@@ -41,8 +41,8 @@ import {
 import {
   buildManifest as buildFixtureManifest,
   BUTTON_STYLE_EDIT as BUTTON_SOURCE_CHANGED,
-  cleanupProjects,
   createProject as createFixtureProject,
+  disposeTempRoots,
   resetAnimusGlobals,
   SYSTEM_CONFIG,
 } from './singleton-fixtures';
@@ -89,7 +89,7 @@ beforeEach(() => {
 afterEach(() => {
   restoreGlobals();
   vi.restoreAllMocks();
-  cleanupProjects();
+  disposeTempRoots();
 });
 
 describe('single-flight watch transaction', () => {
@@ -144,6 +144,34 @@ describe('single-flight watch transaction', () => {
     await Promise.all([first, second]);
 
     expect(mocks.analyzeProject.mock.calls.length).toBe(callsAfterFull + 1);
+    expect(getWatchTransaction()).toBeNull();
+  });
+
+  test('a watch batch entering during an in-flight FULL pipeline joins it', async () => {
+    const root = createProject();
+    // The startup pipeline suspends at the same async seam the watch
+    // transaction does; a batch arriving in that window must join it. The
+    // full pipeline sets `this.system` before its first await, so the
+    // entering batch takes the OWNER branch and would otherwise analyze and
+    // publish concurrently with the pipeline it raced.
+    mocks.analyzeProject.mockImplementation(() =>
+      buildManifest('.btn{margin:8px;}')
+    );
+    const session = new ExtractionSession({ system: './src/system.ts' });
+    session.rootDir = root;
+
+    const pipeline = session.runFullPipeline();
+    expect(getWatchTransaction()).not.toBeNull();
+
+    const joiner = session.handleWatchUpdate({
+      modifiedFiles: new Set([join(root, 'src', 'Button.tsx')]),
+      removedFiles: new Set(),
+    });
+
+    await Promise.all([pipeline, joiner]);
+    // ONE analysis: the joiner resolved against the pipeline's generation
+    // instead of driving a second, concurrent one.
+    expect(mocks.analyzeProject.mock.calls.length).toBe(1);
     expect(getWatchTransaction()).toBeNull();
   });
 

@@ -11,9 +11,9 @@ import type { NavEntry } from './constants/docsNav';
 const Home = lazy(() => import('./pages/Home'));
 const Examples = lazy(() => import('./pages/Examples'));
 
-const contentModules = import.meta.glob('./content/**/*.mdx', {
+const contentModules = import.meta.glob<ComponentType>('./content/**/*.mdx', {
   import: 'default',
-}) as Record<string, () => Promise<ComponentType>>;
+});
 
 function DocPage({ contentKey }: { contentKey: string }) {
   const [Content, setContent] = useState<ComponentType | null>(null);

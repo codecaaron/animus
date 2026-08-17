@@ -5,97 +5,24 @@ import { eq, range, TRUE } from '../src/core/predicate';
 import { applyDeltas } from '../src/core/world';
 import { createOracle, DEFAULT_MAX_CELLS } from '../src/engines';
 import { createInMemoryHost } from '../src/providers/in-memory';
+import {
+  BASE_DIMENSIONS,
+  card,
+  classesFor,
+  obligations,
+  panel,
+  smallNarrow,
+  tokens,
+} from './fixture-world';
 
-import type { ScenarioPoint } from '../src/core/scenario';
-import type { HostObligation, OracleHost } from '../src/providers/host';
-import type { ComponentRecord } from '../src/providers/identity';
+import type { OracleAssertion } from '../src/engines';
+import type { OracleHost } from '../src/providers/host';
 import type { InMemoryHostConfig } from '../src/providers/in-memory';
-import type {
-  TokenDefinition,
-  TokenProvider,
-  TokenResolution,
-} from '../src/providers/tokens';
+import type { FixtureOptions } from './fixture-world';
 
-const card: ComponentRecord = {
-  id: 'src/Card.tsx::Card',
-  file: 'src/Card.tsx',
-  binding: 'Card',
-  className: 'anm-Card',
-  terminal: 'asElement',
-  tag: 'div',
-};
-
-const panel: ComponentRecord = {
-  id: 'src/Panel.tsx::Panel',
-  file: 'src/Panel.tsx',
-  binding: 'Panel',
-  className: 'anm-Panel',
-  terminal: 'asElement',
-};
-
-const SCOPED = /^(variant|state):([^:]+):(.+)$/;
-
-/** Component class + the shared `anm-surface` utility + variant/state. */
-const classesFor = (
-  component: ComponentRecord,
-  point: ScenarioPoint
-): readonly string[] => {
-  const classes = [component.className, 'anm-surface'];
-  for (const dim of Object.keys(point).sort()) {
-    const match = SCOPED.exec(dim);
-    if (match === null) continue;
-    const [, kind, owner, name] = match;
-    if (owner !== component.binding) continue;
-    const value = point[dim];
-    if (kind === 'variant') {
-      classes.push(`${component.className}--${name}-${String(value)}`);
-    } else if (value === true) {
-      classes.push(`${component.className}--${name}`);
-    }
-  }
-  return classes;
-};
-
-const TOKENS: Readonly<Record<string, TokenDefinition>> = {
-  '--color-text': {
-    variable: '--color-text',
-    valuesByMode: { light: '#111', dark: '#eee' },
-    references: [],
-  },
-  '--surface-bg': {
-    variable: '--surface-bg',
-    valuesByMode: { light: 'var(--color-text)', dark: 'var(--color-text)' },
-    references: ['--color-text'],
-  },
-};
-
-const tokens = (): TokenProvider => ({
-  modes: () => ['light', 'dark'],
-  defaultMode: () => 'light',
-  token: (variable) => TOKENS[variable],
-  all: () => Object.values(TOKENS),
-  resolve: (variable, mode): TokenResolution | undefined => {
-    const chain: string[] = [];
-    let current = variable;
-    for (let depth = 0; depth < 8; depth += 1) {
-      chain.push(current);
-      const definition = TOKENS[current];
-      if (definition === undefined) return undefined;
-      const raw = definition.valuesByMode[mode];
-      if (raw === undefined) return undefined;
-      const reference = /^var\((--[a-z-]+)\)$/.exec(raw.trim());
-      if (reference === null) return { value: raw, chain };
-      current = reference[1];
-    }
-    return undefined;
-  },
-});
-
-interface FixtureOptions {
-  pseudoDimension?: boolean;
-  important?: boolean;
-}
-
+/** The shared world plus two rules this suite's harvest must DISCOVER:
+ *  `wide-1024` sits on a cut the domain does not declare, and
+ *  `state-disabled` gives the fixpoint a state-guarded rule to reach. */
 const config = (options: FixtureOptions = {}): InMemoryHostConfig => ({
   rules: [
     {
@@ -275,15 +202,13 @@ const config = (options: FixtureOptions = {}): InMemoryHostConfig => ({
     },
   ],
   components: [card, panel],
-  dimensions: {
-    mode: { kind: 'finite', values: ['light', 'dark'] },
-    'viewport.inline': { kind: 'interval', min: 0, max: 1920 },
-    'variant:Card:size': { kind: 'finite', values: ['small', 'large'] },
-    'state:Card:disabled': { kind: 'finite', values: [false, true] },
-    ...(options.pseudoDimension === true
-      ? { 'pseudo:hover': { kind: 'finite' as const, values: [false, true] } }
-      : {}),
-  },
+  dimensions:
+    options.pseudoDimension === true
+      ? {
+          ...BASE_DIMENSIONS,
+          'pseudo:hover': { kind: 'finite', values: [false, true] },
+        }
+      : { ...BASE_DIMENSIONS },
   cuts: { 'viewport.inline': [768] },
   namedScenarios: {
     'compact.dark': {
@@ -297,68 +222,11 @@ const config = (options: FixtureOptions = {}): InMemoryHostConfig => ({
   ruleDependencies: { 'base-card': ['src/Card.tsx'] },
 });
 
-const obligations = (): readonly HostObligation[] => [
-  {
-    origin: { file: 'src/Card.tsx', note: 'gap is filled from a runtime prop' },
-    guard: eq('variant:Card:size', 'large'),
-    effectClass: 'dynamic-value',
-    influenceScope: [
-      { kind: 'declaration', rule: asRuleId('base-card'), property: 'gap' },
-    ],
-    reason:
-      'the gap slot is written by a runtime prop the compiler cannot fold',
-    dischargeOptions: [
-      {
-        kind: 'branch-split',
-        description: 'evaluate both declared size variants',
-        automated: true,
-      },
-    ],
-    dependencies: [],
-  },
-  {
-    origin: { file: 'src/theme.ts', note: ':has() is outside the dialect' },
-    guard: TRUE,
-    effectClass: 'external-css',
-    influenceScope: [
-      { kind: 'rule', rule: asRuleId('surface') },
-      {
-        kind: 'declaration',
-        rule: asRuleId('surface'),
-        property: 'background',
-      },
-    ],
-    reason:
-      'a relational (:has) selector in hand-written CSS can override the ' +
-      'surface background',
-    dischargeOptions: [
-      {
-        kind: 'context-capsule-measurement',
-        description: 'measure the computed background in a browser capsule',
-        automated: false,
-      },
-      {
-        kind: 'manual-declaration',
-        description: 'declare the relational rule in the style universe',
-        automated: false,
-      },
-    ],
-    dependencies: [],
-  },
-];
-
 const host = (options: FixtureOptions = {}): OracleHost => ({
   ...createInMemoryHost(config(options)),
   tokens: tokens(),
   obligations,
 });
-
-const smallNarrow: ScenarioPoint = {
-  mode: 'light',
-  'viewport.inline': 400,
-  'variant:Card:size': 'small',
-  'state:Card:disabled': false,
-};
 
 const dynamicObligation = (oracle: ReturnType<typeof createOracle>) => {
   const found = oracle
@@ -551,17 +419,31 @@ describe('prove — CONDITIONAL and INCONCLUSIVE', () => {
     expect(result.coverage.cellsEvaluated).toBe(40);
   });
 
+  /**
+   * `prove` re-checks every assertion at runtime because callers also reach
+   * it through the JSON surface, where the declared union guarantees nothing.
+   * Exercising a refusal therefore needs a value the union forbids: start
+   * from a valid assertion and install the offending kind at runtime, with
+   * the key order and descriptor flags an object literal would have given it.
+   */
+  const assertionOfKind = (kind: string): OracleAssertion => {
+    const assertion: OracleAssertion = { kind: 'no-important', target: 'Card' };
+    Object.defineProperty(assertion, 'kind', {
+      value: kind,
+      writable: true,
+      enumerable: true,
+      configurable: true,
+    });
+    return assertion;
+  };
+
   it('validates the assertion shape', () => {
     const oracle = createOracle(host());
     expect(() =>
-      oracle.prove({
-        assertions: [{ kind: 'looks-nice', target: 'Card' } as never],
-      })
+      oracle.prove({ assertions: [assertionOfKind('looks-nice')] })
     ).toThrow(/unknown assertion kind 'looks-nice'/);
     expect(() =>
-      oracle.prove({
-        assertions: [{ kind: 'effective-value', target: 'Card' } as never],
-      })
+      oracle.prove({ assertions: [assertionOfKind('effective-value')] })
     ).toThrow(/requires a property name/);
     expect(() => oracle.prove({ assertions: [] })).toThrow(
       /at least one assertion is required/

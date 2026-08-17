@@ -7,6 +7,7 @@ import {
   areTransformsEqual,
   createSystem,
   createTransform,
+  type MapScale,
   type Prop,
   type RegistrySnapshot,
   type TransformFn,
@@ -25,6 +26,45 @@ function snapshotOf(system: {
     throw new Error('expected a built system to carry a registry snapshot');
   }
   return snapshot;
+}
+
+/**
+ * Post-build mutation as a consumer performs it. `build()` hands back
+ * key-exact registry types, so a name the builder chain never declared cannot
+ * be written through them; `defineProperty` installs precisely the own,
+ * enumerable, writable, configurable property a plain assignment would.
+ */
+function installUndeclaredEntry<Registry extends object>(
+  registry: Registry,
+  name: string,
+  entry: Prop | readonly string[]
+): void {
+  Object.defineProperty(registry, name, {
+    configurable: true,
+    enumerable: true,
+    value: entry,
+    writable: true,
+  });
+}
+
+/**
+ * In-place growth of a registry member list whose declared element domain
+ * (or `readonly` modifier) excludes the appended name: installing the next
+ * index is exactly what `push` performs on an extensible array.
+ */
+function appendMember(members: readonly string[], member: string): void {
+  Object.defineProperty(members, String(members.length), {
+    configurable: true,
+    enumerable: true,
+    value: member,
+    writable: true,
+  });
+}
+
+/** `Prop.scale` carries the whole string/map/array union; the fixtures below
+ *  mutate props they declared with an inline object scale. */
+function isMapScale(scale: Prop['scale']): scale is MapScale {
+  return Object.prototype.toString.call(scale) === '[object Object]';
 }
 
 describe('areTransformsEqual (design D12)', () => {
@@ -54,9 +94,8 @@ describe('areTransformsEqual (design D12)', () => {
   it('rejects a name match when the captured source is missing on either side', () => {
     // Simulates an instance built by an older @animus-ui/system: named, but
     // no transformSource captured at creation.
-    const legacy = Object.assign(((v) => `${v}px`) as TransformFn, {
-      transformName: 'px',
-    });
+    const legacyBody: TransformFn = (v) => `${v}px`;
+    const legacy = Object.assign(legacyBody, { transformName: 'px' });
     expect(areTransformsEqual(named(), legacy)).toBe(false);
     expect(areTransformsEqual(legacy, named())).toBe(false);
   });
@@ -484,11 +523,17 @@ describe('SystemBuilder extend()', () => {
       .build();
     const before = system.toConfig();
 
-    (system.propRegistry as Record<string, Prop>).rogue = {
+    installUndeclaredEntry(system.propRegistry, 'rogue', {
       property: 'color',
-    };
-    (system.propRegistry as Record<string, Prop>).m.scale = 'sizes';
-    (system.groupRegistry as Record<string, string[]>).space.push('rogue');
+    });
+    system.propRegistry.m.scale = 'sizes';
+    appendMember(system.groupRegistry.space, 'rogue');
+
+    // The mutation has to LAND on the public fields, or every assertion below
+    // would hold for the wrong reason.
+    expect(system.propRegistry).toHaveProperty('rogue');
+    expect(system.propRegistry.m.scale).toBe('sizes');
+    expect(system.groupRegistry.space).toEqual(['m', 'rogue']);
 
     expect(system.toConfig()).toEqual(before);
 
@@ -510,14 +555,21 @@ describe('SystemBuilder extend()', () => {
     const { system: first } = builder.build();
     const before = first.toConfig();
 
-    (first.propRegistry as Record<string, Prop>).rogue = {
+    installUndeclaredEntry(first.propRegistry, 'rogue', {
       property: 'color',
-    };
-    (first.groupRegistry as Record<string, string[]>).rogueGroup = ['rogue'];
+    });
+    installUndeclaredEntry(first.groupRegistry, 'rogueGroup', ['rogue']);
     // Entry-depth mutation (review probe P9, second pass): a field inside a
     // shared Prop entry must not reach a later build either.
-    (first.propRegistry as Record<string, Prop>).m.scale = 'sizes';
-    (first.groupRegistry as Record<string, string[]>).space.push('rogue');
+    first.propRegistry.m.scale = 'sizes';
+    appendMember(first.groupRegistry.space, 'rogue');
+
+    // Precondition: the first instance really is mutated, so a pristine
+    // rebuild below is evidence rather than an accident.
+    expect(first.propRegistry).toHaveProperty('rogue');
+    expect(first.groupRegistry).toHaveProperty('rogueGroup');
+    expect(first.propRegistry.m.scale).toBe('sizes');
+    expect(first.groupRegistry.space).toEqual(['m', 'rogue']);
 
     const { system: second } = builder.build();
     const after = second.toConfig();
@@ -540,8 +592,22 @@ describe('SystemBuilder extend()', () => {
       .build();
     const before = system.toConfig();
 
-    (system.propRegistry.mx.properties as string[]).push('marginTop');
-    (system.propRegistry.mx.scale as Record<string, string>).sm = '999px';
+    const { properties, scale } = system.propRegistry.mx;
+    if (properties === undefined || !isMapScale(scale)) {
+      throw new TypeError(
+        'the mx fixture declares member properties and an object scale'
+      );
+    }
+    appendMember(properties, 'marginTop');
+    scale.sm = '999px';
+
+    // Precondition: both nested containers really were mutated in place.
+    expect(system.propRegistry.mx.properties).toEqual([
+      'marginLeft',
+      'marginRight',
+      'marginTop',
+    ]);
+    expect(system.propRegistry.mx.scale).toEqual({ sm: '999px' });
 
     expect(system.toConfig()).toEqual(before);
 

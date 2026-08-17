@@ -74,7 +74,7 @@ export function PageToc() {
         items.push({
           id: el.id,
           text: el.textContent?.trim() || '',
-          level: level as 2 | 3,
+          level,
         });
       }
       setEntries(items);
@@ -132,7 +132,7 @@ export function PageToc() {
         <TocLink
           key={entry.id}
           href={`#${entry.id}`}
-          depth={String(entry.level) as '2' | '3'}
+          depth={entry.level === 2 ? '2' : '3'}
           active={activeId === entry.id}
           onClick={(e: React.MouseEvent<HTMLAnchorElement>) => {
             e.preventDefault();

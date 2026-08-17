@@ -14,12 +14,7 @@
  * Same harness as watch-asset-batch.test.ts: the NAPI boundary is mocked,
  * the session and pure pipeline helpers run for real over a temp project.
  */
-import {
-  buildSystemPropsModule,
-  contentHash,
-  hashReplacementPlans,
-  snapshotFilePlans,
-} from '@animus-ui/extract/pipeline';
+import { contentHash } from '@animus-ui/extract/pipeline';
 import { readFileSync, rmSync, statSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
@@ -51,32 +46,38 @@ import {
 } from '../../extract/session/singleton';
 import {
   buildManifest,
-  BUTTON_SHAPE_EDIT,
+  // The fixture's edit corpus: this source MOVES the replacement plans,
+  // where BUTTON_STYLE_EDIT only moves style values.
+  BUTTON_PLAN_EDIT,
   BUTTON_SOURCE,
   BUTTON_STYLE_EDIT,
-  cleanupProjects,
   createProject as createFixtureProject,
+  disposeTempRoots,
+  expectedEpoch,
   PLAN_A,
   PLAN_B,
   resetAnimusGlobals,
   SYSTEM_CONFIG,
 } from './singleton-fixtures';
 
+import type { ManifestComponentDescriptor } from '@animus-ui/extract/pipeline';
+
 let restoreGlobals: () => void;
 
-/** The served system-props module the fixture pipeline emits — the epoch's
- *  served-dependency witness (fixture manifests carry empty prop maps). */
-const SYSTEM_PROPS_WITNESS = buildSystemPropsModule({
-  systemPropMapJson: '{}',
-  groupRegistryJson: SYSTEM_CONFIG.groupRegistry,
-  dynamicProps: {},
-});
+/** The session-scoped epoch witness on disk, written by
+ *  `ExtractionSession.publishReplacementEpoch`. */
+interface ReplacementEpochRecord {
+  schema: number;
+  sessionId: string;
+  epoch: string;
+}
 
-function expectedEpoch(components: Record<string, unknown>): string {
-  return hashReplacementPlans(
-    snapshotFilePlans({ components }),
-    SYSTEM_PROPS_WITNESS
-  );
+/** One reading of that artifact: its bytes, its decoded record, and the
+ *  mtime the rewrite-suppression proofs compare. */
+interface EpochArtifactReading {
+  raw: string;
+  parsed: ReplacementEpochRecord;
+  mtimeMs: number;
 }
 
 function createProject(): string {
@@ -85,7 +86,7 @@ function createProject(): string {
 
 async function startSession(
   root: string,
-  components: Record<string, unknown>
+  components: Record<string, ManifestComponentDescriptor>
 ): Promise<ExtractionSession> {
   mocks.analyzeProject.mockImplementation(() => buildManifest(components));
   const session = new ExtractionSession({ system: './src/system.ts' });
@@ -94,11 +95,7 @@ async function startSession(
   return session;
 }
 
-function epochArtifact(session: ExtractionSession): {
-  raw: string;
-  parsed: { schema: number; sessionId: string; epoch: string };
-  mtimeMs: number;
-} {
+function epochArtifact(session: ExtractionSession): EpochArtifactReading {
   const path = replacementEpochPath(session.sessionDir);
   const raw = readFileSync(path, 'utf-8');
   return { raw, parsed: JSON.parse(raw), mtimeMs: statSync(path).mtimeMs };
@@ -114,7 +111,7 @@ beforeEach(() => {
 afterEach(() => {
   restoreGlobals();
   vi.restoreAllMocks();
-  cleanupProjects();
+  disposeTempRoots();
 });
 
 describe('epoch artifact publication', () => {
@@ -158,7 +155,7 @@ describe('epoch artifact publication', () => {
     const before = epochArtifact(session);
 
     mocks.analyzeProject.mockImplementation(() => buildManifest(PLAN_B));
-    writeFileSync(join(root, 'src', 'Button.tsx'), BUTTON_SHAPE_EDIT);
+    writeFileSync(join(root, 'src', 'Button.tsx'), BUTTON_PLAN_EDIT);
     await session.handleWatchUpdate({
       modifiedFiles: new Set([join(root, 'src', 'Button.tsx')]),
       removedFiles: new Set(),
@@ -216,10 +213,13 @@ describe('epoch artifact publication', () => {
     const first = await startSession(root, PLAN_A);
     const before = epochArtifact(first);
 
-    // Simulate a same-process config re-evaluation: a NEW session instance
-    // adopts the process-claimed identity (same session dir) over identical
-    // plans. Bytes and mtime must be untouched so persistent-cache
-    // snapshots that include the artifact stay valid.
+    // Simulate a same-process config re-evaluation: the first session is
+    // closed (publication ownership is exclusive — the handoff is
+    // sequential by contract) and a NEW instance adopts the process-claimed
+    // identity (same session dir) over identical plans. Bytes and mtime
+    // must be untouched so persistent-cache snapshots that include the
+    // artifact stay valid.
+    first.close();
     const second = await startSession(root, PLAN_A);
     expect(second.sessionId).toBe(first.sessionId);
     const after = epochArtifact(second);
@@ -261,7 +261,7 @@ describe('failed analyses publish no partial generation', () => {
     mocks.analyzeProject.mockImplementationOnce(() => {
       throw new Error('analysis boom');
     });
-    writeFileSync(join(root, 'src', 'Button.tsx'), BUTTON_SHAPE_EDIT);
+    writeFileSync(join(root, 'src', 'Button.tsx'), BUTTON_PLAN_EDIT);
     await expect(
       session.handleWatchUpdate({
         modifiedFiles: new Set([join(root, 'src', 'Button.tsx')]),

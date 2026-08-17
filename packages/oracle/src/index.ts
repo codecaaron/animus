@@ -140,16 +140,16 @@ export type {
 export type { DependencyProvider } from './providers/dependency';
 
 export type {
-  ChoiceShape,
+  ChoiceNode,
   HostNode,
   OpaqueNode,
-  PortalShape,
-  RenderShape,
-  RenderShapeProvider,
-  RepeatShape,
-  SequenceShape,
+  PortalNode,
+  RenderTree,
+  RenderTreeProvider,
+  RepeatNode,
+  SequenceNode,
   TextNode,
-} from './providers/render-shape';
+} from './providers/render-tree';
 
 export type {
   ComponentContractProvider,

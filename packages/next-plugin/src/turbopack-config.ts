@@ -1,17 +1,20 @@
 import { ENGINE_TRANSFORM_EXTENSIONS } from '@animus-ui/extract/pipeline';
 import {
+  // Emitted module ids: ONE authority — the session vocabulary
+  // (session-paths) — for both resolveAlias KEYS below. A local
+  // re-declaration would let an emitted id and its resolveAlias key drift.
+  // `TURBOPACK_SYSTEM_PROPS_ID` is re-exported below for this module's
+  // consumers.
+  ANIMUS_CSS_MODULE_ID,
   STYLES_ARTIFACT,
   SYSTEM_PROPS_ARTIFACT,
-  // Virtual system-props id: ONE authority — the session vocabulary
-  // (session-paths). Imported and re-exported below for this module's
-  // consumers; a local re-declaration would let the emitted id and the
-  // resolveAlias key drift.
   TURBOPACK_SYSTEM_PROPS_ID,
 } from '@animus-ui/extract/session';
 import { join, relative } from 'path';
 
 import { resolveLoaderPath } from './loader-path';
 
+import type { TurbopackLoaderOptions } from './turbopack-loader';
 import type { AnimusNextOptions } from './types';
 
 /**
@@ -23,7 +26,10 @@ import type { AnimusNextOptions } from './types';
 export type TurbopackMode = 'off' | 'auto' | 'on';
 
 export interface TurbopackRule {
-  loaders: Array<{ loader: string; options: Record<string, unknown> }>;
+  /** The loader whose options contract is `turbopack-loader.ts`'s own — the
+   *  reader of these bytes on the other side of the process boundary owns
+   *  what may be written here, so the fragment carries no second spelling. */
+  loaders: Array<{ loader: string; options: TurbopackLoaderOptions }>;
 }
 
 export interface TurbopackConfigFragment {
@@ -91,22 +97,26 @@ export function buildTurbopackConfig(args: {
     sessionDir,
   } = args;
 
-  const loaderOptions: Record<string, unknown> = {
+  // Absent keys are load-bearing: the loader reads `strict`/`cssImportTarget`
+  // through `LoaderPolicyOptions`, where "not configured" is the key being
+  // missing — an explicit `undefined` would serialize to a present null key in
+  // some JSON encoders and stop meaning "unset".
+  const loaderOptions: TurbopackLoaderOptions = {
     rootDir,
     sessionId,
     sessionDir,
-    ...(options.strict !== undefined ? { strict: options.strict } : {}),
-    ...(options.cssImportTarget !== undefined
-      ? { cssImportTarget: options.cssImportTarget }
-      : {}),
   };
+  if (options.strict !== undefined) loaderOptions.strict = options.strict;
+  if (options.cssImportTarget !== undefined) {
+    loaderOptions.cssImportTarget = options.cssImportTarget;
+  }
 
-  const resolveAlias: Record<string, string> = {
+  const resolveAlias: TurbopackConfigFragment['resolveAlias'] = {
     [TURBOPACK_SYSTEM_PROPS_ID]: rootRelativeRequest(
       rootDir,
       join(sessionDir, SYSTEM_PROPS_ARTIFACT)
     ),
-    '.animus/styles.css': rootRelativeRequest(
+    [ANIMUS_CSS_MODULE_ID]: rootRelativeRequest(
       rootDir,
       join(sessionDir, STYLES_ARTIFACT)
     ),

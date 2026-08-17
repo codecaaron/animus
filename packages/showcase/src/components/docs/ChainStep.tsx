@@ -668,7 +668,17 @@ export interface Step {
   repeatable?: boolean;
 }
 
-type LayerKey = '0' | '1' | '2' | '3' | '4' | '5';
+const LAYER_KEYS = ['0', '1', '2', '3', '4', '5'] as const;
+
+type LayerKey = (typeof LAYER_KEYS)[number];
+
+function layerKeyAt(index: number): LayerKey {
+  const key = LAYER_KEYS[index];
+  if (key === undefined) {
+    throw new Error(`ChainStep supports at most ${LAYER_KEYS.length} steps.`);
+  }
+  return key;
+}
 
 export function ChainStep({
   steps,
@@ -729,14 +739,14 @@ export function ChainStep({
   }, [isControlled, controlledClick, activeStep, steps.length]);
 
   const step = activeStep >= 0 ? steps[activeStep] : null;
-  const layerKey = String(activeStep >= 0 ? activeStep : 0) as LayerKey;
+  const layerKey = activeStep >= 0 ? layerKeyAt(activeStep) : LAYER_KEYS[0];
 
   return (
     <CascadeGrid>
       <StrataColumn>
         {steps.map((s, i) => {
           const isActive = i === activeStep;
-          const lk = String(i) as LayerKey;
+          const lk = layerKeyAt(i);
           return (
             <Strata.Root
               key={s.label}
@@ -761,10 +771,10 @@ export function ChainStep({
                   {Array.from({ length: i + 1 }).map((_, j) =>
                     isActive ? (
                       // oxlint-disable-next-line react/no-array-index-key -- composite key with stable step identifier; index is fine
-                      <Strata.DotActive key={`${s}-dot-${j as number}`} />
+                      <Strata.DotActive key={`${s.label}-dot-${j}`} />
                     ) : (
                       // oxlint-disable-next-line react/no-array-index-key -- composite key with stable step identifier; index is fine
-                      <Strata.Dot key={`${s}-dot-${j as number}`} />
+                      <Strata.Dot key={`${s.label}-dot-${j}`} />
                     )
                   )}
                 </Strata.Dots>
@@ -812,7 +822,7 @@ export function ChainStep({
               <ResolutionList>
                 {steps.slice(0, activeStep + 1).map((s, i) => {
                   const isWinner = i === activeStep;
-                  const rlk = String(i) as LayerKey;
+                  const rlk = layerKeyAt(i);
                   return (
                     <ResolutionRow
                       key={s.label}

@@ -3,6 +3,23 @@ import { type ReactNode, useState } from 'react';
 import { ds } from '../../ds';
 import { TabGroup } from './TabGroup';
 
+const PREVIEW_TABS = ['preview', 'code'] as const;
+
+type LivePreviewProps = {
+  code: ReactNode;
+  defaultTab?: 'preview' | 'code';
+  variants?: Record<string, string[]>;
+} & (
+  | {
+      preview: ReactNode;
+      renderPreview?: never;
+    }
+  | {
+      preview?: never;
+      renderPreview: (selected: Record<string, string>) => ReactNode;
+    }
+);
+
 const PreviewContainer = ds
   .styles({
     border: 1,
@@ -106,15 +123,11 @@ const VariantLabel = ds
 
 export function LivePreview({
   preview,
+  renderPreview,
   code,
   defaultTab = 'preview',
   variants,
-}: {
-  preview: ReactNode | ((selected: Record<string, string>) => ReactNode);
-  code: ReactNode;
-  defaultTab?: 'preview' | 'code';
-  variants?: Record<string, string[]>;
-}) {
+}: LivePreviewProps) {
   const [tab, setTab] = useState(defaultTab);
   const [selected, setSelected] = useState<Record<string, string>>(() => {
     if (!variants) return {};
@@ -129,16 +142,20 @@ export function LivePreview({
     setSelected((prev) => ({ ...prev, [axis]: value }));
   };
 
-  const renderPreview =
-    typeof preview === 'function' ? preview(selected) : preview;
+  const previewContent = renderPreview ? renderPreview(selected) : preview;
 
   return (
     <PreviewContainer>
       <PreviewHeader>
         <TabGroup
-          tabs={['preview', 'code']}
+          tabs={[...PREVIEW_TABS]}
           activeTab={tab}
-          onChange={(t) => setTab(t as 'preview' | 'code')}
+          onChange={(value) => {
+            const nextTab = PREVIEW_TABS.find(
+              (candidate) => candidate === value
+            );
+            if (nextTab) setTab(nextTab);
+          }}
         />
         {variants && tab === 'preview' && (
           <VariantToolbar>
@@ -163,7 +180,7 @@ export function LivePreview({
         )}
       </PreviewHeader>
       {tab === 'preview' ? (
-        <PreviewPane>{renderPreview}</PreviewPane>
+        <PreviewPane>{previewContent}</PreviewPane>
       ) : (
         <CodePane>{code}</CodePane>
       )}

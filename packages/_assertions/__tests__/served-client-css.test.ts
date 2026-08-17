@@ -8,7 +8,7 @@ import { readRequiredCss } from '../src/find-build-assets';
 
 const temporaryDirectories: string[] = [];
 
-function scaffold(): { root: string; clientRoot: string; serverRoot: string } {
+function scaffold() {
   const root = mkdtempSync(resolve(tmpdir(), 'animus-served-client-css-'));
   temporaryDirectories.push(root);
   const clientRoot = join(root, 'client');

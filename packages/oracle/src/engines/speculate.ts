@@ -91,7 +91,8 @@ const overlayTokens = (
     const override = overrides.get(variable);
     if (override === undefined) return base.token(variable);
 
-    const valuesByMode: Record<string, string> = { [ROOT_MODE]: override };
+    const valuesByMode: Record<string, string> = {};
+    valuesByMode[ROOT_MODE] = override;
     for (const mode of base.modes()) valuesByMode[mode] = override;
     return { variable, valuesByMode, references: [] };
   };

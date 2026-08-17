@@ -15,55 +15,43 @@ import {
   assertSystemFallbackParity,
   assertSystemSchemeGuard,
   assertVariantDeclarationParity,
+  compact,
   findCssFiles,
   findJsFiles,
   layerBlock,
+  layerBlockBody,
   readAllConcat,
   systemSchemeVariableSpans,
   writeLaneReceipt,
 } from '@animus-ui/assertions';
 import { createAppearanceBootstrap } from '@animus-ui/system/bootstrap';
-import { readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import viteManifest from 'vite/package.json' with { type: 'json' };
 
 import { theme } from '../src/ds';
 
 const APP_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const DIST = resolve(APP_ROOT, 'dist');
 
-function globalLayerBody(css: string): string | undefined {
-  const marker = css.match(/@layer\s+anm-global\s*\{/);
-  if (marker?.index === undefined) return undefined;
-  const openingBrace = marker.index + marker[0].length - 1;
-  let depth = 1;
-  for (let index = openingBrace + 1; index < css.length; index += 1) {
-    if (css[index] === '{') depth += 1;
-    if (css[index] !== '}') continue;
-    depth -= 1;
-    if (depth === 0) return css.slice(openingBrace + 1, index);
-  }
-  return undefined;
-}
-
 function selectors(selector: string): Set<string> {
   return new Set(
     selector.split(',').map((part) => {
-      const compact = part.replace(/\s+/g, '');
-      if (/^\*?::?before$/.test(compact)) return ':before';
-      if (/^\*?::?after$/.test(compact)) return ':after';
-      return compact;
+      const token = compact(part);
+      if (/^\*?::?before$/.test(token)) return ':before';
+      if (/^\*?::?after$/.test(token)) return ':after';
+      return token;
     })
   );
 }
 
 function declarations(body: string): Set<string> {
-  return new Set(body.replace(/\s+/g, '').split(';'));
+  return new Set(compact(body).split(';'));
 }
 
 function assertGlobalBaseline(css: string): void {
-  const layer = globalLayerBody(css) ?? '';
+  const layer = layerBlockBody(css, 'anm-global') ?? '';
   const bodyDeclarations = new Set<string>();
   let hasReset = false;
   for (const match of layer.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
@@ -102,45 +90,23 @@ function assertGlobalBaseline(css: string): void {
 }
 
 function emitLaneReceipt(): void {
-  // Retirement regression guard (openspec: retire-extract-v1): v2 is the only
-  // engine. The fixture config MUST NOT reference ANIMUS_ENGINE or set the
-  // engine option — either would reintroduce a retired v1 selection path.
-  const config = readFileSync(resolve(APP_ROOT, 'vite.config.ts'), 'utf8');
-  if (config.includes('ANIMUS_ENGINE') || /\bengine\s*:/.test(config)) {
-    throw new AssertionError(
-      'vite.config.ts must not reference ANIMUS_ENGINE or set the engine ' +
-        'option — the v1 engine was retired (openspec: retire-extract-v1)'
-    );
-  }
-
-  // v1 is retired (openspec: retire-extract-v1): v2 is the only engine, so the
-  // receipt records v2 as both default and loaded, with no override.
-  const engineDefault = 'v2' as const;
-  const engineLoaded = 'v2' as const;
-  const engineOverride = false;
-
+  // Engine identity comes from writeLaneReceipt's retirement guard over the
+  // fixture config (openspec: retire-extract-v1) — never spelled here.
+  //
   // hostVersion from the fixture's installed host, not the manifest range.
-  const hostVersion = (
-    JSON.parse(
-      readFileSync(
-        resolve(APP_ROOT, 'node_modules', 'vite', 'package.json'),
-        'utf8'
-      )
-    ) as { version: string }
-  ).version;
-
-  writeLaneReceipt(resolve(APP_ROOT, '.receipts', 'verify-assert-vite.json'), {
-    lane: '@animus-ui/vite-app#verify:assert',
-    host: 'vite',
-    hostVersion,
-    mode: 'production',
-    engineLoaded,
-    engineDefault,
-    engineOverride,
-    packageForm: 'workspace',
-  });
+  const receipt = writeLaneReceipt(
+    resolve(APP_ROOT, '.receipts', 'verify-assert-vite.json'),
+    {
+      lane: '@animus-ui/vite-app#verify:assert',
+      host: 'vite',
+      hostVersion: viteManifest.version,
+      mode: 'production',
+      packageForm: 'workspace',
+      engineConfigPath: resolve(APP_ROOT, 'vite.config.ts'),
+    }
+  );
   console.log(
-    `[vite-app:assert] receipt → .receipts/verify-assert-vite.json (engine=${engineLoaded}, default=${engineDefault}, override=${engineOverride})`
+    `[vite-app:assert] receipt → .receipts/verify-assert-vite.json (engine=${receipt.engineLoaded}, default=${receipt.engineDefault}, override=${receipt.engineOverride})`
   );
 }
 

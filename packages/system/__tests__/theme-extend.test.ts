@@ -93,13 +93,12 @@ describe('ThemeBuilder extend() composition', () => {
       .extend(buildKitTheme())
       .addColors({ ember: '#7c3aed' })
       .build();
-    // Runtime reads go through a cast: intersecting the kit's literal color
-    // type with the override's reduces the conflicting key to `never` at the
-    // type level (the same admission-typing limitation from() has).
-    const colors = composed.colors as unknown as Record<string, string>;
-    expect(colors.ember).toBe('#7c3aed');
+    // Intersecting the kit's literal color type with the override reduces the
+    // conflicting key to `never`; the property matcher observes the runtime
+    // merge without pretending that impossible static intersection survived.
+    expect(composed.colors).toHaveProperty('ember', '#7c3aed');
     // Non-conflicting kit values survive as the base.
-    expect(colors.void).toBe('#000000');
+    expect(composed.colors).toHaveProperty('void', '#000000');
     expect(composed.space[8]).toBe('0.5rem');
   });
 
@@ -128,8 +127,8 @@ describe('ThemeBuilder extend() composition', () => {
       .build();
     expect(preferred.colors.ember).toBe('#ff2800');
     // The bundle's other halves never leak into the theme.
-    expect((viaTheme as Record<string, unknown>).system).toBeUndefined();
-    expect((viaTheme as Record<string, unknown>).theme).toBeUndefined();
+    expect(viaTheme).not.toHaveProperty('system');
+    expect(viaTheme).not.toHaveProperty('theme');
   });
 
   // Scenario: "Sibling themes conflict loudly" (D3/G4) — positional origin
@@ -194,9 +193,7 @@ describe('ThemeBuilder extend() composition', () => {
       .extend(kitA)
       .addColors({ primary: '#123456' })
       .build();
-    expect((composed.colors as unknown as Record<string, string>).primary).toBe(
-      '#123456'
-    );
+    expect(composed.colors).toHaveProperty('primary', '#123456');
   });
 
   it('never mutates the consumed kit theme during composition', () => {
@@ -234,10 +231,7 @@ describe('ThemeBuilder extend() composition', () => {
   it('preserves the v1-manifest fail-closed taint through extend() (D8)', () => {
     const real = buildKitTheme();
     // v1 facsimile: same raw data, manifest limited to the v1 field set.
-    const v1Source: Record<string, unknown> = {};
-    for (const key of Object.keys(real)) {
-      v1Source[key] = (real as Record<string, unknown>)[key];
-    }
+    const v1Source = { ...real };
     Object.defineProperty(v1Source, 'manifest', {
       value: {
         tokenMap: real.manifest.tokenMap,
@@ -420,9 +414,7 @@ describe('deep merge semantics on augmentation (MODIFIED)', () => {
       .addColors({ gray: { 50: '#ffffff' } })
       .build();
     // Runtime storage is nested; the type surface is flat dot-paths.
-    expect(
-      (composed.colors as unknown as Record<string, unknown>).gray
-    ).toEqual({
+    expect(composed.colors).toHaveProperty('gray', {
       50: '#ffffff',
       100: '#f0f0f0',
     });
@@ -436,7 +428,7 @@ describe('deep merge semantics on augmentation (MODIFIED)', () => {
       .extend(buildKitTheme())
       .addScale({ name: 'space', values: { 4: '0.3rem', 12: '0.75rem' } })
       .build();
-    expect(composed.space as unknown).toEqual({
+    expect(composed.space).toEqual({
       0: '0',
       4: '0.3rem',
       8: '0.5rem',
@@ -454,7 +446,7 @@ describe('deep merge semantics on augmentation (MODIFIED)', () => {
       .extend(kit)
       .addScale({ name: 'radii', values: { pill: '999px' }, replace: true })
       .build();
-    expect(replaced.radii as unknown).toEqual({ pill: '999px' });
+    expect(replaced.radii).toEqual({ pill: '999px' });
     expect(replaced.manifest.tokenMap['radii.sm']).toBeUndefined();
   });
 
@@ -816,9 +808,7 @@ describe('from() freeze during the deprecation window (G6)', () => {
       .addColors({ ember: '#00ff00' })
       .from(lib)
       .build();
-    expect((theme.colors as unknown as Record<string, string>).ember).toBe(
-      '#ff2800'
-    );
+    expect(theme.colors).toHaveProperty('ember', '#ff2800');
   });
 
   // Scenario: "Deprecation is visible to consumers" — the published types

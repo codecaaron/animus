@@ -17,7 +17,7 @@ import {
   writeValidatedBaselinePair,
 } from '../src/baseline';
 
-import type { BaselineMode, BaselineRefreshChecks } from '../src/baseline';
+import type { BaselineModePair, BaselineRefreshChecks } from '../src/baseline';
 import type { RegisterEntry, UnitSurface } from '../src/types';
 
 function surface(css = '.a{color:red}'): UnitSurface {
@@ -136,6 +136,41 @@ describe('baseline envelope and refresh protocol', () => {
       expect.arrayContaining([
         expect.stringContaining('mode'),
         expect.stringContaining('corpus'),
+      ])
+    );
+  });
+
+  test('reads a hand-edited baseline as a document, not as a trusted envelope', () => {
+    const digest = 'c'.repeat(64);
+    const envelope = createBaselineEnvelope('production', 'seed-1', digest, {
+      unit: surface(),
+    });
+    const expected = { mode: 'production', corpusSha256: digest } as const;
+
+    // `RegExp.test` coerces, so a digest recorded as a one-element list used
+    // to stringify into a passing 64-hex value. The refresh path validates an
+    // existing envelope against its OWN digest, so the equality check cannot
+    // see this one — the shape check is the only witness.
+    expect(
+      validateBaselineEnvelope(
+        { ...envelope, corpusSha256: [digest] },
+        expected
+      )
+    ).toEqual(
+      expect.arrayContaining([expect.stringContaining('must be SHA-256')])
+    );
+
+    // A list is not a keyed block, and a non-string intent is not an intent.
+    expect(
+      validateBaselineEnvelope({ ...envelope, units: [] }, expected)
+    ).toEqual(
+      expect.arrayContaining([expect.stringContaining('units missing')])
+    );
+    expect(
+      validateBaselineEnvelope({ ...envelope, refreshIntent: 7 }, expected)
+    ).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('refresh intent missing'),
       ])
     );
   });
@@ -319,7 +354,7 @@ describe('baseline envelope and refresh protocol', () => {
         join(root, 'v2/development.json'),
         'utf8'
       );
-      const checks: Record<BaselineMode, BaselineRefreshChecks> = {
+      const checks: BaselineModePair<BaselineRefreshChecks> = {
         production: {
           determinism: [],
           cssValidity: [],
@@ -389,7 +424,7 @@ describe('baseline envelope and refresh protocol', () => {
       join(root, 'v2/development.json'),
       'utf8'
     );
-    const green: Record<BaselineMode, BaselineRefreshChecks> = {
+    const green: BaselineModePair<BaselineRefreshChecks> = {
       production: {
         determinism: [],
         cssValidity: [],

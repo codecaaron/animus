@@ -16,6 +16,7 @@
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
+import { asRuleId } from '../src/core/identity';
 import { applyDeltas } from '../src/core/world';
 import { createOracle } from '../src/engines';
 import { createAnimusHost } from '../src/host/animus/host';
@@ -66,11 +67,18 @@ const originOf = (fact: RenderFact): RuleId => {
       candidate.kind === 'origin' || candidate.kind === 'inherited-from'
   );
   if (edge === undefined) throw new Error('fixture: fact has no origin edge');
-  return edge.ref as RuleId;
+  // An origin/inherited-from edge names a rule, and `ref` is the identity
+  // module's own untyped carrier — `asRuleId` is how every reader brands it.
+  return asRuleId(edge.ref);
 };
 
+/**
+ * `ProbeResult.semanticDiff` is typed `SemanticDiff` and OPTIONAL — present
+ * exactly when the operation compared two worlds. The fixture only ever asks
+ * comparing operations, so absence is a fixture error, not a shape question.
+ */
 const semanticDiffOf = (result: ProbeResult): SemanticDiff => {
-  const diff = result.semanticDiff as SemanticDiff | undefined;
+  const diff = result.semanticDiff;
   if (diff === undefined) throw new Error('fixture: result carries no diff');
   return diff;
 };

@@ -61,6 +61,22 @@ export interface ExplainRequest {
 
 export const SYMPTOM_KINDS = ['unexpected-value', 'missing-declaration'];
 
+/**
+ * The declared type says `property` is a string; this is the runtime half of
+ * that claim, for callers that reached `explain` through the JSON surface
+ * rather than the typed API. Intrinsic text only — a boxed String would carry
+ * no usable property name into the cascade.
+ */
+const isDeclaredText = <Value>(value: Value): value is Value & string => {
+  if (Object(value) === value) return false;
+  try {
+    String.prototype.valueOf.call(value);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
 const validate = (symptom: OracleSymptom): string => {
   if (!SYMPTOM_KINDS.includes(symptom.kind)) {
     throw new TypeError(
@@ -69,7 +85,7 @@ const validate = (symptom: OracleSymptom): string => {
     );
   }
   const property = symptom.detail?.property;
-  if (typeof property !== 'string' || property.length === 0) {
+  if (!isDeclaredText(property) || property.length === 0) {
     throw new TypeError(
       `explain: symptom '${symptom.kind}' requires detail.property (a CSS ` +
         'property name)'

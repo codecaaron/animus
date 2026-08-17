@@ -11,7 +11,7 @@ import { relative } from 'path';
 
 import { transformWithManifest } from './loader-core';
 
-import type { LoaderPolicyOptions } from './loader-core';
+import type { LoaderContextBase } from './loader-core';
 
 /** Session dirs whose epoch artifact has been SEEN on disk. A sibling
  *  session's reconciliation may delete the artifact, but the owning
@@ -22,13 +22,7 @@ import type { LoaderPolicyOptions } from './loader-core';
  *  Negatives always re-probe. */
 const epochSeenForSessionDir = new Set<string>();
 
-type LoaderContext = {
-  resourcePath: string;
-  rootContext: string;
-  getOptions: () => LoaderPolicyOptions;
-  /** webpack file-dependency registration — optional so bare policy tests
-   *  can drive the loader without a full context. */
-  addDependency?: (file: string) => void;
+type LoaderContext = LoaderContextBase & {
   /** webpack build mode; production invocations stay engine-verbatim. */
   mode?: 'development' | 'production' | 'none';
 };
@@ -57,7 +51,10 @@ export default function animusLoader(
   // prod loader behavior engine-verbatim). The path is session-scoped
   // (design D2, next-turbopack-served-transform-coherence): the owning
   // session publishes its artifact dir through the process singleton.
-  if (this.mode !== 'production' && typeof this.addDependency === 'function') {
+  // `addDependency` is optional on the shared loader context (bare policy
+  // tests drive a loader without a full runner), so its presence — not its
+  // representation — is what decides whether the epoch can be registered.
+  if (this.mode !== 'production' && this.addDependency !== undefined) {
     const sessionDir = getSessionArtifactDir();
     if (sessionDir) {
       const epochPath = replacementEpochPath(sessionDir);

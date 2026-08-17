@@ -21,6 +21,11 @@ export async function findBuildAssets(
     try {
       entries = await readdir(current, { withFileTypes: true });
     } catch (err) {
+      // SAFETY: the only awaited call in this `try` is `readdir`, and
+      // node:fs/promises rejects exclusively with a SystemError — an `Error`
+      // carrying the `errno`/`code` pair this narrowing reads. Nothing else in
+      // the block can throw, so `err` has no other possible producer. Any
+      // non-ENOENT code is rethrown unchanged.
       const e = err as NodeJS.ErrnoException;
       if (e.code === 'ENOENT') return;
       throw err;

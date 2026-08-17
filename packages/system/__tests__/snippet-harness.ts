@@ -41,7 +41,7 @@ export function createHarness(
   getItem: (key: string) => string | null,
   serverRendered: Record<string, string> = {}
 ): Harness {
-  const attributes: Record<string, string> = { ...serverRendered };
+  const attributes = { ...serverRendered };
   const mutations: string[] = [];
 
   const setAttribute = vi.fn((name: string, value: string) => {
@@ -63,13 +63,26 @@ export function createHarness(
   };
 }
 
+/**
+ * The snippet's calling convention, derived from the harness that supplies the
+ * shadowed globals: each parameter's domain is exactly the `Harness` field
+ * passed for it, so narrowing a harness field narrows this contract with it.
+ */
+type SnippetEntry = (
+  documentGlobal: Harness['document'],
+  storageGlobal: Harness['localStorage']
+) => void;
+
 /** Execute snippet `code` against the harness's shadowed globals. */
 export function runSnippetCode(code: string, harness: Harness): Harness {
+  // SAFETY: `new Function` returns a function whose parameters are exactly the
+  // names listed before the body, in that order — here `document` then
+  // `localStorage`, matching SnippetEntry. `code` is a generated bootstrap
+  // artifact, which bootstrap-generator's artifact tests pin as a
+  // self-contained IIFE statement: no imports, no placeholders, no return
+  // value, and no free identifier other than those two.
   // oxlint-disable-next-line no-new-func
-  const run = new Function('document', 'localStorage', code) as (
-    documentGlobal: unknown,
-    storageGlobal: unknown
-  ) => void;
+  const run = new Function('document', 'localStorage', code) as SnippetEntry;
   run(harness.document, harness.localStorage);
   return harness;
 }

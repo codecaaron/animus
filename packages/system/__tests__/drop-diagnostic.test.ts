@@ -1,12 +1,22 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
-import {
-  describeResultShape,
-  type DynamicPropConfig,
+import * as classResolutionRuntime from '../src/runtime/resolveClasses';
+import { loadUnderNodeEnv } from './load-under-node-env';
+
+import type { DynamicPropConfig } from '../src/runtime/resolveClasses';
+import type { WitnessRecord } from '../src/runtime/witness';
+
+const {
   resolveClasses,
   serializeValueKey,
-} from '../src/runtime/resolveClasses';
-import { loadUnderNodeEnv } from './load-under-node-env';
+  ['describeResultShape']: describeInvalidTransformResult,
+} = classResolutionRuntime;
+
+type WitnessRuntimeGlobal = typeof globalThis & {
+  __ANIMUS_WITNESS__?: WitnessRecord[];
+};
+
+const witnessRuntimeGlobal: WitnessRuntimeGlobal = globalThis;
 
 const config = (base: Partial<Parameters<typeof resolveClasses>[2]> = {}) => ({
   systemPropNames: ['p'],
@@ -114,34 +124,63 @@ describe('drop diagnostic', () => {
 });
 
 describe('invalid transform result gate', () => {
-  type WitnessRecord = {
-    component: string;
-    prop: string;
-    value: string;
-    outcome: 'static' | 'dynamic' | 'drop';
-  };
-  const witnesses = (): WitnessRecord[] =>
-    (globalThis as Record<string, unknown>)
-      .__ANIMUS_WITNESS__ as WitnessRecord[];
+  type DynamicPropFixture = DynamicPropConfig[string];
+  type RejectedTransformFixtureResult = object | boolean | undefined;
+
+  const witnesses = () => witnessRuntimeGlobal.__ANIMUS_WITNESS__;
+
+  const dynamicPropFixture = (
+    overrides: Partial<DynamicPropFixture> = {}
+  ): DynamicPropFixture => ({
+    varName: '--animus-p',
+    slotClass: 'animus-dyn-p',
+    ...overrides,
+  });
 
   const dyn = (
-    overrides: Partial<DynamicPropConfig[string]> = {}
+    overrides: Partial<DynamicPropFixture> = {}
   ): DynamicPropConfig => ({
-    p: { varName: '--animus-p', slotClass: 'animus-dyn-p', ...overrides },
+    p: dynamicPropFixture(overrides),
+  });
+
+  /**
+   * Installs a contract-violating transform result at runtime so the defensive
+   * gate is exercised without claiming that the value satisfies its static
+   * string-or-number return contract.
+   */
+  const withRuntimeTransformResult = (
+    result: RejectedTransformFixtureResult,
+    overrides: Partial<DynamicPropFixture> = {}
+  ): DynamicPropFixture => {
+    const fixture = dynamicPropFixture(overrides);
+    Object.defineProperty(fixture, 'transform', {
+      configurable: true,
+      enumerable: true,
+      value: () => result,
+      writable: true,
+    });
+    return fixture;
+  };
+
+  const dynWithRuntimeTransformResult = (
+    result: RejectedTransformFixtureResult,
+    overrides: Partial<DynamicPropFixture> = {}
+  ): DynamicPropConfig => ({
+    p: withRuntimeTransformResult(result, overrides),
   });
 
   beforeEach(() => {
-    delete (globalThis as Record<string, unknown>).__ANIMUS_WITNESS__;
+    delete witnessRuntimeGlobal.__ANIMUS_WITNESS__;
   });
 
-  test('scalar object result applies nothing, witnesses drop, warns naming the shape', () => {
+  test('scalar object result applies nothing, witnesses drop, warns naming the invalid result kind', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const res = resolveClasses(
       'animus-G-obj1',
       { p: 5 },
       config(),
       undefined,
-      dyn({ transform: () => ({ bad: true }) as unknown as string })
+      dynWithRuntimeTransformResult({ bad: true })
     );
     expect(res.classes).toEqual(['animus-G-obj1']);
     expect(res.dynamicStyle).toBeUndefined();
@@ -189,11 +228,10 @@ describe('invalid transform result gate', () => {
       undefined,
       {
         p: { varName: '--animus-p', slotClass: 'animus-dyn-p' },
-        m: {
-          varName: '--animus-m',
-          slotClass: 'animus-dyn-m',
-          transform: () => ({ bad: true }) as unknown as string,
-        },
+        m: withRuntimeTransformResult(
+          { bad: true },
+          { varName: '--animus-m', slotClass: 'animus-dyn-m' }
+        ),
       }
     );
     expect(res.classes).toEqual(['animus-G-pair1', 'animus-dyn-p']);
@@ -217,11 +255,7 @@ describe('invalid transform result gate', () => {
       config({ systemPropNames: ['p', 'm'] }),
       undefined,
       {
-        p: {
-          varName: '--animus-p',
-          slotClass: 'animus-dyn-p',
-          transform: () => ({ bad: true }) as unknown as string,
-        },
+        p: withRuntimeTransformResult({ bad: true }),
         m: { varName: '--animus-m', slotClass: 'animus-dyn-m' },
       }
     );
@@ -318,9 +352,8 @@ describe('invalid transform result gate', () => {
       { p: 'sm' },
       config(),
       undefined,
-      dyn({
+      dynWithRuntimeTransformResult(undefined, {
         scaleValues: { sm: '4rem' },
-        transform: () => undefined as unknown as string,
       })
     );
     expect(res.classes).toEqual(['animus-G-scale2']);
@@ -334,7 +367,7 @@ describe('invalid transform result gate', () => {
 
   test('invalid-result warning dedupes per component and prop across renders', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const dc = dyn({ transform: () => false as unknown as string });
+    const dc = dynWithRuntimeTransformResult(false);
     const first = resolveClasses(
       'animus-G-dedupe1',
       { p: 1 },
@@ -363,24 +396,24 @@ describe('invalid transform result gate', () => {
       { p: 5 },
       config(),
       undefined,
-      dyn({ transform: () => ({}) as unknown as string })
+      dynWithRuntimeTransformResult({})
     );
     expect(res.classes).toEqual(['animus-G-prod1']);
     expect(res.dynamicStyle).toBeUndefined();
     expect(warn).not.toHaveBeenCalled();
-    expect(
-      (globalThis as Record<string, unknown>).__ANIMUS_WITNESS__
-    ).toBeUndefined();
+    expect(witnessRuntimeGlobal.__ANIMUS_WITNESS__).toBeUndefined();
   });
 
-  test('shape descriptors name every invalid result form', () => {
-    expect(describeResultShape({})).toBe('object');
-    expect(describeResultShape([])).toBe('array');
-    expect(describeResultShape(null)).toBe('null');
-    expect(describeResultShape(true)).toBe('boolean');
-    expect(describeResultShape(undefined)).toBe('undefined');
-    expect(describeResultShape(() => {})).toBe('function');
-    expect(describeResultShape(Number.NaN)).toBe('non-finite-number');
-    expect(describeResultShape(Infinity)).toBe('non-finite-number');
+  test('invalid-result descriptors name every rejected runtime kind', () => {
+    expect(describeInvalidTransformResult({})).toBe('object');
+    expect(describeInvalidTransformResult([])).toBe('array');
+    expect(describeInvalidTransformResult(null)).toBe('null');
+    expect(describeInvalidTransformResult(true)).toBe('boolean');
+    expect(describeInvalidTransformResult(undefined)).toBe('undefined');
+    expect(describeInvalidTransformResult(() => {})).toBe('function');
+    expect(describeInvalidTransformResult(Number.NaN)).toBe(
+      'non-finite-number'
+    );
+    expect(describeInvalidTransformResult(Infinity)).toBe('non-finite-number');
   });
 });

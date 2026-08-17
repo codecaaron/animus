@@ -1,19 +1,75 @@
 import {
   AssertionError,
+  compact,
   findJsFiles,
   readAllConcat,
   readRequiredCss,
+  writeLaneReceipt,
 } from '@animus-ui/assertions';
 import { readFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { pathToFileURL, fileURLToPath } from 'node:url';
+import svelteManifest from 'svelte/package.json' with { type: 'json' };
+
+import manifest from '../package.json' with { type: 'json' };
+
+import type { JsonValue } from '@animus-ui/assertions';
 
 const APP_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const CLIENT_ROOT = resolve(APP_ROOT, 'dist/client');
 const SSR_ENTRY = resolve(APP_ROOT, 'dist/server/ssr.js');
 
-function expect(condition: unknown, message: string): asserts condition {
+const DEPENDENCY_FIELDS = [
+  'dependencies',
+  'devDependencies',
+  'peerDependencies',
+  'optionalDependencies',
+] as const;
+
+type DependencyField = (typeof DEPENDENCY_FIELDS)[number];
+
+type SsrArtifact = typeof import('../src/ssr');
+
+function expect(condition: boolean, message: string): asserts condition {
   if (!condition) throw new AssertionError(message);
+}
+
+function parseDependencyMap(
+  value: JsonValue | undefined,
+  field: DependencyField
+): ReadonlyMap<string, string> {
+  if (value === undefined) return new Map();
+  if (value === null || Array.isArray(value) || !(value instanceof Object)) {
+    throw new AssertionError(
+      `Svelte canary manifest field ${field} must be a dependency object`
+    );
+  }
+
+  const entries: [string, string][] = [];
+  for (const [dependency, version] of Object.entries(value)) {
+    if (Object.prototype.toString.call(version) !== '[object String]') {
+      throw new AssertionError(
+        `Svelte canary manifest dependency ${field}.${dependency} must have a string version`
+      );
+    }
+    entries.push([dependency, String(version)]);
+  }
+  return new Map(entries);
+}
+
+function parseManifestDependencies(
+  value: JsonValue
+): ReadonlyMap<DependencyField, ReadonlyMap<string, string>> {
+  if (value === null || Array.isArray(value) || !(value instanceof Object)) {
+    throw new AssertionError('Svelte canary manifest must be a JSON object');
+  }
+
+  return new Map(
+    DEPENDENCY_FIELDS.map((field) => [
+      field,
+      parseDependencyMap(value[field], field),
+    ])
+  );
 }
 
 function markedTag(html: string, element: string, probe: string): string {
@@ -58,8 +114,25 @@ function ruleBody(css: string, selector: string): string | undefined {
   return undefined;
 }
 
-function compact(value: string): string {
-  return value.replace(/\s+/g, '');
+function emitLaneReceipt(): void {
+  // Engine identity comes from writeLaneReceipt's retirement guard over the
+  // fixture config (openspec: retire-extract-v1) — never spelled here.
+  //
+  // hostVersion from the fixture's installed host, not the manifest range.
+  const receipt = writeLaneReceipt(
+    resolve(APP_ROOT, '.receipts', 'verify-assert-svelte.json'),
+    {
+      lane: '@animus-ui/svelte-app#verify:assert',
+      host: 'svelte',
+      hostVersion: svelteManifest.version,
+      mode: 'production',
+      packageForm: 'workspace',
+      engineConfigPath: resolve(APP_ROOT, 'vite.config.ts'),
+    }
+  );
+  console.log(
+    `[svelte-app:assert] receipt → .receipts/verify-assert-svelte.json (engine=${receipt.engineLoaded}, default=${receipt.engineDefault}, override=${receipt.engineOverride})`
+  );
 }
 
 function assertFrameworkNeutralArtifact(
@@ -98,32 +171,19 @@ async function main(): Promise<void> {
   assertFrameworkNeutralArtifact('Client JavaScript', clientJavascript);
   assertFrameworkNeutralArtifact('SSR JavaScript', ssrJavascript);
 
-  const manifest = JSON.parse(
-    await readFile(resolve(APP_ROOT, 'package.json'), 'utf8')
-  ) as Record<string, Record<string, string> | undefined>;
+  const dependencies = parseManifestDependencies(manifest);
   expect(
-    manifest.devDependencies?.['@types/react'] === '18.3.28',
+    dependencies.get('devDependencies')?.get('@types/react') === '18.3.28',
     'Svelte canary must pin exact @types/react for the strict declaration closure (DEF-2)'
   );
-  for (const field of [
-    'dependencies',
-    'devDependencies',
-    'peerDependencies',
-    'optionalDependencies',
-  ] as const) {
+  for (const field of DEPENDENCY_FIELDS) {
     expect(
-      manifest[field]?.react == null,
+      !dependencies.get(field)?.has('react'),
       `Svelte canary must not declare React in ${field} (G1: React-absent authoring)`
     );
   }
 
-  const ssrModule = (await import(pathToFileURL(SSR_ENTRY).href)) as {
-    renderedHtml?: unknown;
-  };
-  expect(
-    typeof ssrModule.renderedHtml === 'string',
-    'SSR artifact must export renderedHtml as a string'
-  );
+  const ssrModule: SsrArtifact = await import(pathToFileURL(SSR_ENTRY).href);
   const html = ssrModule.renderedHtml;
 
   const literalTag = markedTag(html, 'p', 'literal');
@@ -213,6 +273,8 @@ async function main(): Promise<void> {
   console.log(
     `[svelte-app:assert] client CSS and SSR runtime matched ${gapClass}; literal loud, dynamic offset, React runtime, and builder code were absent from production artifacts`
   );
+
+  emitLaneReceipt();
 }
 
 await main();

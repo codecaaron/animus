@@ -17,7 +17,7 @@ import type { RenderFact, SourceRef } from '../core/fact';
 import type { UnknownObligation } from '../core/obligation';
 import type { ProbeResult } from '../core/probe';
 import type { ScenarioPoint } from '../core/scenario';
-import type { SemanticDiff, SemanticDiffEntry } from '../engines/diff';
+import type { SemanticDiffEntry } from '../engines/diff';
 import type { RenderEquivalence } from '../engines/equivalence';
 
 export interface RenderContext {
@@ -83,21 +83,6 @@ const diffEntryLine = (entry: SemanticDiffEntry): string =>
   `  ${entry.property}: ${entry.kind} ${entry.before ?? '(unset)'} → ` +
   `${entry.after ?? '(unset)'} @ ${entry.context}`;
 
-/**
- * `ProbeResult.semanticDiff` is `unknown` at the substrate boundary (the
- * comparator is an engine concern), so the renderer checks the shape it knows
- * instead of asserting it — an unrecognised payload is skipped, never printed
- * as a half-parsed section.
- */
-const asSemanticDiff = (value: unknown): SemanticDiff | undefined => {
-  if (typeof value !== 'object' || value === null) return undefined;
-  const candidate = value as Partial<SemanticDiff>;
-  if (!Array.isArray(candidate.entries)) return undefined;
-  if (typeof candidate.affectedContextClasses !== 'number') return undefined;
-  if (typeof candidate.unaffectedContextClasses !== 'number') return undefined;
-  return candidate as SemanticDiff;
-};
-
 const obligationLines = (obligation: UnknownObligation): readonly string[] => [
   `  ${obligation.id} [${obligation.effectClass}] ${obligation.reason}`,
   `      origin ${describeSource(obligation.origin) ?? '(none)'}`,
@@ -138,7 +123,7 @@ export const renderProbe = (
     for (const fact of result.facts) lines.push(...factLines(fact));
   }
 
-  const diff = asSemanticDiff(result.semanticDiff);
+  const diff = result.semanticDiff;
   if (diff !== undefined) {
     lines.push(
       `SEMANTIC DIFF (${diff.entries.length} entries; ` +

@@ -9,7 +9,7 @@ import {
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 
-import { REPO_ROOT } from './prerequisites';
+import { REPO_ROOT } from '../../../extract/tests/engine-prerequisites';
 
 /**
  * The dev-lane fixture app: the smallest project shape that still has every

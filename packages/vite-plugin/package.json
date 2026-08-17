@@ -43,6 +43,9 @@
     "browserslist": "^4.24.0",
     "lightningcss": "^1.29.0"
   },
+  "devDependencies": {
+    "@animus-ui/assertions": "workspace:*"
+  },
   "peerDependencies": {
     "@mdx-js/mdx": "^3.0.0",
     "vite": ">=8 <9"

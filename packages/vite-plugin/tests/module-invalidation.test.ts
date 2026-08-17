@@ -24,8 +24,7 @@ describe('invalidateFileModules', () => {
       ids: [abs, `${abs}?v=123`],
     });
     const ssr = makeEnvGraph({ rootDir: '/tmp/proj', file: 'src/Card.tsx' });
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (probe.ctx as any).devServer = {
+    probe.ctx.devServer = {
       environments: {
         client: { moduleGraph: client.moduleGraph },
         ssr: { moduleGraph: ssr.moduleGraph },
@@ -46,8 +45,7 @@ describe('invalidateFileModules', () => {
       file: 'src/Card.tsx',
       ids: [],
     });
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (probe.ctx as any).devServer = {
+    probe.ctx.devServer = {
       environments: { client: { moduleGraph: client.moduleGraph } },
     };
     expect(invalidateFileModules(probe.ctx, ['src/Other.tsx'])).toBe(0);
@@ -56,8 +54,7 @@ describe('invalidateFileModules', () => {
   it('falls back to the mixed module graph when environments are absent', () => {
     const probe = makeContextProbe('/tmp/proj');
     const mixed = makeEnvGraph({ rootDir: '/tmp/proj', file: 'src/Card.tsx' });
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (probe.ctx as any).devServer = { moduleGraph: mixed.moduleGraph };
+    probe.ctx.devServer = { moduleGraph: mixed.moduleGraph };
     expect(invalidateFileModules(probe.ctx, ['src/Card.tsx'])).toBe(1);
     expect(mixed.invalidated.length).toBe(1);
   });

@@ -70,8 +70,9 @@ compile-time `{scale.path}` → `var(--name)` resolution.
 
 ```bash
 # Production build (from repo root): v2 NAPI + TS dists
-vp run build:extract          # = build:v2 && build:ts
-vp run build:extract-v2       # v2 NAPI only
+vp run build:extract          # = build:extract-v2 && build:ts (this package only)
+vp run build:extract-v2       # v2 NAPI only — asserts rustc == rust-toolchain.toml
+                              # channel BEFORE building; aborts on mismatch
 
 # From this directory
 bun run build:v2              # release NAPI (cd crates/extract-v2 && napi build --release)

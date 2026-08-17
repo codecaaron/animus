@@ -52,7 +52,7 @@ Files under discovered external package directories SHALL bypass extension filte
 #### Scenario: Vite transform processes external package files
 
 - **WHEN** a file's path starts with an external package directory prefix
-- **THEN** the transform hook skips the `\.[jt]sx?$` extension check and the `node_modules` guard — the manifest check alone determines whether to transform
+- **THEN** the transform hook skips the shared `ENGINE_TRANSFORM_EXTENSIONS` file-class check and the `node_modules` guard — the manifest check alone determines whether to transform
 
 #### Scenario: Webpack loader processes external package files
 

@@ -31,19 +31,21 @@ import {
  *   no injected pair.
  */
 
-// Shape of `e2e/vite-app` after Lightning CSS — theme blocks AND an
+// `e2e/vite-app` Lightning CSS artifact — theme blocks AND an
 // application-authored `_osDark` condition block in the same sheet.
-const VITE_SHAPED = `:root{--color-primary:var(--color-blue-500);--lightningcss-light: ;--lightningcss-dark:initial;color-scheme:dark}@media (prefers-color-scheme:light){:root:not([data-color-mode]){--color-primary:#1d4ed8;--lightningcss-light:initial;--lightningcss-dark: ;color-scheme:light}}@media (prefers-color-scheme:dark){:root:not([data-color-mode]){--color-primary:#3b82f6;--lightningcss-light: ;--lightningcss-dark:initial;color-scheme:dark}}[data-color-mode=dark]{--color-primary:#3b82f6;--lightningcss-light: ;--lightningcss-dark:initial;color-scheme:dark}[data-color-mode=light]{--color-primary:#1d4ed8;--lightningcss-light:initial;--lightningcss-dark: ;color-scheme:light}@layer anm-base{@media (prefers-color-scheme:dark){.animus-Card-74286a66{border-color:var(--color-border)}}}`;
+const VITE_APP_LIGHTNING_CSS_ARTIFACT = `:root{--color-primary:var(--color-blue-500);--lightningcss-light: ;--lightningcss-dark:initial;color-scheme:dark}@media (prefers-color-scheme:light){:root:not([data-color-mode]){--color-primary:#1d4ed8;--lightningcss-light:initial;--lightningcss-dark: ;color-scheme:light}}@media (prefers-color-scheme:dark){:root:not([data-color-mode]){--color-primary:#3b82f6;--lightningcss-light: ;--lightningcss-dark:initial;color-scheme:dark}}[data-color-mode=dark]{--color-primary:#3b82f6;--lightningcss-light: ;--lightningcss-dark:initial;color-scheme:dark}[data-color-mode=light]{--color-primary:#1d4ed8;--lightningcss-light:initial;--lightningcss-dark: ;color-scheme:light}@layer anm-base{@media (prefers-color-scheme:dark){.animus-Card-74286a66{border-color:var(--color-border)}}}`;
 
 describe('assertSystemSchemeGuard', () => {
   it('accepts guarded theme blocks alongside an unguarded author condition block', () => {
     expect(() =>
-      assertSystemSchemeGuard(VITE_SHAPED, { expectSchemes: ['light', 'dark'] })
+      assertSystemSchemeGuard(VITE_APP_LIGHTNING_CSS_ARTIFACT, {
+        expectSchemes: ['light', 'dark'],
+      })
     ).not.toThrow();
   });
 
   it('rejects a root-targeting rule inside a prefers-color-scheme block that drops the guard', () => {
-    const unguarded = VITE_SHAPED.replace(
+    const unguarded = VITE_APP_LIGHTNING_CSS_ARTIFACT.replace(
       '@media (prefers-color-scheme:dark){:root:not([data-color-mode])',
       '@media (prefers-color-scheme:dark){:root'
     );
@@ -51,7 +53,7 @@ describe('assertSystemSchemeGuard', () => {
   });
 
   it('rejects a partially guarded selector list', () => {
-    const partial = VITE_SHAPED.replace(
+    const partial = VITE_APP_LIGHTNING_CSS_ARTIFACT.replace(
       '@media (prefers-color-scheme:light){:root:not([data-color-mode])',
       '@media (prefers-color-scheme:light){:root:not([data-color-mode]),html'
     );
@@ -62,7 +64,7 @@ describe('assertSystemSchemeGuard', () => {
     // `html { _osDark: { … } }` in an app's global styles emits an unguarded
     // root-element block that is the app's own business — the guard contract
     // governs the emitter's fallback blocks, which are always `:root`-based.
-    const authored = `${VITE_SHAPED}@media (prefers-color-scheme:dark){html{--app-owned:1}}`;
+    const authored = `${VITE_APP_LIGHTNING_CSS_ARTIFACT}@media (prefers-color-scheme:dark){html{--app-owned:1}}`;
     expect(() =>
       assertSystemSchemeGuard(authored, { expectSchemes: ['light', 'dark'] })
     ).not.toThrow();
@@ -88,7 +90,7 @@ describe('assertSystemSchemeGuard', () => {
 describe('assertColorSchemeEmission', () => {
   it('reads color-scheme off :root, both attribute blocks and both guarded blocks', () => {
     expect(() =>
-      assertColorSchemeEmission(VITE_SHAPED, {
+      assertColorSchemeEmission(VITE_APP_LIGHTNING_CSS_ARTIFACT, {
         root: 'dark',
         modes: { dark: 'dark', light: 'light' },
         system: { light: 'light', dark: 'dark' },
@@ -98,7 +100,7 @@ describe('assertColorSchemeEmission', () => {
 
   it('rejects a :root classification that does not match the initial mode', () => {
     expect(() =>
-      assertColorSchemeEmission(VITE_SHAPED, {
+      assertColorSchemeEmission(VITE_APP_LIGHTNING_CSS_ARTIFACT, {
         root: 'light',
         modes: { dark: 'dark' },
       })
@@ -107,7 +109,7 @@ describe('assertColorSchemeEmission', () => {
 
   it('rejects a mode block whose color-scheme contradicts the classification', () => {
     expect(() =>
-      assertColorSchemeEmission(VITE_SHAPED, {
+      assertColorSchemeEmission(VITE_APP_LIGHTNING_CSS_ARTIFACT, {
         root: 'dark',
         modes: { light: 'dark' },
       })
@@ -118,14 +120,14 @@ describe('assertColorSchemeEmission', () => {
 describe('assertSystemFallbackParity', () => {
   it('accepts declaration lists that match the mapped mode block byte-for-byte', () => {
     expect(() =>
-      assertSystemFallbackParity(VITE_SHAPED, {
+      assertSystemFallbackParity(VITE_APP_LIGHTNING_CSS_ARTIFACT, {
         mapping: { light: 'light', dark: 'dark' },
       })
     ).not.toThrow();
   });
 
   it('rejects a fallback whose declarations drifted from the mode block', () => {
-    const drifted = VITE_SHAPED.replace(
+    const drifted = VITE_APP_LIGHTNING_CSS_ARTIFACT.replace(
       '@media (prefers-color-scheme:dark){:root:not([data-color-mode]){--color-primary:#3b82f6',
       '@media (prefers-color-scheme:dark){:root:not([data-color-mode]){--color-primary:#000000'
     );
@@ -158,7 +160,7 @@ describe('assertSystemFallbackParity', () => {
 describe('systemSchemeVariableSpans', () => {
   // Offset of the AUTHOR-written `_osDark` component block, which lives inside
   // `@layer anm-base` and must never be covered.
-  const authorBlock = VITE_SHAPED.indexOf(
+  const authorBlock = VITE_APP_LIGHTNING_CSS_ARTIFACT.indexOf(
     '@media (prefers-color-scheme:dark){.animus-Card'
   );
   const covers = (
@@ -167,10 +169,10 @@ describe('systemSchemeVariableSpans', () => {
   ): boolean => spans.some(([start, end]) => index >= start && index <= end);
 
   it('(a) emits a span for each all-guarded unlayered block, and only those', () => {
-    const spans = systemSchemeVariableSpans(VITE_SHAPED);
+    const spans = systemSchemeVariableSpans(VITE_APP_LIGHTNING_CSS_ARTIFACT);
     expect(spans).toHaveLength(2);
     for (const [start, end] of spans) {
-      const block = VITE_SHAPED.slice(start, end + 1);
+      const block = VITE_APP_LIGHTNING_CSS_ARTIFACT.slice(start, end + 1);
       expect(block.startsWith('@media')).toBe(true);
       expect(block).toContain(':root:not([data-color-mode])');
     }
@@ -179,7 +181,7 @@ describe('systemSchemeVariableSpans', () => {
   });
 
   it('(b) withholds the span from a block whose rule targets a class, not the root', () => {
-    const classScoped = VITE_SHAPED.replace(
+    const classScoped = VITE_APP_LIGHTNING_CSS_ARTIFACT.replace(
       '@media (prefers-color-scheme:light){:root:not([data-color-mode])',
       '@media (prefers-color-scheme:light){.animus-Card-74286a66'
     );
@@ -192,11 +194,11 @@ describe('systemSchemeVariableSpans', () => {
 
   it('(c) withholds the span when one extra unguarded rule joins the block', () => {
     // The guard is still there; a second, unguarded rule rides beside it.
-    const extraRule = VITE_SHAPED.replace(
+    const extraRule = VITE_APP_LIGHTNING_CSS_ARTIFACT.replace(
       'color-scheme:dark}}',
       'color-scheme:dark}.animus-Card-74286a66{color:red}}'
     );
-    expect(extraRule).not.toBe(VITE_SHAPED);
+    expect(extraRule).not.toBe(VITE_APP_LIGHTNING_CSS_ARTIFACT);
     const spans = systemSchemeVariableSpans(extraRule);
     expect(spans).toHaveLength(1);
     expect(
@@ -209,13 +211,13 @@ describe('systemSchemeVariableSpans', () => {
     expect(systemSchemeVariableSpans(empty)).toHaveLength(0);
   });
 
-  it('(e) the gate it loosens is non-vacuous — without spans, VITE_SHAPED throws', () => {
-    expect(() => assertConditionsInsideLayers(VITE_SHAPED)).toThrow(
-      AssertionError
-    );
+  it('(e) the gate it loosens is non-vacuous — without spans, the Vite app CSS artifact throws', () => {
     expect(() =>
-      assertConditionsInsideLayers(VITE_SHAPED, {
-        exemptSpans: systemSchemeVariableSpans(VITE_SHAPED),
+      assertConditionsInsideLayers(VITE_APP_LIGHTNING_CSS_ARTIFACT)
+    ).toThrow(AssertionError);
+    expect(() =>
+      assertConditionsInsideLayers(VITE_APP_LIGHTNING_CSS_ARTIFACT, {
+        exemptSpans: systemSchemeVariableSpans(VITE_APP_LIGHTNING_CSS_ARTIFACT),
       })
     ).not.toThrow();
   });
@@ -224,11 +226,11 @@ describe('systemSchemeVariableSpans', () => {
     // The nested rule is ITSELF the root guard, so the all-guarded condition
     // alone still passes — this is exactly the shape that would otherwise ride
     // into the sheet under blanket cover.
-    const nested = VITE_SHAPED.replace(
+    const nested = VITE_APP_LIGHTNING_CSS_ARTIFACT.replace(
       'color-scheme:dark}}',
       'color-scheme:dark}@supports (color:red){:root:not([data-color-mode]){--color-primary:red}}}'
     );
-    expect(nested).not.toBe(VITE_SHAPED);
+    expect(nested).not.toBe(VITE_APP_LIGHTNING_CSS_ARTIFACT);
     const spans = systemSchemeVariableSpans(nested);
     expect(spans).toHaveLength(1);
     expect(
@@ -259,21 +261,28 @@ describe('systemSchemeVariableSpans', () => {
 // document places the script itself, and Next's own CSS preload link is the
 // first stylesheet reference after it.
 const CODE = '(function(){try{}catch(e){}})();';
-const NEXT_SHAPED = `<!DOCTYPE html><html lang="en"><head><meta charSet="utf-8"/><script data-animus-bootstrap="">${CODE}</script><link rel="preload" href="/_next/static/css/a.css" as="style"/><link rel="stylesheet" href="/_next/static/css/a.css"/></head><body></body></html>`;
+const NEXT_APP_LEGACY_PAGE_HTML_ARTIFACT = `<!DOCTYPE html><html lang="en"><head><meta charSet="utf-8"/><script data-animus-bootstrap="">${CODE}</script><link rel="preload" href="/_next/static/css/a.css" as="style"/><link rel="stylesheet" href="/_next/static/css/a.css"/></head><body></body></html>`;
 
 describe('assertBootstrapScriptFirst', () => {
   it('accepts a script placed ahead of a preload/stylesheet pair', () => {
-    expect(() => assertBootstrapScriptFirst(NEXT_SHAPED)).not.toThrow();
+    expect(() =>
+      assertBootstrapScriptFirst(NEXT_APP_LEGACY_PAGE_HTML_ARTIFACT)
+    ).not.toThrow();
   });
 
   it('compares the emitted text to the artifact code and its CSP hash', () => {
     // sha256 of CODE, base64 — recomputed the way a browser would.
     const cspHash = `sha256-${createHash('sha256').update(CODE, 'utf8').digest('base64')}`;
     expect(() =>
-      assertBootstrapScriptFirst(NEXT_SHAPED, { code: CODE, cspHash })
+      assertBootstrapScriptFirst(NEXT_APP_LEGACY_PAGE_HTML_ARTIFACT, {
+        code: CODE,
+        cspHash,
+      })
     ).not.toThrow();
     expect(() =>
-      assertBootstrapScriptFirst(NEXT_SHAPED, { cspHash: 'sha256-stale' })
+      assertBootstrapScriptFirst(NEXT_APP_LEGACY_PAGE_HTML_ARTIFACT, {
+        cspHash: 'sha256-stale',
+      })
     ).toThrow(AssertionError);
   });
 
@@ -303,7 +312,9 @@ describe('assertBootstrapScriptFirst', () => {
 
 describe('assertCharsetWithinByteBudget', () => {
   it('accepts a charset declaration inside the byte budget', () => {
-    expect(() => assertCharsetWithinByteBudget(NEXT_SHAPED)).not.toThrow();
+    expect(() =>
+      assertCharsetWithinByteBudget(NEXT_APP_LEGACY_PAGE_HTML_ARTIFACT)
+    ).not.toThrow();
   });
 
   it('rejects a declaration pushed past the budget', () => {
@@ -336,6 +347,8 @@ describe('assertNoBootstrapScript', () => {
   });
 
   it('fails as soon as the marker appears', () => {
-    expect(() => assertNoBootstrapScript(NEXT_SHAPED)).toThrow(AssertionError);
+    expect(() =>
+      assertNoBootstrapScript(NEXT_APP_LEGACY_PAGE_HTML_ARTIFACT)
+    ).toThrow(AssertionError);
   });
 });

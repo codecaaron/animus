@@ -26,7 +26,7 @@ function rec(
     v: 1,
     target: 'fixture.ts:1',
     ...partial,
-  } as Receipt;
+  };
 }
 
 function jsonl(records: Receipt[]): string {

@@ -39,6 +39,7 @@ import { dedupeOperations, dischargeOperations } from './result';
 import type { RenderFact, RenderSubject } from '../core/fact';
 import type { UnknownObligation } from '../core/obligation';
 import type {
+  AssertionSpec,
   CounterexampleWitness,
   ProbeBudget,
   ProbeResult,
@@ -49,6 +50,7 @@ import type {
   ScenarioCell,
   ScenarioDomain,
   ScenarioPoint,
+  DimensionValue,
 } from '../core/scenario';
 import type { AbstractValue } from '../core/value';
 import type { RenderWorld } from '../core/world';
@@ -99,6 +101,16 @@ const ASSERTION_KINDS = [
 
 const MODE = 'mode';
 
+const isProofString = (value: string | undefined): value is string =>
+  Object(value) !== value &&
+  Object.prototype.toString.call(value) === '[object String]';
+
+const isNumericDimensionValue = (
+  value: DimensionValue | undefined
+): value is number =>
+  Object(value) !== value &&
+  Object.prototype.toString.call(value) === '[object Number]';
+
 const validate = (assertion: OracleAssertion): void => {
   if (!ASSERTION_KINDS.includes(assertion.kind)) {
     throw new TypeError(
@@ -107,16 +119,13 @@ const validate = (assertion: OracleAssertion): void => {
       )}' — supported: ${ASSERTION_KINDS.join(', ')}`
     );
   }
-  if (typeof assertion.target !== 'string' || assertion.target.length === 0) {
+  if (!isProofString(assertion.target) || assertion.target.length === 0) {
     throw new TypeError(
       `prove: assertion '${assertion.kind}' requires a target selector`
     );
   }
   if (assertion.kind !== 'no-important') {
-    if (
-      typeof assertion.property !== 'string' ||
-      assertion.property.length === 0
-    ) {
+    if (!isProofString(assertion.property) || assertion.property.length === 0) {
       throw new TypeError(
         `prove: assertion '${assertion.kind}' requires a property name`
       );
@@ -124,7 +133,7 @@ const validate = (assertion: OracleAssertion): void => {
   }
   if (
     assertion.kind === 'effective-value' &&
-    typeof assertion.expected !== 'string'
+    !isProofString(assertion.expected)
   ) {
     throw new TypeError(
       "prove: assertion 'effective-value' requires expected (a string)"
@@ -134,7 +143,7 @@ const validate = (assertion: OracleAssertion): void => {
     if (
       !Array.isArray(assertion.allowed) ||
       assertion.allowed.length === 0 ||
-      assertion.allowed.some((value) => typeof value !== 'string')
+      assertion.allowed.some((value) => !isProofString(value))
     ) {
       throw new TypeError(
         "prove: assertion 'effective-value-in' requires a non-empty allowed " +
@@ -144,7 +153,7 @@ const validate = (assertion: OracleAssertion): void => {
   }
   if (
     assertion.kind === 'winner-origin-token' &&
-    (typeof assertion.token !== 'string' || !assertion.token.startsWith('--'))
+    (!isProofString(assertion.token) || !assertion.token.startsWith('--'))
   ) {
     throw new TypeError(
       "prove: assertion 'winner-origin-token' requires a custom-property " +
@@ -221,6 +230,24 @@ interface Evaluation {
   resolution: TargetResolution;
 }
 
+interface CellCheckResult {
+  violation?: string;
+  effective?: EffectiveValue;
+  undecided?: true;
+}
+
+interface ModeInvarianceResult {
+  failures: readonly Failure[];
+  undecided: number;
+}
+
+interface ModeCellComparison {
+  cell: ScenarioCell;
+  value: string;
+  decided: boolean;
+  mode: string;
+}
+
 const importantAt = (analysis: CascadeAnalysis): string | undefined => {
   for (const candidate of analysis.candidates) {
     if (!candidate.active) continue;
@@ -240,7 +267,7 @@ const checkCell = (
   ctx: CascadeContext,
   assertion: OracleAssertion,
   analysis: CascadeAnalysis
-): { violation?: string; effective?: EffectiveValue; undecided?: boolean } => {
+): CellCheckResult => {
   if (assertion.kind === 'no-important') {
     const found = importantAt(analysis);
     return found === undefined ? {} : { violation: found };
@@ -316,14 +343,11 @@ interface CellObservation {
 const checkModeInvariance = (
   observations: readonly CellObservation[],
   property: string
-): { failures: readonly Failure[]; undecided: number } => {
-  const groups = new Map<
-    string,
-    { cell: ScenarioCell; value: string; decided: boolean; mode: string }[]
-  >();
+): ModeInvarianceResult => {
+  const groups = new Map<string, ModeCellComparison[]>();
 
   for (const { cell, effective } of observations) {
-    const rest: Record<string, unknown> = { ...cell.point };
+    const rest = { ...cell.point };
     delete rest[MODE];
     const key = canonicalJson(rest);
 
@@ -372,7 +396,7 @@ const witnessScore = (
       if (declared.values.length > 0 && value !== declared.values[0]) {
         nonDefault += 1;
       }
-    } else if (typeof value === 'number') {
+    } else if (isNumericDimensionValue(value)) {
       numeric += value;
     }
   }
@@ -414,12 +438,12 @@ const boundaryNote = (
   for (const dim of Object.keys(domain).sort()) {
     if (domain[dim].kind !== 'interval') continue;
     const failingValue = failing[dim];
-    if (typeof failingValue !== 'number') continue;
+    if (!isNumericDimensionValue(failingValue)) continue;
 
     const thresholds = [...(cuts[dim] ?? [])].sort((a, b) => a - b);
     for (const cell of passing) {
       const passingValue = cell.point[dim];
-      if (typeof passingValue !== 'number') continue;
+      if (!isNumericDimensionValue(passingValue)) continue;
       const differsElsewhere = Object.keys(failing).some(
         (other) => other !== dim && failing[other] !== cell.point[other]
       );
@@ -577,19 +601,20 @@ const evaluateAssertion = (
     }
   }
 
-  return {
+  const evaluation: Evaluation = {
     ...unevaluated,
     evaluated: cells.length,
     failures,
     passing,
     undecided,
-    ...(vacuous === undefined ? {} : { vacuous }),
     concerns: Array.from(concerns),
     unknowns: rt.unknownsFor(subjects, raised),
     assumptions: Array.from(assumptions),
     subjects,
-    ...(winner === undefined ? {} : { winner }),
   };
+  if (vacuous !== undefined) evaluation.vacuous = vacuous;
+  if (winner !== undefined) evaluation.winner = winner;
+  return evaluation;
 };
 
 const verdictOf = (evaluations: readonly Evaluation[]): ProbeVerdict => {
@@ -627,13 +652,14 @@ const witnessesOf = (
       failure.cell.point,
       evaluation.passing
     );
-    witnesses.push({
+    const witness: CounterexampleWitness = {
       point: failure.cell.point,
       violation: `${assertionLabel(evaluation.assertion)}: ${
         failure.violation
       } at ${describeCell(failure.cell)}`,
-      ...(boundary === undefined ? {} : { boundary }),
-    });
+    };
+    if (boundary !== undefined) witness.boundary = boundary;
+    witnesses.push(witness);
   }
   return witnesses;
 };
@@ -726,6 +752,18 @@ const summarize = (
   }
 };
 
+const assertionSpec = (
+  rt: OracleRuntime,
+  assertion: OracleAssertion
+): AssertionSpec => {
+  const params = { ...assertion, target: undefined };
+  return {
+    kind: assertion.kind,
+    target: rt.resolveTarget(assertion.target).target,
+    params,
+  };
+};
+
 export const runProve = (
   rt: OracleRuntime,
   request: ProveRequest
@@ -751,14 +789,9 @@ export const runProve = (
       scope: 'equivalence-class',
       objective: {
         kind: 'assertion',
-        assertions: request.assertions.map((assertion) => ({
-          kind: assertion.kind,
-          target: rt.resolveTarget(assertion.target).target,
-          params: {
-            ...assertion,
-            target: undefined,
-          } as Readonly<Record<string, unknown>>,
-        })),
+        assertions: request.assertions.map((assertion) =>
+          assertionSpec(rt, assertion)
+        ),
       },
       budget,
     },

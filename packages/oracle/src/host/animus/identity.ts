@@ -108,43 +108,57 @@ const recordOf = (
   const chain = findChain(manifest, component);
   const span = chain?.descriptor.span;
 
-  return {
+  // The optional fields are absent whenever the manifest carries null or
+  // nothing there: a record that reports `extendsFrom: undefined` would claim
+  // the adapter looked and found no parent, which is not the same fact as a
+  // component that has none recorded.
+  const record: ComponentRecord = {
     id: component.id,
     file: component.record.file,
     binding: component.record.binding,
     className: component.record.class_name,
     terminal: component.record.terminal,
-    ...(component.record.extends_from == null
-      ? {}
-      : { extendsFrom: component.record.extends_from }),
-    ...(component.record.tag == null ? {} : { tag: component.record.tag }),
-    ...(span == null
-      ? {}
-      : {
-          source: {
-            file: component.record.file,
-            span: [span[0], span[1]] as const,
-            note: 'the whole builder chain, from binding to terminal',
-          },
-        }),
   };
+  if (component.record.extends_from != null) {
+    record.extendsFrom = component.record.extends_from;
+  }
+  if (component.record.tag != null) record.tag = component.record.tag;
+  if (span != null) {
+    record.source = {
+      file: component.record.file,
+      span: [span[0], span[1]],
+      note: 'the whole builder chain, from binding to terminal',
+    };
+  }
+
+  return record;
 };
+
+/**
+ * A component's public record and the parsed config it was derived from, kept
+ * together so resolution never has to look the parse back up by id — the two
+ * halves are produced from one `ParsedComponent` and cannot go missing
+ * independently.
+ */
+interface IdentifiedComponent {
+  record: ComponentRecord;
+  parsed: ParsedComponent;
+}
 
 export const createAnimusIdentity = (
   input: AnimusIdentityInput
 ): IdentityProvider => {
-  const records = input.components.map((component) =>
-    recordOf(input.manifest, component)
-  );
-  const byId = new Map<string, ComponentRecord>(
-    records.map((record) => [record.id, record])
-  );
-  const parsedById = new Map<string, ParsedComponent>(
-    input.components.map((component) => [component.id, component])
+  const identified: IdentifiedComponent[] = input.components.map((parsed) => ({
+    record: recordOf(input.manifest, parsed),
+    parsed,
+  }));
+  const records = identified.map((entry) => entry.record);
+  const byId = new Map<string, IdentifiedComponent>(
+    identified.map((entry) => [entry.record.id, entry])
   );
 
-  const resolutionFor = (record: ComponentRecord): TargetResolution => {
-    const component = parsedById.get(record.id) as ParsedComponent;
+  const resolutionFor = (entry: IdentifiedComponent): TargetResolution => {
+    const { record } = entry;
     const owner = input.owners.get(record.id) ?? record.binding;
     return {
       target: asTargetId(record.id),
@@ -154,13 +168,13 @@ export const createAnimusIdentity = (
         ...(input.componentDomains.get(record.id) ?? {}),
       },
       classes: (point: ScenarioPoint) =>
-        classesAtPoint(component, owner, point),
+        classesAtPoint(entry.parsed, owner, point),
     };
   };
 
   return {
     components: () => records,
-    componentById: (id: string) => byId.get(id),
+    componentById: (id: string) => byId.get(id)?.record,
     resolveTarget: (selector: string) => {
       const exact = byId.get(selector);
       if (exact !== undefined) return resolutionFor(exact);
@@ -168,7 +182,9 @@ export const createAnimusIdentity = (
       // A bare binding that matches two components resolves to nothing: an
       // arbitrary winner would scope every later answer to a component the
       // caller did not name, and the ambiguity would never surface.
-      const named = records.filter((record) => record.binding === selector);
+      const named = identified.filter(
+        (entry) => entry.record.binding === selector
+      );
       return named.length === 1 ? resolutionFor(named[0]) : undefined;
     },
   };

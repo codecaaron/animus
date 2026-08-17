@@ -44,6 +44,14 @@ export const PUBLISHABLE_PACKAGE_NAMES = [
 const INTERNAL_PREFIX = '@animus-ui/';
 const EXTRACT_PLATFORM_PREFIX = '@animus-ui/extract-';
 
+// DISTINCT from `./manifest-model.ts`'s `PackageManifest`, deliberately.
+// That type models an arbitrary package.json found on disk, so every field is
+// optional. This one models a manifest extracted from a BUILT TARBALL, where
+// `name` and `version` are guaranteed present by the publish contract — every
+// read site below keys maps by `manifest.name` and compares `manifest.version`
+// against the expected graph. Same file format, different question: routing
+// this through the on-disk model would force a presence check for an invariant
+// `bun pm pack` already establishes.
 export type PackageManifest = {
   name: string;
   version: string;
@@ -70,11 +78,16 @@ export type TarballInputs =
   | { mode: 'local'; tarballs: Map<string, string> }
   | { mode: 'supplied'; tarballs: Map<string, string>; tarballsDir: string };
 
+// Membership lookup over the same names. The tuple above is the ORDERED
+// publish list (packed.sh packs in that order); this asks a different question
+// of it — "is this arbitrary dependency name one of ours?" — and asking it of a
+// set keeps an unrelated name from having to pose as a member of the tuple.
+const PUBLISHABLE_PACKAGE_NAME_SET = new Set<string>(PUBLISHABLE_PACKAGE_NAMES);
+
 function isInternalPackage(name: string): boolean {
   return (
-    PUBLISHABLE_PACKAGE_NAMES.includes(
-      name as (typeof PUBLISHABLE_PACKAGE_NAMES)[number]
-    ) || name.startsWith(EXTRACT_PLATFORM_PREFIX)
+    PUBLISHABLE_PACKAGE_NAME_SET.has(name) ||
+    name.startsWith(EXTRACT_PLATFORM_PREFIX)
   );
 }
 
@@ -194,6 +207,12 @@ export function validateInstalledInternalGraph(
 
     let manifest: PackageManifest;
     try {
+      // SAFETY: `packagePath` is an installed (non-symlink, checked above)
+      // package directory the installer materialized from a published tarball,
+      // and a publish is impossible without `name` and `version` — the same
+      // publish contract this type is declared against. An unreadable or
+      // unparseable manifest is caught below and reported as a diagnostic
+      // rather than reaching the read sites.
       manifest = JSON.parse(
         readFileSync(join(packagePath, 'package.json'), 'utf8')
       ) as PackageManifest;
@@ -275,6 +294,11 @@ function manifestFromTarball(path: string): PackageManifest {
       `cannot read package/package.json from ${path}: ${result.stderr.trim()}`
     );
   }
+  // SAFETY: `tar` exited 0, so `package/package.json` was extracted from a
+  // tarball `bun pm pack` built out of a workspace manifest. `name` and
+  // `version` are the two fields the pack step itself requires — that is the
+  // publish contract `PackageManifest` is declared against above — so no read
+  // site below has to check for them.
   return JSON.parse(result.stdout) as PackageManifest;
 }
 
@@ -348,6 +372,9 @@ function main(args: readonly string[]): number {
     printInstalledDiagnostics(diagnostics);
     return diagnostics.length === 0 ? 0 : 1;
   } catch (error) {
+    // SAFETY: every throw reachable from this block is an Error — the
+    // `new Error(...)` sites in `resolveTarballInputs`, `manifestFromTarball`,
+    // and the root check just above, plus `node:fs` and `JSON.parse` failures.
     console.error(`ERROR: ${(error as Error).message}`);
     return 1;
   }

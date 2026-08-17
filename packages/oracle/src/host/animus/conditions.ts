@@ -102,13 +102,18 @@ export const cutsOfPredicates = (
     }
   }
 
-  const out: Record<string, number[]> = {};
-  for (const dimension of Array.from(merged.keys()).sort()) {
-    const values = Array.from(merged.get(dimension) as Set<number>);
-    values.sort((a, b) => a - b);
-    out[dimension] = values;
-  }
-  return out;
+  // Dimension order is the map's own entries sorted by name, so the sets and
+  // their names cannot come apart the way a name-keyed second lookup can, and
+  // the emitted key order stays the historical one (names ascending, each
+  // dimension's thresholds ascending).
+  return Object.fromEntries(
+    Array.from(merged.entries())
+      .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+      .map(([dimension, cuts]): [string, number[]] => [
+        dimension,
+        Array.from(cuts).sort((left, right) => left - right),
+      ])
+  );
 };
 
 /**

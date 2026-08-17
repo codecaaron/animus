@@ -10,6 +10,7 @@ import {
   assertNoPlaceholders,
   assertNoUnresolvedTokens,
   assertVariantDeclarationParity,
+  layerBlockBody,
 } from '../src/assert-css';
 
 const ORDERED_CSS = `
@@ -55,6 +56,18 @@ describe('assertLayerOrder', () => {
         layers: [layerBlock('anm-base'), layerBlock('anm-variants')],
       })
     ).not.toThrow();
+  });
+
+  it('names a missing string marker verbatim and a missing regex marker as a pattern', () => {
+    // The two marker kinds are reported differently on purpose: a literal is
+    // quoted as authored, a pattern is shown in `/…/` form so the reader can
+    // tell "this text is absent" from "nothing matched this shape".
+    expect(() =>
+      assertLayerOrder('/* empty */', { layers: ['@layer anm-base {'] })
+    ).toThrow('missing expected layer markers: @layer anm-base {');
+    expect(() =>
+      assertLayerOrder('/* empty */', { layers: [/@layer\s+anm-base/] })
+    ).toThrow('missing expected layer markers: /@layer\\s+anm-base/');
   });
 });
 
@@ -317,5 +330,32 @@ describe('assertVariantDeclarationParity', () => {
     expect(() => assertVariantDeclarationParity(css, config)).toThrow(
       AssertionError
     );
+  });
+});
+
+describe('layerBlockBody', () => {
+  it('returns the body of the named layer block', () => {
+    expect(layerBlockBody(ORDERED_CSS, 'anm-base')).toBe(
+      ' .animus-card { padding: 8px; } '
+    );
+  });
+
+  it('returns undefined when the sheet declares no such block', () => {
+    // The `@layer a, b, c;` DECLARATION is not a block.
+    expect(layerBlockBody(ORDERED_CSS, 'anm-states')).toBeUndefined();
+  });
+
+  it('brace-matches so a nested at-rule does not terminate the body early', () => {
+    const css =
+      '@layer anm-global { @media (min-width: 10px) { body { margin: 0; } } .tail { gap: 1px; } }';
+    const body = layerBlockBody(css, 'anm-global');
+    // A flat `[^{}]*` reader would stop at the first inner `}` and lose .tail.
+    expect(body).toContain('.tail { gap: 1px; }');
+    expect(body).toContain('@media');
+  });
+
+  it('takes the FIRST block when a layer is reopened', () => {
+    const css = '@layer anm-base { a { x: 1 } } @layer anm-base { b { y: 2 } }';
+    expect(layerBlockBody(css, 'anm-base')).toBe(' a { x: 1 } ');
   });
 });

@@ -36,10 +36,19 @@ export interface DynamicPropConfigEntry {
   scaleValues?: Record<string, string>;
 }
 
+/**
+ * The emitted `dynamicPropConfig` object: prop name → its slot config entry.
+ * Named because this map IS the system-props module's serialized contract —
+ * `JSON.stringify` of exactly this value is what each plugin writes.
+ */
+export interface DynamicPropConfig {
+  [propName: string]: DynamicPropConfigEntry;
+}
+
 export function buildDynamicPropConfig(
   dynamicProps: Record<string, DynamicPropMeta>
-): Record<string, DynamicPropConfigEntry> {
-  const configEntries: Record<string, DynamicPropConfigEntry> = {};
+): DynamicPropConfig {
+  const configEntries: DynamicPropConfig = {};
   for (const [propName, meta] of Object.entries(dynamicProps)) {
     if (!meta.varName || !meta.slotClass) {
       // Loud on purpose: a rename on the manifest side has to fail the build,

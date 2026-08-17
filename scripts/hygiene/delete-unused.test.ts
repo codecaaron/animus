@@ -18,34 +18,69 @@ import { describe, expect, test } from 'vitest';
 // the project root ("path is expected to be under the root"), and vp's
 // lint config (vite.config.ts ignorePatterns) excludes `tmp/`,
 // `node_modules/`, `dist/`, etc. — those skips apply even to explicit
-// path arguments. Live tests must place fixtures at a project-root path
-// that (a) is under the project root and (b) does not match any vp
-// ignorePattern. The `.live-test-fixtures-*` prefix satisfies both;
-// .gitignore prevents leak commits.
+// path arguments. So live fixtures must sit at a project-root path that
+// matches no vp ignorePattern.
+//
+// The subtle part: the fixture path must ALSO not be in .gitignore. `vp lint
+// --no-ignore` disables `.eslintignore` / `--ignore-path` / `--ignore-pattern`
+// and nothing else — .gitignore still applies. The previous
+// `.live-test-fixtures-*` prefix WAS gitignored (added, reasonably enough, to
+// prevent leak commits), so oxlint skipped it, returned `number_of_files: 0`
+// plus a "No files found to lint" banner on stdout, and both live tests below
+// died on `JSON.parse`. The ignore entry meant to protect the fixture is what
+// made the gate vacuous. `livetestfixtures-*` is deliberately NOT ignored;
+// see the note in .gitignore. Each test removes its directory in a `finally`.
 function liveFixtureDir(prefix: string): string {
   return mkdtempSync(join(process.cwd(), prefix));
 }
 
+import {
+  isJsonNumber,
+  isJsonObject,
+  isJsonString,
+  parseJsonObject,
+} from '@animus-ui/assertions';
+
+import {
+  type OxlintDiagnostic,
+  ToolReportError,
+  classifyUnusedVar,
+  decodeKnipReport,
+  decodeOxlintReport,
+} from './_tool-reports.ts';
 import { applyDeletions } from './delete-unused.ts';
 
-type OxlintSpan = {
-  offset: number;
-  length: number;
-  line: number;
-  column: number;
-};
-type OxlintLabel = { label: string; span: OxlintSpan };
-type OxlintDiagnostic = {
-  message: string;
-  code: string;
-  filename: string;
-  severity: string;
-  causes: unknown[];
-  related: unknown[];
-  url: string;
-  help: string;
-  labels: OxlintLabel[];
-};
+import type { JsonObject } from '@animus-ui/assertions';
+
+// The shape claims below are about the WIRE record oxlint emits, so the
+// subject is read back as JSON and decided with the shared JSON vocabulary.
+// A `typeof` over the in-memory object would have been answered by the local
+// `OxlintDiagnostic` annotation — i.e. by the very declaration under test —
+// which is exactly the vacuous gate this suite exists to prevent.
+function wireRecord(
+  diagnostic: OxlintDiagnostic,
+  boundary: string
+): JsonObject {
+  return parseJsonObject(JSON.stringify(diagnostic), boundary);
+}
+
+// `labels[0].span` is the coordinate path the deleter navigates. Reaching it
+// fails loud so a schema move (span hoisted onto the diagnostic, labels
+// renamed) surfaces here rather than as a silent no-op deletion pass.
+function firstLabelSpan(diagnostic: JsonObject): JsonObject {
+  const labels = diagnostic.labels;
+  if (!Array.isArray(labels)) {
+    throw new TypeError('oxlint diagnostic: `labels` is not an array');
+  }
+  const [first] = labels;
+  if (!isJsonObject(first)) {
+    throw new TypeError('oxlint diagnostic: `labels[0]` is not an object');
+  }
+  if (!isJsonObject(first.span)) {
+    throw new TypeError('oxlint diagnostic: `labels[0].span` is not an object');
+  }
+  return first.span;
+}
 
 function diag(
   message: string,
@@ -83,24 +118,21 @@ function diag(
 
 describe('oxlint JSON shape contract', () => {
   test('diagnostics use oxlint field shape: code/message/filename + labels[0].span', () => {
-    const sample = diag(
-      "Variable 'unusedConst' is declared but never used.",
-      6
+    const sample = wireRecord(
+      diag("Variable 'unusedConst' is declared but never used.", 6),
+      'oxlint diagnostic fixture'
     );
-    expect(typeof sample.code).toBe('string');
-    expect(typeof sample.message).toBe('string');
-    expect(typeof sample.filename).toBe('string');
+    expect(isJsonString(sample.code)).toBe(true);
+    expect(isJsonString(sample.message)).toBe(true);
+    expect(isJsonString(sample.filename)).toBe(true);
     expect(Array.isArray(sample.labels)).toBe(true);
-    expect(typeof sample.labels[0].span.offset).toBe('number');
-    expect(typeof sample.labels[0].span.line).toBe('number');
-    expect(typeof sample.labels[0].span.column).toBe('number');
+    const span = firstLabelSpan(sample);
+    expect(isJsonNumber(span.offset)).toBe(true);
+    expect(isJsonNumber(span.line)).toBe(true);
+    expect(isJsonNumber(span.column)).toBe(true);
     // Biome 2.x fields MUST NOT be present on the expected oxlint shape
-    expect(
-      (sample as unknown as { category?: unknown }).category
-    ).toBeUndefined();
-    expect(
-      (sample as unknown as { location?: unknown }).location
-    ).toBeUndefined();
+    expect(sample.category).toBeUndefined();
+    expect(sample.location).toBeUndefined();
   });
 
   test('live oxlint output uses `eslint(...)` code wrapper', () => {
@@ -111,7 +143,7 @@ describe('oxlint JSON shape contract', () => {
     // `eslint(<rule>)` code wrapper format. If oxlint changes this shape,
     // this test fails loud and the adapter in delete-unused.ts is the
     // one-file fix point.
-    const dir = liveFixtureDir('.live-test-fixtures-contract-');
+    const dir = liveFixtureDir('livetestfixtures-contract-');
     try {
       const path = join(dir, 'fixture.ts');
       writeFileSync(path, 'const deadLocal = 1;\nexport const live = 2;\n');
@@ -120,20 +152,126 @@ describe('oxlint JSON shape contract', () => {
         ['vp', 'lint', '--no-ignore', '--format=json', path],
         { encoding: 'utf-8' }
       );
-      const report = JSON.parse(result.stdout);
-      const unusedDiag = report.diagnostics.find((d: { message: string }) =>
+      const report = decodeOxlintReport(result.stdout, 'live contract test');
+      const unusedDiag = report.diagnostics.find((d) =>
         d.message.startsWith("Variable 'deadLocal'")
       );
       expect(unusedDiag).toBeDefined();
-      expect(typeof unusedDiag.code).toBe('string');
+      if (!unusedDiag) return;
+      const wire = wireRecord(unusedDiag, 'live oxlint diagnostic');
+      expect(isJsonString(wire.code)).toBe(true);
       expect(unusedDiag.code.startsWith('eslint(')).toBe(true);
       expect(unusedDiag.code.endsWith(')')).toBe(true);
-      expect(typeof unusedDiag.filename).toBe('string');
-      expect(Array.isArray(unusedDiag.labels)).toBe(true);
-      expect(typeof unusedDiag.labels[0].span.offset).toBe('number');
+      expect(isJsonString(wire.filename)).toBe(true);
+      expect(Array.isArray(wire.labels)).toBe(true);
+      expect(isJsonNumber(firstLabelSpan(wire).offset)).toBe(true);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('classifyUnusedVar (single owner for Layer A + Layer C)', () => {
+  // This classifier decides BOTH what the Layer C deleter is allowed to
+  // remove and what the Layer A receipt CLAIMS was removed. It used to be
+  // declared twice — once in `_emit-oxlint-receipts.ts`, once in
+  // `delete-unused.ts`. The bodies had not in fact drifted (verified
+  // byte-identical before consolidation), but nothing prevented them from
+  // drifting, and a divergence would let the audit trail disagree with the
+  // mutation in a tool that deletes source. These cases pin the classification
+  // for the one surviving owner.
+  test('import messages classify as `import` (Layer A deletes, Layer C skips)', () => {
+    expect(
+      classifyUnusedVar("Identifier 'unused' is imported but never used.")
+    ).toBe('import');
+  });
+
+  test('parameter messages classify as `param`', () => {
+    expect(
+      classifyUnusedVar(
+        "Parameter 'a' is declared but never used. Unused parameters should start with a '_'."
+      )
+    ).toBe('param');
+  });
+
+  test.each([
+    ['Variable', "Variable 'x' is declared but never used."],
+    ['Function', "Function 'x' is declared but never used."],
+    ['Class', "Class 'X' is declared but never used."],
+    ['Type alias', "Type alias 'X' is declared but never used."],
+    ['Interface', "Interface 'X' is declared but never used."],
+    ['Enum', "Enum 'X' is declared but never used."],
+  ])('%s messages classify as `decl`', (_prefix, message) => {
+    expect(classifyUnusedVar(message)).toBe('decl');
+  });
+
+  test('unrecognized message prose classifies as `unknown` (never a delete)', () => {
+    expect(classifyUnusedVar('Some future oxlint phrasing.')).toBe('unknown');
+    expect(classifyUnusedVar('')).toBe('unknown');
+  });
+
+  test('the classification is prose-anchored: a mid-string match does not count', () => {
+    // The regexes are `^`-anchored on purpose. A diagnostic that merely
+    // mentions a variable must not be read as a declaration to delete.
+    expect(classifyUnusedVar("Prefer const over let for Variable 'x'.")).toBe(
+      'unknown'
+    );
+  });
+});
+
+describe('external tool report decoding (one failure policy)', () => {
+  // `_tool-reports.ts` replaced three models of oxlint's wire format carrying
+  // two opposite failure policies (silent `catch { return }` in the Layer A/D
+  // receipt emitters vs `exit 1` in the Layer C deleter). The policy is now
+  // one: diagnose and raise, naming the tool. Never a silent empty report —
+  // zero receipts is indistinguishable from a converged cascade.
+  test('a well-formed oxlint report decodes', () => {
+    const report = decodeOxlintReport(
+      JSON.stringify({ diagnostics: [] }),
+      'test'
+    );
+    expect(report.diagnostics).toEqual([]);
+  });
+
+  test('empty output raises rather than decoding as an empty report', () => {
+    expect(() => decodeOxlintReport('   ', 'test')).toThrow(ToolReportError);
+    expect(() => decodeOxlintReport('   ', 'test')).toThrow(
+      /produced no output/
+    );
+  });
+
+  test('oxlint\'s "No files found to lint" banner is diagnosed by name', () => {
+    // oxlint prints this banner on STDOUT ahead of its JSON whenever the
+    // invocation matches no lintable file, so it lands in the cascade's input
+    // (run.sh captures stdout). Decoding it as `{diagnostics: []}` would report
+    // "layer inspected nothing" as "layer found nothing to clean".
+    const banner =
+      'No files found to lint. Please check your paths and ignore patterns.\n' +
+      '{ "diagnostics": [], "number_of_files": 0 }';
+    expect(() => decodeOxlintReport(banner, 'test')).toThrow(ToolReportError);
+    expect(() => decodeOxlintReport(banner, 'test')).toThrow(
+      /matched no lintable files/
+    );
+  });
+
+  test('malformed JSON raises with the tool named', () => {
+    expect(() => decodeOxlintReport('{oops', 'test')).toThrow(
+      /unreadable oxlint report/
+    );
+  });
+
+  test('a missing `diagnostics` array raises (format-change guard)', () => {
+    expect(() => decodeOxlintReport('{"findings":[]}', 'test')).toThrow(
+      /no `diagnostics` array/
+    );
+  });
+
+  test('the knip decoder carries the identical policy on its own payload', () => {
+    expect(decodeKnipReport('{"issues":[]}', 'test').issues).toEqual([]);
+    expect(() => decodeKnipReport('', 'test')).toThrow(/produced no output/);
+    expect(() => decodeKnipReport('{"stuff":[]}', 'test')).toThrow(
+      /unreadable knip report/
+    );
   });
 });
 
@@ -608,7 +746,7 @@ describe('live oxlint pipeline integration', () => {
     // otherwise breaks the contract between the linter and this deleter,
     // this test catches it — unit tests alone would still pass on stale
     // shape assumptions.
-    const dir = liveFixtureDir('.live-test-fixtures-live-');
+    const dir = liveFixtureDir('livetestfixtures-live-');
     try {
       const path = join(dir, 'fixture.ts');
       const src = [
@@ -627,7 +765,7 @@ describe('live oxlint pipeline integration', () => {
         ['vp', 'lint', '--no-ignore', '--format=json', path],
         { encoding: 'utf-8' }
       );
-      const report = JSON.parse(oxlint.stdout);
+      const report = decodeOxlintReport(oxlint.stdout, 'live pipeline test');
       expect(Array.isArray(report.diagnostics)).toBe(true);
 
       const cleaned = applyDeletions(path, src, report.diagnostics);

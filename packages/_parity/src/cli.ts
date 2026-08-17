@@ -33,6 +33,7 @@ import { familyViolations, renderScoreboard } from './scoreboard';
 import type {
   BaselineEnvelope,
   BaselineMode,
+  BaselineModePair,
   BaselineRefreshChecks,
 } from './baseline';
 import type { Divergence, UnitSurface } from './types';
@@ -247,12 +248,6 @@ async function refreshBaselines(intent: string): Promise<void> {
   const corpus = await enumerateUnits();
   const digest = corpusSha256(corpus);
   const register = loadRegister();
-  const created = new Map<BaselineMode, BaselineEnvelope>();
-  const checks = {} as Record<BaselineMode, BaselineRefreshChecks>;
-  const drift = {
-    production: [],
-    development: [],
-  } as Record<BaselineMode, Divergence[]>;
   const existingPaths = (['production', 'development'] as const).map((mode) =>
     existsSync(baselinePath(mode))
   );
@@ -260,20 +255,22 @@ async function refreshBaselines(intent: string): Promise<void> {
     throw new Error('baseline refresh refuses a partial existing mode pair');
   }
 
-  for (const devMode of [false, true]) {
+  /** One mode's refresh state: its green-ness checks, its drift against the
+   *  committed envelope (empty when there is none yet), and the envelope this
+   *  refresh would publish. Runs the engine, so the pair below is produced in
+   *  the declared order — production first, then development. */
+  const refreshMode = async (devMode: boolean) => {
     const mode = modeOf(devMode);
     const first = runV2(devMode, { RAYON_NUM_THREADS: '1' });
     const second = runV2(devMode, { RAYON_NUM_THREADS: '8' });
-    const determinism = selfCheckDivergences(first, second);
-    const validity = await cssValidityDivergences(first);
-    const budget = parseBudgetDivergences(first);
-    checks[mode] = {
-      determinism,
-      cssValidity: validity,
-      parseBudget: budget,
+    const checks: BaselineRefreshChecks = {
+      determinism: selfCheckDivergences(first, second),
+      cssValidity: await cssValidityDivergences(first),
+      parseBudget: parseBudgetDivergences(first),
       families: [],
     };
 
+    let drift: Divergence[] = [];
     if (existingPaths[0]) {
       const existing = loadBaseline(mode);
       const existingErrors = validateBaselineEnvelope(existing, {
@@ -285,26 +282,42 @@ async function refreshBaselines(intent: string): Promise<void> {
           `baseline refresh refuses an invalid existing envelope (${mode}): ${existingErrors.join('; ')}`
         );
       }
-      drift[mode] = await compareUnitSets(existing.units, first);
+      drift = await compareUnitSets(existing.units, first);
     }
-    created.set(mode, createBaselineEnvelope(mode, intent, digest, first));
-  }
+    return {
+      checks,
+      drift,
+      envelope: createBaselineEnvelope(mode, intent, digest, first),
+    };
+  };
+
+  const production = await refreshMode(false);
+  const development = await refreshMode(true);
+  const drift: BaselineModePair<Divergence[]> = {
+    production: production.drift,
+    development: development.drift,
+  };
+  const checks: BaselineModePair<BaselineRefreshChecks> = {
+    production: production.checks,
+    development: development.checks,
+  };
 
   assertRefreshPairEligible(drift, register);
   const unitIds = [
     ...new Set(
-      [...created.values()].flatMap((baseline) => Object.keys(baseline.units))
+      [production.envelope, development.envelope].flatMap((baseline) =>
+        Object.keys(baseline.units)
+      )
     ),
   ];
   const families = loadFamilies(new Set(unitIds));
   const familyErrors = refreshPairFamilyErrors(families, drift, register);
-  for (const mode of ['production', 'development'] as const) {
-    checks[mode].families = [...familyErrors];
-  }
+  checks.production.families = [...familyErrors];
+  checks.development.families = [...familyErrors];
   writeValidatedBaselinePair(
     BASELINES_ROOT,
-    created.get('production')!,
-    created.get('development')!,
+    production.envelope,
+    development.envelope,
     checks
   );
   console.log(`BASELINE REFRESH: PASS (${intent})`);
@@ -353,6 +366,8 @@ async function main() {
         ? `PARITY GATE: FAIL (${snapName} NOT updated; details in last-failure.txt)`
         : baselineStaleFailureMessage()
     );
+    // 1 = THE GATE RAN AND FAILED. See the taxonomy note at the `.catch`
+    // below; this harness's codes are its own, not the CLI's.
     process.exit(1);
   }
   writeFileSync(join(HERE, snapName), full);
@@ -360,6 +375,25 @@ async function main() {
   console.log('PARITY GATE: PASS');
 }
 
+/**
+ * This harness's exit taxonomy — two values, and deliberately NOT the
+ * `packages/cli` taxonomy (`EXIT_USAGE`/`EXIT_ENVIRONMENT`):
+ *
+ *   1 — the gate RAN and FAILED (a real parity regression; see above).
+ *   2 — the harness REFUSED TO RUN: an unhandled throw, which includes
+ *       every argument-safety rejection. A `2` never means "parity is
+ *       broken", so a caller must not read it as a regression.
+ *
+ * Pinned by `__tests__/cli.test.ts` ("a refresh flag without an intent…"
+ * and "an unknown option…"): each asserts status 2 AND asserts that
+ * `PARITY GATE: PASS` was not printed. Nothing else in the repo branches on
+ * these values — `scripts/verify/parity.sh` and its refresh sibling are
+ * `set -euo pipefail` + `exec`, so any nonzero propagates identically.
+ *
+ * Do not unify with `packages/cli`'s codes: `_parity` has no dependency on
+ * that package, and creating one for two integers would be boundary
+ * laundering between two tools answering different questions.
+ */
 main().catch((error) => {
   console.error(String(error?.stack ?? error));
   process.exit(2);

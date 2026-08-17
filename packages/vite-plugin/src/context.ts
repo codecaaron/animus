@@ -13,6 +13,8 @@ import {
   formatRustTimingWaterfall,
   loadSystemConfig,
   mergeExternalKeyframes,
+  parseFilesJson,
+  projectExternalFileOwners,
   resolveAssetFile,
   runProjectAnalysis,
   serializeStaticCss,
@@ -42,7 +44,9 @@ import type {
   ExcludeMatcher,
   ExternalPackageOutcome,
   ManifestDiagnostic,
+  ManifestSheets,
   ProjectAnalysisResult,
+  ProjectManifest,
   RawSourceEntry,
   SourceEntryOwnership,
   SourceIngestionDiagnostic,
@@ -52,22 +56,6 @@ import type {
   V2ExtractEngine,
 } from '@animus-ui/extract/pipeline';
 import type { Logger } from 'vite';
-
-/**
- * Structured per-layer CSS sheets from the Rust crate (dev split delivery).
- * Mirrors the `CssSheets` struct in packages/extract/src/css_generator.rs —
- * keep these fields in sync.
- */
-export interface CssSheets {
-  declaration: string;
-  global: string;
-  base: string;
-  variants: string;
-  compounds: string;
-  states: string;
-  system: string;
-  custom: string;
-}
 
 /** Pre-load / failed-load defaults — the plugin's historical initial state. */
 function emptySystemConfig(): SystemConfig {
@@ -86,7 +74,7 @@ function emptySystemConfig(): SystemConfig {
 
 /** Full raw originals for one adaptation attempt. */
 export function buildRawEntriesFromCache(
-  cache: Map<string, { hash: string; source: string }>
+  cache: ReadonlyMap<string, { hash: string; source: string }>
 ): Array<{ path: string; source: string; hash: string }> {
   return [...cache].map(([path, { hash, source }]) => ({
     path,
@@ -100,16 +88,16 @@ export function buildRawEntriesFromCache(
 // section spans await points — two interleaved transactions publish
 // generations built from different cache snapshots (a later-created file
 // vanishes from the earlier snapshot's publication, permanently: its
-// detection guard never fires again). WeakMap-keyed so behavioral test
-// doubles serialize identically; the stored chain never rejects, so a
-// failed transaction cannot poison the lock.
-const analysisChains = new WeakMap<object, Promise<void>>();
+// detection guard never fires again). WeakMap-keyed by the owning plugin
+// context; the stored chain never rejects, so a failed transaction cannot
+// poison the lock.
+const analysisChains = new WeakMap<PluginContext, Promise<void>>();
 
 /** Run `task` after every previously scheduled analysis transaction for
  *  this context. Entry points only (transform detection, hot update,
  *  geological reset); helpers they call internally must stay unlocked. */
 export function runExclusiveAnalysis<T>(
-  ctx: object,
+  ctx: PluginContext,
   task: () => Promise<T>
 ): Promise<T> {
   const chain = analysisChains.get(ctx) ?? Promise.resolve();
@@ -135,20 +123,42 @@ function generateSystemPropsModule(ctx: PluginContext): string {
 }
 
 /**
+ * The generated module for the current inputs, memoized against those exact
+ * inputs. Reader-keyed on purpose: the four inputs are already strings, so the
+ * key IS the inputs, and no writer owes the memo a refresh. A refresh
+ * obligation spread across every writer is one thing to keep in sync per write
+ * site, and the site that forgets serves a module from a generation that no
+ * longer exists — permanently, since a store-on-generate memo never revisits
+ * the decision.
+ */
+const systemPropsModules = new WeakMap<
+  PluginContext,
+  { key: string; source: string }
+>();
+
+/** NUL cannot appear in JSON text, so concatenation is injective. */
+function systemPropsModuleKey(ctx: PluginContext): string {
+  return [
+    ctx.storedSystemPropMapJson,
+    ctx.system.groupRegistryJson,
+    ctx.storedDynamicPropsJson,
+    ctx.storedTransformsSource,
+  ].join('\u0000');
+}
+
+/**
  * The exact source `virtual:animus/system-props` serves for the current state.
- * One definition, so the served bytes and the change decision below can never
- * be computed from different inputs.
- *
- * A real context carries the module already generated (`systemPropsModuleMemo`,
- * refreshed wherever the four inputs move), so serving it and deciding whether
- * it changed are both reads. Contexts that publish those inputs by hand — the
- * behavioral test doubles — carry no memo and generate here instead.
+ * One definition, so the served bytes and the HMR change decision can never be
+ * computed from different inputs — and both read whatever the inputs say NOW,
+ * whether they were published by an analysis or set by hand.
  */
 export function systemPropsModuleSource(ctx: PluginContext): string {
-  // Store-on-generate: after this call the serving path and the change
-  // decision always read the SAME memoized bytes, so they cannot diverge
-  // even on a context (test doubles) that published the inputs by hand.
-  return (ctx.systemPropsModuleMemo ??= generateSystemPropsModule(ctx));
+  const key = systemPropsModuleKey(ctx);
+  const memo = systemPropsModules.get(ctx);
+  if (memo && memo.key === key) return memo.source;
+  const source = generateSystemPropsModule(ctx);
+  systemPropsModules.set(ctx, { key, source });
+  return source;
 }
 
 /**
@@ -175,6 +185,48 @@ export function pruneFileCache(
  * A class rather than closure variables so each hook module names exactly
  * the state it touches, and the engine store (per-instance, never
  * module-level) is explicit.
+ *
+ * ── Relationship to `ExtractionSession` (the honest map) ──────────────────
+ * This is the repo's SECOND session spine, and the split is deliberate but
+ * only half a duplication. The Vite plugin never constructs an
+ * `ExtractionSession` — zero references in this package; sessions are built
+ * only by the unplugin host, the two Next arms, and the CLI. So these are
+ * two spines for two DRIVERS, not one driver holding two.
+ *
+ * The contract distinction: `ExtractionSession` is an ARTIFACT-PUBLISHING
+ * session (disk artifacts behind a commit transaction, module-level
+ * singleton engine, cross-process readers); `PluginContext` is an IN-MEMORY
+ * SERVE spine (virtual modules answered synchronously out of retained
+ * state, per-instance engine, nothing published for another process).
+ *
+ * Of this class's ~50 fields, roughly 26 duplicate an `ExtractionSession`
+ * authority field-for-field — `options`, `verbose`, `staticCssJson`,
+ * `rootDir`, `system`, `lcssTargets`, `pathAliasesJson`, `extensionsSet`,
+ * `excludeMatcher`, `externalKeyframesDiagnostics`, `fileCache`,
+ * `analysisEntryCache`, `sourceOwnership`, `packageMap`, the asset-pass
+ * trio, the five `external*` ownership maps, `externalPackageOutcomes`,
+ * `resolvedSystemPath`, the two `systemDependency*` sets, and
+ * `sourceIngestor` (whose twin the session's own comment already labels
+ * "vite-plugin parity BY CODE"). The other ~24 are genuinely Vite-only:
+ * `isProd`/`emissionProd`, `logger`, the `stored*` serve payloads,
+ * `globalCss`/`resolvedComponentCss`/`storedSheets`, `layerDeclaration`,
+ * `transformOutputHashes`, `reverseProvenance`, `analysisOwnerByPath`,
+ * `rawExtensionFallbacks`, `hotUpdateEvents`, `pendingReloadTimer`, `base`,
+ * `devServer`, the per-instance engine quartet, and `resetCoalescer`.
+ *
+ * RECORDED SMALLEST STEP (not implemented — do not implement it piecemeal):
+ * extract a driver-neutral `SourceUniverse` read model into
+ * `@animus-ui/extract` owning exactly the ingestion read model
+ * (`sourceIngestor`, `analysisEntryCache`, `sourceOwnership`, and one
+ * shared `publishSourceIngestion`), leaving `fileCache` ownership with each
+ * driver — that divergence is real (this class mutates it incrementally
+ * under `runExclusiveAnalysis`; the session rebinds it wholesale) and must
+ * not be laundered away. Logged as C-018 in `docs/anti-slop-curiosities.md`.
+ *
+ * This class is also the uncaught case named by guardrail G1's own blind
+ * spot ("does not catch a duplicated loop under a different class name",
+ * `openspec/changes/standalone-extraction-cli/design.md`): G1 counts
+ * `class ExtractionSession` definitions, so no gate sees this spine.
  */
 export class PluginContext {
   readonly options: AnimusExtractOptions;
@@ -210,16 +262,20 @@ export class PluginContext {
   // server lifecycles.
   excludeMatcher: ExcludeMatcher;
 
-  // Manifest state — populated at buildStart, consumed during transform/load
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  storedManifest: any = null;
+  // Manifest state — populated at buildStart, consumed during transform/load.
+  // The producing package's own wire declaration, not a plugin-private model:
+  // this holds exactly the `ProjectAnalysisResult.manifest` published below,
+  // so every reader (transform, HMR, rediscovery, self-verify) reads ONE
+  // field spelling and one optionality answer. `null` is the pre-publication
+  // state alone — a failed analysis leaves the previous manifest current.
+  storedManifest: ProjectManifest | null = null;
   storedManifestJson = '';
 
   // Resolved CSS from .withGlobalStyles({ reset, global }) — @layer anm-global
   globalCss = '';
   // Pre-resolved component CSS with transforms + unit fallback applied
   resolvedComponentCss = '';
-  storedSheets: CssSheets | null = null;
+  storedSheets: ManifestSheets | null = null;
 
   // @layer declaration for HTML injection via transformIndexHtml.
   layerDeclaration = '';
@@ -290,13 +346,42 @@ export class PluginContext {
   // transforms resolve at extraction time via boa_engine in Rust.
   storedTransformsSource = '{}';
 
-  // The generated module for the four inputs above, refreshed by the only two
-  // writers of those inputs (loadSystem, runAnalysis). Read through
-  // `systemPropsModuleSource`; `null` means no writer has run yet.
-  systemPropsModuleMemo: string | null = null;
-
   // Raw/original source cache for dev HMR (original path → raw hash/source).
-  fileCache = new Map<string, { hash: string; source: string }>();
+  // Declared read-only so the compiler routes every write through
+  // `mutateFileCache` — memos over this cache key on the generation counter
+  // that mutator bumps, and a direct `.set` would move the cache underneath
+  // them without moving the key.
+  readonly fileCache: ReadonlyMap<string, { hash: string; source: string }> =
+    new Map();
+
+  /**
+   * Mutations applied to `fileCache` so far. Consumers that memoize a verdict
+   * derived from the whole cache (rediscovery's barren-walk memo) key on this
+   * instead of on a property of the contents: `size` is the same after a
+   * delete and an unrelated create, and a memo keyed on it skips the work a
+   * changed cache demands. Counts mutation ATTEMPTS, so a no-op call costs a
+   * redundant recompute rather than a stale answer.
+   */
+  fileCacheGeneration = 0;
+
+  /**
+   * THE one mutator of the raw-source cache: every add, replacement, and
+   * deletion goes through here so no write can escape the counter above.
+   */
+  mutateFileCache<T>(
+    mutate: (cache: Map<string, { hash: string; source: string }>) => T
+  ): T {
+    // SAFETY: `fileCache` is a Map declared as ReadonlyMap so that every
+    // mutation has to pass through this method; this is the one place allowed
+    // to write it, and the counter below is bumped for exactly that write.
+    const cache = this.fileCache as Map<
+      string,
+      { hash: string; source: string }
+    >;
+    const result = mutate(cache);
+    this.fileCacheGeneration += 1;
+    return result;
+  }
 
   // Last published parser-ready projection. Generated MDX/Svelte paths never
   // enter `fileCache`; they are replaced as one set with `sourceOwnership`.
@@ -304,14 +389,35 @@ export class PluginContext {
   sourceOwnership: Record<string, SourceEntryOwnership> = {};
   analysisOwnerByPath = new Map<string, string>();
 
-  // rootDir-relative files last served as UNRESOLVED-EXTENSION runtime
-  // fallbacks (transform returned null while the manifest carried an
-  // unresolved-parent drop for the file). The compatibility publication
-  // barrier consults this before serving an extracted extension ancestor —
-  // the fatal raw-consumer/extracted-ancestor pair is withheld, never
-  // published (openspec: dev-transform-coherence). Entries clear on the
-  // file's next transform in any non-fallback state.
+  // rootDir-relative files whose LIVE SERVE is the raw source while the
+  // analysis believes them extractable — an unresolved-parent drop named
+  // the file, or the manifest listed components for it and the transform
+  // still produced nothing (engine reported no components, or a non-strict
+  // failure warned and passed the source through). Every such serve is a
+  // runtime fallback: the file executes `.extend()` against whatever its
+  // ancestor published. The compatibility publication barrier consults this
+  // before serving an extracted extension ancestor — the fatal
+  // raw-consumer/extracted-ancestor pair is withheld, never published
+  // (openspec: dev-transform-coherence). Written ONLY through
+  // `recordFallbackState`; entries clear on the file's next extracted serve.
   rawExtensionFallbacks = new Set<string>();
+
+  /**
+   * The one mutator of a file's own fallback state — every raw-serve exit
+   * of the transform hook reports through here, so no exit can add without
+   * a matching clear (or, worse, leave a stale record from an earlier
+   * serve). Production has no barrier and no module graph to withhold from,
+   * so the set stays empty there whatever the caller says.
+   *
+   * The barrier's one-shot withhold RELEASE is deliberately not this call:
+   * it retires OTHER files' records after invalidating them, which is not a
+   * statement about their current serve.
+   */
+  recordFallbackState(relativePath: string, isFallback: boolean): void {
+    if (this.isProd) return;
+    if (isFallback) this.rawExtensionFallbacks.add(relativePath);
+    else this.rawExtensionFallbacks.delete(relativePath);
+  }
 
   // Once-per-file-event coordination across the per-environment `hotUpdate`
   // dispatches (see hmr.ts) — the analysis half runs for one of them.
@@ -426,11 +532,7 @@ export class PluginContext {
       // analysis-entry cache before analyze.
       rehydrateFilesJson: (filesJsonRaw) => {
         if (!filesJsonRaw.includes('"source":""')) return filesJsonRaw;
-        const entries = JSON.parse(filesJsonRaw) as Array<{
-          path: string;
-          source: string;
-          hash?: string;
-        }>;
+        const entries = parseFilesJson(filesJsonRaw, 'animus-extract');
         for (const entry of entries) {
           if (entry.source === '') {
             entry.source =
@@ -533,10 +635,6 @@ export class PluginContext {
         e
       );
     }
-    // `groupRegistryJson` is one of the served module's four inputs, and a
-    // failed non-strict reload keeps the previous one — either way the memo
-    // has to match what `this.system` now holds.
-    this.systemPropsModuleMemo = generateSystemPropsModule(this);
   }
 
   /**
@@ -587,32 +685,25 @@ export class PluginContext {
     // manifest-derived state is published, so no stylesheet from this
     // analysis is served (build fails; dev surfaces Vite's plugin-error
     // overlay via the callers' normal throw paths).
-    assertNoErrorDiagnostics(result.manifest?.diagnostics);
+    assertNoErrorDiagnostics(result.manifest.diagnostics);
     this.assertRuntimeImportSuppliesTerminals(result.manifest);
 
     this.storedManifest = result.manifest;
     this.storedManifestJson = result.manifestJson;
 
     this.storedSystemPropMapJson = JSON.stringify(
-      result.manifest?.system_prop_map ?? {}
+      result.manifest.system_prop_map
     );
-    this.storedDynamicPropsJson = JSON.stringify(
-      result.manifest?.dynamic_props ?? {}
-    );
+    this.storedDynamicPropsJson = JSON.stringify(result.manifest.dynamic_props);
 
     // Update reverse provenance for transitive invalidation
-    this.reverseProvenance = result.manifest?.reverse_provenance ?? {};
+    this.reverseProvenance = result.manifest.reverse_provenance;
 
     // Store structured sheets for dev split delivery
-    this.storedSheets = result.manifest?.sheets ?? null;
+    this.storedSheets = result.manifest.sheets;
 
     this.globalCss = result.globalCss;
     this.resolvedComponentCss = result.componentCss;
-
-    // The system-props inputs were just republished, so regenerate the served
-    // module once, here. Both readers — the `load` hook and the HMR change
-    // decision — then compare and serve the same bytes without rebuilding.
-    this.systemPropsModuleMemo = generateSystemPropsModule(this);
 
     // A system edit can INTRODUCE an asset() specifier after buildStart —
     // substitution alone only knows buildStart's map, so a new placeholder
@@ -632,17 +723,18 @@ export class PluginContext {
    * error diagnostics (extraction-diagnostics §Error diagnostics fail the
    * build), naming the offending components instead of the import site.
    */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  private assertRuntimeImportSuppliesTerminals(manifest: any): void {
+  private assertRuntimeImportSuppliesTerminals(
+    manifest: ProjectManifest
+  ): void {
     const override = this.options.runtimeImport;
     if (!override || override === '@animus-ui/system') return;
     const offenders: string[] = [];
-    for (const [id, descriptor] of Object.entries(
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (manifest?.components ?? {}) as Record<string, any>
-    )) {
-      const replacement = String(descriptor?.replacement ?? '');
-      if (/\bcreateComponent\(|\bcreateComposedFamily\(/.test(replacement)) {
+    for (const [id, descriptor] of Object.entries(manifest.components)) {
+      if (
+        /\bcreateComponent\(|\bcreateComposedFamily\(/.test(
+          descriptor.replacement
+        )
+      ) {
         offenders.push(id);
       }
     }
@@ -714,7 +806,6 @@ export class PluginContext {
   /** Publish every parser child and ownership edge atomically after analysis. */
   publishSourceIngestion(result: SourceIngestionResult): void {
     this.sourceIngestor.markPublished(result);
-    const priorAnalysisPaths = new Set(this.analysisOwnerByPath.keys());
     this.analysisEntryCache = new Map(
       result.analysisEntries.map((entry) => [
         entry.path,
@@ -726,16 +817,16 @@ export class PluginContext {
     for (const owner of Object.values(result.ownership)) {
       for (const analysisPath of owner.analysisPaths) {
         this.analysisOwnerByPath.set(analysisPath, owner.originalPath);
-        const externalOwner = this.externalFileOwners[owner.originalPath];
-        if (externalOwner)
-          this.externalFileOwners[analysisPath] = externalOwner;
       }
     }
-    for (const stalePath of priorAnalysisPaths) {
-      if (!this.analysisOwnerByPath.has(stalePath)) {
-        delete this.externalFileOwners[stalePath];
-      }
-    }
+    // The owner projection is the shared one (the session runs it at the same
+    // point in its own transaction), so a generated child correlates to the
+    // same package in both hosts — the token-contract diagnostic joins through
+    // this map and must not depend on which driver is running.
+    this.externalFileOwners = projectExternalFileOwners(
+      result,
+      this.externalFileOwners
+    );
 
     // Cross-source token contracts run on EVERY publication — buildStart,
     // HMR re-analysis, new-file detection, and the geological reset alike.
@@ -817,27 +908,26 @@ export class PluginContext {
     this.log(`HMR geological reset scheduled: ${trigger}`);
     this.resetCoalescer ??= new ResetCoalescer(
       async () => this.performGeologicalReset(),
-      (err) => this.geologicalResetFailed(err)
+      /**
+       * A failed reset must surface without killing the server: the coalescer
+       * fires from a bare timer, OUTSIDE Vite's handleHMRUpdate catch, so a
+       * strict-mode throw (asset resolution, token contracts, system load)
+       * would otherwise be an unhandled exception that exits the process.
+       * Strict-in-dev means the error overlay, matching the transform/HMR
+       * strict paths that Vite itself catches.
+       */
+      (err) => {
+        const display = String(err);
+        this.warn(`[animus-extract] geological reset failed: ${display}`);
+        const message = err instanceof Error ? err.message : String(err);
+        const stack = err instanceof Error ? (err.stack ?? '') : '';
+        this.devServer?.hot?.send({
+          type: 'error',
+          err: { message, stack, plugin: 'animus-extract' },
+        });
+      }
     );
     this.resetCoalescer.request();
-  }
-
-  /**
-   * A failed reset must surface without killing the server: the coalescer
-   * fires from a bare timer, OUTSIDE Vite's handleHMRUpdate catch, so a
-   * strict-mode throw (asset resolution, token contracts, system load)
-   * would otherwise be an unhandled exception that exits the process.
-   * Strict-in-dev means the error overlay, matching the transform/HMR
-   * strict paths that Vite itself catches.
-   */
-  private geologicalResetFailed(err: unknown): void {
-    this.warn(`[animus-extract] geological reset failed: ${err}`);
-    const message = err instanceof Error ? err.message : String(err);
-    const stack = err instanceof Error ? (err.stack ?? '') : '';
-    this.devServer?.hot?.send({
-      type: 'error',
-      err: { message, stack, plugin: 'animus-extract' },
-    });
   }
 
   /**

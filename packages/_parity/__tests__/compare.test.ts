@@ -269,18 +269,28 @@ describe('register matching', () => {
   });
 
   test('an unknown JSON category cannot license exact drift', () => {
-    const entry = {
-      unit: div.unit,
-      artifact: div.artifact,
-      category: 'typo-category',
-      note: 'untyped register JSON',
-      status: 'active',
-      baselineSha256: div.baselineSha256,
-      candidateSha256: div.candidateSha256,
-    } as unknown as RegisterEntry;
+    // `register.json` is hand-edited JSON that nothing validates before
+    // `loadRegister` hands it to these two functions, so a row whose
+    // `category` falls outside `RegisterCategory` is reachable at runtime and
+    // unrepresentable in the type. The fixture therefore enters through the
+    // loader's own boundary — register TEXT, decoded — rather than asserting
+    // a shape past the compiler.
+    const register: RegisterEntry[] = JSON.parse(
+      JSON.stringify([
+        {
+          unit: div.unit,
+          artifact: div.artifact,
+          category: 'typo-category',
+          note: 'untyped register JSON',
+          status: 'active',
+          baselineSha256: div.baselineSha256,
+          candidateSha256: div.candidateSha256,
+        },
+      ])
+    );
 
-    expect(matchRegister([div], [entry])[0]?.registered).toBeUndefined();
-    expect(validateRegister([entry], [div])).toEqual([
+    expect(matchRegister([div], register)[0]?.registered).toBeUndefined();
+    expect(validateRegister(register, [div])).toEqual([
       expect.stringContaining('unknown category'),
     ]);
   });

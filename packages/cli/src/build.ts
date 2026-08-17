@@ -24,7 +24,6 @@ import {
   ExtractionSession,
   getAnalyzedHashes,
   getManifestJson,
-  getSessionArtifactDir,
   getSharedCss,
   getSharedSystemProps,
 } from '@animus-ui/extract/session';
@@ -38,6 +37,7 @@ import {
 } from './writer';
 
 import type { ResolvedCliConfig } from './config';
+import type { ProjectManifest } from '@animus-ui/extract/pipeline';
 
 /** Thrown for failures whose exit class is "extraction failure" (1). */
 export class ExtractionFailure extends Error {}
@@ -166,10 +166,12 @@ export function publishSharedPayloads(
   let componentCount = session.lastComponentCount ?? -1;
   if (componentCount < 0) {
     try {
-      componentCount = Object.keys(
-        (JSON.parse(manifestJson) as { components?: Record<string, unknown> })
-          .components ?? {}
-      ).length;
+      // SAFETY: these bytes are the session's own `ExtractEngine.analyze()`
+      // output, whose wire type the producing package declares
+      // (`ProjectManifest`); `components` is always emitted, so an absent one
+      // means this is not a manifest and the catch below is the answer.
+      const manifest = JSON.parse(manifestJson) as ProjectManifest;
+      componentCount = Object.keys(manifest.components).length;
     } catch {
       throw new ExtractionFailure('Analysis published no readable manifest');
     }
@@ -278,12 +280,15 @@ export async function runBuild(
   } finally {
     release();
     // One-shot: the session-scoped tree has no reader once the raw set is
-    // published — remove it so CI runs never accumulate session dirs. The
-    // singleton fallback covers only a construction failure, where no
-    // session object exists to ask.
-    const dir = session?.sessionDir ?? getSessionArtifactDir();
-    if (dir) {
-      rmSync(dir, { recursive: true, force: true });
+    // published — remove it so CI runs never accumulate session dirs. Only
+    // this run's OWN tree: when construction failed there is no session to
+    // ask, and the process-global slot would then necessarily name a
+    // different session's tree (nothing this call may delete).
+    if (session) {
+      rmSync(session.sessionDir, { recursive: true, force: true });
+      // Programmatic entry point: `main()` is published, so a second
+      // in-process run must find the publication claim free.
+      session.close();
     }
   }
 }

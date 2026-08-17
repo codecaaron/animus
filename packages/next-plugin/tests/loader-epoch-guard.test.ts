@@ -17,8 +17,7 @@
  * sent-sources map, so no native engine is involved.
  */
 import { contentHash } from '@animus-ui/extract/pipeline';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
-import { tmpdir } from 'os';
+import { mkdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 
@@ -27,6 +26,10 @@ import {
   sessionArtifactDir,
 } from '../../extract/session/session-paths';
 import animusLoader from '../src/loader';
+import { disposeTempRoots, makeTempRoot } from './singleton-fixtures';
+
+import type { AnimusEngine } from '../../extract/session/singleton';
+import type { V2ExtractEngine } from '@animus-ui/extract/pipeline';
 
 const MANIFEST_KEY = '__animus_manifest_json__';
 const ENGINE_KEY = '__animus_engine__';
@@ -38,9 +41,42 @@ const SESSION_DIR_KEY = '__animus_session_artifact_dir__';
 /** Fabricated owning-session id for the singleton-published session dir. */
 const SESSION_ID = 'loader-epoch-session';
 
-const g = globalThis as Record<string, unknown>;
-let saved: Record<string, unknown>;
-const tempRoots: string[] = [];
+/** The singleton slots this suite publishes, carrying the value types their
+ *  owner declares (`AnimusSingletonStore` in
+ *  packages/extract/session/singleton.ts) plus the `undefined` an
+ *  unpublished slot holds — the state each slot is saved to and restored
+ *  from here. */
+interface LoaderSingletonSlots {
+  [MANIFEST_KEY]: string | null | undefined;
+  [ENGINE_KEY]: AnimusEngine | undefined;
+  [V2_ENGINE_KEY]: V2ExtractEngine | null | undefined;
+  [V2_SENT_SOURCES_KEY]: Map<string, string> | null | undefined;
+  [ANALYZED_HASHES_KEY]: Map<string, string> | null | undefined;
+  [SESSION_DIR_KEY]: string | null | undefined;
+}
+
+// SAFETY: singleton.ts owns these exact globalThis keys and publishes them
+// with exactly these value types; its setters cannot clear a slot and the
+// engine slots have no setter at all, so writing the same keys the loader's
+// singleton reads is the only way to drive this suite's lifecycle. The keys
+// are private to that module, so no other declaration of globalThis can
+// disagree about them.
+const g = globalThis as typeof globalThis & LoaderSingletonSlots;
+let saved: LoaderSingletonSlots;
+
+/** No path in this suite is inside the last analyze() set, so the adapter
+ *  must pass it through without ever reaching the engine. */
+const unreachableEngine: V2ExtractEngine = {
+  analyze: () => {
+    throw new Error('engine must not be called for unknown paths');
+  },
+  transformFile: () => {
+    throw new Error('engine must not be called for unknown paths');
+  },
+  clearCache: () => {
+    throw new Error('engine must not be called for unknown paths');
+  },
+};
 
 const OLD_SOURCE = 'export const x = 1;\n';
 const NEW_SOURCE =
@@ -57,11 +93,7 @@ beforeEach(() => {
   };
   g[MANIFEST_KEY] = JSON.stringify({ components: {} });
   g[ENGINE_KEY] = 'v2';
-  g[V2_ENGINE_KEY] = {
-    transformFile: () => {
-      throw new Error('engine must not be called for unknown paths');
-    },
-  };
+  g[V2_ENGINE_KEY] = unreachableEngine;
   g[V2_SENT_SOURCES_KEY] = new Map<string, string>();
   g[ANALYZED_HASHES_KEY] = undefined;
   g[SESSION_DIR_KEY] = undefined;
@@ -69,20 +101,14 @@ beforeEach(() => {
 
 afterEach(() => {
   Object.assign(g, saved);
-  for (const root of tempRoots.splice(0)) {
-    rmSync(root, { recursive: true, force: true });
-  }
+  disposeTempRoots();
 });
 
 /** Fabricate a project whose owning session published its artifact dir
  *  through the singleton (the loader's source for the session-scoped epoch
  *  dependency path). */
-function createRoot(withArtifact: boolean): {
-  root: string;
-  epochPath: string;
-} {
-  const root = mkdtempSync(join(tmpdir(), 'animus-loader-epoch-'));
-  tempRoots.push(root);
+function createRoot(withArtifact: boolean) {
+  const root = makeTempRoot('animus-loader-epoch-');
   const sessionDir = sessionArtifactDir(root, SESSION_ID);
   g[SESSION_DIR_KEY] = sessionDir;
   const epochPath = replacementEpochPath(sessionDir);
@@ -101,7 +127,7 @@ function runLoader(args: {
   relPath?: string;
   source: string;
   mode?: 'development' | 'production' | 'none';
-}): { output: string; dependencies: string[] } {
+}) {
   const dependencies: string[] = [];
   const ctx = {
     resourcePath: join(args.root, args.relPath ?? 'src/C.tsx'),

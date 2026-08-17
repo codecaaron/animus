@@ -1,14 +1,22 @@
+import { isJsonObject } from '@animus-ui/assertions';
 import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parseSync } from 'oxc-parser';
+import { parseSync, Visitor } from 'oxc-parser';
+import { resolveConfig } from 'vite';
 import { describe, expect, test } from 'vitest';
 
 import { animusExtract } from '../src/index';
 import { buildIndexHtmlTags } from '../src/index-html';
-import { contextWith, LAYER_DECLARATION } from './index-html-context';
+import {
+  contextWith,
+  HTML_HOOK_CONTEXT,
+  LAYER_DECLARATION,
+} from './index-html-context';
 
 import type { PluginContext } from '../src/context';
+import type { JsonValue } from '@animus-ui/assertions';
+import type { Node, StringLiteral } from 'oxc-parser';
 import type { HtmlTagDescriptor } from 'vite';
 
 /**
@@ -54,17 +62,14 @@ const PRE_CHANGE_LAYER_TAG: HtmlTagDescriptor = {
   injectTo: 'head-prepend',
 };
 
-function isSystemSpecifier(value: unknown): boolean {
+function isSystemSpecifier(value: string): boolean {
   return (
-    typeof value === 'string' &&
-    (value === '@animus-ui/system' || value.startsWith('@animus-ui/system/'))
+    value === '@animus-ui/system' || value.startsWith('@animus-ui/system/')
   );
 }
 
-function astRecord(value: unknown): Record<string, unknown> | undefined {
-  return typeof value === 'object' && value !== null
-    ? (value as Record<string, unknown>)
-    : undefined;
+function isStringLiteral(node: Node): node is StringLiteral {
+  return node.type === 'Literal' && String(node.value) === node.value;
 }
 
 function hasSystemModuleReference(file: string, source: string): boolean {
@@ -75,39 +80,39 @@ function hasSystemModuleReference(file: string, source: string): boolean {
     );
   }
 
-  const visit = (value: unknown): boolean => {
-    if (Array.isArray(value)) return value.some(visit);
-    const node = astRecord(value);
-    if (!node) return false;
-
-    const sourceNode = astRecord(node.source);
-    if (
-      (node.type === 'ImportDeclaration' ||
-        node.type === 'ExportNamedDeclaration' ||
-        node.type === 'ExportAllDeclaration' ||
-        node.type === 'ImportExpression') &&
-      isSystemSpecifier(sourceNode?.value)
-    ) {
-      return true;
-    }
-
-    const callee = astRecord(node.callee);
-    const firstArgument = Array.isArray(node.arguments)
-      ? astRecord(node.arguments[0])
-      : undefined;
-    if (
-      node.type === 'CallExpression' &&
-      callee?.type === 'Identifier' &&
-      callee.name === 'require' &&
-      isSystemSpecifier(firstArgument?.value)
-    ) {
-      return true;
-    }
-
-    return Object.values(node).some(visit);
-  };
-
-  return visit(parsed.program);
+  let found = false;
+  new Visitor({
+    ImportDeclaration(node) {
+      if (isSystemSpecifier(node.source.value)) found = true;
+    },
+    ExportNamedDeclaration(node) {
+      if (node.source && isSystemSpecifier(node.source.value)) found = true;
+    },
+    ExportAllDeclaration(node) {
+      if (isSystemSpecifier(node.source.value)) found = true;
+    },
+    ImportExpression(node) {
+      if (
+        isStringLiteral(node.source) &&
+        isSystemSpecifier(node.source.value)
+      ) {
+        found = true;
+      }
+    },
+    CallExpression(node) {
+      const firstArgument = node.arguments[0];
+      if (
+        node.callee.type === 'Identifier' &&
+        node.callee.name === 'require' &&
+        firstArgument &&
+        isStringLiteral(firstArgument) &&
+        isSystemSpecifier(firstArgument.value)
+      ) {
+        found = true;
+      }
+    },
+  }).visit(parsed.program);
+  return found;
 }
 
 /**
@@ -224,9 +229,12 @@ describe('G3: the plugin never depends on or imports @animus-ui/system', () => {
   const packageDir = join(dirname(fileURLToPath(import.meta.url)), '..');
 
   test('no @animus-ui/system entry in any package.json dependency field', () => {
-    const manifest = JSON.parse(
+    const manifest: JsonValue = JSON.parse(
       readFileSync(join(packageDir, 'package.json'), 'utf-8')
-    ) as Record<string, Record<string, string> | undefined>;
+    );
+    if (!isJsonObject(manifest)) {
+      throw new Error('vite-plugin package manifest must be a JSON object');
+    }
 
     for (const field of [
       'dependencies',
@@ -234,7 +242,13 @@ describe('G3: the plugin never depends on or imports @animus-ui/system', () => {
       'peerDependencies',
       'optionalDependencies',
     ]) {
-      const names = Object.keys(manifest[field] ?? {});
+      const dependencies = manifest[field];
+      if (dependencies !== undefined && !isJsonObject(dependencies)) {
+        throw new Error(
+          `vite-plugin package manifest.${field} must be an object`
+        );
+      }
+      const names = Object.keys(dependencies ?? {});
       expect(
         names.filter(
           (n) => n === '@animus-ui/system' || n.startsWith('@animus-ui/system/')
@@ -423,12 +437,12 @@ describe('Vite injection option: absent by default (G4 parity)', () => {
     expect(tags).toEqual([]);
   });
 
-  test('the real plugin hook takes the empty branch of the same builder', () => {
+  test('the real plugin hook takes the empty branch of the same builder', async () => {
     const plugin = animusExtract({ system: './ds.ts' });
     const hook = plugin.transformIndexHtml;
 
     // Object form with `order: 'pre'` — unchanged by this increment.
-    if (typeof hook !== 'object' || hook === null || !('handler' in hook)) {
+    if (hook === undefined || !('handler' in hook)) {
       throw new Error(
         'transformIndexHtml must stay in object-with-handler form'
       );
@@ -441,16 +455,17 @@ describe('Vite injection option: absent by default (G4 parity)', () => {
     // proves an unconfigured build emits no tag, attribute, or whitespace of
     // its own. `command: 'build'` is the only field the emptiness depends on.
     const configResolved = plugin.configResolved;
-    if (typeof configResolved !== 'function') {
+    if (configResolved === undefined || 'handler' in configResolved) {
       throw new Error('configResolved must stay in plain-function form');
     }
-    (configResolved as (config: never) => void).call(
-      plugin as never,
+    await resolveConfig(
       {
-        command: 'build',
+        configFile: false,
         root: process.cwd(),
         base: '/',
-      } as never
+        plugins: [plugin],
+      },
+      'build'
     );
 
     // SCOPE: `ctx.layerDeclaration` is '' until buildStart runs (which needs
@@ -460,9 +475,13 @@ describe('Vite injection option: absent by default (G4 parity)', () => {
     // output. The production path with a real layer declaration is covered by
     // `vp run verify:integration` and by the built-HTML assertions in the
     // consumer verify lanes.
-    const result = (
-      hook.handler as (...args: never[]) => HtmlTagDescriptor[]
-    ).call(plugin as never);
+    const result = await hook.handler.call(HTML_HOOK_CONTEXT, '', {
+      path: '/',
+      filename: join(process.cwd(), 'index.html'),
+    });
+    if (!Array.isArray(result)) {
+      throw new Error('transformIndexHtml must return tag descriptors');
+    }
 
     expect(result).toEqual([]);
   });

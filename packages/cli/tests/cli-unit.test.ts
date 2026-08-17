@@ -1,5 +1,11 @@
-import { AnimusConfigError } from '@animus-ui/extract/pipeline';
-import { collectSessionAssets } from '@animus-ui/extract/session';
+import {
+  AnimusConfigError,
+  RETIRED_ENGINE_MESSAGE,
+} from '@animus-ui/extract/pipeline';
+import {
+  collectSessionAssets,
+  getSessionArtifactDir,
+} from '@animus-ui/extract/session';
 import {
   existsSync,
   mkdirSync,
@@ -17,6 +23,7 @@ import {
   createCliSession,
   EnvironmentFailure,
   ExtractionFailure,
+  runBuild,
   UsageFailure,
 } from '../src/build';
 import { projectResolvedConfig, resolveCliConfig } from '../src/config';
@@ -128,6 +135,38 @@ describe('config resolution', () => {
     expect(patterns).toContain('.test.');
   });
 
+  test('a retired v1 engine selection is rejected at the CLI ingress', async () => {
+    const root = makeRoot();
+    writeFileSync(
+      join(root, 'animus.config.json'),
+      JSON.stringify({ system: './ds.ts', engine: 'v1' })
+    );
+    // `engine` is a CORE key, so the shared key validator vouches for it and
+    // the CLI then drops the value on the floor: the one driver that never
+    // applied the retirement gate silently ran v2 instead (flow row A).
+    await expect(resolveCliConfig({ root }, root)).rejects.toThrow(
+      RETIRED_ENGINE_MESSAGE
+    );
+  });
+
+  test('the ANIMUS_ENGINE=v1 override is rejected at the CLI ingress too', async () => {
+    const root = makeRoot();
+    writeFileSync(
+      join(root, 'animus.config.json'),
+      JSON.stringify({ system: './ds.ts' })
+    );
+    const prev = process.env.ANIMUS_ENGINE;
+    process.env.ANIMUS_ENGINE = 'v1';
+    try {
+      await expect(resolveCliConfig({ root }, root)).rejects.toThrow(
+        RETIRED_ENGINE_MESSAGE
+      );
+    } finally {
+      if (prev === undefined) delete process.env.ANIMUS_ENGINE;
+      else process.env.ANIMUS_ENGINE = prev;
+    }
+  });
+
   test('exclude flags merge with file patterns and the defaults', async () => {
     const root = makeRoot();
     writeFileSync(
@@ -188,6 +227,39 @@ describe('artifact writer', () => {
     publishArtifacts(outDir, payloads);
     writeFileSync(join(outDir, 'styles.css'), '/* tampered */');
     expect(verifyPublishedSet(outDir).join('\n')).toContain('styles.css');
+  });
+
+  test('a record whose payloads is an ARRAY is not a schema-1 record', () => {
+    // The hole this pins: a `typeof record.payloads !== 'object'` gate admits
+    // an array, whose zero entries then verify vacuously — a record naming no
+    // payload at all would certify any tree it sits in.
+    const outDir = join(makeRoot(), '.animus');
+    publishArtifacts(outDir, payloads);
+    writeFileSync(
+      join(outDir, 'commit.json'),
+      JSON.stringify({ schema: 1, payloads: [] })
+    );
+    expect(verifyPublishedSet(outDir).length).toBeGreaterThan(0);
+  });
+
+  test('a record whose entry hash is not a string is not a schema-1 record', () => {
+    const outDir = join(makeRoot(), '.animus');
+    publishArtifacts(outDir, payloads);
+    writeFileSync(
+      join(outDir, 'commit.json'),
+      JSON.stringify({ schema: 1, payloads: { 'styles.css': { hash: 7 } } })
+    );
+    expect(verifyPublishedSet(outDir).length).toBeGreaterThan(0);
+  });
+
+  test('a record of bare `null` fails the check instead of throwing', () => {
+    // `JSON.parse('null')` is a successful parse, so a field read off the
+    // result throws out of a function whose contract is to RETURN failures —
+    // the session's hygiene gate calls this and does not catch.
+    const outDir = join(makeRoot(), '.animus');
+    publishArtifacts(outDir, payloads);
+    writeFileSync(join(outDir, 'commit.json'), 'null');
+    expect(verifyPublishedSet(outDir).length).toBeGreaterThan(0);
   });
 
   test('session assets are published beside styles.css, recorded, and verified', () => {
@@ -298,6 +370,75 @@ describe('artifact writer', () => {
     release();
     expect(verifyPublishedSet(outDir).length).toBeGreaterThan(0); // no commit yet — check runs
   });
+
+  test('a lock that exists but does not decode is never stolen', () => {
+    const outDir = join(makeRoot(), '.animus');
+    mkdirSync(outDir, { recursive: true });
+    // A torn or hand-edited lock names no pid, so its holder cannot be
+    // proven dead. Stealing it is the unsafe direction — two writers over
+    // one tree — so the conflict is loud and names the file to remove.
+    writeFileSync(join(outDir, 'lock.json'), '{"pid":');
+    expect(() => acquireLock(outDir)).toThrow(/lock\.json/);
+    expect(existsSync(join(outDir, 'lock.json'))).toBe(true);
+  });
+
+  test('a holder this process may not signal is live, not stale', () => {
+    // pid 1 (launchd/init) exists and is root-owned, so `process.kill(1, 0)`
+    // from an unprivileged runner throws EPERM — "the process is there, you
+    // may not signal it". Reading that as DEAD is how a second writer steals
+    // a live holder's tree. Under a root runner the probe simply succeeds and
+    // the verdict is the same, so the assertion holds either way.
+    const outDir = join(makeRoot(), '.animus');
+    mkdirSync(outDir, { recursive: true });
+    writeFileSync(
+      join(outDir, 'lock.json'),
+      JSON.stringify({ pid: 1, startedAt: 'boot' })
+    );
+    expect(() => acquireLock(outDir)).toThrow(/owns .*--out-dir/s);
+  });
+});
+
+describe('session-tree cleanup ownership', () => {
+  /** A resolved config for a minimal project the CLI can preflight. */
+  async function projectConfig(root: string) {
+    writeFileSync(join(root, 'ds.ts'), 'export const notASystem = 1;\n');
+    writeFileSync(
+      join(root, 'animus.config.json'),
+      JSON.stringify({ system: './ds.ts' })
+    );
+    return resolveCliConfig({ root }, root);
+  }
+
+  test('a run that never constructed a session deletes no session tree', async () => {
+    // Run 1 reaches pipeline start (which publishes its session dir into
+    // the process-global slot) and then fails — the slot now names THIS
+    // root's tree for the rest of the process.
+    const rootA = makeRoot();
+    await expect(runBuild(await projectConfig(rootA))).rejects.toThrow();
+    const slotDir = getSessionArtifactDir();
+    expect(slotDir?.startsWith(rootA)).toBe(true);
+    mkdirSync(slotDir!, { recursive: true });
+    writeFileSync(join(slotDir!, 'manifest.json'), '{}');
+
+    // Run 2 is a DIFFERENT root whose session construction fails:
+    // `excludePatterns` is read only by createCliSession (preflight never
+    // touches it), so a throwing accessor reproduces the one reachable path
+    // to the cleanup fallback.
+    const configB = await projectConfig(makeRoot());
+    Object.defineProperty(configB, 'excludePatterns', {
+      get(): string[] {
+        throw new Error('session construction failed');
+      },
+    });
+    await expect(runBuild(configB)).rejects.toThrow(
+      'session construction failed'
+    );
+
+    // The data loss this pins: the `?? getSessionArtifactDir()` fallback
+    // fires exactly when this run owns nothing, and recursively removed a
+    // tree belonging to a different session (flow #5).
+    expect(existsSync(join(slotDir!, 'manifest.json'))).toBe(true);
+  });
 });
 
 describe('exit taxonomy', () => {
@@ -318,7 +459,7 @@ describe('exit taxonomy', () => {
 describe('watch degradation reporting', () => {
   const healthy = {
     projectRoot: '/proj',
-    projectWatchActive: true,
+    projectWatch: 'active' as const,
     externalWatchRoots: ['/kits/ds'],
     stickyDiagnostics: new Map<string, string>(),
   };
@@ -330,7 +471,7 @@ describe('watch degradation reporting', () => {
   test('an inactive project watcher names the project root and the consequence', () => {
     const degraded = collectDegradedRoots({
       ...healthy,
-      projectWatchActive: false,
+      projectWatch: 'unavailable',
     });
     expect(degraded).toHaveLength(1);
     expect(degraded[0].root).toBe('/proj');
@@ -338,6 +479,24 @@ describe('watch degradation reporting', () => {
     const line = formatDegradedRootLine(degraded[0]);
     expect(line).toContain('watch degraded root=/proj');
     expect(line).toContain('restart');
+  });
+
+  test('a duplicate root claim is reported as a collision, not a platform loss', () => {
+    const degraded = collectDegradedRoots({
+      ...healthy,
+      projectWatch: 'already-watched',
+    });
+    expect(degraded).toHaveLength(1);
+    expect(degraded[0].root).toBe('/proj');
+    // The misreport this pins: the orchestrator returned the same `null` for
+    // a duplicate claim and a platform failure, so the CLI blamed the
+    // platform and prescribed a restart that collides identically (S9).
+    expect(degraded[0].reason).not.toMatch(/platform watcher unavailable/);
+    expect(degraded[0].reason).toMatch(/already/i);
+    expect(degraded[0].reason).toMatch(/NO source edits will be observed/);
+    expect(formatDegradedRootLine(degraded[0])).not.toMatch(
+      /restart the watch/
+    );
   });
 
   test('node_modules-resolved external roots are documented unwatchable', () => {

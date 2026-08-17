@@ -13,16 +13,50 @@ import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 
 import animusLoader from '../src/loader';
 
+import type { AnimusEngine } from '../../extract/session/singleton';
+import type { LoaderPolicyOptions } from '../src/loader-core';
+import type { V2ExtractEngine } from '@animus-ui/extract/pipeline';
+
 const MANIFEST_KEY = '__animus_manifest_json__';
 const ENGINE_KEY = '__animus_engine__';
 const V2_ENGINE_KEY = '__animus_v2_engine__';
 const V2_SENT_SOURCES_KEY = '__animus_v2_sent_sources__';
 
-const g = globalThis as Record<string, unknown>;
-let saved: Record<string, unknown>;
+/** The singleton slots this suite publishes, carrying the value types their
+ *  owner declares (`AnimusSingletonStore` in
+ *  packages/extract/session/singleton.ts) plus the `undefined` an unpublished
+ *  slot holds — the state each slot is saved to and restored from here. */
+interface LoaderSingletonSlots {
+  [MANIFEST_KEY]: string | null | undefined;
+  [ENGINE_KEY]: AnimusEngine | undefined;
+  [V2_ENGINE_KEY]: V2ExtractEngine | null | undefined;
+  [V2_SENT_SOURCES_KEY]: Map<string, string> | null | undefined;
+}
+
+// SAFETY: singleton.ts owns these exact globalThis keys and publishes them
+// with exactly these value types; the engine slots have no exported setter,
+// so writing the same keys the loader's singleton reads is the only way to
+// stand the engine down. The keys are private to that module, so no other
+// declaration of globalThis can disagree about them.
+const g = globalThis as typeof globalThis & LoaderSingletonSlots;
+let saved: LoaderSingletonSlots;
 
 const ROOT = '/proj';
 const CSS_IMPORT = "import '.animus/styles.css';\n";
+
+/** Every path in this suite is absent from the last analyze() set, so the
+ *  adapter must pass it through without ever reaching the engine. */
+const unreachableEngine: V2ExtractEngine = {
+  analyze: () => {
+    throw new Error('engine must not be called for unknown paths');
+  },
+  transformFile: () => {
+    throw new Error('engine must not be called for unknown paths');
+  },
+  clearCache: () => {
+    throw new Error('engine must not be called for unknown paths');
+  },
+};
 
 beforeEach(() => {
   saved = {
@@ -33,11 +67,7 @@ beforeEach(() => {
   };
   g[MANIFEST_KEY] = '{}';
   g[ENGINE_KEY] = 'v2';
-  g[V2_ENGINE_KEY] = {
-    transformFile: () => {
-      throw new Error('engine must not be called for unknown paths');
-    },
-  };
+  g[V2_ENGINE_KEY] = unreachableEngine;
   g[V2_SENT_SOURCES_KEY] = new Map<string, string>();
 });
 
@@ -48,7 +78,7 @@ afterEach(() => {
 function runLoader(
   relPath: string,
   source: string,
-  options: { strict?: boolean; cssImportTarget?: string } = {}
+  options: LoaderPolicyOptions = {}
 ): string {
   const ctx = {
     resourcePath: join(ROOT, relPath),

@@ -163,7 +163,7 @@ their soundness:
    (component / variant / prop / state / token).
 2. **Invocation & source-identity provider** — stable identities linking source symbol
    → component definition → invocation → generated selector/class.
-3. **Render-shape provider** — symbolic host-tree description (conditionals, repetition,
+3. **Render-tree provider** — symbolic host-tree description (conditionals, repetition,
    portals). _(Phase 2+; interface defined now, animus adapter later.)_
 4. **Component-contract provider** — declared summaries (intrinsic bounds, content
    domains, opaque obligations). _(Phase 2+.)_

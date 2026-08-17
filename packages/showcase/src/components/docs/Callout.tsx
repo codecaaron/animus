@@ -113,15 +113,15 @@ const CalloutFamily = compose(
 
 // ─── Convenience Wrapper ────────────────────────────────────────
 
-const ICONS: Record<string, string> = {
+type CalloutVariant = 'info' | 'tip' | 'warn' | 'danger' | 'deprecated';
+
+const ICONS = {
   info: '\u2139',
   tip: '\u2192',
   warn: '\u26A0',
   danger: '\u2715',
   deprecated: '\u29B8',
-};
-
-type CalloutVariant = 'info' | 'tip' | 'warn' | 'danger' | 'deprecated';
+} satisfies Record<CalloutVariant, string>;
 
 export function Callout({
   variant = 'info',

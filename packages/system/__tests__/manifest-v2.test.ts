@@ -99,28 +99,43 @@ function buildSystemRegisteredFixture() {
     .build();
 }
 
+type BuiltReferenceTheme = ReturnType<typeof buildReferenceFixture>;
+
+/** The manifest field set a pre-v2 `build()` published — no v2 discriminant. */
+type V1Manifest = Pick<
+  BuiltReferenceTheme['manifest'],
+  'tokenMap' | 'variableMap' | 'modes' | 'variableCss'
+>;
+
+/**
+ * A built theme's enumerable data half carrying a v1-only manifest. `build()`
+ * attaches `manifest`, `serialize`, and `varRef` as NON-enumerable own
+ * properties (and `__emitted` is phantom), so the key copy below reproduces
+ * exactly the data half a v1 build published.
+ */
+interface V1Facsimile extends Omit<
+  BuiltReferenceTheme,
+  '__emitted' | 'manifest' | 'serialize' | 'varRef'
+> {
+  manifest: V1Manifest;
+}
+
 /**
  * Hand-construct a v1-built-theme facsimile from a real built theme: same raw
  * data, manifest limited to the v1 field set (no manifestVersion
  * discriminant), non-enumerable exactly like build() defines it.
  */
-function buildV1Facsimile(
-  real: ReturnType<typeof buildReferenceFixture>
-): Record<string, unknown> {
-  const v1Source: Record<string, unknown> = {};
-  for (const key of Object.keys(real)) {
-    v1Source[key] = (real as Record<string, unknown>)[key];
-  }
-  Object.defineProperty(v1Source, 'manifest', {
-    value: {
-      tokenMap: real.manifest.tokenMap,
-      variableMap: real.manifest.variableMap,
-      modes: real.manifest.modes,
-      variableCss: real.manifest.variableCss,
-    },
+function buildV1Facsimile(real: BuiltReferenceTheme): V1Facsimile {
+  const v1Manifest: V1Manifest = {
+    tokenMap: real.manifest.tokenMap,
+    variableMap: real.manifest.variableMap,
+    modes: real.manifest.modes,
+    variableCss: real.manifest.variableCss,
+  };
+  return Object.defineProperty({ ...real }, 'manifest', {
+    value: v1Manifest,
     enumerable: false,
   });
-  return v1Source;
 }
 
 /** Authored-graph fixture: literal, plain ref, and opacity ref side by side. */
@@ -186,13 +201,35 @@ describe('manifest v2 authored token definitions', () => {
   });
 });
 
+// ─── Ambient slots the contract hash probes at call time ────
+
+/**
+ * Node ≥ 22.3's `process.getBuiltinModule` — the slot `sha256Hex` reads to
+ * reach `node:crypto` without a static import edge, returning the builtin
+ * module namespace or `undefined`. @types/node 18 predates the API, so the
+ * runtime contract is named here rather than asserted away.
+ */
+type BuiltinModuleLookup = (id: string) => object | undefined;
+
+/**
+ * The two ambient slots whose ABSENCE selects the pure FIPS 180-4 fallback.
+ * Both are optional because the tests below remove and restore them, and
+ * `globalThis` is the very object `sha256Hex` probes at call time.
+ */
+interface HashingAmbients {
+  process?: NodeJS.Process & { getBuiltinModule?: BuiltinModuleLookup };
+  TextEncoder?: typeof globalThis.TextEncoder;
+}
+
+const ambients: HashingAmbients = globalThis;
+
 // ─── Task 01.3: version, hash, fragments ────────────────────
 
 describe('manifest v2 version, contract hash, and CSS fragments', () => {
   it('carries manifestVersion 2 and an emitter version on every fresh build', () => {
     const manifest = buildReferenceFixture().manifest;
     expect(manifest.manifestVersion).toBe(2);
-    expect(typeof manifest.emitterVersion).toBe('number');
+    expect(manifest.emitterVersion).toEqual(expect.any(Number));
     expect(manifest.emittedScales).toEqual(['colors']);
   });
 
@@ -245,11 +282,7 @@ describe('manifest v2 version, contract hash, and CSS fragments', () => {
     // use (built themes execute inside client bundles). Cross-environment
     // composition identity requires both paths to digest identically.
     const nodeCryptoHash = buildSystemRegisteredFixture().manifest.contractHash;
-    const proc = (
-      globalThis as {
-        process?: { getBuiltinModule?: (id: string) => unknown };
-      }
-    ).process;
+    const proc = ambients.process;
     expect(proc?.getBuiltinModule).toBeDefined();
     const original = proc!.getBuiltinModule;
     let fallbackHash: string | undefined;
@@ -269,25 +302,19 @@ describe('manifest v2 version, contract hash, and CSS fragments', () => {
     // provides ES built-ins only — no Node globals and no WHATWG APIs
     // (rust-system-loader spec). The fallback must digest without either.
     const nodeCryptoHash = buildSystemRegisteredFixture().manifest.contractHash;
-    const proc = (
-      globalThis as {
-        process?: { getBuiltinModule?: (id: string) => unknown };
-      }
-    ).process;
+    const proc = ambients.process;
     expect(proc?.getBuiltinModule).toBeDefined();
     const originalGetBuiltin = proc!.getBuiltinModule;
-    const originalTextEncoder = (globalThis as { TextEncoder?: unknown })
-      .TextEncoder;
+    const originalTextEncoder = ambients.TextEncoder;
     expect(originalTextEncoder).toBeDefined();
     let fallbackHash: string | undefined;
     try {
       proc!.getBuiltinModule = undefined;
-      (globalThis as { TextEncoder?: unknown }).TextEncoder = undefined;
+      ambients.TextEncoder = undefined;
       fallbackHash = buildSystemRegisteredFixture().manifest.contractHash;
     } finally {
       proc!.getBuiltinModule = originalGetBuiltin;
-      (globalThis as { TextEncoder?: unknown }).TextEncoder =
-        originalTextEncoder;
+      ambients.TextEncoder = originalTextEncoder;
     }
 
     expect(nodeCryptoHash).toBeDefined();

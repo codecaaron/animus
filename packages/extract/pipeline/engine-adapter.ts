@@ -22,6 +22,8 @@
  * webpack, or vite (dependency direction: plugins -> extract).
  */
 
+import { parseFilesJson } from './source-ingestion';
+
 /** The stateful v2 engine handle produced by `new native.ExtractEngine(...)`. */
 export interface V2ExtractEngine {
   analyze(filesJson: string): string;
@@ -157,7 +159,16 @@ export interface V2EngineAdapterDeps {
 export function createV2EngineApi(deps: V2EngineAdapterDeps): () => EngineApi {
   const { label, isV2, loadNativeEngine, store } = deps;
   return (): EngineApi => {
-    if (!isV2()) return loadNativeEngine() as EngineApi;
+    if (!isV2()) {
+      // SAFETY: the v1 leg IS the native module — `EngineApi` was derived from
+      // the surface `animus-extract-v2`'s NAPI entry points already export
+      // (loadSystemModule / scanKeyframesExports / analyzeProject /
+      // transformFile / clearAnalysisCache), which is why the v2 adapter below
+      // can mimic it. The module's own generated `index.d.ts` is authoritative
+      // and `loadNativeEngine` is declared `any`, so this names the surface the
+      // callers get rather than widening one.
+      return loadNativeEngine() as EngineApi;
+    }
     const native = loadNativeEngine();
     return {
       loadSystemModule: (...args: unknown[]) =>
@@ -193,10 +204,7 @@ export function createV2EngineApi(deps: V2EngineAdapterDeps): () => EngineApi {
 
         // Record analyze-time sources for the transform-time drift check.
         const sent = new Map<string, string>();
-        for (const entry of JSON.parse(filesJson) as Array<{
-          path: string;
-          source: string;
-        }>) {
+        for (const entry of parseFilesJson(filesJson, label)) {
           sent.set(entry.path, entry.source);
         }
         store.setSentSources(sent);
@@ -204,6 +212,11 @@ export function createV2EngineApi(deps: V2EngineAdapterDeps): () => EngineApi {
         // v1 EmitterConfig rides positionally; pass its fields through so the
         // plugin's runtime subpath and custom css/system-props module ids reach
         // the engine (dropping them silently rewires imports).
+        // SAFETY: `emitterConfigJson` is animus's own wire — `buildAnalysisInputs`
+        // (`run-analysis.ts`) is its only producer and writes exactly these three
+        // snake_case keys from `EmitterConfig`. Every field is read back
+        // optionally below (`?? undefined`), so a producer that stops emitting
+        // one degrades to the engine's own default rather than to a wrong value.
         const emitterConfig = emitterConfigJson
           ? (JSON.parse(emitterConfigJson) as {
               runtime_import?: string;
@@ -237,6 +250,12 @@ export function createV2EngineApi(deps: V2EngineAdapterDeps): () => EngineApi {
           transformSourcesJson: transformSourcesJson ?? undefined,
           devMode,
         };
+        // SAFETY: `native` is the loaded `animus-extract-v2` module, whose
+        // generated `crates/extract-v2/index.d.ts` declares `ExtractEngine`
+        // with exactly the three methods `V2ExtractEngine` names. The
+        // declaration is `any` only because this module refuses to import the
+        // native binding (see the header's dependency-direction rule); a
+        // missing method surfaces on the very next line's `analyze` call.
         const engine = new native.ExtractEngine(config) as V2ExtractEngine;
         store.setEngine(engine);
         return engine.analyze(filesJson);
@@ -266,6 +285,11 @@ export function createV2EngineApi(deps: V2EngineAdapterDeps): () => EngineApi {
             `[${label}] v2: transform-time source for ${path} differs from analyze-time source — an upstream transform may be reverted`
           );
         }
+        // SAFETY: this is the engine's own serde output for the call made on
+        // the line itself — `ExtractEngine.transformFile` serializes
+        // `{ code, hasComponents }`. Unparseable bytes throw here, which is
+        // correct: the engine emitting non-JSON is an engine bug, and a
+        // substituted default would ship the untransformed source as success.
         return JSON.parse(engine.transformFile(path)) as TransformFileResult;
       },
       clearAnalysisCache: () => {

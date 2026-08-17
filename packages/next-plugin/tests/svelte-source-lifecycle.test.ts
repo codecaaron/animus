@@ -14,9 +14,9 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   loadSystemModule: vi.fn(),
-  extractFacts: vi.fn(),
+  extractFacts: vi.fn<(filesJson: string) => string>(),
   extractFactsEnabled: true,
-  analyzeProject: vi.fn(),
+  analyzeProject: vi.fn<(...args: AnalyzeProjectArgs) => string>(),
   transformFile: vi.fn(),
   clearAnalysisCache: vi.fn(),
   scanKeyframesExports: vi.fn(),
@@ -27,7 +27,16 @@ import {
   engineApi,
   setEngineApiOverride,
 } from '../../extract/session/singleton';
-import { resetAnimusGlobals, SYSTEM_CONFIG } from './singleton-fixtures';
+import {
+  makeManifest,
+  resetAnimusGlobals,
+  SYSTEM_CONFIG,
+} from './singleton-fixtures';
+
+import type {
+  AnalysisSourceEntry,
+  AnalyzeProjectArgs,
+} from '@animus-ui/extract/pipeline';
 
 // Engine API injection through the singleton's globalThis-keyed test
 // seam — reaches every copy of the module (source or dist), which a
@@ -45,31 +54,39 @@ setEngineApiOverride(() => {
     : api;
 });
 
-interface FileEntry {
-  path: string;
-  source: string;
-  hash?: string;
+/** The slice of one serialized engine file entry these fakes read. */
+type EngineFileEntry = Pick<AnalysisSourceEntry, 'path' | 'source'>;
+
+/**
+ * Decode one engine payload. The fakes stand exactly where the NAPI boundary
+ * stands — they receive a JSON string — so each payload is decoded and
+ * checked once here instead of asserted at every read site.
+ */
+function readFileEntries(filesJson: string): EngineFileEntry[] {
+  const parsed: unknown = JSON.parse(filesJson);
+  if (!Array.isArray(parsed)) {
+    throw new TypeError('engine payload must be a JSON array of file entries');
+  }
+  return parsed.map((entry, index) => {
+    const { path, source } = entry;
+    if (String(path) !== path || String(source) !== source) {
+      throw new TypeError(
+        `engine payload entry ${index} must carry a string path and source`
+      );
+    }
+    return { path, source };
+  });
 }
 
-interface SessionSources {
-  fileCache: Map<string, { hash: string; source: string }>;
-  analysisEntryCache: Map<string, { hash: string; source: string }>;
-  sourceOwnership: Record<
-    string,
-    { originalPath: string; originalHash: string; analysisPaths: string[] }
-  >;
-}
-
-const MANIFEST = JSON.stringify({
-  css: '',
-  sheets: { global: '' },
-  system_prop_map: {},
-  dynamic_props: {},
-  diagnostics: [],
-});
+/** The engine's manifest for these workspaces — a COMPLETE `ProjectManifest`
+ *  at its empty-universe values (the shared pipeline reads
+ *  `manifest.sheets.global` and `manifest.css` as typed fields, not guarded
+ *  ones). This suite asserts on source ownership, not on emitted CSS, so
+ *  every field stays at its empty value. */
+const MANIFEST = JSON.stringify(makeManifest());
 
 function factsFor(filesJson: string): string {
-  const entries = JSON.parse(filesJson) as FileEntry[];
+  const entries = readFileEntries(filesJson);
   return JSON.stringify({
     files: Object.fromEntries(
       entries.map((entry) => {
@@ -171,14 +188,20 @@ function makeSession(app: string, strict = false): ExtractionSession {
   return session;
 }
 
-function sources(session: ExtractionSession): SessionSources {
-  return session as unknown as SessionSources;
+/** The live ownership state these assertions read. `fileCache` is private to
+ *  ExtractionSession, so it is reached through TypeScript's element-access
+ *  escape hatch: the owner's own declared type still applies, no assertion. */
+function sources(session: ExtractionSession) {
+  return {
+    fileCache: session['fileCache'],
+    sourceOwnership: session.sourceOwnership,
+  };
 }
 
-function analyzedEntries(): FileEntry[] {
+function analyzedEntries(): EngineFileEntry[] {
   const call = mocks.analyzeProject.mock.calls.at(-1);
   expect(call).toBeDefined();
-  return JSON.parse(call![0] as string) as FileEntry[];
+  return readFileEntries(call![0]);
 }
 
 function analyzedSource(path: string): string | undefined {
@@ -197,10 +220,7 @@ beforeEach(() => {
   mocks.extractFacts.mockReset().mockImplementation(factsFor);
   mocks.analyzeProject.mockReset().mockImplementation((filesJson: string) => {
     activeTransformSources = new Map(
-      (JSON.parse(filesJson) as FileEntry[]).map((entry) => [
-        entry.path,
-        entry.source,
-      ])
+      readFileEntries(filesJson).map((entry) => [entry.path, entry.source])
     );
     return MANIFEST;
   });
@@ -264,11 +284,9 @@ describe('Next opted-in Svelte source ownership', () => {
       `${externalPath}.instance.tsx`,
     ]);
     expect(
-      (
-        mocks.extractFacts.mock.calls.flatMap((call) =>
-          JSON.parse(call[0] as string)
-        ) as FileEntry[]
-      ).some((entry) => entry.path.endsWith('.svelte'))
+      mocks.extractFacts.mock.calls
+        .flatMap((call) => readFileEntries(call[0]))
+        .some((entry) => entry.path.endsWith('.svelte'))
     ).toBe(false);
   });
 

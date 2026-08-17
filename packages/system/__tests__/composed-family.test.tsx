@@ -68,6 +68,10 @@ function tagLacksClass(html: string, tag: string, cls: string): boolean {
   return !tagHasClass(html, tag, cls);
 }
 
+/** The variant props a mount forwards to a slot — `size` is the only axis the
+ *  fixtures above declare. */
+type SlotVariantProps = { size?: 'sm' | 'lg' };
+
 /**
  * Mount a component with a ref via the client renderer and return the DOM
  * node the ref resolved to. Uses flushSync so the commit (and therefore ref
@@ -76,7 +80,7 @@ function tagLacksClass(html: string, tag: string, cls: string): boolean {
  */
 function mountAndGetRefNode(
   Component: ForwardRefExoticComponent<any>,
-  props: Record<string, unknown> = {}
+  props: SlotVariantProps = {}
 ): Element | null {
   const ref = createRef<Element>();
   const container = document.createElement('div');

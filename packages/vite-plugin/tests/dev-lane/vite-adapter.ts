@@ -6,6 +6,19 @@ import { createServer } from 'vite-plus';
 import { animusExtract } from '../../src/index';
 
 import type { DevArtifacts, DevServerAdapter } from './scenario';
+import type { AddressInfo } from 'net';
+import type { Logger, ViteDevServer } from 'vite-plus';
+
+interface ViteDevLaneConfig {
+  root: string;
+  configFile: false;
+  customLogger: Logger;
+  optimizeDeps: { noDiscovery: true; include: never[] };
+  server: { middlewareMode: true; hmr: { port: number } };
+  plugins: ReturnType<typeof animusExtract>[];
+}
+
+type StartViteDevLane = (config: ViteDevLaneConfig) => Promise<ViteDevServer>;
 
 /**
  * The one real bundler adapter: a programmatic Vite dev server running the
@@ -24,6 +37,8 @@ const SYSTEM_PROPS_MODULE_ID = '\0virtual:animus/system-props';
 /** Unwrap `const __vite__css = "..."` from Vite's dev CSS module wrapper. */
 function decodeStaticCss(code: string): string {
   const match = code.match(/const __vite__css = ("(?:[^"\\]|\\[\s\S])*")/);
+  // SAFETY: The capture is a complete quoted JSON string literal, so parsing it
+  // can only produce the CSS string represented by that literal.
   return match ? (JSON.parse(match[1]) as string) : code;
 }
 
@@ -47,17 +62,23 @@ function reserveHmrPort(): Promise<number> {
     const probe = createNetServer();
     probe.on('error', reject);
     probe.listen(0, '127.0.0.1', () => {
-      const address = probe.address();
-      const port = typeof address === 'object' && address ? address.port : 0;
+      // SAFETY: A listening net.Server opened with a numeric port and IP host
+      // reports a non-null TCP AddressInfo, never a Unix-socket string.
+      const { port } = probe.address() as AddressInfo;
       probe.close(() => resolve(port));
     });
   });
 }
 
 export function createViteDevAdapter(): DevServerAdapter {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let server: any = null;
+  let server: ViteDevServer | null = null;
   let projectRoot = '';
+
+  const startedServer = () => {
+    // SAFETY: The adapter lifecycle starts the server before invoking every
+    // server-backed method; close handles the allowed never-started state.
+    return server!;
+  };
 
   // Bounded evidence trail for timeout forensics: raw chokidar events plus
   // everything the plugin and Vite log. The server runs with a capturing
@@ -69,7 +90,7 @@ export function createViteDevAdapter(): DevServerAdapter {
     trace.push(`${new Date().toISOString().slice(11, 23)} ${line}`);
     if (trace.length > 400) trace.splice(0, trace.length - 400);
   };
-  const capturingLogger = {
+  const capturingLogger: Logger = {
     info: (msg: string) => record(`log.info ${msg}`),
     warn: (msg: string) => record(`log.warn ${msg}`),
     warnOnce: (msg: string) => record(`log.warn ${msg}`),
@@ -85,11 +106,8 @@ export function createViteDevAdapter(): DevServerAdapter {
   // while the components virtual module updates proves the gate held.
   const sentUpdatePaths: string[] = [];
 
-  const readModule = async (
-    id: string,
-    decode: (code: string) => string
-  ): Promise<{ css: string; revision: number }> => {
-    const environment = server.environments.client;
+  const readModule = async (id: string, decode: (code: string) => string) => {
+    const environment = startedServer().environments.client;
     const result = await environment.transformRequest(id);
     const node = environment.moduleGraph.getModuleById(id);
     return {
@@ -103,15 +121,12 @@ export function createViteDevAdapter(): DevServerAdapter {
 
     async start(root: string): Promise<void> {
       projectRoot = root;
-      // The config type is erased on purpose. The plugin is typed against its
-      // `vite` peer while vite-plus vendors its own structurally identical copy
-      // of those types; comparing the two inline configs is a nominal mismatch
-      // that also blows the type-instantiation depth limit.
-      const start = createServer as unknown as (
-        config: unknown
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      ) => Promise<any>;
-      server = await start({
+      // SAFETY: vite-plus runs Vite's server implementation and consumes the
+      // same runtime plugin hooks as the peer-vite Plugin returned by
+      // animusExtract; this named seam avoids comparing the duplicate nominal
+      // declaration graphs while preserving the exact config and server API.
+      const startViteDevLane = createServer as StartViteDevLane;
+      server = await startViteDevLane({
         root,
         configFile: false,
         customLogger: capturingLogger,
@@ -130,10 +145,10 @@ export function createViteDevAdapter(): DevServerAdapter {
         // dropped an event instead of guessing.
         plugins: [animusExtract({ system: './src/ds.ts', verbose: true })],
       });
-      server.watcher.on('all', (event: string, path: string) =>
+      server.watcher.on('all', (event, path) =>
         record(`watcher ${event} ${path}`)
       );
-      server.watcher.on('error', (error: unknown) =>
+      server.watcher.on('error', (error) =>
         record(`watcher error ${String(error)}`)
       );
       // Capture the client environment's outgoing hot payloads. `hot.send` is
@@ -141,7 +156,10 @@ export function createViteDevAdapter(): DevServerAdapter {
       // `sentUpdatePaths` is byte-for-byte what a connected browser would act
       // on — no browser needed for update-delivery assertions.
       const hot = server.environments.client.hot;
-      const originalSend = hot.send.bind(hot);
+      // Vite's overloaded send contract forwards either an HMR payload or a
+      // custom event tuple; the wrapper preserves both argument forms.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const originalSend: (...args: any[]) => void = hot.send.bind(hot);
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       hot.send = (...args: any[]) => {
         const payload = args[0];
@@ -168,7 +186,7 @@ export function createViteDevAdapter(): DevServerAdapter {
     },
 
     isModuleWarm(projectRelativePath: string): boolean {
-      const environment = server.environments.client;
+      const environment = startedServer().environments.client;
       const abs = join(projectRoot, projectRelativePath);
       const mods = environment.moduleGraph.getModulesByFile(abs);
       if (!mods || mods.size === 0) return false;
@@ -200,7 +218,7 @@ export function createViteDevAdapter(): DevServerAdapter {
     },
 
     async requestSource(projectRelativePath: string): Promise<string> {
-      const result = await server.environments.client.transformRequest(
+      const result = await startedServer().environments.client.transformRequest(
         `/${projectRelativePath}`
       );
       return result?.code ?? '';
@@ -216,7 +234,8 @@ export function createViteDevAdapter(): DevServerAdapter {
         ? url.slice('/@id/'.length)
         : url;
       const id = stripped.replace('__x00__', '\0');
-      const result = await server.environments.client.transformRequest(id);
+      const result =
+        await startedServer().environments.client.transformRequest(id);
       return result?.code ?? '';
     },
 
@@ -226,7 +245,7 @@ export function createViteDevAdapter(): DevServerAdapter {
       // the file on disk, so the returned string is byte-for-byte what a
       // browser is handed.
       const raw = readFileSync(join(projectRoot, 'index.html'), 'utf-8');
-      return server.transformIndexHtml('/index.html', raw, '/');
+      return startedServer().transformIndexHtml('/index.html', raw, '/');
     },
 
     async close(): Promise<void> {

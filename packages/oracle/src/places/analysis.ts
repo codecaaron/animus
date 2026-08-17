@@ -49,18 +49,20 @@ export type {
   UnresolvedInvocation,
 } from './model';
 
+export interface PlaceExplanationWinner {
+  selector: string;
+  layer: string;
+  value: string;
+  origin?: StyleRuleRecord['origin'];
+  source?: StyleRuleRecord['source'];
+}
+
 export interface PlaceExplanation {
   place: Place;
   point: ScenarioPoint;
   property: string;
   value: string | undefined;
-  winner?: {
-    selector: string;
-    layer: string;
-    value: string;
-    origin?: StyleRuleRecord['origin'];
-    source?: StyleRuleRecord['source'];
-  };
+  winner?: PlaceExplanationWinner;
   defeated: readonly {
     selector: string;
     value: string;
@@ -121,11 +123,16 @@ export interface PlaceAnalysis {
   observe(place: Place, observation: Observation): ObserveResult;
 }
 
+interface AxisBindingResult {
+  binding: AxisBinding;
+  assumption?: string;
+}
+
 const bindAxis = (
   axis: string,
   read: SourceRead,
   invocation: InvocationRef
-): { binding: AxisBinding; assumption?: string } => {
+): AxisBindingResult => {
   const requirement = requirementOf(axis);
   if (!requirement.modeled) {
     return {
@@ -179,22 +186,19 @@ const bindAxis = (
   }
 
   if (openReason !== undefined) {
-    return {
-      binding: {
-        axis,
-        state: 'open',
-        reason: openReason,
-        ...(openWitness === undefined
-          ? {}
-          : {
-              witness: {
-                file: read.file,
-                ordinal: openWitness.ordinal,
-                tag: openWitness.tag,
-              },
-            }),
-      },
+    const binding: AxisBinding = {
+      axis,
+      state: 'open',
+      reason: openReason,
     };
+    if (openWitness !== undefined) {
+      binding.witness = {
+        file: read.file,
+        ordinal: openWitness.ordinal,
+        tag: openWitness.tag,
+      };
+    }
+    return { binding };
   }
 
   return {
@@ -273,17 +277,18 @@ export const createPlaceAnalysis = (snapshot: Snapshot): PlaceAnalysis => {
         element.tag
       );
       if (resolution.kind !== 'ambiguous') continue;
-      entries.push({
+      const entry: UnresolvedInvocation = {
         file,
         ordinal: element.ordinal,
         span: element.span,
         tag: element.tag,
         reason: 'ambiguous-binding',
         candidates: resolution.candidates.map((candidate) => candidate.id),
-        ...(resolution.specifier === undefined
-          ? {}
-          : { specifier: resolution.specifier }),
-      });
+      };
+      if (resolution.specifier !== undefined) {
+        entry.specifier = resolution.specifier;
+      }
+      entries.push(entry);
     }
     return entries;
   };
@@ -432,26 +437,22 @@ export const createPlaceAnalysis = (snapshot: Snapshot): PlaceAnalysis => {
       }
     }
 
-    return {
-      place,
-      point,
-      property: question.property,
-      value: reading.values.get(question.property),
-      ...(winner === undefined
-        ? {}
-        : {
-            winner: {
-              selector: winner.candidate.rule.selector.raw,
-              layer: winner.candidate.rule.layer,
-              value: winner.declaration.value,
-              ...(winner.candidate.rule.origin === undefined
-                ? {}
-                : { origin: winner.candidate.rule.origin }),
-              ...(winner.candidate.rule.source === undefined
-                ? {}
-                : { source: winner.candidate.rule.source }),
-            },
-          }),
+    const value = reading.values.get(question.property);
+    let explanationWinner: PlaceExplanationWinner | undefined;
+    if (winner !== undefined) {
+      explanationWinner = {
+        selector: winner.candidate.rule.selector.raw,
+        layer: winner.candidate.rule.layer,
+        value: winner.declaration.value,
+      };
+      if (winner.candidate.rule.origin !== undefined) {
+        explanationWinner.origin = winner.candidate.rule.origin;
+      }
+      if (winner.candidate.rule.source !== undefined) {
+        explanationWinner.source = winner.candidate.rule.source;
+      }
+    }
+    const explanationTail = {
       defeated: (outcome?.defeated ?? []).map((entry) => ({
         selector: entry.declaration.candidate.rule.selector.raw,
         value: entry.declaration.declaration.value,
@@ -461,6 +462,23 @@ export const createPlaceAnalysis = (snapshot: Snapshot): PlaceAnalysis => {
         guarded.has(binding.axis)
       ),
       assumptions: [...place.assumptions, ...reading.assumptions],
+    };
+    if (explanationWinner === undefined) {
+      return {
+        place,
+        point,
+        property: question.property,
+        value,
+        ...explanationTail,
+      };
+    }
+    return {
+      place,
+      point,
+      property: question.property,
+      value,
+      winner: explanationWinner,
+      ...explanationTail,
     };
   };
 
@@ -492,10 +510,8 @@ export const createPlaceAnalysis = (snapshot: Snapshot): PlaceAnalysis => {
       );
 
       for (const mode of modes) {
-        const context: ScenarioPoint = {
-          ...(mode === undefined ? {} : { mode }),
-          ...place.point,
-        };
+        const context: ScenarioPoint =
+          mode === undefined ? { ...place.point } : { mode, ...place.point };
         if (deciding.length > 0) {
           const opaque = deciding.some(
             (binding) => binding.reason === 'opaque-component'
@@ -523,13 +539,14 @@ export const createPlaceAnalysis = (snapshot: Snapshot): PlaceAnalysis => {
         );
         const from = base.values.get(subject.property);
         const to = candidate.values.get(subject.property);
-        outcomes.push({
+        const carried: CarriedOutcome = {
           place,
           context,
           outcome: from === to ? 'stable' : 'changed',
-          ...(from === undefined ? {} : { from }),
-          ...(to === undefined ? {} : { to }),
-        });
+        };
+        if (from !== undefined) carried.from = from;
+        if (to !== undefined) carried.to = to;
+        outcomes.push(carried);
       }
     }
     return outcomes;

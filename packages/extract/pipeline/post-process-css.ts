@@ -32,12 +32,14 @@ export function resolveLightningTargets(
     // browserslist() with undefined query uses the project's config or defaults
     queries = detected.length > 0 ? detected : browserslist('defaults');
   }
+  // An unresolved QUERY ('last 2 versions', '> 0.5%') is spaced; a resolved
+  // browser id from the two branches above is passed through as-is. An empty
+  // list has no first query to classify and resolves nothing.
+  const [firstQuery] = queries;
   return browserslistToTargets(
-    Array.isArray(queries) &&
-      typeof queries[0] === 'string' &&
-      queries[0].includes(' ')
+    firstQuery !== undefined && firstQuery.includes(' ')
       ? browserslist(queries)
-      : (queries as ReturnType<typeof browserslist>)
+      : queries
   );
 }
 

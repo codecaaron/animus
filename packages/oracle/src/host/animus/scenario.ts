@@ -111,16 +111,19 @@ export const createAnimusScenarios = (
   const viewportMax = input.viewportMax ?? DEFAULT_VIEWPORT_MAX;
   const modes = input.tokens?.modes() ?? [];
 
-  const dimensions: Record<string, DimensionDomain> = {
-    [VIEWPORT_DIMENSION]: {
-      kind: 'interval',
-      min: viewportMin,
-      max: viewportMax,
-    },
-    ...(modes.length === 0
-      ? {}
-      : { [MODE_DIMENSION]: { kind: 'finite' as const, values: [...modes] } }),
+  // Declaration order is the answer's reading order: the viewport axis first,
+  // then `mode` only when the stylesheet actually declared modes, then every
+  // component-scoped axis. A modeless host has no `mode` key at all, which is
+  // what makes an unbound mode guard read FALSE instead of bound-to-nothing.
+  const dimensions: Record<string, DimensionDomain> = {};
+  dimensions[VIEWPORT_DIMENSION] = {
+    kind: 'interval',
+    min: viewportMin,
+    max: viewportMax,
   };
+  if (modes.length > 0) {
+    dimensions[MODE_DIMENSION] = { kind: 'finite', values: [...modes] };
+  }
 
   for (const domain of input.componentDomains.values()) {
     for (const [name, dimension] of Object.entries(domain)) {

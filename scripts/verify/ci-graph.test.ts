@@ -2,12 +2,41 @@ import { spawnSync } from 'node:child_process';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
+/**
+ * A value read out of the parsed workflow: a YAML scalar, list, or mapping as
+ * the `Bun.YAML.parse` -> JSON round-trip hands it back, plus the `undefined`
+ * an absent key reads as. `on:` triggers and `strategy:` matrices are GitHub's
+ * schemas, not this suite's, so they are compared whole rather than restated.
+ */
+type WorkflowValue =
+  | undefined
+  | null
+  | boolean
+  | number
+  | string
+  | WorkflowValue[]
+  | WorkflowMapping;
+
+type WorkflowMapping = { [key: string]: WorkflowValue };
+
+/**
+ * A `with:` input. Actions forwards every input to the action as a string, so
+ * only scalars are writable there.
+ */
+type WorkflowInput = boolean | number | string;
+
+// Decided by representation tag rather than by `typeof`: `[object Object]` is
+// what separates a YAML mapping from a list.
+function isMapping(value: WorkflowValue): value is WorkflowMapping {
+  return Object.prototype.toString.call(value) === '[object Object]';
+}
+
 type WorkflowStep = {
   env?: Record<string, string>;
   name?: string;
   uses?: string;
   run?: string;
-  with?: Record<string, unknown>;
+  with?: Record<string, WorkflowInput>;
 };
 
 type WorkflowJob = {
@@ -21,11 +50,11 @@ type WorkflowJob = {
   permissions?: Record<string, string>;
   'runs-on': string;
   steps: WorkflowStep[];
-  strategy?: unknown;
+  strategy?: WorkflowValue;
 };
 
 type Workflow = {
-  on: Record<string, unknown>;
+  on: Record<string, WorkflowValue>;
   jobs: Record<string, WorkflowJob>;
 };
 
@@ -62,7 +91,25 @@ function readWorkflow(): Workflow {
     throw new Error(`Bun.YAML.parse failed: ${parsed.stderr}`);
   }
 
-  return JSON.parse(parsed.stdout) as Workflow;
+  const document: WorkflowValue = JSON.parse(parsed.stdout);
+  if (
+    !isMapping(document) ||
+    !isMapping(document.on) ||
+    !isMapping(document.jobs)
+  ) {
+    throw new Error(
+      `${workflowPath} has no top-level 'on:' and 'jobs:' mappings`
+    );
+  }
+
+  // SAFETY: the guard above establishes the two mappings every test below
+  // navigates, so no read can fault. The fields under them are not claims about
+  // arbitrary bytes — `Workflow` is this suite's EXPECTATION of the repo's own
+  // ci.yaml, and every field it names is asserted by a test in this file
+  // (`runs-on`/`needs` by the runner and dependency test, `steps` and their
+  // `with` inputs by the step tests). A ci.yaml that drifts fails the assertion
+  // that names it, which is the whole job of this gate.
+  return document as Workflow;
 }
 
 function namedStep(job: WorkflowJob, name: string): WorkflowStep {

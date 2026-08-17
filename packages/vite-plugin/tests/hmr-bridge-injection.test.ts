@@ -1,3 +1,4 @@
+import { join } from 'node:path';
 import { runInNewContext } from 'node:vm';
 import { describe, expect, test } from 'vitest';
 
@@ -9,7 +10,11 @@ import {
 import { animusExtract } from '../src/index';
 import { buildIndexHtmlTags } from '../src/index-html';
 import { loadVirtualModule } from '../src/virtual-modules';
-import { contextWith, LAYER_DECLARATION } from './index-html-context';
+import {
+  contextWith,
+  HTML_HOOK_CONTEXT,
+  LAYER_DECLARATION,
+} from './index-html-context';
 
 import type { HtmlTagDescriptor } from 'vite';
 
@@ -44,6 +49,19 @@ const BRIDGE_TAG: HtmlTagDescriptor = {
   },
   injectTo: 'head-prepend',
 };
+
+function bridgeModuleSource(): string {
+  const source = loadVirtualModule(
+    contextWith({ isProd: false }),
+    RESOLVED_BRIDGE_ID
+  );
+  if (source === null) throw new Error('bridge module did not resolve');
+  return source;
+}
+
+function withGlobalThis<Context extends object>(context: Context) {
+  return Object.assign(context, { globalThis: context });
+}
 
 describe('bridge delivery via transformIndexHtml', () => {
   test('dev emits a module script on every served document, before any analysis', () => {
@@ -102,11 +120,11 @@ describe('bridge delivery via transformIndexHtml', () => {
 });
 
 describe('the wired hook delivers the bridge', () => {
-  test('the real plugin hook returns the bridge tag in its dev default state', () => {
+  test('the real plugin hook returns the bridge tag in its dev default state', async () => {
     const plugin = animusExtract({ system: './ds.ts' });
     const hook = plugin.transformIndexHtml;
 
-    if (typeof hook !== 'object' || hook === null || !('handler' in hook)) {
+    if (hook === undefined || !('handler' in hook)) {
       throw new Error(
         'transformIndexHtml must stay in object-with-handler form'
       );
@@ -114,9 +132,13 @@ describe('the wired hook delivers the bridge', () => {
 
     // `isProd` is false and `layerDeclaration` is '' until `configResolved` /
     // `buildStart` run, so this observes exactly the bridge branch.
-    const result = (
-      hook.handler as (...args: never[]) => HtmlTagDescriptor[]
-    ).call(plugin as never);
+    const result = await hook.handler.call(HTML_HOOK_CONTEXT, '', {
+      path: '/',
+      filename: join(process.cwd(), 'index.html'),
+    });
+    if (!Array.isArray(result)) {
+      throw new Error('transformIndexHtml must return tag descriptors');
+    }
 
     expect(result).toEqual([BRIDGE_TAG]);
   });
@@ -128,23 +150,13 @@ describe('the bridge module is server-safe', () => {
     // component modules, so the module body evaluates on the server too. The
     // ESM shell is swapped for scriptable equivalents; the DOM logic under
     // test is byte-identical.
-    const source = loadVirtualModule(
-      {
-        isProd: false,
-        lcssTargets: undefined,
-        warn: () => {},
-        options: { system: './ds.ts' },
-      } as never,
-      RESOLVED_BRIDGE_ID
-    );
-    if (!source) throw new Error('bridge module did not resolve');
+    const source = bridgeModuleSource();
 
     const scriptable = source
       .replace(/^import css from .*$/m, "const css = '';")
       .replaceAll('import.meta.hot', 'undefined');
 
-    const context: Record<string, unknown> = {};
-    context.globalThis = context;
+    const context = withGlobalThis({});
     expect(() => runInNewContext(scriptable, context)).not.toThrow();
     // No sheet was created and no global key was written.
     expect(Object.keys(context)).toEqual(['globalThis']);
@@ -154,29 +166,19 @@ describe('the bridge module is server-safe', () => {
     // The server module runner has a hot channel of its own: any style edit
     // dispatches the accept callback server-side, where `sheet` is null and
     // the <style> fallback would dereference `document`.
-    const source = loadVirtualModule(
-      {
-        isProd: false,
-        lcssTargets: undefined,
-        warn: () => {},
-        options: { system: './ds.ts' },
-      } as never,
-      RESOLVED_BRIDGE_ID
-    );
-    if (!source) throw new Error('bridge module did not resolve');
+    const source = bridgeModuleSource();
 
     const scriptable = source
       .replace(/^import css from .*$/m, "const css = '';")
       .replaceAll('import.meta.hot', '__hot__');
 
     const accepted: Array<(m: { default: string }) => void> = [];
-    const context: Record<string, unknown> = {
+    const context = withGlobalThis({
       __hot__: {
         accept: (_id: string, cb: (m: { default: string }) => void) =>
           accepted.push(cb),
       },
-    };
-    context.globalThis = context;
+    });
     runInNewContext(scriptable, context);
 
     expect(accepted).toHaveLength(1);

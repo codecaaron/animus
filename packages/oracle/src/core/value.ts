@@ -94,8 +94,24 @@ export const piecewise = <T>(
   return { kind: 'piecewise', cases: merged };
 };
 
-const describeLeaf = (value: unknown): string =>
-  typeof value === 'string' ? value : canonicalJson(value);
+/**
+ * A leaf that is already text is its own description; everything else is
+ * described by its canonical form. Boxed strings are deliberately excluded —
+ * `canonicalJson` refuses them, and a description must never be the only place
+ * an unencodable value slips through as if it were text.
+ */
+const isTextLeaf = <T>(value: T): value is T & string => {
+  if (Object(value) === value) return false;
+  try {
+    String.prototype.valueOf.call(value);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+const describeLeaf = <T>(value: T): string =>
+  isTextLeaf(value) ? value : canonicalJson(value);
 
 export const describeValue = <T>(v: AbstractValue<T>): string => {
   switch (v.kind) {

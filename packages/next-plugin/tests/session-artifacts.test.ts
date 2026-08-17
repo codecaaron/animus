@@ -21,11 +21,13 @@
  * and pure pipeline helpers real, temp project on disk.
  */
 import {
-  buildSystemPropsModule,
-  contentHash,
-  hashReplacementPlans,
-  snapshotFilePlans,
-} from '@animus-ui/extract/pipeline';
+  isJsonBoolean,
+  isJsonNumber,
+  isJsonObject,
+  isJsonString,
+  parseJsonObject,
+} from '@animus-ui/assertions';
+import { contentHash } from '@animus-ui/extract/pipeline';
 import {
   existsSync,
   mkdirSync,
@@ -56,41 +58,242 @@ setEngineApiOverride(() => ({
 }));
 
 import { ExtractionSession } from '../../extract/session/extraction-session';
+import { readCliLockRecord } from '../../extract/session/published-set';
 import {
   ANALYSIS_COMMIT_ARTIFACT,
   ANALYSIS_STATUS_ARTIFACT,
   REPLACEMENT_EPOCH_ARTIFACT,
   sessionArtifactDir,
+  type AnalysisCommit,
+  type AnalysisStatus,
+  type SessionEnvelope,
 } from '../../extract/session/session-paths';
 import { getManifestJson } from '../../extract/session/singleton';
 import {
   buildManifest,
-  BUTTON_SHAPE_EDIT,
   BUTTON_STYLE_EDIT,
-  cleanupProjects,
   createProject as createFixtureProject,
+  disposeTempRoots,
+  expectedEpoch,
   PLAN_A,
   PLAN_B,
   resetAnimusGlobals,
   SYSTEM_CONFIG,
 } from './singleton-fixtures';
 
+import type { ReplacementPlan, ReplacementPlans } from './singleton-fixtures';
+import type { JsonObject, JsonValue } from '@animus-ui/assertions';
+import type { ManifestComponentDescriptor } from '@animus-ui/extract/pipeline';
+
 let restoreGlobals: () => void;
 
-/** The served system-props module the fixture pipeline emits — the epoch's
- *  served-dependency witness (fixture manifests carry empty prop maps). */
-const SYSTEM_PROPS_WITNESS = buildSystemPropsModule({
-  systemPropMapJson: '{}',
-  groupRegistryJson: SYSTEM_CONFIG.groupRegistry,
-  dynamicProps: {},
-});
+interface DiskManifest {
+  __animusSession: SessionEnvelope;
+  components: ReplacementPlans;
+}
 
-function expectedEpoch(components: Record<string, unknown>): string {
-  return hashReplacementPlans(
-    snapshotFilePlans({ components }),
-    SYSTEM_PROPS_WITNESS
+interface EngineManifest {
+  components: ReplacementPlans;
+}
+
+interface AnalysisInputsArtifact {
+  __animusSession: SessionEnvelope;
+  filesJson: string;
+}
+
+interface CliCommitRecord {
+  schema: 1;
+  payloads: { [artifactName: string]: { hash: string } };
+}
+
+interface CliPayloadBytes {
+  'styles.css': string;
+  'system-props.js': string;
+  'manifest.json': string;
+}
+
+function isReplacementPlan(
+  value: JsonValue
+): value is JsonObject & ReplacementPlan {
+  return (
+    isJsonObject(value) &&
+    isJsonString(value.file) &&
+    isJsonString(value.replacement)
   );
 }
+
+function parseReplacementPlans(candidate: JsonValue, artifactName: string) {
+  if (!isJsonObject(candidate)) {
+    throw new TypeError(`${artifactName}.components must be an object`);
+  }
+  const plans: ReplacementPlans = {};
+  for (const [componentId, plan] of Object.entries(candidate)) {
+    if (!isReplacementPlan(plan)) {
+      throw new TypeError(
+        `${artifactName}.components.${componentId} is malformed`
+      );
+    }
+    plans[componentId] = plan;
+  }
+  return plans;
+}
+
+function parseSessionEnvelope(
+  candidate: JsonValue,
+  artifactName: string
+): SessionEnvelope {
+  if (
+    !isJsonObject(candidate) ||
+    !isJsonString(candidate.sessionId) ||
+    !isJsonNumber(candidate.generation) ||
+    !isJsonString(candidate.replacementEpoch) ||
+    !isJsonString(candidate.payloadHash)
+  ) {
+    throw new TypeError(`${artifactName} session envelope is malformed`);
+  }
+  return {
+    sessionId: candidate.sessionId,
+    generation: candidate.generation,
+    replacementEpoch: candidate.replacementEpoch,
+    payloadHash: candidate.payloadHash,
+  };
+}
+
+function parseAnalysisCommit(bytes: string): AnalysisCommit {
+  const candidate = parseJsonObject(bytes, ANALYSIS_COMMIT_ARTIFACT);
+  if (
+    candidate.schema !== 1 ||
+    !isJsonString(candidate.sessionId) ||
+    !isJsonNumber(candidate.generation) ||
+    !isJsonString(candidate.replacementEpoch) ||
+    !isJsonString(candidate.manifestHash) ||
+    (candidate.inputsHash !== undefined &&
+      !isJsonString(candidate.inputsHash)) ||
+    !isJsonString(candidate.stylesHash)
+  ) {
+    throw new TypeError(`${ANALYSIS_COMMIT_ARTIFACT} is malformed`);
+  }
+  const commit: AnalysisCommit = {
+    schema: 1,
+    sessionId: candidate.sessionId,
+    generation: candidate.generation,
+    replacementEpoch: candidate.replacementEpoch,
+    manifestHash: candidate.manifestHash,
+    stylesHash: candidate.stylesHash,
+  };
+  if (candidate.inputsHash !== undefined) {
+    commit.inputsHash = candidate.inputsHash;
+  }
+  return commit;
+}
+
+function parseStatusState(candidate: JsonValue): AnalysisStatus['state'] {
+  switch (candidate) {
+    case 'starting':
+    case 'debouncing':
+    case 'analyzing':
+    case 'committing':
+    case 'idle':
+    case 'failed':
+      return candidate;
+    default:
+      throw new TypeError(`${ANALYSIS_STATUS_ARTIFACT} state is invalid`);
+  }
+}
+
+function parseAnalysisStatus(bytes: string): AnalysisStatus {
+  const candidate = parseJsonObject(bytes, ANALYSIS_STATUS_ARTIFACT);
+  if (
+    (candidate.schema !== 1 && candidate.schema !== 2) ||
+    !isJsonString(candidate.sessionId) ||
+    !isJsonNumber(candidate.attemptId) ||
+    !Array.isArray(candidate.pending) ||
+    !isJsonNumber(candidate.deadlineAt) ||
+    (candidate.diagnostic !== undefined &&
+      !isJsonString(candidate.diagnostic)) ||
+    (candidate.ready !== undefined && !isJsonBoolean(candidate.ready))
+  ) {
+    throw new TypeError(`${ANALYSIS_STATUS_ARTIFACT} is malformed`);
+  }
+  const pending = candidate.pending.map((entry, index) => {
+    if (
+      !Array.isArray(entry) ||
+      entry.length !== 2 ||
+      !isJsonString(entry[0]) ||
+      !isJsonString(entry[1])
+    ) {
+      throw new TypeError(
+        `${ANALYSIS_STATUS_ARTIFACT}.pending[${index}] is malformed`
+      );
+    }
+    return [entry[0], entry[1]] satisfies [string, string];
+  });
+  const status: AnalysisStatus = {
+    schema: candidate.schema,
+    sessionId: candidate.sessionId,
+    attemptId: candidate.attemptId,
+    state: parseStatusState(candidate.state),
+    pending,
+    deadlineAt: candidate.deadlineAt,
+  };
+  if (candidate.diagnostic !== undefined) {
+    status.diagnostic = candidate.diagnostic;
+  }
+  if (candidate.ready !== undefined) status.ready = candidate.ready;
+  return status;
+}
+
+function parseDiskManifest(bytes: string): DiskManifest {
+  const candidate = parseJsonObject(bytes, 'manifest.json');
+  return {
+    __animusSession: parseSessionEnvelope(
+      candidate.__animusSession,
+      'manifest.json'
+    ),
+    components: parseReplacementPlans(candidate.components, 'manifest.json'),
+  };
+}
+
+function parseEngineManifest(bytes: string): EngineManifest {
+  const candidate = parseJsonObject(bytes, 'engine manifest');
+  return {
+    components: parseReplacementPlans(candidate.components, 'engine manifest'),
+  };
+}
+
+function parseAnalysisInputs(bytes: string): AnalysisInputsArtifact {
+  const candidate = parseJsonObject(bytes, 'analysis-inputs.json');
+  if (!isJsonString(candidate.filesJson)) {
+    throw new TypeError('analysis-inputs.json filesJson must be a string');
+  }
+  return {
+    __animusSession: parseSessionEnvelope(
+      candidate.__animusSession,
+      'analysis-inputs.json'
+    ),
+    filesJson: candidate.filesJson,
+  };
+}
+
+function parseCliCommitRecord(bytes: string): CliCommitRecord {
+  const candidate = parseJsonObject(bytes, 'commit.json');
+  if (candidate.schema !== 1 || !isJsonObject(candidate.payloads)) {
+    throw new TypeError('commit.json is malformed');
+  }
+  const payloads: CliCommitRecord['payloads'] = {};
+  for (const [artifactName, payload] of Object.entries(candidate.payloads)) {
+    if (!isJsonObject(payload) || !isJsonString(payload.hash)) {
+      throw new TypeError(`commit.json payload ${artifactName} is malformed`);
+    }
+    payloads[artifactName] = { hash: payload.hash };
+  }
+  return { schema: 1, payloads };
+}
+
+/** Byte-identical config-plan edit used by the shared fixture; these source
+ *  bytes feed the watched-file content hash. */
+const BUTTON_COMPONENT_PLAN_EDIT =
+  "export const Button = animus.styles({ margin: 16 }).variant({}).asElement('button');\n";
 
 function createProject(): string {
   return createFixtureProject('animus-session-artifacts-');
@@ -100,7 +303,7 @@ type WriteRecord = { name: string; content: string };
 
 async function startSession(
   root: string,
-  components: Record<string, unknown>,
+  components: Record<string, ManifestComponentDescriptor>,
   writes?: WriteRecord[],
   opts?: { turbopack?: boolean }
 ): Promise<ExtractionSession> {
@@ -133,7 +336,7 @@ function payloadNames(writes: WriteRecord[]): string[] {
 function statusStates(writes: WriteRecord[]): string[] {
   return writes
     .filter((w) => w.name === ANALYSIS_STATUS_ARTIFACT)
-    .map((w) => (JSON.parse(w.content) as { state: string }).state);
+    .map((w) => parseAnalysisStatus(w.content).state);
 }
 
 beforeEach(() => {
@@ -146,7 +349,7 @@ beforeEach(() => {
 afterEach(() => {
   restoreGlobals();
   vi.restoreAllMocks();
-  cleanupProjects();
+  disposeTempRoots();
 });
 
 describe('session directory + transaction write order (design D1/D2)', () => {
@@ -187,12 +390,12 @@ describe('session directory + transaction write order (design D1/D2)', () => {
     // ...while the loader reads the manifest from process memory as before.
     expect(getManifestJson()).toBe(buildManifest(PLAN_A));
     // The webpack-mode commit carries NO inputsHash field.
-    const commit = JSON.parse(
+    const commit = parseAnalysisCommit(
       readSessionArtifact(session, ANALYSIS_COMMIT_ARTIFACT)
-    ) as Record<string, unknown>;
+    );
     expect('inputsHash' in commit).toBe(false);
-    expect(typeof commit.manifestHash).toBe('string');
-    expect(typeof commit.stylesHash).toBe('string');
+    expect(commit.manifestHash).toEqual(expect.any(String));
+    expect(commit.stylesHash).toEqual(expect.any(String));
   });
 
   test('write order (Turbopack): manifest → inputs → styles → system-props → commit → epoch', async () => {
@@ -254,17 +457,9 @@ describe('analysis-commit content (design D1)', () => {
       turbopack: true,
     });
 
-    const commit = JSON.parse(
+    const commit = parseAnalysisCommit(
       readSessionArtifact(session, ANALYSIS_COMMIT_ARTIFACT)
-    ) as {
-      schema: number;
-      sessionId: string;
-      generation: number;
-      replacementEpoch: string;
-      manifestHash: string;
-      inputsHash: string;
-      stylesHash: string;
-    };
+    );
     expect(commit.schema).toBe(1);
     expect(commit.sessionId).toBe(session.sessionId);
     expect(commit.generation).toBe(1);
@@ -284,12 +479,15 @@ describe('analysis-commit content (design D1)', () => {
     const root = createProject();
     const session = await startSession(root, PLAN_A);
 
-    // A second session in the SAME process re-analyzes identical content:
-    // byte-identical artifacts are not rewritten and the generation holds.
+    // A SUCCESSOR session in the same process re-analyzes identical
+    // content: byte-identical artifacts are not rewritten and the
+    // generation holds. The predecessor closes first — publication
+    // ownership is exclusive, so the handoff is sequential by contract.
     const commitStatBefore = statSync(
       join(session.sessionDir, ANALYSIS_COMMIT_ARTIFACT),
       { bigint: true }
     );
+    session.close();
     const again = await startSession(root, PLAN_A);
     expect(again.sessionId).toBe(session.sessionId);
     const commitStatAfter = statSync(
@@ -301,14 +499,14 @@ describe('analysis-commit content (design D1)', () => {
 
     // A plan change advances the generation.
     mocks.analyzeProject.mockImplementation(() => buildManifest(PLAN_B));
-    writeFileSync(join(root, 'src', 'Button.tsx'), BUTTON_SHAPE_EDIT);
+    writeFileSync(join(root, 'src', 'Button.tsx'), BUTTON_COMPONENT_PLAN_EDIT);
     await again.handleWatchUpdate({
       modifiedFiles: new Set([join(root, 'src', 'Button.tsx')]),
       removedFiles: new Set(),
     });
-    const commit = JSON.parse(
+    const commit = parseAnalysisCommit(
       readSessionArtifact(again, ANALYSIS_COMMIT_ARTIFACT)
-    ) as { generation: number; replacementEpoch: string };
+    );
     expect(commit.generation).toBe(2);
     expect(commit.replacementEpoch).toBe(expectedEpoch(PLAN_B));
   });
@@ -320,21 +518,17 @@ describe('payload envelopes (spec: Manifest disk artifact)', () => {
     const session = await startSession(root, PLAN_A);
 
     const manifestJson = buildManifest(PLAN_A);
-    const disk = JSON.parse(readSessionArtifact(session, 'manifest.json')) as {
-      __animusSession?: {
-        sessionId: string;
-        generation: number;
-        replacementEpoch: string;
-        payloadHash: string;
-      };
-      components?: Record<string, unknown>;
-    };
+    const disk = parseDiskManifest(
+      readSessionArtifact(session, 'manifest.json')
+    );
     expect(disk.__animusSession).toBeDefined();
-    expect(disk.__animusSession!.sessionId).toBe(session.sessionId);
-    expect(disk.__animusSession!.generation).toBe(1);
-    expect(disk.__animusSession!.replacementEpoch).toBe(expectedEpoch(PLAN_A));
-    expect(disk.__animusSession!.payloadHash).toBe(contentHash(manifestJson));
-    expect(disk.components).toEqual(JSON.parse(manifestJson).components);
+    expect(disk.__animusSession.sessionId).toBe(session.sessionId);
+    expect(disk.__animusSession.generation).toBe(1);
+    expect(disk.__animusSession.replacementEpoch).toBe(expectedEpoch(PLAN_A));
+    expect(disk.__animusSession.payloadHash).toBe(contentHash(manifestJson));
+    expect(disk.components).toEqual(
+      parseEngineManifest(manifestJson).components
+    );
     // In-process manifest is the verbatim engine output.
     expect(getManifestJson()).toBe(manifestJson);
   });
@@ -345,18 +539,20 @@ describe('payload envelopes (spec: Manifest disk artifact)', () => {
       turbopack: true,
     });
 
-    const inputs = JSON.parse(
+    const inputs = parseAnalysisInputs(
       readSessionArtifact(session, 'analysis-inputs.json')
-    ) as { __animusSession?: { sessionId: string }; filesJson?: string };
-    expect(inputs.__animusSession?.sessionId).toBe(session.sessionId);
-    expect(typeof inputs.filesJson).toBe('string');
+    );
+    expect(inputs.__animusSession.sessionId).toBe(session.sessionId);
+    expect(inputs.filesJson).toEqual(expect.any(String));
 
     const styles = readSessionArtifact(session, 'styles.css');
     const match = styles.match(/\/\* __animusSession (\{.*\}) \*\//);
     expect(match).not.toBeNull();
-    expect((JSON.parse(match![1]) as { sessionId: string }).sessionId).toBe(
-      session.sessionId
-    );
+    if (!match) throw new TypeError('styles.css session envelope is missing');
+    const envelopeCandidate: JsonValue = JSON.parse(match[1]);
+    expect(
+      parseSessionEnvelope(envelopeCandidate, 'styles.css').sessionId
+    ).toBe(session.sessionId);
   });
 });
 
@@ -385,16 +581,7 @@ describe('analysis-status lifecycle (design D3 data half)', () => {
 
     const statuses = writes
       .filter((w) => w.name === ANALYSIS_STATUS_ARTIFACT)
-      .map(
-        (w) =>
-          JSON.parse(w.content) as {
-            sessionId: string;
-            attemptId: number;
-            state: string;
-            pending: Array<[string, string]>;
-            deadlineAt: number;
-          }
-      );
+      .map((w) => parseAnalysisStatus(w.content));
     expect(statuses.map((s) => s.state)).toEqual([
       'starting',
       'analyzing',
@@ -423,7 +610,7 @@ describe('analysis-status lifecycle (design D3 data half)', () => {
     mocks.analyzeProject.mockImplementationOnce(() => {
       throw new Error('analysis boom');
     });
-    writeFileSync(join(root, 'src', 'Button.tsx'), BUTTON_SHAPE_EDIT);
+    writeFileSync(join(root, 'src', 'Button.tsx'), BUTTON_COMPONENT_PLAN_EDIT);
     await expect(
       session.handleWatchUpdate({
         modifiedFiles: new Set([join(root, 'src', 'Button.tsx')]),
@@ -431,9 +618,9 @@ describe('analysis-status lifecycle (design D3 data half)', () => {
       })
     ).rejects.toThrow('analysis boom');
 
-    const status = JSON.parse(
+    const status = parseAnalysisStatus(
       readSessionArtifact(session, ANALYSIS_STATUS_ARTIFACT)
-    ) as { state: string; diagnostic?: string; attemptId: number };
+    );
     expect(status.state).toBe('failed');
     expect(status.diagnostic).toContain('analysis boom');
 
@@ -443,11 +630,45 @@ describe('analysis-status lifecycle (design D3 data half)', () => {
       modifiedFiles: new Set([join(root, 'src', 'Button.tsx')]),
       removedFiles: new Set(),
     });
-    const recovered = JSON.parse(
+    const recovered = parseAnalysisStatus(
       readSessionArtifact(session, ANALYSIS_STATUS_ARTIFACT)
-    ) as { state: string; attemptId: number };
+    );
     expect(recovered.state).toBe('idle');
     expect(recovered.attemptId).toBe(status.attemptId + 1);
+  });
+
+  test('every settled cycle reports its outcome, and a failure still rejects', async () => {
+    const root = createProject();
+    const session = await startSession(root, PLAN_A);
+    const settled: string[] = [];
+    // The seam the CLI watch used to obtain by REPLACING this method: its
+    // publication policy needs the cycle boundary AND the failure (report
+    // S8), which the success-only on* observers cannot carry.
+    session.onCycleSettled = (cause) => {
+      settled.push(cause === null ? 'ok' : `failed:${String(cause)}`);
+    };
+
+    mocks.analyzeProject.mockImplementation(() => buildManifest(PLAN_B));
+    writeFileSync(join(root, 'src', 'Button.tsx'), BUTTON_COMPONENT_PLAN_EDIT);
+    await session.handleWatchUpdate({
+      modifiedFiles: new Set([join(root, 'src', 'Button.tsx')]),
+      removedFiles: new Set(),
+    });
+    expect(settled).toEqual(['ok']);
+
+    mocks.analyzeProject.mockImplementationOnce(() => {
+      throw new Error('analysis boom');
+    });
+    writeFileSync(join(root, 'src', 'Button.tsx'), BUTTON_STYLE_EDIT);
+    await expect(
+      session.handleWatchUpdate({
+        modifiedFiles: new Set([join(root, 'src', 'Button.tsx')]),
+        removedFiles: new Set(),
+      })
+    ).rejects.toThrow('analysis boom');
+
+    expect(settled).toHaveLength(2);
+    expect(settled[1]).toContain('analysis boom');
   });
 });
 
@@ -502,11 +723,11 @@ describe('session-start hygiene (design D2)', () => {
    *  hashes match the payload bytes (writer.ts contract, schema 1). */
   function writeCliPublishedSet(flat: string): void {
     mkdirSync(flat, { recursive: true });
-    const payloads: Record<string, string> = {
+    const payloads = {
       'styles.css': '.published{color:red}',
       'system-props.js': 'export default {};',
       'manifest.json': '{"components":{}}',
-    };
+    } satisfies CliPayloadBytes;
     const record = {
       schema: 1,
       payloads: Object.fromEntries(
@@ -545,7 +766,9 @@ describe('session-start hygiene (design D2)', () => {
     const fontBytes = Buffer.from([0x77, 0x4f, 0x46, 0x32, 0x00, 0xff, 0xfe]);
     mkdirSync(join(flat, 'assets'), { recursive: true });
     writeFileSync(join(flat, 'assets', 'font.abc.woff2'), fontBytes);
-    const record = JSON.parse(readFileSync(join(flat, 'commit.json'), 'utf-8'));
+    const record = parseCliCommitRecord(
+      readFileSync(join(flat, 'commit.json'), 'utf-8')
+    );
     record.payloads['assets/font.abc.woff2'] = { hash: contentHash(fontBytes) };
     writeFileSync(join(flat, 'commit.json'), JSON.stringify(record));
 
@@ -574,6 +797,79 @@ describe('session-start hygiene (design D2)', () => {
     expect(existsSync(join(flat, 'commit.json'))).toBe(false);
   });
 
+  test('a record naming NO payload is debris, not a certificate', async () => {
+    const root = createProject();
+    const flat = join(root, '.animus');
+    writeCliPublishedSet(flat);
+    // An array `payloads` enumerates zero entries: every hash it records
+    // matches, vacuously. Admitting it would let a forged four-byte record
+    // fence off any tree from hygiene forever.
+    writeFileSync(
+      join(flat, 'commit.json'),
+      JSON.stringify({ schema: 1, payloads: [] })
+    );
+
+    await startSession(root, PLAN_A);
+
+    for (const name of ['styles.css', 'system-props.js', 'manifest.json']) {
+      expect(existsSync(join(flat, name)), name).toBe(false);
+    }
+    expect(existsSync(join(flat, 'commit.json'))).toBe(false);
+  });
+
+  test('a lock holder this process may not signal protects the flat tree', async () => {
+    const root = createProject();
+    const flat = join(root, '.animus');
+    writeCliPublishedSet(flat);
+    // Mid-publish instant (see below), but the holder is pid 1 — root-owned,
+    // so the liveness probe gets EPERM rather than success. "Exists, not
+    // ours" must read as LIVE here: reading it as dead deletes artifacts a
+    // running CLI is mid-way through publishing.
+    writeFileSync(join(flat, 'styles.css'), '.newer-generation{}');
+    writeFileSync(
+      join(flat, 'lock.json'),
+      JSON.stringify({ pid: 1, startedAt: 'boot' })
+    );
+
+    await startSession(root, PLAN_A);
+
+    for (const name of ['styles.css', 'system-props.js', 'manifest.json']) {
+      expect(existsSync(join(flat, name)), name).toBe(true);
+    }
+  });
+
+  test('a lock file that EXISTS but does not decode protects the flat tree', async () => {
+    const root = createProject();
+    const flat = join(root, '.animus');
+    writeCliPublishedSet(flat);
+    // Mid-publish instant (the set does not verify) under a lock whose
+    // bytes are torn. "Cannot decode this lock" is not "nothing claims this
+    // tree": reading it as unclaimed authorizes deleting the payloads a
+    // live CLI may be publishing right now (ledger boundary row).
+    writeFileSync(join(flat, 'styles.css'), '.newer-generation{}');
+    writeFileSync(join(flat, 'lock.json'), '{"pid":');
+
+    await startSession(root, PLAN_A);
+
+    for (const name of ['styles.css', 'system-props.js', 'manifest.json']) {
+      expect(existsSync(join(flat, name)), name).toBe(true);
+    }
+  });
+
+  test('a lock read that fails for any reason other than absence surfaces', () => {
+    const root = createProject();
+    const flat = join(root, '.animus');
+    mkdirSync(join(flat, 'lock.json'), { recursive: true });
+
+    // EISDIR, not ENOENT: the read failed, so the holder is unknown. The
+    // fail-open catch answered "no holder" for every errno — including the
+    // EACCES case, on the branch that goes on to delete published payloads.
+    expect(() => readCliLockRecord(flat)).toThrow(/EISDIR/);
+    expect(readCliLockRecord(join(root, 'no-such-dir'))).toEqual({
+      kind: 'none',
+    });
+  });
+
   test('a live CLI lock protects the flat tree even mid-publish (inconsistent instant)', async () => {
     const root = createProject();
     const flat = join(root, '.animus');
@@ -592,6 +888,39 @@ describe('session-start hygiene (design D2)', () => {
       expect(existsSync(join(flat, name)), name).toBe(true);
     }
     expect(existsSync(join(flat, 'commit.json'))).toBe(true);
+  });
+});
+
+describe('publication exclusivity (one publishing session per process)', () => {
+  test('a second session publishing into the process-shared session dir fails loud', async () => {
+    const root = createProject();
+    const first = await startSession(root, PLAN_A);
+
+    // Same process ⇒ same claimed sessionId ⇒ the SAME session directory,
+    // while each instance carries its own payload write guards. Two live
+    // publishers therefore wedge the manifest/commit pair permanently
+    // (ANIMUS_ARTIFACT_READ_TORN); the second publication must be refused
+    // instead, naming both claimants.
+    const second = new ExtractionSession({ system: './src/system.ts' });
+    second.rootDir = root;
+    second.driverLabel = 'animus-second';
+
+    await expect(second.runFullPipeline()).rejects.toThrow(
+      /second Animus host/
+    );
+    await expect(second.runFullPipeline()).rejects.toThrow(first.sessionDir);
+  });
+
+  test('closing the owner releases the claim: the successor publishes', async () => {
+    const root = createProject();
+    const first = await startSession(root, PLAN_A);
+    first.close();
+    // Idempotent: a second close must not free a successor's claim.
+    first.close();
+
+    const second = await startSession(root, PLAN_A);
+    expect(second.sessionId).toBe(first.sessionId);
+    expect(getManifestJson()).toBe(buildManifest(PLAN_A));
   });
 });
 
@@ -626,6 +955,30 @@ describe('sibling epoch reconciliation (webpack cold-cache witness)', () => {
     expect(after.mtimeNs).toBe(agreeingStat.mtimeNs);
   });
 
+  test('a sibling that restored its own artifact is reconciled again on the next move', async () => {
+    const root = createProject();
+    const prior = writeSiblingEpoch(root, 'peer-prior', 'stale-epoch');
+
+    const session = await startSession(root, PLAN_A);
+    expect(existsSync(prior)).toBe(false);
+
+    // The peer publishes: its own `publishReplacementEpoch` probes DISK,
+    // finds the artifact this session deleted, and rewrites it with the
+    // peer's (still disagreeing) epoch — the self-heal that keeps loaders
+    // from registering a permanently-satisfiable dependency. A later move
+    // here must invalidate it AGAIN.
+    writeSiblingEpoch(root, 'peer-prior', 'stale-epoch');
+
+    mocks.analyzeProject.mockImplementation(() => buildManifest(PLAN_B));
+    writeFileSync(join(root, 'src', 'Button.tsx'), BUTTON_COMPONENT_PLAN_EDIT);
+    await session.handleWatchUpdate({
+      modifiedFiles: new Set([join(root, 'src', 'Button.tsx')]),
+      removedFiles: new Set(),
+    });
+
+    expect(existsSync(prior)).toBe(false);
+  });
+
   test('a mid-session epoch move reconciles siblings that agreed with the previous value', async () => {
     const root = createProject();
     const prior = writeSiblingEpoch(root, 'warm-prior', expectedEpoch(PLAN_A));
@@ -634,7 +987,7 @@ describe('sibling epoch reconciliation (webpack cold-cache witness)', () => {
     expect(existsSync(prior)).toBe(true);
 
     mocks.analyzeProject.mockImplementation(() => buildManifest(PLAN_B));
-    writeFileSync(join(root, 'src', 'Button.tsx'), BUTTON_SHAPE_EDIT);
+    writeFileSync(join(root, 'src', 'Button.tsx'), BUTTON_COMPONENT_PLAN_EDIT);
     await session.handleWatchUpdate({
       modifiedFiles: new Set([join(root, 'src', 'Button.tsx')]),
       removedFiles: new Set(),

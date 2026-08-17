@@ -6,29 +6,47 @@
  * singleton seam, same harness as plugin-pipeline.test.ts.
  */
 import {
+  isJsonBoolean,
+  isJsonObject,
+  isJsonString,
+} from '@animus-ui/assertions';
+import {
   existsSync,
   mkdirSync,
-  mkdtempSync,
   readFileSync,
   realpathSync,
   rmSync,
   statSync,
   writeFileSync,
 } from 'fs';
-import { tmpdir } from 'os';
 import { join } from 'path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 import { startTurbopackWatcher } from '../../extract/session/turbopack-orchestrator';
 import { ANIMUS_TURBOPACK_RULE_GLOB } from '../src/turbopack-config';
-import { withAnimus } from '../src/with-animus';
+import { bindTurbopackWatchDeathReport, withAnimus } from '../src/with-animus';
 import {
   BUTTON_SOURCE,
+  disposeTempRoots,
+  makeManifest,
+  makeTempRoot,
   resetAnimusGlobals,
   SYSTEM_CONFIG,
 } from './singleton-fixtures';
 
-import type { ExtractionSession } from '../../extract/session/extraction-session';
+import type { AnalyzeProjectInputs } from '../../extract/pipeline';
+import type {
+  TurbopackWatcherHandle,
+  TurbopackWatchOutcome,
+} from '../../extract/session/turbopack-orchestrator';
+import type { TurbopackLoaderOptions } from '../src/turbopack-loader';
+import type { JsonValue } from '@animus-ui/assertions';
+import type {
+  TurbopackLoaderItem,
+  TurbopackOptions,
+  TurbopackRuleConfigItemOptions,
+  TurbopackRuleConfigItemOrShortcut,
+} from 'next/dist/server/config-shared';
 
 const mocks = vi.hoisted(() => ({
   loadSystemModule: vi.fn(),
@@ -49,24 +67,132 @@ setEngineApiOverride(() => ({
 }));
 
 let restoreGlobals: () => void;
-const tempRoots: string[] = [];
 let savedCwd: string;
 
-const MANIFEST = JSON.stringify({
-  css: '.btn{margin:8;}',
-  sheets: { global: '' },
-  system_prop_map: {},
-  dynamic_props: {},
-  diagnostics: [],
-});
+/** What the engine double returns: a COMPLETE engine manifest carrying this
+ *  suite's component CSS. The shared pipeline reads `manifest.sheets` /
+ *  `manifest.components` directly, so a manifest that omits fields is not a
+ *  manifest. */
+const MANIFEST = JSON.stringify(makeManifest({ css: '.btn{margin:8;}' }));
+
+/** The handle of a started claim — a test asserting on `close`/`settle`
+ *  states which outcome it expects rather than assuming one. */
+function startedHandle(outcome: TurbopackWatchOutcome): TurbopackWatcherHandle {
+  if (outcome.kind !== 'started') {
+    throw new Error(`expected a started watcher, got ${outcome.kind}`);
+  }
+  return outcome.handle;
+}
 
 function createProject(): string {
-  const root = mkdtempSync(join(tmpdir(), 'animus-turbo-orch-'));
-  tempRoots.push(root);
+  const root = makeTempRoot('animus-turbo-orch-');
   mkdirSync(join(root, 'src'), { recursive: true });
   writeFileSync(join(root, 'src', 'system.ts'), 'export const system = {};\n');
   writeFileSync(join(root, 'src', 'Button.tsx'), BUTTON_SOURCE);
   return root;
+}
+
+// ── Artifact readers ───────────────────────────────────────────────────────
+// The bundler only ever sees disk artifacts. Documents this suite asserts
+// whole are matched as JSON; the one artifact whose value is consumed —
+// the hydration corpus — is validated back into its owner's vocabulary.
+
+/** The hydration corpus artifact, in the analyze-time input vocabulary the
+ *  engine itself consumes. The corpus itself is a nested JSON string, so
+ *  this read has to name its two fields rather than assert on the document
+ *  as a whole. */
+function parseAnalysisInputs(
+  bytes: string
+): Pick<AnalyzeProjectInputs, 'devMode' | 'filesJson'> {
+  const candidate: JsonValue = JSON.parse(bytes);
+  if (
+    !isJsonObject(candidate) ||
+    !isJsonString(candidate.filesJson) ||
+    !isJsonBoolean(candidate.devMode)
+  ) {
+    throw new TypeError('analysis-inputs.json is malformed');
+  }
+  return { devMode: candidate.devMode, filesJson: candidate.filesJson };
+}
+
+// ── Emitted Turbopack config readers ───────────────────────────────────────
+// Next types a merged rule as a union of shorthands and forwards loader
+// options across a process boundary as JSON; both owner contracts — the
+// fragment `buildTurbopackConfig` emits and the `TurbopackLoaderOptions`
+// the loader receives — are recovered by validation, never by assertion.
+
+/** withAnimus's return union: the webpack config it builds synchronously,
+ *  or the Turbopack config it resolves after the out-of-band extraction. */
+type AnimusNextConfig = ReturnType<ReturnType<typeof withAnimus>>;
+
+/** Turbopack forwards loader options as JSON; Next's loader item names that
+ *  JSON value domain. */
+type ForwardedLoaderOptions = Extract<
+  TurbopackLoaderItem,
+  { loader: string }
+>['options'];
+
+function turbopackOptions(config: Awaited<AnimusNextConfig>): TurbopackOptions {
+  if (!('turbopack' in config)) {
+    throw new TypeError(
+      'withAnimus returned the webpack branch, not the Turbopack branch'
+    );
+  }
+  return config.turbopack;
+}
+
+function isLoaderRule(
+  rule: TurbopackRuleConfigItemOrShortcut | undefined
+): rule is TurbopackRuleConfigItemOptions {
+  return (
+    rule !== undefined &&
+    rule !== false &&
+    !Array.isArray(rule) &&
+    'loaders' in rule
+  );
+}
+
+function isLoaderEntry(
+  item: TurbopackLoaderItem
+): item is Exclude<TurbopackLoaderItem, string> {
+  return Object.prototype.toString.call(item) === '[object Object]';
+}
+
+function isForwardedString(
+  value: ForwardedLoaderOptions[string]
+): value is string {
+  return Object.prototype.toString.call(value) === '[object String]';
+}
+
+/** The session identity `buildTurbopackConfig` always emits, read back out
+ *  of the merged config into the loader's own option contract. */
+function animusLoaderOptions(
+  turbopack: TurbopackOptions
+): Required<
+  Pick<TurbopackLoaderOptions, 'rootDir' | 'sessionDir' | 'sessionId'>
+> {
+  const rule = turbopack.rules?.[ANIMUS_TURBOPACK_RULE_GLOB];
+  if (!isLoaderRule(rule)) {
+    throw new TypeError(
+      `turbopack.rules['${ANIMUS_TURBOPACK_RULE_GLOB}'] carries no loader rule`
+    );
+  }
+  const entry = rule.loaders[0];
+  if (entry === undefined || !isLoaderEntry(entry)) {
+    throw new TypeError('the Animus rule registers no loader options');
+  }
+  const read = (key: 'rootDir' | 'sessionDir' | 'sessionId'): string => {
+    const value = entry.options[key];
+    if (!isForwardedString(value)) {
+      throw new TypeError(`loader option \`${key}\` must be a string`);
+    }
+    return value;
+  };
+  return {
+    rootDir: read('rootDir'),
+    sessionDir: read('sessionDir'),
+    sessionId: read('sessionId'),
+  };
 }
 
 beforeEach(() => {
@@ -81,9 +207,7 @@ afterEach(() => {
   process.chdir(savedCwd);
   restoreGlobals();
   vi.restoreAllMocks();
-  for (const root of tempRoots.splice(0)) {
-    rmSync(root, { recursive: true, force: true });
-  }
+  disposeTempRoots();
 });
 
 describe('withAnimus Turbopack wiring', () => {
@@ -92,7 +216,7 @@ describe('withAnimus Turbopack wiring', () => {
     process.chdir(root);
     const config = withAnimus({ system: './src/system.ts' })({});
     expect(config).not.toBeInstanceOf(Promise);
-    expect((config as Record<string, unknown>).turbopack).toBeUndefined();
+    expect('turbopack' in config).toBe(false);
   });
 
   test('active mode resolves after the session artifact set exists and merges config', async () => {
@@ -106,27 +230,16 @@ describe('withAnimus Turbopack wiring', () => {
     expect(pending).toBeInstanceOf(Promise);
     const config = await pending;
 
-    const turbopack = (config as Record<string, unknown>).turbopack as {
-      rules: Record<
-        string,
-        {
-          loaders: Array<{
-            options: { sessionId?: string; sessionDir?: string };
-          }>;
-        }
-      >;
-      resolveAlias: Record<string, string>;
-    };
-    expect(turbopack.rules[ANIMUS_TURBOPACK_RULE_GLOB]).toBeDefined();
-    const options =
-      turbopack.rules[ANIMUS_TURBOPACK_RULE_GLOB].loaders[0].options;
+    const turbopack = turbopackOptions(config);
+    expect(turbopack.rules?.[ANIMUS_TURBOPACK_RULE_GLOB]).toBeDefined();
+    const options = animusLoaderOptions(turbopack);
     // process.cwd() resolves the macOS /var → /private/var symlink
     expect(options).toMatchObject({ rootDir: realpathSync(root) });
     // Session identity travels via loader options (design D2).
     expect(options.sessionId).toMatch(/^[0-9a-f-]{36}$/);
-    const sessionDir = options.sessionDir!;
+    const sessionDir = options.sessionDir;
     expect(sessionDir).toBe(
-      join(realpathSync(root), '.animus', 'sessions', options.sessionId!)
+      join(realpathSync(root), '.animus', 'sessions', options.sessionId)
     );
 
     for (const artifact of [
@@ -143,15 +256,17 @@ describe('withAnimus Turbopack wiring', () => {
     }
 
     // The hydration artifact replays the exact analyze-time inputs
-    const inputs = JSON.parse(
+    const inputs = parseAnalysisInputs(
       readFileSync(join(sessionDir, 'analysis-inputs.json'), 'utf-8')
     );
-    const files = JSON.parse(inputs.filesJson) as Array<{
-      path: string;
-      source: string;
-    }>;
-    expect(files.find((f) => f.path === 'src/Button.tsx')?.source).toBe(
-      BUTTON_SOURCE
+    const corpus: JsonValue = JSON.parse(inputs.filesJson);
+    expect(corpus).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          path: 'src/Button.tsx',
+          source: BUTTON_SOURCE,
+        }),
+      ])
     );
     expect(inputs.devMode).toBe(false);
     // The disk manifest is the engine manifest plus the session envelope.
@@ -166,10 +281,10 @@ describe('withAnimus Turbopack wiring', () => {
     });
 
     // Aliases point into the session-scoped tree.
-    expect(turbopack.resolveAlias['virtual:animus/system-props']).toBe(
+    expect(turbopack.resolveAlias?.['virtual:animus/system-props']).toBe(
       `./.animus/sessions/${options.sessionId}/system-props.js`
     );
-    expect(turbopack.resolveAlias['.animus/styles.css']).toBe(
+    expect(turbopack.resolveAlias?.['.animus/styles.css']).toBe(
       `./.animus/sessions/${options.sessionId}/styles.css`
     );
   });
@@ -182,14 +297,7 @@ describe('withAnimus Turbopack wiring', () => {
       system: './src/system.ts',
       unstable_turbopack: { mode: 'on' },
     })({});
-    const sessionDir = (
-      (first as Record<string, unknown>).turbopack as {
-        rules: Record<
-          string,
-          { loaders: Array<{ options: { sessionDir?: string } }> }
-        >;
-      }
-    ).rules[ANIMUS_TURBOPACK_RULE_GLOB].loaders[0].options.sessionDir!;
+    const { sessionDir } = animusLoaderOptions(turbopackOptions(first));
 
     // bigint stat: write-then-rename gives a rewritten artifact a new inode,
     // so ino+mtimeNs equality proves the file was left untouched.
@@ -233,21 +341,62 @@ describe('withAnimus Turbopack wiring', () => {
   });
 });
 
-type WatchChanges = {
-  modifiedFiles: Set<string>;
-  removedFiles: Set<string>;
-};
+describe('Turbopack watcher death reporting (Next driver)', () => {
+  /** A watcher handle standing in for a registered project watch — the
+   *  driver reaction under test is what happens when it DIES. */
+  function fakeHandle(): TurbopackWatcherHandle {
+    return {
+      close: () => {},
+      died: false,
+      onDied: null,
+      settle: async () => {},
+    };
+  }
+
+  test('a started watcher gets a death report on the plugin diagnostic surface', () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const handle = fakeHandle();
+
+    bindTurbopackWatchDeathReport({ kind: 'started', handle }, '/proj');
+
+    // The loss this pins: Next discarded the handle, so post-registration
+    // watcher death (EMFILE/ENOSPC) had no driver reaction at all — the CLI
+    // re-reports its degradation, Next reported nothing (report S10).
+    expect(handle.onDied).toBeTypeOf('function');
+    handle.onDied?.();
+    const line = String(error.mock.calls[0]?.[0]);
+    expect(line).toContain('[animus-extract]');
+    expect(line).toContain('/proj');
+    expect(line).toMatch(/restart/);
+  });
+
+  test('a claim that started no watcher has nothing to observe', () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    bindTurbopackWatchDeathReport({ kind: 'already-watched' }, '/proj');
+    bindTurbopackWatchDeathReport({ kind: 'unavailable' }, '/proj');
+    // The orchestrator already warned for `unavailable`; a duplicate claim
+    // means a live watcher for this root exists in this process.
+    expect(error).not.toHaveBeenCalled();
+  });
+});
 
 describe('startTurbopackWatcher', () => {
   test('feeds debounced, existence-partitioned change sets to the session', async () => {
     const root = createProject();
-    const handleWatchUpdate = vi.fn<(changes: WatchChanges) => Promise<void>>(
-      async () => {}
-    );
-    const session = { handleWatchUpdate } as unknown as ExtractionSession;
+    // A real session with its analysis entry point replaced: this test owns
+    // the watcher's change sets only, so the pipeline behind
+    // handleWatchUpdate never runs.
+    const { ExtractionSession } =
+      await import('../../extract/session/extraction-session');
+    const session = new ExtractionSession({ system: './src/system.ts' });
+    session.rootDir = root;
+    const handleWatchUpdate = vi
+      .spyOn(session, 'handleWatchUpdate')
+      .mockImplementation(async () => {});
 
-    const watcher = startTurbopackWatcher(session, root, 20);
-    expect(watcher).not.toBeNull();
+    const claim = startTurbopackWatcher(session, root, 20);
+    expect(claim.kind).toBe('started');
+    const watcher = startedHandle(claim);
     try {
       let stamp = 0;
       await vi.waitFor(
@@ -261,7 +410,7 @@ describe('startTurbopackWatcher', () => {
           );
           expect(
             handleWatchUpdate.mock.calls.some((c) =>
-              c[0].modifiedFiles.has(join(root, 'src', 'New.tsx'))
+              c[0].modifiedFiles?.has(join(root, 'src', 'New.tsx'))
             )
           ).toBe(true);
         },
@@ -273,13 +422,13 @@ describe('startTurbopackWatcher', () => {
         () =>
           expect(
             handleWatchUpdate.mock.calls.some((c) =>
-              c[0].removedFiles.has(join(root, 'src', 'New.tsx'))
+              c[0].removedFiles?.has(join(root, 'src', 'New.tsx'))
             )
           ).toBe(true),
         { timeout: 10000 }
       );
     } finally {
-      watcher!.close();
+      watcher.close();
     }
     // FSEvents registration + delivery latency under parallel suite load.
   }, 30000);
@@ -295,8 +444,7 @@ describe('startTurbopackWatcher', () => {
     const session = new ExtractionSession({ system: './src/system.ts' });
     session.rootDir = root;
 
-    const watcher = startTurbopackWatcher(session, root, 60_000);
-    expect(watcher).not.toBeNull();
+    const watcher = startedHandle(startTurbopackWatcher(session, root, 60_000));
     try {
       // The watcher's debounce is the status deadline's ceiling.
       expect(session.debounceCeilingMs).toBe(60_000);
@@ -310,34 +458,37 @@ describe('startTurbopackWatcher', () => {
             join(root, 'src', 'Pending.tsx'),
             `export const P = ${stamp++};\n`
           );
-          const status = JSON.parse(readFileSync(statusPath, 'utf-8')) as {
-            state: string;
-            sessionId: string;
-            pending: Array<[string, string]>;
-          };
-          expect(status.state).toBe('debouncing');
-          expect(status.sessionId).toBe(session.sessionId);
-          expect(
-            status.pending.some(([key]) => key === 'src/Pending.tsx')
-          ).toBe(true);
+          const status: JsonValue = JSON.parse(
+            readFileSync(statusPath, 'utf-8')
+          );
+          expect(status).toMatchObject({
+            state: 'debouncing',
+            sessionId: session.sessionId,
+            pending: expect.arrayContaining([
+              ['src/Pending.tsx', expect.any(String)],
+            ]),
+          });
         },
         { timeout: 10000, interval: 250 }
       );
     } finally {
-      watcher!.close();
+      watcher.close();
     }
   }, 30000);
 
   test('is idempotent per process and ignores .animus writes', async () => {
     const root = createProject();
-    const handleWatchUpdate = vi.fn<(changes: WatchChanges) => Promise<void>>(
-      async () => {}
-    );
-    const session = { handleWatchUpdate } as unknown as ExtractionSession;
+    const { ExtractionSession } =
+      await import('../../extract/session/extraction-session');
+    const session = new ExtractionSession({ system: './src/system.ts' });
+    session.rootDir = root;
+    const handleWatchUpdate = vi
+      .spyOn(session, 'handleWatchUpdate')
+      .mockImplementation(async () => {});
 
-    const first = startTurbopackWatcher(session, root, 20);
+    const first = startedHandle(startTurbopackWatcher(session, root, 20));
     const second = startTurbopackWatcher(session, root, 20);
-    expect(second).toBeNull();
+    expect(second).toEqual({ kind: 'already-watched' });
     try {
       // FSEvents may replay events from just before the watcher started —
       // let those flush, then measure only the .animus write.
@@ -349,7 +500,7 @@ describe('startTurbopackWatcher', () => {
       await new Promise((resolve) => setTimeout(resolve, 150));
       expect(handleWatchUpdate).not.toHaveBeenCalled();
     } finally {
-      first!.close();
+      first.close();
     }
   });
 });
@@ -368,10 +519,11 @@ describe('deferred status write containment', () => {
     // dev server.
     writeFileSync(join(root, '.animus'), 'not a directory\n');
     const warned: string[] = [];
+    // The session's own warn path emits one preformatted line per call.
     const warnSpy = vi
       .spyOn(console, 'warn')
-      .mockImplementation((msg: unknown) => {
-        warned.push(String(msg));
+      .mockImplementation((message: string) => {
+        warned.push(message);
       });
     try {
       session.noteDebouncedWatchEvents([join(root, 'src', 'Button.tsx')]);

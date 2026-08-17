@@ -1,5 +1,12 @@
 import { TRUE } from '../../core/predicate';
 import { componentDependency, manifestDependency } from './dependency';
+// The manifest doubles as an obligation ORIGIN: where an obligation points
+// when the artifact has no source span for it — a system-layer slot class or
+// a theme-level dynamic prop is declared by the build, not written at one
+// call site. Naming the manifest is honest; naming an arbitrary component
+// file would not be. That is a role for the loader's filename, not a second
+// authority over how the file is spelled.
+import { MANIFEST_FILE } from './loader';
 
 import type { RenderSubject, SourceRef } from '../../core/fact';
 import type { DependencyId } from '../../core/identity';
@@ -9,14 +16,6 @@ import type { HostObligation } from '../../providers/host';
 import type { AnimusManifest, ManifestUsageResidue } from './manifest-types';
 import type { ParsedComponent } from './replacement';
 import type { UniverseRule } from './universe';
-
-/**
- * Where an obligation points when the artifact has no source span for it — a
- * system-layer slot class or a theme-level dynamic prop is declared by the
- * build, not written at one call site. Naming the manifest is honest; naming
- * an arbitrary component file would not be.
- */
-export const MANIFEST_ORIGIN = 'manifest.json';
 
 const CONTEXT_CAPSULE: DischargeProcedure = {
   kind: 'context-capsule-measurement',
@@ -59,7 +58,7 @@ export interface AnimusObligationInput {
 
 const originOfRule = (rule: UniverseRule): SourceRef =>
   rule.record.source ?? {
-    file: MANIFEST_ORIGIN,
+    file: MANIFEST_FILE,
     note:
       `no authored source span: this rule is emitted by the ` +
       `${rule.record.layer} layer, not by one builder stage`,
@@ -81,7 +80,7 @@ const scopeOfRule = (rule: UniverseRule): RenderSubject[] => {
  * not because parsing was hard:
  *
  * - `tree-shape` — a relational selector's applicability is a fact about the
- *   rendered tree, and the render-shape provider is Phase 2.
+ *   rendered tree, and the render-tree provider is Phase 2.
  * - `geometry` — a container query tests a layout *result*; deriving it needs
  *   the layout IR this spike types but does not evaluate (DESIGN §10).
  * - `dynamic-value` — a dynamic system prop's value arrives at the call site,
@@ -169,7 +168,7 @@ export const buildObligations = (
               note: `\`${prop}\` is declared as a system prop of ${first.id}`,
             }
           : {
-              file: MANIFEST_ORIGIN,
+              file: MANIFEST_FILE,
               note: `\`${prop}\` is declared by the system, not by a component`,
             };
 

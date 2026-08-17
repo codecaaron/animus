@@ -15,6 +15,7 @@
  * (flushing the pack), clear every animus globalThis key, and start a new
  * plugin/session over the same project root and cache directory.
  */
+import { isJsonObject, isJsonString } from '@animus-ui/assertions';
 import { existsSync, readFileSync, statSync } from 'fs';
 import { join, sep } from 'path';
 import { afterEach, describe, expect, test, vi } from 'vitest';
@@ -65,15 +66,15 @@ import {
 import { probeFixtureWebpack, WEBPACK_FIXTURES } from './prerequisites';
 
 import type { CompilationRecord, GauntletProject, WatchState } from './harness';
+import type { JsonValue } from '@animus-ui/assertions';
 
 vi.setConfig({ testTimeout: 90_000, hookTimeout: 90_000 });
 
-const g = globalThis as Record<string, unknown>;
 const disposers: Array<() => void> = [];
 
 afterEach(() => {
   for (const dispose of disposers.splice(0)) dispose();
-  delete g[LOADER_IMPL_KEY];
+  Reflect.deleteProperty(globalThis, LOADER_IMPL_KEY);
   resetAnimusGlobals();
   vi.restoreAllMocks();
 });
@@ -85,10 +86,12 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/** The fixture's compiled webpack factory, as the harness loads it. */
+type FixtureWebpack = ReturnType<typeof loadFixtureWebpack>;
+
 /** One dev-server session over the shared project + cache dir. */
 async function runSession(args: {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  webpack: any;
+  webpack: FixtureWebpack;
   project: GauntletProject;
   steps?: Array<(record: CompilationRecord) => void>;
   settleMs?: number;
@@ -98,11 +101,7 @@ async function runSession(args: {
   armCannedEngine(mocks);
   const shimPath = writeLoaderShim(project.root);
   const state = createWatchState();
-  installLoaderRecorder(
-    project.root,
-    state,
-    animusLoader as unknown as (this: unknown, source: string) => string
-  );
+  installLoaderRecorder(project.root, state, animusLoader);
   const plugin = new AnimusWebpackPlugin({
     system: './src/system.ts',
     loaderPath: shimPath,
@@ -126,15 +125,30 @@ async function runSession(args: {
   return { records, state };
 }
 
-function epochArtifact(path: string): {
+// ── Epoch artifact boundary ───────────────────────────────────────────────
+// The artifact is read back from disk as JSON text (a restart may have been
+// written by a different session), so its epoch is decoded, not asserted.
+
+function parseEpoch(raw: string, path: string): string {
+  const candidate: JsonValue = JSON.parse(raw);
+  if (!isJsonObject(candidate) || !isJsonString(candidate.epoch)) {
+    throw new TypeError(`${path} must contain an epoch string`);
+  }
+  return candidate.epoch;
+}
+
+/** On-disk state of one replacement-epoch artifact. */
+interface EpochArtifact {
   raw: string;
   epoch: string;
   mtimeMs: number;
-} {
+}
+
+function epochArtifact(path: string): EpochArtifact {
   const raw = readFileSync(path, 'utf-8');
   return {
     raw,
-    epoch: (JSON.parse(raw) as { epoch: string }).epoch,
+    epoch: parseEpoch(raw, path),
     mtimeMs: statSync(path).mtimeMs,
   };
 }
@@ -155,8 +169,7 @@ function lastSessionEpochPath(): string {
  * any prior dev session.
  */
 async function runStabilizedFirstSession(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  webpack: any,
+  webpack: FixtureWebpack,
   project: GauntletProject
 ): Promise<CompilationRecord[]> {
   const { records } = await runSession({

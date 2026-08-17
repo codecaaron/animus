@@ -6,6 +6,7 @@ import {
 import { applyUnitFallback } from './unit-fallback';
 
 import type { AnalyzeProjectInputs } from './analyze-project-args';
+import type { ProjectManifest } from './manifest-schema';
 import type { SystemConfig } from './system-config';
 
 /**
@@ -20,8 +21,10 @@ export interface EmitterConfig {
 }
 
 export interface ProjectAnalysisResult {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  manifest: any;
+  /** The parsed engine manifest, typed by the producing package's own wire
+   *  declaration (`manifest-schema.ts`) — consumers read it instead of
+   *  re-deriving a private model per reader. */
+  manifest: ProjectManifest;
   manifestJson: string;
   /** `manifest.sheets.global` — Rust-resolved global CSS. */
   globalCss: string;
@@ -57,9 +60,30 @@ export interface AnalysisOptions {
  * process can replay the analysis from exactly this object
  * (spec: next-turbopack-integration).
  */
+/**
+ * `emitterConfigJson`'s wire shape: the snake_case spelling the Rust emitter
+ * deserializes, distinct from the camelCase `EmitterConfig` above that names
+ * the same identity on this side. Declaration order IS the serialized field
+ * order, and an ABSENT `system_props_module_id` means this driver injects no
+ * system-props module — the engine keeps its own default rather than emitting
+ * an import of the empty string.
+ */
+type EmitterConfigWire = {
+  runtime_import: string;
+  css_module_id: string;
+  system_props_module_id?: string;
+};
+
 export function buildAnalysisInputs(
   opts: AnalysisOptions
 ): AnalyzeProjectInputs {
+  const emitterConfig: EmitterConfigWire = {
+    runtime_import: opts.emitter.runtimeImport,
+    css_module_id: opts.emitter.cssModuleId,
+  };
+  if (opts.emitter.systemPropsModuleId) {
+    emitterConfig.system_props_module_id = opts.emitter.systemPropsModuleId;
+  }
   return {
     filesJson: JSON.stringify(opts.fileEntries),
     scalesJson: opts.system.scalesJson,
@@ -69,13 +93,7 @@ export function buildAnalysisInputs(
     groupRegistryJson: opts.system.groupRegistryJson,
     packageResolutionJson: JSON.stringify(opts.packageMap),
     devMode: opts.devMode,
-    emitterConfigJson: JSON.stringify({
-      runtime_import: opts.emitter.runtimeImport,
-      css_module_id: opts.emitter.cssModuleId,
-      ...(opts.emitter.systemPropsModuleId
-        ? { system_props_module_id: opts.emitter.systemPropsModuleId }
-        : {}),
-    }),
+    emitterConfigJson: JSON.stringify(emitterConfig),
     selectorAliasesJson: opts.system.selectorAliasesJson,
     globalStyleBlocksJson: opts.system.globalStyleBlocksJson,
     pathAliasesJson: opts.pathAliasesJson,
@@ -97,8 +115,10 @@ export function buildAnalysisInputs(
 
 /** Whether the loader captured at least one source built-theme manifest. */
 function hasSourceThemeManifests(system: SystemConfig): boolean {
-  const json = system.sourceThemeManifestsJson;
-  return typeof json === 'string' && json.length > 0 && json !== '{}';
+  // Absent, null, empty, and the empty object all mean the same thing: the
+  // loader evaluated no module exporting a built theme.
+  const json = system.sourceThemeManifestsJson ?? '';
+  return json.length > 0 && json !== '{}';
 }
 
 /**
@@ -126,7 +146,12 @@ export function runProjectAnalysis(
   const extractMs = Math.round(performance.now() - t);
 
   t = performance.now();
-  const manifest = JSON.parse(manifestJson);
+  // SAFETY: `manifestJson` is this call's own `analyzeProject` return value —
+  // serde output from the Rust `AnalyzeResult` that `manifest-schema.ts`
+  // mirrors. A parse failure throws here (the engine emitting unparseable
+  // JSON is an engine bug, not a recoverable input); a Rust-side field rename
+  // is caught by the manifest tether test in `packages/_integration`.
+  const manifest = JSON.parse(manifestJson) as ProjectManifest;
   surfaceManifestDiagnostics(manifest, opts.warn, {
     strict: opts.strict,
     prepend: [
@@ -139,8 +164,8 @@ export function runProjectAnalysis(
   return {
     manifest,
     manifestJson,
-    globalCss: manifest?.sheets?.global || '',
-    componentCss: applyUnitFallback(manifest?.css || ''),
+    globalCss: manifest.sheets.global,
+    componentCss: applyUnitFallback(manifest.css),
     inputs,
     timings: { serializeMs, extractMs, parseMs },
   };

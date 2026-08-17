@@ -243,8 +243,11 @@ export async function collectExternalPackageSources(opts: {
    * `ingestSourceEntries`, never here.
    */
   onSourceRead?: (source: string, relPath: string, absPath: string) => void;
-  /** Called when a discovered file cannot be read; the file is skipped. */
-  onUnreadable: (relPath: string, error: unknown) => void;
+  /** Called when a discovered file cannot be read; the file is skipped. The
+   *  thrown value is universally quantified: it comes straight out of a
+   *  `catch`, so this contract claims nothing about it and every handler
+   *  stringifies it (precedent: `ResetErrorHandler` in the Vite plugin). */
+  onUnreadable: <Thrown>(relPath: string, error: Thrown) => void;
   /**
    * Called once per specifier immediately after its package dir is derived
    * and BEFORE that package's sources are walked (openspec:
@@ -459,12 +462,18 @@ export async function collectExternalPackageSources(opts: {
   };
 }
 
+/** Absolute package dir → the ONE specifier credited with it. A dir claimed
+ *  by no specifier has no key; a dir is never present with an empty owner. */
+export interface PackageDirOwners {
+  [packageDir: string]: string;
+}
+
 /** First-declared specifier per package dir — the single-value ownership
  *  view correlation consumers key on, derived from `dirOwnerSets`. */
 export function firstOwners(
   dirOwnerSets: Record<string, string[]>
-): Record<string, string> {
-  const owners: Record<string, string> = {};
+): PackageDirOwners {
+  const owners: PackageDirOwners = {};
   for (const [dir, specifiers] of Object.entries(dirOwnerSets)) {
     if (specifiers.length > 0) owners[dir] = specifiers[0];
   }

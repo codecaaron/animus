@@ -14,6 +14,8 @@ import { buildUniverse } from './universe';
 
 import type { ProgramRevision } from '../../core/world';
 import type { HostObligation, OracleHost } from '../../providers/host';
+import type { AnimusDependencyInput } from './dependency';
+import type { AnimusScenarioInput } from './scenario';
 import type { AnimusTokens } from './tokens';
 
 export interface AnimusHostOptions {
@@ -83,17 +85,24 @@ export const createAnimusHost = (input: AnimusHostInput): AnimusHost => {
       manifest,
       stylesheet: input.stylesheetText ?? null,
     }),
-    ...(input.label === undefined ? {} : { label: input.label }),
   };
+  // An unlabelled program has no `label` key at all: the probe envelope prints
+  // the label only when the build recorded one.
+  if (input.label !== undefined) program.label = input.label;
 
-  const dependencies = createAnimusDependencies({
+  const dependencyInput: AnimusDependencyInput = {
     rules: build.rules,
     componentFiles: new Map(
       components.map((component) => [component.id, component.record.file])
     ),
-    ...(tokens === undefined ? {} : { tokens }),
     programHash: program.hash,
-  });
+  };
+  // A degraded host omits `tokens` everywhere it is optional rather than
+  // carrying an explicit undefined — token closure and the mode axis are then
+  // absent by construction, not by a falsy read.
+  if (tokens !== undefined) dependencyInput.tokens = tokens;
+
+  const dependencies = createAnimusDependencies(dependencyInput);
 
   const obligations = buildObligations({
     manifest,
@@ -103,17 +112,19 @@ export const createAnimusHost = (input: AnimusHostInput): AnimusHost => {
     programHash: program.hash,
   });
 
-  const scenarios = createAnimusScenarios({
+  const scenarioInput: AnimusScenarioInput = {
     componentDomains,
-    ...(tokens === undefined ? {} : { tokens }),
     cuts: build.cuts,
-    ...(input.options?.viewportMin === undefined
-      ? {}
-      : { viewportMin: input.options.viewportMin }),
-    ...(input.options?.viewportMax === undefined
-      ? {}
-      : { viewportMax: input.options.viewportMax }),
-  });
+  };
+  if (tokens !== undefined) scenarioInput.tokens = tokens;
+  // Omitted bounds fall back to the provider's declared defaults, so an
+  // absent option must stay absent rather than become an explicit undefined.
+  const viewportMin = input.options?.viewportMin;
+  if (viewportMin !== undefined) scenarioInput.viewportMin = viewportMin;
+  const viewportMax = input.options?.viewportMax;
+  if (viewportMax !== undefined) scenarioInput.viewportMax = viewportMax;
+
+  const scenarios = createAnimusScenarios(scenarioInput);
 
   // The axes no component owns (viewport, mode) affect every component, so
   // they belong to every target's domain — the same contract the in-memory
@@ -131,7 +142,7 @@ export const createAnimusHost = (input: AnimusHostInput): AnimusHost => {
       .map((name) => [name, declared[name]])
   );
 
-  return {
+  const host: AnimusHost = {
     program,
     universe: { universe: () => build.universe },
     scenarios,
@@ -143,7 +154,12 @@ export const createAnimusHost = (input: AnimusHostInput): AnimusHost => {
       shared,
     }),
     dependencies,
-    ...(tokens === undefined ? {} : { tokens }),
     obligations: () => obligations,
   };
+  // `host.tokens` stays absent on a degraded host — every engine tests it
+  // against undefined, and an explicit undefined would read the same while
+  // claiming the channel exists.
+  if (tokens !== undefined) host.tokens = tokens;
+
+  return host;
 };

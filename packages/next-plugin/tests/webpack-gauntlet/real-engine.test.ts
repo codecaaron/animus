@@ -40,13 +40,12 @@ import {
 
 vi.setConfig({ testTimeout: 120_000, hookTimeout: 120_000 });
 
-const g = globalThis as Record<string, unknown>;
 const disposers: Array<() => void> = [];
 const prereq = probeRealEnginePrerequisites();
 
 afterEach(() => {
   for (const dispose of disposers.splice(0)) dispose();
-  delete g[LOADER_IMPL_KEY];
+  Reflect.deleteProperty(globalThis, LOADER_IMPL_KEY);
   resetAnimusGlobals();
   vi.restoreAllMocks();
 });
@@ -138,7 +137,7 @@ describe.skipIf(!prereq.ok)('real-engine gauntlet [next-app]', () => {
     installLoaderRecorder(
       project.root,
       state,
-      animusLoader as unknown as (this: unknown, source: string) => string,
+      animusLoader,
       (file, turn, code) => {
         outputs.push({ file, turn, code });
       }

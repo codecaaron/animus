@@ -2,6 +2,7 @@ import {
   assembleStylesheet,
   assertKnownOptionKeys,
   buildPathAliasesJson,
+  isEngineTransformExtension,
   isPathWithinRoot,
   readTsconfigAliasPairs,
   resolveMode,
@@ -27,30 +28,88 @@ import {
 } from './turbopack-config';
 
 import type { AnimusNextOptions } from './types';
+import type { TurbopackWatchOutcome } from '@animus-ui/extract/session';
+import type {
+  NextConfig as NextOwnedConfig,
+  TurbopackOptions,
+} from 'next/dist/server/config-shared';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-type WebpackConfig = {
-  plugins?: unknown[];
+type WebpackPluginEntry = object | false | null | undefined;
+
+interface WebpackLoaderUse {
+  loader: string;
+  options?: object | string;
+}
+
+interface WebpackRule {
+  test?: RegExp | ((path: string) => boolean);
+  exclude?: RegExp | ((path: string) => boolean);
+  enforce?: string;
+  use?: WebpackLoaderUse[];
+}
+
+interface WebpackConfig {
+  plugins?: WebpackPluginEntry[];
   resolve?: {
     alias?: Record<string, string>;
   };
   module?: {
-    rules?: Array<{
-      test?: RegExp | ((path: string) => boolean);
-      exclude?: RegExp | ((path: string) => boolean);
-      enforce?: string;
-      use?: Array<{ loader: string; options?: Record<string, unknown> }>;
-    }>;
+    rules?: WebpackRule[];
   };
+}
+
+type DefinePluginConstructor = new (
+  definitions: Record<string, string>
+) => object;
+
+interface NextWebpackContext {
+  dir?: string;
+  dev?: boolean;
+  webpack?: {
+    DefinePlugin?: DefinePluginConstructor;
+  };
+}
+
+type NextWebpackHook = (
+  config: WebpackConfig,
+  context: NextWebpackContext
+) => WebpackConfig;
+
+interface NextConfigBoundary {
+  webpack?: NextWebpackHook | null;
+  turbopack?: TurbopackOptions;
+}
+
+type CallableNextConfig = (
+  ...args: never[]
+) => NextOwnedConfig | Promise<NextOwnedConfig>;
+
+// The four aliases below are exported so a consumer's `export default
+// withAnimus(...)({...})` infers a type tsc can NAME via this package.
+// Module-private aliases force structural expansion into `next`'s internal
+// paths, which resolve to THIS package's nested `next` copy and fail the
+// consumer's compile as non-portable (TS2742) whenever the app's `next`
+// version differs.
+export type { NextConfigBoundary as AnimusNextConfigBoundary };
+
+export type NextConfigInput<Config extends NextOwnedConfig> =
+  Config extends CallableNextConfig ? never : Config & NextConfigBoundary;
+
+export type WebpackNextConfig<Config extends NextOwnedConfig> = Omit<
+  Config,
+  'webpack'
+> & {
+  webpack: NextWebpackHook;
 };
 
-type NextConfig = Record<string, unknown> & {
-  webpack?: (
-    config: WebpackConfig,
-    context: Record<string, unknown>
-  ) => WebpackConfig;
+export type TurbopackNextConfig<Config extends NextOwnedConfig> = Omit<
+  Config,
+  'turbopack'
+> & {
+  turbopack: TurbopackOptions;
 };
 
 let warnedGitignore = false;
@@ -67,7 +126,9 @@ let warnedUnstableTurbopack = false;
  */
 export function withAnimus(
   options: AnimusNextOptions
-): (nextConfig: NextConfig) => NextConfig | Promise<NextConfig> {
+): <Config extends NextOwnedConfig>(
+  nextConfig: NextConfigInput<Config>
+) => WebpackNextConfig<Config> | Promise<TurbopackNextConfig<Config>> {
   if (!options.system) {
     throw new Error(
       '[animus-extract] Missing required option `system`. ' +
@@ -78,16 +139,33 @@ export function withAnimus(
   // Unknown top-level keys WARN naming the key (never a throw at this
   // published entry point — a consumer upgrade must not die at config load
   // over a previously-inert extra key); the listed keys are this driver's
-  // own top-level surface (shared-driver-config). `root` is named loudly
-  // rather than silently ignored — Next's `dir` is the one rootDir
-  // authority for this driver. Invalid `mode` VALUES still throw.
+  // own top-level surface (shared-driver-config). Invalid `mode` VALUES
+  // still throw.
+  //
+  // `root` is named loudly rather than silently ignored, but the reason
+  // differs PER ARM and neither arm reads the option:
+  //   • webpack arm — Next hands the compiler `context.dir` (the project
+  //     root it resolved), and that dir is the one rootDir authority (see
+  //     the `context.dir` derivation in the `webpack` hook below). A
+  //     consumer `root` could only disagree with it.
+  //   • Turbopack arm — no Next-supplied dir is reachable. This wrapper
+  //     runs during user `next.config` module evaluation, which is
+  //     strictly before Next has a compiler to hand anything back:
+  //     `normalizeConfig` invokes a function-form config as
+  //     `(phase, { defaultConfig })` with no dir (and the function form is
+  //     rejected by `NextConfigInput` anyway), and `loadConfig(phase, dir)`
+  //     keeps `dir` internal. So `process.cwd()` is the only root signal
+  //     that exists there — see the `rootDir` derivation in `wireTurbopack`
+  //     for the known `next dev <subdir>` + Turbopack gap.
   assertKnownOptionKeys(
-    options as unknown as Record<string, unknown>,
+    { ...options },
     ['cssImportTarget', 'turbopack', 'unstable_turbopack', 'loaderPath'],
     [
       {
         key: 'root',
-        reason: "the Next driver's root is Next's `dir` at config time",
+        reason:
+          "this driver derives its own root — Next's `dir` under webpack, " +
+          '`process.cwd()` under Turbopack (Next passes no dir to a config module)',
       },
     ],
     {
@@ -107,7 +185,9 @@ export function withAnimus(
     );
   }
 
-  return (nextConfig: NextConfig): NextConfig | Promise<NextConfig> => {
+  return <Config extends NextOwnedConfig>(
+    nextConfig: NextConfigInput<Config>
+  ): WebpackNextConfig<Config> | Promise<TurbopackNextConfig<Config>> => {
     // Turbopack path (default 'auto' — active under any Turbopack run):
     // the pipeline runs during config resolution (Turbopack has no compiler
     // hooks); webpack wiring is skipped for the Turbopack-active process.
@@ -119,8 +199,8 @@ export function withAnimus(
 
     return {
       ...nextConfig,
-      webpack(config: WebpackConfig, context: Record<string, unknown>) {
-        if (typeof existingWebpack === 'function') {
+      webpack(config: WebpackConfig, context: NextWebpackContext) {
+        if (existingWebpack) {
           config = existingWebpack(config, context);
         }
 
@@ -130,10 +210,7 @@ export function withAnimus(
         // same dir, so every config-time derivation below (sessionDir,
         // stub, aliases, watch-ignore) and the run/watchRun taps read ONE
         // root. cwd is only the fallback for harnesses that omit `dir`.
-        const rootDir =
-          typeof context.dir === 'string' && context.dir.length > 0
-            ? context.dir
-            : process.cwd();
+        const rootDir = context.dir?.length ? context.dir : process.cwd();
 
         // Inject AnimusWebpackPlugin. Constructed FIRST — the session
         // identity it claims decides the session-scoped artifact paths the
@@ -197,10 +274,8 @@ export function withAnimus(
         // hook context, so the plugin never imports it; a context without one
         // simply leaves the token absent and the runtime falls back to reading
         // NODE_ENV.
-        const { DefinePlugin } = (context.webpack ?? {}) as {
-          DefinePlugin?: new (definitions: Record<string, string>) => unknown;
-        };
-        if (typeof DefinePlugin === 'function') {
+        const DefinePlugin = context.webpack?.DefinePlugin;
+        if (DefinePlugin) {
           config.plugins.push(
             new DefinePlugin({
               // Emission decision: explicit `mode` wins over the compiler's
@@ -285,11 +360,13 @@ export function withAnimus(
         config.module = config.module || {};
         config.module.rules = config.module.rules || [];
         config.module.rules.push({
-          test: (filePath: string) => {
-            if (/\.[jt]sx?$/.test(filePath)) return true;
-            // Allow .mjs for external DS packages (published dist with builder chains)
-            return /\.mjs$/.test(filePath) && isExternalPackageFile(filePath);
-          },
+          // File class only — the ONE owner set, shared with the Turbopack
+          // rule glob and the Vite hook. `.mjs` is admitted on the class
+          // alone (it used to need an external-package witness here while
+          // the Turbopack arm admitted it unconditionally); module-graph
+          // scoping stays in `exclude` below and the loader's manifest
+          // lookup remains the file-level gate.
+          test: (filePath: string) => isEngineTransformExtension(filePath),
           exclude: (filePath: string) => {
             if (!filePath.includes('node_modules')) return false;
             // Allow external DS packages through
@@ -314,18 +391,68 @@ export function withAnimus(
 }
 
 /**
+ * This driver's reaction to a project watcher that DIES after registration
+ * (EMFILE/ENOSPC on the OS handles): a loud line on the plugin's diagnostic
+ * surface. Next dev keeps serving, so silence would leave the user editing
+ * source that nothing re-extracts; unlike the CLI there is no exit code to
+ * spend and no degradation report to re-run, so the report is the reaction.
+ * The other two claim outcomes carry no handle: `unavailable` has already
+ * warned inside the orchestrator, and `already-watched` means a live
+ * watcher for this root exists in this process.
+ */
+export function bindTurbopackWatchDeathReport(
+  outcome: TurbopackWatchOutcome,
+  rootDir: string
+): void {
+  if (outcome.kind !== 'started') return;
+  const handle = outcome.handle;
+  handle.onDied = () => {
+    console.error(
+      `[animus-extract] dev watcher for ${rootDir} died — source edits are ` +
+        'no longer extracted; restart the dev server'
+    );
+  };
+}
+
+/** The session the last Turbopack config resolution published through —
+ *  this process's one live publisher on that path. */
+let liveTurbopackSession: ExtractionSession | null = null;
+
+/**
  * Turbopack wiring: run the full extraction now (artifacts on disk before
  * bundling), start the dev watcher, and merge the generated rules/aliases
  * into `nextConfig.turbopack`. Consumer-managed rules for the same glob are
  * a hard error — silently stacking loaders would be undebuggable.
  */
-async function wireTurbopack(
-  nextConfig: NextConfig,
+async function wireTurbopack<Config extends NextOwnedConfig>(
+  nextConfig: NextConfigInput<Config>,
   options: AnimusNextOptions
-): Promise<NextConfig> {
+): Promise<TurbopackNextConfig<Config>> {
+  // The Turbopack arm's root authority, and the reason the `root` option is
+  // rejected here too (see the `rejectKeys` comment in `withAnimus`). Unlike
+  // the webpack arm there is no `context.dir` to prefer: this function runs
+  // during user `next.config` evaluation, and Next's config-resolution
+  // contract exposes no dir to a
+  // config module (`normalizeConfig` passes `(phase, {defaultConfig})`; the
+  // callable form is rejected by `NextConfigInput`). Next never
+  // `process.chdir`s and its dev fork inherits the launcher's cwd, so cwd
+  // equals Next's `dir` for every invocation that starts in the project
+  // directory. KNOWN GAP: `next dev ./apps/web` from a monorepo root leaves
+  // cwd at the root while Next's dir is the app — unsupported under
+  // Turbopack, and no e2e lane exercises it (every lane runs from its own
+  // app directory with no dir argument). Next 16's `turbopack.root` is the
+  // WORKSPACE root, semantically broader than the app dir, so adopting it
+  // would widen the scan rather than fix the gap.
   const rootDir = process.cwd();
 
   const session = new ExtractionSession(options);
+  // Next re-evaluates next.config IN-PROCESS, and this driver owns no
+  // teardown hook (see the watcher comment below), so the superseded
+  // resolution's session is closed here: publication ownership is
+  // exclusive, and an abandoned config's claim would otherwise refuse
+  // every later resolution.
+  liveTurbopackSession?.close();
+  liveTurbopackSession = session;
   session.rootDir = rootDir;
   // Alias parity with the webpack/vite drivers: Turbopack exposes no live
   // bundler config, so tsconfig `paths` are the alias source here.
@@ -341,7 +468,14 @@ async function wireTurbopack(
   // dev watching or starts watchers inside one-shot builds
   // (shared-driver-config: mode selects emission).
   if (process.env.NODE_ENV === 'development') {
-    startTurbopackWatcher(session, rootDir);
+    // The claim is OBSERVED, not discarded: this driver owns no teardown
+    // (no process to exit, no shutdown hook), so `close()`/`settle()` have
+    // no consumer here — but a watcher that dies after registration stops
+    // HMR silently, and only the holder of the handle can react to that.
+    bindTurbopackWatchDeathReport(
+      startTurbopackWatcher(session, rootDir),
+      rootDir
+    );
   }
 
   const fragment = buildTurbopackConfig({
@@ -356,10 +490,7 @@ async function wireTurbopack(
     sessionDir: session.sessionDir,
   });
 
-  const existing = (nextConfig.turbopack ?? {}) as {
-    rules?: Record<string, unknown>;
-    resolveAlias?: Record<string, string>;
-  };
+  const existing: TurbopackOptions = nextConfig.turbopack ?? {};
   if (existing.rules && ANIMUS_TURBOPACK_RULE_GLOB in existing.rules) {
     throw new Error(
       `[animus-extract] turbopack.rules['${ANIMUS_TURBOPACK_RULE_GLOB}'] is already configured — remove the consumer rule or disable unstable_turbopack`

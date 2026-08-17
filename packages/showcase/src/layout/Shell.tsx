@@ -80,14 +80,10 @@ export function Shell() {
   // Read current mode for the trigger label. The attribute's ABSENCE is not
   // "dark" — it is the OS-driven state, so the label says so rather than naming
   // a mode the user never picked.
-  const [modeLabel, setModeLabel] = useState(() => {
-    if (typeof document !== 'undefined') {
-      return (
-        document.documentElement.getAttribute('data-color-mode') ?? SYSTEM_MODE
-      );
-    }
-    return SYSTEM_MODE;
-  });
+  const [modeLabel, setModeLabel] = useState(
+    () =>
+      document.documentElement.getAttribute('data-color-mode') ?? SYSTEM_MODE
+  );
 
   useEffect(() => {
     const observer = new MutationObserver(() => {

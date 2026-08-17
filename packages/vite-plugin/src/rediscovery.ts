@@ -10,6 +10,7 @@ import { readFileSync } from 'fs';
 import { dirname, extname, relative, resolve } from 'path';
 
 import type { PluginContext } from './context';
+import type { ProjectManifest } from '@animus-ui/extract/pipeline';
 
 interface UnresolvedParentDrop {
   /** rootDir-relative consumer file the diagnostic names. */
@@ -26,15 +27,12 @@ export function unresolvedParentDrops(
   ctx: PluginContext
 ): UnresolvedParentDrop[] {
   const drops: UnresolvedParentDrop[] = [];
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  for (const d of (ctx.storedManifest?.diagnostics ?? []) as any[]) {
+  const manifest = ctx.storedManifest;
+  if (!manifest) return drops;
+  for (const d of manifest.diagnostics) {
     const parent = unresolvedParentName(d);
     if (parent !== null) {
-      drops.push({
-        file: String(d.file ?? ''),
-        component: String(d.component ?? ''),
-        parent,
-      });
+      drops.push({ file: d.file, component: d.component, parent });
     }
   }
   return drops;
@@ -45,19 +43,18 @@ const EMPTY_DROP_FILES: ReadonlySet<string> = new Set();
 // Per-manifest memo for the hot-path membership checks below — transform's
 // raw-serve check and stabilize's trigger run per served file, and a full
 // diagnostics scan per call is wasted work when the manifest hasn't moved.
-const dropFilesByManifest = new WeakMap<object, ReadonlySet<string>>();
+const dropFilesByManifest = new WeakMap<ProjectManifest, ReadonlySet<string>>();
 
 /** Files carrying an unresolved-parent drop in the CURRENT manifest —
  *  derived once per manifest publication, then a set lookup. */
 export function unresolvedDropFiles(ctx: PluginContext): ReadonlySet<string> {
-  const manifest = ctx.storedManifest as object | null;
+  const manifest = ctx.storedManifest;
   if (!manifest) return EMPTY_DROP_FILES;
   let files = dropFilesByManifest.get(manifest);
   if (!files) {
     const derived = new Set<string>();
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    for (const d of ((manifest as any).diagnostics ?? []) as any[]) {
-      if (isUnresolvedParentDrop(d)) derived.add(String(d.file ?? ''));
+    for (const d of manifest.diagnostics) {
+      if (isUnresolvedParentDrop(d)) derived.add(d.file);
     }
     files = derived;
     dropFilesByManifest.set(manifest, files);
@@ -100,9 +97,12 @@ export async function stabilizeSourceUniverse(
     const drops = unresolvedParentDrops(ctx);
 
     // Barren-walk memo (approved log/walk-frequency change): a walk over an
-    // UNCHANGED drop tuple-set with no cache-size movement since the last
-    // barren walk cannot fold anything new — skip it (its verdicts already
-    // warned once).
+    // UNCHANGED drop tuple-set with no cache movement since the last barren
+    // walk cannot fold anything new — skip it (its verdicts already warned
+    // once). "No movement" is the cache's mutation generation, never its size:
+    // a delete plus an unrelated create restores the size while the contents
+    // differ, and skipping there strands the lost-event file as a raw fallback
+    // for the session.
     const dropKey = drops
       .map((d) => `${d.file}\0${d.component}\0${d.parent}`)
       .sort()
@@ -111,7 +111,7 @@ export async function stabilizeSourceUniverse(
     if (
       memo &&
       memo.dropKey === dropKey &&
-      memo.cacheSize === ctx.fileCache.size
+      memo.cacheGeneration === ctx.fileCacheGeneration
     ) {
       return reanalyzed;
     }
@@ -122,7 +122,10 @@ export async function stabilizeSourceUniverse(
       // genuinely absent, or resolvable-but-inadmissible. Teach the reason
       // where resolution succeeds on disk; the documented runtime fallback
       // stands.
-      barrenWalkMemos.set(ctx, { dropKey, cacheSize: ctx.fileCache.size });
+      barrenWalkMemos.set(ctx, {
+        dropKey,
+        cacheGeneration: ctx.fileCacheGeneration,
+      });
       warnInadmissibleParents(ctx, drops);
       return reanalyzed;
     }
@@ -145,7 +148,9 @@ export async function stabilizeSourceUniverse(
       published = (await ctx.analyzeIngested()).ok;
     } finally {
       if (!published) {
-        for (const key of folded) ctx.fileCache.delete(key);
+        ctx.mutateFileCache((cache) => {
+          for (const key of folded) cache.delete(key);
+        });
       }
     }
     if (!published) {
@@ -181,6 +186,7 @@ function foldUndiscoveredFiles(ctx: PluginContext): string[] {
     ctx.extensionsSet
   );
   const folded: string[] = [];
+  const pending: Array<[string, { hash: string; source: string }]> = [];
   for (const filePath of filePaths) {
     // `.mdx` sources are not folded here (they ingest on their first
     // watcher edit): with the optional MDX peer absent, a folded `.mdx`
@@ -195,17 +201,25 @@ function foldUndiscoveredFiles(ctx: PluginContext): string[] {
     } catch {
       continue;
     }
-    ctx.fileCache.set(relPath, { hash: contentHash(source), source });
+    pending.push([relPath, { hash: contentHash(source), source }]);
     folded.push(relPath);
+  }
+  // One mutation for the whole walk: the fold either happens or it does not,
+  // and the memo above reads a single generation either way.
+  if (pending.length > 0) {
+    ctx.mutateFileCache((cache) => {
+      for (const [relPath, entry] of pending) cache.set(relPath, entry);
+    });
   }
   return folded;
 }
 
-/** Barren-walk memo per context: the drop tuple-set and cache size at the
- *  last walk that folded nothing (see stabilizeSourceUniverse). */
+/** Barren-walk memo per context: the drop tuple-set and the cache's mutation
+ *  generation at the last walk that folded nothing (see
+ *  stabilizeSourceUniverse). */
 const barrenWalkMemos = new WeakMap<
   object,
-  { dropKey: string; cacheSize: number }
+  { dropKey: string; cacheGeneration: number }
 >();
 
 /** Per-context (file, parent, condition) verdicts already warned — each

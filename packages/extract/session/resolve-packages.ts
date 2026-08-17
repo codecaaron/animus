@@ -7,15 +7,24 @@ import { join, relative, resolve } from 'path';
  * matching package names; Pass 2 falls back to `require.resolve`. Specifiers
  * that resolve nowhere are simply omitted (spec: silent skip).
  */
+/**
+ * Package specifier → rootDir-relative entry path. A specifier that resolved
+ * nowhere has NO key at all (spec: silent skip) — an entry is never present
+ * with an empty target.
+ */
+export interface ResolvedPackageMap {
+  [specifier: string]: string;
+}
+
 export function resolvePackagesByName(
   rootDir: string,
   names: string[]
-): Record<string, string> {
+): ResolvedPackageMap {
   if (names.length === 0) return {};
 
   const nameSet = new Set(names);
   const resolved = new Set<string>();
-  const packageMap: Record<string, string> = {};
+  const packageMap: ResolvedPackageMap = {};
 
   // Pass 1: workspace resolution
   try {

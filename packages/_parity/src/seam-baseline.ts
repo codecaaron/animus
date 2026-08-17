@@ -6,6 +6,20 @@ import {
 
 import { canonicalPrettyJson } from './content-hash';
 
+import type { JsonObject, JsonValue } from '@animus-ui/assertions';
+
+/**
+ * One recorded seam case. A wire contract — it is the value stored under a
+ * case id in `tools/seam-baseline.json` — so it is a `type`, and its
+ * `diagnostics` stay an uninterpreted JSON value: the battery records what the
+ * engine reported and compares it by canonical form, and nothing here decides
+ * what a diagnostic means.
+ */
+export type SeamCaseResult = {
+  css: string;
+  diagnostics: JsonValue;
+};
+
 interface AtomicFileOps {
   writeFileSync: (path: string, content: string) => void;
   renameSync: (from: string, to: string) => void;
@@ -18,9 +32,18 @@ const DEFAULT_FILE_OPS: AtomicFileOps = {
   rmSync: removeFileSync,
 };
 
+/**
+ * Compare a recorded seam document against a fresh one, case id by case id.
+ *
+ * Both sides are JSON documents keyed by case id — the baseline is bytes read
+ * back off disk — and this comparator deliberately does not interpret a case's
+ * value: it decides presence, and then identity under the writer's canonical
+ * form. Anything that reads a FIELD of a case is `SeamCaseResult`'s business,
+ * not this function's.
+ */
 export function compareSeamResults(
-  baseline: Record<string, unknown>,
-  candidate: Record<string, unknown>
+  baseline: JsonObject,
+  candidate: JsonObject
 ): string[] {
   const ids = [
     ...new Set([...Object.keys(baseline), ...Object.keys(candidate)]),
@@ -45,7 +68,7 @@ export function compareSeamResults(
 
 export function writeJsonFileAtomic(
   target: string,
-  value: unknown,
+  value: JsonValue,
   fileOps: AtomicFileOps = DEFAULT_FILE_OPS
 ): void {
   const next = `${target}.next-${process.pid}-${Date.now()}`;

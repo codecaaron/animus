@@ -142,6 +142,10 @@ export interface AnimusExtractOptions {
   appearanceBootstrap?: { code: string; cspHash: string };
 }
 
+type AnimusExtractOptionRecord = {
+  [Key in keyof AnimusExtractOptions]: AnimusExtractOptions[Key];
+};
+
 /**
  * Vite adapter for the extraction pipeline. State and pipeline operations
  * live in PluginContext; hook bodies live in their own modules — this
@@ -150,16 +154,17 @@ export interface AnimusExtractOptions {
 export function animusExtract(options: AnimusExtractOptions): Plugin {
   // v2 is the only engine (openspec: retire-extract-v1). Reject a retired v1
   // selection loudly before any engine work — the option type no longer admits
-  // 'v1', so cast to string to still catch a stale config at runtime.
-  assertNoRetiredEngineSelection(options.engine as string | undefined);
+  // 'v1', but the raw runtime value still reaches the broader validator.
+  assertNoRetiredEngineSelection(options.engine);
   // Unknown top-level keys WARN naming the key (never a throw at this
   // published entry point — a consumer upgrade must not die while Vite is
   // loading the config over a previously-inert extra key); `verify` and
   // `appearanceBootstrap` are this driver's own top-level surface. `root`
   // is named loudly rather than silently ignored — this driver's root is
   // the resolved Vite root. Invalid `mode` VALUES still throw.
+  const optionRecord: AnimusExtractOptionRecord = options;
   assertKnownOptionKeys(
-    options as unknown as Record<string, unknown>,
+    optionRecord,
     ['verify', 'appearanceBootstrap'],
     [
       {

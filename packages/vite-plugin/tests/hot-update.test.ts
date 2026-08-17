@@ -17,9 +17,10 @@ import {
 import { handleHotUpdate } from '../src/hmr';
 import { HotUpdateEvents } from '../src/hot-update-events';
 import { makeContextProbe, makeEnvGraph } from './context-probe';
+import { makeComponent, makeManifest } from './manifest-fixture';
 
 import type { ContextProbe } from './context-probe';
-import type { DevEnvironment } from 'vite';
+import type { DevEnvironment, HotUpdateOptions } from 'vite';
 
 /**
  * Vite dispatches `hotUpdate` once per environment for a single file event —
@@ -37,45 +38,69 @@ interface HotUpdateProbe extends ContextProbe {
    * An omitted field is left untouched, i.e. republished identically.
    */
   setNextSystemProps(next: { map?: string; dynamicProps?: string }): void;
+  setSystemDependency(file: string): void;
 }
 
 function makeContext(rootDir: string): HotUpdateProbe {
   const resets: string[] = [];
-  let next: { map?: string; dynamicProps?: string } = {};
+  let nextMap: string | undefined;
+  let nextDynamicProps: string | undefined;
+  let systemDependency: string | undefined;
   const base = makeContextProbe(rootDir, {
     extensionsSet: new Set(['.ts', '.tsx', '.js', '.jsx']),
     reverseProvenance: {},
     hotUpdateEvents: new HotUpdateEvents(),
-    systemDependency: '',
-    isSystemDependency(this: { systemDependency: string }, absFile: string) {
-      return absFile === this.systemDependency;
+    isSystemDependency(absFile: string) {
+      return absFile === systemDependency;
     },
     requestGeologicalReset(trigger: string) {
       resets.push(trigger);
     },
   });
-  const ctx = base.ctx as unknown as {
-    storedSystemPropMapJson: string;
-    storedDynamicPropsJson: string;
-    systemPropsModuleMemo: string | null;
-    runAnalysis: () => void;
-  };
-  ctx.runAnalysis = () => {
+  base.ctx.runAnalysis = () => {
     base.analyses++;
-    if (next.map !== undefined) ctx.storedSystemPropMapJson = next.map;
-    if (next.dynamicProps !== undefined) {
-      ctx.storedDynamicPropsJson = next.dynamicProps;
+    if (nextMap !== undefined) base.ctx.storedSystemPropMapJson = nextMap;
+    if (nextDynamicProps !== undefined) {
+      base.ctx.storedDynamicPropsJson = nextDynamicProps;
     }
-    // The writer contract the real runAnalysis honors: publishing new inputs
-    // refreshes the served-module memo.
-    ctx.systemPropsModuleMemo = null;
+    // Publishing the inputs is the whole writer contract: the served module
+    // is keyed on them by its reader, so nothing here refreshes a memo.
+    return true;
   };
   return Object.assign(base, {
     resets,
     setNextSystemProps(update: { map?: string; dynamicProps?: string }) {
-      next = update;
+      nextMap = update.map;
+      nextDynamicProps = update.dynamicProps;
+    },
+    setSystemDependency(file: string) {
+      systemDependency = file;
     },
   });
+}
+
+type HotUpdateEnvironment = Pick<
+  DevEnvironment,
+  'name' | 'moduleGraph' | 'transformRequest'
+>;
+type HotUpdateFixtureOptions = Pick<
+  HotUpdateOptions,
+  'type' | 'file' | 'timestamp' | 'modules'
+> &
+  Partial<Pick<HotUpdateOptions, 'read'>>;
+
+function runHotUpdate(
+  ctx: ContextProbe['ctx'],
+  environment: HotUpdateEnvironment,
+  options: HotUpdateFixtureOptions
+) {
+  return handleHotUpdate(
+    ctx,
+    // SAFETY: The fixture models every DevEnvironment field read by handleHotUpdate: name, moduleGraph, and transformRequest.
+    environment as DevEnvironment,
+    // SAFETY: The fixture provides every option read by handleHotUpdate; server is unused, and read is optional for its documented non-Vite host path.
+    options as HotUpdateOptions
+  );
 }
 
 /** Named-environment wrapper over the shared graph double — the graph body
@@ -85,8 +110,12 @@ function makeEnvironment(name: string, moduleIds: string[]) {
     rootDir: '/',
     ids: moduleIds,
   });
-  const environment = { name, moduleGraph };
-  return { environment: environment as unknown as DevEnvironment, invalidated };
+  const environment: HotUpdateEnvironment = {
+    name,
+    moduleGraph,
+    transformRequest: async () => null,
+  };
+  return { environment, invalidated };
 }
 
 const VIRTUAL_IDS = [RESOLVED_COMPONENTS_ID, RESOLVED_SYSTEM_PROPS_ID];
@@ -115,18 +144,16 @@ describe('hotUpdate across environment dispatches', () => {
     const ssr = makeEnvironment('ssr', VIRTUAL_IDS);
     const event = { type: 'update' as const, file, timestamp: 10 };
 
-    const clientModules = await handleHotUpdate(probe.ctx, client.environment, {
+    const clientModules = await runHotUpdate(probe.ctx, client.environment, {
       ...event,
       modules: [],
       read: readFile,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } as any);
-    const ssrModules = await handleHotUpdate(probe.ctx, ssr.environment, {
+    });
+    const ssrModules = await runHotUpdate(probe.ctx, ssr.environment, {
       ...event,
       modules: [],
       read: readFile,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } as any);
+    });
 
     // The analysis half ran for the client dispatch only.
     expect(probe.analyses).toBe(1);
@@ -138,19 +165,61 @@ describe('hotUpdate across environment dispatches', () => {
     expect(ssrModules?.map((m) => m.id)).toEqual(VIRTUAL_IDS);
   });
 
+  it('invalidates conservatively when the burst evicted the decision', async () => {
+    // Vite does not serialize watcher handlers, so a mass edit (git checkout,
+    // format-on-save-all) puts many events in flight between one event's
+    // client dispatch and its ssr dispatch. Past the bounded history the ssr
+    // dispatch can no longer read the owner's decision — and the one thing it
+    // must not do is skip invalidation: its graph would keep the pre-edit
+    // component CSS and system-props module while the client has the new
+    // ones, which renders as a hydration mismatch.
+    const probe = makeContext(root);
+    probe.setNextSystemProps({ map: '{"p":{"8":"animus-u-abc"}}' });
+    const client = makeEnvironment('client', VIRTUAL_IDS);
+    const ssr = makeEnvironment('ssr', VIRTUAL_IDS);
+    const event = { type: 'update' as const, file, timestamp: 10 };
+
+    await runHotUpdate(probe.ctx, client.environment, {
+      ...event,
+      modules: [],
+      read: readFile,
+    });
+    // Seventeen other files change while the ssr dispatch is still queued —
+    // every one of them claims its own event first, exactly as a dispatch
+    // does, and the oldest key falls out of the 16-entry window.
+    for (let index = 0; index < 17; index++) {
+      probe.ctx.hotUpdateEvents.claim(
+        'client',
+        join(root, `Other${index}.tsx`),
+        100 + index
+      );
+    }
+
+    const ssrModules = await runHotUpdate(probe.ctx, ssr.environment, {
+      ...event,
+      modules: [],
+      read: readFile,
+    });
+
+    // No second analysis: the owner already ran it, and the file's content
+    // has not moved since.
+    expect(probe.analyses).toBe(1);
+    expect(ssr.invalidated).toEqual(VIRTUAL_IDS);
+    expect(ssrModules?.map((m) => m.id)).toEqual(VIRTUAL_IDS);
+  });
+
   it('suppresses the update in every environment when content is unchanged', async () => {
     const probe = makeContext(root);
     const client = makeEnvironment('client', VIRTUAL_IDS);
     const ssr = makeEnvironment('ssr', VIRTUAL_IDS);
-    const dispatch = (environment: DevEnvironment, timestamp: number) =>
-      handleHotUpdate(probe.ctx, environment, {
+    const dispatch = (environment: HotUpdateEnvironment, timestamp: number) =>
+      runHotUpdate(probe.ctx, environment, {
         type: 'update',
         file,
         timestamp,
         modules: [],
         read: readFile,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      } as any);
+      });
 
     await dispatch(client.environment, 10);
     await dispatch(ssr.environment, 10);
@@ -165,8 +234,7 @@ describe('hotUpdate across environment dispatches', () => {
 
   it('schedules one geological reset per system-dependency event', async () => {
     const probe = makeContext(root);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (probe.ctx as any).systemDependency = file;
+    probe.setSystemDependency(file);
     const client = makeEnvironment('client', VIRTUAL_IDS);
     const ssr = makeEnvironment('ssr', VIRTUAL_IDS);
 
@@ -174,14 +242,13 @@ describe('hotUpdate across environment dispatches', () => {
     for (const [index, type] of types.entries()) {
       const timestamp = 30 + index;
       for (const environment of [client.environment, ssr.environment]) {
-        const returned = await handleHotUpdate(probe.ctx, environment, {
+        const returned = await runHotUpdate(probe.ctx, environment, {
           type,
           file,
           timestamp,
           modules: [],
           read: readFile,
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        } as any);
+        });
         // The reset owns the delivery; no environment gets its own update.
         expect(returned).toEqual([]);
       }
@@ -204,18 +271,16 @@ describe('hotUpdate across environment dispatches', () => {
     const ssr = makeEnvironment('ssr', VIRTUAL_IDS);
     const event = { type: 'create' as const, file, timestamp: 40 };
 
-    const clientModules = await handleHotUpdate(probe.ctx, client.environment, {
+    const clientModules = await runHotUpdate(probe.ctx, client.environment, {
       ...event,
       modules: [],
       read: readFile,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } as any);
-    await handleHotUpdate(probe.ctx, ssr.environment, {
+    });
+    await runHotUpdate(probe.ctx, ssr.environment, {
       ...event,
       modules: [],
       read: readFile,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } as any);
+    });
 
     expect(probe.analyses).toBe(1);
     expect(probe.ctx.fileCache.size).toBe(1);
@@ -234,24 +299,19 @@ describe('hotUpdate across environment dispatches', () => {
     const kitFile = join(kitSrc, 'Chip.tsx');
     writeFileSync(kitFile, 'export const Chip = 1;\n');
     const probe = makeContext(root);
-    const ctx = probe.ctx as unknown as {
-      externalPackageDirs: string[];
-      externalDirOwners: Record<string, string>;
-      externalFileOwners: Record<string, string>;
-    };
+    const ctx = probe.ctx;
     ctx.externalPackageDirs = [kitSrc];
     ctx.externalDirOwners = { [kitSrc]: '@scope/kit' };
     ctx.externalFileOwners = {};
     const client = makeEnvironment('client', VIRTUAL_IDS);
 
-    await handleHotUpdate(probe.ctx, client.environment, {
+    await runHotUpdate(probe.ctx, client.environment, {
       type: 'create',
       file: kitFile,
       timestamp: 45,
       modules: [],
       read: async () => readFileSync(kitFile, 'utf-8'),
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } as any);
+    });
 
     expect(probe.analyses).toBe(1);
     expect(ctx.externalFileOwners).toEqual({
@@ -268,20 +328,21 @@ describe('hotUpdate across environment dispatches', () => {
     // full-reload that clears the "Failed to resolve import" overlay.
     const probe = makeContext(root);
     const source = readFileSync(file, 'utf-8');
-    probe.ctx.fileCache.set('Button.tsx', {
-      hash: contentHash(source),
-      source,
-    });
+    probe.ctx.mutateFileCache((cache) =>
+      cache.set('Button.tsx', {
+        hash: contentHash(source),
+        source,
+      })
+    );
     const client = makeEnvironment('client', VIRTUAL_IDS);
 
-    const returned = await handleHotUpdate(probe.ctx, client.environment, {
+    const returned = await runHotUpdate(probe.ctx, client.environment, {
       type: 'create',
       file,
       timestamp: 41,
       modules: [],
       read: async () => source,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } as any);
+    });
 
     expect(returned).toBeUndefined();
     expect(probe.analyses).toBe(0);
@@ -289,19 +350,20 @@ describe('hotUpdate across environment dispatches', () => {
 
   it('prunes a deleted file once across environments', async () => {
     const probe = makeContext(root);
-    probe.ctx.fileCache.set('Button.tsx', { hash: 'h', source: 'src' });
+    probe.ctx.mutateFileCache((cache) =>
+      cache.set('Button.tsx', { hash: 'h', source: 'src' })
+    );
     const client = makeEnvironment('client', VIRTUAL_IDS);
     const ssr = makeEnvironment('ssr', VIRTUAL_IDS);
 
     for (const environment of [client.environment, ssr.environment]) {
-      const returned = await handleHotUpdate(probe.ctx, environment, {
+      const returned = await runHotUpdate(probe.ctx, environment, {
         type: 'delete',
         file,
         timestamp: 50,
         modules: [],
         read: readFile,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      } as any);
+      });
       expect(returned).toBeUndefined();
     }
 
@@ -349,21 +411,23 @@ describe('hotUpdate delete re-delivers consumers whose plan changed', () => {
 
   it('evicts consumer modules when a deleted parent drops their chains', async () => {
     const probe = makeContext(root);
-    probe.ctx.fileCache.set('Button.tsx', { hash: 'h', source: 's' });
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const ctx = probe.ctx as any;
-    ctx.storedManifest = {
+    probe.ctx.mutateFileCache((cache) =>
+      cache.set('Button.tsx', { hash: 'h', source: 's' })
+    );
+    const ctx = probe.ctx;
+    ctx.storedManifest = makeManifest({
       components: {
-        'Fancy.tsx::Fancy': {
-          file: 'Fancy.tsx',
-          replacement: "createComponent('div', 'a')",
-        },
+        'Fancy.tsx::Fancy': makeComponent(
+          'Fancy.tsx',
+          "createComponent('div', 'a')"
+        ),
       },
       files: { 'Fancy.tsx': ['Fancy.tsx::Fancy'] },
-    };
+    });
     ctx.runAnalysis = () => {
       probe.analyses++;
-      ctx.storedManifest = { components: {}, files: {} };
+      ctx.storedManifest = makeManifest();
+      return true;
     };
     const consumerAbs = resolve(root, 'Fancy.tsx');
     const graph = makeFileGraph(consumerAbs);
@@ -372,14 +436,13 @@ describe('hotUpdate delete re-delivers consumers whose plan changed', () => {
     };
     const client = makeEnvironment('client', VIRTUAL_IDS);
 
-    await handleHotUpdate(probe.ctx, client.environment, {
+    await runHotUpdate(probe.ctx, client.environment, {
       type: 'delete',
       file,
       timestamp: 55,
       modules: [],
       read: async () => '',
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } as any);
+    });
 
     expect(probe.analyses).toBe(1);
     expect(graph.invalidated).toEqual([consumerAbs]);
@@ -420,15 +483,12 @@ describe('hotUpdate recovers a new imported parent found on disk', () => {
 
   it('folds the parent during the consumer edit and re-analyzes once', async () => {
     const probe = makeContext(root);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const ctx = probe.ctx as any;
+    const ctx = probe.ctx;
     ctx.runAnalysis = () => {
       probe.analyses++;
       if (probe.analyses === 1) {
         // The parent is not in the analyzed universe yet: chains drop.
-        ctx.storedManifest = {
-          components: {},
-          files: {},
+        ctx.storedManifest = makeManifest({
           diagnostics: [
             {
               file: 'Consumer.tsx',
@@ -438,33 +498,31 @@ describe('hotUpdate recovers a new imported parent found on disk', () => {
                 "chain dropped: could not resolve parent component 'Parent'",
             },
           ],
-        };
+        });
       } else {
         // The fold made the parent visible: the whole graph resolves.
-        ctx.storedManifest = {
+        ctx.storedManifest = makeManifest({
           components: {
-            'Parent.tsx::Parent': { file: 'Parent.tsx', replacement: 'rp' },
-            'Consumer.tsx::Fancy': { file: 'Consumer.tsx', replacement: 'rf' },
+            'Parent.tsx::Parent': makeComponent('Parent.tsx', 'rp'),
+            'Consumer.tsx::Fancy': makeComponent('Consumer.tsx', 'rf'),
           },
           files: {
             'Parent.tsx': ['Parent.tsx::Parent'],
             'Consumer.tsx': ['Consumer.tsx::Fancy'],
           },
-          diagnostics: [],
-        };
+        });
       }
-      ctx.systemPropsModuleMemo = null;
+      return true;
     };
     const client = makeEnvironment('client', VIRTUAL_IDS);
 
-    const returned = await handleHotUpdate(probe.ctx, client.environment, {
+    const returned = await runHotUpdate(probe.ctx, client.environment, {
       type: 'update',
       file: consumer,
       timestamp: 70,
       modules: [],
       read: async () => readFileSync(consumer, 'utf-8'),
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } as any);
+    });
 
     // One reconciliation pass: drop → fold Parent.tsx → one re-analysis.
     expect(probe.analyses).toBe(2);
@@ -497,25 +555,25 @@ describe('hotUpdate failed analysis reopens the hash gate', () => {
   it('restores the previous cache entry and re-analyzes the same content', async () => {
     const old = 'export const Button = 1;\n';
     const probe = makeContext(root);
-    probe.ctx.fileCache.set('Button.tsx', {
-      hash: contentHash(old),
-      source: old,
-    });
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (probe.ctx as any).runAnalysis = () => {
+    probe.ctx.mutateFileCache((cache) =>
+      cache.set('Button.tsx', {
+        hash: contentHash(old),
+        source: old,
+      })
+    );
+    probe.ctx.runAnalysis = () => {
       probe.analyses++;
       return false;
     };
     const client = makeEnvironment('client', VIRTUAL_IDS);
     const dispatch = (timestamp: number) =>
-      handleHotUpdate(probe.ctx, client.environment, {
+      runHotUpdate(probe.ctx, client.environment, {
         type: 'update',
         file,
         timestamp,
         modules: [],
         read: async () => readFileSync(file, 'utf-8'),
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      } as any);
+      });
 
     const first = await dispatch(60);
 
@@ -545,19 +603,18 @@ describe('hotUpdate failed analysis reopens the hash gate', () => {
     // On disk but not cached, so stabilization's walk folds it and re-analyzes.
     writeFileSync(join(root, 'Parent.tsx'), 'export const Parent = 1;\n');
     const probe = makeContext(root);
-    probe.ctx.fileCache.set('Button.tsx', {
-      hash: contentHash(old),
-      source: old,
-    });
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const ctx = probe.ctx as any;
+    probe.ctx.mutateFileCache((cache) =>
+      cache.set('Button.tsx', {
+        hash: contentHash(old),
+        source: old,
+      })
+    );
+    const ctx = probe.ctx;
     ctx.runAnalysis = () => {
       probe.analyses++;
       if (probe.analyses === 1) {
         // Publishes, but leaves an unresolved-parent drop for stabilize.
-        ctx.storedManifest = {
-          components: {},
-          files: {},
+        ctx.storedManifest = makeManifest({
           diagnostics: [
             {
               file: 'Button.tsx',
@@ -567,7 +624,7 @@ describe('hotUpdate failed analysis reopens the hash gate', () => {
                 "chain dropped: could not resolve parent component 'Parent'",
             },
           ],
-        };
+        });
         return true;
       }
       throw new Error('error diagnostics fail the build');
@@ -575,14 +632,13 @@ describe('hotUpdate failed analysis reopens the hash gate', () => {
     const client = makeEnvironment('client', VIRTUAL_IDS);
 
     await expect(
-      handleHotUpdate(probe.ctx, client.environment, {
+      runHotUpdate(probe.ctx, client.environment, {
         type: 'update',
         file,
         timestamp: 60,
         modules: [],
         read: async () => readFileSync(file, 'utf-8'),
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      } as any)
+      })
     ).rejects.toThrow();
 
     expect(probe.analyses).toBe(2);
@@ -623,14 +679,13 @@ describe('hotUpdate reads through the retry-guarded read helper', () => {
     const probe = makeContext(root);
     const client = makeEnvironment('client', VIRTUAL_IDS);
 
-    await handleHotUpdate(probe.ctx, client.environment, {
+    await runHotUpdate(probe.ctx, client.environment, {
       type: 'update',
       file,
       timestamp: 60,
       modules: [],
       read: async () => settled,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } as any);
+    });
 
     expect(probe.ctx.fileCache.get('Button.tsx')).toEqual({
       hash: contentHash(settled),
@@ -644,13 +699,12 @@ describe('hotUpdate reads through the retry-guarded read helper', () => {
     const probe = makeContext(root);
     const client = makeEnvironment('client', VIRTUAL_IDS);
 
-    await handleHotUpdate(probe.ctx, client.environment, {
+    await runHotUpdate(probe.ctx, client.environment, {
       type: 'update',
       file,
       timestamp: 61,
       modules: [],
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } as any);
+    });
 
     expect(probe.ctx.fileCache.get('Button.tsx')?.source).toBe(onDisk);
   });
@@ -681,17 +735,16 @@ describe('hotUpdate gates system-props invalidation on a changed map', () => {
 
   const dispatch = (
     probe: ContextProbe,
-    environment: DevEnvironment,
+    environment: HotUpdateEnvironment,
     timestamp: number
   ) =>
-    handleHotUpdate(probe.ctx, environment, {
+    runHotUpdate(probe.ctx, environment, {
       type: 'update',
       file,
       timestamp,
       modules: [],
       read: readFile,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } as any);
+    });
 
   it('leaves the map module alone when the analysis republished it unchanged', async () => {
     const probe = makeContext(root);
@@ -778,24 +831,24 @@ describe('hotUpdate refreshes a system dependency that is also a source', () => 
 
   it('refreshes the cached source before scheduling the reset', async () => {
     const probe = makeContext(root);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (probe.ctx as any).systemDependency = file;
-    probe.ctx.fileCache.set('theme.ts', {
-      hash: contentHash('export const tokens = 1;\n'),
-      source: 'export const tokens = 1;\n',
-    });
+    probe.setSystemDependency(file);
+    probe.ctx.mutateFileCache((cache) =>
+      cache.set('theme.ts', {
+        hash: contentHash('export const tokens = 1;\n'),
+        source: 'export const tokens = 1;\n',
+      })
+    );
     const client = makeEnvironment('client', VIRTUAL_IDS);
     const ssr = makeEnvironment('ssr', VIRTUAL_IDS);
 
     for (const environment of [client.environment, ssr.environment]) {
-      await handleHotUpdate(probe.ctx, environment, {
+      await runHotUpdate(probe.ctx, environment, {
         type: 'update',
         file,
         timestamp: 90,
         modules: [],
         read: async () => readFileSync(file, 'utf-8'),
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      } as any);
+      });
     }
 
     expect(probe.ctx.fileCache.get('theme.ts')).toEqual({
@@ -809,18 +862,16 @@ describe('hotUpdate refreshes a system dependency that is also a source', () => 
 
   it('creates no entry for a dependency that is not a discovered source', async () => {
     const probe = makeContext(root);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (probe.ctx as any).systemDependency = file;
+    probe.setSystemDependency(file);
     const client = makeEnvironment('client', VIRTUAL_IDS);
 
-    await handleHotUpdate(probe.ctx, client.environment, {
+    await runHotUpdate(probe.ctx, client.environment, {
       type: 'update',
       file,
       timestamp: 91,
       modules: [],
       read: async () => readFileSync(file, 'utf-8'),
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } as any);
+    });
 
     expect([...probe.ctx.fileCache.keys()]).toEqual([]);
     expect(probe.resets).toEqual(['theme.ts']);
@@ -837,22 +888,22 @@ describe('hotUpdate refreshes a system dependency that is also a source', () => 
     // the entry would be overwritten with `''` rather than removed, and the
     // assertion would fail on the entry still existing.
     const probe = makeContext(root);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (probe.ctx as any).systemDependency = file;
-    probe.ctx.fileCache.set('theme.ts', {
-      hash: 'h',
-      source: 'export const tokens = 2;\n',
-    });
+    probe.setSystemDependency(file);
+    probe.ctx.mutateFileCache((cache) =>
+      cache.set('theme.ts', {
+        hash: 'h',
+        source: 'export const tokens = 2;\n',
+      })
+    );
     const client = makeEnvironment('client', VIRTUAL_IDS);
 
-    const returned = await handleHotUpdate(probe.ctx, client.environment, {
+    const returned = await runHotUpdate(probe.ctx, client.environment, {
       type: 'delete',
       file,
       timestamp: 92,
       modules: [],
       read: async () => '',
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } as any);
+    });
 
     expect(probe.ctx.fileCache.has('theme.ts')).toBe(false);
     expect(returned).toEqual([]);

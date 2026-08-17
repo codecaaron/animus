@@ -10,7 +10,6 @@ import {
 } from './conditions';
 import { parseStylesheet } from './css-parse';
 import { AnimusAdapterError } from './errors';
-import { isRecord } from './manifest-types';
 import { analyzeSelector, ancestorGuardsOf } from './selector';
 
 import type { SourceRef } from '../../core/fact';
@@ -27,7 +26,12 @@ import type {
   KeyframesBlock,
   ParsedRule,
 } from './css-parse';
-import type { AnimusManifest, ManifestChain } from './manifest-types';
+import type {
+  AnimusManifest,
+  ManifestChain,
+  ManifestJsonObject,
+  ManifestJsonValue,
+} from './manifest-types';
 import type { ParsedComponent } from './replacement';
 import type { AnalyzedSelector } from './selector';
 
@@ -56,7 +60,12 @@ export interface UniverseBuild {
  * `authoredProperty` unset. Guessing wider would put a fabricated authoring
  * origin on a real declaration, which is exactly the failure DESIGN §8 names.
  */
-const PROPERTY_ALIASES: Readonly<Record<string, readonly string[]>> = {
+interface PropertyAliases {
+  /** Absent for every shorthand this table does not claim. */
+  readonly [shorthand: string]: readonly string[] | undefined;
+}
+
+const PROPERTY_ALIASES: PropertyAliases = {
   area: ['grid-area'],
   bg: ['background-color'],
   flexDir: ['flex-direction'],
@@ -103,6 +112,32 @@ interface AuthoredEntry {
 }
 
 /**
+ * A nested authored block. The authored value is manifest JSON, so "is this a
+ * block" is object identity, not a representation test: `Object(v) === v`
+ * holds for exactly the objects and arrays `JSON.parse` produces, and the
+ * array exclusion is what separates a block from a list value.
+ */
+const isAuthoredObject = (
+  value: ManifestJsonValue | undefined
+): value is ManifestJsonObject =>
+  Object(value) === value && !Array.isArray(value);
+
+/**
+ * The single authored value a declaration can carry — a JSON string or number.
+ * Blocks, lists, booleans and `null` name a key without naming one value, so
+ * they resolve to no scalar and the caller decides what to record.
+ */
+const authoredScalar = (
+  value: ManifestJsonValue | undefined
+): string | undefined => {
+  if (value === null || value === undefined) return undefined;
+  if (value === true || value === false) return undefined;
+  // Arrays and blocks are the only non-scalars left in the JSON domain.
+  if (Object(value) === value) return undefined;
+  return String(value);
+};
+
+/**
  * Index the *top level* of one authored stage value by the CSS property each
  * key lands on.
  *
@@ -112,21 +147,20 @@ interface AuthoredEntry {
  * value was actually `bg: 'primary'`. The caller pairs this with a
  * plain-context check for the same reason.
  */
-const authoredIndex = (value: unknown): Map<string, AuthoredEntry> => {
+const authoredIndex = (
+  value: ManifestJsonValue | undefined
+): Map<string, AuthoredEntry> => {
   const index = new Map<string, AuthoredEntry>();
-  if (!isRecord(value)) return index;
+  if (!isAuthoredObject(value)) return index;
 
   for (const [key, raw] of Object.entries(value)) {
     const properties = cssPropertiesFor(key);
     if (properties.length === 0) continue;
 
-    const scalar =
-      typeof raw === 'string' || typeof raw === 'number'
-        ? String(raw)
-        : undefined;
+    const scalar = authoredScalar(raw);
     // A responsive object (`fontSize: { _: 14, sm: 16 }`) names the property
     // but has no single authored value — record the key, withhold the value.
-    if (scalar === undefined && !isRecord(raw)) continue;
+    if (scalar === undefined && !isAuthoredObject(raw)) continue;
 
     for (const property of properties) {
       if (index.has(property)) continue;
@@ -176,7 +210,7 @@ const matchStage = (
     const exact = stages.findIndex(
       (stage) =>
         stage.method === 'variant' &&
-        isRecord(stage.value) &&
+        isAuthoredObject(stage.value) &&
         stage.value.prop === origin.variantProp
     );
     if (exact !== -1) return { index: exact, second: false };
@@ -184,8 +218,8 @@ const matchStage = (
     const byOption = stages.findIndex(
       (stage) =>
         stage.method === 'variant' &&
-        isRecord(stage.value) &&
-        isRecord(stage.value.variants) &&
+        isAuthoredObject(stage.value) &&
+        isAuthoredObject(stage.value.variants) &&
         origin.variantOption !== undefined &&
         Object.hasOwn(stage.value.variants, origin.variantOption)
     );
@@ -211,7 +245,7 @@ const matchStage = (
     const index = stages.findIndex(
       (stage) =>
         stage.method === 'states' &&
-        isRecord(stage.value) &&
+        isAuthoredObject(stage.value) &&
         origin.state !== undefined &&
         Object.hasOwn(stage.value, origin.state)
     );
@@ -225,21 +259,25 @@ const authoredValueOf = (
   chain: ManifestChain,
   match: StageMatch,
   origin: RuleOrigin
-): unknown => {
+): ManifestJsonValue | undefined => {
   const stage = chain.stages[match.index];
   if (stage === undefined) return undefined;
 
   if (origin.method === 'styles') return stage.value;
   if (origin.method === 'compound') return stage.secondValue;
   if (origin.method === 'variant') {
-    if (!isRecord(stage.value) || origin.variantOption === undefined) {
+    if (!isAuthoredObject(stage.value) || origin.variantOption === undefined) {
       return undefined;
     }
     const variants = stage.value.variants;
-    return isRecord(variants) ? variants[origin.variantOption] : undefined;
+    return isAuthoredObject(variants)
+      ? variants[origin.variantOption]
+      : undefined;
   }
   if (origin.method === 'states') {
-    if (!isRecord(stage.value) || origin.state === undefined) return undefined;
+    if (!isAuthoredObject(stage.value) || origin.state === undefined) {
+      return undefined;
+    }
     return stage.value[origin.state];
   }
   return undefined;
@@ -255,11 +293,11 @@ const sourceRefOf = (
     : descriptor?.argSpan;
 
   if (span != null) {
-    return {
-      file: '',
-      span: [span[0], span[1]],
-      ...(match.note === undefined ? {} : { note: match.note }),
-    };
+    const ref: SourceRef = { file: '', span: [span[0], span[1]] };
+    // `note` stays absent when the match needed none: an empty note would
+    // claim the adapter recorded a caveat it did not have.
+    if (match.note !== undefined) ref.note = match.note;
+    return ref;
   }
 
   const fallback = chain.descriptor.span;
@@ -547,14 +585,23 @@ export const buildUniverse = (
       (declaration) => {
         const tokenRefs = tokenReferencesIn(declaration.value);
         const entry = authored?.get(declaration.property);
-        return {
+        // Each optional channel is added only where it was observed: an
+        // `authoredValue: undefined` would report that the adapter looked at
+        // the authored stage and found nothing, which is a different fact
+        // from never having had a stage to look at.
+        const declarationRecord: DeclarationRecord = {
           property: declaration.property,
           value: declaration.value,
-          ...(declaration.important ? { important: true } : {}),
-          ...(tokenRefs.length === 0 ? {} : { tokenRefs }),
-          ...(entry === undefined ? {} : { authoredProperty: entry.key }),
-          ...(entry?.value === undefined ? {} : { authoredValue: entry.value }),
         };
+        if (declaration.important) declarationRecord.important = true;
+        if (tokenRefs.length !== 0) declarationRecord.tokenRefs = tokenRefs;
+        if (entry !== undefined) {
+          declarationRecord.authoredProperty = entry.key;
+        }
+        if (entry?.value !== undefined) {
+          declarationRecord.authoredValue = entry.value;
+        }
+        return declarationRecord;
       }
     );
 
@@ -590,17 +637,20 @@ export const buildUniverse = (
       ),
       layer: layerKey,
       order,
-      ...(source === undefined ? {} : { source }),
-      origin,
     };
+    // `source` before `origin`, exactly where the emitted record has always
+    // carried it, and only when the stage span resolved — an absent source is
+    // "the chain did not say", never "the chain said nothing".
+    if (source !== undefined) record.source = source;
+    record.origin = origin;
 
     const universeRule: UniverseRule = {
       record,
       selector,
       atStack: rule.atStack,
-      ...(component === undefined ? {} : { componentId: component.id }),
-      ...(systemProp === undefined ? {} : { systemProp }),
     };
+    if (component !== undefined) universeRule.componentId = component.id;
+    if (systemProp !== undefined) universeRule.systemProp = systemProp;
     rules.push(universeRule);
     ruleById.set(id, universeRule);
   }

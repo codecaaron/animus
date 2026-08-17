@@ -1,6 +1,7 @@
 import { posix } from 'node:path';
 
 import { contentHash } from './content-hash';
+import { parseInternalWire } from './internal-wire';
 import { preprocessMdx, type PreprocessMdxResult } from './mdx-preprocessor';
 import {
   adaptSvelteSource,
@@ -15,6 +16,74 @@ export interface RawSourceEntry {
   source: string;
   /** Optional precomputed hash of the raw original source. */
   hash?: string;
+}
+
+/**
+ * The value domain of `filesJson` — exactly what `JSON.parse` produces for the
+ * serialized analysis corpus. Declared beside the entry type it narrows to, so
+ * the guards that decide it belong to this boundary rather than to whichever
+ * consumer happened to decode first.
+ */
+type FilesJsonValue =
+  | null
+  | boolean
+  | number
+  | string
+  | FilesJsonValue[]
+  | { [key: string]: FilesJsonValue };
+
+/**
+ * One decoded corpus entry. Keys beyond `RawSourceEntry`'s are kept addressable
+ * rather than dropped: callers that re-serialize the corpus after editing it
+ * (the vite-plugin's empty-source rehydration) must not silently strip fields a
+ * newer writer added.
+ */
+export type SerializedSourceEntry = RawSourceEntry & {
+  [key: string]: FilesJsonValue;
+};
+
+function isSerializedSourceEntry(
+  value: FilesJsonValue
+): value is SerializedSourceEntry {
+  if (!(value instanceof Object) || Array.isArray(value)) return false;
+  return (
+    String(value.path) === value.path &&
+    String(value.source) === value.source &&
+    (value.hash === undefined || String(value.hash) === value.hash)
+  );
+}
+
+/**
+ * Decode a serialized analysis corpus (`filesJson`).
+ *
+ * `filesJson` is animus's OWN wire — `run-analysis.ts` writes it with
+ * `JSON.stringify(fileEntries)` and every reader is in this repository. A
+ * payload that is not an array of source entries is therefore a producer bug,
+ * never user input, so this throws instead of yielding an empty corpus: an
+ * empty corpus is indistinguishable from "the project has no files" and would
+ * publish an empty stylesheet as a success.
+ *
+ * The throw is the single policy. Call sites that own a documented failure
+ * channel translate it there (the Turbopack loader answers a committed-artifact
+ * decode failure with `ANIMUS_ARTIFACT_READ_TORN`); none of them swallow it.
+ *
+ * `context` names the reader in the message — the same bytes reach three
+ * decoders and the failure has to say which one refused them.
+ */
+export function parseFilesJson(
+  filesJson: string,
+  context: string
+): SerializedSourceEntry[] {
+  const candidate: FilesJsonValue = parseInternalWire(
+    filesJson,
+    `${context} filesJson`
+  );
+  if (!Array.isArray(candidate) || !candidate.every(isSerializedSourceEntry)) {
+    throw new TypeError(
+      `[${context}] analysis files JSON must be an array of {path, source} entries`
+    );
+  }
+  return candidate;
 }
 
 export interface OriginalSourceEntry {
@@ -59,13 +128,22 @@ export interface ExtractChainFact {
   fatalError: string | null;
 }
 
+/**
+ * The engine's per-file facts record (`facts::FileFacts`), transcribed for the
+ * channels this repository reads. `FileFacts` also serializes `statics`,
+ * `usage`, `compose`, and `transforms`; those stay untranscribed rather than
+ * addressable-as-`unknown`, because the two readers that want them —
+ * `packages/oracle`'s adapter model and the `_integration` usage-facts helpers
+ * — already declare the slices they consume, and an open index signature here
+ * would let a THIRD reader invent a shape without ever naming the field.
+ * Transcribe the channel when a reader in this package needs it.
+ */
 export interface ExtractFileFacts {
   path: string;
   chains: ExtractChainFact[];
   imports: ExtractImportFact[];
   exports: ExtractExportFact[];
   parseDiagnostics: string[];
-  [key: string]: unknown;
 }
 
 export interface ExtractFactsResult {
@@ -189,7 +267,14 @@ function canonicalResolverPath(path: string): string {
  *  (`./definition.js` for `definition.ts`); map each back to its source
  *  forms. The exact spelling is probed first by the suffix loop's empty
  *  suffix, so a literal `.js` neighbor still wins. */
-const NODE_NEXT_EXTENSION_MAP: Readonly<Record<string, readonly string[]>> = {
+interface NodeNextExtensionMap {
+  /** Emitted extension → the source extensions it can have come from. An
+   *  extension with no NodeNext mapping has no key, and the probe loop below
+   *  falls back to an empty candidate list. */
+  readonly [emitted: string]: readonly string[] | undefined;
+}
+
+const NODE_NEXT_EXTENSION_MAP: NodeNextExtensionMap = {
   '.js': ['.ts', '.tsx', '.jsx'],
   '.mjs': ['.mts'],
   '.cjs': ['.cts'],
@@ -554,6 +639,11 @@ function collectFileFacts(
 ): ExtractFactsResult {
   const cache = options.factsCache;
   if (!cache) {
+    // SAFETY: `extractFacts` is the engine's own NAPI surface and this is its
+    // return value for the call made on this line — serde output for the
+    // `{ files, parseCount }` record `ExtractFactsResult` mirrors. Unparseable
+    // bytes throw here, which is right: an empty facts set is
+    // indistinguishable from "this corpus declares no components".
     return JSON.parse(
       options.extractFacts(JSON.stringify(analysisEntries))
     ) as ExtractFactsResult;
@@ -563,6 +653,8 @@ function collectFileFacts(
   );
   let parseCount = 0;
   if (pending.length > 0) {
+    // SAFETY: same engine surface, same wire as the uncached branch above —
+    // only the entry subset differs.
     const fresh = JSON.parse(
       options.extractFacts(JSON.stringify(pending))
     ) as ExtractFactsResult;
@@ -618,6 +710,47 @@ export function withoutInvalidOriginals(
   };
 }
 
+/** rootDir-relative source path → the external package specifier that owns it.
+ *  A consumer-owned file has no key — absence means "not external", which is
+ *  what every reader branches on. */
+export interface ExternalFileOwners {
+  [sourcePath: string]: string;
+}
+
+/**
+ * Project external-package ownership from raw originals onto the generated
+ * analysis children the ingestion produced — the join the cross-source token
+ * contract runs through.
+ *
+ * Diagnostics are raised against ANALYSIS paths (an `.mdx`/`.svelte` original
+ * is analyzed as its generated `.tsx` child), while package ownership is only
+ * ever recorded for the raw original a discovery walk or watcher event named.
+ * Without this projection a violation inside a generated child correlates to
+ * no package and is silently dropped.
+ *
+ * The result REPLACES the caller's owner map: an original that has left the
+ * corpus takes its projected children with it, so a stale owner cannot
+ * outlive the file it described. Every host projects at the same point — after
+ * ingestion, before the analysis result is enforced — so two hosts cannot
+ * raise different diagnostics for one kit (precedent:
+ * `collectExternalPackageSources`).
+ */
+export function projectExternalFileOwners(
+  result: SourceIngestionResult,
+  rawOwners: Readonly<ExternalFileOwners>
+): ExternalFileOwners {
+  const projected: ExternalFileOwners = {};
+  for (const owner of Object.values(result.ownership)) {
+    const packageOwner = rawOwners[owner.originalPath];
+    if (!packageOwner) continue;
+    projected[owner.originalPath] = packageOwner;
+    for (const analysisPath of owner.analysisPaths) {
+      projected[analysisPath] = packageOwner;
+    }
+  }
+  return projected;
+}
+
 export interface SourceIngestorHost {
   /** Engine access at call time; `extractFacts` stays optional on the shared
    *  EngineApi for test doubles — the capability guard lives HERE, once. */
@@ -658,8 +791,11 @@ export function createSourceIngestor(host: SourceIngestorHost): SourceIngestor {
   const warnedByOriginal = new Map<string, Set<string>>();
   return {
     async ingest(entries) {
+      // `extractFacts` is optional on `EngineApi`: an engine either exposes the
+      // parse-only surface or it does not, and absence is the only way it can
+      // say so (the field is a function on every engine that has it).
       const extractFacts = host.engineApi().extractFacts;
-      if (typeof extractFacts !== 'function') {
+      if (extractFacts === undefined) {
         throw new Error(
           `${host.prefix} native engine does not expose extractFacts required for source adaptation`
         );

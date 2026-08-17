@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import type { ComponentProps, ReactNode } from 'react';
 
 import { MDXProvider as BaseMDXProvider } from '@mdx-js/react';
 
@@ -12,6 +12,23 @@ import { Callout } from './Callout';
 import { Heading } from './Heading';
 
 import type { MDXComponents } from 'mdx/types';
+
+type SyntaxLanguage = NonNullable<
+  ComponentProps<typeof SyntaxBlock>['language']
+>;
+
+const SYNTAX_LANGUAGE_BY_FENCE = [
+  ['tsx', 'tsx'],
+  ['ts', 'typescript'],
+  ['typescript', 'typescript'],
+  ['css', 'css'],
+  ['jsx', 'jsx'],
+  ['js', 'javascript'],
+  ['javascript', 'javascript'],
+  ['sh', 'sh'],
+  ['bash', 'sh'],
+  ['svelte', 'svelte'],
+] as const satisfies readonly (readonly [string, SyntaxLanguage])[];
 
 const ContentWrapper = ds
   .styles({
@@ -140,11 +157,12 @@ const componentMap = {
   }) => {
     const langMatch = /language-(\w+)/.exec(className || '');
     if (langMatch) {
+      const language = SYNTAX_LANGUAGE_BY_FENCE.find(
+        ([fence]) => fence === langMatch[1]
+      )?.[1];
       return (
         <CodeBlockWrapper>
-          <SyntaxBlock
-            language={langMatch[1] as 'tsx' | 'css' | 'typescript' | 'sh'}
-          >
+          <SyntaxBlock language={language}>
             {String(children).replace(/\n$/, '')}
           </SyntaxBlock>
         </CodeBlockWrapper>
@@ -153,14 +171,12 @@ const componentMap = {
     return <InlineCode>{children}</InlineCode>;
   },
   Callout,
-};
+} satisfies MDXComponents;
 
 export function DocsContentProvider({ children }: { children: ReactNode }) {
   return (
     <ContentWrapper>
-      <BaseMDXProvider components={componentMap as MDXComponents}>
-        {children}
-      </BaseMDXProvider>
+      <BaseMDXProvider components={componentMap}>{children}</BaseMDXProvider>
     </ContentWrapper>
   );
 }

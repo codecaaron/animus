@@ -12,6 +12,8 @@ import { existsSync } from 'fs';
 import { createRequire } from 'module';
 import { dirname, isAbsolute, join } from 'path';
 
+import { parseInternalWire } from './internal-wire';
+
 import type { PathAliasEntry } from './path-aliases';
 
 // One resolution context per root — `createRequire` builds a module system
@@ -38,21 +40,29 @@ function packageRootFromEntry(entry: string): string | null {
   }
 }
 
-// Per-call memo: the alias JSON is a stable string per config lifecycle and
-// resolution runs once per specifier, so parse each distinct table once.
+// Module-level memo, keyed by the alias JSON itself and never cleared: the
+// table is a stable string per config lifecycle and resolution runs once per
+// specifier, so each distinct table is parsed once for the process. Keying on
+// the payload is what makes an unbounded cache safe — a new config mints a new
+// key rather than reading a stale one.
 const aliasTableCache = new Map<string, PathAliasEntry[]>();
 
+/**
+ * `pathAliasesJson` has exactly one encoder — `buildPathAliasesJson`, "the
+ * single authoritative encoder of the wire format" — and every host assignment
+ * routes through it. A parse failure is therefore a broken encoder, so it
+ * throws: an empty table would disable ALL alias-based `asset()` resolution and
+ * ship dangling `url()`s as a successful build. Only successful parses enter
+ * the memo, so a failure can never harden into process-lifetime policy.
+ */
 function parseAliasTable(pathAliasesJson: string): PathAliasEntry[] {
   const cached = aliasTableCache.get(pathAliasesJson);
   if (cached) return cached;
-  let aliases: PathAliasEntry[];
-  try {
-    aliases =
-      (JSON.parse(pathAliasesJson) as { aliases?: PathAliasEntry[] }).aliases ??
-      [];
-  } catch {
-    aliases = [];
-  }
+  const table = parseInternalWire<{ aliases?: PathAliasEntry[] }>(
+    pathAliasesJson,
+    'pathAliasesJson (the host alias table from buildPathAliasesJson)'
+  );
+  const aliases = table.aliases ?? [];
   aliasTableCache.set(pathAliasesJson, aliases);
   return aliases;
 }

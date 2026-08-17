@@ -46,11 +46,18 @@ import type { WorldDelta } from '../core/world';
 import type { OracleSymptom } from '../engines/explain';
 import type { Oracle } from '../engines/oracle';
 import type { AnimusHost } from '../host/animus/host';
+import type { SnapshotOptions } from '../places/snapshot';
 import type { TargetResolution } from '../providers/identity';
 import type { RenderContext } from './render';
 
+/**
+ * A sink the CLI writes text to. `void` is the whole contract — nothing here
+ * reads what a write returned — and it is the spelling `SessionStreams` already
+ * uses for the same three streams, so a real `process.stdout` (which returns a
+ * backpressure flag) and a capturing test double satisfy one type.
+ */
 export interface CliStream {
-  write(text: string): unknown;
+  write(text: string): void;
 }
 
 export interface CliStreams {
@@ -104,10 +111,12 @@ export const exitCodeForVerdict = (verdict: ProbeVerdict): number => {
  * over a bad request) is the caller's to fix; anything else — a missing
  * artifact directory, an unreadable manifest, an unmodeled construct the
  * adapter refuses — is the environment's, and is deliberately *not* reported
- * as a verdict.
+ * as a verdict. Universally quantified over what was thrown for the same
+ * reason `failureLine` below is — a `catch` binding is — and decided by real
+ * `instanceof` guards rather than by anything assumed about the value.
  */
-export const exitCodeForError = (error: unknown): number =>
-  error instanceof UsageError || error instanceof TypeError
+export const exitCodeForError = <Thrown>(thrown: Thrown): number =>
+  thrown instanceof UsageError || thrown instanceof TypeError
     ? EXIT_USAGE
     : EXIT_ENVIRONMENT;
 
@@ -303,11 +312,11 @@ const executeCheck = (
   io: CliStreams
 ): number => {
   const sourceRoot = values['source-root'];
-  const snapshot = loadSnapshot(dir, {
-    ...(sourceRoot === undefined
-      ? {}
-      : { sourceRoot: resolve(process.cwd(), sourceRoot) }),
-  });
+  const options: SnapshotOptions = {};
+  if (sourceRoot !== undefined) {
+    options.sourceRoot = resolve(process.cwd(), sourceRoot);
+  }
+  const snapshot = loadSnapshot(dir, options);
   const report = checkSnapshot(snapshot);
 
   if (values.json === true) {
@@ -476,6 +485,16 @@ const execute = async (
   }
 };
 
+/**
+ * The one line a failure prints. Universally quantified over what was thrown
+ * because a `catch` binding is: `parseArgs` and every oracle layer reject with
+ * an `Error` subclass (`UsageError`, `TypeError`, `AnimusAdapterError`), whose
+ * message is the failure; anything else describes itself rather than printing
+ * the `undefined` an absent `.message` would render.
+ */
+const failureLine = <Thrown>(thrown: Thrown): string =>
+  thrown instanceof Error ? thrown.message : String(thrown);
+
 export const runCli = async (
   argv: string[],
   io: CliStreams
@@ -484,7 +503,7 @@ export const runCli = async (
   try {
     parsed = parse(argv);
   } catch (error) {
-    io.stderr.write(`[animus-oracle] ${String((error as Error).message)}\n`);
+    io.stderr.write(`[animus-oracle] ${failureLine(error)}\n`);
     io.stderr.write(USAGE);
     return EXIT_USAGE;
   }
@@ -513,9 +532,7 @@ export const runCli = async (
   try {
     return await execute(command, values, io);
   } catch (error) {
-    io.stderr.write(
-      `[animus-oracle] ${String((error as Error).message ?? error)}\n`
-    );
+    io.stderr.write(`[animus-oracle] ${failureLine(error)}\n`);
     const code = exitCodeForError(error);
     if (code === EXIT_USAGE) {
       io.stderr.write(

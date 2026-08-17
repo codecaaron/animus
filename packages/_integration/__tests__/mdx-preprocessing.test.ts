@@ -31,7 +31,7 @@ describe('preprocessMdx — successful compile (kind: "ok")', () => {
   test('compiles MDX-with-JSX to a JSX source string', async () => {
     const result = await preprocessMdx(MDX_WITH_COMPONENT, 'usage.mdx');
     expect(result.kind).toBe('ok');
-    expect(typeof result.source).toBe('string');
+    expect(result.source).toEqual(expect.any(String));
     expect((result.source ?? '').length).toBeGreaterThan(0);
     // The `error` field is absent on success.
     expect(result.error).toBeUndefined();
@@ -61,7 +61,7 @@ describe('preprocessMdx — successful compile (kind: "ok")', () => {
       'md.mdx'
     );
     expect(result.kind).toBe('ok');
-    expect(typeof result.source).toBe('string');
+    expect(result.source).toEqual(expect.any(String));
   });
 
   test('there is NO non-mdx passthrough: plain prose still runs through the compiler', async () => {
@@ -82,7 +82,7 @@ describe('preprocessMdx — compile failure (kind: "error")', () => {
   ])('%s -> { kind: "error", error: <message> }', async (_label, source) => {
     const result = await preprocessMdx(source, 'broken.mdx');
     expect(result.kind).toBe('error');
-    expect(typeof result.error).toBe('string');
+    expect(result.error).toEqual(expect.any(String));
     expect((result.error ?? '').length).toBeGreaterThan(0);
     // On failure there is no compiled source.
     expect(result.source).toBeUndefined();

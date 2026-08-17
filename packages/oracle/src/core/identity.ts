@@ -10,92 +10,210 @@ import { createHash } from 'node:crypto';
  * substrate's plumbing (ledgers, graphs, probe state) type-checked without
  * paying for wrapper objects, which would break canonical hashing.
  */
-export type WorldId = string & { readonly __brand: 'WorldId' };
-export type FactId = string & { readonly __brand: 'FactId' };
-export type RuleId = string & { readonly __brand: 'RuleId' };
-export type TargetId = string & { readonly __brand: 'TargetId' };
-export type ObligationId = string & { readonly __brand: 'ObligationId' };
-export type EvidenceId = string & { readonly __brand: 'EvidenceId' };
-export type ProbeStateId = string & { readonly __brand: 'ProbeStateId' };
-export type DependencyId = string & { readonly __brand: 'DependencyId' };
+type IdentityBrand =
+  | 'WorldId'
+  | 'FactId'
+  | 'RuleId'
+  | 'TargetId'
+  | 'ObligationId'
+  | 'EvidenceId'
+  | 'ProbeStateId'
+  | 'DependencyId';
 
-export const asWorldId = (s: string): WorldId => s as WorldId;
-export const asFactId = (s: string): FactId => s as FactId;
-export const asRuleId = (s: string): RuleId => s as RuleId;
-export const asTargetId = (s: string): TargetId => s as TargetId;
-export const asObligationId = (s: string): ObligationId => s as ObligationId;
-export const asEvidenceId = (s: string): EvidenceId => s as EvidenceId;
-export const asProbeStateId = (s: string): ProbeStateId => s as ProbeStateId;
-export const asDependencyId = (s: string): DependencyId => s as DependencyId;
+type BrandedId<Brand extends IdentityBrand> = string & {
+  readonly __brand: Brand;
+};
 
-const isPlainObject = (value: object): boolean => {
-  const prototype = Object.getPrototypeOf(value) as object | null;
+export type WorldId = BrandedId<'WorldId'>;
+export type FactId = BrandedId<'FactId'>;
+export type RuleId = BrandedId<'RuleId'>;
+export type TargetId = BrandedId<'TargetId'>;
+export type ObligationId = BrandedId<'ObligationId'>;
+export type EvidenceId = BrandedId<'EvidenceId'>;
+export type ProbeStateId = BrandedId<'ProbeStateId'>;
+export type DependencyId = BrandedId<'DependencyId'>;
+
+const brandId = <Brand extends IdentityBrand>(
+  value: string
+): BrandedId<Brand> => {
+  // SAFETY: An identity brand is a compile-time-only intersection. Returning
+  // the same string preserves its runtime value and equality semantics.
+  return value as BrandedId<Brand>;
+};
+
+export const asWorldId = (value: string): WorldId => brandId<'WorldId'>(value);
+export const asFactId = (value: string): FactId => brandId<'FactId'>(value);
+export const asRuleId = (value: string): RuleId => brandId<'RuleId'>(value);
+export const asTargetId = (value: string): TargetId =>
+  brandId<'TargetId'>(value);
+export const asObligationId = (value: string): ObligationId =>
+  brandId<'ObligationId'>(value);
+export const asEvidenceId = (value: string): EvidenceId =>
+  brandId<'EvidenceId'>(value);
+export const asProbeStateId = (value: string): ProbeStateId =>
+  brandId<'ProbeStateId'>(value);
+export const asDependencyId = (value: string): DependencyId =>
+  brandId<'DependencyId'>(value);
+
+interface CanonicalConstructor extends CanonicalReference {
+  readonly name?: string;
+}
+
+interface CanonicalReference {
+  readonly constructor?: CanonicalConstructor;
+}
+
+declare const canonicalCallableMarker: unique symbol;
+
+interface CanonicalCallable extends CanonicalReference {
+  readonly [canonicalCallableMarker]?: never;
+}
+
+type CanonicalValue =
+  | null
+  | undefined
+  | boolean
+  | number
+  | string
+  | bigint
+  | symbol
+  | CanonicalReference;
+
+interface CanonicalObject extends CanonicalReference {
+  readonly [key: string]: CanonicalValue;
+}
+
+const isCanonicalReference = <Value>(
+  value: Value
+): value is Value & CanonicalReference => Object(value) === value;
+
+type ReadPrimitive = () => CanonicalValue;
+
+const acceptsIntrinsicPrimitive = <Value>(
+  value: Value,
+  read: ReadPrimitive
+): boolean => {
+  if (isCanonicalReference(value)) return false;
+
+  try {
+    read();
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+const isCanonicalString = <Value>(value: Value): value is Value & string =>
+  acceptsIntrinsicPrimitive(value, () => String.prototype.valueOf.call(value));
+
+const isCanonicalBoolean = <Value>(value: Value): value is Value & boolean =>
+  acceptsIntrinsicPrimitive(value, () => Boolean.prototype.valueOf.call(value));
+
+const isCanonicalNumber = <Value>(value: Value): value is Value & number =>
+  acceptsIntrinsicPrimitive(value, () => Number.prototype.valueOf.call(value));
+
+const isCanonicalBigInt = <Value>(value: Value): value is Value & bigint =>
+  acceptsIntrinsicPrimitive(value, () => BigInt.prototype.valueOf.call(value));
+
+const isCanonicalSymbol = <Value>(value: Value): value is Value & symbol =>
+  acceptsIntrinsicPrimitive(value, () => Symbol.prototype.valueOf.call(value));
+
+const isCanonicalCallable = <Value>(
+  value: Value
+): value is Value & CanonicalCallable => {
+  if (!isCanonicalReference(value)) return false;
+
+  try {
+    Function.prototype.toString.call(value);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+const isCanonicalArray = <Value>(
+  value: Value
+): value is Value & readonly CanonicalValue[] => Array.isArray(value);
+
+const isPlainObject = <Value>(
+  value: Value & CanonicalReference
+): value is Value & CanonicalObject => {
+  const prototype = Object.getPrototypeOf(value);
   return prototype === Object.prototype || prototype === null;
+};
+
+const prototypeName = (value: CanonicalReference): string => {
+  const prototype: CanonicalReference | null = Object.getPrototypeOf(value);
+  return prototype?.constructor?.name ?? 'unknown prototype';
 };
 
 const encodeString = (value: string): string => JSON.stringify(value);
 
-const encode = (value: unknown, path: string): string => {
+const encode = <Value>(value: Value, path: string): string => {
   if (value === null) return 'null';
 
-  switch (typeof value) {
-    case 'string':
-      return encodeString(value);
-    case 'boolean':
-      return value ? 'true' : 'false';
-    case 'number':
-      if (!Number.isFinite(value)) {
-        throw new TypeError(
-          `canonicalJson: non-finite number at ${path} (${String(value)}) ` +
-            'has no canonical form — model it as an explicit abstract value ' +
-            'or an obligation instead of approximating it'
-        );
-      }
-      // JSON.stringify is exact and round-trippable for finite doubles, and
-      // normalises -0 to 0 — two numerically equal values must hash equal.
-      return JSON.stringify(value);
-    case 'undefined':
+  if (isCanonicalString(value)) return encodeString(value);
+  if (isCanonicalBoolean(value)) return value ? 'true' : 'false';
+  if (isCanonicalNumber(value)) {
+    if (!Number.isFinite(value)) {
       throw new TypeError(
-        `canonicalJson: undefined at ${path} — undefined is representable ` +
-          'only as an omitted object property, never as a root value or an ' +
-          'array element'
+        `canonicalJson: non-finite number at ${path} (${String(value)}) ` +
+          'has no canonical form — model it as an explicit abstract value ' +
+          'or an obligation instead of approximating it'
       );
-    case 'bigint':
-    case 'function':
-    case 'symbol':
-      throw new TypeError(
-        `canonicalJson: unsupported ${typeof value} at ${path} — the ` +
-          'canonical form admits no lossy encoding for it'
-      );
-    default:
-      break;
+    }
+    // JSON.stringify is exact and round-trippable for finite doubles, and
+    // normalises -0 to 0 — two numerically equal values must hash equal.
+    return JSON.stringify(value);
+  }
+  if (value === undefined) {
+    throw new TypeError(
+      `canonicalJson: undefined at ${path} — undefined is representable ` +
+        'only as an omitted object property, never as a root value or an ' +
+        'array element'
+    );
+  }
+  if (isCanonicalBigInt(value)) {
+    throw new TypeError(
+      `canonicalJson: unsupported bigint at ${path} — the canonical form ` +
+        'admits no lossy encoding for it'
+    );
+  }
+  if (isCanonicalSymbol(value)) {
+    throw new TypeError(
+      `canonicalJson: unsupported symbol at ${path} — the canonical form ` +
+        'admits no lossy encoding for it'
+    );
+  }
+  if (isCanonicalCallable(value)) {
+    throw new TypeError(
+      `canonicalJson: unsupported function at ${path} — the canonical form ` +
+        'admits no lossy encoding for it'
+    );
   }
 
-  const object = value as object;
-
-  if (Array.isArray(object)) {
-    const items = object.map((item, index) =>
-      encode(item, `${path}[${index}]`)
-    );
+  if (isCanonicalArray(value)) {
+    const items = value.map((item, index) => encode(item, `${path}[${index}]`));
     return `[${items.join(',')}]`;
   }
 
-  if (!isPlainObject(object)) {
+  if (!isCanonicalReference(value)) {
+    throw new TypeError(`canonicalJson: unsupported value at ${path}`);
+  }
+
+  if (!isPlainObject(value)) {
     throw new TypeError(
-      `canonicalJson: non-plain object at ${path} (${
-        (Object.getPrototypeOf(object) as { constructor?: { name?: string } })
-          ?.constructor?.name ?? 'unknown prototype'
-      }) — class instances, Map/Set/Date and friends have no declared ` +
+      `canonicalJson: non-plain object at ${path} (${prototypeName(value)}) ` +
+        '— class instances, Map/Set/Date and friends have no declared ' +
         'canonical form; convert to a plain record first'
     );
   }
 
-  const record = object as Record<string, unknown>;
-  const keys = Object.keys(record)
-    .filter((key) => record[key] !== undefined)
+  const keys = Object.keys(value)
+    .filter((key) => value[key] !== undefined)
     .sort();
   const entries = keys.map(
-    (key) => `${encodeString(key)}:${encode(record[key], `${path}.${key}`)}`
+    (key) => `${encodeString(key)}:${encode(value[key], `${path}.${key}`)}`
   );
   return `{${entries.join(',')}}`;
 };
@@ -111,7 +229,8 @@ const encode = (value: unknown, path: string): string => {
  * explicit obligation upstream, never a hash of a lossy stand-in — otherwise
  * two different worlds could share an id and the caches would lie.
  */
-export const canonicalJson = (value: unknown): string => encode(value, '$');
+export const canonicalJson = <Value>(value: Value): string =>
+  encode(value, '$');
 
 /**
  * Content address: the first 16 hex chars (64 bits) of sha256 over
@@ -119,7 +238,7 @@ export const canonicalJson = (value: unknown): string => encode(value, '$');
  * collisions out of reach for corpora many orders of magnitude larger than a
  * design system while staying short enough to read in a terminal.
  */
-export const stableHash = (value: unknown): string =>
+export const stableHash = <Value>(value: Value): string =>
   createHash('sha256')
     .update(canonicalJson(value), 'utf8')
     .digest('hex')

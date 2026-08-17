@@ -1,4 +1,12 @@
-import { parseSync } from 'oxc-parser';
+import { parseSync, Visitor } from 'oxc-parser';
+
+import type {
+  Expression,
+  JSXAttributeValue,
+  JSXElementName,
+  JSXOpeningElement,
+  Span,
+} from 'oxc-parser';
 
 /**
  * Seam S5 (PLACES.md §1): the structural reader — the only new reader the
@@ -44,71 +52,66 @@ export interface SourceRead {
   elements: readonly SourceElement[];
 }
 
-interface AstNode {
-  type?: unknown;
-  [key: string]: unknown;
-}
+/**
+ * ESTree collapses every literal onto one `type: 'Literal'`, so the kind is
+ * not in the tag. It discriminates the two kinds JSON cannot carry with their
+ * own fields (`bigint`, `regex`) — the seam this reader narrows on.
+ */
+type LiteralExpression = Extract<Expression, { type: 'Literal' }>;
 
-const isNode = (value: unknown): value is AstNode =>
-  typeof value === 'object' && value !== null;
-
-const spanOf = (node: AstNode): readonly [number, number] => [
-  typeof node.start === 'number' ? node.start : 0,
-  typeof node.end === 'number' ? node.end : 0,
+const spanOf = (node: Span): readonly [number, number] => [
+  node.start,
+  node.end,
 ];
 
-/** `<A.B.C>` → 'A.B.C'; identifiers pass through; anything else ''. */
-const tagNameOf = (name: unknown): string => {
-  if (!isNode(name)) return '';
-  if (name.type === 'JSXIdentifier') return String(name.name ?? '');
+/** `<A.B.C>` → 'A.B.C'; identifiers pass through. */
+const tagNameOf = (name: JSXElementName): string => {
+  if (name.type === 'JSXIdentifier') return name.name;
   if (name.type === 'JSXMemberExpression') {
     return `${tagNameOf(name.object)}.${tagNameOf(name.property)}`;
   }
-  if (name.type === 'JSXNamespacedName') {
-    return `${tagNameOf(name.namespace)}:${tagNameOf(name.name)}`;
-  }
-  return '';
+  return `${tagNameOf(name.namespace)}:${tagNameOf(name.name)}`;
 };
 
 const isComponentTag = (tag: string): boolean =>
   tag.includes('.') || /^[A-Z]/.test(tag);
 
-const staticAttrValue = (value: unknown): string | undefined => {
-  if (value === null || value === undefined) return 'true';
-  if (!isNode(value)) return undefined;
-  if (value.type === 'Literal' && typeof value.value === 'string') {
-    return value.value;
-  }
+/**
+ * A `{...}` attribute value the reader can write down: string and number
+ * literals only. A boolean, null, bigint or regexp literal is a value the
+ * structural reader has no attribute text for, so it reads as dynamic.
+ */
+const literalText = (literal: LiteralExpression): string | undefined => {
+  if ('bigint' in literal || 'regex' in literal) return undefined;
+  const { value } = literal;
+  if (value === null || value === true || value === false) return undefined;
+  return String(value);
+};
+
+const staticAttrValue = (
+  value: JSXAttributeValue | null
+): string | undefined => {
+  if (value === null) return 'true';
+  if (value.type === 'Literal') return value.value;
   if (value.type === 'JSXExpressionContainer') {
-    const expression = value.expression;
-    if (
-      isNode(expression) &&
-      expression.type === 'Literal' &&
-      (typeof expression.value === 'string' ||
-        typeof expression.value === 'number')
-    ) {
-      return String(expression.value);
-    }
-    return undefined;
+    const { expression } = value;
+    return expression.type === 'Literal' ? literalText(expression) : undefined;
   }
   return undefined;
 };
 
 const attributesOf = (
-  opening: AstNode
-): { attributes: SourceAttribute[]; hasSpread: boolean } => {
+  opening: JSXOpeningElement
+): Pick<SourceElement, 'attributes' | 'hasSpread'> => {
   const attributes: SourceAttribute[] = [];
   let hasSpread = false;
 
-  const list = Array.isArray(opening.attributes) ? opening.attributes : [];
-  for (const attr of list) {
-    if (!isNode(attr)) continue;
+  for (const attr of opening.attributes) {
     if (attr.type === 'JSXSpreadAttribute') {
       hasSpread = true;
       attributes.push({ name: '...', kind: 'spread', span: spanOf(attr) });
       continue;
     }
-    if (attr.type !== 'JSXAttribute') continue;
     const name = tagNameOf(attr.name);
     const value = staticAttrValue(attr.value);
     attributes.push({
@@ -140,16 +143,19 @@ export const readSourceStructure = (file: string, text: string): SourceRead => {
   }
 
   const elements: SourceElement[] = [];
+  // Innermost-last stack of the containing element for the next JSX element
+  // OXC reaches. A fragment is transparent, so it pushes nothing.
+  const containment: (number | undefined)[] = [undefined];
+  const sever = (): void => {
+    containment.push(undefined);
+  };
+  const restore = (): void => {
+    containment.pop();
+  };
 
-  const visit = (node: unknown, parent: number | undefined): void => {
-    if (Array.isArray(node)) {
-      for (const item of node) visit(item, parent);
-      return;
-    }
-    if (!isNode(node)) return;
-
-    if (node.type === 'JSXElement') {
-      const opening = isNode(node.openingElement) ? node.openingElement : {};
+  new Visitor({
+    JSXElement(node) {
+      const opening = node.openingElement;
       const tag = tagNameOf(opening.name);
       const { attributes, hasSpread } = attributesOf(opening);
       const ordinal = elements.length;
@@ -160,30 +166,20 @@ export const readSourceStructure = (file: string, text: string): SourceRead => {
         attributes,
         hasSpread,
         span: spanOf(node),
-        parent,
+        parent: containment[containment.length - 1],
       });
-      // Attribute values first (matching visit order), containment severed —
-      // a render prop's JSX is not a DOM child of this element.
-      for (const attr of Array.isArray(opening.attributes)
-        ? opening.attributes
-        : []) {
-        if (isNode(attr)) visit(attr.value ?? attr.argument, undefined);
-      }
-      visit(node.children, ordinal);
-      return;
-    }
-    if (node.type === 'JSXFragment') {
-      visit(node.children, parent);
-      return;
-    }
+      containment.push(ordinal);
+    },
+    'JSXElement:exit': restore,
+    // OXC reaches an attribute before this element's children, matching the
+    // reader's order — but containment is severed across it: a render prop's
+    // JSX is not a DOM child of the element that carries it.
+    JSXAttribute: sever,
+    'JSXAttribute:exit': restore,
+    JSXSpreadAttribute: sever,
+    'JSXSpreadAttribute:exit': restore,
+  }).visit(parsed.program);
 
-    for (const key of Object.keys(node)) {
-      if (key === 'type') continue;
-      visit(node[key], parent);
-    }
-  };
-
-  visit(parsed.program, undefined);
   return { file, elements };
 };
 

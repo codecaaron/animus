@@ -1,6 +1,8 @@
+import { createLogger } from 'vite';
 import { describe, expect, test } from 'vitest';
 
 import { PluginContext } from '../src/context';
+import { makeComponent, makeManifest } from './manifest-fixture';
 
 /**
  * The gates over external-package discovery outcomes
@@ -15,7 +17,9 @@ import { PluginContext } from '../src/context';
  *  present; openspec: standalone-extraction-cli). */
 function makeContext(strict: boolean): PluginContext {
   const ctx = new PluginContext({ system: './src/ds.ts', strict });
-  ctx.storedManifest = { components: { 'Button::src/Button.tsx': {} } };
+  ctx.storedManifest = makeManifest({
+    components: { 'Button::src/Button.tsx': makeComponent('src/Button.tsx') },
+  });
   ctx.system.variableCss = ':root { --color-text: #000; }';
   ctx.resolvedComponentCss = '.animus-Button-abc { margin: 0; }';
   return ctx;
@@ -48,10 +52,8 @@ describe('self-verify: external package include outcomes', () => {
   test('non-strict mode warns instead of throwing', () => {
     const ctx = makeContext(false);
     const warnings: string[] = [];
-    ctx.logger = {
-      warn: (message: string) => warnings.push(message),
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } as any;
+    ctx.logger = createLogger('silent');
+    ctx.logger.warn = (message) => warnings.push(message);
     ctx.externalPackageOutcomes = [
       { specifier: '@x/ds', outcome: 'empty', fileCount: 0 },
     ];
@@ -81,10 +83,8 @@ describe('buildStart gate: enforceIncludeResolution', () => {
   test('non-strict mode warns and continues', () => {
     const ctx = makeContext(false);
     const warnings: string[] = [];
-    ctx.logger = {
-      warn: (message: string) => warnings.push(message),
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } as any;
+    ctx.logger = createLogger('silent');
+    ctx.logger.warn = (message) => warnings.push(message);
     ctx.externalPackageOutcomes = [
       { specifier: '@x/missing', outcome: 'unresolvable', fileCount: 0 },
     ];

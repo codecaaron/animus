@@ -1,341 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { asRuleId } from '../src/core/identity';
-import { eq, range, TRUE } from '../src/core/predicate';
 import { createOracle } from '../src/engines';
-import { createInMemoryHost } from '../src/providers/in-memory';
+import { host, smallNarrow } from './fixture-world';
 
 import type { ScenarioPoint } from '../src/core/scenario';
-import type { HostObligation, OracleHost } from '../src/providers/host';
-import type { ComponentRecord } from '../src/providers/identity';
-import type { InMemoryHostConfig } from '../src/providers/in-memory';
-import type {
-  TokenDefinition,
-  TokenProvider,
-  TokenResolution,
-} from '../src/providers/tokens';
-
-const card: ComponentRecord = {
-  id: 'src/Card.tsx::Card',
-  file: 'src/Card.tsx',
-  binding: 'Card',
-  className: 'anm-Card',
-  terminal: 'asElement',
-  tag: 'div',
-};
-
-const panel: ComponentRecord = {
-  id: 'src/Panel.tsx::Panel',
-  file: 'src/Panel.tsx',
-  binding: 'Panel',
-  className: 'anm-Panel',
-  terminal: 'asElement',
-};
-
-const SCOPED = /^(variant|state):([^:]+):(.+)$/;
-
-/** Component class + the shared `anm-surface` utility + variant/state. */
-const classesFor = (
-  component: ComponentRecord,
-  point: ScenarioPoint
-): readonly string[] => {
-  const classes = [component.className, 'anm-surface'];
-  for (const dim of Object.keys(point).sort()) {
-    const match = SCOPED.exec(dim);
-    if (match === null) continue;
-    const [, kind, owner, name] = match;
-    if (owner !== component.binding) continue;
-    const value = point[dim];
-    if (kind === 'variant') {
-      classes.push(`${component.className}--${name}-${String(value)}`);
-    } else if (value === true) {
-      classes.push(`${component.className}--${name}`);
-    }
-  }
-  return classes;
-};
-
-const TOKENS: Readonly<Record<string, TokenDefinition>> = {
-  '--color-text': {
-    variable: '--color-text',
-    valuesByMode: { light: '#111', dark: '#eee' },
-    references: [],
-  },
-  '--surface-bg': {
-    variable: '--surface-bg',
-    valuesByMode: { light: 'var(--color-text)', dark: 'var(--color-text)' },
-    references: ['--color-text'],
-  },
-};
-
-const tokens = (): TokenProvider => ({
-  modes: () => ['light', 'dark'],
-  defaultMode: () => 'light',
-  token: (variable) => TOKENS[variable],
-  all: () => Object.values(TOKENS),
-  resolve: (variable, mode): TokenResolution | undefined => {
-    const chain: string[] = [];
-    let current = variable;
-    for (let depth = 0; depth < 8; depth += 1) {
-      chain.push(current);
-      const definition = TOKENS[current];
-      if (definition === undefined) return undefined;
-      const raw = definition.valuesByMode[mode];
-      if (raw === undefined) return undefined;
-      const reference = /^var\((--[a-z-]+)\)$/.exec(raw.trim());
-      if (reference === null) return { value: raw, chain };
-      current = reference[1];
-    }
-    return undefined;
-  },
-});
-
-interface FixtureOptions {
-  pseudoDimension?: boolean;
-  important?: boolean;
-}
-
-const config = (options: FixtureOptions = {}): InMemoryHostConfig => ({
-  rules: [
-    {
-      id: 'global-body',
-      selector: { raw: 'body', classNames: [] },
-      declarations: [
-        { property: 'color', value: 'var(--color-text)' },
-        { property: 'font-size', value: '16px' },
-      ],
-      condition: TRUE,
-      layer: 'anm-global',
-      order: 0,
-      source: { file: 'src/theme.ts', span: [10, 40] },
-    },
-    {
-      id: 'base-card',
-      selector: { raw: '.anm-Card', classNames: ['anm-Card'] },
-      declarations: [
-        {
-          property: 'padding',
-          value: '4px',
-          authoredProperty: 'p',
-          authoredValue: '1',
-        },
-        { property: 'gap', value: '2px' },
-      ],
-      condition: TRUE,
-      layer: 'anm-base',
-      order: 0,
-      source: { file: 'src/Card.tsx', span: [67, 200] },
-      origin: { component: 'Card', method: 'styles' },
-    },
-    {
-      id: 'surface',
-      selector: { raw: '.anm-surface', classNames: ['anm-surface'] },
-      declarations: [
-        { property: 'background', value: 'var(--surface-bg)' },
-        { property: 'gap', value: '5px' },
-      ],
-      condition: TRUE,
-      layer: 'anm-base',
-      order: 1,
-      source: { file: 'src/theme.ts' },
-    },
-    {
-      id: 'variant-large',
-      selector: {
-        raw: '.anm-Card--size-large',
-        classNames: ['anm-Card--size-large'],
-      },
-      declarations: [{ property: 'padding', value: '12px' }],
-      condition: eq('variant:Card:size', 'large'),
-      layer: 'anm-variants',
-      order: 2,
-      source: { file: 'src/Card.tsx' },
-      origin: {
-        component: 'Card',
-        method: 'variant',
-        variantProp: 'size',
-        variantOption: 'large',
-      },
-    },
-    {
-      id: 'variant-large-strong',
-      selector: {
-        raw: '.anm-Card.anm-Card--size-large',
-        classNames: ['anm-Card', 'anm-Card--size-large'],
-      },
-      declarations: [{ property: 'padding', value: '20px' }],
-      condition: eq('variant:Card:size', 'large'),
-      layer: 'anm-variants',
-      order: 0,
-      source: { file: 'src/Card.tsx' },
-      origin: { component: 'Card', method: 'compound', compoundIndex: 0 },
-    },
-    {
-      id: 'wide',
-      selector: { raw: '.anm-Card', classNames: ['anm-Card'] },
-      declarations: [{ property: 'padding', value: '16px' }],
-      condition: range('viewport.inline', { min: 768 }),
-      layer: 'anm-variants',
-      order: 3,
-      source: { file: 'src/Card.tsx' },
-    },
-    {
-      id: 'hover',
-      selector: {
-        raw: '.anm-Card:hover',
-        classNames: ['anm-Card'],
-        pseudo: ['hover'],
-      },
-      declarations: [{ property: 'border-color', value: 'red' }],
-      condition: TRUE,
-      layer: 'anm-states',
-      order: 1,
-      source: { file: 'src/Card.tsx' },
-    },
-    {
-      id: 'marker',
-      selector: {
-        raw: '.anm-Card::before',
-        classNames: ['anm-Card'],
-        pseudo: ['::before'],
-      },
-      declarations: [{ property: 'content', value: '""' }],
-      condition: TRUE,
-      layer: 'anm-custom',
-      order: 1,
-      source: { file: 'src/Card.tsx' },
-    },
-    {
-      id: 'unresolved',
-      selector: { raw: '.anm-Card', classNames: ['anm-Card'] },
-      declarations: [{ property: 'outline-color', value: 'var(--missing)' }],
-      condition: TRUE,
-      layer: 'anm-custom',
-      order: 0,
-      source: { file: 'src/Card.tsx' },
-    },
-    ...(options.important === true
-      ? [
-          {
-            id: 'base-important',
-            selector: { raw: '.anm-Card', classNames: ['anm-Card'] },
-            declarations: [
-              { property: 'padding', value: '1px', important: true },
-            ],
-            condition: TRUE,
-            layer: 'anm-base',
-            order: 9,
-            source: { file: 'src/Card.tsx' },
-          },
-          {
-            id: 'variants-important',
-            selector: { raw: '.anm-Card', classNames: ['anm-Card'] },
-            declarations: [
-              { property: 'padding', value: '2px', important: true },
-            ],
-            condition: TRUE,
-            layer: 'anm-variants',
-            order: 9,
-            source: { file: 'src/Card.tsx' },
-          },
-        ]
-      : []),
-    {
-      id: 'panel-base',
-      selector: { raw: '.anm-Panel', classNames: ['anm-Panel'] },
-      declarations: [{ property: 'padding', value: '3px' }],
-      condition: TRUE,
-      layer: 'anm-base',
-      order: 2,
-      source: { file: 'src/Panel.tsx' },
-      origin: { component: 'Panel', method: 'styles' },
-    },
-  ],
-  components: [card, panel],
-  dimensions: {
-    mode: { kind: 'finite', values: ['light', 'dark'] },
-    'viewport.inline': { kind: 'interval', min: 0, max: 1920 },
-    'variant:Card:size': { kind: 'finite', values: ['small', 'large'] },
-    'state:Card:disabled': { kind: 'finite', values: [false, true] },
-    ...(options.pseudoDimension === true
-      ? { 'pseudo:hover': { kind: 'finite' as const, values: [false, true] } }
-      : {}),
-  },
-  cuts: { 'viewport.inline': [768] },
-  namedScenarios: {
-    'compact.dark': {
-      mode: 'dark',
-      'viewport.inline': 375,
-      'variant:Card:size': 'small',
-      'state:Card:disabled': false,
-    },
-  },
-  classesFor,
-  ruleDependencies: { 'base-card': ['src/Card.tsx'] },
-});
-
-const obligations = (): readonly HostObligation[] => [
-  {
-    origin: { file: 'src/Card.tsx', note: 'gap is filled from a runtime prop' },
-    guard: eq('variant:Card:size', 'large'),
-    effectClass: 'dynamic-value',
-    influenceScope: [
-      { kind: 'declaration', rule: asRuleId('base-card'), property: 'gap' },
-    ],
-    reason:
-      'the gap slot is written by a runtime prop the compiler cannot fold',
-    dischargeOptions: [
-      {
-        kind: 'branch-split',
-        description: 'evaluate both declared size variants',
-        automated: true,
-      },
-    ],
-    dependencies: [],
-  },
-  {
-    origin: { file: 'src/theme.ts', note: ':has() is outside the dialect' },
-    guard: TRUE,
-    effectClass: 'external-css',
-    influenceScope: [
-      { kind: 'rule', rule: asRuleId('surface') },
-      {
-        kind: 'declaration',
-        rule: asRuleId('surface'),
-        property: 'background',
-      },
-    ],
-    reason:
-      'a relational (:has) selector in hand-written CSS can override the ' +
-      'surface background',
-    dischargeOptions: [
-      {
-        kind: 'context-capsule-measurement',
-        description: 'measure the computed background in a browser capsule',
-        automated: false,
-      },
-      {
-        kind: 'manual-declaration',
-        description: 'declare the relational rule in the style universe',
-        automated: false,
-      },
-    ],
-    dependencies: [],
-  },
-];
-
-const host = (options: FixtureOptions = {}): OracleHost => ({
-  ...createInMemoryHost(config(options)),
-  tokens: tokens(),
-  obligations,
-});
-
-const smallNarrow: ScenarioPoint = {
-  mode: 'light',
-  'viewport.inline': 400,
-  'variant:Card:size': 'small',
-  'state:Card:disabled': false,
-};
+import type { OracleSymptom } from '../src/engines';
 
 describe('inspect — the envelope', () => {
   const oracle = createOracle(host());
@@ -619,14 +288,35 @@ describe('explain — missing declaration', () => {
     expect(result.summary).toContain('is set by base-card');
   });
 
+  /**
+   * `explain` re-checks its symptom at runtime because callers also reach it
+   * through the JSON surface, where the declared union guarantees nothing.
+   * Exercising a refusal therefore needs a value the union forbids: start
+   * from a valid symptom and install one own property at runtime, with the
+   * key order and descriptor flags an object literal would have given it.
+   */
+  const symptomWith = (
+    field: 'kind' | 'detail',
+    value: string | Readonly<Record<string, string>>
+  ): OracleSymptom => {
+    const symptom: OracleSymptom = {
+      kind: 'missing-declaration',
+      detail: { property: 'padding' },
+    };
+    Object.defineProperty(symptom, field, {
+      value,
+      writable: true,
+      enumerable: true,
+      configurable: true,
+    });
+    return symptom;
+  };
+
   it('refuses an unknown symptom kind', () => {
     expect(() =>
       createOracle(host()).explain({
         target: 'Card',
-        symptom: {
-          kind: 'looks-wrong',
-          detail: { property: 'padding' },
-        } as never,
+        symptom: symptomWith('kind', 'looks-wrong'),
       })
     ).toThrow(/unknown symptom kind 'looks-wrong'/);
   });
@@ -635,7 +325,7 @@ describe('explain — missing declaration', () => {
     expect(() =>
       createOracle(host()).explain({
         target: 'Card',
-        symptom: { kind: 'missing-declaration', detail: {} } as never,
+        symptom: symptomWith('detail', {}),
       })
     ).toThrow(/requires detail.property/);
   });

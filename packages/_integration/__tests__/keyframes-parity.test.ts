@@ -9,8 +9,20 @@
  */
 import { describe, expect, test } from 'vitest';
 
-import { config, theme } from '../fixtures/setup';
 import { analyzeProject } from './run-pipeline';
+
+import type { KeyframesBlocks } from './run-pipeline';
+import type { KeyframeFrameMap } from '@animus-ui/system';
+
+/**
+ * The `globalStyleBlocksJson` payload this parity test builds: one named block
+ * per export, keyed by the structured `@keyframes <name>` selector whose body
+ * is a frame map. The suite emits no other global-style selector, so the value
+ * type says exactly what these fixtures carry.
+ */
+type StructuredKeyframeBlocks = {
+  [exportName: string]: { [keyframesSelector: string]: KeyframeFrameMap };
+};
 
 const frameMap = {
   '0%': { opacity: 0, transform: 'scale(0.95)' },
@@ -24,24 +36,15 @@ const extractFrames = (css: string): string | null => {
 };
 
 const run = (
-  globalBlocks: Record<string, any> | null,
-  keyframesBlocks: Record<string, any> | null
+  globalBlocks: StructuredKeyframeBlocks | null,
+  keyframesBlocks: KeyframesBlocks | null
 ) => {
   const manifestJson = analyzeProject(
     JSON.stringify([]), // no component files — we just want the global layer
-    theme.scalesJson,
-    theme.variableMapJson,
-    theme.contextualVarsJson || null,
-    config.propConfig,
-    config.groupRegistry,
-    '{}',
-    false, // dev_mode
-    null, // emitter config
-    null, // selector aliases
-    null, // retained selector-order slot
-    globalBlocks ? JSON.stringify(globalBlocks) : null,
-    null, // path aliases
-    keyframesBlocks ? JSON.stringify(keyframesBlocks) : null
+    {
+      globalStyleBlocksJson: globalBlocks ? JSON.stringify(globalBlocks) : null,
+      keyframesJson: keyframesBlocks ? JSON.stringify(keyframesBlocks) : null,
+    }
   );
   const manifest = JSON.parse(manifestJson);
   return manifest.sheets?.global ?? manifest.css ?? '';

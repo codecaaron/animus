@@ -1,9 +1,46 @@
+import { parseInternalWire } from './internal-wire';
+
 import type { ManifestDiagnostic } from './manifest-diagnostics';
 
 /** Stable codes for external keyframes discovery. */
 export const KEYFRAMES_EXTERNAL_ENTRY_FAILED =
   'animus.keyframes.external-entry-failed';
 export const KEYFRAMES_EXPORT_COLLISION = 'animus.keyframes.export-collision';
+
+/**
+ * The scanned-keyframes wire: export name → that export's collection. The
+ * system loader's `extract_keyframes_blocks` produces this shape on BOTH sides
+ * of the merge below — for the consumer system (`SystemConfig.keyframesJson`)
+ * and for every external entry (`scanKeyframesExports`) — so one declaration
+ * covers both, and a collection that survives the merge is re-serialized
+ * unchanged.
+ */
+interface KeyframesCollections {
+  [exportName: string]: KeyframesCollection;
+}
+
+/** One branded `Keyframes` export, flattened to its `__frames` record. */
+interface KeyframesCollection {
+  [keyframeName: string]: KeyframeBlock;
+}
+
+/** One keyframe: the emitted `@keyframes` identity plus its authored steps. */
+interface KeyframeBlock {
+  /** Content-hashed `@keyframes` name the emitter declares and references. */
+  name: string;
+  frames: KeyframeSteps;
+}
+
+/** Step selector (`from`, `to`, `NN%`) → that step's CSS declarations. */
+interface KeyframeSteps {
+  [step: string]: KeyframeDeclarations;
+}
+
+/** CSS property → value as authored: raw CSS, a number, or a `{scale.key}`
+ *  token reference the engine resolves at emission. */
+interface KeyframeDeclarations {
+  [property: string]: string | number;
+}
 
 export interface ExternalKeyframesMerge {
   /** Consumer collections merged with every discovered external collection
@@ -29,13 +66,16 @@ export function mergeExternalKeyframes(
   externalEntries: Iterable<string>,
   rootDir: string
 ): ExternalKeyframesMerge {
-  const merged: Record<string, unknown> = {};
+  const merged: KeyframesCollections = {};
   if (consumerKeyframesJson) {
     try {
       Object.assign(merged, JSON.parse(consumerKeyframesJson));
     } catch {
-      // A malformed consumer payload is the loader's problem, not this
-      // merge's — pass it through untouched.
+      // Delegation, not a swallow: the consumer payload's owner is the system
+      // loader that produced it (`SystemConfig.keyframesJson`), and the caller
+      // hands the same field straight to the engine. Returning the ORIGINAL
+      // string leaves the malformed bytes to fail at that owner instead of
+      // substituting a value this merge invented.
       return { keyframesJson: consumerKeyframesJson, diagnostics: [] };
     }
   }
@@ -66,12 +106,17 @@ export function mergeExternalKeyframes(
     }
     if (!scanned) continue;
 
-    let collections: Record<string, unknown>;
-    try {
-      collections = JSON.parse(scanned);
-    } catch {
-      continue;
-    }
+    // The scan RESULT is animus's own wire — `scanKeyframesExports` is a NAPI
+    // entry point and the engine serializes it. An entry that fails to
+    // EVALUATE is an external-package failure and degrades to the coded
+    // diagnostic above; an entry that evaluates and then yields unparseable
+    // engine output is an engine bug, and `continue` would drop its
+    // collections indistinguishably from "this package ships no keyframes".
+    const collections = parseInternalWire<KeyframesCollections>(
+      scanned,
+      `keyframes collections scanned from '${entryPath}' ` +
+        "(the engine's scanKeyframesExports)"
+    );
     for (const [exportName, collection] of Object.entries(collections)) {
       const existing = merged[exportName];
       if (existing !== undefined) {

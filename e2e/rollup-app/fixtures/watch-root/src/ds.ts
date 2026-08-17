@@ -12,10 +12,9 @@ export const theme = createTheme()
   .addColors({ gray: { 100: '#f5f5f5', 700: '#404040' } })
   .build();
 
-const badGlow = createTransform(
-  'badGlow',
-  (value) => ({ boxShadow: String(value) }) as never
-);
+const badGlow = createTransform('badGlow', (value) => ({
+  boxShadow: String(value),
+}));
 
 export const { system: ds } = createSystem()
   .addGroup('fx', {

@@ -3,6 +3,7 @@ import { join, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import viteConfig from '../../vite.config';
+import { type TaskGraphConfig } from './manifest-model';
 
 /**
  * `packages/extract/tests/` is deliberately NOT globbed wholesale by
@@ -30,14 +31,10 @@ const ENGINE_BOUND = new Set([
   'static-css-overrides.test.ts',
 ]);
 
-type RootTask = { command?: string };
-
 function taskCommand(name: string): string {
-  const tasks = (
-    viteConfig as unknown as {
-      run?: { tasks?: Record<string, RootTask> };
-    }
-  ).run?.tasks;
+  // SAFETY: `vite.config.ts` declares `run.tasks`; TaskGraphConfig models that
+  // slice with every level optional, so the read below cannot assume presence.
+  const tasks = (viteConfig as TaskGraphConfig).run?.tasks;
   const command = tasks?.[name]?.command;
   if (!command) throw new Error(`vite.config.ts declares no '${name}' command`);
   return command;

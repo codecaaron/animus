@@ -22,15 +22,15 @@ describe('v2 system loader NAPI boundary', () => {
     const config = v2.loadSystemModule(systemPath, root);
 
     // Required string fields (NAPI snake_case → camelCase auto-conversion).
-    for (const field of [
-      'propConfig',
-      'groupRegistry',
-      'scalesJson',
-      'variableMapJson',
-      'variableCss',
-      'contextualVarsJson',
-    ]) {
-      expect(typeof config[field], field).toBe('string');
+    for (const [field, value] of Object.entries({
+      propConfig: config.propConfig,
+      groupRegistry: config.groupRegistry,
+      scalesJson: config.scalesJson,
+      variableMapJson: config.variableMapJson,
+      variableCss: config.variableCss,
+      contextualVarsJson: config.contextualVarsJson,
+    })) {
+      expect(value, field).toEqual(expect.any(String));
     }
 
     // The JSON-bearing fields must parse.

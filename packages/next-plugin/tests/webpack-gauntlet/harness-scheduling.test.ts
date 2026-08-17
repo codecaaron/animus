@@ -26,10 +26,17 @@ afterEach(() => {
   for (const dispose of disposers.splice(0)) dispose();
 });
 
-interface FakeStats {
-  hasErrors: () => boolean;
-  compilation: { errors: unknown[]; modules: unknown[] };
-}
+// The scripted compiler answers the SAME contracts `runWatchSession` drives
+// on a real fixture webpack, derived from that owner rather than restated —
+// the scheduling hazard only reproduces if the fake is driven identically.
+type GauntletWebpack = Parameters<typeof runWatchSession>[0]['webpack'];
+type GauntletCompiler = ReturnType<GauntletWebpack>;
+type GauntletWatch = GauntletCompiler['watch'];
+type WatchRunTap = Parameters<
+  GauntletCompiler['hooks']['watchRun']['tapPromise']
+>[1];
+type WatchDoneCallback = Parameters<GauntletWatch>[1];
+type GauntletStats = Parameters<WatchDoneCallback>[1];
 
 /**
  * Scripted stand-in for a watching webpack compiler: every turn runs the
@@ -46,13 +53,12 @@ function makeFakeCompiler(opts: {
   aggregateMs: number;
   echo?: { afterTurn: number; delayMs: number };
 }) {
-  type WatchRunTap = (c: { modifiedFiles: Set<string> }) => Promise<void>;
   const taps: WatchRunTap[] = [];
-  const stats: FakeStats = {
+  const stats: GauntletStats = {
     hasErrors: () => false,
     compilation: { errors: [], modules: [] },
   };
-  let doneCb: (err: Error | null, stats: FakeStats) => void = () => {};
+  let doneCb: WatchDoneCallback = () => {};
   let active = false;
   let closed = false;
   let turnCount = 0;
@@ -98,31 +104,31 @@ function makeFakeCompiler(opts: {
     }, opts.aggregateMs);
   };
 
-  const compiler = {
+  const compiler: GauntletCompiler = {
     options: {},
     hooks: {
       watchRun: {
-        tapPromise: (_name: string, fn: WatchRunTap) => {
+        tapPromise: (_name, fn) => {
           taps.push(fn);
         },
       },
       // Present-but-silent, mirroring production: the fake's turns start
       // synchronously without a watcher, so no invalidation evidence fires.
       invalid: {
-        tap: (_name: string, _fn: (file: string, time: number) => void) => {},
+        tap: (_name, _fn) => {},
       },
     },
-    watch: (_watchOptions: unknown, cb: typeof doneCb) => {
+    watch: (_watchOptions, cb) => {
       doneCb = cb;
       startTurn(['<cold>']);
       return {
-        close: (done: () => void) => {
+        close: (done) => {
           closed = true;
           done();
         },
       };
     },
-    close: (done: () => void) => done(),
+    close: (done) => done(),
   };
 
   return {
@@ -146,8 +152,7 @@ describe('runWatchSession step scheduling', () => {
     });
 
     const records = await runWatchSession({
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      webpack: (() => fake.compiler) as any,
+      webpack: () => fake.compiler,
       root,
       config: {},
       state,

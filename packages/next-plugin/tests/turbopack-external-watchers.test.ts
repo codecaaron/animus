@@ -7,71 +7,92 @@
  *
  * A fake `watch` is injected through the orchestrator's seam (fs builtins
  * are not interceptable by the runner's module mocker); the session is a
- * minimal fake whose reset flow the tests drive through the seams the
- * orchestrator installs on it.
+ * REAL ExtractionSession with its analysis entry point replaced, whose
+ * reset flow the tests drive through the seams the orchestrator installs
+ * on it.
  */
 import { EventEmitter } from 'events';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
-import { tmpdir } from 'os';
+import { mkdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
+import { ExtractionSession } from '../../extract/session/extraction-session';
 import { startTurbopackWatcher } from '../../extract/session/turbopack-orchestrator';
+import { disposeTempRoots, makeTempRoot } from './singleton-fixtures';
 
-import type { ExtractionSession } from '../../extract/session/extraction-session';
-import type { watch } from 'fs';
+import type { FSWatcher, WatchListener, WatchOptions, watch } from 'fs';
 
-type FakeWatcher = EventEmitter & {
-  dir: string;
-  closed: boolean;
-  trigger(filename: string | null): void;
-  close(): void;
-  unref(): void;
-};
+/** The registered handle: a real `FSWatcher` surface (the orchestrator
+ *  consumes `on('error')`, `unref()`, and `close()`) plus this scenario's
+ *  event driver. */
+class FakeWatcher extends EventEmitter implements FSWatcher {
+  closed = false;
+
+  constructor(
+    readonly dir: string,
+    private readonly listener: WatchListener<string | Buffer>
+  ) {
+    super();
+  }
+
+  /** Deliver one change event exactly as the OS watcher would. */
+  trigger(filename: string | null): void {
+    this.listener('change', filename);
+  }
+
+  close(): void {
+    this.closed = true;
+  }
+
+  ref(): this {
+    return this;
+  }
+
+  unref(): this {
+    return this;
+  }
+}
 
 const calls: Array<{ dir: string; recursive: boolean }> = [];
 const watchers: FakeWatcher[] = [];
 /** Registration for these dirs throws a capacity error. */
 const failDirs = new Set<string>();
 
+// SAFETY: `fs.watch` publishes four overloads (buffer/encoding/string
+// filenames); its assignability cannot be met by any single signature, so a
+// seam fake must be asserted. This one is sound because
+// startTurbopackWatcher calls the seam exactly once per root as
+// `watchFn(root, { recursive: true }, listener)` and consumes only the
+// FSWatcher members implemented above — see openExternalWatcher/addWatcher
+// in packages/extract/session/turbopack-orchestrator.ts.
 const fakeWatch = ((
   dir: string,
-  opts: { recursive?: boolean } | undefined,
-  listener: (event: string, filename: string | Buffer | null) => void
+  opts?: WatchOptions | null,
+  listener?: WatchListener<string | Buffer>
 ): FakeWatcher => {
   if (failDirs.has(dir)) {
-    const err = new Error(
-      'EMFILE: too many open files, watch'
-    ) as NodeJS.ErrnoException;
-    err.code = 'EMFILE';
-    throw err;
+    throw Object.assign(new Error('EMFILE: too many open files, watch'), {
+      code: 'EMFILE',
+    });
   }
-  const watcher: FakeWatcher = Object.assign(new EventEmitter(), {
-    dir,
-    closed: false,
-    trigger(filename: string | null): void {
-      listener('change', filename);
-    },
-    close(): void {
-      watcher.closed = true;
-    },
-    unref(): void {},
-  });
+  if (listener === undefined) {
+    // The orchestrator always registers a listener; this fake's watchers are
+    // event drivers, so a listener-less registration is a harness bug.
+    throw new Error('external watcher registered without a listener');
+  }
+  const watcher = new FakeWatcher(dir, listener);
   calls.push({ dir, recursive: Boolean(opts?.recursive) });
   watchers.push(watcher);
   return watcher;
-}) as unknown as typeof watch;
+}) as typeof watch;
 
 function watcherFor(dir: string): FakeWatcher | undefined {
   // Latest registration wins — reconciliation may re-register a dir.
   return [...watchers].reverse().find((w) => w.dir === dir);
 }
 
-const tempRoots: string[] = [];
-
-function createTree(): { root: string; kitA: string; kitB: string } {
-  const parent = mkdtempSync(join(tmpdir(), 'animus-turbo-ext-'));
-  tempRoots.push(parent);
+function createTree() {
+  const parent = makeTempRoot('animus-turbo-ext-');
   const root = join(parent, 'app');
   mkdirSync(join(root, 'src'), { recursive: true });
   writeFileSync(join(root, 'next.config.ts'), 'export default {};\n');
@@ -84,37 +105,33 @@ function createTree(): { root: string; kitA: string; kitB: string } {
   return { root, kitA, kitB };
 }
 
-interface FakeSession {
-  externalWatchRoots: string[];
-  stickyDiagnostics: Map<string, string>;
-  handleWatchUpdate: ReturnType<typeof vi.fn>;
-  onExternalRootResolved: ((root: string) => void) | null;
-  onExternalRootsCommitted: ((roots: string[]) => void) | null;
+/** A real session carrying the admitted external roots, with its analysis
+ *  entry point replaced: the orchestrator installs its reset seams on the
+ *  genuine class and `updates` records the cycles it drives. */
+function makeSession(root: string, roots: string[]) {
+  const session = new ExtractionSession({ system: './src/system.ts' });
+  session.rootDir = root;
+  session.externalWatchRoots = roots;
+  const updates = vi
+    .spyOn(session, 'handleWatchUpdate')
+    .mockImplementation(async () => {});
+  return { session, updates };
 }
 
-function makeSession(roots: string[]): FakeSession {
-  return {
-    externalWatchRoots: roots,
-    stickyDiagnostics: new Map(),
-    handleWatchUpdate: vi.fn(async () => {}),
-    onExternalRootResolved: null,
-    onExternalRootsCommitted: null,
-  };
-}
+type WatchUpdates = ReturnType<typeof makeSession>['updates'];
 
-function start(session: FakeSession, root: string) {
-  return startTurbopackWatcher(
-    session as unknown as ExtractionSession,
-    root,
-    20,
-    fakeWatch
-  );
+function start(session: ExtractionSession, root: string) {
+  const outcome = startTurbopackWatcher(session, root, 20, fakeWatch);
+  if (outcome.kind !== 'started') {
+    throw new Error(`expected a started watcher, got ${outcome.kind}`);
+  }
+  return outcome.handle;
 }
 
 /** Modified-file sets across every handleWatchUpdate call. */
-function allModified(session: FakeSession): string[] {
-  return session.handleWatchUpdate.mock.calls.flatMap((c) => [
-    ...(c[0] as { modifiedFiles: Set<string> }).modifiedFiles,
+function allModified(updates: WatchUpdates): string[] {
+  return updates.mock.calls.flatMap(([changes]) => [
+    ...(changes.modifiedFiles ?? []),
   ]);
 }
 
@@ -126,19 +143,16 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
-  for (const root of tempRoots.splice(0)) {
-    rmSync(root, { recursive: true, force: true });
-  }
+  disposeTempRoots();
 });
 
 describe('external root registration (design D4)', () => {
   test('admitted roots get recursive watchers; node_modules roots never do (G2)', () => {
     const { root, kitA } = createTree();
     const embedded = join(root, 'node_modules', 'dep', 'src');
-    const session = makeSession([kitA, embedded]);
+    const { session } = makeSession(root, [kitA, embedded]);
 
     const handle = start(session, root);
-    expect(handle).not.toBeNull();
     try {
       const registered = new Map(calls.map((c) => [c.dir, c.recursive]));
       expect(registered.get(kitA)).toBe(true);
@@ -153,14 +167,14 @@ describe('external root registration (design D4)', () => {
 
   test('kit file events flow into the session change sets', async () => {
     const { root, kitA } = createTree();
-    const session = makeSession([kitA]);
+    const { session, updates } = makeSession(root, [kitA]);
     const handle = start(session, root);
     try {
       const kitWatcher = watcherFor(kitA);
       expect(kitWatcher).toBeDefined();
       kitWatcher!.trigger('Button.tsx');
       await vi.waitFor(() =>
-        expect(allModified(session)).toContain(join(kitA, 'Button.tsx'))
+        expect(allModified(updates)).toContain(join(kitA, 'Button.tsx'))
       );
     } finally {
       handle!.close();
@@ -169,11 +183,11 @@ describe('external root registration (design D4)', () => {
 
   test('filename == null marks the root itself dirty for rediscovery', async () => {
     const { root, kitA } = createTree();
-    const session = makeSession([kitA]);
+    const { session, updates } = makeSession(root, [kitA]);
     const handle = start(session, root);
     try {
       watcherFor(kitA)!.trigger(null);
-      await vi.waitFor(() => expect(allModified(session)).toContain(kitA));
+      await vi.waitFor(() => expect(allModified(updates)).toContain(kitA));
     } finally {
       handle!.close();
     }
@@ -185,15 +199,14 @@ describe('per-root degradation (design D7)', () => {
     const { root, kitA, kitB } = createTree();
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     failDirs.add(kitB);
-    const session = makeSession([kitA, kitB]);
+    const { session, updates } = makeSession(root, [kitA, kitB]);
 
     const handle = start(session, root);
-    expect(handle).not.toBeNull();
     try {
       // The healthy root still ingests.
       watcherFor(kitA)!.trigger('Button.tsx');
       await vi.waitFor(() =>
-        expect(allModified(session)).toContain(join(kitA, 'Button.tsx'))
+        expect(allModified(updates)).toContain(join(kitA, 'Button.tsx'))
       );
       // The sticky diagnostic names only the failing root, its reason,
       // and the effect.
@@ -217,7 +230,7 @@ describe('per-root degradation (design D7)', () => {
     const { root, kitA, kitB } = createTree();
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     failDirs.add(kitB);
-    const session = makeSession([kitA, kitB]);
+    const { session, updates } = makeSession(root, [kitA, kitB]);
     const handle = start(session, root);
     try {
       expect(session.stickyDiagnostics.size).toBe(1);
@@ -231,7 +244,7 @@ describe('per-root degradation (design D7)', () => {
       expect(session.stickyDiagnostics.size).toBe(0);
       watcherFor(kitB)!.trigger('Button.tsx');
       await vi.waitFor(() =>
-        expect(allModified(session)).toContain(join(kitB, 'Button.tsx'))
+        expect(allModified(updates)).toContain(join(kitB, 'Button.tsx'))
       );
     } finally {
       handle!.close();
@@ -241,7 +254,7 @@ describe('per-root degradation (design D7)', () => {
   test('an async watcher error degrades that root only, not the project watch', async () => {
     const { root, kitA } = createTree();
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const session = makeSession([kitA]);
+    const { session } = makeSession(root, [kitA]);
     const handle = start(session, root);
     try {
       const kitWatcher = watcherFor(kitA)!;
@@ -270,7 +283,7 @@ describe('per-root degradation (design D7)', () => {
 describe('generation-fenced reset reconciliation (design D4)', () => {
   test('events captured during the snapshot replay after commit; removed roots are fenced', async () => {
     const { root, kitA, kitB } = createTree();
-    const session = makeSession([kitA]);
+    const { session, updates } = makeSession(root, [kitA]);
     const handle = start(session, root);
     try {
       // Reset resolves a NEW root: its watcher opens immediately (no blind
@@ -280,24 +293,24 @@ describe('generation-fenced reset reconciliation (design D4)', () => {
       expect(kitBWatcher).toBeDefined();
       kitBWatcher.trigger('Button.tsx');
       await new Promise((resolve) => setTimeout(resolve, 80));
-      expect(allModified(session)).not.toContain(join(kitB, 'Button.tsx'));
+      expect(allModified(updates)).not.toContain(join(kitB, 'Button.tsx'));
 
       // Publish: kitB admitted, kitA REMOVED from the universe.
       session.onExternalRootsCommitted!([kitB]);
 
       // The captured event replays into the ordinary flow.
       await vi.waitFor(() =>
-        expect(allModified(session)).toContain(join(kitB, 'Button.tsx'))
+        expect(allModified(updates)).toContain(join(kitB, 'Button.tsx'))
       );
 
       // The removed root's watcher is closed and its late events are
       // rejected by the generation fence.
       const kitAWatcher = watcherFor(kitA)!;
       expect(kitAWatcher.closed).toBe(true);
-      session.handleWatchUpdate.mockClear();
+      updates.mockClear();
       kitAWatcher.trigger('Button.tsx');
       await new Promise((resolve) => setTimeout(resolve, 80));
-      expect(allModified(session)).not.toContain(join(kitA, 'Button.tsx'));
+      expect(allModified(updates)).not.toContain(join(kitA, 'Button.tsx'));
     } finally {
       handle!.close();
     }
@@ -306,11 +319,11 @@ describe('generation-fenced reset reconciliation (design D4)', () => {
   test('a failed reset closes newly opened handles and drops captured events', async () => {
     const { root, kitA, kitB } = createTree();
     vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const session = makeSession([kitA]);
+    const { session, updates } = makeSession(root, [kitA]);
     // The reset transaction: resolves kitB mid-flight, then fails before
     // publishing — driven from inside handleWatchUpdate exactly like the
     // real session's geological reset.
-    session.handleWatchUpdate.mockImplementationOnce(async () => {
+    updates.mockImplementationOnce(async () => {
       session.onExternalRootResolved!(kitB);
       // onExternalRootsCommitted is never called — the reset fails.
       throw new Error('analysis failed');
@@ -320,18 +333,16 @@ describe('generation-fenced reset reconciliation (design D4)', () => {
     try {
       // Trigger the transaction via an ordinary kitA event.
       watcherFor(kitA)!.trigger('Button.tsx');
-      await vi.waitFor(() =>
-        expect(session.handleWatchUpdate).toHaveBeenCalled()
-      );
+      await vi.waitFor(() => expect(updates).toHaveBeenCalled());
 
       // Rollback: the newly opened handle is closed, captured events die
       // with it.
       const kitBWatcher = watcherFor(kitB)!;
       await vi.waitFor(() => expect(kitBWatcher.closed).toBe(true));
-      session.handleWatchUpdate.mockClear();
+      updates.mockClear();
       kitBWatcher.trigger('Button.tsx');
       await new Promise((resolve) => setTimeout(resolve, 80));
-      expect(allModified(session)).not.toContain(join(kitB, 'Button.tsx'));
+      expect(allModified(updates)).not.toContain(join(kitB, 'Button.tsx'));
     } finally {
       handle!.close();
     }

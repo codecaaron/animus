@@ -110,8 +110,12 @@ describe('assertConditionsInsideLayers (Guardrail G2)', () => {
       throw new Error('expected assertion to throw');
     } catch (err) {
       expect(err).toBeInstanceOf(AssertionError);
-      expect((err as AssertionError).message).toContain('@container');
-      expect((err as AssertionError).details).toHaveProperty('offenders');
+      // Narrowing, not a second assertion: anything that is not the
+      // AssertionError under test (including the `expected assertion to
+      // throw` guard above) leaves this catch by the same route it entered.
+      if (!(err instanceof AssertionError)) throw err;
+      expect(err.message).toContain('@container');
+      expect(err.details).toHaveProperty('offenders');
     }
   });
 });

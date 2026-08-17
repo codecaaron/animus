@@ -17,66 +17,40 @@
 //   2 = internal error
 
 import { readFileSync, writeFileSync } from 'node:fs';
-// oxc-parser replaces the former `typescript5` alias: the canonical toolchain
-// (typescript@7, native) ships no JS compiler API, and this layer needs an
-// in-process AST surface. oxc-parser emits a TS-ESTree AST (`parseSync` →
-// `{ program, errors, comments }`) with trivia-exclusive `start`/`end` spans,
-// which is all the intra-file dead-decl deleter needs.
-import { parseSync } from 'oxc-parser';
 
+import {
+  type Node,
+  type NodeField,
+  type TextRange,
+  childNode,
+  childNodeList,
+  childNodeSlots,
+  identifierName,
+  isNode,
+  parseProgram,
+  stringField,
+} from './_ast';
 import { emitReceipt } from './_receipts';
+import {
+  type OxlintDiagnostic,
+  ToolReportError,
+  classifyUnusedVar,
+  decodeOxlintReport,
+  readReportInput,
+  unwrapCode,
+} from './_tool-reports';
 
-// Minimal structural view of an oxc ESTree node. oxc nodes carry no `parent`
-// back-link (unlike the TS AST), so `assignParents` wires one on non-enumerable
-// `parent` slots after parse; the recursive walkers below rely on it.
-type Node = {
-  type: string;
-  start: number;
-  end: number;
-  parent?: Node;
-  // Children are navigated structurally (see `childNodes`); the index
-  // signature keeps that ergonomic without enumerating every ESTree field.
-  // oxlint-disable-next-line no-explicit-any
-  [key: string]: any;
-};
-
-// oxc deduces the dialect from the filename extension. Hygiene only ever sees
-// TypeScript, and test fixtures use non-standard extensions (`*.ts.in`), so we
-// pass `lang` explicitly: JSX-bearing files by extension, everything else as
-// `ts`. This guarantees TS syntax (overload signatures, `namespace`, type
-// annotations) parses regardless of the on-disk extension.
-function langFor(filename: string): 'ts' | 'tsx' | 'js' | 'jsx' {
-  if (filename.endsWith('.tsx')) return 'tsx';
-  if (filename.endsWith('.jsx')) return 'jsx';
-  if (
-    filename.endsWith('.js') ||
-    filename.endsWith('.mjs') ||
-    filename.endsWith('.cjs')
-  ) {
-    return 'js';
-  }
-  return 'ts';
-}
-
-// A node is any object carrying a string `type` and numeric `start`. This is
-// the discriminator `childNodes`/`assignParents` use to separate AST children
-// from scalar fields (names, flags, regex descriptors, `null` holes).
-function isNode(value: unknown): value is Node {
-  return (
-    typeof value === 'object' &&
-    value !== null &&
-    typeof (value as { type?: unknown }).type === 'string' &&
-    typeof (value as { start?: unknown }).start === 'number'
-  );
-}
+const SOURCE = 'Layer C deleter (delete-unused.ts)';
 
 // Direct child nodes of `node`, in source order. Iterates own enumerable
-// values (arrays are flattened, `null` array holes skipped). The `parent`
-// link written by `assignParents` is non-enumerable, so it is never revisited
-// as a child — this is what keeps the walk acyclic.
+// values (arrays are flattened, `null` array holes skipped) using `_ast`'s
+// node discriminator. The `parent` link written by `assignParents` is
+// non-enumerable, so it is never revisited as a child — this is what keeps the
+// walk acyclic. Local to this pass: `reconcile-after-knip.ts` reaches its
+// nodes by field name and never needs structural child discovery.
 function childNodes(node: Node): Node[] {
   const out: Node[] = [];
-  for (const value of Object.values(node)) {
+  for (const value of Object.values<NodeField>(node)) {
     if (isNode(value)) {
       out.push(value);
     } else if (Array.isArray(value)) {
@@ -125,28 +99,12 @@ function rangeNode(node: Node): Node {
     parent &&
     (parent.type === 'ExportNamedDeclaration' ||
       parent.type === 'ExportDefaultDeclaration') &&
-    parent.declaration === node
+    childNode(parent, 'declaration') === node
   ) {
     return parent;
   }
   return node;
 }
-
-type OxlintSpan = {
-  offset: number;
-  length: number;
-  line: number;
-  column: number;
-};
-type OxlintLabel = { label: string; span: OxlintSpan };
-type OxlintDiagnostic = {
-  message: string;
-  code: string;
-  filename: string;
-  labels: OxlintLabel[];
-  // Other oxlint fields (severity, causes, related, url, help) are ignored.
-};
-type OxlintReport = { diagnostics: OxlintDiagnostic[] };
 
 type Target =
   | { kind: 'top-level'; node: Node }
@@ -166,12 +124,6 @@ type NormalizedDiag = {
   line: number; // 1-indexed
   column: number; // 1-indexed
 };
-
-async function readStdin(): Promise<string> {
-  const chunks: Uint8Array[] = [];
-  for await (const chunk of process.stdin) chunks.push(chunk as Uint8Array);
-  return Buffer.concat(chunks).toString('utf-8');
-}
 
 function findNodeAtOffset(root: Node, offset: number): Node {
   function recurse(node: Node): Node {
@@ -211,7 +163,7 @@ function resolveTarget(node: Node): Target | undefined {
         stmt.parent &&
         STATEMENT_CONTAINERS.has(stmt.parent.type)
       ) {
-        if (stmt.declarations.length === 1) {
+        if (childNodeList(stmt, 'declarations').length === 1) {
           return { kind: 'var-stmt-single', stmt };
         }
         return { kind: 'var-decl-of-many', decl: cur, stmt };
@@ -232,10 +184,7 @@ function resolveTarget(node: Node): Target | undefined {
   return undefined;
 }
 
-function expandToLineBounds(
-  text: string,
-  node: Node
-): { start: number; end: number } {
+function expandToLineBounds(text: string, node: Node): TextRange {
   let start = node.start;
   let end = node.end;
 
@@ -254,11 +203,8 @@ function expandToLineBounds(
   return { start, end };
 }
 
-function rangeForVarDeclOfMany(
-  decl: Node,
-  stmt: Node
-): { start: number; end: number } {
-  const decls: Node[] = stmt.declarations;
+function rangeForVarDeclOfMany(decl: Node, stmt: Node): TextRange {
+  const decls = childNodeList(stmt, 'declarations');
   const idx = decls.indexOf(decl);
   if (idx === -1) return { start: decl.start, end: decl.end };
 
@@ -276,28 +222,29 @@ function rangeForVarDeclOfMany(
   return { start: prev.end, end: decl.end };
 }
 
-function rangeForBindingElement(
-  elem: Node,
-  pattern: Node
-): { start: number; end: number } {
+function rangeForBindingElement(elem: Node, pattern: Node): TextRange {
   // ObjectPattern holds `properties`; ArrayPattern holds `elements` (which may
-  // contain `null` holes). The neighbor-based comma-slicing math carries over
-  // on spans either way.
+  // contain `null` holes — `const [a, , c] = arr`). The neighbor-based
+  // comma-slicing math carries over on spans either way, but only a REAL
+  // neighbor can supply a span: a hole has no offsets to slice against, so it
+  // is not a usable neighbor and the search falls through to the other side.
+  // (Reading a hole's `.start` was a crash, not a range.)
   const elements: Array<Node | null> =
-    pattern.type === 'ObjectPattern' ? pattern.properties : pattern.elements;
+    pattern.type === 'ObjectPattern'
+      ? childNodeList(pattern, 'properties')
+      : childNodeSlots(pattern, 'elements');
   const idx = elements.indexOf(elem);
 
-  if (idx < elements.length - 1) {
-    return {
-      start: elem.start,
-      end: (elements[idx + 1] as Node).start,
-    };
+  const next = idx >= 0 && idx + 1 < elements.length ? elements[idx + 1] : null;
+  if (next !== null) {
+    return { start: elem.start, end: next.start };
   }
-  if (idx > 0) {
-    const prev = elements[idx - 1] as Node;
+  const prev = idx > 0 ? elements[idx - 1] : null;
+  if (prev !== null) {
     return { start: prev.end, end: elem.end };
   }
-  // Only element: delete just the element (caller must decide about the pattern itself)
+  // Only element (or holes on both sides): delete just the element (caller
+  // must decide about the pattern itself).
   return { start: elem.start, end: elem.end };
 }
 
@@ -308,15 +255,21 @@ function findOverloadGroupStart(impl: Node): Node {
   // (TS2391). When `impl` has a body AND is preceded by same-named
   // signature-only overloads (ESTree `TSDeclareFunction`), expand the range
   // to the first signature so the whole group is removed atomically.
-  if (!impl.body || !impl.id) return impl;
+  const implName = identifierName(impl, 'id');
+  if (childNode(impl, 'body') === undefined || implName === undefined) {
+    return impl;
+  }
   const parent = impl.parent;
-  const statements: Node[] | undefined = parent?.body;
-  if (!statements || !Array.isArray(statements)) return impl;
+  if (parent === undefined) return impl;
+  const statements = childNodeList(parent, 'body');
   const idx = statements.indexOf(impl);
   let groupStart: Node = impl;
   for (let i = idx - 1; i >= 0; i--) {
     const s = statements[i];
-    if (s.type === 'TSDeclareFunction' && s.id?.name === impl.id.name) {
+    if (
+      s.type === 'TSDeclareFunction' &&
+      identifierName(s, 'id') === implName
+    ) {
       groupStart = s;
     } else {
       break;
@@ -326,8 +279,9 @@ function findOverloadGroupStart(impl: Node): Node {
 }
 
 function varDeclKind(stmt: Node): string {
-  if (stmt.kind === 'const') return 'const-decl';
-  if (stmt.kind === 'let') return 'let-decl';
+  const kind = stringField(stmt, 'kind');
+  if (kind === 'const') return 'const-decl';
+  if (kind === 'let') return 'let-decl';
   return 'var-decl';
 }
 
@@ -352,10 +306,7 @@ function kindForTarget(target: Target): string {
   }
 }
 
-function rangeForTarget(
-  text: string,
-  target: Target
-): { start: number; end: number } {
+function rangeForTarget(text: string, target: Target): TextRange {
   switch (target.kind) {
     case 'top-level': {
       // Handle function overload groups: expand backwards to include all
@@ -379,30 +330,9 @@ function rangeForTarget(
   }
 }
 
-// Oxlint emits codes wrapped as `eslint(<rule-name>)`. Strip the wrapper
-// so the deleter operates on bare rule names internally.
+// The bare oxlint rule names Layer C acts on (codes arrive wrapped as
+// `eslint(<rule-name>)`; `unwrapCode` from `_tool-reports` strips the wrapper).
 const TARGET_CODES = new Set(['no-unused-vars']);
-
-function unwrapCode(code: string): string {
-  const m = code.match(/^eslint\((.+)\)$/);
-  return m ? m[1] : code;
-}
-
-// Discriminator for oxlint's `no-unused-vars` rule, which folds biome 2.x's
-// noUnusedVariables + noUnusedFunctionParameters + noUnusedImports into one
-// rule. The class is recovered from the diagnostic message prefix (verified
-// empirically against the live binary; live-integration test pins drift
-// detection).
-function classifyUnusedVar(
-  message: string
-): 'decl' | 'import' | 'param' | 'unknown' {
-  if (/^Identifier '[^']+' is imported/.test(message)) return 'import';
-  if (/^Parameter '/.test(message)) return 'param';
-  if (/^(Variable|Function|Class|Type alias|Interface|Enum) '/.test(message)) {
-    return 'decl';
-  }
-  return 'unknown';
-}
 
 function normalizeDiagnostic(d: OxlintDiagnostic): NormalizedDiag | undefined {
   if (!d.labels || d.labels.length === 0) return undefined;
@@ -422,11 +352,10 @@ export function applyDeletions(
   source: string,
   diagnostics: OxlintDiagnostic[]
 ): string {
-  const program = parseSync(filePath, source, { lang: langFor(filePath) })
-    .program as unknown as Node;
+  const program = parseProgram(filePath, source);
   assignParents(program);
   const targets: {
-    range: { start: number; end: number };
+    range: TextRange;
     kind: string;
     line: number;
     code: string;
@@ -515,26 +444,8 @@ function groupByFile(
 }
 
 async function main(): Promise<void> {
-  const input = process.argv[2]
-    ? readFileSync(process.argv[2], 'utf-8')
-    : await readStdin();
-
-  let report: OxlintReport;
-  try {
-    report = JSON.parse(input);
-  } catch (e) {
-    console.error('ERROR: failed to parse oxlint JSON input:', e);
-    process.exit(1);
-  }
-
-  if (!report.diagnostics || !Array.isArray(report.diagnostics)) {
-    console.error(
-      'ERROR: oxlint JSON missing `diagnostics` array (oxlint --format=json shape expected)'
-    );
-    process.exit(1);
-  }
-
-  const relevant = report.diagnostics;
+  const input = await readReportInput(process.argv[2]);
+  const relevant = decodeOxlintReport(input, SOURCE).diagnostics;
 
   detectCodeDrift(relevant);
   const byFile = groupByFile(relevant);
@@ -560,6 +471,11 @@ async function main(): Promise<void> {
 
 if (import.meta.main) {
   main().catch((e) => {
+    // Same policy as Layer A/D: see `_tool-reports.ts` § Failure policy.
+    if (e instanceof ToolReportError) {
+      console.error(e.message);
+      process.exit(1);
+    }
     console.error('INTERNAL ERROR:', e);
     process.exit(2);
   });

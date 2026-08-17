@@ -26,10 +26,10 @@ import {
 import { describePoint, listOf, plural } from './format';
 import { dedupeOperations, dischargeOperations, sweepVerdict } from './result';
 
-import type { CausalFinding, ProbeResult } from '../core/probe';
+import type { CausalFinding, ProbeResult, RenderProbe } from '../core/probe';
 import type { ScenarioDomain, ScenarioPoint } from '../core/scenario';
 import type { RenderWorld, WorldDelta } from '../core/world';
-import type { ComparisonSide } from './diff';
+import type { ComparisonSide, SweepRequest } from './diff';
 import type { OracleRuntime } from './runtime';
 
 export interface SimulateRequest {
@@ -90,162 +90,166 @@ export const runSimulate = (
   const point =
     request.at === undefined ? undefined : rt.resolvePoint(request.at);
 
-  return rt.run(
-    {
-      operation: 'simulate',
-      world: candidateWorld,
-      ...(resolution === undefined ? {} : { target: resolution.target }),
-      scope: point === undefined ? 'equivalence-class' : 'callsite',
-      ...(point === undefined ? {} : { scenarioPoint: point }),
-      objective: { kind: 'diff', against: worldId(baselineWorld) },
-      budget: rt.budget,
-    },
-    (stateId, probeWorld) => {
-      const factsBefore = rt.factCount(probeWorld);
-      const obligationsBefore = rt.obligationCount();
+  // Absent, not undefined: `probeStateId` hashes the descriptor, so a target
+  // or a point that was never asked for must not appear in it at all.
+  const probe: RenderProbe = {
+    operation: 'simulate',
+    world: candidateWorld,
+    scope: point === undefined ? 'equivalence-class' : 'callsite',
+    objective: { kind: 'diff', against: worldId(baselineWorld) },
+    budget: rt.budget,
+  };
+  if (resolution !== undefined) probe.target = resolution.target;
+  if (point !== undefined) probe.scenarioPoint = point;
 
-      const baseline: ComparisonSide = {
-        world: baselineWorld,
-        ctx: rt.contextFor(baselineWorld),
-      };
-      const candidate: ComparisonSide = {
-        world: probeWorld,
-        ctx: rt.contextFor(probeWorld),
-      };
-      const added = addedInterventions(baselineWorld, probeWorld);
+  return rt.run(probe, (stateId, probeWorld) => {
+    const factsBefore = rt.factCount(probeWorld);
+    const obligationsBefore = rt.obligationCount();
 
-      const plan = planFocalSweep(
-        rt,
-        candidate.ctx,
-        baselineWorld,
-        resolution,
-        request.domain,
-        point
-      );
+    const baseline: ComparisonSide = {
+      world: baselineWorld,
+      ctx: rt.contextFor(baselineWorld),
+    };
+    const candidate: ComparisonSide = {
+      world: probeWorld,
+      ctx: rt.contextFor(probeWorld),
+    };
+    const added = addedInterventions(baselineWorld, probeWorld);
 
-      const sweep = sweepWorlds({
-        rt,
-        baseline,
-        candidate,
-        affectedRules: affectedRulesOf(added),
-        maxCells: rt.maxCells(),
-        ...(resolution === undefined ? {} : { focal: resolution }),
-        ...(plan.focalCells === undefined
-          ? {}
-          : { focalCells: plan.focalCells }),
-      });
+    const plan = planFocalSweep(
+      rt,
+      candidate.ctx,
+      baselineWorld,
+      resolution,
+      request.domain,
+      point
+    );
 
-      const focalIncomplete = isFocalIncomplete(sweep, plan);
-
-      const facts = focalFacts(
-        rt,
-        candidate,
-        probeWorld,
-        resolution,
-        point ?? plan.focalCells?.[0]?.point ?? {},
-        sweep.changedProperties
-      );
-
-      const unknowns = rt.unknownsFor(
-        [...sweep.subjects, ...subjectsOfDeltas(added)],
-        []
-      );
-
-      const where =
-        point === undefined
-          ? 'across the focal domain'
-          : `at ${describePoint(point)}`;
-
-      return {
-        probeStateId: stateId,
-        worldId: worldId(probeWorld),
-        verdict: sweepVerdict(focalIncomplete, unknowns),
-        summary:
-          `${summarizeDiff(
-            sweep,
-            `Simulating ${listOf(request.deltas.map(describeDelta))} ${where}`
-          )} ` +
-          (sweep.changedProperties.length === 0
-            ? sweep.truncated || focalIncomplete
-              ? 'No change was observed in the evaluated cells, but the ' +
-                'sweep is partial — this is not a universe-wide claim.'
-              : 'No property changed anywhere in the modeled universe.'
-            : `Properties moved: ${listOf(sweep.changedProperties)}.`),
-        facts,
-        semanticDiff: toSemanticDiff(sweep),
-        // Causal findings are domain-level claims; a partially walked focal
-        // domain supports none of them.
-        ...(focalIncomplete
-          ? {}
-          : {
-              causalFindings: causalFindingsFor(
-                request.deltas,
-                sweep.changedProperties,
-                sweep.focalCellsChanged,
-                sweep.focalCellsEvaluated
-              ),
-            }),
-        assumptions: Array.from(
-          new Set([
-            ...rt.viewFor(baselineWorld).assumptions,
-            ...rt.viewFor(probeWorld).assumptions,
-            ...(sweep.truncated
-              ? [
-                  focalIncomplete
-                    ? `the sweep stopped after ${plural(
-                        sweep.cellsEvaluated,
-                        'cell'
-                      )} (budget) — the focal domain itself was not fully ` +
-                      'evaluated'
-                    : `the collateral sweep stopped after ${plural(
-                        sweep.cellsEvaluated,
-                        'cell'
-                      )} (budget) — components after that point were not checked`,
-                ]
-              : []),
-            ...(plan.harvestTruncated
-              ? [
-                  'the focal threshold partition exceeded the cell budget ' +
-                    'before enumeration — rule-guard cuts were not folded in',
-                ]
-              : []),
-          ])
-        ),
-        unknowns,
-        coverage: rt.coverage(
-          plan.scenarioCells === 0 ? sweep.cellsEvaluated : plan.scenarioCells,
-          sweep.cellsEvaluated
-        ),
-        knowledgeDelta: rt.delta({
-          newFacts: rt.factCount(probeWorld) - factsBefore,
-          newObligations: rt.obligationCount() - obligationsBefore,
-        }),
-        nextOperations: dedupeOperations([
-          ...(sweep.entries.length === 0
-            ? []
-            : [
-                {
-                  kind: 'diff',
-                  description:
-                    'diff this hypothetical world against the baseline to ' +
-                    'classify the collateral changes by context class',
-                  expectedInformationGain: 'MEDIUM' as const,
-                },
-              ]),
-          ...(sweep.changedProperties.length === 0
-            ? []
-            : [
-                {
-                  kind: 'prove',
-                  description: `prove the intended value of ${listOf(
-                    sweep.changedProperties
-                  )} over the whole domain in this hypothetical world`,
-                  expectedInformationGain: 'HIGH' as const,
-                },
-              ]),
-          ...dischargeOperations(unknowns),
-        ]),
-      };
+    const sweepRequest: SweepRequest = {
+      rt,
+      baseline,
+      candidate,
+      affectedRules: affectedRulesOf(added),
+      maxCells: rt.maxCells(),
+    };
+    if (resolution !== undefined) sweepRequest.focal = resolution;
+    if (plan.focalCells !== undefined) {
+      sweepRequest.focalCells = plan.focalCells;
     }
-  );
+
+    const sweep = sweepWorlds(sweepRequest);
+
+    const focalIncomplete = isFocalIncomplete(sweep, plan);
+
+    const facts = focalFacts(
+      rt,
+      candidate,
+      probeWorld,
+      resolution,
+      point ?? plan.focalCells?.[0]?.point ?? {},
+      sweep.changedProperties
+    );
+
+    const unknowns = rt.unknownsFor(
+      [...sweep.subjects, ...subjectsOfDeltas(added)],
+      []
+    );
+
+    const where =
+      point === undefined
+        ? 'across the focal domain'
+        : `at ${describePoint(point)}`;
+
+    const result: ProbeResult = {
+      probeStateId: stateId,
+      worldId: worldId(probeWorld),
+      verdict: sweepVerdict(focalIncomplete, unknowns),
+      summary:
+        `${summarizeDiff(
+          sweep,
+          `Simulating ${listOf(request.deltas.map(describeDelta))} ${where}`
+        )} ` +
+        (sweep.changedProperties.length === 0
+          ? sweep.truncated || focalIncomplete
+            ? 'No change was observed in the evaluated cells, but the ' +
+              'sweep is partial — this is not a universe-wide claim.'
+            : 'No property changed anywhere in the modeled universe.'
+          : `Properties moved: ${listOf(sweep.changedProperties)}.`),
+      facts,
+      semanticDiff: toSemanticDiff(sweep),
+      assumptions: Array.from(
+        new Set([
+          ...rt.viewFor(baselineWorld).assumptions,
+          ...rt.viewFor(probeWorld).assumptions,
+          ...(sweep.truncated
+            ? [
+                focalIncomplete
+                  ? `the sweep stopped after ${plural(
+                      sweep.cellsEvaluated,
+                      'cell'
+                    )} (budget) — the focal domain itself was not fully ` +
+                    'evaluated'
+                  : `the collateral sweep stopped after ${plural(
+                      sweep.cellsEvaluated,
+                      'cell'
+                    )} (budget) — components after that point were not checked`,
+              ]
+            : []),
+          ...(plan.harvestTruncated
+            ? [
+                'the focal threshold partition exceeded the cell budget ' +
+                  'before enumeration — rule-guard cuts were not folded in',
+              ]
+            : []),
+        ])
+      ),
+      unknowns,
+      coverage: rt.coverage(
+        plan.scenarioCells === 0 ? sweep.cellsEvaluated : plan.scenarioCells,
+        sweep.cellsEvaluated
+      ),
+      knowledgeDelta: rt.delta({
+        newFacts: rt.factCount(probeWorld) - factsBefore,
+        newObligations: rt.obligationCount() - obligationsBefore,
+      }),
+      nextOperations: dedupeOperations([
+        ...(sweep.entries.length === 0
+          ? []
+          : [
+              {
+                kind: 'diff',
+                description:
+                  'diff this hypothetical world against the baseline to ' +
+                  'classify the collateral changes by context class',
+                expectedInformationGain: 'MEDIUM' as const,
+              },
+            ]),
+        ...(sweep.changedProperties.length === 0
+          ? []
+          : [
+              {
+                kind: 'prove',
+                description: `prove the intended value of ${listOf(
+                  sweep.changedProperties
+                )} over the whole domain in this hypothetical world`,
+                expectedInformationGain: 'HIGH' as const,
+              },
+            ]),
+        ...dischargeOperations(unknowns),
+      ]),
+    };
+
+    // Causal findings are domain-level claims; a partially walked focal
+    // domain supports none of them, so the key stays off the answer.
+    if (!focalIncomplete) {
+      result.causalFindings = causalFindingsFor(
+        request.deltas,
+        sweep.changedProperties,
+        sweep.focalCellsChanged,
+        sweep.focalCellsEvaluated
+      );
+    }
+
+    return result;
+  });
 };

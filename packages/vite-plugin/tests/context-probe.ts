@@ -1,13 +1,21 @@
 import {
   contentHash,
   createExcludeMatcher,
+  projectExternalFileOwners,
   withoutInvalidOriginals,
 } from '@animus-ui/extract/pipeline';
 import { resolve } from 'path';
 
-import { buildRawEntriesFromCache } from '../src/context';
+import { buildRawEntriesFromCache, PluginContext } from '../src/context';
+import { makeManifest } from './manifest-fixture';
 
-import type { PluginContext } from '../src/context';
+import type {
+  RawSourceEntry,
+  SourceEntryOwnership,
+  SourceIngestionDiagnostic,
+  SourceIngestionResult,
+} from '@animus-ui/extract/pipeline';
+import type { DevEnvironment } from 'vite';
 
 /**
  * The stand-in `PluginContext` that behavioral tests drive hook bodies with.
@@ -32,6 +40,20 @@ export interface ContextProbe {
   verboseLines: string[];
 }
 
+interface ProbeModuleNode {
+  id: string;
+  url: string;
+  file: string | null;
+}
+
+interface ProbeModuleGraph {
+  getModulesByFile(file: string): Set<ProbeModuleNode> | undefined;
+  getModuleById(id: string): ProbeModuleNode | undefined;
+  invalidateModule(module: ProbeModuleNode): void;
+}
+
+type ContextProbeOverrides = Partial<PluginContext>;
+
 /**
  * Minimal environment module-graph double: nodes for one physical `file`
  * (rootDir-relative or absolute; node ids/urls from `ids`, defaulting to the
@@ -42,11 +64,7 @@ export function makeEnvGraph(opts: {
   rootDir: string;
   file?: string;
   ids?: string[];
-}): {
-  invalidated: string[];
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  moduleGraph: any;
-} {
+}) {
   const absPath = opts.file ? resolve(opts.rootDir, opts.file) : null;
   const invalidated: string[] = [];
   const nodes = (opts.ids ?? (absPath ? [absPath] : [])).map((id) => ({
@@ -54,50 +72,59 @@ export function makeEnvGraph(opts: {
     url: id,
     file: absPath,
   }));
+  const moduleGraph: ProbeModuleGraph = {
+    getModulesByFile: (file) =>
+      absPath && file === absPath ? new Set(nodes) : undefined,
+    getModuleById: (id) => nodes.find((node) => node.id === id),
+    invalidateModule: (module) => {
+      invalidated.push(module.id);
+    },
+  };
   return {
     invalidated,
-    moduleGraph: {
-      getModulesByFile: (file: string) =>
-        absPath && file === absPath ? new Set(nodes) : undefined,
-      getModuleById: (id: string) => nodes.find((node) => node.id === id),
-      invalidateModule: (mod: { id?: unknown }) => {
-        invalidated.push(String(mod.id));
-      },
-    },
+    // SAFETY: The graph probe models the complete method surface exercised by
+    // its exact Vite hook consumers; every returned node supplies the id, url,
+    // and file fields those consumers observe and pass back to invalidation.
+    moduleGraph: moduleGraph as DevEnvironment['moduleGraph'],
   };
 }
 
-export function makeContextProbe(
+export function makeContextProbe<Overrides extends ContextProbeOverrides>(
   rootDir: string,
-  extras: Record<string, unknown> = {}
+  extras?: Overrides
 ): ContextProbe {
-  const probe: ContextProbe = {
-    ctx: null as unknown as PluginContext,
-    analyses: 0,
-    extractedInvalidations: 0,
-    infoLines: [],
-    verboseLines: [],
-  };
+  let probe: ContextProbe;
+  const externalPackageDirs: string[] = [];
+  const fileCache: ReadonlyMap<string, { hash: string; source: string }> =
+    new Map();
+  const externalFileOwners: Record<string, string> = {};
+  const sourceOwnership: Record<string, SourceEntryOwnership> = {};
+  const reverseProvenance: Record<string, string[]> = {};
   const ctx = {
     isProd: false,
     verbose: false,
     rootDir,
     options: {},
-    externalPackageDirs: [] as string[],
-    externalFileOwners: {} as Record<string, string>,
+    externalPackageDirs,
+    externalFileOwners,
     // The context's memoized matcher (PluginContext builds it in its
     // constructor) — hook code reads this, never a per-call construction.
     excludeMatcher: createExcludeMatcher(undefined),
-    fileCache: new Map<string, { hash: string; source: string }>(),
+    // Read-only exactly like production's, so every seed and every hook write
+    // goes through the borrowed mutator below and the generation counter the
+    // barren-walk memo keys on moves in tests as it does in production.
+    fileCache,
+    fileCacheGeneration: 0,
+    // The PRODUCTION mutator, borrowed rather than mirrored (as with
+    // `recordFallbackState`): it touches only `fileCache` and
+    // `fileCacheGeneration`, both modeled here.
+    mutateFileCache: PluginContext.prototype.mutateFileCache,
     analysisEntryCache: new Map<string, { hash: string; source: string }>(),
-    sourceOwnership: {} as Record<
-      string,
-      { originalPath: string; originalHash: string; analysisPaths: string[] }
-    >,
+    sourceOwnership,
     analysisOwnerByPath: new Map<string, string>(),
     rawExtensionFallbacks: new Set<string>(),
-    reverseProvenance: {} as Record<string, string[]>,
-    storedManifest: { components: {}, files: {} },
+    reverseProvenance,
+    storedManifest: makeManifest(),
     // The four inputs `virtual:animus/system-props` is generated from. The
     // engine republishes them on every analysis whether or not they moved.
     storedSystemPropMapJson: '{}',
@@ -109,18 +136,19 @@ export function makeContextProbe(
     // open (updates deliver normally).
     transformOutputHashes: new Map<string, string>(),
     recordTransformOutput(relativePath: string, code: string) {
-      (this.transformOutputHashes as Map<string, string>).set(
-        relativePath,
-        `probe:${code.length}`
-      );
+      this.transformOutputHashes.set(relativePath, `probe:${code.length}`);
     },
-    runAnalysis(_entries?: unknown): boolean | undefined {
+    // The PRODUCTION mutator, borrowed rather than mirrored: it reads only
+    // `isProd` and `rawExtensionFallbacks`, both modeled above, so a probe
+    // can never disagree with the real fallback bookkeeping.
+    recordFallbackState: PluginContext.prototype.recordFallbackState,
+    runAnalysis(_entries?: RawSourceEntry[]): boolean | undefined {
       probe.analyses++;
       return undefined;
     },
     async ingestRawSources(
-      entries: Array<{ path: string; source: string; hash?: string }>
-    ) {
+      entries: readonly RawSourceEntry[]
+    ): Promise<SourceIngestionResult> {
       const originalEntries = entries.map((entry) => ({
         ...entry,
         hash: entry.hash ?? contentHash(entry.source),
@@ -141,35 +169,31 @@ export function makeContextProbe(
         diagnostics: [],
       };
     },
-    surfaceSourceDiagnostics() {
+    surfaceSourceDiagnostics(
+      _diagnostics: readonly SourceIngestionDiagnostic[]
+    ) {
       return new Set<string>();
     },
     // Mirrors PluginContext.analyzeIngested exactly — same step order, same
     // publish-on-success rule — over the probe's own overridable parts, so
     // a hook body driven through the probe exercises the real transaction.
     async analyzeIngested(options?: {
-      rawEntries?: Array<{ path: string; source: string; hash?: string }>;
-      beforeAnalysis?: (accepted: unknown) => void;
+      rawEntries?: readonly RawSourceEntry[];
+      beforeAnalysis?: (accepted: SourceIngestionResult) => void;
     }) {
       const ingested = await this.ingestRawSources(
         options?.rawEntries ?? buildRawEntriesFromCache(this.fileCache)
       );
       const accepted = withoutInvalidOriginals(
         ingested,
-        this.surfaceSourceDiagnostics()
+        this.surfaceSourceDiagnostics(ingested.diagnostics)
       );
       options?.beforeAnalysis?.(accepted);
       const ok = this.runAnalysis(accepted.analysisEntries) !== false;
       if (ok) this.publishSourceIngestion(accepted);
       return { ok, accepted };
     },
-    publishSourceIngestion(result: {
-      analysisEntries: Array<{ path: string; source: string; hash: string }>;
-      ownership: Record<
-        string,
-        { originalPath: string; originalHash: string; analysisPaths: string[] }
-      >;
-    }) {
+    publishSourceIngestion(result: SourceIngestionResult) {
       this.analysisEntryCache = new Map(
         result.analysisEntries.map((entry) => [
           entry.path,
@@ -181,6 +205,13 @@ export function makeContextProbe(
         Object.values(result.ownership).flatMap((owner) =>
           owner.analysisPaths.map((path) => [path, owner.originalPath])
         )
+      );
+      // The SHARED projection production publishes through, not a mirror of
+      // it: a hook driven here observes the same owner map — generated
+      // children included, retired originals excluded — that the plugin does.
+      this.externalFileOwners = projectExternalFileOwners(
+        result,
+        this.externalFileOwners
       );
     },
     invalidateExtractedModules() {
@@ -196,6 +227,15 @@ export function makeContextProbe(
     logTimingWaterfall() {},
     ...extras,
   };
-  probe.ctx = ctx as unknown as PluginContext;
+  probe = {
+    // SAFETY: This is the structural hook-test seam documented above. Its
+    // modeled base uses owner ingestion/context types, and owner-typed extras
+    // are spread last for each exact hook consumer before the seam is exposed.
+    ctx: ctx as PluginContext,
+    analyses: 0,
+    extractedInvalidations: 0,
+    infoLines: [],
+    verboseLines: [],
+  };
   return probe;
 }

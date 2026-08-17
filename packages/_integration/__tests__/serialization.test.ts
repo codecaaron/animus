@@ -9,11 +9,7 @@ import { beforeAll, describe, expect, test } from 'vitest';
 
 import { readFixtureFile } from '../fixtures/read-fixtures';
 import { config, theme } from '../fixtures/setup';
-import {
-  analyzeProject,
-  clearAnalysisCache,
-  runPipeline,
-} from './run-pipeline';
+import { analyzeProject, clearAnalysisCache } from './run-pipeline';
 
 const COMPONENTS = join(__dirname, '..', 'fixtures', 'components');
 
@@ -23,9 +19,9 @@ beforeAll(() => {
 
 describe('serialization shape', () => {
   test('ds.toConfig() returns propConfig, groupRegistry, transforms', () => {
-    expect(typeof config.propConfig).toBe('string');
-    expect(typeof config.groupRegistry).toBe('string');
-    expect(typeof config.transforms).toBe('object');
+    expect(config.propConfig).toEqual(expect.any(String));
+    expect(config.groupRegistry).toEqual(expect.any(String));
+    expect(config.transforms).toEqual(expect.any(Object));
 
     // propConfig and groupRegistry must be valid JSON
     expect(() => JSON.parse(config.propConfig)).not.toThrow();
@@ -33,28 +29,15 @@ describe('serialization shape', () => {
   });
 
   test('ds.toConfig() omits the retired selector order output', () => {
-    expect(typeof config.selectorAliases).toBe('string');
+    expect(config.selectorAliases).toEqual(expect.any(String));
     expect(config).not.toHaveProperty('selectorOrder');
   });
 
-  test('runPipeline retains a null selector-order NAPI slot', () => {
-    let args: unknown[] = [];
-
-    runPipeline([], {}, (...received: unknown[]) => {
-      args = received;
-      return JSON.stringify({ css: '' });
-    });
-
-    expect(args).toHaveLength(14);
-    expect(args[9]).toBe(config.selectorAliases);
-    expect(args[10]).toBeNull();
-  });
-
   test('tokens.serialize() returns scalesJson, variableMapJson, variableCss, contextualVarsJson', () => {
-    expect(typeof theme.scalesJson).toBe('string');
-    expect(typeof theme.variableMapJson).toBe('string');
-    expect(typeof theme.variableCss).toBe('string');
-    expect(typeof theme.contextualVarsJson).toBe('string');
+    expect(theme.scalesJson).toEqual(expect.any(String));
+    expect(theme.variableMapJson).toEqual(expect.any(String));
+    expect(theme.variableCss).toEqual(expect.any(String));
+    expect(theme.contextualVarsJson).toEqual(expect.any(String));
 
     // JSON fields must be valid JSON
     expect(() => JSON.parse(theme.scalesJson)).not.toThrow();
@@ -67,19 +50,9 @@ describe('serialize → NAPI round-trip', () => {
     const entry = readFixtureFile(COMPONENTS, 'button.tsx');
     const fileEntries = JSON.stringify([entry]);
 
-    const manifestJson = analyzeProject(
-      fileEntries,
-      theme.scalesJson,
-      theme.variableMapJson,
-      theme.contextualVarsJson || null,
-      config.propConfig,
-      config.groupRegistry,
-      '{}',
-      false,
-      null
-    );
+    const manifestJson = analyzeProject(fileEntries);
 
-    expect(typeof manifestJson).toBe('string');
+    expect(manifestJson).toEqual(expect.any(String));
     const manifest = JSON.parse(manifestJson);
     expect(manifest).toBeDefined();
     expect(manifest.css).toBeDefined();
@@ -89,17 +62,7 @@ describe('serialize → NAPI round-trip', () => {
     const entry = readFixtureFile(COMPONENTS, 'button.tsx');
     const fileEntries = JSON.stringify([entry]);
 
-    const manifestJson = analyzeProject(
-      fileEntries,
-      theme.scalesJson,
-      theme.variableMapJson,
-      theme.contextualVarsJson || null,
-      config.propConfig,
-      config.groupRegistry,
-      '{}',
-      false,
-      null
-    );
+    const manifestJson = analyzeProject(fileEntries);
 
     const manifest = JSON.parse(manifestJson);
     expect(manifest.css).toContain('@layer');
@@ -109,17 +72,7 @@ describe('serialize → NAPI round-trip', () => {
     const entry = readFixtureFile(COMPONENTS, 'button.tsx');
     const fileEntries = JSON.stringify([entry]);
 
-    const manifestJson = analyzeProject(
-      fileEntries,
-      theme.scalesJson,
-      theme.variableMapJson,
-      theme.contextualVarsJson || null,
-      config.propConfig,
-      config.groupRegistry,
-      '{}',
-      false,
-      null
-    );
+    const manifestJson = analyzeProject(fileEntries);
 
     const manifest = JSON.parse(manifestJson);
     expect(manifest.report).toBeDefined();

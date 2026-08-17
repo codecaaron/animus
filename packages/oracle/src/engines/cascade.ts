@@ -23,6 +23,7 @@ import {
   referencedDimensions,
   TRUE,
 } from '../core/predicate';
+import { isStringDimensionValue } from '../core/scenario';
 import { exact, unknownValue } from '../core/value';
 import { tokenReferencesIn } from '../providers/tokens';
 import { plural } from './format';
@@ -52,7 +53,7 @@ import type { TokenProvider } from '../providers/tokens';
 /**
  * Properties this phase propagates from an element-selector rule when the
  * target itself declares nothing. Deliberately tiny: a full inherited-property
- * table without a render-shape provider would be a guess about the ancestor
+ * table without a render-tree provider would be a guess about the ancestor
  * chain, and DESIGN §8 forbids that.
  */
 export const INHERITABLE_PROPERTIES: readonly string[] = [
@@ -472,6 +473,23 @@ const substituteVariables = (
  * content hash over the guard tree and dependency list every call — a cost
  * that otherwise repeats for the same unresolved declaration at every cell of
  * every sweep.
+ *
+ * WHY THE UNIVERSE IS NOT IN THE KEY (and this memo is still sound across
+ * universes). One registry provably spans several: the runtime builds one
+ * `ObligationRegistry` and `contextFor` hands that same instance to every
+ * world while `universe` varies per world, so `carry` reading a base world
+ * and a candidate world back-to-back shares this map. That is safe because
+ * every field `raiseDynamicValueUncached` registers is universe-INVARIANT
+ * for a fixed key: `origin`/`guard` derive only from `rule.source`,
+ * `rule.condition`, `rule.selector`, and `speculate` rewrites ONLY a rule's
+ * `declarations` while spreading the rest of the rule verbatim;
+ * `dependencies` come from the runtime-fixed host. The one input that DOES
+ * vary per universe — the declaration's value — is rendered into `reason`,
+ * which is in the key. Note the contrast with `universeIndexes` further
+ * down this file, which IS universe-keyed; the difference is exactly this
+ * invariance premise, not an oversight. Adding any universe-varying field
+ * to the registered obligation therefore requires adding the universe to
+ * the key in the same edit.
  */
 const raisedObligations = new WeakMap<
   ObligationRegistry,
@@ -608,9 +626,10 @@ export const resolveDeclarationValue = (
   }
 
   const bound = point['mode'];
-  const mode = typeof bound === 'string' ? bound : tokens.defaultMode();
+  const boundMode = isStringDimensionValue(bound) ? bound : undefined;
+  const mode = boundMode ?? tokens.defaultMode();
   const assumptions =
-    typeof bound === 'string'
+    boundMode !== undefined
       ? []
       : [
           `mode is unbound at this point — token values resolved under the ` +
@@ -747,7 +766,15 @@ const indexOfUniverse = (universe: StyleUniverse): UniverseIndex => {
 const staticsOf = (
   universe: StyleUniverse,
   rule: StyleRuleRecord
-): RuleStatics => indexOfUniverse(universe).statics.get(rule.id) as RuleStatics;
+): RuleStatics => {
+  const index = indexOfUniverse(universe);
+  // SAFETY: `indexOfUniverse` populates `statics` for every rule of
+  // `universe.rules` in one pass, and every caller reaches a rule only through
+  // that same index (its `byFirstClass` buckets, its `globalRules`, or the
+  // universe's own rule list), so the entry exists for the universe it was
+  // indexed from.
+  return index.statics.get(rule.id) as RuleStatics;
+};
 
 const buildCandidate = (
   ctx: CascadeContext,
@@ -775,6 +802,17 @@ const buildCandidate = (
     conditional: !active && unboundInWorld.length + unboundAtPoint.length > 0,
   };
 };
+
+/**
+ * Keyed collections are walked in key order so that outcomes, assumptions and
+ * every narrative derived from them are a pure function of the inputs.
+ */
+const byName = <Value>(
+  entries: ReadonlyMap<string, Value>
+): readonly (readonly [string, Value])[] =>
+  Array.from(entries.entries()).sort(([left], [right]) =>
+    left < right ? -1 : left > right ? 1 : 0
+  );
 
 const declarationsOf = (
   candidates: readonly CascadeCandidate[]
@@ -906,11 +944,8 @@ export const analyzeCascade = (
 
   const byProperty = declarationsOf(candidates);
   const outcomes = new Map<string, PropertyOutcome>();
-  for (const property of Array.from(byProperty.keys()).sort()) {
-    outcomes.set(
-      property,
-      outcomeFor(property, byProperty.get(property) as DeclarationCandidate[])
-    );
+  for (const [property, declarations] of byName(byProperty)) {
+    outcomes.set(property, outcomeFor(property, declarations));
   }
 
   const unboundCounts = new Map<string, number>();
@@ -919,9 +954,9 @@ export const analyzeCascade = (
       unboundCounts.set(dim, (unboundCounts.get(dim) ?? 0) + 1);
     }
   }
-  for (const dim of Array.from(unboundCounts.keys()).sort()) {
+  for (const [dim, count] of byName(unboundCounts)) {
     assumptions.push(
-      `${plural(unboundCounts.get(dim) as number, 'rule')} guarded by ` +
+      `${plural(count, 'rule')} guarded by ` +
         `${dim} — dimension unbound in this world`
     );
   }

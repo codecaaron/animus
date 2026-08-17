@@ -38,13 +38,16 @@ setEngineApiOverride(() => ({
 
 import { ExtractionSession } from '../../extract/session/extraction-session';
 import { ANALYSIS_STATUS_ARTIFACT } from '../../extract/session/session-paths';
+import { getManifestJson } from '../../extract/session/singleton';
 import {
   buildManifest,
-  cleanupProjects,
   createProject as createFixtureProject,
+  disposeTempRoots,
   resetAnimusGlobals,
   SYSTEM_CONFIG,
 } from './singleton-fixtures';
+
+import type { AnalysisStatus } from '../../extract/session/session-paths';
 
 let restoreGlobals: () => void;
 
@@ -58,7 +61,7 @@ beforeEach(() => {
 afterEach(() => {
   restoreGlobals();
   vi.restoreAllMocks();
-  cleanupProjects();
+  disposeTempRoots();
 });
 
 describe('geological-reset failure', () => {
@@ -92,10 +95,11 @@ describe('geological-reset failure', () => {
     // No incremental analysis against the stale system config.
     expect(mocks.analyzeProject.mock.calls.length).toBe(analysesAfterFull);
 
-    // The status artifact carries the terminal failure for loaders.
-    const status = JSON.parse(
+    // The status artifact carries the terminal failure for loaders; the
+    // session's own artifact contract (session-paths.ts) names its fields.
+    const status: AnalysisStatus = JSON.parse(
       readFileSync(join(session.sessionDir, ANALYSIS_STATUS_ARTIFACT), 'utf-8')
-    ) as { state: string; diagnostic?: string };
+    );
     expect(status.state).toBe('failed');
     expect(status.diagnostic).toContain('unexpected token');
 
@@ -103,5 +107,36 @@ describe('geological-reset failure', () => {
     expect(readFileSync(join(session.sessionDir, 'styles.css'), 'utf-8')).toBe(
       cssAfterFull
     );
+  });
+});
+
+describe('failed full pipeline', () => {
+  test('a session whose first pipeline failed never answers as the watch owner', async () => {
+    const root = createFixtureProject('animus-owner-fail-');
+    const session = new ExtractionSession({ system: './src/system.ts' });
+    session.rootDir = root;
+
+    // The system LOADS (pipeline step 1 assigns it) and the analysis then
+    // fails — so the pass registers no owner and populates no caches.
+    mocks.analyzeProject.mockImplementation(() => {
+      throw new Error('analysis boom');
+    });
+    await expect(session.runFullPipeline()).rejects.toThrow('analysis boom');
+
+    // A watch batch entering this session must take the NON-OWNING branch:
+    // ownership is decided by the loaded-system field, and a failed pass
+    // that leaves it set makes the session publish a generation built from
+    // caches it never filled.
+    mocks.analyzeProject.mockImplementation(() => buildManifest({}));
+    const analysesAfterFailure = mocks.analyzeProject.mock.calls.length;
+    await session.handleWatchUpdate({
+      modifiedFiles: new Set([join(root, 'src', 'Button.tsx')]),
+      removedFiles: new Set(),
+    });
+
+    expect(mocks.analyzeProject.mock.calls.length).toBe(analysesAfterFailure);
+    // Nothing published: the singleton spells "unset" as either absent or
+    // null (the per-test reset writes undefined).
+    expect(getManifestJson() ?? null).toBeNull();
   });
 });

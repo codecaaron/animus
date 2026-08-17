@@ -1,3 +1,4 @@
+import { isJsonObject, parseJsonObject } from '@animus-ui/assertions';
 import { RETIRED_ENGINE_MESSAGE } from '@animus-ui/extract/pipeline';
 /**
  * Behavior pins for AnimusWebpackPlugin (src/plugin.ts) ahead of refactor.
@@ -21,17 +22,23 @@ import { AnimusWebpackPlugin } from '../src/plugin';
 import {
   BUTTON_SOURCE,
   BUTTON_STYLE_EDIT as BUTTON_SOURCE_CHANGED,
-  cleanupProjects,
   createProject as createFixtureProject,
+  disposeTempRoots,
+  makeManifest,
   resetAnimusGlobals,
   SYSTEM_CONFIG,
 } from './singleton-fixtures';
 
 import type { AnimusNextOptions } from '../src/types';
+import type { JsonObject, JsonValue } from '@animus-ui/assertions';
+import type {
+  AnalyzeProjectArgs,
+  ManifestDiagnostic,
+} from '@animus-ui/extract/pipeline';
 
 const mocks = vi.hoisted(() => ({
   loadSystemModule: vi.fn(),
-  analyzeProject: vi.fn(),
+  analyzeProject: vi.fn<(...args: AnalyzeProjectArgs) => string>(),
   clearAnalysisCache: vi.fn(),
 }));
 
@@ -56,11 +63,24 @@ const SYSTEM_SOURCE_CHANGED =
 /** Component CSS returned by the analyzeProject mock; mutable per test. */
 let nextComponentCss = '.btn{margin:8;}';
 
-function buildManifest(overrides: Record<string, unknown> = {}): string {
-  return JSON.stringify({
+interface ManifestOverrides {
+  diagnostics?: ManifestDiagnostic[];
+}
+
+/**
+ * The engine manifest the `analyzeProject` mock returns — a COMPLETE
+ * `ProjectManifest` (`makeManifest`, singleton-fixtures) carrying this
+ * suite's meaningful values. The shared pipeline reads `manifest.sheets
+ * .global` and `manifest.css` as typed fields, so a partial literal is not
+ * a manifest.
+ */
+function buildManifest(overrides: ManifestOverrides = {}): string {
+  const manifest = makeManifest({
     css: nextComponentCss,
-    sheets: { global: '@layer anm-global{body{margin:0}}' },
-    system_prop_map: { m: 'margin' },
+    // prop name → VALUE → utility class name (manifest-schema.ts): the map
+    // `resolveClasses` indexes as `systemPropMap[prop][value]`. The session
+    // hands it to the served system-props module verbatim.
+    system_prop_map: { m: { '8': 'anm-m-8' } },
     // Verbatim manifest spelling: `DynamicPropMeta` serializes camelCase, with
     // absent transforms as `null` and an empty scale map as `{}`.
     dynamic_props: {
@@ -81,9 +101,13 @@ function buildManifest(overrides: Record<string, unknown> = {}): string {
         scaleValues: {},
       },
     },
-    diagnostics: [],
     ...overrides,
   });
+  // `sheets` stays a whole `ManifestSheets`; only the layer this suite reads
+  // carries content. `makeManifest` returns fresh objects, so this mutates
+  // nobody else's fixture.
+  manifest.sheets.global = '@layer anm-global{body{margin:0}}';
+  return JSON.stringify(manifest);
 }
 
 beforeEach(() => {
@@ -97,7 +121,7 @@ beforeEach(() => {
 afterEach(() => {
   restoreGlobals();
   vi.restoreAllMocks();
-  cleanupProjects();
+  disposeTempRoots();
 });
 
 function createProject(): string {
@@ -119,18 +143,36 @@ class FakeRawSource {
   }
 }
 
-type AsyncHandler = (compiler: unknown) => Promise<void>;
-type CompilationHandler = (compilation: unknown) => void;
+type PluginCompiler = Parameters<AnimusWebpackPlugin['apply']>[0];
+type AsyncHandler = Parameters<PluginCompiler['hooks']['run']['tapPromise']>[1];
+type CompilationHandler = Parameters<
+  PluginCompiler['hooks']['compilation']['tap']
+>[1];
+type ThisCompilationHandler = Parameters<
+  PluginCompiler['hooks']['thisCompilation']['tap']
+>[1];
+type PluginCompilation = Parameters<CompilationHandler>[0];
+type ProcessAssetsTap = PluginCompilation['hooks']['processAssets']['tap'];
+type ProcessAssetsOptions = Parameters<ProcessAssetsTap>[0];
+type ProcessAssetsHandler = Parameters<ProcessAssetsTap>[1];
+type WebpackSource = Parameters<PluginCompilation['updateAsset']>[1];
+
+/** The alias map the plugin declares it harvests from — derived rather than
+ *  restated, so the non-string webpack variants (`false`, candidate lists)
+ *  stay reachable from this harness. */
+type PluginAliasMap = NonNullable<
+  NonNullable<NonNullable<PluginCompiler['options']>['resolve']>['alias']
+>;
 
 function createCompiler(
   root: string,
-  extras: { name?: string; alias?: Record<string, string> } = {}
+  extras: { name?: string; alias?: PluginAliasMap } = {}
 ) {
   const runHandlers: AsyncHandler[] = [];
   const watchRunHandlers: AsyncHandler[] = [];
   const compilationHandlers: CompilationHandler[] = [];
-  const thisCompilationHandlers: CompilationHandler[] = [];
-  const compiler = {
+  const thisCompilationHandlers: ThisCompilationHandler[] = [];
+  const compiler: PluginCompiler = {
     hooks: {
       run: {
         tapPromise: (_name: string, fn: AsyncHandler) => {
@@ -148,7 +190,7 @@ function createCompiler(
         },
       },
       thisCompilation: {
-        tap: (_name: string, fn: CompilationHandler) => {
+        tap: (_name: string, fn: ThisCompilationHandler) => {
           thisCompilationHandlers.push(fn);
         },
       },
@@ -162,7 +204,7 @@ function createCompiler(
       // plugin's runtime existence check (design D7) requires it.
       NormalModule: {
         getCompilationHooks: () => ({
-          needBuild: { tapAsync: (_name: string, _fn: unknown) => {} },
+          needBuild: { tapAsync: () => {} },
         }),
       },
     },
@@ -178,35 +220,35 @@ function createCompiler(
 
 function applyPlugin(
   plugin: AnimusWebpackPlugin,
-  compiler: ReturnType<typeof createCompiler>['compiler']
+  compiler: PluginCompiler
 ): void {
-  plugin.apply(
-    compiler as unknown as Parameters<AnimusWebpackPlugin['apply']>[0]
-  );
+  plugin.apply(compiler);
 }
 
 function createCompilation(assetNames: string[]) {
-  const assets = new Map<string, FakeRawSource>(
+  const assets = new Map<string, WebpackSource>(
     assetNames.map((name) => [name, new FakeRawSource('/* stub */')])
   );
   const taps: Array<{
-    options: { name: string; stage: number };
-    fn: (assets: Record<string, unknown>) => void;
+    options: ProcessAssetsOptions;
+    fn: ProcessAssetsHandler;
   }> = [];
-  const compilation = {
+  const compilation: PluginCompilation = {
     hooks: {
       processAssets: {
-        tap: (
-          options: { name: string; stage: number },
-          fn: (assets: Record<string, unknown>) => void
-        ) => {
+        tap: (options, fn) => {
           taps.push({ options, fn });
         },
       },
     },
-    getAsset: (name: string) =>
-      assets.has(name) ? { source: assets.get(name) } : undefined,
-    updateAsset: (name: string, source: FakeRawSource) => {
+    fileDependencies: new Set<string>(),
+    missingDependencies: new Set<string>(),
+    contextDependencies: new Set<string>(),
+    getAsset: (name: string) => {
+      const source = assets.get(name);
+      return source ? { source } : undefined;
+    },
+    updateAsset: (name: string, source: WebpackSource) => {
       assets.set(name, source);
     },
   };
@@ -222,14 +264,76 @@ function artifactPath(
   return join(sessionArtifactDir(root, plugin.sessionId), name);
 }
 
-function analyzeCall(index: number): unknown[] {
-  return mocks.analyzeProject.mock.calls[index] as unknown[];
+function analyzeCall(index: number): AnalyzeProjectArgs {
+  const call = mocks.analyzeProject.mock.calls[index];
+  if (!call) throw new Error(`Missing analyzeProject call ${index}`);
+  return call;
 }
 
-function parseFiles(
-  args: unknown[]
-): Array<{ path: string; source: string; hash?: string }> {
-  return JSON.parse(args[0] as string);
+interface AnalyzeFileFixture {
+  path: string;
+  source: string;
+  hash?: string;
+}
+
+function parseRequiredJsonObject(
+  json: string | null,
+  label: string
+): JsonObject {
+  if (json === null) throw new Error(`${label} must be present`);
+  return parseJsonObject(json, label);
+}
+
+function readJsonString(
+  object: JsonObject,
+  key: string,
+  label: string
+): string {
+  const value = object[key];
+  if (String(value) !== value) {
+    throw new Error(`${label}.${key} must be a string`);
+  }
+  return String(value);
+}
+
+function parseFiles(args: AnalyzeProjectArgs): AnalyzeFileFixture[] {
+  const parsed: JsonValue = JSON.parse(args[0]);
+  if (!Array.isArray(parsed)) {
+    throw new Error('analyzeProject files must be a JSON array');
+  }
+  return parsed.map((entry, index) => {
+    if (!isJsonObject(entry)) {
+      throw new Error(`analyzeProject files[${index}] must be an object`);
+    }
+    const file: AnalyzeFileFixture = {
+      path: readJsonString(entry, 'path', `analyzeProject files[${index}]`),
+      source: readJsonString(entry, 'source', `analyzeProject files[${index}]`),
+    };
+    if (entry.hash !== undefined) {
+      file.hash = readJsonString(
+        entry,
+        'hash',
+        `analyzeProject files[${index}]`
+      );
+    }
+    return file;
+  });
+}
+
+function analyzeResult(index: number): string {
+  const result = mocks.analyzeProject.mock.results[index];
+  if (!result || result.type !== 'return') {
+    throw new Error(`analyzeProject call ${index} did not return`);
+  }
+  return result.value;
+}
+
+function readEpoch(path: string): string {
+  return readJsonString(
+    parseJsonObject(readFileSync(path, 'utf-8'), 'replacement epoch'),
+    'epoch',
+    'replacement epoch'
+  );
 }
 
 describe('AnimusWebpackPlugin.apply', () => {
@@ -289,7 +393,7 @@ describe('production run (full pipeline)', () => {
     expect(args[5]).toBe(SYSTEM_CONFIG.groupRegistry);
     expect(args[6]).toBe('{}'); // no external packages resolved
     expect(args[7]).toBe(false); // production devMode
-    expect(JSON.parse(args[8] as string)).toEqual({
+    expect(parseRequiredJsonObject(args[8], 'emitter config')).toEqual({
       runtime_import: '@animus-ui/system/runtime',
       css_module_id: '.animus/styles.css',
       system_props_module_id: artifactPath(root, plugin, 'system-props.js'),
@@ -299,7 +403,7 @@ describe('production run (full pipeline)', () => {
     expect(args[11]).toBeNull();
     // Webpack resolve.alias translated to path aliases (own .animus alias skipped,
     // longest pattern first, prefix aliases get trailing slashes)
-    expect(JSON.parse(args[12] as string)).toEqual({
+    expect(parseRequiredJsonObject(args[12], 'path aliases')).toEqual({
       aliases: [
         {
           pattern: '@components/',
@@ -322,6 +426,39 @@ describe('production run (full pipeline)', () => {
     expect(button?.hash).toMatch(/^[0-9a-f]{32}$/);
   });
 
+  test('harvests the first candidate of a list alias and skips the ones that name no target', async () => {
+    const root = createProject();
+    const { compiler, runHandlers } = createCompiler(root, {
+      alias: {
+        // Webpack tries a candidate list in order, so the FIRST entry is the
+        // target a resolution would land on and the one this harvest reports.
+        '@first': [join(root, 'src', 'components'), join(root, 'src')],
+        // `false` disables an alias outright, and an empty list names no
+        // candidate at all: neither yields a pattern→target pair, and
+        // reporting either would point the engine at a path webpack never
+        // resolves to.
+        '@disabled': false,
+        '@empty': [],
+      },
+    });
+    const plugin = new AnimusWebpackPlugin(OPTIONS);
+    applyPlugin(plugin, compiler);
+
+    await runHandlers[0](compiler);
+
+    expect(parseRequiredJsonObject(analyzeCall(0)[12], 'path aliases')).toEqual(
+      {
+        aliases: [
+          {
+            pattern: '@first/',
+            replacement: 'src/components/',
+            type: 'prefix',
+          },
+        ],
+      }
+    );
+  });
+
   test('an offline system-props change moves the replacement epoch', async () => {
     // The epoch is webpack's persistent-cache witness: restored modules
     // import the building session's system-props.js. A group-registry
@@ -337,16 +474,14 @@ describe('production run (full pipeline)', () => {
       sessionArtifactDir(root, session.sessionId),
       'replacements-epoch'
     );
-    const readEpoch = () =>
-      (JSON.parse(readFileSync(epochPath, 'utf-8')) as { epoch: string }).epoch;
-    const before = readEpoch();
+    const before = readEpoch(epochPath);
 
     mocks.loadSystemModule.mockReturnValue({
       ...SYSTEM_CONFIG,
       groupRegistry: '{"typography":{"props":["fontSize"]}}',
     });
     await session.runFullPipeline();
-    expect(readEpoch()).not.toBe(before);
+    expect(readEpoch(epochPath)).not.toBe(before);
   });
 
   test('writes styles.css and system-props.js and publishes shared state', async () => {
@@ -378,9 +513,7 @@ describe('production run (full pipeline)', () => {
     expect(css.startsWith(getSharedCss())).toBe(true);
     expect(css).toContain('__animusSession');
     // Manifest is stored verbatim for the loader
-    expect(getManifestJson()).toBe(
-      mocks.analyzeProject.mock.results[0].value as string
-    );
+    expect(getManifestJson()).toBe(analyzeResult(0));
 
     // system-props module: null transforms and empty scale maps are omitted,
     // systemPropGroups is the raw groupRegistry JSON string
@@ -389,7 +522,7 @@ describe('production run (full pipeline)', () => {
       'utf-8'
     );
     expect(sysProps).toBe(
-      'export const systemPropMap = {"m":"margin"};\n' +
+      'export const systemPropMap = {"m":{"8":"anm-m-8"}};\n' +
         'export const systemPropGroups = {"groups":{}};\n' +
         'export const dynamicPropConfig = {"color":{"varName":"--anm-color","slotClass":"anm-color-slot","property":"color","transformName":"toColor","scaleValues":{"primary":"#00f"}},"p":{"varName":"--anm-p","slotClass":"anm-p-slot","property":"padding"}};\n' +
         'export const transforms = {};\n'
@@ -413,9 +546,11 @@ describe('production run (full pipeline)', () => {
         sessionId: plugin.sessionId,
         generation: 1,
       }),
-      ...JSON.parse(mocks.analyzeProject.mock.results[0].value as string),
+      ...parseJsonObject(analyzeResult(0), 'analyzeProject manifest'),
     });
-    expect(JSON.parse(written).system_prop_map).toEqual({ m: 'margin' });
+    expect(JSON.parse(written).system_prop_map).toEqual({
+      m: { '8': 'anm-m-8' },
+    });
     const mtimeAfterFull = statSync(manifestPath).mtimeMs;
 
     // A source change whose re-analysis yields a byte-identical manifest
@@ -763,8 +898,11 @@ describe('watch mode (dev/HMR)', () => {
 
 describe('engine retirement (retire-extract-v1)', () => {
   test('constructing the plugin with engine:v1 throws the canonical message', () => {
+    const retiredEngineOptions = { ...OPTIONS, engine: 'v1' };
     expect(
-      () => new AnimusWebpackPlugin({ ...OPTIONS, engine: 'v1' as never })
+      // SAFETY: This deliberately crosses the typed option boundary to prove
+      // the constructor rejects a stale JavaScript config's retired engine.
+      () => new AnimusWebpackPlugin(retiredEngineOptions as AnimusNextOptions)
     ).toThrow(RETIRED_ENGINE_MESSAGE);
   });
 

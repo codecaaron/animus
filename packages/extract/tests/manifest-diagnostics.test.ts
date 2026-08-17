@@ -123,7 +123,23 @@ describe('collectSelectorAliasDiagnostics', () => {
       )
     ).toEqual([]);
     expect(collectSelectorAliasDiagnostics(null)).toEqual([]);
-    expect(collectSelectorAliasDiagnostics('not-json')).toEqual([]);
+  });
+
+  /**
+   * RECORDED CONTRACT REVERSAL (campaign cluster F). This assertion previously
+   * pinned `'not-json'` yielding `[]`. The function's own header names the
+   * system-config boundary as "where these must fail loud", and `[]` reads as
+   * "every registered alias validated" — the exact failure the collector
+   * exists to prevent. `selectorAliasesJson` comes from `loadSystemConfig`,
+   * animus's own loader, so a parse failure is an engine bug.
+   */
+  it('throws on malformed selector-alias JSON, naming the wire and the cause', () => {
+    expect(() => collectSelectorAliasDiagnostics('not-json')).toThrow(
+      /selectorAliasesJson/
+    );
+    expect(() => collectSelectorAliasDiagnostics('not-json')).toThrow(
+      /SyntaxError/
+    );
   });
 
   it('flags a value whose every & is quoted with the coded error', () => {

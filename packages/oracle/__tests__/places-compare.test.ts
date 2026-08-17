@@ -9,6 +9,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
+import { MANIFEST_FILE } from '../src/host/animus/loader';
+import { asManifest } from '../src/host/animus/manifest-types';
 import { compareSnapshots, loadSnapshot } from '../src/places';
 
 /**
@@ -53,12 +55,19 @@ describe('compareSnapshots', () => {
   it('classifies places of a dropped file as removed, not silently gone', () => {
     const dir = mkdtempSync(join(tmpdir(), 'places-compare-'));
     cpSync(FIXTURE, dir, { recursive: true });
-    const manifestPath = join(dir, 'manifest.json');
-    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as {
-      fileFacts: Record<string, unknown>;
-    };
-    delete manifest.fileFacts[GROUP_FILE];
-    writeFileSync(manifestPath, JSON.stringify(manifest));
+    const manifestPath = join(dir, MANIFEST_FILE);
+    const manifest = asManifest(JSON.parse(readFileSync(manifestPath, 'utf8')));
+    const facts = manifest.fileFacts;
+    if (facts === undefined) {
+      throw new Error('fixture: the manifest must carry fileFacts');
+    }
+    const { [GROUP_FILE]: dropped, ...keptFacts } = facts;
+    // Vacuity guard: the file whose places must vanish was really in there.
+    expect(dropped).toBeDefined();
+    writeFileSync(
+      manifestPath,
+      JSON.stringify({ ...manifest, fileFacts: keptFacts })
+    );
 
     const before = loadSnapshot(FIXTURE, { sourceRoot: SOURCE_ROOT });
     const after = loadSnapshot(dir, { sourceRoot: SOURCE_ROOT });

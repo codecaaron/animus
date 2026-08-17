@@ -54,8 +54,11 @@ export function logBuildTimings(
       merged[`buildStart.${k}`] = v;
     }
     if (rustTiming) {
+      // Every phase entry is a duration by contract — the caller passes the
+      // manifest's `timing` sub-object (`ManifestTiming`, a number-valued
+      // phase map), same as `bt` above, which the loop over it already trusts.
       for (const [k, v] of Object.entries(rustTiming)) {
-        if (typeof v === 'number') merged[`rust.${k}`] = v;
+        merged[`rust.${k}`] = v;
       }
     }
     // stderr, not stdout: the timing JSON is a debug surface, and stdout

@@ -43,10 +43,9 @@ import {
 import { AnimusWebpackPlugin } from '../src/plugin';
 import {
   buildManifest,
-  BUTTON_SHAPE_EDIT,
   BUTTON_STYLE_EDIT,
-  cleanupProjects,
   createProject as createFixtureProject,
+  disposeTempRoots,
   PLAN_A,
   PLAN_B,
   resetAnimusGlobals,
@@ -60,23 +59,45 @@ let restoreGlobals: () => void;
 /** Loader path injected via the internal option so the loader-chain
  *  predicate is exercised without resolving this package's dist. */
 const LOADER_PATH = '/harness/animus-loader.js';
+const BUTTON_VARIANT_EDIT =
+  "export const Button = animus.styles({ margin: 16 }).variant({}).asElement('button');\n";
 
 function createProject(): string {
   return createFixtureProject('animus-needbuild-');
 }
 
+interface CandidateModule {
+  resource: string;
+  loaders: Array<{ loader: string }>;
+}
+
+type NeedBuildContext = Record<never, never>;
+type NeedBuildError = Error | null | undefined;
 type NeedBuildFn = (
-  module: unknown,
-  context: unknown,
-  callback: (err?: unknown, result?: boolean) => void
+  module: CandidateModule,
+  context: NeedBuildContext,
+  callback: (err?: Error | null, result?: boolean) => void
 ) => void;
+
+type CompilationIdentity = Record<never, never>;
+
+interface FakeNormalModule {
+  getCompilationHooks(compilation: CompilationIdentity): {
+    /** Optional exactly as the plugin's own `NormalModuleCompilationHooks`
+     *  declares it: the second half of the D7 check is a webpack that
+     *  publishes the hooks object without this hook. */
+    needBuild?: {
+      tapAsync(name: string, fn: NeedBuildFn): void;
+    };
+  };
+}
 
 /** Per-compilation needBuild recorder mirroring
  *  NormalModule.getCompilationHooks' identity contract. */
 function makeFakeNormalModule() {
-  const byCompilation = new Map<unknown, { taps: NeedBuildFn[] }>();
+  const byCompilation = new Map<CompilationIdentity, { taps: NeedBuildFn[] }>();
   return {
-    getCompilationHooks(compilation: unknown) {
+    getCompilationHooks(compilation: CompilationIdentity) {
       let entry = byCompilation.get(compilation);
       if (!entry) {
         entry = { taps: [] };
@@ -91,20 +112,52 @@ function makeFakeNormalModule() {
         },
       };
     },
-    tapsFor(compilation: unknown): NeedBuildFn[] {
+    tapsFor(compilation: CompilationIdentity): NeedBuildFn[] {
       return byCompilation.get(compilation)?.taps ?? [];
     },
   };
 }
 
-type AsyncHandler = (compiler: unknown) => Promise<void>;
-type CompilationHandler = (compilation: unknown) => void;
+type WatchIgnoreMatcher = (path: string) => boolean;
+type WatchIgnore = string | string[] | RegExp | WatchIgnoreMatcher;
+
+type AsyncHandler = (compiler: TestCompiler) => Promise<void>;
+type CompilationHandler = (compilation: CompilationIdentity) => void;
+
+interface TestWebpack {
+  Compilation: { PROCESS_ASSETS_STAGE_ADDITIONAL: number };
+  sources: {
+    RawSource: new (content: string) => {
+      source(): string;
+      size(): number;
+    };
+  };
+  NormalModule?: FakeNormalModule;
+}
+
+interface TestCompiler {
+  hooks: {
+    run: { tapPromise(name: string, fn: AsyncHandler): void };
+    watchRun: { tapPromise(name: string, fn: AsyncHandler): void };
+    compilation: { tap(name: string, fn: CompilationHandler): void };
+    thisCompilation: { tap(name: string, fn: CompilationHandler): void };
+  };
+  context: string;
+  options: {
+    name?: string;
+    resolve: { alias: Record<string, string> };
+    watchOptions: { ignored?: WatchIgnore };
+  };
+  webpack: TestWebpack;
+  modifiedFiles?: ReadonlySet<string>;
+  removedFiles?: ReadonlySet<string>;
+}
 
 function createCompiler(
   root: string,
   extras: {
     name?: string;
-    ignored?: unknown;
+    ignored?: WatchIgnore;
     omitNormalModule?: boolean;
   } = {}
 ) {
@@ -113,7 +166,24 @@ function createCompiler(
   const compilationHandlers: CompilationHandler[] = [];
   const thisCompilationHandlers: CompilationHandler[] = [];
   const normalModule = makeFakeNormalModule();
-  const compiler = {
+  const webpack: TestWebpack = {
+    Compilation: { PROCESS_ASSETS_STAGE_ADDITIONAL: -100 },
+    sources: {
+      RawSource: class {
+        constructor(private readonly content: string) {}
+        source(): string {
+          return this.content;
+        }
+        size(): number {
+          return this.content.length;
+        }
+      },
+    },
+  };
+  if (!extras.omitNormalModule) {
+    webpack.NormalModule = normalModule;
+  }
+  const compiler: TestCompiler = {
     hooks: {
       run: {
         tapPromise: (_name: string, fn: AsyncHandler) => {
@@ -143,21 +213,7 @@ function createCompiler(
       watchOptions:
         extras.ignored === undefined ? {} : { ignored: extras.ignored },
     },
-    webpack: {
-      Compilation: { PROCESS_ASSETS_STAGE_ADDITIONAL: -100 },
-      sources: {
-        RawSource: class {
-          constructor(private readonly content: string) {}
-          source(): string {
-            return this.content;
-          }
-          size(): number {
-            return this.content.length;
-          }
-        },
-      },
-      ...(extras.omitNormalModule ? {} : { NormalModule: normalModule }),
-    },
+    webpack,
   };
   return {
     compiler,
@@ -176,19 +232,23 @@ const OPTIONS: AnimusNextOptions & { loaderPath?: string } = {
 
 function applyPlugin(
   plugin: AnimusWebpackPlugin,
-  compiler: ReturnType<typeof createCompiler>['compiler']
+  compiler: TestCompiler
 ): void {
-  plugin.apply(
-    compiler as unknown as Parameters<AnimusWebpackPlugin['apply']>[0]
-  );
+  // SAFETY: TestCompiler models every compiler field read by apply(). This
+  // file drives run/watchRun with TestCompiler and thisCompilation with its
+  // identity token; the registered asset-compilation callback is not invoked.
+  plugin.apply(compiler as Parameters<AnimusWebpackPlugin['apply']>[0]);
 }
 
 /** Drive one tapped needBuild fn synchronously and capture its verdict. */
 function needBuildVerdict(
   fn: NeedBuildFn,
-  module: unknown
-): { err: unknown; forced: boolean | undefined } {
-  let captured: { err: unknown; forced: boolean | undefined } | null = null;
+  module: CandidateModule
+): { err: NeedBuildError; forced: boolean | undefined } {
+  let captured: {
+    err: NeedBuildError;
+    forced: boolean | undefined;
+  } | null = null;
   fn(module, {}, (err, result) => {
     captured = { err, forced: result };
   });
@@ -205,6 +265,14 @@ const otherModule = (root: string) => ({
   loaders: [{ loader: '/other/css-loader.js' }],
 });
 
+function requireWatchIgnoreMatcher(compiler: TestCompiler): WatchIgnoreMatcher {
+  const ignored = compiler.options.watchOptions.ignored;
+  expect(ignored).toBeTypeOf('function');
+  // SAFETY: The runtime assertion establishes the matcher contract produced
+  // when apply() normalizes this harness's RegExp watch-ignore fixture.
+  return ignored as WatchIgnoreMatcher;
+}
+
 beforeEach(() => {
   restoreGlobals = resetAnimusGlobals();
   mocks.loadSystemModule.mockReset().mockReturnValue({ ...SYSTEM_CONFIG });
@@ -217,7 +285,7 @@ beforeEach(() => {
 afterEach(() => {
   restoreGlobals();
   vi.restoreAllMocks();
-  cleanupProjects();
+  disposeTempRoots();
 });
 
 describe('runtime existence check (design D7)', () => {
@@ -227,6 +295,23 @@ describe('runtime existence check (design D7)', () => {
     expect(() =>
       applyPlugin(new AnimusWebpackPlugin(OPTIONS), compiler)
     ).toThrow(/needBuild|getCompilationHooks/);
+  });
+
+  test('a compilation whose hooks omit needBuild fails loudly', () => {
+    const root = createProject();
+    const harness = createCompiler(root);
+    // A webpack that publishes the hooks object without the needBuild hook.
+    // The check is PER-COMPILATION, so the failure lands when the compilation
+    // opens rather than at apply() — the coherence mechanism cannot exist
+    // without this hook, and serving stale transforms instead is the outcome
+    // design D7 forbids.
+    harness.compiler.webpack.NormalModule = {
+      getCompilationHooks: () => ({}),
+    };
+    applyPlugin(new AnimusWebpackPlugin(OPTIONS), harness.compiler);
+    expect(() =>
+      harness.thisCompilationHandlers.forEach((fn) => fn({}))
+    ).toThrow(/needBuild/);
   });
 
   test('the edge-server compiler is still skipped before the check', () => {
@@ -284,16 +369,25 @@ describe('watchOptions.ignored gains the session epoch artifact path (design D2)
     ]);
   });
 
+  test('a matcher shape composes into a matcher that keeps both behaviors', () => {
+    const root = createProject();
+    const userIgnore: WatchIgnoreMatcher = (path) => path.includes('vendor');
+    const { compiler } = createCompiler(root, { ignored: userIgnore });
+    const plugin = new AnimusWebpackPlugin(OPTIONS);
+    applyPlugin(plugin, compiler);
+    const ignored = requireWatchIgnoreMatcher(compiler);
+    expect(ignored(epochPathFor(root, plugin))).toBe(true);
+    expect(ignored('/proj/vendor/x.js')).toBe(true);
+    expect(ignored(join(root, 'src', 'Button.tsx'))).toBe(false);
+  });
+
   test('a RegExp shape composes into a matcher that keeps both behaviors', () => {
     const root = createProject();
     const userIgnore = /node_modules/;
     const { compiler } = createCompiler(root, { ignored: userIgnore });
     const plugin = new AnimusWebpackPlugin(OPTIONS);
     applyPlugin(plugin, compiler);
-    const ignored = compiler.options.watchOptions.ignored as (
-      path: string
-    ) => boolean;
-    expect(typeof ignored).toBe('function');
+    const ignored = requireWatchIgnoreMatcher(compiler);
     expect(ignored(epochPathFor(root, plugin))).toBe(true);
     expect(ignored('/proj/node_modules/x.js')).toBe(true);
     expect(ignored(join(root, 'src', 'Button.tsx'))).toBe(false);
@@ -340,7 +434,7 @@ describe('epoch-driven needBuild fan-out (design D1)', () => {
     mocks.analyzeProject.mockImplementation(() =>
       buildManifest(PLAN_B, '.btn{margin:16px;}')
     );
-    writeFileSync(join(root, 'src', 'Button.tsx'), BUTTON_SHAPE_EDIT);
+    writeFileSync(join(root, 'src', 'Button.tsx'), BUTTON_VARIANT_EDIT);
     await harness.watchRunHandlers[0]({
       ...harness.compiler,
       modifiedFiles: new Set([join(root, 'src', 'Button.tsx')]),
@@ -382,7 +476,7 @@ describe('epoch-driven needBuild fan-out (design D1)', () => {
     mocks.analyzeProject.mockImplementation(() =>
       buildManifest(PLAN_B, '.btn{margin:16px;}')
     );
-    writeFileSync(join(root, 'src', 'Button.tsx'), BUTTON_SHAPE_EDIT);
+    writeFileSync(join(root, 'src', 'Button.tsx'), BUTTON_VARIANT_EDIT);
     await owner.watchRunHandlers[0]({
       ...owner.compiler,
       modifiedFiles: new Set([join(root, 'src', 'Button.tsx')]),

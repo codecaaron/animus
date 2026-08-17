@@ -1,3 +1,4 @@
+import { ENGINE_TRANSFORM_EXTENSIONS } from '@animus-ui/extract/pipeline';
 import { mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -13,9 +14,10 @@ import {
 } from '../src/constants';
 import { transformSource } from '../src/transform';
 import { makeContextProbe, makeEnvGraph } from './context-probe';
+import { makeComponent, makeManifest } from './manifest-fixture';
 
-import type { CssSheets } from '../src/context';
 import type { ContextProbe } from './context-probe';
+import type { ManifestSheets } from '@animus-ui/extract/pipeline';
 
 /**
  * The `transform` hook's own contracts, driven through the hook body with a
@@ -34,7 +36,7 @@ import type { ContextProbe } from './context-probe';
 
 const ROOT = join('/tmp', 'animus-transform-root');
 
-const SHEETS: CssSheets = {
+const SHEETS: ManifestSheets = {
   declaration: '',
   global: '',
   base: '.animus-Button-abc{color:red}',
@@ -58,7 +60,7 @@ function makeProbe(
     isProd: options.isProd ?? false,
     externalDirOwners: {},
     externalFileOwners: {},
-    storedManifest: { components: {}, files: options.knownFiles ?? {} },
+    storedManifest: makeManifest({ files: options.knownFiles ?? {} }),
     storedManifestJson: '{}',
     storedSheets: SHEETS,
     engineApi: () => ({
@@ -68,20 +70,18 @@ function makeProbe(
       }),
     }),
   });
-  const ctx = probe.ctx as unknown as {
-    storedManifest: { files: Record<string, string[]> };
-    runAnalysis: () => void;
-  };
+  const ctx = probe.ctx;
   ctx.runAnalysis = () => {
     probe.analyses++;
-    Object.assign(ctx.storedManifest.files, options.discoversOnAnalysis ?? {});
+    Object.assign(ctx.storedManifest!.files, options.discoversOnAnalysis ?? {});
+    return true;
   };
   return probe;
 }
 
 describe('transform: the plugin never treats its own virtual modules as sources', () => {
-  // Both `.js`-suffixed resolved ids pass the `/\.[jt]sx?$/` extension gate on
-  // their raw text, which is exactly why the `\0` guard has to come first.
+  // Both `.js`-suffixed resolved ids pass the shared engine-transform file
+  // class on their raw text, which is exactly why the `\0` guard comes first.
   const VIRTUAL_IDS = [
     RESOLVED_COMPONENTS_ID,
     RESOLVED_BRIDGE_ID,
@@ -127,6 +127,46 @@ describe('transform: the plugin never treats its own virtual modules as sources'
     );
 
     expect(result?.code).toContain('TRANSFORMED');
+  });
+});
+
+describe('transform: the file-class gate is the shared engine-transform set', () => {
+  // The driver may not re-decide which file classes the engine transform
+  // rewrites — `ENGINE_TRANSFORM_EXTENSIONS` owns that, and a driver-local
+  // spelling silently skips a whole file class on one bundler family. A
+  // LOCAL `.mjs` is the case that used to fall through the hand-written
+  // `/\.[jt]sx?$/`: the manifest listed it and the hook served it raw.
+  it.each([...ENGINE_TRANSFORM_EXTENSIONS])(
+    'transforms a manifest-listed local .%s file',
+    async (ext) => {
+      const rel = `src/Button.${ext}`;
+      const probe = makeProbe({ knownFiles: { [rel]: ['Button#1'] } });
+
+      const result = await transformSource(
+        probe.ctx,
+        'export const Button = 1;',
+        join(ROOT, rel)
+      );
+
+      expect(result?.code).toContain('TRANSFORMED');
+    }
+  );
+
+  it('claims nothing outside that set — not even a manifest-listed file', async () => {
+    // Native Svelte usage is the live out-of-set case (its projected
+    // `.instance.tsx` is what the engine sees), so the gate is not vacuous.
+    const probe = makeProbe({
+      knownFiles: { 'src/Usage.svelte': ['Usage#1'] },
+    });
+
+    expect(
+      await transformSource(
+        probe.ctx,
+        '<script>let x = 1;</script>',
+        join(ROOT, 'src/Usage.svelte')
+      )
+    ).toBeNull();
+    expect(probe.analyses).toBe(0);
   });
 });
 
@@ -284,32 +324,32 @@ describe('transform: new-file invalidation is unconditional', () => {
     // must be evicted before the recovery reload re-fetches them.
     const consumerAbs = join(ROOT, 'src/Fancy.tsx');
     const probe = makeProbe();
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const ctx = probe.ctx as any;
+    const ctx = probe.ctx;
     ctx.runAnalysis = () => {
       probe.analyses++;
       // Publish a FRESH manifest object, as the real runAnalysis does
       // (`this.storedManifest = result.manifest` from a fresh JSON.parse) —
       // snapshot derivation is keyed on manifest identity.
-      ctx.storedManifest = {
+      ctx.storedManifest = makeManifest({
         ...ctx.storedManifest,
         components: {
-          ...ctx.storedManifest.components,
-          'src/Fancy.tsx::Fancy': {
-            file: 'src/Fancy.tsx',
-            replacement: "createComponent('div', 'recovered')",
-          },
-          'src/New.tsx::New': {
-            file: 'src/New.tsx',
-            replacement: "createComponent('div', 'new')",
-          },
+          ...ctx.storedManifest!.components,
+          'src/Fancy.tsx::Fancy': makeComponent(
+            'src/Fancy.tsx',
+            "createComponent('div', 'recovered')"
+          ),
+          'src/New.tsx::New': makeComponent(
+            'src/New.tsx',
+            "createComponent('div', 'new')"
+          ),
         },
         files: {
-          ...ctx.storedManifest.files,
+          ...ctx.storedManifest!.files,
           'src/Fancy.tsx': ['src/Fancy.tsx::Fancy'],
           'src/New.tsx': ['src/New.tsx::New'],
         },
-      };
+      });
+      return true;
     };
     const graph = makeEnvGraph({ rootDir: ROOT, file: 'src/Fancy.tsx' });
     const invalidated = graph.invalidated;
@@ -336,8 +376,7 @@ describe('transform: new-file invalidation is unconditional', () => {
     // equal-content retries" — a failed detection must not register the file,
     // or the next transform would skip detection forever.
     const probe = makeProbe();
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (probe.ctx as any).runAnalysis = () => {
+    probe.ctx.runAnalysis = () => {
       probe.analyses++;
       return false;
     };
@@ -375,21 +414,18 @@ describe('transform: new-file invalidation is unconditional', () => {
         extensionsSet: new Set(['.ts', '.tsx']),
         externalDirOwners: {},
         externalFileOwners: {},
-        storedManifest: { components: {}, files: {} },
+        storedManifest: makeManifest(),
         storedManifestJson: '{}',
         storedSheets: SHEETS,
         engineApi: () => ({
           transformFile: () => ({ hasComponents: true, code: 'TRANSFORMED' }),
         }),
       });
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const ctx = probe.ctx as any;
+      const ctx = probe.ctx;
       ctx.runAnalysis = () => {
         probe.analyses++;
         if (probe.analyses === 1) {
-          ctx.storedManifest = {
-            components: {},
-            files: {},
+          ctx.storedManifest = makeManifest({
             diagnostics: [
               {
                 file: 'New.tsx',
@@ -399,20 +435,20 @@ describe('transform: new-file invalidation is unconditional', () => {
                   "chain dropped: could not resolve parent component 'Base'",
               },
             ],
-          };
+          });
         } else {
-          ctx.storedManifest = {
+          ctx.storedManifest = makeManifest({
             components: {
-              'Base.tsx::Base': { file: 'Base.tsx', replacement: 'rb' },
-              'New.tsx::Child': { file: 'New.tsx', replacement: 'rc' },
+              'Base.tsx::Base': makeComponent('Base.tsx', 'rb'),
+              'New.tsx::Child': makeComponent('New.tsx', 'rc'),
             },
             files: {
               'Base.tsx': ['Base.tsx::Base'],
               'New.tsx': ['New.tsx::Child'],
             },
-            diagnostics: [],
-          };
+          });
         }
+        return true;
       };
 
       const result = await transformSource(

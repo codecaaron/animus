@@ -1,5 +1,7 @@
 import {
+  Children,
   type ComponentProps,
+  isValidElement,
   type ReactNode,
   useCallback,
   useState,
@@ -86,15 +88,13 @@ function toKebab(text: string): string {
 }
 
 function extractText(children: ReactNode): string {
-  if (typeof children === 'string') return children;
-  if (typeof children === 'number') return String(children);
-  if (Array.isArray(children)) return children.map(extractText).join('');
-  if (children && typeof children === 'object' && 'props' in children) {
-    return extractText(
-      (children as { props: { children?: ReactNode } }).props.children
-    );
-  }
-  return '';
+  return Children.toArray(children)
+    .map((child) =>
+      isValidElement<{ children?: ReactNode }>(child)
+        ? extractText(child.props.children)
+        : String(child)
+    )
+    .join('');
 }
 
 // ─── Component ───────────────────────────────────────────────────

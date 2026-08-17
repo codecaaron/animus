@@ -1,0 +1,14 @@
+{
+  // The strict-lib-check half of verify:packed step 6: every template file
+  // EXCEPT next.config.ts. That file's import — @animus-ui/next-plugin —
+  // declares its contract in next-owned types (next/dist/server/config-shared),
+  // and Next's internal d.ts are not strict-lib-clean by upstream design
+  // (unresolvable template placeholders, React-19-only types under React 18;
+  // Next mandates skipLibCheck:true for consumers). next.config.ts is checked
+  // by the full-template pass under tsconfig.json instead.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "skipLibCheck": false
+  },
+  "include": ["src/**/*.ts", "src/**/*.tsx", "app/**/*.tsx", "vite.config.ts"]
+}

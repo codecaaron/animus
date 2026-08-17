@@ -58,9 +58,12 @@ export const resolveComponentTag = (
       return { kind: 'resolved', component: byPath[0] };
     }
   }
-  return {
+  // No import specifier means no `specifier` key — the analysis reads its
+  // absence as "the binding was never imported", not "imported from nowhere".
+  const ambiguous: Extract<TagResolution, { kind: 'ambiguous' }> = {
     kind: 'ambiguous',
     candidates,
-    ...(specifier === undefined ? {} : { specifier }),
   };
+  if (specifier !== undefined) ambiguous.specifier = specifier;
+  return ambiguous;
 };

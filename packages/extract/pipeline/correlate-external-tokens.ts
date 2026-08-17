@@ -1,6 +1,7 @@
 import { existsSync, realpathSync } from 'fs';
 import { dirname, join } from 'path';
 
+import { parseInternalWire } from './internal-wire';
 import { isPathWithinRoot } from './source-identity';
 
 import type { ManifestDiagnostic } from './manifest-diagnostics';
@@ -23,6 +24,11 @@ type SourceThemeManifests = Record<string, Record<string, string[]>>;
  * are canonical absolute paths (symlinks resolved), so each package dir is
  * realpath'd before prefix-matching; a module outside every known package dir
  * (typically the consumer's own theme) contributes nothing.
+ *
+ * Absent manifests (`null`) mean the correlation is off — no evaluated module
+ * exported a built theme. UNPARSEABLE manifests mean the loader is broken, and
+ * an empty index would read exactly like "no source defines this token",
+ * silencing every finding the gate exists to make: that decodes loud.
  */
 export function buildSourceTokenIndex(opts: {
   sourceThemeManifestsJson: string | null | undefined;
@@ -32,12 +38,10 @@ export function buildSourceTokenIndex(opts: {
   const index = new Map<string, Set<string>>();
   if (!opts.sourceThemeManifestsJson) return index;
 
-  let manifests: SourceThemeManifests;
-  try {
-    manifests = JSON.parse(opts.sourceThemeManifestsJson);
-  } catch {
-    return index;
-  }
+  const manifests = parseInternalWire<SourceThemeManifests>(
+    opts.sourceThemeManifestsJson,
+    "sourceThemeManifestsJson (the system loader's built-theme capture)"
+  );
 
   const realDirOwners: Array<{ dir: string; specifier: string }> = [];
   const addOwnerDir = (dir: string, specifier: string): void => {

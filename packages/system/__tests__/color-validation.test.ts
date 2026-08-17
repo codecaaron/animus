@@ -71,7 +71,7 @@ describe('addColors validation', () => {
   test('rejects objects', () => {
     expect(() =>
       /** @ts-expect-error */
-      createTheme().addColors({ nested: { deep: { invalid: 123 as any } } })
+      createTheme().addColors({ nested: { deep: { invalid: 123 } } })
     ).toThrow();
   });
 
@@ -124,10 +124,10 @@ describe('ThemeManifest', () => {
     const tokens = createTheme().addColors({ ember: '#FF2800' }).build();
 
     // manifest exists
-    expect((tokens as any).manifest).toBeDefined();
+    expect(tokens.manifest).toBeDefined();
     // non-enumerable — not in spread
     const spread = { ...tokens };
-    expect((spread as any).manifest).toBeUndefined();
+    expect(spread.manifest).toBeUndefined();
   });
 
   test('manifest.tokenMap contains flattened scales', () => {
@@ -136,7 +136,7 @@ describe('ThemeManifest', () => {
       .addColors({ ember: '#FF2800' })
       .build();
 
-    const manifest = (tokens as any).manifest;
+    const manifest = tokens.manifest;
     expect(manifest.tokenMap['space.8']).toBe('0.5rem');
     expect(manifest.tokenMap['space.16']).toBe('1rem');
   });
@@ -144,7 +144,7 @@ describe('ThemeManifest', () => {
   test('manifest.variableMap contains CSS variable names', () => {
     const tokens = createTheme().addColors({ ember: '#FF2800' }).build();
 
-    const manifest = (tokens as any).manifest;
+    const manifest = tokens.manifest;
     expect(manifest.variableMap['colors.ember']).toBe('--color-ember');
   });
 
@@ -153,7 +153,7 @@ describe('ThemeManifest', () => {
       .addScale({ name: 'space', values: { 8: '0.5rem' } })
       .build();
 
-    const manifest = (tokens as any).manifest;
+    const manifest = tokens.manifest;
     expect(manifest.variableMap['space.8']).toBeUndefined();
     expect(manifest.tokenMap['space.8']).toBe('0.5rem');
   });
@@ -161,7 +161,7 @@ describe('ThemeManifest', () => {
   test('manifest.variableCss contains :root block', () => {
     const tokens = createTheme().addColors({ ember: '#FF2800' }).build();
 
-    const manifest = (tokens as any).manifest;
+    const manifest = tokens.manifest;
     expect(manifest.variableCss).toContain(':root');
     expect(manifest.variableCss).toContain('--color-ember');
   });
@@ -175,7 +175,7 @@ describe('ThemeManifest', () => {
       })
       .build();
 
-    const manifest = (tokens as any).manifest;
+    const manifest = tokens.manifest;
     expect(manifest.modes.dark['colors.primary']).toBe('#FF2800');
     expect(manifest.modes.light['colors.primary']).toBe('#C1121F');
   });

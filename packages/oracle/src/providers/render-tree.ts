@@ -5,8 +5,8 @@ import type { AbstractValue } from '../core/value';
 /**
  * Provider 3 (DESIGN §9), Phase 2+: a symbolic description of the host tree.
  *
- * The shape language is deliberately *symbolic* — conditionals stay as guards
- * and repetition stays as an abstract count, so a shape describes every render
+ * The tree language is deliberately *symbolic* — conditionals stay as guards
+ * and repetition stays as an abstract count, so a tree describes every render
  * of a component rather than one observed render. Nothing derives these yet;
  * the interface is fixed now so geometry questions can already produce
  * addressable obligations instead of fabricated numbers.
@@ -14,7 +14,7 @@ import type { AbstractValue } from '../core/value';
 export interface HostNode {
   kind: 'host';
   tag: string;
-  children: readonly RenderShape[];
+  children: readonly RenderTree[];
   classes?: readonly string[];
   target?: TargetId;
 }
@@ -24,27 +24,27 @@ export interface TextNode {
   content: AbstractValue<string>;
 }
 
-export interface SequenceShape {
+export interface SequenceNode {
   kind: 'sequence';
-  items: readonly RenderShape[];
+  items: readonly RenderTree[];
 }
 
-export interface ChoiceShape {
+export interface ChoiceNode {
   kind: 'choice';
   guard: Predicate;
-  consequent: RenderShape;
-  alternate?: RenderShape;
+  consequent: RenderTree;
+  alternate?: RenderTree;
 }
 
-export interface RepeatShape {
+export interface RepeatNode {
   kind: 'repeat';
   count: AbstractValue<number>;
-  item: RenderShape;
+  item: RenderTree;
 }
 
-export interface PortalShape {
+export interface PortalNode {
   kind: 'portal';
-  child: RenderShape;
+  child: RenderTree;
   hostSelector?: string;
 }
 
@@ -55,15 +55,15 @@ export interface OpaqueNode {
   obligation?: ObligationId;
 }
 
-export type RenderShape =
+export type RenderTree =
   | HostNode
   | TextNode
-  | SequenceShape
-  | ChoiceShape
-  | RepeatShape
-  | PortalShape
+  | SequenceNode
+  | ChoiceNode
+  | RepeatNode
+  | PortalNode
   | OpaqueNode;
 
-export interface RenderShapeProvider {
-  shapeFor(component: string): RenderShape | undefined;
+export interface RenderTreeProvider {
+  treeFor(component: string): RenderTree | undefined;
 }

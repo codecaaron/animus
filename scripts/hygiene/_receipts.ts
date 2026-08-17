@@ -17,6 +17,8 @@
 
 import { appendFileSync } from 'node:fs';
 
+import type { JsonObject } from '@animus-ui/assertions';
+
 export type ReceiptLayer = 'A' | 'C' | 'D' | 'D1';
 export type ReceiptVerb = 'delete' | 'format' | 'stub' | 'drift-suspected';
 
@@ -27,7 +29,10 @@ export interface Receipt {
   verb: ReceiptVerb;
   target: string;
   kind: string;
-  extras?: Record<string, unknown>;
+  // Layer-specific metadata. A receipt is a JSONL line, so `extras` is a JSON
+  // document by construction — the repo's shared JSON vocabulary is what says
+  // so, and it is what the presenter decodes the line back through.
+  extras?: JsonObject;
 }
 
 const RECEIPTS_FILE = process.env.RECEIPTS_FILE ?? '';
@@ -38,7 +43,7 @@ export function emitReceipt(
   verb: ReceiptVerb,
   target: string,
   kind: string,
-  extras?: Record<string, unknown>
+  extras?: JsonObject
 ): void {
   if (!RECEIPTS_FILE) return;
   const record: Receipt = {
@@ -48,7 +53,10 @@ export function emitReceipt(
     verb,
     target,
     kind,
-    ...(extras !== undefined ? { extras } : {}),
   };
+  // An ABSENT `extras` key means the layer recorded no layer-specific metadata
+  // for this operation — which readers distinguish from a present-but-empty
+  // `{}`, so the key is written only when the caller supplied one.
+  if (extras !== undefined) record.extras = extras;
   appendFileSync(RECEIPTS_FILE, `${JSON.stringify(record)}\n`, 'utf-8');
 }

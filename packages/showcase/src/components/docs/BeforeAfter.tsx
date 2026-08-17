@@ -1,6 +1,8 @@
 import { ds } from '../../ds';
 import { SyntaxBlock } from '../surfaces/SyntaxBlock';
 
+import type { Language } from '../surfaces/SyntaxBlock';
+
 // ─── Styled Elements ────────────────────────────────────────────
 
 const BAContainer = ds
@@ -80,8 +82,6 @@ const BATag = ds
   .asElement('span');
 
 // ─── Component ──────────────────────────────────────────────────
-
-type Language = 'tsx' | 'css' | 'jsx' | 'typescript' | 'sh';
 
 interface Pane {
   label: string;

@@ -5,6 +5,7 @@ import { afterAll, describe, expect, test } from 'vitest';
 
 import { runBuildStart } from '../src/build-start';
 import { PluginContext } from '../src/context';
+import { makeManifest } from './manifest-fixture';
 
 /**
  * External-keyframes state across REPEATED buildStarts on one PluginContext
@@ -67,7 +68,7 @@ function makeContext(): PluginContext {
       dependencies: [],
     }),
     extractFacts: () => JSON.stringify({ files: {}, parseCount: 0 }),
-    analyzeProject: () => JSON.stringify({ components: {}, css: '' }),
+    analyzeProject: () => JSON.stringify(makeManifest()),
     scanKeyframesExports: (entry: string) => {
       if (entry.includes('kit-a')) return KIT_A_KF;
       if (entry.includes('kit-b')) return KIT_B_KF;

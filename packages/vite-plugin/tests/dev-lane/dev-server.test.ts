@@ -23,6 +23,7 @@
  */
 import { beforeAll, afterAll, describe, expect, it, vi } from 'vitest';
 
+import { probeEnginePrerequisites } from '../../../extract/tests/engine-prerequisites';
 import {
   brokenThemeSource,
   componentSource,
@@ -37,7 +38,6 @@ import {
   themeViaPaletteSource,
   usageSource,
 } from './fixture';
-import { probeDevLanePrerequisites } from './prerequisites';
 import {
   canonicalizeCss,
   createWatcherBarrier,
@@ -71,7 +71,15 @@ function exportLine(source: string, name: string): string {
   return line;
 }
 
-const prerequisites = probeDevLanePrerequisites();
+/**
+ * Unlike the rest of `packages/vite-plugin/tests` (whose only prerequisite is
+ * `bun install`), this lane boots a real Vite dev server that loads the design
+ * system through the v2 NAPI binary and the sibling package dists. Those are
+ * NOT materialized by `verify:unit:ts`, so the lane probes for them through
+ * their owner and skips with an actionable reason instead of failing the fast
+ * unit tier.
+ */
+const prerequisites = probeEnginePrerequisites();
 
 // Fail-loud skip. Two carriers so the reason cannot be swallowed: this test's
 // skip note (printed by the reporter) and the suite name below.

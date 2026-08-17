@@ -5,6 +5,14 @@
  *
  * - `ignored` — out of extraction scope (extension gate, exclude pattern,
  *   unreadable, MDX skipped): normal Vite HMR applies.
+ * - `evicted` — the event WAS claimed, but its decision fell out of the
+ *   bounded history before this environment read it. The decision is
+ *   unrecoverable and the file is in scope, so every environment that sees it
+ *   invalidates conservatively (see hmr.ts). Deliberately NOT `ignored`: that
+ *   is the least conservative kind, and reading it here would leave this
+ *   environment's graph serving pre-edit component CSS, a pre-edit
+ *   system-props module, and pre-edit definition files — the client/SSR skew
+ *   that shows up as a hydration mismatch.
  * - `unchanged` — content hash identical: the update is suppressed everywhere.
  * - `analyzed` — re-analysis ran; every environment invalidates the affected
  *   modules in its own graph. `staleDefinitionFiles` are rootDir-relative
@@ -26,6 +34,7 @@
  */
 export type HotUpdateResult =
   | { kind: 'ignored' }
+  | { kind: 'evicted' }
   | { kind: 'unchanged' }
   | {
       kind: 'analyzed';
@@ -53,34 +62,74 @@ export type HotUpdateResult =
  *
  * Keys are retained for a bounded number of recent events so that interleaved
  * file events (Vite does not serialize watcher handlers) still find their own
- * result.
+ * result. A decision pushed out of that window leaves a tombstone — bounded by
+ * the same limit — so a later environment still learns that the event was
+ * claimed and analyzed, instead of mistaking it for one nothing ever saw. Past
+ * BOTH windows (more than `2 × historyLimit` events in flight) the key is
+ * forgotten outright and the event reads as unclaimed again.
  */
 export class HotUpdateEvents {
   private readonly results = new Map<string, HotUpdateResult>();
+  /** Keys whose decision aged out of `results`, in eviction order. */
+  private readonly evicted = new Set<string>();
 
   constructor(private readonly historyLimit = 16) {}
 
   /** True when this environment dispatch owns the event's analysis work. */
   claim(environmentName: string, file: string, timestamp: number): boolean {
     const key = eventKey(file, timestamp);
-    if (environmentName !== 'client' && this.results.has(key)) return false;
-    this.results.set(key, { kind: 'ignored' });
-    while (this.results.size > this.historyLimit) {
-      const oldest = this.results.keys().next().value;
-      if (oldest === undefined) break;
-      this.results.delete(oldest);
+    // A non-client dispatch never re-owns an event the client already took,
+    // including one whose decision has since aged out: re-analyzing it would
+    // hit the content-hash gate, report `unchanged`, and suppress this
+    // environment's update entirely.
+    if (
+      environmentName !== 'client' &&
+      (this.results.has(key) || this.evicted.has(key))
+    ) {
+      return false;
     }
+    this.results.set(key, { kind: 'ignored' });
+    // A claim starts a NEW decision for this key, so any tombstone from an
+    // earlier event with the same (file, timestamp) is retired with it.
+    this.evicted.delete(key);
+    this.retireOldest();
     return true;
   }
 
   /** Publish the owning dispatch's decision to the other environments. */
   record(file: string, timestamp: number, result: HotUpdateResult): void {
-    this.results.set(eventKey(file, timestamp), result);
+    const key = eventKey(file, timestamp);
+    this.results.set(key, result);
+    // The owner's own key can age out while its analysis awaits; re-recording
+    // it makes the fresh decision authoritative again.
+    this.evicted.delete(key);
+    this.retireOldest();
   }
 
-  /** The decision for this event — `ignored` when the event was evicted. */
+  /**
+   * The decision for this event — `evicted` once it aged out of the decision
+   * window, `ignored` only when no dispatch ever claimed it.
+   */
   resultOf(file: string, timestamp: number): HotUpdateResult {
-    return this.results.get(eventKey(file, timestamp)) ?? { kind: 'ignored' };
+    const key = eventKey(file, timestamp);
+    const result = this.results.get(key);
+    if (result) return result;
+    return this.evicted.has(key) ? { kind: 'evicted' } : { kind: 'ignored' };
+  }
+
+  /** Hold both windows at `historyLimit`, oldest insertion first. */
+  private retireOldest(): void {
+    while (this.results.size > this.historyLimit) {
+      const oldest = this.results.keys().next().value;
+      if (oldest === undefined) break;
+      this.results.delete(oldest);
+      this.evicted.add(oldest);
+    }
+    while (this.evicted.size > this.historyLimit) {
+      const oldest = this.evicted.values().next().value;
+      if (oldest === undefined) break;
+      this.evicted.delete(oldest);
+    }
   }
 }
 

@@ -2,6 +2,7 @@ import {
   buildAnalyzeProjectArgs,
   contentHash,
   createV2EngineApi,
+  parseFilesJson,
 } from '@animus-ui/extract/pipeline';
 import {
   analysisCommitPath,
@@ -17,12 +18,28 @@ import { relative } from 'path';
 
 import { transformWithManifest } from './loader-core';
 
-import type { LoaderPolicyOptions } from './loader-core';
+import type { LoaderContextBase, LoaderPolicyOptions } from './loader-core';
 import type {
   AnalyzeProjectInputs,
+  EngineApi,
   V2ExtractEngine,
 } from '@animus-ui/extract/pipeline';
-import type { AnalysisStatus } from '@animus-ui/extract/session';
+import type {
+  AnalysisCommit,
+  AnalysisStatus,
+} from '@animus-ui/extract/session';
+
+/**
+ * The `analysis-inputs` artifact as ExtractionSession composes it: the exact
+ * analyze-time `AnalyzeProjectInputs`, plus the per-file hash map that rides
+ * top-level so a loader worker can answer coverage without parsing the whole
+ * source corpus. `analyzedHashes` is optional because artifacts written before
+ * it existed carry only the corpus — the `filesJson` derivation below is that
+ * legacy fallback, not a shape this reader tolerates by choice.
+ */
+interface AnalysisInputsArtifact extends AnalyzeProjectInputs {
+  analyzedHashes?: Record<string, string>;
+}
 
 /** JSON-serializable loader options (Turbopack forwards them across process
  *  boundaries). The session identity is a REAL task input (design D2):
@@ -36,14 +53,7 @@ export interface TurbopackLoaderOptions extends LoaderPolicyOptions {
 
 type LoaderCallback = (err: Error | null, content?: string) => void;
 
-type LoaderContext = {
-  resourcePath: string;
-  rootContext: string;
-  getOptions: () => TurbopackLoaderOptions;
-  /** File-dependency registration (Turbopack loader-runner IPC sends
-   *  dependencies BEFORE the error check — throw-after-addDependency is a
-   *  sound recovery primitive; see design D3). */
-  addDependency?: (file: string) => void;
+type LoaderContext = LoaderContextBase<TurbopackLoaderOptions> & {
   /** Async-completion handle (webpack loader convention) — required: the
    *  evidence-based catch-up wait cannot run synchronously. */
   async?: () => LoaderCallback;
@@ -53,8 +63,17 @@ type LoaderContext = {
 // isolated, ephemeral worker processes — module scope IS worker scope, and
 // nothing here is (or may be) shared across files beyond this process
 // (spec: next-turbopack-integration / Stateless per-file transformation;
-// guardrail G1). The singleton module must never be imported from this
-// graph.
+// guardrail G1).
+//
+// The invariant is on singleton STATE, not on the module graph: the
+// `@animus-ui/extract/session` barrel imported above re-exports
+// `./singleton`, so that module IS reachable from here and no gate stops
+// it. What must never happen is this loader READING OR WRITING
+// globalThis-keyed singleton state — a worker's globalThis is its own, so
+// any such read answers about the wrong process. Only the barrel's pure
+// path builders and JSON readers are legal here; session identity arrives
+// through the loader options instead (`rootDir`/`sessionId`/`sessionDir`
+// above), which is why this file never calls `getSessionArtifactDir()`.
 let engine: V2ExtractEngine | null = null;
 let sentSources: Map<string, string> | null = null;
 let driftWarned = false;
@@ -89,6 +108,29 @@ const engineApi = createV2EngineApi({
     },
   },
 });
+
+// ── Injected engine seam ───────────────────────────────────────────────────
+// The loader builds its own engine above, so neither the singleton's
+// globalThis override nor the runner's module mocker can reach it; tests swap
+// the two calls it makes through this seam instead.
+// G1 discharge: the seam variable is module-local, so it lives and dies with
+// the worker's module instance exactly like the engine it replaces — the
+// worker-local, per-process lifetime is unchanged (ledger C-016).
+
+/** The engine surface this loader consumes — narrowed from the adapter's own
+ *  `EngineApi` so the seam can never widen past the two real call sites. */
+type LoaderEngineApi = () => Pick<
+  EngineApi,
+  'analyzeProject' | 'transformFile'
+>;
+let engineApiImpl: LoaderEngineApi = engineApi;
+
+/** @internal test seam — pass null to restore the real engine api. */
+export function __setTurbopackLoaderEngineApiForTests(
+  api: LoaderEngineApi | null
+): void {
+  engineApiImpl = api ?? engineApi;
+}
 
 // ── Injected filesystem seam ───────────────────────────────────────────────
 // The protocol gauntlet must stage torn-read windows between this loader's
@@ -150,14 +192,17 @@ function hydrateSession(sessionDir: string, sessionId: string): HydrateOutcome {
   for (let attempt = 0; attempt < SEQLOCK_RETRIES; attempt++) {
     const c0raw = readFileOrNull(commitPath);
     if (c0raw === null) return { kind: 'absent' };
-    let c0: {
-      schema?: number;
-      sessionId?: string;
-      manifestHash?: string;
-      inputsHash?: string;
-    };
+    let c0: AnalysisCommit;
     try {
-      c0 = JSON.parse(c0raw) as typeof c0;
+      // SAFETY: `AnalysisCommit` is the declared shape of the artifact
+      // `ExtractionSession.publishAnalysisCommit` writes — animus's own wire,
+      // so a payload that parses but does not match it is a producer bug
+      // rather than an input this loader can recover from. Every field read
+      // below is then re-decided against the payload bytes (session identity,
+      // then both content hashes), so a shape that disagrees fails the
+      // seqlock instead of propagating. A payload that does not parse is the
+      // torn write this loop exists for, and is retried.
+      c0 = JSON.parse(c0raw) as AnalysisCommit;
     } catch {
       continue; // torn commit write — retry
     }
@@ -201,35 +246,36 @@ function hydrateSession(sessionDir: string, sessionId: string): HydrateOutcome {
       if (envelopeSession !== undefined && envelopeSession !== sessionId) {
         return { kind: 'foreign', artifactSessionId: String(envelopeSession) };
       }
-      const inputsParsed = JSON.parse(inputsRaw) as AnalyzeProjectInputs & {
-        analyzedHashes?: Record<string, string>;
-      };
+      // SAFETY: `AnalysisInputsArtifact` is the declared shape of the
+      // hydration corpus this same repository writes, and these bytes were
+      // just proven to be the generation the commit names (`inputsHash`
+      // verified above). A payload that parses but does not match the shape
+      // is the producer bug the catch below fails closed on, via the
+      // decoder's own refusal.
+      const inputsParsed = JSON.parse(inputsRaw) as AnalysisInputsArtifact;
       inputs = inputsParsed;
       // Preferred: the writer's top-level path→hash map (no source-corpus
       // parse); filesJson derivation stays as the legacy-artifact fallback.
       fileHashes = inputsParsed.analyzedHashes
         ? new Map(Object.entries(inputsParsed.analyzedHashes))
         : new Map(
-            (
-              JSON.parse(inputs.filesJson) as Array<{
-                path: string;
-                source: string;
-                hash?: string;
-              }>
-            ).map((entry) => [
-              entry.path,
-              entry.hash ?? contentHash(entry.source),
-            ])
+            // The producing package's decoder, which throws on a corpus that
+            // is not an entry array; the catch below is this site's documented
+            // channel for that throw.
+            parseFilesJson(inputs.filesJson, 'animus-next-turbopack').map(
+              (entry) => [entry.path, entry.hash ?? contentHash(entry.source)]
+            )
           );
     } catch {
       // Hash-verified yet unparseable: committed garbage — fail closed
-      // rather than half-consume or silently pass through.
+      // rather than half-consume or silently pass through. The caller turns
+      // this into a loud ANIMUS_ARTIFACT_READ_TORN failure, so the decoder's
+      // refusal reaches the user through this loader's own diagnostic
+      // vocabulary instead of as a raw TypeError.
       return { kind: 'torn' };
     }
-    const { analyzeProject } = engineApi();
-    hydratedManifestJson = analyzeProject(
-      ...buildAnalyzeProjectArgs(inputs)
-    ) as string;
+    const { analyzeProject } = engineApiImpl();
+    hydratedManifestJson = analyzeProject(...buildAnalyzeProjectArgs(inputs));
     hydratedFileHashes = fileHashes;
     hydratedKey = key;
     return {
@@ -248,21 +294,46 @@ function readStatus(sessionDir: string): AnalysisStatus | null {
   const raw = readFileOrNull(analysisStatusPath(sessionDir));
   if (raw === null) return null;
   try {
+    // SAFETY: `AnalysisStatus` is the declared shape of the artifact the
+    // session writes on every attempt transition — animus's own wire. This
+    // read validates nothing beyond parseability, which is why every field
+    // the wait loop decides on is re-decided there against the value in hand
+    // (`hasReadableDeadline`) and every other branch fails closed with a
+    // stable diagnostic.
     return JSON.parse(raw) as AnalysisStatus;
   } catch {
     return null; // torn status write — indistinguishable from absent
   }
 }
 
+/**
+ * Does the status in hand carry the epoch-ms deadline the wait ceiling reads?
+ * Decided by representation tag rather than `typeof`, and asked at all because
+ * `readStatus` admits disk bytes unvalidated: `AnalysisStatus.deadlineAt` is a
+ * producer promise, and a torn or foreign-version artifact that broke it would
+ * otherwise compare false forever and poll without end.
+ */
+const hasReadableDeadline = (status: AnalysisStatus): boolean =>
+  Object.prototype.toString.call(status.deadlineAt) === '[object Number]';
+
 // ── Catch-up bounds (design D3) ────────────────────────────────────────────
 
 const CATCHUP_POLL_INITIAL_MS = 10;
 const CATCHUP_POLL_MAX_MS = 25;
 const CATCHUP_WAIT_MARGIN_MS = 50;
-const CATCHUP_WATCHDOG_MS = 2000;
-/** The loader cannot read the orchestrator's configured debounce, so its
- *  own ceiling assumes the default watcher debounce. */
-const DEFAULT_DEBOUNCE_CEILING_MS = 75;
+/** The session publishes `deadlineAt` on every status write and IS the sole
+ *  authority on how long an attempt may take; the loader never re-derives
+ *  one from an assumed watcher debounce, which silently expired healthy
+ *  attempts under a non-default `startTurbopackWatcher(…, debounceMs)`.
+ *
+ *  This cap bounds the ONE case that carries no such deadline: `readStatus`
+ *  parses disk bytes unvalidated, so a torn or foreign-version status can
+ *  reach the wait loop with a non-numeric `deadlineAt` and would otherwise
+ *  poll forever. It is NOT a copy of the session's `STATUS_WATCHDOG_MS`
+ *  (whose equal value is coincidence): that watchdog extends a deadline the
+ *  session owns, this one bounds a wait with no deadline at all. Retire it
+ *  when the status read validates its shape and can refuse such bytes. */
+const CATCHUP_NO_DEADLINE_CAP_MS = 2000;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -286,9 +357,11 @@ export default function animusTurbopackLoader(
   this: LoaderContext,
   source: string
 ): void {
-  if (typeof this.async !== 'function') {
+  if (this.async === undefined) {
     // Runtime existence check: the catch-up protocol cannot exist on a
-    // sync-only runner — fail immediately instead of serving stale bytes.
+    // sync-only runner — fail immediately instead of serving stale bytes. The
+    // question is EXISTENCE, and `LoaderContext` spells a runner without the
+    // async-completion handle as one without the property.
     throw new Error(
       '[animus-extract] the Animus Turbopack loader requires an async-capable loader runner (this.async is unavailable)'
     );
@@ -296,8 +369,11 @@ export default function animusTurbopackLoader(
   const callback = this.async();
   runLoader(this, source).then(
     (code) => callback(null, code),
-    (err: unknown) =>
-      callback(err instanceof Error ? err : new Error(String(err)))
+    // Universally quantified over what was thrown, because a rejection is:
+    // the loader's own failures are Errors, and anything else describes
+    // itself rather than reaching the runner as an unreportable value.
+    <Thrown>(thrown: Thrown) =>
+      callback(thrown instanceof Error ? thrown : new Error(String(thrown)))
   );
 }
 
@@ -326,7 +402,7 @@ async function runLoader(ctx: LoaderContext, source: string): Promise<string> {
   // module; style-only analyses keep it byte-identical and fan out to zero
   // loaders (NS4).
   if (
-    typeof ctx.addDependency === 'function' &&
+    ctx.addDependency !== undefined &&
     (epochSeenPaths.has(epochPath) || fsImpl.existsSync(epochPath))
   ) {
     epochSeenPaths.add(epochPath);
@@ -351,7 +427,7 @@ async function runLoader(ctx: LoaderContext, source: string): Promise<string> {
       source,
       filename,
       manifestJson,
-      engineApi,
+      engineApi: engineApiImpl,
       opts,
     });
 
@@ -422,11 +498,10 @@ async function awaitCoverage(args: {
     coverageFailure,
     transform,
   } = args;
-  const ceiling =
-    Date.now() +
-    DEFAULT_DEBOUNCE_CEILING_MS +
-    CATCHUP_WATCHDOG_MS +
-    CATCHUP_WAIT_MARGIN_MS;
+  /** Only bounds waits on a status carrying no readable deadline; the
+   *  session-published `status.deadlineAt` bounds every other wait. */
+  const noDeadlineCap =
+    Date.now() + CATCHUP_NO_DEADLINE_CAP_MS + CATCHUP_WAIT_MARGIN_MS;
   let poll = CATCHUP_POLL_INITIAL_MS;
 
   for (;;) {
@@ -485,13 +560,17 @@ async function awaitCoverage(args: {
         );
       }
     }
+    // Wait ceiling — SINGLE authority: the deadline the session published
+    // for the attempt in hand, re-read every turn so a newly opened attempt
+    // extends the wait exactly as far as the session says it may.
     const now = Date.now();
-    if (typeof status.deadlineAt === 'number' && now > status.deadlineAt) {
-      throw coverageFailure(
-        `ANIMUS_ANALYSIS_STALLED: analysis attempt ${status.attemptId} exceeded its deadline while ${filename} waited for coverage`
-      );
-    }
-    if (now > ceiling) {
+    if (hasReadableDeadline(status)) {
+      if (now > status.deadlineAt) {
+        throw coverageFailure(
+          `ANIMUS_ANALYSIS_STALLED: analysis attempt ${status.attemptId} exceeded its deadline while ${filename} waited for coverage`
+        );
+      }
+    } else if (now > noDeadlineCap) {
       throw coverageFailure(
         `ANIMUS_ANALYSIS_CATCHING_UP: ${filename} changed after the committed analysis; timed out waiting for the commit to advance — retrying on the next invalidation`
       );

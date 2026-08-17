@@ -3,6 +3,8 @@
  * classification; transformed code by normalized AST equivalence; manifest
  * by derived observables; diagnostics as multisets).
  */
+import { isJsonObject, parseJsonObject } from '@animus-ui/assertions';
+
 import { hashArtifact } from './content-hash';
 
 import type {
@@ -11,6 +13,8 @@ import type {
   Divergence,
   UnitSurface,
 } from './types';
+import type { JsonObject, JsonValue } from '@animus-ui/assertions';
+import type { Program } from 'oxc-parser';
 
 /** Parse CSS; returns error string or null. Uses lightningcss. */
 export async function cssParseError(css: string): Promise<string | null> {
@@ -118,12 +122,11 @@ export async function classifyCssDivergence(
 
 /** Strip location fields and sort object-literal properties by key so the
  *  comparison is key-order-insensitive for embedded config literals. */
-function normalizeAst(node: unknown): unknown {
+function normalizeAst(node: JsonValue): JsonValue {
   if (Array.isArray(node)) return node.map(normalizeAst);
-  if (node && typeof node === 'object') {
-    const o = node as Record<string, unknown>;
-    const out: Record<string, unknown> = {};
-    for (const k of Object.keys(o).sort()) {
+  if (isJsonObject(node)) {
+    const out: JsonObject = {};
+    for (const k of Object.keys(node).sort()) {
       // raw carries quote style / literal spelling; value is the semantic field
       if (
         k === 'start' ||
@@ -133,34 +136,53 @@ function normalizeAst(node: unknown): unknown {
         k === 'raw'
       )
         continue;
-      out[k] = normalizeAst(o[k]);
+      out[k] = normalizeAst(node[k]);
     }
-    if (out.type === 'ObjectExpression' && Array.isArray(out.properties)) {
+    const properties = out.properties;
+    if (out.type === 'ObjectExpression' && Array.isArray(properties)) {
       // Key-order insensitivity is licensed ONLY for plain record literals:
       // no spreads, no computed keys, no duplicate keys — those make order
-      // semantically load-bearing (spread/last-wins override order).
-      const props = out.properties as Array<Record<string, unknown>>;
-      const keys = props.map((p) => {
-        if (p.type !== 'Property' || p.computed) return null;
-        const k = p.key as Record<string, unknown> | undefined;
-        return k?.type === 'Identifier'
-          ? `i:${k.name}`
-          : k?.type === 'Literal'
-            ? `l:${k.value}`
+      // semantically load-bearing (spread/last-wins override order). Anything
+      // this walk cannot read as a keyed property node yields a null key,
+      // which is what withholds the licence.
+      const keys = properties.map((property) => {
+        if (!isJsonObject(property)) return null;
+        if (property.type !== 'Property' || property.computed) return null;
+        const key = property.key;
+        if (!isJsonObject(key)) return null;
+        return key.type === 'Identifier'
+          ? `i:${String(key.name)}`
+          : key.type === 'Literal'
+            ? `l:${String(key.value)}`
             : null;
       });
       const sortable =
         keys.every((k) => k !== null) && new Set(keys).size === keys.length;
       if (sortable) {
-        out.properties = props
-          .map((p) => JSON.stringify(p))
+        out.properties = properties
+          .map((property) => JSON.stringify(property))
           .sort()
-          .map((s) => JSON.parse(s));
+          .map((serialized): JsonValue => JSON.parse(serialized));
       }
     }
     return out;
   }
   return node;
+}
+
+/**
+ * The one boundary between oxc's program graph and this comparison.
+ *
+ * AST equivalence here has always been decided on the SERIALIZED program —
+ * the final step was `JSON.stringify` — so the graph is decoded once, up
+ * front, through the shared named-boundary decoder, and the normalizer above
+ * works in the JSON value domain instead of walking a foreign object graph it
+ * cannot describe. The round trip is also what `JSON.stringify` would have
+ * done at the end: undefined-valued and non-serializable properties drop out
+ * either way, and key order is sorted by the normalizer regardless.
+ */
+function astDocument(program: Program): JsonObject {
+  return parseJsonObject(JSON.stringify(program), 'oxc parsed program');
 }
 
 export async function codeAstEquivalent(
@@ -176,8 +198,8 @@ export async function codeAstEquivalent(
   const pb = parseSync(fname, b);
   if (pa.errors.length || pb.errors.length) return false;
   return (
-    JSON.stringify(normalizeAst(pa.program)) ===
-    JSON.stringify(normalizeAst(pb.program))
+    JSON.stringify(normalizeAst(astDocument(pa.program))) ===
+    JSON.stringify(normalizeAst(astDocument(pb.program)))
   );
 }
 
@@ -193,14 +215,21 @@ export async function compareUnit(
     artifact: ArtifactClass,
     detail: string,
     classification?: CssClassification
-  ): Divergence => ({
-    unit,
-    artifact,
-    detail,
-    baselineSha256: hashArtifact(a, artifact),
-    candidateSha256: hashArtifact(b, artifact),
-    ...(classification ? { classification } : {}),
-  });
+  ): Divergence => {
+    const row: Divergence = {
+      unit,
+      artifact,
+      detail,
+      baselineSha256: hashArtifact(a, artifact),
+      candidateSha256: hashArtifact(b, artifact),
+    };
+    // An ABSENT `classification` means no CSS classification was computed for
+    // this row — every artifact class other than `css`. The key stays absent
+    // rather than present-and-undefined: the scoreboard renders it only when
+    // present, and a recorded row is compared by its serialized form.
+    if (classification !== undefined) row.classification = classification;
+    return row;
+  };
 
   for (const [engineTag, s] of [
     ['a', a],

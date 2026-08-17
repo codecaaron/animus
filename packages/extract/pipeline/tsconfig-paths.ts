@@ -73,13 +73,89 @@ function stripJsonc(text: string): string {
   return out.replace(/,(\s*[}\]])/g, '$1');
 }
 
+/**
+ * The value domain of a tsconfig's bytes — exactly what `JSON.parse` produces
+ * for one. A tsconfig is CONSUMER-authored, so nothing about its contents is
+ * guaranteed; every value below is decided by a guard before this reader acts
+ * on it, and the decisions all happen in `readConfig`, at the file boundary.
+ */
+type JsonValue =
+  | null
+  | boolean
+  | number
+  | string
+  | readonly JsonValue[]
+  | JsonBlock;
+
+interface JsonBlock {
+  readonly [key: string]: JsonValue;
+}
+
+/** A keyed JSON block, decided by identity rather than by a representation
+ *  tag: `Object(value) === value` holds for exactly the blocks and lists
+ *  `JSON.parse` produces, and the `[object Object]` tag separates the two. */
+function isJsonBlock(value: JsonValue | undefined): value is JsonBlock {
+  return (
+    Object(value) === value &&
+    Object.prototype.toString.call(value) === '[object Object]'
+  );
+}
+
+/** A JSON value with keys to enumerate — a block or a list. `paths` need only
+ *  be one of these for its config to OWN the setting, matching TypeScript's
+ *  wholesale replacement: a declared `paths` blocks its parents' even when it
+ *  contributes nothing usable. */
+function isJsonKeyed(
+  value: JsonValue | undefined
+): value is JsonBlock | readonly JsonValue[] {
+  return Object(value) === value;
+}
+
+/** A JSON string, excluding the boxed `String` object (which JSON.parse never
+ *  produces and which no path join would accept). */
+function isJsonString(value: JsonValue | undefined): value is string {
+  return (
+    Object(value) !== value &&
+    Object.prototype.toString.call(value) === '[object String]'
+  );
+}
+
+/**
+ * One config in the extends chain, decoded to the three facts this reader
+ * consumes. The walkers below branch on these domain values only.
+ */
 interface TsconfigNode {
   dir: string;
-  compilerOptions: {
-    baseUrl?: unknown;
-    paths?: unknown;
-  };
-  extends?: unknown;
+  /** `compilerOptions.baseUrl` as written, or null when the config declares
+   *  none — or declares a non-string, which resolves against nothing. */
+  baseUrl: string | null;
+  /** `compilerOptions.paths` reduced to pattern → FIRST target, or null when
+   *  the config declares no `paths` at all. An EMPTY map is deliberately
+   *  distinct from null: a config declaring an unusable `paths` still owns
+   *  the setting and must not let a parent's leak through. */
+  paths: ReadonlyMap<string, string> | null;
+  /** Every string `extends` specifier, in declaration order. */
+  extends: readonly string[];
+}
+
+function decodePaths(
+  value: JsonValue | undefined
+): ReadonlyMap<string, string> | null {
+  if (!isJsonKeyed(value)) return null;
+  const decoded = new Map<string, string>();
+  for (const [pattern, targets] of Object.entries(value)) {
+    // First target per pattern (module header); a pattern whose targets are
+    // not a list of strings names nothing this reader can alias to.
+    const [first] = Array.isArray(targets) ? targets : [];
+    if (isJsonString(first)) decoded.set(pattern, first);
+  }
+  return decoded;
+}
+
+/** TypeScript accepts one specifier or an array of them; a non-string member
+ *  names no config, so it is dropped here rather than at the resolution site. */
+function decodeExtends(value: JsonValue | undefined): readonly string[] {
+  return (Array.isArray(value) ? value : [value]).filter(isJsonString);
 }
 
 function readConfig(path: string): TsconfigNode | null {
@@ -89,19 +165,26 @@ function readConfig(path: string): TsconfigNode | null {
   } catch {
     return null;
   }
+  let parsed: JsonValue;
   try {
-    const json = JSON.parse(stripJsonc(raw)) as {
-      compilerOptions?: TsconfigNode['compilerOptions'];
-      extends?: unknown;
-    };
-    return {
-      dir: dirname(path),
-      compilerOptions: json.compilerOptions ?? {},
-      extends: json.extends,
-    };
+    parsed = JSON.parse(stripJsonc(raw));
   } catch {
     return null;
   }
+  // A tsconfig that is not a JSON object declares no compiler options — the
+  // same nothing the old property reads produced for it.
+  const root: JsonBlock = isJsonBlock(parsed) ? parsed : {};
+  const compilerOptions: JsonBlock = isJsonBlock(root.compilerOptions)
+    ? root.compilerOptions
+    : {};
+  return {
+    dir: dirname(path),
+    baseUrl: isJsonString(compilerOptions.baseUrl)
+      ? compilerOptions.baseUrl
+      : null,
+    paths: decodePaths(compilerOptions.paths),
+    extends: decodeExtends(root.extends),
+  };
 }
 
 function resolveExtendsTarget(
@@ -150,13 +233,7 @@ function loadChain(entryPath: string): TsconfigNode[] {
     if (!node) continue;
     chain.push(node);
 
-    const parents = Array.isArray(node.extends)
-      ? node.extends
-      : node.extends !== undefined
-        ? [node.extends]
-        : [];
-    for (const parent of parents) {
-      if (typeof parent !== 'string') continue;
+    for (const parent of node.extends) {
       const resolved = resolveExtendsTarget(parent, node.dir);
       if (resolved) queue.push(resolved);
     }
@@ -174,28 +251,21 @@ export function readTsconfigAliasPairs(rootDir: string): PathAliasPair[] {
   if (chain.length === 0) return [];
 
   // Nearest paths wins wholesale.
-  const pathsOwner = chain.find(
-    (node) =>
-      node.compilerOptions.paths &&
-      typeof node.compilerOptions.paths === 'object'
-  );
-  if (!pathsOwner) return [];
-  const paths = pathsOwner.compilerOptions.paths as Record<string, unknown>;
+  const pathsOwner = chain.find((node) => node.paths !== null);
+  const paths = pathsOwner?.paths ?? null;
+  if (pathsOwner === undefined || paths === null) return [];
 
   // Nearest baseUrl (resolved from ITS declaring config), else the
   // paths-declaring config's directory.
-  const baseOwner = chain.find(
-    (node) => typeof node.compilerOptions.baseUrl === 'string'
-  );
-  const base = baseOwner
-    ? resolve(baseOwner.dir, baseOwner.compilerOptions.baseUrl as string)
-    : pathsOwner.dir;
+  const baseOwner = chain.find((node) => node.baseUrl !== null);
+  const baseUrl = baseOwner?.baseUrl ?? null;
+  const base =
+    baseOwner !== undefined && baseUrl !== null
+      ? resolve(baseOwner.dir, baseUrl)
+      : pathsOwner.dir;
 
   const pairs: PathAliasPair[] = [];
-  for (const [pattern, targets] of Object.entries(paths)) {
-    const target = Array.isArray(targets) ? targets[0] : undefined;
-    if (typeof target !== 'string') continue;
-
+  for (const [pattern, target] of paths) {
     const patternStars = pattern.split('*').length - 1;
     const targetStars = target.split('*').length - 1;
     if (pattern === '*' || patternStars > 1 || targetStars > 1) continue;

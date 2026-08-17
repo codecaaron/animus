@@ -48,8 +48,16 @@ export interface LintDivergenceFinding {
   values: Record<string, string | null>; // manifest path -> level, null = absent
 }
 
-/** `{ 'lints.rust': { unused_lifetimes: 'warn' }, ... }` for one manifest. */
-export type LintTables = Record<string, Record<string, string>>;
+/**
+ * `{ 'lints.rust': { unused_lifetimes: 'warn' }, ... }` for one manifest.
+ *
+ * An interface, not a `Record` alias: this is an in-process domain value the
+ * comparison below owns end to end, not a wire contract that has to compose
+ * with an index signature elsewhere.
+ */
+export interface LintTables {
+  [table: string]: Record<string, string>;
+}
 
 // Extracts the `[lints.*]` tables from a Cargo manifest. Deliberately a line
 // scanner rather than a TOML parser: the tables this gate compares are flat
@@ -127,8 +135,15 @@ export function findLintTableDivergences(
 // so a real attribute trailing an inline comment still tokenizes. String-literal
 // contents are intentionally left in place: attribute macros do not live inside
 // string literals, and stripping strings correctly would require a full lexer
-// the fail-closed policy does not warrant.
-export function stripComments(source: string): string {
+// the fail-closed policy does not warrant. Named for its language on purpose:
+// the JS/TS stripper in `topology.ts` is deliberately a DIFFERENT function and
+// would be actively wrong here (Rust lifetimes — `&'a str`, `'static` — read
+// as an opening quote, and raw strings have no backslash escapes), so the two
+// must never be consolidated by name-matching.
+// Residual (fail-OPEN, accepted): a `//` inside a Rust string literal, e.g.
+// `let u = "https://x"; #[allow(warnings)]` on one line, drops the rest of the
+// line and hides a real attribute. Nested `/* /* */ */` is likewise unhandled.
+export function stripRustComments(source: string): string {
   let out = '';
   let i = 0;
   const n = source.length;
@@ -159,7 +174,7 @@ export function findBlanketSuppressions(
   source: string,
   file: string
 ): SuppressionFinding[] {
-  const stripped = stripComments(source);
+  const stripped = stripRustComments(source);
   const findings: SuppressionFinding[] = [];
   // `[^()]*` keeps each group to a single non-nested lint list. cfg_attr's outer
   // parens are skipped over; its inner allow/expect group is matched on its own.
@@ -213,25 +228,60 @@ export function scanSourcePaths(paths: string[]): SuppressionFinding[] {
   return findings;
 }
 
+/**
+ * The `cargo metadata --no-deps --format-version 1` document as a value domain.
+ * Only `packages[]` is a schema Cargo guarantees; everything under a package's
+ * `metadata` key is arbitrary author-written TOML that Cargo re-emits verbatim,
+ * so this gate cannot know its shape before reading it — it decides key by key.
+ */
+type CargoMetadataValue =
+  | null
+  | boolean
+  | number
+  | string
+  | CargoMetadataValue[]
+  | CargoMetadataTable;
+
+interface CargoMetadataTable {
+  [key: string]: CargoMetadataValue;
+}
+
+// Decided by representation tag rather than by `typeof`: `[object Object]` is
+// what separates a TOML table from an array in the re-emitted JSON, and the tag
+// also rejects everything `JSON.parse` cannot produce.
+function isTable(
+  value: CargoMetadataValue | undefined
+): value is CargoMetadataTable {
+  return Object.prototype.toString.call(value) === '[object Object]';
+}
+
+function isText(value: CargoMetadataValue | undefined): value is string {
+  return Object.prototype.toString.call(value) === '[object String]';
+}
+
 // Reads parsed `cargo metadata` JSON and reports every package that declares a
 // non-empty cargo-machete ignore list. Absent `[package.metadata]` (null) or an
 // empty `ignored` array is compliant.
-export function findIgnoredDeps(metadata: unknown): IgnoredDepFinding[] {
+export function findIgnoredDeps(
+  metadata: CargoMetadataValue
+): IgnoredDepFinding[] {
   const findings: IgnoredDepFinding[] = [];
-  if (metadata === null || typeof metadata !== 'object') return findings;
-  const packages = (metadata as Record<string, unknown>).packages;
+  if (!isTable(metadata)) return findings;
+  const packages = metadata.packages;
   if (!Array.isArray(packages)) return findings;
   for (const pkg of packages) {
-    if (pkg === null || typeof pkg !== 'object') continue;
-    const p = pkg as Record<string, unknown>;
-    const meta = p.metadata;
-    if (meta === null || typeof meta !== 'object') continue;
-    const machete = (meta as Record<string, unknown>)['cargo-machete'];
-    if (machete === null || typeof machete !== 'object') continue;
-    const ignored = (machete as Record<string, unknown>).ignored;
+    if (!isTable(pkg)) continue;
+    const meta = pkg.metadata;
+    if (!isTable(meta)) continue;
+    const machete = meta['cargo-machete'];
+    if (!isTable(machete)) continue;
+    const ignored = machete.ignored;
     if (Array.isArray(ignored) && ignored.length > 0) {
       findings.push({
-        package: typeof p.name === 'string' ? p.name : '<unknown>',
+        // A package Cargo emitted without a string `name` cannot be addressed
+        // in the fix instruction, so the finding says so rather than inventing
+        // an identifier.
+        package: isText(pkg.name) ? pkg.name : '<unknown>',
         ignored: ignored.map((x) => String(x)),
       });
     }
@@ -271,7 +321,7 @@ function runSource(paths: string[]): number {
 
 function runMetadata(): number {
   const raw = readFileSync(0, 'utf8'); // stdin
-  let parsed: unknown;
+  let parsed: CargoMetadataValue;
   try {
     parsed = JSON.parse(raw);
   } catch {

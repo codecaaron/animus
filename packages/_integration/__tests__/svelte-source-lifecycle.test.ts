@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
 
 import { runPipeline } from './run-pipeline';
+import { usageTags, type UsageFactRecord } from './usage-facts';
 
 interface RawEntry {
   path: string;
@@ -18,7 +19,7 @@ interface Publication {
   ingestion: SourceIngestionResult;
   manifest: {
     css: string;
-    fileFacts: Record<string, { usage: unknown[] }>;
+    fileFacts: Record<string, { usage: UsageFactRecord[] }>;
     usageResidue: Array<{
       binding: string;
       prop: string;
@@ -50,19 +51,15 @@ function fixture(relativePath: string, path: string = relativePath): RawEntry {
 }
 
 function extractFacts(filesJson: string): string {
+  // SAFETY: `ingestSourceEntries` is the only caller of this seam, and it
+  // serializes exactly the `{ path, source }` entries this lifecycle handed
+  // it — the same objects, one `JSON.stringify` away. `parseCount` below
+  // counts them, so a drift in that wire would fail the receipts.
   const entries = JSON.parse(filesJson) as RawEntry[];
   const { manifest } = runPipeline(entries);
   return JSON.stringify({
     files: manifest.fileFacts,
     parseCount: entries.length,
-  });
-}
-
-function usageTags(fileFacts: { usage: unknown[] }): string[] {
-  return fileFacts.usage.flatMap((fact) => {
-    const element = (fact as { element?: { tag?: { ident?: string } } })
-      .element;
-    return element?.tag?.ident ? [element.tag.ident] : [];
   });
 }
 
@@ -91,7 +88,7 @@ class RawSourceLifecycle {
       throw new Error(JSON.stringify(ingestion.diagnostics));
     }
     const { manifest } = runPipeline(ingestion.analysisEntries);
-    this.publication = { ingestion, manifest } as Publication;
+    this.publication = { ingestion, manifest };
     return this.publication;
   }
 

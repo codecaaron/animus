@@ -26,49 +26,19 @@
 //     are noise; missing receipts would be corruption — the trade is
 //     biased toward signal preservation.
 
-import { readFileSync } from 'node:fs';
-
 import { emitReceipt } from './_receipts';
+import {
+  type OxlintReport,
+  ToolReportError,
+  classifyUnusedVar,
+  decodeOxlintReport,
+  readReportInput,
+  unwrapCode,
+} from './_tool-reports';
 
-type OxlintSpan = {
-  offset: number;
-  length: number;
-  line: number;
-  column: number;
-};
-type OxlintLabel = { label: string; span: OxlintSpan };
-type OxlintDiagnostic = {
-  message: string;
-  code: string;
-  filename: string;
-  labels: OxlintLabel[];
-};
-type OxlintReport = { diagnostics?: OxlintDiagnostic[] };
-
-async function readStdin(): Promise<string> {
-  const chunks: Uint8Array[] = [];
-  for await (const chunk of process.stdin) chunks.push(chunk as Uint8Array);
-  return Buffer.concat(chunks).toString('utf-8');
-}
-
-function unwrapCode(code: string): string {
-  const m = code.match(/^eslint\((.+)\)$/);
-  return m ? m[1] : code;
-}
-
-function classifyUnusedVar(
-  message: string
-): 'decl' | 'import' | 'param' | 'unknown' {
-  if (/^Identifier '[^']+' is imported/.test(message)) return 'import';
-  if (/^Parameter '/.test(message)) return 'param';
-  if (/^(Variable|Function|Class|Type alias|Interface|Enum) '/.test(message)) {
-    return 'decl';
-  }
-  return 'unknown';
-}
+const SOURCE = 'Layer A receipts (_emit-oxlint-receipts.ts)';
 
 export function emitForReport(report: OxlintReport): number {
-  if (!report.diagnostics || !Array.isArray(report.diagnostics)) return 0;
   let count = 0;
   for (const d of report.diagnostics) {
     if (!d.code || !d.filename || !d.labels?.length) continue;
@@ -93,21 +63,19 @@ export function emitForReport(report: OxlintReport): number {
 }
 
 async function main(): Promise<void> {
-  const fileArg = process.argv[2];
-  const input = fileArg ? readFileSync(fileArg, 'utf-8') : await readStdin();
-  if (!input.trim()) return;
-
-  let report: OxlintReport;
-  try {
-    report = JSON.parse(input);
-  } catch {
-    return;
-  }
-  emitForReport(report);
+  const input = await readReportInput(process.argv[2]);
+  emitForReport(decodeOxlintReport(input, SOURCE));
 }
 
 if (import.meta.main) {
   main().catch((e) => {
+    // Unreadable tool output is a diagnosed failure, not a silent empty run:
+    // zero receipts is how a CLEAN cascade looks, so a decoder that swallowed
+    // this would make a broken Layer A indistinguishable from a converged one.
+    if (e instanceof ToolReportError) {
+      console.error(e.message);
+      process.exit(1);
+    }
     console.error('INTERNAL ERROR:', e);
     process.exit(2);
   });

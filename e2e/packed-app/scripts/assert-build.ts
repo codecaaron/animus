@@ -7,16 +7,23 @@ import {
   assertNoPlaceholders,
   findCssFiles,
   findJsFiles,
+  installedHostVersion,
   layerBlock,
   readAllConcat,
+  writeLaneReceipt,
 } from '@animus-ui/assertions';
+import { readdirSync, readFileSync } from 'node:fs';
 import { readFile, stat } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import type { LaneHost } from '@animus-ui/assertions';
+
 // Positional assertions over the PACKED consumer's build outputs. Runs in
-// workspace context (assertions are a private workspace package); the
-// builds themselves ran inside the isolated staging install.
+// workspace context (assertions are a private workspace package, reached by
+// root hoisting — `e2e/packed-app` deliberately declares no workspace
+// dependency because its manifest is copied into the isolated npm install);
+// the builds themselves ran inside that staging install.
 const STAGING = resolve(
   dirname(fileURLToPath(import.meta.url)),
   '..',
@@ -24,6 +31,78 @@ const STAGING = resolve(
 );
 const VITE_DIST = resolve(STAGING, 'dist');
 const NEXT_DIR = resolve(STAGING, '.next');
+
+/**
+ * The PUBLISHED plugin carries the v1 retirement guard. The guard call is
+ * imported from the externalized extract pipeline, so runtime bundles carry the
+ * identifier; inlined bundles would carry the message (which names the change).
+ * Either marker proves the guard shipped.
+ */
+function assertRetirementGuard(pluginDir: string): void {
+  const dir = resolve(STAGING, pluginDir);
+  for (const entry of readdirSync(dir)) {
+    if (!/\.(?:cjs|mjs|js)$/.test(entry)) continue;
+    const source = readFileSync(resolve(dir, entry), 'utf8');
+    if (
+      source.includes('assertNoRetiredEngineSelection') ||
+      source.includes('retire-extract-v1')
+    ) {
+      return;
+    }
+  }
+  throw new AssertionError(
+    `installed plugin in ${pluginDir} lacks the v1 retirement guard — update the receipt probe`,
+    { pluginDir }
+  );
+}
+
+/**
+ * Receipts for the packed dimension (openspec: dual-engine-build — "the packed
+ * consumer lane SHALL prove the v2 engine loads"). Engine facts are STRUCTURAL
+ * GUARDS over the staged artifacts, never inferred from plugin source
+ * (guardrail G3): `writeLaneReceipt` proves the staged consumer config selects
+ * no engine, and `assertRetirementGuard` proves the installed plugin still
+ * refuses one.
+ */
+function emitLaneReceipts(): void {
+  assertRetirementGuard('node_modules/@animus-ui/vite-plugin/dist');
+  assertRetirementGuard('node_modules/@animus-ui/next-plugin/dist');
+
+  const lanes: ReadonlyArray<{
+    host: LaneHost;
+    lane: string;
+    file: string;
+    config: string;
+  }> = [
+    {
+      host: 'vite',
+      lane: 'verify:packed:vite',
+      file: 'packed-vite.json',
+      config: 'vite.config.ts',
+    },
+    {
+      host: 'next',
+      lane: 'verify:packed:next',
+      file: 'packed-next.json',
+      config: 'next.config.ts',
+    },
+  ];
+
+  for (const { host, lane, file, config } of lanes) {
+    const receipt = writeLaneReceipt(resolve(STAGING, 'receipts', file), {
+      lane,
+      host,
+      hostVersion: installedHostVersion(STAGING, host),
+      mode: 'production',
+      packageForm: 'packed',
+      engineConfigPath: resolve(STAGING, config),
+      engineConfigLabel: `.staging/${config}`,
+    });
+    console.log(
+      `[packed-app:assert] receipt → .staging/receipts/${file} (${receipt.lane}=${receipt.engineLoaded}, default=${receipt.engineDefault}, override=${receipt.engineOverride})`
+    );
+  }
+}
 
 async function assertDir(path: string, label: string): Promise<void> {
   try {
@@ -124,6 +203,8 @@ async function main(): Promise<void> {
   await assertViteOutput();
   await assertNextOutput();
   console.log('[packed-app:assert] all assertions passed');
+
+  emitLaneReceipts();
 }
 
 main().catch((err) => {

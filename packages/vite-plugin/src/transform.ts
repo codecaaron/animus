@@ -1,6 +1,7 @@
 import {
   contentHash,
   diffFilePlans,
+  isEngineTransformExtension,
   isPathWithinRoot,
   snapshotFilePlans,
 } from '@animus-ui/extract/pipeline';
@@ -34,8 +35,9 @@ export function applyDevBridgeImport(code: string): string {
  * withheld exactly like a direct parent's.
  */
 function rawFallbackDescendants(ctx: PluginContext, relPath: string): string[] {
+  const manifest = ctx.storedManifest;
   const conflicted = new Set<string>();
-  const queue = [...(ctx.storedManifest?.files?.[relPath] ?? [])] as string[];
+  const queue = [...(manifest?.files[relPath] ?? [])];
   const seen = new Set(queue);
   while (queue.length > 0) {
     const id = queue.shift()!;
@@ -43,10 +45,10 @@ function rawFallbackDescendants(ctx: PluginContext, relPath: string): string[] {
       if (seen.has(childId)) continue;
       seen.add(childId);
       queue.push(childId);
-      // The manifest is the file authority — no id-string parsing.
-      const childFile = ctx.storedManifest?.components?.[childId]?.file as
-        | string
-        | undefined;
+      // The manifest is the file authority — no id-string parsing. The
+      // optional index result is a genuine miss (a provenance child the
+      // manifest carries no descriptor for), not a shape guard.
+      const childFile = manifest?.components[childId]?.file;
       if (
         childFile &&
         childFile !== relPath &&
@@ -97,8 +99,11 @@ export async function transformSource(
   const relativePath = relative(ctx.rootDir, id);
 
   if (!isExternalPkg) {
-    // Filter by file extension (local files only)
-    if (!/\.[jt]sx?$/.test(id)) return null;
+    // File class (local files only) — the ONE owner set, never a local
+    // spelling: a driver-private regex silently skips a whole file class on
+    // one bundler family (this one used to drop local `.mjs`, which the
+    // Turbopack glob admits and the engine parses).
+    if (!isEngineTransformExtension(id)) return null;
     if (id.includes('node_modules')) return null;
     // A dependency resolved through a workspace symlink arrives REALPATHED —
     // no `node_modules` segment for the filter above to catch. Discovery
@@ -109,7 +114,7 @@ export async function transformSource(
   }
 
   // Only process files we know about in the manifest
-  if (!ctx.storedManifest.files?.[relativePath]?.length) {
+  if (!ctx.storedManifest.files[relativePath]?.length) {
     // New file detection: if this file isn't in the cache, it was created
     // after buildStart. Register it and re-run analysis to pick it up.
     // Exclusive: Vite transforms modules concurrently, and two detections
@@ -133,7 +138,9 @@ export async function transformSource(
           if (owner) ctx.externalFileOwners[relativePath] = owner[1];
         }
         const hash = contentHash(code);
-        ctx.fileCache.set(relativePath, { hash, source: code });
+        ctx.mutateFileCache((cache) =>
+          cache.set(relativePath, { hash, source: code })
+        );
         const prevPlans = snapshotFilePlans(ctx.storedManifest);
         let analysisOk = false;
         try {
@@ -143,7 +150,9 @@ export async function transformSource(
           // transform retries — a registered-but-unanalyzed entry would be
           // permanently hash-suppressed (openspec: dev-transform-coherence,
           // "Failed analyses do not suppress equal-content retries").
-          if (!analysisOk) ctx.fileCache.delete(relativePath);
+          if (!analysisOk) {
+            ctx.mutateFileCache((cache) => cache.delete(relativePath));
+          }
         }
 
         if (analysisOk) {
@@ -166,7 +175,7 @@ export async function transformSource(
           );
 
           const compCount =
-            ctx.storedManifest.files?.[relativePath]?.length ?? 0;
+            ctx.storedManifest?.files[relativePath]?.length ?? 0;
           // Standard level, not verbose-only (openspec:
           // hmr-new-file-detection, "New file detection logging").
           ctx.info(
@@ -184,17 +193,15 @@ export async function transformSource(
       });
     }
     // Re-check after potential analysis
-    if (!ctx.storedManifest.files?.[relativePath]?.length) {
+    if (!ctx.storedManifest.files[relativePath]?.length) {
       // A raw serve caused by an unresolved extension parent is recorded —
       // the barrier below withholds that parent's extracted serve while
-      // this fallback is live. Any other raw serve clears the record.
-      if (!ctx.isProd) {
-        if (unresolvedDropFiles(ctx).has(relativePath)) {
-          ctx.rawExtensionFallbacks.add(relativePath);
-        } else {
-          ctx.rawExtensionFallbacks.delete(relativePath);
-        }
-      }
+      // this fallback is live. A raw serve of a file the analysis knows
+      // nothing about is not a fallback and clears the record.
+      ctx.recordFallbackState(
+        relativePath,
+        unresolvedDropFiles(ctx).has(relativePath)
+      );
       return null;
     }
   }
@@ -217,7 +224,9 @@ export async function transformSource(
       // transforms and this response is withheld, so the fatal pair never
       // reaches any page. Clearing here makes the trip self-limiting — a
       // consumer the reloaded page never re-imports must not withhold its
-      // ancestor forever.
+      // ancestor forever. Deliberately NOT `recordFallbackState`: those
+      // files' serves are unchanged — this retires a withhold, it does not
+      // observe a serve.
       for (const file of conflicted) ctx.rawExtensionFallbacks.delete(file);
       throw new Error(
         `ANIMUS_COMPOSITION_RECOVERING: '${relativePath}' extracted while ` +
@@ -232,10 +241,17 @@ export async function transformSource(
     const { transformFile } = ctx.engineApi();
     const result = transformFile(code, relativePath, ctx.storedManifestJson);
 
-    if (!result.hasComponents) return null;
+    if (!result.hasComponents) {
+      // The manifest listed components for this file (checked above) and the
+      // engine found none — the source is served raw while every extension
+      // ancestor publishes extracted. Same fatal pair as the catch below,
+      // so the barrier must see it.
+      ctx.recordFallbackState(relativePath, true);
+      return null;
+    }
 
     if (ctx.verbose) {
-      const compCount = ctx.storedManifest.files?.[relativePath]?.length ?? 0;
+      const compCount = ctx.storedManifest.files[relativePath]?.length ?? 0;
       ctx.log(`transform ${relativePath}: ${compCount} components`);
     }
 
@@ -253,9 +269,9 @@ export async function transformSource(
       // serves. The hot-update hook compares a post-edit re-transform against
       // it to decide whether a js-update would carry any new bytes at all.
       ctx.recordTransformOutput(relativePath, outputCode);
-      // An extracted serve is never a runtime fallback.
-      ctx.rawExtensionFallbacks.delete(relativePath);
     }
+    // An extracted serve is never a runtime fallback.
+    ctx.recordFallbackState(relativePath, false);
 
     return { code: outputCode, map: null };
   } catch (e) {
@@ -265,6 +281,10 @@ export async function transformSource(
       });
     }
     console.warn(`[animus-extract] Failed to transform ${id}:`, e);
+    // Non-strict means the raw source is served — for a file the manifest
+    // says is extracted, that is the runtime fallback the barrier exists to
+    // catch. Recorded BEFORE returning, or the withheld pair publishes.
+    ctx.recordFallbackState(relativePath, true);
     return null;
   }
 }

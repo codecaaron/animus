@@ -11,16 +11,14 @@ import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
+import { type PackageManifest, readManifest } from './manifest-model';
+
 const ROOT = resolve(import.meta.dirname, '../..');
 
-type Manifest = {
-  scripts?: Record<string, string>;
-};
-
-function manifest(path: string): Manifest {
+function manifest(path: string): PackageManifest {
   const absolute = resolve(ROOT, path);
   expect(existsSync(absolute), `${path} must exist`).toBe(true);
-  return JSON.parse(readFileSync(absolute, 'utf8')) as Manifest;
+  return readManifest(absolute);
 }
 
 function source(path: string): string {
@@ -29,11 +27,36 @@ function source(path: string): string {
   return readFileSync(absolute, 'utf8');
 }
 
-function jsonc(path: string): Record<string, unknown> {
-  return JSON.parse(source(path).replace(/,\s*([}\]])/g, '$1')) as Record<
-    string,
-    unknown
-  >;
+/**
+ * A value read out of a Wrangler JSONC config: a JSON scalar, list, or block,
+ * plus the `undefined` an absent key reads as. Wrangler owns the schema; this
+ * gate asserts about a handful of keys and never restates the rest.
+ */
+type WranglerValue =
+  | undefined
+  | null
+  | boolean
+  | number
+  | string
+  | WranglerValue[]
+  | WranglerBlock;
+
+type WranglerBlock = { [key: string]: WranglerValue };
+
+// Decided by representation tag rather than by `typeof`: `[object Object]` is
+// what separates a config block from a list.
+function isWranglerBlock(value: WranglerValue): value is WranglerBlock {
+  return Object.prototype.toString.call(value) === '[object Object]';
+}
+
+function jsonc(path: string): WranglerBlock {
+  const document: WranglerValue = JSON.parse(
+    source(path).replace(/,\s*([}\]])/g, '$1')
+  );
+  if (!isWranglerBlock(document)) {
+    throw new Error(`${path} is not a Wrangler configuration block`);
+  }
+  return document;
 }
 
 const deploymentScripts = {
@@ -54,15 +77,19 @@ const workerOwners = {
 const cloudflareAccountIdVariable = 'CLOUDFLARE_ACCOUNT_ID';
 const cloudflareApiTokenVariable = 'CLOUDFLARE_API_TOKEN';
 
-function runWorkers(
-  mode?: string,
-  environment: Record<string, string | undefined> = {}
-): {
+/** What one `scripts/deploy/workers.sh` run under the command double leaves behind. */
+interface WorkersRun {
+  /** Every command line the double recorded, in invocation order. */
   commands: string[];
   status: number | null;
   stderr: string;
   stdout: string;
-} {
+}
+
+function runWorkers(
+  mode?: string,
+  environment: Record<string, string | undefined> = {}
+): WorkersRun {
   const directory = mkdtempSync(resolve(tmpdir(), 'animus-workers-'));
   const commandLog = resolve(directory, 'commands.log');
   const commandDouble = resolve(directory, 'command-double.sh');

@@ -7,6 +7,11 @@ import {
   snapshotFilePlans,
 } from '../pipeline/replacement-plans';
 
+import type {
+  ManifestComponentDescriptor,
+  ProjectManifest,
+} from '../pipeline/manifest-schema';
+
 /**
  * Canonical replacement-epoch helper (openspec:
  * next-webpack-served-transform-coherence, design D5): ONE semantic epoch
@@ -16,9 +21,30 @@ import {
  * `animus-replacement-plans-v1\0`.
  */
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function manifestWith(components: Record<string, any>) {
-  return { components, files: {} };
+/** A complete `ManifestComponentDescriptor` at the engine's empty-universe
+ *  values — `file` and `replacement` are the two fields the epoch derivation
+ *  reads; the rest carry the engine's own empty values so a fake descriptor
+ *  is a whole one (the schema in `manifest-schema.ts` is the authority). */
+function descriptor(
+  file: string,
+  replacement: string
+): ManifestComponentDescriptor {
+  return {
+    file,
+    binding: '',
+    class_name: '',
+    extends_from: null,
+    terminal: 'asElement',
+    tag: 'div',
+    replacement,
+    system_prop_names: [],
+  };
+}
+
+function manifestWith(
+  components: Record<string, ManifestComponentDescriptor>
+): Pick<ProjectManifest, 'components'> {
+  return { components };
 }
 
 const DOMAIN_PREFIX = 'animus-replacement-plans-v1\0';
@@ -27,14 +53,14 @@ describe('hashReplacementPlans', () => {
   it('is stable: identical plans hash identically regardless of insertion order', () => {
     const forward = snapshotFilePlans(
       manifestWith({
-        'src/A.tsx::A': { file: 'src/A.tsx', replacement: 'ra' },
-        'src/B.tsx::B': { file: 'src/B.tsx', replacement: 'rb' },
+        'src/A.tsx::A': descriptor('src/A.tsx', 'ra'),
+        'src/B.tsx::B': descriptor('src/B.tsx', 'rb'),
       })
     );
     const reversed = snapshotFilePlans(
       manifestWith({
-        'src/B.tsx::B': { file: 'src/B.tsx', replacement: 'rb' },
-        'src/A.tsx::A': { file: 'src/A.tsx', replacement: 'ra' },
+        'src/B.tsx::B': descriptor('src/B.tsx', 'rb'),
+        'src/A.tsx::A': descriptor('src/A.tsx', 'ra'),
       })
     );
     expect(hashReplacementPlans(forward)).toBe(hashReplacementPlans(reversed));
@@ -43,12 +69,12 @@ describe('hashReplacementPlans', () => {
   it('moves when any replacement content changes', () => {
     const before = snapshotFilePlans(
       manifestWith({
-        'src/A.tsx::A': { file: 'src/A.tsx', replacement: 'ra' },
+        'src/A.tsx::A': descriptor('src/A.tsx', 'ra'),
       })
     );
     const after = snapshotFilePlans(
       manifestWith({
-        'src/A.tsx::A': { file: 'src/A.tsx', replacement: 'ra2' },
+        'src/A.tsx::A': descriptor('src/A.tsx', 'ra2'),
       })
     );
     expect(hashReplacementPlans(after)).not.toBe(hashReplacementPlans(before));
@@ -57,13 +83,13 @@ describe('hashReplacementPlans', () => {
   it('moves on membership changes within a file', () => {
     const one = snapshotFilePlans(
       manifestWith({
-        'src/Kit.tsx::A': { file: 'src/Kit.tsx', replacement: 'x' },
+        'src/Kit.tsx::A': descriptor('src/Kit.tsx', 'x'),
       })
     );
     const two = snapshotFilePlans(
       manifestWith({
-        'src/Kit.tsx::A': { file: 'src/Kit.tsx', replacement: 'x' },
-        'src/Kit.tsx::B': { file: 'src/Kit.tsx', replacement: 'y' },
+        'src/Kit.tsx::A': descriptor('src/Kit.tsx', 'x'),
+        'src/Kit.tsx::B': descriptor('src/Kit.tsx', 'y'),
       })
     );
     expect(hashReplacementPlans(two)).not.toBe(hashReplacementPlans(one));
@@ -73,7 +99,7 @@ describe('hashReplacementPlans', () => {
     const absent = snapshotFilePlans(manifestWith({}));
     const emptyReplacement = snapshotFilePlans(
       manifestWith({
-        'src/A.tsx::A': { file: 'src/A.tsx', replacement: '' },
+        'src/A.tsx::A': descriptor('src/A.tsx', ''),
       })
     );
     expect(hashReplacementPlans(emptyReplacement)).not.toBe(
@@ -89,7 +115,7 @@ describe('hashReplacementPlans', () => {
     // down) must move the epoch even when every replacement is unchanged.
     const snapshot = snapshotFilePlans(
       manifestWith({
-        'src/A.tsx::A': { file: 'src/A.tsx', replacement: 'ra' },
+        'src/A.tsx::A': descriptor('src/A.tsx', 'ra'),
       })
     );
     const bare = hashReplacementPlans(snapshot);
@@ -111,8 +137,8 @@ describe('hashReplacementPlans', () => {
     // `file\0plan\0`, exactly as snapshotFilePlans produced each plan string.
     const snapshot = snapshotFilePlans(
       manifestWith({
-        'src/B.tsx::B': { file: 'src/B.tsx', replacement: 'rb' },
-        'src/A.tsx::A': { file: 'src/A.tsx', replacement: 'ra' },
+        'src/B.tsx::B': descriptor('src/B.tsx', 'rb'),
+        'src/A.tsx::A': descriptor('src/A.tsx', 'ra'),
       })
     );
     const sortedEntries = [...snapshot.entries()].sort(([a], [b]) =>
@@ -131,13 +157,13 @@ describe('snapshotFilePlans / diffFilePlans (moved from vite-plugin)', () => {
   it('diffs replacement changes, membership, and absent↔present transitions', () => {
     const prev = snapshotFilePlans(
       manifestWith({
-        'src/A.tsx::A': { file: 'src/A.tsx', replacement: 'ra' },
-        'src/B.tsx::B': { file: 'src/B.tsx', replacement: 'rb' },
+        'src/A.tsx::A': descriptor('src/A.tsx', 'ra'),
+        'src/B.tsx::B': descriptor('src/B.tsx', 'rb'),
       })
     );
     const next = snapshotFilePlans(
       manifestWith({
-        'src/A.tsx::A': { file: 'src/A.tsx', replacement: 'ra2' },
+        'src/A.tsx::A': descriptor('src/A.tsx', 'ra2'),
       })
     );
     expect(diffFilePlans(prev, next)).toEqual(['src/A.tsx', 'src/B.tsx']);
@@ -152,7 +178,7 @@ describe('snapshotFilePlans / diffFilePlans (moved from vite-plugin)', () => {
   it('treats an empty replacement as present and never collapses membership concatenations', () => {
     const emptyReplacement = snapshotFilePlans(
       manifestWith({
-        'src/Card.tsx::Card': { file: 'src/Card.tsx', replacement: '' },
+        'src/Card.tsx::Card': descriptor('src/Card.tsx', ''),
       })
     );
     const absent = snapshotFilePlans(manifestWith({}));
@@ -162,13 +188,13 @@ describe('snapshotFilePlans / diffFilePlans (moved from vite-plugin)', () => {
     // Two components 'x' + 'y' must not equal one component 'xy'.
     const two = snapshotFilePlans(
       manifestWith({
-        'src/Kit.tsx::A': { file: 'src/Kit.tsx', replacement: 'x' },
-        'src/Kit.tsx::B': { file: 'src/Kit.tsx', replacement: 'y' },
+        'src/Kit.tsx::A': descriptor('src/Kit.tsx', 'x'),
+        'src/Kit.tsx::B': descriptor('src/Kit.tsx', 'y'),
       })
     );
     const one = snapshotFilePlans(
       manifestWith({
-        'src/Kit.tsx::A': { file: 'src/Kit.tsx', replacement: 'xy' },
+        'src/Kit.tsx::A': descriptor('src/Kit.tsx', 'xy'),
       })
     );
     expect(diffFilePlans(two, one)).toEqual(['src/Kit.tsx']);

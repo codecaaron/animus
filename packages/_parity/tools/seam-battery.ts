@@ -21,6 +21,9 @@ import { join } from 'path';
 import { assertRefreshIntent } from '../src/baseline';
 import { compareSeamResults, writeJsonFileAtomic } from '../src/seam-baseline';
 
+import type { SeamCaseResult } from '../src/seam-baseline';
+import type { JsonObject } from '@animus-ui/assertions';
+
 const ROOT = join(import.meta.dirname, '../../..');
 const require_ = createRequire(import.meta.url);
 const v2 = require_(join(ROOT, 'packages/extract/index-v2.js'));
@@ -38,8 +41,12 @@ interface Case {
    *  the vehicle for routing a static styles value through a case-registered
    *  transform (config-carried transform sources win registration, so a
    *  case can only control evaluation through a name the config doesn't
-   *  already source). */
-  configOverride?: Record<string, unknown>;
+   *  already source).
+   *
+   *  A JSON document, because that is what it merges into: `propConfig`
+   *  crosses the engine boundary as JSON text, and this fragment is spread
+   *  over the parsed document before it is re-serialized. */
+  configOverride?: JsonObject;
 }
 
 const chain = (body: string) =>
@@ -179,7 +186,7 @@ const CASES: Case[] = [
   },
 ];
 
-function runV2(c: Case): { css: string; diagnostics: unknown } {
+function runV2(c: Case): SeamCaseResult {
   const configJson = c.configOverride
     ? JSON.stringify({
         ...JSON.parse(config.propConfig),
@@ -216,7 +223,7 @@ if (record) {
   );
 }
 
-const results: Record<string, { css: string; diagnostics: unknown }> = {};
+const results: Record<string, SeamCaseResult> = {};
 for (const c of CASES) {
   results[c.id] = runV2(c);
 }

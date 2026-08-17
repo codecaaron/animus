@@ -108,6 +108,7 @@ done
 
 # ── 3. Isolated install from the committed template ────────────────
 cp e2e/packed-app/package.json e2e/packed-app/tsconfig.json \
+   e2e/packed-app/tsconfig.strict.json \
    e2e/packed-app/vite.config.ts e2e/packed-app/next.config.ts \
    e2e/packed-app/index.html "$STAGING/"
 cp -R e2e/packed-app/src e2e/packed-app/app "$STAGING/"
@@ -139,63 +140,29 @@ echo "[verify:packed] recursive installed package graph ok"
 ")
 
 # ── 6. Published-declaration type-check (stable TypeScript) ─────────
-# --skipLibCheck false pins the strict lib check here; the template's
-# tsconfig sets skipLibCheck:true so Next's own build-time check doesn't
-# lib-check Next's internal template declarations.
-(cd "$STAGING" && ./node_modules/.bin/tsc -p tsconfig.json --noEmit --skipLibCheck false)
+# Two passes, one boundary. The strict pass (tsconfig.strict.json,
+# skipLibCheck:false) proves OUR published declarations under stable TS over
+# every template file except next.config.ts; the full-template pass runs the
+# posture every real Next consumer must use (tsconfig.json, skipLibCheck:true
+# — Next mandates it) and covers the withAnimus usage surface.
+# next.config.ts cannot join the strict pass: @animus-ui/next-plugin's
+# declared contract type-imports next/dist/server/config-shared (the
+# next-owned NextConfig/TurbopackOptions authorities), and Next's internal
+# d.ts are not strict-lib-clean by upstream design (unresolvable template
+# placeholders like VAR_MODULE_GLOBAL_ERROR, React-19-only types under
+# React 18). The template also exact-pins its type graph (next, react×2,
+# @types/react×2, typescript) to the workspace-locked versions — the staging
+# installs without a lockfile, so unpinned type-graph deps would let registry
+# drift move what these passes check.
+(cd "$STAGING" && ./node_modules/.bin/tsc -p tsconfig.strict.json --noEmit)
+(cd "$STAGING" && ./node_modules/.bin/tsc -p tsconfig.json --noEmit)
 echo "[verify:packed] stable-TS declaration check ok"
 
 # ── 7. Consumer builds ──────────────────────────────────────────────
 (cd "$STAGING" && npm run build:vite)
 (cd "$STAGING" && npm run build:next)
 
-# ── 8. Receipt (engine + package-form dimensions) ───────────────────
-# Engine facts are STRUCTURAL GUARDS over the staged artifacts, never inferred
-# from plugin/config source (guardrail G3). retire-extract-v1: v2 is the only
-# engine, so the consumer configs must contain NO engine selection and the
-# installed plugin code must carry the retirement guard; any 'v1' reference in
-# the staged configs is a loud regression.
-mkdir -p "$STAGING/receipts"
-node -e "
-  const fs = require('fs');
-  const path = require('path');
-  const staging = process.argv[1];
-  const vite = require(staging + '/node_modules/vite/package.json').version;
-  const next = require(staging + '/node_modules/next/package.json').version;
-
-  function assertNoEngineSelection(file) {
-    const src = fs.readFileSync(path.join(staging, file), 'utf8');
-    if (/engine\s*:\s*['\"]v[12]['\"]|ANIMUS_ENGINE/.test(src)) {
-      throw new Error(file + ' selects an extraction engine — v1 was retired (retire-extract-v1) and v2 needs no selection');
-    }
-  }
-  function assertRetirementGuard(globDir) {
-    // The guard call is imported from the externalized extract pipeline, so
-    // runtime bundles carry the identifier; inlined bundles would carry the
-    // message (which names the change). Either marker proves the guard.
-    const dir = path.join(staging, globDir);
-    for (const f of fs.readdirSync(dir)) {
-      if (!/\.(cjs|mjs|js)$/.test(f)) continue;
-      const src = fs.readFileSync(path.join(dir, f), 'utf8');
-      if (src.includes('assertNoRetiredEngineSelection') || src.includes('retire-extract-v1')) return;
-    }
-    throw new Error('installed plugin in ' + globDir + ' lacks the v1 retirement guard — update the receipt probe');
-  }
-
-  assertNoEngineSelection('vite.config.ts');
-  assertNoEngineSelection('next.config.ts');
-  assertRetirementGuard('node_modules/@animus-ui/vite-plugin/dist');
-  assertRetirementGuard('node_modules/@animus-ui/next-plugin/dist');
-
-  const receipts = [
-    { lane: 'verify:packed:vite', host: 'vite', hostVersion: vite, mode: 'production', engineLoaded: 'v2', engineDefault: 'v2', engineOverride: false, packageForm: 'packed' },
-    { lane: 'verify:packed:next', host: 'next', hostVersion: next, mode: 'production', engineLoaded: 'v2', engineDefault: 'v2', engineOverride: false, packageForm: 'packed' }
-  ];
-  fs.writeFileSync(staging + '/receipts/packed.json', JSON.stringify(receipts, null, 2) + '\n');
-  console.log('[verify:packed] receipts written:', receipts.map(r => r.lane + '=' + r.engineLoaded).join(', '));
-" "$STAGING"
-
-# ── 9. Outside-repository Svelte + resolver-only runtime proof ──────
+# ── 8. Outside-repository Svelte + resolver-only runtime proof ──────
 # A workspace build can resolve React from the repository root even when the
 # consumer forgot to declare it. Stage two independent consumers under the OS
 # temp root instead, where no ancestor workspace node_modules can mask the
@@ -448,5 +415,10 @@ NODE
 cleanup_svelte_staging
 trap - EXIT
 
-# ── 10. Repo-side positional assertions ─────────────────────────────
+# ── 9. Repo-side positional assertions + packed receipts ────────────
+# The receipt owner is the assert script, not this shell: engine identity may
+# only be recorded through `writeLaneReceipt`'s config-absence guard
+# (@animus-ui/assertions), so the guard and the recorded engine constants
+# cannot drift apart. It also owns the installed-plugin retirement probe, which
+# reads the same staging tree.
 exec bun run e2e/packed-app/scripts/assert-build.ts

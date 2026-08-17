@@ -34,13 +34,16 @@ const breakpoints = { sm: 768 } as const;
 
 // ─── Helpers: var() chasing for emission-parity comparison ───
 
-/** Parse the `:root` block's custom-property declarations into a map. */
-function rootVariables(css: string): Record<string, string> {
-  const start = css.indexOf(':root {');
-  if (start === -1) return {};
+/**
+ * Custom-property declarations of the block that opens at or after `start`.
+ * A `start` of -1 yields an empty map, so each caller keeps its own
+ * block-not-found policy.
+ */
+function blockVariables(css: string, start: number) {
+  const map: Record<string, string> = {};
+  if (start === -1) return map;
   const open = css.indexOf('{', start);
   const close = css.indexOf('}', open);
-  const map: Record<string, string> = {};
   for (const line of css.slice(open + 1, close).split('\n')) {
     const trimmed = line.trim();
     if (!trimmed.startsWith('--')) continue;
@@ -51,6 +54,11 @@ function rootVariables(css: string): Record<string, string> {
       .trim();
   }
   return map;
+}
+
+/** Parse the `:root` block's custom-property declarations into a map. */
+function rootVariables(css: string) {
+  return blockVariables(css, css.indexOf(':root {'));
 }
 
 /**
@@ -172,26 +180,10 @@ describe('emission parity (G1)', () => {
   // the witness above covers the base mode on one fixture only) ──
 
   /** Parse the declarations of the `[data-color-mode="X"]` block. */
-  function modeBlockVariables(
-    css: string,
-    mode: string
-  ): Record<string, string> {
-    const header = `[data-color-mode="${mode}"]`;
-    const start = css.indexOf(header);
+  function modeBlockVariables(css: string, mode: string) {
+    const start = css.indexOf(`[data-color-mode="${mode}"]`);
     if (start === -1) throw new Error(`mode block '${mode}' not found`);
-    const open = css.indexOf('{', start);
-    const close = css.indexOf('}', open);
-    const map: Record<string, string> = {};
-    for (const line of css.slice(open + 1, close).split('\n')) {
-      const trimmed = line.trim();
-      if (!trimmed.startsWith('--')) continue;
-      const colonIdx = trimmed.indexOf(':');
-      map[trimmed.slice(0, colonIdx)] = trimmed
-        .slice(colonIdx + 1)
-        .replace(/;$/, '')
-        .trim();
-    }
-    return map;
+    return blockVariables(css, start);
   }
 
   /**

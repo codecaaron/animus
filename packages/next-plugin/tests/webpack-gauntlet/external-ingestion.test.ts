@@ -12,6 +12,7 @@
  * reconstructs the creation. Engine canned at the singleton seam; the real
  * AnimusWebpackPlugin, loader, and session run throughout.
  */
+import { isJsonObject, isJsonString } from '@animus-ui/assertions';
 import {
   mkdirSync,
   mkdtempSync,
@@ -63,15 +64,15 @@ import {
 import { probeFixtureWebpack, WEBPACK_FIXTURES } from './prerequisites';
 
 import type { GauntletProject, WatchState } from './harness';
+import type { JsonValue } from '@animus-ui/assertions';
 
 vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 });
 
-const g = globalThis as Record<string, unknown>;
 const disposers: Array<() => void> = [];
 
 afterEach(() => {
   for (const dispose of disposers.splice(0)) dispose();
-  delete g[LOADER_IMPL_KEY];
+  Reflect.deleteProperty(globalThis, LOADER_IMPL_KEY);
   resetAnimusGlobals();
   vi.restoreAllMocks();
 });
@@ -84,13 +85,16 @@ function armSuiteEngine(): void {
   });
 }
 
-function setUpExternalProject(): {
+/** Everything one external-workspace scenario drives its watch session with. */
+interface ExternalProjectSetup {
   project: GauntletProject;
   kitRoot: string;
   state: WatchState;
   plugin: AnimusWebpackPlugin;
   shimPath: string;
-} {
+}
+
+function setUpExternalProject(): ExternalProjectSetup {
   resetAnimusGlobals();
   armSuiteEngine();
   const project = createGauntletProject();
@@ -116,11 +120,7 @@ function setUpExternalProject(): {
 
   const shimPath = writeLoaderShim(project.root);
   const state = createWatchState();
-  installLoaderRecorder(
-    project.root,
-    state,
-    animusLoader as unknown as (this: unknown, source: string) => string
-  );
+  installLoaderRecorder(project.root, state, animusLoader);
   const plugin = new AnimusWebpackPlugin({
     system: './src/system.ts',
     loaderPath: shimPath,
@@ -130,11 +130,37 @@ function setUpExternalProject(): {
   return { project, kitRoot, state, plugin, shimPath };
 }
 
+// ── analyzeProject payload boundary ───────────────────────────────────────
+// The engine's first positional argument crosses the NAPI seam as JSON text,
+// so the recorded call is decoded here rather than asserted through casts.
+
+/** One entry of the analyzed universe the engine received. */
+interface AnalyzedFile {
+  path: string;
+  source: string;
+}
+
+function parseAnalyzedFiles(filesJson: string): AnalyzedFile[] {
+  const candidate: JsonValue = JSON.parse(filesJson);
+  if (!Array.isArray(candidate)) {
+    throw new TypeError('analyzeProject filesJson must be an array');
+  }
+  return candidate.map((file, index) => {
+    if (
+      !isJsonObject(file) ||
+      !isJsonString(file.path) ||
+      !isJsonString(file.source)
+    ) {
+      throw new TypeError(`analyzeProject file ${index} is malformed`);
+    }
+    return { path: file.path, source: file.source };
+  });
+}
+
 /** All analyzed file sets, parsed from every analyzeProject call. */
-function analyzedFileSets(): Array<Array<{ path: string; source: string }>> {
-  return mocks.analyzeProject.mock.calls.map(
-    (call) =>
-      JSON.parse(call[0] as string) as Array<{ path: string; source: string }>
+function analyzedFileSets(): AnalyzedFile[][] {
+  return mocks.analyzeProject.mock.calls.map((call) =>
+    parseAnalyzedFiles(call[0])
   );
 }
 

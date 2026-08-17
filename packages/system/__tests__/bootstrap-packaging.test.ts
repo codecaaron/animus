@@ -25,11 +25,54 @@ const packageRoot = resolve(fileURLToPath(import.meta.url), '../..');
 const sourceRoot = resolve(packageRoot, 'src');
 const bootstrapRoot = resolve(sourceRoot, 'bootstrap');
 
-const manifest = JSON.parse(
-  readFileSync(resolve(packageRoot, 'package.json'), 'utf8')
-) as {
-  exports: Record<string, Record<string, string>>;
-};
+type JsonValue =
+  | null
+  | boolean
+  | number
+  | string
+  | JsonValue[]
+  | { [key: string]: JsonValue };
+
+type JsonObject = { [key: string]: JsonValue };
+
+function isJsonObject(value: JsonValue): value is JsonObject {
+  return Object.prototype.toString.call(value) === '[object Object]';
+}
+
+function isJsonString(value: JsonValue): value is string {
+  return Object.prototype.toString.call(value) === '[object String]';
+}
+
+/**
+ * Read the package manifest's export map off disk. The bytes are an I/O
+ * boundary, so every declared subpath is validated as a condition map of
+ * strings before the assertions below read one.
+ */
+function readExportMap(
+  manifestPath: string
+): Record<string, Record<string, string>> {
+  const candidate: JsonValue = JSON.parse(readFileSync(manifestPath, 'utf8'));
+  if (!isJsonObject(candidate) || !isJsonObject(candidate.exports)) {
+    throw new TypeError(`${manifestPath} declares no exports object`);
+  }
+  const declared = candidate.exports;
+  for (const [subpath, conditions] of Object.entries(declared)) {
+    if (
+      !isJsonObject(conditions) ||
+      !Object.values(conditions).every(isJsonString)
+    ) {
+      throw new TypeError(
+        `${manifestPath} exports['${subpath}'] is not a condition map of strings`
+      );
+    }
+  }
+  // SAFETY: the loop above checked every entry of `declared` to be an object
+  // whose values are all strings; the parsed object itself is returned so the
+  // declared condition keys and their order stay observable to the assertions.
+  return declared as JsonObject & Record<string, Record<string, string>>;
+}
+
+const packageExports = readExportMap(resolve(packageRoot, 'package.json'));
 
 /** Resolve a relative specifier to a source file on disk, or null. */
 function resolveSourceFile(fromFile: string, specifier: string): string | null {
@@ -55,7 +98,8 @@ function reachableFiles(entries: string[]): Set<string> {
   const seen = new Set<string>();
   const queue = [...entries];
   while (queue.length > 0) {
-    const file = queue.pop() as string;
+    const file = queue.pop();
+    if (file === undefined) break;
     if (seen.has(file)) continue;
     seen.add(file);
     const source = readFileSync(file, 'utf8');
@@ -71,8 +115,8 @@ function reachableFiles(entries: string[]): Set<string> {
 
 describe('bootstrap packaging', () => {
   it('declares the ./bootstrap subpath mirroring ./groups', () => {
-    const groups = manifest.exports['./groups'];
-    const bootstrap = manifest.exports['./bootstrap'];
+    const groups = packageExports['./groups'];
+    const bootstrap = packageExports['./bootstrap'];
 
     expect(bootstrap).toBeDefined();
     expect(Object.keys(bootstrap)).toEqual(Object.keys(groups));
@@ -90,7 +134,7 @@ describe('bootstrap packaging', () => {
   });
 
   it('serves createAppearanceBootstrap from the dedicated entry', () => {
-    expect(typeof bootstrapEntry.createAppearanceBootstrap).toBe('function');
+    expect(bootstrapEntry.createAppearanceBootstrap).toBeTypeOf('function');
   });
 });
 

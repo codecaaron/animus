@@ -10,6 +10,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
+import { COMMIT_FILE, MANIFEST_FILE } from '../src/host/animus/loader';
 import { loadSnapshot } from '../src/places';
 
 /**
@@ -89,13 +90,13 @@ describe('revalidate detects a changed artifact set', () => {
     const dir = scratchArtifacts();
     const snapshot = loadSnapshot(dir, { sourceRoot: SOURCE_ROOT });
 
-    const manifestPath = join(dir, 'manifest.json');
+    const manifestPath = join(dir, MANIFEST_FILE);
     writeFileSync(manifestPath, `${readFileSync(manifestPath, 'utf8')}\n`);
 
     const freshness = snapshot.revalidate();
     expect(freshness.fresh).toBe(false);
     if (!freshness.fresh) {
-      expect(freshness.changed).toContain('manifest.json');
+      expect(freshness.changed).toContain(MANIFEST_FILE);
     }
   });
 
@@ -103,11 +104,11 @@ describe('revalidate detects a changed artifact set', () => {
     const dir = scratchArtifacts();
     const snapshot = loadSnapshot(dir, { sourceRoot: SOURCE_ROOT });
 
-    rmSync(join(dir, 'commit.json'));
+    rmSync(join(dir, COMMIT_FILE));
     const freshness = snapshot.revalidate();
     expect(freshness.fresh).toBe(false);
     if (!freshness.fresh) {
-      expect(freshness.changed).toContain('commit.json');
+      expect(freshness.changed).toContain(COMMIT_FILE);
     }
   });
 });

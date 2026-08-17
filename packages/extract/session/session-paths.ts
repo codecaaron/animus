@@ -55,9 +55,29 @@ export const CLI_COMMIT_ARTIFACT = 'commit.json';
  *  tree. A live holder means a CLI invocation owns that tree right now. */
 export const CLI_LOCK_ARTIFACT = 'lock.json';
 
+/** The project-relative artifact directory: the flat tree the standalone CLI
+ *  publishes into (its default `--out-dir`) AND the parent of every
+ *  session-scoped tree. One directory, one spelling — the session's start
+ *  hygiene, the watcher's ignore list, and the CLI's default all key on it,
+ *  and a drifted literal on any of them silently splits the tree in two. */
+export const ANIMUS_ARTIFACT_DIR = '.animus';
+
+/** Module id the Rust emitter injects for the extracted stylesheet — and the
+ *  exact resolve-alias KEY both bundler arms register for it (webpack's
+ *  `resolve.alias`, Turbopack's `resolveAlias`), which the adapter's alias
+ *  harvesting must skip. It lives in this fs-free vocabulary module rather
+ *  than the session home so the Turbopack config assembly and the loader
+ *  policy can spell it from ONE authority; a per-arm re-declaration would
+ *  let the emitted id and an alias key drift apart silently.
+ *
+ *  Deliberately a literal, not `${ANIMUS_ARTIFACT_DIR}/${STYLES_ARTIFACT}`:
+ *  this is a published wire identifier baked into already-built consumer
+ *  packages, so it must NOT follow a rename of the artifact directory. */
+export const ANIMUS_CSS_MODULE_ID = '.animus/styles.css';
+
 /** Root of every session-scoped artifact tree for a project. */
 export function sessionsRootDir(rootDir: string): string {
-  return join(rootDir, '.animus', 'sessions');
+  return join(rootDir, ANIMUS_ARTIFACT_DIR, 'sessions');
 }
 
 /** One session's artifact directory (design D2: session-scoped trees,
@@ -145,6 +165,12 @@ export interface AnalysisStatus {
 export interface AnalysisCommit {
   schema: 1;
   sessionId: string;
+  /** FORENSIC ordinal, not a validity witness: no reader — in this repo or
+   *  in a loader protocol — decides anything from it, and the commit's own
+   *  skip guard deliberately compares hashes and the epoch instead. It is
+   *  monotonic per session DIRECTORY only because publication ownership is
+   *  exclusive (ExtractionSession.runFullPipeline claims it). Do not
+   *  promote it to a coherence check without giving it a disk read. */
   generation: number;
   replacementEpoch: string;
   manifestHash: string;
@@ -197,6 +223,11 @@ export const ENVELOPE_CSS_COMMENT_RE = /\/\* __animusSession (\{.*\}) \*\//;
  *  carries none. THROWS on unparseable bytes — callers decide whether a
  *  torn artifact fails closed or degrades. */
 export function readJsonEnvelope(bytes: string): SessionEnvelope | undefined {
+  // SAFETY: `__animusSession` is spliced in by `envelopeJsonArtifact` above —
+  // the single writer of this side-band, in this module — so the key is either
+  // absent (undefined, the declared return) or the object that function was
+  // handed. Bytes that are not JSON at all throw out of `JSON.parse`, which is
+  // this reader's documented contract.
   return (JSON.parse(bytes) as { __animusSession?: SessionEnvelope })
     .__animusSession;
 }
@@ -205,5 +236,9 @@ export function readJsonEnvelope(bytes: string): SessionEnvelope | undefined {
  *  side-band is absent. THROWS on an unparseable envelope body. */
 export function readCssEnvelope(bytes: string): SessionEnvelope | undefined {
   const match = bytes.match(ENVELOPE_CSS_COMMENT_RE);
+  // SAFETY: the captured group comes from `ENVELOPE_CSS_COMMENT_RE`, which
+  // matches only the side-band `envelopeCssArtifact` above writes — the single
+  // writer of this comment, in this module — so the body is that function's
+  // `envelopeJson`. An unparseable body throws, as the doc comment states.
   return match ? (JSON.parse(match[1]) as SessionEnvelope) : undefined;
 }

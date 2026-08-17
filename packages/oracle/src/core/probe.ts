@@ -34,16 +34,40 @@ export type ProbeOperation =
   | 'prove'
   | 'refine';
 
+/**
+ * What a symptom names about its target. `engines/explain.ts` is the only
+ * producer — it copies `OracleSymptom['detail']` in here — and both of that
+ * union's variants carry exactly these fields; the shape is expressible in
+ * core vocabulary alone, so nothing about it obliged the field to be an open
+ * dictionary. `expected` belongs to the `unexpected-value` symptom only.
+ */
+export type SymptomDetail = {
+  property: string;
+  expected?: string;
+};
+
 export type SymptomSpec = {
   kind: string;
   target: TargetId;
-  detail?: Readonly<Record<string, unknown>>;
+  detail?: SymptomDetail;
 };
+
+/**
+ * One value an assertion pins. `engines/prove.ts` is the only producer (it
+ * spreads an `OracleAssertion` with its selector `target` dropped), and every
+ * variant of that union carries a name, a single expected string, or a list of
+ * allowed ones — nothing here is an object, which is what lets `stableHash`
+ * see the whole map in canonical form.
+ */
+export type AssertionParam = string | readonly string[] | undefined;
 
 export type AssertionSpec = {
   kind: string;
   target: TargetId;
-  params?: Readonly<Record<string, unknown>>;
+  /** Read by nobody: the map exists to be hashed into the probe identity
+   *  (§5 — a differently-parameterized assertion is a different question) and
+   *  rendered, so the contract that matters is on the VALUES. */
+  params?: Readonly<Record<string, AssertionParam>>;
 };
 
 export type ProbeObjective =
@@ -134,6 +158,37 @@ export interface CounterexampleWitness {
   boundary?: string;
 }
 
+/**
+ * How a cascade decision moved between two worlds. `engines/diff.ts` is the
+ * only producer and re-exports these names, but the declaration lives here,
+ * beside the `ProbeResult` field it types: the shape is expressible in `core/`
+ * vocabulary alone (`RenderSubject` plus primitives), so nothing about it
+ * obliged the field to be `unknown`.
+ */
+export type SemanticDiffKind =
+  | 'value-changed'
+  | 'winner-changed'
+  | 'rule-activated'
+  | 'rule-deactivated'
+  | 'token-changed'
+  | 'declaration-added'
+  | 'declaration-removed';
+
+export interface SemanticDiffEntry {
+  subject: RenderSubject;
+  property: string;
+  kind: SemanticDiffKind;
+  context: string;
+  before?: string;
+  after?: string;
+}
+
+export interface SemanticDiff {
+  entries: readonly SemanticDiffEntry[];
+  affectedContextClasses: number;
+  unaffectedContextClasses: number;
+}
+
 export interface ProbeResult {
   probeStateId: ProbeStateId;
   worldId: WorldId;
@@ -142,7 +197,9 @@ export interface ProbeResult {
   facts: readonly RenderFact[];
   witnesses?: readonly CounterexampleWitness[];
   causalFindings?: readonly CausalFinding[];
-  semanticDiff?: unknown;
+  /** Present exactly when the operation compared two worlds (`diff`,
+   *  `simulate`); both fill it with `toSemanticDiff(sweep)`. */
+  semanticDiff?: SemanticDiff;
   assumptions: readonly string[];
   unknowns: readonly UnknownObligation[];
   coverage: CoverageReport;

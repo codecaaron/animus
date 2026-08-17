@@ -131,19 +131,37 @@ describe('buildSourceTokenIndex', () => {
     expect(index.size).toBe(0);
   });
 
-  test('absent or invalid manifests JSON yields an empty index', () => {
+  test('absent manifests JSON yields an empty index', () => {
     expect(
       buildSourceTokenIndex({
         sourceThemeManifestsJson: null,
         dirOwners: { [KIT_DIR]: '@acme/ui-kit' },
       }).size
     ).toBe(0);
-    expect(
+  });
+
+  /**
+   * RECORDED CONTRACT REVERSAL (campaign ledger D11a). This assertion
+   * previously pinned the opposite: `'not json'` yielded an empty index. An
+   * empty index is indistinguishable from "no source defines this token", so
+   * the swallow silently disabled the entire cross-source correlation gate.
+   * `sourceThemeManifestsJson` is animus's own wire (the QuickJS system
+   * loader's capture, carried by `loadSystemConfig`), so a parse failure is an
+   * engine bug and must be loud.
+   */
+  test('malformed manifests JSON throws, naming the wire and the cause', () => {
+    expect(() =>
       buildSourceTokenIndex({
         sourceThemeManifestsJson: 'not json',
         dirOwners: { [KIT_DIR]: '@acme/ui-kit' },
-      }).size
-    ).toBe(0);
+      })
+    ).toThrow(/sourceThemeManifestsJson/);
+    expect(() =>
+      buildSourceTokenIndex({
+        sourceThemeManifestsJson: 'not json',
+        dirOwners: { [KIT_DIR]: '@acme/ui-kit' },
+      })
+    ).toThrow(/SyntaxError/);
   });
 });
 
@@ -164,7 +182,7 @@ describe('buildSourceTokenIndex package-boundary join', () => {
   });
 
   /** A real on-disk package: package.json + src/ + dist/, realpath'd. */
-  function makeKit(): { srcDir: string; distModule: string } {
+  function makeKit() {
     const scratch = mkdtempSync(join(tmpdir(), 'animus-correlate-'));
     tempRoots.push(scratch);
     const pkgRoot = join(scratch, 'packages', 'kit');

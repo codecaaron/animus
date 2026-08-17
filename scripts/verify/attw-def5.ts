@@ -42,11 +42,20 @@ export interface Def5Tuple {
   specifier: string; // the unresolved module specifier, e.g. ./shorthands
 }
 
+/**
+ * The accepted DEF-5 sets, keyed by published package name. Open by design: a
+ * package enters the gate by gaining an entry here, and `main` rejects a
+ * package name this map does not carry.
+ */
+interface Def5Baseline {
+  [packageName: string]: Def5Tuple[];
+}
+
 // The exact accepted DEF-5 diagnostic set, captured from a fresh `build:ts`
 // declaration emit + `bunx attw --profile esm-only -f json` (no ignored rule).
 // Regenerate ONLY with a recorded rationale: any drift here is a real change in
 // the published declaration surface. Keyed by published package name.
-export const DEF5_BASELINE: Record<string, Def5Tuple[]> = {
+export const DEF5_BASELINE: Def5Baseline = {
   '@animus-ui/properties': [
     { file: 'dist/index.d.ts', specifier: './shorthands' },
     { file: 'dist/index.d.ts', specifier: './unitless' },
@@ -96,26 +105,73 @@ export const ESM_ONLY_IGNORED_RESOLUTIONS = new Set(['node10', 'node16-cjs']);
 // a fine-grained problem was observed under.
 const MODULE_KIND_ESM = 99;
 
+/**
+ * A value read out of `attw -f json`. attw owns and versions that schema
+ * (0.18.5 here) and this gate reads seven fields of it, so the document is
+ * admitted as a value domain and decided field by field rather than restated.
+ */
+type AttwValue =
+  | undefined
+  | null
+  | boolean
+  | number
+  | string
+  | AttwValue[]
+  | AttwBlock;
+
+interface AttwBlock {
+  [key: string]: AttwValue;
+}
+
+// Decided by representation tag rather than by `typeof`: `[object Object]` is
+// what separates a keyed block from a list, and the tag also rejects everything
+// `JSON.parse` cannot produce.
+function isAttwBlock(value: AttwValue): value is AttwBlock {
+  return Object.prototype.toString.call(value) === '[object Object]';
+}
+
+function isAttwText(value: AttwValue): value is string {
+  return Object.prototype.toString.call(value) === '[object String]';
+}
+
+/** The seven fields of one `analysis.problems` entry that this gate reads. */
 interface AttwProblem {
-  kind?: unknown;
-  resolutionKind?: unknown; // entrypoint-level problems: node10 | node16-cjs | ...
-  resolutionOption?: unknown; // fine-grained problems: node10 | node16 | bundler
-  resolutionMode?: unknown; // fine-grained problems: 99 (ESM) | 1 (CJS)
-  fileName?: unknown;
-  moduleSpecifier?: unknown;
-  entrypoint?: unknown;
+  kind?: AttwValue;
+  resolutionKind?: AttwValue; // entrypoint-level problems: node10 | node16-cjs | ...
+  resolutionOption?: AttwValue; // fine-grained problems: node10 | node16 | bundler
+  resolutionMode?: AttwValue; // fine-grained problems: 99 (ESM) | 1 (CJS)
+  fileName?: AttwValue;
+  moduleSpecifier?: AttwValue;
+  entrypoint?: AttwValue;
+}
+
+// A problems entry that is not a keyed block reads as a problem with no fields
+// — NOT as a dropped entry. It then carries the 'unknown' resolution tag, stays
+// esm-only-visible, and is reported as an added non-resolution problem, which
+// is the fail-closed verdict a malformed entry must produce.
+function readProblem(entry: AttwValue): AttwProblem {
+  const block = isAttwBlock(entry) ? entry : {};
+  return {
+    kind: block.kind,
+    resolutionKind: block.resolutionKind,
+    resolutionOption: block.resolutionOption,
+    resolutionMode: block.resolutionMode,
+    fileName: block.fileName,
+    moduleSpecifier: block.moduleSpecifier,
+    entrypoint: block.entrypoint,
+  };
 }
 
 // Normalizes a problem's resolution to the tag esm-only filters on. Entrypoint
 // problems carry `resolutionKind` directly; fine-grained ones carry
 // option+mode, where node16 splits into esm/cjs by module kind.
 export function resolutionTag(p: AttwProblem): string {
-  if (typeof p.resolutionKind === 'string') return p.resolutionKind;
+  if (isAttwText(p.resolutionKind)) return p.resolutionKind;
   const opt = p.resolutionOption;
   if (opt === 'node16') {
     return p.resolutionMode === MODULE_KIND_ESM ? 'node16-esm' : 'node16-cjs';
   }
-  if (typeof opt === 'string') return opt;
+  if (isAttwText(opt)) return opt;
   return 'unknown';
 }
 
@@ -139,11 +195,11 @@ export interface Def5Result {
 // Evaluates one package's attw analysis against its DEF-5 baseline. `analysis`
 // is the `.analysis` object from `attw -f json`.
 export function evaluateDef5(
-  analysis: unknown,
+  analysis: AttwValue,
   packageName: string
 ): Def5Result {
   const messages: string[] = [];
-  if (analysis === null || typeof analysis !== 'object') {
+  if (!isAttwBlock(analysis)) {
     return {
       ok: false,
       messages: [
@@ -152,9 +208,9 @@ export function evaluateDef5(
       ],
     };
   }
-  const problemsRaw = (analysis as Record<string, unknown>).problems;
-  const problems: AttwProblem[] = Array.isArray(problemsRaw)
-    ? (problemsRaw as AttwProblem[])
+  const problemsRaw = analysis.problems;
+  const problems = Array.isArray(problemsRaw)
+    ? problemsRaw.map(readProblem)
     : [];
 
   const baseline = DEF5_BASELINE[packageName] ?? [];
@@ -168,12 +224,11 @@ export function evaluateDef5(
     (p) => p.kind !== 'InternalResolutionError'
   );
   for (const p of otherVisible) {
-    const where =
-      typeof p.entrypoint === 'string'
-        ? p.entrypoint
-        : typeof p.fileName === 'string'
-          ? p.fileName
-          : '<unknown>';
+    const where = isAttwText(p.entrypoint)
+      ? p.entrypoint
+      : isAttwText(p.fileName)
+        ? p.fileName
+        : '<unknown>';
     messages.push(
       `ADDED non-resolution problem: ${String(p.kind)} at ${where} (${resolutionTag(p)})`
     );
@@ -183,8 +238,7 @@ export function evaluateDef5(
   const observedKeys = new Set<string>();
   for (const p of visible) {
     if (p.kind !== 'InternalResolutionError') continue;
-    if (typeof p.fileName !== 'string' || typeof p.moduleSpecifier !== 'string')
-      continue;
+    if (!isAttwText(p.fileName) || !isAttwText(p.moduleSpecifier)) continue;
     observedKeys.add(
       tupleKey({
         file: stripPackagePrefix(p.fileName, packageName),
@@ -235,7 +289,7 @@ function main(argv: string[]): number {
     return 2;
   }
   const raw = readFileSync(0, 'utf8');
-  let parsed: unknown;
+  let parsed: AttwValue;
   try {
     parsed = JSON.parse(raw);
   } catch {
@@ -247,10 +301,7 @@ function main(argv: string[]): number {
     );
     return 2;
   }
-  const analysis =
-    parsed !== null && typeof parsed === 'object'
-      ? (parsed as Record<string, unknown>).analysis
-      : undefined;
+  const analysis = isAttwBlock(parsed) ? parsed.analysis : undefined;
   const result = evaluateDef5(analysis, packageName);
   if (result.ok) {
     for (const line of result.messages) console.log(line);
