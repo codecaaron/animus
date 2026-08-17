@@ -2,6 +2,7 @@ import { createLogger } from 'vite';
 import { describe, expect, test } from 'vitest';
 
 import { PluginContext } from '../src/context';
+import { makeManifest } from './manifest-fixture';
 
 /**
  * The post-analysis gate over cross-source token contracts
@@ -15,7 +16,7 @@ const KIT_DIR = '/repo/packages/kit/src';
 
 function makeContext(strict: boolean): PluginContext {
   const ctx = new PluginContext({ system: './src/ds.ts', strict });
-  ctx.storedManifest = {
+  ctx.storedManifest = makeManifest({
     diagnostics: [
       {
         file: 'packages/kit/src/Card.tsx',
@@ -25,7 +26,7 @@ function makeContext(strict: boolean): PluginContext {
         token: 'colors.externalAccent',
       },
     ],
-  };
+  });
   ctx.externalFileOwners = { 'packages/kit/src/Card.tsx': '@acme/ui-kit' };
   ctx.externalDirOwners = { [KIT_DIR]: '@acme/ui-kit' };
   ctx.system.sourceThemeManifestsJson = JSON.stringify({
@@ -58,7 +59,7 @@ describe('enforceExternalTokenContracts', () => {
 
   test('a fulfilled contract stays silent (no candidates in the manifest)', () => {
     const ctx = makeContext(true);
-    ctx.storedManifest = { diagnostics: [] };
+    ctx.storedManifest = makeManifest();
 
     expect(() => ctx.enforceExternalTokenContracts()).not.toThrow();
   });
@@ -85,7 +86,7 @@ describe('enforceExternalTokenContracts', () => {
   // gate). Driven through the real method via the injected engine seam so
   // the pin is behavioral, not source-text layout.
   function makeAnalysisContext(strict: boolean): PluginContext {
-    const manifest = {
+    const manifest = makeManifest({
       diagnostics: [
         {
           file: 'packages/kit/src/Card.tsx',
@@ -95,9 +96,7 @@ describe('enforceExternalTokenContracts', () => {
           token: 'colors.externalAccent',
         },
       ],
-      sheets: { global: '' },
-      css: '',
-    };
+    });
     const ctx = new PluginContext({ system: './src/ds.ts', strict }, () => ({
       analyzeProject: () => JSON.stringify(manifest),
     }));

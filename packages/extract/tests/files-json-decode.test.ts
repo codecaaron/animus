@@ -60,8 +60,14 @@ describe('parseFilesJson', () => {
     );
   });
 
-  test('lets a JSON syntax error surface unchanged', () => {
-    expect(() => parseFilesJson('not json', 'test')).toThrow(SyntaxError);
+  // RECORDED CONTRACT REVERSAL: this previously pinned a bare SyntaxError
+  // surfacing unchanged, while every other internal-wire decoder names the
+  // wire and cause via parseInternalWire. The asymmetry was the accident, so
+  // the pin now asserts the named form (wire + reader + cause).
+  test('names the wire and reader on malformed JSON', () => {
+    expect(() => parseFilesJson('not json', 'test')).toThrow(
+      /test filesJson is not valid JSON/
+    );
   });
 });
 

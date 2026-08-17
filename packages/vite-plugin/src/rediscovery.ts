@@ -10,6 +10,7 @@ import { readFileSync } from 'fs';
 import { dirname, extname, relative, resolve } from 'path';
 
 import type { PluginContext } from './context';
+import type { ProjectManifest } from '@animus-ui/extract/pipeline';
 
 interface UnresolvedParentDrop {
   /** rootDir-relative consumer file the diagnostic names. */
@@ -20,57 +21,18 @@ interface UnresolvedParentDrop {
   parent: string;
 }
 
-type RediscoveryJsonValue =
-  | null
-  | boolean
-  | number
-  | string
-  | RediscoveryJsonValue[]
-  | RediscoveryRecord;
-
-type RediscoveryRecord = {
-  [key: string]: RediscoveryJsonValue | undefined;
-};
-
-function isRediscoveryRecord(
-  value: RediscoveryJsonValue
-): value is RediscoveryRecord {
-  return value !== null && Object(value) === value;
-}
-
-function manifestDiagnostics(manifest: RediscoveryRecord) {
-  const diagnostics = manifest.diagnostics;
-  if (diagnostics === null || diagnostics === undefined) return [];
-  if (
-    Array.isArray(diagnostics) ||
-    (Object(diagnostics) !== diagnostics && String(diagnostics) === diagnostics)
-  ) {
-    // Preserve the previous for-of boundary: authored string iterables are
-    // visited character-by-character and ignored as non-diagnostic entries.
-    return diagnostics;
-  }
-  throw new TypeError(
-    '[animus-extract] rediscovery manifest diagnostics must be an array or string iterable'
-  );
-}
-
 /** The current manifest's unresolved-parent drops, parsed from diagnostics
  *  (shared Rust-mirror matcher — the regex lives in manifest-diagnostics). */
 export function unresolvedParentDrops(
   ctx: PluginContext
 ): UnresolvedParentDrop[] {
   const drops: UnresolvedParentDrop[] = [];
-  const manifest: RediscoveryJsonValue = ctx.storedManifest;
-  if (!isRediscoveryRecord(manifest)) return drops;
-  for (const d of manifestDiagnostics(manifest)) {
-    if (!isRediscoveryRecord(d)) continue;
+  const manifest = ctx.storedManifest;
+  if (!manifest) return drops;
+  for (const d of manifest.diagnostics) {
     const parent = unresolvedParentName(d);
     if (parent !== null) {
-      drops.push({
-        file: String(d.file ?? ''),
-        component: String(d.component ?? ''),
-        parent,
-      });
+      drops.push({ file: d.file, component: d.component, parent });
     }
   }
   return drops;
@@ -81,27 +43,18 @@ const EMPTY_DROP_FILES: ReadonlySet<string> = new Set();
 // Per-manifest memo for the hot-path membership checks below — transform's
 // raw-serve check and stabilize's trigger run per served file, and a full
 // diagnostics scan per call is wasted work when the manifest hasn't moved.
-const dropFilesByManifest = new WeakMap<
-  RediscoveryRecord,
-  ReadonlySet<string>
->();
+const dropFilesByManifest = new WeakMap<ProjectManifest, ReadonlySet<string>>();
 
 /** Files carrying an unresolved-parent drop in the CURRENT manifest —
  *  derived once per manifest publication, then a set lookup. */
 export function unresolvedDropFiles(ctx: PluginContext): ReadonlySet<string> {
-  const manifest: RediscoveryJsonValue = ctx.storedManifest;
+  const manifest = ctx.storedManifest;
   if (!manifest) return EMPTY_DROP_FILES;
-  if (!isRediscoveryRecord(manifest)) {
-    throw new TypeError(
-      '[animus-extract] rediscovery manifest must be an object'
-    );
-  }
   let files = dropFilesByManifest.get(manifest);
   if (!files) {
     const derived = new Set<string>();
-    for (const d of manifestDiagnostics(manifest)) {
-      if (!isRediscoveryRecord(d)) continue;
-      if (isUnresolvedParentDrop(d)) derived.add(String(d.file ?? ''));
+    for (const d of manifest.diagnostics) {
+      if (isUnresolvedParentDrop(d)) derived.add(d.file);
     }
     files = derived;
     dropFilesByManifest.set(manifest, files);

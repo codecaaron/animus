@@ -46,6 +46,7 @@ import type {
   ManifestDiagnostic,
   ManifestSheets,
   ProjectAnalysisResult,
+  ProjectManifest,
   RawSourceEntry,
   SourceEntryOwnership,
   SourceIngestionDiagnostic,
@@ -55,14 +56,6 @@ import type {
   V2ExtractEngine,
 } from '@animus-ui/extract/pipeline';
 import type { Logger } from 'vite';
-
-interface RuntimeTerminalDescriptor {
-  replacement?: string | null;
-}
-
-interface RuntimeTerminalManifest {
-  components?: Record<string, RuntimeTerminalDescriptor | null> | null;
-}
 
 /** Pre-load / failed-load defaults — the plugin's historical initial state. */
 function emptySystemConfig(): SystemConfig {
@@ -269,9 +262,13 @@ export class PluginContext {
   // server lifecycles.
   excludeMatcher: ExcludeMatcher;
 
-  // Manifest state — populated at buildStart, consumed during transform/load
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  storedManifest: any = null;
+  // Manifest state — populated at buildStart, consumed during transform/load.
+  // The producing package's own wire declaration, not a plugin-private model:
+  // this holds exactly the `ProjectAnalysisResult.manifest` published below,
+  // so every reader (transform, HMR, rediscovery, self-verify) reads ONE
+  // field spelling and one optionality answer. `null` is the pre-publication
+  // state alone — a failed analysis leaves the previous manifest current.
+  storedManifest: ProjectManifest | null = null;
   storedManifestJson = '';
 
   // Resolved CSS from .withGlobalStyles({ reset, global }) — @layer anm-global
@@ -688,24 +685,22 @@ export class PluginContext {
     // manifest-derived state is published, so no stylesheet from this
     // analysis is served (build fails; dev surfaces Vite's plugin-error
     // overlay via the callers' normal throw paths).
-    assertNoErrorDiagnostics(result.manifest?.diagnostics);
+    assertNoErrorDiagnostics(result.manifest.diagnostics);
     this.assertRuntimeImportSuppliesTerminals(result.manifest);
 
     this.storedManifest = result.manifest;
     this.storedManifestJson = result.manifestJson;
 
     this.storedSystemPropMapJson = JSON.stringify(
-      result.manifest?.system_prop_map ?? {}
+      result.manifest.system_prop_map
     );
-    this.storedDynamicPropsJson = JSON.stringify(
-      result.manifest?.dynamic_props ?? {}
-    );
+    this.storedDynamicPropsJson = JSON.stringify(result.manifest.dynamic_props);
 
     // Update reverse provenance for transitive invalidation
-    this.reverseProvenance = result.manifest?.reverse_provenance ?? {};
+    this.reverseProvenance = result.manifest.reverse_provenance;
 
     // Store structured sheets for dev split delivery
-    this.storedSheets = result.manifest?.sheets ?? null;
+    this.storedSheets = result.manifest.sheets;
 
     this.globalCss = result.globalCss;
     this.resolvedComponentCss = result.componentCss;
@@ -729,14 +724,17 @@ export class PluginContext {
    * build), naming the offending components instead of the import site.
    */
   private assertRuntimeImportSuppliesTerminals(
-    manifest: RuntimeTerminalManifest | null
+    manifest: ProjectManifest
   ): void {
     const override = this.options.runtimeImport;
     if (!override || override === '@animus-ui/system') return;
     const offenders: string[] = [];
-    for (const [id, descriptor] of Object.entries(manifest?.components ?? {})) {
-      const replacement = String(descriptor?.replacement ?? '');
-      if (/\bcreateComponent\(|\bcreateComposedFamily\(/.test(replacement)) {
+    for (const [id, descriptor] of Object.entries(manifest.components)) {
+      if (
+        /\bcreateComponent\(|\bcreateComposedFamily\(/.test(
+          descriptor.replacement
+        )
+      ) {
         offenders.push(id);
       }
     }

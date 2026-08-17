@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { transformSource } from '../src/transform';
 import { makeContextProbe, makeEnvGraph } from './context-probe';
+import { makeComponent, makeManifest } from './manifest-fixture';
 
 import type { ContextProbe } from './context-probe';
 import type { ManifestSheets } from '@animus-ui/extract/pipeline';
@@ -45,7 +46,7 @@ function makeProbe(
     externalDirOwners: {},
     externalFileOwners: {},
     reverseProvenance: {},
-    storedManifest: { components: {}, files: {}, diagnostics: [] },
+    storedManifest: makeManifest(),
     storedManifestJson: '{}',
     storedSheets: SHEETS,
     engineApi: () => ({
@@ -75,9 +76,7 @@ async function serveConsumerRaw(probe: BarrierProbe): Promise<void> {
   probe.ctx.mutateFileCache((cache) =>
     cache.set('src/Parent.tsx', { hash: 'h2', source: 's2' })
   );
-  probe.ctx.storedManifest = {
-    components: {},
-    files: {},
+  probe.ctx.storedManifest = makeManifest({
     diagnostics: [
       {
         file: 'src/Consumer.tsx',
@@ -86,7 +85,7 @@ async function serveConsumerRaw(probe: BarrierProbe): Promise<void> {
         message: "chain dropped: could not resolve parent component 'Parent'",
       },
     ],
-  };
+  });
   const served = await transformSource(
     probe.ctx,
     "import { Parent } from './Parent';\nexport const Fancy = Parent.extend();",
@@ -97,20 +96,16 @@ async function serveConsumerRaw(probe: BarrierProbe): Promise<void> {
 
 /** Publish the recovered manifest: both files extracted, provenance linked. */
 function publishRecoveredManifest(probe: BarrierProbe): void {
-  probe.ctx.storedManifest = {
+  probe.ctx.storedManifest = makeManifest({
     components: {
-      'src/Parent.tsx::Parent': { file: 'src/Parent.tsx', replacement: 'rp' },
-      'src/Consumer.tsx::Fancy': {
-        file: 'src/Consumer.tsx',
-        replacement: 'rf',
-      },
+      'src/Parent.tsx::Parent': makeComponent('src/Parent.tsx', 'rp'),
+      'src/Consumer.tsx::Fancy': makeComponent('src/Consumer.tsx', 'rf'),
     },
     files: {
       'src/Parent.tsx': ['src/Parent.tsx::Parent'],
       'src/Consumer.tsx': ['src/Consumer.tsx::Fancy'],
     },
-    diagnostics: [],
-  };
+  });
   probe.ctx.reverseProvenance = {
     'src/Parent.tsx::Parent': ['src/Consumer.tsx::Fancy'],
   };

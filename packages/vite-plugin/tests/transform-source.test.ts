@@ -14,6 +14,7 @@ import {
 } from '../src/constants';
 import { transformSource } from '../src/transform';
 import { makeContextProbe, makeEnvGraph } from './context-probe';
+import { makeComponent, makeManifest } from './manifest-fixture';
 
 import type { ContextProbe } from './context-probe';
 import type { ManifestSheets } from '@animus-ui/extract/pipeline';
@@ -59,7 +60,7 @@ function makeProbe(
     isProd: options.isProd ?? false,
     externalDirOwners: {},
     externalFileOwners: {},
-    storedManifest: { components: {}, files: options.knownFiles ?? {} },
+    storedManifest: makeManifest({ files: options.knownFiles ?? {} }),
     storedManifestJson: '{}',
     storedSheets: SHEETS,
     engineApi: () => ({
@@ -72,7 +73,7 @@ function makeProbe(
   const ctx = probe.ctx;
   ctx.runAnalysis = () => {
     probe.analyses++;
-    Object.assign(ctx.storedManifest.files, options.discoversOnAnalysis ?? {});
+    Object.assign(ctx.storedManifest!.files, options.discoversOnAnalysis ?? {});
     return true;
   };
   return probe;
@@ -329,25 +330,25 @@ describe('transform: new-file invalidation is unconditional', () => {
       // Publish a FRESH manifest object, as the real runAnalysis does
       // (`this.storedManifest = result.manifest` from a fresh JSON.parse) —
       // snapshot derivation is keyed on manifest identity.
-      ctx.storedManifest = {
+      ctx.storedManifest = makeManifest({
         ...ctx.storedManifest,
         components: {
-          ...ctx.storedManifest.components,
-          'src/Fancy.tsx::Fancy': {
-            file: 'src/Fancy.tsx',
-            replacement: "createComponent('div', 'recovered')",
-          },
-          'src/New.tsx::New': {
-            file: 'src/New.tsx',
-            replacement: "createComponent('div', 'new')",
-          },
+          ...ctx.storedManifest!.components,
+          'src/Fancy.tsx::Fancy': makeComponent(
+            'src/Fancy.tsx',
+            "createComponent('div', 'recovered')"
+          ),
+          'src/New.tsx::New': makeComponent(
+            'src/New.tsx',
+            "createComponent('div', 'new')"
+          ),
         },
         files: {
-          ...ctx.storedManifest.files,
+          ...ctx.storedManifest!.files,
           'src/Fancy.tsx': ['src/Fancy.tsx::Fancy'],
           'src/New.tsx': ['src/New.tsx::New'],
         },
-      };
+      });
       return true;
     };
     const graph = makeEnvGraph({ rootDir: ROOT, file: 'src/Fancy.tsx' });
@@ -413,7 +414,7 @@ describe('transform: new-file invalidation is unconditional', () => {
         extensionsSet: new Set(['.ts', '.tsx']),
         externalDirOwners: {},
         externalFileOwners: {},
-        storedManifest: { components: {}, files: {} },
+        storedManifest: makeManifest(),
         storedManifestJson: '{}',
         storedSheets: SHEETS,
         engineApi: () => ({
@@ -424,9 +425,7 @@ describe('transform: new-file invalidation is unconditional', () => {
       ctx.runAnalysis = () => {
         probe.analyses++;
         if (probe.analyses === 1) {
-          ctx.storedManifest = {
-            components: {},
-            files: {},
+          ctx.storedManifest = makeManifest({
             diagnostics: [
               {
                 file: 'New.tsx',
@@ -436,19 +435,18 @@ describe('transform: new-file invalidation is unconditional', () => {
                   "chain dropped: could not resolve parent component 'Base'",
               },
             ],
-          };
+          });
         } else {
-          ctx.storedManifest = {
+          ctx.storedManifest = makeManifest({
             components: {
-              'Base.tsx::Base': { file: 'Base.tsx', replacement: 'rb' },
-              'New.tsx::Child': { file: 'New.tsx', replacement: 'rc' },
+              'Base.tsx::Base': makeComponent('Base.tsx', 'rb'),
+              'New.tsx::Child': makeComponent('New.tsx', 'rc'),
             },
             files: {
               'Base.tsx': ['Base.tsx::Base'],
               'New.tsx': ['New.tsx::Child'],
             },
-            diagnostics: [],
-          };
+          });
         }
         return true;
       };

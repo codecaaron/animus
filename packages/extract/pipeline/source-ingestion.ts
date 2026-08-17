@@ -1,6 +1,7 @@
 import { posix } from 'node:path';
 
 import { contentHash } from './content-hash';
+import { parseInternalWire } from './internal-wire';
 import { preprocessMdx, type PreprocessMdxResult } from './mdx-preprocessor';
 import {
   adaptSvelteSource,
@@ -73,7 +74,10 @@ export function parseFilesJson(
   filesJson: string,
   context: string
 ): SerializedSourceEntry[] {
-  const candidate: FilesJsonValue = JSON.parse(filesJson);
+  const candidate: FilesJsonValue = parseInternalWire(
+    filesJson,
+    `${context} filesJson`
+  );
   if (!Array.isArray(candidate) || !candidate.every(isSerializedSourceEntry)) {
     throw new TypeError(
       `[${context}] analysis files JSON must be an array of {path, source} entries`

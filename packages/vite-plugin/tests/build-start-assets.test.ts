@@ -5,6 +5,7 @@ import { afterAll, describe, expect, test } from 'vitest';
 
 import { runBuildStart } from '../src/build-start';
 import { PluginContext } from '../src/context';
+import { makeManifest } from './manifest-fixture';
 
 /**
  * asset() lifecycle across REPEATED buildStarts on one PluginContext
@@ -30,13 +31,12 @@ function makeContext() {
   const fontPath = join(scratch, 'inter.woff2');
   writeFileSync(fontPath, 'font-bytes');
 
-  const manifest = {
-    components: {},
+  const manifest = makeManifest({
     sheets: {
+      ...makeManifest().sheets,
       global: `@font-face { font-family: Inter; src: url('animus-asset:${FONT_SPECIFIER}'); }`,
     },
-    css: '',
-  };
+  });
   const engine = {
     loadSystemModule: () => ({
       propConfig: '{}',

@@ -76,7 +76,7 @@ describe('Vite manifest diagnostic surfacing', () => {
       'utf8'
     );
     expect(source).toMatch(
-      /assertNoErrorDiagnostics\(result\.manifest\?\.diagnostics\)/
+      /assertNoErrorDiagnostics\(result\.manifest\.diagnostics\)/
     );
   });
 

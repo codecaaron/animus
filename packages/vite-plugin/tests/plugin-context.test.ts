@@ -10,6 +10,7 @@ import {
   runExclusiveAnalysis,
   systemPropsModuleSource,
 } from '../src/context';
+import { makeComponent, makeManifest } from './manifest-fixture';
 
 import type { AnimusExtractOptions } from '../src/index';
 import type { AnalyzeProjectArgs } from '@animus-ui/extract/pipeline';
@@ -135,7 +136,7 @@ describe('runtime import selection', () => {
     const ctx = new PluginContext(options, () => ({
       analyzeProject: (...received: AnalyzeProjectArgs) => {
         emitterConfigJson = received[8];
-        return JSON.stringify({ components: {}, files: {}, css: '' });
+        return JSON.stringify(makeManifest());
       },
     }));
 
@@ -178,13 +179,13 @@ describe('runtimeImport override guards its terminal contract', () => {
     if (runtimeImport) options.runtimeImport = runtimeImport;
     return new PluginContext(options, () => ({
       analyzeProject: () =>
-        JSON.stringify({
-          components: {
-            badge: { file: 'src/definition.ts', replacement },
-          },
-          files: {},
-          css: '',
-        }),
+        JSON.stringify(
+          makeManifest({
+            components: {
+              badge: makeComponent('src/definition.ts', replacement),
+            },
+          })
+        ),
     }));
   }
 

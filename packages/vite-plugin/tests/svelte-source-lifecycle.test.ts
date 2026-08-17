@@ -17,6 +17,7 @@ import { PluginContext } from '../src/context';
 import { handleHotUpdate } from '../src/hmr';
 import { transformSource } from '../src/transform';
 import { makeEnvGraph } from './context-probe';
+import { makeComponent, makeManifest } from './manifest-fixture';
 
 import type { JsonObject, JsonValue } from '@animus-ui/assertions';
 import type { EngineApi, RawSourceEntry } from '@animus-ui/extract/pipeline';
@@ -134,13 +135,7 @@ function makeEngineProbe(): EngineProbe {
         throw new Error('planned analysis failure');
       }
       analyses.push(parseRawSourceEntries(filesJson));
-      return JSON.stringify({
-        components: {},
-        files: {},
-        sheets: {},
-        css: '',
-        diagnostics: [],
-      });
+      return JSON.stringify(makeManifest());
     },
     transformFile: (_source: string, path: string) => {
       transformedPaths.push(path);
@@ -177,13 +172,7 @@ function makeStatefulResetProbe() {
     extractFacts: factsFor,
     analyzeProject: () => {
       active = true;
-      return JSON.stringify({
-        components: {},
-        files: {},
-        sheets: {},
-        css: '',
-        diagnostics: [],
-      });
+      return JSON.stringify(makeManifest());
     },
     transformFile: (_source: string, path: string) => {
       if (!active) throw new Error('transform engine inactive after clear');
@@ -680,15 +669,11 @@ describe('opted-in Svelte source ownership in the Vite lifecycle', () => {
           failNext = false;
           throw new Error('planned reset failure');
         }
-        return JSON.stringify({
-          components: {
-            badge: { file: definitionPath, replacement },
-          },
-          files: {},
-          sheets: {},
-          css: '',
-          diagnostics: [],
-        });
+        return JSON.stringify(
+          makeManifest({
+            components: { badge: makeComponent(definitionPath, replacement) },
+          })
+        );
       },
       transformFile: () => ({ code: '', hasComponents: false }),
       clearAnalysisCache: () => {},

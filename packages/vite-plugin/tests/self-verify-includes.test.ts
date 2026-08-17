@@ -2,6 +2,7 @@ import { createLogger } from 'vite';
 import { describe, expect, test } from 'vitest';
 
 import { PluginContext } from '../src/context';
+import { makeComponent, makeManifest } from './manifest-fixture';
 
 /**
  * The gates over external-package discovery outcomes
@@ -16,7 +17,9 @@ import { PluginContext } from '../src/context';
  *  present; openspec: standalone-extraction-cli). */
 function makeContext(strict: boolean): PluginContext {
   const ctx = new PluginContext({ system: './src/ds.ts', strict });
-  ctx.storedManifest = { components: { 'Button::src/Button.tsx': {} } };
+  ctx.storedManifest = makeManifest({
+    components: { 'Button::src/Button.tsx': makeComponent('src/Button.tsx') },
+  });
   ctx.system.variableCss = ':root { --color-text: #000; }';
   ctx.resolvedComponentCss = '.animus-Button-abc { margin: 0; }';
   return ctx;

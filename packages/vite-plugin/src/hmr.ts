@@ -309,7 +309,7 @@ async function analyzeChangedFile(
     relPath,
   ];
   const directComponentIds: string[] = previousAnalysisPaths.flatMap(
-    (analysisPath) => ctx.storedManifest?.files?.[analysisPath] ?? []
+    (analysisPath) => ctx.storedManifest?.files[analysisPath] ?? []
   );
   // Compute transitive invalidation set via reverse_provenance BFS
   const invalidatedIds = new Set(directComponentIds);
@@ -429,7 +429,7 @@ function isPresentationOnlyEdit(
 ): boolean {
   const servedHash = ctx.transformOutputHashes.get(scannerRelPath);
   if (!servedHash || !ctx.storedManifestJson) return false;
-  if (!ctx.storedManifest?.files?.[scannerRelPath]?.length) return false;
+  if (!ctx.storedManifest?.files[scannerRelPath]?.length) return false;
   try {
     const { transformFile } = ctx.engineApi();
     const fresh = transformFile(source, scannerRelPath, ctx.storedManifestJson);

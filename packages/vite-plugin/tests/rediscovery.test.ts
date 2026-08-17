@@ -6,8 +6,10 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { stabilizeSourceUniverse } from '../src/rediscovery';
 import { makeContextProbe } from './context-probe';
+import { makeComponent, makeManifest } from './manifest-fixture';
 
 import type { ContextProbe } from './context-probe';
+import type { ManifestDiagnostic } from '@animus-ui/extract/pipeline';
 
 /**
  * Source-universe reconciliation before unresolved-parent fallbacks
@@ -33,8 +35,11 @@ function makeProbe(rootDir: string): RediscoveryProbe {
   return Object.assign(base, { warns });
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function dropDiagnostic(file: string, component: string, parent: string): any {
+function dropDiagnostic(
+  file: string,
+  component: string,
+  parent: string
+): ManifestDiagnostic {
   return {
     file,
     component,
@@ -64,21 +69,18 @@ describe('stabilizeSourceUniverse', () => {
     ctx.mutateFileCache((cache) =>
       cache.set('Consumer.tsx', { hash: 'h', source: 'src' })
     );
-    ctx.storedManifest = {
-      components: {},
-      files: {},
+    ctx.storedManifest = makeManifest({
       diagnostics: [dropDiagnostic('Consumer.tsx', 'Fancy', 'Parent')],
-    };
+    });
     ctx.runAnalysis = () => {
       probe.analyses++;
       // The fold made the parent visible: the re-analysis resolves the graph.
-      ctx.storedManifest = {
+      ctx.storedManifest = makeManifest({
         components: {
-          'Consumer.tsx::Fancy': { file: 'Consumer.tsx', replacement: 'r' },
+          'Consumer.tsx::Fancy': makeComponent('Consumer.tsx', 'r'),
         },
         files: { 'Consumer.tsx': ['Consumer.tsx::Fancy'] },
-        diagnostics: [],
-      };
+      });
       return true;
     };
 
@@ -94,11 +96,7 @@ describe('stabilizeSourceUniverse', () => {
   it('does nothing when no unresolved-parent drops are present', async () => {
     writeFileSync(join(root, 'New.tsx'), 'export const x = 1;\n');
     const probe = makeProbe(root);
-    probe.ctx.storedManifest = {
-      components: {},
-      files: {},
-      diagnostics: [],
-    };
+    probe.ctx.storedManifest = makeManifest();
 
     expect(await stabilizeSourceUniverse(probe.ctx)).toBe(false);
     expect(probe.analyses).toBe(0);
@@ -108,11 +106,9 @@ describe('stabilizeSourceUniverse', () => {
 
   it('returns without re-analyzing when the walk finds nothing new', async () => {
     const probe = makeProbe(root);
-    probe.ctx.storedManifest = {
-      components: {},
-      files: {},
+    probe.ctx.storedManifest = makeManifest({
       diagnostics: [dropDiagnostic('Consumer.tsx', 'Fancy', 'Ghost')],
-    };
+    });
 
     expect(await stabilizeSourceUniverse(probe.ctx)).toBe(false);
     expect(probe.analyses).toBe(0);
@@ -151,11 +147,9 @@ describe('stabilizeSourceUniverse', () => {
       ctx.mutateFileCache((cache) =>
         cache.set('Consumer.tsx', { hash: 'h', source: 'src' })
       );
-      ctx.storedManifest = {
-        components: {},
-        files: {},
+      ctx.storedManifest = makeManifest({
         diagnostics: [dropDiagnostic('Consumer.tsx', 'Fancy', 'Parent')],
-      };
+      });
       fail(ctx);
 
       const first = stabilizeSourceUniverse(probe.ctx);
@@ -171,7 +165,7 @@ describe('stabilizeSourceUniverse', () => {
       let retried = false;
       ctx.runAnalysis = () => {
         retried = true;
-        ctx.storedManifest = { components: {}, files: {}, diagnostics: [] };
+        ctx.storedManifest = makeManifest();
         return true;
       };
       await stabilizeSourceUniverse(probe.ctx);
@@ -202,11 +196,9 @@ describe('stabilizeSourceUniverse', () => {
     ctx.mutateFileCache((cache) =>
       cache.set('Note.tsx', { hash: 'h', source: 'note' })
     );
-    ctx.storedManifest = {
-      components: {},
-      files: {},
+    ctx.storedManifest = makeManifest({
       diagnostics: [dropDiagnostic('Consumer.tsx', 'Fancy', 'Parent')],
-    };
+    });
 
     // The parent is genuinely absent: the walk folds nothing and memoizes
     // that verdict.
@@ -229,7 +221,7 @@ describe('stabilizeSourceUniverse', () => {
     );
     ctx.runAnalysis = () => {
       probe.analyses++;
-      ctx.storedManifest = { components: {}, files: {}, diagnostics: [] };
+      ctx.storedManifest = makeManifest();
       return true;
     };
 
@@ -261,11 +253,9 @@ describe('stabilizeSourceUniverse', () => {
           "export const Fancy = Parent.extend().styles({}).asElement('div');\n",
       })
     );
-    ctx.storedManifest = {
-      components: {},
-      files: {},
+    ctx.storedManifest = makeManifest({
       diagnostics: [dropDiagnostic('Consumer.tsx', 'Fancy', 'Parent')],
-    };
+    });
 
     await stabilizeSourceUniverse(probe.ctx);
 

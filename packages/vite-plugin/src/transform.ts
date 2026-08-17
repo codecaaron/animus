@@ -14,13 +14,6 @@ import { stabilizeSourceUniverse, unresolvedDropFiles } from './rediscovery';
 
 import type { PluginContext } from './context';
 
-interface RawFallbackManifest {
-  files?: { [relativePath: string]: readonly string[] | undefined };
-  components?: {
-    [componentId: string]: { file?: string } | undefined;
-  };
-}
-
 /**
  * The dev-mode bridge prepend, shared with the hot-update gate so both
  * compute byte-identical served output. The import goes AFTER the directive
@@ -42,9 +35,9 @@ export function applyDevBridgeImport(code: string): string {
  * withheld exactly like a direct parent's.
  */
 function rawFallbackDescendants(ctx: PluginContext, relPath: string): string[] {
-  const manifest: RawFallbackManifest | null | undefined = ctx.storedManifest;
+  const manifest = ctx.storedManifest;
   const conflicted = new Set<string>();
-  const queue = [...(manifest?.files?.[relPath] ?? [])];
+  const queue = [...(manifest?.files[relPath] ?? [])];
   const seen = new Set(queue);
   while (queue.length > 0) {
     const id = queue.shift()!;
@@ -52,8 +45,10 @@ function rawFallbackDescendants(ctx: PluginContext, relPath: string): string[] {
       if (seen.has(childId)) continue;
       seen.add(childId);
       queue.push(childId);
-      // The manifest is the file authority — no id-string parsing.
-      const childFile = manifest?.components?.[childId]?.file;
+      // The manifest is the file authority — no id-string parsing. The
+      // optional index result is a genuine miss (a provenance child the
+      // manifest carries no descriptor for), not a shape guard.
+      const childFile = manifest?.components[childId]?.file;
       if (
         childFile &&
         childFile !== relPath &&
@@ -119,7 +114,7 @@ export async function transformSource(
   }
 
   // Only process files we know about in the manifest
-  if (!ctx.storedManifest.files?.[relativePath]?.length) {
+  if (!ctx.storedManifest.files[relativePath]?.length) {
     // New file detection: if this file isn't in the cache, it was created
     // after buildStart. Register it and re-run analysis to pick it up.
     // Exclusive: Vite transforms modules concurrently, and two detections
@@ -180,7 +175,7 @@ export async function transformSource(
           );
 
           const compCount =
-            ctx.storedManifest.files?.[relativePath]?.length ?? 0;
+            ctx.storedManifest?.files[relativePath]?.length ?? 0;
           // Standard level, not verbose-only (openspec:
           // hmr-new-file-detection, "New file detection logging").
           ctx.info(
@@ -198,7 +193,7 @@ export async function transformSource(
       });
     }
     // Re-check after potential analysis
-    if (!ctx.storedManifest.files?.[relativePath]?.length) {
+    if (!ctx.storedManifest.files[relativePath]?.length) {
       // A raw serve caused by an unresolved extension parent is recorded —
       // the barrier below withholds that parent's extracted serve while
       // this fallback is live. A raw serve of a file the analysis knows
@@ -256,7 +251,7 @@ export async function transformSource(
     }
 
     if (ctx.verbose) {
-      const compCount = ctx.storedManifest.files?.[relativePath]?.length ?? 0;
+      const compCount = ctx.storedManifest.files[relativePath]?.length ?? 0;
       ctx.log(`transform ${relativePath}: ${compCount} components`);
     }
 

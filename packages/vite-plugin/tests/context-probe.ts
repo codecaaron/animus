@@ -7,6 +7,7 @@ import {
 import { resolve } from 'path';
 
 import { buildRawEntriesFromCache, PluginContext } from '../src/context';
+import { makeManifest } from './manifest-fixture';
 
 import type {
   RawSourceEntry,
@@ -123,7 +124,7 @@ export function makeContextProbe<Overrides extends ContextProbeOverrides>(
     analysisOwnerByPath: new Map<string, string>(),
     rawExtensionFallbacks: new Set<string>(),
     reverseProvenance,
-    storedManifest: { components: {}, files: {} },
+    storedManifest: makeManifest(),
     // The four inputs `virtual:animus/system-props` is generated from. The
     // engine republishes them on every analysis whether or not they moved.
     storedSystemPropMapJson: '{}',

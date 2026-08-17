@@ -220,39 +220,31 @@ export async function runBuildStart(
   // 7. Surface diagnostics from the manifest
   if (ctx.storedManifest) {
     const report = ctx.storedManifest.report;
-    if (report) {
-      ctx.log(
-        `Extracted ${report.components_extracted}/${report.components_total} components (${Math.round(performance.now() - t0)}ms)`
-      );
-      ctx.logTimingWaterfall(ctx.storedManifest.timing ?? {});
-      ctx.log(
-        `Reconciliation: ${report.components_extracted} kept, ${report.variants_eliminated} variants pruned, ${report.states_eliminated} states pruned`
-      );
+    ctx.log(
+      `Extracted ${report.components_extracted}/${report.components_total} components (${Math.round(performance.now() - t0)}ms)`
+    );
+    ctx.logTimingWaterfall(ctx.storedManifest.timing);
+    ctx.log(
+      `Reconciliation: ${report.components_extracted} kept, ${report.variants_eliminated} variants pruned, ${report.states_eliminated} states pruned`
+    );
 
-      // Always-on elimination warnings (not gated by verbose)
-      const details: Array<{
-        component: string;
-        kind: string;
-        name?: string;
-        reason: string;
-      }> = report.eliminated_details || [];
-      for (const d of details) {
-        if (d.kind === 'component') {
-          ctx.warn(`⚠ ${d.component} eliminated: ${d.reason}`);
-        } else if (d.kind === 'prospective_component') {
-          ctx.warn(
-            `⚠ ${d.component} would be eliminated in production: ${d.reason}`
-          );
-        } else if (d.kind === 'variant') {
-          ctx.warn(`⚠ ${d.component} variant '${d.name}' pruned: ${d.reason}`);
-        } else if (d.kind === 'state') {
-          ctx.warn(`⚠ ${d.component} state '${d.name}' pruned: ${d.reason}`);
-        }
+    // Always-on elimination warnings (not gated by verbose)
+    for (const d of report.eliminated_details) {
+      if (d.kind === 'component') {
+        ctx.warn(`⚠ ${d.component} eliminated: ${d.reason}`);
+      } else if (d.kind === 'prospective_component') {
+        ctx.warn(
+          `⚠ ${d.component} would be eliminated in production: ${d.reason}`
+        );
+      } else if (d.kind === 'variant') {
+        ctx.warn(`⚠ ${d.component} variant '${d.name}' pruned: ${d.reason}`);
+      } else if (d.kind === 'state') {
+        ctx.warn(`⚠ ${d.component} state '${d.name}' pruned: ${d.reason}`);
       }
     }
 
     ctx.log(
-      `CSS: ${ctx.resolvedComponentCss.length} bytes (${Object.keys(ctx.storedManifest.components || {}).length} components)`
+      `CSS: ${ctx.resolvedComponentCss.length} bytes (${Object.keys(ctx.storedManifest.components).length} components)`
     );
 
     if (!ctx.isProd && ctx.storedSheets) {

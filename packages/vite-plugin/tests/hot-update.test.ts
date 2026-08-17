@@ -17,6 +17,7 @@ import {
 import { handleHotUpdate } from '../src/hmr';
 import { HotUpdateEvents } from '../src/hot-update-events';
 import { makeContextProbe, makeEnvGraph } from './context-probe';
+import { makeComponent, makeManifest } from './manifest-fixture';
 
 import type { ContextProbe } from './context-probe';
 import type { DevEnvironment, HotUpdateOptions } from 'vite';
@@ -414,18 +415,18 @@ describe('hotUpdate delete re-delivers consumers whose plan changed', () => {
       cache.set('Button.tsx', { hash: 'h', source: 's' })
     );
     const ctx = probe.ctx;
-    ctx.storedManifest = {
+    ctx.storedManifest = makeManifest({
       components: {
-        'Fancy.tsx::Fancy': {
-          file: 'Fancy.tsx',
-          replacement: "createComponent('div', 'a')",
-        },
+        'Fancy.tsx::Fancy': makeComponent(
+          'Fancy.tsx',
+          "createComponent('div', 'a')"
+        ),
       },
       files: { 'Fancy.tsx': ['Fancy.tsx::Fancy'] },
-    };
+    });
     ctx.runAnalysis = () => {
       probe.analyses++;
-      ctx.storedManifest = { components: {}, files: {} };
+      ctx.storedManifest = makeManifest();
       return true;
     };
     const consumerAbs = resolve(root, 'Fancy.tsx');
@@ -487,9 +488,7 @@ describe('hotUpdate recovers a new imported parent found on disk', () => {
       probe.analyses++;
       if (probe.analyses === 1) {
         // The parent is not in the analyzed universe yet: chains drop.
-        ctx.storedManifest = {
-          components: {},
-          files: {},
+        ctx.storedManifest = makeManifest({
           diagnostics: [
             {
               file: 'Consumer.tsx',
@@ -499,20 +498,19 @@ describe('hotUpdate recovers a new imported parent found on disk', () => {
                 "chain dropped: could not resolve parent component 'Parent'",
             },
           ],
-        };
+        });
       } else {
         // The fold made the parent visible: the whole graph resolves.
-        ctx.storedManifest = {
+        ctx.storedManifest = makeManifest({
           components: {
-            'Parent.tsx::Parent': { file: 'Parent.tsx', replacement: 'rp' },
-            'Consumer.tsx::Fancy': { file: 'Consumer.tsx', replacement: 'rf' },
+            'Parent.tsx::Parent': makeComponent('Parent.tsx', 'rp'),
+            'Consumer.tsx::Fancy': makeComponent('Consumer.tsx', 'rf'),
           },
           files: {
             'Parent.tsx': ['Parent.tsx::Parent'],
             'Consumer.tsx': ['Consumer.tsx::Fancy'],
           },
-          diagnostics: [],
-        };
+        });
       }
       return true;
     };
@@ -616,9 +614,7 @@ describe('hotUpdate failed analysis reopens the hash gate', () => {
       probe.analyses++;
       if (probe.analyses === 1) {
         // Publishes, but leaves an unresolved-parent drop for stabilize.
-        ctx.storedManifest = {
-          components: {},
-          files: {},
+        ctx.storedManifest = makeManifest({
           diagnostics: [
             {
               file: 'Button.tsx',
@@ -628,7 +624,7 @@ describe('hotUpdate failed analysis reopens the hash gate', () => {
                 "chain dropped: could not resolve parent component 'Parent'",
             },
           ],
-        };
+        });
         return true;
       }
       throw new Error('error diagnostics fail the build');
