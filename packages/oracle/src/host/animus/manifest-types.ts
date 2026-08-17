@@ -198,17 +198,22 @@ export interface AnimusManifest {
  * — callables, boxed primitives, `Date`/`Map` and friends — is rejected here
  * rather than downstream, which is the whole point of admitting `manifest.json`
  * at one boundary.
+ *
+ * Admitting it is exactly what puts its contents in this module's value domain:
+ * an input that passes here holds `ManifestJsonValue`s, so a caller that
+ * reaches an unmodeled key gets a value it can decide about rather than one it
+ * can only dereference on faith.
  */
-export const isRecord = (value: unknown): value is Record<string, unknown> =>
+export const isRecord = (value: unknown): value is ManifestJsonObject =>
   Object(value) === value &&
   Object.prototype.toString.call(value) === '[object Object]';
 
 /**
  * The same decision stated over an already-decoded manifest value. `isRecord`
- * admits an unparsed input and hands back `unknown` values; the artifact and
+ * admits an input nobody has decided anything about yet; the artifact and
  * replacement readers have already decided their domain, so they narrow
- * through this instead and keep `ManifestJsonValue` on the way out. One body
- * decides what a keyed JSON object is — this only says which domain is asking.
+ * through this instead and stay inside it. One body decides what a keyed JSON
+ * object is — this only says which domain is asking.
  */
 export const isManifestJsonObject = (
   value: ManifestJsonValue | undefined
@@ -225,29 +230,51 @@ export const isManifestJsonString = (
   Object(value) !== value &&
   Object.prototype.toString.call(value) === '[object String]';
 
+const TAG_PREFIX = '[object ';
+
+/**
+ * What the rejected value IS, for the diagnostic: its representation tag,
+ * lowercased — the same evidence `isRecord` decides on, so the message names
+ * exactly what failed the admission test (`null`, `array`, `string`) instead of
+ * the coarser bucket a representation query would report.
+ */
+const describeRejected = <Value>(value: Value): string =>
+  Object.prototype.toString
+    .call(value)
+    .slice(TAG_PREFIX.length, -1)
+    .toLowerCase();
+
 /**
  * Validating narrow. Only the fields the adapter *requires* are checked — a
  * manifest missing `components` is not a thin input the adapter can degrade
  * over, it is a different artifact, and reading it as an empty universe would
  * make every probe answer "nothing applies" with full confidence.
+ *
+ * Universally quantified over its input because its whole job is to decide
+ * about a value nobody has decided about yet: `AnimusHostInput.manifest` is
+ * whatever a caller parsed, and the guards below are what turn it into a
+ * manifest or a refusal.
  */
-export const asManifest = (value: unknown): AnimusManifest => {
+export const asManifest = <Value>(value: Value): AnimusManifest => {
   if (!isRecord(value)) {
     throw new AnimusAdapterError(
       'manifest is not a JSON object — expected the contents of ' +
         '`manifest.json` as produced by `animus build`, got ' +
-        (value === null ? 'null' : typeof value),
+        describeRejected(value),
       { construct: 'manifest' }
     );
   }
-  if (!isRecord(value.components)) {
+  // Admitted: from here the input is this module's own value domain, and the
+  // required-channel checks below read it as such.
+  const admitted: ManifestJsonObject = value;
+  if (!isRecord(admitted.components)) {
     throw new AnimusAdapterError(
       'manifest has no `components` map — this is not an animus extraction ' +
         'manifest, or it predates the component channel',
       { construct: 'manifest.components' }
     );
   }
-  if (!isRecord(value.sheets)) {
+  if (!isRecord(admitted.sheets)) {
     throw new AnimusAdapterError(
       'manifest has no `sheets` map — without the emitted CSS there is no ' +
         'style universe, and reading this as an empty one would make every ' +
@@ -263,5 +290,5 @@ export const asManifest = (value: unknown): AnimusManifest => {
   // defaulted read by every consumer, and deliberately not re-walked here,
   // because a full structural validation would reject manifests this adapter
   // can still answer from.
-  return value as AnimusManifest;
+  return admitted as AnimusManifest;
 };

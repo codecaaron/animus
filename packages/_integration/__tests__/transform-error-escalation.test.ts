@@ -42,13 +42,15 @@ const D8_MESSAGE =
   'return a string or finite number; rule-level styling ships as ' +
   'declaration scales (see composite-style-scales)';
 
+/** Manifest diagnostics as this suite reads them: the shared gate's structural
+ *  contract (`CssDiagnosticLike`) plus the `severity` field the Rust emitter
+ *  also writes and the D8 assertion below pins. */
+type ManifestDiagnostic = CssDiagnosticLike & { severity?: string };
+
 describe('invalid transform result — static escalation', () => {
   const { manifest, css } = runPipeline([invalidTransformFile]);
-  const errors = (
-    (manifest.diagnostics ?? []) as Array<
-      CssDiagnosticLike & { severity?: string }
-    >
-  ).filter((d) => d.kind === 'error');
+  const diagnostics: ManifestDiagnostic[] = manifest.diagnostics ?? [];
+  const errors = diagnostics.filter((d) => d.kind === 'error');
 
   test('manifest carries the kind:"error" diagnostic with the D8 message', () => {
     expect(errors).toHaveLength(1);
@@ -84,7 +86,11 @@ describe('multiple invalid results — aggregated escalation', () => {
     try {
       assertNoErrorDiagnostics(manifest.diagnostics);
     } catch (e) {
-      thrown = e as Error;
+      // `assertNoErrorDiagnostics` fails by throwing an aggregated `Error`;
+      // anything else leaves this catch unchanged rather than being retyped
+      // into the assertions below.
+      if (!(e instanceof Error)) throw e;
+      thrown = e;
     }
     expect(thrown).not.toBeNull();
     const lines = thrown!.message.split('\n');

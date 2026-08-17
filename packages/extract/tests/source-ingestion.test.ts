@@ -4,6 +4,7 @@ import { contentHash } from '../pipeline/content-hash';
 import { preprocessMdx } from '../pipeline/mdx-preprocessor';
 import {
   ingestSourceEntries,
+  parseFilesJson,
   type ExtractFactsResult,
   type SourceIngestionOptions,
 } from '../pipeline/source-ingestion';
@@ -43,11 +44,10 @@ function factsExtractor(
   calls: Array<Array<{ path: string; source: string; hash?: string }>> = []
 ): SourceIngestionOptions['extractFacts'] {
   return (filesJson) => {
-    const entries = JSON.parse(filesJson) as Array<{
-      path: string;
-      source: string;
-      hash?: string;
-    }>;
+    // The double decodes the corpus with the wire's OWN parser, so a malformed
+    // `filesJson` fails here exactly as the native surface's readers do rather
+    // than being re-derived (and re-guessed) at the test boundary.
+    const entries = parseFilesJson(filesJson, 'extractFacts test double');
     calls.push(entries);
     return JSON.stringify({
       files: Object.fromEntries(

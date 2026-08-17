@@ -19,9 +19,15 @@
 //
 // Cap is read from env (HYGIENE_ITERATIONS) or --cap= flag; defaults to 5.
 
+import {
+  isJsonNumber,
+  isJsonObject,
+  isJsonString,
+} from '@animus-ui/assertions';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 
 import type { Receipt } from './_receipts';
+import type { JsonObject, JsonValue } from '@animus-ui/assertions';
 
 export type Convergence = 'converged' | 'cap-hit-clean' | 'cap-hit-divergent';
 
@@ -53,19 +59,21 @@ const DEFAULT_RECEIPTS_PATH = '.hygiene/receipts.jsonl';
 const DEFAULT_VERDICT_PATH = '.hygiene/verdict.json';
 const DEFAULT_CAP = 5;
 
-// Validates an untrusted JSONL record against the v1 Receipt schema. Every
+// Validates a decoded JSONL record against the v1 Receipt schema. Every
 // required field is present and correctly typed; malformed or wrong-version
 // records are rejected so downstream analysis only sees well-formed receipts.
-function isReceipt(rec: unknown): rec is Receipt {
-  if (rec === null || typeof rec !== 'object') return false;
-  const r = rec as Record<string, unknown>;
+// The decision is made on the JSON document the line actually is — the shared
+// vocabulary from `@animus-ui/assertions` — rather than on a representation
+// the reader has assumed.
+function isReceipt(rec: JsonValue): rec is JsonObject & Receipt {
   return (
-    r.v === 1 &&
-    typeof r.iter === 'number' &&
-    typeof r.layer === 'string' &&
-    typeof r.verb === 'string' &&
-    typeof r.target === 'string' &&
-    typeof r.kind === 'string'
+    isJsonObject(rec) &&
+    rec.v === 1 &&
+    isJsonNumber(rec.iter) &&
+    isJsonString(rec.layer) &&
+    isJsonString(rec.verb) &&
+    isJsonString(rec.target) &&
+    isJsonString(rec.kind)
   );
 }
 
@@ -76,7 +84,7 @@ export function parseReceipts(jsonl: string): Receipt[] {
     const trimmed = line.trim();
     if (!trimmed) continue;
     try {
-      const rec = JSON.parse(trimmed);
+      const rec: JsonValue = JSON.parse(trimmed);
       if (isReceipt(rec)) out.push(rec);
     } catch {
       // Tolerate partial trailing line (e.g., SIGINT mid-write); skip silently.
@@ -145,7 +153,7 @@ function codeDrift(records: Receipt[]): string[] | undefined {
     const codes = r.extras?.codesSeen;
     if (Array.isArray(codes)) {
       for (const c of codes) {
-        if (typeof c === 'string') seen.add(c);
+        if (isJsonString(c)) seen.add(c);
       }
     }
   }

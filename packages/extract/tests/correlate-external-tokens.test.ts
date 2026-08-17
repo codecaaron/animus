@@ -182,7 +182,7 @@ describe('buildSourceTokenIndex package-boundary join', () => {
   });
 
   /** A real on-disk package: package.json + src/ + dist/, realpath'd. */
-  function makeKit(): { srcDir: string; distModule: string } {
+  function makeKit() {
     const scratch = mkdtempSync(join(tmpdir(), 'animus-correlate-'));
     tempRoots.push(scratch);
     const pkgRoot = join(scratch, 'packages', 'kit');

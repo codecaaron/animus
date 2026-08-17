@@ -65,18 +65,32 @@ export function resolveV2BinaryPath(input: HostTargetInput): string {
 // expose header.glibcVersionRuntime in the process report; musl hosts surface
 // an ld-musl shared object. Anything indeterminate returns null so the resolver
 // fails loud rather than guessing a released target.
+/**
+ * The two fields of Node's diagnostic report this probe reads:
+ * `header.glibcVersionRuntime` (emitted only by a glibc build) and
+ * `sharedObjects` (the loaded shared-object paths). The rest of the document is
+ * deliberately unmodelled — nothing here reads it.
+ */
+interface HostDiagnosticReport {
+  header?: { glibcVersionRuntime?: string };
+  sharedObjects?: string[];
+}
+
 export function detectHostLibc(platform: string = process.platform): HostLibc {
   if (platform !== 'linux') return null;
   try {
-    const report =
-      typeof process.report?.getReport === 'function'
-        ? (process.report.getReport() as {
-            header?: { glibcVersionRuntime?: string };
-            sharedObjects?: string[];
-          })
-        : null;
-    if (report?.header?.glibcVersionRuntime) return 'gnu';
-    const shared = report?.sharedObjects ?? [];
+    // `process.report` is absent on runtimes that publish no diagnostic report;
+    // the method is read off the owner object so the call keeps its receiver.
+    const processReport = process.report;
+    if (processReport?.getReport === undefined) return null;
+    // SAFETY: @types/node declares `getReport()` as a bare `object`, but the
+    // document is Node's own and only the two fields `HostDiagnosticReport`
+    // names are read, both through optional access. A runtime whose report
+    // omits them reads as absent and this probe returns null, which makes
+    // resolveNapiTarget throw UnsupportedHostError rather than guess a target.
+    const report = processReport.getReport() as HostDiagnosticReport;
+    if (report.header?.glibcVersionRuntime) return 'gnu';
+    const shared = report.sharedObjects ?? [];
     if (
       shared.some((f) => f.includes('libc.musl-') || f.includes('ld-musl-'))
     ) {
@@ -104,6 +118,9 @@ if (import.meta.main) {
   try {
     process.stdout.write(`${resolveHostV2BinaryPath()}\n`);
   } catch (error) {
+    // SAFETY: `resolveHostV2BinaryPath` throws exactly one thing —
+    // `UnsupportedHostError`, constructed above and extending Error — and
+    // `detectHostLibc` swallows every report-probe failure itself.
     process.stderr.write(`${(error as Error).message}\n`);
     process.exitCode = 1;
   }

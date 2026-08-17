@@ -223,6 +223,11 @@ export const ENVELOPE_CSS_COMMENT_RE = /\/\* __animusSession (\{.*\}) \*\//;
  *  carries none. THROWS on unparseable bytes — callers decide whether a
  *  torn artifact fails closed or degrades. */
 export function readJsonEnvelope(bytes: string): SessionEnvelope | undefined {
+  // SAFETY: `__animusSession` is spliced in by `envelopeJsonArtifact` above —
+  // the single writer of this side-band, in this module — so the key is either
+  // absent (undefined, the declared return) or the object that function was
+  // handed. Bytes that are not JSON at all throw out of `JSON.parse`, which is
+  // this reader's documented contract.
   return (JSON.parse(bytes) as { __animusSession?: SessionEnvelope })
     .__animusSession;
 }
@@ -231,5 +236,9 @@ export function readJsonEnvelope(bytes: string): SessionEnvelope | undefined {
  *  side-band is absent. THROWS on an unparseable envelope body. */
 export function readCssEnvelope(bytes: string): SessionEnvelope | undefined {
   const match = bytes.match(ENVELOPE_CSS_COMMENT_RE);
+  // SAFETY: the captured group comes from `ENVELOPE_CSS_COMMENT_RE`, which
+  // matches only the side-band `envelopeCssArtifact` above writes — the single
+  // writer of this comment, in this module — so the body is that function's
+  // `envelopeJson`. An unparseable body throws, as the doc comment states.
   return match ? (JSON.parse(match[1]) as SessionEnvelope) : undefined;
 }

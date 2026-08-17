@@ -157,9 +157,16 @@ type ProcessAssetsOptions = Parameters<ProcessAssetsTap>[0];
 type ProcessAssetsHandler = Parameters<ProcessAssetsTap>[1];
 type WebpackSource = Parameters<PluginCompilation['updateAsset']>[1];
 
+/** The alias map the plugin declares it harvests from — derived rather than
+ *  restated, so the non-string webpack variants (`false`, candidate lists)
+ *  stay reachable from this harness. */
+type PluginAliasMap = NonNullable<
+  NonNullable<NonNullable<PluginCompiler['options']>['resolve']>['alias']
+>;
+
 function createCompiler(
   root: string,
-  extras: { name?: string; alias?: Record<string, string> } = {}
+  extras: { name?: string; alias?: PluginAliasMap } = {}
 ) {
   const runHandlers: AsyncHandler[] = [];
   const watchRunHandlers: AsyncHandler[] = [];
@@ -417,6 +424,39 @@ describe('production run (full pipeline)', () => {
     const button = files.find((f) => f.path === 'src/Button.tsx');
     expect(button?.source).toBe(BUTTON_SOURCE);
     expect(button?.hash).toMatch(/^[0-9a-f]{32}$/);
+  });
+
+  test('harvests the first candidate of a list alias and skips the ones that name no target', async () => {
+    const root = createProject();
+    const { compiler, runHandlers } = createCompiler(root, {
+      alias: {
+        // Webpack tries a candidate list in order, so the FIRST entry is the
+        // target a resolution would land on and the one this harvest reports.
+        '@first': [join(root, 'src', 'components'), join(root, 'src')],
+        // `false` disables an alias outright, and an empty list names no
+        // candidate at all: neither yields a pattern→target pair, and
+        // reporting either would point the engine at a path webpack never
+        // resolves to.
+        '@disabled': false,
+        '@empty': [],
+      },
+    });
+    const plugin = new AnimusWebpackPlugin(OPTIONS);
+    applyPlugin(plugin, compiler);
+
+    await runHandlers[0](compiler);
+
+    expect(parseRequiredJsonObject(analyzeCall(0)[12], 'path aliases')).toEqual(
+      {
+        aliases: [
+          {
+            pattern: '@first/',
+            replacement: 'src/components/',
+            type: 'prefix',
+          },
+        ],
+      }
+    );
   });
 
   test('an offline system-props change moves the replacement epoch', async () => {

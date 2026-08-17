@@ -1,25 +1,37 @@
+/**
+ * Content identity for the parity oracle.
+ *
+ * Every value hashed here is a JSON document — a recorded baseline envelope, a
+ * seam result, or a slice of one engine's surface — so `JsonValue` (the shared
+ * verification vocabulary) is the domain these functions canonicalize over. A
+ * keyed block is decided by `isJsonObject`'s representation tag rather than by
+ * `typeof`, which also means the things `JSON.parse` cannot produce (callables,
+ * boxed primitives, `Date`/`Map`) are outside the contract instead of being
+ * silently key-copied.
+ */
+import { isJsonObject } from '@animus-ui/assertions';
 import { createHash } from 'crypto';
 
 import type { ArtifactClass, UnitSurface } from './types';
+import type { JsonObject, JsonValue } from '@animus-ui/assertions';
 
-export function canonicalize(value: unknown): unknown {
+export function canonicalize(value: JsonValue): JsonValue {
   if (Array.isArray(value)) return value.map(canonicalize);
-  if (value && typeof value === 'object') {
-    const input = value as Record<string, unknown>;
-    const output: Record<string, unknown> = {};
-    for (const key of Object.keys(input).sort()) {
-      output[key] = canonicalize(input[key]);
+  if (isJsonObject(value)) {
+    const output: JsonObject = {};
+    for (const key of Object.keys(value).sort()) {
+      output[key] = canonicalize(value[key]);
     }
     return output;
   }
   return value;
 }
 
-export function canonicalJson(value: unknown): string {
+export function canonicalJson(value: JsonValue): string {
   return JSON.stringify(canonicalize(value));
 }
 
-export function canonicalPrettyJson(value: unknown): string {
+export function canonicalPrettyJson(value: JsonValue): string {
   return `${JSON.stringify(canonicalize(value), null, 2)}\n`;
 }
 
@@ -27,7 +39,7 @@ export function sha256(value: string): string {
   return createHash('sha256').update(value).digest('hex');
 }
 
-export function sha256Json(value: unknown): string {
+export function sha256Json(value: JsonValue): string {
   return sha256(canonicalJson(value));
 }
 

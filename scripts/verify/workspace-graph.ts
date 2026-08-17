@@ -37,8 +37,40 @@ function expandWorkspacePattern(root: string, pattern: string): string[] {
     .map((entry) => `${parent}/${entry.name}`);
 }
 
-function collectStringLeaves(value: unknown, entries: string[]): void {
-  if (typeof value === 'string') {
+/**
+ * A `package.json` entry-point field value as `JSON.parse` produced it.
+ * `exports` is the one entry-point field `manifest-model.ts` leaves unmodelled
+ * on purpose — a conditional-exports tree nests arbitrarily deep under
+ * condition names nobody owns — so the harvest below decides node by node
+ * instead of dereferencing an assumed shape.
+ */
+type EntryPointValue =
+  | null
+  | boolean
+  | number
+  | string
+  | EntryPointValue[]
+  | { [condition: string]: EntryPointValue };
+
+// Decided by representation tag rather than by `typeof`. Arrays are taken by
+// the branch above this one, so `[object Object]` here means exactly a
+// conditional-exports block.
+function isEntryPointText(value: EntryPointValue): value is string {
+  return Object.prototype.toString.call(value) === '[object String]';
+}
+
+function isConditionBlock(
+  value: EntryPointValue
+): value is { [condition: string]: EntryPointValue } {
+  return Object.prototype.toString.call(value) === '[object Object]';
+}
+
+function collectStringLeaves(
+  value: EntryPointValue | undefined,
+  entries: string[]
+): void {
+  if (value === undefined) return;
+  if (isEntryPointText(value)) {
     entries.push(value);
     return;
   }
@@ -46,7 +78,7 @@ function collectStringLeaves(value: unknown, entries: string[]): void {
     for (const item of value) collectStringLeaves(item, entries);
     return;
   }
-  if (value && typeof value === 'object') {
+  if (isConditionBlock(value)) {
     for (const item of Object.values(value)) {
       collectStringLeaves(item, entries);
     }
@@ -58,7 +90,11 @@ function distEntries(manifest: PackageManifest): string[] {
   collectStringLeaves(manifest.main, candidates);
   collectStringLeaves(manifest.module, candidates);
   collectStringLeaves(manifest.types, candidates);
-  collectStringLeaves(manifest.exports, candidates);
+  // SAFETY: `manifest-model.readManifest` produces every manifest by
+  // `JSON.parse`, so `exports` — the field it declares as `unknown` because
+  // package.json fixes no shape for it — holds exactly what JSON.parse can
+  // produce, which is what `EntryPointValue` enumerates.
+  collectStringLeaves(manifest.exports as EntryPointValue, candidates);
   return [
     ...new Set(candidates.filter((entry) => /(^|\/)dist(\/|$)/.test(entry))),
   ];
@@ -68,9 +104,12 @@ export function discoverWorkspaceManifests(
   root: string
 ): Map<string, WorkspaceEntry> {
   const absoluteRoot = resolve(root);
-  const rootManifest = readManifest(
+  // `RootManifest` adds one optional field to what `readManifest` returns, so
+  // the root's extra `workspaces` declaration is reachable without asserting
+  // anything about the bytes on disk.
+  const rootManifest: RootManifest = readManifest(
     join(absoluteRoot, 'package.json')
-  ) as RootManifest;
+  );
   const workspace = new Map<string, WorkspaceEntry>();
 
   for (const pattern of workspacePatterns(rootManifest)) {
@@ -168,6 +207,10 @@ function main(args: readonly string[]): number {
     }
     return 0;
   } catch (error) {
+    // SAFETY: every throw reachable from this block is an Error — the six
+    // `new Error(...)` sites in this file (unsupported pattern, nameless or
+    // duplicate package, unknown owner, unknown dependency, dependency cycle),
+    // plus `readManifest`'s `node:fs` and `JSON.parse` failures.
     console.error(`ERROR: ${(error as Error).message}`);
     return 1;
   }

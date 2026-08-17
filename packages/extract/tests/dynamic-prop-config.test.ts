@@ -107,9 +107,17 @@ describe('buildDynamicPropConfig', () => {
   test('a meta with no slot metadata fails loudly', () => {
     // A serde rename on DynamicPropMeta has to surface as a CI failure: the
     // silent version of this shipped a config of empty entries.
+    // What the rename leaves behind: the slot fields gone, the rest intact.
+    const renamedSlotFields: Partial<DynamicPropMeta> = {
+      property: 'lineHeight',
+    };
     const build = () =>
       buildDynamicPropConfig({
-        lineHeight: { property: 'lineHeight' } as unknown as DynamicPropMeta,
+        // SAFETY: the assertion IS the test — it reaches the runtime guard
+        // with a meta that violates `DynamicPropMeta`, which is the only
+        // state a Rust-side rename can produce and the one the builder must
+        // reject loudly instead of emitting an empty entry.
+        lineHeight: renamedSlotFields as DynamicPropMeta,
       });
     expect(build).toThrow(/lineHeight/);
     expect(build).toThrow(/varName and slotClass/);

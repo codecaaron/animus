@@ -1,3 +1,8 @@
+import {
+  isJsonObject,
+  isJsonString,
+  parseJsonObject,
+} from '@animus-ui/assertions';
 import { transform as esbuildTransform } from 'esbuild';
 import { readFileSync } from 'fs';
 import { transform as lcssTransform } from 'lightningcss';
@@ -13,13 +18,15 @@ const manifestJson = analyzeProject(
   JSON.stringify([{ path: 'cascade-combos.tsx', source }]),
   { devMode: true }
 );
-const manifest = JSON.parse(manifestJson);
+const manifest = parseJsonObject(manifestJson, 'cascade-combos manifest');
 
 const SIDES = ['top', 'right', 'bottom', 'left'] as const;
 
 type Side = (typeof SIDES)[number];
 type CssProperty = 'padding' | 'margin';
-type SideValues = Partial<Record<Side, string>>;
+/** Closed over the four physical sides — a side this file cannot name is not a
+ *  key this map can carry. */
+type SideValues = { [K in Side]?: string };
 type CascadeCase = {
   label: string;
   binding: string;
@@ -32,13 +39,25 @@ type CssProcessor = {
 };
 
 function getBaseCss(binding: string): string {
-  const entry = Object.entries(manifest.components as Record<string, any>).find(
-    ([, c]) => c.binding === binding
+  const components = manifest.components;
+  if (!isJsonObject(components)) {
+    throw new Error('manifest.components must be an object');
+  }
+  const entry = Object.entries(components).find(
+    ([, descriptor]) =>
+      isJsonObject(descriptor) && descriptor.binding === binding
   );
   if (!entry) throw new Error(`Component ${binding} not found in manifest`);
   const componentId = entry[0];
-  const fragment = manifest.component_fragments?.[componentId]?.base;
-  if (!fragment) throw new Error(`No base fragment for ${binding}`);
+  const missing = new Error(`No base fragment for ${binding}`);
+  const fragments = manifest.component_fragments;
+  if (!isJsonObject(fragments)) throw missing;
+  const layers = fragments[componentId];
+  if (!isJsonObject(layers)) throw missing;
+  const fragment = layers.base;
+  // Empty-string parity with the original falsy guard: a base layer that
+  // emitted nothing is a missing fragment, not a fragment worth transforming.
+  if (!isJsonString(fragment) || fragment === '') throw missing;
   return fragment;
 }
 
@@ -50,7 +69,10 @@ function parseSides(css: string, prop: CssProperty): SideValues {
   );
   let declaration: RegExpExecArray | null;
   while ((declaration = declarationRe.exec(css)) !== null) {
-    const side = declaration[1] as Side | undefined;
+    // The longhand capture group is built from SIDES, so the same tuple that
+    // wrote the alternation decides which side the match names — no side can
+    // be spelled here that this file does not already know.
+    const side = SIDES.find((candidate) => candidate === declaration?.[1]);
     const value = declaration[2].trim();
     if (side) {
       result[side] = value;

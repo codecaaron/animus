@@ -57,6 +57,18 @@ describe('assertLayerOrder', () => {
       })
     ).not.toThrow();
   });
+
+  it('names a missing string marker verbatim and a missing regex marker as a pattern', () => {
+    // The two marker kinds are reported differently on purpose: a literal is
+    // quoted as authored, a pattern is shown in `/…/` form so the reader can
+    // tell "this text is absent" from "nothing matched this shape".
+    expect(() =>
+      assertLayerOrder('/* empty */', { layers: ['@layer anm-base {'] })
+    ).toThrow('missing expected layer markers: @layer anm-base {');
+    expect(() =>
+      assertLayerOrder('/* empty */', { layers: [/@layer\s+anm-base/] })
+    ).toThrow('missing expected layer markers: /@layer\\s+anm-base/');
+  });
 });
 
 describe('assertNoPlaceholders', () => {

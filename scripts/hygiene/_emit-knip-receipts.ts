@@ -49,6 +49,8 @@
 // knip --fix-type list excludes them. If the fix-type list is widened later,
 // extend this emitter accordingly.
 
+import { isJsonNumber, isJsonString } from '@animus-ui/assertions';
+
 import { emitReceipt } from './_receipts';
 import {
   type KnipReport,
@@ -65,9 +67,13 @@ export function emitForReport(report: KnipReport): number {
   for (const issue of report.issues) {
     if (!issue.file) continue;
 
+    // knip's payload is a decoded JSON document, so what a field IS on the
+    // wire — not what `KnipReport` says it should be — is what these receipts
+    // record. A knip release that changes a field's JSON shape drops the
+    // record rather than writing a malformed receipt into the audit trail.
     if (Array.isArray(issue.files)) {
       for (const filename of issue.files) {
-        if (typeof filename !== 'string') continue;
+        if (!isJsonString(filename)) continue;
         emitReceipt('D', 'delete', filename, 'file');
         count++;
       }
@@ -76,9 +82,10 @@ export function emitForReport(report: KnipReport): number {
     if (Array.isArray(issue.exports)) {
       for (const sym of issue.exports) {
         if (!sym?.name) continue;
+        const line = sym.line;
         const target =
-          typeof sym.line === 'number'
-            ? `${issue.file}:${sym.line}`
+          line !== undefined && isJsonNumber(line)
+            ? `${issue.file}:${line}`
             : `${issue.file}:${sym.name}`;
         emitReceipt('D', 'delete', target, 'export-clause', { name: sym.name });
         count++;

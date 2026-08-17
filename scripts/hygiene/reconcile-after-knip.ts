@@ -17,11 +17,19 @@
 
 import { readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { parseSync } from 'oxc-parser';
 
 // This pass walks only top-level statements and export specifiers, so it uses
 // the shared node view without wiring parent back-links.
-import { type Node, langFor } from './_ast';
+import {
+  type Node,
+  type TextRange,
+  childNode,
+  childNodeList,
+  childNodeSlots,
+  identifierName,
+  parseProgram,
+  stringField,
+} from './_ast';
 import { emitReceipt } from './_receipts';
 
 // Build a 0-indexed array of line-start offsets from `text`, used to recover a
@@ -102,32 +110,35 @@ export function fixEmptyModules(files: string[]): string[] {
 // `export { ds } from './system'` re-exports as "all-stale" (2026-04-26).
 function collectBindingNames(name: Node, out: Set<string>): void {
   if (name.type === 'Identifier') {
-    out.add(name.name);
+    const local = stringField(name, 'name');
+    if (local !== undefined) out.add(local);
     return;
   }
   // Default-valued bindings (`{ a = 1 }`, `[a = 1]`) wrap the binding in an
   // AssignmentPattern; the introduced local is on the left.
   if (name.type === 'AssignmentPattern') {
-    collectBindingNames(name.left, out);
+    const left = childNode(name, 'left');
+    if (left !== undefined) collectBindingNames(left, out);
     return;
   }
   if (name.type === 'ObjectPattern') {
-    for (const prop of name.properties as Node[]) {
+    for (const prop of childNodeList(name, 'properties')) {
       // `{ ...rest }` → RestElement; `{ key: local }` / `{ shorthand }` → Property
-      if (prop.type === 'RestElement') {
-        collectBindingNames(prop.argument, out);
-      } else {
-        collectBindingNames(prop.value, out);
-      }
+      const bound =
+        prop.type === 'RestElement'
+          ? childNode(prop, 'argument')
+          : childNode(prop, 'value');
+      if (bound !== undefined) collectBindingNames(bound, out);
     }
     return;
   }
   if (name.type === 'ArrayPattern') {
-    for (const el of name.elements as Array<Node | null>) {
+    for (const el of childNodeSlots(name, 'elements')) {
       // ArrayPattern can hold `null` holes (e.g., `[a, , c]`)
-      if (el == null) continue;
+      if (el === null) continue;
       if (el.type === 'RestElement') {
-        collectBindingNames(el.argument, out);
+        const rest = childNode(el, 'argument');
+        if (rest !== undefined) collectBindingNames(rest, out);
       } else {
         collectBindingNames(el, out);
       }
@@ -135,27 +146,21 @@ function collectBindingNames(name: Node, out: Set<string>): void {
   }
 }
 
-// True for the declaration forms that introduce a single named binding we can
-// register as an export directly (`export function/class/interface/type/enum
-// X`). VariableDeclaration is handled separately (it may bind many names via
-// destructuring — see collectBindingNames). Narrows `id` from the Node index
-// signature's `any` to a present Node, so callers can read `decl.id.name`
-// without a further null check. Mirrors the isReceipt() type-guard precedent.
-function isNamedDeclaration(decl: Node): decl is Node & { id: Node } {
-  return (
-    (decl.type === 'FunctionDeclaration' ||
-      decl.type === 'ClassDeclaration' ||
-      decl.type === 'TSInterfaceDeclaration' ||
-      decl.type === 'TSTypeAliasDeclaration' ||
-      decl.type === 'TSEnumDeclaration') &&
-    Boolean(decl.id)
-  );
-}
+// The declaration forms that introduce a single named binding we can register
+// as an export directly (`export function/class/interface/type/enum X`).
+// VariableDeclaration is handled separately (it may bind many names via
+// destructuring — see collectBindingNames).
+const NAMED_DECLARATION_TYPES = new Set([
+  'FunctionDeclaration',
+  'ClassDeclaration',
+  'TSInterfaceDeclaration',
+  'TSTypeAliasDeclaration',
+  'TSEnumDeclaration',
+]);
 
 export function getExportsOfFile(filePath: string): Set<string> {
   const source = readFileSync(filePath, 'utf-8');
-  const program = parseSync(filePath, source, { lang: langFor(filePath) })
-    .program as unknown as Node;
+  const program = parseProgram(filePath, source);
   const exports = new Set<string>();
 
   const visit = (node: Node): void => {
@@ -163,21 +168,25 @@ export function getExportsOfFile(filePath: string): Set<string> {
       // `export { a, b as c }` and `export { a } from './x'` — both carry
       // specifiers; register the exported-side names either way (matches the
       // former `NamedExports.elements[].name.text`).
-      if (node.specifiers && node.specifiers.length > 0) {
-        for (const spec of node.specifiers as Node[]) {
-          exports.add(spec.exported.name);
+      const specifiers = childNodeList(node, 'specifiers');
+      if (specifiers.length > 0) {
+        for (const spec of specifiers) {
+          const exportedName = identifierName(spec, 'exported');
+          if (exportedName !== undefined) exports.add(exportedName);
         }
         return;
       }
       // `export const/function/class/... ` — the declaration is wrapped.
-      const decl: Node | null = node.declaration ?? null;
-      if (!decl) return;
+      const decl = childNode(node, 'declaration');
+      if (decl === undefined) return;
       if (decl.type === 'VariableDeclaration') {
-        for (const d of decl.declarations as Node[]) {
-          collectBindingNames(d.id, exports);
+        for (const d of childNodeList(decl, 'declarations')) {
+          const id = childNode(d, 'id');
+          if (id !== undefined) collectBindingNames(id, exports);
         }
-      } else if (isNamedDeclaration(decl)) {
-        exports.add(decl.id.name);
+      } else if (NAMED_DECLARATION_TYPES.has(decl.type)) {
+        const declaredName = identifierName(decl, 'id');
+        if (declaredName !== undefined) exports.add(declaredName);
       }
       return;
     }
@@ -194,7 +203,7 @@ export function getExportsOfFile(filePath: string): Set<string> {
     // exports of this file — left untouched, as before.
   };
 
-  for (const stmt of program.body as Node[]) visit(stmt);
+  for (const stmt of childNodeList(program, 'body')) visit(stmt);
   return exports;
 }
 
@@ -235,10 +244,7 @@ function lineOf(lineStarts: number[], pos: number): number {
   return lo + 1;
 }
 
-function fullNodeRange(
-  text: string,
-  node: Node
-): { start: number; end: number } {
+function fullNodeRange(text: string, node: Node): TextRange {
   let start = node.start;
   let end = node.end;
   if (text.charAt(end) === '\r' && text.charAt(end + 1) === '\n') end += 2;
@@ -267,21 +273,22 @@ function fullNodeRange(
 export function computeStaleElementRanges(
   specifiers: Node[],
   staleNames: Set<string>
-): { start: number; end: number }[] {
-  const ranges: { start: number; end: number }[] = [];
+): TextRange[] {
+  const ranges: TextRange[] = [];
   const elements = specifiers;
+  const isStale = (element: Node): boolean => {
+    const exportedName = identifierName(element, 'exported');
+    return exportedName !== undefined && staleNames.has(exportedName);
+  };
   let i = 0;
   while (i < elements.length) {
-    if (!staleNames.has(elements[i].exported.name)) {
+    if (!isStale(elements[i])) {
       i++;
       continue;
     }
     const runStart = i;
     let runEnd = i;
-    while (
-      runEnd + 1 < elements.length &&
-      staleNames.has(elements[runEnd + 1].exported.name)
-    ) {
+    while (runEnd + 1 < elements.length && isStale(elements[runEnd + 1])) {
       runEnd++;
     }
 
@@ -324,26 +331,30 @@ export function fixStaleBarrelReExports(files: string[]): string[] {
     // Cheap pre-filter: must contain both `export` and `from`
     if (!source.includes('export') || !source.includes('from')) continue;
 
-    const program = parseSync(file, source, { lang: langFor(file) })
-      .program as unknown as Node;
+    const program = parseProgram(file, source);
     const lineStarts = computeLineStarts(source);
-    const wholeRemovals: { start: number; end: number }[] = [];
+    const wholeRemovals: TextRange[] = [];
     const partialRemovals: {
       specifiers: Node[];
       names: Set<string>;
     }[] = [];
 
-    for (const stmt of program.body as Node[]) {
+    for (const stmt of childNodeList(program, 'body')) {
       // Re-exports with a module specifier: `export { … } from '…'`
       // (ExportNamedDeclaration with a `source`) and `export * from '…'`
       // (ExportAllDeclaration). Everything else — including local re-exports
       // like `export { X }` with no source — is skipped.
+      const sourceNode = childNode(stmt, 'source');
       const isNamedFrom =
-        stmt.type === 'ExportNamedDeclaration' && stmt.source != null;
+        stmt.type === 'ExportNamedDeclaration' && sourceNode !== undefined;
       const isStarFrom = stmt.type === 'ExportAllDeclaration';
       if (!isNamedFrom && !isStarFrom) continue;
 
-      const spec = stmt.source.value as string;
+      // Every `… from '…'` form carries a string-literal module specifier;
+      // without one there is no target to reconcile against.
+      const spec =
+        sourceNode === undefined ? undefined : stringField(sourceNode, 'value');
+      if (spec === undefined) continue;
       const isRelative = spec.startsWith('./') || spec.startsWith('../');
       if (!isRelative) continue;
 
@@ -393,14 +404,20 @@ export function fixStaleBarrelReExports(files: string[]): string[] {
         continue;
       }
 
-      const specifiers = stmt.specifiers as Node[];
+      const specifiers = childNodeList(stmt, 'specifiers');
       const stale = new Set<string>();
       for (const el of specifiers) {
         // `.local` is the source-side name to check against the target's
-        // exports; `.exported` is how it appears in this barrel's clause.
-        const originalName = el.local.name;
+        // exports; `.exported` is how it appears in this barrel's clause. A
+        // specifier whose either side is an arbitrary string module-export
+        // name (`export { "a" as b } from …`, ES2022) has no binding name on
+        // that side, so this pass cannot decide staleness for it and leaves
+        // the element in place.
+        const exportedName = identifierName(el, 'exported');
+        const originalName = identifierName(el, 'local');
+        if (exportedName === undefined || originalName === undefined) continue;
         if (!targetExports.has(originalName)) {
-          stale.add(el.exported.name);
+          stale.add(exportedName);
         }
       }
       if (stale.size === 0) continue;
@@ -435,7 +452,7 @@ export function fixStaleBarrelReExports(files: string[]): string[] {
     // elements, computed so retained elements' leading trivia (JSDoc,
     // suppression directives, per-element type modifiers) survives intact.
     // Reverse-offset application keeps later ranges' indices stable.
-    const edits: { start: number; end: number }[] = [];
+    const edits: TextRange[] = [];
     for (const w of wholeRemovals) {
       edits.push({ start: w.start, end: w.end });
     }

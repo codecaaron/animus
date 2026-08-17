@@ -12,6 +12,7 @@ import { beforeAll, describe, expect, test } from 'vitest';
 import { createV2EngineApi } from '../pipeline/engine-adapter';
 
 import type { V2ExtractEngine } from '../pipeline/engine-adapter';
+import type { ProjectManifest } from '../pipeline/manifest-schema';
 
 const ROOT = join(__dirname, '../../..');
 const NATIVE = join(__dirname, '../index-v2.js');
@@ -62,11 +63,7 @@ beforeAll(async () => {
   theme = tokens.serialize();
 });
 
-function analyze(staticCssJson: string | null): {
-  manifestJson: string;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  manifest: any;
-} {
+function analyze(staticCssJson: string | null) {
   const api = makeApi();
   api.clearAnalysisCache();
   const manifestJson: string = api.analyzeProject(
@@ -88,7 +85,12 @@ function analyze(staticCssJson: string | null): {
     null,
     staticCssJson
   );
-  return { manifestJson, manifest: JSON.parse(manifestJson) };
+  // SAFETY: `manifestJson` is this call's own `analyzeProject` return value —
+  // serde output from the Rust `AnalyzeResult` that `manifest-schema.ts`
+  // mirrors. A Rust-side rename fails the manifest tether test in
+  // `packages/_integration`, so the declaration cannot silently rot here.
+  const manifest = JSON.parse(manifestJson) as ProjectManifest;
+  return { manifestJson, manifest };
 }
 
 const FORCED = JSON.stringify({
@@ -109,8 +111,7 @@ describe('static-emission-overrides (real engine)', () => {
     expect(manifest.report.components_eliminated).toBeGreaterThanOrEqual(1);
     expect(
       manifest.report.eliminated_details.some(
-        (d: { component: string; kind: string }) =>
-          d.component === 'Spacer' && d.kind === 'component'
+        (d) => d.component === 'Spacer' && d.kind === 'component'
       )
     ).toBe(true);
     expect(manifest.report.variants_forced).toBe(0);
@@ -126,8 +127,7 @@ describe('static-emission-overrides (real engine)', () => {
     // Never-rendered component survives
     expect(
       manifest.report.eliminated_details.some(
-        (d: { component: string; kind: string }) =>
-          d.component === 'Spacer' && d.kind === 'component'
+        (d) => d.component === 'Spacer' && d.kind === 'component'
       )
     ).toBe(false);
     // System prop value reaches the utility stream
@@ -140,21 +140,15 @@ describe('static-emission-overrides (real engine)', () => {
     expect(manifest.report.variants_forced).toBe(1);
     expect(manifest.report.states_forced).toBe(1);
     const forcedDetails = manifest.report.eliminated_details.filter(
-      (d: { kind: string }) => d.kind === 'forced'
+      (d) => d.kind === 'forced'
     );
     expect(forcedDetails).toHaveLength(3);
-    expect(
-      forcedDetails.some((d: { name: string | null }) => d.name === 'ghost')
-    ).toBe(true);
-    expect(
-      forcedDetails.some((d: { name: string | null }) => d.name === 'loading')
-    ).toBe(true);
+    expect(forcedDetails.some((d) => d.name === 'ghost')).toBe(true);
+    expect(forcedDetails.some((d) => d.name === 'loading')).toBe(true);
 
     // No warnings for a fully-matched declaration
     expect(
-      (manifest.diagnostics ?? []).filter(
-        (d: { file: string }) => d.file === 'staticCss'
-      )
+      (manifest.diagnostics ?? []).filter((d) => d.file === 'staticCss')
     ).toEqual([]);
   });
 
@@ -168,8 +162,7 @@ describe('static-emission-overrides (real engine)', () => {
   test('unmatched names warn without failing', () => {
     const { manifest } = analyze(JSON.stringify({ components: { Buton: {} } }));
     const warnings = (manifest.diagnostics ?? []).filter(
-      (d: { file: string; kind: string }) =>
-        d.file === 'staticCss' && d.kind === 'warn'
+      (d) => d.file === 'staticCss' && d.kind === 'warn'
     );
     expect(warnings).toHaveLength(1);
     expect(warnings[0].message).toContain("unknown component 'Buton'");

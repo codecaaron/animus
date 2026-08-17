@@ -43,7 +43,11 @@ import { dirname, join, relative, resolve, sep } from 'node:path';
 // oxc-parser is the repo's pinned in-process AST surface (same devDep and
 // TS-ESTree `parseSync` → `{ program, errors, comments }` contract used by
 // scripts/hygiene/delete-unused.ts). See langForParser() for the dialect pin.
-import { parseSync } from 'oxc-parser';
+// `Visitor` declares the syntax this checker reads instead of reflecting over
+// node dictionaries (the same conversion `oracle/src/places/source.ts` made).
+import { Visitor, parseSync } from 'oxc-parser';
+
+import type { Argument, StringLiteral } from 'oxc-parser';
 
 export type Tree = 'packages' | 'e2e' | 'legacy' | 'other';
 export type Vector = 'import' | 'tsconfig-path' | 'package-dependency';
@@ -215,92 +219,14 @@ function langForParser(filename: string): 'ts' | 'tsx' | 'jsx' {
   return 'ts';
 }
 
-// A minimal structural node view — oxc emits a TS-ESTree AST whose nodes carry a
-// string `type`; children are reached by walking own enumerable values.
-type OxcNode = { type?: unknown; [key: string]: unknown };
-
-function isOxcNode(value: unknown): value is OxcNode {
-  return (
-    typeof value === 'object' &&
-    value !== null &&
-    typeof (value as { type?: unknown }).type === 'string'
-  );
-}
-
-function literalStringValue(node: unknown): string | undefined {
-  if (isOxcNode(node) && node.type === 'Literal') {
-    const { value } = node as { value?: unknown };
-    if (typeof value === 'string') return value;
-  }
-  return undefined;
-}
-
-// Collects every genuine syntactic module specifier from an oxc AST. Only real
-// specifier positions count — a code-looking string or template literal never
-// does, because it is a Literal/TemplateLiteral, not one of these nodes.
-function collectSpecifiers(node: unknown, out: Specifier[]): void {
-  if (Array.isArray(node)) {
-    for (const el of node) collectSpecifiers(el, out);
-    return;
-  }
-  if (!isOxcNode(node)) return;
-
-  switch (node.type) {
-    case 'ImportDeclaration': {
-      // Covers `import x from 'y'` and side-effect `import 'y'` alike.
-      const v = literalStringValue(node.source);
-      if (v !== undefined) out.push({ kind: 'import', value: v });
-      break;
-    }
-    case 'ExportNamedDeclaration':
-    case 'ExportAllDeclaration': {
-      // `export … from 'y'` / `export * from 'y'`; a bare export has no source.
-      const v = literalStringValue(node.source);
-      if (v !== undefined) out.push({ kind: 'export', value: v });
-      break;
-    }
-    case 'ImportExpression': {
-      // `import('y')` — only a static string arg is a resolvable specifier;
-      // `import(expr)` / `import(`…`)` cannot be, and are skipped.
-      const v = literalStringValue(node.source);
-      if (v !== undefined) out.push({ kind: 'dynamic-import', value: v });
-      break;
-    }
-    case 'TSImportEqualsDeclaration': {
-      // `import x = require('y')` — CJS via a TS external module reference.
-      const mr = node.moduleReference;
-      if (isOxcNode(mr) && mr.type === 'TSExternalModuleReference') {
-        const v = literalStringValue(
-          (mr as { expression?: unknown }).expression
-        );
-        if (v !== undefined) out.push({ kind: 'require', value: v });
-      }
-      break;
-    }
-    case 'CallExpression': {
-      // `require('y')` — a call to the bare `require` identifier.
-      const callee = node.callee;
-      const args = node.arguments;
-      if (
-        isOxcNode(callee) &&
-        callee.type === 'Identifier' &&
-        (callee as { name?: unknown }).name === 'require' &&
-        Array.isArray(args) &&
-        args.length >= 1
-      ) {
-        const v = literalStringValue(args[0]);
-        if (v !== undefined) out.push({ kind: 'require', value: v });
-      }
-      break;
-    }
-    default:
-      break;
-  }
-
-  for (const key of Object.keys(node)) {
-    if (key === 'type') continue;
-    collectSpecifiers(node[key], out);
-  }
+// oxc's ESTree flavor collapses every literal kind onto `type: 'Literal'`, so
+// the string kind is not in the tag. `String(value) === value` holds for a
+// primitive string and for nothing else the parser can emit (a number, boolean,
+// null, bigint or regexp literal all fail the identity), which is exactly the
+// discrimination a module-specifier position needs. Same predicate the
+// vite-plugin's appearance-bootstrap isolation reader uses.
+function isStringLiteral(node: Argument): node is StringLiteral {
+  return node.type === 'Literal' && String(node.value) === node.value;
 }
 
 // MDX is not JS — oxc does not parse it — so its top-level ESM import/export
@@ -344,17 +270,60 @@ export function extractSpecifiers(
   if (filename.endsWith('.mdx')) return extractMdxSpecifiers(source);
 
   const result = parseSync(filename, source, { lang: langForParser(filename) });
-  const errors = (result.errors ?? []).filter(
-    (e) => (e as { severity?: unknown }).severity === 'Error'
-  );
+  const errors = result.errors.filter((e) => e.severity === 'Error');
   if (errors.length > 0) {
-    const detail =
-      (errors[0] as { message?: unknown }).message?.toString() ??
-      'unknown parse error';
-    throw new TopologyParseError(filename, detail);
+    throw new TopologyParseError(filename, errors[0].message);
   }
+
+  // Only real specifier positions count — a code-looking string or template
+  // literal never does, because it is a Literal/TemplateLiteral, and no visitor
+  // below is registered for one. The set of visited node types IS the closed
+  // list of syntax that can name a module.
   const out: Specifier[] = [];
-  collectSpecifiers((result as { program?: unknown }).program, out);
+  new Visitor({
+    // Covers `import x from 'y'` and side-effect `import 'y'` alike.
+    ImportDeclaration(node) {
+      out.push({ kind: 'import', value: node.source.value });
+    },
+    // `export … from 'y'`; a bare `export { … }` has no source.
+    ExportNamedDeclaration(node) {
+      if (node.source) out.push({ kind: 'export', value: node.source.value });
+    },
+    // `export * from 'y'` / `export * as ns from 'y'` — source is mandatory.
+    ExportAllDeclaration(node) {
+      out.push({ kind: 'export', value: node.source.value });
+    },
+    // `import('y')` — only a static string arg is a resolvable specifier;
+    // `import(expr)` / `import(`…`)` cannot be, and are skipped.
+    ImportExpression(node) {
+      if (isStringLiteral(node.source)) {
+        out.push({ kind: 'dynamic-import', value: node.source.value });
+      }
+    },
+    // `import x = require('y')` — CJS via a TS external module reference. The
+    // other two module references (`import x = A.B`, `import x = A`) name a
+    // namespace, not a module path.
+    TSImportEqualsDeclaration(node) {
+      const reference = node.moduleReference;
+      if (reference.type === 'TSExternalModuleReference') {
+        out.push({ kind: 'require', value: reference.expression.value });
+      }
+    },
+    // `require('y')` — a call to the bare `require` identifier. A member call
+    // (`obj.require(…)`) or an immediately-invoked shadow is a different callee
+    // node and is not reached.
+    CallExpression(node) {
+      const [first] = node.arguments;
+      if (
+        node.callee.type === 'Identifier' &&
+        node.callee.name === 'require' &&
+        first !== undefined &&
+        isStringLiteral(first)
+      ) {
+        out.push({ kind: 'require', value: first.value });
+      }
+    },
+  }).visit(result.program);
   return out;
 }
 
@@ -449,7 +418,42 @@ function topLevelDirs(repoRoot: string, tree: 'packages' | 'e2e'): string[] {
     .map((entry) => join(base, entry.name));
 }
 
-function readJson(path: string): unknown {
+// The JSON value domain for the two declarative manifests this checker reads —
+// an arbitrary `package.json` and an arbitrary tsconfig found by the walk.
+// Neither is this repo's own document, so nothing about their shape is known
+// before they are read; a reader that reaches an unmodeled key gets a value it
+// can decide about rather than one it dereferences on faith.
+//
+// `@animus-ui/assertions` owns the identical vocabulary for test code, and this
+// is deliberately NOT that import: `verify:lint` runs `bun scripts/verify/
+// topology.ts` with no `build:ts` precondition (see vite.config.ts `run.tasks`),
+// so the workspace package's built dist is not reachable from here. Every other
+// file in scripts/verify holds the same line — node builtins and the runner
+// only.
+type JsonValue =
+  | null
+  | boolean
+  | number
+  | string
+  | JsonValue[]
+  | { [key: string]: JsonValue };
+
+interface JsonObject {
+  [key: string]: JsonValue;
+}
+
+// Decided by representation tag, not by `typeof`: `[object Object]` is what
+// separates a keyed block from a list, and the tag also rejects everything
+// `JSON.parse` cannot produce.
+function isJsonObject(value: JsonValue | undefined): value is JsonObject {
+  return Object.prototype.toString.call(value) === '[object Object]';
+}
+
+function isJsonString(value: JsonValue | undefined): value is string {
+  return Object.prototype.toString.call(value) === '[object String]';
+}
+
+function readJson(path: string): JsonValue | undefined {
   try {
     return JSON.parse(readFileSync(path, 'utf8'));
   } catch {
@@ -459,7 +463,7 @@ function readJson(path: string): unknown {
 
 // tsconfig files are JSONC: comment-strip, then drop trailing commas before
 // JSON.parse. Good enough to reach compilerOptions.paths without a full parser.
-function readJsonc(path: string): unknown {
+function readJsonc(path: string): JsonValue | undefined {
   try {
     const stripped = stripTsComments(readFileSync(path, 'utf8')).replace(
       /,(\s*[}\]])/g,
@@ -479,8 +483,10 @@ export function readE2ePackageNames(repoRoot: string): string[] {
   for (const dir of topLevelDirs(repoRoot, 'e2e')) {
     const manifest = join(dir, 'package.json');
     if (!existsSync(manifest)) continue;
-    const parsed = readJson(manifest) as { name?: unknown } | undefined;
-    if (parsed && typeof parsed.name === 'string' && parsed.name) {
+    const parsed = readJson(manifest);
+    // A manifest whose `name` is absent, empty, or not a string names no
+    // workspace package, so it contributes no specifier to match against.
+    if (isJsonObject(parsed) && isJsonString(parsed.name) && parsed.name) {
       names.push(parsed.name);
     }
   }
@@ -576,7 +582,7 @@ function resolveExtendsSpecifier(
 interface EffectivePaths {
   // The winning `paths` map and the directory it was declared in (its anchor
   // when no baseUrl overrides it).
-  targets?: { map: Record<string, unknown>; dir: string };
+  targets?: { map: JsonObject; dir: string };
   // The directory an explicit `baseUrl` resolves to, if any config set one.
   baseUrlDir?: string;
 }
@@ -601,25 +607,19 @@ function computeEffectivePaths(
   if (!resolved || seen.has(resolved) || depth > MAX_EXTENDS_DEPTH) return {};
   seen.add(resolved);
 
-  const config = readJsonc(resolved) as
-    | {
-        extends?: unknown;
-        compilerOptions?: { baseUrl?: unknown; paths?: unknown };
-      }
-    | undefined;
-  if (!config || typeof config !== 'object') return {};
+  // A tsconfig is a keyed block. Anything else on disk under a tsconfig*.json
+  // name declares no `extends` and no `compilerOptions`, so it contributes
+  // nothing to the effective result either way.
+  const config = readJsonc(resolved);
+  if (!isJsonObject(config)) return {};
 
   const eff: EffectivePaths = {};
 
   // 1. Inherit from extends (arrays: later overrides earlier).
   const ext = config.extends;
-  const parents = Array.isArray(ext)
-    ? ext
-    : typeof ext === 'string'
-      ? [ext]
-      : [];
+  const parents = Array.isArray(ext) ? ext : isJsonString(ext) ? [ext] : [];
   for (const parent of parents) {
-    if (typeof parent !== 'string') continue;
+    if (!isJsonString(parent)) continue;
     const parentFile = resolveExtendsSpecifier(
       parent,
       dirname(resolved),
@@ -636,17 +636,17 @@ function computeEffectivePaths(
     if (inherited.baseUrlDir) eff.baseUrlDir = inherited.baseUrlDir;
   }
 
-  // 2. Own options override inherited.
+  // 2. Own options override inherited. `compilerOptions` and `paths` are both
+  // keyed blocks in the tsconfig schema — `paths` in particular maps alias to
+  // target list, so a non-keyed value there declares no alias to resolve.
   const options = config.compilerOptions;
-  if (options && typeof options === 'object') {
-    if (typeof options.baseUrl === 'string') {
-      eff.baseUrlDir = resolve(dirname(resolved), options.baseUrl);
+  if (isJsonObject(options)) {
+    const { baseUrl, paths } = options;
+    if (isJsonString(baseUrl)) {
+      eff.baseUrlDir = resolve(dirname(resolved), baseUrl);
     }
-    if (options.paths && typeof options.paths === 'object') {
-      eff.targets = {
-        map: options.paths as Record<string, unknown>,
-        dir: dirname(resolved),
-      };
+    if (isJsonObject(paths)) {
+      eff.targets = { map: paths, dir: dirname(resolved) };
     }
   }
 
@@ -679,7 +679,7 @@ export function scanTsconfigPaths(repoRoot: string): Violation[] {
     for (const [alias, targets] of Object.entries(eff.targets.map)) {
       if (!Array.isArray(targets)) continue;
       for (const target of targets) {
-        if (typeof target !== 'string') continue;
+        if (!isJsonString(target)) continue;
         const abs = resolve(baseDir, target.replace(/\*/g, ''));
         const to = classifyTree(repoRoot, abs);
         if (!isForbidden(owner, to)) continue;
@@ -708,12 +708,15 @@ export function scanPackageDependencies(repoRoot: string): Violation[] {
     for (const dir of topLevelDirs(repoRoot, tree)) {
       const manifest = join(dir, 'package.json');
       if (!existsSync(manifest)) continue;
-      const parsed = readJson(manifest) as Record<string, unknown> | undefined;
-      if (!parsed) continue;
+      // A manifest is a keyed block, and each dependency map inside it is a
+      // keyed block of name -> range. Anything else declares no dependency
+      // name, so there is nothing to check against the forbidden trees.
+      const parsed = readJson(manifest);
+      if (!isJsonObject(parsed)) continue;
       for (const mapName of DEPENDENCY_MAPS) {
         const map = parsed[mapName];
-        if (!map || typeof map !== 'object') continue;
-        for (const dep of Object.keys(map as Record<string, unknown>)) {
+        if (!isJsonObject(map)) continue;
+        for (const dep of Object.keys(map)) {
           const to = e2eNames.has(dep)
             ? 'e2e'
             : legacyNames.has(dep)

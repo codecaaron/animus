@@ -11,6 +11,19 @@ import { describe, expect, test } from 'vitest';
 
 import { analyzeProject } from './run-pipeline';
 
+import type { KeyframesBlocks } from './run-pipeline';
+import type { KeyframeFrameMap } from '@animus-ui/system';
+
+/**
+ * The `globalStyleBlocksJson` payload this parity test builds: one named block
+ * per export, keyed by the structured `@keyframes <name>` selector whose body
+ * is a frame map. The suite emits no other global-style selector, so the value
+ * type says exactly what these fixtures carry.
+ */
+type StructuredKeyframeBlocks = {
+  [exportName: string]: { [keyframesSelector: string]: KeyframeFrameMap };
+};
+
 const frameMap = {
   '0%': { opacity: 0, transform: 'scale(0.95)' },
   '100%': { opacity: 1, transform: 'scale(1)' },
@@ -23,8 +36,8 @@ const extractFrames = (css: string): string | null => {
 };
 
 const run = (
-  globalBlocks: Record<string, any> | null,
-  keyframesBlocks: Record<string, any> | null
+  globalBlocks: StructuredKeyframeBlocks | null,
+  keyframesBlocks: KeyframesBlocks | null
 ) => {
   const manifestJson = analyzeProject(
     JSON.stringify([]), // no component files — we just want the global layer

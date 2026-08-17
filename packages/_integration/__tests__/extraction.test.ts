@@ -143,7 +143,7 @@ describe('system props extraction', () => {
     const { manifest } = runPipeline([entry]);
 
     expect(manifest.system_prop_map).toBeDefined();
-    expect(typeof manifest.system_prop_map).toBe('object');
+    expect(manifest.system_prop_map).toEqual(expect.any(Object));
   });
 });
 

@@ -19,9 +19,9 @@ beforeAll(() => {
 
 describe('serialization shape', () => {
   test('ds.toConfig() returns propConfig, groupRegistry, transforms', () => {
-    expect(typeof config.propConfig).toBe('string');
-    expect(typeof config.groupRegistry).toBe('string');
-    expect(typeof config.transforms).toBe('object');
+    expect(config.propConfig).toEqual(expect.any(String));
+    expect(config.groupRegistry).toEqual(expect.any(String));
+    expect(config.transforms).toEqual(expect.any(Object));
 
     // propConfig and groupRegistry must be valid JSON
     expect(() => JSON.parse(config.propConfig)).not.toThrow();
@@ -29,15 +29,15 @@ describe('serialization shape', () => {
   });
 
   test('ds.toConfig() omits the retired selector order output', () => {
-    expect(typeof config.selectorAliases).toBe('string');
+    expect(config.selectorAliases).toEqual(expect.any(String));
     expect(config).not.toHaveProperty('selectorOrder');
   });
 
   test('tokens.serialize() returns scalesJson, variableMapJson, variableCss, contextualVarsJson', () => {
-    expect(typeof theme.scalesJson).toBe('string');
-    expect(typeof theme.variableMapJson).toBe('string');
-    expect(typeof theme.variableCss).toBe('string');
-    expect(typeof theme.contextualVarsJson).toBe('string');
+    expect(theme.scalesJson).toEqual(expect.any(String));
+    expect(theme.variableMapJson).toEqual(expect.any(String));
+    expect(theme.variableCss).toEqual(expect.any(String));
+    expect(theme.contextualVarsJson).toEqual(expect.any(String));
 
     // JSON fields must be valid JSON
     expect(() => JSON.parse(theme.scalesJson)).not.toThrow();
@@ -52,7 +52,7 @@ describe('serialize → NAPI round-trip', () => {
 
     const manifestJson = analyzeProject(fileEntries);
 
-    expect(typeof manifestJson).toBe('string');
+    expect(manifestJson).toEqual(expect.any(String));
     const manifest = JSON.parse(manifestJson);
     expect(manifest).toBeDefined();
     expect(manifest.css).toBeDefined();

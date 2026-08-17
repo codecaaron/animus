@@ -1,5 +1,13 @@
-/** Comparison surface produced by one engine run over one corpus unit. */
-export interface UnitSurface {
+/**
+ * Comparison surface produced by one engine run over one corpus unit.
+ *
+ * A wire contract, so it is a `type` and not an `interface`: the surface is
+ * `engine-run.ts` stdout and it is stored verbatim inside a committed baseline
+ * envelope, so it has to compose with the JSON value domain the hasher and the
+ * envelope writer speak. In-process contracts below (`Divergence`, …) stay
+ * interfaces.
+ */
+export type UnitSurface = {
   /** Complete emitted CSS (raw NAPI output, before TS post-processing). */
   css: string;
   /** Per-file transformed code, keyed by fixture-relative path. */
@@ -25,7 +33,7 @@ export interface UnitSurface {
   /** Parser invocation count reported by the engine, or null if the engine
    *  does not report one. */
   parseCount: number | null;
-}
+};
 
 /** One corpus unit = one independent analyzeProject invocation. */
 export interface CorpusUnit {

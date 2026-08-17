@@ -34,7 +34,7 @@ const ENGINE_BOUND = new Set([
 function taskCommand(name: string): string {
   // SAFETY: `vite.config.ts` declares `run.tasks`; TaskGraphConfig models that
   // slice with every level optional, so the read below cannot assume presence.
-  const tasks = (viteConfig as unknown as TaskGraphConfig).run?.tasks;
+  const tasks = (viteConfig as TaskGraphConfig).run?.tasks;
   const command = tasks?.[name]?.command;
   if (!command) throw new Error(`vite.config.ts declares no '${name}' command`);
   return command;

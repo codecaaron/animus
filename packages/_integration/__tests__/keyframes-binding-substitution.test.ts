@@ -15,6 +15,8 @@ import { describe, expect, test } from 'vitest';
 
 import { analyzeProject, clearAnalysisCache } from './run-pipeline';
 
+import type { KeyframesBlocks } from './run-pipeline';
+
 const frameMap = {
   '0%': { opacity: 0 },
   '100%': { opacity: 1 },
@@ -27,7 +29,7 @@ interface FileEntry {
 
 const runWithKeyframes = (
   fileEntries: FileEntry[],
-  keyframesBlocks: Record<string, any>
+  keyframesBlocks: KeyframesBlocks
 ) => {
   clearAnalysisCache();
   const manifestJson = analyzeProject(JSON.stringify(fileEntries), {

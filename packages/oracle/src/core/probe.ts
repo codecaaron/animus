@@ -34,16 +34,40 @@ export type ProbeOperation =
   | 'prove'
   | 'refine';
 
+/**
+ * What a symptom names about its target. `engines/explain.ts` is the only
+ * producer — it copies `OracleSymptom['detail']` in here — and both of that
+ * union's variants carry exactly these fields; the shape is expressible in
+ * core vocabulary alone, so nothing about it obliged the field to be an open
+ * dictionary. `expected` belongs to the `unexpected-value` symptom only.
+ */
+export type SymptomDetail = {
+  property: string;
+  expected?: string;
+};
+
 export type SymptomSpec = {
   kind: string;
   target: TargetId;
-  detail?: Readonly<Record<string, unknown>>;
+  detail?: SymptomDetail;
 };
+
+/**
+ * One value an assertion pins. `engines/prove.ts` is the only producer (it
+ * spreads an `OracleAssertion` with its selector `target` dropped), and every
+ * variant of that union carries a name, a single expected string, or a list of
+ * allowed ones — nothing here is an object, which is what lets `stableHash`
+ * see the whole map in canonical form.
+ */
+export type AssertionParam = string | readonly string[] | undefined;
 
 export type AssertionSpec = {
   kind: string;
   target: TargetId;
-  params?: Readonly<Record<string, unknown>>;
+  /** Read by nobody: the map exists to be hashed into the probe identity
+   *  (§5 — a differently-parameterized assertion is a different question) and
+   *  rendered, so the contract that matters is on the VALUES. */
+  params?: Readonly<Record<string, AssertionParam>>;
 };
 
 export type ProbeObjective =

@@ -35,6 +35,13 @@ function liveFixtureDir(prefix: string): string {
 }
 
 import {
+  isJsonNumber,
+  isJsonObject,
+  isJsonString,
+  parseJsonObject,
+} from '@animus-ui/assertions';
+
+import {
   type OxlintDiagnostic,
   ToolReportError,
   classifyUnusedVar,
@@ -42,6 +49,38 @@ import {
   decodeOxlintReport,
 } from './_tool-reports.ts';
 import { applyDeletions } from './delete-unused.ts';
+
+import type { JsonObject } from '@animus-ui/assertions';
+
+// The shape claims below are about the WIRE record oxlint emits, so the
+// subject is read back as JSON and decided with the shared JSON vocabulary.
+// A `typeof` over the in-memory object would have been answered by the local
+// `OxlintDiagnostic` annotation — i.e. by the very declaration under test —
+// which is exactly the vacuous gate this suite exists to prevent.
+function wireRecord(
+  diagnostic: OxlintDiagnostic,
+  boundary: string
+): JsonObject {
+  return parseJsonObject(JSON.stringify(diagnostic), boundary);
+}
+
+// `labels[0].span` is the coordinate path the deleter navigates. Reaching it
+// fails loud so a schema move (span hoisted onto the diagnostic, labels
+// renamed) surfaces here rather than as a silent no-op deletion pass.
+function firstLabelSpan(diagnostic: JsonObject): JsonObject {
+  const labels = diagnostic.labels;
+  if (!Array.isArray(labels)) {
+    throw new TypeError('oxlint diagnostic: `labels` is not an array');
+  }
+  const [first] = labels;
+  if (!isJsonObject(first)) {
+    throw new TypeError('oxlint diagnostic: `labels[0]` is not an object');
+  }
+  if (!isJsonObject(first.span)) {
+    throw new TypeError('oxlint diagnostic: `labels[0].span` is not an object');
+  }
+  return first.span;
+}
 
 function diag(
   message: string,
@@ -79,24 +118,21 @@ function diag(
 
 describe('oxlint JSON shape contract', () => {
   test('diagnostics use oxlint field shape: code/message/filename + labels[0].span', () => {
-    const sample = diag(
-      "Variable 'unusedConst' is declared but never used.",
-      6
+    const sample = wireRecord(
+      diag("Variable 'unusedConst' is declared but never used.", 6),
+      'oxlint diagnostic fixture'
     );
-    expect(typeof sample.code).toBe('string');
-    expect(typeof sample.message).toBe('string');
-    expect(typeof sample.filename).toBe('string');
+    expect(isJsonString(sample.code)).toBe(true);
+    expect(isJsonString(sample.message)).toBe(true);
+    expect(isJsonString(sample.filename)).toBe(true);
     expect(Array.isArray(sample.labels)).toBe(true);
-    expect(typeof sample.labels[0].span.offset).toBe('number');
-    expect(typeof sample.labels[0].span.line).toBe('number');
-    expect(typeof sample.labels[0].span.column).toBe('number');
+    const span = firstLabelSpan(sample);
+    expect(isJsonNumber(span.offset)).toBe(true);
+    expect(isJsonNumber(span.line)).toBe(true);
+    expect(isJsonNumber(span.column)).toBe(true);
     // Biome 2.x fields MUST NOT be present on the expected oxlint shape
-    expect(
-      (sample as unknown as { category?: unknown }).category
-    ).toBeUndefined();
-    expect(
-      (sample as unknown as { location?: unknown }).location
-    ).toBeUndefined();
+    expect(sample.category).toBeUndefined();
+    expect(sample.location).toBeUndefined();
   });
 
   test('live oxlint output uses `eslint(...)` code wrapper', () => {
@@ -122,13 +158,13 @@ describe('oxlint JSON shape contract', () => {
       );
       expect(unusedDiag).toBeDefined();
       if (!unusedDiag) return;
-      expect(unusedDiag).toBeDefined();
-      expect(typeof unusedDiag.code).toBe('string');
+      const wire = wireRecord(unusedDiag, 'live oxlint diagnostic');
+      expect(isJsonString(wire.code)).toBe(true);
       expect(unusedDiag.code.startsWith('eslint(')).toBe(true);
       expect(unusedDiag.code.endsWith(')')).toBe(true);
-      expect(typeof unusedDiag.filename).toBe('string');
-      expect(Array.isArray(unusedDiag.labels)).toBe(true);
-      expect(typeof unusedDiag.labels[0].span.offset).toBe('number');
+      expect(isJsonString(wire.filename)).toBe(true);
+      expect(Array.isArray(wire.labels)).toBe(true);
+      expect(isJsonNumber(firstLabelSpan(wire).offset)).toBe(true);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

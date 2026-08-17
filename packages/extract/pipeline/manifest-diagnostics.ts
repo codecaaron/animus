@@ -26,23 +26,23 @@ export const SELECTOR_UNSUPPORTED_SUBJECT =
 const UNRESOLVED_PARENT_RE =
   /chain dropped: could not resolve parent component '([^']+)'/;
 
+/** The one field both matchers below read. Named as a slice of the owner
+ *  record rather than a private shape so the message channel cannot drift
+ *  from the diagnostics these are actually run over — every caller feeds
+ *  them entries of a manifest's `diagnostics` array. */
+type DiagnosticMessage = Pick<ManifestDiagnostic, 'message'>;
+
 /** True when the diagnostic reports a chain dropped for an unresolved
  *  parent component. */
-export function isUnresolvedParentDrop(diagnostic: {
-  message?: unknown;
-}): boolean {
-  return (
-    typeof diagnostic?.message === 'string' &&
-    UNRESOLVED_PARENT_RE.test(diagnostic.message)
-  );
+export function isUnresolvedParentDrop(diagnostic: DiagnosticMessage): boolean {
+  return UNRESOLVED_PARENT_RE.test(diagnostic.message);
 }
 
 /** The parent binding named by an unresolved-parent drop, or null when the
  *  diagnostic is not one. */
-export function unresolvedParentName(diagnostic: {
-  message?: unknown;
-}): string | null {
-  if (typeof diagnostic?.message !== 'string') return null;
+export function unresolvedParentName(
+  diagnostic: DiagnosticMessage
+): string | null {
   return UNRESOLVED_PARENT_RE.exec(diagnostic.message)?.[1] ?? null;
 }
 
@@ -97,13 +97,17 @@ export function collectSelectorAliasDiagnostics(
   // loader's own serialization, and an empty diagnostic list reads as "every
   // registered alias validated" — the exact outcome this collector exists to
   // deny.
-  const aliases = parseInternalWire<Record<string, unknown>>(
+  //
+  // The registry's value type is the producer's, not a guess:
+  // `serializeSelectorMap` (@animus-ui/system) writes `alias name → selector
+  // string`, flattening each `SelectorAlias` to its `selector` field before
+  // `JSON.stringify`. There is no other writer of this wire.
+  const aliases = parseInternalWire<Record<string, string>>(
     selectorAliasesJson,
     "selectorAliasesJson (the system loader's selector-alias registry)"
   );
   const diagnostics: ManifestDiagnostic[] = [];
   for (const [name, value] of Object.entries(aliases)) {
-    if (typeof value !== 'string') continue;
     if (value.includes('&') && !hasSelectorSubject(value)) {
       diagnostics.push({
         file: 'system',

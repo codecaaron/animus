@@ -108,6 +108,7 @@ done
 
 # ── 3. Isolated install from the committed template ────────────────
 cp e2e/packed-app/package.json e2e/packed-app/tsconfig.json \
+   e2e/packed-app/tsconfig.strict.json \
    e2e/packed-app/vite.config.ts e2e/packed-app/next.config.ts \
    e2e/packed-app/index.html "$STAGING/"
 cp -R e2e/packed-app/src e2e/packed-app/app "$STAGING/"
@@ -139,10 +140,22 @@ echo "[verify:packed] recursive installed package graph ok"
 ")
 
 # ── 6. Published-declaration type-check (stable TypeScript) ─────────
-# --skipLibCheck false pins the strict lib check here; the template's
-# tsconfig sets skipLibCheck:true so Next's own build-time check doesn't
-# lib-check Next's internal template declarations.
-(cd "$STAGING" && ./node_modules/.bin/tsc -p tsconfig.json --noEmit --skipLibCheck false)
+# Two passes, one boundary. The strict pass (tsconfig.strict.json,
+# skipLibCheck:false) proves OUR published declarations under stable TS over
+# every template file except next.config.ts; the full-template pass runs the
+# posture every real Next consumer must use (tsconfig.json, skipLibCheck:true
+# — Next mandates it) and covers the withAnimus usage surface.
+# next.config.ts cannot join the strict pass: @animus-ui/next-plugin's
+# declared contract type-imports next/dist/server/config-shared (the
+# next-owned NextConfig/TurbopackOptions authorities), and Next's internal
+# d.ts are not strict-lib-clean by upstream design (unresolvable template
+# placeholders like VAR_MODULE_GLOBAL_ERROR, React-19-only types under
+# React 18). The template also exact-pins its type graph (next, react×2,
+# @types/react×2, typescript) to the workspace-locked versions — the staging
+# installs without a lockfile, so unpinned type-graph deps would let registry
+# drift move what these passes check.
+(cd "$STAGING" && ./node_modules/.bin/tsc -p tsconfig.strict.json --noEmit)
+(cd "$STAGING" && ./node_modules/.bin/tsc -p tsconfig.json --noEmit)
 echo "[verify:packed] stable-TS declaration check ok"
 
 # ── 7. Consumer builds ──────────────────────────────────────────────

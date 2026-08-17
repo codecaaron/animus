@@ -6,18 +6,25 @@
  *               `var(--color-ember)` -> `var(--prefix-color-ember)`
  * Theme JSON:   `{ "colors.ember": "var(--color-ember)" }` -> `{ "colors.ember": "var(--prefix-color-ember)" }`
  */
+/**
+ * The prefixed slice of a system's serialized artifacts. `themeJson` and
+ * `contextualVarsJson` are absent exactly when the caller supplied none —
+ * `applyPrefix` never invents an input it was not given.
+ */
+export interface PrefixedSystemArtifacts {
+  variableMapJson: string;
+  variableCss: string;
+  themeJson?: string;
+  contextualVarsJson?: string;
+}
+
 export function applyPrefix(
   prefix: string,
   variableMapJson: string,
   variableCss: string,
   themeJson?: string,
   contextualVarsJson?: string
-): {
-  variableMapJson: string;
-  variableCss: string;
-  themeJson?: string;
-  contextualVarsJson?: string;
-} {
+): PrefixedSystemArtifacts {
   if (!prefix)
     return { variableMapJson, variableCss, themeJson, contextualVarsJson };
 
@@ -35,12 +42,7 @@ export function applyPrefix(
   css = css.replace(/--([a-zA-Z][\w-]*)\s*:/g, `--${prefix}-$1:`);
   css = css.replace(varRefRe, `var(--${prefix}-$1)`);
 
-  const result: {
-    variableMapJson: string;
-    variableCss: string;
-    themeJson?: string;
-    contextualVarsJson?: string;
-  } = {
+  const result: PrefixedSystemArtifacts = {
     variableMapJson: JSON.stringify(prefixed),
     variableCss: css,
   };

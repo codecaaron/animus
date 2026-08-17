@@ -4,7 +4,9 @@
  */
 import type { Divergence, FamilyDecl } from './types';
 
-interface ScoreboardInput {
+/** Everything one scoreboard render reads. Exported because it is the shape a
+ *  caller — the CLI, and the render's own tests — has to build. */
+export interface ScoreboardInput {
   mode: string;
   engines: [string, string];
   devMode: boolean;

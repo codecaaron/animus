@@ -16,6 +16,38 @@ const objectResultError: CssDiagnosticLike & { severity?: string } = {
   severity: 'error',
 };
 
+/**
+ * A warning KIND carrying error SEVERITY. Declared with the gate's own field
+ * contract plus the severity the Rust record can carry, so the entry stays a
+ * value of that contract instead of an assertion over a narrower one.
+ */
+const severityErrorOnWarnKind: CssDiagnosticLike & { severity?: string } = {
+  file: 'd.tsx',
+  component: '_broken',
+  kind: 'warn',
+  message: 'selector alias without substitutable subject',
+  severity: 'error',
+};
+
+/**
+ * The `Error` the gate threw, or `null` when it returned. The gate's contract
+ * is ONE aggregated `Error`, so a non-Error throw is a contract break: it is
+ * re-thrown as a loud failure rather than narrowed away into `null`, which
+ * would read here as "the gate accepted the diagnostics".
+ */
+function thrownFrom(run: () => void): Error | null {
+  try {
+    run();
+  } catch (error) {
+    if (error instanceof Error) return error;
+    throw new TypeError(
+      `assertNoErrorDiagnostics threw a non-Error value: ${String(error)}`,
+      { cause: error }
+    );
+  }
+  return null;
+}
+
 describe('assertNoErrorDiagnostics', () => {
   it('accepts undefined and empty diagnostics', () => {
     expect(() => assertNoErrorDiagnostics(undefined)).not.toThrow();
@@ -45,24 +77,15 @@ describe('assertNoErrorDiagnostics', () => {
         },
         // Error SEVERITY on a warning kind routes through the strict policy
         // in surfaceManifestDiagnostics — never through this gate.
-        {
-          file: 'd.tsx',
-          component: '_broken',
-          kind: 'warn',
-          message: 'selector alias without substitutable subject',
-          severity: 'error',
-        } as CssDiagnosticLike,
+        severityErrorOnWarnKind,
       ])
     ).not.toThrow();
   });
 
   it('throws on one error naming component, file, and message', () => {
-    let thrown: Error | null = null;
-    try {
-      assertNoErrorDiagnostics([objectResultError]);
-    } catch (e) {
-      thrown = e as Error;
-    }
+    const thrown = thrownFrom(() =>
+      assertNoErrorDiagnostics([objectResultError])
+    );
     expect(thrown).not.toBeNull();
     expect(thrown!.message).toContain('[animus]');
     expect(thrown!.message).toContain('Broken');
@@ -80,12 +103,9 @@ describe('assertNoErrorDiagnostics', () => {
         'transforms must return a string or finite number; rule-level ' +
         'styling ships as declaration scales (see composite-style-scales)',
     };
-    let thrown: Error | null = null;
-    try {
-      assertNoErrorDiagnostics([objectResultError, second]);
-    } catch (e) {
-      thrown = e as Error;
-    }
+    const thrown = thrownFrom(() =>
+      assertNoErrorDiagnostics([objectResultError, second])
+    );
     expect(thrown).not.toBeNull();
     const lines = thrown!.message.split('\n');
     expect(lines).toHaveLength(2);
@@ -100,29 +120,23 @@ describe('assertNoErrorDiagnostics', () => {
     // The engine records one entry per resolve position (a responsive value
     // can fail per breakpoint); the build failure repeats nothing. Distinct
     // errors are never collapsed — pinned by the two-entry test above.
-    let thrown: Error | null = null;
-    try {
+    const thrown = thrownFrom(() =>
       assertNoErrorDiagnostics([
         objectResultError,
         { ...objectResultError },
         { ...objectResultError },
-      ]);
-    } catch (e) {
-      thrown = e as Error;
-    }
+      ])
+    );
     expect(thrown).not.toBeNull();
     expect(thrown!.message.split('\n')).toHaveLength(1);
   });
 
   it('renders placeholders, never "undefined" or empty parens, for absent fields', () => {
-    let thrown: Error | null = null;
-    try {
+    const thrown = thrownFrom(() =>
       assertNoErrorDiagnostics([
         { file: '', component: '', kind: 'error', message: 'boom' },
-      ]);
-    } catch (e) {
-      thrown = e as Error;
-    }
+      ])
+    );
     expect(thrown!.message).toBe(
       '[animus] <unknown component> (<unknown file>): boom'
     );
@@ -135,12 +149,9 @@ describe('assertNoErrorDiagnostics', () => {
     // (extraction-diagnostics §Identical escalation in both bundler plugins).
     // Whole-message equality, not toThrow containment — a stray prefix or
     // suffix must fail this pin.
-    let thrown: Error | undefined;
-    try {
-      assertNoErrorDiagnostics([objectResultError]);
-    } catch (error) {
-      thrown = error as Error;
-    }
+    const thrown = thrownFrom(() =>
+      assertNoErrorDiagnostics([objectResultError])
+    );
     expect(thrown?.message).toBe(
       "[animus] Broken (src/invalid.tsx): transform 'size' returned object " +
         "for prop 'width' — transforms must return a string or finite " +

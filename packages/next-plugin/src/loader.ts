@@ -51,7 +51,10 @@ export default function animusLoader(
   // prod loader behavior engine-verbatim). The path is session-scoped
   // (design D2, next-turbopack-served-transform-coherence): the owning
   // session publishes its artifact dir through the process singleton.
-  if (this.mode !== 'production' && typeof this.addDependency === 'function') {
+  // `addDependency` is optional on the shared loader context (bare policy
+  // tests drive a loader without a full runner), so its presence — not its
+  // representation — is what decides whether the epoch can be registered.
+  if (this.mode !== 'production' && this.addDependency !== undefined) {
     const sessionDir = getSessionArtifactDir();
     if (sessionDir) {
       const epochPath = replacementEpochPath(sessionDir);

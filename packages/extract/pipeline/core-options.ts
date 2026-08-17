@@ -16,6 +16,11 @@ import type { StaticCssConfig } from './static-css';
 export const DRIVER_NAMESPACES = ['vite', 'next', 'cli'] as const;
 export type DriverNamespace = (typeof DRIVER_NAMESPACES)[number];
 
+/** The same closed set as a membership test over arbitrary observed keys —
+ *  derived from the list above so a new namespace joins both at once (same
+ *  shape as `CORE_OPTION_KEYS` below). */
+const DRIVER_NAMESPACE_KEYS: ReadonlySet<string> = new Set(DRIVER_NAMESPACES);
+
 /**
  * Structural exclusions applied unconditionally, whether or not the user
  * supplies an `exclude` list. `node_modules` is owned by the external-package
@@ -143,8 +148,8 @@ export type AssertKnownOptionKeysOpts =
  * kill, so the driver must reject it with its reason (or, in `'warn'`
  * mode, name it loudly while the key stays inert as it always was).
  */
-export function assertKnownOptionKeys(
-  raw: Record<string, unknown>,
+export function assertKnownOptionKeys<Value>(
+  raw: Readonly<Record<string, Value>>,
   ownKeys: readonly string[] = [],
   rejectKeys: ReadonlyArray<{ key: string; reason: string }> = [],
   opts: AssertKnownOptionKeysOpts = {}
@@ -168,7 +173,7 @@ export function assertKnownOptionKeys(
     }
     if (
       CORE_OPTION_KEYS.has(key) ||
-      (DRIVER_NAMESPACES as readonly string[]).includes(key) ||
+      DRIVER_NAMESPACE_KEYS.has(key) ||
       own.has(key)
     ) {
       continue;
@@ -212,13 +217,25 @@ export function assertKnownOptionKeys(
  */
 type CoreOptionValue = string | boolean | readonly string[];
 
-const isString = (value: unknown): value is string => typeof value === 'string';
+/**
+ * Intrinsic primitive brands. A driver's options object is foreign JS, not
+ * parsed JSON, so a value can carry a hostile `Symbol.toStringTag` or be a
+ * boxed `String`/`Boolean` — and a boxed primitive is NOT what any consumer
+ * of these options goes on to use (`new String('x')` spread into a Set is one
+ * object, not characters). `Object(value) !== value` admits only true
+ * primitives; the intrinsic tag then names which one, unspoofably, because no
+ * primitive carries an own `Symbol.toStringTag`.
+ */
+const isString = (value: unknown): value is string =>
+  Object(value) !== value &&
+  Object.prototype.toString.call(value) === '[object String]';
 
 const isBoolean = (value: unknown): value is boolean =>
-  typeof value === 'boolean';
+  Object(value) !== value &&
+  Object.prototype.toString.call(value) === '[object Boolean]';
 
 const isStringArray = (value: unknown): value is readonly string[] =>
-  Array.isArray(value) && value.every((entry) => typeof entry === 'string');
+  Array.isArray(value) && value.every(isString);
 
 const isStringOrStringArray = (
   value: unknown

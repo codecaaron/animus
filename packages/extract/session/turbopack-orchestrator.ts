@@ -39,6 +39,41 @@ const IGNORED_SEGMENTS = new Set([
   'node_modules',
 ]);
 
+/** Watcher-registration failures that mean "the OS is out of watch capacity"
+ *  (design D7): descriptor and inotify limits surface under all of these. */
+const CAPACITY_CODES: ReadonlySet<string> = new Set([
+  'EMFILE',
+  'ENFILE',
+  'ENOSPC',
+  'EPERM',
+]);
+
+/**
+ * The errno `code` a thrown value carries, or null when it carries none.
+ *
+ * A thrown value is universally quantified — `fs.watch` rejects with an
+ * `Error`, but nothing in the language guarantees that — so this decides what
+ * it is instead of asserting it into `NodeJS.ErrnoException`. A `code` that is
+ * not a string names no errno and reads as "no code", which is the same answer
+ * the reason table gives for a plain `Error`.
+ */
+function errnoCode<Thrown>(error: Thrown): string | null {
+  if (!(error instanceof Object) || !('code' in error)) return null;
+  const { code } = error;
+  return isIntrinsicString(code) ? code : null;
+}
+
+/** A primitive string, decided by the intrinsic tag. `Object(value) !== value`
+ *  rejects the boxed `String` — which no errno carries and which would fail
+ *  every code comparison below anyway — and makes the test immune to a
+ *  `Symbol.toStringTag` an arbitrary thrown object may carry. */
+function isIntrinsicString<Value>(value: Value): value is Value & string {
+  return (
+    Object(value) !== value &&
+    Object.prototype.toString.call(value) === '[object String]'
+  );
+}
+
 /**
  * Start the dev watcher: fs.watch per eligible top-level directory (plus a
  * non-recursive watch on the root itself), debounced into
@@ -67,9 +102,11 @@ export function startTurbopackWatcher(
 
   // The watcher's debounce is the ceiling the session's status deadlines
   // (and thereby the loader's catch-up waits) are derived from (design D3).
-  if (typeof session.noteDebouncedWatchEvents === 'function') {
-    session.debounceCeilingMs = debounceMs;
-  }
+  // Announced unconditionally: `debounceCeilingMs` is a declared field of
+  // every `ExtractionSession`, and the ceiling has to be published BEFORE the
+  // first deadline is computed whether or not the session reports debounce
+  // observations back.
+  session.debounceCeilingMs = debounceMs;
 
   const pendingPaths = new Set<string>();
   const watchers = new Map<string, ReturnType<typeof watch>>();
@@ -97,21 +134,14 @@ export function startTurbopackWatcher(
   // Capacity exhaustion is recognized generally (design D7) — descriptor
   // and inotify limits surface under several codes, plus message-only
   // spellings on some platforms.
-  const failureReason = (err: unknown): string => {
-    const code = (err as NodeJS.ErrnoException)?.code;
-    if (
-      code === 'EMFILE' ||
-      code === 'ENFILE' ||
-      code === 'ENOSPC' ||
-      code === 'EPERM'
-    ) {
-      return `capacity(${code})`;
-    }
+  const failureReason = <Thrown>(err: Thrown): string => {
+    const code = errnoCode(err);
+    if (code !== null && CAPACITY_CODES.has(code)) return `capacity(${code})`;
     if (/inotify|too many/i.test(String(err))) return 'capacity';
     return code ?? 'error';
   };
 
-  const degradeExternalRoot = (root: string, err: unknown): void => {
+  const degradeExternalRoot = <Thrown>(root: string, err: Thrown): void => {
     externalWatchers.get(root)?.close();
     externalWatchers.delete(root);
     pendingOpened.get(root)?.close();
@@ -195,7 +225,7 @@ export function startTurbopackWatcher(
   // OBSERVABLE on the handle (`died` + `onDied`): a process owner that
   // holds a live handle to a dead watcher (the CLI watch) must be able to
   // report the degradation instead of hanging silently forever.
-  const onWatcherError = (err: unknown): void => {
+  const onWatcherError = <Thrown>(err: Thrown): void => {
     died = true;
     closeAll();
     console.warn(

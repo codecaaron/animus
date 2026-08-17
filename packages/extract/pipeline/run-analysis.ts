@@ -60,9 +60,30 @@ export interface AnalysisOptions {
  * process can replay the analysis from exactly this object
  * (spec: next-turbopack-integration).
  */
+/**
+ * `emitterConfigJson`'s wire shape: the snake_case spelling the Rust emitter
+ * deserializes, distinct from the camelCase `EmitterConfig` above that names
+ * the same identity on this side. Declaration order IS the serialized field
+ * order, and an ABSENT `system_props_module_id` means this driver injects no
+ * system-props module — the engine keeps its own default rather than emitting
+ * an import of the empty string.
+ */
+type EmitterConfigWire = {
+  runtime_import: string;
+  css_module_id: string;
+  system_props_module_id?: string;
+};
+
 export function buildAnalysisInputs(
   opts: AnalysisOptions
 ): AnalyzeProjectInputs {
+  const emitterConfig: EmitterConfigWire = {
+    runtime_import: opts.emitter.runtimeImport,
+    css_module_id: opts.emitter.cssModuleId,
+  };
+  if (opts.emitter.systemPropsModuleId) {
+    emitterConfig.system_props_module_id = opts.emitter.systemPropsModuleId;
+  }
   return {
     filesJson: JSON.stringify(opts.fileEntries),
     scalesJson: opts.system.scalesJson,
@@ -72,13 +93,7 @@ export function buildAnalysisInputs(
     groupRegistryJson: opts.system.groupRegistryJson,
     packageResolutionJson: JSON.stringify(opts.packageMap),
     devMode: opts.devMode,
-    emitterConfigJson: JSON.stringify({
-      runtime_import: opts.emitter.runtimeImport,
-      css_module_id: opts.emitter.cssModuleId,
-      ...(opts.emitter.systemPropsModuleId
-        ? { system_props_module_id: opts.emitter.systemPropsModuleId }
-        : {}),
-    }),
+    emitterConfigJson: JSON.stringify(emitterConfig),
     selectorAliasesJson: opts.system.selectorAliasesJson,
     globalStyleBlocksJson: opts.system.globalStyleBlocksJson,
     pathAliasesJson: opts.pathAliasesJson,
@@ -100,8 +115,10 @@ export function buildAnalysisInputs(
 
 /** Whether the loader captured at least one source built-theme manifest. */
 function hasSourceThemeManifests(system: SystemConfig): boolean {
-  const json = system.sourceThemeManifestsJson;
-  return typeof json === 'string' && json.length > 0 && json !== '{}';
+  // Absent, null, empty, and the empty object all mean the same thing: the
+  // loader evaluated no module exporting a built theme.
+  const json = system.sourceThemeManifestsJson ?? '';
+  return json.length > 0 && json !== '{}';
 }
 
 /**

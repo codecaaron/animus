@@ -193,6 +193,23 @@ export default defineConfig({
       // change-governed; schema executable scripts stay linted via the
       // override below.
       'openspec/changes/**',
+      // Parity corpus fixtures are byte-precise adversarial extraction/
+      // formatting fixtures, not code subject to the rule — the same
+      // rationale scripts/verify/topology.ts states for its own
+      // `packages/_parity/corpus` EXCLUDE_PREFIXES entry, and the same
+      // reason the fmt ignorePatterns below excludes them. Their bytes are
+      // hashed into the parity baselines (`corpusSha256`), so editing one to
+      // satisfy a lint rule would invalidate the oracle. Scoped to the corpus
+      // only: `packages/_parity/src`, `tools`, and `__tests__` stay linted.
+      'packages/_parity/corpus/**',
+      // Same pinned-bytes rationale, one file each: these two fixtures carry
+      // transform functions whose SOURCE TEXT the emitter copies verbatim
+      // into generated code, and those exact bytes are recorded in
+      // packages/_parity/baselines under `corpusSha256`. Rewriting their
+      // one flagged `typeof` each would break verify:parity until a baseline
+      // refresh — an owner decision, not a lint fix.
+      'packages/extract/tests/fixtures/custom-props.tsx',
+      'packages/_integration/fixtures/components/transforms.tsx',
       'tools/oxlint/anti-slop/**',
     ],
     overrides: [

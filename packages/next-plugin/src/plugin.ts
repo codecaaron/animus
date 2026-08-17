@@ -29,6 +29,42 @@ type WebpackSource = {
   size(): number;
 };
 
+/** A single watch-ignore pattern webpack 5 accepts. */
+type WatchIgnoreEntry = string | RegExp;
+
+/** The composed matcher form — what this plugin writes back when it has to
+ *  wrap a user shape it cannot append to. */
+type WatchIgnoreMatcher = (path: string) => boolean;
+
+/** Every shape `watchOptions.ignored` reaches this plugin in. Mirrors the
+ *  webpack-gauntlet harness's model of the same option (its own
+ *  `WatchIgnored`), which is what drives the real webpack watcher in the
+ *  gauntlet lanes — one vocabulary for one option. */
+type WatchIgnored =
+  | WatchIgnoreEntry
+  | WatchIgnoreEntry[]
+  | WatchIgnoreMatcher
+  | null
+  | undefined;
+
+/** A string pattern, decided by representation tag rather than `typeof`: the
+ *  option comes from a consumer's `next.config`, so the union above is a model
+ *  of what webpack accepts, not a proof about the value in hand. */
+const isWatchIgnoreString = (ignored: WatchIgnored): ignored is string =>
+  Object.prototype.toString.call(ignored) === '[object String]';
+
+/** The callable variant, distinguished by the same tag after the null, array,
+ *  string, and RegExp variants are excluded (house precedent: the gauntlet
+ *  harness's own watch-ignore composition). */
+const isWatchIgnoreMatcher = (
+  ignored: WatchIgnored
+): ignored is WatchIgnoreMatcher =>
+  Object.prototype.toString.call(ignored) === '[object Function]';
+
+/** Webpack's keyed `resolve.alias` map: pattern → target path, a list of
+ *  candidate targets, or `false` for a disabled alias. */
+type WebpackAliasMap = Record<string, string | string[] | false>;
+
 type Compilation = {
   hooks: {
     processAssets: {
@@ -59,6 +95,19 @@ type CandidateModule = {
 
 type NeedBuildCallback = (err?: Error | null, result?: boolean) => void;
 
+/** The slice of webpack's needBuild build context this plugin inspects: none.
+ *  The fan-out predicate is history-free (design D1) — it decides from the
+ *  module's loader chain alone — so the slot is named, never read. Same
+ *  spelling as the needBuild suite's own `NeedBuildContext`. */
+type NeedBuildContext = Record<never, never>;
+
+/** A webpack Compilation as `NormalModule.getCompilationHooks` uses it: an
+ *  identity key into webpack's per-compilation hooks map. `thisCompilation`
+ *  forwards its argument there and reads nothing from it, so this slot is
+ *  named rather than modeled — the `compilation` hook's callback, which DOES
+ *  read fields, is typed `Compilation` above. */
+type CompilationIdentity = Record<never, never>;
+
 /** NormalModule.getCompilationHooks(...) slice (webpack 5). */
 type NormalModuleCompilationHooks = {
   needBuild?: {
@@ -66,7 +115,7 @@ type NormalModuleCompilationHooks = {
       name: string,
       fn: (
         module: CandidateModule,
-        context: unknown,
+        context: NeedBuildContext,
         callback: NeedBuildCallback
       ) => void
     ) => void;
@@ -85,7 +134,10 @@ type Compiler = {
       tap: (name: string, fn: (compilation: Compilation) => void) => void;
     };
     thisCompilation: {
-      tap: (name: string, fn: (compilation: unknown) => void) => void;
+      tap: (
+        name: string,
+        fn: (compilation: CompilationIdentity) => void
+      ) => void;
     };
   };
   context: string;
@@ -95,10 +147,10 @@ type Compiler = {
   options?: {
     name?: string;
     resolve?: {
-      alias?: Record<string, string | string[] | false>;
+      alias?: WebpackAliasMap;
     };
     watchOptions?: {
-      ignored?: unknown;
+      ignored?: WatchIgnored;
     };
   };
   webpack?: {
@@ -112,7 +164,7 @@ type Compiler = {
      *  webpack import (Next ships its own compiled webpack). */
     NormalModule?: {
       getCompilationHooks?: (
-        compilation: unknown
+        compilation: CompilationIdentity
       ) => NormalModuleCompilationHooks;
     };
   };
@@ -154,10 +206,12 @@ export class AnimusWebpackPlugin {
   constructor(options: AnimusNextOptions) {
     this.options = options;
     // v2 is the only engine (openspec: retire-extract-v1). Reject a retired v1
-    // selection loudly before publishing the shared choice — the option type no
-    // longer admits 'v1', so cast to string to still catch a stale config or an
-    // ANIMUS_ENGINE=v1 override at runtime.
-    assertNoRetiredEngineSelection(options.engine as string | undefined);
+    // selection loudly before publishing the shared choice. The option type no
+    // longer admits 'v1', but the retirement check's own parameter is the wide
+    // `string | undefined` precisely so a stale config or an ANIMUS_ENGINE=v1
+    // override still reaches it at runtime — the declared option widens into
+    // that contract on its own.
+    assertNoRetiredEngineSelection(options.engine);
     setSharedEngine(options.engine ?? 'v2');
     this.session = new ExtractionSession(options);
     this.animusLoaderPaths = new Set([resolveAnimusLoaderPath()]);
@@ -172,10 +226,12 @@ export class AnimusWebpackPlugin {
   private moduleUsesAnimusLoader(module: CandidateModule): boolean {
     const loaders = module?.loaders;
     if (!Array.isArray(loaders)) return false;
+    // A chain entry names its loader by resolved path (`CandidateModule`
+    // above): presence of that path IS the decision, and the membership test
+    // is what admits it — a non-path value cannot be in the set.
     return loaders.some(
       (entry) =>
-        typeof entry?.loader === 'string' &&
-        this.animusLoaderPaths.has(entry.loader)
+        entry?.loader !== undefined && this.animusLoaderPaths.has(entry.loader)
     );
   }
 
@@ -204,15 +260,14 @@ export class AnimusWebpackPlugin {
       watchOptions.ignored = [epochPath];
     } else if (Array.isArray(ignored)) {
       if (!ignored.includes(epochPath)) ignored.push(epochPath);
-    } else if (typeof ignored === 'string') {
+    } else if (isWatchIgnoreString(ignored)) {
       watchOptions.ignored = [ignored, epochPath];
     } else if (ignored instanceof RegExp) {
       watchOptions.ignored = (path: string) =>
         path === epochPath || ignored.test(path);
-    } else if (typeof ignored === 'function') {
-      const original = ignored as (path: string) => boolean;
+    } else if (isWatchIgnoreMatcher(ignored)) {
       watchOptions.ignored = (path: string) =>
-        path === epochPath || Boolean(original(path));
+        path === epochPath || Boolean(ignored(path));
     }
     // Any other shape is left untouched: the epoch write is value-guarded,
     // so the worst case is one echo compilation per real epoch move.
@@ -225,13 +280,20 @@ export class AnimusWebpackPlugin {
     this.aliasesExtracted = true;
     const rootDir = compiler.context;
     const rawAlias = compiler.options?.resolve?.alias;
-    if (!rawAlias || typeof rawAlias !== 'object') return;
+    if (rawAlias === undefined) return;
+    // Webpack also admits an ARRAY `resolve.alias` form; only the keyed map
+    // (`WebpackAliasMap`) carries the pattern→target pairs this harvest reads,
+    // so the keyed-object tag is the admission test — the array form yields no
+    // pair either way.
+    if (Object.prototype.toString.call(rawAlias) !== '[object Object]') return;
 
-    // Webpack alias is Record<string, string | string[] | false>
     const pairs: Array<{ pattern: string; target: string }> = [];
     for (const [key, value] of Object.entries(rawAlias)) {
-      const target = Array.isArray(value) ? value[0] : value;
-      if (typeof target !== 'string') continue;
+      // `false` disables an alias, and an array alias contributes the FIRST
+      // target webpack would try — an empty one names no target at all.
+      if (value === false) continue;
+      const target = Array.isArray(value) ? value.at(0) : value;
+      if (target === undefined) continue;
       // Skip exactly the alias with-animus injected for the emitter's CSS
       // import — a consumer alias merely containing '.animus' must survive.
       if (key === ANIMUS_CSS_MODULE_ID) continue;
@@ -249,9 +311,11 @@ export class AnimusWebpackPlugin {
     if (compiler.options?.name === 'edge-server') return;
 
     // Runtime existence check (design D7): required loader-coherence APIs
-    // must exist or the plugin fails immediately — no efficacy probing.
+    // must exist or the plugin fails immediately — no efficacy probing. The
+    // question is EXISTENCE, and the modeled webpack slice above spells an
+    // absent hook API as an absent property.
     const NormalModule = compiler.webpack?.NormalModule;
-    if (typeof NormalModule?.getCompilationHooks !== 'function') {
+    if (NormalModule?.getCompilationHooks === undefined) {
       throw new Error(UNSUPPORTED_WEBPACK_MESSAGE);
     }
 
@@ -267,7 +331,7 @@ export class AnimusWebpackPlugin {
       this.epochMovedForNextCompilation = false;
       const needBuild =
         NormalModule.getCompilationHooks!(compilation).needBuild;
-      if (typeof needBuild?.tapAsync !== 'function') {
+      if (needBuild === undefined) {
         throw new Error(UNSUPPORTED_WEBPACK_MESSAGE);
       }
       needBuild.tapAsync(PLUGIN_NAME, (module, _context, callback) => {

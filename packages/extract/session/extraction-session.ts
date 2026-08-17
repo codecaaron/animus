@@ -113,7 +113,6 @@ export type SessionOptions = AnimusCoreOptions;
 
 import type { ExcludeMatcher } from '../pipeline/index';
 import type {
-  DynamicPropMeta,
   LightningTargets,
   ManifestDiagnostic,
   RawSourceEntry,
@@ -168,6 +167,46 @@ type FileEntry = { path: string; source: string; hash: string };
 export interface WatchChanges {
   modifiedFiles?: ReadonlySet<string>;
   removedFiles?: ReadonlySet<string>;
+}
+
+/** One published artifact's write guards: `payloadHash` gates rewrites
+ *  (a byte-identical payload leaves disk untouched), `diskHash` is the hash
+ *  of the CURRENT disk bytes, envelope included, recorded in the commit. */
+interface ArtifactWriteRecord {
+  payloadHash: string;
+  diskHash: string;
+}
+
+/** The three payload artifacts a session publishes. `null` = not yet seeded
+ *  (the first publication reads the artifact's own envelope, so a
+ *  same-session restart never rewrites byte-identical bytes). */
+interface SessionArtifactRecords {
+  manifest: ArtifactWriteRecord | null;
+  inputs: ArtifactWriteRecord | null;
+  styles: ArtifactWriteRecord | null;
+}
+
+/**
+ * Primitive brands for values read back off DISK. These artifacts are
+ * animus's own, but a torn write, a hand-edited file, or a tree left by a
+ * different animus version can put anything in a field — and these decisions
+ * are what keep such a record out of a write guard or an epoch comparison.
+ * `Object(value) !== value` rejects boxed primitives (no `JSON.parse`
+ * produces one, and none would match the comparisons downstream) and makes
+ * the intrinsic tag unspoofable by a `Symbol.toStringTag`.
+ */
+function isDiskString<Value>(value: Value): value is Value & string {
+  return (
+    Object(value) !== value &&
+    Object.prototype.toString.call(value) === '[object String]'
+  );
+}
+
+function isDiskNumber<Value>(value: Value): value is Value & number {
+  return (
+    Object(value) !== value &&
+    Object.prototype.toString.call(value) === '[object Number]'
+  );
 }
 
 /**
@@ -316,11 +355,11 @@ export class ExtractionSession {
    *  disk bytes (envelope included) recorded in the analysis-commit. null =
    *  not yet seeded (first publication reads the artifact's envelope so a
    *  same-session restart never rewrites byte-identical artifacts). */
-  private artifactRecords: {
-    manifest: { payloadHash: string; diskHash: string } | null;
-    inputs: { payloadHash: string; diskHash: string } | null;
-    styles: { payloadHash: string; diskHash: string } | null;
-  } = { manifest: null, inputs: null, styles: null };
+  private artifactRecords: SessionArtifactRecords = {
+    manifest: null,
+    inputs: null,
+    styles: null,
+  };
   /** Last written analysis-commit; null = seeded from disk on first use.
    *  Its `generation` is a forensic ordinal with no reader (see
    *  AnalysisCommit) — the per-instance counter is correct only because
@@ -506,7 +545,7 @@ export class ExtractionSession {
       const hasBatch =
         (changes.modifiedFiles?.size ?? 0) > 0 ||
         (changes.removedFiles?.size ?? 0) > 0;
-      if (owner && owner !== (this as unknown) && hasBatch) {
+      if (owner && owner !== this && hasBatch) {
         await owner.ingestForwardedBatch(changes);
       }
       return;
@@ -1752,10 +1791,7 @@ export class ExtractionSession {
     const systemPropsContent = buildSystemPropsModule({
       systemPropMapJson: JSON.stringify(manifest?.system_prop_map ?? {}),
       groupRegistryJson: system.groupRegistryJson,
-      dynamicProps: (manifest?.dynamic_props ?? {}) as Record<
-        string,
-        DynamicPropMeta
-      >,
+      dynamicProps: manifest?.dynamic_props ?? {},
     });
 
     setSharedSystemProps(systemPropsContent);
@@ -1878,9 +1914,13 @@ export class ExtractionSession {
       state,
       pending,
       deadlineAt: Date.now() + this.debounceCeilingMs + STATUS_WATCHDOG_MS,
-      ...(diagnostic !== undefined ? { diagnostic } : {}),
-      ready: this.firstEmissionComplete,
     };
+    // An ABSENT `diagnostic` key means this attempt recorded no reason —
+    // distinct from a present-but-empty one, which a loader would surface as
+    // a blank failure message. Assigned here rather than spread so the
+    // artifact's field order stays diagnostic-then-ready.
+    if (diagnostic !== undefined) status.diagnostic = diagnostic;
+    status.ready = this.firstEmissionComplete;
     this.writeSessionArtifact(ANALYSIS_STATUS_ARTIFACT, JSON.stringify(status));
     if (state === 'idle' || state === 'failed') {
       this.statusAttemptOpen = false;
@@ -1967,7 +2007,7 @@ export class ExtractionSession {
   private seedPayloadRecord(
     key: 'manifest' | 'inputs' | 'styles',
     name: string
-  ): { payloadHash: string; diskHash: string } | null {
+  ): ArtifactWriteRecord | null {
     let bytes: string;
     try {
       bytes = readFileSync(join(this.sessionDir, name), 'utf-8');
@@ -1981,19 +2021,25 @@ export class ExtractionSession {
     } catch {
       return null;
     }
-    if (!envelope || typeof envelope.payloadHash !== 'string') return null;
+    if (!envelope || !isDiskString(envelope.payloadHash)) return null;
     return { payloadHash: envelope.payloadHash, diskHash: contentHash(bytes) };
   }
 
   /** Last analysis-commit persisted in this session's directory, or null. */
   private seedCommitFromDisk(): AnalysisCommit | null {
     try {
+      // SAFETY: `writeAnalysisCommit` below is this artifact's only writer and
+      // serializes an `AnalysisCommit`. The three fields any reader acts on —
+      // schema, owning session, generation — are re-decided on the next line
+      // rather than trusted, because a torn write or a tree from a different
+      // animus version can leave anything here; a record failing them seeds
+      // nothing and the session starts its generation from scratch.
       const parsed = JSON.parse(
         readFileSync(analysisCommitPath(this.sessionDir), 'utf-8')
       ) as AnalysisCommit;
       return parsed.schema === 1 &&
         parsed.sessionId === this.sessionId &&
-        typeof parsed.generation === 'number'
+        isDiskNumber(parsed.generation)
         ? parsed
         : null;
     } catch {
@@ -2034,9 +2080,12 @@ export class ExtractionSession {
       generation,
       replacementEpoch: epoch,
       manifestHash,
-      ...(inputsHash !== undefined ? { inputsHash } : {}),
       stylesHash,
     };
+    // An ABSENT `inputsHash` key is what marks a webpack-mode commit: it
+    // persisted no hydration corpus, so there is no artifact for a reader to
+    // verify. A present-but-empty hash would instead claim an empty corpus.
+    if (inputsHash !== undefined) commit.inputsHash = inputsHash;
     this.writeSessionArtifact(ANALYSIS_COMMIT_ARTIFACT, JSON.stringify(commit));
     this.lastCommit = commit;
   }
@@ -2122,6 +2171,11 @@ export class ExtractionSession {
         REPLACEMENT_EPOCH_ARTIFACT
       );
       try {
+        // SAFETY: sibling sessions write this artifact through the same
+        // `publishReplacementEpoch` below, whose payload is
+        // `{ schema, sessionId, epoch }`. `epoch` is optional here because a
+        // foreign or older artifact may carry none, and the comparison below
+        // treats a missing epoch as disagreement — the fail-safe direction.
         const parsed = JSON.parse(readFileSync(siblingEpochPath, 'utf-8')) as {
           epoch?: string;
         };
@@ -2129,6 +2183,10 @@ export class ExtractionSession {
         // later epoch value can turn them stale.
         if (parsed.epoch === epoch) continue;
       } catch (err) {
+        // SAFETY: `err` is `readFileSync`/`JSON.parse`'s throw. `?.code` reads
+        // through whatever it is (a `SyntaxError` simply has none), and the
+        // ONLY code acted on is `ENOENT` — every other value, missing or not,
+        // falls through to the fail-safe deletion below.
         // Absent artifact: nothing to invalidate this round.
         if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') continue;
         // Unreadable/corrupt sibling artifact: fall through to deletion —
@@ -2146,10 +2204,15 @@ export class ExtractionSession {
    *  absent, unreadable, or not the expected schema. */
   private diskEpochValue(): string | null {
     try {
+      // SAFETY: `publishReplacementEpoch` below is this artifact's only
+      // writer and serializes `{ schema: 1, sessionId, epoch }`. Both fields
+      // are optional here and both are re-decided on the next line, because a
+      // torn write or an artifact from another animus version can carry
+      // anything — and this value gates whether the epoch is republished.
       const parsed = JSON.parse(
         readFileSync(replacementEpochPath(this.sessionDir), 'utf-8')
       ) as { schema?: number; epoch?: string };
-      return parsed.schema === 1 && typeof parsed.epoch === 'string'
+      return parsed.schema === 1 && isDiskString(parsed.epoch)
         ? parsed.epoch
         : null;
     } catch {

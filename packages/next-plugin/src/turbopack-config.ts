@@ -14,6 +14,7 @@ import { join, relative } from 'path';
 
 import { resolveLoaderPath } from './loader-path';
 
+import type { TurbopackLoaderOptions } from './turbopack-loader';
 import type { AnimusNextOptions } from './types';
 
 /**
@@ -25,7 +26,10 @@ import type { AnimusNextOptions } from './types';
 export type TurbopackMode = 'off' | 'auto' | 'on';
 
 export interface TurbopackRule {
-  loaders: Array<{ loader: string; options: Record<string, unknown> }>;
+  /** The loader whose options contract is `turbopack-loader.ts`'s own — the
+   *  reader of these bytes on the other side of the process boundary owns
+   *  what may be written here, so the fragment carries no second spelling. */
+  loaders: Array<{ loader: string; options: TurbopackLoaderOptions }>;
 }
 
 export interface TurbopackConfigFragment {
@@ -93,17 +97,21 @@ export function buildTurbopackConfig(args: {
     sessionDir,
   } = args;
 
-  const loaderOptions: Record<string, unknown> = {
+  // Absent keys are load-bearing: the loader reads `strict`/`cssImportTarget`
+  // through `LoaderPolicyOptions`, where "not configured" is the key being
+  // missing — an explicit `undefined` would serialize to a present null key in
+  // some JSON encoders and stop meaning "unset".
+  const loaderOptions: TurbopackLoaderOptions = {
     rootDir,
     sessionId,
     sessionDir,
-    ...(options.strict !== undefined ? { strict: options.strict } : {}),
-    ...(options.cssImportTarget !== undefined
-      ? { cssImportTarget: options.cssImportTarget }
-      : {}),
   };
+  if (options.strict !== undefined) loaderOptions.strict = options.strict;
+  if (options.cssImportTarget !== undefined) {
+    loaderOptions.cssImportTarget = options.cssImportTarget;
+  }
 
-  const resolveAlias: Record<string, string> = {
+  const resolveAlias: TurbopackConfigFragment['resolveAlias'] = {
     [TURBOPACK_SYSTEM_PROPS_ID]: rootRelativeRequest(
       rootDir,
       join(sessionDir, SYSTEM_PROPS_ARTIFACT)

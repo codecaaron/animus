@@ -29,8 +29,20 @@ const STYLESHEET_REFERENCES: readonly RegExp[] = [
   /<style\b/i,
 ];
 
+/**
+ * A document slice plus where it starts, so an offset found inside `html` can
+ * be converted back to a DOCUMENT offset — which is the unit both the ordering
+ * and the byte-budget contracts are actually written in.
+ */
+interface HeadSlice {
+  /** The sliced markup. */
+  html: string;
+  /** Offset of `html[0]` in the original document. */
+  offset: number;
+}
+
 /** The `<head>…</head>` slice, or the whole document when there is no head. */
-function headOf(html: string): { html: string; offset: number } {
+function headOf(html: string): HeadSlice {
   const open = html.search(/<head\b[^>]*>/i);
   if (open === -1) return { html, offset: 0 };
   const start = html.indexOf('>', open) + 1;

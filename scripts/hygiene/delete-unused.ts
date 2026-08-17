@@ -17,9 +17,19 @@
 //   2 = internal error
 
 import { readFileSync, writeFileSync } from 'node:fs';
-import { parseSync } from 'oxc-parser';
 
-import { type Node, langFor } from './_ast';
+import {
+  type Node,
+  type NodeField,
+  type TextRange,
+  childNode,
+  childNodeList,
+  childNodeSlots,
+  identifierName,
+  isNode,
+  parseProgram,
+  stringField,
+} from './_ast';
 import { emitReceipt } from './_receipts';
 import {
   type OxlintDiagnostic,
@@ -32,27 +42,15 @@ import {
 
 const SOURCE = 'Layer C deleter (delete-unused.ts)';
 
-// A node is any object carrying a string `type` and numeric `start`. This is
-// the discriminator `childNodes`/`assignParents` use to separate AST children
-// from scalar fields (names, flags, regex descriptors, `null` holes). Local to
-// this pass: `reconcile-after-knip.ts` walks `program.body` positionally and
-// never needs structural child discovery.
-function isNode(value: unknown): value is Node {
-  return (
-    typeof value === 'object' &&
-    value !== null &&
-    typeof (value as { type?: unknown }).type === 'string' &&
-    typeof (value as { start?: unknown }).start === 'number'
-  );
-}
-
 // Direct child nodes of `node`, in source order. Iterates own enumerable
-// values (arrays are flattened, `null` array holes skipped). The `parent`
-// link written by `assignParents` is non-enumerable, so it is never revisited
-// as a child — this is what keeps the walk acyclic.
+// values (arrays are flattened, `null` array holes skipped) using `_ast`'s
+// node discriminator. The `parent` link written by `assignParents` is
+// non-enumerable, so it is never revisited as a child — this is what keeps the
+// walk acyclic. Local to this pass: `reconcile-after-knip.ts` reaches its
+// nodes by field name and never needs structural child discovery.
 function childNodes(node: Node): Node[] {
   const out: Node[] = [];
-  for (const value of Object.values(node)) {
+  for (const value of Object.values<NodeField>(node)) {
     if (isNode(value)) {
       out.push(value);
     } else if (Array.isArray(value)) {
@@ -101,7 +99,7 @@ function rangeNode(node: Node): Node {
     parent &&
     (parent.type === 'ExportNamedDeclaration' ||
       parent.type === 'ExportDefaultDeclaration') &&
-    parent.declaration === node
+    childNode(parent, 'declaration') === node
   ) {
     return parent;
   }
@@ -165,7 +163,7 @@ function resolveTarget(node: Node): Target | undefined {
         stmt.parent &&
         STATEMENT_CONTAINERS.has(stmt.parent.type)
       ) {
-        if (stmt.declarations.length === 1) {
+        if (childNodeList(stmt, 'declarations').length === 1) {
           return { kind: 'var-stmt-single', stmt };
         }
         return { kind: 'var-decl-of-many', decl: cur, stmt };
@@ -186,10 +184,7 @@ function resolveTarget(node: Node): Target | undefined {
   return undefined;
 }
 
-function expandToLineBounds(
-  text: string,
-  node: Node
-): { start: number; end: number } {
+function expandToLineBounds(text: string, node: Node): TextRange {
   let start = node.start;
   let end = node.end;
 
@@ -208,11 +203,8 @@ function expandToLineBounds(
   return { start, end };
 }
 
-function rangeForVarDeclOfMany(
-  decl: Node,
-  stmt: Node
-): { start: number; end: number } {
-  const decls: Node[] = stmt.declarations;
+function rangeForVarDeclOfMany(decl: Node, stmt: Node): TextRange {
+  const decls = childNodeList(stmt, 'declarations');
   const idx = decls.indexOf(decl);
   if (idx === -1) return { start: decl.start, end: decl.end };
 
@@ -230,28 +222,29 @@ function rangeForVarDeclOfMany(
   return { start: prev.end, end: decl.end };
 }
 
-function rangeForBindingElement(
-  elem: Node,
-  pattern: Node
-): { start: number; end: number } {
+function rangeForBindingElement(elem: Node, pattern: Node): TextRange {
   // ObjectPattern holds `properties`; ArrayPattern holds `elements` (which may
-  // contain `null` holes). The neighbor-based comma-slicing math carries over
-  // on spans either way.
+  // contain `null` holes — `const [a, , c] = arr`). The neighbor-based
+  // comma-slicing math carries over on spans either way, but only a REAL
+  // neighbor can supply a span: a hole has no offsets to slice against, so it
+  // is not a usable neighbor and the search falls through to the other side.
+  // (Reading a hole's `.start` was a crash, not a range.)
   const elements: Array<Node | null> =
-    pattern.type === 'ObjectPattern' ? pattern.properties : pattern.elements;
+    pattern.type === 'ObjectPattern'
+      ? childNodeList(pattern, 'properties')
+      : childNodeSlots(pattern, 'elements');
   const idx = elements.indexOf(elem);
 
-  if (idx < elements.length - 1) {
-    return {
-      start: elem.start,
-      end: (elements[idx + 1] as Node).start,
-    };
+  const next = idx >= 0 && idx + 1 < elements.length ? elements[idx + 1] : null;
+  if (next !== null) {
+    return { start: elem.start, end: next.start };
   }
-  if (idx > 0) {
-    const prev = elements[idx - 1] as Node;
+  const prev = idx > 0 ? elements[idx - 1] : null;
+  if (prev !== null) {
     return { start: prev.end, end: elem.end };
   }
-  // Only element: delete just the element (caller must decide about the pattern itself)
+  // Only element (or holes on both sides): delete just the element (caller
+  // must decide about the pattern itself).
   return { start: elem.start, end: elem.end };
 }
 
@@ -262,15 +255,21 @@ function findOverloadGroupStart(impl: Node): Node {
   // (TS2391). When `impl` has a body AND is preceded by same-named
   // signature-only overloads (ESTree `TSDeclareFunction`), expand the range
   // to the first signature so the whole group is removed atomically.
-  if (!impl.body || !impl.id) return impl;
+  const implName = identifierName(impl, 'id');
+  if (childNode(impl, 'body') === undefined || implName === undefined) {
+    return impl;
+  }
   const parent = impl.parent;
-  const statements: Node[] | undefined = parent?.body;
-  if (!statements || !Array.isArray(statements)) return impl;
+  if (parent === undefined) return impl;
+  const statements = childNodeList(parent, 'body');
   const idx = statements.indexOf(impl);
   let groupStart: Node = impl;
   for (let i = idx - 1; i >= 0; i--) {
     const s = statements[i];
-    if (s.type === 'TSDeclareFunction' && s.id?.name === impl.id.name) {
+    if (
+      s.type === 'TSDeclareFunction' &&
+      identifierName(s, 'id') === implName
+    ) {
       groupStart = s;
     } else {
       break;
@@ -280,8 +279,9 @@ function findOverloadGroupStart(impl: Node): Node {
 }
 
 function varDeclKind(stmt: Node): string {
-  if (stmt.kind === 'const') return 'const-decl';
-  if (stmt.kind === 'let') return 'let-decl';
+  const kind = stringField(stmt, 'kind');
+  if (kind === 'const') return 'const-decl';
+  if (kind === 'let') return 'let-decl';
   return 'var-decl';
 }
 
@@ -306,10 +306,7 @@ function kindForTarget(target: Target): string {
   }
 }
 
-function rangeForTarget(
-  text: string,
-  target: Target
-): { start: number; end: number } {
+function rangeForTarget(text: string, target: Target): TextRange {
   switch (target.kind) {
     case 'top-level': {
       // Handle function overload groups: expand backwards to include all
@@ -355,11 +352,10 @@ export function applyDeletions(
   source: string,
   diagnostics: OxlintDiagnostic[]
 ): string {
-  const program = parseSync(filePath, source, { lang: langFor(filePath) })
-    .program as unknown as Node;
+  const program = parseProgram(filePath, source);
   assignParents(program);
   const targets: {
-    range: { start: number; end: number };
+    range: TextRange;
     kind: string;
     line: number;
     code: string;

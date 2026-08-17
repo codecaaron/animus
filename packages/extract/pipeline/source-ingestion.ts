@@ -128,13 +128,22 @@ export interface ExtractChainFact {
   fatalError: string | null;
 }
 
+/**
+ * The engine's per-file facts record (`facts::FileFacts`), transcribed for the
+ * channels this repository reads. `FileFacts` also serializes `statics`,
+ * `usage`, `compose`, and `transforms`; those stay untranscribed rather than
+ * addressable-as-`unknown`, because the two readers that want them —
+ * `packages/oracle`'s adapter model and the `_integration` usage-facts helpers
+ * — already declare the slices they consume, and an open index signature here
+ * would let a THIRD reader invent a shape without ever naming the field.
+ * Transcribe the channel when a reader in this package needs it.
+ */
 export interface ExtractFileFacts {
   path: string;
   chains: ExtractChainFact[];
   imports: ExtractImportFact[];
   exports: ExtractExportFact[];
   parseDiagnostics: string[];
-  [key: string]: unknown;
 }
 
 export interface ExtractFactsResult {
@@ -258,7 +267,14 @@ function canonicalResolverPath(path: string): string {
  *  (`./definition.js` for `definition.ts`); map each back to its source
  *  forms. The exact spelling is probed first by the suffix loop's empty
  *  suffix, so a literal `.js` neighbor still wins. */
-const NODE_NEXT_EXTENSION_MAP: Readonly<Record<string, readonly string[]>> = {
+interface NodeNextExtensionMap {
+  /** Emitted extension → the source extensions it can have come from. An
+   *  extension with no NodeNext mapping has no key, and the probe loop below
+   *  falls back to an empty candidate list. */
+  readonly [emitted: string]: readonly string[] | undefined;
+}
+
+const NODE_NEXT_EXTENSION_MAP: NodeNextExtensionMap = {
   '.js': ['.ts', '.tsx', '.jsx'],
   '.mjs': ['.mts'],
   '.cjs': ['.cts'],
@@ -623,6 +639,11 @@ function collectFileFacts(
 ): ExtractFactsResult {
   const cache = options.factsCache;
   if (!cache) {
+    // SAFETY: `extractFacts` is the engine's own NAPI surface and this is its
+    // return value for the call made on this line — serde output for the
+    // `{ files, parseCount }` record `ExtractFactsResult` mirrors. Unparseable
+    // bytes throw here, which is right: an empty facts set is
+    // indistinguishable from "this corpus declares no components".
     return JSON.parse(
       options.extractFacts(JSON.stringify(analysisEntries))
     ) as ExtractFactsResult;
@@ -632,6 +653,8 @@ function collectFileFacts(
   );
   let parseCount = 0;
   if (pending.length > 0) {
+    // SAFETY: same engine surface, same wire as the uncached branch above —
+    // only the entry subset differs.
     const fresh = JSON.parse(
       options.extractFacts(JSON.stringify(pending))
     ) as ExtractFactsResult;
@@ -687,6 +710,13 @@ export function withoutInvalidOriginals(
   };
 }
 
+/** rootDir-relative source path → the external package specifier that owns it.
+ *  A consumer-owned file has no key — absence means "not external", which is
+ *  what every reader branches on. */
+export interface ExternalFileOwners {
+  [sourcePath: string]: string;
+}
+
 /**
  * Project external-package ownership from raw originals onto the generated
  * analysis children the ingestion produced — the join the cross-source token
@@ -707,9 +737,9 @@ export function withoutInvalidOriginals(
  */
 export function projectExternalFileOwners(
   result: SourceIngestionResult,
-  rawOwners: Readonly<Record<string, string>>
-): Record<string, string> {
-  const projected: Record<string, string> = {};
+  rawOwners: Readonly<ExternalFileOwners>
+): ExternalFileOwners {
+  const projected: ExternalFileOwners = {};
   for (const owner of Object.values(result.ownership)) {
     const packageOwner = rawOwners[owner.originalPath];
     if (!packageOwner) continue;
@@ -761,8 +791,11 @@ export function createSourceIngestor(host: SourceIngestorHost): SourceIngestor {
   const warnedByOriginal = new Map<string, Set<string>>();
   return {
     async ingest(entries) {
+      // `extractFacts` is optional on `EngineApi`: an engine either exposes the
+      // parse-only surface or it does not, and absence is the only way it can
+      // say so (the field is a function on every engine that has it).
       const extractFacts = host.engineApi().extractFacts;
-      if (typeof extractFacts !== 'function') {
+      if (extractFacts === undefined) {
         throw new Error(
           `${host.prefix} native engine does not expose extractFacts required for source adaptation`
         );

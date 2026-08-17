@@ -83,7 +83,10 @@ type CompilationIdentity = Record<never, never>;
 
 interface FakeNormalModule {
   getCompilationHooks(compilation: CompilationIdentity): {
-    needBuild: {
+    /** Optional exactly as the plugin's own `NormalModuleCompilationHooks`
+     *  declares it: the second half of the D7 check is a webpack that
+     *  publishes the hooks object without this hook. */
+    needBuild?: {
       tapAsync(name: string, fn: NeedBuildFn): void;
     };
   };
@@ -294,6 +297,23 @@ describe('runtime existence check (design D7)', () => {
     ).toThrow(/needBuild|getCompilationHooks/);
   });
 
+  test('a compilation whose hooks omit needBuild fails loudly', () => {
+    const root = createProject();
+    const harness = createCompiler(root);
+    // A webpack that publishes the hooks object without the needBuild hook.
+    // The check is PER-COMPILATION, so the failure lands when the compilation
+    // opens rather than at apply() — the coherence mechanism cannot exist
+    // without this hook, and serving stale transforms instead is the outcome
+    // design D7 forbids.
+    harness.compiler.webpack.NormalModule = {
+      getCompilationHooks: () => ({}),
+    };
+    applyPlugin(new AnimusWebpackPlugin(OPTIONS), harness.compiler);
+    expect(() =>
+      harness.thisCompilationHandlers.forEach((fn) => fn({}))
+    ).toThrow(/needBuild/);
+  });
+
   test('the edge-server compiler is still skipped before the check', () => {
     const root = createProject();
     const { compiler } = createCompiler(root, {
@@ -347,6 +367,18 @@ describe('watchOptions.ignored gains the session epoch artifact path (design D2)
       '**/custom/**',
       epochPathFor(root, first),
     ]);
+  });
+
+  test('a matcher shape composes into a matcher that keeps both behaviors', () => {
+    const root = createProject();
+    const userIgnore: WatchIgnoreMatcher = (path) => path.includes('vendor');
+    const { compiler } = createCompiler(root, { ignored: userIgnore });
+    const plugin = new AnimusWebpackPlugin(OPTIONS);
+    applyPlugin(plugin, compiler);
+    const ignored = requireWatchIgnoreMatcher(compiler);
+    expect(ignored(epochPathFor(root, plugin))).toBe(true);
+    expect(ignored('/proj/vendor/x.js')).toBe(true);
+    expect(ignored(join(root, 'src', 'Button.tsx'))).toBe(false);
   });
 
   test('a RegExp shape composes into a matcher that keeps both behaviors', () => {

@@ -351,4 +351,13 @@ describe('animus host — degraded and failing inputs', () => {
       AnimusAdapterError
     );
   });
+
+  it('names what a rejected non-manifest actually was', () => {
+    // The refusal has to be actionable: a list and a `null` are different
+    // mistakes, and reporting both as the same coarse bucket would send a
+    // reader looking for the wrong thing.
+    expect(() => createAnimusHost({ manifest: [] })).toThrow(/got array/);
+    expect(() => createAnimusHost({ manifest: null })).toThrow(/got null/);
+    expect(() => createAnimusHost({ manifest: 'nope' })).toThrow(/got string/);
+  });
 });

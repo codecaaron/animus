@@ -1,3 +1,4 @@
+import { isJsonObject } from '@animus-ui/assertions';
 import {
   adaptSvelteSource,
   type AdaptSvelteSourceOptions,
@@ -10,8 +11,17 @@ import { describe, expect, test } from 'vitest';
 import { runPipeline } from './run-pipeline';
 import { usageTags } from './usage-facts';
 
+import type { JsonObject, JsonValue } from '@animus-ui/assertions';
+
 const FIXTURES_ROOT = join(__dirname, '..', 'fixtures');
 const FIXTURE_DIR = join(FIXTURES_ROOT, 'components', 'svelte-usage');
+
+/** The single native-loader surface the barrel-hop case reaches for: the fact
+ *  extractor `ingestSourceEntries` drives. Direct-path require per the
+ *  _integration NAPI-loading contract (see the package CLAUDE.md). */
+interface NativeFactExtractor {
+  extractFacts(filesJson: string): string;
+}
 
 function fixtureEntry(filename: string) {
   const absolutePath = join(FIXTURE_DIR, filename);
@@ -74,9 +84,7 @@ describe('isolated native Svelte usage projection', () => {
     // re-export hops + the defining-module local-rename unwrap), so both
     // consumers witness and prune end-to-end.
     // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const nativeEngine = require('../../extract/index-v2.js') as {
-      extractFacts(filesJson: string): string;
-    };
+    const nativeEngine: NativeFactExtractor = require('../../extract/index-v2.js');
     const extractFacts = (filesJson: string) =>
       nativeEngine.extractFacts(filesJson);
 
@@ -141,9 +149,10 @@ describe('isolated native Svelte usage projection', () => {
     const usageEntry = await projectFixture('dynamic.svelte');
     const { manifest, css } = runPipeline([definitionEntry, usageEntry]);
     const fileFacts = manifest.fileFacts[usageEntry.path];
-    const badgeComponent = Object.values(manifest.components).find(
-      (component) => (component as { binding?: string }).binding === 'badge'
-    ) as { replacement: string; system_prop_names: string[] } | undefined;
+    const badgeComponent = Object.values<JsonValue>(manifest.components).find(
+      (component): component is JsonObject =>
+        isJsonObject(component) && component.binding === 'badge'
+    );
 
     expect(css).toContain('--tone-quiet');
     expect(css).toContain('--tone-loud');

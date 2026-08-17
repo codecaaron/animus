@@ -84,12 +84,13 @@ describe('assertKnownOptionKeys', () => {
     expect(() =>
       assertKnownOptionKeys({ system: './ds.ts', exclide: [] })
     ).toThrow(AnimusConfigError);
-    try {
-      assertKnownOptionKeys({ system: './ds.ts', exclide: [] });
-    } catch (error) {
-      expect((error as Error).message).toContain('"exclide"');
-      expect((error as Error).message).toContain('"exclude"');
-    }
+    // The message names the offending key AND the suggested spelling.
+    expect(() =>
+      assertKnownOptionKeys({ system: './ds.ts', exclide: [] })
+    ).toThrow('"exclide"');
+    expect(() =>
+      assertKnownOptionKeys({ system: './ds.ts', exclide: [] })
+    ).toThrow('"exclude"');
   });
 
   test('a driver-owned legacy key passes only when declared as ownKeys', () => {

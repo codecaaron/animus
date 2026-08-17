@@ -111,6 +111,9 @@ function schemeBlocks(css: string): SchemeBlock[] {
     const close = matchBrace(css, open);
     if (close === -1) continue;
     blocks.push({
+      // SAFETY: `openRe` captures group 1 from the literal alternation
+      // `(light|dark)`, and the group is not optional — a match therefore
+      // carries exactly one of the two `OsScheme` spellings.
       scheme: match[1] as OsScheme,
       index: match.index,
       rules: styleRules(css.slice(open + 1, close), open + 1),
@@ -328,7 +331,9 @@ export function assertColorSchemeEmission(
   if (rootScheme !== config.root) {
     throw new AssertionError(
       `assertColorSchemeEmission: :root expected 'color-scheme: ${config.root}', found ${rootScheme ?? 'none'}`,
-      { expected: config.root, found: rootScheme }
+      // `null` is the serializable spelling of "the rule declares no
+      // color-scheme at all" — an absent key would read as a lost detail.
+      { expected: config.root, found: rootScheme ?? null }
     );
   }
 
@@ -344,7 +349,7 @@ export function assertColorSchemeEmission(
     if (found !== expected) {
       throw new AssertionError(
         `assertColorSchemeEmission: [data-color-mode="${mode}"] expected 'color-scheme: ${expected}', found ${found ?? 'none'}`,
-        { mode, expected, found }
+        { mode, expected, found: found ?? null }
       );
     }
   }
@@ -358,7 +363,11 @@ export function assertColorSchemeEmission(
     if (!found.includes(expected)) {
       throw new AssertionError(
         `assertColorSchemeEmission: guarded '(prefers-color-scheme: ${scheme})' block expected 'color-scheme: ${expected}', found ${found.join(', ') || 'no guarded block'}`,
-        { scheme, expected, found }
+        {
+          scheme,
+          expected,
+          found: found.map((declaration) => declaration ?? null),
+        }
       );
     }
   }

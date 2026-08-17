@@ -3,6 +3,8 @@ import { describe, expect, test } from 'vitest';
 
 import { adaptSvelteSource } from '../pipeline/svelte-source-adapter';
 
+import type { SvelteResolverAttributionRequest } from '../pipeline/svelte-source-adapter';
+
 const resolverOptions = {
   attributeResolver: ({
     source,
@@ -165,7 +167,7 @@ const member = validators.badge.attrs({ ...props });
   });
 
   test('fails closed for an attributed namespace-member resolver form', async () => {
-    const requests: unknown[] = [];
+    const requests: SvelteResolverAttributionRequest[] = [];
     const result = await adaptSvelteSource(
       `<script>
 import * as styles from './definition';
@@ -173,7 +175,7 @@ const attrs = styles.badge.attrs({ tone: 'quiet' });
 </script>`,
       'Namespace.svelte',
       {
-        attributeResolver(request: unknown) {
+        attributeResolver(request: SvelteResolverAttributionRequest) {
           requests.push(request);
           return 'unsupported-resolver-form';
         },
@@ -195,7 +197,7 @@ const attrs = styles.badge.attrs({ tone: 'quiet' });
   });
 
   test('fails closed for an attributed named-default resolver form', async () => {
-    const requests: unknown[] = [];
+    const requests: SvelteResolverAttributionRequest[] = [];
     const result = await adaptSvelteSource(
       `<script>
 import { default as localBadge } from './definition';
@@ -203,7 +205,7 @@ const attrs = localBadge.attrs();
 </script>`,
       'NamedDefault.svelte',
       {
-        attributeResolver(request: unknown) {
+        attributeResolver(request: SvelteResolverAttributionRequest) {
           requests.push(request);
           return 'unsupported-resolver-form';
         },
@@ -275,7 +277,7 @@ const attrs = badge.attrs({ tone: 'instance' });
   });
 
   test('fails closed for an attributed string-named resolver import', async () => {
-    const requests: unknown[] = [];
+    const requests: SvelteResolverAttributionRequest[] = [];
     const source = `<script>
 import { 'badge-resolver' as badge } from './definition';
 const attrs = badge.attrs({ tone: 'quiet' });

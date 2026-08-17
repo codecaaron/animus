@@ -16,7 +16,8 @@ import { describe, expect, test } from 'vitest';
 
 import { renderScoreboard } from '../src/scoreboard';
 
-import type { Divergence, FamilyDecl } from '../src/types';
+import type { ScoreboardInput } from '../src/scoreboard';
+import type { Divergence } from '../src/types';
 
 function divergence(overrides: Partial<Divergence> = {}): Divergence {
   return {
@@ -29,14 +30,17 @@ function divergence(overrides: Partial<Divergence> = {}): Divergence {
   };
 }
 
-const BASE = {
+// The renderer's own input contract types this fixture, so each empty
+// collection carries the element type the renderer declares instead of an
+// assertion per field.
+const BASE: ScoreboardInput = {
   mode: 'baseline',
-  engines: ['baseline:v2', 'v2'] as [string, string],
+  engines: ['baseline:v2', 'v2'],
   devMode: false,
-  unitIds: [] as string[],
-  divergences: [] as Divergence[],
-  families: [] as FamilyDecl[],
-  familyVerdictErrors: [] as string[],
+  unitIds: [],
+  divergences: [],
+  families: [],
+  familyVerdictErrors: [],
 };
 
 describe('renderScoreboard', () => {

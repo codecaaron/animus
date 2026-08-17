@@ -1,7 +1,19 @@
-export class AssertionError extends Error {
-  details?: Record<string, unknown>;
+import type { JsonObject } from './json';
 
-  constructor(message: string, details?: Record<string, unknown>) {
+/**
+ * A failed assertion plus its evidence.
+ *
+ * `details` is the JSON value domain this package already owns (`./json`), not
+ * an open `unknown` bag: every consumer renders it with `JSON.stringify` (the
+ * six `assert-build` lanes and the showcase script all do), so a payload that
+ * cannot survive that round-trip is evidence the reader will never see. Typing
+ * it as `JsonObject` makes an unserializable detail a compile error at the
+ * throw site instead of a silently missing key in a failing build's log.
+ */
+export class AssertionError extends Error {
+  details?: JsonObject;
+
+  constructor(message: string, details?: JsonObject) {
     super(message);
     this.name = 'AssertionError';
     this.details = details;
@@ -39,15 +51,15 @@ const DEFAULT_LAYER_ORDER: readonly LayerMarker[] = [
 ];
 
 function findMarkerIndex(css: string, marker: LayerMarker): number {
-  if (typeof marker === 'string') {
-    return css.indexOf(marker);
+  if (marker instanceof RegExp) {
+    const m = css.match(marker);
+    return m?.index ?? -1;
   }
-  const m = css.match(marker);
-  return m?.index ?? -1;
+  return css.indexOf(marker);
 }
 
 function markerLabel(marker: LayerMarker): string {
-  return typeof marker === 'string' ? marker : `/${marker.source}/`;
+  return marker instanceof RegExp ? `/${marker.source}/` : marker;
 }
 
 export function assertLayerOrder(css: string, config?: LayerOrderConfig): void {

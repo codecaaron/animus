@@ -34,12 +34,7 @@ afterEach(() => {
   }
 });
 
-function makeTree(): {
-  parent: string;
-  app: string;
-  kit: string;
-  kitOld: string;
-} {
+function makeTree() {
   const parent = realpathSync(mkdtempSync(join(tmpdir(), 'animus-srcid-')));
   tempRoots.push(parent);
   const app = join(parent, 'app');

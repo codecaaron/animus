@@ -11,11 +11,8 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { AssertionError } from '../src/assert-css';
-import {
-  installedHostVersion,
-  type LaneReceipt,
-  writeLaneReceipt,
-} from '../src/receipt';
+import { parseJsonObject } from '../src/json';
+import { installedHostVersion, writeLaneReceipt } from '../src/receipt';
 
 const dirs: string[] = [];
 
@@ -57,7 +54,10 @@ describe('writeLaneReceipt', () => {
       engineConfigPath: cleanConfig(dir),
     });
 
-    const parsed = JSON.parse(readFileSync(path, 'utf8')) as LaneReceipt;
+    // Decoded, not asserted: the round-trip claim is what `toEqual` below
+    // proves, so the reader only needs the bytes to BE a JSON object — which
+    // this package's own boundary parser establishes rather than assumes.
+    const parsed = parseJsonObject(readFileSync(path, 'utf8'), 'lane receipt');
     expect(parsed).toEqual(returned);
     expect(parsed).toEqual({
       lane: 'verify:assert:vite',

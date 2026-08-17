@@ -28,6 +28,8 @@ import {
   typography,
 } from '@animus-ui/system/groups';
 
+import type { Prop } from '@animus-ui/system';
+
 /** Known transform functions → Rust string identifiers */
 const TRANSFORM_MAP = new Map<Function, string>([
   [size, 'size'],
@@ -36,28 +38,35 @@ const TRANSFORM_MAP = new Map<Function, string>([
   [gridItem, 'gridItem'],
 ]);
 
-interface PropEntry {
-  property: string;
-  properties?: string[];
-  scale?: string | Record<string, any> | any[];
-  transform?: Function;
-  negative?: boolean;
-  currentVar?: string;
-  strict?: boolean;
+/** Prop name → the system's OWN prop contract: the registry
+ *  `createSystem().addGroup()` accumulates. */
+interface PropRegistry {
+  readonly [propName: string]: Prop;
 }
 
 interface SerializedEntry {
   property: string;
-  properties?: string[];
+  properties?: readonly string[];
   scale?: string;
   transform?: string;
+}
+
+/**
+ * A theme scale reference is the scale's NAME. Strict identity under `String`
+ * holds only for a primitive string — an inline `createScale()` scale, like an
+ * absent one, can never equal its own `String()` rendering — so this admits
+ * exactly the scale names the Rust config reads and drops the rest (inline
+ * scales are type-only constraints the config never carries).
+ */
+function isThemeScaleName(scale: Prop['scale']): scale is string {
+  return String(scale) === scale;
 }
 
 /**
  * All prop groups flattened — matches what createSystem().addGroup() accumulates.
  * Order matches the addGroup calls in the canonical system config.
  */
-const allProps = {
+const allProps: PropRegistry = {
   ...flex,
   ...grid,
   ...space,
@@ -69,9 +78,9 @@ const allProps = {
   ...typography,
   ...positioning,
   ...transitions,
-} as any as Record<string, PropEntry>;
+};
 
-function serializeProps(): Record<string, SerializedEntry> {
+function serializeProps() {
   const result: Record<string, SerializedEntry> = {};
 
   for (const [propName, entry] of Object.entries(allProps)) {
@@ -83,9 +92,8 @@ function serializeProps(): Record<string, SerializedEntry> {
       serialized.properties = entry.properties;
     }
 
-    // Only string scale names (theme lookups).
-    // Inline scales (createScale() objects/arrays) are type-only constraints.
-    if (typeof entry.scale === 'string') {
+    // Only theme scale names (theme lookups) reach the Rust config.
+    if (isThemeScaleName(entry.scale)) {
       serialized.scale = entry.scale;
     }
 
@@ -109,7 +117,7 @@ export const serializedConfig = JSON.stringify(serializeProps());
  * This mirrors what createSystem().addGroup(name, props) builds.
  * Group names must match the addGroup() calls exactly.
  */
-function buildGroupRegistry(): Record<string, string[]> {
+function buildGroupRegistry() {
   return {
     flex: Object.keys(flex),
     grid: Object.keys(grid),

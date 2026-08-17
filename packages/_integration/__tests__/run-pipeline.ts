@@ -23,6 +23,29 @@ import type {
   AnalyzeProjectInputs,
   V2ExtractEngine,
 } from '@animus-ui/extract/pipeline';
+import type { KeyframeFrameMap } from '@animus-ui/system';
+
+/**
+ * One entry of a `keyframes()` collection's `__frames` payload: the resolved
+ * `@keyframes` identifier plus its frame body. Frame bodies keep the system
+ * package's own vocabulary (`KeyframeFrameMap`) rather than a restatement.
+ */
+export interface KeyframesCollectionEntry {
+  name: string;
+  frames: KeyframeFrameMap;
+}
+
+/**
+ * The decoded form of the `keyframesJson` analysis input —
+ * `{ exportName: { keyName: { name, frames } } }`, which is what
+ * `system_loader::extract_keyframes_blocks` produces and what the engine
+ * parses back into its binding registry. Declared once here, beside the helper
+ * that serializes it, so the two suites that build this payload cannot drift
+ * from each other.
+ */
+export type KeyframesBlocks = {
+  [exportName: string]: { [keyName: string]: KeyframesCollectionEntry };
+};
 
 // Direct-path require of the v2 loader per the _integration NAPI-loading
 // contract (see CLAUDE.md): index-v2.js is the package's only engine and its

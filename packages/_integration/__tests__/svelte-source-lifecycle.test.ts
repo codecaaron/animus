@@ -51,6 +51,10 @@ function fixture(relativePath: string, path: string = relativePath): RawEntry {
 }
 
 function extractFacts(filesJson: string): string {
+  // SAFETY: `ingestSourceEntries` is the only caller of this seam, and it
+  // serializes exactly the `{ path, source }` entries this lifecycle handed
+  // it — the same objects, one `JSON.stringify` away. `parseCount` below
+  // counts them, so a drift in that wire would fail the receipts.
   const entries = JSON.parse(filesJson) as RawEntry[];
   const { manifest } = runPipeline(entries);
   return JSON.stringify({
@@ -84,7 +88,7 @@ class RawSourceLifecycle {
       throw new Error(JSON.stringify(ingestion.diagnostics));
     }
     const { manifest } = runPipeline(ingestion.analysisEntries);
-    this.publication = { ingestion, manifest } as Publication;
+    this.publication = { ingestion, manifest };
     return this.publication;
   }
 
