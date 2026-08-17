@@ -20,7 +20,7 @@ describe('percentageOrAbsolute', () => {
   it('returns the number 0 (not a string) for 0', () => {
     const result = percentageOrAbsolute(0);
     expect(result).toBe(0);
-    expect(typeof result).toBe('number');
+    expect(result).toBeTypeOf('number');
   });
 
   it.each([
@@ -59,7 +59,7 @@ describe('size transform', () => {
     it('returns the number 0 (not a string) for 0', () => {
       const result = size(0);
       expect(result).toBe(0);
-      expect(typeof result).toBe('number');
+      expect(result).toBeTypeOf('number');
     });
 
     it.each([
@@ -111,7 +111,7 @@ describe('size transform', () => {
     it('returns the number 0 (not a string) for the string "0"', () => {
       const result = size('0');
       expect(result).toBe(0);
-      expect(typeof result).toBe('number');
+      expect(result).toBeTypeOf('number');
     });
   });
 

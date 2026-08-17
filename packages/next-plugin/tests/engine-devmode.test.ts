@@ -19,7 +19,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   loadSystemModule: vi.fn(),
-  analyzeProject: vi.fn(),
+  analyzeProject: vi.fn<(...args: AnalyzeProjectArgs) => string>(),
   clearAnalysisCache: vi.fn(),
 }));
 
@@ -39,13 +39,15 @@ import { ExtractionSession } from '../../extract/session/extraction-session';
 import {
   buildManifest,
   BUTTON_STYLE_EDIT,
-  cleanupProjects,
   createProject as createFixtureProject,
+  disposeTempRoots,
   resetAnimusGlobals,
   SYSTEM_CONFIG,
 } from './singleton-fixtures';
 
 import type { AnimusMode } from '../../extract/pipeline/core-options';
+import type { SessionOptions } from '../../extract/session/extraction-session';
+import type { AnalyzeProjectArgs } from '@animus-ui/extract/pipeline';
 
 let restoreGlobals: () => void;
 
@@ -54,16 +56,17 @@ const DEV_MODE_SLOT = 7;
 function lastDevModeArg(): boolean {
   const calls = mocks.analyzeProject.mock.calls;
   expect(calls.length).toBeGreaterThan(0);
-  return calls[calls.length - 1][DEV_MODE_SLOT] as boolean;
+  return calls[calls.length - 1][DEV_MODE_SLOT];
 }
 
 async function startSession(mode?: AnimusMode): Promise<ExtractionSession> {
   const root = createFixtureProject('animus-devmode-');
   mocks.analyzeProject.mockImplementation(() => buildManifest({}));
-  const session = new ExtractionSession({
-    system: './src/system.ts',
-    ...(mode ? { mode } : {}),
-  });
+  // `mode` stays ABSENT unless the caller pins one — the historical
+  // per-pipeline default only applies to an option object without the key.
+  const options: SessionOptions = { system: './src/system.ts' };
+  if (mode) options.mode = mode;
+  const session = new ExtractionSession(options);
   session.rootDir = root;
   await session.runFullPipeline();
   return session;
@@ -90,7 +93,7 @@ beforeEach(() => {
 afterEach(() => {
   restoreGlobals();
   vi.restoreAllMocks();
-  cleanupProjects();
+  disposeTempRoots();
 });
 
 describe('engine devMode derivation', () => {

@@ -2,12 +2,14 @@ import type { ComponentType } from 'react';
 
 import 'virtual:animus/styles.css';
 
-export default function App({
+interface VinextAppProps<PageProps extends object> {
+  Component: ComponentType<PageProps>;
+  pageProps: PageProps;
+}
+
+export default function App<PageProps extends object>({
   Component,
   pageProps,
-}: {
-  Component: ComponentType<Record<string, unknown>>;
-  pageProps: Record<string, unknown>;
-}) {
+}: VinextAppProps<PageProps>) {
   return <Component {...pageProps} />;
 }

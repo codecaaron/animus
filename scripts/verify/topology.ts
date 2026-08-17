@@ -58,6 +58,12 @@ export interface Violation {
 
 // Directories that never hold authored, boundary-relevant source: build
 // outputs, vendored code, and generated staging trees. Pruned during the walk.
+//
+// NOT the same list as `ignoredDirectories` in scripts/verify/owner-graph.test
+// .ts, and deliberately not merged with it: that one answers "not a current
+// contributor/executable surface" and so holds `.receipts` and `tmp` (outputs
+// of the graph, and scratch) while omitting `.git`/`.turbo`/`coverage`, which
+// are irrelevant to its question but must be pruned from this walk.
 const PRUNE_DIRS = new Set([
   '.animus',
   '.git',
@@ -130,7 +136,10 @@ export function classifyTree(repoRoot: string, absPath: string): Tree {
 // Removes JS/TS line and block comments while preserving string-literal
 // contents (import specifiers live inside strings). String scanning honours
 // backslash escapes so a quote inside a string cannot terminate it early.
-export function stripComments(source: string): string {
+// Named for its language on purpose: `rust-policy.ts` owns a deliberately
+// different stripper, and this literal-aware scan would be catastrophic there
+// (a Rust lifetime `'a` opens a string that runs to the next apostrophe).
+export function stripTsComments(source: string): string {
   let out = '';
   let i = 0;
   const n = source.length;
@@ -452,7 +461,7 @@ function readJson(path: string): unknown {
 // JSON.parse. Good enough to reach compilerOptions.paths without a full parser.
 function readJsonc(path: string): unknown {
   try {
-    const stripped = stripComments(readFileSync(path, 'utf8')).replace(
+    const stripped = stripTsComments(readFileSync(path, 'utf8')).replace(
       /,(\s*[}\]])/g,
       '$1'
     );

@@ -11,16 +11,14 @@ import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
+import { type PackageManifest, readManifest } from './manifest-model';
+
 const ROOT = resolve(import.meta.dirname, '../..');
 
-type Manifest = {
-  scripts?: Record<string, string>;
-};
-
-function manifest(path: string): Manifest {
+function manifest(path: string): PackageManifest {
   const absolute = resolve(ROOT, path);
   expect(existsSync(absolute), `${path} must exist`).toBe(true);
-  return JSON.parse(readFileSync(absolute, 'utf8')) as Manifest;
+  return readManifest(absolute);
 }
 
 function source(path: string): string {

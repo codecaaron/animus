@@ -212,6 +212,6 @@ describe('createClassResolver', () => {
     expect(resolver({ selected: true })).toBe(
       'animus-card-abc animus-card-abc--selected'
     );
-    expect(typeof resolver.attrs).toBe('function');
+    expect(resolver.attrs).toBeTypeOf('function');
   });
 });

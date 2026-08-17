@@ -9,11 +9,7 @@ import { beforeAll, describe, expect, test } from 'vitest';
 
 import { readFixtureFile } from '../fixtures/read-fixtures';
 import { config, theme } from '../fixtures/setup';
-import {
-  analyzeProject,
-  clearAnalysisCache,
-  runPipeline,
-} from './run-pipeline';
+import { analyzeProject, clearAnalysisCache } from './run-pipeline';
 
 const COMPONENTS = join(__dirname, '..', 'fixtures', 'components');
 
@@ -37,19 +33,6 @@ describe('serialization shape', () => {
     expect(config).not.toHaveProperty('selectorOrder');
   });
 
-  test('runPipeline retains a null selector-order NAPI slot', () => {
-    let args: unknown[] = [];
-
-    runPipeline([], {}, (...received: unknown[]) => {
-      args = received;
-      return JSON.stringify({ css: '' });
-    });
-
-    expect(args).toHaveLength(14);
-    expect(args[9]).toBe(config.selectorAliases);
-    expect(args[10]).toBeNull();
-  });
-
   test('tokens.serialize() returns scalesJson, variableMapJson, variableCss, contextualVarsJson', () => {
     expect(typeof theme.scalesJson).toBe('string');
     expect(typeof theme.variableMapJson).toBe('string');
@@ -67,17 +50,7 @@ describe('serialize → NAPI round-trip', () => {
     const entry = readFixtureFile(COMPONENTS, 'button.tsx');
     const fileEntries = JSON.stringify([entry]);
 
-    const manifestJson = analyzeProject(
-      fileEntries,
-      theme.scalesJson,
-      theme.variableMapJson,
-      theme.contextualVarsJson || null,
-      config.propConfig,
-      config.groupRegistry,
-      '{}',
-      false,
-      null
-    );
+    const manifestJson = analyzeProject(fileEntries);
 
     expect(typeof manifestJson).toBe('string');
     const manifest = JSON.parse(manifestJson);
@@ -89,17 +62,7 @@ describe('serialize → NAPI round-trip', () => {
     const entry = readFixtureFile(COMPONENTS, 'button.tsx');
     const fileEntries = JSON.stringify([entry]);
 
-    const manifestJson = analyzeProject(
-      fileEntries,
-      theme.scalesJson,
-      theme.variableMapJson,
-      theme.contextualVarsJson || null,
-      config.propConfig,
-      config.groupRegistry,
-      '{}',
-      false,
-      null
-    );
+    const manifestJson = analyzeProject(fileEntries);
 
     const manifest = JSON.parse(manifestJson);
     expect(manifest.css).toContain('@layer');
@@ -109,17 +72,7 @@ describe('serialize → NAPI round-trip', () => {
     const entry = readFixtureFile(COMPONENTS, 'button.tsx');
     const fileEntries = JSON.stringify([entry]);
 
-    const manifestJson = analyzeProject(
-      fileEntries,
-      theme.scalesJson,
-      theme.variableMapJson,
-      theme.contextualVarsJson || null,
-      config.propConfig,
-      config.groupRegistry,
-      '{}',
-      false,
-      null
-    );
+    const manifestJson = analyzeProject(fileEntries);
 
     const manifest = JSON.parse(manifestJson);
     expect(manifest.report).toBeDefined();

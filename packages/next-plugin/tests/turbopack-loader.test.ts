@@ -3,34 +3,18 @@
  * Stateless per-file transformation + turbopack-artifact-transactions):
  * everything derives from the incoming source, serializable options
  * (carrying the session identity), and the session's COMMITTED disk
- * artifacts. The engine adapter is mocked at the pipeline factory seam;
- * hydration replays analyzeProject from the committed analysis-inputs,
- * keyed by commit CONTENT (never file stat). The loader is async
+ * artifacts. The engine doubles reach the loader through its own worker-local
+ * engine seam — it builds its engine at module scope, so no module mock or
+ * singleton override can reach it. Hydration replays analyzeProject from the
+ * committed analysis-inputs, keyed by commit CONTENT (never file stat). The
+ * loader is async
  * (webpack-loader convention: `this.async()`), required for the catch-up
  * wait.
  */
 import { contentHash } from '@animus-ui/extract/pipeline';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
-import { tmpdir } from 'os';
+import { mkdirSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
-
-const mocks = vi.hoisted(() => ({
-  analyzeProject: vi.fn(),
-  transformFile: vi.fn(),
-}));
-
-vi.mock('@animus-ui/extract/pipeline', async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import('@animus-ui/extract/pipeline')>();
-  return {
-    ...actual,
-    createV2EngineApi: () => () => ({
-      analyzeProject: mocks.analyzeProject,
-      transformFile: mocks.transformFile,
-    }),
-  };
-});
 
 import {
   analysisCommitPath,
@@ -38,15 +22,22 @@ import {
 } from '../../extract/session/session-paths';
 import animusTurbopackLoader, {
   __resetTurbopackLoaderStateForTests,
+  __setTurbopackLoaderEngineApiForTests,
 } from '../src/turbopack-loader';
+import { disposeTempRoots, makeTempRoot } from './singleton-fixtures';
 
-const tempRoots: string[] = [];
+import type { TurbopackLoaderOptions } from '../src/turbopack-loader';
+
+const mocks = {
+  analyzeProject: vi.fn(),
+  transformFile: vi.fn(),
+};
+
 const SESSION_ID = 'loader-test-session';
 
 /** Fabricate a committed generation covering the given files. */
 function makeRoot(files: Array<{ path: string; source: string }>): string {
-  const root = mkdtempSync(join(tmpdir(), 'animus-turbo-loader-'));
-  tempRoots.push(root);
+  const root = makeTempRoot('animus-turbo-loader-');
   if (files.length === 0) return root;
   writeCommitted(root, files);
   return root;
@@ -108,10 +99,10 @@ function runLoader(
   root: string,
   relPath: string,
   source: string,
-  options: Record<string, unknown> = {}
+  options: TurbopackLoaderOptions = {}
 ): Promise<string> {
   return new Promise((resolve, reject) => {
-    const ctx = {
+    const ctx: ThisParameterType<typeof animusTurbopackLoader> = {
       resourcePath: join(root, relPath),
       rootContext: root,
       getOptions: () => ({
@@ -128,11 +119,9 @@ function runLoader(
           else resolve(content ?? '');
         },
     };
-    const sync = animusTurbopackLoader.call(
-      ctx as ThisParameterType<typeof animusTurbopackLoader>,
-      source
-    );
-    if (typeof sync === 'string') resolve(sync);
+    // The loader is async by contract (it returns void and always answers
+    // through `this.async()`), so every outcome reaches the callback above.
+    animusTurbopackLoader.call(ctx, source);
   });
 }
 
@@ -143,12 +132,15 @@ beforeEach(() => {
     hasComponents: false,
   }));
   __resetTurbopackLoaderStateForTests?.();
+  __setTurbopackLoaderEngineApiForTests?.(() => ({
+    analyzeProject: mocks.analyzeProject,
+    transformFile: mocks.transformFile,
+  }));
 });
 
 afterEach(() => {
-  for (const root of tempRoots.splice(0)) {
-    rmSync(root, { recursive: true, force: true });
-  }
+  __setTurbopackLoaderEngineApiForTests?.(null);
+  disposeTempRoots();
 });
 
 describe('turbopack loader hydration', () => {
@@ -232,18 +224,17 @@ describe('turbopack loader hydration', () => {
 
   test('fails loudly when the loader runner cannot run it async', () => {
     const root = makeRoot([]);
-    const ctx = {
+    // A sync-only runner: `async` is optional on the loader context, so a
+    // host that never offers the handle is a real, typed possibility.
+    const ctx: ThisParameterType<typeof animusTurbopackLoader> = {
       resourcePath: join(root, 'app/a.tsx'),
       rootContext: root,
       getOptions: () => ({ rootDir: root }),
       addDependency: () => {},
     };
-    expect(() =>
-      animusTurbopackLoader.call(
-        ctx as unknown as ThisParameterType<typeof animusTurbopackLoader>,
-        'export {};\n'
-      )
-    ).toThrow(/async/);
+    expect(() => animusTurbopackLoader.call(ctx, 'export {};\n')).toThrow(
+      /async/
+    );
   });
 });
 

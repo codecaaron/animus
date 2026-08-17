@@ -14,7 +14,10 @@ import { AnimusConfigError, contentHash } from '@animus-ui/extract/pipeline';
 import {
   CLI_COMMIT_ARTIFACT,
   CLI_LOCK_ARTIFACT,
+  decodeCommitRecord,
+  isLockHolderAlive,
   MANIFEST_ARTIFACT,
+  readCliLockRecord,
   SESSION_ASSETS_DIR,
   STYLES_ARTIFACT,
   SYSTEM_PROPS_ARTIFACT,
@@ -30,7 +33,11 @@ import {
 } from 'fs';
 import { join } from 'path';
 
-import type { SessionAsset } from '@animus-ui/extract/session';
+import type {
+  CliLockRecord,
+  CommitRecord,
+  SessionAsset,
+} from '@animus-ui/extract/session';
 
 // Every published name is the SESSION's constant — the stylesheet's
 // relative urls and the session's start-hygiene confinement gate key on
@@ -53,9 +60,14 @@ export interface ArtifactPayloads {
   assets?: readonly SessionAsset[];
 }
 
-export interface CommitRecord {
-  schema: 1;
-  payloads: Record<string, { hash: string }>;
+interface FileExistsError {
+  code: 'EEXIST';
+}
+
+function isFileExistsError<Value>(
+  error: Value
+): error is Value & FileExistsError {
+  return error instanceof Object && 'code' in error && error.code === 'EEXIST';
 }
 
 /** Publication rejected by the pre-swap consistency check: the staged set
@@ -69,30 +81,69 @@ export class PublishInconsistencyError extends Error {
   }
 }
 
+/**
+ * A refused claim on the output tree: some other process owns it, or its
+ * lock cannot be proven dead. Split out of `AnimusConfigError` so the class
+ * names ONE thing — "the user misconfigured this run" and "another writer
+ * is here" are different facts, and the base class was carrying both.
+ *
+ * The exit routing is deliberately UNCHANGED: this extends
+ * `AnimusConfigError`, so `exitCodeFor` still classifies it as EXIT_USAGE
+ * exactly as before. The split makes the two meanings separable by
+ * `instanceof` without making the class the routing mechanism.
+ *
+ * Open owner decision (spec gap, not settled here): the standalone-CLI
+ * design's D5 Choice reads exit 2 as "config/usage error" while its own
+ * Rationale reads it as "preconditions", and no requirement or scenario
+ * under that change's specs names a lock-conflict code at all. Under the
+ * Choice reading a busy output directory is arguably an environment
+ * failure (3). Moving it is a behavior change and needs a fail-first test.
+ */
+export class AnimusLockConflictError extends AnimusConfigError {
+  constructor(message: string) {
+    super(message);
+    this.name = 'AnimusLockConflictError';
+  }
+}
+
+/** This invocation's claim on the tree, in the session's declared lock
+ *  shape — the only bytes ever written to LOCK_FILE, so a shape change is a
+ *  compiler event for both readers rather than a silent one. */
+function lockBytes(): string {
+  return JSON.stringify({
+    pid: process.pid,
+    startedAt: new Date().toISOString(),
+  } satisfies CliLockRecord);
+}
+
 /** Take the single-writer advisory lock, failing loud on a live holder.
  *  Returns a release function. */
 export function acquireLock(outDir: string): () => void {
   mkdirSync(outDir, { recursive: true });
   const lockPath = join(outDir, LOCK_FILE);
   try {
-    writeFileSync(
-      lockPath,
-      JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }),
-      { flag: 'wx' }
-    );
+    writeFileSync(lockPath, lockBytes(), { flag: 'wx' });
   } catch (error) {
-    if ((error as { code?: string }).code !== 'EEXIST') throw error;
-    let holder: { pid?: number; startedAt?: string } = {};
-    try {
-      holder = JSON.parse(readFileSync(lockPath, 'utf-8'));
-    } catch {
-      // Unreadable lock — treat as stale below.
+    if (!isFileExistsError(error)) throw error;
+    // The lock's shape and its liveness policy belong to the session (the
+    // other reader is the session's debris-detection gate) — this driver
+    // only decides what to do with each outcome.
+    const lock = readCliLockRecord(outDir);
+    if (lock.kind === 'held' && isLockHolderAlive(lock.record.pid)) {
+      throw new AnimusLockConflictError(
+        `Another animus process (pid ${lock.record.pid}, started ` +
+          `${lock.record.startedAt ?? 'unknown'}) owns ${outDir} — wait for ` +
+          `it or pass --out-dir to write elsewhere.`
+      );
     }
-    if (typeof holder.pid === 'number' && isProcessAlive(holder.pid)) {
-      throw new AnimusConfigError(
-        `Another animus process (pid ${holder.pid}, started ` +
-          `${holder.startedAt ?? 'unknown'}) owns ${outDir} — wait for it ` +
-          `or pass --out-dir to write elsewhere.`
+    if (lock.kind === 'indeterminate') {
+      // A lock whose bytes name no pid cannot be proven dead, and stealing
+      // it would put two writers on one tree. Refuse, and name the file the
+      // user may remove once no animus process is running.
+      throw new AnimusLockConflictError(
+        `${join(outDir, LOCK_FILE)} exists but is not a readable lock record ` +
+          `— its holder cannot be identified. Remove the file if no animus ` +
+          `process is running, or pass --out-dir to write elsewhere.`
       );
     }
     // Stale lock from a dead process: steal it loudly via unlink +
@@ -100,23 +151,17 @@ export function acquireLock(outDir: string): () => void {
     // cannot both win (one's exclusive create fails and maps to the live
     // conflict path).
     console.error(
-      `[animus] Replacing stale lock left by dead pid ${holder.pid ?? '?'}`
+      `[animus] Replacing stale lock left by dead pid ` +
+        `${lock.kind === 'held' ? lock.record.pid : '?'}`
     );
     rmSync(lockPath, { force: true });
     try {
-      writeFileSync(
-        lockPath,
-        JSON.stringify({
-          pid: process.pid,
-          startedAt: new Date().toISOString(),
-        }),
-        { flag: 'wx' }
-      );
+      writeFileSync(lockPath, lockBytes(), { flag: 'wx' });
     } catch (retryError) {
-      if ((retryError as { code?: string }).code !== 'EEXIST') {
+      if (!isFileExistsError(retryError)) {
         throw retryError;
       }
-      throw new AnimusConfigError(
+      throw new AnimusLockConflictError(
         `Another animus process re-acquired ${outDir} while a stale lock ` +
           `was being replaced — wait for it or pass --out-dir.`
       );
@@ -127,30 +172,23 @@ export function acquireLock(outDir: string): () => void {
   };
 }
 
-function isProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 /** Asset names under `assets/` that outDir's current commit record
  *  published, or empty when no record is readable. */
 function publishedAssetNames(outDir: string): ReadonlySet<string> {
+  let record: CommitRecord | null;
   try {
-    const record = JSON.parse(
+    record = decodeCommitRecord(
       readFileSync(join(outDir, COMMIT_FILE), 'utf-8')
-    ) as { payloads?: Record<string, unknown> };
-    return new Set(
-      Object.keys(record.payloads ?? {})
-        .filter((name) => name.startsWith(`${ASSETS_DIR}/`))
-        .map((name) => name.slice(ASSETS_DIR.length + 1))
     );
   } catch {
     return new Set();
   }
+  if (record === null) return new Set();
+  return new Set(
+    Object.keys(record.payloads)
+      .filter((name) => name.startsWith(`${ASSETS_DIR}/`))
+      .map((name) => name.slice(ASSETS_DIR.length + 1))
+  );
 }
 
 /**

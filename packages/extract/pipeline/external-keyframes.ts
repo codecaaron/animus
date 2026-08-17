@@ -1,3 +1,5 @@
+import { parseInternalWire } from './internal-wire';
+
 import type { ManifestDiagnostic } from './manifest-diagnostics';
 
 /** Stable codes for external keyframes discovery. */
@@ -34,8 +36,11 @@ export function mergeExternalKeyframes(
     try {
       Object.assign(merged, JSON.parse(consumerKeyframesJson));
     } catch {
-      // A malformed consumer payload is the loader's problem, not this
-      // merge's — pass it through untouched.
+      // Delegation, not a swallow: the consumer payload's owner is the system
+      // loader that produced it (`SystemConfig.keyframesJson`), and the caller
+      // hands the same field straight to the engine. Returning the ORIGINAL
+      // string leaves the malformed bytes to fail at that owner instead of
+      // substituting a value this merge invented.
       return { keyframesJson: consumerKeyframesJson, diagnostics: [] };
     }
   }
@@ -66,12 +71,17 @@ export function mergeExternalKeyframes(
     }
     if (!scanned) continue;
 
-    let collections: Record<string, unknown>;
-    try {
-      collections = JSON.parse(scanned);
-    } catch {
-      continue;
-    }
+    // The scan RESULT is animus's own wire — `scanKeyframesExports` is a NAPI
+    // entry point and the engine serializes it. An entry that fails to
+    // EVALUATE is an external-package failure and degrades to the coded
+    // diagnostic above; an entry that evaluates and then yields unparseable
+    // engine output is an engine bug, and `continue` would drop its
+    // collections indistinguishably from "this package ships no keyframes".
+    const collections = parseInternalWire<Record<string, unknown>>(
+      scanned,
+      `keyframes collections scanned from '${entryPath}' ` +
+        "(the engine's scanKeyframesExports)"
+    );
     for (const [exportName, collection] of Object.entries(collections)) {
       const existing = merged[exportName];
       if (existing !== undefined) {

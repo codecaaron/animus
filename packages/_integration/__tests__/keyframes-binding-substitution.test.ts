@@ -13,7 +13,6 @@
  */
 import { describe, expect, test } from 'vitest';
 
-import { config, theme } from '../fixtures/setup';
 import { analyzeProject, clearAnalysisCache } from './run-pipeline';
 
 const frameMap = {
@@ -31,22 +30,9 @@ const runWithKeyframes = (
   keyframesBlocks: Record<string, any>
 ) => {
   clearAnalysisCache();
-  const manifestJson = analyzeProject(
-    JSON.stringify(fileEntries),
-    theme.scalesJson,
-    theme.variableMapJson,
-    theme.contextualVarsJson || null,
-    config.propConfig,
-    config.groupRegistry,
-    '{}',
-    false,
-    null,
-    null,
-    null,
-    null,
-    null,
-    JSON.stringify(keyframesBlocks)
-  );
+  const manifestJson = analyzeProject(JSON.stringify(fileEntries), {
+    keyframesJson: JSON.stringify(keyframesBlocks),
+  });
   return JSON.parse(manifestJson);
 };
 

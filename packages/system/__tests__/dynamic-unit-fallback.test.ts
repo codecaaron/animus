@@ -7,8 +7,12 @@ import {
 
 const config = { systemPropNames: ['lineHeight', 'width', 'mx'] };
 
+/** A dynamic prop value as authored on a component: one scalar, or a
+ *  breakpoint-keyed responsive map of them. */
+type DynamicPropValue = string | number | Record<string, string | number>;
+
 const styleFor = (
-  props: Record<string, unknown>,
+  props: Record<string, DynamicPropValue>,
   dynamicPropConfig: DynamicPropConfig
 ) =>
   resolveClasses('animus-U', props, config, undefined, dynamicPropConfig)

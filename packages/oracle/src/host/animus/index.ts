@@ -69,7 +69,7 @@ export type {
   ManifestUsageResidue,
 } from './manifest-types';
 
-export { buildObligations, MANIFEST_ORIGIN } from './obligations';
+export { buildObligations } from './obligations';
 export type { AnimusObligationInput } from './obligations';
 
 export { parseComponents, parseConfig } from './replacement';

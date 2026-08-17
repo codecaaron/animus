@@ -1,7 +1,11 @@
 import { AnimusAdapterError } from './errors';
-import { isRecord } from './manifest-types';
+import { isManifestJsonObject, isManifestJsonString } from './manifest-types';
 
-import type { AnimusManifest, ManifestComponent } from './manifest-types';
+import type {
+  AnimusManifest,
+  ManifestComponent,
+  ManifestJsonValue,
+} from './manifest-types';
 
 /**
  * The per-component authority on variants, compounds and states.
@@ -37,6 +41,14 @@ export interface ParsedComponent {
   /** Set when the config had to be recovered key-by-key; see `parseConfig`. */
   note?: string;
 }
+
+export interface ParsedReplacementConfig {
+  config: ReplacementConfig;
+  note?: string;
+}
+
+const parseReplacementJson = (text: string): ManifestJsonValue =>
+  JSON.parse(text);
 
 const FACTORY = /\b(createComponent|createClassResolver)\s*\(/;
 
@@ -110,7 +122,11 @@ const configText = (replacement: string, id: string): string => {
   );
 };
 
-const jsonAt = (text: string, key: string, id: string): unknown => {
+const jsonAt = (
+  text: string,
+  key: string,
+  id: string
+): ManifestJsonValue | undefined => {
   const marker = `"${key}"`;
   const at = text.indexOf(marker);
   if (at === -1) return undefined;
@@ -123,7 +139,7 @@ const jsonAt = (text: string, key: string, id: string): unknown => {
   const block = readBalanced(text, cursor);
   if (block === undefined) return undefined;
   try {
-    return JSON.parse(block) as unknown;
+    return parseReplacementJson(block);
   } catch {
     throw new AnimusAdapterError(
       `component config key \`${key}\` is not valid JSON`,
@@ -133,38 +149,42 @@ const jsonAt = (text: string, key: string, id: string): unknown => {
 };
 
 const asVariants = (
-  value: unknown
+  value: ManifestJsonValue | undefined
 ): Readonly<Record<string, VariantConfig>> | undefined => {
-  if (!isRecord(value)) return undefined;
+  if (!isManifestJsonObject(value)) return undefined;
   const variants: Record<string, VariantConfig> = {};
   for (const [prop, config] of Object.entries(value)) {
-    if (!isRecord(config) || !Array.isArray(config.options)) continue;
-    const options = config.options.filter(
-      (option): option is string => typeof option === 'string'
-    );
-    variants[prop] =
-      typeof config.default === 'string'
-        ? { options, default: config.default }
-        : { options };
+    if (!isManifestJsonObject(config) || !Array.isArray(config.options)) {
+      continue;
+    }
+    const options = config.options.filter(isManifestJsonString);
+    const variant: VariantConfig = { options };
+    if (isManifestJsonString(config.default)) {
+      variant.default = config.default;
+    }
+    variants[prop] = variant;
   }
   return variants;
 };
 
-const asCompounds = (value: unknown): CompoundConfig[] | undefined => {
+const asCompounds = (
+  value: ManifestJsonValue | undefined
+): CompoundConfig[] | undefined => {
   if (!Array.isArray(value)) return undefined;
   const compounds: CompoundConfig[] = [];
   for (const entry of value) {
-    if (!isRecord(entry)) continue;
-    if (typeof entry.className !== 'string' || !isRecord(entry.conditions)) {
+    if (!isManifestJsonObject(entry)) continue;
+    if (
+      !isManifestJsonString(entry.className) ||
+      !isManifestJsonObject(entry.conditions)
+    ) {
       continue;
     }
     const conditions: Record<string, string | string[]> = {};
     for (const [prop, expected] of Object.entries(entry.conditions)) {
-      if (typeof expected === 'string') conditions[prop] = expected;
+      if (isManifestJsonString(expected)) conditions[prop] = expected;
       else if (Array.isArray(expected)) {
-        conditions[prop] = expected.filter(
-          (option): option is string => typeof option === 'string'
-        );
+        conditions[prop] = expected.filter(isManifestJsonString);
       }
     }
     compounds.push({ conditions, className: entry.className });
@@ -172,10 +192,10 @@ const asCompounds = (value: unknown): CompoundConfig[] | undefined => {
   return compounds;
 };
 
-const asStrings = (value: unknown): string[] | undefined =>
-  Array.isArray(value)
-    ? value.filter((entry): entry is string => typeof entry === 'string')
-    : undefined;
+const asStrings = (
+  value: ManifestJsonValue | undefined
+): string[] | undefined =>
+  Array.isArray(value) ? value.filter(isManifestJsonString) : undefined;
 
 /**
  * Parse the config object out of a replacement string.
@@ -193,42 +213,42 @@ const asStrings = (value: unknown): string[] | undefined =>
 export const parseConfig = (
   id: string,
   record: ManifestComponent
-): { config: ReplacementConfig; note?: string } => {
+): ParsedReplacementConfig => {
   const text = configText(record.replacement, id);
   const systemPropNames = asStrings(record.system_prop_names) ?? [];
 
-  let parsed: unknown;
+  let parsed: ManifestJsonValue | undefined;
   try {
-    parsed = JSON.parse(text) as unknown;
+    parsed = parseReplacementJson(text);
   } catch {
     parsed = undefined;
   }
 
-  if (isRecord(parsed)) {
+  if (isManifestJsonObject(parsed)) {
     const variants = asVariants(parsed.variants);
     const compounds = asCompounds(parsed.compounds);
     const states = asStrings(parsed.states);
-    return {
-      config: {
-        ...(variants === undefined ? {} : { variants }),
-        ...(compounds === undefined ? {} : { compounds }),
-        ...(states === undefined ? {} : { states }),
-        systemPropNames: asStrings(parsed.systemPropNames) ?? systemPropNames,
-      },
-    };
+    const config: ReplacementConfig = {};
+    if (variants !== undefined) config.variants = variants;
+    if (compounds !== undefined) config.compounds = compounds;
+    if (states !== undefined) config.states = states;
+    config.systemPropNames =
+      asStrings(parsed.systemPropNames) ?? systemPropNames;
+    return { config };
   }
 
   const variants = asVariants(jsonAt(text, 'variants', id));
   const compounds = asCompounds(jsonAt(text, 'compounds', id));
   const states = asStrings(jsonAt(text, 'states', id));
 
+  const config: ReplacementConfig = {};
+  if (variants !== undefined) config.variants = variants;
+  if (compounds !== undefined) config.compounds = compounds;
+  if (states !== undefined) config.states = states;
+  config.systemPropNames = systemPropNames;
+
   return {
-    config: {
-      ...(variants === undefined ? {} : { variants }),
-      ...(compounds === undefined ? {} : { compounds }),
-      ...(states === undefined ? {} : { states }),
-      systemPropNames,
-    },
+    config,
     note:
       'replacement config is not strict JSON (a dynamic expression is ' +
       'present); variants/compounds/states were recovered structurally and ' +
@@ -244,12 +264,9 @@ export const parseComponents = (
 
   for (const [id, record] of Object.entries(manifest.components)) {
     const { config, note } = parseConfig(id, record);
-    components.push({
-      id,
-      record,
-      config,
-      ...(note === undefined ? {} : { note }),
-    });
+    const component: ParsedComponent = { id, record, config };
+    if (note !== undefined) component.note = note;
+    components.push(component);
   }
 
   return components;

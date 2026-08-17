@@ -56,6 +56,39 @@ function buildTestTheme() {
     .build();
 }
 
+interface TestThemeRuntimeColors {
+  void: '#000000';
+  ember: '#ff2800';
+  bone: '#e8e0d0';
+  gray: { 300: '#666666'; 600: '#333333' };
+}
+
+/** Recover the nested runtime palette hidden by the public flat-path type. */
+function readTestThemeRuntimeColors(
+  theme: ReturnType<typeof buildTestTheme>
+): TestThemeRuntimeColors {
+  const colors = theme.colors;
+  if (!('gray' in colors)) {
+    throw new Error('test theme runtime colors are missing gray');
+  }
+  const gray = colors.gray;
+  if (
+    !(gray instanceof Object) ||
+    !('300' in gray) ||
+    gray[300] !== '#666666' ||
+    !('600' in gray) ||
+    gray[600] !== '#333333'
+  ) {
+    throw new Error('test theme runtime gray palette is malformed');
+  }
+  return {
+    void: colors.void,
+    ember: colors.ember,
+    bone: colors.bone,
+    gray: { 300: gray[300], 600: gray[600] },
+  };
+}
+
 // ─── Tests: Nested Storage ──────────────────────────────────
 
 describe('ThemeBuilder nested storage', () => {
@@ -63,7 +96,7 @@ describe('ThemeBuilder nested storage', () => {
 
   it('colors are stored nested after build', () => {
     // Runtime stores nested objects; type is LiteralPaths (flat dot-paths)
-    expect(nestedTheme.colors as unknown).toEqual({
+    expect(nestedTheme.colors).toEqual({
       void: '#000000',
       ember: '#ff2800',
       bone: '#e8e0d0',
@@ -103,11 +136,11 @@ describe('ThemeBuilder nested storage', () => {
   });
 
   it('no _variables on theme', () => {
-    expect((nestedTheme as Record<string, unknown>)._variables).toBeUndefined();
+    expect(nestedTheme).not.toHaveProperty('_variables');
   });
 
   it('no _tokens on theme', () => {
-    expect((nestedTheme as Record<string, unknown>)._tokens).toBeUndefined();
+    expect(nestedTheme).not.toHaveProperty('_tokens');
   });
 
   it('nested scale values preserved (not flattened)', () => {
@@ -120,7 +153,7 @@ describe('ThemeBuilder nested storage', () => {
       .build();
 
     // Runtime stores nested objects; type is LiteralPaths (flat dot-paths)
-    expect(theme.test as unknown).toEqual({ nested: { a: '1px', b: '2px' } });
+    expect(theme.test).toEqual({ nested: { a: '1px', b: '2px' } });
   });
 });
 
@@ -193,10 +226,10 @@ describe('theme.serialize()', () => {
 
   it('returns all 4 JSON strings', () => {
     const result = theme.serialize();
-    expect(typeof result.scalesJson).toBe('string');
-    expect(typeof result.variableMapJson).toBe('string');
-    expect(typeof result.variableCss).toBe('string');
-    expect(typeof result.contextualVarsJson).toBe('string');
+    expect(result.scalesJson).toBeTypeOf('string');
+    expect(result.variableMapJson).toBeTypeOf('string');
+    expect(result.variableCss).toBeTypeOf('string');
+    expect(result.contextualVarsJson).toBeTypeOf('string');
   });
 
   it('scalesJson parses to dot-path keyed token map with breakpoints', () => {
@@ -463,24 +496,21 @@ describe('theme composition via from()', () => {
     // Library colors preserved
     expect(consumer.colors.ember).toBe('#ff2800');
     // New color added
-    expect((consumer.colors as Record<string, unknown>).brand).toEqual({
+    expect(consumer.colors).toHaveProperty('brand', {
       500: '#cc5500',
     });
   });
 
   it('selective spread: only library colors', () => {
+    const libraryColors = readTestThemeRuntimeColors(libTokens);
     const consumer = createTheme()
       .addBreakpoints(breakpoints)
-      .addColors({ ...libTokens.colors } as Record<
-        string,
-        string | Record<string, string>
-      >)
+      .addColors({ ...libraryColors })
       .build();
 
-    // @ts-expect-error — cast to Record widened away specific keys
     expect(consumer.colors.ember).toBe('#ff2800');
     // No space scale (not spread)
-    expect((consumer as Record<string, unknown>).space).toBeUndefined();
+    expect(consumer).not.toHaveProperty('space');
   });
 
   it('library bundle feeds the tokens half identically to the direct form', () => {
@@ -496,8 +526,8 @@ describe('theme composition via from()', () => {
 
     expect(viaBundle.serialize()).toEqual(direct.serialize());
     // The bundle's other halves never leak into the theme
-    expect((viaBundle as Record<string, unknown>).system).toBeUndefined();
-    expect((viaBundle as Record<string, unknown>).tokens).toBeUndefined();
+    expect(viaBundle).not.toHaveProperty('system');
+    expect(viaBundle).not.toHaveProperty('tokens');
   });
 });
 
@@ -642,7 +672,7 @@ describe('declareContextualVars @property registration', () => {
   it('leaves the runtime theme object free of the registered var name', () => {
     const theme = buildRegistered();
     expect(theme.colors).not.toHaveProperty('current-bg');
-    expect(Object.keys(theme.colors as object)).toEqual(['bg']);
+    expect(Object.keys(theme.colors)).toEqual(['bg']);
   });
 
   // contextual-vars › "Phantom keys do not appear in manifest"

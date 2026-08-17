@@ -93,23 +93,30 @@ describe('compose()', () => {
   });
 
   it('throws without a Root slot', () => {
-    expect(() => compose({ Control } as never, { shared: {} })).toThrow(
-      /No "Root" slot found/
-    );
+    expect(() =>
+      // SAFETY: This deliberately crosses compose's typed slot boundary. The
+      // `Slots extends { Root: AnyBrandedComponent }` constraint is what keeps
+      // a well-typed caller from ever reaching assertRootSlot, and that
+      // runtime guard is exactly what this test proves still fires.
+      compose({ Control } as never, { shared: {} })
+    ).toThrow(/No "Root" slot found/);
   });
 
   it('throws when Root is inherited rather than an own enumerable slot', () => {
     // Every implementation iterates the slot map with Object.entries, so a
     // prototype-carried Root would validate and then vanish from the family.
     expect(() =>
+      // SAFETY: Same deliberate crossing of the `Slots extends { Root }`
+      // constraint — a prototype-carried Root satisfies neither the type nor
+      // the own-enumerable rule assertRootSlot enforces.
       compose(Object.create({ Root }) as never, { shared: {} })
     ).toThrow(/No "Root" slot found/);
   });
 
   it('composed output has no .extend() method (sealed)', () => {
     const Family = compose({ Root, Control }, { shared: { size: true } });
-    expect((Family.Root as any).extend).toBeUndefined();
-    expect((Family.Control as any).extend).toBeUndefined();
+    expect('extend' in Family.Root).toBe(false);
+    expect('extend' in Family.Control).toBe(false);
   });
 
   it('Root applies shared variant class, children rely on CSS cascade', () => {
@@ -456,6 +463,10 @@ describe('composeWithContext()', () => {
 
   it('throws without a Root slot (source form)', () => {
     expect(() =>
+      // SAFETY: This deliberately crosses composeWithContext's typed slot
+      // boundary; its `Slots extends { Root: AnyBrandedComponent }` constraint
+      // makes assertRootSlot unreachable from a well-typed caller, and that
+      // runtime guard is what this test proves.
       composeWithContext({ Control } as never, { shared: {} })
     ).toThrow(/No "Root" slot found/);
   });

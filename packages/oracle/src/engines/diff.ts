@@ -31,7 +31,14 @@ import { dedupeOperations, dischargeOperations, sweepVerdict } from './result';
 
 import type { RenderFact, RenderSubject } from '../core/fact';
 import type { RuleId } from '../core/identity';
-import type { ProbeResult, SuggestedOperation } from '../core/probe';
+import type {
+  ProbeResult,
+  RenderProbe,
+  SemanticDiff,
+  SemanticDiffEntry,
+  SemanticDiffKind,
+  SuggestedOperation,
+} from '../core/probe';
 import type {
   DimensionValue,
   ScenarioCell,
@@ -51,29 +58,18 @@ import type {
 } from './cascade';
 import type { OracleRuntime } from './runtime';
 
-export type SemanticDiffKind =
-  | 'value-changed'
-  | 'winner-changed'
-  | 'rule-activated'
-  | 'rule-deactivated'
-  | 'token-changed'
-  | 'declaration-added'
-  | 'declaration-removed';
-
-export interface SemanticDiffEntry {
-  subject: RenderSubject;
-  property: string;
-  kind: SemanticDiffKind;
-  context: string;
-  before?: string;
-  after?: string;
-}
-
-export interface SemanticDiff {
-  entries: readonly SemanticDiffEntry[];
-  affectedContextClasses: number;
-  unaffectedContextClasses: number;
-}
+/**
+ * The comparator's own vocabulary is DECLARED in `core/probe.ts`, beside the
+ * `ProbeResult.semanticDiff` field it types, and re-exported here because this
+ * module is its only producer (`toSemanticDiff`) and the name every consumer
+ * already reaches for. One declaration, so the field and the producer cannot
+ * describe different shapes.
+ */
+export type {
+  SemanticDiff,
+  SemanticDiffEntry,
+  SemanticDiffKind,
+} from '../core/probe';
 
 export interface ComparisonSide {
   world: RenderWorld;
@@ -558,9 +554,9 @@ export const summarizeDiff = (sweep: SweepResult, label: string): string => {
   for (const entry of sweep.entries) {
     kinds.set(entry.kind, (kinds.get(entry.kind) ?? 0) + 1);
   }
-  const kindList = Array.from(kinds.keys())
-    .sort()
-    .map((kind) => `${kind} × ${kinds.get(kind) as number}`);
+  const kindList = Array.from(kinds.entries())
+    .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+    .map(([kind, count]) => `${kind} × ${count}`);
 
   return (
     `${label} produced ${plural(
@@ -678,103 +674,104 @@ export const runDiff = (
   const resolution =
     request.target === undefined ? undefined : rt.resolveTarget(request.target);
 
-  return rt.run(
-    {
-      operation: 'diff',
-      world: candidateWorld,
-      ...(resolution === undefined ? {} : { target: resolution.target }),
-      scope: resolution === undefined ? 'all-invocations' : 'equivalence-class',
-      objective: { kind: 'diff', against: worldId(baselineWorld) },
-      budget: rt.budget,
-    },
-    (stateId, probeWorld) => {
-      const factsBefore = rt.factCount(probeWorld);
-      const obligationsBefore = rt.obligationCount();
+  // Absent, not undefined: `probeStateId` hashes the descriptor, so an
+  // unscoped diff must not carry a target key at all.
+  const probe: RenderProbe = {
+    operation: 'diff',
+    world: candidateWorld,
+    scope: resolution === undefined ? 'all-invocations' : 'equivalence-class',
+    objective: { kind: 'diff', against: worldId(baselineWorld) },
+    budget: rt.budget,
+  };
+  if (resolution !== undefined) probe.target = resolution.target;
 
-      const baseline: ComparisonSide = {
-        world: baselineWorld,
-        ctx: rt.contextFor(baselineWorld),
-      };
-      const candidate: ComparisonSide = {
-        world: probeWorld,
-        ctx: rt.contextFor(probeWorld),
-      };
-      const added = addedInterventions(baselineWorld, probeWorld);
+  return rt.run(probe, (stateId, probeWorld) => {
+    const factsBefore = rt.factCount(probeWorld);
+    const obligationsBefore = rt.obligationCount();
 
-      const plan = planFocalSweep(rt, candidate.ctx, baselineWorld, resolution);
+    const baseline: ComparisonSide = {
+      world: baselineWorld,
+      ctx: rt.contextFor(baselineWorld),
+    };
+    const candidate: ComparisonSide = {
+      world: probeWorld,
+      ctx: rt.contextFor(probeWorld),
+    };
+    const added = addedInterventions(baselineWorld, probeWorld);
 
-      const sweep = sweepWorlds({
-        rt,
-        baseline,
-        candidate,
-        affectedRules: affectedRulesOf(added),
-        maxCells: rt.maxCells(),
-        ...(resolution === undefined ? {} : { focal: resolution }),
-        ...(plan.focalCells === undefined
-          ? {}
-          : { focalCells: plan.focalCells }),
-      });
+    const plan = planFocalSweep(rt, candidate.ctx, baselineWorld, resolution);
 
-      const focalIncomplete = isFocalIncomplete(sweep, plan);
-
-      const facts = focalFacts(
-        rt,
-        candidate,
-        probeWorld,
-        resolution,
-        plan.focalCells?.[0]?.point ?? {},
-        sweep.changedProperties
-      );
-      const unknowns = rt.unknownsFor(
-        [...sweep.subjects, ...subjectsOfDeltas(added)],
-        []
-      );
-
-      const operations: SuggestedOperation[] = [
-        ...dischargeOperations(unknowns),
-      ];
-      if (sweep.entries.length > 0 && resolution === undefined) {
-        operations.push({
-          kind: 'inspect',
-          description:
-            'inspect the components named in the diff entries to see the ' +
-            'winners behind each change',
-          expectedInformationGain: 'MEDIUM',
-        });
-      }
-
-      return {
-        probeStateId: stateId,
-        worldId: worldId(probeWorld),
-        verdict: sweepVerdict(focalIncomplete, unknowns),
-        summary: summarizeDiff(
-          sweep,
-          added.length === 0
-            ? 'Comparing two explicitly given worlds'
-            : `Comparing ${plural(added.length, 'intervention')} against ` +
-                'the baseline world'
-        ),
-        facts,
-        semanticDiff: toSemanticDiff(sweep),
-        assumptions: Array.from(
-          new Set([...baselineView.assumptions, ...candidateView.assumptions])
-        ),
-        unknowns,
-        coverage: rt.coverage(
-          resolution === undefined
-            ? sweep.cellsEvaluated
-            : cellCount(
-                scopedDomain(resolution, baselineWorld),
-                rt.host.scenarios.cuts()
-              ),
-          sweep.cellsEvaluated
-        ),
-        knowledgeDelta: rt.delta({
-          newFacts: rt.factCount(probeWorld) - factsBefore,
-          newObligations: rt.obligationCount() - obligationsBefore,
-        }),
-        nextOperations: dedupeOperations(operations),
-      };
+    const sweepRequest: SweepRequest = {
+      rt,
+      baseline,
+      candidate,
+      affectedRules: affectedRulesOf(added),
+      maxCells: rt.maxCells(),
+    };
+    if (resolution !== undefined) sweepRequest.focal = resolution;
+    if (plan.focalCells !== undefined) {
+      sweepRequest.focalCells = plan.focalCells;
     }
-  );
+
+    const sweep = sweepWorlds(sweepRequest);
+
+    const focalIncomplete = isFocalIncomplete(sweep, plan);
+
+    const facts = focalFacts(
+      rt,
+      candidate,
+      probeWorld,
+      resolution,
+      plan.focalCells?.[0]?.point ?? {},
+      sweep.changedProperties
+    );
+    const unknowns = rt.unknownsFor(
+      [...sweep.subjects, ...subjectsOfDeltas(added)],
+      []
+    );
+
+    const operations: SuggestedOperation[] = [...dischargeOperations(unknowns)];
+    if (sweep.entries.length > 0 && resolution === undefined) {
+      operations.push({
+        kind: 'inspect',
+        description:
+          'inspect the components named in the diff entries to see the ' +
+          'winners behind each change',
+        expectedInformationGain: 'MEDIUM',
+      });
+    }
+
+    return {
+      probeStateId: stateId,
+      worldId: worldId(probeWorld),
+      verdict: sweepVerdict(focalIncomplete, unknowns),
+      summary: summarizeDiff(
+        sweep,
+        added.length === 0
+          ? 'Comparing two explicitly given worlds'
+          : `Comparing ${plural(added.length, 'intervention')} against ` +
+              'the baseline world'
+      ),
+      facts,
+      semanticDiff: toSemanticDiff(sweep),
+      assumptions: Array.from(
+        new Set([...baselineView.assumptions, ...candidateView.assumptions])
+      ),
+      unknowns,
+      coverage: rt.coverage(
+        resolution === undefined
+          ? sweep.cellsEvaluated
+          : cellCount(
+              scopedDomain(resolution, baselineWorld),
+              rt.host.scenarios.cuts()
+            ),
+        sweep.cellsEvaluated
+      ),
+      knowledgeDelta: rt.delta({
+        newFacts: rt.factCount(probeWorld) - factsBefore,
+        newObligations: rt.obligationCount() - obligationsBefore,
+      }),
+      nextOperations: dedupeOperations(operations),
+    };
+  });
 };

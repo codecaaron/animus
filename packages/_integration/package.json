@@ -6,6 +6,7 @@
     "test": "bunx vp test run"
   },
   "devDependencies": {
+    "@animus-ui/assertions": "workspace:*",
     "@animus-ui/extract": "workspace:*",
     "@mdx-js/mdx": "^3.0.0",
     "esbuild": "^0.25.0",

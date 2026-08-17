@@ -59,8 +59,13 @@ tsconfig.tsbuildinfo
 
 tmp
 
-# live oxlint test fixtures (transient, mkdtempSync per test)
-.live-test-fixtures-*
+# Live oxlint test fixtures (scripts/hygiene/delete-unused.test.ts) are
+# DELIBERATELY NOT ignored here. `vp lint --no-ignore` disables `.eslintignore`
+# / `--ignore-path` / `--ignore-pattern` only — it does NOT disable .gitignore,
+# so any fixture path listed here is skipped by the linter ("No files found to
+# lint", number_of_files: 0) and the live-integration gate silently inspects
+# nothing. The former `.live-test-fixtures-*` entry did exactly that. The tests
+# create `livetestfixtures-*` at the repo root and remove them in a `finally`.
 
 # packed consumer lane staging (verify:packed)
 e2e/packed-app/.staging/
@@ -72,6 +77,7 @@ e2e/packed-app/.staging/
 # made the deliverable un-commitable; children-glob + negation instead)
 docs/*
 !docs/standalone-extraction.md
+!docs/contract-change-ledger.md
 .codex
 .repowise/
 

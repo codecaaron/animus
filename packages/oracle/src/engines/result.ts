@@ -35,14 +35,14 @@ export const sweepVerdict = (
 ): ProbeVerdict => (focalIncomplete ? 'INCONCLUSIVE' : pointVerdict(unknowns));
 
 /** Cheapest sound procedure first — `refine` reports options in order. */
-const DISCHARGE_COST: Readonly<Record<DischargeProcedure['kind'], number>> = {
+const DISCHARGE_COST = {
   'partial-evaluation': 0,
   'branch-split': 1,
   'fixture-lookup': 2,
   'contract-application': 3,
   'manual-declaration': 4,
   'context-capsule-measurement': 5,
-};
+} satisfies Readonly<Record<DischargeProcedure['kind'], number>>;
 
 const dischargeCost = (procedure: DischargeProcedure): number =>
   DISCHARGE_COST[procedure.kind];
@@ -86,6 +86,14 @@ export const replacementOperation = (
   expectedInformationGain: 'HIGH',
 });
 
+/** Counted axes in dimension-name order — the order suggestions are reported in. */
+const byDimension = (
+  counts: ReadonlyMap<string, number>
+): readonly (readonly [string, number])[] =>
+  Array.from(counts.entries()).sort(([left], [right]) =>
+    left < right ? -1 : left > right ? 1 : 0
+  );
+
 /**
  * One suggestion per axis a candidate rule tests but this point leaves free.
  * An axis the world never declared is the stronger signal — no fork can
@@ -110,7 +118,7 @@ export const forkOperations = (
 
   const operations: SuggestedOperation[] = [];
 
-  for (const dim of Array.from(atPoint.keys()).sort()) {
+  for (const [dim, count] of byDimension(atPoint)) {
     const declared = domain[dim];
     if (declared === undefined || declared.kind !== 'finite') continue;
     operations.push({
@@ -119,18 +127,18 @@ export const forkOperations = (
         `fork on ${dim} ∈ {${declared.values
           .map(String)
           .join(', ')}} — unbound at this point and tested by ` +
-        `${plural(atPoint.get(dim) as number, 'candidate rule')}`,
+        `${plural(count, 'candidate rule')}`,
       expectedInformationGain: 'MEDIUM',
     });
   }
 
-  for (const dim of Array.from(inWorld.keys()).sort()) {
+  for (const [dim, count] of byDimension(inWorld)) {
     operations.push({
       kind: 'declare-dimension',
       description:
         `declare ${dim} in the scenario domain — ` +
         `${plural(
-          inWorld.get(dim) as number,
+          count,
           'candidate rule'
         )} is guarded by it and this world cannot decide them`,
       expectedInformationGain: 'HIGH',

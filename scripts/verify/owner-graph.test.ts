@@ -15,24 +15,20 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import viteConfig from '../../vite.config';
 import {
+  type PackageManifest,
+  type RootTask,
+  type TaskGraphConfig,
+  readManifest,
+} from './manifest-model';
+import {
   discoverWorkspaceManifests,
   resolveDistDependencyClosure,
 } from './workspace-graph';
 
-type Manifest = {
-  name: string;
-  scripts?: Record<string, string>;
-};
-
 type Owner = {
   directory: string;
-  manifest: Manifest;
+  manifest: PackageManifest;
   worker: boolean;
-};
-
-type RootTask = {
-  command?: string;
-  dependsOn?: string[];
 };
 
 const ROOT = resolve(import.meta.dirname, '../..');
@@ -58,6 +54,12 @@ function currentSurfaceFiles(): string[] {
   // Historical plans, archived/legacy source, and active OpenSpec artifacts
   // are evidence inputs, not current executable/contributor surfaces.
   const excludedTrees = ['docs/superpowers', 'legacy', 'openspec/changes'];
+  // NOT the same list as `PRUNE_DIRS` in scripts/verify/topology.ts, and
+  // deliberately not merged with it: that one answers "holds no authored,
+  // boundary-relevant source" for an import walk and so prunes `.git`,
+  // `.staging`, `.turbo`, and `coverage`. This one answers "holds no current
+  // contributor/executable surface", which is why `.receipts` and `tmp` are
+  // here and those four are not.
   const ignoredDirectories = new Set([
     '.animus',
     '.next',
@@ -128,10 +130,6 @@ function temporaryDirectory(prefix: string): string {
   return directory;
 }
 
-function readManifest(path: string): Manifest {
-  return JSON.parse(readFileSync(path, 'utf8')) as Manifest;
-}
-
 function discoverOwners(): Owner[] {
   const directories = [
     'packages/showcase',
@@ -153,9 +151,9 @@ function discoverOwners(): Owner[] {
 }
 
 function rootTasks(): Record<string, RootTask> {
-  const config = viteConfig as {
-    run?: { tasks?: Record<string, RootTask> };
-  };
+  // SAFETY: `vite.config.ts` declares `run.tasks`; TaskGraphConfig models that
+  // slice with every level optional, so the read below cannot assume presence.
+  const config = viteConfig as TaskGraphConfig;
 
   return config.run?.tasks ?? {};
 }

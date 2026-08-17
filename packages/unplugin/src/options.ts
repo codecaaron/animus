@@ -35,6 +35,24 @@ import type {
  */
 export type AnimusUnpluginOptions = AnimusCoreOptions;
 
+type HostOptionRecord = Partial<AnimusUnpluginOptions>;
+
+function isOptionString(value: HostOptionRecord['system']): value is string {
+  if (Object(value) === value) return false;
+  try {
+    String.prototype.valueOf.call(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function hasRequiredSystem(
+  options: HostOptionRecord
+): options is AnimusUnpluginOptions {
+  return isOptionString(options.system) && options.system.length > 0;
+}
+
 export interface ResolvedHostOptions {
   /** Absolute root every relative input resolves against. */
   root: string;
@@ -53,12 +71,12 @@ export function resolveHostOptions(
   raw: AnimusUnpluginOptions | undefined,
   cwd: string = process.cwd()
 ): ResolvedHostOptions {
-  const options = raw ?? ({} as AnimusUnpluginOptions);
+  const options: HostOptionRecord = raw ?? {};
   // v2 is the only engine (openspec: retire-extract-v1) — reject a stale v1
   // selection loudly before any engine work, matching the plugin drivers.
-  assertNoRetiredEngineSelection(options.engine as string | undefined);
-  assertKnownOptionKeys(options as unknown as Record<string, unknown>);
-  if (typeof options.system !== 'string' || options.system.length === 0) {
+  assertNoRetiredEngineSelection(options.engine);
+  assertKnownOptionKeys(options);
+  if (!hasRequiredSystem(options)) {
     throw new AnimusConfigError(
       'Missing required option `system` — pass `system: "./src/ds.ts"` to ' +
         'the Animus plugin.'

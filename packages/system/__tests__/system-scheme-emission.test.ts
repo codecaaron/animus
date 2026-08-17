@@ -156,10 +156,10 @@ describe('system preference mapping configuration', () => {
         .addBreakpoints(breakpoints)
         .addColors(makeColors())
         .addColorModes('paper', makeModes(), {
-          systemPreference: { light: 'paper' } as {
-            light: 'paper';
-            dark: 'midnight';
-          },
+          // @ts-expect-error — the dark axis is deliberately absent, which the
+          // option type already forbids; build() owns the runtime rejection
+          // this test pins.
+          systemPreference: { light: 'paper' },
         })
         .build()
     ).toThrow(/systemPreference requires both/);
@@ -709,20 +709,6 @@ describe('merged-state option validation', () => {
     ).toContain('color-scheme: normal;');
   });
 
-  /**
-   * The option TYPE is local to one `addColorModes` call (D1 — mode names are
-   * deliberately not threaded through the builder chain), so a mapping that
-   * targets modes declared by an EARLIER call needs one widening cast. Runtime
-   * validation is merged-authoritative; this is the single documented widening
-   * point rather than a scattering of `as` casts.
-   */
-  function crossCallOptions<T>(options: {
-    systemPreference?: { light: string; dark: string };
-    browserColorScheme?: Record<string, 'light' | 'dark' | 'normal'>;
-  }): T {
-    return options as unknown as T;
-  }
-
   // F2 reproduction (b): a mapping naming a mode declared by an EARLIER call
   // is legal — the availability set is the merged mode union, not this call's.
   it('accepts a mapping naming a mode declared by an earlier call', () => {
@@ -731,10 +717,16 @@ describe('merged-state option validation', () => {
       .addColorModes(
         'paper',
         { sepia: { fg: 'ash', bg: 'bone' } },
-        crossCallOptions({
+        {
+          // @ts-expect-error — the option TYPE is local to one addColorModes
+          // call (D1 — mode names are deliberately not threaded through the
+          // builder chain), so naming 'paper'/'midnight' here is a type error
+          // by construction. Runtime validation is merged-authoritative, which
+          // is exactly what this test proves; the self-guarding suppression is
+          // the single documented exception rather than a widening cast.
           systemPreference: { light: 'paper', dark: 'midnight' },
           browserColorScheme: { sepia: 'normal' },
-        })
+        }
       )
       .build();
 

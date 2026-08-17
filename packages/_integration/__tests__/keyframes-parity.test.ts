@@ -9,7 +9,6 @@
  */
 import { describe, expect, test } from 'vitest';
 
-import { config, theme } from '../fixtures/setup';
 import { analyzeProject } from './run-pipeline';
 
 const frameMap = {
@@ -29,19 +28,10 @@ const run = (
 ) => {
   const manifestJson = analyzeProject(
     JSON.stringify([]), // no component files — we just want the global layer
-    theme.scalesJson,
-    theme.variableMapJson,
-    theme.contextualVarsJson || null,
-    config.propConfig,
-    config.groupRegistry,
-    '{}',
-    false, // dev_mode
-    null, // emitter config
-    null, // selector aliases
-    null, // retained selector-order slot
-    globalBlocks ? JSON.stringify(globalBlocks) : null,
-    null, // path aliases
-    keyframesBlocks ? JSON.stringify(keyframesBlocks) : null
+    {
+      globalStyleBlocksJson: globalBlocks ? JSON.stringify(globalBlocks) : null,
+      keyframesJson: keyframesBlocks ? JSON.stringify(keyframesBlocks) : null,
+    }
   );
   const manifest = JSON.parse(manifestJson);
   return manifest.sheets?.global ?? manifest.css ?? '';

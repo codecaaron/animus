@@ -26,15 +26,17 @@ export const checkSnapshot = (snapshot: Snapshot): CheckReport => {
   const files = snapshot.files().map((file): CheckEntry => {
     const result = snapshot.structureOf(file);
     if (result.ok) return { file, ok: true };
-    return {
+    // `divergences` stays absent, not undefined: the report is written to
+    // JSON and an absent key is how a non-diverged refusal reads.
+    const entry: CheckEntry = {
       file,
       ok: false,
       reason: result.reason,
       detail: result.detail,
-      ...(result.divergences === undefined
-        ? {}
-        : { divergences: result.divergences }),
     };
+    if (result.divergences !== undefined)
+      entry.divergences = result.divergences;
+    return entry;
   });
   return {
     ok: files.every((entry) => entry.ok),

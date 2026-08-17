@@ -16,7 +16,7 @@
  * descendant transform; hygiene = no compilation is triggered by the
  * integration's own epoch write.
  */
-import { writeFileSync } from 'fs';
+import { readFileSync, writeFileSync } from 'fs';
 import { join, relative, sep } from 'path';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 
@@ -73,35 +73,31 @@ import type { GauntletProject, WatchState } from './harness';
 
 vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 });
 
-const g = globalThis as Record<string, unknown>;
 const disposers: Array<() => void> = [];
 
 afterEach(() => {
   for (const dispose of disposers.splice(0)) dispose();
-  delete g[LOADER_IMPL_KEY];
+  Reflect.deleteProperty(globalThis, LOADER_IMPL_KEY);
   resetAnimusGlobals();
   vi.restoreAllMocks();
 });
 
-function setUpProject(entryModules?: string[]): {
+/** Everything one differential probe drives its watch session with. */
+interface DifferentialProjectSetup {
   project: GauntletProject;
   state: WatchState;
   plugin: AnimusWebpackPlugin;
   shimPath: string;
-} {
+}
+
+function setUpProject(entryModules?: string[]): DifferentialProjectSetup {
   resetAnimusGlobals();
   armCannedEngine(mocks);
   const project = createGauntletProject({ entryModules });
   disposers.push(() => project.dispose());
   const shimPath = writeLoaderShim(project.root);
   const state = createWatchState();
-  disposers.push(
-    installLoaderRecorder(
-      project.root,
-      state,
-      animusLoader as unknown as (this: unknown, source: string) => string
-    )
-  );
+  disposers.push(installLoaderRecorder(project.root, state, animusLoader));
   const plugin = new AnimusWebpackPlugin({
     system: './src/system.ts',
     loaderPath: shimPath,
@@ -278,26 +274,27 @@ for (const fixture of WEBPACK_FIXTURES) {
       project.write('epoch.txt', 'E0');
       const shimPath = writeLoaderShim(project.root);
       const state = createWatchState();
-      g[LOADER_IMPL_KEY] = function (
-        this: {
-          resourcePath: string;
-          rootContext: string;
-          addDependency: (file: string) => void;
-        },
-        source: string
-      ): string {
-        const epochPath = join(this.rootContext, 'epoch.txt');
-        // eslint-disable-next-line @typescript-eslint/no-require-imports
-        const epoch = (require('fs') as typeof import('fs'))
-          .readFileSync(epochPath, 'utf-8')
-          .trim();
-        this.addDependency(epochPath);
-        const file = relative(project.root, this.resourcePath)
-          .split(sep)
-          .join('/');
-        state.log.push({ file, turn: state.turn, epoch });
-        return `${source}\n/* epoch:${epoch} via ${file} */\n`;
-      };
+      Reflect.set(
+        globalThis,
+        LOADER_IMPL_KEY,
+        function (
+          this: {
+            resourcePath: string;
+            rootContext: string;
+            addDependency: (file: string) => void;
+          },
+          source: string
+        ): string {
+          const epochPath = join(this.rootContext, 'epoch.txt');
+          const epoch = readFileSync(epochPath, 'utf-8').trim();
+          this.addDependency(epochPath);
+          const file = relative(project.root, this.resourcePath)
+            .split(sep)
+            .join('/');
+          state.log.push({ file, turn: state.turn, epoch });
+          return `${source}\n/* epoch:${epoch} via ${file} */\n`;
+        }
+      );
 
       const arm = { lateWrite: false };
       const lateEpochWriter = {

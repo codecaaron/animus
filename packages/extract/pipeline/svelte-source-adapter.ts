@@ -1,5 +1,7 @@
 import { contentHash } from './content-hash';
 
+import type { AST } from 'svelte/compiler';
+
 export type SvelteScriptScope = 'module' | 'instance';
 
 export interface SourceSpan {
@@ -115,11 +117,26 @@ export type AdaptSvelteSourceResult =
       diagnostics: SvelteAdapterDiagnostic[];
     };
 
-interface AstNode {
+interface SvelteCompilerRecord {
+  [key: string]: SvelteCompilerValue;
+}
+
+type SvelteCompilerValue =
+  | null
+  | undefined
+  | boolean
+  | number
+  | string
+  | bigint
+  | symbol
+  | SvelteCompilerRecord
+  | readonly SvelteCompilerValue[]
+  | Function;
+
+interface AstNode extends SvelteCompilerRecord {
   type: string;
   start: number;
   end: number;
-  [key: string]: unknown;
 }
 
 interface ProgramNode extends AstNode {
@@ -135,12 +152,10 @@ interface SvelteAst {
   instance?: ScriptNode | null;
   /** Template markup AST — scanned so resolver calls written in markup
    *  fail closed instead of silently contributing no usage witness. */
-  fragment?: AstNode | null;
+  fragment: SvelteCompilerRecord;
 }
 
-interface SvelteCompiler {
-  parse(source: string, options: { filename: string; modern: true }): SvelteAst;
-}
+type SvelteCompiler = Pick<typeof import('svelte/compiler'), 'parse'>;
 
 interface ImportBinding {
   kind: SvelteResolverImportKind;
@@ -169,28 +184,111 @@ interface ScopeProjection {
   diagnostics: SvelteAdapterDiagnostic[];
 }
 
-interface CompilerErrorPoint {
-  line?: unknown;
-  column?: unknown;
-  character?: unknown;
+interface CompilerErrorPoint extends SvelteCompilerRecord {
+  line?: SvelteCompilerValue;
+  column?: SvelteCompilerValue;
+  character?: SvelteCompilerValue;
 }
 
-function isNode(value: unknown): value is AstNode {
+interface ParsedCompilerError {
+  start?: CompilerErrorPoint;
+  end?: CompilerErrorPoint;
+  positions: readonly SvelteCompilerValue[];
+}
+
+const isCompilerReference = <Value>(
+  value: Value
+): value is Value & (SvelteCompilerRecord | Function) =>
+  Object(value) === value;
+
+const isCompilerCallable = <Value>(value: Value): value is Value & Function => {
+  if (!isCompilerReference(value)) return false;
+  try {
+    Function.prototype.toString.call(value);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+const isCompilerRecord = <Value>(
+  value: Value
+): value is Value & SvelteCompilerRecord =>
+  isCompilerReference(value) && !isCompilerCallable(value);
+
+type ReadCompilerPrimitive = () => SvelteCompilerValue;
+
+const acceptsCompilerPrimitive = <Value>(
+  value: Value,
+  read: ReadCompilerPrimitive
+): boolean => {
+  if (isCompilerReference(value)) return false;
+  try {
+    read();
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+const isCompilerString = <Value>(value: Value): value is Value & string =>
+  acceptsCompilerPrimitive(value, () => String.prototype.valueOf.call(value));
+
+const isCompilerNumber = <Value>(value: Value): value is Value & number =>
+  acceptsCompilerPrimitive(value, () => Number.prototype.valueOf.call(value));
+
+function isNode<Value>(value: Value): value is Value & AstNode {
   return (
-    typeof value === 'object' &&
-    value !== null &&
-    typeof (value as { type?: unknown }).type === 'string' &&
-    typeof (value as { start?: unknown }).start === 'number' &&
-    typeof (value as { end?: unknown }).end === 'number'
+    isCompilerRecord(value) &&
+    isCompilerString(value.type) &&
+    isCompilerNumber(value.start) &&
+    isCompilerNumber(value.end)
   );
 }
 
-function childNode(value: unknown): AstNode | null {
+function childNode<Value>(value: Value): (Value & AstNode) | null {
   return isNode(value) ? value : null;
 }
 
+function isProgramNode<Value>(value: Value): value is Value & ProgramNode {
+  return (
+    isNode(value) &&
+    Array.isArray(value.body) &&
+    value.body.every((child) => isNode(child))
+  );
+}
+
+function isScriptNode<Value>(value: Value): value is Value & ScriptNode {
+  return isNode(value) && isProgramNode(value.content);
+}
+
+function parseSvelteAst(value: AST.Root): SvelteAst {
+  if (
+    value.module !== undefined &&
+    value.module !== null &&
+    !isScriptNode(value.module)
+  ) {
+    throw new TypeError('svelte/compiler returned an invalid module script');
+  }
+  if (
+    value.instance !== undefined &&
+    value.instance !== null &&
+    !isScriptNode(value.instance)
+  ) {
+    throw new TypeError('svelte/compiler returned an invalid instance script');
+  }
+  if (!isCompilerRecord(value.fragment)) {
+    throw new TypeError('svelte/compiler returned an invalid fragment');
+  }
+  return {
+    module: value.module,
+    instance: value.instance,
+    fragment: value.fragment,
+  };
+}
+
 function nodeName(node: AstNode | null): string | null {
-  return node?.type === 'Identifier' && typeof node.name === 'string'
+  return node?.type === 'Identifier' && isCompilerString(node.name)
     ? node.name
     : null;
 }
@@ -304,14 +402,17 @@ function walk(
  * gate would stop at each one. Descend through every plain object/array,
  * visit only span-carrying nodes, and guard against metadata back-references.
  */
-function walkFragment(value: unknown, visit: (node: AstNode) => void): void {
-  const seen = new WeakSet<object>();
-  const descend = (current: unknown): void => {
+function walkFragment(
+  value: SvelteCompilerValue,
+  visit: (node: AstNode) => void
+): void {
+  const seen = new WeakSet<SvelteCompilerRecord>();
+  const descend = (current: SvelteCompilerValue): void => {
     if (Array.isArray(current)) {
       for (const item of current) descend(item);
       return;
     }
-    if (typeof current !== 'object' || current === null) return;
+    if (!isCompilerRecord(current)) return;
     if (seen.has(current)) return;
     seen.add(current);
     if (isNode(current)) visit(current);
@@ -348,7 +449,7 @@ function importBindings(program: ProgramNode): Map<string, ImportBinding> {
       if (!local || !localName) continue;
       const sourceNode = childNode(declaration.source);
       const importSource =
-        sourceNode && typeof sourceNode.value === 'string'
+        sourceNode && isCompilerString(sourceNode.value)
           ? sourceNode.value
           : null;
       if (!importSource) continue;
@@ -395,42 +496,45 @@ function diagnostic(
   node?: AstNode,
   location?: SourceLocation
 ): SvelteAdapterDiagnostic {
-  return {
+  const result: SvelteAdapterDiagnostic = {
     code,
     message,
     originalPath,
-    ...(node
-      ? {
-          span: byteSpan(source, node),
-          location: location ?? sourceLocation(source, node),
-        }
-      : {}),
   };
+  if (node) {
+    result.span = byteSpan(source, node);
+    result.location = location ?? sourceLocation(source, node);
+  }
+  return result;
 }
 
-function compilerParseErrorRange(
-  error: unknown,
+function parseCompilerError<Value>(value: Value): ParsedCompilerError | null {
+  if (!isCompilerRecord(value)) return null;
+  const parsed: ParsedCompilerError = {
+    positions: Array.isArray(value.position) ? value.position : [],
+  };
+  if (isCompilerRecord(value.start)) parsed.start = value.start;
+  if (isCompilerRecord(value.end)) parsed.end = value.end;
+  return parsed;
+}
+
+function compilerParseErrorRange<ErrorValue>(
+  error: ErrorValue,
   source: string
 ): { node: AstNode; location: SourceLocation } | null {
-  if (typeof error !== 'object' || error === null) return null;
-  const candidate = error as {
-    start?: CompilerErrorPoint;
-    end?: CompilerErrorPoint;
-    position?: unknown;
-  };
-  const positions = Array.isArray(candidate.position) ? candidate.position : [];
-  const startCharacter =
-    typeof candidate.start?.character === 'number'
-      ? candidate.start.character
-      : typeof positions[0] === 'number'
-        ? positions[0]
-        : null;
-  const endCharacter =
-    typeof candidate.end?.character === 'number'
-      ? candidate.end.character
-      : typeof positions[1] === 'number'
-        ? positions[1]
-        : startCharacter;
+  const candidate = parseCompilerError(error);
+  if (candidate === null) return null;
+  const positions = candidate.positions;
+  const startCharacter = isCompilerNumber(candidate.start?.character)
+    ? candidate.start.character
+    : isCompilerNumber(positions[0])
+      ? positions[0]
+      : null;
+  const endCharacter = isCompilerNumber(candidate.end?.character)
+    ? candidate.end.character
+    : isCompilerNumber(positions[1])
+      ? positions[1]
+      : startCharacter;
   if (
     startCharacter === null ||
     endCharacter === null ||
@@ -450,9 +554,10 @@ function compilerParseErrorRange(
     value: CompilerErrorPoint | undefined,
     fallbackPoint: SourcePosition
   ): SourcePosition => ({
-    line: typeof value?.line === 'number' ? value.line : fallbackPoint.line,
-    column:
-      typeof value?.column === 'number' ? value.column : fallbackPoint.column,
+    line: isCompilerNumber(value?.line) ? value.line : fallbackPoint.line,
+    column: isCompilerNumber(value?.column)
+      ? value.column
+      : fallbackPoint.column,
   });
   return {
     node,
@@ -529,7 +634,7 @@ function resolverImportAccess(
   const namespaceName = nodeName(namespaceNode);
   const memberName =
     nodeName(memberNode) ??
-    (memberNode?.type === 'Literal' && typeof memberNode.value === 'string'
+    (memberNode?.type === 'Literal' && isCompilerString(memberNode.value)
       ? memberNode.value
       : null);
   if (!namespaceNode || !namespaceName || !memberName) return null;
@@ -610,10 +715,10 @@ function argumentSpan(argumentsList: AstNode[], fallback: AstNode): AstNode {
 function propertyName(node: AstNode): string | null {
   const key = childNode(node.key);
   if (!key) return null;
-  if (key.type === 'Identifier' && typeof key.name === 'string') {
+  if (key.type === 'Identifier' && isCompilerString(key.name)) {
     return key.name;
   }
-  if (key.type === 'Literal' && typeof key.value === 'string') {
+  if (key.type === 'Literal' && isCompilerString(key.value)) {
     return key.value;
   }
   return null;
@@ -752,10 +857,10 @@ class VirtualSourceBuilder {
 function importedName(specifier: AstNode): string | null {
   const imported = childNode(specifier.imported);
   if (!imported) return null;
-  if (imported.type === 'Identifier' && typeof imported.name === 'string') {
+  if (imported.type === 'Identifier' && isCompilerString(imported.name)) {
     return imported.name;
   }
-  if (imported.type === 'Literal' && typeof imported.value === 'string') {
+  if (imported.type === 'Literal' && isCompilerString(imported.value)) {
     return imported.value;
   }
   return null;
@@ -780,9 +885,9 @@ function renderImport(
   if (names.length === 0) return null;
   const sourceNode = childNode(declaration.source);
   const sourceText =
-    sourceNode && typeof sourceNode.raw === 'string'
+    sourceNode && isCompilerString(sourceNode.raw)
       ? sourceNode.raw
-      : sourceNode && typeof sourceNode.value === 'string'
+      : sourceNode && isCompilerString(sourceNode.value)
         ? JSON.stringify(sourceNode.value)
         : null;
   return sourceText
@@ -795,9 +900,7 @@ function renderImport(
 let compilerMemo: SvelteCompiler | null = null;
 async function loadCompiler(): Promise<SvelteCompiler | null> {
   if (compilerMemo) return compilerMemo;
-  compilerMemo = (await import('svelte/compiler').catch(
-    () => null
-  )) as SvelteCompiler | null;
+  compilerMemo = await import('svelte/compiler').catch(() => null);
   return compilerMemo;
 }
 
@@ -990,9 +1093,12 @@ export async function adaptSvelteSource(
     return { kind: 'missing-dep', original, dependency: 'svelte/compiler' };
   }
 
-  let ast: SvelteAst;
+  let compilerAst: AST.Root;
   try {
-    ast = compiler.parse(source, { filename: originalPath, modern: true });
+    compilerAst = compiler.parse(source, {
+      filename: originalPath,
+      modern: true,
+    });
   } catch (error) {
     const range = compilerParseErrorRange(error, source);
     return {
@@ -1010,6 +1116,7 @@ export async function adaptSvelteSource(
       ],
     };
   }
+  const ast = parseSvelteAst(compilerAst);
 
   const projections: ScopeProjection[] = [];
   // Each program's import bindings are computed ONCE here and threaded to

@@ -24,12 +24,12 @@
 import {
   buildPathAliasesJson,
   ENGINE_TRANSFORM_EXTENSIONS,
+  isEngineTransformExtension,
   isPathWithinRoot,
   readTsconfigAliasPairs,
 } from '@animus-ui/extract/pipeline';
 import {
   ANIMUS_CSS_MODULE_ID,
-  claimExclusiveSessionOwner,
   collectSessionAssets,
   engineApi,
   ExtractionSession,
@@ -63,14 +63,10 @@ export const PROPS_VIRTUAL_ID = 'animus:system-props';
 /** File name of the emitted stylesheet asset. */
 export const CSS_ASSET_NAME = 'animus.css';
 
-/** Files the engine transform may rewrite — derived from the ONE shared
- *  extension set (also the Turbopack rule glob's source). */
-const ENGINE_TRANSFORM_RE = new RegExp(
-  `\\.(?:${ENGINE_TRANSFORM_EXTENSIONS.join('|')})$`
-);
-
-/** Files the transform hook claims at all (define substitution included —
- *  `.cjs` carries no components but may read the dev-signal token). */
+/** Files the transform hook claims at all — the ONE shared engine-transform
+ *  file class (tested through `isEngineTransformExtension` below) WIDENED by
+ *  `.cjs` for define substitution alone: a `.cjs` module carries no builder
+ *  chains for the engine to rewrite but may read the dev-signal token. */
 const TRANSFORM_INCLUDE_RE = new RegExp(
   `\\.(?:${[...ENGINE_TRANSFORM_EXTENSIONS, 'cjs'].join('|')})$`
 );
@@ -277,22 +273,14 @@ interface WebpackLikeCompiler {
   };
   hooks: {
     done: { tap: (name: string, fn: () => void) => void };
-    failed?: { tap: (name: string, fn: (err: unknown) => void) => void };
+    failed?: { tap: (name: string, fn: () => void) => void };
   };
 }
 interface WebpackLikeApplied {
-  apply: (compiler: unknown) => void;
+  apply: (compiler: WebpackLikeCompiler) => void;
 }
 
 const PLUGIN_NAME = 'animus-host';
-
-/**
- * The one-live-host-per-process constraint, enforced where the invariant
- * lives: the SESSION singleton (its slots are what concurrent hosts would
- * clobber). Re-exported under the host's historical name; the key sits in
- * `SINGLETON_GLOBAL_KEYS`, so test harness resets clear a leaked claim.
- */
-export const claimProcessHost = claimExclusiveSessionOwner;
 
 /**
  * The unplugin factory. One factory invocation = one host = one session
@@ -304,8 +292,11 @@ export const unpluginFactory: UnpluginFactory<
 > = (rawOptions, meta) => {
   const { root, options } = resolveHostOptions(rawOptions);
   const state = createHostState();
-  /** Release handle of this host's process claim, or null when not held. */
-  let releaseHostClaim: (() => void) | null = null;
+  /** The session this build publishes through, or null outside a build.
+   *  One live host per process is the SESSION's own claim (taken by its
+   *  first pipeline); closing it here is what makes the host's sequential
+   *  rebuilds legal. */
+  let activeSession: ExtractionSession | null = null;
   /** Adapter-supplied command oracle (null = no bundler signal). */
   let modeOracle: AnimusMode | null = null;
   let esbuildOptions: EsbuildOptionsLike | null = null;
@@ -330,11 +321,6 @@ export const unpluginFactory: UnpluginFactory<
 
   async function startPipeline(): Promise<void> {
     signalPipelineStarted();
-    // One live host per process (see claimProcessHost): claimed for the
-    // build's lifetime, released wherever the session dir is disposed —
-    // including the failure path below, where drivePipeline disposes
-    // before rethrowing.
-    releaseHostClaim = claimProcessHost(`${PLUGIN_NAME}:${root}`);
     try {
       await runClaimedPipeline();
     } catch (error) {
@@ -343,9 +329,12 @@ export const unpluginFactory: UnpluginFactory<
     }
   }
 
+  /** Close the build's session wherever its directory is disposed —
+   *  including the failure path above, where drivePipeline disposes before
+   *  rethrowing. The next build (a watch rebuild) then claims cleanly. */
   function releaseClaim(): void {
-    releaseHostClaim?.();
-    releaseHostClaim = null;
+    activeSession?.close();
+    activeSession = null;
   }
 
   async function runClaimedPipeline(): Promise<void> {
@@ -356,6 +345,9 @@ export const unpluginFactory: UnpluginFactory<
       // parity lesson): the session receives the resolved mode — it never
       // sniffs the environment on this driver's behalf.
       const session = new ExtractionSession({ ...options, mode });
+      // Recorded BEFORE the pipeline: a failed run must still close the
+      // session that already claimed publication ownership.
+      activeSession = session;
       session.driverLabel = 'animus-unplugin';
       session.rootDir = root;
       // Emit the virtual system-props id (the session vocabulary) instead
@@ -562,7 +554,7 @@ export const unpluginFactory: UnpluginFactory<
       await joinPipeline();
       const filePath = moduleFilePath(id);
       let output = code;
-      if (ENGINE_TRANSFORM_RE.test(filePath)) {
+      if (isEngineTransformExtension(filePath)) {
         // The engine adapter is resolved ONCE per pipeline run (captured in
         // startPipeline) — a per-module engineApi() call paid a require +
         // six closure allocations for every module in the graph. The
@@ -603,28 +595,23 @@ export const unpluginFactory: UnpluginFactory<
       // Replaces the normalized buildStart for rollup only: rollup's
       // command oracle (watch mode) lives on its own plugin context meta.
       async buildStart() {
-        const rollupContext = this as unknown as {
-          meta?: { watchMode?: boolean };
-        };
-        modeOracle = rollupContext.meta?.watchMode
-          ? 'development'
-          : 'production';
+        modeOracle = this.meta?.watchMode ? 'development' : 'production';
         await startPipeline();
-        registerWatchTargets(this as unknown as UnpluginBuildContext);
+        registerWatchTargets(this);
       },
     },
 
     webpack(compiler) {
-      wireWebpackLike(compiler as unknown as WebpackLikeCompiler);
+      wireWebpackLike(compiler);
     },
 
     rspack(compiler) {
-      wireWebpackLike(compiler as unknown as WebpackLikeCompiler);
+      wireWebpackLike(compiler);
     },
 
     esbuild: {
       config(buildOptions) {
-        esbuildOptions = buildOptions as EsbuildOptionsLike;
+        esbuildOptions = buildOptions;
         // esbuild exposes no dev/serve signal to plugins: the documented
         // default (production) stands unless `mode` is explicit.
         buildOptions.define = {

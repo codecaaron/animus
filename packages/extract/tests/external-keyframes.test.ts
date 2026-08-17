@@ -76,6 +76,34 @@ describe('mergeExternalKeyframes', () => {
     expect(JSON.parse(result.keyframesJson!).kitMotion).toBeDefined();
   });
 
+  /**
+   * The scan result is animus's own wire: `scanKeyframesExports` is a NAPI
+   * entry point and its JSON is serialized by the engine, never authored by a
+   * package. A `catch { continue }` here dropped the entry's collections
+   * silently — indistinguishable from "this package ships no keyframes", the
+   * same success-looking default the ENTRY_FAILED diagnostic exists to avoid.
+   * An entry that fails to EVALUATE still degrades to that diagnostic (the
+   * external-package boundary); only unparseable engine output throws.
+   */
+  it('throws when the engine returns unparseable scan JSON', () => {
+    expect(() =>
+      mergeExternalKeyframes(
+        () => 'not json',
+        null,
+        ['/pkg/kit/src/index.ts'],
+        '/root'
+      )
+    ).toThrow(/keyframes/);
+    expect(() =>
+      mergeExternalKeyframes(
+        () => 'not json',
+        null,
+        ['/pkg/kit/src/index.ts'],
+        '/root'
+      )
+    ).toThrow(/SyntaxError/);
+  });
+
   it('returns null when nothing exists and dedupes repeated entries', () => {
     let scans = 0;
     const empty = mergeExternalKeyframes(

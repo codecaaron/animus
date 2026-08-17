@@ -9,7 +9,40 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-import { resolveAssetFile } from '../pipeline/resolve-asset';
+import {
+  resolveAssetFile,
+  resolveThroughPathAliases,
+} from '../pipeline/resolve-asset';
+
+/**
+ * `pathAliasesJson` has exactly one encoder — `buildPathAliasesJson`, declared
+ * "the single authoritative encoder of the wire format" — and every plugin
+ * assignment routes through it. The old `catch { aliases = [] }` turned a
+ * broken encoder into "no aliases configured", disabling ALL alias-based
+ * `asset()` resolution and emitting dangling `url()`s instead of an error, and
+ * it MEMOIZED that empty table against the same string for the process
+ * lifetime.
+ */
+describe('resolveThroughPathAliases — internal wire', () => {
+  it('throws on malformed alias JSON, naming the wire and the cause', () => {
+    expect(() =>
+      resolveThroughPathAliases('@fonts/inter.woff2', '/root', 'not json')
+    ).toThrow(/pathAliasesJson/);
+    expect(() =>
+      resolveThroughPathAliases('@fonts/inter.woff2', '/root', 'not json')
+    ).toThrow(/SyntaxError/);
+  });
+
+  it('keeps throwing on repeat calls — no failure is memoized', () => {
+    const malformed = '{"aliases": [';
+    expect(() =>
+      resolveThroughPathAliases('@fonts/a.woff2', '/root', malformed)
+    ).toThrow();
+    expect(() =>
+      resolveThroughPathAliases('@fonts/b.woff2', '/root', malformed)
+    ).toThrow();
+  });
+});
 
 describe('resolveAssetFile', () => {
   it('finds a physical asset when package.json is hidden by exports', () => {

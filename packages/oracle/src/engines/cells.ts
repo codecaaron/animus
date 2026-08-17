@@ -88,14 +88,17 @@ export const sharedDomain = (world: RenderWorld): ScenarioDomain => {
 };
 
 export const mergeCuts = (a: Cuts, b: Cuts): Cuts => {
-  const merged: Record<string, number[]> = {};
+  const merged = new Map<string, number[]>();
   for (const source of [a, b]) {
     for (const dim of Object.keys(source)) {
-      const values = new Set([...(merged[dim] ?? []), ...source[dim]]);
-      merged[dim] = Array.from(values).sort((x, y) => x - y);
+      const values = new Set([...(merged.get(dim) ?? []), ...source[dim]]);
+      merged.set(
+        dim,
+        Array.from(values).sort((x, y) => x - y)
+      );
     }
   }
-  return merged;
+  return Object.fromEntries(merged);
 };
 
 export interface HarvestedCuts {

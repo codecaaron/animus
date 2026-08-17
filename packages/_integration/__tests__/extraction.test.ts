@@ -10,7 +10,6 @@ import { join } from 'node:path';
 import { beforeAll, describe, expect, test } from 'vitest';
 
 import { readFixtureFile, readFixtureFiles } from '../fixtures/read-fixtures';
-import { config, theme } from '../fixtures/setup';
 import { assertNoUnresolvedTokens } from './assert-no-unresolved-tokens';
 import {
   analyzeProject,
@@ -120,17 +119,7 @@ describe('compound resolution', () => {
 describe('transform resolution', () => {
   test('evaluates extracted named transforms in Rust', () => {
     const entry = readFixtureFile(COMPONENTS, 'transforms.tsx');
-    const manifestJson = analyzeProject(
-      JSON.stringify([entry]),
-      theme.scalesJson,
-      theme.variableMapJson,
-      theme.contextualVarsJson || null,
-      config.propConfig,
-      config.groupRegistry,
-      '{}',
-      false,
-      null
-    );
+    const manifestJson = analyzeProject(JSON.stringify([entry]));
 
     const manifest = JSON.parse(manifestJson);
     const rawCss: string = manifest.css || '';

@@ -1,3 +1,4 @@
+import { createLogger } from 'vite';
 import { describe, expect, test } from 'vitest';
 
 import { PluginContext } from '../src/context';
@@ -48,10 +49,8 @@ describe('self-verify: external package include outcomes', () => {
   test('non-strict mode warns instead of throwing', () => {
     const ctx = makeContext(false);
     const warnings: string[] = [];
-    ctx.logger = {
-      warn: (message: string) => warnings.push(message),
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } as any;
+    ctx.logger = createLogger('silent');
+    ctx.logger.warn = (message) => warnings.push(message);
     ctx.externalPackageOutcomes = [
       { specifier: '@x/ds', outcome: 'empty', fileCount: 0 },
     ];
@@ -81,10 +80,8 @@ describe('buildStart gate: enforceIncludeResolution', () => {
   test('non-strict mode warns and continues', () => {
     const ctx = makeContext(false);
     const warnings: string[] = [];
-    ctx.logger = {
-      warn: (message: string) => warnings.push(message),
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } as any;
+    ctx.logger = createLogger('silent');
+    ctx.logger.warn = (message) => warnings.push(message);
     ctx.externalPackageOutcomes = [
       { specifier: '@x/missing', outcome: 'unresolvable', fileCount: 0 },
     ];

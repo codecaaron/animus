@@ -202,17 +202,37 @@ export function assertKnownOptionKeys(
   }
 }
 
-const isStringArray = (value: unknown): boolean =>
+/**
+ * The domain of a core option value once its shape gate has accepted it —
+ * the union of every `expected` phrase in the table below. Named so the
+ * gates can answer "is this a legal value for this key" as a NARROWING
+ * question rather than a bare boolean: a gate that returns `boolean` proves
+ * nothing to its caller, and the table's whole purpose is to establish what
+ * the value is before the option is honored.
+ */
+type CoreOptionValue = string | boolean | readonly string[];
+
+const isString = (value: unknown): value is string => typeof value === 'string';
+
+const isBoolean = (value: unknown): value is boolean =>
+  typeof value === 'boolean';
+
+const isStringArray = (value: unknown): value is readonly string[] =>
   Array.isArray(value) && value.every((entry) => typeof entry === 'string');
+
+const isStringOrStringArray = (
+  value: unknown
+): value is string | readonly string[] =>
+  isString(value) || isStringArray(value);
 
 const CORE_VALUE_GATES: ReadonlyArray<{
   key: string;
-  ok: (value: unknown) => boolean;
+  ok: (value: unknown) => value is CoreOptionValue;
   expected: string;
 }> = [
   {
     key: 'system',
-    ok: (v) => typeof v === 'string',
+    ok: isString,
     expected: 'a string path',
   },
   {
@@ -225,13 +245,13 @@ const CORE_VALUE_GATES: ReadonlyArray<{
     ok: isStringArray,
     expected: 'an array of string extensions',
   },
-  { key: 'strict', ok: (v) => typeof v === 'boolean', expected: 'a boolean' },
-  { key: 'verbose', ok: (v) => typeof v === 'boolean', expected: 'a boolean' },
-  { key: 'minify', ok: (v) => typeof v === 'boolean', expected: 'a boolean' },
-  { key: 'prefix', ok: (v) => typeof v === 'string', expected: 'a string' },
+  { key: 'strict', ok: isBoolean, expected: 'a boolean' },
+  { key: 'verbose', ok: isBoolean, expected: 'a boolean' },
+  { key: 'minify', ok: isBoolean, expected: 'a boolean' },
+  { key: 'prefix', ok: isString, expected: 'a string' },
   {
     key: 'targets',
-    ok: (v) => typeof v === 'string' || isStringArray(v),
+    ok: isStringOrStringArray,
     expected: 'a string or an array of strings',
   },
   {

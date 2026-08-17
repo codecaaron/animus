@@ -197,16 +197,41 @@ const CSS_OUTPUT = `/* Statically extracted. No runtime serialization. */
 // ─── Cascade Contract ───────────────────────────────────────
 
 const CASCADE_LAYERS = [
-  { name: '@layer global', desc: 'Resets. Box-sizing. Body defaults.' },
-  { name: '@layer base', desc: 'What the component always looks like.' },
+  {
+    name: '@layer global',
+    desc: 'Resets. Box-sizing. Body defaults.',
+    depth: '1',
+  },
+  {
+    name: '@layer base',
+    desc: 'What the component always looks like.',
+    depth: '2',
+  },
   {
     name: '@layer variants',
     desc: 'Named design decisions. Size, intent, appearance.',
+    depth: '3',
   },
-  { name: '@layer compounds', desc: 'Intersections of variant axes.' },
-  { name: '@layer states', desc: 'Boolean overrides. Disabled always wins.' },
-  { name: '@layer system', desc: 'Callsite props. Responsive by default.' },
-  { name: '@layer custom', desc: 'Runtime values. The escape hatch.' },
+  {
+    name: '@layer compounds',
+    desc: 'Intersections of variant axes.',
+    depth: '4',
+  },
+  {
+    name: '@layer states',
+    desc: 'Boolean overrides. Disabled always wins.',
+    depth: '5',
+  },
+  {
+    name: '@layer system',
+    desc: 'Callsite props. Responsive by default.',
+    depth: '6',
+  },
+  {
+    name: '@layer custom',
+    desc: 'Runtime values. The escape hatch.',
+    depth: '7',
+  },
 ] as const;
 
 // ─── Feature Pillars Data ───────────────────────────────────
@@ -217,18 +242,21 @@ const PILLARS = [
     title: 'Zero-Runtime Extraction',
     body: 'Your styles shouldn\u2019t serialize on every render. Animus evaluates builder chains at build time via a Rust pipeline. What ships is a thin React wrapper and pure, static CSS.',
     accent: 'fire' as const,
+    delay: '0' as const,
   },
   {
     mark: '@',
     title: 'The Cascade Contract',
     body: 'Throw away !important. Animus maps base styles, variants, and states to explicit CSS @layer blocks. Precedence is guaranteed by layer order, not selector specificity.',
     accent: 'gold' as const,
+    delay: '1' as const,
   },
   {
     mark: '.',
     title: 'Type-State Builder Chain',
     body: 'The API prevents invalid CSS before you hit save. The builder chain is a type-state machine that enforces cascade ordering, validates token references, and narrows variant props in your IDE.',
     accent: 'warm' as const,
+    delay: '2' as const,
   },
 ] as const;
 
@@ -316,10 +344,10 @@ export default function Home() {
       <Scene py={{ _: 96, md: 128 }} minHeight="auto">
         <Stack gap={48} maxWidth="64rem" mx="auto" px={{ _: 24, md: 48 }}>
           <Row gap={{ _: 24, md: 32 }} flexWrap="wrap" alignItems="stretch">
-            {PILLARS.map(({ mark, title, body, accent }, i) => (
+            {PILLARS.map(({ mark, title, body, accent, delay }) => (
               <Reveal
                 key={title}
-                delay={`${i}` as '0' | '1' | '2'}
+                delay={delay}
                 style={{ flex: '1 1 280px', minWidth: 0, display: 'flex' }}
               >
                 <PillarCard accent={accent}>
@@ -393,11 +421,8 @@ export default function Home() {
 
           <Reveal delay="2">
             <Stack gap={2}>
-              {CASCADE_LAYERS.map(({ name, desc }, i) => (
-                <CascadeLayer
-                  key={name}
-                  depth={`${i + 1}` as `${1 | 2 | 3 | 4 | 5 | 6 | 7}`}
-                >
+              {CASCADE_LAYERS.map(({ name, desc, depth }) => (
+                <CascadeLayer key={name} depth={depth}>
                   <Mono
                     transition="all 2s ease-in"
                     fontSize={13}

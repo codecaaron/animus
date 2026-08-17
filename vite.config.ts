@@ -1,5 +1,7 @@
 import { defineConfig } from 'vite-plus';
 
+import type { OxlintOverride } from 'oxlint';
+
 const typescriptTestTargets = [
   // Owned-root discovery (design decision D8): the whole system package root so
   // colocated src/ tests cannot be silently omitted from the tier.
@@ -25,6 +27,7 @@ const typescriptTestTargets = [
   'packages/extract/tests/dynamic-prop-config.test.ts',
   'packages/extract/tests/error-diagnostics.test.ts',
   'packages/extract/tests/external-keyframes.test.ts',
+  'packages/extract/tests/files-json-decode.test.ts',
   'packages/extract/tests/manifest-diagnostics.test.ts',
   'packages/extract/tests/path-aliases.test.ts',
   'packages/extract/tests/post-process-css.test.ts',
@@ -55,14 +58,115 @@ const typescriptCoverageExclusionArguments = typescriptCoverageExclusions
   .map((pattern) => `--coverage.exclude='${pattern}'`)
   .join(' ');
 
+// Agent scratch trees. One question — "this is an agent's working directory,
+// no repo tool reads, rewrites, or collects from it" — so one list, spread into
+// every tool surface that has to answer it (lint, fmt, test). Adding a new
+// agent directory here admits it to all three at once; the non-agent entries in
+// each surface below diverge deliberately and stay local to that surface.
+const agentScratchDirectories = [
+  '.agent/**',
+  '.agents/**',
+  '.claude/**',
+  '.codex/**',
+  '.continue/**',
+  '.cursor/**',
+  '.gemini/**',
+  '.opencode/**',
+  '.pi/**',
+  '.playwright-mcp/**',
+  '.repowise/**',
+  '.roo/**',
+  '.windsurf/**',
+] as const;
+
+// TEMPORARY: campaign-close protected-core freeze. Remove each exact file as
+// it is independently migrated; do not replace this list with a system glob,
+// so unaffected and newly added system files remain under anti-slop enforcement.
+const temporaryProtectedCoreAntiSlopOverride = {
+  files: [
+    'packages/system/__tests__/types.test-d.tsx',
+    'packages/system/src/Animus.ts',
+    'packages/system/src/AnimusExtended.ts',
+    'packages/system/src/SystemBuilder.ts',
+    'packages/system/src/appearance/index.ts',
+    'packages/system/src/asset.ts',
+    'packages/system/src/bootstrap/createAppearanceBootstrap.ts',
+    'packages/system/src/compose.ts',
+    'packages/system/src/composeWithContext.ts',
+    'packages/system/src/conditions.ts',
+    'packages/system/src/keyframes.ts',
+    'packages/system/src/runtime/assert-root-slot.ts',
+    'packages/system/src/runtime/createClassResolver.ts',
+    'packages/system/src/runtime/createComposedFamily.ts',
+    'packages/system/src/runtime/index.ts',
+    'packages/system/src/runtime/is-dev.ts',
+    'packages/system/src/runtime/resolveClasses.ts',
+    'packages/system/src/runtime/witness.ts',
+    'packages/system/src/scales/createScale.ts',
+    'packages/system/src/selectors.ts',
+    'packages/system/src/theme/createTheme.ts',
+    'packages/system/src/theme/flattenScale.ts',
+    'packages/system/src/theme/resolveReferences.ts',
+    'packages/system/src/theme/serializeTokens.ts',
+    'packages/system/src/theme/types.ts',
+    'packages/system/src/theme/utils.ts',
+    'packages/system/src/transforms/border.ts',
+    'packages/system/src/transforms/createTransform.ts',
+    'packages/system/src/transforms/grid.ts',
+    'packages/system/src/transforms/size.ts',
+    'packages/system/src/types/component.ts',
+    'packages/system/src/types/props.ts',
+    'packages/system/src/types/theme.ts',
+    'packages/system/src/utils/deepMerge.ts',
+  ],
+  rules: {
+    'anti-slop/no-chained-type-assertions': 'off',
+    'anti-slop/no-conditional-empty-object-spread': 'off',
+    'anti-slop/no-known-value-widening': 'off',
+    'anti-slop/no-module-mocking': 'off',
+    'anti-slop/no-object-parameters': 'off',
+    'anti-slop/no-reflect-apply': 'off',
+    'anti-slop/no-reflect-get': 'off',
+    'anti-slop/no-runtime-typeof': 'off',
+    'anti-slop/no-shape-in-symbol-names': 'off',
+    'anti-slop/no-unknown-parameters': 'off',
+    'anti-slop/no-unknown-returns': 'off',
+    'anti-slop/no-unknown-type-aliases': 'off',
+    'anti-slop/no-unsafe-dictionary-type': 'off',
+    'anti-slop/no-widen-then-assert': 'off',
+    'anti-slop/require-safety-comment-for-type-assertion': 'off',
+  },
+} satisfies OxlintOverride;
+
 export default defineConfig({
   lint: {
     plugins: ['react', 'jsx-a11y', 'nextjs', 'import'],
+    jsPlugins: [
+      {
+        name: 'anti-slop',
+        specifier: './tools/oxlint/anti-slop/index.ts',
+      },
+    ],
     categories: {
       correctness: 'error',
       suspicious: 'error',
     },
     rules: {
+      'anti-slop/no-chained-type-assertions': 'error',
+      'anti-slop/no-conditional-empty-object-spread': 'error',
+      'anti-slop/no-known-value-widening': 'error',
+      'anti-slop/no-module-mocking': 'error',
+      'anti-slop/no-object-parameters': 'error',
+      'anti-slop/no-reflect-apply': 'error',
+      'anti-slop/no-reflect-get': 'error',
+      'anti-slop/no-runtime-typeof': 'error',
+      'anti-slop/no-shape-in-symbol-names': 'error',
+      'anti-slop/no-unknown-parameters': 'error',
+      'anti-slop/no-unknown-returns': 'error',
+      'anti-slop/no-unknown-type-aliases': 'error',
+      'anti-slop/no-unsafe-dictionary-type': 'error',
+      'anti-slop/no-widen-then-assert': 'error',
+      'anti-slop/require-safety-comment-for-type-assertion': 'error',
       'react/react-in-jsx-scope': 'off',
       'import/no-unassigned-import': 'off',
       'react-hooks/exhaustive-deps': 'error',
@@ -71,6 +175,7 @@ export default defineConfig({
       'no-underscore-dangle': 'off',
     },
     ignorePatterns: [
+      ...agentScratchDirectories,
       '**/node_modules/**',
       '**/.next/**',
       '**/.animus/**',
@@ -88,8 +193,10 @@ export default defineConfig({
       // change-governed; schema executable scripts stay linted via the
       // override below.
       'openspec/changes/**',
+      'tools/oxlint/anti-slop/**',
     ],
     overrides: [
+      temporaryProtectedCoreAntiSlopOverride,
       {
         files: ['**/*.test-d.{ts,tsx}'],
         rules: {
@@ -209,6 +316,7 @@ export default defineConfig({
       ],
     },
     ignorePatterns: [
+      ...agentScratchDirectories,
       '**/node_modules/**',
       '**/.next/**',
       '**/.animus/**',
@@ -242,13 +350,22 @@ export default defineConfig({
       // in its own formatting on every run; keep the formatter out of the
       // tug-of-war.
       '.vscode/extensions.json',
+      'tools/oxlint/anti-slop/**',
     ],
   },
   test: {
     environment: 'happy-dom',
+    // This list is the WHOLE collection boundary for a bare `bunx vp test run`
+    // (root `package.json` "test" passes no targets). verify:unit:ts and
+    // verify:coverage:ts are safe by construction — both enumerate
+    // typescriptTestTargets above — so a gap here shows up only in the
+    // untargeted command, which is why the agent block and `**/build/**` were
+    // missing until now.
     exclude: [
+      ...agentScratchDirectories,
       '**/node_modules/**',
       '**/dist/**',
+      '**/build/**',
       '**/cypress/**',
       '**/.{idea,git,cache,output,temp}/**',
       '**/{karma,rollup,webpack,vite,vitest,jest,ava,babel,nyc,cypress,tsup,build,eslint,prettier}.config.*',
@@ -322,7 +439,16 @@ export default defineConfig({
         cache: false,
       },
       'build:extract': {
-        command: "bun run --filter '@animus-ui/extract' build",
+        // The NAPI half routes through build:extract-v2 — i.e. through
+        // scripts/cloudflare/build-extract-v2.sh, which asserts `rustc
+        // --version` equals the rust-toolchain.toml channel BEFORE building and
+        // calls that channel the single source of truth. Calling the extract
+        // package's own `build` here instead would reach `napi build --release`
+        // with no channel check, leaving a second, ungated path to the shipped
+        // .node. `build:v2:debug` stays ungated on purpose: a developer-profile
+        // binary, not the shipped artifact.
+        command:
+          "vp run build:extract-v2 && bun run --filter '@animus-ui/extract' build:ts",
         cache: false,
       },
       'build:extract-v2': {
@@ -342,8 +468,16 @@ export default defineConfig({
         cache: false,
       },
       'build:all': {
-        command: 'echo "build:all complete"',
-        dependsOn: ['build:extract', 'build:ts'],
+        // Ordered, not a dependency set: `dependsOn` has no ordering field, so
+        // `['build:extract', 'build:ts']` let two writers into
+        // packages/extract/dist at once (build:extract carries extract's
+        // build:ts, and build:ts fans out over every package including
+        // extract). Naming the NAPI-only gate task here instead of
+        // build:extract also drops that duplicate write entirely: the fan-out
+        // is the one build:ts writer for every package. Same phase order the
+        // spec requires (Rust NAPI first, then TS in dependency order) and the
+        // same ordered-chain mechanism verify:full uses.
+        command: 'vp run build:extract-v2 && vp run build:ts',
         cache: false,
       },
       build: {
@@ -367,6 +501,15 @@ export default defineConfig({
         cache: false,
       },
       'verify:full': {
+        // Deliberately NOT `dependsOn`, and not foldable into `verify` above.
+        // `verify` is a fan-out gate: an unordered set of independent checks,
+        // which is exactly what `dependsOn` models. This is an ordered pipeline
+        // — artifacts must exist before the checks that read them — and
+        // `dependsOn` has no ordering field. Its middle step is also a
+        // package-filtered fan-out (`-F './e2e/*' …`), which has no task
+        // identity and therefore no `dependsOn` spelling at all. The two lists
+        // drift independently by design; that is the cost of the split, not a
+        // bug to consolidate away.
         command:
           "vp run build:extract-v2 && vp run build:ts && vp run verify && vp run --fail-if-no-match -F './e2e/*' -F '!animus-packed-app' -F './packages/showcase' verify && vp run verify:parity && vp run verify:integration && vp run verify:hygiene:rust && vp run verify:packed",
         cache: false,

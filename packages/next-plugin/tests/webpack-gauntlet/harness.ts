@@ -1,3 +1,4 @@
+import { isJsonObject, isJsonString } from '@animus-ui/assertions';
 import {
   lutimesSync,
   mkdirSync,
@@ -17,6 +18,7 @@ import { dirname, join, relative, sep } from 'path';
 import { getReplacementEpoch } from '../../../extract/session/singleton';
 import { buildManifest, SYSTEM_CONFIG } from '../singleton-fixtures';
 
+import type { JsonValue } from '@animus-ui/assertions';
 import type { Mock } from 'vitest';
 
 /**
@@ -33,15 +35,103 @@ import type { Mock } from 'vitest';
 
 const requireCjs = createRequire(import.meta.url);
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function loadFixtureWebpack(webpackPath: string): any {
-  const webpackModule = requireCjs(webpackPath);
+interface HarnessWatchCompilerState {
+  modifiedFiles?: Iterable<string>;
+  removedFiles?: Iterable<string>;
+}
+
+interface HarnessCompiledModule {
+  resource?: string;
+  buildInfo?: {
+    fileDependencies?: Iterable<string>;
+    snapshot?: { getFileIterable?: () => Iterable<string> };
+  };
+}
+
+interface HarnessCompilationError {
+  message?: string;
+}
+
+interface HarnessStats {
+  hasErrors?: () => boolean;
+  compilation: {
+    modules: Iterable<HarnessCompiledModule>;
+    errors: HarnessCompilationError[];
+  };
+}
+
+type WatchIgnoreEntry = string | RegExp;
+type WatchIgnoreMatcher = (path: string) => boolean;
+type WatchIgnored =
+  | WatchIgnoreEntry
+  | readonly WatchIgnoreEntry[]
+  | WatchIgnoreMatcher
+  | null
+  | undefined;
+
+interface HarnessWatchOptions {
+  aggregateTimeout?: number;
+  ignored?: WatchIgnored;
+}
+
+interface HarnessCompiler {
+  options?: { watchOptions?: HarnessWatchOptions };
+  hooks: {
+    watchRun: {
+      tapPromise(
+        name: string,
+        callback: (compiler: HarnessWatchCompilerState) => Promise<void>
+      ): void;
+    };
+    invalid: {
+      tap(
+        name: string,
+        callback: (file: string | null, changeTime: number | null) => void
+      ): void;
+    };
+  };
+  watch(
+    options: HarnessWatchOptions,
+    callback: (error: Error | null, stats: HarnessStats) => void
+  ): { close(callback: () => void): void };
+  close(callback: () => void): void;
+}
+
+interface HarnessWebpackConfig {
+  mode?: 'development';
+}
+
+type FixtureWebpack = (config: HarnessWebpackConfig) => HarnessCompiler;
+
+interface FixtureWebpackModuleCandidate {
+  init?: object | null;
+  webpack?: object | null;
+}
+
+function initializeFixtureWebpackModule(
+  candidate: FixtureWebpackModuleCandidate
+): void {
+  if (candidate.init === undefined) return;
+  if (Object.prototype.toString.call(candidate.init) !== '[object Function]') {
+    throw new TypeError('fixture webpack module has an invalid init export');
+  }
+  // SAFETY: The function tag validates the optional init method; calling it through the module preserves Next 15's receiver and materializes its lazy webpack export.
+  (candidate as FixtureWebpackModuleCandidate & { init(): void }).init();
+}
+
+export function loadFixtureWebpack(webpackPath: string): FixtureWebpack {
+  const webpackModule: FixtureWebpackModuleCandidate = requireCjs(webpackPath);
   // Next 15 ships `{ init, webpack }` (init required before use); Next 16's
   // compiled bundle exposes the same surface via lazy getters with no init.
-  if (typeof webpackModule.init === 'function') {
-    webpackModule.init();
+  initializeFixtureWebpackModule(webpackModule);
+  if (
+    Object.prototype.toString.call(webpackModule.webpack) !==
+    '[object Function]'
+  ) {
+    throw new TypeError('fixture webpack module has an invalid webpack export');
   }
-  return webpackModule.webpack;
+  // SAFETY: The post-init function tag establishes the callable webpack factory returned by both supported Next fixture module surfaces.
+  return webpackModule.webpack as FixtureWebpack;
 }
 
 // Shared fixtures (globals hygiene, SYSTEM_CONFIG, manifest builder) —
@@ -92,8 +182,8 @@ export const NEWCOMER_REL = 'src/newcomer.js';
  * emitted CSS (a style-value-only edit). Descendant `child.js`'s plan is
  * derived from the parent's shape marker — the transitive-propagation model.
  */
-export function parentSource(shape: string, style: string): string {
-  return `module.exports = 'parent'; // shape:${shape} style:${style}\n`;
+export function parentSource(generation: string, style: string): string {
+  return `module.exports = 'parent'; // shape:${generation} style:${style}\n`;
 }
 
 export function childSource(): string {
@@ -194,6 +284,71 @@ export interface CannedEngineMocks {
   transformFile: Mock;
 }
 
+interface CannedAnalysisFile {
+  path: string;
+  source: string;
+}
+
+interface CannedComponentPlan {
+  file: string;
+  replacement: string;
+}
+
+type CannedComponentPlans = { [componentId: string]: CannedComponentPlan };
+
+interface CannedManifestComponent {
+  file?: string;
+  replacement?: string;
+}
+
+type CannedTransformResult =
+  | { code: string; hasComponents: false }
+  | { code: string; hasComponents: true };
+
+function parseCannedAnalysisFiles(serialized: string): CannedAnalysisFile[] {
+  const candidate: JsonValue = JSON.parse(serialized);
+  if (!Array.isArray(candidate)) {
+    throw new TypeError('canned analysis files must be an array');
+  }
+  return candidate.map((file, index) => {
+    if (
+      !isJsonObject(file) ||
+      !isJsonString(file.path) ||
+      !isJsonString(file.source)
+    ) {
+      throw new TypeError(`canned analysis file ${index} is malformed`);
+    }
+    return { path: file.path, source: file.source };
+  });
+}
+
+function parseCannedManifestComponents(
+  serialized: string
+): CannedManifestComponent[] {
+  const manifest: JsonValue = JSON.parse(serialized);
+  if (!isJsonObject(manifest)) {
+    throw new TypeError('canned transform manifest must be an object');
+  }
+  if (manifest.components === undefined) return [];
+  if (!isJsonObject(manifest.components)) {
+    throw new TypeError('canned transform components must be an object');
+  }
+
+  return Object.entries(manifest.components).map(([componentId, component]) => {
+    if (
+      !isJsonObject(component) ||
+      (component.file !== undefined && !isJsonString(component.file)) ||
+      (component.replacement !== undefined &&
+        !isJsonString(component.replacement))
+    ) {
+      throw new TypeError(
+        `canned manifest component ${componentId} is malformed`
+      );
+    }
+    return { file: component.file, replacement: component.replacement };
+  });
+}
+
 /**
  * Arm the canned NAPI engine: system config + canned analyze/transform.
  * `extra` runs after the standard arming for suite-specific mocks (e.g.
@@ -221,32 +376,29 @@ export function armCannedEngine(
  * - `newcomer.js` gains its plan only when its source carries a chain
  *   marker (zero-entries→first-chain model).
  */
-export function cannedAnalyzeProject(...args: unknown[]): string {
-  const files = JSON.parse(args[0] as string) as Array<{
-    path: string;
-    source: string;
-  }>;
+export function cannedAnalyzeProject(filesJson: string): string {
+  const files = parseCannedAnalysisFiles(filesJson);
   const parent = files.find((f) => f.path === PARENT_REL);
-  const shape = parent?.source.match(/shape:(\w+)/)?.[1] ?? 'G?';
+  const generation = parent?.source.match(/shape:(\w+)/)?.[1] ?? 'G?';
   const style = parent?.source.match(/style:(\w+)/)?.[1] ?? 'S?';
-  const components: Record<string, unknown> = {};
+  const components: CannedComponentPlans = {};
   if (parent) {
     components[`${PARENT_REL}::Parent`] = {
       file: PARENT_REL,
-      replacement: `parent@${shape}`,
+      replacement: `parent@${generation}`,
     };
   }
   if (files.some((f) => f.path === CHILD_REL)) {
     components[`${CHILD_REL}::Child`] = {
       file: CHILD_REL,
-      replacement: `child@${shape}`,
+      replacement: `child@${generation}`,
     };
   }
   const newcomer = files.find((f) => f.path === NEWCOMER_REL);
   if (newcomer && newcomer.source.includes('chain')) {
     components[`${NEWCOMER_REL}::Newcomer`] = {
       file: NEWCOMER_REL,
-      replacement: `newcomer@${shape}`,
+      replacement: `newcomer@${generation}`,
     };
   }
   return buildManifest(components, `.p{--style:${style}}`);
@@ -262,12 +414,9 @@ export function cannedTransformFile(
   source: string,
   filename: string,
   manifestJson: string
-): { code: string; hasComponents: boolean } {
-  const manifest = JSON.parse(manifestJson) as {
-    components?: Record<string, { file?: string; replacement?: string }>;
-  };
-  const owned = Object.values(manifest.components ?? {}).filter(
-    (c) => c.file === filename
+): CannedTransformResult {
+  const owned = parseCannedManifestComponents(manifestJson).filter(
+    (component) => component.file === filename
   );
   if (owned.length === 0) return { code: source, hasComponents: false };
   const markers = owned
@@ -301,6 +450,12 @@ export interface WatchState {
   removedByTurn: Map<number, string[]>;
 }
 
+interface LoaderExecutionContext {
+  resourcePath: string;
+}
+
+type HarnessLoader = (this: LoaderExecutionContext, source: string) => string;
+
 export function createWatchState(): WatchState {
   return {
     turn: 0,
@@ -319,12 +474,11 @@ export function createWatchState(): WatchState {
 export function installLoaderRecorder(
   root: string,
   state: WatchState,
-  loaderFn: (this: unknown, source: string) => string,
+  loaderFn: HarnessLoader,
   onCode?: (file: string, turn: number, code: string) => void
 ): () => void {
-  const g = globalThis as Record<string, unknown>;
-  g[LOADER_IMPL_KEY] = function (
-    this: { resourcePath: string },
+  const recorder: HarnessLoader = function (
+    this: LoaderExecutionContext,
     source: string
   ): string {
     const file = relative(root, this.resourcePath).split(sep).join('/');
@@ -333,8 +487,9 @@ export function installLoaderRecorder(
     onCode?.(file, state.turn, code);
     return code;
   };
+  Reflect.set(globalThis, LOADER_IMPL_KEY, recorder);
   return () => {
-    delete g[LOADER_IMPL_KEY];
+    Reflect.deleteProperty(globalThis, LOADER_IMPL_KEY);
   };
 }
 
@@ -343,23 +498,39 @@ export function installLoaderRecorder(
  * cache by default, filesystem cache via `cache`, resolver/rule overrides
  * for suites compiling TS sources.
  */
-export function buildGauntletConfig(args: {
+interface GauntletConfigArguments {
   root: string;
   shimPath: string;
-  plugins: unknown[];
-  cache?: unknown;
-  resolve?: unknown;
+  plugins: object[];
+  cache?: { type: 'memory' } | { type: 'filesystem'; cacheDirectory: string };
+  resolve?: { extensions: string[] };
   rulesTest?: RegExp;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-}): any {
-  return {
+}
+
+interface GauntletConfig {
+  mode: 'development';
+  context: string;
+  entry: string;
+  output: { path: string; filename: string };
+  devtool: false;
+  cache: { type: 'memory' } | { type: 'filesystem'; cacheDirectory: string };
+  resolve?: { extensions: string[] };
+  module: {
+    rules: Array<{ test: RegExp; use: string[] }>;
+  };
+  plugins: object[];
+}
+
+export function buildGauntletConfig(
+  args: GauntletConfigArguments
+): GauntletConfig {
+  const config: GauntletConfig = {
     mode: 'development',
     context: args.root,
     entry: join(args.root, 'entry.js'),
     output: { path: join(args.root, 'out'), filename: 'bundle.js' },
     devtool: false,
     cache: args.cache ?? { type: 'memory' },
-    ...(args.resolve !== undefined ? { resolve: args.resolve } : {}),
     module: {
       rules: [
         { test: args.rulesTest ?? /src[\\/].*\.js$/, use: [args.shimPath] },
@@ -367,6 +538,8 @@ export function buildGauntletConfig(args: {
     },
     plugins: args.plugins,
   };
+  if (args.resolve !== undefined) config.resolve = args.resolve;
+  return config;
 }
 
 /**
@@ -392,24 +565,22 @@ export function buildGauntletConfig(args: {
  */
 function scopeWatcherToProjectFiles(
   root: string,
-  base: unknown,
+  base: WatchIgnored,
   extraRoots: readonly string[]
 ): (path: string) => boolean {
   const baseMatches = (path: string): boolean => {
     if (base === undefined || base === null) return false;
-    if (typeof base === 'function') {
-      return Boolean((base as (p: string) => boolean)(path));
-    }
     if (base instanceof RegExp) return base.test(path);
-    if (typeof base === 'string') return path === base;
     if (Array.isArray(base)) {
       return base.some((entry) =>
-        entry instanceof RegExp
-          ? entry.test(path)
-          : typeof entry === 'string' && path === entry
+        entry instanceof RegExp ? entry.test(path) : path === entry
       );
     }
-    return false;
+    if (Object.prototype.toString.call(base) === '[object Function]') {
+      // SAFETY: WatchIgnored admits exactly one callable variant, and the function tag distinguishes it after null, RegExp, and array variants are excluded.
+      return Boolean((base as WatchIgnoreMatcher)(path));
+    }
+    return path === base;
   };
   return (path: string): boolean => {
     if (
@@ -484,11 +655,9 @@ export function turnEvidence(records: CompilationRecord[]): Array<{
  * any filesystem cache).
  */
 export function runWatchSession(opts: {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  webpack: any;
+  webpack: FixtureWebpack;
   root: string;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  config: any;
+  config: HarnessWebpackConfig;
   state: WatchState;
   steps?: Array<(record: CompilationRecord) => void>;
   settleMs?: number;
@@ -512,8 +681,7 @@ export function runWatchSession(opts: {
     // by the time loaders run.
     compiler.hooks.watchRun.tapPromise(
       'gauntlet-recorder',
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      async (c: any) => {
+      async (c: HarnessWatchCompilerState) => {
         building = true;
         state.turn += 1;
         state.modifiedByTurn.set(state.turn, [...(c.modifiedFiles ?? [])]);
@@ -529,7 +697,7 @@ export function runWatchSession(opts: {
     }> = [];
     compiler.hooks.invalid.tap(
       'gauntlet-recorder',
-      (file: string | null, changeTime: number) => {
+      (file: string | null, changeTime: number | null) => {
         pendingInvalidations.push({
           file: file ?? null,
           changeTime: changeTime ?? null,
@@ -584,8 +752,7 @@ export function runWatchSession(opts: {
           opts.watchRoots ?? []
         ),
       },
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (err: Error | null, stats: any) => {
+      (err: Error | null, stats: HarnessStats) => {
         if (err) return rejectPromise(err);
         building = false;
         doneCount += 1;
@@ -608,8 +775,9 @@ export function runWatchSession(opts: {
             const direct = compiledModule.buildInfo?.fileDependencies;
             if (direct) for (const dep of direct) deps.add(dep);
             const snapshot = compiledModule.buildInfo?.snapshot;
-            if (typeof snapshot?.getFileIterable === 'function') {
-              for (const dep of snapshot.getFileIterable()) deps.add(dep);
+            const snapshotFiles = snapshot?.getFileIterable?.();
+            if (snapshotFiles) {
+              for (const dep of snapshotFiles) deps.add(dep);
             }
             if (deps.size > 0) {
               moduleFileDependencies.set(relative(root, resource), [...deps]);
@@ -627,8 +795,8 @@ export function runWatchSession(opts: {
           removedFiles: state.removedByTurn.get(state.turn) ?? [],
           invalidations: pendingInvalidations.splice(0),
           hasErrors: Boolean(stats.hasErrors?.()),
-          errors: (stats.compilation?.errors ?? []).map((e: unknown) =>
-            String((e as { message?: string })?.message ?? e)
+          errors: (stats.compilation?.errors ?? []).map((error) =>
+            String(error.message ?? error)
           ),
           moduleFileDependencies,
         };

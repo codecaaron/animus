@@ -12,19 +12,30 @@ import { describe, expect, it } from 'vitest';
 
 import { runCli } from '../src/cli/run';
 
+import type { CliEnvelope } from '../src/cli/json';
+import type { CliStream, CliStreams } from '../src/cli/run';
+import type { ProbeResult } from '../src/core/probe';
+import type { SemanticDiff } from '../src/engines/diff';
+import type { RenderEquivalence } from '../src/engines/equivalence';
+
 const FIXTURE = join(__dirname, 'fixtures/rollup-app');
 
 const ALERT_POINT =
   'viewport.inline=390,mode=dark,variant:Alert:variant=outline,' +
   'variant:Alert:intent=danger';
 
-interface Capture {
-  stdout: { write(text: string): unknown; text(): string };
-  stderr: { write(text: string): unknown; text(): string };
+/** A real `CliStream`, plus everything the CLI has written to it. */
+interface CaptureStream extends CliStream {
+  text(): string;
+}
+
+interface Capture extends CliStreams {
+  stdout: CaptureStream;
+  stderr: CaptureStream;
 }
 
 const capture = (): Capture => {
-  const sink = (): { write(text: string): unknown; text(): string } => {
+  const sink = (): CaptureStream => {
     const chunks: string[] = [];
     return {
       write: (text: string) => chunks.push(text),
@@ -33,6 +44,29 @@ const capture = (): Capture => {
   };
   return { stdout: sink(), stderr: sink() };
 };
+
+/**
+ * The `--json` document, named at the types the CLI serialised it from:
+ * `renderJson` writes a `CliEnvelope` whose `result` is the answer the command
+ * produced. `ProbeResult.semanticDiff` is a `SemanticDiff` the moment it is
+ * present; `ComparedProbeResult` below only removes the optionality, which is
+ * what a comparing command guarantees.
+ */
+interface ProbeEnvelope extends CliEnvelope {
+  result: ProbeResult;
+}
+
+interface ClassesEnvelope extends CliEnvelope {
+  result: RenderEquivalence;
+}
+
+interface ComparedProbeResult extends ProbeResult {
+  semanticDiff: SemanticDiff;
+}
+
+interface DiffEnvelope extends CliEnvelope {
+  result: ComparedProbeResult;
+}
 
 interface Run {
   code: number;
@@ -62,15 +96,7 @@ describe('cli — machine output on stdout', () => {
     expect(result.code).toBe(0);
     expect(result.stderr).toBe('');
 
-    const envelope = JSON.parse(result.stdout) as {
-      command: string;
-      target: string;
-      at: Record<string, unknown>;
-      result: {
-        verdict: string;
-        facts: { property: string; value: { value?: string } }[];
-      };
-    };
+    const envelope: ProbeEnvelope = JSON.parse(result.stdout);
 
     expect(envelope.command).toBe('inspect');
     expect(envelope.target).toBe(
@@ -87,7 +113,7 @@ describe('cli — machine output on stdout', () => {
     const color = envelope.result.facts.find(
       (fact) => fact.property === 'color'
     );
-    expect(color?.value.value).toBe('#ef4444');
+    expect(color?.value).toEqual({ kind: 'exact', value: '#ef4444' });
   });
 
   it('serialises the equivalence classes for the classes command', async () => {
@@ -99,10 +125,7 @@ describe('cli — machine output on stdout', () => {
       'Alert',
       '--json'
     );
-    const envelope = JSON.parse(result.stdout) as {
-      command: string;
-      result: { classes: { cellCount: number }[] };
-    };
+    const envelope: ClassesEnvelope = JSON.parse(result.stdout);
 
     expect(result.code).toBe(0);
     expect(envelope.command).toBe('classes');
@@ -378,9 +401,7 @@ describe('cli — the flag grammar', () => {
       'a5e7b19f52a9de29:color',
       '--json'
     );
-    const envelope = JSON.parse(byRule.stdout) as {
-      result: { semanticDiff: { entries: { property: string }[] } };
-    };
+    const envelope: DiffEnvelope = JSON.parse(byRule.stdout);
     expect(byRule.code).toBe(0);
     expect(
       envelope.result.semanticDiff.entries.some(

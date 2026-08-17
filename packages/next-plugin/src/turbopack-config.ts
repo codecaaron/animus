@@ -1,11 +1,13 @@
 import { ENGINE_TRANSFORM_EXTENSIONS } from '@animus-ui/extract/pipeline';
 import {
+  // Emitted module ids: ONE authority — the session vocabulary
+  // (session-paths) — for both resolveAlias KEYS below. A local
+  // re-declaration would let an emitted id and its resolveAlias key drift.
+  // `TURBOPACK_SYSTEM_PROPS_ID` is re-exported below for this module's
+  // consumers.
+  ANIMUS_CSS_MODULE_ID,
   STYLES_ARTIFACT,
   SYSTEM_PROPS_ARTIFACT,
-  // Virtual system-props id: ONE authority — the session vocabulary
-  // (session-paths). Imported and re-exported below for this module's
-  // consumers; a local re-declaration would let the emitted id and the
-  // resolveAlias key drift.
   TURBOPACK_SYSTEM_PROPS_ID,
 } from '@animus-ui/extract/session';
 import { join, relative } from 'path';
@@ -106,7 +108,7 @@ export function buildTurbopackConfig(args: {
       rootDir,
       join(sessionDir, SYSTEM_PROPS_ARTIFACT)
     ),
-    '.animus/styles.css': rootRelativeRequest(
+    [ANIMUS_CSS_MODULE_ID]: rootRelativeRequest(
       rootDir,
       join(sessionDir, STYLES_ARTIFACT)
     ),

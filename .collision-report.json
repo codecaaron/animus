@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "reportDirectory": "git:contract-change/reports",
+  "workflows": {
+    "agent-session": {
+      "changeScope": "worktree",
+      "sessionDelta": true,
+      "candidateAction": "warn",
+      "ownerViolationAction": "fail",
+      "errorAction": "fail"
+    },
+    "agent-stop": {
+      "changeScope": "worktree",
+      "candidateAction": "warn",
+      "ownerViolationAction": "fail",
+      "errorAction": "fail"
+    },
+    "pre-commit": {
+      "changeScope": "staged",
+      "candidateAction": "warn",
+      "ownerViolationAction": "fail",
+      "errorAction": "fail"
+    },
+    "ci": {
+      "changeScope": "branch",
+      "baseEnv": "GITHUB_BASE_REF",
+      "base": "origin/main",
+      "candidateAction": "warn",
+      "ownerViolationAction": "fail",
+      "ownersFull": true,
+      "errorAction": "fail"
+    }
+  }
+}

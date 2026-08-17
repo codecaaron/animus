@@ -4,18 +4,47 @@ import { resolveClasses } from '../src/runtime/resolveClasses';
 import { recordWitness, WITNESS_CAP } from '../src/runtime/witness';
 import { loadUnderNodeEnv } from './load-under-node-env';
 
-type WitnessRecord = {
-  component: string;
-  prop: string;
-  value: string;
-  outcome: 'static' | 'dynamic' | 'drop';
+import type { DynamicPropConfig } from '../src/runtime/resolveClasses';
+import type { WitnessRecord } from '../src/runtime/witness';
+
+/** The dev-only handle `recordWitness` installs, named exactly as it types it. */
+type WitnessRuntimeGlobal = typeof globalThis & {
+  __ANIMUS_WITNESS__?: WitnessRecord[];
 };
 
-const buffer = (): WitnessRecord[] =>
-  (globalThis as Record<string, unknown>).__ANIMUS_WITNESS__ as WitnessRecord[];
+const witnessRuntimeGlobal: WitnessRuntimeGlobal = globalThis;
+
+const buffer = (): WitnessRecord[] => {
+  const recorded = witnessRuntimeGlobal.__ANIMUS_WITNESS__;
+  if (!recorded) {
+    throw new Error('expected the dev witness handle to be installed');
+  }
+  return recorded;
+};
+
+/**
+ * A dynamic entry whose transform returns null at runtime — outside the
+ * `string | number` return its own contract declares. `defineProperty`
+ * installs exactly the own, enumerable, writable, configurable property an
+ * object literal would, without claiming the violating callback satisfies
+ * that contract.
+ */
+const nullResultTransformEntry = (): DynamicPropConfig[string] => {
+  const entry: DynamicPropConfig[string] = {
+    varName: '--animus-p',
+    slotClass: 'animus-dyn-p',
+  };
+  Object.defineProperty(entry, 'transform', {
+    configurable: true,
+    enumerable: true,
+    value: () => null,
+    writable: true,
+  });
+  return entry;
+};
 
 beforeEach(() => {
-  delete (globalThis as Record<string, unknown>).__ANIMUS_WITNESS__;
+  delete witnessRuntimeGlobal.__ANIMUS_WITNESS__;
 });
 
 afterEach(() => {
@@ -72,13 +101,7 @@ describe('witness recording', () => {
       { p: 3 },
       { systemPropNames: ['p'] },
       undefined,
-      {
-        p: {
-          varName: '--animus-p',
-          slotClass: 'animus-dyn-p',
-          transform: () => null as unknown as string,
-        },
-      }
+      { p: nullResultTransformEntry() }
     );
     try {
       expect(buffer()).toEqual([
@@ -107,9 +130,7 @@ describe('witness recording', () => {
     const prod = await loadUnderNodeEnv('production');
     prod.recordWitness('animus-W-d', 'p', '1', 'static');
     prod.resolveClasses('animus-W-d', { p: 8 }, { systemPropNames: ['p'] });
-    expect(
-      (globalThis as Record<string, unknown>).__ANIMUS_WITNESS__
-    ).toBeUndefined();
+    expect(witnessRuntimeGlobal.__ANIMUS_WITNESS__).toBeUndefined();
   });
 
   test('production variant resolution does not serialize witness values', async () => {

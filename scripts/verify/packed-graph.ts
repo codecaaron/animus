@@ -44,6 +44,14 @@ export const PUBLISHABLE_PACKAGE_NAMES = [
 const INTERNAL_PREFIX = '@animus-ui/';
 const EXTRACT_PLATFORM_PREFIX = '@animus-ui/extract-';
 
+// DISTINCT from `./manifest-model.ts`'s `PackageManifest`, deliberately.
+// That type models an arbitrary package.json found on disk, so every field is
+// optional. This one models a manifest extracted from a BUILT TARBALL, where
+// `name` and `version` are guaranteed present by the publish contract — every
+// read site below keys maps by `manifest.name` and compares `manifest.version`
+// against the expected graph. Same file format, different question: routing
+// this through the on-disk model would force a presence check for an invariant
+// `bun pm pack` already establishes.
 export type PackageManifest = {
   name: string;
   version: string;

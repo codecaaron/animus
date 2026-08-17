@@ -53,10 +53,39 @@ Exit codes: 0 success · 1 extraction failure · 2 config error · 3 engine fail
 Watch shutdown: SIGINT exits 130, SIGTERM 143 (lock released, last-good kept)
 `;
 
+type ErrorMessageValue =
+  | object
+  | string
+  | number
+  | bigint
+  | boolean
+  | symbol
+  | null
+  | undefined;
+
+interface ErrorMessageHolder {
+  message?: ErrorMessageValue;
+}
+
+function readThrownMessage<Thrown>(error: Thrown): ErrorMessageValue {
+  // SAFETY: This exposes only the optional property that these catch paths
+  // historically read directly. The runtime value stays untouched, so the
+  // read retains its primitive receiver, getter order, and native nullish
+  // TypeError behavior.
+  return (error as Thrown & ErrorMessageHolder).message;
+}
+
 /** Classify an error into the documented exit taxonomy. ExtractionFailure
  *  and unclassified errors deliberately share the extraction exit class —
- *  an unknown throw during a build IS a failed extraction to a supervisor. */
-export function exitCodeFor(error: unknown): number {
+ *  an unknown throw during a build IS a failed extraction to a supervisor.
+ *
+ *  `AnimusLockConflictError` (writer.ts) is a SUBCLASS of
+ *  `AnimusConfigError` and is caught by the branch below on purpose: a busy
+ *  output directory keeps exit 2 as it always had. The subclass exists so
+ *  callers can tell "another writer owns the tree" from "your config is
+ *  wrong" without the exit code being the only distinguisher; moving it to
+ *  EXIT_ENVIRONMENT is an open owner decision, not an accident of typing. */
+export function exitCodeFor<Thrown>(error: Thrown): number {
   if (error instanceof UsageFailure || error instanceof AnimusConfigError) {
     return EXIT_USAGE;
   }
@@ -88,7 +117,7 @@ export async function main(
       },
     });
   } catch (error) {
-    console.error(`[animus] ${String((error as Error).message)}`);
+    console.error(`[animus] ${String(readThrownMessage(error))}`);
     console.error(USAGE);
     process.exitCode = EXIT_USAGE;
     return;
@@ -145,7 +174,7 @@ export async function main(
     console.error(USAGE);
     process.exitCode = EXIT_USAGE;
   } catch (error) {
-    console.error(`[animus] ${String((error as Error).message ?? error)}`);
+    console.error(`[animus] ${String(readThrownMessage(error) ?? error)}`);
     process.exitCode = exitCodeFor(error);
   }
 }

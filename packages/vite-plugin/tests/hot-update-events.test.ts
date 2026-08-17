@@ -98,19 +98,60 @@ describe('HotUpdateEvents', () => {
     });
   });
 
-  it('reports an unseen or evicted event as ignored', () => {
+  it('reports an event nobody ever claimed as ignored', () => {
     const events = new HotUpdateEvents(2);
 
     expect(events.resultOf(FILE, 99)).toEqual({ kind: 'ignored' });
+  });
+
+  it('reports an evicted decision as evicted, not as ignored', () => {
+    // History is bounded, and `ignored` is the LEAST conservative kind —
+    // "out of extraction scope, leave it to normal HMR". A decision that fell
+    // out of the window is the opposite: the file WAS analyzed and every
+    // environment still owes its own graph an invalidation.
+    const events = new HotUpdateEvents(2);
 
     events.claim('client', FILE, 1);
     events.record(FILE, 1, { kind: 'unchanged' });
     events.claim('client', FILE, 2);
     events.claim('client', FILE, 3);
 
-    // History is bounded: the oldest key is dropped, and an event that falls
-    // out of it degrades to normal HMR rather than to a stale decision.
-    expect(events.resultOf(FILE, 1)).toEqual({ kind: 'ignored' });
+    expect(events.resultOf(FILE, 1)).toEqual({ kind: 'evicted' });
     expect(events.claim('ssr', FILE, 3)).toBe(false);
+  });
+
+  it('never re-claims an evicted event for a later environment', () => {
+    // Re-claiming would re-run the whole analysis for an event the owner
+    // already analyzed — and the content-hash gate would then report
+    // `unchanged`, suppressing the update in that environment entirely.
+    const events = new HotUpdateEvents(2);
+
+    events.claim('client', FILE, 1);
+    events.record(FILE, 1, {
+      kind: 'analyzed',
+      staleDefinitionFiles: [],
+      systemPropsChanged: false,
+      presentationOnly: false,
+    });
+    events.claim('client', FILE, 2);
+    events.claim('client', FILE, 3);
+
+    expect(events.claim('ssr', FILE, 1)).toBe(false);
+    expect(events.resultOf(FILE, 1)).toEqual({ kind: 'evicted' });
+  });
+
+  it('lets the client re-own a key its own eviction retired', () => {
+    const events = new HotUpdateEvents(2);
+
+    events.claim('client', FILE, 1);
+    events.record(FILE, 1, { kind: 'unchanged' });
+    events.claim('client', FILE, 2);
+    events.claim('client', FILE, 3);
+    expect(events.resultOf(FILE, 1)).toEqual({ kind: 'evicted' });
+
+    // The same (file, timestamp) reaching the client again is a new event,
+    // not the evicted one: it claims and starts from a clean decision.
+    expect(events.claim('client', FILE, 1)).toBe(true);
+    expect(events.resultOf(FILE, 1)).toEqual({ kind: 'ignored' });
   });
 });

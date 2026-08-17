@@ -36,6 +36,7 @@ import {
   loadSystemConfig,
   mergeExternalKeyframes,
   postProcessCss,
+  projectExternalFileOwners,
   resolveAssetFile,
   resolveLightningTargets,
   resolveMode,
@@ -50,15 +51,20 @@ import {
   walkPackageSources,
   withoutInvalidOriginals,
 } from '../pipeline/index';
-import { verifyCommitRecord } from './published-set';
+import {
+  isLockHolderAlive,
+  readCliLockRecord,
+  verifyCommitRecord,
+} from './published-set';
 import { resolvePackagesByName } from './resolve-packages';
 import {
   ANALYSIS_COMMIT_ARTIFACT,
   ANALYSIS_INPUTS_ARTIFACT,
   ANALYSIS_STATUS_ARTIFACT,
   analysisCommitPath,
+  ANIMUS_ARTIFACT_DIR,
+  ANIMUS_CSS_MODULE_ID,
   CLI_COMMIT_ARTIFACT,
-  CLI_LOCK_ARTIFACT,
   envelopeCssArtifact,
   envelopeJsonArtifact,
   MANIFEST_ARTIFACT,
@@ -74,13 +80,14 @@ import {
   systemPropsPath,
 } from './session-paths';
 import {
+  claimExclusiveSessionOwner,
   claimProcessSessionId,
   engineApi,
   getOwningWatchSession,
   getWatchTransaction,
-  resetAnalysisPromise,
+  resetAnalysisStartedPromise,
   setOwningWatchSession,
-  setAnalysisPromise,
+  setAnalysisStartedPromise,
   setAnalyzedHashes,
   setManifestJson,
   setReplacementEpoch,
@@ -123,18 +130,18 @@ import type {
   SessionEnvelope,
 } from './session-paths';
 
-/**
- * Module id the Rust emitter injects for the extracted stylesheet — also the
- * exact resolve.alias key with-animus registers for it, which the adapter's
- * alias harvesting must skip.
- */
-export const ANIMUS_CSS_MODULE_ID = '.animus/styles.css';
-
 /** Retention window for sibling session directories (design D2). */
 const SESSION_DIR_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 /** Watchdog added to the debounce ceiling for status deadlines (D3). */
 const STATUS_WATCHDOG_MS = 2000;
+
+/** Default watcher debounce, and therefore the session's default status
+ *  deadline ceiling (D3). ONE definition: the watcher entry point
+ *  (`startTurbopackWatcher`) defaults its `debounceMs` from this, so an
+ *  unconfigured watcher can never publish a deadline the session did not
+ *  already assume. */
+export const DEFAULT_WATCH_DEBOUNCE_MS = 75;
 
 /** Flat legacy `.animus/` artifacts removed at session start — unreachable
  *  by session-scoped loaders. The standalone CLI still publishes the three
@@ -264,6 +271,15 @@ export class ExtractionSession {
    *  failed pipeline never fires it, so the host rolls back). */
   onExternalRootResolved: ((canonicalRoot: string) => void) | null = null;
   onExternalRootsCommitted: ((canonicalRoots: string[]) => void) | null = null;
+  /** Watch-cycle boundary seam (openspec: standalone-extraction-cli, design
+   *  D5): fires exactly once per settled `handleWatchUpdate` — with the
+   *  failure `cause`, or `null` when the cycle settled clean. Unlike the
+   *  success-only observers above it carries the OUTCOME, because its owner
+   *  (the CLI watch's publication policy) reports a contracted per-cycle
+   *  failure line and must not learn about failures from a swallowed
+   *  rejection. Observation never alters delivery: a rejected cycle still
+   *  rejects for its caller. */
+  onCycleSettled: ((cause: unknown) => void) | null = null;
 
   private readonly options: SessionOptions;
   private readonly staticCssJson: string | null;
@@ -305,8 +321,17 @@ export class ExtractionSession {
     inputs: { payloadHash: string; diskHash: string } | null;
     styles: { payloadHash: string; diskHash: string } | null;
   } = { manifest: null, inputs: null, styles: null };
-  /** Last written analysis-commit; null = seeded from disk on first use. */
+  /** Last written analysis-commit; null = seeded from disk on first use.
+   *  Its `generation` is a forensic ordinal with no reader (see
+   *  AnalysisCommit) — the per-instance counter is correct only because
+   *  one session owns the directory. */
   private lastCommit: AnalysisCommit | null = null;
+  /** Release handle of this session's process-exclusive publication claim,
+   *  or null when unheld. Taken by the first `runFullPipeline` and held
+   *  until `close()`: the guards above are per-INSTANCE while `sessionDir`
+   *  is process-shared, so a second live publisher is what makes them
+   *  lie. */
+  private releasePublicationClaim: (() => void) | null = null;
   /** Session identity — claimed once per PROCESS (one Next invocation),
    *  adopted by every subsequent session instance so all compilers share
    *  one artifact tree (design D2: `next dev`/`next build` co-writing are
@@ -317,7 +342,7 @@ export class ExtractionSession {
    *  same-session restart with unchanged plans never rewrites bytes). */
   private lastEpochValue: string | null = null;
   /** Watcher debounce ceiling feeding status deadlines (design D3). */
-  debounceCeilingMs = 75;
+  debounceCeilingMs = DEFAULT_WATCH_DEBOUNCE_MS;
   /** Test seam: observes every session-artifact write (name, content)
    *  post-rename — write ORDER is part of the transaction contract. */
   onArtifactWrite: ((name: string, content: string) => void) | null = null;
@@ -442,8 +467,25 @@ export class ExtractionSession {
    * promise, so no compiler proceeds against a generation older than the
    * one the transaction publishes. A rejected transaction rejects every
    * joiner; the gate always clears.
+   *
+   * Every settled entry — joined, forwarded, or transacted — reports its
+   * outcome to `onCycleSettled` before returning or rejecting.
    */
   async handleWatchUpdate(changes: WatchChanges): Promise<void> {
+    try {
+      await this.routeWatchUpdate(changes);
+    } catch (error) {
+      // Reported BEFORE the rethrow: observation never changes delivery,
+      // but an observer must never learn of a failure after its caller.
+      this.onCycleSettled?.(error);
+      throw error;
+    }
+    this.onCycleSettled?.(null);
+  }
+
+  /** The cycle itself: join an in-flight transaction, forward a batch this
+   *  instance cannot serve, or run the transaction. */
+  private async routeWatchUpdate(changes: WatchChanges): Promise<void> {
     const inflight = getWatchTransaction();
     if (inflight) {
       await inflight;
@@ -570,7 +612,7 @@ export class ExtractionSession {
       this.resetForHmr();
       try {
         const promise = this.runFullPipeline(this.pendingFromBatch(changes));
-        setAnalysisPromise(promise);
+        setAnalysisStartedPromise(promise);
         await promise;
       } catch (err) {
         // A failed reset re-run is a FAILED CYCLE, not a fallback signal:
@@ -769,17 +811,17 @@ export class ExtractionSession {
         // ANIMUS_ANALYSIS_NOT_SCHEDULED. Strict mode still throws into the
         // catch below, which writes 'failed'.
         ingested = await this.ingestAccepted();
-        this.externalFileOwners = this.projectExternalFileOwners(
+        this.externalFileOwners = projectExternalFileOwners(
           ingested,
           this.externalFileOwners
         );
 
-        resetAnalysisPromise();
+        resetAnalysisStartedPromise();
         const promise = this.runIncrementalPipeline(
           ingested.analysisEntries,
           pending
         );
-        setAnalysisPromise(promise);
+        setAnalysisStartedPromise(promise);
         await promise;
       } catch (err) {
         // Roll the cache back to the pre-batch state: the failed attempt
@@ -861,26 +903,6 @@ export class ExtractionSession {
     return this.sourceIngestor.surfaceDiagnostics(diagnostics);
   }
 
-  /**
-   * Correlate diagnostics emitted against generated children back to the
-   * external package owning their raw original.
-   */
-  private projectExternalFileOwners(
-    result: SourceIngestionResult,
-    rawOwners: Readonly<Record<string, string>>
-  ): Record<string, string> {
-    const projected: Record<string, string> = {};
-    for (const owner of Object.values(result.ownership)) {
-      const packageOwner = rawOwners[owner.originalPath];
-      if (!packageOwner) continue;
-      projected[owner.originalPath] = packageOwner;
-      for (const analysisPath of owner.analysisPaths) {
-        projected[analysisPath] = packageOwner;
-      }
-    }
-    return projected;
-  }
-
   /** Publish the raw cache and complete parser projection atomically. */
   private publishSourceIngestion(result: SourceIngestionResult): void {
     this.sourceIngestor.markPublished(result);
@@ -899,7 +921,51 @@ export class ExtractionSession {
     this.sourceOwnership = result.ownership;
   }
 
+  /**
+   * Full analysis + publication. Registers in the ONE in-flight
+   * transaction slot `handleWatchUpdate` joins (design D3): a full pipeline
+   * is a publishing transaction like any watch batch, so a batch entering
+   * the startup window joins it instead of driving a second, concurrent
+   * analysis. The geological reset re-enters from INSIDE a watch
+   * transaction — that nested call leaves the enclosing registration
+   * untouched.
+   */
   async runFullPipeline(pending: Array<[string, string]> = []): Promise<void> {
+    // Publication exclusivity is the PIPELINE's claim, not a per-driver
+    // opt-in: every driver inherits it, and the per-instance payload write
+    // guards (`artifactRecords`, `lastCommit`, `lastEpochValue`) become true
+    // by construction. Re-entrant for this instance — the geological reset
+    // re-enters from inside a watch transaction, and drivers re-run the
+    // pipeline on the same session.
+    this.releasePublicationClaim ??= claimExclusiveSessionOwner(
+      `${this.driverLabel}:${this.sessionDir}`
+    );
+
+    // The loaded system is assigned at pipeline step 1 — BEFORE the
+    // source-state try below opens — while `handleWatchUpdate` decides
+    // ownership by asking whether it is set. A failed pass that left it set
+    // made the session answer as the owner and publish a generation built
+    // from caches the failure never filled, so the failure path restores it
+    // (null on a first run; the last-good system on a later one, which the
+    // session legitimately still serves).
+    const priorSystem = this.system;
+
+    const nested = getWatchTransaction() !== null;
+    const transaction = this.runPipelineTransaction(pending);
+    if (!nested) setWatchTransaction(transaction);
+    try {
+      await transaction;
+    } catch (error) {
+      this.system = priorSystem;
+      throw error;
+    } finally {
+      if (!nested) setWatchTransaction(null);
+    }
+  }
+
+  private async runPipelineTransaction(
+    pending: Array<[string, string]>
+  ): Promise<void> {
     const pipelineStart = this.now();
     const bt: Record<string, number> = {};
 
@@ -1179,7 +1245,7 @@ export class ExtractionSession {
         this.writeAnalysisStatus('failed', pending, String(err));
         throw err;
       }
-      this.externalFileOwners = this.projectExternalFileOwners(
+      this.externalFileOwners = projectExternalFileOwners(
         accepted,
         this.externalFileOwners
       );
@@ -1257,13 +1323,26 @@ export class ExtractionSession {
   }
 
   /**
+   * The driver's end-of-life signal for this session: release the
+   * process-exclusive publication claim so a SUCCESSOR session over the
+   * same root may publish (sequential claim/release cycles are legal — a
+   * rollup watch rebuild, a second programmatic CLI run). Idempotent, and
+   * scoped to this session's own claim: a late close can never free a
+   * successor's. A session that never ran a pipeline holds nothing.
+   */
+  close(): void {
+    this.releasePublicationClaim?.();
+    this.releasePublicationClaim = null;
+  }
+
+  /**
    * Reset analysis state for HMR geological reset. Payload write guards go
    * back to null so the next publication reseeds them from the disk
    * envelopes — a byte-identical post-reset artifact is still not
    * rewritten.
    */
   resetForHmr(): void {
-    resetAnalysisPromise();
+    resetAnalysisStartedPromise();
     this.artifactRecords = { manifest: null, inputs: null, styles: null };
     this.lastSystemPropsHash = null;
   }
@@ -2013,9 +2092,6 @@ export class ExtractionSession {
    * foreign-session write; races with concurrent sessions are tolerated
    * (S14).
    */
-  /** Sibling ids already reconciled away (artifact deleted or absent) —
-   *  nothing left to invalidate for them on later moves. */
-  private reconciledSiblingIds = new Set<string>();
   /** sessions-root listing memo, keyed by the root dir's mtime — a new or
    *  pruned sibling DIRECTORY moves it; agreeing siblings stay listed. */
   private siblingListing: { mtimeMs: number; entries: string[] } | null = null;
@@ -2036,7 +2112,10 @@ export class ExtractionSession {
     }
     for (const entry of entries) {
       if (entry === this.sessionId) continue;
-      if (this.reconciledSiblingIds.has(entry)) continue;
+      // No "already reconciled" memo: a sibling REWRITES its own artifact
+      // whenever its publish finds it missing (the self-heal above), so
+      // only the sibling's current bytes can answer whether it still
+      // disagrees. The read below is that single witness.
       const siblingEpochPath = join(
         rootPath,
         entry,
@@ -2050,10 +2129,8 @@ export class ExtractionSession {
         // later epoch value can turn them stale.
         if (parsed.epoch === epoch) continue;
       } catch (err) {
-        if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') {
-          this.reconciledSiblingIds.add(entry);
-          continue;
-        }
+        // Absent artifact: nothing to invalidate this round.
+        if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') continue;
         // Unreadable/corrupt sibling artifact: fall through to deletion —
         // fail-safe invalidation beats a stale-but-valid snapshot.
       }
@@ -2062,7 +2139,6 @@ export class ExtractionSession {
       } catch {
         // Concurrent prune/removal — the invalidation already happened.
       }
-      this.reconciledSiblingIds.add(entry);
     }
   }
 
@@ -2081,26 +2157,18 @@ export class ExtractionSession {
     }
   }
 
-  /** True when the flat `.animus/` advisory lock names a live pid — a CLI
-   *  invocation (build mid-publish, or a whole watch run) owns the flat
-   *  tree right now, and any instantaneous inconsistency is its in-flight
-   *  write, not debris. */
+  /** True when the flat `.animus/` advisory lock claims the tree — a CLI
+   *  invocation (build mid-publish, or a whole watch run) owns it right
+   *  now, and any instantaneous inconsistency is its in-flight write, not
+   *  debris. A lock that EXISTS but cannot be decoded claims the tree too:
+   *  this gate guards deletion, and an unreadable claim is unknown, never
+   *  absent. */
   private cliWriterHoldsLock(animusDir: string): boolean {
-    let holder: { pid?: number };
-    try {
-      holder = JSON.parse(
-        readFileSync(join(animusDir, CLI_LOCK_ARTIFACT), 'utf-8')
-      ) as { pid?: number };
-    } catch {
-      return false;
-    }
-    if (typeof holder.pid !== 'number') return false;
-    try {
-      process.kill(holder.pid, 0);
-      return true;
-    } catch {
-      return false;
-    }
+    // Shape and liveness are the writer-side contract (published-set) — this
+    // gate must not hand-roll a second reading of the artifact it shares.
+    const lock = readCliLockRecord(animusDir);
+    if (lock.kind === 'none') return false;
+    return lock.kind === 'indeterminate' || isLockHolderAlive(lock.record.pid);
   }
 
   /** Session-start hygiene (design D2): delete legacy flat artifacts
@@ -2112,7 +2180,7 @@ export class ExtractionSession {
   private runSessionStartHygiene(): void {
     if (this.sessionStartHygieneDone) return;
     this.sessionStartHygieneDone = true;
-    const animusDir = join(this.rootDir!, '.animus');
+    const animusDir = join(this.rootDir!, ANIMUS_ARTIFACT_DIR);
     // Confinement (openspec: standalone-extraction-cli D3): a flat set
     // whose commit.json VERIFIES against its payload bytes is the CLI's
     // PUBLISHED artifact contract — deliberately written and

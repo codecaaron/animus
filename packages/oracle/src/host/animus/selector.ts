@@ -219,12 +219,12 @@ const analyzeCompound = (raw: string): CompoundAnalysis => {
     atCompoundStart = false;
   }
 
-  const model: SelectorModel = {
-    raw,
-    classNames,
-    ...(pseudo.length === 0 ? {} : { pseudo }),
-    ...(attributes.length === 0 ? {} : { attributes }),
-  };
+  // `pseudo` and `attributes` are absent — not empty — when nothing was read,
+  // so a compound with no qualifiers hashes and serializes exactly as the
+  // core contract declares it.
+  const model: SelectorModel = { raw, classNames };
+  if (pseudo.length > 0) model.pseudo = pseudo;
+  if (attributes.length > 0) model.attributes = attributes;
 
   return { model, hasTypeSelector };
 };
@@ -259,13 +259,16 @@ export const analyzeSelector = (raw: string): AnalyzedSelector => {
       }))
     : [];
 
-  const model: SelectorModel = {
-    raw: selector,
-    classNames,
-    ...(pseudo.length === 0 ? {} : { pseudo }),
-    ...(attributes.length === 0 ? {} : { attributes }),
-    ...(relational ? { subject: parts[parts.length - 1].model, ancestry } : {}),
-  };
+  // Same presence contract as `analyzeCompound`, plus the relational pair:
+  // `subject` and `ancestry` appear together or not at all, so a consumer that
+  // sees one never has to guard the other.
+  const model: SelectorModel = { raw: selector, classNames };
+  if (pseudo.length > 0) model.pseudo = pseudo;
+  if (attributes.length > 0) model.attributes = attributes;
+  if (relational) {
+    model.subject = parts[parts.length - 1].model;
+    model.ancestry = ancestry;
+  }
 
   const classification: SelectorClassification = relational
     ? 'relational'
@@ -288,11 +291,11 @@ export type AncestorGuard =
   | { kind: 'mode'; value: string }
   | { kind: 'axis'; dimension: string };
 
-const COMBINATOR_GLYPH: Record<Exclude<Combinator, 'descendant'>, string> = {
+const COMBINATOR_GLYPH = {
   child: '>',
   adjacent: '+',
   general: '~',
-};
+} satisfies Record<Exclude<Combinator, 'descendant'>, string>;
 
 /**
  * Quoted attribute values canonicalize to their unquoted form when they are

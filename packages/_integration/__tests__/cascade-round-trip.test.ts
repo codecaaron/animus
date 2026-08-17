@@ -4,7 +4,6 @@ import { transform as lcssTransform } from 'lightningcss';
 import { join } from 'path';
 import { describe, expect, test } from 'vitest';
 
-import { config, theme } from '../fixtures/setup';
 import { analyzeProject } from './run-pipeline';
 
 const FIXTURES = join(__dirname, '../fixtures/components');
@@ -12,14 +11,7 @@ const FIXTURES = join(__dirname, '../fixtures/components');
 const source = readFileSync(join(FIXTURES, 'cascade-combos.tsx'), 'utf-8');
 const manifestJson = analyzeProject(
   JSON.stringify([{ path: 'cascade-combos.tsx', source }]),
-  theme.scalesJson,
-  theme.variableMapJson,
-  theme.contextualVarsJson || null,
-  config.propConfig,
-  config.groupRegistry,
-  '{}',
-  true,
-  null
+  { devMode: true }
 );
 const manifest = JSON.parse(manifestJson);
 

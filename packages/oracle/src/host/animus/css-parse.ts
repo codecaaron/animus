@@ -1,5 +1,7 @@
 import { AnimusAdapterError } from './errors';
 
+import type { AnimusAdapterErrorContext } from './errors';
+
 /**
  * A parser for exactly one dialect: the pretty-printed CSS animus emits into
  * `manifest.sheets.*` and `manifest.component_fragments.*` (two-space indent,
@@ -81,6 +83,17 @@ const CONTAINER_WIDTH_GTE =
 const IMPORTANT = /!\s*important$/i;
 
 const collapse = (text: string): string => text.replace(/\s+/g, ' ').trim();
+
+/**
+ * The text before a top-level delimiter, plus the delimiter that ended it.
+ * An empty `terminator` means end-of-input — the caller decides whether that
+ * is a clean finish or an unterminated block, so the two cases stay
+ * distinguishable instead of collapsing into "no more input".
+ */
+interface Prelude {
+  text: string;
+  terminator: '{' | ';' | '}' | '';
+}
 
 /**
  * Split a comma-separated list at top level, ignoring commas inside quotes,
@@ -229,11 +242,12 @@ export const parseStylesheet = (
     snippet: string,
     construct?: string
   ) => never = (message, snippet, construct) => {
-    throw new AnimusAdapterError(message, {
-      layer: sheet,
-      snippet,
-      ...(construct === undefined ? {} : { construct }),
-    });
+    // `construct` stays off the context when the caller did not name one, so
+    // the error message keeps its historical `construct=` segment exactly
+    // where the caller supplied the construct and nowhere else.
+    const context: AnimusAdapterErrorContext = { layer: sheet, snippet };
+    if (construct !== undefined) context.construct = construct;
+    throw new AnimusAdapterError(message, context);
   };
 
   const checkComment = (index: number): void => {
@@ -247,10 +261,7 @@ export const parseStylesheet = (
   };
 
   /** Read up to the next top-level `{`, `;` or `}` and consume it. */
-  const readPrelude = (): {
-    text: string;
-    terminator: '{' | ';' | '}' | '';
-  } => {
+  const readPrelude = (): Prelude => {
     const start = pos;
     let depth = 0;
     let quote: string | null = null;

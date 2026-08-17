@@ -49,29 +49,17 @@
 // knip --fix-type list excludes them. If the fix-type list is widened later,
 // extend this emitter accordingly.
 
-import { readFileSync } from 'node:fs';
-
 import { emitReceipt } from './_receipts';
+import {
+  type KnipReport,
+  ToolReportError,
+  decodeKnipReport,
+  readReportInput,
+} from './_tool-reports';
 
-type KnipNamedSymbol = { name: string; line?: number };
-type KnipPackage = { name: string };
-type KnipIssue = {
-  file: string;
-  files?: string[];
-  exports?: KnipNamedSymbol[];
-  dependencies?: KnipPackage[];
-  devDependencies?: KnipPackage[];
-};
-type KnipReport = { issues?: KnipIssue[] };
-
-async function readStdin(): Promise<string> {
-  const chunks: Uint8Array[] = [];
-  for await (const chunk of process.stdin) chunks.push(chunk as Uint8Array);
-  return Buffer.concat(chunks).toString('utf-8');
-}
+const SOURCE = 'Layer D receipts (_emit-knip-receipts.ts)';
 
 export function emitForReport(report: KnipReport): number {
-  if (!report.issues || !Array.isArray(report.issues)) return 0;
   let count = 0;
 
   for (const issue of report.issues) {
@@ -112,21 +100,17 @@ export function emitForReport(report: KnipReport): number {
 }
 
 async function main(): Promise<void> {
-  const fileArg = process.argv[2];
-  const input = fileArg ? readFileSync(fileArg, 'utf-8') : await readStdin();
-  if (!input.trim()) return;
-
-  let report: KnipReport;
-  try {
-    report = JSON.parse(input);
-  } catch {
-    return;
-  }
-  emitForReport(report);
+  const input = await readReportInput(process.argv[2]);
+  emitForReport(decodeKnipReport(input, SOURCE));
 }
 
 if (import.meta.main) {
   main().catch((e) => {
+    // Same policy as Layer A/C: see `_tool-reports.ts` § Failure policy.
+    if (e instanceof ToolReportError) {
+      console.error(e.message);
+      process.exit(1);
+    }
     console.error('INTERNAL ERROR:', e);
     process.exit(2);
   });

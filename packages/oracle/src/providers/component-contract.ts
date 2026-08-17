@@ -1,6 +1,6 @@
 import type { UnknownObligation } from '../core/obligation';
 import type { AbstractValue } from '../core/value';
-import type { RenderShape } from './render-shape';
+import type { RenderTree } from './render-tree';
 
 /**
  * Provider 4 (DESIGN §9), Phase 2+: what a component *declares* about itself.
@@ -13,7 +13,7 @@ import type { RenderShape } from './render-shape';
  */
 export interface ComponentRenderContract {
   component: string;
-  shape?: RenderShape;
+  tree?: RenderTree;
   intrinsic?: {
     inlineSize?: AbstractValue<number>;
     blockSize?: AbstractValue<number>;

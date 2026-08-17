@@ -5,9 +5,11 @@ import { describe, expect, test } from 'vitest';
 
 // State mutator deliberately OFF the public barrel — tests reach it via
 // source (the next-plugin test convention).
-import { setSessionArtifactDir } from '../../extract/session/singleton';
 import {
-  claimProcessHost,
+  claimExclusiveSessionOwner as claimProcessHost,
+  setSessionArtifactDir,
+} from '../../extract/session/singleton';
+import {
   createHostState,
   disposeSessionDir,
   drivePipeline,
@@ -18,36 +20,60 @@ import {
   substituteDevDefine,
   transformWithEngine,
 } from '../src/core';
-import { resolveHostMode, resolveHostOptions } from '../src/options';
+import {
+  resolveHostMode,
+  resolveHostOptions,
+  type AnimusUnpluginOptions,
+} from '../src/options';
+
+interface RuntimeHostOptionMap {
+  exclide: never[];
+  mode: 'prod';
+  engine: 'v1';
+}
+
+function withRuntimeHostOption<Key extends keyof RuntimeHostOptionMap>(
+  key: Key,
+  value: RuntimeHostOptionMap[Key]
+): AnimusUnpluginOptions {
+  const options: AnimusUnpluginOptions = { system: './ds.ts' };
+  Object.defineProperty(options, key, {
+    value,
+    enumerable: true,
+    writable: true,
+    configurable: true,
+  });
+  return options;
+}
 
 describe('option validation', () => {
   test('missing system is a config error naming the remedy', () => {
-    expect(() => resolveHostOptions({} as never, '/tmp')).toThrow(
+    expect(() => resolveHostOptions(undefined, '/tmp')).toThrow(
       /Missing required option `system`/
     );
   });
 
   test('unknown top-level keys fail loud naming the key', () => {
     expect(() =>
-      resolveHostOptions({ system: './ds.ts', exclide: [] } as never, '/tmp')
+      resolveHostOptions(withRuntimeHostOption('exclide', []), '/tmp')
     ).toThrow(/Unknown option "exclide"/);
   });
 
   test('invalid mode values fail loud at intake', () => {
     expect(() =>
-      resolveHostOptions({ system: './ds.ts', mode: 'prod' } as never, '/tmp')
+      resolveHostOptions(withRuntimeHostOption('mode', 'prod'), '/tmp')
     ).toThrow(/Invalid mode "prod"/);
   });
 
   test('a retired engine selection is rejected, never upgraded', () => {
     expect(() =>
-      resolveHostOptions({ system: './ds.ts', engine: 'v1' } as never, '/tmp')
+      resolveHostOptions(withRuntimeHostOption('engine', 'v1'), '/tmp')
     ).toThrow(/v1/);
   });
 
   test('config errors carry the shared AnimusConfigError class', () => {
     try {
-      resolveHostOptions({} as never, '/tmp');
+      resolveHostOptions(undefined, '/tmp');
       expect.unreachable();
     } catch (error) {
       expect(error).toBeInstanceOf(AnimusConfigError);
@@ -284,7 +310,9 @@ describe('transform claim (node_modules skip)', () => {
   });
 });
 
-describe('process host claim (one live host per process)', () => {
+// The claim itself now lives on the session (ExtractionSession.runFullPipeline
+// claims, close() releases); these pin the mechanism the host inherits.
+describe('process publication claim (one live publisher per process)', () => {
   test('sequential claim/release cycles are legal', () => {
     const releaseA = claimProcessHost('animus-host:/app');
     releaseA();

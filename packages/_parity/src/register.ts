@@ -7,15 +7,19 @@
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 
-import type { Divergence, RegisterEntry } from './types';
+import type { Divergence, RegisterCategory, RegisterEntry } from './types';
 
 const REGISTER_PATH = join(import.meta.dirname, '../register.json');
-const REGISTER_CATEGORIES = new Set([
-  'intentional-correctness',
-  'ordering',
-  'v1-feature-drift',
-  'known-quirk',
-]);
+
+// Derived from the union so the runtime gate cannot drift from the type:
+// adding or retiring a category fails to compile until this table matches.
+const REGISTER_CATEGORIES = new Set<string>(
+  Object.keys({
+    'intentional-correctness': true,
+    ordering: true,
+    'known-quirk': true,
+  } satisfies Record<RegisterCategory, true>)
+);
 
 function hasKnownCategory(entry: RegisterEntry): boolean {
   return REGISTER_CATEGORIES.has(entry.category);

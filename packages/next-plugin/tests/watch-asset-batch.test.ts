@@ -9,20 +9,13 @@
  * Same harness as plugin-pipeline.test.ts: the NAPI boundary is mocked, the
  * pure pipeline helpers and the session run for real over a temp project.
  */
-import {
-  mkdtempSync,
-  mkdirSync,
-  realpathSync,
-  rmSync,
-  writeFileSync,
-} from 'fs';
-import { tmpdir } from 'os';
+import { mkdirSync, realpathSync, rmSync, writeFileSync } from 'fs';
 import { join, relative } from 'path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   loadSystemModule: vi.fn(),
-  analyzeProject: vi.fn(),
+  analyzeProject: vi.fn<(...args: AnalyzeProjectArgs) => string>(),
   clearAnalysisCache: vi.fn(),
 }));
 
@@ -42,14 +35,16 @@ import { ExtractionSession } from '../../extract/session/extraction-session';
 import {
   BUTTON_SOURCE,
   BUTTON_STYLE_EDIT as BUTTON_SOURCE_CHANGED,
+  disposeTempRoots,
+  makeTempRoot,
+  resetAnimusGlobals,
   SYSTEM_CONFIG,
 } from './singleton-fixtures';
 
-const tempRoots: string[] = [];
+import type { AnalyzeProjectArgs } from '@animus-ui/extract/pipeline';
 
-function createProject(): { root: string; assetPath: string } {
-  const root = mkdtempSync(join(tmpdir(), 'animus-watch-asset-'));
-  tempRoots.push(root);
+function createProject() {
+  const root = makeTempRoot('animus-watch-asset-');
   mkdirSync(join(root, 'src'), { recursive: true });
   writeFileSync(join(root, 'package.json'), '{"name":"consumer"}');
   writeFileSync(
@@ -75,29 +70,33 @@ function buildManifest(assetPath: string): string {
   });
 }
 
-/** File entries JSON from the most recent analyzeProject invocation. */
+/** File entries JSON from the most recent analyzeProject invocation — slot 0
+ *  of the positional NAPI tuple (analyze-project-args.ts). */
 function lastAnalyzedEntries(): Array<{ path: string; source: string }> {
   const calls = mocks.analyzeProject.mock.calls;
   expect(calls.length).toBeGreaterThan(0);
-  const args = calls[calls.length - 1] as unknown[];
-  const filesArg = args.find(
-    (arg): arg is string => typeof arg === 'string' && arg.startsWith('[')
-  );
-  expect(filesArg).toBeDefined();
-  return JSON.parse(filesArg!);
+  const [filesJson] = calls[calls.length - 1];
+  expect(filesJson.startsWith('[')).toBe(true);
+  return JSON.parse(filesJson);
 }
 
+let restoreGlobals: () => void;
+
 beforeEach(() => {
+  // Each test drives its own session over its own root — in production a
+  // separate PROCESS. The singleton reset (the sibling suites' convention)
+  // gives each one a fresh process image, including the publication claim
+  // the session holds until close().
+  restoreGlobals = resetAnimusGlobals();
   mocks.loadSystemModule.mockReset().mockReturnValue({ ...SYSTEM_CONFIG });
   mocks.analyzeProject.mockReset();
   mocks.clearAnalysisCache.mockReset();
 });
 
 afterEach(() => {
+  restoreGlobals();
   vi.restoreAllMocks();
-  for (const root of tempRoots.splice(0)) {
-    rmSync(root, { recursive: true, force: true });
-  }
+  disposeTempRoots();
 });
 
 async function startSession(root: string, assetPath: string) {

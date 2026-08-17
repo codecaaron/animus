@@ -1,10 +1,37 @@
+import { createLogger } from 'vite';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
   RESOLVED_COMPONENTS_ID,
   RESOLVED_SYSTEM_PROPS_ID,
 } from '../src/constants';
-import { PluginContext, runExclusiveAnalysis } from '../src/context';
+import {
+  PluginContext,
+  runExclusiveAnalysis,
+  systemPropsModuleSource,
+} from '../src/context';
+
+import type { AnimusExtractOptions } from '../src/index';
+import type { AnalyzeProjectArgs } from '@animus-ui/extract/pipeline';
+import type { FullReloadPayload } from 'vite';
+
+type EmitterJsonValue =
+  | null
+  | boolean
+  | number
+  | string
+  | EmitterJsonValue[]
+  | EmitterJsonObject;
+
+interface EmitterJsonObject {
+  [key: string]: EmitterJsonValue | undefined;
+}
+
+function isEmitterJsonObject(
+  value: EmitterJsonValue
+): value is EmitterJsonObject {
+  return value !== null && Object(value) === value && !Array.isArray(value);
+}
 
 /**
  * `PluginContext`'s own behavior, driven on a real instance rather than through
@@ -23,7 +50,7 @@ describe('invalidateExtractedModules: the shared create/delete path', () => {
    * cached transform result). Asserted here rather than at either call site,
    * because a condition, if one were reintroduced, would live here.
    */
-  function contextWithGraph(): { ctx: PluginContext; invalidated: string[] } {
+  function contextWithGraph() {
     const invalidated: string[] = [];
     const ctx = new PluginContext({ system: './ds.ts' });
     ctx.devServer = {
@@ -58,14 +85,14 @@ describe('invalidateExtractedModules: the shared create/delete path', () => {
     // invalidations inside one burst must not stack N reloads.
     vi.useFakeTimers();
     try {
-      const sends: unknown[] = [];
+      const sends: FullReloadPayload[] = [];
       const ctx = new PluginContext({ system: './ds.ts' });
       ctx.devServer = {
         moduleGraph: {
           getModuleById: () => undefined,
           invalidateModule: () => {},
         },
-        hot: { send: (payload: unknown) => sends.push(payload) },
+        hot: { send: (payload: FullReloadPayload) => sends.push(payload) },
       };
 
       ctx.invalidateExtractedModules();
@@ -85,10 +112,11 @@ describe('info: visible without verbose', () => {
   it('emits when verbose is off, while log() stays silent', () => {
     const lines: string[] = [];
     const ctx = new PluginContext({ system: './ds.ts' });
-    ctx.logger = {
-      info: (msg: string) => lines.push(msg),
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } as any;
+    const logger = createLogger('silent');
+    logger.info = (message) => {
+      lines.push(message);
+    };
+    ctx.logger = logger;
 
     expect(ctx.verbose).toBe(false);
     ctx.log('verbose only');
@@ -103,17 +131,26 @@ describe('runtime import selection', () => {
     system: string;
     runtimeImport?: string;
   }): string {
-    let args: unknown[] = [];
+    let emitterConfigJson: AnalyzeProjectArgs[8] | undefined;
     const ctx = new PluginContext(options, () => ({
-      analyzeProject: (...received: unknown[]) => {
-        args = received;
+      analyzeProject: (...received: AnalyzeProjectArgs) => {
+        emitterConfigJson = received[8];
         return JSON.stringify({ components: {}, files: {}, css: '' });
       },
     }));
 
     expect(ctx.runAnalysis([])).toBe(true);
-    return (JSON.parse(String(args[8])) as { runtime_import: string })
-      .runtime_import;
+    if (emitterConfigJson === undefined || emitterConfigJson === null) {
+      throw new Error('analyzeProject emitter config must be present');
+    }
+    const emitterConfig: EmitterJsonValue = JSON.parse(emitterConfigJson);
+    if (
+      !isEmitterJsonObject(emitterConfig) ||
+      String(emitterConfig.runtime_import) !== emitterConfig.runtime_import
+    ) {
+      throw new Error('analyzeProject emitter runtime import must be a string');
+    }
+    return String(emitterConfig.runtime_import);
   }
 
   it('keeps the existing system barrel as the default', () => {
@@ -137,19 +174,18 @@ describe('runtimeImport override guards its terminal contract', () => {
     replacement: string,
     runtimeImport?: string
   ): PluginContext {
-    return new PluginContext(
-      { system: './ds.ts', ...(runtimeImport ? { runtimeImport } : {}) },
-      () => ({
-        analyzeProject: () =>
-          JSON.stringify({
-            components: {
-              badge: { file: 'src/definition.ts', replacement },
-            },
-            files: {},
-            css: '',
-          }),
-      })
-    );
+    const options: AnimusExtractOptions = { system: './ds.ts' };
+    if (runtimeImport) options.runtimeImport = runtimeImport;
+    return new PluginContext(options, () => ({
+      analyzeProject: () =>
+        JSON.stringify({
+          components: {
+            badge: { file: 'src/definition.ts', replacement },
+          },
+          files: {},
+          css: '',
+        }),
+    }));
   }
 
   it('throws in every mode when an override coexists with a non-.asClass() terminal', () => {
@@ -173,6 +209,46 @@ describe('runtimeImport override guards its terminal contract', () => {
   it('never fires for the default runtime', () => {
     const ctx = contextWithReplacement("createComponent('div', {...})");
     expect(ctx.runAnalysis([])).toBe(true);
+  });
+});
+
+describe('systemPropsModuleSource: keyed on the inputs it generates from', () => {
+  /**
+   * The served module is a pure function of four context inputs, all already
+   * strings. Invalidation belongs to the READER: a memo the writers have to
+   * remember to refresh is a standing obligation, and the one writer that
+   * forgets serves a module from a generation that no longer exists — the
+   * `??=` store-on-generate then makes that staleness permanent and invisible.
+   */
+  it('serves a hand-moved input without any writer refreshing a memo', () => {
+    const ctx = new PluginContext({ system: './ds.ts' });
+
+    const before = systemPropsModuleSource(ctx);
+    ctx.storedSystemPropMapJson = JSON.stringify({ color: 'colors' });
+
+    expect(before).toContain('export const systemPropMap = {};');
+    expect(systemPropsModuleSource(ctx)).toContain(
+      'export const systemPropMap = {"color":"colors"};'
+    );
+  });
+
+  it('tracks the group registry the loaded system carries', () => {
+    // `system` is replaced wholesale by `loadSystem`, so the registry moves
+    // without any per-field write the memo could hang a refresh on.
+    const ctx = new PluginContext({ system: './ds.ts' });
+
+    systemPropsModuleSource(ctx);
+    ctx.system = { ...ctx.system, groupRegistryJson: '{"space":["p","m"]}' };
+
+    expect(systemPropsModuleSource(ctx)).toContain(
+      'export const systemPropGroups = {"space":["p","m"]};'
+    );
+  });
+
+  it('serves identical bytes while the inputs stand still', () => {
+    const ctx = new PluginContext({ system: './ds.ts' });
+
+    expect(systemPropsModuleSource(ctx)).toBe(systemPropsModuleSource(ctx));
   });
 });
 

@@ -3,7 +3,7 @@ import type { ProgramRevision } from '../core/world';
 import type { ComponentContractProvider } from './component-contract';
 import type { DependencyProvider } from './dependency';
 import type { IdentityProvider } from './identity';
-import type { RenderShapeProvider } from './render-shape';
+import type { RenderTreeProvider } from './render-tree';
 import type { ScenarioProvider } from './scenario';
 import type { StyleUniverseProvider } from './style-universe';
 import type { TokenProvider } from './tokens';
@@ -30,6 +30,6 @@ export interface OracleHost {
   /** Unknowns the host already knows about (dynamic values, unmodeled
    * selector structure, geometry-coupled conditions). */
   obligations?(): readonly HostObligation[];
-  shape?: RenderShapeProvider;
+  trees?: RenderTreeProvider;
   contracts?: ComponentContractProvider;
 }

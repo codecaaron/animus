@@ -24,12 +24,7 @@ afterAll(() => {
 
 const FONT_SPECIFIER = '@acme/fonts/inter.woff2';
 
-function makeContext(): {
-  ctx: PluginContext;
-  emitted: string[];
-  resolveSpecifier: (specifier: string) => Promise<string | null>;
-  emitAsset: (fileName: string, source: Uint8Array) => string;
-} {
+function makeContext() {
   mkdirSync(join(scratch, 'src'), { recursive: true });
   writeFileSync(join(scratch, 'src', 'ds.ts'), 'export const ds = {};\n');
   const fontPath = join(scratch, 'inter.woff2');
@@ -60,16 +55,22 @@ function makeContext(): {
   ctx.isProd = true;
 
   const emitted: string[] = [];
+  const resolveSpecifier: Parameters<typeof runBuildStart>[1] = async (
+    specifier
+  ) => (specifier === FONT_SPECIFIER ? fontPath : null);
+  const emitAsset: NonNullable<Parameters<typeof runBuildStart>[2]> = (
+    _fileName,
+    _source
+  ) => {
+    const referenceId = `ref${emitted.length + 1}`;
+    emitted.push(referenceId);
+    return referenceId;
+  };
   return {
     ctx,
     emitted,
-    resolveSpecifier: async (specifier) =>
-      specifier === FONT_SPECIFIER ? fontPath : null,
-    emitAsset: (_fileName, _source) => {
-      const referenceId = `ref${emitted.length + 1}`;
-      emitted.push(referenceId);
-      return referenceId;
-    },
+    resolveSpecifier,
+    emitAsset,
   };
 }
 

@@ -8,14 +8,38 @@ import {
   layerBlock,
   readAllConcat,
   readRequiredCss,
+  writeLaneReceipt,
 } from '@animus-ui/assertions';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
+import routerManifest from 'react-router/package.json' with { type: 'json' };
 
-const BUILD = resolve(import.meta.dirname, '..', 'build');
+const APP_ROOT = resolve(import.meta.dirname, '..');
+const BUILD = resolve(APP_ROOT, 'build');
 // Wrangler serves build/client; semantic CSS must be proven there independently
 // from build/server (canary delta: React Router served-client CSS proof).
 const CLIENT_ROOT = resolve(BUILD, 'client');
+
+function emitLaneReceipt(): void {
+  // Engine identity comes from writeLaneReceipt's retirement guard over the
+  // fixture config (openspec: retire-extract-v1) — never spelled here.
+  //
+  // hostVersion from the fixture's installed host, not the manifest range.
+  const receipt = writeLaneReceipt(
+    resolve(APP_ROOT, '.receipts', 'verify-assert-react-router.json'),
+    {
+      lane: '@animus-ui/react-router-app#verify:assert',
+      host: 'react-router',
+      hostVersion: routerManifest.version,
+      mode: 'production',
+      packageForm: 'workspace',
+      engineConfigPath: resolve(APP_ROOT, 'vite.config.ts'),
+    }
+  );
+  console.log(
+    `[react-router-app:assert] receipt → .receipts/verify-assert-react-router.json (engine=${receipt.engineLoaded}, default=${receipt.engineDefault}, override=${receipt.engineOverride})`
+  );
+}
 
 async function main(): Promise<void> {
   const css = await readRequiredCss(
@@ -44,6 +68,8 @@ async function main(): Promise<void> {
   console.log(
     `[react-router-app:assert] served-client CSS (build/client) + ${jsFiles.length} JS — all assertions passed`
   );
+
+  emitLaneReceipt();
 }
 
 main().catch((error) => {

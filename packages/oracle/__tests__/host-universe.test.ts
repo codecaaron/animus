@@ -5,7 +5,9 @@ import { referencedDimensions } from '../src/core/predicate';
 import { AnimusAdapterError } from '../src/host/animus/errors';
 import { createAnimusHost } from '../src/host/animus/host';
 import { loadAnimusArtifacts } from '../src/host/animus/loader';
+import { asManifest } from '../src/host/animus/manifest-types';
 
+import type { AnimusHostInput } from '../src/host/animus/host';
 import type { StyleRuleRecord } from '../src/providers/style-universe';
 
 const FIXTURE = join(__dirname, 'fixtures/rollup-app');
@@ -13,6 +15,20 @@ const FIXTURE = join(__dirname, 'fixtures/rollup-app');
 const input = loadAnimusArtifacts(FIXTURE);
 const host = createAnimusHost(input);
 const universe = host.universe.universe();
+
+/** The adapter's own reading of the fixture manifest — the same validating
+ *  narrow `createAnimusHost` performs, so the variants below start from the
+ *  emitter's contract instead of a locally restated slice of it. */
+const manifest = asManifest(input.manifest);
+
+/**
+ * The fixture manifest with one sheet added or replaced. `sheets` is read per
+ * key, so a variant is a new map rather than a mutated fixture — the shared
+ * `input` stays the artifact every other test in this file reads.
+ */
+const withSheet = (name: string, css: string): AnimusHostInput => ({
+  manifest: { ...manifest, sheets: { ...manifest.sheets, [name]: css } },
+});
 
 const ALERT_FILE = '../../packages/test-ds/src/components/Alert.tsx';
 
@@ -217,24 +233,19 @@ describe('createAnimusHost — the style universe over the emitted artifacts', (
   });
 
   it('refuses an unmodeled construct in a sheet instead of skipping it', () => {
-    const corrupt = JSON.parse(JSON.stringify(input.manifest)) as {
-      sheets: Record<string, string>;
-    };
-    corrupt.sheets.base =
-      '@layer anm-base {\n@scope (.a) { .b { color: red; } }\n}';
-
-    expect(() => createAnimusHost({ manifest: corrupt })).toThrow(
-      AnimusAdapterError
+    const corrupt = withSheet(
+      'base',
+      '@layer anm-base {\n@scope (.a) { .b { color: red; } }\n}'
     );
-    expect(() => createAnimusHost({ manifest: corrupt })).toThrow(/@scope/);
+
+    expect(() => createAnimusHost(corrupt)).toThrow(AnimusAdapterError);
+    expect(() => createAnimusHost(corrupt)).toThrow(/@scope/);
   });
 
   it('refuses a manifest with no sheets instead of a confident empty universe', () => {
-    const thin = JSON.parse(JSON.stringify(input.manifest)) as Record<
-      string,
-      unknown
-    >;
-    delete thin.sheets;
+    const { sheets, ...thin } = manifest;
+    // Vacuity guard: the fixture really did carry the map being removed.
+    expect(Object.keys(sheets).length).toBeGreaterThan(0);
 
     expect(() => createAnimusHost({ manifest: thin })).toThrow(
       AnimusAdapterError
@@ -243,13 +254,12 @@ describe('createAnimusHost — the style universe over the emitted artifacts', (
   });
 
   it('records unread sheet keys as exclusions instead of dropping them', () => {
-    const widened = JSON.parse(JSON.stringify(input.manifest)) as {
-      sheets: Record<string, string>;
-    };
-    widened.sheets.overrides =
-      '@layer anm-overrides{.animus-Alert-a385f997{color:red !important}}';
+    const widened = withSheet(
+      'overrides',
+      '@layer anm-overrides{.animus-Alert-a385f997{color:red !important}}'
+    );
 
-    const exclusions = createAnimusHost({ manifest: widened })
+    const exclusions = createAnimusHost(widened)
       .universe.universe()
       .exclusions.join('\n');
 

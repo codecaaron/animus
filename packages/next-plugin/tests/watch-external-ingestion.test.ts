@@ -11,24 +11,38 @@
  */
 import {
   mkdirSync,
-  mkdtempSync,
   realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync,
 } from 'fs';
-import { tmpdir } from 'os';
 import { join, relative } from 'path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
-import { ExtractionSession } from '../../extract/session/extraction-session';
-import { resetAnimusGlobals, SYSTEM_CONFIG } from './singleton-fixtures';
+import {
+  ExtractionSession,
+  type SessionOptions,
+} from '../../extract/session/extraction-session';
+import {
+  disposeTempRoots,
+  makeTempRoot,
+  resetAnimusGlobals,
+  SYSTEM_CONFIG,
+} from './singleton-fixtures';
 
+import type {
+  AnalysisSourceEntry,
+  EngineApi,
+} from '@animus-ui/extract/pipeline';
+
+// Each mock carries the engine function's own signature (EngineApi is the
+// contract the session calls through), so recorded calls stay typed at
+// their real slots instead of being re-asserted at every read.
 const mocks = vi.hoisted(() => ({
-  loadSystemModule: vi.fn(),
-  analyzeProject: vi.fn(),
-  clearAnalysisCache: vi.fn(),
-  scanKeyframesExports: vi.fn(),
+  loadSystemModule: vi.fn<EngineApi['loadSystemModule']>(),
+  analyzeProject: vi.fn<EngineApi['analyzeProject']>(),
+  clearAnalysisCache: vi.fn<EngineApi['clearAnalysisCache']>(),
+  scanKeyframesExports: vi.fn<EngineApi['scanKeyframesExports']>(),
 }));
 
 import { setEngineApiOverride } from '../../extract/session/singleton';
@@ -45,7 +59,6 @@ setEngineApiOverride(() => ({
 }));
 
 let restoreGlobals: () => void;
-const tempRoots: string[] = [];
 
 const MANIFEST = JSON.stringify({
   css: '.btn{margin:8;}',
@@ -73,8 +86,7 @@ interface Workspace {
 }
 
 function createWorkspace(systemSource: string = SYSTEM_SOURCE): Workspace {
-  const parent = realpathSync(mkdtempSync(join(tmpdir(), 'animus-ext-watch-')));
-  tempRoots.push(parent);
+  const parent = realpathSync(makeTempRoot('animus-ext-watch-'));
   const app = join(parent, 'app');
   mkdirSync(join(app, 'src'), { recursive: true });
   writeFileSync(join(app, 'package.json'), '{"name":"app"}');
@@ -91,7 +103,7 @@ function createWorkspace(systemSource: string = SYSTEM_SOURCE): Workspace {
   return { parent, app, kit, kitOld };
 }
 
-function makeSession(app: string, options: Record<string, unknown> = {}) {
+function makeSession(app: string, options: Partial<SessionOptions> = {}) {
   const session = new ExtractionSession({
     system: './src/system.ts',
     ...options,
@@ -100,24 +112,22 @@ function makeSession(app: string, options: Record<string, unknown> = {}) {
   return session;
 }
 
+/** The file set the LAST analysis received: slot 0 of the engine call is
+ *  the serialized analysis entry set (`buildAnalysisInputs`' `filesJson`). */
+function lastAnalyzedFiles(): AnalysisSourceEntry[] {
+  const calls = mocks.analyzeProject.mock.calls;
+  return JSON.parse(calls[calls.length - 1][0]);
+}
+
 /** Paths (rootDir-relative) of the file set the LAST analysis received. */
 function lastAnalyzedPaths(): string[] {
-  const calls = mocks.analyzeProject.mock.calls;
-  expect(calls.length).toBeGreaterThan(0);
-  const files = JSON.parse(calls[calls.length - 1][0] as string) as Array<{
-    path: string;
-  }>;
-  return files.map((f) => f.path);
+  expect(mocks.analyzeProject.mock.calls.length).toBeGreaterThan(0);
+  return lastAnalyzedFiles().map((f) => f.path);
 }
 
 /** Source of one path in the LAST analyzed file set, or undefined. */
 function lastAnalyzedSource(path: string): string | undefined {
-  const calls = mocks.analyzeProject.mock.calls;
-  const files = JSON.parse(calls[calls.length - 1][0] as string) as Array<{
-    path: string;
-    source: string;
-  }>;
-  return files.find((f) => f.path === path)?.source;
+  return lastAnalyzedFiles().find((f) => f.path === path)?.source;
 }
 
 beforeEach(() => {
@@ -131,9 +141,7 @@ beforeEach(() => {
 afterEach(() => {
   restoreGlobals();
   vi.restoreAllMocks();
-  for (const root of tempRoots.splice(0)) {
-    rmSync(root, { recursive: true, force: true });
-  }
+  disposeTempRoots();
 });
 
 describe('external membership in the watch pass', () => {
@@ -273,8 +281,9 @@ describe('external membership in the watch pass', () => {
     await session.runFullPipeline();
 
     const kitButtonKey = relative(app, join(kit, 'src', 'Button.tsx'));
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const owners = () => (session as any).externalFileOwners;
+    // The owner record is session-private state; element access keeps the
+    // session's own declared type instead of asserting a local slice.
+    const owners = () => session['externalFileOwners'];
     expect(owners()[kitButtonKey]).toBeDefined();
 
     rmSync(join(kit, 'src', 'Button.tsx'));
@@ -576,9 +585,7 @@ export const system = createSystem({}).extend(kit);
     const kitIndexKey = relative(ws.app, join(distKit, 'dist', 'index.mjs'));
     const kitButtonKey = relative(ws.app, join(distKit, 'dist', 'Button.mjs'));
     expect(lastAnalyzedPaths()).toContain(kitButtonKey);
-    const fileCache = (
-      session as unknown as { fileCache: Map<string, unknown> }
-    ).fileCache;
+    const fileCache = session['fileCache'];
 
     // Directory-granularity event on the dist root (turbopack's
     // filename==null case, webpack's contextDependency).
@@ -612,11 +619,7 @@ export const system = createSystem({}).extend(kit);
 
     const session = makeSession(ws.app);
     await session.runFullPipeline();
-    const recorded = (
-      session as unknown as {
-        externalKeyframesDiagnostics: Array<{ code: string }>;
-      }
-    ).externalKeyframesDiagnostics;
+    const recorded = session['externalKeyframesDiagnostics'];
     expect(recorded.length).toBeGreaterThan(0);
 
     // Remove the kit import — the geological rewrite of the system file —
@@ -629,12 +632,6 @@ export const system = createSystem({});
     );
     await session.runFullPipeline();
 
-    expect(
-      (
-        session as unknown as {
-          externalKeyframesDiagnostics: Array<{ code: string }>;
-        }
-      ).externalKeyframesDiagnostics
-    ).toEqual([]);
+    expect(session['externalKeyframesDiagnostics']).toEqual([]);
   });
 });

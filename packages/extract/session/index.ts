@@ -12,18 +12,26 @@
  * ceremony until the standalone CLI ships its consumer contract
  * (standalone-extraction-cli inc 03/07).
  */
-export {
-  ANIMUS_CSS_MODULE_ID,
-  ExtractionSession,
-  pruneStaleAssets,
-} from './extraction-session';
+export { ExtractionSession, pruneStaleAssets } from './extraction-session';
 export type { SessionOptions, WatchChanges } from './extraction-session';
-export { collectSessionAssets, verifyCommitRecord } from './published-set';
-export type { SessionAsset } from './published-set';
+export {
+  collectSessionAssets,
+  decodeCommitRecord,
+  isLockHolderAlive,
+  readCliLockRecord,
+  verifyCommitRecord,
+} from './published-set';
+export type {
+  CliLockRecord,
+  CommitRecord,
+  SessionAsset,
+} from './published-set';
 export {
   analysisCommitPath,
   analysisInputsPath,
   analysisStatusPath,
+  ANIMUS_ARTIFACT_DIR,
+  ANIMUS_CSS_MODULE_ID,
   CLI_COMMIT_ARTIFACT,
   CLI_LOCK_ARTIFACT,
   MANIFEST_ARTIFACT,
@@ -47,11 +55,13 @@ export {
   runSessionPipeline,
   startTurbopackWatcher,
 } from './turbopack-orchestrator';
-export type { TurbopackWatcherHandle } from './turbopack-orchestrator';
+export type {
+  TurbopackWatcherHandle,
+  TurbopackWatchOutcome,
+} from './turbopack-orchestrator';
 export {
-  claimExclusiveSessionOwner,
   engineApi,
-  getAnalysisPromise,
+  getAnalysisStartedPromise,
   getAnalyzedHashes,
   getManifestJson,
   getReplacementEpoch,
@@ -60,6 +70,6 @@ export {
   getSharedExternalDirs,
   getSharedExternalEntries,
   getSharedSystemProps,
-  setAnalysisPromise,
+  setAnalysisStartedPromise,
   setSharedEngine,
 } from './singleton';

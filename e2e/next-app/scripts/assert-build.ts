@@ -20,7 +20,7 @@ import {
   systemSchemeVariableSpans,
   writeLaneReceipt,
 } from '@animus-ui/assertions';
-import { readFileSync } from 'node:fs';
+import nextManifest from 'next/package.json' with { type: 'json' };
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -43,46 +43,24 @@ async function assertDir(path: string, label: string): Promise<void> {
 }
 
 function emitLaneReceipt(): void {
-  // Retirement regression guard (openspec: retire-extract-v1): v2 is the only
-  // engine. The fixture config MUST NOT reference ANIMUS_ENGINE or set the
-  // engine option — either would reintroduce a retired v1 selection path.
-  const config = readFileSync(resolve(APP_ROOT, 'next.config.ts'), 'utf8');
-  if (config.includes('ANIMUS_ENGINE') || /\bengine\s*:/.test(config)) {
-    throw new AssertionError(
-      'next.config.ts must not reference ANIMUS_ENGINE or set the engine ' +
-        'option — the v1 engine was retired (openspec: retire-extract-v1)'
-    );
-  }
-
-  // v1 is retired (openspec: retire-extract-v1): v2 is the only engine, so the
-  // receipt records v2 as both default and loaded, with no override. Engine
-  // identity is never inferred from plugin/config source (guardrail G3).
-  const engineDefault = 'v2' as const;
-  const engineLoaded = 'v2' as const;
-  const engineOverride = false;
-
+  // Engine identity comes from writeLaneReceipt's retirement guard over the
+  // fixture config (openspec: retire-extract-v1) — never spelled here, and
+  // never inferred from plugin source (guardrail G3).
+  //
   // hostVersion from the fixture's installed host, not the manifest range.
-  const hostVersion = (
-    JSON.parse(
-      readFileSync(
-        resolve(APP_ROOT, 'node_modules', 'next', 'package.json'),
-        'utf8'
-      )
-    ) as { version: string }
-  ).version;
-
-  writeLaneReceipt(resolve(APP_ROOT, '.receipts', 'verify-assert-next.json'), {
-    lane: '@animus-ui/next-app#verify:assert',
-    host: 'next',
-    hostVersion,
-    mode: 'production',
-    engineLoaded,
-    engineDefault,
-    engineOverride,
-    packageForm: 'workspace',
-  });
+  const receipt = writeLaneReceipt(
+    resolve(APP_ROOT, '.receipts', 'verify-assert-next.json'),
+    {
+      lane: '@animus-ui/next-app#verify:assert',
+      host: 'next',
+      hostVersion: nextManifest.version,
+      mode: 'production',
+      packageForm: 'workspace',
+      engineConfigPath: resolve(APP_ROOT, 'next.config.ts'),
+    }
+  );
   console.log(
-    `[next-app:assert] receipt → .receipts/verify-assert-next.json (engine=${engineLoaded}, default=${engineDefault}, override=${engineOverride})`
+    `[next-app:assert] receipt → .receipts/verify-assert-next.json (engine=${receipt.engineLoaded}, default=${receipt.engineDefault}, override=${receipt.engineOverride})`
   );
 }
 

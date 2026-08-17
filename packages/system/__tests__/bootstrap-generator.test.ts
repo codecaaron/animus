@@ -15,6 +15,33 @@ import { describe, expect, it, vi } from 'vitest';
 import { createTheme } from '../src';
 import { createAppearanceBootstrap } from '../src/bootstrap';
 
+/** The `document` slice the generated snippet touches. */
+interface SnippetDocument {
+  documentElement: {
+    setAttribute: (name: string, value: string) => void;
+    removeAttribute: (name: string) => void;
+  };
+}
+
+/** The `localStorage` slice the generated snippet reads. */
+interface SnippetStorage {
+  getItem: (key: string) => string | null;
+  setItem: (key: string, value: string) => void;
+}
+
+/** The snippet's calling convention: free globals shadowed as parameters. */
+type SnippetEntry = (
+  documentGlobal: SnippetDocument,
+  storageGlobal: SnippetStorage
+) => void;
+
+/** The same convention plus the shadowed breakout target the hostile tests add. */
+type ShadowedSnippetEntry = (
+  documentGlobal: SnippetDocument,
+  storageGlobal: SnippetStorage,
+  injectedGlobal: () => void
+) => void;
+
 /** Minimal structural stand-in for a built theme's manifest. */
 function themeWithModes(...modeNames: string[]) {
   return {
@@ -44,7 +71,7 @@ describe('createAppearanceBootstrap — artifact shape', () => {
       storageKey: 'animus:appearance',
     });
 
-    expect(typeof artifact.code).toBe('string');
+    expect(artifact.code).toBeTypeOf('string');
     expect(artifact.code.length).toBeGreaterThan(0);
     expect(artifact.cspHash).toMatch(/^sha256-[A-Za-z0-9+/]+={0,2}$/);
   });
@@ -198,17 +225,18 @@ describe('createAppearanceBootstrap — hostile mode names', () => {
     expect(() => {
       // Construction throws SyntaxError if the embedding broke the literal;
       // `injected` is shadowed so a successful breakout would still be caught.
+      // SAFETY: `new Function` returns a function whose parameters are exactly
+      // the names listed before the body, in that order — `document`,
+      // `localStorage`, `injected`, matching ShadowedSnippetEntry — and `code`
+      // is a generated artifact this suite pins as a self-contained IIFE
+      // statement with no imports, no placeholders and no return value.
       // oxlint-disable-next-line no-new-func
       const run = new Function(
         'document',
         'localStorage',
         'injected',
         code
-      ) as (
-        documentGlobal: unknown,
-        storageGlobal: unknown,
-        injectedGlobal: unknown
-      ) => void;
+      ) as ShadowedSnippetEntry;
       run(documentStub, storageStub, injected);
     }).not.toThrow();
 
@@ -231,11 +259,13 @@ describe('createAppearanceBootstrap — hostile mode names', () => {
     });
     const storageStub = { getItem: () => record, setItem: vi.fn() };
 
+    // SAFETY: `new Function` returns a function whose parameters are exactly
+    // the names listed before the body, in that order — `document` then
+    // `localStorage`, matching SnippetEntry — and `code` is a generated
+    // artifact this suite pins as a self-contained IIFE statement with no
+    // imports, no placeholders and no return value.
     // oxlint-disable-next-line no-new-func
-    const run = new Function('document', 'localStorage', code) as (
-      documentGlobal: unknown,
-      storageGlobal: unknown
-    ) => void;
+    const run = new Function('document', 'localStorage', code) as SnippetEntry;
     run(documentStub, storageStub);
 
     expect(setAttribute).toHaveBeenCalledWith('data-color-mode', 'mid"night');

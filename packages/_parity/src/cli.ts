@@ -353,6 +353,8 @@ async function main() {
         ? `PARITY GATE: FAIL (${snapName} NOT updated; details in last-failure.txt)`
         : baselineStaleFailureMessage()
     );
+    // 1 = THE GATE RAN AND FAILED. See the taxonomy note at the `.catch`
+    // below; this harness's codes are its own, not the CLI's.
     process.exit(1);
   }
   writeFileSync(join(HERE, snapName), full);
@@ -360,6 +362,25 @@ async function main() {
   console.log('PARITY GATE: PASS');
 }
 
+/**
+ * This harness's exit taxonomy — two values, and deliberately NOT the
+ * `packages/cli` taxonomy (`EXIT_USAGE`/`EXIT_ENVIRONMENT`):
+ *
+ *   1 — the gate RAN and FAILED (a real parity regression; see above).
+ *   2 — the harness REFUSED TO RUN: an unhandled throw, which includes
+ *       every argument-safety rejection. A `2` never means "parity is
+ *       broken", so a caller must not read it as a regression.
+ *
+ * Pinned by `__tests__/cli.test.ts` ("a refresh flag without an intent…"
+ * and "an unknown option…"): each asserts status 2 AND asserts that
+ * `PARITY GATE: PASS` was not printed. Nothing else in the repo branches on
+ * these values — `scripts/verify/parity.sh` and its refresh sibling are
+ * `set -euo pipefail` + `exec`, so any nonzero propagates identically.
+ *
+ * Do not unify with `packages/cli`'s codes: `_parity` has no dependency on
+ * that package, and creating one for two integers would be boundary
+ * laundering between two tools answering different questions.
+ */
 main().catch((error) => {
   console.error(String(error?.stack ?? error));
   process.exit(2);

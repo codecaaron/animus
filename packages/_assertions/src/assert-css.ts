@@ -8,6 +8,15 @@ export class AssertionError extends Error {
   }
 }
 
+/**
+ * Collapse ALL whitespace so a minified and a pretty-printed form compare
+ * equal. The one owner for this normalization — post-build assertions run over
+ * output whose whitespace no contract pins.
+ */
+export function compact(value: string): string {
+  return value.replace(/\s+/g, '');
+}
+
 export type LayerMarker = string | RegExp;
 
 export interface LayerOrderConfig {
@@ -389,6 +398,20 @@ function layerSpans(css: string, name: string): [number, number][] {
   return spans;
 }
 
+/**
+ * Body text of the FIRST `@layer <name> { … }` block, brace-matched so a nested
+ * at-rule or rule block never terminates the scan early, or `undefined` when
+ * the sheet declares no such block.
+ *
+ * The single owner of "give me what is inside this layer" — `layerSpans` is the
+ * one brace-matching scan behind both this and `assertKeyframesExtracted`, so a
+ * consumer lane never hand-rolls its own depth counter.
+ */
+export function layerBlockBody(css: string, name: string): string | undefined {
+  const [span] = layerSpans(css, name);
+  return span ? css.slice(span[0], span[1]) : undefined;
+}
+
 export function assertKeyframesExtracted(
   css: string,
   config?: KeyframesAssertionConfig
@@ -627,8 +650,8 @@ function tokenDeclarations(css: string, token: string): string[] {
   for (const m of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
     if (!tokenRe.test(m[1])) continue;
     for (const declaration of m[2].split(';')) {
-      const compact = declaration.trim();
-      if (compact) declarations.push(compact);
+      const trimmed = declaration.trim();
+      if (trimmed) declarations.push(trimmed);
     }
   }
   // Emitted order is the comparison surface: order changes CSS semantics

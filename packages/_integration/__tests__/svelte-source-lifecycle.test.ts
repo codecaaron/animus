@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
 
 import { runPipeline } from './run-pipeline';
+import { usageTags, type UsageFactRecord } from './usage-facts';
 
 interface RawEntry {
   path: string;
@@ -18,7 +19,7 @@ interface Publication {
   ingestion: SourceIngestionResult;
   manifest: {
     css: string;
-    fileFacts: Record<string, { usage: unknown[] }>;
+    fileFacts: Record<string, { usage: UsageFactRecord[] }>;
     usageResidue: Array<{
       binding: string;
       prop: string;
@@ -55,14 +56,6 @@ function extractFacts(filesJson: string): string {
   return JSON.stringify({
     files: manifest.fileFacts,
     parseCount: entries.length,
-  });
-}
-
-function usageTags(fileFacts: { usage: unknown[] }): string[] {
-  return fileFacts.usage.flatMap((fact) => {
-    const element = (fact as { element?: { tag?: { ident?: string } } })
-      .element;
-    return element?.tag?.ident ? [element.tag.ident] : [];
   });
 }
 

@@ -18,11 +18,20 @@ const source = readFileSync(
   'utf8'
 );
 
+/**
+ * The globals a host supplies to the fresh context. Only `process` is ever
+ * installed: it is the one global the module source reads, and each host case
+ * below differs solely in how much of it exists.
+ */
+interface EvaluationHost {
+  process?: { env?: { NODE_ENV?: string } };
+}
+
 const evaluateIsDev = (
   definedNodeEnv?: string,
-  host: Record<string, unknown> = {},
+  host: EvaluationHost = {},
   definedDev?: boolean
-): unknown => {
+): boolean => {
   // The ambient declaration of the define token is TS-only syntax that no
   // host ever evaluates — a bundler emits nothing for it.
   let bundled = source.replace(/^declare .*$/gm, '');
@@ -35,10 +44,17 @@ const evaluateIsDev = (
       JSON.stringify(definedNodeEnv)
     );
   }
-  return runInNewContext(
+  const evaluated: unknown = runInNewContext(
     `${bundled.replaceAll('export const', 'const')}
 IS_DEV;`,
     host
+  );
+  // The constant is a dev-build signal, not a truthiness: a host that produced
+  // anything but a boolean has already broken the contract these cases assert.
+  if (evaluated === true) return true;
+  if (evaluated === false) return false;
+  throw new TypeError(
+    `IS_DEV evaluated to ${String(evaluated)}, not a boolean`
   );
 };
 

@@ -15,18 +15,13 @@
  *
  * Everything is pure over the CSS string; no I/O.
  */
-import { AssertionError } from './assert-css';
+import { AssertionError, compact } from './assert-css';
 
 /** The two OS color-scheme preferences a theme can map a mode onto. */
 export type OsScheme = 'light' | 'dark';
 
 /** The guard the emitter writes so an explicit mode wins purely in CSS. */
 const DEFAULT_GUARD = ':root:not([data-color-mode])';
-
-/** Collapse whitespace so a minified and a pretty-printed form compare equal. */
-function compact(value: string): string {
-  return value.replace(/\s+/g, '');
-}
 
 /** Whitespace-normalized, order-preserving declaration list of a rule body. */
 function declarationList(body: string): string[] {

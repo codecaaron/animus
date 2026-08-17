@@ -126,10 +126,10 @@ export const createInMemoryHost = (config: InMemoryHostConfig): OracleHost => {
         targetDimensions: config.targetDimensions,
         ruleDependencies,
       }),
-    ...(config.program?.label === undefined
-      ? {}
-      : { label: config.program.label }),
   };
+  if (config.program?.label !== undefined) {
+    program.label = config.program.label;
+  }
 
   const universe: StyleUniverse = {
     rules,

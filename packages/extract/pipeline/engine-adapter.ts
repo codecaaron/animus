@@ -22,6 +22,8 @@
  * webpack, or vite (dependency direction: plugins -> extract).
  */
 
+import { parseFilesJson } from './source-ingestion';
+
 /** The stateful v2 engine handle produced by `new native.ExtractEngine(...)`. */
 export interface V2ExtractEngine {
   analyze(filesJson: string): string;
@@ -193,10 +195,7 @@ export function createV2EngineApi(deps: V2EngineAdapterDeps): () => EngineApi {
 
         // Record analyze-time sources for the transform-time drift check.
         const sent = new Map<string, string>();
-        for (const entry of JSON.parse(filesJson) as Array<{
-          path: string;
-          source: string;
-        }>) {
+        for (const entry of parseFilesJson(filesJson, label)) {
           sent.set(entry.path, entry.source);
         }
         store.setSentSources(sent);

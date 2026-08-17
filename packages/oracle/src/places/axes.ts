@@ -46,7 +46,11 @@ export const parseAttributeRequirement = (
   const parsed = /^\[([^\]=]+)(?:=([^\]]*))?\]$/.exec(raw);
   if (parsed === null) return undefined;
   const value = parsed[2]?.replace(/^["']|["']$/g, '');
-  return { name: parsed[1], ...(value === undefined ? {} : { value }) };
+  // A bare `[name]` requirement has no `value` key at all — `elementSatisfies`
+  // reads its absence as "any value satisfies".
+  const requirement: AttributeRequirement = { name: parsed[1] };
+  if (value !== undefined) requirement.value = value;
+  return requirement;
 };
 
 const classListOf = (element: SourceElement): readonly string[] | undefined => {

@@ -19,6 +19,57 @@
  */
 export type DimensionValue = string | number | boolean;
 
+/** Which of the three primitives a dimension value actually carries. */
+export type DimensionValueKind = 'boolean' | 'number' | 'string';
+
+/**
+ * `DimensionValue` is an untagged union, so every consumer that has to branch
+ * on which primitive it holds asks here instead of re-deriving the split.
+ *
+ * The guards accept intrinsic primitives only: a provider that hands back a
+ * boxed `new Number(…)` has not produced a dimension value, and letting one
+ * pass would put an object into a point that `canonicalJson` then refuses.
+ */
+const isIntrinsicPrimitive = (value: DimensionValue): boolean =>
+  Object(value) !== value;
+
+export const isNumberDimensionValue = (
+  value: DimensionValue
+): value is number => {
+  if (!isIntrinsicPrimitive(value)) return false;
+  try {
+    Number.prototype.valueOf.call(value);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+export const isStringDimensionValue = (
+  value: DimensionValue
+): value is string => {
+  if (!isIntrinsicPrimitive(value)) return false;
+  try {
+    String.prototype.valueOf.call(value);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * The kind tag is load-bearing, not a debug label: `inSet` embeds it in the
+ * key it deduplicates and sorts membership by, so these three spellings decide
+ * the normal form of every `in` predicate — and therefore every fact id that
+ * quotes one.
+ */
+export const dimensionValueKind = (value: DimensionValue): DimensionValueKind =>
+  isNumberDimensionValue(value)
+    ? 'number'
+    : isStringDimensionValue(value)
+      ? 'string'
+      : 'boolean';
+
 const SCOPED_DIMENSION = /^(variant|state|prop):([^:]+):(.+)$/;
 
 /** A component-scoped axis, parsed out of its conventional name. */
@@ -33,16 +84,18 @@ export interface ScopedDimension {
  * definition of the naming convention above — providers and engines that
  * re-derive it with their own regexes will disagree on malformed names.
  */
+/** The alternation in `SCOPED_DIMENSION`, as a value the parser can narrow by. */
+const isScopedKind = (value: string): value is ScopedDimension['kind'] =>
+  value === 'variant' || value === 'state' || value === 'prop';
+
 export const parseScopedDimension = (
   dimension: string
 ): ScopedDimension | undefined => {
   const match = SCOPED_DIMENSION.exec(dimension);
   if (match === null) return undefined;
-  return {
-    kind: match[1] as ScopedDimension['kind'],
-    owner: match[2],
-    name: match[3],
-  };
+  const kind = match[1];
+  if (!isScopedKind(kind)) return undefined;
+  return { kind, owner: match[2], name: match[3] };
 };
 
 /** True for a component-scoped axis; everything else every target shares. */

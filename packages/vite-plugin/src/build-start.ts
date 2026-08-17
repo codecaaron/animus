@@ -159,12 +159,12 @@ export async function runBuildStart(
     // edit.
     beforeAnalysis: (accepted) => {
       if (!ctx.isProd) {
-        ctx.fileCache = new Map(
-          accepted.originalEntries.map((entry) => [
-            entry.path,
-            { hash: entry.hash, source: entry.source },
-          ])
-        );
+        ctx.mutateFileCache((cache) => {
+          cache.clear();
+          for (const entry of accepted.originalEntries) {
+            cache.set(entry.path, { hash: entry.hash, source: entry.source });
+          }
+        });
       }
     },
   });

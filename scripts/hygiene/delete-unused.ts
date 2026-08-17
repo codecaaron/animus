@@ -17,50 +17,26 @@
 //   2 = internal error
 
 import { readFileSync, writeFileSync } from 'node:fs';
-// oxc-parser replaces the former `typescript5` alias: the canonical toolchain
-// (typescript@7, native) ships no JS compiler API, and this layer needs an
-// in-process AST surface. oxc-parser emits a TS-ESTree AST (`parseSync` →
-// `{ program, errors, comments }`) with trivia-exclusive `start`/`end` spans,
-// which is all the intra-file dead-decl deleter needs.
 import { parseSync } from 'oxc-parser';
 
+import { type Node, langFor } from './_ast';
 import { emitReceipt } from './_receipts';
+import {
+  type OxlintDiagnostic,
+  ToolReportError,
+  classifyUnusedVar,
+  decodeOxlintReport,
+  readReportInput,
+  unwrapCode,
+} from './_tool-reports';
 
-// Minimal structural view of an oxc ESTree node. oxc nodes carry no `parent`
-// back-link (unlike the TS AST), so `assignParents` wires one on non-enumerable
-// `parent` slots after parse; the recursive walkers below rely on it.
-type Node = {
-  type: string;
-  start: number;
-  end: number;
-  parent?: Node;
-  // Children are navigated structurally (see `childNodes`); the index
-  // signature keeps that ergonomic without enumerating every ESTree field.
-  // oxlint-disable-next-line no-explicit-any
-  [key: string]: any;
-};
-
-// oxc deduces the dialect from the filename extension. Hygiene only ever sees
-// TypeScript, and test fixtures use non-standard extensions (`*.ts.in`), so we
-// pass `lang` explicitly: JSX-bearing files by extension, everything else as
-// `ts`. This guarantees TS syntax (overload signatures, `namespace`, type
-// annotations) parses regardless of the on-disk extension.
-function langFor(filename: string): 'ts' | 'tsx' | 'js' | 'jsx' {
-  if (filename.endsWith('.tsx')) return 'tsx';
-  if (filename.endsWith('.jsx')) return 'jsx';
-  if (
-    filename.endsWith('.js') ||
-    filename.endsWith('.mjs') ||
-    filename.endsWith('.cjs')
-  ) {
-    return 'js';
-  }
-  return 'ts';
-}
+const SOURCE = 'Layer C deleter (delete-unused.ts)';
 
 // A node is any object carrying a string `type` and numeric `start`. This is
 // the discriminator `childNodes`/`assignParents` use to separate AST children
-// from scalar fields (names, flags, regex descriptors, `null` holes).
+// from scalar fields (names, flags, regex descriptors, `null` holes). Local to
+// this pass: `reconcile-after-knip.ts` walks `program.body` positionally and
+// never needs structural child discovery.
 function isNode(value: unknown): value is Node {
   return (
     typeof value === 'object' &&
@@ -132,22 +108,6 @@ function rangeNode(node: Node): Node {
   return node;
 }
 
-type OxlintSpan = {
-  offset: number;
-  length: number;
-  line: number;
-  column: number;
-};
-type OxlintLabel = { label: string; span: OxlintSpan };
-type OxlintDiagnostic = {
-  message: string;
-  code: string;
-  filename: string;
-  labels: OxlintLabel[];
-  // Other oxlint fields (severity, causes, related, url, help) are ignored.
-};
-type OxlintReport = { diagnostics: OxlintDiagnostic[] };
-
 type Target =
   | { kind: 'top-level'; node: Node }
   | { kind: 'var-stmt-single'; stmt: Node }
@@ -166,12 +126,6 @@ type NormalizedDiag = {
   line: number; // 1-indexed
   column: number; // 1-indexed
 };
-
-async function readStdin(): Promise<string> {
-  const chunks: Uint8Array[] = [];
-  for await (const chunk of process.stdin) chunks.push(chunk as Uint8Array);
-  return Buffer.concat(chunks).toString('utf-8');
-}
 
 function findNodeAtOffset(root: Node, offset: number): Node {
   function recurse(node: Node): Node {
@@ -379,30 +333,9 @@ function rangeForTarget(
   }
 }
 
-// Oxlint emits codes wrapped as `eslint(<rule-name>)`. Strip the wrapper
-// so the deleter operates on bare rule names internally.
+// The bare oxlint rule names Layer C acts on (codes arrive wrapped as
+// `eslint(<rule-name>)`; `unwrapCode` from `_tool-reports` strips the wrapper).
 const TARGET_CODES = new Set(['no-unused-vars']);
-
-function unwrapCode(code: string): string {
-  const m = code.match(/^eslint\((.+)\)$/);
-  return m ? m[1] : code;
-}
-
-// Discriminator for oxlint's `no-unused-vars` rule, which folds biome 2.x's
-// noUnusedVariables + noUnusedFunctionParameters + noUnusedImports into one
-// rule. The class is recovered from the diagnostic message prefix (verified
-// empirically against the live binary; live-integration test pins drift
-// detection).
-function classifyUnusedVar(
-  message: string
-): 'decl' | 'import' | 'param' | 'unknown' {
-  if (/^Identifier '[^']+' is imported/.test(message)) return 'import';
-  if (/^Parameter '/.test(message)) return 'param';
-  if (/^(Variable|Function|Class|Type alias|Interface|Enum) '/.test(message)) {
-    return 'decl';
-  }
-  return 'unknown';
-}
 
 function normalizeDiagnostic(d: OxlintDiagnostic): NormalizedDiag | undefined {
   if (!d.labels || d.labels.length === 0) return undefined;
@@ -515,26 +448,8 @@ function groupByFile(
 }
 
 async function main(): Promise<void> {
-  const input = process.argv[2]
-    ? readFileSync(process.argv[2], 'utf-8')
-    : await readStdin();
-
-  let report: OxlintReport;
-  try {
-    report = JSON.parse(input);
-  } catch (e) {
-    console.error('ERROR: failed to parse oxlint JSON input:', e);
-    process.exit(1);
-  }
-
-  if (!report.diagnostics || !Array.isArray(report.diagnostics)) {
-    console.error(
-      'ERROR: oxlint JSON missing `diagnostics` array (oxlint --format=json shape expected)'
-    );
-    process.exit(1);
-  }
-
-  const relevant = report.diagnostics;
+  const input = await readReportInput(process.argv[2]);
+  const relevant = decodeOxlintReport(input, SOURCE).diagnostics;
 
   detectCodeDrift(relevant);
   const byFile = groupByFile(relevant);
@@ -560,6 +475,11 @@ async function main(): Promise<void> {
 
 if (import.meta.main) {
   main().catch((e) => {
+    // Same policy as Layer A/D: see `_tool-reports.ts` § Failure policy.
+    if (e instanceof ToolReportError) {
+      console.error(e.message);
+      process.exit(1);
+    }
     console.error('INTERNAL ERROR:', e);
     process.exit(2);
   });

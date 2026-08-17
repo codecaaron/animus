@@ -63,7 +63,7 @@ for (const name of assetUrls) {
   );
   check(
     `commit records assets/${name}`,
-    typeof commit.payloads[`assets/${name}`]?.hash === 'string'
+    Object.hasOwn(commit.payloads, `assets/${name}`)
   );
 }
 const manifest = JSON.parse(

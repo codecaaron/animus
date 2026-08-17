@@ -50,6 +50,14 @@ export const DEFAULT_ENVIRONMENT: EnvironmentProfile = Object.freeze({
  */
 export const DEFAULT_MAX_CELLS = 512;
 
+/**
+ * The two ways a caller can name a context: a literal point, or the name of a
+ * scenario the host declared. Only the literal one is a reference value, which
+ * is the whole discrimination — a boxed string is not a name.
+ */
+const isPointLiteral = (at: ScenarioPoint | string): at is ScenarioPoint =>
+  Object(at) === at;
+
 export interface OracleRuntime {
   host: OracleHost;
   environment: EnvironmentProfile;
@@ -167,7 +175,7 @@ export const createRuntime = (
 
     resolvePoint: (at) => {
       if (at === undefined) return {};
-      if (typeof at !== 'string') return at;
+      if (isPointLiteral(at)) return at;
       const named = host.scenarios.namedScenarios();
       const found = named[at];
       if (found !== undefined) return found;

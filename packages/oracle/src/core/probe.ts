@@ -134,6 +134,37 @@ export interface CounterexampleWitness {
   boundary?: string;
 }
 
+/**
+ * How a cascade decision moved between two worlds. `engines/diff.ts` is the
+ * only producer and re-exports these names, but the declaration lives here,
+ * beside the `ProbeResult` field it types: the shape is expressible in `core/`
+ * vocabulary alone (`RenderSubject` plus primitives), so nothing about it
+ * obliged the field to be `unknown`.
+ */
+export type SemanticDiffKind =
+  | 'value-changed'
+  | 'winner-changed'
+  | 'rule-activated'
+  | 'rule-deactivated'
+  | 'token-changed'
+  | 'declaration-added'
+  | 'declaration-removed';
+
+export interface SemanticDiffEntry {
+  subject: RenderSubject;
+  property: string;
+  kind: SemanticDiffKind;
+  context: string;
+  before?: string;
+  after?: string;
+}
+
+export interface SemanticDiff {
+  entries: readonly SemanticDiffEntry[];
+  affectedContextClasses: number;
+  unaffectedContextClasses: number;
+}
+
 export interface ProbeResult {
   probeStateId: ProbeStateId;
   worldId: WorldId;
@@ -142,7 +173,9 @@ export interface ProbeResult {
   facts: readonly RenderFact[];
   witnesses?: readonly CounterexampleWitness[];
   causalFindings?: readonly CausalFinding[];
-  semanticDiff?: unknown;
+  /** Present exactly when the operation compared two worlds (`diff`,
+   *  `simulate`); both fill it with `toSemanticDiff(sweep)`. */
+  semanticDiff?: SemanticDiff;
   assumptions: readonly string[];
   unknowns: readonly UnknownObligation[];
   coverage: CoverageReport;

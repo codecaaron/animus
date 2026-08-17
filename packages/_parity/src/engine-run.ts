@@ -6,12 +6,30 @@
  * stdout: canonical JSON  Record<unitId, UnitSurface>
  * argv:   --engine v2 [--dev]
  */
+import {
+  isJsonNumber,
+  isJsonObject,
+  isJsonString,
+  parseJsonObject,
+} from '@animus-ui/assertions';
+import {
+  buildAnalyzeProjectArgs,
+  createV2EngineApi,
+} from '@animus-ui/extract/pipeline';
 import { createRequire } from 'module';
 import { join } from 'path';
 
+import { canonicalJson } from './content-hash';
 import { enumerateUnits } from './corpus';
 
 import type { UnitSurface } from './types';
+import type { JsonObject, JsonValue } from '@animus-ui/assertions';
+import type {
+  EngineApi,
+  ManifestDiagnostic,
+  ProjectManifest,
+  V2ExtractEngine,
+} from '@animus-ui/extract/pipeline';
 
 const ROOT = join(import.meta.dirname, '../../..');
 // Direct relative path — documented workaround for the bun>=1.3.12
@@ -23,78 +41,93 @@ const engine = process.argv.includes('--engine')
   : 'v2';
 const devMode = process.argv.includes('--dev');
 
-interface EngineApi {
-  analyzeProject: (...args: unknown[]) => string;
-  transformFile: (
-    source: string,
-    path: string,
-    manifest: string
-  ) => { code: string; hasComponents: boolean };
-  clearAnalysisCache: () => void;
+/**
+ * The manifest slice this harness records.
+ *
+ * Field names and types are the PRODUCER's (`ProjectManifest` in
+ * `@animus-ui/extract/pipeline`) — the harness keeps no second read model and
+ * no second spelling. Its own observable names stay camelCase below; that
+ * renaming happens where the surface is built, not by re-declaring the wire.
+ *
+ * `sheets` / `component_fragments` / `system_prop_map` / `dynamic_props` are
+ * recorded as canonicalized bytes rather than interpreted, so this ingress
+ * proves only that each is a JSON object. Their element contracts have a
+ * runtime witness already — `packages/_integration/__tests__/
+ * manifest-shape.test.ts` decodes a real manifest against `ProjectManifest` —
+ * and re-checking them here would fork that witness, not strengthen it.
+ */
+interface ParityManifest extends Pick<
+  ProjectManifest,
+  'css' | 'diagnostics' | 'reverse_provenance' | 'parseCount'
+> {
+  sheets: JsonObject;
+  component_fragments: JsonObject;
+  system_prop_map: JsonObject;
+  dynamic_props: JsonObject;
+}
+
+type EngineFailure = Error | JsonValue;
+
+type NativeEngineConstructor =
+  (typeof import('../../extract/crates/extract-v2'))['ExtractEngine'];
+
+interface NativeEngineModuleCandidate {
+  ExtractEngine?: object | null;
+}
+
+interface NativeEngineModule {
+  ExtractEngine: NativeEngineConstructor;
+}
+
+function parseNativeEngineModule(
+  candidate: NativeEngineModuleCandidate
+): NativeEngineModule {
+  if (
+    Object.prototype.toString.call(candidate.ExtractEngine) !==
+    '[object Function]'
+  ) {
+    throw new TypeError('v2 NAPI module is missing ExtractEngine');
+  }
+  // SAFETY: This value comes from the repository-owned index-v2.js bridge;
+  // its generated declaration owns the constructor/instance contract, and the
+  // function-tag check fails loud before this adapter attempts construction.
+  return candidate as NativeEngineModule;
 }
 
 function loadEngine(name: string): EngineApi {
   if (name === 'v2') {
-    // Adapter over the stateful ExtractEngine handle (RF-54): maps the
-    // function-shaped harness interface onto per-unit engine instances.
-    // Config inputs move from analyzeProject args to constructor options;
-    // transformFile reads retained state instead of a manifest. Fail-loud
-    // surfaces (compose emission, resolved extension chains) throw through.
-    const native = require_(join(ROOT, 'packages/extract/index-v2.js'));
-    let instance: InstanceType<typeof native.ExtractEngine> | null = null;
-    return {
-      analyzeProject: (
-        filesJson: unknown,
-        scalesJson: unknown,
-        variableMapJson: unknown,
-        contextualVarsJson: unknown,
-        propConfig: unknown,
-        groupRegistry: unknown,
-        _pkgResolution: unknown,
-        devMode: unknown,
-        _emitterConfig: unknown,
-        selectorAliases: unknown,
-        _selectorOrder: unknown,
-        globalStyleBlocks: unknown,
-        pathAliases: unknown,
-        keyframes: unknown,
-        conditionAliases: unknown,
-        // Appended slots. This shim mirrors a positional signature, so a new
-        // trailing argument that is not named here is silently dropped and the
-        // oracle records engine behavior the real plugins never see.
-        externalDirs: unknown,
-        transformSources: unknown
-      ) => {
-        // NAPI Option fields: undefined → None; null is a conversion error.
-        instance = new native.ExtractEngine({
-          themeJson: scalesJson,
-          variableMapJson,
-          contextualVarsJson: contextualVarsJson ?? undefined,
-          configJson: propConfig,
-          groupRegistryJson: groupRegistry,
-          selectorAliasesJson: selectorAliases ?? undefined,
-          conditionAliasesJson: conditionAliases ?? undefined,
-          // Caller positions 12/13/14 (row-13 review A6): preserve the
-          // supplied harness inputs rather than re-asserting constants.
-          globalStyleBlocksJson: globalStyleBlocks ?? undefined,
-          pathAliasesJson: pathAliases ?? undefined,
-          keyframesJson: keyframes ?? undefined,
-          packageResolutionJson: _pkgResolution ?? undefined,
-          externalDirsJson: externalDirs ?? undefined,
-          transformSourcesJson: transformSources ?? undefined,
-          devMode: Boolean(devMode),
-        });
-        return instance.analyze(filesJson as string);
+    // The oracle drives the SAME adapter the production plugins do
+    // (packages/extract/pipeline/engine-adapter.ts): config inputs move from
+    // the positional analyzeProject tuple to the engine constructor options,
+    // and transformFile reads retained state instead of a manifest. Per-run
+    // state lives in closure variables (the vite-plugin's storage shape).
+    // Fail-loud surfaces (compose emission, resolved extension chains) throw
+    // through.
+    const native = parseNativeEngineModule(
+      require_(join(ROOT, 'packages/extract/index-v2.js'))
+    );
+    let instance: V2ExtractEngine | null = null;
+    let sentSources: Map<string, string> | null = null;
+    let driftWarned = false;
+    return createV2EngineApi({
+      label: 'animus-parity',
+      isV2: () => true,
+      loadNativeEngine: () => native,
+      store: {
+        getEngine: () => instance,
+        setEngine: (next) => {
+          instance = next;
+        },
+        getSentSources: () => sentSources,
+        setSentSources: (next) => {
+          sentSources = next;
+        },
+        getDriftWarned: () => driftWarned,
+        setDriftWarned: (value) => {
+          driftWarned = value;
+        },
       },
-      transformFile: (source: string, path: string, _manifest: string) => {
-        if (!instance)
-          throw new Error('v2 adapter: analyzeProject must run first');
-        return JSON.parse(instance.transformFile(path));
-      },
-      clearAnalysisCache: () => {
-        instance = null;
-      },
-    };
+    })();
   }
   throw new Error(`unknown engine '${name}' — supported: v2`);
 }
@@ -147,25 +180,102 @@ const HARNESS_CONDITION_ALIASES = JSON.stringify({
   },
 });
 
-function fragmentsOf(manifest: Record<string, unknown>) {
-  return (manifest.component_fragments ??
-    manifest.componentFragments ??
-    {}) as Record<string, unknown>;
+function parseJsonObjectField(candidate: JsonValue, field: string): JsonObject {
+  if (!isJsonObject(candidate)) {
+    throw new TypeError(`engine manifest ${field} must be an object`);
+  }
+  return candidate;
 }
 
-/** Key-sorted stringify — native maps can vary iteration order across fresh
- *  processes; the observable is sorted content, not incidental emission
- *  order. */
-function canonicalJson(value: unknown): string {
-  return JSON.stringify(value, (_k, v) => {
-    if (v && typeof v === 'object' && !Array.isArray(v)) {
-      const sorted: Record<string, unknown> = {};
-      for (const key of Object.keys(v).sort())
-        sorted[key] = (v as Record<string, unknown>)[key];
-      return sorted;
+function parseDiagnostics(candidate: JsonValue): ManifestDiagnostic[] {
+  if (!Array.isArray(candidate)) {
+    throw new TypeError('engine manifest diagnostics must be an array');
+  }
+  return candidate.map((diagnostic, index) => {
+    if (
+      !isJsonObject(diagnostic) ||
+      !isJsonString(diagnostic.kind) ||
+      !isJsonString(diagnostic.component) ||
+      !isJsonString(diagnostic.message) ||
+      !isJsonString(diagnostic.file)
+    ) {
+      throw new TypeError(`engine manifest diagnostics[${index}] is malformed`);
     }
-    return v;
+    return {
+      kind: diagnostic.kind,
+      component: diagnostic.component,
+      message: diagnostic.message,
+      file: diagnostic.file,
+    };
   });
+}
+
+function parseReverseProvenance(
+  candidate: JsonValue
+): ProjectManifest['reverse_provenance'] {
+  if (!isJsonObject(candidate)) {
+    throw new TypeError('engine manifest reverse provenance must be an object');
+  }
+  const provenance: ProjectManifest['reverse_provenance'] = {};
+  for (const [parentId, children] of Object.entries(candidate)) {
+    if (!Array.isArray(children) || !children.every(isJsonString)) {
+      throw new TypeError(
+        `engine manifest reverse provenance ${parentId} must be a string array`
+      );
+    }
+    provenance[parentId] = children;
+  }
+  return provenance;
+}
+
+/**
+ * Decode the engine manifest into the recorded slice.
+ *
+ * Every field is read at its ONE emitted spelling. `ProjectManifest` declares
+ * them all as always-present (the Rust `AnalyzeResult` carries no `Option` and
+ * no `skip_serializing_if` at the top level), so a missing field is a producer
+ * change and must fail the harness rather than be defaulted into an empty
+ * observable — a silently-empty observable compares equal to a baseline that
+ * recorded nothing, which is how a real regression would hide.
+ */
+function parseManifest(manifestJson: string): ParityManifest {
+  const candidate = parseJsonObject(manifestJson, 'ExtractEngine.analyze');
+  const css = candidate.css;
+  if (!isJsonString(css)) {
+    throw new TypeError('engine manifest css must be a string');
+  }
+  const parseCount = candidate.parseCount;
+  if (!isJsonNumber(parseCount)) {
+    throw new TypeError('engine manifest parseCount must be a number');
+  }
+
+  return {
+    css,
+    diagnostics: parseDiagnostics(candidate.diagnostics),
+    component_fragments: parseJsonObjectField(
+      candidate.component_fragments,
+      'component fragments'
+    ),
+    reverse_provenance: parseReverseProvenance(candidate.reverse_provenance),
+    system_prop_map: parseJsonObjectField(
+      candidate.system_prop_map,
+      'system prop map'
+    ),
+    dynamic_props: parseJsonObjectField(
+      candidate.dynamic_props,
+      'dynamic props'
+    ),
+    sheets: parseJsonObjectField(candidate.sheets, 'sheets'),
+    parseCount,
+  };
+}
+
+function engineFailureText(failure: EngineFailure): string {
+  if (failure instanceof Error) return failure.stack ?? String(failure);
+  if (isJsonObject(failure) && isJsonString(failure.stack)) {
+    return failure.stack;
+  }
+  return String(failure);
 }
 
 async function main() {
@@ -189,30 +299,36 @@ async function main() {
   for (const unit of units) {
     api.clearAnalysisCache();
     const manifestJson: string = api.analyzeProject(
-      JSON.stringify(unit.files),
-      theme.scalesJson,
-      theme.variableMapJson,
-      theme.contextualVarsJson || null,
-      config.propConfig,
-      config.groupRegistry,
-      '{}',
-      devMode,
-      null,
-      config.selectorAliases ?? null,
-      null,
-      HARNESS_GLOBAL_BLOCKS,
-      null,
-      HARNESS_KEYFRAMES,
-      HARNESS_CONDITION_ALIASES,
-      // externalDirsJson — the harness declares no external packages.
-      null,
-      // Transform sources from the evaluated test system. Without this the
-      // oracle would record every package-shipped transform (`size`,
-      // `gridItem`, …) as unresolvable, blessing a raw-value fallback that
-      // real consumers do not get.
-      config.transformSources ?? null
+      ...buildAnalyzeProjectArgs({
+        filesJson: JSON.stringify(unit.files),
+        scalesJson: theme.scalesJson,
+        variableMapJson: theme.variableMapJson,
+        contextualVarsJson: theme.contextualVarsJson || null,
+        propConfigJson: config.propConfig,
+        groupRegistryJson: config.groupRegistry,
+        packageResolutionJson: '{}',
+        devMode,
+        // emitterConfigJson — the oracle compares raw engine output, so it
+        // declares no bundler emitter identity (runtime import / css module
+        // id / system-props module id all stay at the engine defaults).
+        emitterConfigJson: null,
+        selectorAliasesJson: config.selectorAliases ?? null,
+        globalStyleBlocksJson: HARNESS_GLOBAL_BLOCKS,
+        pathAliasesJson: null,
+        keyframesJson: HARNESS_KEYFRAMES,
+        // staticCssJson — current parity corpus has no forced-emission input.
+        staticCssJson: null,
+        conditionAliasesJson: HARNESS_CONDITION_ALIASES,
+        // externalDirsJson — the harness declares no external packages.
+        externalDirsJson: null,
+        // Transform sources from the evaluated test system. Without this the
+        // oracle would record every package-shipped transform (`size`,
+        // `gridItem`, …) as unresolvable, blessing a raw-value fallback that
+        // real consumers do not get.
+        transformSourcesJson: config.transformSources ?? null,
+      })
     );
-    const manifest = JSON.parse(manifestJson);
+    const manifest = parseManifest(manifestJson);
 
     const code: Record<string, string> = {};
     const hasComponents: Record<string, boolean> = {};
@@ -222,53 +338,45 @@ async function main() {
       hasComponents[f.path] = r.hasComponents;
     }
 
-    const diagnostics = (manifest.diagnostics ?? [])
+    const diagnostics = manifest.diagnostics
       .map(
-        (d: {
-          kind: string;
-          component: string;
-          message: string;
-          file: string;
-        }) => `${d.file}|${d.kind}|${d.component}|${d.message}`
+        (diagnostic) =>
+          `${diagnostic.file}|${diagnostic.kind}|${diagnostic.component}|${diagnostic.message}`
       )
       .sort();
 
     out[unit.id] = {
-      css: manifest.css ?? '',
+      css: manifest.css,
       code,
       hasComponents,
       diagnostics,
       observables: {
-        componentFragmentKeys: Object.keys(fragmentsOf(manifest)).sort(),
-        reverseProvenanceEdges: Object.entries(
-          manifest.reverse_provenance ?? manifest.reverseProvenance ?? {}
-        )
+        componentFragmentKeys: Object.keys(manifest.component_fragments).sort(),
+        reverseProvenanceEdges: Object.entries(manifest.reverse_provenance)
           .flatMap(([parent, children]) =>
-            (children as string[]).map((c) => `${parent}->${c}`)
+            children.map((child) => `${parent}->${child}`)
           )
           .sort(),
-        systemPropMapJson: canonicalJson(
-          manifest.system_prop_map ?? manifest.systemPropMap ?? {}
-        ),
-        dynamicPropsJson: canonicalJson(
-          manifest.dynamic_props ?? manifest.dynamicProps ?? {}
-        ),
-        sheetsJson: canonicalJson(manifest.sheets ?? {}),
-        componentFragmentsJson: canonicalJson(fragmentsOf(manifest)),
+        // Key-sorted via the comparator's own canonical form — native maps
+        // can vary iteration order across fresh processes; the observable is
+        // sorted content, not incidental emission order.
+        systemPropMapJson: canonicalJson(manifest.system_prop_map),
+        dynamicPropsJson: canonicalJson(manifest.dynamic_props),
+        sheetsJson: canonicalJson(manifest.sheets),
+        componentFragmentsJson: canonicalJson(manifest.component_fragments),
       },
-      parseCount:
-        typeof manifest.timing?.parseCount === 'number'
-          ? manifest.timing.parseCount
-          : typeof manifest.parseCount === 'number'
-            ? manifest.parseCount
-            : null,
+      parseCount: manifest.parseCount,
     };
   }
 
   process.stdout.write(JSON.stringify(out, null, 1));
 }
 
-main().catch((e) => {
-  process.stderr.write(String(e?.stack ?? e));
+/** 2 = the harness refused to run, matching `cli.ts`'s taxonomy (documented
+ *  in full at its `.catch`). This subprocess never emits a 1: it reports
+ *  engine facts on stdout and lets `cli.ts` decide whether the gate passed,
+ *  so "ran and failed" is not a state this entry point can be in. */
+main().catch((error: EngineFailure) => {
+  process.stderr.write(engineFailureText(error));
   process.exit(2);
 });

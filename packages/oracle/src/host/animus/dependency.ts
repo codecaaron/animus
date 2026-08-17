@@ -52,8 +52,11 @@ export const tokenClosure = (
   const seen = new Set<string>();
   const queue = [...seeds];
 
-  while (queue.length > 0) {
-    const variable = queue.shift() as string;
+  // Breadth-first over a queue that grows as it is walked: the cursor never
+  // passes `queue.length`, and references appended during the walk are visited
+  // in the same order a front-shifting queue visited them.
+  for (let index = 0; index < queue.length; index += 1) {
+    const variable = queue[index];
     if (seen.has(variable)) continue;
     seen.add(variable);
 

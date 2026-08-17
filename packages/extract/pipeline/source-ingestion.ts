@@ -17,6 +17,71 @@ export interface RawSourceEntry {
   hash?: string;
 }
 
+/**
+ * The value domain of `filesJson` — exactly what `JSON.parse` produces for the
+ * serialized analysis corpus. Declared beside the entry type it narrows to, so
+ * the guards that decide it belong to this boundary rather than to whichever
+ * consumer happened to decode first.
+ */
+type FilesJsonValue =
+  | null
+  | boolean
+  | number
+  | string
+  | FilesJsonValue[]
+  | { [key: string]: FilesJsonValue };
+
+/**
+ * One decoded corpus entry. Keys beyond `RawSourceEntry`'s are kept addressable
+ * rather than dropped: callers that re-serialize the corpus after editing it
+ * (the vite-plugin's empty-source rehydration) must not silently strip fields a
+ * newer writer added.
+ */
+export type SerializedSourceEntry = RawSourceEntry & {
+  [key: string]: FilesJsonValue;
+};
+
+function isSerializedSourceEntry(
+  value: FilesJsonValue
+): value is SerializedSourceEntry {
+  if (!(value instanceof Object) || Array.isArray(value)) return false;
+  return (
+    String(value.path) === value.path &&
+    String(value.source) === value.source &&
+    (value.hash === undefined || String(value.hash) === value.hash)
+  );
+}
+
+/**
+ * Decode a serialized analysis corpus (`filesJson`).
+ *
+ * `filesJson` is animus's OWN wire — `run-analysis.ts` writes it with
+ * `JSON.stringify(fileEntries)` and every reader is in this repository. A
+ * payload that is not an array of source entries is therefore a producer bug,
+ * never user input, so this throws instead of yielding an empty corpus: an
+ * empty corpus is indistinguishable from "the project has no files" and would
+ * publish an empty stylesheet as a success.
+ *
+ * The throw is the single policy. Call sites that own a documented failure
+ * channel translate it there (the Turbopack loader answers a committed-artifact
+ * decode failure with `ANIMUS_ARTIFACT_READ_TORN`); none of them swallow it.
+ *
+ * `context` names the reader in the message — the same bytes reach three
+ * decoders and the failure has to say which one refused them.
+ */
+export function parseFilesJson(
+  filesJson: string,
+  context: string
+): SerializedSourceEntry[] {
+  const candidate: FilesJsonValue = JSON.parse(filesJson);
+  if (!Array.isArray(candidate) || !candidate.every(isSerializedSourceEntry)) {
+    throw new TypeError(
+      `[${context}] analysis files JSON must be an array of {path, source} entries`
+    );
+  }
+  return candidate;
+}
+
 export interface OriginalSourceEntry {
   path: string;
   source: string;
@@ -616,6 +681,40 @@ export function withoutInvalidOriginals(
     ),
     ownership,
   };
+}
+
+/**
+ * Project external-package ownership from raw originals onto the generated
+ * analysis children the ingestion produced — the join the cross-source token
+ * contract runs through.
+ *
+ * Diagnostics are raised against ANALYSIS paths (an `.mdx`/`.svelte` original
+ * is analyzed as its generated `.tsx` child), while package ownership is only
+ * ever recorded for the raw original a discovery walk or watcher event named.
+ * Without this projection a violation inside a generated child correlates to
+ * no package and is silently dropped.
+ *
+ * The result REPLACES the caller's owner map: an original that has left the
+ * corpus takes its projected children with it, so a stale owner cannot
+ * outlive the file it described. Every host projects at the same point — after
+ * ingestion, before the analysis result is enforced — so two hosts cannot
+ * raise different diagnostics for one kit (precedent:
+ * `collectExternalPackageSources`).
+ */
+export function projectExternalFileOwners(
+  result: SourceIngestionResult,
+  rawOwners: Readonly<Record<string, string>>
+): Record<string, string> {
+  const projected: Record<string, string> = {};
+  for (const owner of Object.values(result.ownership)) {
+    const packageOwner = rawOwners[owner.originalPath];
+    if (!packageOwner) continue;
+    projected[owner.originalPath] = packageOwner;
+    for (const analysisPath of owner.analysisPaths) {
+      projected[analysisPath] = packageOwner;
+    }
+  }
+  return projected;
 }
 
 export interface SourceIngestorHost {

@@ -1,5 +1,9 @@
 import { canonicalJson } from './identity';
-import { enumerateCells } from './scenario';
+import {
+  dimensionValueKind,
+  enumerateCells,
+  isNumberDimensionValue,
+} from './scenario';
 
 import type { DimensionValue, ScenarioDomain, ScenarioPoint } from './scenario';
 
@@ -26,6 +30,9 @@ export type Predicate =
   | { kind: 'or'; operands: readonly Predicate[] }
   | { kind: 'not'; operand: Predicate };
 
+/** The one threshold node, named so builders and readers share its contract. */
+type RangePredicate = Extract<Predicate, { kind: 'range' }>;
+
 export interface RangeOptions {
   min?: number;
   minInclusive?: boolean;
@@ -37,7 +44,7 @@ export const TRUE: Predicate = Object.freeze({ kind: 'true' as const });
 export const FALSE: Predicate = Object.freeze({ kind: 'false' as const });
 
 const valueKey = (value: DimensionValue): string =>
-  `${typeof value}:${canonicalJson(value)}`;
+  `${dimensionValueKind(value)}:${canonicalJson(value)}`;
 
 export const eq = (dim: string, value: DimensionValue): Predicate => ({
   kind: 'eq',
@@ -56,8 +63,9 @@ export const inSet = (
 ): Predicate => {
   const byKey = new Map<string, DimensionValue>();
   for (const value of values) byKey.set(valueKey(value), value);
-  const keys = Array.from(byKey.keys()).sort();
-  const unique = keys.map((key) => byKey.get(key) as DimensionValue);
+  const unique = Array.from(byKey.entries())
+    .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+    .map(([, value]) => value);
 
   if (unique.length === 0) return FALSE;
   if (unique.length === 1) return eq(dim, unique[0]);
@@ -70,14 +78,7 @@ export const inSet = (
  * depends on a reader remembering the default.
  */
 export const range = (dim: string, opts: RangeOptions): Predicate => {
-  const node: {
-    kind: 'range';
-    dim: string;
-    min?: number;
-    minInclusive?: boolean;
-    max?: number;
-    maxInclusive?: boolean;
-  } = { kind: 'range', dim };
+  const node: RangePredicate = { kind: 'range', dim };
 
   if (opts.min !== undefined) {
     if (!Number.isFinite(opts.min)) {
@@ -159,10 +160,7 @@ export const not = (p: Predicate): Predicate => {
   return { kind: 'not', operand: p };
 };
 
-const inRange = (
-  value: number,
-  p: Extract<Predicate, { kind: 'range' }>
-): boolean => {
+const inRange = (value: number, p: RangePredicate): boolean => {
   if (p.min !== undefined) {
     const ok = (p.minInclusive ?? true) ? value >= p.min : value > p.min;
     if (!ok) return false;
@@ -201,7 +199,7 @@ export const evalPredicate = (p: Predicate, point: ScenarioPoint): boolean => {
       );
     case 'range': {
       const value = point[p.dim];
-      return typeof value === 'number' && inRange(value, p);
+      return isNumberDimensionValue(value) && inRange(value, p);
     }
     case 'and':
       return p.operands.every((operand) => evalPredicate(operand, point));
@@ -257,12 +255,12 @@ export const collectCuts = (p: Predicate): Record<string, number[]> => {
 
   walk(p, (leaf) => {
     if (leaf.kind === 'eq') {
-      if (typeof leaf.value === 'number') push(leaf.dim, leaf.value);
+      if (isNumberDimensionValue(leaf.value)) push(leaf.dim, leaf.value);
       return;
     }
     if (leaf.kind === 'in') {
       for (const value of leaf.values) {
-        if (typeof value === 'number') push(leaf.dim, value);
+        if (isNumberDimensionValue(value)) push(leaf.dim, value);
       }
       return;
     }
@@ -272,13 +270,15 @@ export const collectCuts = (p: Predicate): Record<string, number[]> => {
     }
   });
 
-  const out: Record<string, number[]> = {};
-  for (const dim of Array.from(collected.keys()).sort()) {
-    const values = Array.from(collected.get(dim) as Set<number>);
-    values.sort((a, b) => a - b);
-    out[dim] = values;
-  }
-  return out;
+  return Object.fromEntries(
+    Array.from(collected.entries())
+      .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+      .map(([dim, values]): [string, number[]] => {
+        const cuts = Array.from(values);
+        cuts.sort((a, b) => a - b);
+        return [dim, cuts];
+      })
+  );
 };
 
 /**
@@ -295,7 +295,7 @@ export const satisfiableOverDomain = (
 ): boolean =>
   enumerateCells(domain, cuts).some((cell) => evalPredicate(p, cell.point));
 
-const describeRange = (p: Extract<Predicate, { kind: 'range' }>): string => {
+const describeRange = (p: RangePredicate): string => {
   const lower =
     p.min === undefined
       ? ''

@@ -88,19 +88,19 @@ export const applyDeltas = (
   world: RenderWorld,
   deltas: readonly WorldDelta[]
 ): RenderWorld => {
-  const scenario: Record<string, DimensionDomain> = { ...world.scenario };
+  const pinned = new Map<string, DimensionDomain>();
 
   for (const delta of deltas) {
     if (delta.kind === 'force-dimension') {
-      scenario[delta.dimension] = { kind: 'finite', values: [delta.value] };
+      pinned.set(delta.dimension, { kind: 'finite', values: [delta.value] });
     } else if (delta.kind === 'pin-dimension-domain') {
-      scenario[delta.dimension] = delta.domain;
+      pinned.set(delta.dimension, delta.domain);
     }
   }
 
   return {
     ...world,
-    scenario,
+    scenario: { ...world.scenario, ...Object.fromEntries(pinned) },
     interventions: [...world.interventions, ...deltas],
   };
 };

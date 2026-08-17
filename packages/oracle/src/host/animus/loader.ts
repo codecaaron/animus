@@ -2,15 +2,24 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { AnimusAdapterError } from './errors';
-import { isRecord } from './manifest-types';
+import { isManifestJsonObject, isManifestJsonString } from './manifest-types';
 
 import type { AnimusHostInput } from './host';
+import type { ManifestJsonValue } from './manifest-types';
 
 export const MANIFEST_FILE = 'manifest.json';
 
 export const STYLESHEET_FILE = 'styles.css';
 
 export const COMMIT_FILE = 'commit.json';
+
+/**
+ * The manifest keeps travelling untrusted (`asManifest` is its validator);
+ * `commit.json` is read key-by-key through the manifest module's guards, so
+ * nothing in this module ever reads a field off a value it has not decided the
+ * domain of first.
+ */
+const parseArtifactJson = (text: string): ManifestJsonValue => JSON.parse(text);
 
 /**
  * Read one `.animus` output directory into a host input.
@@ -45,9 +54,9 @@ export const loadAnimusArtifacts = (dir: string): AnimusHostInput => {
   }
 
   const raw = readFileSync(manifestPath, 'utf8');
-  let manifest: unknown;
+  let manifest: ManifestJsonValue;
   try {
-    manifest = JSON.parse(raw) as unknown;
+    manifest = parseArtifactJson(raw);
   } catch {
     throw new AnimusAdapterError(`${manifestPath} is not valid JSON`, {
       construct: MANIFEST_FILE,
@@ -59,11 +68,15 @@ export const loadAnimusArtifacts = (dir: string): AnimusHostInput => {
   let label: string | undefined;
   if (existsSync(commitPath)) {
     try {
-      const commit = JSON.parse(readFileSync(commitPath, 'utf8')) as unknown;
-      const payloads = isRecord(commit) ? commit.payloads : undefined;
-      const entry = isRecord(payloads) ? payloads[MANIFEST_FILE] : undefined;
-      const hash = isRecord(entry) ? entry.hash : undefined;
-      if (typeof hash === 'string') label = `animus-commit:${hash}`;
+      const commit = parseArtifactJson(readFileSync(commitPath, 'utf8'));
+      const payloads = isManifestJsonObject(commit)
+        ? commit.payloads
+        : undefined;
+      const entry = isManifestJsonObject(payloads)
+        ? payloads[MANIFEST_FILE]
+        : undefined;
+      const hash = isManifestJsonObject(entry) ? entry.hash : undefined;
+      if (isManifestJsonString(hash)) label = `animus-commit:${hash}`;
     } catch {
       throw new AnimusAdapterError(`${commitPath} is not valid JSON`, {
         construct: COMMIT_FILE,
@@ -71,9 +84,14 @@ export const loadAnimusArtifacts = (dir: string): AnimusHostInput => {
     }
   }
 
-  return {
+  const input: AnimusHostInput = {
     manifest,
     stylesheetText: readFileSync(stylesheetPath, 'utf8'),
-    ...(label === undefined ? {} : { label }),
   };
+  // No `commit.json`, or one without a recorded manifest hash, leaves `label`
+  // off the input entirely — `createAnimusHost` distinguishes that from a
+  // label it was given.
+  if (label !== undefined) input.label = label;
+
+  return input;
 };

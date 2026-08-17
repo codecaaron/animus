@@ -88,7 +88,7 @@ When `src/index.ts` exists for an external package, the plugin SHALL redirect th
 
 ### Requirement: Transform/loader exemption for external packages
 
-External package files SHALL bypass the standard extension filter (`/\.[jt]sx?$/`) and `node_modules` exclusion. The manifest check is the gatekeeper — if a file has manifest entries, it SHALL be transformed regardless of extension or location.
+External package files SHALL bypass the standard extension filter (the shared `ENGINE_TRANSFORM_EXTENSIONS` file class) and `node_modules` exclusion. The manifest check is the gatekeeper — if a file has manifest entries, it SHALL be transformed regardless of extension or location.
 
 #### Scenario: Manifest-listed dist file is transformed despite extension and location
 

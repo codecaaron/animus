@@ -17,41 +17,12 @@
 
 import { readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-// oxc-parser replaces the former `typescript5` alias — the canonical
-// typescript@7 (native) ships no JS compiler API. See delete-unused.ts. This
-// pass only needs the module's top-level export surface, which oxc's
-// TS-ESTree `program.body` exposes directly.
 import { parseSync } from 'oxc-parser';
 
+// This pass walks only top-level statements and export specifiers, so it uses
+// the shared node view without wiring parent back-links.
+import { type Node, langFor } from './_ast';
 import { emitReceipt } from './_receipts';
-
-// Minimal structural view of an oxc ESTree node (see delete-unused.ts). This
-// pass walks only top-level statements and export specifiers, so no parent
-// back-links are needed here.
-type Node = {
-  type: string;
-  start: number;
-  end: number;
-  // oxlint-disable-next-line no-explicit-any
-  [key: string]: any;
-};
-
-// oxc deduces the dialect from the filename extension. Hygiene only ever sees
-// TypeScript, and test fixtures use non-standard extensions (`*.ts.in`), so we
-// pass `lang` explicitly: JSX-bearing files by extension, everything else as
-// `ts`.
-function langFor(filename: string): 'ts' | 'tsx' | 'js' | 'jsx' {
-  if (filename.endsWith('.tsx')) return 'tsx';
-  if (filename.endsWith('.jsx')) return 'jsx';
-  if (
-    filename.endsWith('.js') ||
-    filename.endsWith('.mjs') ||
-    filename.endsWith('.cjs')
-  ) {
-    return 'js';
-  }
-  return 'ts';
-}
 
 // Build a 0-indexed array of line-start offsets from `text`, used to recover a
 // 1-indexed line number for a byte offset (replaces TS

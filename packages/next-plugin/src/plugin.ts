@@ -5,14 +5,14 @@ import {
 import {
   ANIMUS_CSS_MODULE_ID,
   ExtractionSession,
-  getAnalysisPromise,
+  getAnalysisStartedPromise,
   getReplacementEpoch,
   getSharedCss,
   getSharedExternalDirs,
   getSharedExternalEntries,
   replacementEpochPath,
   sessionArtifactDir,
-  setAnalysisPromise,
+  setAnalysisStartedPromise,
   setSharedEngine,
   stylesPath,
 } from '@animus-ui/extract/session';
@@ -342,14 +342,14 @@ export class AnimusWebpackPlugin {
       this.adoptCompilerContext(_compiler);
       this.extractAliases(_compiler);
 
-      const existing = getAnalysisPromise();
+      const existing = getAnalysisStartedPromise();
       if (existing) {
         await existing;
         return;
       }
 
       const promise = this.session.runFullPipeline();
-      setAnalysisPromise(promise);
+      setAnalysisStartedPromise(promise);
       await promise;
     });
 
@@ -361,12 +361,12 @@ export class AnimusWebpackPlugin {
         this.extractAliases(_compiler);
 
         if (!this.initialized) {
-          const existing = getAnalysisPromise();
+          const existing = getAnalysisStartedPromise();
           if (existing) {
             await existing;
           } else {
             const promise = this.session.runFullPipeline();
-            setAnalysisPromise(promise);
+            setAnalysisStartedPromise(promise);
             await promise;
           }
           this.initialized = true;

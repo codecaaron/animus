@@ -1,11 +1,11 @@
 import { join, resolve } from 'path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { transformSource } from '../src/transform';
 import { makeContextProbe, makeEnvGraph } from './context-probe';
 
-import type { CssSheets } from '../src/context';
 import type { ContextProbe } from './context-probe';
+import type { ManifestSheets } from '@animus-ui/extract/pipeline';
 
 /**
  * The compatibility publication barrier (openspec: dev-transform-coherence,
@@ -19,7 +19,7 @@ import type { ContextProbe } from './context-probe';
 
 const ROOT = join('/tmp', 'animus-barrier-root');
 
-const SHEETS: CssSheets = {
+const SHEETS: ManifestSheets = {
   declaration: '',
   global: '',
   base: '',
@@ -34,7 +34,12 @@ interface BarrierProbe extends ContextProbe {
   invalidatedNodes: string[];
 }
 
-function makeProbe(): BarrierProbe {
+/** Per-file engine outcome: extracted, component-less, or a hard failure. */
+type EngineOutcome = 'extracted' | 'no-components' | 'throws';
+
+function makeProbe(
+  outcomeFor: (relativePath: string) => EngineOutcome = () => 'extracted'
+): BarrierProbe {
   const graph = makeEnvGraph({ rootDir: ROOT, file: 'src/Consumer.tsx' });
   const base = makeContextProbe(ROOT, {
     externalDirOwners: {},
@@ -44,7 +49,14 @@ function makeProbe(): BarrierProbe {
     storedManifestJson: '{}',
     storedSheets: SHEETS,
     engineApi: () => ({
-      transformFile: () => ({ hasComponents: true, code: 'TRANSFORMED' }),
+      transformFile: (_source: string, path: string) => {
+        const outcome = outcomeFor(path);
+        if (outcome === 'throws') throw new Error('planned transform failure');
+        return {
+          hasComponents: outcome === 'extracted',
+          code: outcome === 'extracted' ? 'TRANSFORMED' : '',
+        };
+      },
     }),
     devServer: {
       environments: {
@@ -57,11 +69,13 @@ function makeProbe(): BarrierProbe {
 
 /** Serve the consumer while its parent is unresolved: a raw fallback. */
 async function serveConsumerRaw(probe: BarrierProbe): Promise<void> {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const ctx = probe.ctx as any;
-  ctx.fileCache.set('src/Consumer.tsx', { hash: 'h', source: 's' });
-  ctx.fileCache.set('src/Parent.tsx', { hash: 'h2', source: 's2' });
-  ctx.storedManifest = {
+  probe.ctx.mutateFileCache((cache) =>
+    cache.set('src/Consumer.tsx', { hash: 'h', source: 's' })
+  );
+  probe.ctx.mutateFileCache((cache) =>
+    cache.set('src/Parent.tsx', { hash: 'h2', source: 's2' })
+  );
+  probe.ctx.storedManifest = {
     components: {},
     files: {},
     diagnostics: [
@@ -83,9 +97,7 @@ async function serveConsumerRaw(probe: BarrierProbe): Promise<void> {
 
 /** Publish the recovered manifest: both files extracted, provenance linked. */
 function publishRecoveredManifest(probe: BarrierProbe): void {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const ctx = probe.ctx as any;
-  ctx.storedManifest = {
+  probe.ctx.storedManifest = {
     components: {
       'src/Parent.tsx::Parent': { file: 'src/Parent.tsx', replacement: 'rp' },
       'src/Consumer.tsx::Fancy': {
@@ -99,7 +111,7 @@ function publishRecoveredManifest(probe: BarrierProbe): void {
     },
     diagnostics: [],
   };
-  ctx.reverseProvenance = {
+  probe.ctx.reverseProvenance = {
     'src/Parent.tsx::Parent': ['src/Consumer.tsx::Fancy'],
   };
 }
@@ -156,13 +168,97 @@ describe('compatibility publication barrier', () => {
     expect(parentOut?.code).toContain('TRANSFORMED');
   });
 
+  /**
+   * The two raw-serve exits taken AFTER the manifest confirmed this file is
+   * extracted. Both produce exactly the pair the barrier exists to prevent —
+   * a raw consumer running `.extend()` against an extracted ancestor — so
+   * both must land in the fallback record, not just the unresolved-parent
+   * exit above.
+   */
+  const POST_MANIFEST_RAW_EXITS = [
+    ['a non-strict transform failure', 'throws'],
+    ['an engine result carrying no components', 'no-components'],
+  ] as const;
+
+  it.each(POST_MANIFEST_RAW_EXITS)(
+    'withholds the ancestor after %s serves the consumer raw',
+    async (_label, outcome) => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        const probe = makeProbe((path) =>
+          path === 'src/Consumer.tsx' ? outcome : 'extracted'
+        );
+        publishRecoveredManifest(probe);
+
+        // The consumer is manifest-known and extracted-by-belief, yet the
+        // hook serves it raw.
+        expect(
+          await transformSource(
+            probe.ctx,
+            'export const Fancy = 1;',
+            resolve(ROOT, 'src/Consumer.tsx')
+          )
+        ).toBeNull();
+
+        await expect(
+          transformSource(
+            probe.ctx,
+            'export const Parent = 1;',
+            resolve(ROOT, 'src/Parent.tsx')
+          )
+        ).rejects.toThrow(/ANIMUS_COMPOSITION_RECOVERING/);
+        expect(probe.invalidatedNodes).toContain(
+          resolve(ROOT, 'src/Consumer.tsx')
+        );
+      } finally {
+        warn.mockRestore();
+      }
+    }
+  );
+
+  it('clears the record once the file serves extracted again', async () => {
+    // Worst ordering from the audit: fallback → extracted → fallback. The
+    // clear must be the file's own state transition, not a one-shot.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      let consumerOutcome: EngineOutcome = 'throws';
+      const probe = makeProbe((path) =>
+        path === 'src/Consumer.tsx' ? consumerOutcome : 'extracted'
+      );
+      publishRecoveredManifest(probe);
+
+      await transformSource(
+        probe.ctx,
+        'export const Fancy = 1;',
+        resolve(ROOT, 'src/Consumer.tsx')
+      );
+      consumerOutcome = 'extracted';
+      await transformSource(
+        probe.ctx,
+        'export const Fancy = 1;',
+        resolve(ROOT, 'src/Consumer.tsx')
+      );
+
+      const parentOut = await transformSource(
+        probe.ctx,
+        'export const Parent = 1;',
+        resolve(ROOT, 'src/Parent.tsx')
+      );
+      expect(parentOut?.code).toContain('TRANSFORMED');
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it('ignores raw serves that carry no unresolved-extension drop', async () => {
     const probe = makeProbe();
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const ctx = probe.ctx as any;
     // A plain helper file: known, no manifest entries, no drop diagnostic.
-    ctx.fileCache.set('src/util.ts', { hash: 'h', source: 's' });
-    ctx.fileCache.set('src/Parent.tsx', { hash: 'h2', source: 's2' });
+    probe.ctx.mutateFileCache((cache) =>
+      cache.set('src/util.ts', { hash: 'h', source: 's' })
+    );
+    probe.ctx.mutateFileCache((cache) =>
+      cache.set('src/Parent.tsx', { hash: 'h2', source: 's2' })
+    );
     expect(
       await transformSource(
         probe.ctx,

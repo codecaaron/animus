@@ -1,3 +1,4 @@
+import { ENGINE_TRANSFORM_EXTENSIONS } from '@animus-ui/extract/pipeline';
 import { describe, expect, test } from 'vitest';
 
 import {
@@ -74,8 +75,16 @@ describe('buildTurbopackConfig', () => {
       sessionDir: SESSION_DIR,
     });
 
-  test('keeps native Svelte usage files outside the Turbopack loader glob', () => {
+  test('the loader glob is the shared engine-transform file class, verbatim', () => {
+    // The glob is a spelling of `ENGINE_TRANSFORM_EXTENSIONS`, never a
+    // second answer to "which file classes does the engine transform
+    // rewrite" — the Vite hook and the webpack rule test the same set.
+    expect(ANIMUS_TURBOPACK_RULE_GLOB).toBe(
+      `*.{${ENGINE_TRANSFORM_EXTENSIONS.join(',')}}`
+    );
     expect(ANIMUS_TURBOPACK_RULE_GLOB).toBe('*.{ts,tsx,js,jsx,mjs}');
+    // Native Svelte usage stays outside it (the projected `.instance.tsx`
+    // is what the engine sees).
     expect(ANIMUS_TURBOPACK_RULE_GLOB).not.toContain('svelte');
   });
 

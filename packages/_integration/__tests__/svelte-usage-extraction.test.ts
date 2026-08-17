@@ -8,6 +8,7 @@ import { join, relative } from 'node:path';
 import { describe, expect, test } from 'vitest';
 
 import { runPipeline } from './run-pipeline';
+import { usageTags } from './usage-facts';
 
 const FIXTURES_ROOT = join(__dirname, '..', 'fixtures');
 const FIXTURE_DIR = join(FIXTURES_ROOT, 'components', 'svelte-usage');
@@ -43,14 +44,6 @@ async function projectFixture(filename: string) {
   }
   expect(result.entries).toHaveLength(1);
   return result.entries[0];
-}
-
-function usageTags(fileFacts: { usage: unknown[] }): string[] {
-  return fileFacts.usage.flatMap((fact) => {
-    const element = (fact as { element?: { tag?: { ident?: string } } })
-      .element;
-    return element?.tag?.ident ? [element.tag.ident] : [];
-  });
 }
 
 describe('isolated native Svelte usage projection', () => {

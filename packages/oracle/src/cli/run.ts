@@ -46,6 +46,7 @@ import type { WorldDelta } from '../core/world';
 import type { OracleSymptom } from '../engines/explain';
 import type { Oracle } from '../engines/oracle';
 import type { AnimusHost } from '../host/animus/host';
+import type { SnapshotOptions } from '../places/snapshot';
 import type { TargetResolution } from '../providers/identity';
 import type { RenderContext } from './render';
 
@@ -303,11 +304,11 @@ const executeCheck = (
   io: CliStreams
 ): number => {
   const sourceRoot = values['source-root'];
-  const snapshot = loadSnapshot(dir, {
-    ...(sourceRoot === undefined
-      ? {}
-      : { sourceRoot: resolve(process.cwd(), sourceRoot) }),
-  });
+  const options: SnapshotOptions = {};
+  if (sourceRoot !== undefined) {
+    options.sourceRoot = resolve(process.cwd(), sourceRoot);
+  }
+  const snapshot = loadSnapshot(dir, options);
   const report = checkSnapshot(snapshot);
 
   if (values.json === true) {
@@ -476,6 +477,16 @@ const execute = async (
   }
 };
 
+/**
+ * The one line a failure prints. Universally quantified over what was thrown
+ * because a `catch` binding is: `parseArgs` and every oracle layer reject with
+ * an `Error` subclass (`UsageError`, `TypeError`, `AnimusAdapterError`), whose
+ * message is the failure; anything else describes itself rather than printing
+ * the `undefined` an absent `.message` would render.
+ */
+const failureLine = <Thrown>(thrown: Thrown): string =>
+  thrown instanceof Error ? thrown.message : String(thrown);
+
 export const runCli = async (
   argv: string[],
   io: CliStreams
@@ -484,7 +495,7 @@ export const runCli = async (
   try {
     parsed = parse(argv);
   } catch (error) {
-    io.stderr.write(`[animus-oracle] ${String((error as Error).message)}\n`);
+    io.stderr.write(`[animus-oracle] ${failureLine(error)}\n`);
     io.stderr.write(USAGE);
     return EXIT_USAGE;
   }
@@ -513,9 +524,7 @@ export const runCli = async (
   try {
     return await execute(command, values, io);
   } catch (error) {
-    io.stderr.write(
-      `[animus-oracle] ${String((error as Error).message ?? error)}\n`
-    );
+    io.stderr.write(`[animus-oracle] ${failureLine(error)}\n`);
     const code = exitCodeForError(error);
     if (code === EXIT_USAGE) {
       io.stderr.write(

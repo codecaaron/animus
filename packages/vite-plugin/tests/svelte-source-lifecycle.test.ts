@@ -1,3 +1,4 @@
+import { isJsonObject } from '@animus-ui/assertions';
 import { contentHash } from '@animus-ui/extract/pipeline';
 import {
   mkdirSync,
@@ -8,6 +9,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
+import { createLogger } from 'vite';
 import { afterEach, describe, expect, test } from 'vitest';
 
 import { runBuildStart } from '../src/build-start';
@@ -16,17 +18,45 @@ import { handleHotUpdate } from '../src/hmr';
 import { transformSource } from '../src/transform';
 import { makeEnvGraph } from './context-probe';
 
-import type { EngineApi } from '@animus-ui/extract/pipeline';
-import type { DevEnvironment } from 'vite';
+import type { JsonObject, JsonValue } from '@animus-ui/assertions';
+import type { EngineApi, RawSourceEntry } from '@animus-ui/extract/pipeline';
+import type { DevEnvironment, FullReloadPayload, HotUpdateOptions } from 'vite';
 
-interface FileEntry {
-  path: string;
-  source: string;
-  hash?: string;
+function readJsonString(
+  object: JsonObject,
+  key: string,
+  label: string
+): string {
+  const value = object[key];
+  if (String(value) !== value) {
+    throw new Error(`${label}.${key} must be a string`);
+  }
+  return String(value);
+}
+
+function parseRawSourceEntries(filesJson: string): RawSourceEntry[] {
+  const parsed: JsonValue = JSON.parse(filesJson);
+  if (!Array.isArray(parsed)) {
+    throw new Error('engine files must be a JSON array');
+  }
+  return parsed.map((candidate, index) => {
+    const label = `engine files[${index}]`;
+    if (!isJsonObject(candidate)) {
+      throw new Error(`${label} must be a JSON object`);
+    }
+    const entry: RawSourceEntry = {
+      path: readJsonString(candidate, 'path', label),
+      source: readJsonString(candidate, 'source', label),
+    };
+    if (candidate.hash !== undefined) {
+      entry.hash = readJsonString(candidate, 'hash', label);
+    }
+    return entry;
+  });
 }
 
 function factsFor(filesJson: string): string {
-  const entries = JSON.parse(filesJson) as FileEntry[];
+  const entries = parseRawSourceEntries(filesJson);
   return JSON.stringify({
     files: Object.fromEntries(
       entries.map((entry) => {
@@ -72,16 +102,16 @@ function factsFor(filesJson: string): string {
 }
 
 interface EngineProbe {
-  engine: Record<string, unknown>;
-  analyses: FileEntry[][];
-  factsInputs: FileEntry[][];
+  engine: EngineApi;
+  analyses: RawSourceEntry[][];
+  factsInputs: RawSourceEntry[][];
   transformedPaths: string[];
   failNextAnalysis(): void;
 }
 
 function makeEngineProbe(): EngineProbe {
-  const analyses: FileEntry[][] = [];
-  const factsInputs: FileEntry[][] = [];
+  const analyses: RawSourceEntry[][] = [];
+  const factsInputs: RawSourceEntry[][] = [];
   const transformedPaths: string[] = [];
   let failNext = false;
   const engine = {
@@ -95,7 +125,7 @@ function makeEngineProbe(): EngineProbe {
       dependencies: [],
     }),
     extractFacts: (filesJson: string) => {
-      factsInputs.push(JSON.parse(filesJson) as FileEntry[]);
+      factsInputs.push(parseRawSourceEntries(filesJson));
       return factsFor(filesJson);
     },
     analyzeProject: (filesJson: string) => {
@@ -103,7 +133,7 @@ function makeEngineProbe(): EngineProbe {
         failNext = false;
         throw new Error('planned analysis failure');
       }
-      analyses.push(JSON.parse(filesJson) as FileEntry[]);
+      analyses.push(parseRawSourceEntries(filesJson));
       return JSON.stringify({
         components: {},
         files: {},
@@ -118,7 +148,7 @@ function makeEngineProbe(): EngineProbe {
     },
     clearAnalysisCache: () => {},
     scanKeyframesExports: () => null,
-  };
+  } satisfies EngineApi;
   return {
     engine,
     analyses,
@@ -165,7 +195,7 @@ function makeStatefulResetProbe() {
       active = false;
     },
     scanKeyframesExports: () => null,
-  };
+  } satisfies EngineApi;
 
   return {
     engine,
@@ -175,14 +205,7 @@ function makeStatefulResetProbe() {
   };
 }
 
-function writeProject(
-  root: string,
-  includeExternal: boolean
-): {
-  appRoot: string;
-  localUsage: string;
-  externalUsage: string;
-} {
+function writeProject(root: string, includeExternal: boolean) {
   const appRoot = join(root, 'app');
   const appSrc = join(appRoot, 'src');
   const kitRoot = join(root, 'kit');
@@ -220,7 +243,7 @@ function writeProject(
 
 function makeContext(
   appRoot: string,
-  engine: Record<string, unknown>,
+  engine: EngineApi,
   extensions: string[]
 ): PluginContext {
   const ctx = new PluginContext(
@@ -232,6 +255,14 @@ function makeContext(
   return ctx;
 }
 
+function warningLogger(warnings: string[]) {
+  const logger = createLogger('silent');
+  logger.warn = (message) => {
+    warnings.push(message);
+  };
+  return logger;
+}
+
 async function dispatch(
   ctx: PluginContext,
   type: 'create' | 'update' | 'delete',
@@ -240,17 +271,31 @@ async function dispatch(
   source?: string
 ): Promise<void> {
   const graph = makeEnvGraph({ rootDir: ctx.rootDir, ids: [] });
+  const environment: Pick<
+    DevEnvironment,
+    'name' | 'moduleGraph' | 'transformRequest'
+  > = {
+    name: 'client',
+    moduleGraph: graph.moduleGraph,
+    transformRequest: async () => null,
+  };
+  const options: Pick<
+    HotUpdateOptions,
+    'type' | 'file' | 'timestamp' | 'modules'
+  > &
+    Partial<Pick<HotUpdateOptions, 'read'>> = {
+    type,
+    file,
+    timestamp,
+    modules: [],
+    read: source === undefined ? undefined : async () => source,
+  };
   await handleHotUpdate(
     ctx,
-    { name: 'client', moduleGraph: graph.moduleGraph } as DevEnvironment,
-    {
-      type,
-      file,
-      timestamp,
-      modules: [],
-      read: source === undefined ? undefined : async () => source,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } as any
+    // SAFETY: The fixture models every DevEnvironment field read by handleHotUpdate: name, moduleGraph, and transformRequest.
+    environment as DevEnvironment,
+    // SAFETY: The fixture provides every option read by handleHotUpdate; server is unused, and read is optional for its documented non-Vite host path.
+    options as HotUpdateOptions
   );
 }
 
@@ -286,10 +331,7 @@ describe('opted-in Svelte source ownership in the Vite lifecycle', () => {
     };
     const warnings: string[] = [];
     const warnContext = new PluginContext({ system: 'src/ds.ts' });
-    warnContext.logger = {
-      warn: (message: string) => warnings.push(message),
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } as any;
+    warnContext.logger = warningLogger(warnings);
 
     expect(warnContext.surfaceSourceDiagnostics([diagnostic])).toEqual(
       new Set(['src/Usage.svelte'])
@@ -334,10 +376,7 @@ describe('opted-in Svelte source ownership in the Vite lifecycle', () => {
       system: 'src/ds.ts',
       strict: true,
     });
-    strictContext.logger = {
-      warn: (message: string) => warnings.push(message),
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } as any;
+    strictContext.logger = warningLogger(warnings);
 
     expect(strictContext.surfaceSourceDiagnostics([advisory])).toEqual(
       new Set()
@@ -489,18 +528,15 @@ describe('opted-in Svelte source ownership in the Vite lifecycle', () => {
     const ctx = makeContext(appRoot, probe.engine, ['.ts', '.svelte']);
     const warnings: string[] = [];
     const invalidated: string[] = [];
-    const hotMessages: Array<Record<string, unknown>> = [];
-    ctx.logger = {
-      warn: (message: string) => warnings.push(message),
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } as any;
+    const hotMessages: FullReloadPayload[] = [];
+    ctx.logger = warningLogger(warnings);
     ctx.devServer = {
       moduleGraph: {
         getModuleById: (id: string) => ({ id }),
         invalidateModule: (mod: { id: string }) => invalidated.push(mod.id),
       },
       hot: {
-        send: (message: Record<string, unknown>) => hotMessages.push(message),
+        send: (message: FullReloadPayload) => hotMessages.push(message),
       },
     };
 
@@ -509,10 +545,12 @@ describe('opted-in Svelte source ownership in the Vite lifecycle', () => {
     const clearsBeforeReset = probe.clearCount();
     const malformedSource = `<script>import { badge } from './definition'; const attrs = badge.attrs({</script>`;
     const usagePath = relative(appRoot, localUsage);
-    ctx.fileCache.set(usagePath, {
-      hash: contentHash(malformedSource),
-      source: malformedSource,
-    });
+    ctx.mutateFileCache((cache) =>
+      cache.set(usagePath, {
+        hash: contentHash(malformedSource),
+        source: malformedSource,
+      })
+    );
 
     await ctx.performGeologicalReset();
 
@@ -569,10 +607,7 @@ describe('opted-in Svelte source ownership in the Vite lifecycle', () => {
     const probe = makeEngineProbe();
     const ctx = makeContext(appRoot, probe.engine, ['.ts', '.svelte']);
     const warnings: string[] = [];
-    ctx.logger = {
-      warn: (message: string) => warnings.push(message),
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } as any;
+    ctx.logger = warningLogger(warnings);
 
     await runBuildStart(ctx, async () => null);
     const badPath = relative(appRoot, badFile);

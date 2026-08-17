@@ -31,7 +31,6 @@
 import { contentHash } from '@animus-ui/extract/pipeline';
 import {
   getManifestJson,
-  getSessionArtifactDir,
   getSharedCss,
   getSharedSystemProps,
   startTurbopackWatcher,
@@ -52,7 +51,6 @@ import type { ResolvedCliConfig } from './config';
 import type {
   ExtractionSession,
   TurbopackWatcherHandle,
-  WatchChanges,
 } from '@animus-ui/extract/session';
 
 /** Signal exit conventions (128 + signal number) plus the degraded-exit
@@ -72,11 +70,29 @@ export interface DegradedRoot {
 }
 
 /**
+ * Whether this watch observes the project root, and if not, WHY — the two
+ * failures have different remediations and must never be reported as one
+ * (`unavailable` is fixed by restarting; a duplicate claim collides
+ * identically on restart).
+ */
+export type ProjectWatchState = 'active' | 'unavailable' | 'already-watched';
+
+/** The consequence of each non-observing project-watch state, in the
+ *  user's terms. `unavailable` keeps its contracted wording. */
+const PROJECT_WATCH_REASONS = {
+  unavailable:
+    'platform watcher unavailable — NO source edits will be observed; restart the watch after changes',
+  'already-watched':
+    'root already claimed by another watcher in this process — NO source edits will be observed by THIS watch; run one watch per root (restarting collides the same way)',
+} satisfies Record<Exclude<ProjectWatchState, 'active'>, string>;
+
+/**
  * The degradation list for one publication — every root whose edits the
  * watch will NOT observe, with the reason. Sources:
- * - the project root itself when the platform watcher could not start
- *   (recursive fs.watch unavailable / registration failed — the session
- *   degrades to no-watch with a warning and returns no handle);
+ * - the project root itself whenever its watch is not active: the platform
+ *   watcher could not start (recursive fs.watch unavailable / registration
+ *   failed / it died after registration), or another watcher in this
+ *   process already claims the root;
  * - external roots resolved through node_modules (documented unwatchable —
  *   the orchestrator never registers them; its own guardrail-G2 comment on
  *   `openExternalWatcher`'s early return);
@@ -85,7 +101,7 @@ export interface DegradedRoot {
  */
 export function collectDegradedRoots(inputs: {
   projectRoot: string;
-  projectWatchActive: boolean;
+  projectWatch: ProjectWatchState;
   externalWatchRoots: readonly string[];
   stickyDiagnostics: ReadonlyMap<string, string>;
 }): DegradedRoot[] {
@@ -97,11 +113,8 @@ export function collectDegradedRoots(inputs: {
     degraded.push({ root, reason });
   };
 
-  if (!inputs.projectWatchActive) {
-    add(
-      inputs.projectRoot,
-      'platform watcher unavailable — NO source edits will be observed; restart the watch after changes'
-    );
+  if (inputs.projectWatch !== 'active') {
+    add(inputs.projectRoot, PROJECT_WATCH_REASONS[inputs.projectWatch]);
   }
   for (const root of inputs.externalWatchRoots) {
     if (root.split(/[\\/]/).includes('node_modules')) {
@@ -171,13 +184,20 @@ export async function runWatch(
   } catch (error) {
     release();
     // Startup failed before the loop: no reader exists for the session
-    // tree the pipeline may have published — remove it. The session's own
-    // dir is a pure derivation; the singleton fallback covers only a
-    // construction failure, where no session object exists to ask.
-    const dir =
-      (session as ExtractionSession | undefined)?.sessionDir ??
-      getSessionArtifactDir();
+    // tree the pipeline may have published — remove it. Only this run's
+    // OWN tree: a construction failure leaves no session to ask, and the
+    // process-global slot would then necessarily name a different
+    // session's tree (nothing this call may delete).
+    // SAFETY: `session` carries a definite-assignment assertion for the
+    // loop below, but THIS catch is reachable from `createCliSession`
+    // itself — the one point where the binding is still unassigned, which
+    // only the widened read can observe.
+    const started = session as ExtractionSession | undefined;
+    const dir = started?.sessionDir;
     if (dir) rmSync(dir, { recursive: true, force: true });
+    // Released with the tree it protected: a later in-process run
+    // (programmatic `main()`) must find the publication claim free.
+    started?.close();
     throw error;
   }
 
@@ -186,9 +206,10 @@ export async function runWatch(
 
   return new Promise<number>((resolvePromise) => {
     let settled = false;
-    // Assigned after the wrapper below is installed; declared first so the
-    // degradation report can read it.
+    // Assigned after the cycle observer below is installed; declared first
+    // so shutdown and the degradation report can read them.
     let watcher: TurbopackWatcherHandle | null = null;
+    let rootAlreadyWatched = false;
 
     // The session watcher unrefs every handle by design — the CLI is the
     // process owner, so it holds its own ref'd keepalive.
@@ -223,6 +244,9 @@ export async function runWatch(
         } catch {
           // Best-effort: a missing tree is already gone.
         }
+        // Released with the tree it protected: a later in-process run
+        // (programmatic `main()`) must find the publication claim free.
+        session.close();
         release();
         // Cleared LAST: the ref'd keepalive is what guarantees the process
         // survives the drain above — an otherwise-empty event loop would
@@ -243,11 +267,16 @@ export async function runWatch(
     const reportDegradation = (): boolean => {
       // Liveness, not handle-presence: a watcher that DIED after
       // registration (post-registration EMFILE/ENOSPC) leaves a non-null
-      // handle observing nothing. Every caller runs after the watcher
-      // assignment, so null means registration itself failed.
+      // handle observing nothing. Every caller runs after the claim, so a
+      // handle-less state is one of the two claim failures — kept apart,
+      // because only one of them is fixed by restarting.
       const degraded = collectDegradedRoots({
         projectRoot: root,
-        projectWatchActive: watcher !== null && !watcher.died,
+        projectWatch: rootAlreadyWatched
+          ? 'already-watched'
+          : watcher !== null && !watcher.died
+            ? 'active'
+            : 'unavailable',
         externalWatchRoots: session.externalWatchRoots,
         stickyDiagnostics: session.stickyDiagnostics,
       });
@@ -264,24 +293,22 @@ export async function runWatch(
       return false;
     };
 
-    // Per-cycle observation wrapper: publication policy ONLY — ingestion
+    // Per-cycle observation: publication policy ONLY — ingestion
     // (classification, debounce, serialization, external-root semantics)
-    // stays entirely the session's. Installed before the watcher starts so
-    // every cycle it ever drives is observed.
-    const baseHandleWatchUpdate = session.handleWatchUpdate.bind(session);
-    session.handleWatchUpdate = async (changes: WatchChanges) => {
-      if (settled) return; // shutdown ran — never publish into an unlocked outDir
-      try {
-        await baseHandleWatchUpdate(changes);
-      } catch (error) {
-        if (settled) return;
+    // stays entirely the session's, observed through its own cycle-boundary
+    // seam. Installed before the watcher starts so every cycle it ever
+    // drives is observed. Suppression after shutdown belongs to the
+    // watcher's close() (no cycle is scheduled or entered past it); the
+    // `settled` checks here cover only a cycle that outlived the handle.
+    session.onCycleSettled = (cause) => {
+      if (settled) return; // cycle outlived shutdown (inc 06 review S2)
+      if (cause !== null) {
         // D5: mid-run failures keep last-good output and report per-cycle.
         err(
-          `watch cycle failed — keeping last-good artifacts in ${outDir}: ${String(error)}`
+          `watch cycle failed — keeping last-good artifacts in ${outDir}: ${String(cause)}`
         );
         return;
       }
-      if (settled) return; // cycle outlived shutdown (inc 06 review S2)
       const key = currentPayloadKey();
       if (key === lastPublishedKey) return; // no-op cycle — nothing new
       let outcome: { componentCount: number; fileCount: number };
@@ -303,14 +330,19 @@ export async function runWatch(
       reportDegradation();
     };
 
-    watcher = startTurbopackWatcher(session, root);
-    if (watcher) {
+    const claim = startTurbopackWatcher(session, root);
+    if (claim.kind === 'started') {
+      watcher = claim.handle;
       // A dead watcher produces no further cycles, so the per-publication
       // degradation report would never run again — report (and trip
       // --fail-on-degraded) at the moment of death instead.
       watcher.onDied = () => {
         if (!settled) reportDegradation();
       };
+    } else {
+      // Reported as itself: a duplicate claim leaves this session unwired
+      // exactly like a platform failure does, but restarting cannot fix it.
+      rootAlreadyWatched = claim.kind === 'already-watched';
     }
 
     // Startup degradation report precedes readiness so an orchestrator

@@ -6,6 +6,7 @@ import {
 import { applyUnitFallback } from './unit-fallback';
 
 import type { AnalyzeProjectInputs } from './analyze-project-args';
+import type { ProjectManifest } from './manifest-schema';
 import type { SystemConfig } from './system-config';
 
 /**
@@ -20,8 +21,10 @@ export interface EmitterConfig {
 }
 
 export interface ProjectAnalysisResult {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  manifest: any;
+  /** The parsed engine manifest, typed by the producing package's own wire
+   *  declaration (`manifest-schema.ts`) — consumers read it instead of
+   *  re-deriving a private model per reader. */
+  manifest: ProjectManifest;
   manifestJson: string;
   /** `manifest.sheets.global` — Rust-resolved global CSS. */
   globalCss: string;
@@ -126,7 +129,12 @@ export function runProjectAnalysis(
   const extractMs = Math.round(performance.now() - t);
 
   t = performance.now();
-  const manifest = JSON.parse(manifestJson);
+  // SAFETY: `manifestJson` is this call's own `analyzeProject` return value —
+  // serde output from the Rust `AnalyzeResult` that `manifest-schema.ts`
+  // mirrors. A parse failure throws here (the engine emitting unparseable
+  // JSON is an engine bug, not a recoverable input); a Rust-side field rename
+  // is caught by the manifest tether test in `packages/_integration`.
+  const manifest = JSON.parse(manifestJson) as ProjectManifest;
   surfaceManifestDiagnostics(manifest, opts.warn, {
     strict: opts.strict,
     prepend: [

@@ -1,21 +1,11 @@
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 
-type DependencyMap = Record<string, string>;
-
-type PackageManifest = {
-  name?: string;
-  main?: string;
-  module?: string;
-  types?: string;
-  exports?: unknown;
-  dependencies?: DependencyMap;
-  optionalDependencies?: DependencyMap;
-};
-
-type RootManifest = PackageManifest & {
-  workspaces?: string[] | { packages?: string[] };
-};
+import {
+  type PackageManifest,
+  type RootManifest,
+  readManifest,
+} from './manifest-model';
 
 export type WorkspaceEntry = {
   name: string;
@@ -23,10 +13,6 @@ export type WorkspaceEntry = {
   manifest: PackageManifest;
   distEntries: string[];
 };
-
-function readManifest(path: string): PackageManifest {
-  return JSON.parse(readFileSync(path, 'utf8')) as PackageManifest;
-}
 
 function workspacePatterns(manifest: RootManifest): string[] {
   if (Array.isArray(manifest.workspaces)) return manifest.workspaces;

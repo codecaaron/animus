@@ -3,6 +3,14 @@ import { describe, expect, it } from 'vitest';
 import { deepMerge } from '../src/utils/deepMerge';
 
 /**
+ * A merge source that carries `a` as an own key it explicitly sets to
+ * undefined. The number branch stays in the declared type on purpose:
+ * `deepMerge` returns `A & B`, so an undefined-only `a` would reduce the
+ * whole result to `never` and hide the surviving keys from the assertions.
+ */
+type UndefinedOverwriteSource = { a: number | undefined };
+
+/**
  * Boundary tests documenting the CURRENT behavior of deepMerge.
  * These are characterization tests — they assert what the implementation
  * actually does today, not what it "should" do. Do not change semantics
@@ -64,7 +72,7 @@ describe('deepMerge (current behavior)', () => {
 
     it('overwrites with an undefined source value (own enumerable key)', () => {
       const target = { a: 1, b: 2 };
-      const source: { a: number | undefined } = { a: undefined };
+      const source: UndefinedOverwriteSource = { a: undefined };
 
       const result = deepMerge(target, source);
       expect(result).toHaveProperty('a', undefined);

@@ -1,3 +1,4 @@
+import { isJsonObject, parseJsonObject } from '@animus-ui/assertions';
 import { RETIRED_ENGINE_MESSAGE } from '@animus-ui/extract/pipeline';
 /**
  * Behavior pins for AnimusWebpackPlugin (src/plugin.ts) ahead of refactor.
@@ -21,17 +22,22 @@ import { AnimusWebpackPlugin } from '../src/plugin';
 import {
   BUTTON_SOURCE,
   BUTTON_STYLE_EDIT as BUTTON_SOURCE_CHANGED,
-  cleanupProjects,
   createProject as createFixtureProject,
+  disposeTempRoots,
   resetAnimusGlobals,
   SYSTEM_CONFIG,
 } from './singleton-fixtures';
 
 import type { AnimusNextOptions } from '../src/types';
+import type { JsonObject, JsonValue } from '@animus-ui/assertions';
+import type {
+  AnalyzeProjectArgs,
+  ManifestDiagnostic,
+} from '@animus-ui/extract/pipeline';
 
 const mocks = vi.hoisted(() => ({
   loadSystemModule: vi.fn(),
-  analyzeProject: vi.fn(),
+  analyzeProject: vi.fn<(...args: AnalyzeProjectArgs) => string>(),
   clearAnalysisCache: vi.fn(),
 }));
 
@@ -56,7 +62,11 @@ const SYSTEM_SOURCE_CHANGED =
 /** Component CSS returned by the analyzeProject mock; mutable per test. */
 let nextComponentCss = '.btn{margin:8;}';
 
-function buildManifest(overrides: Record<string, unknown> = {}): string {
+interface ManifestOverrides {
+  diagnostics?: ManifestDiagnostic[];
+}
+
+function buildManifest(overrides: ManifestOverrides = {}): string {
   return JSON.stringify({
     css: nextComponentCss,
     sheets: { global: '@layer anm-global{body{margin:0}}' },
@@ -97,7 +107,7 @@ beforeEach(() => {
 afterEach(() => {
   restoreGlobals();
   vi.restoreAllMocks();
-  cleanupProjects();
+  disposeTempRoots();
 });
 
 function createProject(): string {
@@ -119,8 +129,19 @@ class FakeRawSource {
   }
 }
 
-type AsyncHandler = (compiler: unknown) => Promise<void>;
-type CompilationHandler = (compilation: unknown) => void;
+type PluginCompiler = Parameters<AnimusWebpackPlugin['apply']>[0];
+type AsyncHandler = Parameters<PluginCompiler['hooks']['run']['tapPromise']>[1];
+type CompilationHandler = Parameters<
+  PluginCompiler['hooks']['compilation']['tap']
+>[1];
+type ThisCompilationHandler = Parameters<
+  PluginCompiler['hooks']['thisCompilation']['tap']
+>[1];
+type PluginCompilation = Parameters<CompilationHandler>[0];
+type ProcessAssetsTap = PluginCompilation['hooks']['processAssets']['tap'];
+type ProcessAssetsOptions = Parameters<ProcessAssetsTap>[0];
+type ProcessAssetsHandler = Parameters<ProcessAssetsTap>[1];
+type WebpackSource = Parameters<PluginCompilation['updateAsset']>[1];
 
 function createCompiler(
   root: string,
@@ -129,8 +150,8 @@ function createCompiler(
   const runHandlers: AsyncHandler[] = [];
   const watchRunHandlers: AsyncHandler[] = [];
   const compilationHandlers: CompilationHandler[] = [];
-  const thisCompilationHandlers: CompilationHandler[] = [];
-  const compiler = {
+  const thisCompilationHandlers: ThisCompilationHandler[] = [];
+  const compiler: PluginCompiler = {
     hooks: {
       run: {
         tapPromise: (_name: string, fn: AsyncHandler) => {
@@ -148,7 +169,7 @@ function createCompiler(
         },
       },
       thisCompilation: {
-        tap: (_name: string, fn: CompilationHandler) => {
+        tap: (_name: string, fn: ThisCompilationHandler) => {
           thisCompilationHandlers.push(fn);
         },
       },
@@ -162,7 +183,7 @@ function createCompiler(
       // plugin's runtime existence check (design D7) requires it.
       NormalModule: {
         getCompilationHooks: () => ({
-          needBuild: { tapAsync: (_name: string, _fn: unknown) => {} },
+          needBuild: { tapAsync: () => {} },
         }),
       },
     },
@@ -178,35 +199,35 @@ function createCompiler(
 
 function applyPlugin(
   plugin: AnimusWebpackPlugin,
-  compiler: ReturnType<typeof createCompiler>['compiler']
+  compiler: PluginCompiler
 ): void {
-  plugin.apply(
-    compiler as unknown as Parameters<AnimusWebpackPlugin['apply']>[0]
-  );
+  plugin.apply(compiler);
 }
 
 function createCompilation(assetNames: string[]) {
-  const assets = new Map<string, FakeRawSource>(
+  const assets = new Map<string, WebpackSource>(
     assetNames.map((name) => [name, new FakeRawSource('/* stub */')])
   );
   const taps: Array<{
-    options: { name: string; stage: number };
-    fn: (assets: Record<string, unknown>) => void;
+    options: ProcessAssetsOptions;
+    fn: ProcessAssetsHandler;
   }> = [];
-  const compilation = {
+  const compilation: PluginCompilation = {
     hooks: {
       processAssets: {
-        tap: (
-          options: { name: string; stage: number },
-          fn: (assets: Record<string, unknown>) => void
-        ) => {
+        tap: (options, fn) => {
           taps.push({ options, fn });
         },
       },
     },
-    getAsset: (name: string) =>
-      assets.has(name) ? { source: assets.get(name) } : undefined,
-    updateAsset: (name: string, source: FakeRawSource) => {
+    fileDependencies: new Set<string>(),
+    missingDependencies: new Set<string>(),
+    contextDependencies: new Set<string>(),
+    getAsset: (name: string) => {
+      const source = assets.get(name);
+      return source ? { source } : undefined;
+    },
+    updateAsset: (name: string, source: WebpackSource) => {
       assets.set(name, source);
     },
   };
@@ -222,14 +243,76 @@ function artifactPath(
   return join(sessionArtifactDir(root, plugin.sessionId), name);
 }
 
-function analyzeCall(index: number): unknown[] {
-  return mocks.analyzeProject.mock.calls[index] as unknown[];
+function analyzeCall(index: number): AnalyzeProjectArgs {
+  const call = mocks.analyzeProject.mock.calls[index];
+  if (!call) throw new Error(`Missing analyzeProject call ${index}`);
+  return call;
 }
 
-function parseFiles(
-  args: unknown[]
-): Array<{ path: string; source: string; hash?: string }> {
-  return JSON.parse(args[0] as string);
+interface AnalyzeFileFixture {
+  path: string;
+  source: string;
+  hash?: string;
+}
+
+function parseRequiredJsonObject(
+  json: string | null,
+  label: string
+): JsonObject {
+  if (json === null) throw new Error(`${label} must be present`);
+  return parseJsonObject(json, label);
+}
+
+function readJsonString(
+  object: JsonObject,
+  key: string,
+  label: string
+): string {
+  const value = object[key];
+  if (String(value) !== value) {
+    throw new Error(`${label}.${key} must be a string`);
+  }
+  return String(value);
+}
+
+function parseFiles(args: AnalyzeProjectArgs): AnalyzeFileFixture[] {
+  const parsed: JsonValue = JSON.parse(args[0]);
+  if (!Array.isArray(parsed)) {
+    throw new Error('analyzeProject files must be a JSON array');
+  }
+  return parsed.map((entry, index) => {
+    if (!isJsonObject(entry)) {
+      throw new Error(`analyzeProject files[${index}] must be an object`);
+    }
+    const file: AnalyzeFileFixture = {
+      path: readJsonString(entry, 'path', `analyzeProject files[${index}]`),
+      source: readJsonString(entry, 'source', `analyzeProject files[${index}]`),
+    };
+    if (entry.hash !== undefined) {
+      file.hash = readJsonString(
+        entry,
+        'hash',
+        `analyzeProject files[${index}]`
+      );
+    }
+    return file;
+  });
+}
+
+function analyzeResult(index: number): string {
+  const result = mocks.analyzeProject.mock.results[index];
+  if (!result || result.type !== 'return') {
+    throw new Error(`analyzeProject call ${index} did not return`);
+  }
+  return result.value;
+}
+
+function readEpoch(path: string): string {
+  return readJsonString(
+    parseJsonObject(readFileSync(path, 'utf-8'), 'replacement epoch'),
+    'epoch',
+    'replacement epoch'
+  );
 }
 
 describe('AnimusWebpackPlugin.apply', () => {
@@ -289,7 +372,7 @@ describe('production run (full pipeline)', () => {
     expect(args[5]).toBe(SYSTEM_CONFIG.groupRegistry);
     expect(args[6]).toBe('{}'); // no external packages resolved
     expect(args[7]).toBe(false); // production devMode
-    expect(JSON.parse(args[8] as string)).toEqual({
+    expect(parseRequiredJsonObject(args[8], 'emitter config')).toEqual({
       runtime_import: '@animus-ui/system/runtime',
       css_module_id: '.animus/styles.css',
       system_props_module_id: artifactPath(root, plugin, 'system-props.js'),
@@ -299,7 +382,7 @@ describe('production run (full pipeline)', () => {
     expect(args[11]).toBeNull();
     // Webpack resolve.alias translated to path aliases (own .animus alias skipped,
     // longest pattern first, prefix aliases get trailing slashes)
-    expect(JSON.parse(args[12] as string)).toEqual({
+    expect(parseRequiredJsonObject(args[12], 'path aliases')).toEqual({
       aliases: [
         {
           pattern: '@components/',
@@ -337,16 +420,14 @@ describe('production run (full pipeline)', () => {
       sessionArtifactDir(root, session.sessionId),
       'replacements-epoch'
     );
-    const readEpoch = () =>
-      (JSON.parse(readFileSync(epochPath, 'utf-8')) as { epoch: string }).epoch;
-    const before = readEpoch();
+    const before = readEpoch(epochPath);
 
     mocks.loadSystemModule.mockReturnValue({
       ...SYSTEM_CONFIG,
       groupRegistry: '{"typography":{"props":["fontSize"]}}',
     });
     await session.runFullPipeline();
-    expect(readEpoch()).not.toBe(before);
+    expect(readEpoch(epochPath)).not.toBe(before);
   });
 
   test('writes styles.css and system-props.js and publishes shared state', async () => {
@@ -378,9 +459,7 @@ describe('production run (full pipeline)', () => {
     expect(css.startsWith(getSharedCss())).toBe(true);
     expect(css).toContain('__animusSession');
     // Manifest is stored verbatim for the loader
-    expect(getManifestJson()).toBe(
-      mocks.analyzeProject.mock.results[0].value as string
-    );
+    expect(getManifestJson()).toBe(analyzeResult(0));
 
     // system-props module: null transforms and empty scale maps are omitted,
     // systemPropGroups is the raw groupRegistry JSON string
@@ -413,7 +492,7 @@ describe('production run (full pipeline)', () => {
         sessionId: plugin.sessionId,
         generation: 1,
       }),
-      ...JSON.parse(mocks.analyzeProject.mock.results[0].value as string),
+      ...parseJsonObject(analyzeResult(0), 'analyzeProject manifest'),
     });
     expect(JSON.parse(written).system_prop_map).toEqual({ m: 'margin' });
     const mtimeAfterFull = statSync(manifestPath).mtimeMs;
@@ -763,8 +842,11 @@ describe('watch mode (dev/HMR)', () => {
 
 describe('engine retirement (retire-extract-v1)', () => {
   test('constructing the plugin with engine:v1 throws the canonical message', () => {
+    const retiredEngineOptions = { ...OPTIONS, engine: 'v1' };
     expect(
-      () => new AnimusWebpackPlugin({ ...OPTIONS, engine: 'v1' as never })
+      // SAFETY: This deliberately crosses the typed option boundary to prove
+      // the constructor rejects a stale JavaScript config's retired engine.
+      () => new AnimusWebpackPlugin(retiredEngineOptions as AnimusNextOptions)
     ).toThrow(RETIRED_ENGINE_MESSAGE);
   });
 

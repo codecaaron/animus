@@ -1,7 +1,10 @@
+import { createLogger } from 'vite';
 import { describe, expect, it } from 'vitest';
 
 import { PluginContext } from '../src/context';
 import { ResetCoalescer } from '../src/reset-coalescer';
+
+import type { ErrorPayload } from 'vite';
 
 /** Manual timer harness — injected seams, no builtin mocking. */
 function harness(run: () => void | Promise<void>, quietMs = 60) {
@@ -32,7 +35,9 @@ function harness(run: () => void | Promise<void>, quietMs = 60) {
 describe('ResetCoalescer', () => {
   it('collapses a burst of requests into one scheduled reset', () => {
     let runs = 0;
-    const { coalescer, pending, fire } = harness(() => runs++);
+    const { coalescer, pending, fire } = harness(() => {
+      runs++;
+    });
 
     for (let i = 0; i < 10; i++) coalescer.request();
     // Each request cancels the previous timer — exactly one remains.
@@ -45,17 +50,15 @@ describe('ResetCoalescer', () => {
 
   it('runs exactly one follow-up for requests during a running reset', () => {
     let runs = 0;
-    const harnessRef: { fire?: () => void; coalescer?: ResetCoalescer } = {};
     const h = harness(() => {
       runs++;
       if (runs === 1) {
         // Three events arrive while the reset is executing.
-        harnessRef.coalescer!.request();
-        harnessRef.coalescer!.request();
-        harnessRef.coalescer!.request();
+        h.coalescer.request();
+        h.coalescer.request();
+        h.coalescer.request();
       }
     });
-    harnessRef.coalescer = h.coalescer;
 
     h.coalescer.request();
     h.fire();
@@ -156,7 +159,9 @@ describe('ResetCoalescer', () => {
 
   it('schedules again after a completed quiet cycle', () => {
     let runs = 0;
-    const { coalescer, fire } = harness(() => runs++);
+    const { coalescer, fire } = harness(() => {
+      runs++;
+    });
 
     coalescer.request();
     fire();
@@ -170,13 +175,13 @@ describe('PluginContext geological-reset error wiring', () => {
   it('a strict reset failure surfaces as warn + overlay, not a process kill', async () => {
     const ctx = new PluginContext({ system: './src/ds.ts', strict: true });
     const warnings: string[] = [];
-    ctx.logger = {
-      warn: (message: string) => warnings.push(message),
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } as any;
-    const sent: Array<Record<string, unknown>> = [];
+    ctx.logger = createLogger('silent');
+    ctx.logger.warn = (message) => {
+      warnings.push(message);
+    };
+    const sent: ErrorPayload[] = [];
     ctx.devServer = {
-      hot: { send: (p: Record<string, unknown>) => sent.push(p) },
+      hot: { send: (payload: ErrorPayload) => sent.push(payload) },
     };
     ctx.performGeologicalReset = () => {
       throw new Error(
@@ -192,8 +197,6 @@ describe('PluginContext geological-reset error wiring', () => {
     );
     expect(sent).toHaveLength(1);
     expect(sent[0].type).toBe('error');
-    expect((sent[0].err as { message: string }).message).toContain(
-      '@acme/typo.woff2'
-    );
+    expect(sent[0].err.message).toContain('@acme/typo.woff2');
   });
 });

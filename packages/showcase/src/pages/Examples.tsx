@@ -117,12 +117,8 @@ const Swatch = ds
   .props({
     sizing: {
       property: 'width',
-      transform: (value: string | number) =>
-        typeof value === 'number'
-          ? value <= 1 && value >= -1
-            ? `${value * 100}%`
-            : `${value}px`
-          : value,
+      transform: (value: number) =>
+        value <= 1 && value >= -1 ? `${value * 100}%` : `${value}px`,
     },
     depth: {
       property: 'boxShadow',

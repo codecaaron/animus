@@ -102,6 +102,7 @@ export type {
   NativeSourceDiagnostic,
   OriginalSourceEntry,
   RawSourceEntry,
+  SerializedSourceEntry,
   SourceEntryOwnership,
   SourceIngestionDiagnostic,
   SourceIngestionOptions,
@@ -112,6 +113,8 @@ export {
   createSourceIngestor,
   ingestSourceEntries,
   isAdvisorySourceDiagnostic,
+  parseFilesJson,
+  projectExternalFileOwners,
   withoutInvalidOriginals,
 } from './source-ingestion';
 export type { SourceIngestor, SourceIngestorHost } from './source-ingestion';
@@ -150,6 +153,12 @@ export type {
 export { buildDynamicPropConfig } from './dynamic-prop-config';
 export type { CssDiagnosticLike } from './error-diagnostics';
 export { assertNoErrorDiagnostics } from './error-diagnostics';
+export type {
+  ManifestComponentDescriptor,
+  ManifestComponentSheets,
+  ManifestSheets,
+  ProjectManifest,
+} from './manifest-schema';
 export type { ManifestDiagnostic } from './manifest-diagnostics';
 export {
   isUnresolvedParentDrop,
@@ -160,6 +169,7 @@ export type { DefaultExtension, PreprocessMdxResult } from './mdx-preprocessor';
 export {
   DEFAULT_EXTENSIONS,
   ENGINE_TRANSFORM_EXTENSIONS,
+  isEngineTransformExtension,
   preprocessMdx,
 } from './mdx-preprocessor';
 export { applyPrefix } from './prefix';
@@ -170,5 +180,5 @@ export {
   snapshotFilePlans,
 } from './replacement-plans';
 export { applyUnitFallback } from './unit-fallback';
-export { camelToKebab } from './utils';
+export { camelToKebab, stableStringify } from './utils';
 export { toWatchKeys } from './watch-keys';

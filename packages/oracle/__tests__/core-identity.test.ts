@@ -48,7 +48,7 @@ describe('canonicalJson', () => {
   });
 
   it('accepts null-prototype records', () => {
-    const record = Object.create(null) as Record<string, unknown>;
+    const record: Record<string, number> = Object.create(null);
     record.a = 1;
     expect(canonicalJson(record)).toBe('{"a":1}');
   });

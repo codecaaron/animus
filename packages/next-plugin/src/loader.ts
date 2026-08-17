@@ -11,7 +11,7 @@ import { relative } from 'path';
 
 import { transformWithManifest } from './loader-core';
 
-import type { LoaderPolicyOptions } from './loader-core';
+import type { LoaderContextBase } from './loader-core';
 
 /** Session dirs whose epoch artifact has been SEEN on disk. A sibling
  *  session's reconciliation may delete the artifact, but the owning
@@ -22,13 +22,7 @@ import type { LoaderPolicyOptions } from './loader-core';
  *  Negatives always re-probe. */
 const epochSeenForSessionDir = new Set<string>();
 
-type LoaderContext = {
-  resourcePath: string;
-  rootContext: string;
-  getOptions: () => LoaderPolicyOptions;
-  /** webpack file-dependency registration — optional so bare policy tests
-   *  can drive the loader without a full context. */
-  addDependency?: (file: string) => void;
+type LoaderContext = LoaderContextBase & {
   /** webpack build mode; production invocations stay engine-verbatim. */
   mode?: 'development' | 'production' | 'none';
 };

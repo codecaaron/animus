@@ -126,6 +126,23 @@ async function handleHotUpdateExclusive(
   const result = ctx.hotUpdateEvents.resultOf(file, timestamp);
   // Out of extraction scope — leave the update to normal HMR.
   if (result.kind === 'ignored') return;
+  if (result.kind === 'evicted') {
+    // The owner analyzed this event and its decision aged out of the bounded
+    // history before this environment read it — an in-flight burst wide
+    // enough to lap the window. The decision is unrecoverable, so this
+    // environment takes the conservative one: invalidate both virtual modules
+    // in ITS graph and deliver the incoming modules, expressing no
+    // suppression opinion. Under-invalidating here is a silent client/SSR
+    // skew; over-invalidating costs one re-execution.
+    ctx.log(
+      `HMR (${environment.name}): decision for ${relative(ctx.rootDir, absFile)} evicted — invalidating conservatively`
+    );
+    return invalidateStaleModules(ctx, environment, modules, {
+      staleDefinitionFiles: [],
+      systemPropsChanged: true,
+      presentationOnly: false,
+    });
+  }
   if (result.kind === 'unchanged') {
     // A create can be pre-satisfied here: rediscovery folded the file into
     // the cache at its on-disk hash before the lagging watcher event landed.
@@ -184,7 +201,7 @@ async function reconcileSourceEntry(
   read: HotUpdateOptions['read'] | undefined
 ): Promise<void> {
   if (type === 'delete') {
-    pruneFileCache(ctx.fileCache, ctx.rootDir, absFile);
+    ctx.mutateFileCache((cache) => pruneFileCache(cache, ctx.rootDir, absFile));
     return;
   }
 
@@ -204,7 +221,9 @@ async function reconcileSourceEntry(
     );
     return;
   }
-  ctx.fileCache.set(relPath, { hash: contentHash(source), source });
+  ctx.mutateFileCache((cache) =>
+    cache.set(relPath, { hash: contentHash(source), source })
+  );
 }
 
 /**
@@ -267,10 +286,12 @@ async function analyzeChangedFile(
 
   // Update cache entry — rolled back below if the analysis fails to publish,
   // so the same-content retry is never hash-suppressed.
-  ctx.fileCache.set(relPath, { hash, source });
+  ctx.mutateFileCache((cache) => cache.set(relPath, { hash, source }));
   const restoreEntry = () => {
-    if (cached) ctx.fileCache.set(relPath, cached);
-    else ctx.fileCache.delete(relPath);
+    ctx.mutateFileCache((cache) => {
+      if (cached) cache.set(relPath, cached);
+      else cache.delete(relPath);
+    });
     if (priorExternalOwner) {
       ctx.externalFileOwners[relPath] = priorExternalOwner;
     } else {
@@ -433,7 +454,11 @@ async function pruneDeletedFile(
 ): Promise<void> {
   const relPath = relative(ctx.rootDir, absFile);
   const cached = ctx.fileCache.get(relPath);
-  if (!cached || !pruneFileCache(ctx.fileCache, ctx.rootDir, absFile)) return;
+  if (!cached) return;
+  const pruned = ctx.mutateFileCache((cache) =>
+    pruneFileCache(cache, ctx.rootDir, absFile)
+  );
+  if (!pruned) return;
 
   const prevPlans = snapshotFilePlans(ctx.storedManifest);
   // A failed re-analysis after a delete must NOT restore the cache entry:
@@ -463,6 +488,16 @@ async function pruneDeletedFile(
 }
 
 /**
+ * What one environment must invalidate for an event. The owning dispatch's
+ * `analyzed` decision IS such a plan; an evicted decision supplies the
+ * conservative one instead.
+ */
+type InvalidationPlan = Omit<
+  Extract<HotUpdateResult, { kind: 'analyzed' }>,
+  'kind'
+>;
+
+/**
  * The per-environment invalidation half: invalidate the modules this
  * environment serves and widen its update set with them. Static CSS
  * (virtual:animus/styles.css) is NOT invalidated here — it only changes on a
@@ -472,7 +507,7 @@ function invalidateStaleModules(
   ctx: PluginContext,
   environment: DevEnvironment,
   modules: EnvironmentModuleNode[],
-  analyzed: Extract<HotUpdateResult, { kind: 'analyzed' }>
+  analyzed: InvalidationPlan
 ): EnvironmentModuleNode[] | void {
   const graph = environment.moduleGraph;
   // Presentation-only edits (byte-identical transform output) exclude the

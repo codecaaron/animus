@@ -65,8 +65,10 @@ const FileDot = ds
       tsx: { bg: 'ocean.500' },
       jsx: { bg: 'ocean.500' },
       typescript: { bg: 'ocean.500' },
+      javascript: { bg: 'ocean.500' },
       css: { bg: 'forest.500' },
       sh: { bg: 'gold.300' },
+      svelte: { bg: 'fire.500' },
     },
   })
   .asElement('span');
@@ -284,7 +286,36 @@ const animusTheme: PrismTheme = {
 
 // ─── Helpers ─────────────────────────────────────────────────────
 
-type Language = 'tsx' | 'css' | 'jsx' | 'typescript' | 'sh';
+/** The languages the highlighter accepts. The highlighter owns this
+ *  vocabulary — consumers that forward a `language` through to
+ *  `SyntaxBlock` (e.g. `docs/BeforeAfter`) import this type rather than
+ *  re-declaring a narrower copy, so adding a language reaches them. */
+export type Language =
+  | 'tsx'
+  | 'css'
+  | 'jsx'
+  | 'typescript'
+  | 'javascript'
+  | 'sh'
+  | 'svelte';
+
+type HighlightLanguage =
+  | 'tsx'
+  | 'css'
+  | 'jsx'
+  | 'typescript'
+  | 'javascript'
+  | 'plain';
+
+const HIGHLIGHT_LANGUAGE = {
+  tsx: 'tsx',
+  css: 'css',
+  jsx: 'jsx',
+  typescript: 'typescript',
+  javascript: 'javascript',
+  sh: 'plain',
+  svelte: 'plain',
+} as const satisfies Record<Language, HighlightLanguage>;
 
 function detectLanguage(code: string): Language {
   if (
@@ -366,7 +397,11 @@ export function SyntaxBlock({
               <CopyButton text={code} size="sm" />
             </CopyOverlay>
           )}
-          <Highlight theme={animusTheme} code={code} language={lang}>
+          <Highlight
+            theme={animusTheme}
+            code={code}
+            language={HIGHLIGHT_LANGUAGE[lang]}
+          >
             {({ tokens: tokenLines, getLineProps, getTokenProps }) => (
               <SyntaxPre chrome={hasChrome ? 'true' : 'false'}>
                 {tokenLines.map((line, i) => {

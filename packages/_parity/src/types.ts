@@ -63,7 +63,6 @@ export interface Divergence {
 export type RegisterCategory =
   | 'intentional-correctness'
   | 'ordering'
-  | 'v1-feature-drift'
   | 'known-quirk';
 
 export interface RegisterEntry {

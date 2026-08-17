@@ -11,7 +11,11 @@ import {
 import { asManifest } from '../host/animus/manifest-types';
 import { readSourceStructure } from './source';
 
-import type { AnimusHost, AnimusHostOptions } from '../host/animus/host';
+import type {
+  AnimusHost,
+  AnimusHostInput,
+  AnimusHostOptions,
+} from '../host/animus/host';
 import type {
   AnimusManifest,
   ManifestFileFacts,
@@ -163,10 +167,9 @@ export const loadSnapshot = (
   options: SnapshotOptions = {}
 ): Snapshot => {
   const input = loadAnimusArtifacts(artifactsDir);
-  const host = createAnimusHost({
-    ...input,
-    ...(options.host === undefined ? {} : { options: options.host }),
-  });
+  const hostInput: AnimusHostInput = { ...input };
+  if (options.host !== undefined) hostInput.options = options.host;
+  const host = createAnimusHost(hostInput);
   const manifest = asManifest(input.manifest);
   const sourceRoot = resolve(options.sourceRoot ?? dirname(artifactsDir));
   const loadedBytes = artifactBytes(artifactsDir);

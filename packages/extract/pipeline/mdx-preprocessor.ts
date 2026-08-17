@@ -31,10 +31,25 @@ export type DefaultExtension = (typeof DEFAULT_EXTENSIONS)[number];
  * Extensions the ENGINE TRANSFORM may rewrite (distinct from
  * `DEFAULT_EXTENSIONS`, the discovery set: `.mjs` is here so dist-entry
  * kits reach the engine, `.mdx` is not — MDX is preprocessed to `.tsx`
- * before the engine sees it). The single source for the Turbopack rule
- * glob and the unplugin transform gate; independent redeclaration of this
- * set is considered a regression — a missed copy silently skips a whole
- * file class on one bundler family.
+ * before the engine sees it). Matches what the engine's parser accepts —
+ * `source_type_for` (crates/extract-v2/src/owned_ast.rs) maps exactly these
+ * five suffixes onto tsx/ts/jsx/mjs source types.
+ *
+ * The single source for EVERY driver's engine-transform file gate — the
+ * Turbopack rule glob (`next-plugin/src/turbopack-config.ts`), the webpack
+ * loader rule (`next-plugin/src/with-animus.ts`), the Vite transform hook
+ * (`vite-plugin/src/transform.ts`), and the unplugin host
+ * (`unplugin/src/core.ts`). Independent redeclaration of this set is
+ * considered a regression — a missed copy silently skips a whole file class
+ * on one bundler family.
+ *
+ * The set is the file-class gate only; each driver keeps its own
+ * module-graph scoping (node_modules exclusion, root containment, admitted
+ * external-package dirs) and the manifest lookup remains the file-level
+ * authority. Two widenings are deliberate and documented at their sites:
+ * unplugin adds `.cjs` for define substitution alone (no engine transform),
+ * and Turbopack's rule carries no node_modules condition because Next 15
+ * rules have no condition algebra.
  */
 export const ENGINE_TRANSFORM_EXTENSIONS = [
   'ts',
@@ -43,6 +58,17 @@ export const ENGINE_TRANSFORM_EXTENSIONS = [
   'jsx',
   'mjs',
 ] as const;
+
+/** The owner set as a suffix test — the ONE spelling every driver's
+ *  file-class gate calls, so no driver can re-derive it and drift. */
+const ENGINE_TRANSFORM_RE = new RegExp(
+  `\\.(?:${ENGINE_TRANSFORM_EXTENSIONS.join('|')})$`
+);
+
+/** Whether `path`'s extension is one the engine transform may rewrite. */
+export function isEngineTransformExtension(path: string): boolean {
+  return ENGINE_TRANSFORM_RE.test(path);
+}
 
 export interface PreprocessMdxResult {
   kind: 'ok' | 'missing-dep' | 'error';

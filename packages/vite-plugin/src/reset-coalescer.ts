@@ -7,8 +7,12 @@
  * Timer functions are injected seams — `vi.mock` on node builtins silently
  * no-ops under vite-plus-test, so tests drive a manual scheduler instead.
  */
+type ResetTimerHandle = ReturnType<typeof setTimeout> | number;
+
+type ResetErrorHandler = <Thrown>(error: Thrown) => void;
+
 export class ResetCoalescer {
-  private timer: unknown = null;
+  private timer: ResetTimerHandle | null = null;
   private running = false;
   private dirty = false;
 
@@ -18,14 +22,14 @@ export class ResetCoalescer {
     // throw escaping it (e.g. a strict-mode gate inside the reset) is an
     // unhandled exception that kills the dev server, so every caller must
     // decide where contained errors go.
-    private readonly onError: (err: unknown) => void,
+    private readonly onError: ResetErrorHandler,
     private readonly quietMs = 60,
-    private readonly schedule: (fn: () => void, ms: number) => unknown = (
-      fn,
-      ms
-    ) => setTimeout(fn, ms),
-    private readonly cancel: (timer: unknown) => void = (timer) =>
-      clearTimeout(timer as ReturnType<typeof setTimeout>)
+    private readonly schedule: (
+      fn: () => void,
+      ms: number
+    ) => ResetTimerHandle = (fn, ms) => setTimeout(fn, ms),
+    private readonly cancel: (timer: ResetTimerHandle) => void = (timer) =>
+      clearTimeout(timer)
   ) {}
 
   /** Ask for a reset; bursts within the quiescence window collapse. */

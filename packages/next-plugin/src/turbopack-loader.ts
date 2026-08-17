@@ -2,6 +2,7 @@ import {
   buildAnalyzeProjectArgs,
   contentHash,
   createV2EngineApi,
+  parseFilesJson,
 } from '@animus-ui/extract/pipeline';
 import {
   analysisCommitPath,
@@ -17,9 +18,10 @@ import { relative } from 'path';
 
 import { transformWithManifest } from './loader-core';
 
-import type { LoaderPolicyOptions } from './loader-core';
+import type { LoaderContextBase, LoaderPolicyOptions } from './loader-core';
 import type {
   AnalyzeProjectInputs,
+  EngineApi,
   V2ExtractEngine,
 } from '@animus-ui/extract/pipeline';
 import type { AnalysisStatus } from '@animus-ui/extract/session';
@@ -36,14 +38,7 @@ export interface TurbopackLoaderOptions extends LoaderPolicyOptions {
 
 type LoaderCallback = (err: Error | null, content?: string) => void;
 
-type LoaderContext = {
-  resourcePath: string;
-  rootContext: string;
-  getOptions: () => TurbopackLoaderOptions;
-  /** File-dependency registration (Turbopack loader-runner IPC sends
-   *  dependencies BEFORE the error check — throw-after-addDependency is a
-   *  sound recovery primitive; see design D3). */
-  addDependency?: (file: string) => void;
+type LoaderContext = LoaderContextBase<TurbopackLoaderOptions> & {
   /** Async-completion handle (webpack loader convention) — required: the
    *  evidence-based catch-up wait cannot run synchronously. */
   async?: () => LoaderCallback;
@@ -53,8 +48,17 @@ type LoaderContext = {
 // isolated, ephemeral worker processes — module scope IS worker scope, and
 // nothing here is (or may be) shared across files beyond this process
 // (spec: next-turbopack-integration / Stateless per-file transformation;
-// guardrail G1). The singleton module must never be imported from this
-// graph.
+// guardrail G1).
+//
+// The invariant is on singleton STATE, not on the module graph: the
+// `@animus-ui/extract/session` barrel imported above re-exports
+// `./singleton`, so that module IS reachable from here and no gate stops
+// it. What must never happen is this loader READING OR WRITING
+// globalThis-keyed singleton state — a worker's globalThis is its own, so
+// any such read answers about the wrong process. Only the barrel's pure
+// path builders and JSON readers are legal here; session identity arrives
+// through the loader options instead (`rootDir`/`sessionId`/`sessionDir`
+// above), which is why this file never calls `getSessionArtifactDir()`.
 let engine: V2ExtractEngine | null = null;
 let sentSources: Map<string, string> | null = null;
 let driftWarned = false;
@@ -89,6 +93,29 @@ const engineApi = createV2EngineApi({
     },
   },
 });
+
+// ── Injected engine seam ───────────────────────────────────────────────────
+// The loader builds its own engine above, so neither the singleton's
+// globalThis override nor the runner's module mocker can reach it; tests swap
+// the two calls it makes through this seam instead.
+// G1 discharge: the seam variable is module-local, so it lives and dies with
+// the worker's module instance exactly like the engine it replaces — the
+// worker-local, per-process lifetime is unchanged (ledger C-016).
+
+/** The engine surface this loader consumes — narrowed from the adapter's own
+ *  `EngineApi` so the seam can never widen past the two real call sites. */
+type LoaderEngineApi = () => Pick<
+  EngineApi,
+  'analyzeProject' | 'transformFile'
+>;
+let engineApiImpl: LoaderEngineApi = engineApi;
+
+/** @internal test seam — pass null to restore the real engine api. */
+export function __setTurbopackLoaderEngineApiForTests(
+  api: LoaderEngineApi | null
+): void {
+  engineApiImpl = api ?? engineApi;
+}
 
 // ── Injected filesystem seam ───────────────────────────────────────────────
 // The protocol gauntlet must stage torn-read windows between this loader's
@@ -210,23 +237,22 @@ function hydrateSession(sessionDir: string, sessionId: string): HydrateOutcome {
       fileHashes = inputsParsed.analyzedHashes
         ? new Map(Object.entries(inputsParsed.analyzedHashes))
         : new Map(
-            (
-              JSON.parse(inputs.filesJson) as Array<{
-                path: string;
-                source: string;
-                hash?: string;
-              }>
-            ).map((entry) => [
-              entry.path,
-              entry.hash ?? contentHash(entry.source),
-            ])
+            // The producing package's decoder, which throws on a corpus that
+            // is not an entry array; the catch below is this site's documented
+            // channel for that throw.
+            parseFilesJson(inputs.filesJson, 'animus-next-turbopack').map(
+              (entry) => [entry.path, entry.hash ?? contentHash(entry.source)]
+            )
           );
     } catch {
       // Hash-verified yet unparseable: committed garbage — fail closed
-      // rather than half-consume or silently pass through.
+      // rather than half-consume or silently pass through. The caller turns
+      // this into a loud ANIMUS_ARTIFACT_READ_TORN failure, so the decoder's
+      // refusal reaches the user through this loader's own diagnostic
+      // vocabulary instead of as a raw TypeError.
       return { kind: 'torn' };
     }
-    const { analyzeProject } = engineApi();
+    const { analyzeProject } = engineApiImpl();
     hydratedManifestJson = analyzeProject(
       ...buildAnalyzeProjectArgs(inputs)
     ) as string;
@@ -259,10 +285,19 @@ function readStatus(sessionDir: string): AnalysisStatus | null {
 const CATCHUP_POLL_INITIAL_MS = 10;
 const CATCHUP_POLL_MAX_MS = 25;
 const CATCHUP_WAIT_MARGIN_MS = 50;
-const CATCHUP_WATCHDOG_MS = 2000;
-/** The loader cannot read the orchestrator's configured debounce, so its
- *  own ceiling assumes the default watcher debounce. */
-const DEFAULT_DEBOUNCE_CEILING_MS = 75;
+/** The session publishes `deadlineAt` on every status write and IS the sole
+ *  authority on how long an attempt may take; the loader never re-derives
+ *  one from an assumed watcher debounce, which silently expired healthy
+ *  attempts under a non-default `startTurbopackWatcher(…, debounceMs)`.
+ *
+ *  This cap bounds the ONE case that carries no such deadline: `readStatus`
+ *  parses disk bytes unvalidated, so a torn or foreign-version status can
+ *  reach the wait loop with a non-numeric `deadlineAt` and would otherwise
+ *  poll forever. It is NOT a copy of the session's `STATUS_WATCHDOG_MS`
+ *  (whose equal value is coincidence): that watchdog extends a deadline the
+ *  session owns, this one bounds a wait with no deadline at all. Retire it
+ *  when the status read validates its shape and can refuse such bytes. */
+const CATCHUP_NO_DEADLINE_CAP_MS = 2000;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -351,7 +386,7 @@ async function runLoader(ctx: LoaderContext, source: string): Promise<string> {
       source,
       filename,
       manifestJson,
-      engineApi,
+      engineApi: engineApiImpl,
       opts,
     });
 
@@ -422,11 +457,10 @@ async function awaitCoverage(args: {
     coverageFailure,
     transform,
   } = args;
-  const ceiling =
-    Date.now() +
-    DEFAULT_DEBOUNCE_CEILING_MS +
-    CATCHUP_WATCHDOG_MS +
-    CATCHUP_WAIT_MARGIN_MS;
+  /** Only bounds waits on a status carrying no readable deadline; the
+   *  session-published `status.deadlineAt` bounds every other wait. */
+  const noDeadlineCap =
+    Date.now() + CATCHUP_NO_DEADLINE_CAP_MS + CATCHUP_WAIT_MARGIN_MS;
   let poll = CATCHUP_POLL_INITIAL_MS;
 
   for (;;) {
@@ -485,13 +519,17 @@ async function awaitCoverage(args: {
         );
       }
     }
+    // Wait ceiling — SINGLE authority: the deadline the session published
+    // for the attempt in hand, re-read every turn so a newly opened attempt
+    // extends the wait exactly as far as the session says it may.
     const now = Date.now();
-    if (typeof status.deadlineAt === 'number' && now > status.deadlineAt) {
-      throw coverageFailure(
-        `ANIMUS_ANALYSIS_STALLED: analysis attempt ${status.attemptId} exceeded its deadline while ${filename} waited for coverage`
-      );
-    }
-    if (now > ceiling) {
+    if (typeof status.deadlineAt === 'number') {
+      if (now > status.deadlineAt) {
+        throw coverageFailure(
+          `ANIMUS_ANALYSIS_STALLED: analysis attempt ${status.attemptId} exceeded its deadline while ${filename} waited for coverage`
+        );
+      }
+    } else if (now > noDeadlineCap) {
       throw coverageFailure(
         `ANIMUS_ANALYSIS_CATCHING_UP: ${filename} changed after the committed analysis; timed out waiting for the commit to advance — retrying on the next invalidation`
       );

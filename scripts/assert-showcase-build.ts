@@ -9,11 +9,11 @@ import {
   assertSystemSchemeGuard,
   findCssFiles,
   findJsFiles,
+  installedHostVersion,
   layerBlock,
   readAllConcat,
   writeLaneReceipt,
 } from '@animus-ui/assertions';
-import { readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -23,48 +23,23 @@ const SHOWCASE_ROOT = resolve(REPO_ROOT, 'packages', 'showcase');
 const DIST = resolve(SHOWCASE_ROOT, 'dist');
 
 function emitLaneReceipt(): void {
-  // Retirement regression guard (openspec: retire-extract-v1): v2 is the only
-  // engine. The showcase config MUST NOT reference ANIMUS_ENGINE or set the
-  // engine option — either would reintroduce a retired v1 selection path.
-  const config = readFileSync(resolve(SHOWCASE_ROOT, 'vite.config.ts'), 'utf8');
-  if (config.includes('ANIMUS_ENGINE') || /\bengine\s*:/.test(config)) {
-    throw new AssertionError(
-      'packages/showcase/vite.config.ts must not reference ANIMUS_ENGINE or ' +
-        'set the engine option — the v1 engine was retired (openspec: retire-extract-v1)'
-    );
-  }
-
-  // v1 is retired (openspec: retire-extract-v1): v2 is the only engine, so the
-  // receipt records v2 as both default and loaded, with no override.
-  const engineDefault = 'v2' as const;
-  const engineLoaded = 'v2' as const;
-  const engineOverride = false;
-
+  // Engine identity comes from writeLaneReceipt's retirement guard over the
+  // showcase config (openspec: retire-extract-v1) — never spelled here.
   // hostVersion from the fixture's installed host, not the manifest range.
-  const hostVersion = (
-    JSON.parse(
-      readFileSync(
-        resolve(SHOWCASE_ROOT, 'node_modules', 'vite', 'package.json'),
-        'utf8'
-      )
-    ) as { version: string }
-  ).version;
-
-  writeLaneReceipt(
+  const receipt = writeLaneReceipt(
     resolve(SHOWCASE_ROOT, '.receipts', 'verify-assert-showcase.json'),
     {
       lane: '@animus-ui/showcase#verify:assert',
       host: 'vite',
-      hostVersion,
+      hostVersion: installedHostVersion(SHOWCASE_ROOT, 'vite'),
       mode: 'production',
-      engineLoaded,
-      engineDefault,
-      engineOverride,
       packageForm: 'workspace',
+      engineConfigPath: resolve(SHOWCASE_ROOT, 'vite.config.ts'),
+      engineConfigLabel: 'packages/showcase/vite.config.ts',
     }
   );
   console.log(
-    `[showcase:assert] receipt → packages/showcase/.receipts/verify-assert-showcase.json (engine=${engineLoaded}, default=${engineDefault}, override=${engineOverride})`
+    `[showcase:assert] receipt → packages/showcase/.receipts/verify-assert-showcase.json (engine=${receipt.engineLoaded}, default=${receipt.engineDefault}, override=${receipt.engineOverride})`
   );
 }
 

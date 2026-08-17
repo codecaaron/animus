@@ -8,10 +8,9 @@ import { join } from 'node:path';
  *   - scale lookup of typed props inside aliased blocks
  *   - component-usage recognition via `createElement(bareIdent, ...)`
  *
- * Exercises the full 14-arg `analyzeProject` signature matching the production
- * vite-plugin invocation. `runPipeline` passes `selectorAliasesJson` and a
- * `null` placeholder in the retained selector-order slot, closing the coverage
- * gap that let this regression class slip past integration.
+ * Exercises the production analysis inputs: `runPipeline` passes the system's
+ * `selectorAliasesJson`, closing the coverage gap that let this regression
+ * class slip past integration.
  *
  * Historical regressions, now fixed and retained as active guards:
  *   - Bare-identifier `createElement` usage is recognized as rendering, so the

@@ -17,8 +17,6 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { createTheme } from '../src';
 
-type NestedColors = Record<string, Record<string, string>>;
-
 describe('ThemeBuilder state isolation', () => {
   it('branching a builder never cross-contaminates branches or the parent', () => {
     const base = createTheme().addColors({ brand: { primary: '#111111' } });
@@ -40,9 +38,8 @@ describe('ThemeBuilder state isolation', () => {
 
     builder.addColors({ z: { b: '#444444' } });
 
-    expect((built.colors as unknown as NestedColors).z).toEqual({
-      a: '#333333',
-    });
+    // Whole-object: a leaked mutation would show up as an extra `z.b` here.
+    expect(built.colors).toEqual({ z: { a: '#333333' } });
   });
 
   it('from() never mutates the consumed built theme', () => {
@@ -54,9 +51,7 @@ describe('ThemeBuilder state isolation', () => {
       .from(kit)
       .addColors({ kitc: { b: '#999999' } });
 
-    expect((kit.colors as unknown as NestedColors).kitc).toEqual({
-      a: '#111111',
-    });
+    expect(kit.colors).toEqual({ kitc: { a: '#111111' } });
   });
 
   it('extend() never mutates the consumed built theme through later augmentation', () => {
@@ -68,9 +63,7 @@ describe('ThemeBuilder state isolation', () => {
       .extend(kit)
       .addColors({ kitc: { b: '#999999' } });
 
-    expect((kit.colors as unknown as NestedColors).kitc).toEqual({
-      a: '#111111',
-    });
+    expect(kit.colors).toEqual({ kitc: { a: '#111111' } });
   });
 });
 
@@ -83,9 +76,7 @@ describe('from() bundle-half resolution', () => {
 
     const built = createTheme().from(bundle).build();
 
-    expect((built.colors as unknown as NestedColors | undefined)?.kitc).toEqual(
-      { a: '#111111' }
-    );
+    expect(built.colors).toEqual({ kitc: { a: '#111111' } });
     expect(built.serialize().scalesJson).toContain('kitc');
   });
 });

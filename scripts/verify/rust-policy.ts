@@ -127,8 +127,15 @@ export function findLintTableDivergences(
 // so a real attribute trailing an inline comment still tokenizes. String-literal
 // contents are intentionally left in place: attribute macros do not live inside
 // string literals, and stripping strings correctly would require a full lexer
-// the fail-closed policy does not warrant.
-export function stripComments(source: string): string {
+// the fail-closed policy does not warrant. Named for its language on purpose:
+// the JS/TS stripper in `topology.ts` is deliberately a DIFFERENT function and
+// would be actively wrong here (Rust lifetimes — `&'a str`, `'static` — read
+// as an opening quote, and raw strings have no backslash escapes), so the two
+// must never be consolidated by name-matching.
+// Residual (fail-OPEN, accepted): a `//` inside a Rust string literal, e.g.
+// `let u = "https://x"; #[allow(warnings)]` on one line, drops the rest of the
+// line and hides a real attribute. Nested `/* /* */ */` is likewise unhandled.
+export function stripRustComments(source: string): string {
   let out = '';
   let i = 0;
   const n = source.length;
@@ -159,7 +166,7 @@ export function findBlanketSuppressions(
   source: string,
   file: string
 ): SuppressionFinding[] {
-  const stripped = stripComments(source);
+  const stripped = stripRustComments(source);
   const findings: SuppressionFinding[] = [];
   // `[^()]*` keeps each group to a single non-nested lint list. cfg_attr's outer
   // parens are skipped over; its inner allow/expect group is matched on its own.

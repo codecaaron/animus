@@ -10,12 +10,20 @@ Re-exported via `fixtures/setup.ts` → imports from `extract/tests/test-system.
 
 ## Pipeline Helper
 
-`__tests__/run-pipeline.ts` drives the stateful v2 `ExtractEngine` the same way
-the production plugins do (via `extract/pipeline/engine-adapter.ts`):
+`__tests__/run-pipeline.ts` drives the stateful v2 `ExtractEngine` through the
+same adapter the production plugins use (`createV2EngineApi` from
+`extract/pipeline/engine-adapter.ts`, with the engine handle stored in closure
+variables):
 
-1. `analyzeProject()` — a positional v2-backed shim (retained v1 NAPI argument
-   shape) that builds `EngineOptions`, constructs a fresh `ExtractEngine`, and
-   returns its `analyze()` manifest JSON
+1. `analyzeProject(filesJson, overrides?)` — named `AnalyzeProjectInputs` (the
+   production input surface) serialized into the positional NAPI tuple by the
+   production `buildAnalyzeProjectArgs`, then handed to the shared adapter,
+   which builds `EngineOptions`, constructs a fresh `ExtractEngine`, and
+   returns its `analyze()` manifest JSON. Fixture defaults supply the shared
+   theme/config inputs and `null` for every optional engine input; call sites
+   override only the inputs their case exercises. A new engine input reaches
+   this helper as a new named field — the helper carries no slot list of its
+   own
 2. `applyUnitFallback()` — append `px` to bare numerics on length properties
 
 Extraction-semantics tests use this helper (or import its `analyzeProject` /

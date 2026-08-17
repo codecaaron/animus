@@ -37,7 +37,7 @@ interface MemoryStorage {
 function createStorage(initial: Record<string, string> = {}): MemoryStorage {
   const map = new Map(Object.entries(initial));
   return {
-    getItem: (key) => (map.has(key) ? (map.get(key) as string) : null),
+    getItem: (key) => map.get(key) ?? null,
     setItem: (key, value) => void map.set(key, value),
     removeItem: (key) => void map.delete(key),
     dump: () => Object.fromEntries(map),

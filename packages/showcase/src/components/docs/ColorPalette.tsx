@@ -236,12 +236,9 @@ const PaletteHeading = ds
 export function ColorPalette() {
   // `null` = no explicit mode: the attribute is absent and the OS preference is
   // driving the palette, so the System option is the active one.
-  const [currentMode, setCurrentMode] = useState<string | null>(() => {
-    if (typeof document !== 'undefined') {
-      return document.documentElement.getAttribute('data-color-mode');
-    }
-    return null;
-  });
+  const [currentMode, setCurrentMode] = useState<string | null>(() =>
+    document.documentElement.getAttribute('data-color-mode')
+  );
   const gridRef = useRef<HTMLDivElement | null>(null);
 
   const hasActiveMode = MODES.some((m) => m.name === currentMode);
@@ -289,7 +286,9 @@ export function ColorPalette() {
       // compute a move back onto the focused cell, eating the keystroke.
       // Selection is the fallback, and one option is checked in every state
       // (System when no mode is explicit), so the fallback always exists.
-      const focusedIdx = buttons.indexOf(document.activeElement as HTMLElement);
+      const focusedIdx = buttons.findIndex(
+        (button) => button === document.activeElement
+      );
       const origin =
         focusedIdx !== -1
           ? focusedIdx

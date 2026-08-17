@@ -2,7 +2,10 @@ import { describe, expect, test } from 'vitest';
 
 import { animusExtract } from '../src/index';
 
-import type { ConfigEnv } from 'vite';
+import type { ConfigEnv, HookHandler, Plugin } from 'vite';
+
+type ConfigHook = HookHandler<NonNullable<Plugin['config']>>;
+type ConfigHookCall = OmitThisParameter<ConfigHook>;
 
 /**
  * The system runtime gates its development-only diagnostics on the
@@ -13,10 +16,11 @@ import type { ConfigEnv } from 'vite';
 describe('__ANIMUS_DEV__ define', () => {
   const runConfigHook = (command: ConfigEnv['command']) => {
     const hook = animusExtract({ system: './src/ds.ts' }).config;
-    if (typeof hook !== 'function') {
+    if (hook === undefined || 'handler' in hook) {
       throw new Error('expected a plain function `config` hook');
     }
-    return hook.call(undefined as never, {}, { command, mode: 'test' });
+    const callConfigHook: ConfigHookCall = hook;
+    return callConfigHook({}, { command, mode: 'test' });
   };
 
   test('dev serve declares the token as dev', () => {

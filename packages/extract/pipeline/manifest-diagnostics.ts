@@ -1,3 +1,5 @@
+import { parseInternalWire } from './internal-wire';
+
 export type ManifestDiagnostic = {
   file: string;
   component: string;
@@ -91,12 +93,14 @@ export function collectSelectorAliasDiagnostics(
   selectorAliasesJson: string | null | undefined
 ): ManifestDiagnostic[] {
   if (!selectorAliasesJson) return [];
-  let aliases: Record<string, unknown>;
-  try {
-    aliases = JSON.parse(selectorAliasesJson);
-  } catch {
-    return [];
-  }
+  // Fail loud, as the header says: `selectorAliasesJson` is the system
+  // loader's own serialization, and an empty diagnostic list reads as "every
+  // registered alias validated" — the exact outcome this collector exists to
+  // deny.
+  const aliases = parseInternalWire<Record<string, unknown>>(
+    selectorAliasesJson,
+    "selectorAliasesJson (the system loader's selector-alias registry)"
+  );
   const diagnostics: ManifestDiagnostic[] = [];
   for (const [name, value] of Object.entries(aliases)) {
     if (typeof value !== 'string') continue;

@@ -72,8 +72,11 @@ describe('Next manifest diagnostic surfacing', () => {
       resolve(process.cwd(), 'packages/extract/pipeline/run-analysis.ts'),
       'utf8'
     );
+    // The parse is typed by the producing package's own manifest declaration;
+    // the invariant this pins is unchanged — nothing runs between the parse
+    // and the single surfacing call.
     expect(analysisSource).toMatch(
-      /const manifest = JSON\.parse\(manifestJson\);\s*surfaceManifestDiagnostics\(manifest,/
+      /const manifest = JSON\.parse\(manifestJson\) as ProjectManifest;\s*surfaceManifestDiagnostics\(manifest,/
     );
     expect(
       analysisSource.match(/surfaceManifestDiagnostics\(manifest,/g) ?? []
