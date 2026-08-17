@@ -25,6 +25,7 @@ import {
 } from '../../extract/session/extraction-session';
 import {
   disposeTempRoots,
+  makeManifest,
   makeTempRoot,
   resetAnimusGlobals,
   SYSTEM_CONFIG,
@@ -60,13 +61,11 @@ setEngineApiOverride(() => ({
 
 let restoreGlobals: () => void;
 
-const MANIFEST = JSON.stringify({
-  css: '.btn{margin:8;}',
-  sheets: { global: '' },
-  system_prop_map: {},
-  dynamic_props: {},
-  diagnostics: [],
-});
+/** The engine's manifest for these workspaces — a COMPLETE `ProjectManifest`
+ *  (the shared pipeline reads `manifest.sheets.global` and `manifest.css`
+ *  as typed fields, not guarded ones), carrying the one value this suite
+ *  cares about: the component CSS the Button sources produce. */
+const MANIFEST = JSON.stringify(makeManifest({ css: '.btn{margin:8;}' }));
 
 const SYSTEM_SOURCE = `import { createSystem } from '@animus-ui/system';
 import kit from '../../kits/ui/src/index.ts';

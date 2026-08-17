@@ -9,6 +9,11 @@ import { join } from 'path';
 
 import { SINGLETON_GLOBAL_KEYS } from '../../extract/session/singleton';
 
+import type {
+  ManifestComponentDescriptor,
+  ProjectManifest,
+} from '@animus-ui/extract/pipeline';
+
 /**
  * Shared, webpack-free fixtures for the next-plugin behavioral suites: the
  * singleton globalThis hygiene, the canned SystemConfig, the Button project
@@ -73,32 +78,113 @@ export const BUTTON_STYLE_EDIT =
 export const BUTTON_PLAN_EDIT =
   "export const Button = animus.styles({ margin: 16 }).variant({}).asElement('button');\n";
 
-export const PLAN_A = {
-  'src/Button.tsx::Button': {
-    file: 'src/Button.tsx',
-    replacement: "createComponent('button', 'a')",
-  },
-};
-export const PLAN_B = {
-  'src/Button.tsx::Button': {
-    file: 'src/Button.tsx',
-    replacement: "createComponent('button', 'b')",
-  },
-};
-
-/** Canonical engine-manifest JSON for a component set. */
-export function buildManifest(
-  components: Record<string, unknown>,
-  css = '.btn{margin:8px;}'
-): string {
-  return JSON.stringify({
-    components,
-    css,
-    sheets: { global: '' },
+/**
+ * A COMPLETE `ProjectManifest` at its empty-universe values, overridden per
+ * test — the next-plugin twin of `packages/vite-plugin/tests/manifest-fixture
+ * .ts` (each package keeps a local copy; test directories are not importable
+ * across packages).
+ *
+ * The engine's `AnalyzeResult` declares no `Option` and no
+ * `skip_serializing_if` at the top level (see `manifest-schema.ts`), so an
+ * empty project still serializes `{}` / `[]` / `""` for every field — absence
+ * means "not a manifest". Fakes that omitted fields were the only thing
+ * keeping `manifest?.sheets`-style shape guards alive in the shared pipeline;
+ * building every fake from this base is what lets those guards go.
+ */
+export function makeManifest(
+  overrides: Partial<ProjectManifest> = {}
+): ProjectManifest {
+  return {
+    fileFacts: {},
+    crossFile: {
+      componentNames: [],
+      classResolvers: [],
+      memberBindings: {},
+      renderedComponents: [],
+      variantOptions: {},
+      stateNames: {},
+    },
+    parseCount: 0,
+    usageResidue: [],
+    css: '',
+    sheets: {
+      declaration: '',
+      global: '',
+      base: '',
+      variants: '',
+      compounds: '',
+      states: '',
+      system: '',
+      custom: '',
+    },
+    diagnostics: [],
+    report: {
+      components_total: 0,
+      components_extracted: 0,
+      components_eliminated: 0,
+      variants_total: 0,
+      variants_used: 0,
+      variants_eliminated: 0,
+      states_total: 0,
+      states_used: 0,
+      states_eliminated: 0,
+      components_forced: 0,
+      variants_forced: 0,
+      states_forced: 0,
+      eliminated_details: [],
+    },
     system_prop_map: {},
     dynamic_props: {},
-    diagnostics: [],
-  });
+    component_fragments: {},
+    reverse_provenance: {},
+    components: {},
+    files: {},
+    timing: { parseCount: 0 },
+    ...overrides,
+  };
+}
+
+/**
+ * One component descriptor. `file` and `replacement` are the two fields the
+ * epoch/plan derivation reads; the rest carry the engine's own empty values
+ * so a fake descriptor is a whole one.
+ */
+export function makeComponent(
+  file: string,
+  replacement = ''
+): ManifestComponentDescriptor {
+  return {
+    file,
+    binding: '',
+    class_name: '',
+    extends_from: null,
+    terminal: 'asElement',
+    tag: 'div',
+    replacement,
+    system_prop_names: [],
+  };
+}
+
+export const PLAN_A = {
+  'src/Button.tsx::Button': makeComponent(
+    'src/Button.tsx',
+    "createComponent('button', 'a')"
+  ),
+};
+export const PLAN_B = {
+  'src/Button.tsx::Button': makeComponent(
+    'src/Button.tsx',
+    "createComponent('button', 'b')"
+  ),
+};
+
+/** Canonical engine-manifest JSON for a component set — a COMPLETE
+ *  `ProjectManifest`, so the pipeline's typed reads hold in these suites. */
+export function buildManifest(
+  components: Record<string, ManifestComponentDescriptor>,
+  css = '.btn{margin:8px;}'
+): string {
+  return JSON.stringify(makeManifest({ components, css }));
 }
 
 const tempRoots: string[] = [];
@@ -137,14 +223,14 @@ export function createProject(prefix: string): string {
   return root;
 }
 
-/** One manifest component entry, limited to the two fields the epoch
- *  derivation reads (`snapshotFilePlans`,
- *  packages/extract/pipeline/replacement-plans.ts); the manifest itself is
- *  still untyped upstream. */
-export interface ReplacementPlan {
-  file: string;
-  replacement: string;
-}
+/** The (file, replacement) projection of one component descriptor — the two
+ *  fields the epoch derivation reads (`snapshotFilePlans`,
+ *  packages/extract/pipeline/replacement-plans.ts). Reader-side validators
+ *  assert artifacts read back from disk carry at least this projection. */
+export type ReplacementPlan = Pick<
+  ManifestComponentDescriptor,
+  'file' | 'replacement'
+>;
 
 /** The manifest `components` map these fixtures drive, keyed by
  *  `<file>::<binding>` component id. */
@@ -159,8 +245,12 @@ const SYSTEM_PROPS_WITNESS = buildSystemPropsModule({
 });
 
 /** The canonical replacement epoch for a component set — the value the
- *  session must publish and write to its epoch artifact. */
-export function expectedEpoch(components: ReplacementPlans): string {
+ *  session must publish and write to its epoch artifact. Takes complete
+ *  descriptors (`makeComponent`) because the epoch derivation reads a
+ *  typed manifest projection. */
+export function expectedEpoch(
+  components: Record<string, ManifestComponentDescriptor>
+): string {
   return hashReplacementPlans(
     snapshotFilePlans({ components }),
     SYSTEM_PROPS_WITNESS

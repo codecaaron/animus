@@ -24,7 +24,11 @@ import animusTurbopackLoader, {
   __resetTurbopackLoaderStateForTests,
   __setTurbopackLoaderEngineApiForTests,
 } from '../src/turbopack-loader';
-import { disposeTempRoots, makeTempRoot } from './singleton-fixtures';
+import {
+  disposeTempRoots,
+  makeManifest,
+  makeTempRoot,
+} from './singleton-fixtures';
 
 import type { TurbopackLoaderOptions } from '../src/turbopack-loader';
 
@@ -34,6 +38,15 @@ const mocks = {
 };
 
 const SESSION_ID = 'loader-test-session';
+
+/**
+ * A COMPLETE engine manifest at its empty-universe values — both the payload
+ * these fabricated generations commit to disk and the value the replayed
+ * `analyzeProject` double hands back. The shared pipeline reads
+ * `manifest.sheets` / `manifest.components` with no shape guard, so a fake
+ * manifest that omits fields is no longer a manifest at all.
+ */
+const EMPTY_MANIFEST = JSON.stringify(makeManifest());
 
 /** Fabricate a committed generation covering the given files. */
 function makeRoot(files: Array<{ path: string; source: string }>): string {
@@ -46,7 +59,7 @@ function makeRoot(files: Array<{ path: string; source: string }>): string {
 function writeCommitted(
   root: string,
   files: Array<{ path: string; source: string }>,
-  manifestJson = '{"files":{}}'
+  manifestJson = EMPTY_MANIFEST
 ): void {
   const sessionDir = sessionArtifactDir(root, SESSION_ID);
   mkdirSync(sessionDir, { recursive: true });
@@ -126,7 +139,7 @@ function runLoader(
 }
 
 beforeEach(() => {
-  mocks.analyzeProject.mockReset().mockReturnValue('{"files":{}}');
+  mocks.analyzeProject.mockReset().mockReturnValue(EMPTY_MANIFEST);
   mocks.transformFile.mockReset().mockImplementation((source: string) => ({
     code: source,
     hasComponents: false,
@@ -204,7 +217,7 @@ describe('turbopack loader hydration', () => {
     expect(mocks.transformFile).toHaveBeenLastCalledWith(
       'export const b = 2;\n',
       'app/b.tsx',
-      '{"files":{}}'
+      EMPTY_MANIFEST
     );
   });
 
@@ -213,10 +226,13 @@ describe('turbopack loader hydration', () => {
     await runLoader(root, 'app/a.tsx', 'export {};\n');
     const before = mocks.analyzeProject.mock.calls.length;
 
+    // A second generation whose committed manifest payload differs in
+    // content (one declared file) — the commit content is what keys
+    // hydration.
     writeCommitted(
       root,
       [{ path: 'app/a.tsx', source: 'export {};\n' }],
-      '{"files":{"app/a.tsx":1}}'
+      JSON.stringify(makeManifest({ files: { 'app/a.tsx': ['app/a.tsx::A'] } }))
     );
     await runLoader(root, 'app/a.tsx', 'export {};\n');
     expect(mocks.analyzeProject.mock.calls.length).toBe(before + 1);

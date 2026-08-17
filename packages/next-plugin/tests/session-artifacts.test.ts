@@ -83,6 +83,7 @@ import {
 
 import type { ReplacementPlan, ReplacementPlans } from './singleton-fixtures';
 import type { JsonObject, JsonValue } from '@animus-ui/assertions';
+import type { ManifestComponentDescriptor } from '@animus-ui/extract/pipeline';
 
 let restoreGlobals: () => void;
 
@@ -302,7 +303,7 @@ type WriteRecord = { name: string; content: string };
 
 async function startSession(
   root: string,
-  components: ReplacementPlans,
+  components: Record<string, ManifestComponentDescriptor>,
   writes?: WriteRecord[],
   opts?: { turbopack?: boolean }
 ): Promise<ExtractionSession> {

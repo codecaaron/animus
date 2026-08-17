@@ -77,8 +77,12 @@ e2e/packed-app/.staging/
 # made the deliverable un-commitable; children-glob + negation instead)
 docs/*
 !docs/standalone-extraction.md
-!docs/contract-change-ledger.md
 .codex
+
+# contract-change campaign ratchet artifacts — enforcement hooks were never
+# enabled and nothing consumes these; regenerated on demand by a future pass
+.abstraction-owners.json
+.collision-report.json
 .repowise/
 
 # opx generated workspace state

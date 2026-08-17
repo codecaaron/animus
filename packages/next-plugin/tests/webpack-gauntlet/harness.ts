@@ -16,9 +16,15 @@ import { tmpdir } from 'os';
 import { dirname, join, relative, sep } from 'path';
 
 import { getReplacementEpoch } from '../../../extract/session/singleton';
-import { buildManifest, SYSTEM_CONFIG } from '../singleton-fixtures';
+import {
+  buildManifest,
+  makeComponent,
+  SYSTEM_CONFIG,
+} from '../singleton-fixtures';
 
+import type { ReplacementPlan } from '../singleton-fixtures';
 import type { JsonValue } from '@animus-ui/assertions';
+import type { ManifestComponentDescriptor } from '@animus-ui/extract/pipeline';
 import type { Mock } from 'vitest';
 
 /**
@@ -289,18 +295,6 @@ interface CannedAnalysisFile {
   source: string;
 }
 
-interface CannedComponentPlan {
-  file: string;
-  replacement: string;
-}
-
-type CannedComponentPlans = { [componentId: string]: CannedComponentPlan };
-
-interface CannedManifestComponent {
-  file?: string;
-  replacement?: string;
-}
-
 type CannedTransformResult =
   | { code: string; hasComponents: false }
   | { code: string; hasComponents: true };
@@ -322,14 +316,15 @@ function parseCannedAnalysisFiles(serialized: string): CannedAnalysisFile[] {
   });
 }
 
-function parseCannedManifestComponents(
-  serialized: string
-): CannedManifestComponent[] {
+/** Read the (file, replacement) projection back out of a served manifest —
+ *  `ReplacementPlan` is the fixtures' name for exactly that projection. Both
+ *  fields are required: the manifest reaching the loader is always a complete
+ *  `ProjectManifest` (see `buildManifest`). */
+function parseCannedManifestComponents(serialized: string): ReplacementPlan[] {
   const manifest: JsonValue = JSON.parse(serialized);
   if (!isJsonObject(manifest)) {
     throw new TypeError('canned transform manifest must be an object');
   }
-  if (manifest.components === undefined) return [];
   if (!isJsonObject(manifest.components)) {
     throw new TypeError('canned transform components must be an object');
   }
@@ -337,9 +332,8 @@ function parseCannedManifestComponents(
   return Object.entries(manifest.components).map(([componentId, component]) => {
     if (
       !isJsonObject(component) ||
-      (component.file !== undefined && !isJsonString(component.file)) ||
-      (component.replacement !== undefined &&
-        !isJsonString(component.replacement))
+      !isJsonString(component.file) ||
+      !isJsonString(component.replacement)
     ) {
       throw new TypeError(
         `canned manifest component ${componentId} is malformed`
@@ -381,25 +375,25 @@ export function cannedAnalyzeProject(filesJson: string): string {
   const parent = files.find((f) => f.path === PARENT_REL);
   const generation = parent?.source.match(/shape:(\w+)/)?.[1] ?? 'G?';
   const style = parent?.source.match(/style:(\w+)/)?.[1] ?? 'S?';
-  const components: CannedComponentPlans = {};
+  const components: Record<string, ManifestComponentDescriptor> = {};
   if (parent) {
-    components[`${PARENT_REL}::Parent`] = {
-      file: PARENT_REL,
-      replacement: `parent@${generation}`,
-    };
+    components[`${PARENT_REL}::Parent`] = makeComponent(
+      PARENT_REL,
+      `parent@${generation}`
+    );
   }
   if (files.some((f) => f.path === CHILD_REL)) {
-    components[`${CHILD_REL}::Child`] = {
-      file: CHILD_REL,
-      replacement: `child@${generation}`,
-    };
+    components[`${CHILD_REL}::Child`] = makeComponent(
+      CHILD_REL,
+      `child@${generation}`
+    );
   }
   const newcomer = files.find((f) => f.path === NEWCOMER_REL);
   if (newcomer && newcomer.source.includes('chain')) {
-    components[`${NEWCOMER_REL}::Newcomer`] = {
-      file: NEWCOMER_REL,
-      replacement: `newcomer@${generation}`,
-    };
+    components[`${NEWCOMER_REL}::Newcomer`] = makeComponent(
+      NEWCOMER_REL,
+      `newcomer@${generation}`
+    );
   }
   return buildManifest(components, `.p{--style:${style}}`);
 }

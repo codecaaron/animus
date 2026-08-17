@@ -27,7 +27,11 @@ import {
   engineApi,
   setEngineApiOverride,
 } from '../../extract/session/singleton';
-import { resetAnimusGlobals, SYSTEM_CONFIG } from './singleton-fixtures';
+import {
+  makeManifest,
+  resetAnimusGlobals,
+  SYSTEM_CONFIG,
+} from './singleton-fixtures';
 
 import type {
   AnalysisSourceEntry,
@@ -74,13 +78,12 @@ function readFileEntries(filesJson: string): EngineFileEntry[] {
   });
 }
 
-const MANIFEST = JSON.stringify({
-  css: '',
-  sheets: { global: '' },
-  system_prop_map: {},
-  dynamic_props: {},
-  diagnostics: [],
-});
+/** The engine's manifest for these workspaces — a COMPLETE `ProjectManifest`
+ *  at its empty-universe values (the shared pipeline reads
+ *  `manifest.sheets.global` and `manifest.css` as typed fields, not guarded
+ *  ones). This suite asserts on source ownership, not on emitted CSS, so
+ *  every field stays at its empty value. */
+const MANIFEST = JSON.stringify(makeManifest());
 
 function factsFor(filesJson: string): string {
   const entries = readFileEntries(filesJson);

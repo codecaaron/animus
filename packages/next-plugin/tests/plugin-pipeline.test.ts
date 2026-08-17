@@ -24,6 +24,7 @@ import {
   BUTTON_STYLE_EDIT as BUTTON_SOURCE_CHANGED,
   createProject as createFixtureProject,
   disposeTempRoots,
+  makeManifest,
   resetAnimusGlobals,
   SYSTEM_CONFIG,
 } from './singleton-fixtures';
@@ -66,11 +67,20 @@ interface ManifestOverrides {
   diagnostics?: ManifestDiagnostic[];
 }
 
+/**
+ * The engine manifest the `analyzeProject` mock returns — a COMPLETE
+ * `ProjectManifest` (`makeManifest`, singleton-fixtures) carrying this
+ * suite's meaningful values. The shared pipeline reads `manifest.sheets
+ * .global` and `manifest.css` as typed fields, so a partial literal is not
+ * a manifest.
+ */
 function buildManifest(overrides: ManifestOverrides = {}): string {
-  return JSON.stringify({
+  const manifest = makeManifest({
     css: nextComponentCss,
-    sheets: { global: '@layer anm-global{body{margin:0}}' },
-    system_prop_map: { m: 'margin' },
+    // prop name → VALUE → utility class name (manifest-schema.ts): the map
+    // `resolveClasses` indexes as `systemPropMap[prop][value]`. The session
+    // hands it to the served system-props module verbatim.
+    system_prop_map: { m: { '8': 'anm-m-8' } },
     // Verbatim manifest spelling: `DynamicPropMeta` serializes camelCase, with
     // absent transforms as `null` and an empty scale map as `{}`.
     dynamic_props: {
@@ -91,9 +101,13 @@ function buildManifest(overrides: ManifestOverrides = {}): string {
         scaleValues: {},
       },
     },
-    diagnostics: [],
     ...overrides,
   });
+  // `sheets` stays a whole `ManifestSheets`; only the layer this suite reads
+  // carries content. `makeManifest` returns fresh objects, so this mutates
+  // nobody else's fixture.
+  manifest.sheets.global = '@layer anm-global{body{margin:0}}';
+  return JSON.stringify(manifest);
 }
 
 beforeEach(() => {
@@ -468,7 +482,7 @@ describe('production run (full pipeline)', () => {
       'utf-8'
     );
     expect(sysProps).toBe(
-      'export const systemPropMap = {"m":"margin"};\n' +
+      'export const systemPropMap = {"m":{"8":"anm-m-8"}};\n' +
         'export const systemPropGroups = {"groups":{}};\n' +
         'export const dynamicPropConfig = {"color":{"varName":"--anm-color","slotClass":"anm-color-slot","property":"color","transformName":"toColor","scaleValues":{"primary":"#00f"}},"p":{"varName":"--anm-p","slotClass":"anm-p-slot","property":"padding"}};\n' +
         'export const transforms = {};\n'
@@ -494,7 +508,9 @@ describe('production run (full pipeline)', () => {
       }),
       ...parseJsonObject(analyzeResult(0), 'analyzeProject manifest'),
     });
-    expect(JSON.parse(written).system_prop_map).toEqual({ m: 'margin' });
+    expect(JSON.parse(written).system_prop_map).toEqual({
+      m: { '8': 'anm-m-8' },
+    });
     const mtimeAfterFull = statSync(manifestPath).mtimeMs;
 
     // A source change whose re-analysis yields a byte-identical manifest

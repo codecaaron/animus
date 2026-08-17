@@ -60,7 +60,7 @@ import {
   SYSTEM_CONFIG,
 } from './singleton-fixtures';
 
-import type { ReplacementPlans } from './singleton-fixtures';
+import type { ManifestComponentDescriptor } from '@animus-ui/extract/pipeline';
 
 let restoreGlobals: () => void;
 
@@ -86,7 +86,7 @@ function createProject(): string {
 
 async function startSession(
   root: string,
-  components: ReplacementPlans
+  components: Record<string, ManifestComponentDescriptor>
 ): Promise<ExtractionSession> {
   mocks.analyzeProject.mockImplementation(() => buildManifest(components));
   const session = new ExtractionSession({ system: './src/system.ts' });

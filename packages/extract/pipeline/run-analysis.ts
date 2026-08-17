@@ -147,8 +147,8 @@ export function runProjectAnalysis(
   return {
     manifest,
     manifestJson,
-    globalCss: manifest?.sheets?.global || '',
-    componentCss: applyUnitFallback(manifest?.css || ''),
+    globalCss: manifest.sheets.global,
+    componentCss: applyUnitFallback(manifest.css),
     inputs,
     timings: { serializeMs, extractMs, parseMs },
   };

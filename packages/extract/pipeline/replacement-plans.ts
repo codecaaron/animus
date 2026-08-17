@@ -1,5 +1,7 @@
 import { contentHash } from './content-hash';
 
+import type { ProjectManifest } from './manifest-schema';
+
 /**
  * File-plan snapshot/diff — the invalidation candidate source shared by
  * every analysis path (openspec: dev-transform-coherence,
@@ -20,25 +22,21 @@ export type FilePlanSnapshot = Map<string, string>;
 // read-only — deriving it once per manifest is free of aliasing hazards.
 const snapshotByManifest = new WeakMap<object, FilePlanSnapshot>();
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function snapshotFilePlans(manifest: any): FilePlanSnapshot {
-  const memoKey: object | null =
-    manifest !== null && typeof manifest === 'object'
-      ? (manifest as object)
-      : null;
-  if (memoKey) {
-    const cached = snapshotByManifest.get(memoKey);
-    if (cached) return cached;
-  }
+/** The manifest projection the snapshot reads — component descriptors'
+ *  (file, replacement) pairs. `null` (no manifest stored yet, e.g. a
+ *  plugin context before its first analysis) snapshots to the empty plan
+ *  set, the same state as an empty universe. */
+export function snapshotFilePlans(
+  manifest: Pick<ProjectManifest, 'components'> | null
+): FilePlanSnapshot {
+  if (manifest === null) return new Map();
+  const cached = snapshotByManifest.get(manifest);
+  if (cached) return cached;
   const entriesByFile = new Map<string, Array<[string, string]>>();
-  for (const [id, desc] of Object.entries(manifest?.components ?? {})) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const file = (desc as any).file as string | undefined;
-    if (!file) continue;
-    const list = entriesByFile.get(file) ?? [];
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    list.push([id, (desc as any).replacement ?? '']);
-    entriesByFile.set(file, list);
+  for (const [id, desc] of Object.entries(manifest.components)) {
+    const list = entriesByFile.get(desc.file) ?? [];
+    list.push([id, desc.replacement]);
+    entriesByFile.set(desc.file, list);
   }
   const snapshot: FilePlanSnapshot = new Map();
   for (const [file, entries] of entriesByFile) {
@@ -47,7 +45,7 @@ export function snapshotFilePlans(manifest: any): FilePlanSnapshot {
     // 'x'+'y' can never serialize equal to one component 'xy'.
     snapshot.set(file, JSON.stringify(entries));
   }
-  if (memoKey) snapshotByManifest.set(memoKey, snapshot);
+  snapshotByManifest.set(manifest, snapshot);
   return snapshot;
 }
 

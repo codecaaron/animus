@@ -36,6 +36,7 @@ import {
   BUTTON_SOURCE,
   BUTTON_STYLE_EDIT as BUTTON_SOURCE_CHANGED,
   disposeTempRoots,
+  makeManifest,
   makeTempRoot,
   resetAnimusGlobals,
   SYSTEM_CONFIG,
@@ -57,17 +58,13 @@ function createProject() {
   return { root, assetPath };
 }
 
-/** Manifest whose global sheet references the asset by absolute specifier. */
+/** Complete manifest whose global sheet references the asset by absolute
+ *  specifier — the only field this suite gives a meaningful value beyond the
+ *  empty-universe base. */
 function buildManifest(assetPath: string): string {
-  return JSON.stringify({
-    css: '.btn{margin:8;}',
-    sheets: {
-      global: `@layer anm-global{body{background:url('animus-asset:${assetPath}')}}`,
-    },
-    system_prop_map: {},
-    dynamic_props: {},
-    diagnostics: [],
-  });
+  const manifest = makeManifest({ css: '.btn{margin:8;}' });
+  manifest.sheets.global = `@layer anm-global{body{background:url('animus-asset:${assetPath}')}}`;
+  return JSON.stringify(manifest);
 }
 
 /** File entries JSON from the most recent analyzeProject invocation — slot 0

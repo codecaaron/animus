@@ -66,7 +66,12 @@ import animusTurbopackLoader, {
   __setTurbopackLoaderFsForTests,
   __resetTurbopackLoaderStateForTests,
 } from '../src/turbopack-loader';
-import { disposeTempRoots, makeTempRoot } from './singleton-fixtures';
+import {
+  disposeTempRoots,
+  makeComponent,
+  makeManifest,
+  makeTempRoot,
+} from './singleton-fixtures';
 
 import type { AnalysisStatus } from '../../extract/session/session-paths';
 import type { TurbopackLoaderOptions } from '../src/turbopack-loader';
@@ -115,6 +120,19 @@ function buildInputs(files: GenerationSpec['files']) {
   };
 }
 
+/**
+ * What the engine double returns when the loader replays a committed corpus:
+ * a COMPLETE manifest (the shared pipeline reads its fields unguarded) whose
+ * CSS names the corpus it was analyzed from — the replay marker that lets a
+ * test tell WHICH generation was hydrated. Assertions build the expected
+ * value from this same function, so the marker is never restated by hand.
+ */
+function replayedManifest(filesJson: string): string {
+  return JSON.stringify(
+    makeManifest({ css: `/* replayed ${contentHash(filesJson)} */` })
+  );
+}
+
 /** Write a full committed generation the way the session writer shapes it:
  *  enveloped payloads (via the shared session-paths encoding helpers) + a
  *  commit whose hashes cover the DISK bytes. */
@@ -124,7 +142,17 @@ function writeGeneration(root: string, spec: GenerationSpec) {
   mkdirSync(sessionDir, { recursive: true });
   const generation = spec.generation ?? 1;
   const epoch = spec.epoch ?? 'epoch-1';
-  const manifestJson = spec.manifestJson ?? `{"generation":${generation}}`;
+  // A COMPLETE manifest naming the generation's analyzed files (none of them
+  // declaring components) — the payload's own shape has to be a manifest now
+  // that the shared pipeline reads its fields unguarded. Generation identity
+  // rides in the envelope wrapped around it, never in the payload.
+  const manifestJson =
+    spec.manifestJson ??
+    JSON.stringify(
+      makeManifest({
+        files: Object.fromEntries(spec.files.map((f) => [f.path, []])),
+      })
+    );
   const envelope = {
     sessionId,
     generation,
@@ -237,12 +265,9 @@ async function expectRejection(
 
 beforeEach(() => {
   mocks.loadSystemModule.mockReset();
-  mocks.analyzeProject.mockReset().mockImplementation(
-    // Replay marker: the manifest the engine returns embeds the inputs'
-    // filesJson hash so tests can tell WHICH generation was hydrated.
-    (filesJson: string) =>
-      `{"replayed":${JSON.stringify(contentHash(filesJson))}}`
-  );
+  mocks.analyzeProject
+    .mockReset()
+    .mockImplementation((filesJson: string) => replayedManifest(filesJson));
   mocks.clearAnalysisCache.mockReset();
   mocks.transformFile
     .mockReset()
@@ -306,9 +331,7 @@ describe('seqlock hydration (design D1 read half)', () => {
     // The served transform derives from generation 2's replayed manifest —
     // never a G1-commit/G2-payload mixture.
     const g2Inputs = buildInputs([{ path: 'src/C.tsx', source: NEW_SOURCE }]);
-    expect(code).toContain(
-      `{"replayed":${JSON.stringify(contentHash(g2Inputs.filesJson))}}`
-    );
+    expect(code).toContain(replayedManifest(g2Inputs.filesJson));
     // The seqlock actually retried: commit read at least twice.
     expect(commitReads).toBeGreaterThanOrEqual(2);
   });
@@ -491,9 +514,7 @@ describe('catch-up decision table (design D3 — verbatim)', () => {
 
     const { code } = await runLoader({ root, source: NEW_SOURCE });
     const g2Inputs = buildInputs([{ path: 'src/C.tsx', source: NEW_SOURCE }]);
-    expect(code).toContain(
-      `{"replayed":${JSON.stringify(contentHash(g2Inputs.filesJson))}}`
-    );
+    expect(code).toContain(replayedManifest(g2Inputs.filesJson));
   }, 15_000);
 
   test('the published deadline also BOUNDS the wait: an attempt that misses it ends in ANIMUS_ANALYSIS_STALLED', async () => {
@@ -530,9 +551,7 @@ describe('catch-up decision table (design D3 — verbatim)', () => {
       source: NEW_SOURCE,
     });
     const g2Inputs = buildInputs([{ path: 'src/C.tsx', source: NEW_SOURCE }]);
-    expect(code).toContain(
-      `{"replayed":${JSON.stringify(contentHash(g2Inputs.filesJson))}}`
-    );
+    expect(code).toContain(replayedManifest(g2Inputs.filesJson));
     // Successful paths register no commit/status dependency (D3).
     expect(dependencies).not.toContain(analysisCommitPath(sessionDir));
     expect(dependencies).not.toContain(analysisStatusPath(sessionDir));
@@ -600,18 +619,13 @@ describe('style-only end-to-end through the real session writer', () => {
       globalStyleBlocks: null,
       keyframesBlocks: null,
     });
+    // One component with a fixed replacement: the plan the epoch is derived
+    // from, held constant across the style-only re-analysis below.
     const plan = {
-      'src/C.tsx::C': { file: 'src/C.tsx', replacement: 'r1' },
+      'src/C.tsx::C': makeComponent('src/C.tsx', 'r1'),
     };
     const sessionManifest = (css: string) =>
-      JSON.stringify({
-        components: plan,
-        css,
-        sheets: { global: '' },
-        system_prop_map: {},
-        dynamic_props: {},
-        diagnostics: [],
-      });
+      JSON.stringify(makeManifest({ components: plan, css }));
     mocks.analyzeProject.mockImplementation(() => sessionManifest('.c{x:1}'));
 
     // Real writer: full pipeline, then a style-only watch analysis. The

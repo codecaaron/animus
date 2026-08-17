@@ -28,6 +28,7 @@ import { bindTurbopackWatchDeathReport, withAnimus } from '../src/with-animus';
 import {
   BUTTON_SOURCE,
   disposeTempRoots,
+  makeManifest,
   makeTempRoot,
   resetAnimusGlobals,
   SYSTEM_CONFIG,
@@ -68,13 +69,11 @@ setEngineApiOverride(() => ({
 let restoreGlobals: () => void;
 let savedCwd: string;
 
-const MANIFEST = JSON.stringify({
-  css: '.btn{margin:8;}',
-  sheets: { global: '' },
-  system_prop_map: {},
-  dynamic_props: {},
-  diagnostics: [],
-});
+/** What the engine double returns: a COMPLETE engine manifest carrying this
+ *  suite's component CSS. The shared pipeline reads `manifest.sheets` /
+ *  `manifest.components` directly, so a manifest that omits fields is not a
+ *  manifest. */
+const MANIFEST = JSON.stringify(makeManifest({ css: '.btn{margin:8;}' }));
 
 /** The handle of a started claim — a test asserting on `close`/`settle`
  *  states which outcome it expects rather than assuming one. */
