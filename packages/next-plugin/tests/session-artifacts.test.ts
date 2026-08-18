@@ -394,8 +394,6 @@ describe('session directory + transaction write order (design D1/D2)', () => {
       readSessionArtifact(session, ANALYSIS_COMMIT_ARTIFACT)
     );
     expect('inputsHash' in commit).toBe(false);
-    expect(commit.manifestHash).toEqual(expect.any(String));
-    expect(commit.stylesHash).toEqual(expect.any(String));
   });
 
   test('write order (Turbopack): manifest → inputs → styles → system-props → commit → epoch', async () => {
@@ -543,7 +541,6 @@ describe('payload envelopes (spec: Manifest disk artifact)', () => {
       readSessionArtifact(session, 'analysis-inputs.json')
     );
     expect(inputs.__animusSession.sessionId).toBe(session.sessionId);
-    expect(inputs.filesJson).toEqual(expect.any(String));
 
     const styles = readSessionArtifact(session, 'styles.css');
     const match = styles.match(/\/\* __animusSession (\{.*\}) \*\//);

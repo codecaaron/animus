@@ -65,10 +65,6 @@ describe('stableHash', () => {
     expect(stableHash('oracle')).toBe('f131a0db68862d39');
   });
 
-  it('is 16 lowercase hex characters', () => {
-    expect(stableHash({ any: 'value' })).toMatch(/^[0-9a-f]{16}$/);
-  });
-
   it('agrees with canonicalJson on content equality', () => {
     expect(stableHash({ a: 1, b: 2 })).toBe(stableHash({ b: 2, a: 1 }));
     expect(stableHash({ a: 1 })).not.toBe(stableHash({ a: 2 }));

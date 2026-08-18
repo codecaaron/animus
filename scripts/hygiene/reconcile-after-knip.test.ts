@@ -290,6 +290,22 @@ describe('fixStaleBarrelReExports — `export * from` handling', () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  test('local re-exports without a module specifier are NOT touched', () => {
+    const dir = scratch();
+    try {
+      const barrel = write(
+        dir,
+        'packages/a/src/index.ts',
+        ["import X from './target';", 'export { X };', ''].join('\n')
+      );
+      const fixed = fixStaleBarrelReExports([barrel]);
+      expect(fixed).toEqual([]);
+      expect(readFileSync(barrel, 'utf-8')).toContain('export { X };');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('fixStaleBarrelReExports — type-only re-exports', () => {
@@ -464,35 +480,53 @@ describe('fixStaleBarrelReExports — span-preserving partial removals', () => {
 });
 
 describe('fixStaleBarrelReExports — CJS export = (Tier 3 corner case)', () => {
-  // Aspirational: getExportsOfFile maps `export = X;` to the symbol "default",
-  // which can mismatch consumer barrels that re-export under the original
-  // import binding name. The reconciler MUST NOT strip a live re-export; it
-  // is preferable to leave a true-positive stale re-export in place than to
-  // strip a false-positive live one.
-  test('does not strip live re-export of CJS-style import binding', () => {
+  // refine-code-hygiene-dx D10 / task 11.3: getExportsOfFile maps
+  // `export = X;` (TSExportAssignment) to the symbol "default". A barrel
+  // re-exporting that default under a named binding is live; stripping it
+  // is the regression this pins. The `from './cjs-target'` form forces the
+  // reconciler to resolve and read the target, so removing the
+  // TSExportAssignment mapping fails this test.
+  test('does not strip a live `default as X` re-export from an `export =` target', () => {
     const dir = scratch();
     try {
-      // CJS target: `export = X;` produces a default-style export only.
       write(
         dir,
         'packages/a/src/cjs-target.ts',
         ['const X = 42;', 'export = X;', ''].join('\n')
       );
-      const barrel = write(
-        dir,
-        'packages/a/src/index.ts',
-        ["import X from './cjs-target';", 'export { X };', ''].join('\n')
+      const fixturePath = join(
+        process.cwd(),
+        'scripts/hygiene/__fixtures__/reconciler/cjs-export-equals.ts.in'
       );
+      const barrelSource = readFileSync(fixturePath, 'utf-8');
+      const barrel = write(dir, 'packages/a/src/index.ts', barrelSource);
       const fixed = fixStaleBarrelReExports([barrel]);
-      // Reconciler is conservative when the re-export form has no module-
-      // specifier (this barrel's `export { X }` is a local re-export). The
-      // path filter (`isRelative`) means the reconciler only touches
-      // re-exports with a relative module specifier — so this barrel is
-      // skipped entirely, which is the correct behavior for a live re-export.
       expect(fixed).toEqual([]);
-      const out = readFileSync(barrel, 'utf-8');
-      expect(out).toContain("import X from './cjs-target'");
-      expect(out).toContain('export { X };');
+      expect(readFileSync(barrel, 'utf-8')).toBe(barrelSource);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('fixStaleBarrelReExports — .d.ts targets (Tier 3 corner case)', () => {
+  // A live `.d.ts` target must be resolvable, or the caller's
+  // unresolvable-means-deleted branch strips a LIVE re-export and logs it as
+  // `target-deleted` — silent data loss. refine-code-hygiene-dx D10: prefer
+  // leaving a stale re-export in place over stripping a live one.
+  test('does not strip a live extensionless re-export whose target is a .d.ts file', () => {
+    const dir = scratch();
+    try {
+      write(
+        dir,
+        'packages/a/src/types.d.ts',
+        'export declare const X: number;\n'
+      );
+      const barrelSource = "export { X } from './types';\n";
+      const barrel = write(dir, 'packages/a/src/index.ts', barrelSource);
+      const fixed = fixStaleBarrelReExports([barrel]);
+      expect(fixed).toEqual([]);
+      expect(readFileSync(barrel, 'utf-8')).toBe(barrelSource);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

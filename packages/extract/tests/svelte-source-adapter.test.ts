@@ -69,6 +69,13 @@ describe('adaptSvelteSource', () => {
 
     const moduleEntry = result.entries[0];
     const instanceEntry = result.entries[1];
+    // Byte-exact projections: the entry list above fixes the entries, so
+    // these two literals pin the whole output — both resolver binding forms
+    // (direct named `badge`/`moduleBadge`, aliased `badge as badgeAlias`),
+    // all four prop forms (absent `<badge />`, literal `tone={'strong'}`,
+    // shorthand `active={active}`, dynamic `size={width + 1}`), and every
+    // absence: no manufactured export, no `<Wrapper>` template tag scanned,
+    // no `dynamicAttrs` local carried through.
     expect(moduleEntry.source).toBe(
       "import { moduleBadge } from './module-badge';\n<moduleBadge tone={'quiet'} />;\n"
     );
@@ -79,34 +86,6 @@ describe('adaptSvelteSource', () => {
     expect(moduleEntry.source).not.toContain('moduleHelper');
     expect(instanceEntry.source).not.toContain("from './helper'");
     expect(instanceEntry.source).not.toContain('export let');
-  });
-
-  test('supports direct named and aliased imported resolver bindings', async () => {
-    const result = await okResult();
-    const source = result.entries.map((entry) => entry.source).join('\n');
-
-    expect(source).toContain('<moduleBadge');
-    expect(source).toContain('<badge');
-    expect(source).toContain('<badgeAlias');
-  });
-
-  test('emits absent, literal, shorthand, and dynamic-expression props', async () => {
-    const result = await okResult();
-    const instanceSource = result.entries[1].source;
-
-    expect(instanceSource).toContain('<badge />');
-    expect(instanceSource).toContain("tone={'strong'}");
-    expect(instanceSource).toContain('active={active}');
-    expect(instanceSource).toContain('size={width + 1}');
-  });
-
-  test('does not manufacture exports or scan wrapper component tags', async () => {
-    const result = await okResult();
-    const source = result.entries.map((entry) => entry.source).join('\n');
-
-    expect(source).not.toMatch(/\bexport\b/);
-    expect(source).not.toContain('Wrapper');
-    expect(source).not.toContain('dynamicAttrs');
   });
 
   test('returns no entries when neither script scope witnesses a resolver', async () => {

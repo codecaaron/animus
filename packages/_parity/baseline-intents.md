@@ -202,3 +202,13 @@ committed production/development pair. Ordinary parity runs never write it.
       adaptation belongs to the TypeScript ingestion pipeline and is proven by
       the dedicated real-engine integration tests. Every pre-existing parity
       unit stays byte-identical in the same run.
+- [x] `test-value-audit-extension-fixture-20260818` — refresh after the
+      test-value audit added `fixtures/components/extended.tsx` (a cross-file
+      `Button.extend()` chain) so `manifest-shape.test.ts`'s provenance-
+      reciprocity tests iterate a non-empty `reverse_provenance` (they were
+      vacuous: no prior integration fixture used `.extend()`). The fixture
+      enters the automatically discovered parity inventory as a NEW unit only
+      (`integration/extended.tsx` · css/code/observables/diagnostics, both
+      modes); every pre-existing unit stays byte-identical in the same run
+      (65/66 with only the new unit's four unregistered surfaces, corpus
+      digest moves accordingly).

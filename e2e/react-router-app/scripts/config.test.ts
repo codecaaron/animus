@@ -10,29 +10,16 @@ function source(path: string): string {
   return readFileSync(absolute, 'utf8');
 }
 
+// Fixture self-containment (no cross-fixture imports) is enforced for all
+// e2e/* members by the fixture-sibling vector in scripts/verify/topology.ts
+// (runs in verify:lint).
 describe('React Router Worker canary structure', () => {
   it('delegates the Worker to the generated server build', () => {
+    // The two anchors carry the invariant: the Worker still exercises React
+    // Router SSR rather than degenerating into a stub that would build and
+    // dry-run green.
     const worker = source('workers/app.ts');
     expect(worker).toContain('createRequestHandler');
     expect(worker).toContain('virtual:react-router/server-build');
-    expect(worker).not.toContain('/api/health');
-    expect(worker).not.toContain('new URL');
-    expect(worker).toMatch(
-      /async fetch\(request: Request\): Promise<Response> \{\s*return requestHandler\(request\);\s*\}/
-    );
-  });
-
-  it('contains no cross-fixture imports', () => {
-    for (const path of [
-      'app/root.tsx',
-      'app/routes.ts',
-      'app/routes/home.tsx',
-      'app/routes/client.tsx',
-      'src/ds.ts',
-      'src/components.tsx',
-      'workers/app.ts',
-    ]) {
-      expect(source(path)).not.toMatch(/e2e\/(next|vite|vinext)-app/);
-    }
   });
 });

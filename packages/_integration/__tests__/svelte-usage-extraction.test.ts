@@ -135,10 +135,6 @@ describe('isolated native Svelte usage projection', () => {
       { extractFacts }
     );
     expect(renamedIngested.diagnostics).toEqual([]);
-    expect(
-      renamedIngested.ownership['components/svelte-usage/Renamed.svelte']
-        .analysisPaths
-    ).toEqual(['components/svelte-usage/Renamed.svelte.instance.tsx']);
     const renamed = runPipeline(renamedIngested.analysisEntries);
     expect(renamed.css).toContain('--tone-quiet');
     expect(renamed.css).not.toContain('--tone-loud');

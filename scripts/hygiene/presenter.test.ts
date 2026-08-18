@@ -9,13 +9,7 @@
 
 import { describe, expect, test } from 'vitest';
 
-import {
-  analyze,
-  LAYER_D_EXPORT_THRESHOLD,
-  LAYER_D_FILE_THRESHOLD,
-  parseReceipts,
-  type Verdict,
-} from './presenter';
+import { analyze, parseReceipts, type Verdict } from './presenter';
 
 import type { Receipt } from './_receipts';
 
@@ -80,10 +74,12 @@ describe('analyze: convergence verdict', () => {
       rec({ iter: 2, layer: 'A', verb: 'format', kind: 'format-only' }),
     ];
     const v = analyze(records, 5);
-    expect(v.convergence).toBe('converged');
-    expect(v.finalIteration).toBe(2);
-    expect(v.finalIterationDeletes).toBe(0);
-    expect(v.suggestedExitCode).toBe(0);
+    expect(v).toMatchObject({
+      convergence: 'converged',
+      finalIteration: 2,
+      finalIterationDeletes: 0,
+      suggestedExitCode: 0,
+    });
     expect(v.summaryLines[0]).toMatch(/converged in 2 iteration/);
   });
 
@@ -104,10 +100,12 @@ describe('analyze: convergence verdict', () => {
       rec({ iter: 1, layer: 'C', verb: 'delete', kind: 'const-decl' }),
     ];
     const v = analyze(records, 5, 3);
-    expect(v.convergence).toBe('converged');
-    expect(v.finalIteration).toBe(3);
-    expect(v.finalIterationDeletes).toBe(0);
-    expect(v.suggestedExitCode).toBe(0);
+    expect(v).toMatchObject({
+      convergence: 'converged',
+      finalIteration: 3,
+      finalIterationDeletes: 0,
+      suggestedExitCode: 0,
+    });
   });
 
   test('ranIters override: cap-hit-clean when trailing clean iter equals cap', () => {
@@ -127,9 +125,11 @@ describe('analyze: convergence verdict', () => {
       rec({ iter: 4, layer: 'C', verb: 'delete', kind: 'const-decl' }),
     ];
     const v = analyze(records, 5, 2);
-    expect(v.finalIteration).toBe(4);
-    expect(v.finalIterationDeletes).toBe(1);
-    expect(v.convergence).toBe('cap-hit-divergent');
+    expect(v).toMatchObject({
+      convergence: 'cap-hit-divergent',
+      finalIteration: 4,
+      finalIterationDeletes: 1,
+    });
   });
 
   test('cap-hit-clean: 5 iters, last has zero deletes (cap=5)', () => {
@@ -176,9 +176,11 @@ describe('analyze: convergence verdict', () => {
       );
     }
     const v = analyze(records, 5);
-    expect(v.convergence).toBe('cap-hit-divergent');
-    expect(v.finalIterationDeletes).toBe(3);
-    expect(v.suggestedExitCode).toBe(1);
+    expect(v).toMatchObject({
+      convergence: 'cap-hit-divergent',
+      finalIterationDeletes: 3,
+      suggestedExitCode: 1,
+    });
     expect(v.summaryLines[0]).toMatch(/WARN: cascade did not converge/);
     expect(v.summaryLines[0]).toMatch(/iteration 5/);
     expect(v.summaryLines[0]).toMatch(/Layer C\/D/);
@@ -197,9 +199,11 @@ describe('analyze: Layer D volume NOTE', () => {
       }),
     ];
     const v = analyze(records, 5);
-    expect(v.layerDVolume.files).toBe(1);
-    expect(v.riskyDeletion).toBe(true);
-    expect(v.suggestedExitCode).toBe(1);
+    expect(v).toMatchObject({
+      layerDVolume: expect.objectContaining({ files: 1 }),
+      riskyDeletion: true,
+      suggestedExitCode: 1,
+    });
     expect(
       v.summaryLines.some((l) => l.startsWith('MANUAL REVIEW REQUIRED'))
     ).toBe(true);
@@ -233,11 +237,6 @@ describe('analyze: Layer D volume NOTE', () => {
     expect(
       v.summaryLines.some((l) => l.startsWith('NOTE: Layer D removed'))
     ).toBe(false);
-  });
-
-  test('threshold constants match spec', () => {
-    expect(LAYER_D_FILE_THRESHOLD).toBe(1);
-    expect(LAYER_D_EXPORT_THRESHOLD).toBe(5);
   });
 });
 
@@ -321,9 +320,10 @@ describe('analyze: combined signals', () => {
       rec({ iter: 5, layer: 'A', verb: 'format', kind: 'format-only' })
     );
     const v: Verdict = analyze(records, 5);
-    expect(v.convergence).toBe('cap-hit-clean');
-    expect(v.layerDVolume.files).toBe(0);
-    expect(v.layerDVolume.exports).toBe(8);
+    expect(v).toMatchObject({
+      convergence: 'cap-hit-clean',
+      layerDVolume: expect.objectContaining({ files: 0, exports: 8 }),
+    });
     expect(v.riskyDeletion).toBe(false);
     expect(v.suggestedExitCode).toBe(0);
     expect(v.summaryLines.length).toBe(2); // INFO + NOTE

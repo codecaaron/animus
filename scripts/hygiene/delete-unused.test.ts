@@ -117,24 +117,6 @@ function diag(
 }
 
 describe('oxlint JSON shape contract', () => {
-  test('diagnostics use oxlint field shape: code/message/filename + labels[0].span', () => {
-    const sample = wireRecord(
-      diag("Variable 'unusedConst' is declared but never used.", 6),
-      'oxlint diagnostic fixture'
-    );
-    expect(isJsonString(sample.code)).toBe(true);
-    expect(isJsonString(sample.message)).toBe(true);
-    expect(isJsonString(sample.filename)).toBe(true);
-    expect(Array.isArray(sample.labels)).toBe(true);
-    const span = firstLabelSpan(sample);
-    expect(isJsonNumber(span.offset)).toBe(true);
-    expect(isJsonNumber(span.line)).toBe(true);
-    expect(isJsonNumber(span.column)).toBe(true);
-    // Biome 2.x fields MUST NOT be present on the expected oxlint shape
-    expect(sample.category).toBeUndefined();
-    expect(sample.location).toBeUndefined();
-  });
-
   test('live oxlint output uses `eslint(...)` code wrapper', () => {
     // Empirical assertion against the real oxlint binary (via vp lint).
     // Session 89 (2026-04-24, biome-era) caught a fictional-vs-real mismatch
@@ -164,7 +146,12 @@ describe('oxlint JSON shape contract', () => {
       expect(unusedDiag.code.endsWith(')')).toBe(true);
       expect(isJsonString(wire.filename)).toBe(true);
       expect(Array.isArray(wire.labels)).toBe(true);
-      expect(isJsonNumber(firstLabelSpan(wire).offset)).toBe(true);
+      const span = firstLabelSpan(wire);
+      expect(isJsonNumber(span.offset)).toBe(true);
+      // The deleter reads span.line/span.column (delete-unused.ts) — pin them
+      // against real oxlint output, not a synthetic literal.
+      expect(isJsonNumber(span.line)).toBe(true);
+      expect(isJsonNumber(span.column)).toBe(true);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

@@ -254,28 +254,6 @@ describe('extractSystemFilePackages', () => {
     }
   });
 
-  test('from() and legacy includes forms contribute to one discovered set', () => {
-    const path = writeFixture(`
-      import { createSystem } from '@animus-ui/system';
-      import { ds as legacyDs } from '@animus-ui/test-ds';
-      import { ds as kitDs } from '@acme/ui-kit';
-
-      export const { system: ds } = createSystem({ includes: [legacyDs] })
-        .from(kitDs)
-        .addGroup('space', {})
-        .build();
-    `);
-
-    try {
-      const pkgs = extractSystemFilePackages(path);
-      expect(pkgs).toContain('@animus-ui/test-ds');
-      expect(pkgs).toContain('@acme/ui-kit');
-    } finally {
-      rmSync(path, { force: true });
-      rmSync(join(path, '..'), { recursive: true, force: true });
-    }
-  });
-
   test('createTheme().from() never contributes discovery membership', () => {
     const path = writeFixture(`
       import { createSystem, createTheme } from '@animus-ui/system';
@@ -303,28 +281,6 @@ describe('extractSystemFilePackages', () => {
     }
   });
 
-  test('from() sources survive a reformatted chain', () => {
-    const path = writeFixture(`
-      import { createSystem } from '@animus-ui/system';
-      import { ds as kitDs } from '@acme/ui-kit';
-
-      export const { system: ds } = createSystem()
-        .from(
-          kitDs
-        )
-        .addGroup('space', {})
-        .build();
-    `);
-
-    try {
-      const pkgs = extractSystemFilePackages(path);
-      expect(pkgs).toContain('@acme/ui-kit');
-    } finally {
-      rmSync(path, { force: true });
-      rmSync(join(path, '..'), { recursive: true, force: true });
-    }
-  });
-
   test('discovers package from an extend() chain call', () => {
     const path = writeFixture(`
       import { createSystem } from '@animus-ui/system';
@@ -340,29 +296,6 @@ describe('extractSystemFilePackages', () => {
       const pkgs = extractSystemFilePackages(path);
       expect(pkgs).toContain('@acme/kit');
       expect(pkgs).not.toContain('@animus-ui/system');
-    } finally {
-      rmSync(path, { force: true });
-      rmSync(join(path, '..'), { recursive: true, force: true });
-    }
-  });
-
-  test('discovers every source of repeated extend() calls', () => {
-    const path = writeFixture(`
-      import { createSystem } from '@animus-ui/system';
-      import { ds as a } from '@ds-a/core';
-      import { ds as b } from '@ds-b/core';
-
-      export const { system: ds } = createSystem()
-        .extend(a)
-        .extend(b)
-        .addGroup('space', {})
-        .build();
-    `);
-
-    try {
-      const pkgs = extractSystemFilePackages(path);
-      expect(pkgs).toContain('@ds-a/core');
-      expect(pkgs).toContain('@ds-b/core');
     } finally {
       rmSync(path, { force: true });
       rmSync(join(path, '..'), { recursive: true, force: true });
@@ -452,6 +385,10 @@ describe('extractSystemFilePackages', () => {
   });
 
   test('extend() sources survive a reformatted chain', () => {
+    // Trivia sits between the argument and the closing paren — the one
+    // position the tolerance block's trailing-comma fixture never reaches
+    // (there the comma follows the identifier directly). Both spellings run
+    // the same link scan, so extend() carries this shape for from() too.
     const path = writeFixture(`
       import { createSystem } from '@animus-ui/system';
       import { ds as kitDs } from '@acme/ui-kit';

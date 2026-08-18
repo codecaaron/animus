@@ -162,41 +162,32 @@ describe('ThemeBuilder nested storage', () => {
 describe('ThemeManifest', () => {
   const theme = buildTestTheme();
 
-  it('manifest.tokenMap includes breakpoints', () => {
-    const tokenMap = theme.manifest.tokenMap;
-    expect(tokenMap['breakpoints.xs']).toBe('480');
-    expect(tokenMap['breakpoints.sm']).toBe('768');
-    expect(tokenMap['breakpoints.md']).toBe('1024');
-    expect(tokenMap['breakpoints.lg']).toBe('1200');
-    expect(tokenMap['breakpoints.xl']).toBe('1440');
-  });
-
-  it('manifest.tokenMap includes scales with dot-path keys', () => {
-    const tokenMap = theme.manifest.tokenMap;
-    expect(tokenMap['space.4']).toBe('0.25rem');
-    expect(tokenMap['fontSizes.16']).toBe('1rem');
-  });
-
-  it('manifest.tokenMap includes colors as var() refs with dot-path keys', () => {
-    const tokenMap = theme.manifest.tokenMap;
-    expect(tokenMap['colors.ember']).toBe('var(--color-ember)');
-    expect(tokenMap['colors.gray.300']).toBe('var(--color-gray-300)');
-    expect(tokenMap['colors.void']).toBe('var(--color-void)');
-  });
-
-  it('manifest.tokenMap includes semantic aliases as var() refs', () => {
-    const tokenMap = theme.manifest.tokenMap;
-    expect(tokenMap['colors.primary']).toBe('var(--color-primary)');
-    expect(tokenMap['colors.bg']).toBe('var(--color-bg)');
-    expect(tokenMap['colors.muted']).toBe('var(--color-muted)');
+  it('manifest.tokenMap maps breakpoints/scales to raw values and colors to var() refs', () => {
+    expect(theme.manifest.tokenMap).toMatchObject({
+      'breakpoints.xs': '480',
+      'breakpoints.sm': '768',
+      'breakpoints.md': '1024',
+      'breakpoints.lg': '1200',
+      'breakpoints.xl': '1440',
+      'space.4': '0.25rem',
+      'fontSizes.16': '1rem',
+      'colors.ember': 'var(--color-ember)',
+      'colors.gray.300': 'var(--color-gray-300)',
+      'colors.void': 'var(--color-void)',
+      'colors.primary': 'var(--color-primary)',
+      'colors.bg': 'var(--color-bg)',
+      'colors.muted': 'var(--color-muted)',
+    });
   });
 
   it('manifest.variableMap maps dot-path to dash-join CSS var names', () => {
-    const variableMap = theme.manifest.variableMap;
-    expect(variableMap['colors.ember']).toBe('--color-ember');
-    expect(variableMap['colors.gray.300']).toBe('--color-gray-300');
-    expect(variableMap['colors.primary']).toBe('--color-primary');
-    expect(variableMap['breakpoints.xs']).toBeUndefined();
+    expect(theme.manifest.variableMap).toMatchObject({
+      'colors.ember': '--color-ember',
+      'colors.gray.300': '--color-gray-300',
+      'colors.primary': '--color-primary',
+    });
+    // Breakpoints never materialize as CSS variables.
+    expect(theme.manifest.variableMap['breakpoints.xs']).toBeUndefined();
   });
 
   it('manifest.variableCss contains :root and mode blocks', () => {
@@ -209,13 +200,10 @@ describe('ThemeManifest', () => {
   });
 
   it('manifest.modes contains resolved raw values', () => {
-    const modes = theme.manifest.modes;
-    expect(modes.dark).toBeDefined();
-    expect(modes.light).toBeDefined();
-    expect(modes.dark['colors.primary']).toBe('#ff2800'); // ember
-    expect(modes.dark['colors.bg']).toBe('#000000'); // void
-    expect(modes.light['colors.primary']).toBe('#000000'); // void
-    expect(modes.light['colors.bg']).toBe('#e8e0d0'); // bone
+    expect(theme.manifest.modes).toMatchObject({
+      dark: { 'colors.primary': '#ff2800', 'colors.bg': '#000000' }, // ember / void
+      light: { 'colors.primary': '#000000', 'colors.bg': '#e8e0d0' }, // void / bone
+    });
   });
 });
 
@@ -224,29 +212,27 @@ describe('ThemeManifest', () => {
 describe('theme.serialize()', () => {
   const theme = buildTestTheme();
 
-  it('returns all 4 JSON strings', () => {
-    const result = theme.serialize();
-    expect(result.scalesJson).toBeTypeOf('string');
-    expect(result.variableMapJson).toBeTypeOf('string');
-    expect(result.variableCss).toBeTypeOf('string');
-    expect(result.contextualVarsJson).toBeTypeOf('string');
-  });
-
+  // Field stringness is subsumed: every serialized field below is either
+  // JSON.parsed or matched as a string by these tests.
   it('scalesJson parses to dot-path keyed token map with breakpoints', () => {
-    const scales = JSON.parse(theme.serialize().scalesJson);
-    expect(scales['space.4']).toBe('0.25rem');
-    expect(scales['space.8']).toBe('0.5rem');
-    expect(scales['fontSizes.16']).toBe('1rem');
-    expect(scales['colors.ember']).toBe('var(--color-ember)');
-    expect(scales['colors.gray.300']).toBe('var(--color-gray-300)');
-    expect(scales['breakpoints.xs']).toBe('480');
+    expect(JSON.parse(theme.serialize().scalesJson)).toMatchObject({
+      'space.4': '0.25rem',
+      'space.8': '0.5rem',
+      'fontSizes.16': '1rem',
+      'colors.ember': 'var(--color-ember)',
+      'colors.gray.300': 'var(--color-gray-300)',
+      'breakpoints.xs': '480',
+    });
   });
 
   it('variableMapJson maps dot-path keys to dash-join CSS var names', () => {
     const varMap = JSON.parse(theme.serialize().variableMapJson);
-    expect(varMap['colors.ember']).toBe('--color-ember');
-    expect(varMap['colors.gray.300']).toBe('--color-gray-300');
-    expect(varMap['colors.primary']).toBe('--color-primary');
+    expect(varMap).toMatchObject({
+      'colors.ember': '--color-ember',
+      'colors.gray.300': '--color-gray-300',
+      'colors.primary': '--color-primary',
+    });
+    // Breakpoints never materialize as CSS variables.
     expect(varMap['breakpoints.xs']).toBeUndefined();
   });
 

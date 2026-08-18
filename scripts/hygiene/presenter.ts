@@ -52,8 +52,7 @@ export interface Verdict {
   summaryLines: string[];
 }
 
-export const LAYER_D_FILE_THRESHOLD = 1;
-export const LAYER_D_EXPORT_THRESHOLD = 5;
+const LAYER_D_EXPORT_THRESHOLD = 5;
 
 const DEFAULT_RECEIPTS_PATH = '.hygiene/receipts.jsonl';
 const DEFAULT_VERDICT_PATH = '.hygiene/verdict.json';

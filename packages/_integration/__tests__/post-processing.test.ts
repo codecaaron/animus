@@ -218,26 +218,8 @@ describe('assembleStylesheet', () => {
     expect(declarations).toHaveLength(1);
   });
 
-  test('uses custom layers when provided', () => {
-    const result = assembleStylesheet({
-      layers: [
-        'reset',
-        'anm-global',
-        'anm-base',
-        'anm-variants',
-        'anm-compounds',
-        'anm-states',
-        'anm-system',
-        'anm-custom',
-        'overrides',
-      ],
-      variableCss: ':root { --x: 1; }',
-    });
-
-    expect(result).toContain('@layer reset, anm-global, anm-base,');
-    expect(result).toContain('overrides;');
-  });
-
+  // Custom-layer declaration content is pinned byte-for-byte by
+  // packages/extract/tests/canary.test.ts 'custom layers with bookends'.
   test('throws on invalid layer order', () => {
     expect(() =>
       assembleStylesheet({
@@ -306,12 +288,7 @@ describe('assembleStylesheet split + post-processing', () => {
     );
   });
 
-  test('split form preserves :root position (not in body)', () => {
-    const { variables, body } = assembleStylesheet({
-      ...opts,
-      split: true,
-    });
-    expect(variables).toContain(':root');
-    expect(body).not.toContain(':root');
-  });
+  // Split-mode :root placement is pinned (with variable content) by
+  // packages/extract/tests/canary.test.ts 'variables contains :root block,
+  // not in body'.
 });

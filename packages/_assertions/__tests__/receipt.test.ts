@@ -69,19 +69,6 @@ describe('writeLaneReceipt', () => {
       engineOverride: false,
       packageForm: 'workspace',
     });
-    // Explicitly prove every one of the eight fields survived.
-    for (const key of [
-      'lane',
-      'host',
-      'hostVersion',
-      'mode',
-      'engineLoaded',
-      'engineDefault',
-      'engineOverride',
-      'packageForm',
-    ] as const) {
-      expect(parsed).toHaveProperty(key);
-    }
   });
 
   it('creates missing parent directories and appends a trailing newline', () => {

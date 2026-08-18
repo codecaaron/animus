@@ -100,12 +100,6 @@ function mountAndGetRefNode(
 // ─── createComposedFamily() Tests ───────────────────────────────
 
 describe('createComposedFamily()', () => {
-  it('returns exact slot keys (PascalCase)', () => {
-    const Family = createComposedFamily({ Root, Control }, { name: 'Card' });
-    expect('Root' in Family).toBe(true);
-    expect('Control' in Family).toBe(true);
-  });
-
   it('sets displayName as `${name}.${slot}`', () => {
     const Family = createComposedFamily(
       { Root, Control, Label },

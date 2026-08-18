@@ -6,11 +6,8 @@ import { applyDeltas } from '../src/core/world';
 import { createOracle, DEFAULT_MAX_CELLS } from '../src/engines';
 import { createInMemoryHost } from '../src/providers/in-memory';
 import {
-  BASE_DIMENSIONS,
-  card,
-  classesFor,
-  obligations,
-  panel,
+  config as fixtureConfig,
+  host as fixtureHost,
   smallNarrow,
   tokens,
 } from './fixture-world';
@@ -20,213 +17,42 @@ import type { OracleHost } from '../src/providers/host';
 import type { InMemoryHostConfig } from '../src/providers/in-memory';
 import type { FixtureOptions } from './fixture-world';
 
-/** The shared world plus two rules this suite's harvest must DISCOVER:
- *  `wide-1024` sits on a cut the domain does not declare, and
- *  `state-disabled` gives the fixpoint a state-guarded rule to reach. */
-const config = (options: FixtureOptions = {}): InMemoryHostConfig => ({
-  rules: [
-    {
-      id: 'global-body',
-      selector: { raw: 'body', classNames: [] },
-      declarations: [
-        { property: 'color', value: 'var(--color-text)' },
-        { property: 'font-size', value: '16px' },
-      ],
-      condition: TRUE,
-      layer: 'anm-global',
-      order: 0,
-      source: { file: 'src/theme.ts', span: [10, 40] },
-    },
-    {
-      id: 'base-card',
-      selector: { raw: '.anm-Card', classNames: ['anm-Card'] },
-      declarations: [
-        {
-          property: 'padding',
-          value: '4px',
-          authoredProperty: 'p',
-          authoredValue: '1',
-        },
-        { property: 'gap', value: '2px' },
-      ],
-      condition: TRUE,
-      layer: 'anm-base',
-      order: 0,
-      source: { file: 'src/Card.tsx', span: [67, 200] },
-      origin: { component: 'Card', method: 'styles' },
-    },
-    {
-      id: 'surface',
-      selector: { raw: '.anm-surface', classNames: ['anm-surface'] },
-      declarations: [
-        { property: 'background', value: 'var(--surface-bg)' },
-        { property: 'gap', value: '5px' },
-      ],
-      condition: TRUE,
-      layer: 'anm-base',
-      order: 1,
-      source: { file: 'src/theme.ts' },
-    },
-    {
-      id: 'variant-large',
-      selector: {
-        raw: '.anm-Card--size-large',
-        classNames: ['anm-Card--size-large'],
-      },
-      declarations: [{ property: 'padding', value: '12px' }],
-      condition: eq('variant:Card:size', 'large'),
-      layer: 'anm-variants',
-      order: 2,
-      source: { file: 'src/Card.tsx' },
-      origin: {
-        component: 'Card',
-        method: 'variant',
-        variantProp: 'size',
-        variantOption: 'large',
-      },
-    },
-    {
-      id: 'variant-large-strong',
-      selector: {
-        raw: '.anm-Card.anm-Card--size-large',
-        classNames: ['anm-Card', 'anm-Card--size-large'],
-      },
-      declarations: [{ property: 'padding', value: '20px' }],
-      condition: eq('variant:Card:size', 'large'),
-      layer: 'anm-variants',
-      order: 0,
-      source: { file: 'src/Card.tsx' },
-      origin: { component: 'Card', method: 'compound', compoundIndex: 0 },
-    },
-    {
-      id: 'wide',
-      selector: { raw: '.anm-Card', classNames: ['anm-Card'] },
-      declarations: [{ property: 'padding', value: '16px' }],
-      condition: range('viewport.inline', { min: 768 }),
-      layer: 'anm-variants',
-      order: 3,
-      source: { file: 'src/Card.tsx' },
-    },
-    {
-      id: 'wide-1024',
-      selector: { raw: '.anm-Card', classNames: ['anm-Card'] },
-      declarations: [{ property: 'padding', value: '24px' }],
-      // 1024 is deliberately NOT in `cuts`: prove has to harvest it.
-      condition: range('viewport.inline', { min: 1024 }),
-      layer: 'anm-system',
-      order: 0,
-      source: { file: 'src/Card.tsx' },
-    },
-    {
-      id: 'state-disabled',
-      selector: {
-        raw: '.anm-Card--disabled',
-        classNames: ['anm-Card--disabled'],
-      },
-      declarations: [{ property: 'gap', value: '10px' }],
-      condition: eq('state:Card:disabled', true),
-      layer: 'anm-states',
-      order: 0,
-      source: { file: 'src/Card.tsx' },
-    },
-    {
-      id: 'hover',
-      selector: {
-        raw: '.anm-Card:hover',
-        classNames: ['anm-Card'],
-        pseudo: ['hover'],
-      },
-      declarations: [{ property: 'border-color', value: 'red' }],
-      condition: TRUE,
-      layer: 'anm-states',
-      order: 1,
-      source: { file: 'src/Card.tsx' },
-    },
-    {
-      id: 'marker',
-      selector: {
-        raw: '.anm-Card::before',
-        classNames: ['anm-Card'],
-        pseudo: ['::before'],
-      },
-      declarations: [{ property: 'content', value: '""' }],
-      condition: TRUE,
-      layer: 'anm-custom',
-      order: 1,
-      source: { file: 'src/Card.tsx' },
-    },
-    {
-      id: 'unresolved',
-      selector: { raw: '.anm-Card', classNames: ['anm-Card'] },
-      declarations: [{ property: 'outline-color', value: 'var(--missing)' }],
-      condition: TRUE,
-      layer: 'anm-custom',
-      order: 0,
-      source: { file: 'src/Card.tsx' },
-    },
-    ...(options.important === true
-      ? [
-          {
-            id: 'base-important',
-            selector: { raw: '.anm-Card', classNames: ['anm-Card'] },
-            declarations: [
-              { property: 'padding', value: '1px', important: true },
-            ],
-            condition: TRUE,
-            layer: 'anm-base',
-            order: 9,
-            source: { file: 'src/Card.tsx' },
-          },
-          {
-            id: 'variants-important',
-            selector: { raw: '.anm-Card', classNames: ['anm-Card'] },
-            declarations: [
-              { property: 'padding', value: '2px', important: true },
-            ],
-            condition: TRUE,
-            layer: 'anm-variants',
-            order: 9,
-            source: { file: 'src/Card.tsx' },
-          },
-        ]
-      : []),
-    {
-      id: 'panel-base',
-      selector: { raw: '.anm-Panel', classNames: ['anm-Panel'] },
-      declarations: [{ property: 'padding', value: '3px' }],
-      condition: TRUE,
-      layer: 'anm-base',
-      order: 2,
-      source: { file: 'src/Panel.tsx' },
-      origin: { component: 'Panel', method: 'styles' },
-    },
-  ],
-  components: [card, panel],
-  dimensions:
-    options.pseudoDimension === true
-      ? {
-          ...BASE_DIMENSIONS,
-          'pseudo:hover': { kind: 'finite', values: [false, true] },
-        }
-      : { ...BASE_DIMENSIONS },
-  cuts: { 'viewport.inline': [768] },
-  namedScenarios: {
-    'compact.dark': {
-      mode: 'dark',
-      'viewport.inline': 375,
-      'variant:Card:size': 'small',
-      'state:Card:disabled': false,
-    },
+/** The only way this suite's world differs from the shared one: two rules its
+ *  harvest must DISCOVER. `wide-1024` sits on a cut the domain does not
+ *  declare, and `state-disabled` gives the fixpoint a state-guarded rule to
+ *  reach. Everything else — components, dimensions, cuts, named scenarios,
+ *  `classesFor` and the rule dependencies — is the shared fixture world, so a
+ *  change to engine behaviour reaches this suite too. */
+const EXTRA_RULES: InMemoryHostConfig['rules'] = [
+  {
+    id: 'wide-1024',
+    selector: { raw: '.anm-Card', classNames: ['anm-Card'] },
+    declarations: [{ property: 'padding', value: '24px' }],
+    // 1024 is deliberately NOT in `cuts`: prove has to harvest it.
+    condition: range('viewport.inline', { min: 1024 }),
+    layer: 'anm-system',
+    order: 0,
+    source: { file: 'src/Card.tsx' },
   },
-  classesFor,
-  ruleDependencies: { 'base-card': ['src/Card.tsx'] },
-});
+  {
+    id: 'state-disabled',
+    selector: {
+      raw: '.anm-Card--disabled',
+      classNames: ['anm-Card--disabled'],
+    },
+    declarations: [{ property: 'gap', value: '10px' }],
+    condition: eq('state:Card:disabled', true),
+    layer: 'anm-states',
+    order: 0,
+    source: { file: 'src/Card.tsx' },
+  },
+];
 
-const host = (options: FixtureOptions = {}): OracleHost => ({
-  ...createInMemoryHost(config(options)),
-  tokens: tokens(),
-  obligations,
-});
+const config = (options: FixtureOptions = {}): InMemoryHostConfig =>
+  fixtureConfig({ ...options, extraRules: EXTRA_RULES });
+
+const host = (options: FixtureOptions = {}): OracleHost =>
+  fixtureHost({ ...options, extraRules: EXTRA_RULES });
 
 const dynamicObligation = (oracle: ReturnType<typeof createOracle>) => {
   const found = oracle

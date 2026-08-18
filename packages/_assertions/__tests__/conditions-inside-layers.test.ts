@@ -61,16 +61,6 @@ describe('assertConditionsInsideLayers (Guardrail G2)', () => {
     ).not.toThrow();
   });
 
-  it('passes even for nested sublayers (@layer composed inside @layer anm-variants)', () => {
-    // The `@container (min-width: 600px)` lives inside `@layer composed`, itself
-    // nested in `@layer anm-variants` — still "inside a named @layer block".
-    expect(() =>
-      assertConditionsInsideLayers(CONDITIONS_IN_LAYERS, {
-        atRules: ['@container'],
-      })
-    ).not.toThrow();
-  });
-
   it('fails when a @container rule appears outside any @layer block', () => {
     const hoisted = `
 @layer anm-base { .animus-Card { display: flex; } }

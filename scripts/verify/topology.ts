@@ -50,7 +50,11 @@ import { Visitor, parseSync } from 'oxc-parser';
 import type { Argument, StringLiteral } from 'oxc-parser';
 
 export type Tree = 'packages' | 'e2e' | 'legacy' | 'other';
-export type Vector = 'import' | 'tsconfig-path' | 'package-dependency';
+export type Vector =
+  | 'import'
+  | 'tsconfig-path'
+  | 'package-dependency'
+  | 'fixture-sibling';
 
 export interface Violation {
   vector: Vector;
@@ -477,20 +481,87 @@ function readJsonc(path: string): JsonValue | undefined {
 
 // Reads the workspace package name of every e2e/* member that has a manifest.
 export function readE2ePackageNames(repoRoot: string): string[] {
-  const base = join(repoRoot, 'e2e');
-  if (!existsSync(base)) return [];
-  const names: string[] = [];
+  // Projection of e2eMembersByName so one place owns e2e manifest reading.
+  return [...e2eMembersByName(repoRoot).keys()].sort();
+}
+
+// The e2e member (fixture directory name) owning an absolute path, or
+// undefined when the path is not under e2e/.
+export function e2eMember(
+  repoRoot: string,
+  absPath: string
+): string | undefined {
+  const rel = relative(repoRoot, absPath);
+  if (rel === '' || rel.startsWith('..')) return undefined;
+  const parts = rel.split(sep);
+  return parts[0] === 'e2e' && parts.length > 1 ? parts[1] : undefined;
+}
+
+// Workspace package name -> owning e2e member directory. Mirrors
+// readE2ePackageNames but keeps the directory each name was declared in, so a
+// bare workspace specifier can be attributed to a member.
+export function e2eMembersByName(repoRoot: string): Map<string, string> {
+  const byName = new Map<string, string>();
   for (const dir of topLevelDirs(repoRoot, 'e2e')) {
     const manifest = join(dir, 'package.json');
     if (!existsSync(manifest)) continue;
     const parsed = readJson(manifest);
-    // A manifest whose `name` is absent, empty, or not a string names no
-    // workspace package, so it contributes no specifier to match against.
     if (isJsonObject(parsed) && isJsonString(parsed.name) && parsed.name) {
-      names.push(parsed.name);
+      const member = e2eMember(repoRoot, dir);
+      if (member !== undefined) byName.set(parsed.name, member);
     }
   }
-  return names.sort();
+  return byName;
+}
+
+// Vector 4 — fixture-sibling imports. e2e fixtures must stay self-contained
+// (e2e-workspace-convention › "New framework fixtures remain self-contained":
+// each fixture builds from only its own source plus active packages/*
+// dependencies). The Tree-level rule cannot express this edge — sibling and
+// self are both e2e -> e2e — so it is scanned per-member here. This is a
+// static-specifier PROXY for the spec's build-level claim, with the same
+// accepted blind spot (dynamic/runtime resolution) as the rest of the
+// one-way rule.
+export function scanFixtureSiblingImports(repoRoot: string): Violation[] {
+  const membersByName = e2eMembersByName(repoRoot);
+  const files: string[] = [];
+  for (const dir of topLevelDirs(repoRoot, 'e2e')) {
+    walk(dir, repoRoot, SOURCE_EXT, files);
+  }
+  files.sort();
+
+  const violations: Violation[] = [];
+  const seen = new Set<string>();
+  for (const file of files) {
+    const fromMember = e2eMember(repoRoot, file);
+    if (fromMember === undefined) continue;
+    for (const spec of extractSpecifiers(readFileSync(file, 'utf8'), file)) {
+      let toMember: string | undefined;
+      if (spec.value.startsWith('.')) {
+        toMember = e2eMember(repoRoot, resolve(dirname(file), spec.value));
+      } else {
+        for (const [name, member] of membersByName) {
+          if (spec.value === name || spec.value.startsWith(`${name}/`)) {
+            toMember = member;
+            break;
+          }
+        }
+      }
+      if (toMember === undefined || toMember === fromMember) continue;
+      const rel = relative(repoRoot, file);
+      const key = `${rel}::${spec.value}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      violations.push({
+        vector: 'fixture-sibling',
+        file: rel,
+        from: 'e2e',
+        to: 'e2e',
+        detail: `imports e2e/${toMember} via '${spec.value}'`,
+      });
+    }
+  }
+  return violations;
 }
 
 // Vector 1 — source imports across a forbidden boundary.
@@ -742,6 +813,7 @@ export function collectViolations(repoRoot: string): Violation[] {
     ...scanSourceImports(repoRoot),
     ...scanTsconfigPaths(repoRoot),
     ...scanPackageDependencies(repoRoot),
+    ...scanFixtureSiblingImports(repoRoot),
   ];
 }
 
@@ -749,7 +821,8 @@ export function formatReport(violations: Violation[]): string {
   const lines = [
     'ERROR: workspace topology violation(s) — forbidden cross-boundary dependency.',
     '  One-Way Dependency Rule (AGENTS.md § Workspace Topology): packages/* must',
-    '  not import e2e/* or legacy/*; e2e/* must not import legacy/*.',
+    '  not import e2e/* or legacy/*; e2e/* must not import legacy/*. Each e2e',
+    '  fixture stays self-contained: no imports from sibling e2e/* fixtures.',
   ];
   for (const v of violations) {
     lines.push(`  ${v.file}: [${v.vector}] ${v.from} -> ${v.to}: ${v.detail}`);
@@ -765,7 +838,7 @@ export function main(repoRoot: string): number {
   const violations = collectViolations(repoRoot);
   if (violations.length === 0) {
     console.log(
-      '[topology] workspace boundaries clean — no packages->e2e, packages->legacy, or e2e->legacy edges'
+      '[topology] workspace boundaries clean — no packages->e2e, packages->legacy, e2e->legacy, or e2e sibling-fixture imports'
     );
     return 0;
   }

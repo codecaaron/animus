@@ -113,6 +113,12 @@ export const tokens = (): TokenProvider => ({
 export interface FixtureOptions {
   pseudoDimension?: boolean;
   important?: boolean;
+  /** Rules a suite's world genuinely adds on top of the shared one. They are
+   *  spliced at one fixed point (after `wide`, before the pseudo-guarded
+   *  rules) rather than appended per caller: rule array order feeds the
+   *  synthetic program hash, so a caller-chosen position would make two
+   *  suites' worlds differ by more than their rules. */
+  extraRules?: InMemoryHostConfig['rules'];
 }
 
 /** The axes every fixture models. `pseudo:hover` is deliberately absent: the
@@ -209,6 +215,7 @@ export const config = (options: FixtureOptions = {}): InMemoryHostConfig => ({
       order: 3,
       source: { file: 'src/Card.tsx' },
     },
+    ...(options.extraRules ?? []),
     {
       id: 'hover',
       selector: {

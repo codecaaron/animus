@@ -172,6 +172,9 @@ describe('Vite injection option: opt-in injection', () => {
       prodContext({ appearanceBootstrap: ARTIFACT, layerDeclaration: '' })
     );
 
+    // The exact array is also the pin on D6's delivery-only clause: the script
+    // carries `code` and nothing else the plugin was handed, so the artifact's
+    // `cspHash` has no position in the emitted document to leak into.
     expect(tags).toEqual([
       {
         tag: 'script',
@@ -180,14 +183,6 @@ describe('Vite injection option: opt-in injection', () => {
         injectTo: 'head-prepend',
       },
     ]);
-  });
-
-  test('the plugin never reads the artifact beyond `code` (no cspHash leakage)', () => {
-    const tags = buildIndexHtmlTags(
-      prodContext({ appearanceBootstrap: ARTIFACT })
-    );
-
-    expect(JSON.stringify(tags)).not.toContain(ARTIFACT.cspHash);
   });
 
   test('an empty-code artifact emits no script tag', () => {
@@ -201,17 +196,18 @@ describe('Vite injection option: opt-in injection', () => {
     expect(tags.some((t) => t.tag === 'script')).toBe(false);
     expect(tags).toEqual([PRE_CHANGE_LAYER_TAG]);
     expect(JSON.stringify(tags)).not.toContain('bootstrap');
-  });
 
-  test('an empty-code artifact with no layer declaration emits nothing at all', () => {
-    const tags = buildIndexHtmlTags(
-      prodContext({
-        appearanceBootstrap: { code: '', cspHash: '' },
-        layerDeclaration: '',
-      })
-    );
-
-    expect(tags).toEqual([]);
+    // The bootstrap and layer guards are independent build-time branches, so
+    // the same empty artifact with the layer branch also empty leaves nothing
+    // at all behind.
+    expect(
+      buildIndexHtmlTags(
+        prodContext({
+          appearanceBootstrap: { code: '', cspHash: '' },
+          layerDeclaration: '',
+        })
+      )
+    ).toEqual([]);
   });
 });
 

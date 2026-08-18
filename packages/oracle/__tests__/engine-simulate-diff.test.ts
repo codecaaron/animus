@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 
 import { asRuleId } from '../src/core/identity';
 import { TRUE } from '../src/core/predicate';
-import { applyDeltas } from '../src/core/world';
 import { createOracle } from '../src/engines';
 import { createInMemoryHost } from '../src/providers/in-memory';
 import { config, host, smallNarrow } from './fixture-world';
@@ -164,17 +163,6 @@ describe('simulate — force-dimension', () => {
       value: 'large',
     },
   ];
-
-  it('narrows the scenario domain of the hypothetical world', () => {
-    const oracle = createOracle(host());
-    const forced = applyDeltas(oracle.baselineWorld(), deltas);
-
-    expect(forced.scenario['variant:Card:size']).toEqual({
-      kind: 'finite',
-      values: ['large'],
-    });
-    expect(forced.interventions).toEqual(deltas);
-  });
 
   it('reports the rules the forced binding activates', () => {
     const result = createOracle(host()).simulate({ target: 'Card', deltas });

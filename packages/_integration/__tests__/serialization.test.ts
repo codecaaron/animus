@@ -17,65 +17,24 @@ beforeAll(() => {
   clearAnalysisCache();
 });
 
-describe('serialization shape', () => {
-  test('ds.toConfig() returns propConfig, groupRegistry, transforms', () => {
-    expect(config.propConfig).toEqual(expect.any(String));
-    expect(config.groupRegistry).toEqual(expect.any(String));
-    expect(config.transforms).toEqual(expect.any(Object));
-
-    // propConfig and groupRegistry must be valid JSON
+describe('serialize → NAPI round-trip', () => {
+  test('serialized system + theme output feeds analyzeProject and yields layered CSS', () => {
+    // The JSON-bearing fields must parse (spec: "valid JSON strings accepted
+    // by analyzeProject()"); variableCss/contextualVarsJson are plain strings
+    // with no JSON.parse counterpart.
     expect(() => JSON.parse(config.propConfig)).not.toThrow();
     expect(() => JSON.parse(config.groupRegistry)).not.toThrow();
-  });
-
-  test('ds.toConfig() omits the retired selector order output', () => {
-    expect(config.selectorAliases).toEqual(expect.any(String));
-    expect(config).not.toHaveProperty('selectorOrder');
-  });
-
-  test('tokens.serialize() returns scalesJson, variableMapJson, variableCss, contextualVarsJson', () => {
-    expect(theme.scalesJson).toEqual(expect.any(String));
-    expect(theme.variableMapJson).toEqual(expect.any(String));
-    expect(theme.variableCss).toEqual(expect.any(String));
-    expect(theme.contextualVarsJson).toEqual(expect.any(String));
-
-    // JSON fields must be valid JSON
     expect(() => JSON.parse(theme.scalesJson)).not.toThrow();
     expect(() => JSON.parse(theme.variableMapJson)).not.toThrow();
-  });
-});
+    expect(theme.variableCss).toEqual(expect.any(String));
+    expect(theme.contextualVarsJson).toEqual(expect.any(String));
+    expect(config).not.toHaveProperty('selectorOrder');
 
-describe('serialize → NAPI round-trip', () => {
-  test('serialized output feeds analyzeProject successfully', () => {
+    // One boundary crossing proves acceptance: non-empty layered CSS plus a
+    // populated report from the single-file entry.
     const entry = readFixtureFile(COMPONENTS, 'button.tsx');
-    const fileEntries = JSON.stringify([entry]);
-
-    const manifestJson = analyzeProject(fileEntries);
-
-    expect(manifestJson).toEqual(expect.any(String));
-    const manifest = JSON.parse(manifestJson);
-    expect(manifest).toBeDefined();
-    expect(manifest.css).toBeDefined();
-  });
-
-  test('manifest contains @layer declarations', () => {
-    const entry = readFixtureFile(COMPONENTS, 'button.tsx');
-    const fileEntries = JSON.stringify([entry]);
-
-    const manifestJson = analyzeProject(fileEntries);
-
-    const manifest = JSON.parse(manifestJson);
+    const manifest = JSON.parse(analyzeProject(JSON.stringify([entry])));
     expect(manifest.css).toContain('@layer');
-  });
-
-  test('manifest contains component extraction data', () => {
-    const entry = readFixtureFile(COMPONENTS, 'button.tsx');
-    const fileEntries = JSON.stringify([entry]);
-
-    const manifestJson = analyzeProject(fileEntries);
-
-    const manifest = JSON.parse(manifestJson);
-    expect(manifest.report).toBeDefined();
     expect(manifest.report.components_extracted).toBeGreaterThan(0);
   });
 });

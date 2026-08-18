@@ -1,20 +1,13 @@
 parity baseline — engines: baseline:v2 vs v2 — devMode: false
 
-Units passed: 64/66 (96.97%)
-Divergences: 11 (11 unregistered)
+Units passed: 65/66 (98.48%)
+Divergences: 4 (4 unregistered)
 
 Failing units (sorted):
-  integration/svelte-lifecycle · css (UNREGISTERED) [dcf25e1b438599b78769ba1e8ccad9cf2d17171f2b7897d34836046533edb4d6 -> 7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39] — unit missing from candidate
-  integration/svelte-lifecycle · code (UNREGISTERED) [2e10e0eb3656faec8e2dd16c0337a6c27e8df677e1ffe65a8d4011604cc95321 -> 7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39] — unit missing from candidate
-  integration/svelte-lifecycle · observables (UNREGISTERED) [9f8a577ab84e38ad065dfd6e859cdb25ec47cc86123e57eef637f6e49aedd80b -> 7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39] — unit missing from candidate
-  integration/svelte-lifecycle · diagnostics (UNREGISTERED) [4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945 -> 7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39] — unit missing from candidate
-  integration/svelte-usage · css [selector] (UNREGISTERED) [dcf25e1b438599b78769ba1e8ccad9cf2d17171f2b7897d34836046533edb4d6 -> 8ff12cf3d90e07e107e35e7a1a6bea98fe94b8ebda78b32afa6e84801caedd19] — CSS bytes differ (175 vs 585)
-  integration/svelte-usage · code (UNREGISTERED) [2e10e0eb3656faec8e2dd16c0337a6c27e8df677e1ffe65a8d4011604cc95321 -> addc9660f3053f5dcbfe8d7c12a1581d4b61be23a5a3b0233419ef6ef905e435] — definition.ts: present in one engine only
-  integration/svelte-usage · code (UNREGISTERED) [2e10e0eb3656faec8e2dd16c0337a6c27e8df677e1ffe65a8d4011604cc95321 -> addc9660f3053f5dcbfe8d7c12a1581d4b61be23a5a3b0233419ef6ef905e435] — definition.ts: hasComponents differs
-  integration/svelte-usage · observables (UNREGISTERED) [9f8a577ab84e38ad065dfd6e859cdb25ec47cc86123e57eef637f6e49aedd80b -> db46345b24e32f3b1513228e72b7baf91c30e22f57ee1c1c488f3ac18b48f201] — parseCount differs
-  integration/svelte-usage · observables (UNREGISTERED) [9f8a577ab84e38ad065dfd6e859cdb25ec47cc86123e57eef637f6e49aedd80b -> db46345b24e32f3b1513228e72b7baf91c30e22f57ee1c1c488f3ac18b48f201] — componentFragmentKeys differs
-  integration/svelte-usage · observables (UNREGISTERED) [9f8a577ab84e38ad065dfd6e859cdb25ec47cc86123e57eef637f6e49aedd80b -> db46345b24e32f3b1513228e72b7baf91c30e22f57ee1c1c488f3ac18b48f201] — sheetsJson differs
-  integration/svelte-usage · observables (UNREGISTERED) [9f8a577ab84e38ad065dfd6e859cdb25ec47cc86123e57eef637f6e49aedd80b -> db46345b24e32f3b1513228e72b7baf91c30e22f57ee1c1c488f3ac18b48f201] — componentFragmentsJson differs
+  integration/extended.tsx · css (UNREGISTERED) [7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39 -> dcf25e1b438599b78769ba1e8ccad9cf2d17171f2b7897d34836046533edb4d6] — unit missing from baseline
+  integration/extended.tsx · code (UNREGISTERED) [7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39 -> ced3d69b657daf5ceafe7246dff836c080aa32d491f5afd3711f3f057753ee42] — unit missing from baseline
+  integration/extended.tsx · observables (UNREGISTERED) [7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39 -> 42d5fb8fab40ec14100d4eb5a596e43bc6d0f4df6cec4d7c2d4ac2fb129119a1] — unit missing from baseline
+  integration/extended.tsx · diagnostics (UNREGISTERED) [7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39 -> 97ca2717c37e577206a357c652d5f190ec4d14afb5d403678650fcf330a4b6ae] — unit missing from baseline
 
 Usage-case families:
   ok mdx-provider-scope — expected identical, observed identical
@@ -38,21 +31,14 @@ Baseline metadata errors:
 
 parity baseline — engines: baseline:v2 vs v2 — devMode: true
 
-Units passed: 64/66 (96.97%)
-Divergences: 11 (11 unregistered)
+Units passed: 65/66 (98.48%)
+Divergences: 4 (4 unregistered)
 
 Failing units (sorted):
-  integration/svelte-lifecycle · css (UNREGISTERED) [dcf25e1b438599b78769ba1e8ccad9cf2d17171f2b7897d34836046533edb4d6 -> 7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39] — unit missing from candidate
-  integration/svelte-lifecycle · code (UNREGISTERED) [2e10e0eb3656faec8e2dd16c0337a6c27e8df677e1ffe65a8d4011604cc95321 -> 7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39] — unit missing from candidate
-  integration/svelte-lifecycle · observables (UNREGISTERED) [9f8a577ab84e38ad065dfd6e859cdb25ec47cc86123e57eef637f6e49aedd80b -> 7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39] — unit missing from candidate
-  integration/svelte-lifecycle · diagnostics (UNREGISTERED) [4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945 -> 7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39] — unit missing from candidate
-  integration/svelte-usage · css [selector] (UNREGISTERED) [dcf25e1b438599b78769ba1e8ccad9cf2d17171f2b7897d34836046533edb4d6 -> 8ff12cf3d90e07e107e35e7a1a6bea98fe94b8ebda78b32afa6e84801caedd19] — CSS bytes differ (175 vs 585)
-  integration/svelte-usage · code (UNREGISTERED) [2e10e0eb3656faec8e2dd16c0337a6c27e8df677e1ffe65a8d4011604cc95321 -> addc9660f3053f5dcbfe8d7c12a1581d4b61be23a5a3b0233419ef6ef905e435] — definition.ts: present in one engine only
-  integration/svelte-usage · code (UNREGISTERED) [2e10e0eb3656faec8e2dd16c0337a6c27e8df677e1ffe65a8d4011604cc95321 -> addc9660f3053f5dcbfe8d7c12a1581d4b61be23a5a3b0233419ef6ef905e435] — definition.ts: hasComponents differs
-  integration/svelte-usage · observables (UNREGISTERED) [9f8a577ab84e38ad065dfd6e859cdb25ec47cc86123e57eef637f6e49aedd80b -> db46345b24e32f3b1513228e72b7baf91c30e22f57ee1c1c488f3ac18b48f201] — parseCount differs
-  integration/svelte-usage · observables (UNREGISTERED) [9f8a577ab84e38ad065dfd6e859cdb25ec47cc86123e57eef637f6e49aedd80b -> db46345b24e32f3b1513228e72b7baf91c30e22f57ee1c1c488f3ac18b48f201] — componentFragmentKeys differs
-  integration/svelte-usage · observables (UNREGISTERED) [9f8a577ab84e38ad065dfd6e859cdb25ec47cc86123e57eef637f6e49aedd80b -> db46345b24e32f3b1513228e72b7baf91c30e22f57ee1c1c488f3ac18b48f201] — sheetsJson differs
-  integration/svelte-usage · observables (UNREGISTERED) [9f8a577ab84e38ad065dfd6e859cdb25ec47cc86123e57eef637f6e49aedd80b -> db46345b24e32f3b1513228e72b7baf91c30e22f57ee1c1c488f3ac18b48f201] — componentFragmentsJson differs
+  integration/extended.tsx · css (UNREGISTERED) [7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39 -> dcf25e1b438599b78769ba1e8ccad9cf2d17171f2b7897d34836046533edb4d6] — unit missing from baseline
+  integration/extended.tsx · code (UNREGISTERED) [7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39 -> ced3d69b657daf5ceafe7246dff836c080aa32d491f5afd3711f3f057753ee42] — unit missing from baseline
+  integration/extended.tsx · observables (UNREGISTERED) [7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39 -> 42d5fb8fab40ec14100d4eb5a596e43bc6d0f4df6cec4d7c2d4ac2fb129119a1] — unit missing from baseline
+  integration/extended.tsx · diagnostics (UNREGISTERED) [7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39 -> 97ca2717c37e577206a357c652d5f190ec4d14afb5d403678650fcf330a4b6ae] — unit missing from baseline
 
 Usage-case families:
   ok mdx-provider-scope — expected identical, observed identical

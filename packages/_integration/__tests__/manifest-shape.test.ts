@@ -223,28 +223,20 @@ describe('component descriptor completeness', () => {
   );
 
   test('manifest.components is a non-empty object', () => {
-    expect(manifest.components).toEqual(expect.any(Object));
+    // Non-empty: the vacuity anchor for the descriptor loop below.
     expect(Object.keys(manifest.components).length).toBeGreaterThan(0);
   });
 
   test('every component descriptor has required non-empty fields', () => {
+    // The manifest decoder already guarantees string types; non-emptiness
+    // (and the class_name prefix) is the claim here.
     for (const [id, descriptor] of Object.entries(manifest.components)) {
-      expect(descriptor.file).toEqual(expect.any(String));
-      expect(descriptor.file.length).toBeGreaterThan(0);
-      expect(descriptor.binding).toEqual(expect.any(String));
-      expect(descriptor.binding.length).toBeGreaterThan(0);
-      expect(descriptor.class_name).toEqual(expect.any(String));
-      expect(descriptor.class_name).toMatch(/^animus-/);
-      expect(descriptor.replacement).toEqual(expect.any(String));
-      expect(descriptor.replacement.length).toBeGreaterThan(0);
-      expect(descriptor.tag).toEqual(expect.any(String));
-      expect(descriptor.tag.length).toBeGreaterThan(0);
-      expect(Object.prototype.toString.call(descriptor.terminal)).toBe(
-        '[object String]'
-      );
-      expect(descriptor.terminal.length).toBeGreaterThan(0);
-      // id should be a non-empty string and match the key
       expect(id.length).toBeGreaterThan(0);
+      expect(descriptor.class_name).toMatch(/^animus-/);
+      const emptyFields = (
+        ['file', 'binding', 'replacement', 'tag', 'terminal'] as const
+      ).filter((field) => descriptor[field].length === 0);
+      expect(emptyFields).toEqual([]);
     }
   });
 });
@@ -255,9 +247,9 @@ describe('files-to-components consistency', () => {
   );
 
   test('every component_id in manifest.files exists in manifest.components', () => {
-    expect(manifest.files).toEqual(expect.any(Object));
+    // Non-empty: the vacuity anchor for the loop below.
+    expect(Object.keys(manifest.files).length).toBeGreaterThan(0);
     for (const [filePath, componentIds] of Object.entries(manifest.files)) {
-      expect(Array.isArray(componentIds)).toBe(true);
       for (const id of componentIds) {
         expect(manifest.components[id]).toBeDefined();
         expect(manifest.components[id].file).toBe(filePath);
@@ -273,7 +265,7 @@ describe('provenance reciprocity', () => {
 
   test('reverse_provenance is reciprocal with extends_from', () => {
     const reverse = manifest.reverse_provenance;
-    expect(reverse).toEqual(expect.any(Object));
+    expect(Object.keys(reverse).length).toBeGreaterThan(0);
     for (const [parentId, childIds] of Object.entries(reverse)) {
       expect(manifest.components[parentId]).toBeDefined();
       for (const childId of childIds) {
@@ -359,10 +351,9 @@ describe('system_prop_map validation', () => {
   );
 
   test('system_prop_map is populated for used props', () => {
-    expect(manifest.system_prop_map).toEqual(expect.any(Object));
-    // system-props.tsx uses p, mt, display, color — at minimum p and mt should appear.
+    // system-props.tsx uses p, mt, display, color — at minimum p should
+    // appear. This is the vacuity anchor for the class-name loop below.
     expect(manifest.system_prop_map.p).toBeDefined();
-    expect(manifest.system_prop_map.p).toEqual(expect.any(Object));
   });
 
   test('all system_prop_map class name values are animus-u- prefixed', () => {

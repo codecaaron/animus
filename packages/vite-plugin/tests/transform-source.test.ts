@@ -82,6 +82,10 @@ function makeProbe(
 describe('transform: the plugin never treats its own virtual modules as sources', () => {
   // Both `.js`-suffixed resolved ids pass the shared engine-transform file
   // class on their raw text, which is exactly why the `\0` guard comes first.
+  // A dev page load sends every one of these back through `transform`; the
+  // guard returns before any `fileCache` or analysis mutation, so an empty
+  // cache per id is also the statement that a full pass accumulates no
+  // permanent `\0` keys.
   const VIRTUAL_IDS = [
     RESOLVED_COMPONENTS_ID,
     RESOLVED_BRIDGE_ID,
@@ -103,19 +107,6 @@ describe('transform: the plugin never treats its own virtual modules as sources'
       expect([...probe.ctx.fileCache.keys()]).toEqual([]);
     }
   );
-
-  it('leaves no `\\0` keys behind after a full virtual-module load pass', async () => {
-    const probe = makeProbe();
-
-    for (const id of VIRTUAL_IDS) {
-      await transformSource(probe.ctx, 'export default ``;', id);
-    }
-
-    expect(
-      [...probe.ctx.fileCache.keys()].filter((key) => key.includes('\0'))
-    ).toEqual([]);
-    expect(probe.analyses).toBe(0);
-  });
 
   it('still transforms a real source file (the guard is not vacuous)', async () => {
     const probe = makeProbe({ knownFiles: { 'src/Button.tsx': ['Button#1'] } });
