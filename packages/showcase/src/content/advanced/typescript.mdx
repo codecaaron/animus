@@ -1,6 +1,5 @@
 import { TypeSignature } from '../../components/docs/TypeSignature';
 import { ParamTable } from '../../components/docs/ParamTable';
-import { CodeExample } from '../../components/docs/CodeExample';
 import { Callout } from '../../components/docs/Callout';
 
 # TypeScript Integration
@@ -192,10 +191,13 @@ function StatusBadge({ label, ...variants }: BadgeVariants & { label: string }) 
 import { compose } from '@animus-ui/system';
 import type { VariantPropsOf } from '@animus-ui/system';
 
-const { Root, Body } = compose({ Root, Body }, { shared: { size: true } });
+const Family = compose(
+  { Root: CardRoot, Body: CardBody },
+  { shared: { size: true } }
+);
 
 // Root variant props include shared variants — Body receives them via cascade
-type FamilyRootVariants = VariantPropsOf<typeof Root>;
+type FamilyRootVariants = VariantPropsOf<typeof Family.Root>;
 ```
 
 ---

@@ -1,9 +1,7 @@
 ## Purpose
 
 Requirements for the `developer-knowledge-docs` capability: Package-level CLAUDE.md for extract; Package-level CLAUDE.md for vite-plugin; Package-level CLAUDE.md for showcase; and 1 more.
-
 ## Requirements
-
 ### Requirement: Package-level CLAUDE.md for extract
 
 The `packages/extract/` directory SHALL contain a `CLAUDE.md` file documenting the Rust NAPI crate's build process, cache behavior, debugging procedures, and known failure modes.
@@ -54,22 +52,24 @@ The `packages/vite-plugin/` directory SHALL contain a `CLAUDE.md` file documenti
 
 ### Requirement: Package-level CLAUDE.md for showcase
 
-The `packages/showcase/` directory SHALL contain a `CLAUDE.md` file documenting the showcase's role as extraction proof, what breaks it, and how to verify extraction is working.
+The `packages/showcase/` directory SHALL contain a `CLAUDE.md` file documenting
+the showcase's role as extraction proof, what breaks it, and how to verify
+extraction is working.
 
 #### Scenario: CLAUDE.md covers extraction verification
 
 - **WHEN** a developer reads `packages/showcase/CLAUDE.md`
-- **THEN** it SHALL document: how to verify extraction works (`bun run build` in showcase dir), what the output should look like (no Emotion runtime in bundle, static CSS in assets), and expected bundle size baseline
+- **THEN** it SHALL document: how to run the complete showcase-scoped proof (`vp run @animus-ui/showcase#verify` — build, output assertions, Worker dry-run), where the assertion script and its lane receipt live, and that the built output carries no Emotion runtime
 
 #### Scenario: CLAUDE.md covers the design system
 
 - **WHEN** a developer reads `packages/showcase/CLAUDE.md`
-- **THEN** it SHALL document: `src/ds.ts` defines the design system via `createSystem()`, the component library in `src/components.tsx`, and that ALL components are built with the extraction-compatible `@animus-ui/system` builder
+- **THEN** it SHALL document: `src/ds.ts` defines the design system via `createSystem()`, the component library under `src/components/`, and that ALL components are built with the extraction-compatible `@animus-ui/system` builder
 
 #### Scenario: CLAUDE.md covers common breakage patterns
 
 - **WHEN** a developer reads `packages/showcase/CLAUDE.md`
-- **THEN** it SHALL document: Vite resolve aliases breaking transforms, stale Vite cache after pipeline changes, and that the showcase has no Emotion dependency (any Emotion import means extraction is broken)
+- **THEN** it SHALL document: stale Vite cache after pipeline changes, components silently failing to extract when authored with the archived legacy builder instead of `ds.styles()`, and unresolved `__TRANSFORM__` placeholders in the output CSS
 
 ### Requirement: Root CLAUDE.md build system addendum
 
@@ -89,3 +89,4 @@ The root `CLAUDE.md` SHALL include a build system section (appended after existi
 
 - **WHEN** a developer reads the root `CLAUDE.md` build system section
 - **THEN** it SHALL document a decision tree: "transforms seem stale" → clean:light, "NAPI errors" → rebuild, "nothing works" → clean:full + rebuild
+

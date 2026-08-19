@@ -1,16 +1,16 @@
 ## Purpose
 
 Post-build assertions SHALL validate that the showcase Vite build emits correctly-layered extraction CSS, resolved variable references, and no runtime CSS-in-JS dependencies. Assertions run against built output (not source) and use shared structural utilities from `@animus-ui/assertions` so layer ordering is checked via character-position comparison — the same code that validates the Next.js and Vite consumer fixtures.
-
 ## Requirements
-
 ### Requirement: Showcase build output contains valid extraction CSS
 
-After the showcase Vite build completes, the output CSS SHALL be validated using structural position-aware assertions, not shell `grep`. The assertion script SHALL use shared utilities from `@animus-ui/assertions`.
+After the showcase Vite build completes, the output CSS SHALL be validated
+using structural position-aware assertions, not shell `grep`. The assertion
+script SHALL draw its shared utilities from `@animus-ui/assertions`.
 
 #### Scenario: CSS file exists and is non-empty
 
-- **WHEN** `bun run test:showcase` completes
+- **WHEN** `vp run @animus-ui/showcase#verify` completes
 - **THEN** at least one `.css` file SHALL exist in `packages/showcase/dist/assets/`
 - **AND** the file SHALL be non-empty
 
@@ -74,3 +74,4 @@ The showcase package-owned assertion diagnostic and complete owner claim SHALL v
 
 - **WHEN** the showcase assertion observes a unit-mangled keyframe reference
 - **THEN** the package-owned assertion diagnostic exits non-zero
+

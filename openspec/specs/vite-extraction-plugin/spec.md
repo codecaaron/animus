@@ -548,7 +548,15 @@ Adapter parity: any change to the default extension list lands in one module (`p
 
 ### Requirement: File-discovery walk includes `.mdx` sources by default
 
-The Vite extraction plugin's default discovery walk SHALL include `.mdx` sources and preserve the existing extension override behavior. The showcase package-owned production verification claim SHALL remain the end-to-end proof that MDX-rendered design-system components extract correctly.
+The Vite extraction plugin's default discovery walk SHALL include `.mdx`
+sources and preserve the existing extension override behavior. The showcase
+package-owned production verification claim SHALL remain the end-to-end proof
+that MDX-rendered design-system components extract: the showcase production
+build SHALL contain at least one MDX source whose rendered design-system
+component extracts into the production CSS, observed by the showcase output
+assertions. That obligation is stated over the build's MDX sources alone and
+SHALL hold independently of how many documentation pages the showcase carries
+and of which documentation components exist.
 
 #### Scenario: `.mdx` files appear in the scanner's input set (default config)
 
@@ -569,6 +577,11 @@ The Vite extraction plugin's default discovery walk SHALL include `.mdx` sources
 
 - **WHEN** `vp run @animus-ui/showcase#verify` builds MDX that renders design-system components
 - **THEN** the output assertion observes their extracted CSS
+
+#### Scenario: Documentation set shrinks
+
+- **WHEN** documentation pages or documentation components are deleted and at least one MDX source rendering a design-system component remains in the showcase build
+- **THEN** `vp run @animus-ui/showcase#verify` still observes extracted CSS from that source and the proof obligation remains satisfied
 
 #### Scenario: Adapter-parity via shared constant
 

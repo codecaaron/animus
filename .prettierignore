@@ -1,3 +1,9 @@
 # Content-addressed parity oracles are formatted by their privileged recorders.
 packages/_parity/baselines/
 packages/_parity/tools/seam-baseline.json
+
+# Showcase MDX doc pages: the formatter treats each line of a multi-line
+# template literal inside a JSX attribute as markdown prose — it rewrites
+# `/* */` comments into `/_ _/` emphasis and flattens sample indentation
+# (the e5653d26 corruption). Doc code samples are formatted by their authors.
+packages/showcase/src/content/

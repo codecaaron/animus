@@ -7,7 +7,7 @@ import { APIBlock } from '../../components/docs/APIBlock';
 
 # createSystem()
 
-`createSystem()` returns a `SystemBuilder` — an immutable, type-state accumulator that registers props, groups, and selector aliases. Every method returns a new builder instance with widened generics. `.build()` finalizes the accumulator into a `SystemInstance` and a `createGlobalStyles` factory.
+`createSystem()` returns a `SystemBuilder` — an immutable, type-state accumulator that registers props, groups, and selector aliases. Every method returns a new builder instance with widened generics. `.build()` finalizes the accumulator into a `SystemInstance`, a `createGlobalStyles` factory, and a `createKeyframes` factory.
 
 One system per application. Every component in the app imports from the built system instance.
 
@@ -63,7 +63,7 @@ export const { system: ds, createGlobalStyles } = createSystem()
       label: 'build',
       layer: 'output',
       description:
-        'Finalizes the builder. Returns { system, createGlobalStyles }. No further chaining after build().',
+        'Finalizes the builder. Returns { system, createGlobalStyles, createKeyframes }. No further chaining after build().',
       code: `const { system: ds, createGlobalStyles } = createSystem()
   .addGroup('surface', { ...color })
   .build();`,
@@ -350,22 +350,26 @@ Rules:
 
 <MethodCard
   name="build"
-  description="Finalize the builder — returns the system instance and the global styles factory"
-  returnType="{ system: SystemInstance<PropReg, GroupReg>; createGlobalStyles: GlobalStylesFactory }"
+  description="Finalize the builder — returns the system instance, the global styles factory, and the keyframes factory"
+  returnType="{ system: SystemInstance<PropReg, GroupReg>; createGlobalStyles: GlobalStylesFactory; createKeyframes: CreateKeyframesFactory }"
 />
 
 <APIBlock>
   <TypeSignature
     name="build"
     params={[]}
-    returns="{ system: SystemInstance<PropReg, GroupReg>; createGlobalStyles: GlobalStylesFactory }"
+    returns="{ system: SystemInstance<PropReg, GroupReg>; createGlobalStyles: GlobalStylesFactory; createKeyframes: CreateKeyframesFactory }"
   />
 </APIBlock>
 
-Finalizes the builder. Returns two values — always destructure both:
+Finalizes the builder. Returns three values — destructure the ones you use:
 
 ```ts
-export const { system: ds, createGlobalStyles } = createSystem()
+export const {
+  system: ds,
+  createGlobalStyles,
+  createKeyframes,
+} = createSystem()
   .addGroup('surface', { ...color, ...border })
   .build();
 ```
@@ -378,10 +382,12 @@ The `system` return is renamed via destructuring. `ds` is the conventional name.
   name="SystemInstance"
   generics="PropReg extends Record<string, Prop>, GroupReg extends Record<string, (keyof PropReg)[]>"
   params={[]}
-  returns="Animus<PropReg, GroupReg> & { toConfig(): SerializedConfig }"
+  returns="Animus<PropReg, GroupReg> & { toConfig(): SerializedConfig; getRegistrySnapshot?(): RegistrySnapshot }"
 />
 
 `SystemInstance` is the built system: an `Animus` builder instance extended with `toConfig()`. The builder chain is available on it. `toConfig()` is called by the Vite plugin subprocess — do not call it in application code.
+
+`getRegistrySnapshot()` returns the frozen registry state captured at `build()` — this is what `.extend()` merges from. It is optional in the type only so systems built by an older `@animus-ui/system` stay structurally acceptable during the deprecation window; instances built by this version always carry it.
 
 The generic parameters carry the full accumulated type state, which powers prop type narrowing on every component defined via the system.
 
@@ -427,10 +433,22 @@ The `GlobalStyleBlock` return type has a `__brand: 'GlobalStyleBlock'` discrimin
       desc: 'Live transform function references keyed by transform name. Cannot be JSON-serialized — the pipeline receives them as live JS values via the subprocess. Each NamedTransform carries a transformName property that matches its key here.',
     },
     {
+      name: 'transformSources',
+      type: 'string (JSON)',
+      default: '—',
+      desc: 'JSON map of transform name → captured source text. The only channel by which transforms shipped inside a package reach the build-time evaluator.',
+    },
+    {
       name: 'selectorAliases',
       type: 'string (JSON)',
       default: '—',
       desc: 'JSON map of alias key → CSS selector string, for all registered aliases (built-in + custom).',
+    },
+    {
+      name: 'conditionAliases',
+      type: 'string (JSON)',
+      default: '—',
+      desc: 'JSON map of condition alias → { value, order, kind }. "{}" when the system registers no conditions.',
     },
   ]}
 />
@@ -460,13 +478,13 @@ The `GlobalStyleBlock` return type has a `__brand: 'GlobalStyleBlock'` discrimin
       name: 'variableMap',
       type: 'Record<string, string>',
       default: '—',
-      desc: 'Flat token key → CSS variable name without var() wrapper. E.g. "colors.primary" → "--colors-primary". Maps prop values to their emitted variable.',
+      desc: 'Flat token key → CSS variable name without var() wrapper. E.g. "colors.primary" → "--color-primary". Maps prop values to their emitted variable.',
     },
     {
       name: 'modes',
       type: 'Record<string, Record<string, string>>',
       default: '—',
-      desc: 'Mode name → flat key → resolved raw value. E.g. { dark: { "colors.primary": "#..." } }. One entry per mode registered via addColorModes or addModes.',
+      desc: 'Mode name → flat key → resolved raw value. E.g. { dark: { "colors.primary": "#..." } }. One entry per mode registered via addColorModes.',
     },
     {
       name: 'variableCss',

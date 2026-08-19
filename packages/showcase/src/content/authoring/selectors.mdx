@@ -9,8 +9,7 @@ Style objects in Animus accept nested keys as selectors. Three forms are availab
 <Callout variant="warn" title="Static values only">
   All style values must be static string literals. Dynamic values — template
   literals, variables, ternaries, function calls — are skipped per-property at
-  extraction time. See [Static Extraction & CSS
-  Output](/docs/advanced/extraction) for the full skip model.
+  extraction time.
 </Callout>
 
 ---
@@ -21,7 +20,7 @@ Animus ships 25 selector aliases. Each `_`-prefixed key maps to one or more CSS 
 
 **Cascade ordering:** The `order` field determines emission order within a layer. Higher order numbers win when specificity is equal. `_disabled` (order 200) always overrides interaction states (`_hover` at 30, `_active` at 70).
 
-**Unknown aliases are silently dropped.** If you use a `_`-prefixed key that does not match a built-in or registered custom alias, the extractor drops it without warning. Typos produce no CSS.
+**Unknown aliases are rejected once your alias set is published.** A `_`-prefixed key matching no built-in or registered alias resolves to the branded `UnknownConditionAlias` type — the key name and the remedy are in the error text — so typos are a compile-time failure, not silent CSS. Publication is the gate: until you augment `Selectors` or `Conditions` — see Custom Selector Registration below — the `_` namespace stays permissive and an unmatched key emits nothing.
 
 | Alias           | CSS Selector(s)                                                      | Order | Group          |
 | --------------- | -------------------------------------------------------------------- | ----- | -------------- |
@@ -78,18 +77,18 @@ Alias keys accept the same system props and CSS properties as the top-level conf
   },
 }).asElement('button')`}
   output={`.animus-Button-a1b2 {
-  background-color: var(--colors-primary);
-  color: var(--colors-bg);
+  background-color: var(--color-primary);
+  color: var(--color-bg);
   padding-inline: 1rem;
   padding-block: 0.5rem;
   border-radius: 6px;
 }
 .animus-Button-a1b2:hover {
-  background-color: var(--colors-secondary);
+  background-color: var(--color-secondary);
 }
 .animus-Button-a1b2:focus-visible {
   outline: 2px solid;
-  outline-color: var(--colors-primary);
+  outline-color: var(--color-primary);
   outline-offset: 2px;
 }
 .animus-Button-a1b2:disabled,
@@ -185,7 +184,7 @@ const Card = ds
       cursor: 'pointer',
       _hover: {
         borderColor: 'primary',
-        boxShadow: '0 0 0 1px var(--colors-primary)',
+        boxShadow: '0 0 0 1px var(--color-primary)',
       },
       _focusVisible: {
         outline: '2px solid',
@@ -232,8 +231,8 @@ This means a component can have no interactive styles when the `interactive` sta
   },
 }).asElement('span')`}
   output={`.animus-Tag-c3d4 {
-  background-color: color-mix(in srgb, var(--colors-border) 20%, transparent);
-  color: var(--colors-text);
+  background-color: color-mix(in srgb, var(--color-border) 20%, transparent);
+  color: var(--color-text);
   border-radius: 4px;
   padding-inline: 0.5rem;
   padding-block: 0.25rem;
@@ -243,7 +242,7 @@ This means a component can have no interactive styles when the `interactive` sta
 }
 .animus-Tag-c3d4--removable [data-remove]:hover {
   opacity: 1;
-  color: var(--colors-error);
+  color: var(--color-error);
 }`}
 />
 

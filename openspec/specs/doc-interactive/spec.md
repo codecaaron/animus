@@ -1,47 +1,7 @@
 ## Purpose
 
 Requirements for the `doc-interactive` capability: TabGroup provides tabbed content switching; LivePreview component; ChainStep displays arrow connectors; and 4 more.
-
 ## Requirements
-
-### Requirement: TabGroup provides tabbed content switching
-
-TabGroup SHALL use ark-ui Tabs primitives for keyboard navigation, focus management, and panel association while maintaining the existing consumer API (`tabs`, `activeTab`, `onChange` props). The convenience wrapper absorbs ark-ui's internal API (`value`/`onValueChange`).
-
-#### Scenario: TabGroup keyboard navigation via ark-ui
-
-- **WHEN** user presses ArrowRight on a focused tab
-- **THEN** focus moves to the next tab (with wrap-around), managed by ark-ui's Tabs primitive
-
-#### Scenario: TabGroup panel association
-
-- **WHEN** a tab is selected
-- **THEN** the corresponding panel has `aria-labelledby` referencing the tab, and the tab has `aria-controls` referencing the panel
-
-#### Scenario: TabGroup consumer API stable
-
-- **WHEN** a consumer renders `<TabGroup tabs={['A','B']} activeTab="A" onChange={fn} />`
-- **THEN** the component works identically to the pre-migration version
-
-### Requirement: LivePreview component
-
-A preview/code toggle panel for MDX documentation. The component SHALL accept `preview` (ReactNode — live rendered component), `code` (ReactNode — typically a SyntaxBlock), and optionally `defaultTab` (`'preview' | 'code'`, default `'preview'`). It SHALL render a bordered container with TabGroup toggling between the preview and code views.
-
-#### Scenario: Default preview view
-
-- **WHEN** LivePreview renders with preview and code props
-- **THEN** the preview tab is active and the rendered component is visible in a padded container
-
-#### Scenario: Switch to code view
-
-- **WHEN** user clicks the "code" tab
-- **THEN** the preview is hidden and the code content is displayed
-
-#### Scenario: MDX usage
-
-- **WHEN** an .mdx file uses `<LivePreview preview={<Button>Click</Button>} code={<SyntaxBlock>...</SyntaxBlock>} />`
-- **THEN** both the live component and its source code are viewable via tab toggle
-
 ### Requirement: ChainStep displays arrow connectors
 
 ChainStep SHALL use lucide-react icons for arrow connectors between steps instead of inline SVGs. Visual appearance and step active state behavior remain unchanged.
@@ -66,37 +26,6 @@ ChainStep SHALL use `.states({ active })` on a single StepLabel and single Layer
 - **WHEN** ChainStep renders step items
 - **THEN** the wrapper around each step+connector SHALL be a ds element, not a raw `<div style={...}>`
 
-### Requirement: TabGroup keyboard navigation
-
-TabGroup SHALL implement WAI-ARIA Tabs keyboard navigation with roving tabindex.
-
-#### Scenario: Arrow key navigation
-
-- **WHEN** focus is on a tab and user presses ArrowRight
-- **THEN** focus SHALL move to the next tab and activate it
-- **AND** the previous tab SHALL receive `tabIndex={-1}`, the new tab `tabIndex={0}`
-
-#### Scenario: Wrap-around navigation
-
-- **WHEN** focus is on the last tab and user presses ArrowRight
-- **THEN** focus SHALL wrap to the first tab
-
-#### Scenario: Home/End keys
-
-- **WHEN** user presses Home while focused on any tab
-- **THEN** focus SHALL move to the first tab
-- **WHEN** user presses End
-- **THEN** focus SHALL move to the last tab
-
-### Requirement: TabGroup focus visibility
-
-TabButton SHALL display a visible focus indicator via `_focusVisible` selector alias.
-
-#### Scenario: Keyboard focus on tab
-
-- **WHEN** user navigates to a tab via keyboard
-- **THEN** a focus ring SHALL appear on the focused tab button
-
 ### Requirement: ChainStep provides interactive builder chain visualization
 
 ChainStep (renamed to ChainVisualizer) SHALL accept enriched step data including `description`, `code`, `repeatable`, and `available` fields. The component renders a chain strip with step buttons, connector arrows, and a detail panel below showing per-step content.
@@ -115,3 +44,4 @@ ChainStep (renamed to ChainVisualizer) SHALL accept enriched step data including
 
 - **WHEN** ChainVisualizer renders with steps containing only `label` and `layer` (no description/code)
 - **THEN** the chain strip renders as before with no detail panel
+

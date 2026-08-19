@@ -248,7 +248,7 @@ If you need typed element-specific props — for example, `href` on an `<a>` —
 - `element` — the HTML tag string or React component to render
 - `className` — the base extracted class name (e.g., `"animus-Button-a1b2"`)
 - `config` — variant definitions, state keys, and system prop names for filtering
-- `systemPropMap` — served via virtual module (`virtual:animus/styles.css`); maps prop→value→className
+- `systemPropMap` — served via virtual module (`virtual:animus/system-props`); maps prop→value→className
 - `dynamicPropConfig` — CSS variable metadata for props with detected dynamic usage
 
 The `extend()` method on extracted components throws at runtime with an actionable message. Extension must happen in source code before extraction runs.
@@ -288,7 +288,7 @@ The `extend()` method on extracted components throws at runtime with an actionab
   after={{
     label: 'extracted — plugin output',
     code: `import { createClassResolver } from '@animus-ui/system'
-import { systemPropMap } from 'virtual:animus/styles.css'
+import { systemPropMap } from 'virtual:animus/system-props'
 
 const badgeClasses = createClassResolver(
 'animus-badgeClasses-x1y2',

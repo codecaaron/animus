@@ -167,8 +167,8 @@ When a scale is not emitted, its tokens resolve to their raw values at extractio
   --breakpoint-lg: 1280px;
 }
 
-/_ fontSizes: no CSS variables emitted _/
-/_ fontSizes.sm → "0.875rem" in scalesJson only _/`}
+/* fontSizes: no CSS variables emitted */
+/* fontSizes.sm → "0.875rem" in scalesJson only */`}
 inputLabel="theme definition"
 outputLabel="emitted CSS"
 />
@@ -366,7 +366,7 @@ Calling `.build()` finalizes the theme and returns a `BuiltTheme`. Three non-enu
   />
 </APIBlock>
 
-The Vite plugin calls `theme.serialize()` once during `buildStart`. The Rust crate receives `scalesJson` and `variableMapJson` as inputs to its resolver. `variableCss` is injected verbatim into the virtual CSS module.
+The Rust system loader evaluates the system module once during `buildStart` and reads these fields off the built theme. The Rust crate receives `scalesJson` and `variableMapJson` as inputs to its resolver. `variableCss` is injected verbatim into the virtual CSS module.
 
 ### manifest
 
@@ -456,7 +456,7 @@ Contextual variables solve a specific problem: style values that must be set dyn
    colors.bg-current → --color-bg-current (available)
    colors.fg-current → --color-fg-current (available) */
 
-/_ Consumer sets them at component scope: _/
+/* Consumer sets them at component scope: */
 .my-component {
 --color-bg-current: var(--color-ember);
 }`}

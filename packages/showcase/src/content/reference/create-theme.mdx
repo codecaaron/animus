@@ -63,7 +63,7 @@ export const themeSteps = [
     layer: 'output',
     description:
       'Finalizes the chain. Returns BuiltTheme with manifest, serialize(), and varRef().',
-    code: `.build({ prefix: 'app' })`,
+    code: `.build()`,
   },
 ];
 
@@ -163,6 +163,7 @@ Maps semantic alias tokens to palette color dot-paths. Each mode produces a `[da
     params={[
       { name: 'initialMode', type: 'string' },
       { name: 'modeConfig', type: 'Config' },
+      { name: 'options?', type: 'ColorModeOptions<Config>' },
     ]}
     returns="ThemeBuilder<T & { colors: ColorsWithModes }, Emitted>"
   />
@@ -179,6 +180,12 @@ Maps semantic alias tokens to palette color dot-paths. Each mode produces a `[da
         type: 'Record<string, Record<string, string>>',
         default: 'required',
         desc: 'Map of mode name to alias definitions. Values are dot-path strings referencing existing color keys (e.g., "gray.900"). Nested alias objects are supported up to any depth.',
+      },
+      {
+        name: 'options',
+        type: 'ColorModeOptions<Config>',
+        default: 'undefined',
+        desc: 'Controls systemPreference (OS preference → mode), browserColorScheme (mode → CSS color-scheme), and basedOn (new mode → the declared mode its uncovered inherited aliases resolve through) emission.',
       },
     ]}
   />
@@ -226,9 +233,12 @@ Adds a named scale of token values. By default, scale values are raw (no CSS var
 <APIBlock>
   <TypeSignature
     name="addScale"
-    generics="Key extends string, Values extends Record<string | number, string | number | Record<string, string | number>>, Emit extends boolean = false"
+    generics="Key extends string, Values extends Record<string | number, string | number | Record<string, string | number>>, Emit extends boolean = false, Replace extends boolean = false"
     params={[
-      { name: 'config', type: '{ name: Key; values: Values; emit?: Emit }' },
+      {
+        name: 'config',
+        type: '{ name: Key; values: Values; emit?: Emit; replace?: Replace }',
+      },
     ]}
     returns="ThemeBuilder<T & { [K in Key]: LiteralPaths<Values> }, Emit extends true ? Emitted | Key : Emitted>"
   />
@@ -251,6 +261,12 @@ Adds a named scale of token values. By default, scale values are raw (no CSS var
         type: 'boolean',
         default: 'false',
         desc: 'When true, emits CSS variables (--{name}-{key}) and enables this scale as a token reference target from other scales.',
+      },
+      {
+        name: 'config.replace',
+        type: 'boolean',
+        default: 'false',
+        desc: 'When true, the scale becomes exactly the supplied values instead of merging by key. The default merge keeps implicit deletion impossible.',
       },
     ]}
   />
@@ -289,7 +305,13 @@ This enables style props to accept named contextual variables that are defined e
   <TypeSignature
     name="declareContextualVars"
     generics="Vars extends Partial<{ [K in keyof T & string]: readonly string[] }>"
-    params={[{ name: 'vars', type: 'Vars' }]}
+    params={[
+      { name: 'vars', type: 'Vars' },
+      {
+        name: 'registrations?',
+        type: 'Partial<Record<ContextualVarNames<Vars>, ContextualVarRegistration>>',
+      },
+    ]}
     returns="ThemeBuilder<T & { [K in keyof Vars]: T[K] & Record<Vars[K][number], `var(--${string})`> }, Emitted>"
   />
   <ParamTable
@@ -299,6 +321,12 @@ This enables style props to accept named contextual variables that are defined e
         type: 'Partial<{ [K in keyof T]: readonly string[] }>',
         default: 'required',
         desc: 'Map of scale name to an array of contextual variable names to add as typed phantom keys. The scale must already exist on the theme.',
+      },
+      {
+        name: 'registrations',
+        type: 'Partial<Record<ContextualVarNames<Vars>, ContextualVarRegistration>>',
+        default: 'undefined',
+        desc: 'Optional @property registration metadata keyed by declared var name — emits an @property block for that variable. Kept a separate parameter so the phantom typing of vars is unaffected.',
       },
     ]}
   />
@@ -503,21 +531,7 @@ export const tokens = createTheme()
 Finalizes the builder chain. Flattens all scale data, resolves token references, generates CSS variable declarations, and assembles the `ThemeManifest`. Returns a `BuiltTheme` — a plain object containing all scale data, with three non-enumerable methods attached.
 
 <APIBlock>
-  <TypeSignature
-    name="build"
-    params={[{ name: 'options', type: '{ prefix?: string }' }]}
-    returns="BuiltTheme<T, Emitted>"
-  />
-  <ParamTable
-    params={[
-      {
-        name: 'options.prefix',
-        type: 'string',
-        default: 'undefined',
-        desc: 'Optional CSS variable prefix. When set, all emitted variables are scoped: --color-primary becomes --{prefix}-color-primary. Applied consistently in variableCss and varRef() output.',
-      },
-    ]}
-  />
+  <TypeSignature name="build" params={[]} returns="BuiltTheme<T, Emitted>" />
 </APIBlock>
 
 ```ts
@@ -554,7 +568,7 @@ The value returned by `.build()`. All scale data is enumerable on the object. Th
       name: 'varRef(tokenPath)',
       type: '(tokenPath: string) => string | undefined',
       default: 'non-enumerable',
-      desc: 'Resolves a dot-path token to its var() reference for emitted scales, or its raw value for non-emitted scales. Returns undefined if the path does not exist. Applies the prefix option when set.',
+      desc: 'Resolves a dot-path token to its var() reference for emitted scales, or its raw value for non-emitted scales. Returns undefined if the path does not exist.',
     },
   ]}
 />

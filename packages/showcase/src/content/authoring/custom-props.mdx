@@ -8,13 +8,12 @@ import { Callout } from '../../components/docs/Callout';
 
 The pre-built prop groups (`space`, `color`, `typography`, etc.) cover most CSS properties. When you need a prop that maps to a CSS property outside those groups — or when you want a transform to convert a prop value before it reaches CSS — `.props()` is the mechanism.
 
-Custom props live in `@layer custom`, the highest-specificity component layer. They are defined once on the builder chain, fully extracted at build time, and typed automatically from their config.
+Custom props live in `@layer anm-custom`, the highest-specificity component layer. They are defined once on the builder chain, fully extracted at build time, and typed automatically from their config.
 
 <Callout variant="warn" title="Static values only">
   All prop values — including custom prop values — must be static string
   literals. Dynamic values, template literals, and function calls are skipped
-  per-property during extraction. See [Static Extraction & CSS
-  Output](/docs/advanced/extraction) for the full skip model.
+  per-property during extraction.
 </Callout>
 
 ---
@@ -125,7 +124,7 @@ ds.styles({
   })
   .asElement('div');
 
-// <Div accentColor="primary" />  →  --accent: var(--colors-primary); color: var(--colors-primary);
+// <Div accentColor="primary" />  →  --accent: var(--color-primary); color: var(--color-primary);
 ```
 
 #### Prop.transform
@@ -255,7 +254,7 @@ ds.styles({
 
 ## Built-in Transforms
 
-Animus ships six transform functions. Each is a `NamedTransform` — created via `createTransform` with a stable name so the extraction pipeline can serialize and reconstruct it by name.
+Animus ships five transform functions plus the `createTransform` factory that produces new ones. Four of the five — `size`, `borderShorthand`, `gridItem`, and `gridItemRatio` — are `NamedTransform`s built with `createTransform`, so the extraction pipeline can serialize and reconstruct them by name. `percentageOrAbsolute` is a plain numeric utility, not a `NamedTransform`.
 
 ### size
 
@@ -419,7 +418,7 @@ Object returns were live behavior in the legacy Emotion runtime, where the retur
 type NamedTransform = TransformFn & { transformName: string };
 ```
 
-`createTransform` returns a `NamedTransform`: a `TransformFn` with a `transformName` property attached. The extraction pipeline reads this property to serialize the transform by name in `ds.serialize()` output. If your transform function does not have a `transformName`, the extractor emits `__TRANSFORM__` as the resolved value — a visible signal that extraction failed for that prop.
+`createTransform` returns a `NamedTransform`: a `TransformFn` with a `transformName` property attached. The extraction pipeline reads this property to serialize the transform by name in `ds.toConfig()` output. If your transform function does not have a `transformName`, the extractor emits `__TRANSFORM__` as the resolved value — a visible signal that extraction failed for that prop.
 
 ```ts
 import { createTransform } from '@animus-ui/system';
@@ -609,4 +608,4 @@ ds.styles({
 
 ---
 
-Next: [Recipes & Extend](/docs/authoring/recipes) — extend existing components and compose builder chains for variant families.
+Next: [Examples](/docs/examples) — see the Custom Prop Transforms section for these transforms running end-to-end in the showcase.

@@ -1,5 +1,4 @@
 import { TypeSignature } from '../../components/docs/TypeSignature';
-import { MethodCard } from '../../components/docs/MethodCard';
 import { ParamTable } from '../../components/docs/ParamTable';
 import { CodeExample } from '../../components/docs/CodeExample';
 import { Callout } from '../../components/docs/Callout';
@@ -21,7 +20,7 @@ Create a single module — conventionally `src/ds.ts` — that builds and export
 animusExtract({ system: './src/ds.ts' });
 ```
 
-The `system` path is resolved relative to the project root. The plugin runs the file in a subprocess and calls `system.toConfig()` on the exported instance. Every export from `ds.ts` that the components reference must be resolvable at build time.
+The `system` path is resolved relative to the project root. The plugin loads the file through the Rust NAPI system loader — types stripped with OXC, evaluated in rquickjs — and calls `system.toConfig()` on the exported instance. Every export from `ds.ts` that the components reference must be resolvable at build time.
 
 ### createSystem
 
@@ -110,8 +109,8 @@ const fluid = createTransform('fluid', (value) => {
 const [min, max] = String(value).split('-').map(Number);
 const minRem = min / 16;
 const maxRem = max / 16;
-const slope = ((max - min) / 880) _ 100;
-const intercept = minRem - (slope / 100) _ (480 / 16);
+const slope = ((max - min) / 880) * 100;
+const intercept = minRem - (slope / 100) * (480 / 16);
 return \`clamp(\${minRem.toFixed(3)}rem, \${intercept.toFixed(3)}rem + \${slope.toFixed(2)}vw, \${maxRem.toFixed(3)}rem)\`;
 });
 
@@ -324,15 +323,16 @@ Merge rules:
 <TypeSignature
   name="build"
   params={[]}
-  returns="{ system: SystemInstance<PropReg, GroupReg>; createGlobalStyles: GlobalStylesFactory }"
+  returns="{ system: SystemInstance<PropReg, GroupReg>; createGlobalStyles: GlobalStylesFactory; createKeyframes: CreateKeyframesFactory }"
 />
 
-Finalizes the builder. Returns two values — destructure both:
+Finalizes the builder. Returns three values — destructure the ones you need:
 
 ```ts
-export const { system: ds, createGlobalStyles } = createSystem()
-  .addGroup('surface', { ...color })
-  .build();
+export const { system: ds, createGlobalStyles, createKeyframes } =
+  createSystem()
+    .addGroup('surface', { ...color })
+    .build();
 ```
 
 The `system` return is renamed via destructuring — `ds` is the conventional name. All component authoring calls (`ds.styles()`, `ds.variant()`, etc.) go through this instance.
@@ -348,6 +348,17 @@ export const globalStyles = createGlobalStyles({
 });
 ```
 
+`createKeyframes` is a factory for declaring `@keyframes` animations. It accepts a map of animation name to frame map and returns a `Keyframes` object whose entries are typed refs usable as `animationName` values — the extraction pipeline emits the corresponding `@keyframes` blocks.
+
+```ts
+export const animations = createKeyframes({
+  flow: {
+    '0%': { backgroundPosition: '0% 50%' },
+    '100%': { backgroundPosition: '100% 50%' },
+  },
+});
+```
+
 ### SystemInstance
 
 <TypeSignature
@@ -357,7 +368,7 @@ export const globalStyles = createGlobalStyles({
   returns="Animus<PropReg, GroupReg> & { toConfig(): SerializedConfig }"
 />
 
-`SystemInstance` is the built system: an `Animus` builder instance extended with `toConfig()`. The builder chain (`ds.styles()`, `.variant()`, `.states()`, etc.) is available on it. `toConfig()` is called by the Vite plugin subprocess — you do not call it in application code.
+`SystemInstance` is the built system: an `Animus` builder instance extended with `toConfig()`. The builder chain (`ds.styles()`, `.variant()`, `.states()`, etc.) is available on it. `toConfig()` is called by the Vite plugin's Rust system loader — you do not call it in application code.
 
 The generic parameters carry the full accumulated type state from the builder chain, which powers the prop type narrowing on every component defined with this system.
 
@@ -395,10 +406,11 @@ The generic parameters carry the full accumulated type state from the builder ch
 />
 
 <Callout variant="info" title="Do not import SerializedConfig at runtime">
-  `toConfig()` is invoked by the Vite plugin's subprocess, not by your
-  components. The extraction pipeline reads `propConfig` and `groupRegistry` to
-  understand which JSX props map to which CSS properties. Do not call
-  `toConfig()` in component code.
+  `toConfig()` is invoked by the Vite plugin's Rust system loader when it
+  evaluates your system module at build time, not by your components. The
+  extraction pipeline reads `propConfig` and `groupRegistry` to understand
+  which JSX props map to which CSS properties. Do not call `toConfig()` in
+  component code.
 </Callout>
 
 ---
@@ -464,7 +476,7 @@ export const theme = createTheme()
   .addScale({ name: 'radii', values: { sm: '4px', md: '8px', full: '9999px' } })
   .build();
 
-export type AppTheme = typeof tokens;
+export type AppTheme = typeof theme;
 
 declare module '@animus-ui/system' {
   interface Theme extends AppTheme {}

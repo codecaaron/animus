@@ -1,9 +1,7 @@
 ## Purpose
 
 Requirements for the `headless-composition` capability: asChild composes with ark-ui primitives; Selector aliases target ark-ui state attributes; data-state variant key works via class reactivity; and 2 more.
-
 ## Requirements
-
 ### Requirement: asChild composes with ark-ui primitives
 
 Animus ds elements using `asChild` SHALL merge their resolved className onto ark-ui child elements, preserving both Animus extracted styles and ark-ui behavior (ARIA attributes, event handlers, data-state management).
@@ -31,15 +29,6 @@ When a variant is defined with `prop: 'data-state'`, the runtime SHALL resolve t
 - **WHEN** a component has `.variant({ prop: 'data-state', variants: { open: {...}, closed: {...} } })` and receives `data-state="open"` as a prop
 - **THEN** the element receives both the class `Component--data-state-open` and the DOM attribute `data-state="open"`
 
-### Requirement: Convenience wrappers hide headless internals
-
-Components using ark-ui internally SHALL maintain their existing consumer-facing props API. ark-ui's concepts (parts, data-state values, internal context) MUST NOT leak through the wrapper.
-
-#### Scenario: TabGroup API unchanged after ark-ui migration
-
-- **WHEN** a consumer renders `<TabGroup tabs={['A','B']} activeTab="A" onChange={fn} />`
-- **THEN** the component accepts and works with the same props as the hand-rolled version
-
 ### Requirement: Extraction unaffected by headless composition
 
 The Rust extraction pipeline SHALL continue to produce correct CSS for ds elements that compose with headless primitives via asChild/asComponent. No extraction pipeline changes required.
@@ -48,3 +37,13 @@ The Rust extraction pipeline SHALL continue to produce correct CSS for ds elemen
 
 - **WHEN** extraction processes a file containing `<StyledTab asChild><Ark.Tabs.Trigger>...</Ark.Tabs.Trigger></StyledTab>`
 - **THEN** the extracted CSS for StyledTab is identical to what it would produce without asChild
+
+### Requirement: Convenience wrappers conceal headless internals
+
+Components using ark-ui internally SHALL maintain their existing consumer-facing props API. ark-ui's concepts (parts, data-state values, internal context) MUST NOT leak through the wrapper.
+
+#### Scenario: MethodCard API hides its Accordion internals
+
+- **WHEN** a consumer renders `<MethodCard name="build()" description="..." returnType="..." />`
+- **THEN** the component accepts only its own props (`name`, `description`, `returnType`, `available?`, `example?`) and none of ark-ui's Accordion parts, values, or context appear in the consumer-facing API
+

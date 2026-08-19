@@ -14,7 +14,6 @@ export { ColorPalette } from './docs/ColorPalette';
 export { CopyButton } from './docs/CopyButton';
 export { DocsBreadcrumb } from './docs/DocsBreadcrumb';
 export { Heading } from './docs/Heading';
-export { LivePreview } from './docs/LivePreview';
 export { DocsContentProvider } from './docs/MDXProvider';
 export { MethodCard } from './docs/MethodCard';
 export { MetricCard, MetricGrid } from './docs/MetricCard';
@@ -22,7 +21,6 @@ export { PageNav } from './docs/PageNav';
 export { PageToc } from './docs/PageToc';
 export { ParamTable } from './docs/ParamTable';
 export { Sidebar } from './docs/Sidebar';
-export { TabGroup } from './docs/TabGroup';
 export { TokenBadge } from './docs/TokenBadge';
 export { TypeSignature } from './docs/TypeSignature';
 // Layout

@@ -1,9 +1,7 @@
 ## Purpose
 
 Defines `packages/_assertions/` as the shared workspace package (`@animus-ui/assertions`) for assertion utilities imported by both `packages/*` post-build scripts and `e2e/*` fixture apps. Placement in `packages/` (with the `_` prefix convention denoting internal-not-published) preserves the one-way dependency rule established by `e2e-workspace-convention`: imports always flow top-down from `e2e/*` into `packages/*`, never the reverse. This capability documents the scaffold-only initial state; assertion utility code is out of scope here and lands in the `integration-test-infrastructure` change.
-
 ## Requirements
-
 ### Requirement: Shared Assertions Workspace Package
 
 A private workspace package SHALL exist at `packages/_assertions/` with the name `@animus-ui/assertions`. It SHALL be the shared home for assertion utilities importable by both post-build scripts (in `packages/*`) and consumer fixture apps (in `e2e/*`).
@@ -82,20 +80,21 @@ No actual assertion utility code SHALL be added until `integration-test-infrastr
 
 The package SHALL be importable as `@animus-ui/assertions` from:
 
-- Post-build scripts in `packages/*` (e.g., future TS rewrites of `scripts/assert-showcase.sh`)
-- Fixture apps in `e2e/*` (e.g., `e2e/next-app/scripts/` and future `e2e/vite-app/scripts/`)
+- Repository post-build scripts in `scripts/` (e.g. `scripts/assert-showcase-build.ts`, invoked by the showcase package's assertion diagnostic)
+- Fixture apps in `e2e/*` (e.g. `e2e/next-app/scripts/assert-build.ts`)
 - Integration tests in `packages/_integration/`
 
-This pattern keeps all imports flowing top-down (from consumer toward shared infrastructure) and does not cross the `packages/ ← e2e/` one-way boundary.
+This pattern keeps all imports flowing top-down (from consumer toward shared
+infrastructure) and does not cross the `packages/ ← e2e/` one-way boundary.
 
 #### Scenario: e2e script imports assertions
 
-- **WHEN** a script at `e2e/next-app/scripts/assert-next-build.ts` imports `@animus-ui/assertions`
+- **WHEN** a script at `e2e/next-app/scripts/assert-build.ts` imports `@animus-ui/assertions`
 - **THEN** the import resolves via the workspace to `packages/_assertions/dist/index.js`
 
 #### Scenario: packages post-build script imports assertions
 
-- **WHEN** a future TS script at `scripts/assert-showcase.ts` imports `@animus-ui/assertions`
+- **WHEN** the repository script `scripts/assert-showcase-build.ts` imports `@animus-ui/assertions`
 - **THEN** the import resolves via the workspace without crossing into `e2e/`
 
 ### Requirement: Build Pipeline Inclusion
@@ -107,3 +106,4 @@ This pattern keeps all imports flowing top-down (from consumer toward shared inf
 - **WHEN** a developer runs `bun run build:ts`
 - **THEN** `packages/_assertions/dist/index.js` and `packages/_assertions/dist/index.d.ts` are produced
 - **AND** importers in the workspace can resolve `@animus-ui/assertions`
+

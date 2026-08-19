@@ -1,9 +1,7 @@
 ## Purpose
 
 Requirements for the `mdx-authoring` capability: MDX compilation pipeline; MDX component provider; Content files are MDX format; and 4 more.
-
 ## Requirements
-
 ### Requirement: MDX compilation pipeline
 
 The showcase build SHALL compile `.mdx` files via `@mdx-js/rollup` as a Vite plugin. The plugin MUST be ordered before `react()` in the Vite plugin array. The `remarkGfm` plugin MUST be configured for table, strikethrough, and task list support.
@@ -98,14 +96,14 @@ The project MUST include a type declaration for `.mdx` file imports so that Type
 - **WHEN** a `.tsx` file imports from a `.mdx` file
 - **THEN** TypeScript resolves the default export as `ComponentType` without error
 
-### Requirement: Doc component imports in MDX
+### Requirement: Documentation component imports in MDX
 
-MDX content files SHALL support importing and using documentation-specific components (LivePreview, TokenBadge, TypeSignature, ParamTable, MethodCard, ChainStep, TabGroup) from the showcase component barrel or relative paths. These components MUST render as interactive instances alongside markdown prose.
-
-#### Scenario: LivePreview in MDX
-
-- **WHEN** an MDX file imports LivePreview and renders `<LivePreview preview={<Component />} code={<SyntaxBlock>...</SyntaxBlock>} />`
-- **THEN** a tabbed preview/code panel renders inline with the surrounding prose
+MDX content files SHALL support importing documentation components from the
+showcase component barrel (`src/components/index.ts`) or from a relative path
+under `src/components/docs/`, and imported components SHALL render as live,
+interactive instances alongside markdown prose. This requirement fixes the
+import mechanism, not a component list: the importable set is whatever
+`src/components/docs/` currently ships.
 
 #### Scenario: TokenBadge in MDX prose
 
@@ -114,10 +112,16 @@ MDX content files SHALL support importing and using documentation-specific compo
 
 #### Scenario: Reference components in MDX
 
-- **WHEN** an MDX file uses TypeSignature, ParamTable, or MethodCard
+- **WHEN** an MDX file imports TypeSignature, ParamTable, or MethodCard from `../../components/docs/…`
 - **THEN** each renders as an interactive API reference component with full styling and behavior
 
 #### Scenario: ChainStep visualization in MDX
 
-- **WHEN** an MDX file wraps ChainStep in a client component with state management
+- **WHEN** an MDX file imports ChainStep and renders it with a `steps` array of `{ label, layer, description, code }` entries
 - **THEN** the interactive chain visualization renders with clickable steps and active highlighting
+
+#### Scenario: Deleted documentation component
+
+- **WHEN** a documentation component is removed from `src/components/docs/` and no MDX file imports it
+- **THEN** the showcase build succeeds and this requirement remains satisfied by the components that are still imported
+

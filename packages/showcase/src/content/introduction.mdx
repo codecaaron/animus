@@ -36,14 +36,14 @@ The builder chain enforces cascade ordering through the type system. Each method
   steps={[
     {
       label: '.styles()',
-      layer: 'base',
+      layer: 'anm-base',
       description:
         'Foundation styles. Typography, layout, colors — the bedrock. Lowest specificity.',
       code: `ds.styles({\n  display: 'inline-flex',\n  fontFamily: 'body',\n  fontSize: 14,\n  color: 'text',\n})`,
     },
     {
       label: '.variant()',
-      layer: 'variants',
+      layer: 'anm-variants',
       repeatable: true,
       description:
         'Named variations. Size, intent, visual weight — a controlled vocabulary.',
@@ -51,7 +51,7 @@ The builder chain enforces cascade ordering through the type system. Each method
     },
     {
       label: '.compound()',
-      layer: 'compounds',
+      layer: 'anm-compounds',
       repeatable: true,
       description:
         'Cross-variant conditions. When size=lg AND intent=primary, apply these overrides.',
@@ -59,14 +59,14 @@ The builder chain enforces cascade ordering through the type system. Each method
     },
     {
       label: '.states()',
-      layer: 'states',
+      layer: 'anm-states',
       description:
-        'Boolean prop toggles. isLoading, isDisabled — semantic UI states as props.',
+        'Boolean prop toggles. The config keys become the props: loading, disabled.',
       code: `.states({\n  loading: { opacity: '0.6', pointerEvents: 'none' },\n  disabled: { opacity: '0.4', cursor: 'not-allowed' },\n})`,
     },
     {
       label: '.system()',
-      layer: 'system',
+      layer: 'anm-system',
       description:
         'Design token props. Enable spacing, color, typography groups as component props.',
       code: `.system({ space: true, color: true })`,
@@ -106,7 +106,7 @@ This constraint shapes everything. Dynamic values that other CSS-in-JS libraries
   }}
 />
 
-When a value isn't static, that **property** is skipped — not the entire component. The component still extracts every other static property. This per-property skip model means partial extraction is always better than all-or-nothing. See [Static Extraction & CSS Output](/docs/advanced/extraction) for the full skip model.
+When a value isn't static, that **property** is skipped — not the entire component. The component still extracts every other static property. This per-property skip model means partial extraction is always better than all-or-nothing.
 
 ## The Zero-Runtime Proof
 
@@ -120,7 +120,6 @@ Here's what a component looks like before and after extraction:
   input={`const Button = ds.styles({
   display: 'inline-flex',
   alignItems: 'center',
-  fontFamily: 'body',
   color: 'text',
 })
 .variant({
@@ -131,22 +130,21 @@ Here's what a component looks like before and after extraction:
   },
 })
 .asElement('button')`}
-  output={`/* @layer base */
+  output={`/* @layer anm-base */
 .animus-Button-a1b2 {
   display: inline-flex;
   align-items: center;
-  font-family: var(--font-body);
   color: var(--color-text);
 }
 
-/_ @layer variants _/
+/* @layer anm-variants */
 .animus-Button-a1b2--size-sm {
-padding-inline: 0.5rem;
-font-size: 0.8125rem;
+  padding-inline: 0.5rem;
+  font-size: 0.8125rem;
 }
 .animus-Button-a1b2--size-lg {
-padding-inline: 1.5rem;
-font-size: 1rem;
+  padding-inline: 1.5rem;
+  font-size: 1rem;
 }`}
 />
 
@@ -175,4 +173,84 @@ Animus is built for teams that author design systems as constrained component li
 
 If you need fully dynamic styles computed from arbitrary runtime values — per-pixel drag positions, user-selected colors from a picker, animation keyframes generated from physics — a runtime library is the right tool. Animus optimizes for the 95% of component styling that is enumerable and static.
 
-Next: [Getting Started](/docs/start) to build your first extracted component.
+## Quick Start
+
+Install the system package and the Vite plugin:
+
+```bash
+bun add @animus-ui/system
+bun add -D @animus-ui/vite-plugin
+```
+
+Define your design system in a dedicated module. The theme is built first; the `declare module` augmentation makes its token paths available to every builder call:
+
+```tsx
+// src/ds.ts
+import { createSystem, createTheme } from '@animus-ui/system';
+import { color, layout, space, typography } from '@animus-ui/system/groups';
+
+export const theme = createTheme()
+  .addColors({
+    gray: { 100: '#f5f5f5', 500: '#737373', 900: '#171717' },
+    blue: { 500: '#3b82f6', 700: '#1d4ed8' },
+  })
+  .addColorModes('dark', {
+    dark: { primary: 'blue.500', bg: 'gray.900', text: 'gray.100' },
+    light: { primary: 'blue.700', bg: 'gray.100', text: 'gray.900' },
+  })
+  .addScale({
+    name: 'space',
+    values: { 0: '0', 8: '0.5rem', 16: '1rem', 24: '1.5rem' },
+  })
+  .build();
+
+export type AppTheme = typeof theme;
+
+declare module '@animus-ui/system' {
+  interface Theme extends AppTheme {}
+}
+
+export const { system: ds, createGlobalStyles } = createSystem()
+  .addGroup('space', space)
+  .addGroup('layout', layout)
+  .addGroup('text', typography)
+  .addGroup('surface', color)
+  .build();
+```
+
+Point the plugin at that module and import the virtual stylesheet:
+
+```ts
+// vite.config.ts
+import { animusExtract } from '@animus-ui/vite-plugin';
+import react from '@vitejs/plugin-react';
+import { defineConfig } from 'vite';
+
+export default defineConfig({
+  plugins: [react(), animusExtract({ system: './src/ds.ts' })],
+});
+```
+
+```tsx
+// src/main.tsx
+import 'virtual:animus/styles.css';
+```
+
+Then author components with the chain:
+
+```tsx
+import { ds } from './ds';
+
+export const Button = ds
+  .styles({ display: 'inline-flex', color: 'text', px: 16 })
+  .variant({
+    prop: 'size',
+    variants: {
+      sm: { fontSize: 13 },
+      lg: { fontSize: 16 },
+    },
+  })
+  .asElement('button');
+```
+
+The build emits their CSS as a static asset; the [Examples](/docs/examples) page shows the full surface — variants, compound components, portals, `asChild` polymorphism, and container queries — running against this exact pipeline.

@@ -1,9 +1,7 @@
 ## Purpose
 
 Requirements for the `test-strategy` capability: Three-tier testing model; Snapshot policy — inline only; Snapshots for structure, assertions for semantics; and 3 more.
-
 ## Requirements
-
 ### Requirement: Three-tier testing model
 
 The test infrastructure SHALL follow a three-tier model: unit tests (bottom-up), type tests (compile-time), and integration/canary tests (top-down). Each tier SHALL use distinct assertion tools appropriate to its purpose.
@@ -87,12 +85,15 @@ The convergence testing philosophy SHALL require that unit and integration tiers
 - **THEN** both SHALL use the same `tokens.serialize()` output derived from the same `createTheme()` definition
 - **AND** both SHALL use the same `ds.serialize()` output derived from the same `createSystem()` definition
 
-### Requirement: Showcase serves as verified build proof
+### Requirement: Showcase owner claim is a verified build proof
 
-The showcase build SHALL function as a verified integration proof — not just a build that succeeds or fails, but a build whose output is automatically checked for extraction correctness.
+The showcase build SHALL function as a verified integration proof — not just a
+build that succeeds or fails, but a build whose output is automatically checked
+for extraction correctness by the showcase package-owned verification claim.
 
-#### Scenario: test:showcase includes output verification
+#### Scenario: Showcase owner claim includes output verification
 
-- **WHEN** `bun run test:showcase` completes
-- **THEN** it SHALL have run both the Vite build AND post-build assertion checks
-- **AND** a failure in output assertions SHALL cause the script to exit non-zero
+- **WHEN** `vp run @animus-ui/showcase#verify` completes
+- **THEN** it SHALL have run both the Vite build AND the post-build assertion checks
+- **AND** a failure in the output assertions SHALL cause the claim to exit non-zero
+
