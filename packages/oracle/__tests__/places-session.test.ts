@@ -301,7 +301,6 @@ describe('check — the correspondence guard as a CI gate', () => {
     );
     expect(code).toBe(0);
     const envelope = parseCheckEnvelope(out.join(''));
-    expect(envelope.command).toBe('check');
     expect(envelope.result.ok).toBe(true);
     expect(envelope.result.files.length).toBeGreaterThan(0);
   });

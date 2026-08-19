@@ -135,18 +135,6 @@ describe('transform resolution', () => {
   });
 });
 
-// ─── System Props ────────────────────────────────────────────
-
-describe('system props extraction', () => {
-  test('produces system_prop_map in manifest', () => {
-    const entry = readFixtureFile(COMPONENTS, 'system-props.tsx');
-    const { manifest } = runPipeline([entry]);
-
-    expect(manifest.system_prop_map).toBeDefined();
-    expect(manifest.system_prop_map).toEqual(expect.any(Object));
-  });
-});
-
 // ─── Responsive Extraction ───────────────────────────────────
 
 describe('responsive extraction', () => {

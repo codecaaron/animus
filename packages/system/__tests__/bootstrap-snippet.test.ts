@@ -160,15 +160,6 @@ describe('bootstrap snippet — tri-state restoration', () => {
 });
 
 describe('bootstrap snippet — record version', () => {
-  it('removes the attribute for a future record version', () => {
-    const harness = runBootstrap(
-      { [RECORD_KEY]: '{"v":2,"mode":"midnight","theme":"default"}' },
-      { [ATTRIBUTE]: 'paper' }
-    );
-
-    expect(harness.mutations).toEqual([`remove:${ATTRIBUTE}`]);
-  });
-
   it('removes the attribute for a version-less record', () => {
     const harness = runBootstrap(
       { [RECORD_KEY]: '{"mode":"midnight"}' },
@@ -180,13 +171,19 @@ describe('bootstrap snippet — record version', () => {
 
   it('a version mismatch is terminal — legacy is not consulted', () => {
     // Pins the interpretation: an unreadable-version record is still a
-    // RECORD, so the pre-record key does not get a second vote.
-    const harness = runBootstrap({
-      [RECORD_KEY]: '{"v":2,"mode":"midnight"}',
-      [LEGACY_KEY]: 'paper',
-    });
+    // RECORD, so the pre-record key does not get a second vote. The
+    // server-rendered attribute makes the removal observable in the markup —
+    // a future version leaves nothing behind.
+    const harness = runBootstrap(
+      {
+        [RECORD_KEY]: '{"v":2,"mode":"midnight"}',
+        [LEGACY_KEY]: 'paper',
+      },
+      { [ATTRIBUTE]: 'paper' }
+    );
 
     expect(harness.mutations).toEqual([`remove:${ATTRIBUTE}`]);
+    expect(harness.attributes[ATTRIBUTE]).toBeUndefined();
     expect(harness.localStorage.getItem).not.toHaveBeenCalledWith(LEGACY_KEY);
   });
 });
@@ -282,9 +279,7 @@ describe('bootstrap snippet — OS preference is never materialized', () => {
       [RECORD_KEY]: '{"v":1,"mode":"system","theme":"default"}',
     });
 
-    for (const mutation of harness.mutations) {
-      expect(mutation).toBe(`remove:${ATTRIBUTE}`);
-    }
+    expect(harness.mutations).toEqual([`remove:${ATTRIBUTE}`]);
   });
 
   it('touches only `document` and `localStorage` globals', () => {

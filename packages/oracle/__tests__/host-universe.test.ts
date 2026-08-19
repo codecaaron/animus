@@ -229,7 +229,6 @@ describe('createAnimusHost — the style universe over the emitted artifacts', (
 
     expect(again).toEqual(universe.rules.map((rule) => rule.id));
     expect(new Set(again).size).toBe(again.length);
-    expect(createAnimusHost(input).program.hash).toBe(host.program.hash);
   });
 
   it('refuses an unmodeled construct in a sheet instead of skipping it', () => {

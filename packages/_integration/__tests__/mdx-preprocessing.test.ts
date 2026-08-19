@@ -1,8 +1,4 @@
-import {
-  DEFAULT_EXTENSIONS,
-  preprocessMdx,
-  type PreprocessMdxResult,
-} from '@animus-ui/extract/pipeline';
+import { DEFAULT_EXTENSIONS, preprocessMdx } from '@animus-ui/extract/pipeline';
 import { describe, expect, test } from 'vitest';
 
 /**
@@ -90,11 +86,6 @@ describe('preprocessMdx — compile failure (kind: "error")', () => {
 });
 
 describe('preprocessMdx — result shape contract (PreprocessMdxResult)', () => {
-  test('kind is always one of the documented union members', async () => {
-    const result: PreprocessMdxResult = await preprocessMdx('# ok\n', 'x.mdx');
-    expect(['ok', 'missing-dep', 'error']).toContain(result.kind);
-  });
-
   /**
    * Honestly-unreachable branch — DOCUMENTED GAP.
    *

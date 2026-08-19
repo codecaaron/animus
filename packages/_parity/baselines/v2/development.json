@@ -1,8 +1,8 @@
 {
-  "corpusSha256": "d0c4f19d386944d3d3a6776c64e8ae08aee8ac11a8362ff02c47660952325ce4",
+  "corpusSha256": "0bdc9be48cb7a7db59cc1fcf5dbca46232d3d5f472b6de47778d99fe3eb35503",
   "engine": "v2",
   "mode": "development",
-  "refreshIntent": "svelte-parity-corpus-enumeration-20260810",
+  "refreshIntent": "test-value-audit-extension-fixture-20260818",
   "surfaceSchemaSha256": "43eb1265e97aab8497c11ca05e8a4159a6d4f4b69a6837a704e1d96fa75eb108",
   "units": {
     "extract-all": {
@@ -546,6 +546,27 @@
         "dynamicPropsJson": "{}",
         "reverseProvenanceEdges": [],
         "sheetsJson": "{\"base\":\"@layer anm-base {\\n  .animus-Badge-297a4ef3 {\\n    display: inline-flex;\\n    align-items: center;\\n    border-radius: 4px;\\n  }\\n}\\n\",\"compounds\":\"@layer anm-compounds {\\n  .animus-Badge-297a4ef3--compound-0 {\\n    font-weight: 700;\\n  }\\n  .animus-Badge-297a4ef3--compound-1 {\\n    border-radius: 4px;\\n  }\\n}\\n\",\"custom\":\"\",\"declaration\":\"@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\\n\",\"global\":\"@layer anm-global {\\nbody {\\n  font-family: {fonts.base};\\n  margin: 0;\\n}\\n@keyframes anm-ember {\\n  0% {\\n    opacity: 0;\\n  }\\n  100% {\\n    opacity: 1;\\n  }\\n}\\n}\\n\",\"states\":\"\",\"system\":\"\",\"variants\":\"@layer anm-variants {\\n  @layer standalone, composed;\\n  @layer standalone {\\n\\n  .animus-Badge-297a4ef3--size-small {\\n    padding-left: 0.25rem;\\n    padding-right: 0.25rem;\\n    padding-top: 0;\\n    padding-bottom: 0;\\n    font-size: 0.875rem;\\n  }\\n  .animus-Badge-297a4ef3--size-large {\\n    padding-left: 0.5rem;\\n    padding-right: 0.5rem;\\n    padding-top: 0.25rem;\\n    padding-bottom: 0.25rem;\\n    font-size: 1rem;\\n  }\\n  .animus-Badge-297a4ef3--intent-info {\\n    background-color: var(--color-primary);\\n    --current-bg: var(--color-primary);\\n    color: var(--color-background);\\n  }\\n  .animus-Badge-297a4ef3--intent-danger {\\n    background-color: var(--color-secondary);\\n    --current-bg: var(--color-secondary);\\n    color: var(--color-background);\\n  }\\n  }\\n  @layer composed {\\n  }\\n}\\n\"}",
+        "systemPropMapJson": "{}"
+      },
+      "parseCount": 1
+    },
+    "integration/extended.tsx": {
+      "code": {
+        "extended.tsx": "import { Button } from './button';\n\n// Cross-file extension chain: the one fixture that populates\n// `extends_from` / `reverse_provenance`, so the provenance-reciprocity\n// tests in manifest-shape.test.ts iterate a non-empty collection.\nexport const OutlineButton = Button.extend()\n  .styles({\n    border: '1px solid',\n    borderColor: 'primary',\n    bg: 'transparent',\n  })\n  .asElement('button');\n\nexport const App = () => <OutlineButton size=\"small\" intent=\"primary\" />;\n"
+      },
+      "css": "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer composed {\n  }\n}\n\n",
+      "diagnostics": [
+        "extended.tsx|bail|OutlineButton|chain dropped: could not resolve parent component 'Button'"
+      ],
+      "hasComponents": {
+        "extended.tsx": false
+      },
+      "observables": {
+        "componentFragmentKeys": [],
+        "componentFragmentsJson": "{}",
+        "dynamicPropsJson": "{}",
+        "reverseProvenanceEdges": [],
+        "sheetsJson": "{\"base\":\"\",\"compounds\":\"\",\"custom\":\"\",\"declaration\":\"@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\\n\",\"global\":\"@layer anm-global {\\nbody {\\n  font-family: {fonts.base};\\n  margin: 0;\\n}\\n@keyframes anm-ember {\\n  0% {\\n    opacity: 0;\\n  }\\n  100% {\\n    opacity: 1;\\n  }\\n}\\n}\\n\",\"states\":\"\",\"system\":\"\",\"variants\":\"@layer anm-variants {\\n  @layer standalone, composed;\\n  @layer composed {\\n  }\\n}\\n\"}",
         "systemPropMapJson": "{}"
       },
       "parseCount": 1

@@ -572,12 +572,9 @@ describe('SystemBuilder extend()', () => {
     expect(first.groupRegistry.space).toEqual(['m', 'rogue']);
 
     const { system: second } = builder.build();
-    const after = second.toConfig();
-    expect(JSON.parse(after.propConfig)).not.toHaveProperty('rogue');
-    expect(JSON.parse(after.groupRegistry)).not.toHaveProperty('rogueGroup');
-    expect(JSON.parse(after.propConfig).m.scale).toBe('space');
-    expect(JSON.parse(after.groupRegistry).space).toEqual(['m']);
-    expect(after).toEqual(before);
+    // `before` was captured pre-mutation, so exact equality subsumes every
+    // per-field absence check (no rogue entries, scale/space unchanged).
+    expect(second.toConfig()).toEqual(before);
   });
 
   it('ignores post-build mutation of nested properties arrays and object scales', () => {

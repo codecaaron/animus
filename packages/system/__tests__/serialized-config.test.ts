@@ -345,59 +345,29 @@ describe('serializeInstance contract', () => {
       'transformSources',
       'transforms',
     ]);
-
-    // Carrier types: four are JSON *strings*, transforms is a live JS object.
-    expect(config.propConfig).toEqual(expect.any(String));
-    expect(config.groupRegistry).toEqual(expect.any(String));
-    expect(config.selectorAliases).toEqual(expect.any(String));
-    expect(config.conditionAliases).toEqual(expect.any(String));
-    expect(config.transforms).toEqual(expect.any(Object));
   });
 
-  it('pins the field set and value types of every propConfig entry', () => {
+  it('pins the exact serialized form of every propConfig entry', () => {
     const propConfig = parseFeaturePropConfig(buildFeatureSystem().propConfig);
 
-    // ASSERTION 2: exact per-entry field sets (sorted) + value types.
-    expect(Object.keys(propConfig).sort()).toEqual(['m', 'ratio', 'size']);
-
-    // `m` — string scale + named transform + negative flag.
-    expect(Object.keys(propConfig.m).sort()).toEqual([
-      'negative',
-      'property',
-      'scale',
-      'transform',
-    ]);
-    expect(propConfig.m.property).toEqual(expect.any(String));
-    expect(propConfig.m.scale).toEqual(expect.any(String));
-    expect(propConfig.m.negative).toEqual(expect.any(Boolean));
-    expect(propConfig.m.negative).toBe(true);
-    expect(propConfig.m.transform).toEqual(expect.any(String));
-    // transform serializes to the transform's NAME, not the function body.
-    expect(propConfig.m.transform).toBe('px');
-
-    // `size` — array `properties`, inline object scale, currentVar.
-    expect(Object.keys(propConfig.size).sort()).toEqual([
-      'currentVar',
-      'properties',
-      'property',
-      'scale',
-    ]);
-    expect(propConfig.size.property).toEqual(expect.any(String));
-    expect(Array.isArray(propConfig.size.properties)).toBe(true);
-    expect(propConfig.size.properties).toEqual(['width', 'height']);
-    expect(propConfig.size.scale).toEqual(expect.any(Object));
-    expect(propConfig.size.scale).toEqual({ sm: '4px', lg: '8px' });
-    expect(propConfig.size.currentVar).toEqual(expect.any(String));
-
-    // `ratio` — minimal prop: only `property`.
-    expect(Object.keys(propConfig.ratio)).toEqual(['property']);
-    expect(propConfig.ratio.property).toEqual(expect.any(String));
-
-    // Negative guard: `strict` and `variable` must NEVER be serialized.
-    for (const entry of Object.values(propConfig)) {
-      expect(entry).not.toHaveProperty('strict');
-      expect(entry).not.toHaveProperty('variable');
-    }
+    // Exact whole-value equality (no-leakage): `strict` and `variable` must
+    // NEVER be serialized, so extra keys have to fail, not just missing ones.
+    // `transform` serializes to the transform's NAME, not the function body.
+    expect(propConfig).toEqual({
+      m: {
+        negative: true,
+        property: 'margin',
+        scale: 'space',
+        transform: 'px',
+      },
+      size: {
+        currentVar: '--size',
+        properties: ['width', 'height'],
+        property: 'width',
+        scale: { sm: '4px', lg: '8px' },
+      },
+      ratio: { property: 'aspectRatio' },
+    });
   });
 
   it('maps each group name to its exact ordered prop-name array', () => {

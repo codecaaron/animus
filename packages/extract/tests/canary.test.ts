@@ -22,16 +22,23 @@ describe('v2 system loader NAPI boundary', () => {
     const config = v2.loadSystemModule(systemPath, root);
 
     // Required string fields (NAPI snake_case → camelCase auto-conversion).
-    for (const [field, value] of Object.entries({
+    // Explicit picks: NAPI class instances expose fields as getters, not own
+    // enumerable properties, so toMatchObject(config) cannot see them.
+    expect({
       propConfig: config.propConfig,
       groupRegistry: config.groupRegistry,
       scalesJson: config.scalesJson,
       variableMapJson: config.variableMapJson,
       variableCss: config.variableCss,
       contextualVarsJson: config.contextualVarsJson,
-    })) {
-      expect(value, field).toEqual(expect.any(String));
-    }
+    }).toEqual({
+      propConfig: expect.any(String),
+      groupRegistry: expect.any(String),
+      scalesJson: expect.any(String),
+      variableMapJson: expect.any(String),
+      variableCss: expect.any(String),
+      contextualVarsJson: expect.any(String),
+    });
 
     // The JSON-bearing fields must parse.
     expect(() => JSON.parse(config.propConfig)).not.toThrow();
@@ -118,13 +125,6 @@ describe('assembleStylesheet: split mode', () => {
       '@layer anm-global, anm-base;\n@layer anm-base { .btn { padding: 8px; } }',
   };
 
-  test('split: true returns object with declaration, variables, body', () => {
-    const result = assemble({ ...opts, split: true });
-    expect(result).toHaveProperty('declaration');
-    expect(result).toHaveProperty('variables');
-    expect(result).toHaveProperty('body');
-  });
-
   test('declaration contains @layer statement, not in body', () => {
     const { declaration, body } = assemble({ ...opts, split: true });
     expect(declaration).toContain('@layer anm-global, anm-base');
@@ -155,5 +155,73 @@ describe('assembleStylesheet: split mode', () => {
       .filter(Boolean)
       .join('\n');
     expect(joined).toEqual(stringResult);
+  });
+});
+
+// assembleStylesheet: @property registration split contract (rehomed from
+// packages/vite-plugin/tests/property-registration-split.test.ts — the suite
+// exercises the shared pipeline export, not any Vite seam, so the extract
+// owner is its home). typed-property-registration: "@property rules SHALL
+// appear in the variables part of the assembled stylesheet, before any
+// @layer block."
+describe('assembleStylesheet: @property registration split', () => {
+  const { assembleStylesheet: assemble } = require('../dist/index.mjs');
+
+  // Exactly the shape createTheme's serialize().variableCss produces for a
+  // registered contextual var (see packages/system/__tests__/theme.test.ts).
+  const VARIABLE_CSS = [
+    '@property --current-bg { syntax: "<color>"; inherits: true; initial-value: transparent; }',
+    '',
+    ':root {\n  --color-primary: #abc;\n}',
+  ].join('\n');
+
+  const COMPONENT_CSS = '@layer anm-base { .animus-card { padding: 8px; } }';
+
+  test('places @property in the variables part, absent from body/declaration', () => {
+    const { declaration, variables, body } = assemble({
+      variableCss: VARIABLE_CSS,
+      componentCss: COMPONENT_CSS,
+      split: true,
+    });
+
+    expect(variables).toContain('@property --current-bg');
+    expect(body).not.toContain('@property');
+    expect(declaration).not.toContain('@property');
+    // declaration remains only the @layer ordering statement.
+    expect(declaration).toMatch(/@layer\s+[\w-]+(\s*,\s*[\w-]+)*\s*;/);
+  });
+
+  test('concatenation invariant: rejoined split equals the non-split output', () => {
+    const split = assemble({
+      variableCss: VARIABLE_CSS,
+      componentCss: COMPONENT_CSS,
+      split: true,
+    });
+    const nonSplit = assemble({
+      variableCss: VARIABLE_CSS,
+      componentCss: COMPONENT_CSS,
+    });
+
+    const rejoined = [split.declaration, split.variables, split.body]
+      .filter(Boolean)
+      .join('\n');
+    expect(rejoined).toBe(nonSplit);
+  });
+
+  test('@property appears before the @layer declaration in assembled output', () => {
+    const nonSplit = assemble({
+      variableCss: VARIABLE_CSS,
+      componentCss: COMPONENT_CSS,
+    });
+
+    const propIdx = nonSplit.indexOf('@property --current-bg');
+    const layerBaseIdx = nonSplit.indexOf('@layer anm-base {');
+    const declIdx = nonSplit.search(/@layer\s+[\w-]+(\s*,\s*[\w-]+)*\s*;/);
+
+    expect(propIdx).toBeGreaterThanOrEqual(0);
+    // @property sits in the variables part, after the ordering declaration
+    // line but before any component @layer block.
+    expect(propIdx).toBeGreaterThan(declIdx);
+    expect(layerBaseIdx).toBeGreaterThan(propIdx);
   });
 });

@@ -219,8 +219,13 @@ function resolveRelativeModule(
     base, // explicit extension in specifier
     `${base}.ts`,
     `${base}.tsx`,
+    // Declaration files are live targets too: an unresolvable target is
+    // treated as deleted by the caller, so omitting .d.ts strips live
+    // re-exports as `target-deleted`.
+    `${base}.d.ts`,
     `${base}/index.ts`,
     `${base}/index.tsx`,
+    `${base}/index.d.ts`,
   ];
   for (const c of candidates) {
     try {

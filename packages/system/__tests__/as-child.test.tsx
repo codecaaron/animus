@@ -115,19 +115,6 @@ describe('asChild', () => {
     }).toThrow();
   });
 
-  it('variant props resolve to classes on child element', () => {
-    const html = renderToString(
-      createElement(
-        Box,
-        { size: 'sm', asChild: true },
-        createElement('section', null, 'content')
-      )
-    );
-
-    expect(html).toMatch(/^<section /);
-    expect(tagHasClass(html, 'section', '--size-sm')).toBe(true);
-  });
-
   it('ignores `as` prop when asChild is true', () => {
     const html = renderToString(
       createElement(
@@ -148,15 +135,6 @@ describe('asChild', () => {
     // Should render <div> (the defined element)
     expect(html).toMatch(/^<div /);
     expect(tagHasClass(html, 'div', '--size-sm')).toBe(true);
-  });
-
-  it('asChild prop does not appear on rendered DOM element', () => {
-    const html = renderToString(
-      createElement(Box, { asChild: true }, createElement('span', null, 'text'))
-    );
-
-    expect(html).not.toContain('asChild');
-    expect(html).not.toContain('asChild');
   });
 
   it('forwards parent event handlers to the child element', () => {

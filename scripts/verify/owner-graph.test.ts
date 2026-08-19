@@ -445,7 +445,10 @@ describe('root verification graph', () => {
     expect(references).toEqual([]);
   });
 
-  it('keeps the root graph materially below the calibrated 57 tasks', () => {
+  it('keeps the root graph at or below the 30-task anti-reproliferation budget (G1)', () => {
+    // Budget provenance: enforce-workspace-topology design G1 — the ceiling
+    // that redirected topology work into the existing lint task instead of
+    // growing the graph.
     expect(Object.keys(rootTasks()).length).toBeLessThanOrEqual(30);
   });
 

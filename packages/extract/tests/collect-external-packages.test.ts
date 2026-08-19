@@ -98,28 +98,6 @@ describe('collectExternalPackageSources', () => {
     expect(result.sourceEntries.size).toBe(1);
   });
 
-  test('redirects a package export subpath to its matching source module', async () => {
-    const root = makeRoot();
-    const pkg = makePackage(join(root, 'packages', 'ds'), {
-      'src/index.ts': 'export const root = 1;',
-      'src/definition.ts': 'export const system = 1;',
-      'dist/definition.mjs': 'export const system = 1;',
-    });
-
-    const result = await collect(root, {
-      '@x/ds/definition': join(pkg, 'dist', 'definition.mjs'),
-    });
-
-    expect(result.packageMap).toEqual({
-      '@x/ds/definition': 'packages/ds/src/definition.ts',
-      // Derived root alias — see the dedicated subpath/root-alias tests.
-      '@x/ds': 'packages/ds/src/index.ts',
-    });
-    expect(result.sourceEntries.get('@x/ds/definition')).toBe(
-      join(pkg, 'src', 'definition.ts')
-    );
-  });
-
   test('a subpath specifier also registers its package root for app-side imports', async () => {
     const root = makeRoot();
     const pkg = makePackage(join(root, 'packages', 'ds'), {
@@ -142,7 +120,14 @@ describe('collectExternalPackageSources', () => {
     expect(result.sourceEntries.get('@x/ds')).toBe(
       join(pkg, 'src', 'index.ts')
     );
-    // The alias is derived, not declared: exactly one outcome record.
+    // The declared subpath key redirects to its own source module, never to
+    // the package root's src/index.ts.
+    expect(result.sourceEntries.get('@x/ds/definition')).toBe(
+      join(pkg, 'src', 'definition.ts')
+    );
+    // The alias is derived, not declared: exactly one outcome record — and it
+    // carries the discovered file count (includes-driven-discovery
+    // §Resolved specifier records its file count).
     expect(result.outcomes).toEqual([
       { specifier: '@x/ds/definition', outcome: 'resolved', fileCount: 2 },
     ]);
@@ -363,22 +348,6 @@ describe('collectExternalPackageSources', () => {
 
     expect(result.entries.map((e) => e.path)).toEqual([
       'packages/ds/src/index.ts',
-    ]);
-  });
-
-  test('records a resolved outcome carrying the discovered file count', async () => {
-    const root = makeRoot();
-    const pkg = makePackage(join(root, 'packages', 'ds'), {
-      'src/index.ts': 'export * from "./Button";',
-      'src/Button.tsx': 'export const Button = 1;',
-    });
-
-    const result = await collect(root, {
-      '@x/ds': join(pkg, 'dist', 'index.mjs'),
-    });
-
-    expect(result.outcomes).toEqual([
-      { specifier: '@x/ds', outcome: 'resolved', fileCount: 2 },
     ]);
   });
 

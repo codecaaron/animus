@@ -87,9 +87,11 @@ describe('compose()', () => {
       { Root, Control, Label },
       { shared: { size: true } }
     );
-    expect(Family.Root.displayName).toContain('.Root');
-    expect(Family.Control.displayName).toContain('.Control');
-    expect(Family.Label.displayName).toContain('.Label');
+    // No `name` option — the family name falls back to the literal 'Composed'
+    // (nothing is derived from the Root component), so pin the exact strings.
+    expect(Family.Root.displayName).toBe('Composed.Root');
+    expect(Family.Control.displayName).toBe('Composed.Control');
+    expect(Family.Label.displayName).toBe('Composed.Label');
   });
 
   it('throws without a Root slot', () => {
@@ -268,13 +270,6 @@ describe('compose()', () => {
     expect(html).toContain('c');
   });
 
-  it('displayName fallback when Root has no displayName', () => {
-    const Family = compose({ Root, Control }, { shared: { size: true } });
-    // Builder output initially has empty displayName — falls back to 'Composed'
-    expect(Family.Root.displayName).toContain('.Root');
-    expect(Family.Control.displayName).toContain('.Control');
-  });
-
   it('accepts an .asComponent() output as the Root slot', () => {
     const Family = compose(
       { Root: WrappedRoot, Control },
@@ -287,18 +282,6 @@ describe('compose()', () => {
 
     // Wrapped Root renders its wrapped element with the variant class
     expect(tagHasClass(html, 'section', '--size-sm')).toBe(true);
-    expect(tagLacksClass(html, 'input', '--size-sm')).toBe(true);
-  });
-
-  it('compose has no context option — CSS-only propagation', () => {
-    const Family = compose({ Root, Control }, { shared: { size: true } });
-
-    const html = renderToString(
-      createElement(Family.Root, { size: 'sm' }, createElement(Family.Control))
-    );
-
-    // Root has class, child does NOT — CSS-only propagation
-    expect(tagHasClass(html, 'div', '--size-sm')).toBe(true);
     expect(tagLacksClass(html, 'input', '--size-sm')).toBe(true);
   });
 });

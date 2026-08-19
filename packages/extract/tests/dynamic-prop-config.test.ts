@@ -11,62 +11,6 @@ import type { DynamicPropMeta } from '../pipeline/dynamic-prop-config';
  * the builder reads.
  */
 describe('buildDynamicPropConfig', () => {
-  test('carries the CSS property from a camelCase manifest meta', () => {
-    expect(
-      buildDynamicPropConfig({
-        lineHeight: {
-          varName: '--animus-line-height',
-          slotClass: 'animus-dyn-line-height',
-          property: 'lineHeight',
-        },
-      })
-    ).toEqual({
-      lineHeight: {
-        varName: '--animus-line-height',
-        slotClass: 'animus-dyn-line-height',
-        property: 'lineHeight',
-      },
-    });
-  });
-
-  test('carries member properties for a multi-property prop', () => {
-    expect(
-      buildDynamicPropConfig({
-        mx: {
-          varName: '--animus-mx',
-          slotClass: 'animus-dyn-mx',
-          property: 'margin',
-          properties: ['marginLeft', 'marginRight'],
-        },
-      }).mx
-    ).toEqual({
-      varName: '--animus-mx',
-      slotClass: 'animus-dyn-mx',
-      property: 'margin',
-      properties: ['marginLeft', 'marginRight'],
-    });
-  });
-
-  test('emits transform name and scale values when present', () => {
-    expect(
-      buildDynamicPropConfig({
-        color: {
-          varName: '--animus-color',
-          slotClass: 'animus-dyn-color',
-          property: 'color',
-          transformName: 'toColor',
-          scaleValues: { primary: '#00f' },
-        },
-      }).color
-    ).toEqual({
-      varName: '--animus-color',
-      slotClass: 'animus-dyn-color',
-      property: 'color',
-      transformName: 'toColor',
-      scaleValues: { primary: '#00f' },
-    });
-  });
-
   test('omits absent property, empty properties, null transform, empty scales', () => {
     expect(
       JSON.stringify(

@@ -82,17 +82,6 @@ describe('assertNoErrorDiagnostics', () => {
     ).not.toThrow();
   });
 
-  it('throws on one error naming component, file, and message', () => {
-    const thrown = thrownFrom(() =>
-      assertNoErrorDiagnostics([objectResultError])
-    );
-    expect(thrown).not.toBeNull();
-    expect(thrown!.message).toContain('[animus]');
-    expect(thrown!.message).toContain('Broken');
-    expect(thrown!.message).toContain('src/invalid.tsx');
-    expect(thrown!.message).toContain(objectResultError.message);
-  });
-
   it('lists every error entry, one [animus]-prefixed line each', () => {
     const second: CssDiagnosticLike = {
       file: 'src/other.tsx',

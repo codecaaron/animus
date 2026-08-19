@@ -3,13 +3,11 @@ import { describe, expect, it } from 'vitest';
 import { createClassResolver } from '../src/runtime/createClassResolver';
 
 describe('createClassResolver', () => {
-  it('returns base class on empty call', () => {
+  it('returns base class for both call forms on an empty config', () => {
     const resolver = createClassResolver('animus-card-abc', {});
+    // Omitted props and `{}` must agree — the `props || {}` guard is the only
+    // difference between the two call forms.
     expect(resolver()).toBe('animus-card-abc');
-  });
-
-  it('returns base class when called with empty props', () => {
-    const resolver = createClassResolver('animus-card-abc', {});
     expect(resolver({})).toBe('animus-card-abc');
   });
 
@@ -202,16 +200,5 @@ describe('createClassResolver', () => {
     expect(dynamicResolver.attrs({ p: { _: null, md: undefined } })).toEqual({
       class: 'animus-box-abc',
     });
-  });
-
-  it('preserves the callable string API alongside attrs', () => {
-    const resolver = createClassResolver('animus-card-abc', {
-      states: ['selected'],
-    });
-
-    expect(resolver({ selected: true })).toBe(
-      'animus-card-abc animus-card-abc--selected'
-    );
-    expect(resolver.attrs).toBeTypeOf('function');
   });
 });

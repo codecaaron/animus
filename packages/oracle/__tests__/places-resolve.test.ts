@@ -1,4 +1,3 @@
-import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
@@ -135,17 +134,5 @@ describe('unresolved invocations surface on the analysis', () => {
 
   it('reports nothing for a file outside the snapshot', () => {
     expect(analysis.unresolved('src/App.tsx')).toEqual([]);
-  });
-
-  it('keeps unresolved spans addressable in the real source', () => {
-    // Every unresolved entry, when one exists, must carry a span that
-    // `at(file, offset)` semantics could point into — pin the contract on
-    // the shape even while the fixture holds no ambiguity.
-    const source = readFileSync(join(SOURCE_ROOT, 'src/Group.tsx'), 'utf8');
-    expect(source.length).toBeGreaterThan(0);
-    for (const entry of analysis.unresolved('src/Group.tsx')) {
-      expect(entry.span[0]).toBeGreaterThanOrEqual(0);
-      expect(entry.span[1]).toBeLessThanOrEqual(source.length);
-    }
   });
 });

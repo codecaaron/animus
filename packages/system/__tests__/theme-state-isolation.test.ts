@@ -27,9 +27,17 @@ describe('ThemeBuilder state isolation', () => {
     const builtB = branchB.build();
     const builtBase = base.build();
 
-    expect(Object.keys(builtA.colors).sort()).toEqual(['brand', 'onlyA']);
-    expect(Object.keys(builtB.colors).sort()).toEqual(['brand', 'onlyB']);
-    expect(Object.keys(builtBase.colors)).toEqual(['brand']);
+    // Exact objects: an isolation failure is a leakage failure, so the whole
+    // value is the claim — extra keys must fail, not just missing ones.
+    expect(builtA.colors).toEqual({
+      brand: { primary: '#111111' },
+      onlyA: { x: '#222222' },
+    });
+    expect(builtB.colors).toEqual({
+      brand: { primary: '#111111' },
+      onlyB: { x: '#333333' },
+    });
+    expect(builtBase.colors).toEqual({ brand: { primary: '#111111' } });
   });
 
   it('build() output is a snapshot — later builder calls never mutate it', () => {

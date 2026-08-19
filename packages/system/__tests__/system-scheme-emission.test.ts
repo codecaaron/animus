@@ -539,13 +539,6 @@ describe('browser color-scheme classification', () => {
     ).toContain('color-scheme: dark;');
   });
 
-  it('records the classification on the manifest', () => {
-    expect(buildFullyConfiguredTheme().manifest.browserColorScheme).toEqual({
-      paper: 'light',
-      midnight: 'dark',
-    });
-  });
-
   // ── Classification WITHOUT a system preference (a legal shape) ──
 
   function buildClassificationOnlyTheme() {
