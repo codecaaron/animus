@@ -77,6 +77,39 @@ describe('mergeExternalKeyframes', () => {
   });
 
   /**
+   * `collectExternalPackageSources` registers TWO scan entries for a kit
+   * declared at a subpath — the declared entry and a derived alias for the
+   * package ROOT module, because collections routinely live only there
+   * (pinned by `collect-external-packages.test.ts`, "a derived root alias
+   * scans its root entry for keyframes too"). The failing entry is therefore
+   * often the root barrel, which for a React kit necessarily re-exports
+   * framework components. The message must describe that scan set: telling a
+   * consumer whose definition entry is already framework-free that
+   * collections "must be reachable from the package's definition entry" is
+   * advice they have already followed, and it never silences the barrel.
+   */
+  it('the entry-failed message describes the whole scanned-entry set', () => {
+    const result = mergeExternalKeyframes(
+      () => {
+        throw new Error("could not resolve '@ark-ui/react/field'");
+      },
+      null,
+      ['/pkg/kit/src/index.ts'],
+      '/root'
+    );
+    const [diagnostic] = result.diagnostics;
+    expect(diagnostic.code).toBe(KEYFRAMES_EXTERNAL_ENTRY_FAILED);
+    // Both scanned entries are named, so the reader can tell which one failed.
+    expect(diagnostic.message).toContain('your system entry declares');
+    expect(diagnostic.message).toContain('package root module');
+    // And the false requirement is gone: a framework-free definition entry
+    // does not exempt the root barrel from being scanned.
+    expect(diagnostic.message).not.toContain(
+      "must be reachable from the package's definition entry"
+    );
+  });
+
+  /**
    * The scan result is animus's own wire: `scanKeyframesExports` is a NAPI
    * entry point and its JSON is serialized by the engine, never authored by a
    * package. A `catch { continue }` here dropped the entry's collections

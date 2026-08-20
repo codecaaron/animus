@@ -217,6 +217,11 @@ fn find_package_json(pkg_name: &str, start_dir: &str) -> Result<PathBuf, String>
 /// Resolve an entry from the exports map.
 /// Handles both string values and nested condition objects.
 /// For condition objects, follows the `import` condition, then `default`.
+///
+/// Subpath keys are matched Node's way: an exact key first, then the
+/// `"./*"` wildcard patterns, whose matched segment is substituted into the
+/// resolved target. A subpath that matches nothing returns `None`, so
+/// `resolve_bare_specifier` keeps falling through to `module`/`main`.
 fn resolve_exports_entry(exports: &serde_json::Value, key: &str) -> Option<String> {
     // Normalize key: `./groups` or `/groups` → look up with `./` prefix
     let lookup_key = if key == "." {
@@ -229,8 +234,56 @@ fn resolve_exports_entry(exports: &serde_json::Value, key: &str) -> Option<Strin
         format!("./{}", key)
     };
 
-    let entry = exports.get(&lookup_key)?;
-    resolve_condition_value(entry)
+    // An exact key is Node's first branch and answers alone — a declared key
+    // whose target resolves to nothing is a blocked subpath, not an invitation
+    // to try the patterns.
+    if let Some(entry) = exports.get(&lookup_key) {
+        return resolve_condition_value(entry);
+    }
+
+    resolve_exports_pattern(exports.as_object()?, &lookup_key)
+}
+
+/// Match `lookup_key` against the `"./*"` subpath patterns in an exports map.
+///
+/// Node's specificity rule (PATTERN_KEY_COMPARE): the pattern with the longest
+/// literal prefix before `*` wins, ties broken by the longest literal suffix
+/// after it. The matched segment then replaces every `*` in the target.
+fn resolve_exports_pattern(
+    exports: &serde_json::Map<String, serde_json::Value>,
+    lookup_key: &str,
+) -> Option<String> {
+    let mut best: Option<(&str, &str, &serde_json::Value)> = None;
+
+    for (pattern, value) in exports {
+        // Exactly one `*`, in a subpath key: anything else is not a pattern.
+        let Some((prefix, suffix)) = pattern.split_once('*') else {
+            continue;
+        };
+        if !prefix.starts_with("./") || suffix.contains('*') {
+            continue;
+        }
+        if !lookup_key.starts_with(prefix) || !lookup_key.ends_with(suffix) {
+            continue;
+        }
+        if lookup_key.len() < prefix.len() + suffix.len() {
+            continue;
+        }
+        let more_specific = match best {
+            None => true,
+            Some((best_prefix, best_suffix, _)) => {
+                prefix.len() > best_prefix.len()
+                    || (prefix.len() == best_prefix.len() && suffix.len() > best_suffix.len())
+            }
+        };
+        if more_specific {
+            best = Some((prefix, suffix, value));
+        }
+    }
+
+    let (prefix, suffix, value) = best?;
+    let matched = &lookup_key[prefix.len()..lookup_key.len() - suffix.len()];
+    Some(resolve_condition_value(value)?.replace('*', matched))
 }
 
 /// Resolve a condition value — could be a string or a nested condition object.
@@ -2970,6 +3023,117 @@ export const ds = tokens;
         assert_eq!(
             resolve_exports_entry(&exports, "/runtime"),
             Some("./dist/runtime.js".to_string())
+        );
+    }
+
+    #[test]
+    fn resolve_exports_entry_wildcard_subpath_pattern() {
+        // Node's `exports` wildcard form, verbatim from `@ark-ui/react` 5.36.2:
+        // every component subpath is served by one `"./*"` pattern. Without
+        // pattern support the whole package is unresolvable to this loader
+        // while Node and Vite resolve it fine.
+        let exports: serde_json::Value = serde_json::json!({
+            ".": {
+                "import": { "types": "./dist/index.d.ts", "default": "./dist/index.js" }
+            },
+            "./factory": {
+                "import": { "types": "./dist/components/factory.d.ts", "default": "./dist/components/factory.js" }
+            },
+            "./*": {
+                "import": { "types": "./dist/components/*/index.d.ts", "default": "./dist/components/*/index.js" }
+            },
+            "./package.json": "./package.json"
+        });
+
+        assert_eq!(
+            resolve_exports_entry(&exports, "/field"),
+            Some("./dist/components/field/index.js".to_string()),
+            "a `./*` pattern must substitute the matched subpath"
+        );
+        // An exact key still wins over the pattern that would also match it.
+        assert_eq!(
+            resolve_exports_entry(&exports, "/factory"),
+            Some("./dist/components/factory.js".to_string())
+        );
+        assert_eq!(
+            resolve_exports_entry(&exports, "."),
+            Some("./dist/index.js".to_string())
+        );
+    }
+
+    #[test]
+    fn resolve_exports_entry_wildcard_longest_prefix_wins() {
+        // Node's PATTERN_KEY_COMPARE: the pattern with the longest literal
+        // prefix wins, then the longest suffix.
+        let exports: serde_json::Value = serde_json::json!({
+            "./*": "./dist/*.js",
+            "./lib/*": "./dist/lib/*.js",
+            "./lib/*.css": "./dist/lib/*.css"
+        });
+
+        assert_eq!(
+            resolve_exports_entry(&exports, "/thing"),
+            Some("./dist/thing.js".to_string())
+        );
+        assert_eq!(
+            resolve_exports_entry(&exports, "/lib/thing"),
+            Some("./dist/lib/thing.js".to_string())
+        );
+        assert_eq!(
+            resolve_exports_entry(&exports, "/lib/thing.css"),
+            Some("./dist/lib/thing.css".to_string())
+        );
+    }
+
+    #[test]
+    fn resolve_exports_entry_without_pattern_still_falls_through() {
+        // No matching key and no pattern → `None`, so `resolve_bare_specifier`
+        // keeps falling through to `module`/`main` exactly as before.
+        let exports: serde_json::Value = serde_json::json!({
+            ".": "./dist/index.js",
+            "./groups": "./dist/groups/index.js"
+        });
+        assert_eq!(resolve_exports_entry(&exports, "/missing"), None);
+    }
+
+    #[test]
+    fn resolve_bare_specifier_through_wildcard_exports() {
+        // The end-to-end resolver over a fixture package.json carrying a
+        // `"./*"` exports map: the subpath file on disk must be found.
+        let dir = scratch_dir("wildcard-exports");
+        let pkg = dir.join("node_modules/@fixture/wildcard-kit");
+        write_fixture(
+            &pkg.join("package.json"),
+            "{\n  \"name\": \"@fixture/wildcard-kit\",\n  \"type\": \"module\",\n  \"main\": \"dist/index.cjs\",\n  \"module\": \"dist/index.js\",\n  \"exports\": {\n    \".\": { \"import\": { \"types\": \"./dist/index.d.ts\", \"default\": \"./dist/index.js\" } },\n    \"./*\": { \"import\": { \"types\": \"./dist/components/*/index.d.ts\", \"default\": \"./dist/components/*/index.js\" } }\n  }\n}\n",
+        );
+        write_fixture(&pkg.join("dist/index.js"), "export const kit = 1;\n");
+        write_fixture(
+            &pkg.join("dist/components/field/index.js"),
+            "export const Field = 1;\n",
+        );
+        let from_dir = dir.join("src");
+        fs::create_dir_all(&from_dir).expect("create importing dir");
+
+        let resolved =
+            resolve_bare_specifier("@fixture/wildcard-kit/field", &from_dir.to_string_lossy());
+        let root = resolve_bare_specifier("@fixture/wildcard-kit", &from_dir.to_string_lossy());
+        let missing =
+            resolve_bare_specifier("@fixture/wildcard-kit/absent", &from_dir.to_string_lossy());
+        let _ = fs::remove_dir_all(&dir);
+
+        let resolved = resolved.expect("a `./*` exports pattern must resolve its subpath");
+        assert!(
+            resolved.ends_with("dist/components/field/index.js"),
+            "unexpected resolution: {resolved}"
+        );
+        let root = root.expect("the `.` entry must still resolve");
+        assert!(root.ends_with("dist/index.js"), "unexpected root: {root}");
+        // A pattern that matches but whose substituted target is absent from
+        // disk stays unresolvable — the resolver never invents a path.
+        let error = missing.expect_err("an absent pattern target must not resolve");
+        assert!(
+            error.contains("@fixture/wildcard-kit/absent"),
+            "error must name the specifier: {error}"
         );
     }
 

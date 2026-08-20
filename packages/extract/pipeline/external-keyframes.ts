@@ -95,9 +95,10 @@ export function mergeExternalKeyframes(
         component: 'keyframes',
         kind: 'warn',
         message:
-          `external package entry failed the keyframes scan — its collections are invisible to extraction: ${String(error)}. ` +
-          `Keyframe collections must be reachable from the package's definition entry without evaluating framework re-exports: ` +
-          `export them (directly or as a named re-export) from the definition entry, and avoid \`export *\` of framework packages there ` +
+          `external package entry failed the keyframes scan — any collections it exports are invisible to extraction: ${String(error)}. ` +
+          `Each admitted entry is scanned on its own: the package specifier your system entry declares, plus the package root module when that declaration was a subpath. ` +
+          `Every scan evaluates that entry's whole module graph framework-free, so a root barrel re-exporting framework components can fail here while the definition entry scans clean. ` +
+          `Export keyframe collections (directly or as a named re-export) from an entry that evaluates framework-free, and avoid \`export *\` of framework packages there ` +
           `(${KEYFRAMES_EXTERNAL_ENTRY_FAILED})`,
         code: KEYFRAMES_EXTERNAL_ENTRY_FAILED,
         severity: 'warn',

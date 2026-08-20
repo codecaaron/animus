@@ -59,7 +59,9 @@ Rules:
 
 ### Keep Keyframes on the Definition Entry
 
-External keyframe discovery evaluates a scanned entry in the extraction sandbox and reads only branded `createKeyframes` collections. A component barrel that wildcard-re-exports a framework (`export * from '@ark-ui/react'`) is not an evaluable configuration surface: the sandbox cannot know those export names without running the real framework package. The scan therefore degrades gracefully to the coded `animus.keyframes.external-entry-failed` warning instead of attempting framework evaluation or arbitrary export enumeration.
+External keyframe discovery evaluates a scanned entry in the extraction sandbox and reads only branded `createKeyframes` collections. Discovery scans two entries per declared package: the specifier your configured Animus entry declares, and — when that declaration is a subpath such as `@scope/kit/definition` — the package root module as well, because collections routinely live only there. Each is scanned independently, so a root barrel that pulls in a framework component graph can fail its own scan while the definition entry scans clean.
+
+A framework component graph is not an evaluable configuration surface: the sandbox runs no DOM, no bundler, and no real React. A barrel that wildcard-re-exports a framework (`export * from '@ark-ui/react'`) cannot be enumerated at all without running the real package, and even explicit framework subpath imports reach dist graphs the sandbox is not built to evaluate. The scan therefore degrades gracefully to the coded `animus.keyframes.external-entry-failed` warning, quarantined to the entry that failed, instead of attempting framework evaluation. A package that ships no keyframe collections loses nothing to that warning.
 
 Export keyframe collections directly from the definition entry or through an explicit named re-export. An application may likewise re-export them from its configured Animus entry. Configured-entry collections seed extraction and win name collisions; external entry scans only augment that known set. Keep framework `export *` declarations on component entry points, outside the definition graph.
 
