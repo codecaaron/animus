@@ -141,6 +141,15 @@ export interface NapiSystemConfig {
   globalStyleBlocks?: string
   keyframesBlocks?: string
   /**
+   * Vocabulary collision witnesses from the sealed system's registration
+   * record: JSON array of `{ code, name, winner, loser }` with the stable
+   * code `animus.vocabulary.collision`. The record is the witness channel
+   * (the evaluation host shims console); hosts surface these as
+   * diagnostics. Absent when there are no collisions or the system
+   * predates the record.
+   */
+  vocabularyCollisions?: string
+  /**
    * Canonical absolute paths of every module evaluated for the system
    * (sorted; entry included, runtime stubs excluded). The plugins use this
    * as the geological-reset membership set.

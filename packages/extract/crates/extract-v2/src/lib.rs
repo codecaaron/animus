@@ -75,6 +75,13 @@ pub struct NapiSystemConfig {
     pub transform_sources: Option<String>,
     pub global_style_blocks: Option<String>,
     pub keyframes_blocks: Option<String>,
+    /// Vocabulary collision witnesses from the sealed system's registration
+    /// record: JSON array of `{ code, name, winner, loser }` with the stable
+    /// code `animus.vocabulary.collision`. The record is the witness channel
+    /// (the evaluation host shims console); hosts surface these as
+    /// diagnostics. Absent when there are no collisions or the system
+    /// predates the record.
+    pub vocabulary_collisions: Option<String>,
     /// Canonical absolute paths of every module evaluated for the system
     /// (sorted; entry included, runtime stubs excluded). The plugins use this
     /// as the geological-reset membership set.
@@ -112,6 +119,7 @@ pub fn load_system_module(
         transform_sources: config.transform_sources,
         global_style_blocks: config.global_style_blocks,
         keyframes_blocks: config.keyframes_blocks,
+        vocabulary_collisions: config.vocabulary_collisions,
         dependencies: config.dependencies,
         source_theme_manifests: config.source_theme_manifests,
     })

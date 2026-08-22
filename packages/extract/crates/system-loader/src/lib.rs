@@ -56,6 +56,14 @@ pub struct SystemConfig {
     /// collection identity so the extractor can substitute
     /// `motion.ember`-style member-expression references against it.
     pub keyframes_blocks: Option<String>,
+    /// Vocabulary collision witnesses from the sealed system's registration
+    /// record (vocabulary-registration): JSON array of `{ code, name,
+    /// winner, loser }` entries with the stable code
+    /// `animus.vocabulary.collision`. The record — not the evaluation
+    /// host's console (shimmed to a no-op) — is the witness channel; hosts
+    /// surface these as diagnostics. `None` when the record carries no
+    /// collisions or the system predates the record.
+    pub vocabulary_collisions: Option<String>,
     /// Canonical absolute paths of every module evaluated for this system —
     /// the entry plus its transitive graph, excluding runtime stubs (which
     /// have no path). Sorted. Plugins use this as the geological-reset
@@ -1376,19 +1384,55 @@ fn extract_system_config<'js>(
     namespace: &Object<'js>,
     export_name: Option<&str>,
 ) -> Result<SystemConfig, String> {
-    // Find SystemInstance (export with .toConfig())
+    // Find SystemInstance (export with .toConfig()). Without an explicit
+    // export name, MORE THAN ONE distinct system-like export is a load
+    // error naming every candidate (vocabulary-registration ambiguity
+    // guard; precedent: the dual-built-theme identity check below) — never
+    // an enumeration-order first-pick, which would silently load a system
+    // with no registrations during a migration.
     let system_obj = if let Some(name) = export_name {
         namespace
             .get::<_, Object>(name)
             .map_err(|e| format!("export '{}' not found or not an object: {}", name, e))?
     } else {
-        find_export_with_method(namespace, "toConfig")?.ok_or_else(|| {
-            let keys = list_export_keys(namespace);
-            format!(
-                "no SystemInstance found (no export with .toConfig()). Exports: [{}]",
-                keys.join(", ")
-            )
-        })?
+        let candidates = find_exports_with_method(namespace, "toConfig");
+        match candidates.len() {
+            0 => {
+                let keys = list_export_keys(namespace);
+                return Err(format!(
+                    "no SystemInstance found (no export with .toConfig()). Exports: [{}]",
+                    keys.join(", ")
+                ));
+            }
+            1 => candidates.into_iter().next().map(|(_, obj)| obj).unwrap(),
+            _ => {
+                let is_same: Function = ctx
+                    .eval(b"(a, b) => a === b" as &[u8])
+                    .map_err(|e| format!("system export identity check failed: {}", e))?;
+                let first = candidates[0].1.clone();
+                let mut distinct = false;
+                for (_, obj) in candidates.iter().skip(1) {
+                    let same: bool = is_same
+                        .call((first.clone(), obj.clone()))
+                        .map_err(|e| format!("system export identity check failed: {}", e))?;
+                    if !same {
+                        distinct = true;
+                        break;
+                    }
+                }
+                if distinct {
+                    let keys: Vec<&str> =
+                        candidates.iter().map(|(key, _)| key.as_str()).collect();
+                    return Err(format!(
+                        "ambiguous system exports: [{}] each carry .toConfig() but are not \
+                         the same object; the loader selects exactly one system — export a \
+                         single (sealed) instance or pass an explicit export name",
+                        keys.join(", ")
+                    ));
+                }
+                first
+            }
+        }
     };
 
     // Call .toConfig()
@@ -1509,11 +1553,24 @@ fn extract_system_config<'js>(
         .get("contextualVarsJson")
         .map_err(|e| format!("contextualVarsJson not found: {}", e))?;
 
-    // Find GlobalStyleBlock exports
+    // Find GlobalStyleBlock exports (registration conformance for global
+    // styles is a later increment — export scan stays their channel here).
     let global_style_blocks = extract_global_style_blocks(namespace);
 
-    // Find Keyframes exports
-    let keyframes_blocks = extract_keyframes_blocks(namespace);
+    // Keyframe collections (vocabulary-registration): a sealed system's
+    // registration record is the ONLY source — an exported-but-unregistered
+    // collection does not carry. A system WITHOUT the record accessor falls
+    // back to the export scan so un-migrated systems keep loading; the
+    // migration increment deletes that fallback and makes record absence
+    // the loud version-skew error.
+    let has_record = system_obj
+        .get::<_, Function>("getVocabularyRecord")
+        .is_ok();
+    let (keyframes_blocks, vocabulary_collisions) = if has_record {
+        extract_vocabulary_record(ctx, &system_obj)?
+    } else {
+        (extract_keyframes_blocks(namespace), None)
+    };
 
     Ok(SystemConfig {
         prop_config,
@@ -1528,6 +1585,7 @@ fn extract_system_config<'js>(
         transform_sources,
         global_style_blocks,
         keyframes_blocks,
+        vocabulary_collisions,
         // Populated by load_system_module from the resolved module graph;
         // execute_bundle only sees the assembled bundle text.
         dependencies: Vec::new(),
@@ -1537,20 +1595,89 @@ fn extract_system_config<'js>(
     })
 }
 
-/// Find an export that has a given method name.
-fn find_export_with_method<'js>(
+/// Find every export that has a given method name, with its export key.
+fn find_exports_with_method<'js>(
     namespace: &Object<'js>,
     method_name: &str,
-) -> Result<Option<Object<'js>>, String> {
-    let keys = list_export_keys(namespace);
-    for key in &keys {
+) -> Vec<(String, Object<'js>)> {
+    let mut found = Vec::new();
+    for key in list_export_keys(namespace) {
         if let Ok(obj) = namespace.get::<_, Object>(key.as_str()) {
             if obj.get::<_, Function>(method_name).is_ok() {
-                return Ok(Some(obj));
+                found.push((key, obj));
             }
         }
     }
-    Ok(None)
+    found
+}
+
+/// Read the sealed system's vocabulary record (vocabulary-registration).
+/// Returns `(keyframes_blocks, vocabulary_collisions)`: the record's
+/// declaration-ordered `keyframes` array becomes the unchanged
+/// `{ exportName: { keyName: { name, frames } } }` wire (insertion order
+/// preserved end to end — `Object.fromEntries` + `JSON.stringify` in the
+/// evaluation context, `preserve_order` on the Rust side), and its
+/// `collisions` entries carry verbatim as the host-facing witness. An
+/// incompatible version marker fails the load loud.
+fn extract_vocabulary_record<'js>(
+    ctx: &rquickjs::Ctx<'js>,
+    system_obj: &Object<'js>,
+) -> Result<(Option<String>, Option<String>), String> {
+    let script = r#"(() => {
+  const record = globalThis.__sys_ref.getVocabularyRecord();
+  if (!record || typeof record !== 'object') {
+    return JSON.stringify({ invalid: 'getVocabularyRecord() did not return an object' });
+  }
+  if (record.version !== 1) {
+    return JSON.stringify({ skew: String(record.version) });
+  }
+  const keyframes = Array.isArray(record.keyframes) ? record.keyframes : [];
+  const collisions = Array.isArray(record.collisions) ? record.collisions : [];
+  return JSON.stringify({
+    keyframeCount: keyframes.length,
+    keyframes: Object.fromEntries(keyframes.map((entry) => [entry.name, entry.frames])),
+    collisions,
+  });
+})()"#;
+    let _ = ctx.globals().set("__sys_ref", system_obj.clone());
+    let result = ctx.eval::<String, _>(script.as_bytes());
+    let _ = ctx.globals().remove("__sys_ref");
+    let json =
+        result.map_err(|e| format!("getVocabularyRecord() evaluation failed: {}", e))?;
+    let parsed: serde_json::Value = serde_json::from_str(&json)
+        .map_err(|e| format!("vocabulary record serialization failed: {}", e))?;
+
+    if let Some(skew) = parsed.get("skew").and_then(|v| v.as_str()) {
+        return Err(format!(
+            "system vocabulary record version {} is not supported by this loader \
+             (expected 1) — the system was built by a mismatched @animus-ui/system; \
+             rebuild against a matching version instead of loading with empty \
+             collections",
+            skew
+        ));
+    }
+    if let Some(invalid) = parsed.get("invalid").and_then(|v| v.as_str()) {
+        return Err(format!("system vocabulary record invalid: {}", invalid));
+    }
+
+    let count = parsed
+        .get("keyframeCount")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let keyframes_blocks = if count == 0 {
+        None
+    } else {
+        parsed
+            .get("keyframes")
+            .map(|v| serde_json::to_string(v).unwrap_or_default())
+    };
+    let vocabulary_collisions = match parsed.get("collisions").and_then(|v| v.as_array()) {
+        Some(list) if !list.is_empty() => {
+            Some(serde_json::to_string(list).unwrap_or_default())
+        }
+        _ => None,
+    };
+    Ok((keyframes_blocks, vocabulary_collisions))
 }
 
 /// List all export keys from a module namespace.
@@ -2193,6 +2320,233 @@ export const ds = tokens;
         let _ = fs::remove_dir_all(&dir);
 
         assert_eq!(result.expect("scan must succeed"), None);
+    }
+
+    // ── vocabulary-registration: seam-1 record consumption ──────────────────
+
+    const FIXTURE_THEME: &str = "export const theme = { serialize: () => ({\n\
+         scalesJson: '{}', variableMapJson: '{}', variableCss: '',\n\
+         contextualVarsJson: '{}' }) };\n";
+
+    fn sealed_system_fixture(record_literal: &str) -> String {
+        format!(
+            "export const ds = {{\n\
+               toConfig: () => ({{ propConfig: '{{}}', groupRegistry: '{{}}' }}),\n\
+               getVocabularyRecord: () => ({record_literal}),\n\
+             }};\n\
+             {FIXTURE_THEME}"
+        )
+    }
+
+    const TWO_COLLECTION_RECORD: &str = "{\n\
+        version: 1,\n\
+        keyframes: [\n\
+          { name: 'first', frames: { pulse: { name: 'animus-kf-aaa', frames: { from: { opacity: 0 } } } } },\n\
+          { name: 'second', frames: { fade: { name: 'animus-kf-bbb', frames: { to: { opacity: 1 } } } } },\n\
+        ],\n\
+        globalStyles: [],\n\
+        collisions: [],\n\
+      }";
+
+    #[test]
+    fn sealed_record_carries_collections_declaration_ordered() {
+        // rust-system-loader §"Collections come from the sealed registration
+        // record": registration order reaches the serialized wire.
+        let dir = scratch_dir("vocab-record-order");
+        let entry = dir.join("entry.ts");
+        write_fixture(&entry, &sealed_system_fixture(TWO_COLLECTION_RECORD));
+
+        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None);
+        let _ = fs::remove_dir_all(&dir);
+
+        let config = result.expect("sealed system must load");
+        let blocks = config
+            .keyframes_blocks
+            .expect("registered collections must carry");
+        let first_at = blocks.find("\"first\"").expect("first present");
+        let second_at = blocks.find("\"second\"").expect("second present");
+        assert!(
+            first_at < second_at,
+            "registration order must reach the wire: {blocks}"
+        );
+        let parsed: serde_json::Value = serde_json::from_str(&blocks).expect("valid JSON");
+        assert_eq!(
+            parsed["first"]["pulse"]["name"], "animus-kf-aaa",
+            "wire keeps the {{ exportName: {{ keyName: {{ name, frames }} }} }} shape"
+        );
+    }
+
+    #[test]
+    fn exported_but_unregistered_collection_does_not_carry() {
+        // The hard-cut negative: a branded export absent from the record is
+        // invisible to the loader.
+        let dir = scratch_dir("vocab-unregistered");
+        let entry = dir.join("entry.ts");
+        let mut source = sealed_system_fixture(TWO_COLLECTION_RECORD);
+        source.push_str(
+            "export const motion = { __brand: 'Keyframes', __frames: { spin: { name: 'animus-kf-ccc', frames: {} } } };\n",
+        );
+        write_fixture(&entry, &source);
+
+        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None);
+        let _ = fs::remove_dir_all(&dir);
+
+        let config = result.expect("sealed system must load");
+        let blocks = config.keyframes_blocks.expect("registered ones carry");
+        assert!(
+            !blocks.contains("motion") && !blocks.contains("animus-kf-ccc"),
+            "unregistered export must not carry: {blocks}"
+        );
+    }
+
+    #[test]
+    fn wrong_record_version_fails_the_load() {
+        // rust-system-loader §"Registration-record version skew fails the
+        // load" — the half that has no fallback: a PRESENT record with an
+        // incompatible marker. (Record ABSENCE falls back to the export scan
+        // until the migration increment deletes the scan.)
+        let dir = scratch_dir("vocab-version-skew");
+        let entry = dir.join("entry.ts");
+        write_fixture(
+            &entry,
+            &sealed_system_fixture(
+                "{ version: 99, keyframes: [], globalStyles: [], collisions: [] }",
+            ),
+        );
+
+        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None);
+        let _ = fs::remove_dir_all(&dir);
+
+        let error = result.expect_err("incompatible record version must fail loud");
+        assert!(
+            error.contains("version") && error.contains("99"),
+            "error must name the version mismatch: {error}"
+        );
+    }
+
+    #[test]
+    fn ambiguous_system_like_exports_fail_the_load() {
+        // rust-system-loader §"Ambiguous system-like exports fail the load":
+        // two DISTINCT toConfig-bearing exports and no explicit exportName.
+        let dir = scratch_dir("vocab-ambiguous");
+        let entry = dir.join("entry.ts");
+        write_fixture(
+            &entry,
+            &format!(
+                "export const ds = {{ toConfig: () => ({{ propConfig: '{{}}', groupRegistry: '{{}}' }}) }};\n\
+                 export const dsTwo = {{ toConfig: () => ({{ propConfig: '{{}}', groupRegistry: '{{}}' }}) }};\n\
+                 {FIXTURE_THEME}"
+            ),
+        );
+
+        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None);
+        let _ = fs::remove_dir_all(&dir);
+
+        let error = result.expect_err("two distinct system-like exports must fail loud");
+        assert!(
+            error.contains("ds") && error.contains("dsTwo"),
+            "error must name both exports: {error}"
+        );
+    }
+
+    #[test]
+    fn aliased_reexport_of_one_system_is_not_ambiguous() {
+        let dir = scratch_dir("vocab-alias");
+        let entry = dir.join("entry.ts");
+        write_fixture(
+            &entry,
+            &format!(
+                "export const ds = {{ toConfig: () => ({{ propConfig: '{{}}', groupRegistry: '{{}}' }}) }};\n\
+                 export const dsAlias = ds;\n\
+                 {FIXTURE_THEME}"
+            ),
+        );
+
+        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None);
+        let _ = fs::remove_dir_all(&dir);
+
+        result.expect("aliases of ONE instance stay unambiguous");
+    }
+
+    #[test]
+    fn record_wire_is_byte_identical_across_fresh_loads() {
+        // rust-system-loader §"Collections come from the sealed registration
+        // record" (determinism scenario): two full loads, two runtimes,
+        // identical bytes.
+        let dir = scratch_dir("vocab-determinism");
+        let entry = dir.join("entry.ts");
+        write_fixture(&entry, &sealed_system_fixture(TWO_COLLECTION_RECORD));
+
+        let first = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None)
+            .expect("first load");
+        let second = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None)
+            .expect("second load");
+        let _ = fs::remove_dir_all(&dir);
+
+        assert_eq!(
+            first.keyframes_blocks, second.keyframes_blocks,
+            "fresh-process loads must serialize identical collection bytes"
+        );
+        assert!(first.keyframes_blocks.is_some());
+    }
+
+    #[test]
+    fn record_collisions_carry_to_the_config() {
+        // The record, not console, is the witness channel (the evaluation
+        // host shims console to a no-op).
+        let dir = scratch_dir("vocab-collisions");
+        let entry = dir.join("entry.ts");
+        write_fixture(
+            &entry,
+            &sealed_system_fixture(
+                "{ version: 1, keyframes: [], globalStyles: [], collisions: [\n\
+                   { code: 'animus.vocabulary.collision', name: 'motion',\n\
+                     winner: 'local registration #1', loser: 'extended source #1' },\n\
+                 ] }",
+            ),
+        );
+
+        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None);
+        let _ = fs::remove_dir_all(&dir);
+
+        let config = result.expect("sealed system must load");
+        let collisions = config
+            .vocabulary_collisions
+            .expect("collision entries must carry");
+        assert!(
+            collisions.contains("animus.vocabulary.collision")
+                && collisions.contains("motion")
+                && collisions.contains("extended source #1"),
+            "collision witness must survive verbatim: {collisions}"
+        );
+    }
+
+    #[test]
+    fn recordless_system_falls_back_to_export_scan_until_migration() {
+        // STAGING PIN (design Ledger DEF-11 class; deleted at the migration
+        // increment): a system without a vocabulary record keeps export-scan
+        // discovery so un-migrated fixtures stay green. The migration
+        // increment replaces this with the loud version-skew error — this
+        // test must be DELETED in the same diff.
+        let dir = scratch_dir("vocab-fallback");
+        let entry = dir.join("entry.ts");
+        write_fixture(
+            &entry,
+            &format!(
+                "export const ds = {{ toConfig: () => ({{ propConfig: '{{}}', groupRegistry: '{{}}' }}) }};\n\
+                 export const motion = {{ __brand: 'Keyframes', __frames: {{ spin: {{ name: 'animus-kf-ddd', frames: {{}} }} }} }};\n\
+                 {FIXTURE_THEME}"
+            ),
+        );
+
+        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None);
+        let _ = fs::remove_dir_all(&dir);
+
+        let config = result.expect("recordless system must still load");
+        let blocks = config
+            .keyframes_blocks
+            .expect("legacy export scan still discovers");
+        assert!(blocks.contains("animus-kf-ddd"));
     }
 
     #[test]

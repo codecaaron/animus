@@ -30,6 +30,13 @@ export interface SystemConfig {
   transformSourcesJson?: string | null;
   globalStyleBlocksJson: string | null;
   keyframesJson: string | null;
+  /** Vocabulary collision witnesses from the sealed system's registration
+   *  record (JSON array of `{ code, name, winner, loser }`, stable code
+   *  `animus.vocabulary.collision`). The record — not the evaluation host's
+   *  console, which is shimmed to a no-op — is the witness channel; hosts
+   *  surface these as diagnostics. Optional so pre-load
+   *  `emptySystemConfig()` defaults need not restate it. */
+  vocabularyCollisionsJson?: string | null;
   /** Canonical absolute paths of every module the loader evaluated for this
    *  system (sorted; entry included, runtime stubs excluded). Plugins use it
    *  as the geological-reset membership set. Optional so pre-load
@@ -93,6 +100,7 @@ export function loadSystemConfig(
     transformSourcesJson: config.transformSources || null,
     globalStyleBlocksJson: config.globalStyleBlocks || null,
     keyframesJson: config.keyframesBlocks || null,
+    vocabularyCollisionsJson: config.vocabularyCollisions || null,
     dependencies: config.dependencies ?? [],
     sourceThemeManifestsJson: config.sourceThemeManifests || null,
   };
