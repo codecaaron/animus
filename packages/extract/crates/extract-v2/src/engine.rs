@@ -1301,11 +1301,12 @@ export const App = () => <Box tone="red" />;
 
     #[test]
     fn external_package_keyframes_collection_resolves_via_named_import() {
-        // A `Keyframes` collection discovered from an external
-        // package entry (delivered through keyframesJson by the loader scan)
-        // resolves through a regular named import — the animation-name ref
-        // and exactly one @keyframes block emit, identical to a consumer-entry
-        // collection.
+        // A collection registered inside an external kit's definition graph
+        // (carried to the consumer through the sealed kit and delivered as a
+        // keyframesJson record entry) resolves through a regular named
+        // import — the animation-name ref and exactly one @keyframes block
+        // emit, identical to a collection registered in the consumer's own
+        // definition graph.
         let mut engine = ExtractEngine::new(Some(EngineOptions {
             keyframes_json: Some(
                 r#"{"kitMotion":{"pulse":{"name":"animus-kf-abc123","frames":{"from":{"opacity":0.4},"to":{"opacity":1}}}}}"#
@@ -1467,25 +1468,152 @@ export const App = () => <Box tone="red" />;
         assert_eq!(manifest["usageResidue"][0]["kind"], "conditional");
     }
 
+    /// Messages of every diagnostic carrying the unregistered-keyframe-reference
+    /// code — the witness channel for a reference the registration record
+    /// cannot answer.
+    fn unregistered_keyframe_diagnostics(manifest: &serde_json::Value) -> Vec<String> {
+        manifest["diagnostics"]
+            .as_array()
+            .map(|ds| {
+                ds.iter()
+                    .filter(|d| d["code"] == crate::eval::KEYFRAMES_UNREGISTERED_REFERENCE)
+                    .map(|d| d["message"].as_str().unwrap_or_default().to_string())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     #[test]
-    fn keyframes_registry_resolves_member_lookup() {
-        // v1 Phase 2a/2b: keyframes collections resolve `motion.ember`
-        // through the statics plumbing.
+    fn registration_key_equal_to_the_export_name_resolves_member_lookup() {
+        // Key identity: the record's outer key IS the module-scope export
+        // name the collection leaves its defining module under, so
+        // `animations.pulse` substitutes the content-hashed name into the
+        // consuming component's CSS and nothing is witnessed as missing.
         let mut engine = ExtractEngine::new(Some(EngineOptions {
             keyframes_json: Some(
-                r#"{"motion": {"ember": {"name": "anm-ember", "frames": "0%{}"}}}"#.to_string(),
+                r#"{"animations":{"pulse":{"name":"animus-kf-abc123","frames":{"from":{"opacity":0.4},"to":{"opacity":1}}}}}"#
+                    .to_string(),
             ),
             ..Default::default()
         }))
         .unwrap();
-        let out = engine
-            .analyze(
-                r#"[{"path":"system.ts","source":"export const motion = { ember: 'placeholder' };\n"},
-                    {"path":"a.tsx","source":"import { motion } from './system';\nexport const C = ds.styles({ animationName: motion.ember }).asElement('div');\nexport const App = () => <C />;\n"}]"#
+        let manifest: serde_json::Value = serde_json::from_str(
+            &engine
+                .analyze(
+                    serde_json::json!([
+                        { "path": "system.ts", "source": "export const animations = createKeyframes({ pulse: { from: { opacity: 0.4 }, to: { opacity: 1 } } });\n" },
+                        { "path": "a.tsx", "source": "import { animations } from './system';\nexport const Pulse = ds.styles({ animationName: animations.pulse }).asElement('span');\nexport const App = () => <Pulse />;\n" }
+                    ])
                     .to_string(),
-            )
-            .unwrap();
-        assert!(out.contains("anm-ember"), "{out}");
+                )
+                .unwrap(),
+        )
+        .unwrap();
+
+        let css = manifest["css"].as_str().unwrap_or("");
+        assert!(
+            css.contains("animation-name:animus-kf-abc123")
+                || css.contains("animation-name: animus-kf-abc123"),
+            "{css}"
+        );
+        let global = manifest["sheets"]["global"].as_str().unwrap_or("");
+        assert_eq!(
+            global.matches("@keyframes animus-kf-abc123").count(),
+            1,
+            "{global}"
+        );
+        // Negative control: a resolving reference is not witnessed as missing.
+        assert!(
+            unregistered_keyframe_diagnostics(&manifest).is_empty(),
+            "{manifest}"
+        );
+    }
+
+    #[test]
+    fn registration_key_mismatched_with_the_export_name_skips_and_is_witnessed() {
+        // Registered under `motion`, exported as `animations`. The engine
+        // resolves by EXPORT name, so the reference finds no record entry:
+        // the property drops AND the coded diagnostic names the binding —
+        // the mismatch is not a silent miss.
+        let mut engine = ExtractEngine::new(Some(EngineOptions {
+            keyframes_json: Some(
+                r#"{"motion":{"pulse":{"name":"animus-kf-abc123","frames":{"from":{"opacity":0.4},"to":{"opacity":1}}}}}"#
+                    .to_string(),
+            ),
+            ..Default::default()
+        }))
+        .unwrap();
+        let manifest: serde_json::Value = serde_json::from_str(
+            &engine
+                .analyze(
+                    serde_json::json!([
+                        { "path": "system.ts", "source": "export const animations = createKeyframes({ pulse: { from: { opacity: 0.4 }, to: { opacity: 1 } } });\n" },
+                        { "path": "a.tsx", "source": "import { animations } from './system';\nexport const Pulse = ds.styles({ animationName: animations.pulse }).asElement('span');\nexport const App = () => <Pulse />;\n" }
+                    ])
+                    .to_string(),
+                )
+                .unwrap(),
+        )
+        .unwrap();
+
+        let css = manifest["css"].as_str().unwrap_or("");
+        assert!(!css.contains("animation-name"), "{css}");
+        let coded = unregistered_keyframe_diagnostics(&manifest);
+        assert_eq!(coded.len(), 1, "{coded:?}");
+        assert!(coded[0].contains("animationName"), "{}", coded[0]);
+        assert!(coded[0].contains("animations.pulse"), "{}", coded[0]);
+        // Analysis continues: the component still extracts.
+        assert!(!manifest["components"].as_object().unwrap().is_empty());
+        // Pinned (inc-04 review objection 3, pre-existing behavior): the
+        // record entry still emits its `@keyframes` block into the global
+        // sheet even though nothing can reference it — a dead block, not a
+        // missing one. If this pin starts failing because orphan emission
+        // was removed, that is an improvement; retire the pin deliberately.
+        let global_sheet = manifest["sheets"]["global"].as_str().unwrap_or("");
+        assert!(
+            global_sheet.contains("@keyframes animus-kf-abc123"),
+            "registered-but-unreferenced collections currently emit dead CSS: {global_sheet}"
+        );
+    }
+
+    #[test]
+    fn record_entry_wins_over_a_same_named_static_export() {
+        // Precedence witness (inc-04 review objection 8): the registration
+        // record's entry OVERWRITES a statically-foldable export of the
+        // same name in the statics map (`static_exports_by_file` inserts
+        // first, the record second — last write wins). A plain-object
+        // export `motion` must not shadow the registered collection.
+        let mut engine = ExtractEngine::new(Some(EngineOptions {
+            keyframes_json: Some(
+                r#"{"motion":{"ember":{"name":"animus-kf-abc123","frames":{"from":{"opacity":0.4},"to":{"opacity":1}}}}}"#
+                    .to_string(),
+            ),
+            ..Default::default()
+        }))
+        .unwrap();
+        let manifest: serde_json::Value = serde_json::from_str(
+            &engine
+                .analyze(
+                    serde_json::json!([
+                        { "path": "system.ts", "source": "export const motion = { ember: 'placeholder' };\n" },
+                        { "path": "a.tsx", "source": "import { motion } from './system';\nexport const Ember = ds.styles({ animationName: motion.ember }).asElement('span');\nexport const App = () => <Ember />;\n" }
+                    ])
+                    .to_string(),
+                )
+                .unwrap(),
+        )
+        .unwrap();
+
+        let css = manifest["css"].as_str().unwrap_or("");
+        assert!(
+            css.contains("animation-name:animus-kf-abc123")
+                || css.contains("animation-name: animus-kf-abc123"),
+            "the record entry must win: {css}"
+        );
+        assert!(
+            !css.contains("placeholder"),
+            "the static export must be shadowed by the record: {css}"
+        );
     }
 
     #[test]

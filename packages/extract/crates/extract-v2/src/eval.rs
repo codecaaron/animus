@@ -44,6 +44,19 @@ pub struct SkippedProperty {
 /// attribute value (nothing to anchor the class to).
 pub const SELECTOR_UNSUPPORTED_SUBJECT: &str = "animus.selector.unsupported-subject";
 
+/// Stable diagnostic code for an `object.property` reference whose base
+/// binding carries no entry in the system's keyframe registration record.
+/// Registration is the only channel that puts a collection in front of the
+/// extractor, so a reference the record cannot answer is an authoring
+/// mistake with a specific repair — distinct in kind from the generic
+/// dynamic-value per-property skip, which has none.
+///
+/// Severity: WARN, deliberately (the spec's "skipped without aborting
+/// analysis") — `diagnostic_severity_for_code`'s default arm applies;
+/// escalation belongs to the strict-mode contract, which is a separate
+/// change. Severity-pinned in the analyze_css test module.
+pub const KEYFRAMES_UNREGISTERED_REFERENCE: &str = "animus.keyframes.unregistered-reference";
+
 /// True when a style key looks selector-shaped (`&` present) but carries no
 /// substitutable subject — every `&` is inside quotes.
 pub(crate) fn unsupported_selector_key(key: &str) -> bool {
@@ -88,6 +101,29 @@ pub fn eval_object_expr_with_statics(
     obj: &ObjectExpression<'_>,
     static_values: Option<&FxHashMap<String, Value>>,
 ) -> Result<(Value, Vec<SkippedProperty>, Vec<CapturedTransform>), BailError> {
+    eval_object_expr_scoped(obj, static_values, false)
+}
+
+/// The recursive core, carrying keyframe ELIGIBILITY: whether the value
+/// position being evaluated sits under an animation-name property
+/// (`animationName`/`animation`), directly or through any nested block —
+/// responsive maps (`animationName: { _: ref, sm: ref }`), selector and
+/// at-rule blocks all inherit the owning property's eligibility. Only
+/// eligible positions may carry the `KEYFRAMES_UNREGISTERED_REFERENCE`
+/// code (a keyframes-coded diagnostic on `color: palette.brand` would
+/// re-create the false-alarm class registration eliminates); the decision
+/// is made where the reason is MINTED, never by post-hoc string surgery.
+/// Property-name authority note: the type surface widens `KeyframeRef`
+/// onto `animationName` only (`PassThroughProp<'animationName'>` in
+/// packages/system/src/types/config.ts); `animation` is admitted here
+/// because the shorthand can embed a keyframe name, and the kebab twins
+/// (`animation-name`) are deliberately absent — quoted-kebab authoring is
+/// outside the typed surface and gets the neutral reason.
+fn eval_object_expr_scoped(
+    obj: &ObjectExpression<'_>,
+    static_values: Option<&FxHashMap<String, Value>>,
+    keyframes_eligible: bool,
+) -> Result<(Value, Vec<SkippedProperty>, Vec<CapturedTransform>), BailError> {
     let mut map = Map::new();
     let mut skipped = Vec::new();
     let mut captured = Vec::new();
@@ -104,6 +140,8 @@ pub fn eval_object_expr_with_statics(
                 }
 
                 let key = eval_property_key(&prop.key)?;
+                let eligible = keyframes_eligible
+                    || matches!(key.as_str(), "animationName" | "animation");
 
                 // Selector-shaped keys whose every `&` is quoted have no
                 // substitutable subject: record a coded skip instead of
@@ -140,7 +178,7 @@ pub fn eval_object_expr_with_statics(
 
                 // Handle nested objects directly to propagate inner captures
                 if let Expression::ObjectExpression(inner_obj) = &prop.value {
-                    match eval_object_expr_with_statics(inner_obj, static_values) {
+                    match eval_object_expr_scoped(inner_obj, static_values, eligible) {
                         Ok((value, inner_skips, inner_captured)) => {
                             skipped.extend(inner_skips);
                             // Prefix inner captures with the outer key
@@ -162,7 +200,12 @@ pub fn eval_object_expr_with_statics(
                 }
 
                 // Try to evaluate the value. On failure, skip this property.
-                match eval_expression_with_statics(&prop.value, &mut skipped, static_values) {
+                match eval_expression_scoped(
+                    &prop.value,
+                    &mut skipped,
+                    static_values,
+                    eligible,
+                ) {
                     Ok(value) => {
                         map.insert(key, value);
                     }
@@ -209,6 +252,17 @@ pub(crate) fn eval_expression_with_statics(
     expr: &Expression<'_>,
     skips: &mut Vec<SkippedProperty>,
     static_values: Option<&FxHashMap<String, Value>>,
+) -> Result<Value, BailError> {
+    eval_expression_scoped(expr, skips, static_values, false)
+}
+
+/// The recursive expression core, carrying keyframe eligibility (see
+/// `eval_object_expr_scoped`).
+fn eval_expression_scoped(
+    expr: &Expression<'_>,
+    skips: &mut Vec<SkippedProperty>,
+    static_values: Option<&FxHashMap<String, Value>>,
+    keyframes_eligible: bool,
 ) -> Result<Value, BailError> {
     // `as`/`satisfies`/non-null/parens are erased type-level syntax: a wrapped
     // expression evaluates exactly like its operand (semantic-const-resolution,
@@ -260,7 +314,7 @@ pub(crate) fn eval_expression_with_statics(
             // Note: captures from nested objects are discarded here — this path is
             // only reached for non-object properties in eval_object_expr (objects are
             // handled directly). This path remains for eval_array_element contexts.
-            match eval_object_expr_with_statics(obj, static_values) {
+            match eval_object_expr_scoped(obj, static_values, keyframes_eligible) {
                 Ok((value, inner_skips, _captures)) => {
                     skips.extend(inner_skips);
                     Ok(value)
@@ -326,6 +380,7 @@ pub(crate) fn eval_expression_with_statics(
                 &member.object,
                 member.property.name.as_str(),
                 static_values,
+                keyframes_eligible,
             )))
         }
         Expression::ComputedMemberExpression(_) => {
@@ -340,16 +395,24 @@ pub(crate) fn eval_expression_with_statics(
 ///
 /// A bare "member expression (non-static)" names neither the binding nor the
 /// contract it failed, so an author reading the skip cannot tell a typo from a
-/// keyframes collection the engine never discovered. Everything needed is
-/// already at this seam: `static_values` is the same map the engine seeds with
-/// the keyframes registry (`engine.rs` injects collections under their
-/// imported/exported local binding), so its membership IS the discovery
-/// answer. Every reason keeps the `(non-static)` marker so existing skip
-/// surfacing is unchanged in kind.
+/// keyframe collection that was never registered. Everything needed is already
+/// at this seam: `static_values` is the same map the engine seeds from the
+/// keyframe registration record (`engine.rs` injects each registered
+/// collection under the local binding its export name resolves to), so its
+/// membership IS the registration answer. Every reason keeps the
+/// `(non-static)` marker so existing skip surfacing is unchanged in kind; the
+/// unregistered case additionally carries the stable
+/// `KEYFRAMES_UNREGISTERED_REFERENCE` code, which the manifest lifts out of
+/// the message into `CssDiagnostic::code` — but ONLY when the value position
+/// is keyframe-ELIGIBLE (under an animation-name property, directly or
+/// through nested blocks; see `eval_object_expr_scoped`). Ineligible
+/// positions get the neutral non-static reason: the code is minted here or
+/// not at all, never stripped after the fact.
 fn member_expression_skip_reason(
     object: &Expression<'_>,
     property: &str,
     static_values: Option<&FxHashMap<String, Value>>,
+    keyframes_eligible: bool,
 ) -> String {
     let Expression::Identifier(ident) = object else {
         // Nested/computed object — no single binding to name.
@@ -358,20 +421,23 @@ fn member_expression_skip_reason(
     let base = ident.name.as_str();
     // Every named reason opens the same way and differs only in what follows.
     let named = format!("member expression '{base}.{property}' (non-static)");
-    // No statics at all (the variant stage and a compound's second argument
-    // evaluate this way): discovery was never consulted, so keyframes advice
-    // would be unactionable noise. Report the missing context instead.
+    // No statics at all: this arm's production callers are array-element
+    // evaluation and the module-statics collection pass, whose skips never
+    // surface as manifest diagnostics (the variant stage and the compound
+    // second argument DO evaluate with statics). Keyframe advice here would
+    // be unactionable; report the missing context instead.
     let Some(sv) = static_values else {
         return format!("{named} — evaluated without extraction-time statics");
     };
     match sv.get(base) {
         Some(Value::Object(_)) => format!(
-            "{named} — '{base}' is a discovered collection with no '{property}' member"
+            "{named} — '{base}' is a registered collection with no '{property}' member"
         ),
         Some(_) => format!("{named} — '{base}' is not an object binding"),
-        None => format!(
-            "{named} — '{base}' is not a discovered keyframes collection or extraction-time static binding (collections must be reachable from the system entry)"
+        None if keyframes_eligible => format!(
+            "{named} — '{base}' is neither a registered keyframe collection nor an extraction-time static binding; if it is a keyframe collection, register it on the system between build() and seal() under the key '{base}' — the registration key must equal the export name ({KEYFRAMES_UNREGISTERED_REFERENCE})"
         ),
+        None => format!("{named} — '{base}' is not an extraction-time static binding"),
     }
 }
 
@@ -1265,7 +1331,7 @@ const Component = { gap: GAP };"#;
     // ── the member-expression skip names its binding ─────────────────────────
 
     #[test]
-    fn member_expression_skip_names_undiscovered_collection_and_contract() {
+    fn member_expression_skip_codes_an_unregistered_collection_and_names_the_repair() {
         let sv = FxHashMap::default();
         let (_, skips, _) = parse_obj_with_statics("{ animationName: motion.pulse }", Some(&sv));
         assert_eq!(skips.len(), 1, "{:?}", skips);
@@ -1276,17 +1342,98 @@ const Component = { gap: GAP };"#;
         );
         assert!(reason.contains("non-static"), "{reason}");
         assert!(
-            reason.contains("not a discovered keyframes collection"),
+            reason.contains("is neither a registered keyframe collection"),
+            "{reason}"
+        );
+        // The repair, not the mechanism: register between the terminals under
+        // the export name.
+        assert!(
+            reason.contains("register it on the system between build() and seal()"),
             "{reason}"
         );
         assert!(
-            reason.contains("reachable from the system entry"),
+            reason.contains("the registration key must equal the export name"),
+            "{reason}"
+        );
+        // Trailing marker in the manifest's extractable position, so the
+        // diagnostic carries a stable code rather than only prose.
+        assert!(
+            reason.ends_with(&format!("({KEYFRAMES_UNREGISTERED_REFERENCE})")),
+            "{reason}"
+        );
+        assert_eq!(
+            crate::analyze_css::diagnostic_code_from_message(reason).as_deref(),
+            Some(KEYFRAMES_UNREGISTERED_REFERENCE),
             "{reason}"
         );
     }
 
     #[test]
-    fn member_expression_skip_names_a_missing_member_of_a_known_collection() {
+    fn keyframes_code_is_scoped_to_animation_name_properties() {
+        // vocabulary-registration user story 10: a build using no keyframes
+        // emits ZERO `animus.keyframes.*` diagnostics — an unknown member
+        // base under an unrelated property must not carry the keyframes
+        // code or advice, only the neutral non-static reason.
+        let sv = FxHashMap::default();
+        let (_, skips, _) = parse_obj_with_statics("{ color: palette.brand }", Some(&sv));
+        assert_eq!(skips.len(), 1, "{:?}", skips);
+        let reason = &skips[0].reason;
+        assert!(
+            reason.contains("member expression 'palette.brand'"),
+            "{reason}"
+        );
+        assert!(
+            reason.contains("'palette' is not an extraction-time static binding"),
+            "{reason}"
+        );
+        assert!(
+            !reason.contains("keyframe") && !reason.contains("build() and seal()"),
+            "keyframes advice must not leak onto unrelated properties: {reason}"
+        );
+        assert_eq!(
+            crate::analyze_css::diagnostic_code_from_message(reason),
+            None,
+            "{reason}"
+        );
+    }
+
+    #[test]
+    fn keyframes_code_fires_through_the_responsive_form() {
+        // The type surface licenses `animationName: { _: ref, sm: ref }`
+        // (ResponsiveProp<KeyframeRef ...>); eligibility must survive the
+        // nested-block recursion, not read only the immediate key.
+        let sv = FxHashMap::default();
+        let (_, skips, _) =
+            parse_obj_with_statics("{ animationName: { _: motion.pulse } }", Some(&sv));
+        assert_eq!(skips.len(), 1, "{:?}", skips);
+        let reason = &skips[0].reason;
+        assert_eq!(
+            crate::analyze_css::diagnostic_code_from_message(reason).as_deref(),
+            Some(KEYFRAMES_UNREGISTERED_REFERENCE),
+            "{reason}"
+        );
+    }
+
+    #[test]
+    fn responsive_form_of_an_unrelated_property_stays_uncoded() {
+        let sv = FxHashMap::default();
+        let (_, skips, _) =
+            parse_obj_with_statics("{ color: { _: palette.brand } }", Some(&sv));
+        assert_eq!(skips.len(), 1, "{:?}", skips);
+        let reason = &skips[0].reason;
+        assert!(
+            reason.contains("'palette' is not an extraction-time static binding"),
+            "{reason}"
+        );
+        assert_eq!(
+            crate::analyze_css::diagnostic_code_from_message(reason),
+            None,
+            "{reason}"
+        );
+    }
+
+    #[test]
+    fn member_expression_skip_names_a_missing_member_of_a_registered_collection() {
         let mut sv = FxHashMap::default();
         let mut motion = Map::new();
         motion.insert("ember".to_string(), Value::String("animus-kf-abc".to_string()));
@@ -1300,16 +1447,26 @@ const Component = { gap: GAP };"#;
             "{reason}"
         );
         assert!(
-            reason.contains("discovered collection with no 'pulse' member"),
+            reason.contains("registered collection with no 'pulse' member"),
+            "{reason}"
+        );
+        // A present-but-incomplete collection is NOT the unregistered case.
+        assert_eq!(
+            crate::analyze_css::diagnostic_code_from_message(reason),
+            None,
             "{reason}"
         );
     }
 
     #[test]
     fn member_expression_skip_without_statics_reports_missing_context() {
-        // The variant/second-compound-arg path evaluates with NO statics, so
-        // discovery was never consulted — keyframes advice there would be
-        // unactionable. Name the binding and the missing context instead.
+        // No-statics callers (array-element evaluation and the
+        // module-statics collection pass — the variant stage and the compound
+        // second argument DO evaluate with statics) never consulted the
+        // registration record, and their skips never surface as manifest
+        // diagnostics — keyframe advice there would be unactionable. Name
+        // the binding and the missing context instead, and do NOT code it as
+        // an unregistered reference.
         let (_, skips) = parse_obj_full("{ animationName: motion.pulse }");
         assert_eq!(skips.len(), 1, "{:?}", skips);
         let reason = &skips[0].reason;
@@ -1321,8 +1478,9 @@ const Component = { gap: GAP };"#;
             reason.contains("evaluated without extraction-time statics"),
             "{reason}"
         );
-        assert!(
-            !reason.contains("not a discovered keyframes collection"),
+        assert_eq!(
+            crate::analyze_css::diagnostic_code_from_message(reason),
+            None,
             "{reason}"
         );
     }
