@@ -31,7 +31,7 @@ Each component is in its own file (1 named export per file). This structure exer
 
 ## Design System (`src/ds.ts`)
 
-- `createSystem().addGroup().build()` returns `{ system: ds, createGlobalStyles }`
+- `createSystem().addGroup().build()` returns the bundle (`{ system, createGlobalStyles, createKeyframes, registerKeyframes, seal }`); `ds` is the SEALED instance from `bundle.seal()` (vocabulary-registration)
 - `createGlobalStyles()` is a factory returned from `.build()`, used to define global/reset styles
 - Tokens built separately via `createTheme()` and exported as `tokens`. Theme type augmented via `declare module`.
 - Custom transforms: `fluid` (clamp-based responsive), `ratio` (aspect-ratio)

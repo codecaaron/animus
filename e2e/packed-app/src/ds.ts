@@ -66,17 +66,15 @@ declare module '@animus-ui/system' {
   interface Theme extends PackedAppTheme {}
 }
 
-export const {
-  system: ds,
-  createGlobalStyles,
-  createKeyframes,
-} = createSystem()
+const bundle = createSystem()
   .addGroup('space', space)
   .addGroup('layout', { ...layout, ...flex })
   .addGroup('text', typography)
   .addGroup('surface', { ...color, ...border })
   .addGroup('positioning', positioning)
   .build();
+
+export const { createGlobalStyles, createKeyframes } = bundle;
 
 export const globalStyles = createGlobalStyles({
   '*, *::before, *::after': { boxSizing: 'border-box' },
@@ -98,3 +96,7 @@ export const animations = createKeyframes({
     '50%': { transform: 'scale(1.05)' },
   },
 });
+
+// Sealed system (vocabulary-registration): `animations` registers under
+// its export name; registration closes at seal().
+export const ds = bundle.registerKeyframes({ animations }).seal();

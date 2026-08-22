@@ -80,28 +80,24 @@ declare module '@animus-ui/system' {
   interface Theme extends RollupAppTheme {}
 }
 
-export const {
-  system: ds,
-  createGlobalStyles,
-  createKeyframes,
-  // extend()-form witness (openspec: first-class-extension, D1/NS-1): this
-  // lane consumes test-ds through the single extension verb — a REAL registry
-  // merge. EVERY group here (space, layout, text, surface, positioning) and
-  // the kit's condition aliases arrive through `.extend(testDs)` alone; the
-  // app deliberately re-registers nothing, so the merged config IS the kit's
-  // registry surface plus the local `_motionReduce` re-assertion below.
-  // (Re-spreading kit groups locally would coalesce under D12 transform
-  // equality — name + captured source — but pure extension is the
-  // recommended consumption shape: the merge already provides them.)
-  //
-  // Box.tsx opts into the kit's `positioning` group and App.tsx uses
-  // `top`/`zIndex`, making the emitted CSS the end-to-end witness that a
-  // kit-registered prop flows through the MERGED config into extraction
-  // output (rust-system-loader › "Merged configuration is the extraction
-  // authority"). The legacy lanes stay deliberate elsewhere: next-app keeps
-  // the deprecated `includes:` alias, react-router-app keeps the deprecated
-  // `from()` chain (G6).
-} = createSystem()
+// extend()-form witness (openspec: first-class-extension, D1/NS-1): this
+// lane consumes test-ds through the single extension verb — a REAL registry
+// merge. EVERY group here (space, layout, text, surface, positioning) and
+// the kit's condition aliases arrive through `.extend(testDs)` alone; the
+// app deliberately re-registers nothing, so the merged config IS the kit's
+// registry surface plus the local `_motionReduce` re-assertion below.
+// (Re-spreading kit groups locally would coalesce under D12 transform
+// equality — name + captured source — but pure extension is the
+// recommended consumption shape: the merge already provides them.)
+//
+// Box.tsx opts into the kit's `positioning` group and App.tsx uses
+// `top`/`zIndex`, making the emitted CSS the end-to-end witness that a
+// kit-registered prop flows through the MERGED config into extraction
+// output (rust-system-loader › "Merged configuration is the extraction
+// authority"). The legacy lanes stay deliberate elsewhere: next-app keeps
+// the deprecated `includes:` alias, react-router-app keeps the deprecated
+// `from()` chain (G6).
+const bundle = createSystem()
   .extend(testDs)
   // Condition alias registry (modern-css-surface inc 03). The kit already
   // carries `_motionReduce`; this local registration re-asserts it with an
@@ -111,6 +107,8 @@ export const {
     _motionReduce: '@media (prefers-reduced-motion: reduce)',
   })
   .build();
+
+export const { createGlobalStyles, createKeyframes } = bundle;
 
 export const globalStyles = createGlobalStyles(
   {
@@ -151,3 +149,8 @@ export const animations = createKeyframes({
     '50%': { transform: 'scale(1.05)' },
   },
 });
+
+// Sealed system (vocabulary-registration): `animations` registers under its
+// export name; the kit's `kitMotion` arrives through the sealed test-ds
+// record via `.extend()`.
+export const ds = bundle.registerKeyframes({ animations }).seal();

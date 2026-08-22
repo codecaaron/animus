@@ -180,12 +180,6 @@ export interface CollectedExternalPackages {
   packageMap: Record<string, string>;
   /** specifier → absolute src/index.ts path, only for packages with one. */
   sourceEntries: Map<string, string>;
-  /** specifier → absolute entry to scan for branded `Keyframes` collections —
-   *  one per admitted specifier, whatever the package's shape: the redirected
-   *  source entry when src/ serves it, the resolved (dist) entry otherwise.
-   *  Keyed separately from `sourceEntries` because that map doubles as the
-   *  hosts' module-resolution redirect and stays src-only by contract. */
-  keyframesScanEntries: Map<string, string>;
   /** Absolute directories for bundler loader allowlisting (src/ or dist entry dir). */
   packageDirs: string[];
   /** Absolute package dir → EVERY declared specifier that claimed it, in
@@ -271,7 +265,6 @@ export async function collectExternalPackageSources(opts: {
   const pushed = new Set<string>();
   const packageMap: Record<string, string> = {};
   const sourceEntries = new Map<string, string>();
-  const keyframesScanEntries = new Map<string, string>();
   const packageDirs: string[] = [];
   const dirOwnerSets: Record<string, string[]> = {};
   const dirExtensions: Record<string, string[]> = {};
@@ -330,7 +323,6 @@ export async function collectExternalPackageSources(opts: {
       } else {
         packageMap[specifier] = relative(rootDir, absEntry);
       }
-      keyframesScanEntries.set(specifier, srcEntry ?? absEntry);
 
       // A kit declared at a subpath is routinely imported at its package
       // ROOT by app code (`import { Card } from '@scope/kit'`), and a root
@@ -351,10 +343,6 @@ export async function collectExternalPackageSources(opts: {
           if (rootEntry) {
             packageMap[packageName] = relative(rootDir, rootEntry);
             sourceEntries.set(packageName, rootEntry);
-            // The root module routinely carries the package's `Keyframes`
-            // exports (a definition subpath usually doesn't re-export them)
-            // — the alias scans alongside the declared entry.
-            keyframesScanEntries.set(packageName, rootEntry);
           }
         }
       }
@@ -399,7 +387,6 @@ export async function collectExternalPackageSources(opts: {
       onPackageResolved?.(specifier, outputDir);
       const relPath = relative(rootDir, absEntry);
       packageMap[specifier] = relPath;
-      keyframesScanEntries.set(specifier, absEntry);
 
       const outputExtensions = new Set(extensionsSet);
       outputExtensions.add(extname(absEntry));
@@ -453,7 +440,6 @@ export async function collectExternalPackageSources(opts: {
     entries,
     packageMap,
     sourceEntries,
-    keyframesScanEntries,
     packageDirs,
     dirOwnerSets,
     dirExtensions,
@@ -516,11 +502,6 @@ export function excludeCollectedPackages(
     if (targetRejected(specifier, absEntry)) continue;
     sourceEntries.set(specifier, absEntry);
   }
-  const keyframesScanEntries = new Map<string, string>();
-  for (const [specifier, absEntry] of collected.keyframesScanEntries) {
-    if (targetRejected(specifier, absEntry)) continue;
-    keyframesScanEntries.set(specifier, absEntry);
-  }
   const dirOwnerSets: Record<string, string[]> = {};
   for (const [dir, specs] of Object.entries(collected.dirOwnerSets)) {
     const kept = specs.filter((s) => !rejectedSpecifiers.has(s));
@@ -544,7 +525,6 @@ export function excludeCollectedPackages(
     ),
     packageMap,
     sourceEntries,
-    keyframesScanEntries,
     packageDirs: collected.packageDirs.filter(
       (dir) => !rejectedDirs.includes(dir)
     ),

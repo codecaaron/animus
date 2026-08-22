@@ -56,14 +56,17 @@ pub struct SystemConfig {
     /// collection identity so the extractor can substitute
     /// `motion.ember`-style member-expression references against it.
     pub keyframes_blocks: Option<String>,
-    /// Vocabulary collision witnesses from the sealed system's registration
-    /// record (vocabulary-registration): JSON array of `{ code, name,
-    /// winner, loser }` entries with the stable code
-    /// `animus.vocabulary.collision`. The record — not the evaluation
-    /// host's console (shimmed to a no-op) — is the witness channel; hosts
-    /// surface these as diagnostics. `None` when the record carries no
-    /// collisions or the system predates the record.
-    pub vocabulary_collisions: Option<String>,
+    /// Vocabulary witnesses from the sealed system's registration record
+    /// (vocabulary-registration): one JSON array carrying every coded entry
+    /// — collision entries (`animus.vocabulary.collision`: `{ code, name,
+    /// winner, loser }`) and legacy-verb entries
+    /// (`animus.vocabulary.legacy-verb`: `{ code, verb, names }`, a sealed
+    /// kit with registered vocabulary consumed through `from()`/`includes:`
+    /// which cannot carry it). The record — not the evaluation host's
+    /// console (shimmed to a no-op) — is the witness channel; hosts surface
+    /// each entry as a diagnostic keyed by its `code`. `None` when the
+    /// record carries no witnesses.
+    pub vocabulary_witnesses: Option<String>,
     /// Canonical absolute paths of every module evaluated for this system —
     /// the entry plus its transitive graph, excluding runtime stubs (which
     /// have no path). Sorted. Plugins use this as the geological-reset
@@ -1559,18 +1562,24 @@ fn extract_system_config<'js>(
 
     // Keyframe collections (vocabulary-registration): a sealed system's
     // registration record is the ONLY source — an exported-but-unregistered
-    // collection does not carry. A system WITHOUT the record accessor falls
-    // back to the export scan so un-migrated systems keep loading; the
-    // migration increment deletes that fallback and makes record absence
-    // the loud version-skew error.
-    let has_record = system_obj
+    // collection does not carry, and a system WITHOUT the record accessor
+    // fails the load loud (unsealed, or built by an older
+    // @animus-ui/system) rather than loading with silently empty
+    // collections.
+    if system_obj
         .get::<_, Function>("getVocabularyRecord")
-        .is_ok();
-    let (keyframes_blocks, vocabulary_collisions) = if has_record {
-        extract_vocabulary_record(ctx, &system_obj)?
-    } else {
-        (extract_keyframes_blocks(namespace), None)
-    };
+        .is_err()
+    {
+        return Err(
+            "system carries no vocabulary registration record — it is unsealed or was \
+             built by an older @animus-ui/system. Register collections between build() \
+             and seal() and export the sealed instance; loading with silently empty \
+             collections is refused"
+                .to_string(),
+        );
+    }
+    let (keyframes_blocks, vocabulary_witnesses) =
+        extract_vocabulary_record(ctx, &system_obj)?;
 
     Ok(SystemConfig {
         prop_config,
@@ -1585,7 +1594,7 @@ fn extract_system_config<'js>(
         transform_sources,
         global_style_blocks,
         keyframes_blocks,
-        vocabulary_collisions,
+        vocabulary_witnesses,
         // Populated by load_system_module from the resolved module graph;
         // execute_bundle only sees the assembled bundle text.
         dependencies: Vec::new(),
@@ -1612,13 +1621,14 @@ fn find_exports_with_method<'js>(
 }
 
 /// Read the sealed system's vocabulary record (vocabulary-registration).
-/// Returns `(keyframes_blocks, vocabulary_collisions)`: the record's
+/// Returns `(keyframes_blocks, vocabulary_witnesses)`: the record's
 /// declaration-ordered `keyframes` array becomes the unchanged
 /// `{ exportName: { keyName: { name, frames } } }` wire (insertion order
 /// preserved end to end — `Object.fromEntries` + `JSON.stringify` in the
 /// evaluation context, `preserve_order` on the Rust side), and its
-/// `collisions` entries carry verbatim as the host-facing witness. An
-/// incompatible version marker fails the load loud.
+/// `collisions` + `legacyVerbs` entries carry verbatim as one coded
+/// host-facing witness array. An incompatible version marker fails the
+/// load loud.
 fn extract_vocabulary_record<'js>(
     ctx: &rquickjs::Ctx<'js>,
     system_obj: &Object<'js>,
@@ -1633,10 +1643,11 @@ fn extract_vocabulary_record<'js>(
   }
   const keyframes = Array.isArray(record.keyframes) ? record.keyframes : [];
   const collisions = Array.isArray(record.collisions) ? record.collisions : [];
+  const legacyVerbs = Array.isArray(record.legacyVerbs) ? record.legacyVerbs : [];
   return JSON.stringify({
     keyframeCount: keyframes.length,
     keyframes: Object.fromEntries(keyframes.map((entry) => [entry.name, entry.frames])),
-    collisions,
+    witnesses: collisions.concat(legacyVerbs),
   });
 })()"#;
     let _ = ctx.globals().set("__sys_ref", system_obj.clone());
@@ -1671,13 +1682,13 @@ fn extract_vocabulary_record<'js>(
             .get("keyframes")
             .map(|v| serde_json::to_string(v).unwrap_or_default())
     };
-    let vocabulary_collisions = match parsed.get("collisions").and_then(|v| v.as_array()) {
+    let vocabulary_witnesses = match parsed.get("witnesses").and_then(|v| v.as_array()) {
         Some(list) if !list.is_empty() => {
             Some(serde_json::to_string(list).unwrap_or_default())
         }
         _ => None,
     };
-    Ok((keyframes_blocks, vocabulary_collisions))
+    Ok((keyframes_blocks, vocabulary_witnesses))
 }
 
 /// List all export keys from a module namespace.
@@ -1728,88 +1739,9 @@ fn extract_global_style_blocks(namespace: &Object<'_>) -> Option<String> {
     }
 }
 
-/// Extract Keyframes collection exports (objects with `__brand === 'Keyframes'`).
-///
-/// Each collection carries `__frames: { keyName: { name, frames } }` — the raw
-/// payload the extractor needs to both emit `@keyframes <name>` blocks and
-/// resolve `motion.ember`-style member-expression references in component
-/// styles. The returned JSON preserves this nested shape: `{ exportName:
-/// { keyName: { name, frames } } }`, keyed by the collection's export name.
-fn extract_keyframes_blocks(namespace: &Object<'_>) -> Option<String> {
-    let keys = list_export_keys(namespace);
-    let mut blocks: HashMap<String, serde_json::Value> = HashMap::new();
-    let ctx = namespace.ctx().clone();
-
-    for key in &keys {
-        if let Ok(obj) = namespace.get::<_, Object>(key.as_str()) {
-            if let Ok(brand) = obj.get::<_, String>("__brand") {
-                if brand == "Keyframes" {
-                    // Serialize the full `__frames` record via JSON.stringify.
-                    // Yields `{ keyName: { name, frames } }` per collection.
-                    let script =
-                        format!("JSON.stringify(globalThis.__ns_ref[\"{}\"].__frames)", key);
-                    let _ = ctx.globals().set("__ns_ref", namespace.clone());
-                    if let Ok(json_str) = ctx.eval::<String, _>(script.as_bytes()) {
-                        let _ = ctx.globals().remove("__ns_ref");
-                        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&json_str) {
-                            blocks.insert(key.clone(), parsed);
-                        }
-                    } else {
-                        let _ = ctx.globals().remove("__ns_ref");
-                    }
-                }
-            }
-        }
-    }
-
-    if blocks.is_empty() {
-        None
-    } else {
-        Some(serde_json::to_string(&blocks).unwrap_or_default())
-    }
-}
-
 // ---------------------------------------------------------------------------
 // 6. Public entry point
 // ---------------------------------------------------------------------------
-
-/// Scan a module entry for named `Keyframes` collection exports WITHOUT
-/// extracting any system configuration. External package entries contribute
-/// keyframes only — the consumer's configured system stays the singular
-/// authority for themes, scales, selectors, conditions, and props
-/// (openspec: external-package-file-discovery carve-out). Same
-/// read → strip → resolve → bundle → eval pipeline as a system load; the
-/// namespace walk reads nothing but `__brand === 'Keyframes'` exports.
-/// Returns the `{ exportName: { keyName: { name, frames } } }` JSON shape.
-pub fn scan_keyframes_exports(
-    entry_path: &str,
-    root_dir: &str,
-) -> Result<Option<String>, String> {
-    let (specifier_map, source_map, stub_exports) = resolve_all_deps(entry_path, root_dir)?;
-
-    let entry_canon = fs::canonicalize(entry_path)
-        .map_err(|e| format!("failed to canonicalize '{}': {}", entry_path, e))?
-        .to_string_lossy()
-        .to_string();
-
-    let (bundle, layout) = build_bundle(&specifier_map, &source_map, &stub_exports, &entry_canon)?;
-
-    let runtime = Runtime::new().map_err(|e| format!("rquickjs Runtime::new failed: {}", e))?;
-    let context =
-        Context::full(&runtime).map_err(|e| format!("rquickjs Context::full failed: {}", e))?;
-
-    context.with(|ctx| {
-        ctx.eval::<(), _>(bundle.as_bytes())
-            .map_err(|e| describe_eval_failure(&ctx, &layout, &e))?;
-
-        let access_script = format!("__modules['{}']", js_quoted(&entry_canon));
-        let namespace: Object = ctx
-            .eval(access_script.as_bytes())
-            .map_err(|e| format!("failed to access entry module exports: {}", e))?;
-
-        Ok(extract_keyframes_blocks(&namespace))
-    })
-}
 
 /// Load a system module and return its serialized configuration.
 ///
@@ -2267,61 +2199,6 @@ export const ds = tokens;
         fs::write(path, contents).expect("write fixture");
     }
 
-    #[test]
-    fn scan_keyframes_exports_reads_only_branded_collections() {
-        let dir = scratch_dir("kf-scan");
-        let entry = dir.join("index.ts");
-        write_fixture(
-            &entry,
-            "export const motion = { __brand: 'Keyframes', __frames: { pulse: { name: 'animus-kf-testhash', frames: { from: { opacity: 0.4 }, to: { opacity: 1 } } } } };\n\
-             export const notKeyframes = { __brand: 'Other', __frames: {} };\n\
-             export const plain = 42;\n",
-        );
-
-        let result = scan_keyframes_exports(&entry.to_string_lossy(), &dir.to_string_lossy());
-        let _ = fs::remove_dir_all(&dir);
-
-        let json = result
-            .expect("scan must succeed")
-            .expect("a Keyframes export must be discovered");
-        let parsed: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
-        let obj = parsed.as_object().unwrap();
-        assert_eq!(obj.len(), 1, "{json}");
-        assert_eq!(
-            parsed["motion"]["pulse"]["name"],
-            serde_json::Value::String("animus-kf-testhash".into())
-        );
-        assert!(parsed["motion"]["pulse"]["frames"]["from"].is_object());
-    }
-
-    #[test]
-    fn scan_keyframes_exports_degrades_to_error_not_panic() {
-        let dir = scratch_dir("kf-scan-broken");
-        let entry = dir.join("index.ts");
-        write_fixture(&entry, "throw new Error('entry refuses to evaluate');\n");
-
-        let result = scan_keyframes_exports(&entry.to_string_lossy(), &dir.to_string_lossy());
-        let _ = fs::remove_dir_all(&dir);
-
-        let error = result.expect_err("a throwing entry must surface as Err");
-        assert!(
-            error.contains("refuses to evaluate") || error.contains("eval"),
-            "error must describe the evaluation failure: {error}"
-        );
-    }
-
-    #[test]
-    fn scan_keyframes_exports_none_when_no_collections() {
-        let dir = scratch_dir("kf-scan-empty");
-        let entry = dir.join("index.ts");
-        write_fixture(&entry, "export const plain = { value: 1 };\n");
-
-        let result = scan_keyframes_exports(&entry.to_string_lossy(), &dir.to_string_lossy());
-        let _ = fs::remove_dir_all(&dir);
-
-        assert_eq!(result.expect("scan must succeed"), None);
-    }
-
     // ── vocabulary-registration: seam-1 record consumption ──────────────────
 
     const FIXTURE_THEME: &str = "export const theme = { serialize: () => ({\n\
@@ -2433,8 +2310,8 @@ export const ds = tokens;
         write_fixture(
             &entry,
             &format!(
-                "export const ds = {{ toConfig: () => ({{ propConfig: '{{}}', groupRegistry: '{{}}' }}) }};\n\
-                 export const dsTwo = {{ toConfig: () => ({{ propConfig: '{{}}', groupRegistry: '{{}}' }}) }};\n\
+                "export const ds = {{ toConfig: () => ({{ propConfig: '{{}}', groupRegistry: '{{}}' }}), getVocabularyRecord: () => ({{ version: 1, keyframes: [], globalStyles: [], collisions: [], legacyVerbs: [] }}) }};\n\
+                 export const dsTwo = {{ toConfig: () => ({{ propConfig: '{{}}', groupRegistry: '{{}}' }}), getVocabularyRecord: () => ({{ version: 1, keyframes: [], globalStyles: [], collisions: [], legacyVerbs: [] }}) }};\n\
                  {FIXTURE_THEME}"
             ),
         );
@@ -2456,7 +2333,7 @@ export const ds = tokens;
         write_fixture(
             &entry,
             &format!(
-                "export const ds = {{ toConfig: () => ({{ propConfig: '{{}}', groupRegistry: '{{}}' }}) }};\n\
+                "export const ds = {{ toConfig: () => ({{ propConfig: '{{}}', groupRegistry: '{{}}' }}), getVocabularyRecord: () => ({{ version: 1, keyframes: [], globalStyles: [], collisions: [], legacyVerbs: [] }}) }};\n\
                  export const dsAlias = ds;\n\
                  {FIXTURE_THEME}"
             ),
@@ -2491,10 +2368,11 @@ export const ds = tokens;
     }
 
     #[test]
-    fn record_collisions_carry_to_the_config() {
+    fn record_witnesses_carry_to_the_config() {
         // The record, not console, is the witness channel (the evaluation
-        // host shims console to a no-op).
-        let dir = scratch_dir("vocab-collisions");
+        // host shims console to a no-op): collision AND legacy-verb entries
+        // arrive as one coded array.
+        let dir = scratch_dir("vocab-witnesses");
         let entry = dir.join("entry.ts");
         write_fixture(
             &entry,
@@ -2502,6 +2380,9 @@ export const ds = tokens;
                 "{ version: 1, keyframes: [], globalStyles: [], collisions: [\n\
                    { code: 'animus.vocabulary.collision', name: 'motion',\n\
                      winner: 'local registration #1', loser: 'extended source #1' },\n\
+                 ], legacyVerbs: [\n\
+                   { code: 'animus.vocabulary.legacy-verb', verb: 'includes',\n\
+                     names: ['kitMotion'] },\n\
                  ] }",
             ),
         );
@@ -2510,31 +2391,73 @@ export const ds = tokens;
         let _ = fs::remove_dir_all(&dir);
 
         let config = result.expect("sealed system must load");
-        let collisions = config
-            .vocabulary_collisions
-            .expect("collision entries must carry");
+        let witnesses = config
+            .vocabulary_witnesses
+            .expect("witness entries must carry");
         assert!(
-            collisions.contains("animus.vocabulary.collision")
-                && collisions.contains("motion")
-                && collisions.contains("extended source #1"),
-            "collision witness must survive verbatim: {collisions}"
+            witnesses.contains("animus.vocabulary.collision")
+                && witnesses.contains("motion")
+                && witnesses.contains("extended source #1")
+                && witnesses.contains("animus.vocabulary.legacy-verb")
+                && witnesses.contains("kitMotion"),
+            "witness entries must survive verbatim: {witnesses}"
         );
     }
 
     #[test]
-    fn recordless_system_falls_back_to_export_scan_until_migration() {
-        // STAGING PIN (design Ledger DEF-11 class; deleted at the migration
-        // increment): a system without a vocabulary record keeps export-scan
-        // discovery so un-migrated fixtures stay green. The migration
-        // increment replaces this with the loud version-skew error — this
-        // test must be DELETED in the same diff.
-        let dir = scratch_dir("vocab-fallback");
+    fn undeclared_root_barrel_is_never_evaluated() {
+        // Host-seam deletion witness (vocabulary-registration hard cut): the
+        // consumer's declared definition graph is the ONLY thing evaluated.
+        // A kit's root barrel that THROWS at module top level (standing in
+        // for a framework graph) must never run when the consumer imports
+        // only the definition subpath — discovery-by-scan is gone and
+        // nothing else walks package entries.
+        let dir = scratch_dir("vocab-throwing-barrel");
+        let kit = dir.join("node_modules").join("@x").join("kit");
+        write_fixture(
+            &kit.join("package.json"),
+            r#"{"name":"@x/kit","exports":{".":"./index.js","./definition":"./definition.js"}}"#,
+        );
+        write_fixture(
+            &kit.join("index.js"),
+            "throw new Error('root barrel must not be evaluated');\n",
+        );
+        write_fixture(
+            &kit.join("definition.js"),
+            "export const kitTokens = { fromKit: true };\n",
+        );
+        let entry = dir.join("entry.ts");
+        write_fixture(
+            &entry,
+            &format!(
+                "import {{ kitTokens }} from '@x/kit/definition';\n\
+                 export const marker = kitTokens;\n\
+                 {}",
+                sealed_system_fixture(
+                    "{ version: 1, keyframes: [], globalStyles: [], collisions: [], legacyVerbs: [] }",
+                )
+            ),
+        );
+
+        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None);
+        let _ = fs::remove_dir_all(&dir);
+
+        result.expect("the load must succeed without touching the root barrel");
+    }
+
+    #[test]
+    fn recordless_system_fails_the_load() {
+        // rust-system-loader §"Registration-record version skew fails the
+        // load", the absence half (the DEF-11-class hard cut): a system
+        // without the record accessor is unsealed or built by an older
+        // @animus-ui/system — refuse to load with silently empty
+        // collections.
+        let dir = scratch_dir("vocab-recordless");
         let entry = dir.join("entry.ts");
         write_fixture(
             &entry,
             &format!(
                 "export const ds = {{ toConfig: () => ({{ propConfig: '{{}}', groupRegistry: '{{}}' }}) }};\n\
-                 export const motion = {{ __brand: 'Keyframes', __frames: {{ spin: {{ name: 'animus-kf-ddd', frames: {{}} }} }} }};\n\
                  {FIXTURE_THEME}"
             ),
         );
@@ -2542,11 +2465,11 @@ export const ds = tokens;
         let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None);
         let _ = fs::remove_dir_all(&dir);
 
-        let config = result.expect("recordless system must still load");
-        let blocks = config
-            .keyframes_blocks
-            .expect("legacy export scan still discovers");
-        assert!(blocks.contains("animus-kf-ddd"));
+        let error = result.expect_err("a recordless system must fail the load");
+        assert!(
+            error.contains("unsealed") && error.contains("seal()"),
+            "error must name the sealing requirement: {error}"
+        );
     }
 
     #[test]
@@ -2585,7 +2508,7 @@ export const ds = tokens;
             &entry,
             "import { makeTheme } from './theme';\n\
              export const theme = makeTheme();\n\
-             export const system = { toConfig: () => ({ propConfig: '{}', groupRegistry: '{}' }) };\n",
+             export const system = { toConfig: () => ({ propConfig: '{}', groupRegistry: '{}' }), getVocabularyRecord: () => ({ version: 1, keyframes: [], globalStyles: [], collisions: [], legacyVerbs: [] }) };\n",
         );
         write_fixture(
             &dir.join("theme.ts"),
@@ -2643,7 +2566,7 @@ export const ds = tokens;
                  contextualVarsJson: '{}',\n\
                }),\n\
              };\n\
-             export const system = { toConfig: () => ({ propConfig: '{}', groupRegistry: '{}' }) };\n",
+             export const system = { toConfig: () => ({ propConfig: '{}', groupRegistry: '{}' }), getVocabularyRecord: () => ({ version: 1, keyframes: [], globalStyles: [], collisions: [], legacyVerbs: [] }) };\n",
         );
         write_fixture(
             &dir.join("kit/index.ts"),
@@ -2699,12 +2622,12 @@ export const ds = tokens;
                  contextualVarsJson: '{}',\n\
                }),\n\
              };\n\
-             export const system = { toConfig: () => ({ propConfig: '{}', groupRegistry: '{}' }) };\n",
+             export const system = { toConfig: () => ({ propConfig: '{}', groupRegistry: '{}' }), getVocabularyRecord: () => ({ version: 1, keyframes: [], globalStyles: [], collisions: [], legacyVerbs: [] }) };\n",
         );
         write_fixture(
             &dir.join("kit/index.ts"),
             "export const kit = {\n\
-               system: { toConfig: () => ({ propConfig: '{}', groupRegistry: '{}' }) },\n\
+               system: { toConfig: () => ({ propConfig: '{}', groupRegistry: '{}' }), getVocabularyRecord: () => ({ version: 1, keyframes: [], globalStyles: [], collisions: [], legacyVerbs: [] }) },\n\
                tokens: {\n\
                  colors: { externalAccent: '#f0f' },\n\
                  manifest: { variableMap: { 'colors.externalAccent': '--color-external-accent' } },\n\
@@ -2754,12 +2677,12 @@ export const ds = tokens;
                  contextualVarsJson: '{}',\n\
                }),\n\
              };\n\
-             export const system = { toConfig: () => ({ propConfig: '{}', groupRegistry: '{}' }) };\n",
+             export const system = { toConfig: () => ({ propConfig: '{}', groupRegistry: '{}' }), getVocabularyRecord: () => ({ version: 1, keyframes: [], globalStyles: [], collisions: [], legacyVerbs: [] }) };\n",
         );
         write_fixture(
             &dir.join("kit/index.ts"),
             "export const kit = {\n\
-               system: { toConfig: () => ({ propConfig: '{}', groupRegistry: '{}' }) },\n\
+               system: { toConfig: () => ({ propConfig: '{}', groupRegistry: '{}' }), getVocabularyRecord: () => ({ version: 1, keyframes: [], globalStyles: [], collisions: [], legacyVerbs: [] }) },\n\
                theme: {\n\
                  colors: { externalAccent: '#f0f' },\n\
                  manifest: { variableMap: { 'colors.externalAccent': '--color-external-accent' } },\n\
@@ -2817,7 +2740,7 @@ export const ds = tokens;
                  contextualVarsJson: '{}',\n\
                }),\n\
              };\n\
-             export const system = { toConfig: () => ({ propConfig: '{}', groupRegistry: '{}' }) };\n",
+             export const system = { toConfig: () => ({ propConfig: '{}', groupRegistry: '{}' }), getVocabularyRecord: () => ({ version: 1, keyframes: [], globalStyles: [], collisions: [], legacyVerbs: [] }) };\n",
         );
 
         let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None);
@@ -2847,7 +2770,7 @@ export const ds = tokens;
                  contextualVarsJson: '{}',\n\
                }),\n\
              };\n\
-             export const system = { toConfig: () => ({ propConfig: '{}', groupRegistry: '{}' }) };\n",
+             export const system = { toConfig: () => ({ propConfig: '{}', groupRegistry: '{}' }), getVocabularyRecord: () => ({ version: 1, keyframes: [], globalStyles: [], collisions: [], legacyVerbs: [] }) };\n",
         );
 
         let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None);
@@ -2878,7 +2801,7 @@ export const ds = tokens;
                }),\n\
              };\n\
              export const tokens = { color: 'red' };\n\
-             export const system = { toConfig: () => ({ propConfig: '{}', groupRegistry: '{}' }) };\n",
+             export const system = { toConfig: () => ({ propConfig: '{}', groupRegistry: '{}' }), getVocabularyRecord: () => ({ version: 1, keyframes: [], globalStyles: [], collisions: [], legacyVerbs: [] }) };\n",
         );
 
         let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None);
@@ -2908,7 +2831,7 @@ export const ds = tokens;
                  contextualVarsJson: '{}',\n\
                }),\n\
              };\n\
-             export const system = { toConfig: () => ({ propConfig: '{}', groupRegistry: '{}' }) };\n",
+             export const system = { toConfig: () => ({ propConfig: '{}', groupRegistry: '{}' }), getVocabularyRecord: () => ({ version: 1, keyframes: [], globalStyles: [], collisions: [], legacyVerbs: [] }) };\n",
         );
 
         let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None);
@@ -2937,7 +2860,7 @@ export const ds = tokens;
                  contextualVarsJson: '{}',\n\
                }),\n\
              };\n\
-             export const system = { toConfig: () => ({ propConfig: '{}', groupRegistry: '{}' }) };\n",
+             export const system = { toConfig: () => ({ propConfig: '{}', groupRegistry: '{}' }), getVocabularyRecord: () => ({ version: 1, keyframes: [], globalStyles: [], collisions: [], legacyVerbs: [] }) };\n",
         );
 
         let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None);
@@ -2965,7 +2888,7 @@ export const ds = tokens;
                addScale: () => ({}),\n\
                addColors: () => ({}),\n\
              };\n\
-             export const system = { toConfig: () => ({ propConfig: '{}', groupRegistry: '{}' }) };\n",
+             export const system = { toConfig: () => ({ propConfig: '{}', groupRegistry: '{}' }), getVocabularyRecord: () => ({ version: 1, keyframes: [], globalStyles: [], collisions: [], legacyVerbs: [] }) };\n",
         );
 
         let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None);
@@ -3000,7 +2923,7 @@ export const ds = tokens;
                  contextualVarsJson: '{}',\n\
                }),\n\
              };\n\
-             export const system = { toConfig: () => ({ propConfig: '{}', groupRegistry: '{}' }) };\n",
+             export const system = { toConfig: () => ({ propConfig: '{}', groupRegistry: '{}' }), getVocabularyRecord: () => ({ version: 1, keyframes: [], globalStyles: [], collisions: [], legacyVerbs: [] }) };\n",
         );
 
         let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None);
@@ -3025,7 +2948,7 @@ export const ds = tokens;
                build: () => ({}),\n\
                addScale: () => ({}),\n\
              };\n\
-             export const system = { toConfig: () => ({ propConfig: '{}', groupRegistry: '{}' }) };\n",
+             export const system = { toConfig: () => ({ propConfig: '{}', groupRegistry: '{}' }), getVocabularyRecord: () => ({ version: 1, keyframes: [], globalStyles: [], collisions: [], legacyVerbs: [] }) };\n",
         );
 
         let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None);
@@ -3048,7 +2971,7 @@ export const ds = tokens;
         write_fixture(
             &entry,
             "export const theme = { color: 'red' };\n\
-             export const system = { toConfig: () => ({ propConfig: '{}', groupRegistry: '{}' }) };\n",
+             export const system = { toConfig: () => ({ propConfig: '{}', groupRegistry: '{}' }), getVocabularyRecord: () => ({ version: 1, keyframes: [], globalStyles: [], collisions: [], legacyVerbs: [] }) };\n",
         );
 
         let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None);
@@ -3080,7 +3003,7 @@ export const ds = tokens;
                }),\n\
              };\n\
              export const tokens = theme;\n\
-             export const system = { toConfig: () => ({ propConfig: '{}', groupRegistry: '{}' }) };\n",
+             export const system = { toConfig: () => ({ propConfig: '{}', groupRegistry: '{}' }), getVocabularyRecord: () => ({ version: 1, keyframes: [], globalStyles: [], collisions: [], legacyVerbs: [] }) };\n",
         );
 
         let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None);
@@ -3114,7 +3037,7 @@ export const ds = tokens;
                  contextualVarsJson: '{}',\n\
                }),\n\
              };\n\
-             export const system = { toConfig: () => ({ propConfig: '{}', groupRegistry: '{}' }) };\n",
+             export const system = { toConfig: () => ({ propConfig: '{}', groupRegistry: '{}' }), getVocabularyRecord: () => ({ version: 1, keyframes: [], globalStyles: [], collisions: [], legacyVerbs: [] }) };\n",
         );
 
         let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None);

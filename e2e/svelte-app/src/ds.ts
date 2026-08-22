@@ -7,4 +7,6 @@ export const theme = /* @__PURE__ */ (() =>
     })
     .build())();
 
-export const { system: ds } = /* @__PURE__ */ (() => createSystem().build())();
+// Sealed system (vocabulary-registration): a vocabulary-free system seals
+// too — `.seal()` is the loader's contract for every consumer.
+export const ds = /* @__PURE__ */ (() => createSystem().build().seal())();

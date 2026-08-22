@@ -165,6 +165,25 @@ export interface VocabularyCollisionEntry {
 }
 
 /**
+ * Witness for a sealed kit with registered vocabulary arriving through a
+ * legacy verb (`from()` / `includes:`) that performs no registry merge —
+ * the vocabulary named here does NOT reach the consumer. Registered
+ * vocabulary requires `.extend()`. Entries whose names DO arrive through a
+ * separate `.extend()` of the same vocabulary are filtered out at `seal()`
+ * — the witness never claims an undelivered name that was delivered.
+ */
+export interface VocabularyLegacyVerbEntry {
+  readonly code: 'animus.vocabulary.legacy-verb';
+  readonly verb: 'from' | 'includes';
+  /** Positional source label (`includes source #1`, `from source #2`) —
+   * the same origin-label vocabulary the collision entries use; sources
+   * have no knowable export name at this seam. */
+  readonly source: string;
+  /** The registered vocabulary names the verb could not carry. */
+  readonly names: readonly string[];
+}
+
+/**
  * The declaration-ordered, version-marked registration record a sealed
  * system carries (vocabulary-registration). The loader reads collections
  * exclusively from here; `collisions` is the merge-point witness for paths
@@ -175,6 +194,7 @@ export interface VocabularyRecord {
   readonly keyframes: readonly VocabularyKeyframesEntry[];
   readonly globalStyles: readonly VocabularyGlobalStyleEntry[];
   readonly collisions: readonly VocabularyCollisionEntry[];
+  readonly legacyVerbs: readonly VocabularyLegacyVerbEntry[];
 }
 
 /** Internal pending/merged vocabulary state (origin powers witness text). */
@@ -182,6 +202,37 @@ interface VocabularyKeyframesState {
   name: string;
   frames: KeyframesFrameData;
   origin: string;
+}
+
+/**
+ * Legacy-verb witness helper shared by `from()` and the `includes:` config
+ * path: a sealed source carrying registered vocabulary cannot deliver it
+ * through a verb that performs no registry merge. The RECORD is the sole
+ * witness channel (hosts surface it as a coded diagnostic; the extraction
+ * host shims `console`, and a runtime warn here would ship in production
+ * consumer bundles) — no console output. `seal()` filters out names that
+ * a separate `.extend()` of the same vocabulary DID deliver.
+ */
+function legacyVerbWitness(
+  source: IncludableSystem,
+  verb: 'from' | 'includes',
+  sourceIndex: number
+): VocabularyLegacyVerbEntry | null {
+  const record = (
+    source as { getVocabularyRecord?(): VocabularyRecord }
+  ).getVocabularyRecord?.();
+  if (!record) return null;
+  const names = [
+    ...record.keyframes.map((entry) => entry.name),
+    ...record.globalStyles.map((entry) => entry.name),
+  ];
+  if (names.length === 0) return null;
+  return {
+    code: 'animus.vocabulary.legacy-verb',
+    verb,
+    source: `${verb} source #${sourceIndex}`,
+    names,
+  };
 }
 
 /**
@@ -235,10 +286,11 @@ function mergeVocabularyKeyframes(
         winner: incomingOrigin,
         loser: loser.origin,
       });
+      // oxlint-disable-next-line no-console -- intentional runtime diagnostic
       console.warn(
-        `animus vocabulary collision: keyframes "${name}" is registered by ` +
-          `both ${loser.origin} and ${incomingOrigin} — ${incomingOrigin} ` +
-          'wins. Rename one collection to silence this.'
+        `animus: keyframes vocabulary "${name}" is registered by both ` +
+          `${loser.origin} and ${incomingOrigin} — ${incomingOrigin} wins; ` +
+          'rename one collection (animus.vocabulary.collision)'
       );
       entries.splice(existingIndex, 1);
     }
@@ -247,7 +299,7 @@ function mergeVocabularyKeyframes(
   return { entries, collisions };
 }
 
-declare const VOCABULARY_COLLISION: unique symbol;
+declare const VOCABULARY_COLLISION_BRAND: unique symbol;
 
 /**
  * Impossible-to-satisfy marker type that surfaces a template-literal label
@@ -255,7 +307,7 @@ declare const VOCABULARY_COLLISION: unique symbol;
  * vocabulary name instead of a bare structural mismatch.
  */
 export interface VocabularyNameCollision<Name extends string> {
-  readonly [VOCABULARY_COLLISION]: `Vocabulary name "${Name}" is already registered on this system`;
+  readonly [VOCABULARY_COLLISION_BRAND]: `Vocabulary name "${Name}" is already registered on this system`;
 }
 
 declare const VOCABULARY_INDEX_SIGNATURE: unique symbol;
@@ -575,6 +627,7 @@ export class SystemBuilder<
   // (kit-vs-kit); registration-time collisions accumulate in the bundle.
   #vocabularyRegistry: readonly VocabularyKeyframesState[];
   #vocabularyCollisions: readonly VocabularyCollisionEntry[];
+  #legacyVerbWitnesses: readonly VocabularyLegacyVerbEntry[];
 
   constructor(
     propRegistry?: PropReg,
@@ -585,7 +638,8 @@ export class SystemBuilder<
     extendProvenance?: ReadonlyMap<string, number>,
     extendCount?: number,
     vocabularyRegistry?: readonly VocabularyKeyframesState[],
-    vocabularyCollisions?: readonly VocabularyCollisionEntry[]
+    vocabularyCollisions?: readonly VocabularyCollisionEntry[],
+    legacyVerbWitnesses?: readonly VocabularyLegacyVerbEntry[]
   ) {
     this.#propRegistry = propRegistry || ({} as PropReg);
     this.#groupRegistry = groupRegistry || ({} as GroupReg);
@@ -596,6 +650,7 @@ export class SystemBuilder<
     this.#extendCount = extendCount || 0;
     this.#vocabularyRegistry = vocabularyRegistry || [];
     this.#vocabularyCollisions = vocabularyCollisions || [];
+    this.#legacyVerbWitnesses = legacyVerbWitnesses || [];
   }
 
   // Origin label for divergence errors: where did the existing entry for
@@ -665,6 +720,10 @@ export class SystemBuilder<
     const instance = isLibraryBundle(source)
       ? source.system
       : (source as IncludableSystem);
+    const fromCount = this.#legacyVerbWitnesses.filter(
+      (entry) => entry.verb === 'from'
+    ).length;
+    const witness = legacyVerbWitness(instance, 'from', fromCount + 1);
     return new SystemBuilder<PropReg, GroupReg, Conds, Sels, 'inherit', Vocab>(
       this.#propRegistry,
       this.#groupRegistry,
@@ -674,7 +733,10 @@ export class SystemBuilder<
       this.#extendProvenance,
       this.#extendCount,
       this.#vocabularyRegistry,
-      this.#vocabularyCollisions
+      this.#vocabularyCollisions,
+      witness
+        ? [...this.#legacyVerbWitnesses, witness]
+        : this.#legacyVerbWitnesses
     );
   }
 
@@ -909,15 +971,23 @@ export class SystemBuilder<
     // resolves to the later extension — one merge policy for both call
     // sites, see `mergeVocabularyKeyframes` — with a coded witness entry;
     // on typed paths the collision is a compile error at the consumer's
-    // registration site. An unsealed source carries no record and
-    // contributes nothing (the strict sealed-source requirement lands with
-    // the hard-cut migration increment).
+    // registration site. A source WITHOUT a record fails loud: `.extend()`
+    // consumes sealed instances only (the hard cut — registered vocabulary
+    // has exactly one carriage channel).
     const sourceRecord = (
       instance as { getVocabularyRecord?(): VocabularyRecord }
     ).getVocabularyRecord?.();
+    if (!sourceRecord) {
+      throw new Error(
+        'extend: source system is not sealed (or was built by an older ' +
+          '@animus-ui/system) — registered vocabulary travels only on ' +
+          'sealed instances. Call seal() on the source bundle and export ' +
+          'the sealed instance.'
+      );
+    }
     let nextVocabulary = this.#vocabularyRegistry;
     let nextVocabularyCollisions = this.#vocabularyCollisions;
-    if (sourceRecord && sourceRecord.keyframes.length > 0) {
+    if (sourceRecord.keyframes.length > 0) {
       const merged = mergeVocabularyKeyframes(
         this.#vocabularyRegistry,
         this.#vocabularyCollisions,
@@ -939,7 +1009,8 @@ export class SystemBuilder<
       provenance,
       sourceIndex,
       nextVocabulary,
-      nextVocabularyCollisions
+      nextVocabularyCollisions,
+      this.#legacyVerbWitnesses
     );
   }
 
@@ -1004,7 +1075,8 @@ export class SystemBuilder<
       this.#extendProvenance,
       this.#extendCount,
       this.#vocabularyRegistry,
-      this.#vocabularyCollisions
+      this.#vocabularyCollisions,
+      this.#legacyVerbWitnesses
     );
   }
 
@@ -1069,7 +1141,8 @@ export class SystemBuilder<
       this.#extendProvenance,
       this.#extendCount,
       this.#vocabularyRegistry,
-      this.#vocabularyCollisions
+      this.#vocabularyCollisions,
+      this.#legacyVerbWitnesses
     );
   }
 
@@ -1148,7 +1221,8 @@ export class SystemBuilder<
       this.#extendProvenance,
       this.#extendCount,
       this.#vocabularyRegistry,
-      this.#vocabularyCollisions
+      this.#vocabularyCollisions,
+      this.#legacyVerbWitnesses
     );
   }
 
@@ -1212,7 +1286,8 @@ export class SystemBuilder<
       this.#extendProvenance,
       this.#extendCount,
       this.#vocabularyRegistry,
-      this.#vocabularyCollisions
+      this.#vocabularyCollisions,
+      this.#legacyVerbWitnesses
     );
   }
 
@@ -1283,6 +1358,7 @@ export class SystemBuilder<
     };
 
     const system = mintInstance();
+    const legacyVerbWitnessRecord = this.#legacyVerbWitnesses;
 
     const createGlobalStyles = ((
       styles: GlobalStyleMap,
@@ -1357,7 +1433,11 @@ export class SystemBuilder<
           `local registration #${localCallCount + 1}`
         );
         consumedBy = 'register';
-        return makeBundle(merged.entries, merged.collisions, localCallCount + 1);
+        return makeBundle(
+          merged.entries,
+          merged.collisions,
+          localCallCount + 1
+        );
       };
 
       const seal = (): SealedSystemInstance<
@@ -1391,6 +1471,26 @@ export class SystemBuilder<
           globalStyles: Object.freeze([]),
           collisions: Object.freeze(
             collisions.map((entry) => Object.freeze({ ...entry }))
+          ),
+          legacyVerbs: Object.freeze(
+            legacyVerbWitnessRecord
+              // A name that DID arrive (a separate `.extend()` of the same
+              // vocabulary) must not be claimed undelivered — narrow each
+              // entry to its genuinely refused names, dropping emptied
+              // entries (the false-witness guard).
+              .map((entry) => ({
+                ...entry,
+                names: entry.names.filter(
+                  (name) => !entries.some((kept) => kept.name === name)
+                ),
+              }))
+              .filter((entry) => entry.names.length > 0)
+              .map((entry) =>
+                Object.freeze({
+                  ...entry,
+                  names: Object.freeze([...entry.names]),
+                })
+              )
           ),
         });
 
@@ -1620,10 +1720,26 @@ function serializeInstance<
 }
 
 export function createSystem(config?: CreateSystemConfig): SystemBuilder {
+  const includes = config?.includes ?? [];
+  // Legacy-verb witness (vocabulary-registration): the deprecated
+  // `includes:` alias performs no registry merge, so a sealed source's
+  // registered vocabulary cannot reach this consumer — witnessed per
+  // source, carried on the eventual sealed record.
+  const witnesses: VocabularyLegacyVerbEntry[] = [];
+  includes.forEach((source, index) => {
+    const witness = legacyVerbWitness(source, 'includes', index + 1);
+    if (witness) witnesses.push(witness);
+  });
   return new SystemBuilder(
     undefined,
     undefined,
     undefined,
-    config?.includes ?? []
+    includes,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    witnesses
   );
 }

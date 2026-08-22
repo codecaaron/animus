@@ -2,13 +2,14 @@ import { kitMotion } from '@animus-ui/test-ds';
 
 import { ds } from '../ds';
 
-// External keyframe-collection consumer (rust-extraction-pipeline › "External
-// package collection discovered from its entry"): `kitMotion` is created and
-// exported by the test-ds package ENTRY module, and this component references
-// it through a plain named import — the app's ds.ts does NOT re-export it. The
-// extractor's keyframes scan must discover the collection from the external
-// entry, resolve `kitMotion.pulse` to its `animus-kf-<hash>` name, and emit the
-// matching @keyframes block exactly once. Pulse.tsx (app-local
+// Sealed-kit keyframe consumer (rust-extraction-pipeline › "Sealed kit
+// collection resolves in the consumer"): `kitMotion` is defined and
+// registered inside test-ds's definition graph, re-exported from the package
+// root, and this component references it through a plain named import — the
+// app's ds.ts does NOT re-export it. The collection reaches the app through
+// the sealed kit's registration record via `.extend()`; the extractor
+// resolves `kitMotion.pulse` by the export name at the defining module and
+// emits the matching @keyframes block exactly once. Pulse.tsx (app-local
 // `animations.pulse` from ds.ts) is the inline sibling in the same sheet;
 // assertKeyframesUniqueBodies pins that no frame body is ever emitted twice.
 export const KitPulse = ds

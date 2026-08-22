@@ -16,11 +16,12 @@ const badGlow = createTransform('badGlow', (value) => ({
   boxShadow: String(value),
 }));
 
-export const { system: ds } = createSystem()
+export const ds = createSystem()
   .addGroup('fx', {
     glow: {
       property: 'boxShadow',
       transform: badGlow,
     },
   })
-  .build(theme);
+  .build(theme)
+  .seal();

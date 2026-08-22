@@ -38,6 +38,7 @@ export type {
   VocabularyCollisionEntry,
   VocabularyGlobalStyleEntry,
   VocabularyKeyframesEntry,
+  VocabularyLegacyVerbEntry,
   VocabularyNameCollision,
   VocabularyOf,
   VocabularyRecord,

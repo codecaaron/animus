@@ -16,7 +16,7 @@ import {
   typography,
 } from '@animus-ui/system/groups';
 
-export const { system: ds, createKeyframes } = createSystem()
+const kitBundle = createSystem()
   .addGroup('space', space)
   .addGroup('layout', { ...layout, ...flex })
   .addGroup('text', typography)
@@ -44,3 +44,24 @@ export const { system: ds, createKeyframes } = createSystem()
     _dark: '[data-color-mode="dark"] &',
   })
   .build();
+
+export const { createKeyframes } = kitBundle;
+
+// Kit keyframe collection (vocabulary-registration › sealed-kit carriage):
+// DEFINED inside the loader-evaluated definition graph (this module sits on
+// the `definition.ts` path) and re-exported from the package root so a
+// consumer's plain named import keeps resolving — the engine follows the
+// re-export chain to THIS module's export name, which equals the
+// registration key below. The frame body is deliberately DISTINCT from the
+// vite-app's inline `pulse` (opacity, not scale) so the kit block is its
+// own unique body, not a dedupe alias.
+export const kitMotion = createKeyframes({
+  pulse: {
+    '0%, 100%': { opacity: 1 },
+    '50%': { opacity: 0.6 },
+  },
+});
+
+// The sealed kit instance: registration closes here, and `.extend()`
+// consumers inherit `kitMotion` through the vocabulary record.
+export const ds = kitBundle.registerKeyframes({ kitMotion }).seal();

@@ -2094,8 +2094,10 @@ void (<ExtendedBadge label="hi" />);
   void sealedKit.registerKeyframes;
 
   // Negative: a value that is not a factory-shaped collection is rejected
-  // @ts-expect-error — shape mismatch: not a Keyframes collection
-  void createSystem().build().registerKeyframes({ bogus: { frames: {} } });
+  void createSystem()
+    .build()
+    // @ts-expect-error — shape mismatch: not a Keyframes collection
+    .registerKeyframes({ bogus: { frames: {} } });
 
   // Extending a sealed kit threads its vocabulary into the consumer chain;
   // a colliding consumer registration is a compile error (the dist-kit path
@@ -2122,7 +2124,9 @@ void (<ExtendedBadge label="hi" />);
 
   // Positive: an ANNOTATED LibraryBundle<V> preserves the vocabulary axis
   // (the erasure amendment) — collisions stay compile errors
-  const publishedVocabBundle: LibraryBundle<'kitMotion'> = { system: sealedKit };
+  const publishedVocabBundle: LibraryBundle<'kitMotion'> = {
+    system: sealedKit,
+  };
   const viaAnnotated = createSystem().extend(publishedVocabBundle).build();
   // @ts-expect-error — "kitMotion" arrives through the annotated bundle axis
   void viaAnnotated.registerKeyframes({ kitMotion: consumerMotion });

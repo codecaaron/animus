@@ -1,10 +1,31 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createSystem } from '../src';
-import type { VocabularyRecord } from '../src';
+
+import type {
+  KeyframesFrameData,
+  RegisterableKeyframes,
+  VocabularyRecord,
+} from '../src';
 
 const FRAMES_A = { '0%': { opacity: 0 }, '100%': { opacity: 1 } };
 const FRAMES_B = { '0%': { opacity: 1 }, '100%': { opacity: 0 } };
+
+/** A value the untyped path may hand to registration: a real collection,
+ *  or a malformed shape the runtime rejection is under test for. */
+type ErasedRegistrable = RegisterableKeyframes | { frames: object };
+
+/** The deliberately type-erased bundle view the untyped-path tests drive:
+ *  the runtime linearity/collision witnesses — not the compiler — are under
+ *  test here. Real bundles are structurally assignable (method params check
+ *  bivariantly), so the erasure is a plain parameter widening — no
+ *  assertion anywhere. */
+interface ErasedBundle {
+  registerKeyframes(map: Record<string, ErasedRegistrable>): ErasedBundle;
+  seal(): { getVocabularyRecord?(): VocabularyRecord };
+}
+
+const erased = (bundle: ErasedBundle): ErasedBundle => bundle;
 
 function recordOf(sealed: {
   getVocabularyRecord?(): VocabularyRecord;
@@ -56,9 +77,11 @@ describe('vocabulary registration — two-phase terminal (runtime)', () => {
     expect(Object.isFrozen(entry.frames.pulse)).toBe(true);
     expect(Object.isFrozen(entry.frames.pulse?.frames)).toBe(true);
 
-    (
-      motion.__frames.pulse.frames as Record<string, Record<string, unknown>>
-    )['0%'] = { opacity: 0.5 };
+    // SAFETY: the readonly typing is compile-time only — mutating through
+    // the owner frame-map type is exactly the hazard under test.
+    (motion.__frames.pulse.frames as KeyframesFrameData[string]['frames'])[
+      '0%'
+    ] = { opacity: 0.5 };
     // Literal expectation — the module const aliases the live collection.
     expect(entry.frames.pulse?.frames['0%']).toEqual({ opacity: 0 });
   });
@@ -68,11 +91,9 @@ describe('vocabulary registration — two-phase terminal (runtime)', () => {
     const motion = bundle.createKeyframes({ pulse: FRAMES_A });
     const next = bundle.registerKeyframes({ motion });
 
-    expect(() =>
-      (bundle as { registerKeyframes(map: object): unknown }).registerKeyframes(
-        { motion }
-      )
-    ).toThrow(/superseded|linear/);
+    expect(() => erased(bundle).registerKeyframes({ motion })).toThrow(
+      /superseded|linear/
+    );
     expect(() => bundle.seal()).toThrow(/superseded|linear/);
     expect(recordOf(next.seal()).keyframes.map((e) => e.name)).toEqual([
       'motion',
@@ -84,11 +105,9 @@ describe('vocabulary registration — two-phase terminal (runtime)', () => {
     const motion = bundle.createKeyframes({ pulse: FRAMES_A });
     bundle.seal();
 
-    expect(() =>
-      (bundle as { registerKeyframes(map: object): unknown }).registerKeyframes(
-        { motion }
-      )
-    ).toThrow(/sealed/);
+    expect(() => erased(bundle).registerKeyframes({ motion })).toThrow(
+      /sealed/
+    );
   });
 
   it('a second seal() throws — one sealed instance per bundle', () => {
@@ -100,9 +119,7 @@ describe('vocabulary registration — two-phase terminal (runtime)', () => {
   it('a non-collection value is rejected at runtime naming the key', () => {
     const bundle = createSystem().build();
     expect(() =>
-      (bundle as { registerKeyframes(map: object): unknown }).registerKeyframes(
-        { bogus: { frames: {} } }
-      )
+      erased(bundle).registerKeyframes({ bogus: { frames: {} } })
     ).toThrow(/bogus/);
   });
 
@@ -113,9 +130,11 @@ describe('vocabulary registration — two-phase terminal (runtime)', () => {
     const sealed = bundle.seal();
     const before = sealed.toConfig().propConfig;
 
-    (
-      sealed as unknown as { propRegistry: Record<string, unknown> }
-    ).propRegistry.injected = { property: 'color' };
+    // SAFETY: the public registry field is runtime-mutable by design; the
+    // widened record type simulates a consumer mutating it after seal.
+    (sealed.propRegistry as Record<string, { property: string }>).injected = {
+      property: 'color',
+    };
     expect(sealed.toConfig().propConfig).toBe(before);
   });
 
@@ -143,13 +162,9 @@ describe('vocabulary registration — two-phase terminal (runtime)', () => {
 
     const consumerBundle = createSystem().extend(kit).build();
     const localMotion = consumerBundle.createKeyframes({ fade: FRAMES_B });
-    const sealed = (
-      consumerBundle as unknown as {
-        registerKeyframes(map: object): { seal(): unknown };
-      }
-    )
+    const sealed = erased(consumerBundle)
       .registerKeyframes({ motion: localMotion })
-      .seal() as Parameters<typeof recordOf>[0];
+      .seal();
 
     const record = recordOf(sealed);
     expect(record.keyframes.map((entry) => entry.name)).toEqual(['motion']);
@@ -180,14 +195,7 @@ describe('vocabulary registration — two-phase terminal (runtime)', () => {
       spin: { '0%': { opacity: 0.25 } },
     });
     const bOverride = consumerBundle.createKeyframes({ blink: FRAMES_B });
-    const sealed = (
-      consumerBundle
-        .registerKeyframes({ c }) as unknown as {
-        registerKeyframes(map: object): {
-          seal(): Parameters<typeof recordOf>[0];
-        };
-      }
-    )
+    const sealed = erased(consumerBundle.registerKeyframes({ c }))
       .registerKeyframes({ b: bOverride })
       .seal();
 
@@ -229,17 +237,123 @@ describe('vocabulary registration — two-phase terminal (runtime)', () => {
   });
 
   // SPEC(vocabulary-registration §"Extending an unsealed instance fails
-  // loud"): the strict rejection is DEFERRED to the atomic migration
-  // increment (design Ledger DEF-11) — verify:compile sweeps un-migrated
-  // fixtures until then. `it.fails` pins the obligation: when the flip
-  // lands, this test starts passing and MUST be inverted to a plain `it`.
-  it.fails(
-    'extending a built-but-unsealed system instance fails loud (flips at the migration increment — DEF-11)',
-    () => {
-      const kit = createSystem()
-        .addGroup('kitSurface', { kitGlow: { property: 'boxShadow' } })
-        .build().system;
-      expect(() => createSystem().extend(kit)).toThrow(/seal/);
-    }
-  );
+  // loud") — the DEF-11 flip, landed with the migration increment.
+  it('extending a built-but-unsealed system instance fails loud', () => {
+    const kit = createSystem()
+      .addGroup('kitSurface', { kitGlow: { property: 'boxShadow' } })
+      .build().system;
+    expect(() => createSystem().extend(kit)).toThrow(/seal/);
+  });
+
+  it('a sealed kit with registered vocabulary consumed through includes: is witnessed and not merged', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const kitBundle = createSystem().build();
+    const kitMotion = kitBundle.createKeyframes({ pulse: FRAMES_A });
+    const kit = kitBundle.registerKeyframes({ kitMotion }).seal();
+
+    const sealed = createSystem({ includes: [kit] })
+      .build()
+      .seal();
+    const record = recordOf(sealed);
+
+    expect(record.keyframes).toEqual([]);
+    expect(record.legacyVerbs).toHaveLength(1);
+    expect(record.legacyVerbs[0]).toMatchObject({
+      code: 'animus.vocabulary.legacy-verb',
+      verb: 'includes',
+      source: 'includes source #1',
+      names: ['kitMotion'],
+    });
+    // The record is the SOLE witness channel — a runtime warn would ship in
+    // production consumer bundles and be swallowed by the extraction host.
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('a sealed kit with registered vocabulary consumed through from() is witnessed and not merged', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const kitBundle = createSystem().build();
+    const kitMotion = kitBundle.createKeyframes({ pulse: FRAMES_A });
+    const kit = kitBundle.registerKeyframes({ kitMotion }).seal();
+
+    const sealed = createSystem().from(kit).build().seal();
+    const record = recordOf(sealed);
+
+    expect(record.keyframes).toEqual([]);
+    expect(record.legacyVerbs).toHaveLength(1);
+    expect(record.legacyVerbs[0]).toMatchObject({
+      verb: 'from',
+      source: 'from source #1',
+      names: ['kitMotion'],
+    });
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('a source consumed through BOTH a legacy verb and .extend() is not falsely witnessed — delivered names are filtered at seal', () => {
+    const kitBundle = createSystem().build();
+    const kitMotion = kitBundle.createKeyframes({ pulse: FRAMES_A });
+    const kit = kitBundle.registerKeyframes({ kitMotion }).seal();
+
+    const sealed = createSystem({ includes: [kit] })
+      .extend(kit)
+      .build()
+      .seal();
+    const record = recordOf(sealed);
+
+    expect(record.keyframes.map((entry) => entry.name)).toEqual(['kitMotion']);
+    expect(record.legacyVerbs).toEqual([]);
+  });
+
+  it('partial delivery narrows the witness to the genuinely refused names', () => {
+    const kitABundle = createSystem().build();
+    const kitMotion = kitABundle.createKeyframes({ pulse: FRAMES_A });
+    const kitFade = kitABundle.createKeyframes({ fade: FRAMES_B });
+    const kitA = kitABundle
+      .registerKeyframes({ kitMotion })
+      .registerKeyframes({ kitFade })
+      .seal();
+    // A second kit registering ONLY kitMotion, extended — delivering one of
+    // kitA's two names through a different source.
+    const kitBBundle = createSystem().build();
+    const kitB = kitBBundle
+      .registerKeyframes({
+        kitMotion: kitBBundle.createKeyframes({ pulse: FRAMES_A }),
+      })
+      .seal();
+
+    const sealed = createSystem({ includes: [kitA] })
+      .extend(kitB)
+      .build()
+      .seal();
+    const record = recordOf(sealed);
+
+    expect(record.legacyVerbs).toHaveLength(1);
+    expect(record.legacyVerbs[0]?.names).toEqual(['kitFade']);
+  });
+
+  it('.extend() of the same sealed kit produces no legacy-verb witness — it carries', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const kitBundle = createSystem().build();
+    const kitMotion = kitBundle.createKeyframes({ pulse: FRAMES_A });
+    const kit = kitBundle.registerKeyframes({ kitMotion }).seal();
+
+    const sealed = createSystem().extend(kit).build().seal();
+    const record = recordOf(sealed);
+
+    expect(record.keyframes.map((entry) => entry.name)).toEqual(['kitMotion']);
+    expect(record.legacyVerbs).toEqual([]);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('a vocabulary-free sealed source through legacy verbs stays silent', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const plainKit = createSystem().build().seal();
+    const sealed = createSystem({ includes: [plainKit] })
+      .build()
+      .seal();
+    expect(recordOf(sealed).legacyVerbs).toEqual([]);
+    expect(warn).not.toHaveBeenCalled();
+  });
 });

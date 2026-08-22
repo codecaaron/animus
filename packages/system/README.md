@@ -60,12 +60,15 @@ import {
   layout,
 } from '@animus-ui/system/groups';
 
-export const { system: ds, createGlobalStyles } = createSystem()
+const bundle = createSystem()
   .addGroup('surface', { ...color, ...border, ...shadows, ...background })
   .addGroup('space', space)
   .addGroup('text', typography)
   .addGroup('arrange', { ...flex, ...layout })
   .build();
+
+export const { createGlobalStyles, createKeyframes } = bundle;
+export const ds = bundle.seal();
 ```
 
 To build on a published design-system kit, start either chain with
@@ -77,11 +80,12 @@ kit through the same edge:
 import { system as kitSystem, theme as kitTheme } from '@acme/kit';
 
 const theme = createTheme().extend(kitTheme).build();
-export const { system: ds } = createSystem()
-  .extend(kitSystem)
+const bundle = createSystem()
+  .extend(kitSystem) // a SEALED kit instance — extend() consumes sealed systems
   // Additive only — the kit's groups/props arrive through the merge.
   .addProps({ cursor: { property: 'cursor' } })
   .build();
+export const ds = bundle.seal();
 ```
 
 (`createSystem({ includes: [...] })` and `.from()` are deprecated aliases from

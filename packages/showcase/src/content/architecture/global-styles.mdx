@@ -16,16 +16,19 @@ Every component style layer sits above it. Global styles — resets, body defaul
 
 ## createGlobalStyles
 
-`createGlobalStyles` is returned alongside the system instance from `createSystem().build()`. It is not a standalone import — it is bound to your system's prop config, so it knows how to resolve the props you've registered.
+`createGlobalStyles` is a member of the `createSystem().build()` bundle, beside the system instance and the sealing terminal. It is not a standalone import — it is bound to your system's prop config, so it knows how to resolve the props you've registered.
 
 ```ts
-export const { system: ds, createGlobalStyles } = createSystem()
+const bundle = createSystem()
   .addGroup('surface', { ...color, ...border, ...background })
   .addGroup('space', space)
   .build();
+
+export const { createGlobalStyles } = bundle;
+export const ds = bundle.seal();
 ```
 
-Call it once with a `GlobalStyleMap` to produce a `GlobalStyleBlock`. Export the result — the plugin discovers it by the `__brand` marker and emits it into `@layer global` at build time.
+Call it once with a `GlobalStyleMap` to produce a `GlobalStyleBlock`. Export the result — the plugin reads it from the loaded system configuration and emits it into `@layer global` at build time.
 
 <TypeSignature
   name="createGlobalStyles"

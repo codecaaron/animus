@@ -79,7 +79,7 @@ export const theme = /* @__PURE__ */ (() =>
     })
     .build())();
 
-export const { system: ds } = /* @__PURE__ */ (() => createSystem().build())();
+export const ds = /* @__PURE__ */ (() => createSystem().build().seal())();
 ```
 
 Define runtime resolvers in a second TypeScript module through the

@@ -127,7 +127,9 @@ declare module '@animus-ui/system' {
 
 // ─── System ────────────────────────────────────────────────
 
-export const { system: ds } = createSystem()
+// Sealed (vocabulary-registration): the loader consumes sealed instances
+// only; a vocabulary-free fixture seals with an empty record.
+export const ds = createSystem()
   .addGroup('flex', flex)
   .addGroup('grid', grid)
   .addGroup('mode', mode)
@@ -140,4 +142,5 @@ export const { system: ds } = createSystem()
   .addGroup('typography', typography)
   .addGroup('positioning', positioning)
   .addGroup('transitions', transitions)
-  .build();
+  .build()
+  .seal();

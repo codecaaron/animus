@@ -64,9 +64,13 @@ declare module '@animus-ui/system' {
 // `.extend(testDs)` alone. Nothing is re-registered locally — re-spreading
 // kit groups would coalesce under D12 transform equality (name + captured
 // source), but pure extension is the recommended consumption shape.
-export const { system: ds, createGlobalStyles } = createSystem()
-  .extend(testDs)
-  .build();
+const bundle = createSystem().extend(testDs).build();
+
+export const { createGlobalStyles } = bundle;
+
+// Sealed system (vocabulary-registration): no local collections; the kit's
+// `kitMotion` arrives through the sealed test-ds record via `.extend()`.
+export const ds = bundle.seal();
 
 export const globalStyles = createGlobalStyles({
   '*, *::before, *::after': { boxSizing: 'border-box' },

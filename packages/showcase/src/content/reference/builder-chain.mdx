@@ -107,7 +107,7 @@ The primary chain consists of seven classes arranged in a backwards-inheritance 
 
 ## Entry: `Animus` class
 
-`Animus` is created by `createSystem().build()` and exposed as the `ds` object. It holds the prop registry and group registry for the entire design system.
+`Animus` is created by `createSystem().build()` and exposed as the sealed `ds` object (`bundle.seal()`). It holds the prop registry and group registry for the entire design system.
 
 <TypeSignature
   name="Animus"
@@ -116,7 +116,7 @@ The primary chain consists of seven classes arranged in a backwards-inheritance 
   returns="Animus<PropRegistry, GroupRegistry>"
 />
 
-The `ds` instance is a singleton per system. Do not instantiate `Animus` directly — use `createSystem().build()`.
+The `ds` instance is a singleton per system. Do not instantiate `Animus` directly — use `createSystem().build().seal()`.
 
 ---
 

@@ -19,7 +19,6 @@ const mocks = vi.hoisted(() => ({
   analyzeProject: vi.fn<(...args: AnalyzeProjectArgs) => string>(),
   transformFile: vi.fn(),
   clearAnalysisCache: vi.fn(),
-  scanKeyframesExports: vi.fn(),
 }));
 
 import { ExtractionSession } from '../../extract/session/extraction-session';
@@ -47,7 +46,6 @@ setEngineApiOverride(() => {
     analyzeProject: mocks.analyzeProject,
     transformFile: mocks.transformFile,
     clearAnalysisCache: mocks.clearAnalysisCache,
-    scanKeyframesExports: mocks.scanKeyframesExports,
   };
   return mocks.extractFactsEnabled
     ? { ...api, extractFacts: mocks.extractFacts }
@@ -233,7 +231,6 @@ beforeEach(() => {
   mocks.clearAnalysisCache.mockReset().mockImplementation(() => {
     activeTransformSources.clear();
   });
-  mocks.scanKeyframesExports.mockReset().mockReturnValue(null);
 });
 
 afterEach(() => {

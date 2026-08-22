@@ -81,8 +81,18 @@ declare module '@animus-ui/system' {
   interface Theme extends ViteAppTheme {}
 }
 
+const bundle = createSystem()
+  .extend(testDs)
+  // Condition alias registry (modern-css-surface inc 03). The kit already
+  // carries `_motionReduce`; this local registration re-asserts it with an
+  // identical value (post-extend app calls override silently, NS-4) so the
+  // manifest `conditionAliases` plugin glue keeps a local witness here.
+  .addConditions({
+    _motionReduce: '@media (prefers-reduced-motion: reduce)',
+  })
+  .build();
+
 export const {
-  system: ds,
   createGlobalStyles,
   createKeyframes,
   // extend()-form witness (openspec: first-class-extension, D1/NS-1): this
@@ -102,16 +112,7 @@ export const {
   // authority"). The legacy lanes stay deliberate elsewhere: next-app keeps
   // the deprecated `includes:` alias, react-router-app keeps the deprecated
   // `from()` chain (G6).
-} = createSystem()
-  .extend(testDs)
-  // Condition alias registry (modern-css-surface inc 03). The kit already
-  // carries `_motionReduce`; this local registration re-asserts it with an
-  // identical value (post-extend app calls override silently, NS-4) so the
-  // manifest `conditionAliases` plugin glue keeps a local witness here.
-  .addConditions({
-    _motionReduce: '@media (prefers-reduced-motion: reduce)',
-  })
-  .build();
+} = bundle;
 
 export const globalStyles = createGlobalStyles(
   {
@@ -152,3 +153,8 @@ export const animations = createKeyframes({
     '50%': { transform: 'scale(1.05)' },
   },
 });
+
+// Sealed system (vocabulary-registration): `animations` registers under its
+// export name; the kit's `kitMotion` arrives through the sealed test-ds
+// record via `.extend()` — no local step, and no export scan anywhere.
+export const ds = bundle.registerKeyframes({ animations }).seal();

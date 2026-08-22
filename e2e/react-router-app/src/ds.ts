@@ -79,13 +79,21 @@ declare module '@animus-ui/system' {
 // vite-app/next16-app/vinext-app use `.extend()` (showcase remains on
 // `includes:` pending its deferred migration — registry row 13; see its
 // ds.ts). Do not migrate this lane until removal is specced.
-export const { system: ds, createGlobalStyles } = createSystem()
+const bundle = createSystem()
   .from(testDs)
   .addGroup('space', space)
   .addGroup('layout', { ...layout, ...flex })
   .addGroup('text', typography)
   .addGroup('surface', { ...color, ...border })
   .build();
+
+export const { createGlobalStyles } = bundle;
+
+// Sealed system (vocabulary-registration): the `from()` verb above cannot
+// carry the kit's registered `kitMotion` — this lane is the from()-side
+// legacy-verb witness (`animus.vocabulary.legacy-verb` on the sealed
+// record, surfaced by the host as a warning).
+export const ds = bundle.seal();
 
 export const globalStyles = createGlobalStyles({
   '*, *::before, *::after': { boxSizing: 'border-box' },

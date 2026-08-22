@@ -256,14 +256,15 @@ This means a component can have no interactive styles when the `interactive` sta
 ```ts
 import { createSystem } from '@animus-ui/system';
 
-const { system: ds } = createSystem()
+const ds = createSystem()
   .addSelectors({
     // The selector string must include &
     _highlighted: '&[data-highlighted], &[data-active]',
     _dragging: '&[data-dragging="true"]',
     _dropTarget: '&[data-drop-target]',
   })
-  .build();
+  .build()
+  .seal();
 ```
 
 **Selector string requirement:** The value must include `&`. The `&` is replaced with the component's generated class name at extraction time. A selector without `&` produces invalid CSS.
@@ -274,11 +275,12 @@ const { system: ds } = createSystem()
 
 ```ts
 // Override _hover to also match data-hover (e.g., for touch devices)
-const { system: ds } = createSystem()
+const ds = createSystem()
   .addSelectors({
     _hover: '&:hover, &[data-hover]', // order stays 30
   })
-  .build();
+  .build()
+  .seal();
 ```
 
 Custom aliases registered via `addSelectors()` are serialized into the system config and passed to the Rust extractor at build time. They work identically to built-in aliases — the extractor has no distinction between them. Custom selector aliases are also **typed at the call site**: publish them once via module augmentation and your `_`-keys gain autocomplete and typo-rejection alongside the built-ins:

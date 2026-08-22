@@ -202,11 +202,7 @@ declare module '@animus-ui/system' {
 // (showcase remains on `includes:` pending its deferred migration —
 // registry row 13; see its ds.ts). Do not migrate this lane until removal
 // is specced.
-export const {
-  system: ds,
-  createGlobalStyles,
-  createKeyframes,
-} = createSystem({
+const bundle = createSystem({
   includes: [testDs],
 })
   .addGroup('space', space)
@@ -215,6 +211,8 @@ export const {
   .addGroup('surface', { ...color, ...border, ...shadows })
   .addGroup('positioning', positioning)
   .build();
+
+export const { createGlobalStyles, createKeyframes } = bundle;
 
 // ─── Keyframes ──────────────────────────────────────────────
 
@@ -228,6 +226,13 @@ export const animations = createKeyframes({
     '50%': { transform: 'scale(1.05)' },
   },
 });
+
+// Sealed system (vocabulary-registration): `animations` registers under its
+// export name. The `includes:` alias above deliberately CANNOT carry the
+// kit's registered `kitMotion` — this lane is the legacy-verb witness: the
+// sealed record carries the coded `animus.vocabulary.legacy-verb` entry the
+// hosts surface as a warning.
+export const ds = bundle.registerKeyframes({ animations }).seal();
 
 // ─── Global Styles ──────────────────────────────────────────
 

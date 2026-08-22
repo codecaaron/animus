@@ -9,15 +9,17 @@ import { APIBlock } from '../../components/docs/APIBlock';
 
 `createSystem()` returns a `SystemBuilder` — an immutable, type-state accumulator that registers props, groups, and selector aliases. Every method returns a new builder instance with widened generics. `.build()` finalizes the accumulator into a `SystemInstance` and a `createGlobalStyles` factory.
 
-One system per application. Every component in the app imports from the built system instance.
+One system per application. Every component in the app imports from the SEALED system instance.
 
 ```ts
 import { createSystem } from '@animus-ui/system';
 
-export const { system: ds, createGlobalStyles } = createSystem()
+const bundle = createSystem()
   .addGroup('surface', { ...color, ...border })
   .addGroup('space', space)
   .build();
+
+export const ds = bundle.seal();
 ```
 
 ---
@@ -63,10 +65,11 @@ export const { system: ds, createGlobalStyles } = createSystem()
       label: 'build',
       layer: 'output',
       description:
-        'Finalizes the builder. Returns { system, createGlobalStyles }. No further chaining after build().',
-      code: `const { system: ds, createGlobalStyles } = createSystem()
+        'Finalizes the builder and opens the registration window; seal() closes it and returns the instance the loader consumes.',
+      code: `const bundle = createSystem()
   .addGroup('surface', { ...color })
-  .build();`,
+  .build();
+const ds = bundle.seal();`,
     },
   ]}
 />
@@ -305,7 +308,7 @@ The same collision and overlap rules as `addGroup()` apply:
         name: 'source',
         type: 'SystemInstance | LibraryBundle',
         default: 'required',
-        desc: "A built system from SystemBuilder.build(), or a library bundle ({ system, theme }) — extend() consumes the system half and ignores the rest. The merge reads the source's registry snapshot captured at its build(), never a serialized round-trip.",
+        desc: "A SEALED system (the seal() terminal's return), or a library bundle ({ system, theme }) whose system half is sealed — extend() consumes the system half and ignores the rest. A built-but-unsealed source throws. The merge reads the source's registry snapshot and vocabulary record, never a serialized round-trip.",
       },
     ]}
   />
@@ -317,11 +320,12 @@ The same collision and overlap rules as `addGroup()` apply:
 import { system as baseDs } from '@acme/design-system';
 import { transitions } from '@animus-ui/system/groups';
 
-export const { system: ds } = createSystem()
-  .extend(baseDs)
+const bundle = createSystem()
+  .extend(baseDs) // a sealed kit instance
   // Additive only — the kit's groups and props arrive through the merge.
   .addGroup('motion', transitions)
   .build();
+export const ds = bundle.seal();
 ```
 
 Rules:
@@ -362,15 +366,19 @@ Rules:
   />
 </APIBlock>
 
-Finalizes the builder. Returns two values — always destructure both:
+Finalizes the builder and opens the registration window. Destructure the factories from the bundle, register any keyframe collections, and export the sealed instance:
 
 ```ts
-export const { system: ds, createGlobalStyles } = createSystem()
+const bundle = createSystem()
   .addGroup('surface', { ...color, ...border })
   .build();
+
+export const { createGlobalStyles, createKeyframes } = bundle;
+
+export const ds = bundle.seal();
 ```
 
-The `system` return is renamed via destructuring. `ds` is the conventional name. All component authoring calls (`ds.styles()`, `ds.variant()`, etc.) go through this instance.
+`ds` is the conventional name for the sealed instance. All component authoring calls (`ds.styles()`, `ds.variant()`, etc.) go through it, and the loader (and `.extend()`) consume it.
 
 ### SystemInstance
 

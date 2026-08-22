@@ -98,10 +98,11 @@ import { color, space } from '@animus-ui/system/groups';
 export { tokens } from './theme';
 
 // ${marker}
-export const { system: ds } = createSystem()
+export const ds = createSystem()
   .addGroup('space', space)
   .addGroup('surface', color)
-  .build();
+  .build()
+  .seal();
 `;
 }
 

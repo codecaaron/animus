@@ -66,9 +66,10 @@ import { color } from '@animus-ui/system/groups';
 
 export { tokens } from './theme';
 
-export const { system: ds } = createSystem()
+export const ds = createSystem()
   .addGroup('surface', color)
-  .build();
+  .build()
+  .seal();
 `;
 
 function buttonSource(withVariant: boolean): string {

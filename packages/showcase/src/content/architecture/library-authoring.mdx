@@ -20,11 +20,12 @@ export const theme = createTheme()
   .addColors({ gray: { 100: '#f5f5f5', 900: '#171717' } })
   .build();
 
-export const { system } = createSystem()
+export const system = createSystem()
   .addGroup('space', space)
   .addGroup('text', typography)
   .addGroup('surface', { ...color, ...border })
-  .build();
+  .build()
+  .seal();
 ```
 
 Alternatively, ship one bundle export carrying both halves:
@@ -45,25 +46,40 @@ Consumers extend the named exports directly — each builder takes the value it 
 import { system as kitSystem, theme as kitTheme } from '@acme/kit/definition';
 
 export const theme = createTheme().extend(kitTheme).build();
-export const { system: ds } = createSystem().extend(kitSystem).build();
+export const ds = createSystem().extend(kitSystem).build().seal();
 ```
 
 Extraction discovers your package through the same imported identifiers the consumer passes to `.extend()` — the discovery tracer preserves `/definition` for host resolution, then derives package ownership separately while walking the package sources.
 
 Rules:
 
-- **Keep the definition entry narrow.** It exports `system` and `theme` (or one bundle) plus any branded keyframe collections. Components, hooks, utilities, and framework barrels live behind other entry points. This keeps the module the extraction sandbox evaluates small and side-effect free.
+- **Keep the definition entry narrow — and framework-free.** It exports the sealed `system` and `theme` (or one bundle) plus your registered keyframe collections. Components, hooks, utilities, and framework barrels live behind other entry points. The extraction sandbox evaluates the definition graph and nothing else; a framework graph inside it is a hard load failure, not a warning.
 - **`theme` is the name.** The loader prefers a `theme` export and accepts the legacy `tokens` spelling during the deprecation window. New libraries use `theme`; exporting two _distinct_ built themes under both names is a load error.
 - **Re-export is valid consumption.** A consumer may re-export your `system` and `theme` unchanged instead of extending — the application still builds and extracts against the library definition as-is.
 - **Create transforms with `createTransform`.** Cross-system transform equality is the transform's name plus the source text `createTransform` captures at creation — a consumer re-registering your prop with your own exported definition coalesces cleanly, while a same-named transform with a different body fails loud. Bare inline arrow transforms compare by their own source text; prefer named transforms so conflicts carry a useful name.
 
-### Keep Keyframes on the Definition Entry
+### Register Keyframes, Then Seal
 
-External keyframe discovery evaluates a scanned entry in the extraction sandbox and reads only branded `createKeyframes` collections. Discovery scans two entries per declared package: the specifier your configured Animus entry declares, and — when that declaration is a subpath such as `@scope/kit/definition` — the package root module as well, because collections routinely live only there. Each is scanned independently, so a root barrel that pulls in a framework component graph can fail its own scan while the definition entry scans clean.
+Keyframe collections are **declared to the system, never discovered**: nothing scans your package entries, and animus never evaluates a module you did not declare into the definition graph. Create collections with the bundle's `createKeyframes`, register them between the two terminals, and seal:
 
-A framework component graph is not an evaluable configuration surface: the sandbox runs no DOM, no bundler, and no real React. A barrel that wildcard-re-exports a framework (`export * from '@ark-ui/react'`) cannot be enumerated at all without running the real package, and even explicit framework subpath imports reach dist graphs the sandbox is not built to evaluate. The scan therefore degrades gracefully to the coded `animus.keyframes.external-entry-failed` warning, quarantined to the entry that failed, instead of attempting framework evaluation. A package that ships no keyframe collections loses nothing to that warning.
+```ts
+const bundle = createSystem().addGroup(/* … */).build();
 
-Export keyframe collections directly from the definition entry or through an explicit named re-export. An application may likewise re-export them from its configured Animus entry. Configured-entry collections seed extraction and win name collisions; external entry scans only augment that known set. Keep framework `export *` declarations on component entry points, outside the definition graph.
+export const { createKeyframes } = bundle;
+
+export const kitMotion = createKeyframes({
+  pulse: { '0%, 100%': { opacity: 1 }, '50%': { opacity: 0.6 } },
+});
+
+export const ds = bundle.registerKeyframes({ kitMotion }).seal();
+```
+
+Two obligations travel together, and both live inside the definition graph:
+
+- **The registration key must equal the export name.** The extractor resolves `kitMotion.pulse` references by the export name at the defining module; the shorthand `registerKeyframes({ kitMotion })` keeps the two identical by construction. Collections stay module-scope named exports — registration is additive to the export, not a replacement for it. A package-root re-export (`export { kitMotion } from './system'`) keeps consumer imports working; the resolver follows the chain back to the defining module.
+- **The registering module sits inside the definition graph, which stays framework-free.** Registration is a runtime step the extraction sandbox executes when it evaluates your sealed system; the sandbox runs no DOM, no bundler, and no real React, so a framework graph there fails the load outright.
+
+Consumers who `.extend()` your sealed system inherit your collections through its registration record — no extra steps, with your names visible in their types so a collision is a compile error. The deprecated `from()`/`includes:` verbs perform no registry merge and cannot carry registered vocabulary; consuming a sealed kit through them records a coded `animus.vocabulary.legacy-verb` warning. Registration retains the collections' frame data on the system object your consumers already ship — declared weight, stated here rather than hidden.
 
 ---
 

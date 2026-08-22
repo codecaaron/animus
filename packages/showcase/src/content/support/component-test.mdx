@@ -530,11 +530,12 @@ export const tokens = createTheme()
   })
   .build();
 
-export const { system: ds } = createSystem()
+export const ds = createSystem()
   .addGroup('surface', { ...color, ...border, ...shadows })
   .addGroup('text', { ...typography })
   .addGroup('space', { ...space })
-  .build();`}</SyntaxBlock>
+  .build()
+  .seal();`}</SyntaxBlock>
 
 ### Line Highlighting + Diffs
 

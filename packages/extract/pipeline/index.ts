@@ -26,12 +26,6 @@ export {
   RETIRED_ENGINE_MESSAGE,
 } from './engine-retirement';
 export { contentHash } from './content-hash';
-export {
-  KEYFRAMES_EXPORT_COLLISION,
-  KEYFRAMES_EXTERNAL_ENTRY_FAILED,
-  mergeExternalKeyframes,
-} from './external-keyframes';
-export type { ExternalKeyframesMerge } from './external-keyframes';
 export type {
   AnimusCoreOptions,
   AnimusMode,
@@ -164,6 +158,9 @@ export {
   isUnresolvedParentDrop,
   surfaceManifestDiagnostics,
   unresolvedParentName,
+  VOCABULARY_COLLISION,
+  VOCABULARY_LEGACY_VERB,
+  vocabularyWitnessDiagnostics,
 } from './manifest-diagnostics';
 export type { DefaultExtension, PreprocessMdxResult } from './mdx-preprocessor';
 export {

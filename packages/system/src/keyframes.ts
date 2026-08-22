@@ -3,7 +3,8 @@
  * as a branded collection of typed per-key references.
  *
  * The returned collection is:
- *  - Branded (`__brand: 'Keyframes'`) for plugin discovery via named-export scan.
+ *  - Branded (`__brand: 'Keyframes'`) — the registration shape check reads it
+ *    (vocabulary-registration; collections are declared, never discovered).
  *  - Carries raw frame data on `__frames` as `{ [key]: { name, frames } }`,
  *    where `name` is the resolved keyframes identifier emitted into CSS.
  *  - Exposes one `KeyframeRef<Name>` per named key — each ref coerces to its

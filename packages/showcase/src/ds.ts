@@ -701,19 +701,15 @@ declare module '@animus-ui/system' {
 
 // ─── System ─────────────────────────────────────────────────
 
-export const {
-  system: ds,
-  createGlobalStyles,
-  createKeyframes,
-  // DELIBERATE holdout on the deprecated `includes:` alias (openspec:
-  // first-class-extension, inc 07/row 13): this system re-spreads
-  // `border`/`layout` into custom `surface`/`arrange` groups (Home.tsx
-  // passes `border={1}` through `surface: true`). Under restored D12
-  // transform equality (name + captured source) that re-spread now
-  // COALESCES, so migration to `.extend(testDs)` is unblocked — it is
-  // deferred to registry row 13 only to keep this increment's lane sweep
-  // stable. Migrate there; do not add new `includes:` consumers.
-} = createSystem({
+// DELIBERATE holdout on the deprecated `includes:` alias (openspec:
+// first-class-extension, inc 07/row 13): this system re-spreads
+// `border`/`layout` into custom `surface`/`arrange` groups (Home.tsx
+// passes `border={1}` through `surface: true`). Under restored D12
+// transform equality (name + captured source) that re-spread now
+// COALESCES, so migration to `.extend(testDs)` is unblocked — it is
+// deferred to registry row 13 only to keep this increment's lane sweep
+// stable. Migrate there; do not add new `includes:` consumers.
+const bundle = createSystem({
   includes: [testDs],
 })
   .addGroup('surface', {
@@ -738,6 +734,8 @@ export const {
   .addGroup('positioning', positioning)
   .build();
 
+export const { createGlobalStyles, createKeyframes } = bundle;
+
 // ─── Animations ────────────────────────────────────────────
 
 export const animations = createKeyframes({
@@ -754,6 +752,12 @@ export const animations = createKeyframes({
     '50%': { transform: 'scale(1.02)' },
   },
 });
+
+// Sealed system (vocabulary-registration): `animations` registers under its
+// export name. The `includes:` holdout above cannot carry the kit's
+// registered `kitMotion` — the sealed record carries the coded
+// `animus.vocabulary.legacy-verb` witness the host surfaces as a warning.
+export const ds = bundle.registerKeyframes({ animations }).seal();
 
 // ─── Global Styles ──────────────────────────────────────────
 

@@ -58,7 +58,7 @@ describe('createAnimusHost — the style universe over the emitted artifacts', (
     }
     expect(host.program).toMatchObject({ kind: 'analysis-artifacts' });
     expect(host.program.label).toBe(
-      'animus-commit:410fa0bb91141167e1cad2d6cd6dd150'
+      'animus-commit:b06d23b64b8afc57701072492fe0ec10'
     );
   });
 

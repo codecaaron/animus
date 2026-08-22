@@ -115,30 +115,30 @@ const intercept = minRem - (slope / 100) _ (480 / 16);
 return \`clamp(\${minRem.toFixed(3)}rem, \${intercept.toFixed(3)}rem + \${slope.toFixed(2)}vw, \${maxRem.toFixed(3)}rem)\`;
 });
 
-export const { system: ds, createGlobalStyles } = createSystem()
-  .addGroup('surface', {
-    ...color,
-    ...border,
-    ...shadows,
-    ...background,
-    ring: { property: 'boxShadow', scale: 'rings' },
-  })
-  .addGroup('arrange', {
-    ...flex,
-    ...grid,
-    ...layout,
-  })
-  .addGroup('text', {
-    ...typography,
-    fluidSize: { property: 'fontSize', transform: fluid } as const,
-  })
-  .addGroup('space', space)
-  .build();`}
+const bundle = createSystem()
+.addGroup('surface', {
+...color,
+...border,
+...shadows,
+...background,
+ring: { property: 'boxShadow', scale: 'rings' },
+})
+.addGroup('arrange', {
+...flex,
+...grid,
+...layout,
+})
+.addGroup('text', {
+...typography,
+fluidSize: { property: 'fontSize', transform: fluid } as const,
+})
+.addGroup('space', space)
+.build();`}
   output={`// ds exposes:
-//   surface — color, border, shadow, background props + ring
-//   arrange — flex, grid, layout props
-//   text    — typography props + fluidSize (clamp transform)
-//   space   — margin/padding props
+// surface — color, border, shadow, background props + ring
+// arrange — flex, grid, layout props
+// text — typography props + fluidSize (clamp transform)
+// space — margin/padding props
 
 // Component usage:
 const Card = ds.styles({
@@ -284,13 +284,14 @@ ds.styles({
 import { system as baseDs } from '@acme/design-system';
 import { transitions } from '@animus-ui/system/groups';
 
-export const { system: ds } = createSystem()
-  .extend(baseDs)
+const bundle = createSystem()
+  .extend(baseDs) // a sealed kit instance
   // Additive only: register what the kit does NOT provide. The kit's own
   // groups/props arrive through the merge and are not re-registered.
   .addGroup('motion', transitions)
   .addProps({ cursor: { property: 'cursor' } })
   .build();
+export const ds = bundle.seal();
 ```
 
 Merge rules:
@@ -327,15 +328,18 @@ Merge rules:
   returns="{ system: SystemInstance<PropReg, GroupReg>; createGlobalStyles: GlobalStylesFactory }"
 />
 
-Finalizes the builder. Returns two values — destructure both:
+Finalizes the builder and opens the registration window. Destructure the factories, then export the sealed instance:
 
 ```ts
-export const { system: ds, createGlobalStyles } = createSystem()
+const bundle = createSystem()
   .addGroup('surface', { ...color })
   .build();
+
+export const { createGlobalStyles } = bundle;
+export const ds = bundle.seal();
 ```
 
-The `system` return is renamed via destructuring — `ds` is the conventional name. All component authoring calls (`ds.styles()`, `ds.variant()`, etc.) go through this instance.
+`ds` is the conventional name for the sealed instance. All component authoring calls (`ds.styles()`, `ds.variant()`, etc.) go through it, and the loader (and `.extend()`) consume it.
 
 `createGlobalStyles` is a factory for defining global and reset styles. It accepts a `GlobalStyleMap` — a nested `Record<string, Record<string, any>>` of selector to style object — and returns a `GlobalStyleBlock` that the Vite plugin serializes into `@layer global`.
 
@@ -472,7 +476,7 @@ declare module '@animus-ui/system' {
 
 // ── System ────────────────────────────────────────────────────
 
-export const { system: ds, createGlobalStyles } = createSystem()
+const bundle = createSystem()
   .addGroup('surface', {
     ...color,
     ...border,
@@ -494,6 +498,11 @@ export const { system: ds, createGlobalStyles } = createSystem()
     _peerFocus: '.peer:focus ~ &',
   })
   .build();
+
+export const { createGlobalStyles } = bundle;
+
+// Registration closes at seal(); the loader consumes the sealed instance.
+export const ds = bundle.seal();
 
 // ── Global styles ─────────────────────────────────────────────
 

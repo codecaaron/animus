@@ -86,11 +86,16 @@ declare module '@animus-ui/system' {
 
 // ── System ────────────────────────────────────────────────────
 
-export const { system: ds, createGlobalStyles } = createSystem()
+const bundle = createSystem()
   .addGroup('color', color)
   .addGroup('space', space)
   .addGroup('typography', typography)
   .build();
+
+export const { createGlobalStyles } = bundle;
+
+// Registration closes at seal(); the loader consumes the sealed instance.
+export const ds = bundle.seal();
 
 // ── Global Styles ─────────────────────────────────────────────
 
