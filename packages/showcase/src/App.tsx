@@ -1,94 +1,38 @@
-import type { ComponentType } from 'react';
-import { lazy, Suspense, useEffect, useState } from 'react';
-import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
+import { lazy, Suspense } from 'react';
+import { BrowserRouter, Link, Route, Routes } from 'react-router-dom';
 
-import { DOCS_NAV, hasChildren } from './constants/docsNav';
 import { DocsLayout } from './layout/DocsLayout';
 import { Shell } from './layout/Shell';
-
-import type { NavEntry } from './constants/docsNav';
 
 const Home = lazy(() => import('./pages/Home'));
 const Examples = lazy(() => import('./pages/Examples'));
 
-const contentModules = import.meta.glob<ComponentType>('./content/**/*.mdx', {
-  import: 'default',
-});
-
-function DocPage({ contentKey }: { contentKey: string }) {
-  const [Content, setContent] = useState<ComponentType | null>(null);
-  const loader = contentModules[`./content/${contentKey}.mdx`];
-
-  useEffect(() => {
-    setContent(null);
-    if (loader) {
-      loader().then((mod) => setContent(() => mod));
-    }
-  }, [loader]);
-
-  if (!loader) return <NotFound />;
-  if (Content === null) return null;
-  return <Content />;
-}
-
-function generateDocRoutes(nav: NavEntry[]) {
-  return nav.map((entry) => {
-    if (hasChildren(entry)) {
-      const segment = entry.path.replace('/docs/', '');
-      const firstChild = entry.children[0];
-      return (
-        <Route path={segment} key={entry.path}>
-          <Route index element={<Navigate to={firstChild.path} replace />} />
-          {entry.children.map((child) => {
-            const childSegment = child.path.split('/').pop()!;
-            const contentKey = child.path.replace('/docs/', '');
-            return (
-              <Route
-                key={child.path}
-                path={childSegment}
-                element={<DocPage contentKey={contentKey} />}
-              />
-            );
-          })}
-        </Route>
-      );
-    }
-
-    // Top-level leaf entries
-    if (entry.path === '/docs') {
-      return (
-        <Route
-          key={entry.path}
-          index
-          element={<DocPage contentKey="introduction" />}
-        />
-      );
-    }
-
-    // Examples is a custom component, not markdown
-    if (entry.path === '/docs/examples') {
-      return (
-        <Route
-          key={entry.path}
-          path="examples"
-          element={
-            <Suspense>
-              <Examples />
-            </Suspense>
-          }
-        />
-      );
-    }
-
-    const segment = entry.path.replace('/docs/', '');
-    return (
-      <Route
-        key={entry.path}
-        path={segment}
-        element={<DocPage contentKey={segment} />}
-      />
-    );
-  });
+// The MDX guides were deleted, not archived: the system-definition API is
+// still settling and every written page had drifted into teaching shapes
+// the current pipeline rejects. Examples stay — they are extracted, built,
+// and asserted on every verify run, so they cannot silently drift.
+function DocsPlaceholder() {
+  return (
+    <div style={{ padding: '4rem 2rem', textAlign: 'center' }}>
+      <h1
+        style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: '2rem' }}
+      >
+        Documentation is offline
+      </h1>
+      <p
+        style={{
+          color: 'var(--color-textMuted)',
+          maxWidth: '46ch',
+          margin: '1rem auto',
+        }}
+      >
+        The system-definition API is still settling, and written guides kept
+        drifting out of truth. They have been removed until the API freezes. The{' '}
+        <Link to="/docs/examples">Examples</Link> are live, extracted code and
+        remain accurate.
+      </p>
+    </div>
+  );
 }
 
 function NotFound() {
@@ -118,7 +62,15 @@ export default function App() {
             }
           />
           <Route path="docs" element={<DocsLayout />}>
-            {generateDocRoutes(DOCS_NAV)}
+            <Route index element={<DocsPlaceholder />} />
+            <Route
+              path="examples"
+              element={
+                <Suspense>
+                  <Examples />
+                </Suspense>
+              }
+            />
           </Route>
           <Route path="*" element={<NotFound />} />
         </Route>

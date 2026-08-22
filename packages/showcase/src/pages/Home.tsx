@@ -325,7 +325,7 @@ export default function Home() {
           </Reveal>
           <Reveal delay="3">
             <Row gap={24} flexWrap="wrap">
-              <Link to="/docs/start" style={{ textDecoration: 'none' }}>
+              <Link to="/docs/examples" style={{ textDecoration: 'none' }}>
                 <Mono fontSize={14} color="primary">
                   Get started →
                 </Mono>
@@ -471,7 +471,7 @@ export default function Home() {
           </Reveal>
           <Reveal delay="2">
             <Stack gap={16} alignItems="center">
-              <Link to="/docs/start" style={{ textDecoration: 'none' }}>
+              <Link to="/docs/examples" style={{ textDecoration: 'none' }}>
                 <Mono fontSize={16} color="primary" fontWeight={500}>
                   Get started →
                 </Mono>
