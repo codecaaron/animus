@@ -26,11 +26,21 @@ export type {
   GlobalStyleBlock,
   GlobalStyleMap,
   GlobalStylesFactory,
+  KeyframesFrameData,
   LibraryBundle,
+  RegisterableKeyframes,
   RegistrySnapshot,
+  SealedSystemInstance,
   SerializedConfig,
   SystemBuilderStage,
+  SystemBundle,
   SystemInstance,
+  VocabularyCollisionEntry,
+  VocabularyGlobalStyleEntry,
+  VocabularyKeyframesEntry,
+  VocabularyNameCollision,
+  VocabularyOf,
+  VocabularyRecord,
 } from './SystemBuilder';
 export { createSystem, SystemBuilder } from './SystemBuilder';
 // Scales
