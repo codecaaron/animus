@@ -47,8 +47,8 @@ pub struct SystemConfig {
     /// value. `None` against a system built by an older @animus-ui/system.
     pub transform_sources: Option<String>,
     pub global_style_blocks: Option<String>,
-    /// Keyframes exports — collections produced by the top-level `keyframes()`
-    /// factory (objects with `__brand === 'Keyframes'`). JSON shape:
+    /// Keyframe collections from the sealed system's registration record
+    /// (vocabulary-registration; nothing is export-scanned). JSON shape:
     /// `{ exportName: { keyName: { name, frames } } }`. `name` is the runtime-
     /// generated stable hash (`animus-kf-<hash>`); `frames` is the percent-stop
     /// style map ready for theme resolution via the existing `@keyframes`
@@ -1556,16 +1556,12 @@ fn extract_system_config<'js>(
         .get("contextualVarsJson")
         .map_err(|e| format!("contextualVarsJson not found: {}", e))?;
 
-    // Find GlobalStyleBlock exports (registration conformance for global
-    // styles is a later increment — export scan stays their channel here).
-    let global_style_blocks = extract_global_style_blocks(namespace);
-
-    // Keyframe collections (vocabulary-registration): a sealed system's
-    // registration record is the ONLY source — an exported-but-unregistered
-    // collection does not carry, and a system WITHOUT the record accessor
-    // fails the load loud (unsealed, or built by an older
-    // @animus-ui/system) rather than loading with silently empty
-    // collections.
+    // Vocabulary (vocabulary-registration): a sealed system's registration
+    // record is the ONLY source for keyframe collections AND global-style
+    // blocks — an exported-but-unregistered value does not carry, and a
+    // system WITHOUT the record accessor fails the load loud (unsealed, or
+    // built by an older @animus-ui/system) rather than loading with
+    // silently empty vocabulary.
     if system_obj
         .get::<_, Function>("getVocabularyRecord")
         .is_err()
@@ -1578,7 +1574,7 @@ fn extract_system_config<'js>(
                 .to_string(),
         );
     }
-    let (keyframes_blocks, vocabulary_witnesses) =
+    let (keyframes_blocks, global_style_blocks, vocabulary_witnesses) =
         extract_vocabulary_record(ctx, &system_obj)?;
 
     Ok(SystemConfig {
@@ -1620,19 +1616,25 @@ fn find_exports_with_method<'js>(
     found
 }
 
+/// The three wires the vocabulary record yields: keyframes blocks,
+/// global-style blocks, and the coded witness array (each `None` when
+/// empty).
+type VocabularyWires = (Option<String>, Option<String>, Option<String>);
+
 /// Read the sealed system's vocabulary record (vocabulary-registration).
-/// Returns `(keyframes_blocks, vocabulary_witnesses)`: the record's
-/// declaration-ordered `keyframes` array becomes the unchanged
-/// `{ exportName: { keyName: { name, frames } } }` wire (insertion order
-/// preserved end to end — `Object.fromEntries` + `JSON.stringify` in the
-/// evaluation context, `preserve_order` on the Rust side), and its
-/// `collisions` + `legacyVerbs` entries carry verbatim as one coded
-/// host-facing witness array. An incompatible version marker fails the
-/// load loud.
+/// Returns `(keyframes_blocks, global_style_blocks, vocabulary_witnesses)`:
+/// the record's declaration-ordered `keyframes` array becomes the unchanged
+/// `{ exportName: { keyName: { name, frames } } }` wire, the `globalStyles`
+/// array the unchanged `{ exportName: { styles, fontFaces } }` wire
+/// (insertion order preserved end to end — `Object.fromEntries` +
+/// `JSON.stringify` in the evaluation context, `preserve_order` on the
+/// Rust side), and its `collisions` + `legacyVerbs` entries carry verbatim
+/// as one coded host-facing witness array. An incompatible version marker
+/// fails the load loud.
 fn extract_vocabulary_record<'js>(
     ctx: &rquickjs::Ctx<'js>,
     system_obj: &Object<'js>,
-) -> Result<(Option<String>, Option<String>), String> {
+) -> Result<VocabularyWires, String> {
     let script = r#"(() => {
   const record = globalThis.__sys_ref.getVocabularyRecord();
   if (!record || typeof record !== 'object') {
@@ -1642,11 +1644,14 @@ fn extract_vocabulary_record<'js>(
     return JSON.stringify({ skew: String(record.version) });
   }
   const keyframes = Array.isArray(record.keyframes) ? record.keyframes : [];
+  const globalStyles = Array.isArray(record.globalStyles) ? record.globalStyles : [];
   const collisions = Array.isArray(record.collisions) ? record.collisions : [];
   const legacyVerbs = Array.isArray(record.legacyVerbs) ? record.legacyVerbs : [];
   return JSON.stringify({
     keyframeCount: keyframes.length,
     keyframes: Object.fromEntries(keyframes.map((entry) => [entry.name, entry.frames])),
+    globalStyleCount: globalStyles.length,
+    globalStyles: Object.fromEntries(globalStyles.map((entry) => [entry.name, { styles: entry.styles, fontFaces: entry.fontFaces || [] }])),
     witnesses: collisions.concat(legacyVerbs),
   });
 })()"#;
@@ -1682,13 +1687,24 @@ fn extract_vocabulary_record<'js>(
             .get("keyframes")
             .map(|v| serde_json::to_string(v).unwrap_or_default())
     };
+    let global_style_count = parsed
+        .get("globalStyleCount")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let global_style_blocks = if global_style_count == 0 {
+        None
+    } else {
+        parsed
+            .get("globalStyles")
+            .map(|v| serde_json::to_string(v).unwrap_or_default())
+    };
     let vocabulary_witnesses = match parsed.get("witnesses").and_then(|v| v.as_array()) {
         Some(list) if !list.is_empty() => {
             Some(serde_json::to_string(list).unwrap_or_default())
         }
         _ => None,
     };
-    Ok((keyframes_blocks, vocabulary_witnesses))
+    Ok((keyframes_blocks, global_style_blocks, vocabulary_witnesses))
 }
 
 /// List all export keys from a module namespace.
@@ -1699,49 +1715,6 @@ fn list_export_keys(namespace: &Object<'_>) -> Vec<String> {
     }
     keys
 }
-
-/// Extract GlobalStyleBlock exports (objects with __brand === 'GlobalStyleBlock').
-/// Uses JSON.stringify inside the rquickjs context to serialize the styles object.
-fn extract_global_style_blocks(namespace: &Object<'_>) -> Option<String> {
-    let keys = list_export_keys(namespace);
-    let mut blocks: HashMap<String, serde_json::Value> = HashMap::new();
-    let ctx = namespace.ctx().clone();
-
-    for key in &keys {
-        if let Ok(obj) = namespace.get::<_, Object>(key.as_str()) {
-            if let Ok(brand) = obj.get::<_, String>("__brand") {
-                if brand == "GlobalStyleBlock" {
-                    // Wrapped form: selector map plus the block's typed
-                    // font-face descriptors (global-styles-system). The
-                    // extractor renders fontFaces ahead of selector rules.
-                    let script = format!(
-                        "JSON.stringify({{styles: globalThis.__ns_ref[\"{key}\"].styles, fontFaces: globalThis.__ns_ref[\"{key}\"].fontFaces || []}})"
-                    );
-                    // Temporarily assign namespace to globalThis for access
-                    let _ = ctx.globals().set("__ns_ref", namespace.clone());
-                    if let Ok(json_str) = ctx.eval::<String, _>(script.as_bytes()) {
-                        let _ = ctx.globals().remove("__ns_ref");
-                        if let Ok(parsed) = serde_json::from_str(&json_str) {
-                            blocks.insert(key.clone(), parsed);
-                        }
-                    } else {
-                        let _ = ctx.globals().remove("__ns_ref");
-                    }
-                }
-            }
-        }
-    }
-
-    if blocks.is_empty() {
-        None
-    } else {
-        Some(serde_json::to_string(&blocks).unwrap_or_default())
-    }
-}
-
-// ---------------------------------------------------------------------------
-// 6. Public entry point
-// ---------------------------------------------------------------------------
 
 /// Load a system module and return its serialized configuration.
 ///
@@ -2446,6 +2419,52 @@ export const ds = tokens;
     }
 
     #[test]
+    fn registered_global_styles_carry_in_record_order() {
+        // global-styles-system §"Global style registration and cascade
+        // order": record order reaches the wire; an exported-but-
+        // unregistered branded block does NOT carry.
+        let dir = scratch_dir("vocab-globals-order");
+        let entry = dir.join("entry.ts");
+        let mut source = sealed_system_fixture(
+            "{ version: 1, keyframes: [], globalStyles: [\n\
+               { name: 'reset', styles: { body: { margin: 0 } } },\n\
+               { name: 'typo', styles: { h1: { fontWeight: 700 } } },\n\
+             ], collisions: [], legacyVerbs: [] }",
+        );
+        source.push_str(
+            "export const rogue = { __brand: 'GlobalStyleBlock', styles: { p: { margin: 0 } } };\n",
+        );
+        write_fixture(&entry, &source);
+
+        let first = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None)
+            .expect("sealed system must load");
+        let second = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None)
+            .expect("second load");
+        let _ = fs::remove_dir_all(&dir);
+
+        let blocks = first
+            .global_style_blocks
+            .clone()
+            .expect("registered blocks must carry");
+        let reset_at = blocks.find("\"reset\"").expect("reset present");
+        let typo_at = blocks.find("\"typo\"").expect("typo present");
+        assert!(reset_at < typo_at, "record order must reach the wire: {blocks}");
+        assert!(
+            !blocks.contains("rogue"),
+            "unregistered branded export must not carry: {blocks}"
+        );
+        // Wire shape parity with the retired export scan: wrapped
+        // {{ styles, fontFaces }} per name.
+        let parsed: serde_json::Value = serde_json::from_str(&blocks).expect("valid JSON");
+        assert!(parsed["reset"]["styles"]["body"].is_object());
+        assert!(parsed["reset"]["fontFaces"].is_array());
+        assert_eq!(
+            first.global_style_blocks, second.global_style_blocks,
+            "fresh-process loads must serialize identical block bytes"
+        );
+    }
+
+    #[test]
     fn recordless_system_fails_the_load() {
         // rust-system-loader §"Registration-record version skew fails the
         // load", the absence half (the DEF-11-class hard cut): a system
@@ -2715,10 +2734,10 @@ export const ds = tokens;
     #[test]
     fn asset_placeholder_survives_the_loader_round_trip() {
         // standardize-inheritance-and-assets (rust-system-loader delta): an
-        // `asset()` placeholder inside a global style block's fontFaces
-        // serializes through evaluation with its specifier bytes intact and
-        // WITHOUT any resolution attempt — the scratch dir contains no such
-        // file, and the load must not care.
+        // `asset()` placeholder inside a REGISTERED global style block's
+        // fontFaces serializes through the record with its specifier bytes
+        // intact and WITHOUT any resolution attempt — the scratch dir
+        // contains no such file, and the load must not care.
         let dir = scratch_dir("asset-placeholder");
         let entry = dir.join("entry.ts");
         write_fixture(
@@ -2740,7 +2759,7 @@ export const ds = tokens;
                  contextualVarsJson: '{}',\n\
                }),\n\
              };\n\
-             export const system = { toConfig: () => ({ propConfig: '{}', groupRegistry: '{}' }), getVocabularyRecord: () => ({ version: 1, keyframes: [], globalStyles: [], collisions: [], legacyVerbs: [] }) };\n",
+             export const system = { toConfig: () => ({ propConfig: '{}', groupRegistry: '{}' }), getVocabularyRecord: () => ({ version: 1, keyframes: [], globalStyles: [{ name: 'globals', styles: globals.styles, fontFaces: globals.fontFaces }], collisions: [], legacyVerbs: [] }) };\n",
         );
 
         let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None);

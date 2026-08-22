@@ -2161,6 +2161,26 @@ void (<ExtendedBadge label="hi" />);
   const widened: Record<string, typeof kitMotion> = { anything: kitMotion };
   // @ts-expect-error — index-signature maps cannot register vocabulary
   void createSystem().build().registerKeyframes(widened);
+
+  // Global styles ride the SAME axis (inc 06 — one shared name-space):
+  // registering a block under an already-registered keyframes name is a
+  // compile error, and fresh block names union into VocabularyOf.
+  const gsBundle = createSystem().build();
+  const gsMotion = gsBundle.createKeyframes({
+    spin: { '0%': { opacity: 0 } },
+  });
+  const gsReset = gsBundle.createGlobalStyles({ body: { margin: 0 } });
+  void gsBundle
+    .registerKeyframes({ motion: gsMotion })
+    // @ts-expect-error — "motion" is already registered vocabulary
+    .registerGlobalStyles({ motion: gsReset });
+  const gsSealed = gsBundle
+    .registerKeyframes({ motion: gsMotion })
+    .registerGlobalStyles({ gsReset })
+    .seal();
+  type _MixedVocab = Assert<
+    IsExact<VocabularyOf<typeof gsSealed>, 'motion' | 'gsReset'>
+  >;
 }
 
 void TypeTests;

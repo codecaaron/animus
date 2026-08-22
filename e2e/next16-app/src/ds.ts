@@ -189,11 +189,6 @@ export const animations = createKeyframes({
   },
 });
 
-// Sealed system (vocabulary-registration): `animations` registers under its
-// export name; the kit's `kitMotion` arrives through the sealed test-ds
-// record via `.extend()`.
-export const ds = bundle.registerKeyframes({ animations }).seal();
-
 // ─── Global Styles ──────────────────────────────────────────
 
 export const globalStyles = createGlobalStyles({
@@ -209,3 +204,11 @@ export const globalStyles = createGlobalStyles({
   a: { color: 'primary', textDecoration: 'none' },
   'code, kbd': { fontFamily: 'ui-monospace, monospace', fontSize: 14 },
 });
+
+// Sealed system (vocabulary-registration): `animations` registers under its
+// export name; the kit's `kitMotion` arrives through the sealed test-ds
+// record via `.extend()`.
+export const ds = bundle
+  .registerKeyframes({ animations })
+  .registerGlobalStyles({ globalStyles })
+  .seal();

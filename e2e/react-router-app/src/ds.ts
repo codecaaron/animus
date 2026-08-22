@@ -89,12 +89,6 @@ const bundle = createSystem()
 
 export const { createGlobalStyles } = bundle;
 
-// Sealed system (vocabulary-registration): the `from()` verb above cannot
-// carry the kit's registered `kitMotion` — this lane is the from()-side
-// legacy-verb witness (`animus.vocabulary.legacy-verb` on the sealed
-// record, surfaced by the host as a warning).
-export const ds = bundle.seal();
-
 export const globalStyles = createGlobalStyles({
   '*, *::before, *::after': { boxSizing: 'border-box' },
   body: {
@@ -104,3 +98,9 @@ export const globalStyles = createGlobalStyles({
     fontFamily: 'system-ui, sans-serif',
   },
 });
+
+// Sealed system (vocabulary-registration): the `from()` verb above cannot
+// carry the kit's registered `kitMotion` — this lane is the from()-side
+// legacy-verb witness (`animus.vocabulary.legacy-verb` on the sealed
+// record, surfaced by the host as a warning).
+export const ds = bundle.registerGlobalStyles({ globalStyles }).seal();

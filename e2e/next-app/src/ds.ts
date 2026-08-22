@@ -227,13 +227,6 @@ export const animations = createKeyframes({
   },
 });
 
-// Sealed system (vocabulary-registration): `animations` registers under its
-// export name. The `includes:` alias above deliberately CANNOT carry the
-// kit's registered `kitMotion` — this lane is the legacy-verb witness: the
-// sealed record carries the coded `animus.vocabulary.legacy-verb` entry the
-// hosts surface as a warning.
-export const ds = bundle.registerKeyframes({ animations }).seal();
-
 // ─── Global Styles ──────────────────────────────────────────
 
 export const globalStyles = createGlobalStyles({
@@ -249,3 +242,13 @@ export const globalStyles = createGlobalStyles({
   a: { color: 'primary', textDecoration: 'none' },
   'code, kbd': { fontFamily: 'ui-monospace, monospace', fontSize: 14 },
 });
+
+// Sealed system (vocabulary-registration): `animations` registers under its
+// export name. The `includes:` alias above deliberately CANNOT carry the
+// kit's registered `kitMotion` — this lane is the legacy-verb witness: the
+// sealed record carries the coded `animus.vocabulary.legacy-verb` entry the
+// hosts surface as a warning.
+export const ds = bundle
+  .registerKeyframes({ animations })
+  .registerGlobalStyles({ globalStyles })
+  .seal();

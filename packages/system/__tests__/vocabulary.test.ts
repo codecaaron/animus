@@ -4,6 +4,7 @@ import { createSystem } from '../src';
 
 import type {
   KeyframesFrameData,
+  RegisterableGlobalStyles,
   RegisterableKeyframes,
   VocabularyRecord,
 } from '../src';
@@ -22,6 +23,9 @@ type ErasedRegistrable = RegisterableKeyframes | { frames: object };
  *  assertion anywhere. */
 interface ErasedBundle {
   registerKeyframes(map: Record<string, ErasedRegistrable>): ErasedBundle;
+  registerGlobalStyles(
+    map: Record<string, RegisterableGlobalStyles>
+  ): ErasedBundle;
   seal(): { getVocabularyRecord?(): VocabularyRecord };
 }
 
@@ -345,6 +349,84 @@ describe('vocabulary registration — two-phase terminal (runtime)', () => {
     expect(record.keyframes.map((entry) => entry.name)).toEqual(['kitMotion']);
     expect(record.legacyVerbs).toEqual([]);
     expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('registerGlobalStyles rides the same window: record order, fontFaces payload, shared name-space', () => {
+    const bundle = createSystem().build();
+    const motion = bundle.createKeyframes({ pulse: FRAMES_A });
+    const reset = bundle.createGlobalStyles(
+      { body: { margin: 0 } },
+      {
+        fontFaces: [
+          { family: 'TestFont', src: [{ url: 'font.woff2', format: 'woff2' }] },
+        ],
+      }
+    );
+    const typographyBlock = bundle.createGlobalStyles({
+      h1: { fontWeight: 700 },
+    });
+
+    const sealed = bundle
+      .registerKeyframes({ motion })
+      .registerGlobalStyles({ reset })
+      .registerGlobalStyles({ typographyBlock })
+      .seal();
+
+    const record = recordOf(sealed);
+    expect(record.keyframes.map((entry) => entry.name)).toEqual(['motion']);
+    expect(record.globalStyles.map((entry) => entry.name)).toEqual([
+      'reset',
+      'typographyBlock',
+    ]);
+    expect(record.globalStyles[0]?.styles).toEqual({ body: { margin: 0 } });
+    expect(record.globalStyles[0]?.fontFaces?.[0]?.family).toBe('TestFont');
+    expect(record.globalStyles[1]?.fontFaces).toBeUndefined();
+    expect(Object.isFrozen(record.globalStyles[0])).toBe(true);
+    expect(Object.isFrozen(record.globalStyles[0]?.styles)).toBe(true);
+  });
+
+  it('a global-style block colliding with a keyframes name is witnessed cross-kind — one name-space', () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const bundle = createSystem().build();
+    const motion = bundle.createKeyframes({ pulse: FRAMES_A });
+    const block = bundle.createGlobalStyles({ body: { margin: 0 } });
+
+    const sealed = erased(bundle.registerKeyframes({ motion }))
+      .registerGlobalStyles({ motion: block })
+      .seal();
+
+    const record = recordOf(sealed);
+    expect(record.keyframes).toEqual([]);
+    expect(record.globalStyles.map((entry) => entry.name)).toEqual(['motion']);
+    expect(record.collisions).toHaveLength(1);
+    expect(record.collisions[0]).toMatchObject({ name: 'motion' });
+  });
+
+  it('a sealed kit global-style block carries through .extend() ahead of local blocks', () => {
+    const kitBundle = createSystem().build();
+    const kitReset = kitBundle.createGlobalStyles({ body: { margin: 0 } });
+    const kit = kitBundle.registerGlobalStyles({ kitReset }).seal();
+
+    const consumerBundle = createSystem().extend(kit).build();
+    const appStyles = consumerBundle.createGlobalStyles({
+      main: { padding: 0 },
+    });
+    const sealed = consumerBundle.registerGlobalStyles({ appStyles }).seal();
+
+    expect(recordOf(sealed).globalStyles.map((entry) => entry.name)).toEqual([
+      'kitReset',
+      'appStyles',
+    ]);
+  });
+
+  it('registration after seal throws for global styles too', () => {
+    const bundle = createSystem().build();
+    const block = bundle.createGlobalStyles({ body: { margin: 0 } });
+    bundle.seal();
+    expect(() => erased(bundle).registerGlobalStyles({ block })).toThrow(
+      /sealed/
+    );
   });
 
   it('a vocabulary-free sealed source through legacy verbs stays silent', () => {

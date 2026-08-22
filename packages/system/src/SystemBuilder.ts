@@ -139,6 +139,16 @@ export interface RegisterableKeyframes {
   readonly __frames: object;
 }
 
+/**
+ * The structural shape `registerGlobalStyles` accepts: any
+ * `createGlobalStyles` return value qualifies (the brand stays structural,
+ * mirroring `RegisterableKeyframes`).
+ */
+export interface RegisterableGlobalStyles {
+  readonly __brand: 'GlobalStyleBlock';
+  readonly styles: object;
+}
+
 /** The per-key frame data a collection carries (`Keyframes['__frames']`). */
 export type KeyframesFrameData = Record<
   string,
@@ -152,7 +162,8 @@ export interface VocabularyKeyframesEntry {
 
 export interface VocabularyGlobalStyleEntry {
   readonly name: string;
-  readonly block: GlobalStyleBlock;
+  readonly styles: GlobalStyleMap;
+  readonly fontFaces?: readonly FontFace[];
 }
 
 export interface VocabularyCollisionEntry {
@@ -197,12 +208,33 @@ export interface VocabularyRecord {
   readonly legacyVerbs: readonly VocabularyLegacyVerbEntry[];
 }
 
-/** Internal pending/merged vocabulary state (origin powers witness text). */
-interface VocabularyKeyframesState {
-  name: string;
-  frames: KeyframesFrameData;
-  origin: string;
-}
+/** Internal pending/merged vocabulary state (origin powers witness text).
+ *  ONE name-space across both kinds: a global-style block and a keyframes
+ *  collection cannot share a registered name. */
+type VocabularyEntryState =
+  | {
+      kind: 'keyframes';
+      name: string;
+      frames: KeyframesFrameData;
+      origin: string;
+    }
+  | {
+      kind: 'globalStyles';
+      name: string;
+      styles: GlobalStyleMap;
+      fontFaces?: readonly FontFace[];
+      origin: string;
+    };
+
+/** A merge input — an entry state minus its origin (assigned by the merge). */
+type VocabularyEntryInput =
+  | { kind: 'keyframes'; name: string; frames: KeyframesFrameData }
+  | {
+      kind: 'globalStyles';
+      name: string;
+      styles: GlobalStyleMap;
+      fontFaces?: readonly FontFace[];
+    };
 
 /**
  * Legacy-verb witness helper shared by `from()` and the `includes:` config
@@ -265,36 +297,39 @@ function snapshotFrameData(frames: KeyframesFrameData): KeyframesFrameData {
  * order of the surviving registrations (inherited region first, then
  * locals; a later extension's win sits at that extension's position).
  */
-function mergeVocabularyKeyframes(
-  existingEntries: readonly VocabularyKeyframesState[],
+function mergeVocabularyEntries(
+  existingEntries: readonly VocabularyEntryState[],
   existingCollisions: readonly VocabularyCollisionEntry[],
-  incoming: ReadonlyArray<{ name: string; frames: KeyframesFrameData }>,
+  incoming: ReadonlyArray<VocabularyEntryInput>,
   incomingOrigin: string
 ): {
-  entries: VocabularyKeyframesState[];
+  entries: VocabularyEntryState[];
   collisions: VocabularyCollisionEntry[];
 } {
   const entries = existingEntries.map((entry) => ({ ...entry }));
   const collisions = [...existingCollisions];
-  for (const { name, frames } of incoming) {
-    const existingIndex = entries.findIndex((entry) => entry.name === name);
+  for (const input of incoming) {
+    // ONE name-space: the collision check spans both kinds.
+    const existingIndex = entries.findIndex(
+      (entry) => entry.name === input.name
+    );
     if (existingIndex !== -1) {
       const loser = entries[existingIndex];
       collisions.push({
         code: 'animus.vocabulary.collision',
-        name,
+        name: input.name,
         winner: incomingOrigin,
         loser: loser.origin,
       });
       // oxlint-disable-next-line no-console -- intentional runtime diagnostic
       console.warn(
-        `animus: keyframes vocabulary "${name}" is registered by both ` +
+        `animus: vocabulary "${input.name}" is registered by both ` +
           `${loser.origin} and ${incomingOrigin} — ${incomingOrigin} wins; ` +
-          'rename one collection (animus.vocabulary.collision)'
+          'rename one entry (animus.vocabulary.collision)'
       );
       entries.splice(existingIndex, 1);
     }
-    entries.push({ name, frames, origin: incomingOrigin });
+    entries.push({ ...input, origin: incomingOrigin });
   }
   return { entries, collisions };
 }
@@ -319,7 +354,7 @@ declare const VOCABULARY_INDEX_SIGNATURE: unique symbol;
  * the accumulated axis to `string`. Registration maps require literal keys.
  */
 export interface VocabularyIndexSignatureRejected {
-  readonly [VOCABULARY_INDEX_SIGNATURE]: 'registerKeyframes requires literal keys — an index-signature map cannot prove its vocabulary names';
+  readonly [VOCABULARY_INDEX_SIGNATURE]: 'vocabulary registration requires literal keys — an index-signature map cannot prove its names';
 }
 
 type LiteralKeyMap<M> = string extends keyof M
@@ -385,6 +420,19 @@ export interface SystemBundle<
    * bundles — declared weight, not a hidden zero.
    */
   registerKeyframes<M extends Record<string, RegisterableKeyframes>>(
+    map: M &
+      LiteralKeyMap<M> & {
+        [K in Extract<keyof M, Vocab>]: VocabularyNameCollision<K & string>;
+      }
+  ): SystemBundle<PropReg, GroupReg, Conds, Sels, Vocab | (keyof M & string)>;
+  /**
+   * Register global-style blocks between the terminals — the SAME linear
+   * lifecycle, record carriage, and ONE shared vocabulary name-space as
+   * `registerKeyframes` (a block cannot share a registered name with a
+   * keyframes collection). Keys equal export names; blocks stay
+   * module-scope named exports.
+   */
+  registerGlobalStyles<M extends Record<string, RegisterableGlobalStyles>>(
     map: M &
       LiteralKeyMap<M> & {
         [K in Extract<keyof M, Vocab>]: VocabularyNameCollision<K & string>;
@@ -625,7 +673,7 @@ export class SystemBuilder<
   // (vocabulary-registration: inherited entries precede local registrations
   // in the eventual record). Collisions recorded here are extend-time
   // (kit-vs-kit); registration-time collisions accumulate in the bundle.
-  #vocabularyRegistry: readonly VocabularyKeyframesState[];
+  #vocabularyRegistry: readonly VocabularyEntryState[];
   #vocabularyCollisions: readonly VocabularyCollisionEntry[];
   #legacyVerbWitnesses: readonly VocabularyLegacyVerbEntry[];
 
@@ -637,7 +685,7 @@ export class SystemBuilder<
     conditionRegistry?: ConditionAliasMap,
     extendProvenance?: ReadonlyMap<string, number>,
     extendCount?: number,
-    vocabularyRegistry?: readonly VocabularyKeyframesState[],
+    vocabularyRegistry?: readonly VocabularyEntryState[],
     vocabularyCollisions?: readonly VocabularyCollisionEntry[],
     legacyVerbWitnesses?: readonly VocabularyLegacyVerbEntry[]
   ) {
@@ -987,11 +1035,24 @@ export class SystemBuilder<
     }
     let nextVocabulary = this.#vocabularyRegistry;
     let nextVocabularyCollisions = this.#vocabularyCollisions;
-    if (sourceRecord.keyframes.length > 0) {
-      const merged = mergeVocabularyKeyframes(
+    const inheritedEntries: VocabularyEntryInput[] = [
+      ...sourceRecord.keyframes.map((entry) => ({
+        kind: 'keyframes' as const,
+        name: entry.name,
+        frames: entry.frames,
+      })),
+      ...sourceRecord.globalStyles.map((entry) => ({
+        kind: 'globalStyles' as const,
+        name: entry.name,
+        styles: entry.styles,
+        ...(entry.fontFaces ? { fontFaces: entry.fontFaces } : {}),
+      })),
+    ];
+    if (inheritedEntries.length > 0) {
+      const merged = mergeVocabularyEntries(
         this.#vocabularyRegistry,
         this.#vocabularyCollisions,
-        sourceRecord.keyframes,
+        inheritedEntries,
         incomingOrigin
       );
       nextVocabulary = merged.entries;
@@ -1384,30 +1445,48 @@ export class SystemBuilder<
     // extended sources) seed the record in extension order; local
     // registrations append after them, labeled by 1-based call index.
     const makeBundle = (
-      entries: readonly VocabularyKeyframesState[],
+      entries: readonly VocabularyEntryState[],
       collisions: readonly VocabularyCollisionEntry[],
       localCallCount: number
     ): SystemBundle<PropReg, GroupReg, Conds, Sels, Vocab> => {
       let consumedBy: 'register' | 'seal' | undefined;
 
-      const registerKeyframes = (
-        map: Record<string, RegisterableKeyframes>
+      // One linear-window guard + merge for both registration kinds.
+      const registerEntries = (
+        label: string,
+        incoming: VocabularyEntryInput[]
       ): SystemBundle<PropReg, GroupReg, Conds, Sels, Vocab> => {
         if (consumedBy === 'seal') {
           throw new Error(
-            'registerKeyframes: this system is already sealed — ' +
-              'registration happens between build() and seal().'
+            `${label}: this system is already sealed — registration ` +
+              'happens between build() and seal().'
           );
         }
         if (consumedBy === 'register') {
           throw new Error(
-            'registerKeyframes: this bundle was superseded by a later ' +
-              'registration call — registration is linear; chain the calls ' +
-              'and seal the final bundle.'
+            `${label}: this bundle was superseded by a later registration ` +
+              'call — registration is linear; chain the calls and seal the ' +
+              'final bundle.'
           );
         }
-        const incoming: Array<{ name: string; frames: KeyframesFrameData }> =
-          [];
+        const merged = mergeVocabularyEntries(
+          entries,
+          collisions,
+          incoming,
+          `local registration #${localCallCount + 1}`
+        );
+        consumedBy = 'register';
+        return makeBundle(
+          merged.entries,
+          merged.collisions,
+          localCallCount + 1
+        );
+      };
+
+      const registerKeyframes = (
+        map: Record<string, RegisterableKeyframes>
+      ): SystemBundle<PropReg, GroupReg, Conds, Sels, Vocab> => {
+        const incoming: VocabularyEntryInput[] = [];
         for (const [name, collection] of Object.entries(map)) {
           if (
             !collection ||
@@ -1420,24 +1499,59 @@ export class SystemBuilder<
             );
           }
           incoming.push({
+            kind: 'keyframes',
             name,
             frames: snapshotFrameData(
               (collection as { __frames: KeyframesFrameData }).__frames
             ),
           });
         }
-        const merged = mergeVocabularyKeyframes(
-          entries,
-          collisions,
-          incoming,
-          `local registration #${localCallCount + 1}`
-        );
-        consumedBy = 'register';
-        return makeBundle(
-          merged.entries,
-          merged.collisions,
-          localCallCount + 1
-        );
+        return registerEntries('registerKeyframes', incoming);
+      };
+
+      const registerGlobalStyles = (
+        map: Record<string, RegisterableGlobalStyles>
+      ): SystemBundle<PropReg, GroupReg, Conds, Sels, Vocab> => {
+        const incoming: VocabularyEntryInput[] = [];
+        for (const [name, block] of Object.entries(map)) {
+          if (
+            !block ||
+            (block as { __brand?: unknown }).__brand !== 'GlobalStyleBlock' ||
+            typeof (block as { styles?: unknown }).styles !== 'object'
+          ) {
+            throw new TypeError(
+              `registerGlobalStyles: "${name}" is not a createGlobalStyles ` +
+                'block — register the factory return value itself.'
+            );
+          }
+          const blockValue = block as unknown as GlobalStyleBlock;
+          // Registration-time snapshot mirroring snapshotFrameData: the top
+          // two levels are copied and frozen (blind spot: deeper selector
+          // bodies stay aliased).
+          const styles = Object.freeze(
+            Object.fromEntries(
+              Object.entries(blockValue.styles).map(([selector, body]) => [
+                selector,
+                Object.freeze({ ...body }),
+              ])
+            )
+          ) as GlobalStyleMap;
+          incoming.push({
+            kind: 'globalStyles',
+            name,
+            styles,
+            ...(blockValue.fontFaces?.length
+              ? {
+                  fontFaces: Object.freeze(
+                    blockValue.fontFaces.map((face) =>
+                      Object.freeze({ ...face })
+                    )
+                  ) as readonly FontFace[],
+                }
+              : {}),
+          });
+        }
+        return registerEntries('registerGlobalStyles', incoming);
       };
 
       const seal = (): SealedSystemInstance<
@@ -1462,13 +1576,25 @@ export class SystemBuilder<
         const record: VocabularyRecord = Object.freeze({
           version: 1 as const,
           keyframes: Object.freeze(
-            entries.map((entry) =>
-              // frames were deep-copied and frozen at registration (or
-              // arrived frozen from a sealed source's record).
-              Object.freeze({ name: entry.name, frames: entry.frames })
-            )
+            entries
+              .filter((entry) => entry.kind === 'keyframes')
+              .map((entry) =>
+                // frames were deep-copied and frozen at registration (or
+                // arrived frozen from a sealed source's record).
+                Object.freeze({ name: entry.name, frames: entry.frames })
+              )
           ),
-          globalStyles: Object.freeze([]),
+          globalStyles: Object.freeze(
+            entries
+              .filter((entry) => entry.kind === 'globalStyles')
+              .map((entry) =>
+                Object.freeze({
+                  name: entry.name,
+                  styles: entry.styles,
+                  ...(entry.fontFaces ? { fontFaces: entry.fontFaces } : {}),
+                })
+              )
+          ),
           collisions: Object.freeze(
             collisions.map((entry) => Object.freeze({ ...entry }))
           ),
@@ -1511,15 +1637,17 @@ export class SystemBuilder<
         // stays a compile error): registration attempted on the sealed
         // instance itself names the sealed state instead of a bare
         // "not a function".
-        Object.defineProperty(sealed, 'registerKeyframes', {
-          value: (): never => {
-            throw new Error(
-              'registerKeyframes: this system is sealed — registration ' +
-                'happens between build() and seal().'
-            );
-          },
-          enumerable: false,
-        });
+        for (const member of ['registerKeyframes', 'registerGlobalStyles']) {
+          Object.defineProperty(sealed, member, {
+            value: (): never => {
+              throw new Error(
+                `${member}: this system is sealed — registration happens ` +
+                  'between build() and seal().'
+              );
+            },
+            enumerable: false,
+          });
+        }
         consumedBy = 'seal';
         return sealed;
       };
@@ -1529,6 +1657,7 @@ export class SystemBuilder<
         createGlobalStyles,
         createKeyframes,
         registerKeyframes,
+        registerGlobalStyles,
         seal,
       } as SystemBundle<PropReg, GroupReg, Conds, Sels, Vocab>;
     };

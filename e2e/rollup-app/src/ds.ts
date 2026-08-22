@@ -153,4 +153,7 @@ export const animations = createKeyframes({
 // Sealed system (vocabulary-registration): `animations` registers under its
 // export name; the kit's `kitMotion` arrives through the sealed test-ds
 // record via `.extend()`.
-export const ds = bundle.registerKeyframes({ animations }).seal();
+export const ds = bundle
+  .registerKeyframes({ animations })
+  .registerGlobalStyles({ globalStyles })
+  .seal();

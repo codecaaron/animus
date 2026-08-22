@@ -28,6 +28,7 @@ export type {
   GlobalStylesFactory,
   KeyframesFrameData,
   LibraryBundle,
+  RegisterableGlobalStyles,
   RegisterableKeyframes,
   RegistrySnapshot,
   SealedSystemInstance,

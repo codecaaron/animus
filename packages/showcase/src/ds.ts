@@ -753,12 +753,6 @@ export const animations = createKeyframes({
   },
 });
 
-// Sealed system (vocabulary-registration): `animations` registers under its
-// export name. The `includes:` holdout above cannot carry the kit's
-// registered `kitMotion` — the sealed record carries the coded
-// `animus.vocabulary.legacy-verb` witness the host surfaces as a warning.
-export const ds = bundle.registerKeyframes({ animations }).seal();
-
 // ─── Global Styles ──────────────────────────────────────────
 
 export const globalStyles = createGlobalStyles({
@@ -822,3 +816,12 @@ export const globalStyles = createGlobalStyles({
     backgroundSize: '150px 150px',
   },
 });
+
+// Sealed system (vocabulary-registration): `animations` registers under its
+// export name. The `includes:` holdout above cannot carry the kit's
+// registered `kitMotion` — the sealed record carries the coded
+// `animus.vocabulary.legacy-verb` witness the host surfaces as a warning.
+export const ds = bundle
+  .registerKeyframes({ animations })
+  .registerGlobalStyles({ globalStyles })
+  .seal();

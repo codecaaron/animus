@@ -99,4 +99,7 @@ export const animations = createKeyframes({
 
 // Sealed system (vocabulary-registration): `animations` registers under
 // its export name; registration closes at seal().
-export const ds = bundle.registerKeyframes({ animations }).seal();
+export const ds = bundle
+  .registerKeyframes({ animations })
+  .registerGlobalStyles({ globalStyles })
+  .seal();

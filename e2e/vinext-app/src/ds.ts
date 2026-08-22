@@ -68,10 +68,6 @@ const bundle = createSystem().extend(testDs).build();
 
 export const { createGlobalStyles } = bundle;
 
-// Sealed system (vocabulary-registration): no local collections; the kit's
-// `kitMotion` arrives through the sealed test-ds record via `.extend()`.
-export const ds = bundle.seal();
-
 export const globalStyles = createGlobalStyles({
   '*, *::before, *::after': { boxSizing: 'border-box' },
   body: {
@@ -81,3 +77,7 @@ export const globalStyles = createGlobalStyles({
     fontFamily: 'system-ui, sans-serif',
   },
 });
+
+// Sealed system (vocabulary-registration): no local collections; the kit's
+// `kitMotion` arrives through the sealed test-ds record via `.extend()`.
+export const ds = bundle.registerGlobalStyles({ globalStyles }).seal();
