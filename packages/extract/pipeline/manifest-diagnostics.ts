@@ -122,6 +122,76 @@ export function collectSelectorAliasDiagnostics(
   return diagnostics;
 }
 
+/** Stable code for a vocabulary-record collision witness (mirrors the
+ *  entry code minted by @animus-ui/system's merge). */
+export const VOCABULARY_COLLISION = 'animus.vocabulary.collision';
+
+/** Stable code for a legacy-verb carriage refusal (a sealed kit with
+ *  registered vocabulary consumed through `from()`/`includes:`). */
+export const VOCABULARY_LEGACY_VERB = 'animus.vocabulary.legacy-verb';
+
+/**
+ * Map the sealed system's vocabulary witness entries
+ * (vocabulary-registration: collision + legacy-verb records, carried on the
+ * registration record because the loader's evaluation host shims `console`
+ * to a no-op) into coded diagnostics for the shared surfacing policy point.
+ * ONE mapper for every host — the witness text must not fork per plugin.
+ */
+export function vocabularyWitnessDiagnostics(
+  vocabularyWitnessesJson: string | null | undefined
+): ManifestDiagnostic[] {
+  if (!vocabularyWitnessesJson) return [];
+  const entries = parseInternalWire<
+    Array<{
+      code?: string;
+      name?: string;
+      winner?: string;
+      loser?: string;
+      verb?: string;
+      source?: string;
+      names?: string[];
+    }>
+  >(
+    vocabularyWitnessesJson,
+    "vocabularyWitnessesJson (the sealed system's vocabulary witness record)"
+  );
+  const diagnostics: ManifestDiagnostic[] = [];
+  for (const entry of entries) {
+    if (entry.code === VOCABULARY_COLLISION) {
+      diagnostics.push({
+        file: 'system',
+        component: entry.name ?? 'keyframes',
+        kind: 'warn',
+        message: `keyframes vocabulary "${entry.name}" is registered by both ${entry.loser} and ${entry.winner} — ${entry.winner} wins; rename one collection (${entry.code})`,
+        code: entry.code,
+        severity: 'warn',
+      });
+    } else if (entry.code === VOCABULARY_LEGACY_VERB) {
+      diagnostics.push({
+        file: 'system',
+        component: 'keyframes',
+        kind: 'warn',
+        message: `a sealed system (${entry.source ?? `'${entry.verb}' source`}) with registered vocabulary [${(entry.names ?? []).join(', ')}] was consumed through the deprecated '${entry.verb}' verb, which cannot carry it — those collections do NOT reach this consumer; use createSystem().extend(source) (${entry.code})`,
+        code: entry.code,
+        severity: 'warn',
+      });
+    } else {
+      // Fail closed (arch-fail-closed-diagnostics): a witness entry this
+      // host does not recognize still surfaces, carrying its own code — a
+      // newer @animus-ui/system's witness kind must never vanish silently.
+      diagnostics.push({
+        file: 'system',
+        component: 'vocabulary',
+        kind: 'warn',
+        message: `unrecognized vocabulary witness entry ${JSON.stringify(entry)} — a newer @animus-ui/system may have recorded a witness kind this host predates${entry.code ? ` (${entry.code})` : ''}`,
+        code: entry.code,
+        severity: 'warn',
+      });
+    }
+  }
+  return diagnostics;
+}
+
 /**
  * Surface extraction-manifest diagnostics through a plugin's warn channel.
  *

@@ -43,7 +43,6 @@ const mocks = vi.hoisted(() => ({
   loadSystemModule: vi.fn<EngineApi['loadSystemModule']>(),
   analyzeProject: vi.fn<EngineApi['analyzeProject']>(),
   clearAnalysisCache: vi.fn<EngineApi['clearAnalysisCache']>(),
-  scanKeyframesExports: vi.fn<EngineApi['scanKeyframesExports']>(),
 }));
 
 import { setEngineApiOverride } from '../../extract/session/singleton';
@@ -56,7 +55,6 @@ setEngineApiOverride(() => ({
   loadSystemModule: mocks.loadSystemModule,
   analyzeProject: mocks.analyzeProject,
   clearAnalysisCache: mocks.clearAnalysisCache,
-  scanKeyframesExports: mocks.scanKeyframesExports,
 }));
 
 let restoreGlobals: () => void;
@@ -134,7 +132,6 @@ beforeEach(() => {
   mocks.loadSystemModule.mockReset().mockReturnValue({ ...SYSTEM_CONFIG });
   mocks.analyzeProject.mockReset().mockReturnValue(MANIFEST);
   mocks.clearAnalysisCache.mockReset();
-  mocks.scanKeyframesExports.mockReset().mockReturnValue(null);
 });
 
 afterEach(() => {
@@ -532,36 +529,6 @@ describe('cross-volume external roots (design D5)', () => {
 });
 
 describe('external keyframes discovery', () => {
-  test('a dist-only kit contributes its keyframes collections', async () => {
-    // Published packages routinely ship dist without src/ — their imported
-    // `Keyframes` collections must merge into the analysis inputs exactly
-    // like a src-shipping kit's (vite-plugin parity).
-    const systemSource = `import { createSystem } from '@animus-ui/system';
-import kit from '../../kits/compiled/dist/index.mjs';
-export const system = createSystem({}).extend(kit);
-`;
-    const ws = createWorkspace(systemSource);
-    const distKit = join(ws.parent, 'kits', 'compiled');
-    mkdirSync(join(distKit, 'dist'), { recursive: true });
-    writeFileSync(join(distKit, 'package.json'), '{"name":"@kits/compiled"}');
-    writeFileSync(join(distKit, 'dist', 'index.mjs'), 'export default {};\n');
-    mocks.scanKeyframesExports
-      .mockReset()
-      .mockReturnValue('{"kitKeyframes":{"pulse":{"to":{"opacity":1}}}}');
-
-    const session = makeSession(ws.app);
-    await session.runFullPipeline();
-
-    expect(mocks.scanKeyframesExports).toHaveBeenCalledWith(
-      join(distKit, 'dist', 'index.mjs'),
-      ws.app
-    );
-    // keyframesJson is analyzeProject positional arg 13
-    // (buildAnalyzeProjectArgs).
-    const analyzeArgs = mocks.analyzeProject.mock.calls.at(-1)!;
-    expect(analyzeArgs[13]).toContain('kitKeyframes');
-  });
-
   test('a directory event on a dist-only root keeps its widened-extension files', async () => {
     // A dist-only kit is collected with a WIDENED extension set (the entry's
     // own `.mjs`). A directory-granularity event marks its root dirty; the
@@ -604,33 +571,5 @@ export const system = createSystem({}).extend(kit);
       removedFiles: new Set(),
     });
     expect(lastAnalyzedSource(kitButtonKey)).toBe(BUTTON_V2);
-  });
-
-  test('undeclaring a package clears its recorded keyframes diagnostics', async () => {
-    // A scan warning recorded for a declared package must not outlive the
-    // declaration: once the include is removed and the pipeline reruns with
-    // an empty scan set, stale diagnostics may not ride later analyses
-    // (vite-plugin parity — applyExternalKeyframes' reset arm).
-    const ws = createWorkspace();
-    mocks.scanKeyframesExports.mockReset().mockImplementation(() => {
-      throw new Error('unreadable entry');
-    });
-
-    const session = makeSession(ws.app);
-    await session.runFullPipeline();
-    const recorded = session['externalKeyframesDiagnostics'];
-    expect(recorded.length).toBeGreaterThan(0);
-
-    // Remove the kit import — the geological rewrite of the system file —
-    // and run the full pipeline again with nothing to scan.
-    writeFileSync(
-      join(ws.app, 'src', 'system.ts'),
-      `import { createSystem } from '@animus-ui/system';
-export const system = createSystem({});
-`
-    );
-    await session.runFullPipeline();
-
-    expect(session['externalKeyframesDiagnostics']).toEqual([]);
   });
 });

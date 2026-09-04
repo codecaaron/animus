@@ -30,6 +30,13 @@ export interface SystemConfig {
   transformSourcesJson?: string | null;
   globalStyleBlocksJson: string | null;
   keyframesJson: string | null;
+  /** Vocabulary witness entries from the sealed system's registration
+   *  record — one JSON array of coded entries (collisions and legacy-verb
+   *  carriage refusals). The record — not the evaluation host's console,
+   *  which is shimmed to a no-op — is the witness channel; hosts surface
+   *  each entry via `vocabularyWitnessDiagnostics`. Optional so pre-load
+   *  `emptySystemConfig()` defaults need not restate it. */
+  vocabularyWitnessesJson?: string | null;
   /** Canonical absolute paths of every module the loader evaluated for this
    *  system (sorted; entry included, runtime stubs excluded). Plugins use it
    *  as the geological-reset membership set. Optional so pre-load
@@ -93,6 +100,7 @@ export function loadSystemConfig(
     transformSourcesJson: config.transformSources || null,
     globalStyleBlocksJson: config.globalStyleBlocks || null,
     keyframesJson: config.keyframesBlocks || null,
+    vocabularyWitnessesJson: config.vocabularyWitnesses || null,
     dependencies: config.dependencies ?? [],
     sourceThemeManifestsJson: config.sourceThemeManifests || null,
   };

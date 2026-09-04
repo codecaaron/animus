@@ -34,8 +34,8 @@ import {
   isExcludedPackageRelativePath,
   isPathWithinRoot,
   loadSystemConfig,
-  mergeExternalKeyframes,
   postProcessCss,
+  vocabularyWitnessDiagnostics,
   projectExternalFileOwners,
   resolveAssetFile,
   resolveLightningTargets,
@@ -323,8 +323,9 @@ export class ExtractionSession {
   private readonly options: SessionOptions;
   private readonly staticCssJson: string | null;
   private system: SystemConfig | null = null;
-  /** Discovery-time keyframes diagnostics awaiting the shared surfacing pass. */
-  private externalKeyframesDiagnostics: ManifestDiagnostic[] = [];
+  /** Vocabulary witness diagnostics from the sealed system's registration
+   *  record (vocabulary-registration), awaiting the shared surfacing pass. */
+  private systemVocabularyDiagnostics: ManifestDiagnostic[] = [];
   /** Full package-resolution map from the last full pipeline — replayed by
    *  incremental passes (sourceEntries alone omits dist-resolved packages). */
   private lastPackageMap: Record<string, string> = {};
@@ -1026,6 +1027,12 @@ export class ExtractionSession {
       rootDir,
       prefix: this.options.prefix,
     });
+    // The sealed record is the witness channel (the loader's evaluation
+    // host shims console): map its coded entries for the shared surfacing
+    // policy point.
+    this.systemVocabularyDiagnostics = vocabularyWitnessDiagnostics(
+      this.system.vocabularyWitnessesJson
+    );
     // Asset specifiers resolve against the system just loaded — drop the
     // per-specifier copy memo so a changed reference re-reads and re-hashes.
     this.assetCopyCache.clear();
@@ -1244,32 +1251,6 @@ export class ExtractionSession {
 
       this.externalPackageDirs = admitted.packageDirs;
 
-      // Keyframes-only carve-out: external package entries
-      // contribute their `Keyframes` collections; consumer system authority
-      // is untouched (vite-plugin parity — see PluginContext.applyExternalKeyframes).
-      // Scan entries cover EVERY admitted package (src entry or dist entry) —
-      // deriving from sourceEntries would silently skip dist-only packages.
-      if (this.system && admitted.keyframesScanEntries.size > 0) {
-        const api = engineApi();
-        const merge = mergeExternalKeyframes(
-          (entry, root) => api.scanKeyframesExports(entry, root),
-          this.system.keyframesJson,
-          admitted.keyframesScanEntries.values(),
-          this.rootDir!
-        );
-        this.system.keyframesJson = merge.keyframesJson;
-        // Surfacing stays with the single shared policy point inside
-        // runProjectAnalysis (this file performs no local surfacing) —
-        // stash for analyzeAndEmit to carry.
-        this.externalKeyframesDiagnostics = merge.diagnostics;
-      } else {
-        // No admitted scan entries: the freshly-loaded system already carries
-        // exactly its consumer collections, and diagnostics recorded for
-        // packages no longer declared must not ride every later analysis
-        // (vite-plugin parity — applyExternalKeyframes' reset arm).
-        this.externalKeyframesDiagnostics = [];
-      }
-
       bt.packageResolve = this.elapsed(t);
 
       // Step 5+: hand off to the shared analysis + emit core. Production pass
@@ -1351,7 +1332,7 @@ export class ExtractionSession {
       externalFileOwners: this.externalFileOwners,
       externalSourceEntries: this.externalSourceEntries,
       externalPackageDirs: this.externalPackageDirs,
-      externalKeyframesDiagnostics: this.externalKeyframesDiagnostics,
+      systemVocabularyDiagnostics: this.systemVocabularyDiagnostics,
     };
   }
 
@@ -1700,7 +1681,7 @@ export class ExtractionSession {
       ...analysisOptions,
       warn: (message) => this.warn(message),
       strict: this.options.strict,
-      extraDiagnostics: this.externalKeyframesDiagnostics,
+      extraDiagnostics: this.systemVocabularyDiagnostics,
     });
 
     // Error-diagnostic escalation (extraction-diagnostics §Error diagnostics

@@ -75,6 +75,15 @@ pub struct NapiSystemConfig {
     pub transform_sources: Option<String>,
     pub global_style_blocks: Option<String>,
     pub keyframes_blocks: Option<String>,
+    /// Vocabulary witnesses from the sealed system's registration record:
+    /// one JSON array of coded entries — collisions
+    /// (`animus.vocabulary.collision`) and legacy-verb witnesses
+    /// (`animus.vocabulary.legacy-verb`: registered vocabulary consumed
+    /// through `from()`/`includes:`, which cannot carry it). The record is
+    /// the witness channel (the evaluation host shims console); hosts
+    /// surface each entry as a diagnostic keyed by its `code`. Absent when
+    /// the record carries no witnesses.
+    pub vocabulary_witnesses: Option<String>,
     /// Canonical absolute paths of every module evaluated for the system
     /// (sorted; entry included, runtime stubs excluded). The plugins use this
     /// as the geological-reset membership set.
@@ -112,25 +121,10 @@ pub fn load_system_module(
         transform_sources: config.transform_sources,
         global_style_blocks: config.global_style_blocks,
         keyframes_blocks: config.keyframes_blocks,
+        vocabulary_witnesses: config.vocabulary_witnesses,
         dependencies: config.dependencies,
         source_theme_manifests: config.source_theme_manifests,
     })
-}
-
-/// Scan one module entry for named `Keyframes` collection exports — the
-/// keyframes-only carve-out for external package entries. The
-/// entry evaluates through the same loader pipeline as a system module, but
-/// nothing except `__brand === 'Keyframes'` exports is read from it; the
-/// consumer's configured system remains the singular config authority.
-/// Returns the `{ exportName: { keyName: { name, frames } } }` JSON, or None
-/// when the entry exports no collections.
-#[napi]
-pub fn scan_keyframes_exports(
-    entry_path: String,
-    root_dir: String,
-) -> napi::Result<Option<String>> {
-    animus_system_loader::scan_keyframes_exports(&entry_path, &root_dir)
-        .map_err(napi::Error::from_reason)
 }
 
 #[derive(Deserialize)]

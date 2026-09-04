@@ -1,5 +1,3 @@
-import { createKeyframes } from './system';
-
 export { Alert } from './components/Alert';
 export { Badge } from './components/Badge';
 export { Button } from './components/Button';
@@ -23,18 +21,13 @@ export const kitSizes = {
   lg: { fontSize: 20, px: 24, py: 12 },
 } as const;
 
-// External keyframe collection (rust-extraction-pipeline ›
-// external-collection scenario): exported from the package's source ENTRY
-// module (what `main`/exports resolve to under src/), which the plugin's
-// keyframes-only scan evaluates for `__brand === 'Keyframes'` named exports.
-// A consumer authoring `animationName: kitMotion.pulse` through a plain named
-// import must resolve to the FNV-hashed `animus-kf-<hash>` name with the
-// matching `@keyframes` block emitted exactly once. The frame body is
-// deliberately DISTINCT from the vite-app's inline `pulse` (opacity, not
-// scale) so the kit block is its own unique body, not a dedupe alias.
-export const kitMotion = createKeyframes({
-  pulse: {
-    '0%, 100%': { opacity: 1 },
-    '50%': { opacity: 0.6 },
-  },
-});
+// Kit keyframe collection (vocabulary-registration › sealed-kit carriage):
+// DEFINED in `./system` inside the definition graph and registered on the
+// sealed kit; the root re-export preserves the historical consumer import
+// path (`import { kitMotion } from '@animus-ui/test-ds'`). The engine
+// resolves the re-export chain to the defining module's export name, which
+// equals the registration key — a consumer authoring
+// `animationName: kitMotion.pulse` through this plain named import resolves
+// to the FNV-hashed `animus-kf-<hash>` name with the matching `@keyframes`
+// block emitted exactly once.
+export { kitMotion } from './system';

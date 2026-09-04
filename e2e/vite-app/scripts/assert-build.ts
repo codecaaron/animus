@@ -290,8 +290,8 @@ async function main(): Promise<void> {
   });
 
   // Exactly one @keyframes block per unique frame body: the kit collection
-  // must emit ONCE — not once via the external-entry scan and again via the
-  // consumer reference — and no app body may collide.
+  // must emit ONCE — the sealed record delivers it a single time regardless
+  // of how many consumers reference it — and no app body may collide.
   assertKeyframesUniqueBodies(css);
 
   // Binding-backed vs inline parity (semantic-const-resolution): KitSized

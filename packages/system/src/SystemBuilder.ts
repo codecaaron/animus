@@ -128,6 +128,329 @@ export interface RegistrySnapshot {
   conditions: ConditionAliasMap;
 }
 
+/**
+ * The structural shape `registerKeyframes` accepts: any `createKeyframes`
+ * return value qualifies. The brand stays structural — a hand-rolled object
+ * carrying it is admitted by design (vocabulary-registration: only shape
+ * mismatches are rejected at compile time; provenance is not claimed).
+ */
+export interface RegisterableKeyframes {
+  readonly __brand: 'Keyframes';
+  readonly __frames: object;
+}
+
+/**
+ * The structural shape `registerGlobalStyles` accepts: any
+ * `createGlobalStyles` return value qualifies (the brand stays structural,
+ * mirroring `RegisterableKeyframes`).
+ */
+export interface RegisterableGlobalStyles {
+  readonly __brand: 'GlobalStyleBlock';
+  readonly styles: object;
+}
+
+/** The per-key frame data a collection carries (`Keyframes['__frames']`). */
+export type KeyframesFrameData = Record<
+  string,
+  { readonly name: string; readonly frames: KeyframeFrameMap }
+>;
+
+export interface VocabularyKeyframesEntry {
+  readonly name: string;
+  readonly frames: KeyframesFrameData;
+}
+
+export interface VocabularyGlobalStyleEntry {
+  readonly name: string;
+  readonly styles: GlobalStyleMap;
+  readonly fontFaces?: readonly FontFace[];
+}
+
+export interface VocabularyCollisionEntry {
+  /** Stable machine code — the record, not the console, is the witness
+   * channel (the loader's evaluation host shims `console` to a no-op). */
+  readonly code: 'animus.vocabulary.collision';
+  readonly name: string;
+  readonly winner: string;
+  readonly loser: string;
+}
+
+/**
+ * Witness for a sealed kit with registered vocabulary arriving through a
+ * legacy verb (`from()` / `includes:`) that performs no registry merge —
+ * the vocabulary named here does NOT reach the consumer. Registered
+ * vocabulary requires `.extend()`. Entries whose names DO arrive through a
+ * separate `.extend()` of the same vocabulary are filtered out at `seal()`
+ * — the witness never claims an undelivered name that was delivered.
+ */
+export interface VocabularyLegacyVerbEntry {
+  readonly code: 'animus.vocabulary.legacy-verb';
+  readonly verb: 'from' | 'includes';
+  /** Positional source label (`includes source #1`, `from source #2`) —
+   * the same origin-label vocabulary the collision entries use; sources
+   * have no knowable export name at this seam. */
+  readonly source: string;
+  /** The registered vocabulary names the verb could not carry. */
+  readonly names: readonly string[];
+}
+
+/**
+ * The declaration-ordered, version-marked registration record a sealed
+ * system carries (vocabulary-registration). The loader reads collections
+ * exclusively from here; `collisions` is the merge-point witness for paths
+ * where no type information flows.
+ */
+export interface VocabularyRecord {
+  readonly version: 1;
+  readonly keyframes: readonly VocabularyKeyframesEntry[];
+  readonly globalStyles: readonly VocabularyGlobalStyleEntry[];
+  readonly collisions: readonly VocabularyCollisionEntry[];
+  readonly legacyVerbs: readonly VocabularyLegacyVerbEntry[];
+}
+
+/** Internal pending/merged vocabulary state (origin powers witness text).
+ *  ONE name-space across both kinds: a global-style block and a keyframes
+ *  collection cannot share a registered name. */
+type VocabularyEntryState =
+  | {
+      kind: 'keyframes';
+      name: string;
+      frames: KeyframesFrameData;
+      origin: string;
+    }
+  | {
+      kind: 'globalStyles';
+      name: string;
+      styles: GlobalStyleMap;
+      fontFaces?: readonly FontFace[];
+      origin: string;
+    };
+
+/** A merge input — an entry state minus its origin (assigned by the merge). */
+type VocabularyEntryInput =
+  | { kind: 'keyframes'; name: string; frames: KeyframesFrameData }
+  | {
+      kind: 'globalStyles';
+      name: string;
+      styles: GlobalStyleMap;
+      fontFaces?: readonly FontFace[];
+    };
+
+/**
+ * Legacy-verb witness helper shared by `from()` and the `includes:` config
+ * path: a sealed source carrying registered vocabulary cannot deliver it
+ * through a verb that performs no registry merge. The RECORD is the sole
+ * witness channel (hosts surface it as a coded diagnostic; the extraction
+ * host shims `console`, and a runtime warn here would ship in production
+ * consumer bundles) — no console output. `seal()` filters out names that
+ * a separate `.extend()` of the same vocabulary DID deliver.
+ */
+function legacyVerbWitness(
+  source: IncludableSystem,
+  verb: 'from' | 'includes',
+  sourceIndex: number
+): VocabularyLegacyVerbEntry | null {
+  const record = (
+    source as { getVocabularyRecord?(): VocabularyRecord }
+  ).getVocabularyRecord?.();
+  if (!record) return null;
+  const names = [
+    ...record.keyframes.map((entry) => entry.name),
+    ...record.globalStyles.map((entry) => entry.name),
+  ];
+  if (names.length === 0) return null;
+  return {
+    code: 'animus.vocabulary.legacy-verb',
+    verb,
+    source: `${verb} source #${sourceIndex}`,
+    names,
+  };
+}
+
+/**
+ * Registration-time snapshot of a collection's frame data: copied and frozen
+ * two levels deep (frame entries + stop bodies), so post-registration
+ * mutation of the caller's live collection never reaches a sealed record.
+ * (Blind spot: values nested deeper than a stop body are aliased.)
+ */
+function snapshotFrameData(frames: KeyframesFrameData): KeyframesFrameData {
+  const copy: Record<string, { name: string; frames: KeyframeFrameMap }> = {};
+  for (const [key, entry] of Object.entries(frames)) {
+    const stops: KeyframeFrameMap = {};
+    for (const [stop, body] of Object.entries(entry.frames ?? {})) {
+      stops[stop] = Object.freeze({ ...body }) as KeyframeFrameMap[string];
+    }
+    copy[key] = Object.freeze({
+      name: entry.name,
+      frames: Object.freeze(stops) as KeyframeFrameMap,
+    });
+  }
+  return Object.freeze(copy) as KeyframesFrameData;
+}
+
+/**
+ * THE vocabulary merge — one policy, both call sites (`extend()` inheriting
+ * a sealed source's record, and the bundle's registration window). A name
+ * collision is resolved to the INCOMING side, witnessed with a coded entry,
+ * and the winner takes its OWN declaration position: the loser is removed
+ * and the winner appended, so record order always reads as declaration
+ * order of the surviving registrations (inherited region first, then
+ * locals; a later extension's win sits at that extension's position).
+ */
+function mergeVocabularyEntries(
+  existingEntries: readonly VocabularyEntryState[],
+  existingCollisions: readonly VocabularyCollisionEntry[],
+  incoming: ReadonlyArray<VocabularyEntryInput>,
+  incomingOrigin: string
+): {
+  entries: VocabularyEntryState[];
+  collisions: VocabularyCollisionEntry[];
+} {
+  const entries = existingEntries.map((entry) => ({ ...entry }));
+  const collisions = [...existingCollisions];
+  for (const input of incoming) {
+    // ONE name-space: the collision check spans both kinds.
+    const existingIndex = entries.findIndex(
+      (entry) => entry.name === input.name
+    );
+    if (existingIndex !== -1) {
+      const loser = entries[existingIndex];
+      collisions.push({
+        code: 'animus.vocabulary.collision',
+        name: input.name,
+        winner: incomingOrigin,
+        loser: loser.origin,
+      });
+      // oxlint-disable-next-line no-console -- intentional runtime diagnostic
+      console.warn(
+        `animus: vocabulary "${input.name}" is registered by both ` +
+          `${loser.origin} and ${incomingOrigin} — ${incomingOrigin} wins; ` +
+          'rename one entry (animus.vocabulary.collision)'
+      );
+      entries.splice(existingIndex, 1);
+    }
+    entries.push({ ...input, origin: incomingOrigin });
+  }
+  return { entries, collisions };
+}
+
+declare const VOCABULARY_COLLISION_BRAND: unique symbol;
+
+/**
+ * Impossible-to-satisfy marker type that surfaces a template-literal label
+ * at a colliding registration site — the compile error names the offending
+ * vocabulary name instead of a bare structural mismatch.
+ */
+export interface VocabularyNameCollision<Name extends string> {
+  readonly [VOCABULARY_COLLISION_BRAND]: `Vocabulary name "${Name}" is already registered on this system`;
+}
+
+declare const VOCABULARY_INDEX_SIGNATURE: unique symbol;
+
+/**
+ * Impossible-to-satisfy marker rejecting index-signature registration maps:
+ * a `Record<string, …>`-typed map cannot prove its names, would bypass the
+ * collision mapping (`Extract<string, Vocab>` is `never`), and would poison
+ * the accumulated axis to `string`. Registration maps require literal keys.
+ */
+export interface VocabularyIndexSignatureRejected {
+  readonly [VOCABULARY_INDEX_SIGNATURE]: 'vocabulary registration requires literal keys — an index-signature map cannot prove its names';
+}
+
+type LiteralKeyMap<M> = string extends keyof M
+  ? VocabularyIndexSignatureRejected
+  : unknown;
+
+declare const VOCABULARY_BRAND: unique symbol;
+
+/**
+ * The final instance the sealing terminal returns: a full system instance
+ * plus the vocabulary record accessor, with the registered names carried as
+ * phantom type state (`VocabularyOf` reads them back). `.extend()` threads
+ * this axis into the consumer's chain so collisions are compile errors on
+ * every typed path, published `.d.ts` included.
+ */
+export type SealedSystemInstance<
+  PropReg extends Record<string, Prop>,
+  GroupReg extends Record<string, (keyof PropReg)[]>,
+  Conds extends string = never,
+  Sels extends string = never,
+  Vocab extends string = never,
+> = SystemInstance<PropReg, GroupReg, Conds, Sels> & {
+  getVocabularyRecord(): VocabularyRecord;
+  readonly [VOCABULARY_BRAND]?: Vocab;
+};
+
+/** Read the registered vocabulary names off a sealed system's type. */
+export type VocabularyOf<S> = S extends {
+  readonly [VOCABULARY_BRAND]?: infer V;
+}
+  ? Extract<V, string>
+  : never;
+
+/**
+ * The `build()` return: the pinned `{ system, createGlobalStyles,
+ * createKeyframes }` members unchanged, plus the registration window —
+ * `registerKeyframes` accumulates vocabulary (chain the calls: the returned
+ * bundle carries the widened axis) and `seal()` closes registration,
+ * returning the final instance `.extend()` consumes. One sealed instance
+ * per bundle; registering or re-sealing afterwards throws.
+ */
+export interface SystemBundle<
+  PropReg extends Record<string, Prop>,
+  GroupReg extends Record<string, (keyof PropReg)[]>,
+  Conds extends string = never,
+  Sels extends string = never,
+  Vocab extends string = never,
+> {
+  system: SystemInstance<PropReg, GroupReg, Conds, Sels>;
+  createGlobalStyles: GlobalStylesFactory<PropReg>;
+  createKeyframes: CreateKeyframesFactory<PropReg>;
+  /**
+   * Register keyframe collections between the terminals. Two obligations
+   * travel together: the registration KEY MUST equal the module-scope named
+   * export the collection leaves its defining module under (the engine
+   * resolves `motion.ember` references by export name — a mismatched key
+   * cannot resolve at reference sites), and the shorthand
+   * `registerKeyframes({ animations })` spelling keeps the two identical by
+   * construction. Registration is LINEAR: this call returns the bundle
+   * carrying the accumulated vocabulary and supersedes the receiver —
+   * chain the calls and seal the final bundle. Registration retains the
+   * collections' frame bodies through the system object in consumer
+   * bundles — declared weight, not a hidden zero.
+   */
+  registerKeyframes<M extends Record<string, RegisterableKeyframes>>(
+    map: M &
+      LiteralKeyMap<M> & {
+        [K in Extract<keyof M, Vocab>]: VocabularyNameCollision<K & string>;
+      }
+  ): SystemBundle<PropReg, GroupReg, Conds, Sels, Vocab | (keyof M & string)>;
+  /**
+   * Register global-style blocks between the terminals — the SAME linear
+   * lifecycle, record carriage, and ONE shared vocabulary name-space as
+   * `registerKeyframes` (a block cannot share a registered name with a
+   * keyframes collection). Keys equal export names; blocks stay
+   * module-scope named exports.
+   */
+  registerGlobalStyles<M extends Record<string, RegisterableGlobalStyles>>(
+    map: M &
+      LiteralKeyMap<M> & {
+        [K in Extract<keyof M, Vocab>]: VocabularyNameCollision<K & string>;
+      }
+  ): SystemBundle<PropReg, GroupReg, Conds, Sels, Vocab | (keyof M & string)>;
+  seal(): SealedSystemInstance<PropReg, GroupReg, Conds, Sels, Vocab>;
+}
+
+/**
+ * Derive a kit's publishable bundle type from its sealed system, so the
+ * vocabulary axis is READ off the instance rather than hand-asserted:
+ * `const bundle: LibraryBundleFor<typeof ds> = { system: ds, theme }`.
+ * A hand-written `LibraryBundle<'…'>` parameter is author-asserted and
+ * unchecked; the bare `LibraryBundle` annotation erases the axis entirely
+ * (the runtime collision witness covers that path).
+ */
+export type LibraryBundleFor<S> = LibraryBundle<VocabularyOf<S>>;
+
 const snapshotTransformBySource = new WeakMap<TransformFn, TransformFn>();
 
 function snapshotTransform(source: TransformFn): TransformFn {
@@ -172,11 +495,20 @@ function snapshotTransform(source: TransformFn): TransformFn {
  * `createTheme().extend()`; each builder takes its half and ignores the rest.
  * `tokens` is the pre-D9 name for the theme half — both spellings are
  * accepted (design D9; removal horizon is DEF-8).
+ *
+ * `Vocab` is the vocabulary-axis amendment (vocabulary-registration): the
+ * annotation still erases the system half's registry generics, but a kit may
+ * declare its registered vocabulary names (`LibraryBundle<'kitMotion'>`) so
+ * consumer-side collision typing survives publication. The bare annotation
+ * (`LibraryBundle`) admits no names — the runtime collision witness covers
+ * that path.
  */
-export interface LibraryBundle {
+export interface LibraryBundle<Vocab extends string = never> {
   system: IncludableSystem;
   theme?: unknown;
   tokens?: unknown;
+  /** Phantom vocabulary axis — never present at runtime. */
+  readonly __vocabulary?: Vocab;
 }
 
 /**
@@ -315,6 +647,7 @@ export class SystemBuilder<
   Conds extends string = never,
   Sels extends string = never,
   Stage extends SystemBuilderStage = 'inherit',
+  Vocab extends string = never,
 > {
   // Structural anchor for the phantom Stage parameter — without a member
   // referencing it, 'inherit' and 'extend' builders would be mutually
@@ -336,6 +669,13 @@ export class SystemBuilder<
   // extended source. Distinct from the provenance map's max value: an extend
   // whose entries all coalesce still consumes an index.
   #extendCount: number;
+  // Vocabulary inherited from sealed extended sources, in extension order
+  // (vocabulary-registration: inherited entries precede local registrations
+  // in the eventual record). Collisions recorded here are extend-time
+  // (kit-vs-kit); registration-time collisions accumulate in the bundle.
+  #vocabularyRegistry: readonly VocabularyEntryState[];
+  #vocabularyCollisions: readonly VocabularyCollisionEntry[];
+  #legacyVerbWitnesses: readonly VocabularyLegacyVerbEntry[];
 
   constructor(
     propRegistry?: PropReg,
@@ -344,7 +684,10 @@ export class SystemBuilder<
     includesRegistry?: readonly IncludableSystem[],
     conditionRegistry?: ConditionAliasMap,
     extendProvenance?: ReadonlyMap<string, number>,
-    extendCount?: number
+    extendCount?: number,
+    vocabularyRegistry?: readonly VocabularyEntryState[],
+    vocabularyCollisions?: readonly VocabularyCollisionEntry[],
+    legacyVerbWitnesses?: readonly VocabularyLegacyVerbEntry[]
   ) {
     this.#propRegistry = propRegistry || ({} as PropReg);
     this.#groupRegistry = groupRegistry || ({} as GroupReg);
@@ -353,6 +696,9 @@ export class SystemBuilder<
     this.#conditionRegistry = conditionRegistry || { ...BUILT_IN_CONDITIONS };
     this.#extendProvenance = extendProvenance || new Map();
     this.#extendCount = extendCount || 0;
+    this.#vocabularyRegistry = vocabularyRegistry || [];
+    this.#vocabularyCollisions = vocabularyCollisions || [];
+    this.#legacyVerbWitnesses = legacyVerbWitnesses || [];
   }
 
   // Origin label for divergence errors: where did the existing entry for
@@ -384,7 +730,7 @@ export class SystemBuilder<
     SrcConds extends string = never,
     SrcSels extends string = never,
   >(
-    this: SystemBuilder<PropReg, GroupReg, Conds, Sels, 'inherit'>,
+    this: SystemBuilder<PropReg, GroupReg, Conds, Sels, 'inherit', Vocab>,
     source:
       | SystemInstance<SrcProps, SrcGroups, SrcConds, SrcSels>
       | {
@@ -397,7 +743,8 @@ export class SystemBuilder<
     GroupReg & SrcGroups,
     Conds | SrcConds,
     Sels | SrcSels,
-    'inherit'
+    'inherit',
+    Vocab
   >;
   /**
    * A value annotated as the exported {@link LibraryBundle} interface has
@@ -411,24 +758,33 @@ export class SystemBuilder<
    * membership, no merge) for at least one minor release.
    */
   from(
-    this: SystemBuilder<PropReg, GroupReg, Conds, Sels, 'inherit'>,
-    source: LibraryBundle
-  ): SystemBuilder<PropReg, GroupReg, Conds, Sels, 'inherit'>;
+    this: SystemBuilder<PropReg, GroupReg, Conds, Sels, 'inherit', Vocab>,
+    source: LibraryBundle<string>
+  ): SystemBuilder<PropReg, GroupReg, Conds, Sels, 'inherit', Vocab>;
   from(
-    this: SystemBuilder<PropReg, GroupReg, Conds, Sels, 'inherit'>,
+    this: SystemBuilder<PropReg, GroupReg, Conds, Sels, 'inherit', Vocab>,
     source: IncludableSystem | { system?: unknown; tokens?: unknown }
-  ): SystemBuilder<PropReg, GroupReg, Conds, Sels, 'inherit'> {
+  ): SystemBuilder<PropReg, GroupReg, Conds, Sels, 'inherit', Vocab> {
     const instance = isLibraryBundle(source)
       ? source.system
       : (source as IncludableSystem);
-    return new SystemBuilder<PropReg, GroupReg, Conds, Sels, 'inherit'>(
+    const fromCount = this.#legacyVerbWitnesses.filter(
+      (entry) => entry.verb === 'from'
+    ).length;
+    const witness = legacyVerbWitness(instance, 'from', fromCount + 1);
+    return new SystemBuilder<PropReg, GroupReg, Conds, Sels, 'inherit', Vocab>(
       this.#propRegistry,
       this.#groupRegistry,
       this.#selectorRegistry,
       [...this.#includesRegistry, instance],
       this.#conditionRegistry,
       this.#extendProvenance,
-      this.#extendCount
+      this.#extendCount,
+      this.#vocabularyRegistry,
+      this.#vocabularyCollisions,
+      witness
+        ? [...this.#legacyVerbWitnesses, witness]
+        : this.#legacyVerbWitnesses
     );
   }
 
@@ -453,12 +809,17 @@ export class SystemBuilder<
     SrcGroups extends Record<string, (keyof SrcProps)[]>,
     SrcConds extends string = never,
     SrcSels extends string = never,
+    SrcVocab extends string = never,
   >(
-    this: SystemBuilder<PropReg, GroupReg, Conds, Sels, 'inherit'>,
+    this: SystemBuilder<PropReg, GroupReg, Conds, Sels, 'inherit', Vocab>,
     source:
-      | SystemInstance<SrcProps, SrcGroups, SrcConds, SrcSels>
+      | (SystemInstance<SrcProps, SrcGroups, SrcConds, SrcSels> & {
+          readonly [VOCABULARY_BRAND]?: SrcVocab;
+        })
       | {
-          system: SystemInstance<SrcProps, SrcGroups, SrcConds, SrcSels>;
+          system: SystemInstance<SrcProps, SrcGroups, SrcConds, SrcSels> & {
+            readonly [VOCABULARY_BRAND]?: SrcVocab;
+          };
           theme?: unknown;
           tokens?: unknown;
         }
@@ -467,22 +828,24 @@ export class SystemBuilder<
     GroupReg & SrcGroups,
     Conds | SrcConds,
     Sels | SrcSels,
-    'inherit'
+    'inherit',
+    Vocab | SrcVocab
   >;
   /**
    * A value annotated as the exported {@link LibraryBundle} interface has
    * already erased its system half's generics (`system: IncludableSystem`),
    * so no source types are admitted — the runtime merge is identical, and
-   * the builder's own type state passes through unchanged.
+   * the builder's own type state passes through unchanged, widened by the
+   * bundle's declared vocabulary axis (the erasure amendment).
    */
+  extend<SrcVocab extends string = never>(
+    this: SystemBuilder<PropReg, GroupReg, Conds, Sels, 'inherit', Vocab>,
+    source: LibraryBundle<SrcVocab>
+  ): SystemBuilder<PropReg, GroupReg, Conds, Sels, 'inherit', Vocab | SrcVocab>;
   extend(
-    this: SystemBuilder<PropReg, GroupReg, Conds, Sels, 'inherit'>,
-    source: LibraryBundle
-  ): SystemBuilder<PropReg, GroupReg, Conds, Sels, 'inherit'>;
-  extend(
-    this: SystemBuilder<PropReg, GroupReg, Conds, Sels, 'inherit'>,
+    this: SystemBuilder<PropReg, GroupReg, Conds, Sels, 'inherit', Vocab>,
     source: IncludableSystem | { system?: unknown; theme?: unknown }
-  ): SystemBuilder<PropReg, GroupReg, Conds, Sels, 'inherit'> {
+  ): SystemBuilder<PropReg, GroupReg, Conds, Sels, 'inherit', Vocab> {
     const instance = isLibraryBundle(source)
       ? source.system
       : (source as IncludableSystem);
@@ -650,7 +1013,53 @@ export class SystemBuilder<
       new Set(Object.keys(nextSelectors))
     );
 
-    return new SystemBuilder<PropReg, GroupReg, Conds, Sels, 'inherit'>(
+    // ── Vocabulary (vocabulary-registration): a SEALED source contributes
+    // its registration record in declaration order, appended after entries
+    // from earlier extensions. A name collision between extended sources
+    // resolves to the later extension — one merge policy for both call
+    // sites, see `mergeVocabularyKeyframes` — with a coded witness entry;
+    // on typed paths the collision is a compile error at the consumer's
+    // registration site. A source WITHOUT a record fails loud: `.extend()`
+    // consumes sealed instances only (the hard cut — registered vocabulary
+    // has exactly one carriage channel).
+    const sourceRecord = (
+      instance as { getVocabularyRecord?(): VocabularyRecord }
+    ).getVocabularyRecord?.();
+    if (!sourceRecord) {
+      throw new Error(
+        'extend: source system is not sealed (or was built by an older ' +
+          '@animus-ui/system) — registered vocabulary travels only on ' +
+          'sealed instances. Call seal() on the source bundle and export ' +
+          'the sealed instance.'
+      );
+    }
+    let nextVocabulary = this.#vocabularyRegistry;
+    let nextVocabularyCollisions = this.#vocabularyCollisions;
+    const inheritedEntries: VocabularyEntryInput[] = [
+      ...sourceRecord.keyframes.map((entry) => ({
+        kind: 'keyframes' as const,
+        name: entry.name,
+        frames: entry.frames,
+      })),
+      ...sourceRecord.globalStyles.map((entry) => ({
+        kind: 'globalStyles' as const,
+        name: entry.name,
+        styles: entry.styles,
+        ...(entry.fontFaces ? { fontFaces: entry.fontFaces } : {}),
+      })),
+    ];
+    if (inheritedEntries.length > 0) {
+      const merged = mergeVocabularyEntries(
+        this.#vocabularyRegistry,
+        this.#vocabularyCollisions,
+        inheritedEntries,
+        incomingOrigin
+      );
+      nextVocabulary = merged.entries;
+      nextVocabularyCollisions = merged.collisions;
+    }
+
+    return new SystemBuilder<PropReg, GroupReg, Conds, Sels, 'inherit', Vocab>(
       nextProps as PropReg,
       nextGroups as GroupReg,
       nextSelectors,
@@ -659,7 +1068,10 @@ export class SystemBuilder<
       [...this.#includesRegistry, instance],
       nextConditions,
       provenance,
-      sourceIndex
+      sourceIndex,
+      nextVocabulary,
+      nextVocabularyCollisions,
+      this.#legacyVerbWitnesses
     );
   }
 
@@ -689,7 +1101,8 @@ export class SystemBuilder<
     GroupReg,
     Conds,
     Sels | NarrowedAliases<Extract<keyof S, string>>,
-    'extend'
+    'extend',
+    Vocab
   > {
     // Cross-registry clash guard, REVERSE direction (inc-11 full-pass F-1.4):
     // a name already registered as a CONDITION alias must not be re-registered
@@ -712,7 +1125,8 @@ export class SystemBuilder<
       GroupReg,
       Conds,
       Sels | NarrowedAliases<Extract<keyof S, string>>,
-      'extend'
+      'extend',
+      Vocab
     >(
       this.#propRegistry,
       this.#groupRegistry,
@@ -720,7 +1134,10 @@ export class SystemBuilder<
       this.#includesRegistry,
       this.#conditionRegistry,
       this.#extendProvenance,
-      this.#extendCount
+      this.#extendCount,
+      this.#vocabularyRegistry,
+      this.#vocabularyCollisions,
+      this.#legacyVerbWitnesses
     );
   }
 
@@ -761,7 +1178,8 @@ export class SystemBuilder<
     GroupReg,
     Conds | NarrowedAliases<Extract<keyof C, string>>,
     Sels,
-    'extend'
+    'extend',
+    Vocab
   > {
     const merged = mergeConditions(
       this.#conditionRegistry,
@@ -773,7 +1191,8 @@ export class SystemBuilder<
       GroupReg,
       Conds | NarrowedAliases<Extract<keyof C, string>>,
       Sels,
-      'extend'
+      'extend',
+      Vocab
     >(
       this.#propRegistry,
       this.#groupRegistry,
@@ -781,7 +1200,10 @@ export class SystemBuilder<
       this.#includesRegistry,
       merged,
       this.#extendProvenance,
-      this.#extendCount
+      this.#extendCount,
+      this.#vocabularyRegistry,
+      this.#vocabularyCollisions,
+      this.#legacyVerbWitnesses
     );
   }
 
@@ -793,7 +1215,8 @@ export class SystemBuilder<
     GroupReg & Record<Name, (keyof Conf)[]>,
     Conds,
     Sels,
-    'extend'
+    'extend',
+    Vocab
   > {
     // Collision check: group name must not collide with any registered prop name
     if (name in this.#propRegistry) {
@@ -848,7 +1271,8 @@ export class SystemBuilder<
       GroupReg & Record<Name, (keyof Conf)[]>,
       Conds,
       Sels,
-      'extend'
+      'extend',
+      Vocab
     >(
       nextProps,
       nextGroups,
@@ -856,7 +1280,10 @@ export class SystemBuilder<
       this.#includesRegistry,
       this.#conditionRegistry,
       this.#extendProvenance,
-      this.#extendCount
+      this.#extendCount,
+      this.#vocabularyRegistry,
+      this.#vocabularyCollisions,
+      this.#legacyVerbWitnesses
     );
   }
 
@@ -865,7 +1292,7 @@ export class SystemBuilder<
       Partial<Record<Extract<keyof GroupReg, string>, never>>,
   >(
     config: Conf
-  ): SystemBuilder<PropReg & Conf, GroupReg, Conds, Sels, 'extend'> {
+  ): SystemBuilder<PropReg & Conf, GroupReg, Conds, Sels, 'extend', Vocab> {
     // Collision check: prop names must not collide with any registered group name
     for (const key of Object.keys(config)) {
       if (key in this.#groupRegistry) {
@@ -904,46 +1331,51 @@ export class SystemBuilder<
     }
 
     const nextProps = { ...this.#propRegistry, ...config };
-    return new SystemBuilder<PropReg & Conf, GroupReg, Conds, Sels, 'extend'>(
+    return new SystemBuilder<
+      PropReg & Conf,
+      GroupReg,
+      Conds,
+      Sels,
+      'extend',
+      Vocab
+    >(
       nextProps,
       this.#groupRegistry,
       this.#selectorRegistry,
       this.#includesRegistry,
       this.#conditionRegistry,
       this.#extendProvenance,
-      this.#extendCount
+      this.#extendCount,
+      this.#vocabularyRegistry,
+      this.#vocabularyCollisions,
+      this.#legacyVerbWitnesses
     );
   }
 
-  build(): {
-    system: SystemInstance<PropReg, GroupReg, Conds, Sels>;
-    createGlobalStyles: GlobalStylesFactory<PropReg>;
-    createKeyframes: CreateKeyframesFactory<PropReg>;
-  } {
-    // Copied containers AND entries (review probe P9, both depths): the
-    // instance's public mutable propRegistry/groupRegistry fields must not
-    // alias the builder's private state at any level, or mutating a built
-    // instance (a key, or a field inside an entry) would bake into a LATER
-    // build()'s snapshot on the same builder. The current build's snapshot
-    // deep-copies its own view separately below.
-    const animus = new Animus<PropReg, GroupReg>(
-      Object.fromEntries(
-        Object.entries(this.#propRegistry).map(([key, entry]) => [
-          key,
-          { ...entry },
-        ])
-      ) as PropReg,
-      Object.fromEntries(
-        Object.entries(this.#groupRegistry).map(([key, members]) => [
-          key,
-          [...(members as readonly string[])],
-        ])
-      ) as GroupReg
-    );
-
-    // Immutable registry snapshot (design D7): toConfig() and extend() both
-    // read from it, so post-build mutation of the public mutable
-    // propRegistry/groupRegistry fields affects neither.
+  build(): SystemBundle<PropReg, GroupReg, Conds, Sels, Vocab> {
+    // Everything both instances read is captured ONCE, here (adversarial
+    // pass on inc 02: reading builder/caller-mutable state again at seal
+    // time opened a build→seal divergence window). Copied containers AND
+    // entries (review probe P9, both depths) — an instance's public mutable
+    // propRegistry/groupRegistry fields must not alias the builder's
+    // private state at any level, or mutating a built instance would bake
+    // into a LATER build()'s snapshot on the same builder. Both minted
+    // instances serialize from this ONE frozen snapshot (design D7's
+    // isolation property: newly captured at build, immutable thereafter),
+    // and each gets its own mutable public copies minted from the captured
+    // sources, so the pair can never disagree.
+    const propSource = Object.fromEntries(
+      Object.entries(this.#propRegistry).map(([key, entry]) => [
+        key,
+        { ...entry },
+      ])
+    ) as PropReg;
+    const groupSource = Object.fromEntries(
+      Object.entries(this.#groupRegistry).map(([key, members]) => [
+        key,
+        [...(members as readonly string[])],
+      ])
+    ) as GroupReg;
     const snapshot = createRegistrySnapshot(
       this.#propRegistry,
       this.#groupRegistry as Record<string, readonly string[]>,
@@ -951,24 +1383,43 @@ export class SystemBuilder<
       this.#conditionRegistry
     );
 
-    const system = Object.assign(animus, {
-      toConfig: (): SerializedConfig => {
-        return serializeInstance(
-          snapshot.props,
-          snapshot.groups,
-          snapshot.selectors,
-          snapshot.conditions
-        );
-      },
-    }) as SystemInstance<PropReg, GroupReg, Conds, Sels>;
+    const mintInstance = (): SystemInstance<PropReg, GroupReg, Conds, Sels> => {
+      const animus = new Animus<PropReg, GroupReg>(
+        Object.fromEntries(
+          Object.entries(propSource).map(([key, entry]) => [key, { ...entry }])
+        ) as PropReg,
+        Object.fromEntries(
+          Object.entries(groupSource).map(([key, members]) => [
+            key,
+            [...(members as readonly string[])],
+          ])
+        ) as GroupReg
+      );
 
-    // Non-enumerable next to toConfig: additive on the built instance, so
-    // the QuickJS capture script's bundle discriminator (keyed on
-    // `system.toConfig` being callable) is untouched.
-    Object.defineProperty(system, 'getRegistrySnapshot', {
-      value: (): RegistrySnapshot => snapshot,
-      enumerable: false,
-    });
+      const instance = Object.assign(animus, {
+        toConfig: (): SerializedConfig => {
+          return serializeInstance(
+            snapshot.props,
+            snapshot.groups,
+            snapshot.selectors,
+            snapshot.conditions
+          );
+        },
+      }) as SystemInstance<PropReg, GroupReg, Conds, Sels>;
+
+      // Non-enumerable next to toConfig: additive on the built instance, so
+      // the QuickJS capture script's bundle discriminator (keyed on
+      // `system.toConfig` being callable) is untouched.
+      Object.defineProperty(instance, 'getRegistrySnapshot', {
+        value: (): RegistrySnapshot => snapshot,
+        enumerable: false,
+      });
+
+      return instance;
+    };
+
+    const system = mintInstance();
+    const legacyVerbWitnessRecord = this.#legacyVerbWitnesses;
 
     const createGlobalStyles = ((
       styles: GlobalStyleMap,
@@ -984,7 +1435,238 @@ export class SystemBuilder<
     const createKeyframes = ((frames: Record<string, KeyframeFrameMap>) =>
       keyframesImpl(frames)) as CreateKeyframesFactory<PropReg>;
 
-    return { system, createGlobalStyles, createKeyframes };
+    // ── Registration window (vocabulary-registration): open from this
+    // build() until seal(), and LINEAR — each registerKeyframes returns a
+    // FRESH bundle carrying the accumulated state, and the superseded
+    // bundle rejects further use loudly. Object identity therefore carries
+    // exactly the state its type claims: an unchained second call on a
+    // stale bundle is a runtime error, never a silent divergence between
+    // the type axis and the sealed record. Inherited entries (sealed
+    // extended sources) seed the record in extension order; local
+    // registrations append after them, labeled by 1-based call index.
+    const makeBundle = (
+      entries: readonly VocabularyEntryState[],
+      collisions: readonly VocabularyCollisionEntry[],
+      localCallCount: number
+    ): SystemBundle<PropReg, GroupReg, Conds, Sels, Vocab> => {
+      let consumedBy: 'register' | 'seal' | undefined;
+
+      // One linear-window guard + merge for both registration kinds.
+      const registerEntries = (
+        label: string,
+        incoming: VocabularyEntryInput[]
+      ): SystemBundle<PropReg, GroupReg, Conds, Sels, Vocab> => {
+        if (consumedBy === 'seal') {
+          throw new Error(
+            `${label}: this system is already sealed — registration ` +
+              'happens between build() and seal().'
+          );
+        }
+        if (consumedBy === 'register') {
+          throw new Error(
+            `${label}: this bundle was superseded by a later registration ` +
+              'call — registration is linear; chain the calls and seal the ' +
+              'final bundle.'
+          );
+        }
+        const merged = mergeVocabularyEntries(
+          entries,
+          collisions,
+          incoming,
+          `local registration #${localCallCount + 1}`
+        );
+        consumedBy = 'register';
+        return makeBundle(
+          merged.entries,
+          merged.collisions,
+          localCallCount + 1
+        );
+      };
+
+      const registerKeyframes = (
+        map: Record<string, RegisterableKeyframes>
+      ): SystemBundle<PropReg, GroupReg, Conds, Sels, Vocab> => {
+        const incoming: VocabularyEntryInput[] = [];
+        for (const [name, collection] of Object.entries(map)) {
+          if (
+            !collection ||
+            (collection as { __brand?: unknown }).__brand !== 'Keyframes' ||
+            typeof (collection as { __frames?: unknown }).__frames !== 'object'
+          ) {
+            throw new TypeError(
+              `registerKeyframes: "${name}" is not a createKeyframes ` +
+                'collection — register the factory return value itself.'
+            );
+          }
+          incoming.push({
+            kind: 'keyframes',
+            name,
+            frames: snapshotFrameData(
+              (collection as { __frames: KeyframesFrameData }).__frames
+            ),
+          });
+        }
+        return registerEntries('registerKeyframes', incoming);
+      };
+
+      const registerGlobalStyles = (
+        map: Record<string, RegisterableGlobalStyles>
+      ): SystemBundle<PropReg, GroupReg, Conds, Sels, Vocab> => {
+        const incoming: VocabularyEntryInput[] = [];
+        for (const [name, block] of Object.entries(map)) {
+          if (
+            !block ||
+            (block as { __brand?: unknown }).__brand !== 'GlobalStyleBlock' ||
+            typeof (block as { styles?: unknown }).styles !== 'object'
+          ) {
+            throw new TypeError(
+              `registerGlobalStyles: "${name}" is not a createGlobalStyles ` +
+                'block — register the factory return value itself.'
+            );
+          }
+          const blockValue = block as unknown as GlobalStyleBlock;
+          // Registration-time snapshot mirroring snapshotFrameData: the top
+          // two levels are copied and frozen (blind spot: deeper selector
+          // bodies stay aliased).
+          const styles = Object.freeze(
+            Object.fromEntries(
+              Object.entries(blockValue.styles).map(([selector, body]) => [
+                selector,
+                Object.freeze({ ...body }),
+              ])
+            )
+          ) as GlobalStyleMap;
+          incoming.push({
+            kind: 'globalStyles',
+            name,
+            styles,
+            ...(blockValue.fontFaces?.length
+              ? {
+                  fontFaces: Object.freeze(
+                    blockValue.fontFaces.map((face) =>
+                      Object.freeze({ ...face })
+                    )
+                  ) as readonly FontFace[],
+                }
+              : {}),
+          });
+        }
+        return registerEntries('registerGlobalStyles', incoming);
+      };
+
+      const seal = (): SealedSystemInstance<
+        PropReg,
+        GroupReg,
+        Conds,
+        Sels,
+        Vocab
+      > => {
+        if (consumedBy === 'seal') {
+          throw new Error(
+            'seal: this system is already sealed — seal() returns exactly ' +
+              'one instance per build().'
+          );
+        }
+        if (consumedBy === 'register') {
+          throw new Error(
+            'seal: this bundle was superseded by a later registration call ' +
+              '— registration is linear; seal the final bundle.'
+          );
+        }
+        const record: VocabularyRecord = Object.freeze({
+          version: 1 as const,
+          keyframes: Object.freeze(
+            entries
+              .filter((entry) => entry.kind === 'keyframes')
+              .map((entry) =>
+                // frames were deep-copied and frozen at registration (or
+                // arrived frozen from a sealed source's record).
+                Object.freeze({ name: entry.name, frames: entry.frames })
+              )
+          ),
+          globalStyles: Object.freeze(
+            entries
+              .filter((entry) => entry.kind === 'globalStyles')
+              .map((entry) =>
+                Object.freeze({
+                  name: entry.name,
+                  styles: entry.styles,
+                  ...(entry.fontFaces ? { fontFaces: entry.fontFaces } : {}),
+                })
+              )
+          ),
+          collisions: Object.freeze(
+            collisions.map((entry) => Object.freeze({ ...entry }))
+          ),
+          legacyVerbs: Object.freeze(
+            legacyVerbWitnessRecord
+              // A name that DID arrive (a separate `.extend()` of the same
+              // vocabulary) must not be claimed undelivered — narrow each
+              // entry to its genuinely refused names, dropping emptied
+              // entries (the false-witness guard).
+              .map((entry) => ({
+                ...entry,
+                names: entry.names.filter(
+                  (name) => !entries.some((kept) => kept.name === name)
+                ),
+              }))
+              .filter((entry) => entry.names.length > 0)
+              .map((entry) =>
+                Object.freeze({
+                  ...entry,
+                  names: Object.freeze([...entry.names]),
+                })
+              )
+          ),
+        });
+
+        const sealed = mintInstance() as SealedSystemInstance<
+          PropReg,
+          GroupReg,
+          Conds,
+          Sels,
+          Vocab
+        >;
+        // Non-enumerable for the same reason as getRegistrySnapshot: the
+        // QuickJS capture script's discriminators walk enumerable keys only.
+        Object.defineProperty(sealed, 'getVocabularyRecord', {
+          value: (): VocabularyRecord => record,
+          enumerable: false,
+        });
+        // Runtime-only stub (absent from the sealed TYPE, so typed misuse
+        // stays a compile error): registration attempted on the sealed
+        // instance itself names the sealed state instead of a bare
+        // "not a function".
+        for (const member of ['registerKeyframes', 'registerGlobalStyles']) {
+          Object.defineProperty(sealed, member, {
+            value: (): never => {
+              throw new Error(
+                `${member}: this system is sealed — registration happens ` +
+                  'between build() and seal().'
+              );
+            },
+            enumerable: false,
+          });
+        }
+        consumedBy = 'seal';
+        return sealed;
+      };
+
+      return {
+        system,
+        createGlobalStyles,
+        createKeyframes,
+        registerKeyframes,
+        registerGlobalStyles,
+        seal,
+      } as SystemBundle<PropReg, GroupReg, Conds, Sels, Vocab>;
+    };
+
+    return makeBundle(
+      this.#vocabularyRegistry.map((entry) => ({ ...entry })),
+      [...this.#vocabularyCollisions],
+      0
+    );
   }
 }
 
@@ -1167,10 +1849,26 @@ function serializeInstance<
 }
 
 export function createSystem(config?: CreateSystemConfig): SystemBuilder {
+  const includes = config?.includes ?? [];
+  // Legacy-verb witness (vocabulary-registration): the deprecated
+  // `includes:` alias performs no registry merge, so a sealed source's
+  // registered vocabulary cannot reach this consumer — witnessed per
+  // source, carried on the eventual sealed record.
+  const witnesses: VocabularyLegacyVerbEntry[] = [];
+  includes.forEach((source, index) => {
+    const witness = legacyVerbWitness(source, 'includes', index + 1);
+    if (witness) witnesses.push(witness);
+  });
   return new SystemBuilder(
     undefined,
     undefined,
     undefined,
-    config?.includes ?? []
+    includes,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    witnesses
   );
 }

@@ -163,20 +163,18 @@ declare module '@animus-ui/system' {
 
 // ─── System ─────────────────────────────────────────────────
 
-export const {
-  system: ds,
-  createGlobalStyles,
-  createKeyframes,
-  // extend()-form lane (openspec: first-class-extension, D1): test-ds's
-  // registries MERGE into this system — the kit alone provides the space/
-  // layout/text/surface/positioning groups the components use. The only
-  // LOCAL registration is the additive, transform-free `shadows` prop set
-  // (boxShadow/shadow/textShadow — the kit does not register them, and the
-  // Card/Button styles resolve their `shadows`-scale values through the
-  // registry). Re-spreading kit groups would coalesce under D12 transform
-  // equality (name + captured source); this lane stays pure-extend + additive
-  // as the recommended consumption shape.
-} = createSystem().extend(testDs).addProps(shadows).build();
+// extend()-form lane (openspec: first-class-extension, D1): test-ds's
+// registries MERGE into this system — the kit alone provides the space/
+// layout/text/surface/positioning groups the components use. The only
+// LOCAL registration is the additive, transform-free `shadows` prop set
+// (boxShadow/shadow/textShadow — the kit does not register them, and the
+// Card/Button styles resolve their `shadows`-scale values through the
+// registry). Re-spreading kit groups would coalesce under D12 transform
+// equality (name + captured source); this lane stays pure-extend + additive
+// as the recommended consumption shape.
+const bundle = createSystem().extend(testDs).addProps(shadows).build();
+
+export const { createGlobalStyles, createKeyframes } = bundle;
 
 // ─── Keyframes ──────────────────────────────────────────────
 
@@ -206,3 +204,11 @@ export const globalStyles = createGlobalStyles({
   a: { color: 'primary', textDecoration: 'none' },
   'code, kbd': { fontFamily: 'ui-monospace, monospace', fontSize: 14 },
 });
+
+// Sealed system (vocabulary-registration): `animations` registers under its
+// export name; the kit's `kitMotion` arrives through the sealed test-ds
+// record via `.extend()`.
+export const ds = bundle
+  .registerKeyframes({ animations })
+  .registerGlobalStyles({ globalStyles })
+  .seal();

@@ -50,6 +50,8 @@ tsconfig.tsbuildinfo
 
 # Agents
 .claude
+# local-markdown issue tracker (docs/agents/issue-tracker.md) — machine-local
+.scratch/
 .roadmap
 .playwright-mcp
 # Per-machine MCP server wiring: the entries carry absolute paths to this
@@ -77,6 +79,9 @@ e2e/packed-app/.staging/
 # made the deliverable un-commitable; children-glob + negation instead)
 docs/*
 !docs/standalone-extraction.md
+# agent-skills repo config (issue tracker, triage labels, domain docs) SHIPS —
+# referenced from AGENTS.md § Agent skills
+!docs/agents/
 .codex
 
 # contract-change campaign ratchet artifacts — enforcement hooks were never

@@ -100,7 +100,6 @@ export async function runBuildStart(
   const packageSpecifiers = extractSystemFilePackages(ctx.resolvedSystemPath!);
 
   ctx.externalSourceEntries.clear();
-  ctx.externalKeyframesScanEntries.clear();
 
   // Shared traversal/ingest (spec: external-package-file-discovery);
   // only specifier resolution, MDX handling, and the hash/cache policy
@@ -123,9 +122,6 @@ export async function runBuildStart(
   for (const [specifier, srcEntry] of collected.sourceEntries) {
     ctx.externalSourceEntries.set(specifier, srcEntry);
   }
-  for (const [specifier, scanEntry] of collected.keyframesScanEntries) {
-    ctx.externalKeyframesScanEntries.set(specifier, scanEntry);
-  }
   for (const entry of collected.entries) {
     const hash = !ctx.isProd ? contentHash(entry.source) : undefined;
     rawEntries.push({ path: entry.path, source: entry.source, hash });
@@ -136,11 +132,6 @@ export async function runBuildStart(
   // (configureServer precedes buildStart; loadSystem precedes discovery), so
   // external dirs must register here or they are never watched.
   ctx.registerSystemWatchPaths();
-
-  // Keyframes-only carve-out: external package entries contribute their
-  // `Keyframes` collections to the analysis inputs; everything else about
-  // the consumer system's authority is untouched.
-  ctx.applyExternalKeyframes();
 
   const packageFileCount = rawEntries.length - localFileCount;
   ctx.log(

@@ -203,47 +203,13 @@ describe('collectExternalPackageSources', () => {
     expect(result.packageDirs).toEqual([join(pkg, 'dist')]);
   });
 
-  test('tracks a keyframes scan entry for every admitted package (src or dist)', async () => {
-    const root = makeRoot();
-    const srcPkg = makePackage(join(root, 'packages', 'ds'), {
-      'src/index.ts': 'export const ds = 1;',
-    });
-    const distPkg = makePackage(
-      join(root, 'node_modules', '@x', 'compiled-ds'),
-      { 'dist/definition.mjs': 'export const system = 1;' }
-    );
-    const subpathPkg = makePackage(join(root, 'packages', 'subpath'), {
-      'src/definition.ts': 'export const system = 1;',
-      'main.ts': 'export {};',
-    });
-
-    const result = await collect(root, {
-      '@x/ds': join(srcPkg, 'dist', 'index.mjs'),
-      '@x/compiled-ds/definition': join(distPkg, 'dist', 'definition.mjs'),
-      '@x/subpath': join(subpathPkg, 'main.ts'),
-    });
-
-    // A src package scans its redirected source entry; a dist-only package
-    // scans the resolved dist entry — imported `Keyframes` collections are
-    // reachable either way, never only for src-shipping packages.
-    expect(result.keyframesScanEntries.get('@x/ds')).toBe(
-      join(srcPkg, 'src', 'index.ts')
-    );
-    expect(result.keyframesScanEntries.get('@x/compiled-ds/definition')).toBe(
-      join(distPkg, 'dist', 'definition.mjs')
-    );
-    // src/ exists but cannot serve the entry: the resolved entry itself scans.
-    expect(result.keyframesScanEntries.get('@x/subpath')).toBe(
-      join(subpathPkg, 'main.ts')
-    );
-    expect(result.keyframesScanEntries.size).toBe(3);
-  });
-
-  test('a derived root alias scans its root entry for keyframes too', async () => {
-    // A kit declared at a subpath (`@x/kit/definition`) routinely exports
-    // its `Keyframes` collections from the package ROOT module only; the
-    // derived root alias must scan alongside the declared entry or those
-    // collections silently vanish from the merge.
+  test('a derived root alias keeps its module-resolution redirect', async () => {
+    // A kit declared at a subpath (`@x/kit/definition`) is routinely
+    // imported at its package ROOT by app code; the derived root alias
+    // redirects that import to src so the app never bundles untransformed
+    // dist chains. The redirect is resolution-only — nothing evaluates the
+    // root entry (vocabulary-registration ended discovery-by-scan; a kit's
+    // collections reach consumers through its sealed system's record).
     const root = makeRoot();
     const pkg = makePackage(join(root, 'packages', 'kit'), {
       'src/index.ts': 'export const kitMotion = 1;',
@@ -254,10 +220,10 @@ describe('collectExternalPackageSources', () => {
       '@x/kit/definition': join(pkg, 'src', 'definition.ts'),
     });
 
-    expect(result.keyframesScanEntries.get('@x/kit/definition')).toBe(
-      join(pkg, 'src', 'definition.ts')
+    expect(result.packageMap['@x/kit']).toBe(
+      relative(root, join(pkg, 'src', 'index.ts'))
     );
-    expect(result.keyframesScanEntries.get('@x/kit')).toBe(
+    expect(result.sourceEntries.get('@x/kit')).toBe(
       join(pkg, 'src', 'index.ts')
     );
   });
@@ -603,7 +569,6 @@ describe('collectExternalPackageSources', () => {
       '@x/a': 'packages/a/src/index.ts',
     });
     expect([...admitted.sourceEntries.keys()]).toEqual(['@x/a']);
-    expect([...admitted.keyframesScanEntries.keys()]).toEqual(['@x/a']);
     expect(admitted.packageDirs).toEqual([join(kitA, 'src')]);
     expect(firstOwners(admitted.dirOwnerSets)).toEqual({
       [join(kitA, 'src')]: '@x/a',

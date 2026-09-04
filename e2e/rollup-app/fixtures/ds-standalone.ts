@@ -6,8 +6,9 @@ export const theme = createTheme()
   .addColors({ gray: { 100: '#f5f5f5' } })
   .build();
 
-export const { system: ds } = createSystem()
+export const ds = createSystem()
   .addGroup('color', {
     color: { property: 'color', scale: 'colors' },
   })
-  .build(theme);
+  .build(theme)
+  .seal();

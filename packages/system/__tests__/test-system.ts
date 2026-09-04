@@ -39,11 +39,7 @@ declare module '../src' {
   interface Theme extends TestTheme {}
 }
 
-export const {
-  system: ds,
-  createGlobalStyles,
-  createKeyframes,
-} = createSystem()
+const bundle = createSystem()
   .addGroup('space', space)
   .addGroup('text', typography)
   .addGroup('surface', color)
@@ -66,6 +62,12 @@ export const {
     _hoverChild: '&:hover > *',
   })
   .build();
+
+export const { createGlobalStyles, createKeyframes } = bundle;
+
+// Sealed (vocabulary-registration): the fixture mirrors the consumer shape —
+// runtime tests author from the sealed instance exactly as an app would.
+export const ds = bundle.seal();
 
 // Publish the registered condition + selector aliases through module
 // augmentation (design D9 — the same mechanism as the augmented `Theme`

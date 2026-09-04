@@ -29,7 +29,6 @@ const mocks = vi.hoisted(() => ({
   analyzeProject: vi.fn(),
   clearAnalysisCache: vi.fn(),
   transformFile: vi.fn(),
-  scanKeyframesExports: vi.fn(),
 }));
 
 import { setEngineApiOverride } from '../../../extract/session/singleton';
@@ -43,7 +42,6 @@ setEngineApiOverride(() => ({
   analyzeProject: mocks.analyzeProject,
   clearAnalysisCache: mocks.clearAnalysisCache,
   transformFile: mocks.transformFile,
-  scanKeyframesExports: mocks.scanKeyframesExports,
 }));
 
 import animusLoader from '../../src/loader';
@@ -77,12 +75,9 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-/** Suite arming: the shared canned engine plus this suite's
- *  scanKeyframesExports mock. */
+/** Suite arming: the shared canned engine. */
 function armSuiteEngine(): void {
-  armCannedEngine(mocks, () => {
-    mocks.scanKeyframesExports.mockReset().mockReturnValue(null);
-  });
+  armCannedEngine(mocks, () => {});
 }
 
 /** Everything one external-workspace scenario drives its watch session with. */

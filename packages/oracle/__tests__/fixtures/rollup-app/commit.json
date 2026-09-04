@@ -2,13 +2,13 @@
   "schema": 1,
   "payloads": {
     "styles.css": {
-      "hash": "bb8d158ecab1494b3899930897e722ad"
+      "hash": "939c144af6e9f8273e411bcb8b6f5d39"
     },
     "system-props.js": {
       "hash": "46a029fa4ba91ea026c83821dcd7681b"
     },
     "manifest.json": {
-      "hash": "410fa0bb91141167e1cad2d6cd6dd150"
+      "hash": "b06d23b64b8afc57701072492fe0ec10"
     },
     "assets/test-font.f2a09939.woff2": {
       "hash": "f2a09939afd02913e3adbbb98ae9efe8"

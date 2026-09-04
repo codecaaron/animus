@@ -127,7 +127,8 @@ describe('SystemBuilder extend()', () => {
       .addGroup('layout', {
         gap: prop({ property: 'gap', scale: 'space' }),
       })
-      .build().system;
+      .build()
+      .seal();
 
   // Scenario: "Extended prop is present end to end" (runtime half; the type
   // half lives in types.test-d.tsx) + the G5 runtime witness.
@@ -148,7 +149,8 @@ describe('SystemBuilder extend()', () => {
     const kitDs = createSystem()
       .addSelectors({ _cardHover: '&[data-card]:hover' })
       .addConditions({ _compact: '@media (max-width: 400px)' })
-      .build().system;
+      .build()
+      .seal();
     const config = createSystem().extend(kitDs).build().system.toConfig();
 
     expect(JSON.parse(config.selectorAliases)._cardHover).toBe(
@@ -163,7 +165,8 @@ describe('SystemBuilder extend()', () => {
   it('adopts a kit override of a built-in selector, preserving its order', () => {
     const kitDs = createSystem()
       .addSelectors({ _hover: '&:hover:not([data-frozen])' })
-      .build().system;
+      .build()
+      .seal();
     const config = createSystem().extend(kitDs).build().system.toConfig();
 
     expect(JSON.parse(config.selectorAliases)._hover).toBe(
@@ -179,10 +182,12 @@ describe('SystemBuilder extend()', () => {
   it('allocates distinct selector orders across repeated extends, stable under re-ordering', () => {
     const kitA = createSystem()
       .addSelectors({ _cardHover: '&[data-card]:hover' })
-      .build().system;
+      .build()
+      .seal();
     const kitB = createSystem()
       .addSelectors({ _railOpen: '&[data-rail][data-open]' })
-      .build().system;
+      .build()
+      .seal();
 
     const ab = snapshotOf(
       createSystem().extend(kitA).extend(kitB).build().system
@@ -245,7 +250,8 @@ describe('SystemBuilder extend()', () => {
   it('coalesces byte-equivalent definitions from source and consumer', () => {
     const kitDs = createSystem()
       .addProps({ m: prop({ scale: 'space' }) })
-      .build().system;
+      .build()
+      .seal();
     const { system } = createSystem()
       .extend(kitDs)
       .addProps({ m: prop({ scale: 'space' }) })
@@ -284,10 +290,12 @@ describe('SystemBuilder extend()', () => {
   it('fails divergent sibling selector aliases naming both sources, order-independent', () => {
     const kitA = createSystem()
       .addSelectors({ _hover: '&:hover:not([data-frozen])' })
-      .build().system;
+      .build()
+      .seal();
     const kitB = createSystem()
       .addSelectors({ _hover: '&:hover, &[data-hover]' })
-      .build().system;
+      .build()
+      .seal();
 
     expect(() => createSystem().extend(kitA).extend(kitB)).toThrow(
       /selector alias "_hover".*extended source #1.*extended source #2/s
@@ -301,10 +309,12 @@ describe('SystemBuilder extend()', () => {
   it('fails divergent sibling prop definitions naming both sources, order-independent', () => {
     const kitA = createSystem()
       .addProps({ gap: prop({ property: 'gap', scale: 'space' }) })
-      .build().system;
+      .build()
+      .seal();
     const kitB = createSystem()
       .addProps({ gap: prop({ property: 'gap', scale: 'sizes' }) })
-      .build().system;
+      .build()
+      .seal();
 
     expect(() => createSystem().extend(kitA).extend(kitB)).toThrow(
       /Prop "gap".*Existing \(extended source #1\).*Incoming \(extended source #2\)/
@@ -318,10 +328,12 @@ describe('SystemBuilder extend()', () => {
     // Simulates the same kit at two versions: same names, divergent values.
     const v1 = createSystem()
       .addProps({ gap: prop({ property: 'gap', scale: 'space' }) })
-      .build().system;
+      .build()
+      .seal();
     const v2 = createSystem()
       .addProps({ gap: prop({ property: 'gap', scale: 'spacing' }) })
-      .build().system;
+      .build()
+      .seal();
 
     expect(() => createSystem().extend(v1).extend(v2)).toThrow(
       /extended source #1.*extended source #2/s
@@ -331,10 +343,12 @@ describe('SystemBuilder extend()', () => {
   it('fails divergent sibling condition aliases naming both sources', () => {
     const kitA = createSystem()
       .addConditions({ _compact: '@media (max-width: 400px)' })
-      .build().system;
+      .build()
+      .seal();
     const kitB = createSystem()
       .addConditions({ _compact: '@media (max-width: 500px)' })
-      .build().system;
+      .build()
+      .seal();
 
     expect(() => createSystem().extend(kitA).extend(kitB)).toThrow(
       /condition alias "_compact".*extended source #1.*extended source #2/s
@@ -344,13 +358,15 @@ describe('SystemBuilder extend()', () => {
   it('fails divergent sibling group membership naming both sources', () => {
     const kitA = createSystem()
       .addGroup('layout', { gap: prop({ property: 'gap' }) })
-      .build().system;
+      .build()
+      .seal();
     const kitB = createSystem()
       .addGroup('layout', {
         gap: prop({ property: 'gap' }),
         rowGap: prop({ property: 'rowGap' }),
       })
-      .build().system;
+      .build()
+      .seal();
 
     expect(() => createSystem().extend(kitA).extend(kitB)).toThrow(
       /group "layout".*Existing \(extended source #1\): \[gap\].*Incoming \(extended source #2\): \[gap, rowGap\]/
@@ -360,10 +376,12 @@ describe('SystemBuilder extend()', () => {
   it('fails cross-registry name collisions between extended sources, both directions', () => {
     const conditionKit = createSystem()
       .addConditions({ _compact: '@media (max-width: 400px)' })
-      .build().system;
+      .build()
+      .seal();
     const selectorKit = createSystem()
       .addSelectors({ _compact: '&[data-compact]' })
-      .build().system;
+      .build()
+      .seal();
 
     expect(() =>
       createSystem().extend(conditionKit).extend(selectorKit)
@@ -376,10 +394,12 @@ describe('SystemBuilder extend()', () => {
   it('fails group-name-vs-prop-name cross-collisions between extended sources', () => {
     const propKit = createSystem()
       .addProps({ card: prop({ property: 'gridArea' }) })
-      .build().system;
+      .build()
+      .seal();
     const groupKit = createSystem()
       .addGroup('card', { cardPad: prop({ property: 'padding' }) })
-      .build().system;
+      .build()
+      .seal();
 
     expect(() => createSystem().extend(propKit).extend(groupKit)).toThrow(
       /group name "card".*collides with an existing prop name/
@@ -407,7 +427,8 @@ describe('SystemBuilder extend()', () => {
         })
         .addSelectors({ _cardHover: '&[data-card]:hover' })
         .addConditions({ _compact: '@media (max-width: 400px)' })
-        .build().system;
+        .build()
+        .seal();
 
     const kit = buildDualKit();
     const once = createSystem().extend(kit).build().system.toConfig();
@@ -442,7 +463,8 @@ describe('SystemBuilder extend()', () => {
             transform: createTransform('unit', (value) => `${value}${unit}`),
           }),
         })
-        .build().system;
+        .build()
+        .seal();
 
     const { system } = createSystem()
       .extend(buildUnitKit('px'))
@@ -461,7 +483,8 @@ describe('SystemBuilder extend()', () => {
           mapped: prop({ scale: { sm: '4px', lg: '8px' } }),
           listed: prop({ scale: ['4px', '8px'] }),
         })
-        .build().system;
+        .build()
+        .seal();
 
     expect(() =>
       createSystem().extend(buildScaledKit()).extend(buildScaledKit()).build()
@@ -495,7 +518,8 @@ describe('SystemBuilder extend()', () => {
       .addProps({
         glow: prop({ property: 'boxShadow', transform: glowTransform }),
       })
-      .build().system;
+      .build()
+      .seal();
 
     // The serialized form drops the unnamed transform — reconstruction from
     // toConfig() would lose it (the G7 failure mode).
@@ -518,9 +542,10 @@ describe('SystemBuilder extend()', () => {
 
   // Scenario: "Post-build mutation does not leak" + snapshot immutability.
   it('ignores post-build registry mutation in toConfig() and extension', () => {
-    const { system } = createSystem()
+    const system = createSystem()
       .addGroup('space', { m: prop({ scale: 'space' }) })
-      .build();
+      .build()
+      .seal();
     const before = system.toConfig();
 
     installUndeclaredEntry(system.propRegistry, 'rogue', {
@@ -578,7 +603,7 @@ describe('SystemBuilder extend()', () => {
   });
 
   it('ignores post-build mutation of nested properties arrays and object scales', () => {
-    const { system } = createSystem()
+    const system = createSystem()
       .addGroup('space', {
         mx: prop({
           property: 'margin',
@@ -586,7 +611,8 @@ describe('SystemBuilder extend()', () => {
           scale: { sm: '4px' },
         }),
       })
-      .build();
+      .build()
+      .seal();
     const before = system.toConfig();
 
     const { properties, scale } = system.propRegistry.mx;
@@ -651,7 +677,8 @@ describe('deprecated extension aliases (frozen semantics)', () => {
   const buildKit = () =>
     createSystem()
       .addGroup('kitSurface', { kitGlow: prop({ property: 'boxShadow' }) })
-      .build().system;
+      .build()
+      .seal();
 
   // Scenario: "from() behavior is unchanged during the window" — byte-identical
   // to a builder that never called from() (no registry merge).

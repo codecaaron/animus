@@ -142,7 +142,6 @@ function makeEngineProbe(): EngineProbe {
       return { code: '', hasComponents: false };
     },
     clearAnalysisCache: () => {},
-    scanKeyframesExports: () => null,
   } satisfies EngineApi;
   return {
     engine,
@@ -183,7 +182,6 @@ function makeStatefulResetProbe() {
       clears += 1;
       active = false;
     },
-    scanKeyframesExports: () => null,
   } satisfies EngineApi;
 
   return {
@@ -300,7 +298,6 @@ describe('opted-in Svelte source ownership in the Vite lifecycle', () => {
   test('keeps legacy EngineApi objects source-compatible and fails loud at ingestion', async () => {
     const legacyEngine = {
       loadSystemModule: () => ({}),
-      scanKeyframesExports: () => null,
       analyzeProject: () => '{}',
       transformFile: () => ({ code: '', hasComponents: false }),
       clearAnalysisCache: () => {},
@@ -677,7 +674,6 @@ describe('opted-in Svelte source ownership in the Vite lifecycle', () => {
       },
       transformFile: () => ({ code: '', hasComponents: false }),
       clearAnalysisCache: () => {},
-      scanKeyframesExports: () => null,
     };
     const ctx = makeContext(appRoot, engine, ['.ts', '.svelte']);
 

@@ -48,8 +48,6 @@ export interface EngineApi {
   // it returns, so the surface stays loose here.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   loadSystemModule: (...args: unknown[]) => any;
-  /** Keyframes-only scan of an external package entry. */
-  scanKeyframesExports: (entryPath: string, rootDir: string) => string | null;
   /** Parse-only native fact extraction used to prepare adapted sources. */
   extractFacts?: (filesJson: string) => string;
   analyzeProject: (
@@ -162,7 +160,7 @@ export function createV2EngineApi(deps: V2EngineAdapterDeps): () => EngineApi {
     if (!isV2()) {
       // SAFETY: the v1 leg IS the native module — `EngineApi` was derived from
       // the surface `animus-extract-v2`'s NAPI entry points already export
-      // (loadSystemModule / scanKeyframesExports / analyzeProject /
+      // (loadSystemModule / analyzeProject /
       // transformFile / clearAnalysisCache), which is why the v2 adapter below
       // can mimic it. The module's own generated `index.d.ts` is authoritative
       // and `loadNativeEngine` is declared `any`, so this names the surface the
@@ -173,10 +171,6 @@ export function createV2EngineApi(deps: V2EngineAdapterDeps): () => EngineApi {
     return {
       loadSystemModule: (...args: unknown[]) =>
         native.loadSystemModule(...args),
-      // Keyframes-only scan of an external package entry; returns the
-      // collections JSON or null, throws on evaluation failure.
-      scanKeyframesExports: (entryPath: string, rootDir: string) =>
-        native.scanKeyframesExports(entryPath, rootDir) ?? null,
       extractFacts: (filesJson) => native.extractFacts(filesJson),
       analyzeProject: (
         filesJsonRaw,

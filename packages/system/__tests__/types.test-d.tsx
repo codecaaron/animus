@@ -20,7 +20,7 @@ import { compose, createSystem, createTheme, createTransform } from '../src';
 import { composeWithContext } from '../src/composeWithContext';
 import { createGlobalStyles, createKeyframes, ds, tokens } from './test-system';
 
-import type { LibraryBundle } from '../src';
+import type { LibraryBundle, VocabularyOf } from '../src';
 import type {
   AnyBrandedComponent,
   SharedConfig,
@@ -2050,6 +2050,137 @@ void (<ExtendedBadge label="hi" />);
   const extendedMaybeCallable = createTheme().extend(maybeCallable).build();
   // @ts-expect-error — maybe-callable values cannot be promised as copied data
   extendedMaybeCallable.slot;
+}
+
+// ── 18. Vocabulary registration — two-phase terminal type state ──────────────
+// (vocabulary-registration §"Vocabulary registration window between two
+// terminals" + §"Vocabulary name collisions are compile-time errors on typed
+// paths"; system-builder §"Sealing terminal closes vocabulary registration".
+// Runtime halves in vocabulary.test.ts.)
+{
+  const kitBuild = createSystem()
+    .addGroup('kitSurface', { kitGlow: { property: 'boxShadow' } })
+    .build();
+  const kitMotion = kitBuild.createKeyframes({
+    pulse: { '0%': { opacity: 0 }, '100%': { opacity: 1 } },
+  });
+  const sealedKit = kitBuild.registerKeyframes({ kitMotion }).seal();
+
+  // Positive: the sealed instance authors chains and serializes like any
+  // built instance
+  void sealedKit.styles({}).system({ kitSurface: true });
+  void sealedKit.toConfig();
+  void sealedKit.getVocabularyRecord();
+
+  // Positive: the vocabulary axis is introspectable on the sealed type
+  type _KitVocab = Assert<IsExact<VocabularyOf<typeof sealedKit>, 'kitMotion'>>;
+
+  // Positive: an empty vocabulary seals too (cheap no-op for plain kits)
+  const plainSealed = createSystem().build().seal();
+  type _EmptyVocab = Assert<IsExact<VocabularyOf<typeof plainSealed>, never>>;
+
+  // Negative: duplicate local registration is a compile error at the site,
+  // with the offending name in the reported type
+  const dupBundle = createSystem().build();
+  const motion = dupBundle.createKeyframes({ spin: { '0%': { opacity: 0 } } });
+  void dupBundle
+    .registerKeyframes({ motion })
+    // @ts-expect-error — "motion" is already registered vocabulary
+    .registerKeyframes({ motion });
+
+  // Negative: the sealed instance carries no registration surface —
+  // registration is closed at seal()
+  // @ts-expect-error — sealed instances have no registerKeyframes member
+  void sealedKit.registerKeyframes;
+
+  // Negative: a value that is not a factory-shaped collection is rejected
+  void createSystem()
+    .build()
+    // @ts-expect-error — shape mismatch: not a Keyframes collection
+    .registerKeyframes({ bogus: { frames: {} } });
+
+  // Extending a sealed kit threads its vocabulary into the consumer chain;
+  // a colliding consumer registration is a compile error (the dist-kit path
+  // rides the same sealed instance type, which published `.d.ts` preserves)
+  const consumerBundle = createSystem().extend(sealedKit).build();
+  const consumerMotion = consumerBundle.createKeyframes({
+    blink: { '0%': { opacity: 1 } },
+  });
+  // @ts-expect-error — "kitMotion" is inherited vocabulary from the kit
+  void consumerBundle.registerKeyframes({ kitMotion: consumerMotion });
+  // Positive: a fresh name unions the axis
+  const consumerSealed = consumerBundle
+    .registerKeyframes({ appMotion: consumerMotion })
+    .seal();
+  type _MergedVocab = Assert<
+    IsExact<VocabularyOf<typeof consumerSealed>, 'kitMotion' | 'appMotion'>
+  >;
+
+  // Positive: extending through a bundle literal with a sealed system half
+  // threads the axis the same way
+  const viaLiteral = createSystem().extend({ system: sealedKit }).build();
+  // @ts-expect-error — "kitMotion" arrives through the bundle's sealed half
+  void viaLiteral.registerKeyframes({ kitMotion: consumerMotion });
+
+  // Positive: an ANNOTATED LibraryBundle<V> preserves the vocabulary axis
+  // (the erasure amendment) — collisions stay compile errors
+  const publishedVocabBundle: LibraryBundle<'kitMotion'> = {
+    system: sealedKit,
+  };
+  const viaAnnotated = createSystem().extend(publishedVocabBundle).build();
+  // @ts-expect-error — "kitMotion" arrives through the annotated bundle axis
+  void viaAnnotated.registerKeyframes({ kitMotion: consumerMotion });
+
+  // Pin (updated erasure contract): a BARE LibraryBundle annotation still
+  // erases the vocabulary axis — no names admitted; the runtime collision
+  // witness covers this path
+  const publishedErased: LibraryBundle = { system: sealedKit };
+  const viaErased = createSystem().extend(publishedErased).build();
+  const erasedSealed = viaErased
+    .registerKeyframes({ kitMotion: consumerMotion })
+    .seal();
+  type _ErasedVocab = Assert<
+    IsExact<VocabularyOf<typeof erasedSealed>, 'kitMotion'>
+  >;
+
+  // Canary (inc-02 adversarial pass RF-1): the bare UNSEALED spellings the
+  // consumer fixtures use must stay clean and cheap — the vocabulary-axis
+  // inference must not detonate `extend(<built instance>).build()` into
+  // TS2589/TS2859 territory. These compile with SrcVocab defaulting never.
+  const unsealedKit = createSystem()
+    .addGroup('kitSurface', { kitGlow: { property: 'boxShadow' } })
+    .build().system;
+  void createSystem().extend(unsealedKit).build();
+  void createSystem()
+    .extend(unsealedKit)
+    .addConditions({ _cardSm: '@container card (min-width: 200px)' })
+    .build();
+
+  // Negative (inc-02 adversarial pass RF-3): an index-signature map cannot
+  // prove its names — rejected instead of poisoning the axis to `string`
+  const widened: Record<string, typeof kitMotion> = { anything: kitMotion };
+  // @ts-expect-error — index-signature maps cannot register vocabulary
+  void createSystem().build().registerKeyframes(widened);
+
+  // Global styles ride the SAME axis (inc 06 — one shared name-space):
+  // registering a block under an already-registered keyframes name is a
+  // compile error, and fresh block names union into VocabularyOf.
+  const gsBundle = createSystem().build();
+  const gsMotion = gsBundle.createKeyframes({
+    spin: { '0%': { opacity: 0 } },
+  });
+  const gsReset = gsBundle.createGlobalStyles({ body: { margin: 0 } });
+  void gsBundle
+    .registerKeyframes({ motion: gsMotion })
+    // @ts-expect-error — "motion" is already registered vocabulary
+    .registerGlobalStyles({ motion: gsReset });
+  const gsSealed = gsBundle
+    .registerKeyframes({ motion: gsMotion })
+    .registerGlobalStyles({ gsReset })
+    .seal();
+  type _MixedVocab = Assert<
+    IsExact<VocabularyOf<typeof gsSealed>, 'motion' | 'gsReset'>
+  >;
 }
 
 void TypeTests;

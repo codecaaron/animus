@@ -33,12 +33,14 @@ describe('anonymous transform identity across extend()', () => {
       .addGroup('a', {
         gap: prop({ property: 'gap', transform: (v) => `${v}px` }),
       })
-      .build().system;
+      .build()
+      .seal();
     const kitB = createSystem()
       .addGroup('b', {
         gap: prop({ property: 'gap', transform: (v) => `${v}rem` }),
       })
-      .build().system;
+      .build()
+      .seal();
 
     expect(() => createSystem().extend(kitA).extend(kitB)).toThrow(/gap/);
   });
@@ -48,7 +50,8 @@ describe('anonymous transform identity across extend()', () => {
       .addGroup('a', {
         gap: prop({ property: 'gap', transform: (v) => `${v}px` }),
       })
-      .build().system;
+      .build()
+      .seal();
 
     expect(() => createSystem().extend(kit).extend(kit)).not.toThrow();
   });
@@ -57,7 +60,8 @@ describe('anonymous transform identity across extend()', () => {
     const shared: TransformFn = (v) => `${v}px`;
     const kit = createSystem()
       .addGroup('a', { gap: prop({ property: 'gap', transform: shared }) })
-      .build().system;
+      .build()
+      .seal();
 
     expect(() =>
       createSystem()
@@ -121,7 +125,8 @@ describe('structural scale comparison in addGroup/addProps', () => {
       .addGroup('grid', {
         flow: prop({ property: 'gridAutoFlow', scale: [] }),
       })
-      .build().system;
+      .build()
+      .seal();
 
   it('re-registering an identical object-scaled prop after extend() coalesces', () => {
     expect(() =>

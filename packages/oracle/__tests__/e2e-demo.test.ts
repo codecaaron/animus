@@ -502,7 +502,7 @@ describe('the invariants that hold across the whole path', () => {
   it('scopes every answer to the same program revision', () => {
     expect(host.program.kind).toBe('analysis-artifacts');
     expect(host.program.label).toBe(
-      'animus-commit:410fa0bb91141167e1cad2d6cd6dd150'
+      'animus-commit:b06d23b64b8afc57701072492fe0ec10'
     );
     for (const result of EVERY_RESULT) {
       expect(result.probeStateId).toMatch(/^[0-9a-f]{16}$/);

@@ -4738,6 +4738,16 @@ mod tests {
     }
 
     #[test]
+    fn unregistered_keyframe_reference_severity_is_warn() {
+        // Deliberate warn (the spec's "skipped without aborting analysis");
+        // escalation belongs to the strict-mode contract, a separate change.
+        assert_eq!(
+            diagnostic_severity_for_code(crate::eval::KEYFRAMES_UNREGISTERED_REFERENCE),
+            "warn"
+        );
+    }
+
+    #[test]
     fn extension_child_inherits_parent_base_across_files() {
         let out = analyze(
             &[

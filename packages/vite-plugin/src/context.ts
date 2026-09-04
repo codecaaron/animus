@@ -12,7 +12,7 @@ import {
   findAssetSpecifiers,
   formatRustTimingWaterfall,
   loadSystemConfig,
-  mergeExternalKeyframes,
+  vocabularyWitnessDiagnostics,
   parseFilesJson,
   projectExternalFileOwners,
   resolveAssetFile,
@@ -202,7 +202,7 @@ export function pruneFileCache(
  * Of this class's ~50 fields, roughly 26 duplicate an `ExtractionSession`
  * authority field-for-field — `options`, `verbose`, `staticCssJson`,
  * `rootDir`, `system`, `lcssTargets`, `pathAliasesJson`, `extensionsSet`,
- * `excludeMatcher`, `externalKeyframesDiagnostics`, `fileCache`,
+ * `excludeMatcher`, `systemVocabularyDiagnostics`, `fileCache`,
  * `analysisEntryCache`, `sourceOwnership`, `packageMap`, the asset-pass
  * trio, the five `external*` ownership maps, `externalPackageOutcomes`,
  * `resolvedSystemPath`, the two `systemDependency*` sets, and
@@ -292,49 +292,12 @@ export class PluginContext {
     this.transformOutputHashes.set(relativePath, contentHash(code));
   }
 
-  /**
-   * The consumer system's OWN keyframes collections, captured at load time
-   * before any external merge touches `system.keyframesJson`. Every
-   * `applyExternalKeyframes` merge starts from this baseline, so repeated
-   * merges (a --watch rebuild's loadSystem + rediscovery, a geological
-   * reset) never compound prior external state — a removed include's
-   * keyframes disappear with it.
-   */
-  private consumerKeyframesJson: string | null = null;
-
-  /**
-   * Merge `Keyframes` collections from discovered external package entries
-   * into the system's collections (keyframes-only carve-out — the consumer
-   * system stays the singular config authority). Runs after buildStart
-   * discovery AND after every geological-reset system reload, since a reload
-   * rebuilds `this.system` from the consumer entry alone. Merges from the
-   * consumer-only baseline, never from the previously merged value.
-   */
-  applyExternalKeyframes(): void {
-    if (this.externalKeyframesScanEntries.size === 0) {
-      // No external entries: the system carries exactly its own collections
-      // (byte-identical restore), and no external diagnostics remain to ride
-      // the next analysis.
-      this.system.keyframesJson = this.consumerKeyframesJson;
-      this.externalKeyframesDiagnostics = [];
-      return;
-    }
-    const merge = mergeExternalKeyframes(
-      (entry, root) => this.engineApi().scanKeyframesExports(entry, root),
-      this.consumerKeyframesJson,
-      this.externalKeyframesScanEntries.values(),
-      this.rootDir
-    );
-    this.system.keyframesJson = merge.keyframesJson;
-    // Surfacing stays with the single shared policy point inside
-    // runProjectAnalysis (next-plugin pins that there is exactly one
-    // surfacing call site) — stash for the next analysis to carry.
-    this.externalKeyframesDiagnostics = merge.diagnostics;
-  }
-
-  /** Discovery-time keyframes diagnostics awaiting the next analysis's
-   *  shared surfacing pass. */
-  externalKeyframesDiagnostics: ManifestDiagnostic[] = [];
+  /** Vocabulary witness diagnostics from the sealed system's registration
+   *  record (vocabulary-registration), awaiting the next analysis's shared
+   *  surfacing pass. Surfacing stays with the single policy point inside
+   *  runProjectAnalysis (next-plugin pins that there is exactly one
+   *  surfacing call site). */
+  systemVocabularyDiagnostics: ManifestDiagnostic[] = [];
 
   // Reverse provenance: parent_id → [child_ids] for transitive invalidation
   reverseProvenance: Record<string, string[]> = {};
@@ -461,11 +424,6 @@ export class PluginContext {
 
   // External package specifier → absolute source entry (resolveId redirect)
   externalSourceEntries = new Map<string, string>();
-
-  // External package specifier → absolute keyframes scan entry — one per
-  // admitted package whatever its shape (src entry or dist entry), so
-  // dist-only packages' `Keyframes` collections merge like src-shipping ones.
-  externalKeyframesScanEntries = new Map<string, string>();
 
   // Per-specifier discovery outcomes from buildStart (self-verify input)
   externalPackageOutcomes: ExternalPackageOutcome[] = [];
@@ -616,13 +574,13 @@ export class PluginContext {
       this.systemDependencyKeys = keys;
       this.systemDependencyPaths = deps;
       this.registerSystemWatchPaths();
-      // The freshly loaded config carries the consumer's own collections —
-      // capture the merge baseline BEFORE the carve-out overwrites it. A
-      // failed reload keeps the previous system AND its matching baseline.
-      this.consumerKeyframesJson = this.system.keyframesJson;
-      // A reload rebuilds `this.system` from the consumer entry alone —
-      // re-apply the external keyframes carve-out (no-op before discovery).
-      this.applyExternalKeyframes();
+      // The sealed record is the witness channel (the loader's evaluation
+      // host shims console): map its coded entries for the next analysis's
+      // shared surfacing pass. A failed reload keeps the previous system
+      // AND its matching witnesses.
+      this.systemVocabularyDiagnostics = vocabularyWitnessDiagnostics(
+        this.system.vocabularyWitnessesJson
+      );
     } catch (e) {
       if (this.options.strict) {
         throw new Error(
@@ -667,7 +625,7 @@ export class PluginContext {
         devMode: !this.emissionProd,
         warn: (m) => this.warn(m),
         strict: this.options.strict,
-        extraDiagnostics: this.externalKeyframesDiagnostics,
+        extraDiagnostics: this.systemVocabularyDiagnostics,
       });
     } catch (e) {
       if (this.options.strict) {

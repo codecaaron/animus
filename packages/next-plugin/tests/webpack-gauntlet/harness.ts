@@ -345,8 +345,7 @@ function parseCannedManifestComponents(serialized: string): ReplacementPlan[] {
 
 /**
  * Arm the canned NAPI engine: system config + canned analyze/transform.
- * `extra` runs after the standard arming for suite-specific mocks (e.g.
- * scanKeyframesExports).
+ * `extra` runs after the standard arming for suite-specific mocks.
  */
 export function armCannedEngine(
   mocks: CannedEngineMocks,
