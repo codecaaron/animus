@@ -173,7 +173,7 @@ async function main(): Promise<void> {
 
   const dependencies = parseManifestDependencies(manifest);
   expect(
-    dependencies.get('devDependencies')?.get('@types/react') === '18.3.28',
+    dependencies.get('devDependencies')?.get('@types/react') === '18.3.31',
     'Svelte canary must pin exact @types/react for the strict declaration closure (DEF-2)'
   );
   for (const field of DEPENDENCY_FIELDS) {

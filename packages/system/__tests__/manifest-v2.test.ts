@@ -206,8 +206,8 @@ describe('manifest v2 authored token definitions', () => {
 /**
  * Node ≥ 22.3's `process.getBuiltinModule` — the slot `sha256Hex` reads to
  * reach `node:crypto` without a static import edge, returning the builtin
- * module namespace or `undefined`. @types/node 18 predates the API, so the
- * runtime contract is named here rather than asserted away.
+ * module namespace or `undefined`. The local signature keeps the test's
+ * cross-runtime boundary explicit without coupling it to Node's overload set.
  */
 type BuiltinModuleLookup = (id: string) => object | undefined;
 
@@ -217,7 +217,9 @@ type BuiltinModuleLookup = (id: string) => object | undefined;
  * `globalThis` is the very object `sha256Hex` probes at call time.
  */
 interface HashingAmbients {
-  process?: NodeJS.Process & { getBuiltinModule?: BuiltinModuleLookup };
+  process?: Omit<NodeJS.Process, 'getBuiltinModule'> & {
+    getBuiltinModule?: BuiltinModuleLookup;
+  };
   TextEncoder?: typeof globalThis.TextEncoder;
 }
 

@@ -173,15 +173,14 @@ export const buildObligations = (
             };
 
     const scope: RenderSubject[] = [
-      ...rules.map(
-        (rule): RenderSubject => ({ kind: 'rule', rule: rule.record.id })
-      ),
-      ...declaring.map(
-        (component): RenderSubject => ({
-          kind: 'component',
-          component: component.id,
-        })
-      ),
+      ...rules.map((rule): RenderSubject => ({
+        kind: 'rule',
+        rule: rule.record.id,
+      })),
+      ...declaring.map((component): RenderSubject => ({
+        kind: 'component',
+        component: component.id,
+      })),
     ];
 
     const dependencies: DependencyId[] = [

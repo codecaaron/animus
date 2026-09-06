@@ -24,13 +24,11 @@ describe('parity corpus preconditions', () => {
       'duplicate-binding',
       'bare-create-element',
       'compose-reassignment',
-    ].map(
-      (family): FamilyDecl => ({
-        family,
-        units: ['known-unit'],
-        expectedVerdict: 'identical',
-      })
-    );
+    ].map((family): FamilyDecl => ({
+      family,
+      units: ['known-unit'],
+      expectedVerdict: 'identical',
+    }));
 
     expect(() =>
       validateFamilies(

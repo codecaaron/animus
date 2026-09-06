@@ -5,13 +5,12 @@ const Heading = ds.styles({ fontSize: 24, fontWeight: 700 }).asElement('h1');
 const Subheading = ds.styles({ color: 'text.muted' }).asElement('p');
 
 const INTENTS = ['primary', 'secondary', 'danger'] as const;
+const RUNTIME_ROTATION = Date.now() % INTENTS.length;
 
 export function App() {
   // Runtime-selected variant: the variant prop value is not statically
   // resolvable at the call site, so class resolution happens at runtime
   // against the extracted variant classes.
-  const rotation = Date.now() % INTENTS.length;
-
   return (
     <Stack p={32} gap={24}>
       <Stack gap={8}>
@@ -36,7 +35,7 @@ export function App() {
           <Button
             key={intent}
             size="medium"
-            intent={INTENTS[(rotation + index) % INTENTS.length]}
+            intent={INTENTS[(RUNTIME_ROTATION + index) % INTENTS.length]}
           >
             Dynamic {intent}
           </Button>

@@ -19,16 +19,16 @@
     "@animus-ui/system": "workspace:*",
     "@animus-ui/test-ds": "workspace:*",
     "@animus-ui/vite-plugin": "workspace:*",
-    "react": "19.2.7",
-    "react-dom": "19.2.7",
-    "react-router": "8.2.0"
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "react-router": "8.3.1"
   },
   "devDependencies": {
     "@animus-ui/assertions": "workspace:*",
-    "@cloudflare/vite-plugin": "1.44.0",
-    "@react-router/dev": "8.2.0",
-    "@types/react": "19.2.17",
-    "@types/react-dom": "19.2.3",
-    "vite": "8.1.4"
+    "@cloudflare/vite-plugin": "1.54.4",
+    "@react-router/dev": "8.3.1",
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.7",
+    "vite": "8.2.2"
   }
 }

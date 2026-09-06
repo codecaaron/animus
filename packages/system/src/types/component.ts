@@ -3,6 +3,7 @@ import type {
   ComponentPropsWithRef,
   ComponentType,
   ForwardRefExoticComponent,
+  JSX,
   ReactNode,
 } from 'react';
 
@@ -85,9 +86,9 @@ type GroupProps<
   GR extends Record<string, (keyof PR)[]>,
   AG,
 > = {
-  [K in ActiveGroupPropNames<PR, GR, AG> as K extends string
-    ? K
-    : never]?: ThemedScale<PR[K & keyof PR]>;
+  [
+    K in ActiveGroupPropNames<PR, GR, AG> as K extends string ? K : never
+  ]?: ThemedScale<PR[K & keyof PR]>;
 };
 
 /**
@@ -103,11 +104,9 @@ type CustomPropValues<CP extends Record<string, Prop>> = {
 
 /** Strip string/number index signatures, keeping only literal keys. */
 type StripIndex<T> = {
-  [K in keyof T as string extends K
-    ? never
-    : number extends K
-      ? never
-      : K]: T[K];
+  [
+    K in keyof T as string extends K ? never : number extends K ? never : K
+  ]: T[K];
 };
 
 /**

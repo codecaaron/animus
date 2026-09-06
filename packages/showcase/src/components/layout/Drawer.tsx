@@ -244,6 +244,7 @@ export function Drawer({
 
   if (!open) return null;
 
+  /* oxlint-disable react/refs -- createElement forwards the ref; render never reads it */
   return createPortal(
     createElement(
       DrawerContext.Provider,
@@ -283,4 +284,5 @@ export function Drawer({
     ),
     document.body
   );
+  /* oxlint-enable react/refs */
 }

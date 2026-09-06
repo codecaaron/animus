@@ -1,6 +1,7 @@
 {
   "name": "@animus-ui/next-app",
   "private": true,
+  "description": "Next 15, React 18, and TypeScript 5 compatibility consumer lane",
   "type": "module",
   "scripts": {
     "dev": "next dev",
@@ -15,12 +16,14 @@
     "@animus-ui/next-plugin": "workspace:*",
     "@animus-ui/system": "workspace:*",
     "@animus-ui/test-ds": "workspace:*",
-    "next": "^15.5.20",
+    "next": "^15.5.25",
     "react": "^18.2.0",
     "react-dom": "^18.2.0"
   },
   "devDependencies": {
     "@animus-ui/assertions": "workspace:*",
-    "typescript": "^5.9.2"
+    "@types/react": "18.3.31",
+    "@types/react-dom": "18.3.7",
+    "typescript": "5.9.3"
   }
 }

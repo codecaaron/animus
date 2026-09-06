@@ -95,17 +95,15 @@ describe('committed v2 baseline comparison', () => {
       { unit: surface() },
       { unit: surface('.a{color:blue}') }
     );
-    const exact = divs.map(
-      (d): RegisterEntry => ({
-        unit: d.unit,
-        artifact: d.artifact,
-        category: 'intentional-correctness',
-        note: 'intentional test drift',
-        status: 'active',
-        baselineSha256: d.baselineSha256,
-        candidateSha256: d.candidateSha256,
-      })
-    );
+    const exact = divs.map((d): RegisterEntry => ({
+      unit: d.unit,
+      artifact: d.artifact,
+      category: 'intentional-correctness',
+      note: 'intentional test drift',
+      status: 'active',
+      baselineSha256: d.baselineSha256,
+      candidateSha256: d.candidateSha256,
+    }));
 
     expect(() => assertRefreshEligible(divs, exact)).not.toThrow();
     expect(baselineGateFailed(divs, [])).toBe(true);
@@ -243,17 +241,15 @@ describe('baseline envelope and refresh protocol', () => {
       { unit: surface() },
       { unit: surface('.intentional{}') }
     );
-    const register = divs.map(
-      (d): RegisterEntry => ({
-        unit: d.unit,
-        artifact: d.artifact,
-        category: 'intentional-correctness',
-        note: 'exact but family still expects identity',
-        status: 'active',
-        baselineSha256: d.baselineSha256,
-        candidateSha256: d.candidateSha256,
-      })
-    );
+    const register = divs.map((d): RegisterEntry => ({
+      unit: d.unit,
+      artifact: d.artifact,
+      category: 'intentional-correctness',
+      note: 'exact but family still expects identity',
+      status: 'active',
+      baselineSha256: d.baselineSha256,
+      candidateSha256: d.candidateSha256,
+    }));
 
     expect(
       refreshFamilyErrors(
@@ -269,17 +265,15 @@ describe('baseline envelope and refresh protocol', () => {
       { unit: surface() },
       { unit: surface('.production-only{}') }
     );
-    const register = production.map(
-      (d): RegisterEntry => ({
-        unit: d.unit,
-        artifact: d.artifact,
-        category: 'intentional-correctness',
-        note: 'production-only family transition',
-        status: 'active',
-        baselineSha256: d.baselineSha256,
-        candidateSha256: d.candidateSha256,
-      })
-    );
+    const register = production.map((d): RegisterEntry => ({
+      unit: d.unit,
+      artifact: d.artifact,
+      category: 'intentional-correctness',
+      note: 'production-only family transition',
+      status: 'active',
+      baselineSha256: d.baselineSha256,
+      candidateSha256: d.candidateSha256,
+    }));
     const families = [
       {
         family: 'f',

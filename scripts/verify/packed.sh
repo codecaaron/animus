@@ -279,8 +279,8 @@ for (const field of [
     throw new Error(`packed Svelte authoring manifest declares React in ${field}`);
   }
 }
-if (manifest.devDependencies?.['@types/react'] !== '18.3.28') {
-  throw new Error('packed Svelte authoring graph must pin @types/react@18.3.28 in devDependencies');
+if (manifest.devDependencies?.['@types/react'] !== '18.3.31') {
+  throw new Error('packed Svelte authoring graph must pin @types/react@18.3.31 in devDependencies');
 }
 
 for (let ancestor = root; ; ancestor = dirname(ancestor)) {

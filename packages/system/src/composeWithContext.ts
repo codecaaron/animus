@@ -89,6 +89,7 @@ export function composeWithContext<
           if (props[key] == null && key in inherited)
             merged[key] = inherited[key];
         }
+        // oxlint-disable-next-line react/refs -- forwarding does not read the ref value
         return createElement(SourceComponent, { ...merged, ref });
       });
     }
@@ -158,6 +159,7 @@ export function createComposedFamilyWithContext(
           if (props[key] == null && key in inherited)
             merged[key] = inherited[key];
         }
+        // oxlint-disable-next-line react/refs -- forwarding does not read the ref value
         return createElement(SourceComponent, { ...merged, ref });
       });
     }

@@ -606,11 +606,13 @@ type ThemeBoundaryKey = '__emitted' | 'manifest' | 'serialize' | 'varRef';
 
 /** Runtime composition copies enumerable data and deliberately skips methods. */
 type ThemeDataOf<Source> = {
-  [Key in keyof Source as Key extends ThemeBoundaryKey
-    ? never
-    : Extract<Source[Key], (...args: never[]) => unknown> extends never
-      ? Key
-      : never]: Source[Key];
+  [
+    Key in keyof Source as Key extends ThemeBoundaryKey
+      ? never
+      : Extract<Source[Key], (...args: never[]) => unknown> extends never
+        ? Key
+        : never
+  ]: Source[Key];
 };
 
 type MergeThemeData<Base, Source> = Flatten<

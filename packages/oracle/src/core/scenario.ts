@@ -63,7 +63,9 @@ export const isStringDimensionValue = (
  * the normal form of every `in` predicate — and therefore every fact id that
  * quotes one.
  */
-export const dimensionValueKind = (value: DimensionValue): DimensionValueKind =>
+export const dimensionValueKind = (
+  value: DimensionValue
+): DimensionValueKind =>
   isNumberDimensionValue(value)
     ? 'number'
     : isStringDimensionValue(value)

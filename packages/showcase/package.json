@@ -20,19 +20,19 @@
     "@animus-ui/system": "workspace:*",
     "@animus-ui/test-ds": "workspace:*",
     "@animus-ui/vite-plugin": "workspace:*",
-    "@ark-ui/react": "^5.35.0",
+    "@ark-ui/react": "^5.39.1",
     "@mdx-js/react": "^3.1.1",
     "@mdx-js/rollup": "^3.1.1",
-    "lucide-react": "^1.7.0",
+    "lucide-react": "^1.40.0",
     "prism-react-renderer": "^2.4.1",
-    "react": "^18.2.0",
-    "react-dom": "^18.2.0",
-    "react-router-dom": "^7.18.1",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "react-router-dom": "^7.18.3",
     "remark-gfm": "^4.0.1"
   },
   "devDependencies": {
-    "@types/mdx": "^2.0.13",
-    "@vitejs/plugin-react": "^6.0.1",
-    "vite": "^8.1.4"
+    "@types/mdx": "^2.0.14",
+    "@vitejs/plugin-react": "^6.1.1",
+    "vite": "^8.2.2"
   }
 }

@@ -1,4 +1,4 @@
-import type { ComponentType } from 'react';
+import type { ComponentType, JSX } from 'react';
 
 import { AnimusExtended } from './AnimusExtended';
 import { createComponent } from './runtime';

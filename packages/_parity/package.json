@@ -12,7 +12,7 @@
   "devDependencies": {
     "@animus-ui/assertions": "workspace:*",
     "@animus-ui/extract": "workspace:*",
-    "lightningcss": "^1.30.2",
-    "oxc-parser": "^0.139.0"
+    "lightningcss": "^1.33.0",
+    "oxc-parser": "^0.148.0"
   }
 }

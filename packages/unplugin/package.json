@@ -58,7 +58,7 @@
   },
   "dependencies": {
     "@animus-ui/extract": "workspace:*",
-    "unplugin": "^2.3.10"
+    "unplugin": "^3.3.0"
   },
   "engines": {
     "node": ">=22.12.0"

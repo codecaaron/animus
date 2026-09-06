@@ -1,6 +1,7 @@
 {
   "name": "@animus-ui/next16-app",
   "private": true,
+  "description": "Next 16 and React 19 consumer lane with its TypeScript 5 config loader",
   "type": "module",
   "scripts": {
     "dev": "next dev",
@@ -14,12 +15,12 @@
     "@animus-ui/next-plugin": "workspace:*",
     "@animus-ui/system": "workspace:*",
     "@animus-ui/test-ds": "workspace:*",
-    "next": "^16.0.0",
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "next": "^16.3.4",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
   },
   "devDependencies": {
     "@animus-ui/assertions": "workspace:*",
-    "typescript": "^5.9.2"
+    "typescript": "5.9.3"
   }
 }

@@ -452,7 +452,7 @@ export type BuiltInConditionAlias =
  * are block-position only (media-condition-aliases spec), never callsite props.
  */
 export type SelectorAliasProps<GroupPropValues> = {
-  [K in
-    | BuiltInSelectorAlias
-    | Extract<keyof Selectors, `_${string}`>]?: Partial<GroupPropValues>;
+  [
+    K in BuiltInSelectorAlias | Extract<keyof Selectors, `_${string}`>
+  ]?: Partial<GroupPropValues>;
 };
