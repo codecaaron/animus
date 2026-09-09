@@ -5,7 +5,7 @@
  *
  * Every other consumer lane in this repo builds for production and asserts on
  * `dist/`. Nothing exercised the dev server, so the hot-update hook, the
- * geological reset and the transform-time new-file path had no regression
+ * system reload and the transform-time new-file path had no regression
  * coverage at all. This lane closes that gap: one real Vite dev server, one
  * real watcher, one real fixture app on disk, and assertions on the artifacts
  * the server hands a browser.
@@ -312,14 +312,14 @@ suite(
       );
     });
 
-    it('editing the theme file the system imports triggers the geological reset', async () => {
+    it('editing the theme file the system imports triggers the system reload', async () => {
       const before = await adapter.read();
 
       fixture.write('src/theme.ts', themeSource(EDITED_BRAND_HEX));
 
       // Contract (dependency-set membership): the theme file is in the
       // loader-reported system module graph, so a transitive token edit
-      // coalesces into a geological reset and lands in the variable CSS.
+      // coalesces into a system reload and lands in the variable CSS.
       const after = await until(
         async () => {
           const served = await adapter.read();
@@ -335,7 +335,7 @@ suite(
       expect(after.staticRevision).toBeGreaterThan(before.staticRevision);
     });
 
-    it('a system-entry edit still triggers the geological reset', async () => {
+    it('a system-entry edit still triggers the system reload', async () => {
       const before = await adapter.read();
 
       fixture.write('src/ds.ts', systemSource('reset-after-theme-edit'));

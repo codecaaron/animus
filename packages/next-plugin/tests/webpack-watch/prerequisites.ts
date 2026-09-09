@@ -9,10 +9,10 @@ import {
 import type { EnginePrerequisites } from '../../../extract/tests/engine-prerequisites';
 
 /**
- * Prerequisite probes for the webpack gauntlet (openspec:
+ * Prerequisite probes for the webpack-watch suites (openspec:
  * next-webpack-served-transform-coherence, increment 03).
  *
- * The gauntlet runs against the EXACT compiled webpack each Next e2e
+ * The harness runs against the EXACT compiled webpack each Next e2e
  * fixture ships — never a separately installed webpack — so the only
  * prerequisite this file owns is the fixture install. The real-engine lane
  * also needs the NAPI binary + package dists, which are `packages/extract`'s
@@ -44,7 +44,10 @@ export const WEBPACK_FIXTURES = [
 export function probeFixtureWebpack(fixtureId: string): EnginePrerequisites {
   const fixture = WEBPACK_FIXTURES.find((f) => f.id === fixtureId);
   if (!fixture) {
-    return { ok: false, reason: `unknown gauntlet fixture '${fixtureId}'` };
+    return {
+      ok: false,
+      reason: `unknown webpack-watch fixture '${fixtureId}'`,
+    };
   }
   if (!existsSync(fixture.webpackPath)) {
     return {

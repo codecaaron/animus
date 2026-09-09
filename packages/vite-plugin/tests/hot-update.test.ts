@@ -53,7 +53,7 @@ function makeContext(rootDir: string): HotUpdateProbe {
     isSystemDependency(absFile: string) {
       return absFile === systemDependency;
     },
-    requestGeologicalReset(trigger: string) {
+    requestSystemReload(trigger: string) {
       resets.push(trigger);
     },
   });
@@ -232,7 +232,7 @@ describe('hotUpdate across environment dispatches', () => {
     expect(ssrModules).toEqual([]);
   });
 
-  it('schedules one geological reset per system-dependency event', async () => {
+  it('schedules one system reload per system-dependency event', async () => {
     const probe = makeContext(root);
     probe.setSystemDependency(file);
     const client = makeEnvironment('client', VIRTUAL_IDS);
@@ -811,8 +811,8 @@ describe('hotUpdate gates system-props invalidation on a changed map', () => {
  * A file can be BOTH a system dependency and a discovered component source
  * (a theme module that also exports components). The dependency branch returns
  * before the cache write, so without an explicit refresh that file's pre-edit
- * text survives in `fileCache` for the life of the process — and the geological
- * reset rebuilds its full-source analysis from that same cache, so every reset
+ * text survives in `fileCache` for the life of the process — and the system
+ * reload rebuilds its full-source analysis from that same cache, so every reset
  * re-analyzes the stale text.
  */
 describe('hotUpdate refreshes a system dependency that is also a source', () => {

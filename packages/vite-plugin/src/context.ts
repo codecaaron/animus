@@ -95,7 +95,7 @@ const analysisChains = new WeakMap<PluginContext, Promise<void>>();
 
 /** Run `task` after every previously scheduled analysis transaction for
  *  this context. Entry points only (transform detection, hot update,
- *  geological reset); helpers they call internally must stay unlocked. */
+ *  system reload); helpers they call internally must stay unlocked. */
 export function runExclusiveAnalysis<T>(
   ctx: PluginContext,
   task: () => Promise<T>
@@ -432,11 +432,11 @@ export class PluginContext {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   devServer: any;
 
-  // Resolved system module path for geological reset detection
+  // Resolved system module path for system reload detection
   resolvedSystemPath: string | null = null;
 
   // Membership keys (lexical + canonical, via toWatchKeys) for every module
-  // the loader evaluated for the current system — the geological-reset set.
+  // the loader evaluated for the current system — the system-reload set.
   // A failed non-strict reload keeps the last successful set (plus the
   // entry), matching the stale config still being served.
   systemDependencyKeys: Set<string> = new Set();
@@ -740,7 +740,7 @@ export class PluginContext {
    * double reads as success), and the accepted corpus publishes only on
    * success. `beforeAnalysis` runs between quarantine and analysis for the
    * two sites with a documented ordering constraint: buildStart's dev-cache
-   * seed must survive a strict analysis throw, and the geological reset
+   * seed must survive a strict analysis throw, and the system reload
    * clears the engine cache only after strict ingestion diagnostics had
    * their chance to throw.
    */
@@ -787,7 +787,7 @@ export class PluginContext {
     );
 
     // Cross-source token contracts run on EVERY publication — buildStart,
-    // HMR re-analysis, new-file detection, and the geological reset alike.
+    // HMR re-analysis, new-file detection, and the system reload alike.
     // AFTER the ownership maps above, deliberately: the join correlates
     // diagnostics raised against generated MDX/Svelte children through
     // `externalFileOwners`, and those child keys enter the map in this very
@@ -819,8 +819,8 @@ export class PluginContext {
 
   /**
    * The one asset-substitution pass per analysis. In dev, a specifier not
-   * already mapped by buildStart's bundler-resolved pass (a geological
-   * reset regenerates globalCss from an edited system, which may reference
+   * already mapped by buildStart's bundler-resolved pass (a system
+   * reload regenerates globalCss from an edited system, which may reference
    * NEW assets) is resolved Node-side first — host aliases, then Node,
    * then package root; bundler-only resolutions can differ, since the
    * plugin hook context is unavailable on this path. Strict semantics
@@ -854,18 +854,18 @@ export class PluginContext {
     );
   }
 
-  // Burst-coalescing scheduler for geological resets (lazy; per instance).
+  // Burst-coalescing scheduler for system reloads (lazy; per instance).
   private resetCoalescer: ResetCoalescer | null = null;
 
   /**
-   * Schedule a geological reset through the burst coalescer. N dependency
+   * Schedule a system reload through the burst coalescer. N dependency
    * events within the quiescence window produce one reset; events during a
    * running reset produce exactly one follow-up.
    */
-  requestGeologicalReset(trigger: string): void {
-    this.log(`HMR geological reset scheduled: ${trigger}`);
+  requestSystemReload(trigger: string): void {
+    this.log(`HMR system reload scheduled: ${trigger}`);
     this.resetCoalescer ??= new ResetCoalescer(
-      async () => this.performGeologicalReset(),
+      async () => this.performSystemReload(),
       /**
        * A failed reset must surface without killing the server: the coalescer
        * fires from a bare timer, OUTSIDE Vite's handleHMRUpdate catch, so a
@@ -876,7 +876,7 @@ export class PluginContext {
        */
       (err) => {
         const display = String(err);
-        this.warn(`[animus-extract] geological reset failed: ${display}`);
+        this.warn(`[animus-extract] system reload failed: ${display}`);
         const message = err instanceof Error ? err.message : String(err);
         const stack = err instanceof Error ? (err.stack ?? '') : '';
         this.devServer?.hot?.send({
@@ -889,21 +889,21 @@ export class PluginContext {
   }
 
   /**
-   * The geological reset: reload the system (refreshing the dependency
+   * The system reload: reload the system (refreshing the dependency
    * set), clear the Rust per-file cache, re-analyze everything with full
    * sources, then invalidate the static/component/system-prop virtual
    * modules and reload the client.
    */
-  async performGeologicalReset(): Promise<void> {
+  async performSystemReload(): Promise<void> {
     // Exclusive: the coalescer fires from a bare timer, so a reset can
     // otherwise interleave with an in-flight transform detection or hot
     // update transaction over the same fileCache.
     return runExclusiveAnalysis(this, () =>
-      this.performGeologicalResetExclusive()
+      this.performSystemReloadExclusive()
     );
   }
 
-  private async performGeologicalResetExclusive(): Promise<void> {
+  private async performSystemReloadExclusive(): Promise<void> {
     const resetStart = performance.now();
     // Snapshot BEFORE the reload: replacement-plan content is the shared
     // transform-byte authority, so the pre/post diff below is exactly the
@@ -924,25 +924,26 @@ export class PluginContext {
       // replacement bytes — evict every module node whose plan changed, in
       // every environment graph, before the finally-block full reload
       // re-fetches. Equal-plan files stay cached; failed resets return
-      // above and evict nothing (openspec: vite-extraction-plugin,
-      // "Geological reset invalidates changed source replacement plans").
+      // above and evict nothing (openspec: vite-extraction-plugin, the
+      // scenario where a system reload invalidates changed source
+      // replacement plans).
       invalidateFileModules(
         this,
         diffFilePlans(prevPlans, snapshotFilePlans(this.storedManifest))
       );
       this.log(
-        `HMR geological reset complete: ${Math.round(performance.now() - resetStart)}ms`
+        `HMR system reload complete: ${Math.round(performance.now() - resetStart)}ms`
       );
     } finally {
       // A failed reset still re-delivers the last good publication. Besides
       // preserving the historical dev-server recovery contract, this makes
       // the attempted reset observable without publishing a partial source
       // generation.
-      this.invalidateGeologicalResetModules();
+      this.invalidateSystemReloadModules();
     }
   }
 
-  private invalidateGeologicalResetModules(): void {
+  private invalidateSystemReloadModules(): void {
     const server = this.devServer;
     if (!server) return;
     for (const moduleId of [

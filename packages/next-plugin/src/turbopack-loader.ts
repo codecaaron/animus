@@ -133,9 +133,10 @@ export function __setTurbopackLoaderEngineApiForTests(
 }
 
 // ── Injected filesystem seam ───────────────────────────────────────────────
-// The protocol gauntlet must stage torn-read windows between this loader's
-// artifact reads; fs builtins are not interceptable by the runner's module
-// mocker, so the reads go through this swappable, worker-local seam.
+// The loader catch-up tests (tests/turbopack-loader-catch-up.test.ts) stage
+// torn-read windows between this loader's artifact reads; fs builtins are not
+// interceptable by the runner's module mocker, so the reads go through this
+// swappable, worker-local seam.
 
 type LoaderFs = Pick<typeof nodeFs, 'readFileSync' | 'existsSync'>;
 let fsImpl: LoaderFs = nodeFs;
@@ -165,7 +166,7 @@ function readFileOrNull(path: string): string | null {
   }
 }
 
-// ── Seqlock hydration (design D1 read half) ────────────────────────────────
+// ── Retried artifact reads (design D1 read half) ───────────────────────────
 
 interface Hydration {
   manifestJson: string;
@@ -179,17 +180,17 @@ type HydrateOutcome =
   | { kind: 'foreign'; artifactSessionId: string }
   | { kind: 'torn' };
 
-const SEQLOCK_RETRIES = 5;
+const ARTIFACT_READ_RETRIES = 5;
 
 /**
- * Seqlock-style artifact read: commit C0 → payloads → hash verification
+ * Retried artifact read: commit C0 → payloads → hash verification
  * against C0 → commit re-read; accept only if unchanged, else retry
  * (bounded) — a torn or mismatched set is never consumed (design D1).
  * Hydration replays the committed analysis inputs once per commit content.
  */
 function hydrateSession(sessionDir: string, sessionId: string): HydrateOutcome {
   const commitPath = analysisCommitPath(sessionDir);
-  for (let attempt = 0; attempt < SEQLOCK_RETRIES; attempt++) {
+  for (let attempt = 0; attempt < ARTIFACT_READ_RETRIES; attempt++) {
     const c0raw = readFileOrNull(commitPath);
     if (c0raw === null) return { kind: 'absent' };
     let c0: AnalysisCommit;
@@ -200,7 +201,7 @@ function hydrateSession(sessionDir: string, sessionId: string): HydrateOutcome {
       // rather than an input this loader can recover from. Every field read
       // below is then re-decided against the payload bytes (session identity,
       // then both content hashes), so a shape that disagrees fails the
-      // seqlock instead of propagating. A payload that does not parse is the
+      // read attempt instead of propagating. A payload that does not parse is the
       // torn write this loop exists for, and is retried.
       c0 = JSON.parse(c0raw) as AnalysisCommit;
     } catch {
@@ -439,7 +440,7 @@ async function runLoader(ctx: LoaderContext, source: string): Promise<string> {
   }
   if (outcome.kind === 'torn') {
     throw coverageFailure(
-      `ANIMUS_ARTIFACT_READ_TORN: could not obtain a consistent committed artifact set for ${filename} after ${SEQLOCK_RETRIES} attempts`
+      `ANIMUS_ARTIFACT_READ_TORN: could not obtain a consistent committed artifact set for ${filename} after ${ARTIFACT_READ_RETRIES} attempts`
     );
   }
   let sourceHash: string | null = null;
@@ -476,8 +477,8 @@ async function runLoader(ctx: LoaderContext, source: string): Promise<string> {
  * polled, bounded — ONLY in the two evidence states: commit absent while an
  * attempt is active, or the active attempt's pending set contains this file
  * at its current hash. Everything else fails immediately with its stable
- * diagnostic. The moment a commit lands that covers the input, the seqlock
- * hydration consumes it and the transform proceeds with no diagnostic.
+ * diagnostic. The moment a commit lands that covers the input, the next
+ * hydration read consumes it and the transform proceeds with no diagnostic.
  */
 async function awaitCoverage(args: {
   source: string;
@@ -506,7 +507,8 @@ async function awaitCoverage(args: {
 
   for (;;) {
     // Commit advancement first: a commit covering this input is the success
-    // path — seqlock hydrate + transform, no dependencies registered.
+    // path — hydrate from the committed set + transform, no dependencies
+    // registered.
     const outcome = hydrateSession(sessionDir, sessionId);
     if (outcome.kind === 'foreign') {
       throw coverageFailure(

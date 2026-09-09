@@ -17,7 +17,7 @@
  * snapshots referencing it invalidate; an agreeing sibling stays
  * byte-untouched so warm restores survive).
  *
- * Same harness as replacement-epoch.test.ts: NAPI boundary mocked, session
+ * Same setup as replacements-epoch.test.ts: NAPI boundary mocked, session
  * and pure pipeline helpers real, temp project on disk.
  */
 import {
@@ -27,7 +27,6 @@ import {
   isJsonString,
   parseJsonObject,
 } from '@animus-ui/assertions';
-import { contentHash } from '@animus-ui/extract/pipeline';
 import {
   existsSync,
   mkdirSync,
@@ -39,13 +38,15 @@ import {
 import { join } from 'path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
+import { contentHash } from '../../pipeline';
+
 const mocks = vi.hoisted(() => ({
   loadSystemModule: vi.fn(),
   analyzeProject: vi.fn(),
   clearAnalysisCache: vi.fn(),
 }));
 
-import { setEngineApiOverride } from '../../extract/session/singleton';
+import { setEngineApiOverride } from '../../session/singleton';
 
 // Engine API injection through the singleton's globalThis-keyed test
 // seam — reaches every copy of the module (source or dist), which a
@@ -57,8 +58,8 @@ setEngineApiOverride(() => ({
   clearAnalysisCache: mocks.clearAnalysisCache,
 }));
 
-import { ExtractionSession } from '../../extract/session/extraction-session';
-import { readCliLockRecord } from '../../extract/session/published-set';
+import { ExtractionSession } from '../../session/extraction-session';
+import { readCliLockRecord } from '../../session/published-set';
 import {
   ANALYSIS_COMMIT_ARTIFACT,
   ANALYSIS_STATUS_ARTIFACT,
@@ -67,8 +68,8 @@ import {
   type AnalysisCommit,
   type AnalysisStatus,
   type SessionEnvelope,
-} from '../../extract/session/session-paths';
-import { getManifestJson } from '../../extract/session/singleton';
+} from '../../session/session-paths';
+import { getManifestJson } from '../../session/singleton';
 import {
   buildManifest,
   BUTTON_STYLE_EDIT,
@@ -79,11 +80,11 @@ import {
   PLAN_B,
   resetAnimusGlobals,
   SYSTEM_CONFIG,
-} from './singleton-fixtures';
+} from './session-fixtures';
 
-import type { ReplacementPlan, ReplacementPlans } from './singleton-fixtures';
+import type { ManifestComponentDescriptor } from '../../pipeline';
+import type { ReplacementPlan, ReplacementPlans } from './session-fixtures';
 import type { JsonObject, JsonValue } from '@animus-ui/assertions';
-import type { ManifestComponentDescriptor } from '@animus-ui/extract/pipeline';
 
 let restoreGlobals: () => void;
 

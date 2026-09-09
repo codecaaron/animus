@@ -29,7 +29,7 @@ Vite plugin that bridges the Rust extraction crate with the build pipeline. Runs
 
 - Handles every dev file event: `update`, `create` and `delete`
 - Content-hash check skips unchanged files
-- **Geological reset:** system dependency event → reload (coalesced)
+- **System reload:** system dependency event → reload (coalesced)
 - **Delete:** the file's cache entry is pruned so its CSS stops being re-emitted
 - **Create:** ingested through the same analysis path as an edit (watcher creation ingestion); transform-time new-file detection stays the backstop for creations the watcher never reports
 - CSS module invalidated alongside changed JS modules
@@ -40,12 +40,12 @@ Vite plugin that bridges the Rust extraction crate with the build pipeline. Runs
 
 All heavy lifting is done in the Rust NAPI crate — no subprocesses needed.
 
-| NAPI Function          | Purpose                                                     | When                             |
-| ---------------------- | ----------------------------------------------------------- | -------------------------------- |
-| `loadSystemModule()`   | Read system file, OXC strip, rquickjs eval, return config   | buildStart, HMR geological reset |
-| `analyzeProject()`     | Multi-file extraction, CSS generation, transform eval (boa) | buildStart, HMR re-analysis      |
-| `transformFile()`      | Per-file builder chain → createComponent() replacement      | transform hook                   |
-| `clearAnalysisCache()` | Reset per-file content-hash cache                           | buildStart, geological reset     |
+| NAPI Function          | Purpose                                                     | When                          |
+| ---------------------- | ----------------------------------------------------------- | ----------------------------- |
+| `loadSystemModule()`   | Read system file, OXC strip, rquickjs eval, return config   | buildStart, HMR system reload |
+| `analyzeProject()`     | Multi-file extraction, CSS generation, transform eval (boa) | buildStart, HMR re-analysis   |
+| `transformFile()`      | Per-file builder chain → createComponent() replacement      | transform hook                |
+| `clearAnalysisCache()` | Reset per-file content-hash cache                           | buildStart, system reload     |
 
 ## Vite Cache
 
@@ -57,7 +57,7 @@ This cache stores pre-transformed module results. It persists across Vite dev se
 
 ## Known Failure Modes
 
-- **Dev server not reflecting changes:** The dev server holds `buildStart` results in memory. If you change the plugin source, restart the dev server. System file (ds.ts) changes trigger automatic geological reset via HMR.
+- **Dev server not reflecting changes:** The dev server holds `buildStart` results in memory. If you change the plugin source, restart the dev server. System file (ds.ts) changes trigger automatic system reload via HMR.
 - **Vite resolve aliases break transforms:** Adding resolve aliases (e.g., for React) can cause Vite to discard transform hook results. The bundler treats aliased modules differently. Never add resolve aliases for packages used by extracted components.
 - **Stale `.vite` cache:** After changing NAPI function signatures or plugin behavior, delete `node_modules/.vite/`. Symptoms: transforms appear correct in plugin logs but bundled output uses old code.
 - **NAPI errors:** If `loadSystemModule()` or `analyzeProject()` fails, the plugin catches and warns (or throws in strict mode). Check terminal output for `[animus-extract]` warnings.

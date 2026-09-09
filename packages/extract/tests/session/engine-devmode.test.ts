@@ -9,7 +9,7 @@
  * retain all components. Without an explicit mode the historical
  * per-pipeline default applies (full = false, incremental = true).
  *
- * Same harness as session-artifacts.test.ts: NAPI boundary mocked, session
+ * Same setup as session-artifacts.test.ts: NAPI boundary mocked, session
  * real, temp project on disk. `devMode` is slot 7 of the positional
  * `analyzeProject` tuple (analyze-project-args.ts).
  */
@@ -23,7 +23,7 @@ const mocks = vi.hoisted(() => ({
   clearAnalysisCache: vi.fn(),
 }));
 
-import { setEngineApiOverride } from '../../extract/session/singleton';
+import { setEngineApiOverride } from '../../session/singleton';
 
 // Engine API injection through the singleton's globalThis-keyed test
 // seam — reaches every copy of the module (source or dist), which a
@@ -35,7 +35,7 @@ setEngineApiOverride(() => ({
   clearAnalysisCache: mocks.clearAnalysisCache,
 }));
 
-import { ExtractionSession } from '../../extract/session/extraction-session';
+import { ExtractionSession } from '../../session/extraction-session';
 import {
   buildManifest,
   BUTTON_STYLE_EDIT,
@@ -43,11 +43,11 @@ import {
   disposeTempRoots,
   resetAnimusGlobals,
   SYSTEM_CONFIG,
-} from './singleton-fixtures';
+} from './session-fixtures';
 
-import type { AnimusMode } from '../../extract/pipeline/core-options';
-import type { SessionOptions } from '../../extract/session/extraction-session';
-import type { AnalyzeProjectArgs } from '@animus-ui/extract/pipeline';
+import type { AnalyzeProjectArgs } from '../../pipeline';
+import type { AnimusMode } from '../../pipeline/core-options';
+import type { SessionOptions } from '../../session/extraction-session';
 
 let restoreGlobals: () => void;
 

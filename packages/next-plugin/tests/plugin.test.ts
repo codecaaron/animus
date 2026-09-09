@@ -18,7 +18,6 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { ExtractionSession } from '../../extract/session/extraction-session';
 import { sessionArtifactDir } from '../../extract/session/session-paths';
 import { getManifestJson, getSharedCss } from '../../extract/session/singleton';
-import { AnimusWebpackPlugin } from '../src/plugin';
 import {
   BUTTON_SOURCE,
   BUTTON_STYLE_EDIT as BUTTON_SOURCE_CHANGED,
@@ -27,7 +26,8 @@ import {
   makeManifest,
   resetAnimusGlobals,
   SYSTEM_CONFIG,
-} from './singleton-fixtures';
+} from '../../extract/tests/session/session-fixtures';
+import { AnimusWebpackPlugin } from '../src/plugin';
 
 import type { AnimusNextOptions } from '../src/types';
 import type { JsonObject, JsonValue } from '@animus-ui/assertions';
@@ -69,7 +69,7 @@ interface ManifestOverrides {
 
 /**
  * The engine manifest the `analyzeProject` mock returns — a COMPLETE
- * `ProjectManifest` (`makeManifest`, singleton-fixtures) carrying this
+ * `ProjectManifest` (`makeManifest`, session-fixtures) carrying this
  * suite's meaningful values. The shared pipeline reads `manifest.sheets
  * .global` and `manifest.css` as typed fields, so a partial literal is not
  * a manifest.
@@ -767,7 +767,7 @@ describe('watch mode (dev/HMR)', () => {
     ).toBe(cssAfterFull);
   });
 
-  test('a system file change triggers a geological reset: cache cleared, system reloaded, full pipeline re-run', async () => {
+  test('a system file change reloads the system: cache cleared, system reloaded, full pipeline re-run', async () => {
     const root = createProject();
     const { compiler, watchRunHandlers } = createCompiler(root);
     applyPlugin(new AnimusWebpackPlugin(OPTIONS), compiler);

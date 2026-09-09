@@ -49,7 +49,7 @@ export type HotUpdateResult =
  * Vite 8 calls `hotUpdate` once per environment for a single file event — the
  * client environment first, then every non-client environment (see
  * `handleHMRUpdate` in vite/dist/node/chunks/node.js). Analysis work (cache
- * mutation, engine re-analysis, geological reset scheduling) must happen
+ * mutation, engine re-analysis, system reload scheduling) must happen
  * exactly once per event; module invalidation must happen per environment
  * against that environment's own graph.
  *

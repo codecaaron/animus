@@ -5,9 +5,9 @@ import { join } from 'path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 import { sessionArtifactDir } from '../../extract/session/session-paths';
+import { resetAnimusGlobals } from '../../extract/tests/session/session-fixtures';
 import { AnimusWebpackPlugin } from '../src/plugin';
 import { withAnimus } from '../src/with-animus';
-import { resetAnimusGlobals } from './singleton-fixtures';
 
 import type { AnimusNextOptions } from '../src/types';
 

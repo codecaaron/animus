@@ -27,7 +27,7 @@ import type {
 
 /**
  * hotUpdate: the single dev file-event hook. Handles system-dependency
- * membership (geological reset), content-hash diffing with incremental
+ * membership (system reload), content-hash diffing with incremental
  * re-analysis, deleted-file cache pruning, and targeted module invalidation
  * (component CSS, system props, and definition files whose replacement
  * changed).
@@ -51,8 +51,8 @@ export async function handleHotUpdate(
 ): Promise<EnvironmentModuleNode[] | void> {
   // Only active in dev mode
   if (ctx.isProd) return;
-  // Exclusive: hot updates, transform new-file detections, and geological
-  // resets all run ingest→analyze→publish transactions over the shared
+  // Exclusive: hot updates, transform new-file detections, and system
+  // reloads all run ingest→analyze→publish transactions over the shared
   // fileCache across await points — serialize at the entry point (internal
   // helpers like stabilize/prune stay unlocked).
   return runExclusiveAnalysis(ctx, () =>
@@ -93,7 +93,7 @@ async function handleHotUpdateExclusive(
       // first — otherwise it keeps pre-edit text, or survives deletion, for the
       // life of the process.
       await reconcileSourceEntry(ctx, absFile, type, read);
-      ctx.requestGeologicalReset(relative(ctx.rootDir, absFile));
+      ctx.requestSystemReload(relative(ctx.rootDir, absFile));
     }
     // The reset ends in its own invalidation plus a full reload; suppress the
     // per-environment update that would otherwise race it.
@@ -184,7 +184,7 @@ async function readChangedSource(
  * and a discovered component source, since the dependency branch is terminal —
  * neither the edit path's cache write nor `pruneDeletedFile` runs for it.
  *
- * An edit refreshes the entry: `performGeologicalReset` rebuilds its
+ * An edit refreshes the entry: `performSystemReload` rebuilds its
  * full-source analysis from this cache, so a stale entry would be re-analyzed
  * on every later reset. A delete prunes it, exactly as the ordinary delete path
  * would (openspec: hmr-new-file-detection, "Watcher deletion pruning") — a
@@ -213,10 +213,10 @@ async function reconcileSourceEntry(
     source = await readChangedSource(absFile, read);
   } catch {
     // No corrective event follows a failed read, so the stale entry survives
-    // every later geological reset — say so instead of failing silently.
+    // every later system reload — say so instead of failing silently.
     ctx.warn(
       `could not re-read ${relPath} after a system-dependency edit — ` +
-        `geological resets will analyze its pre-edit text until a later ` +
+        `system reloads will analyze its pre-edit text until a later ` +
         `edit is read successfully`
     );
     return;
@@ -501,7 +501,7 @@ type InvalidationPlan = Omit<
  * The per-environment invalidation half: invalidate the modules this
  * environment serves and widen its update set with them. Static CSS
  * (virtual:animus/styles.css) is NOT invalidated here — it only changes on a
- * geological reset (vars/globals are stable during dev).
+ * system reload (vars/globals are stable during dev).
  */
 function invalidateStaleModules(
   ctx: PluginContext,

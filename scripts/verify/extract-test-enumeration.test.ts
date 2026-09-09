@@ -1,4 +1,4 @@
-import { readdirSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
@@ -20,6 +20,10 @@ import { type TaskGraphConfig } from './manifest-model';
 const ROOT = resolve(import.meta.dirname, '../..');
 const EXTRACT_TESTS_DIR = join(ROOT, 'packages/extract/tests');
 const EXTRACT_TESTS_PREFIX = 'packages/extract/tests';
+/** The driver-shared session-engine suites: targeted as one directory, so
+ *  the flat enumeration above never has to grow for them. */
+const SESSION_TESTS_DIR = join(EXTRACT_TESTS_DIR, 'session');
+const SESSION_TESTS_TARGET = 'packages/extract/tests/session';
 
 /**
  * The only two files allowed to be absent from `verify:unit:ts`: both load the
@@ -40,10 +44,35 @@ function taskCommand(name: string): string {
   return command;
 }
 
-function extractTestFiles(): string[] {
-  return readdirSync(EXTRACT_TESTS_DIR)
+/** The test files directly inside one directory. Non-recursive on purpose:
+ *  the flat files are the enumerated ones, and the session subdirectory is
+ *  covered by its own directory-target assertions below. */
+function testFilesIn(directory: string): string[] {
+  return readdirSync(directory)
     .filter((entry) => entry.endsWith('.test.ts'))
     .sort();
+}
+
+function extractTestFiles(): string[] {
+  return testFilesIn(EXTRACT_TESTS_DIR);
+}
+
+function sessionTestFiles(): string[] {
+  return testFilesIn(SESSION_TESTS_DIR);
+}
+
+/** Whether a file or directory target is one whole argument of the command,
+ *  never a substring of a longer path (the directory target must not be
+ *  satisfied by an enumerated file inside it, nor a file by a look-alike). */
+function hasTarget(command: string, target: string): boolean {
+  return command.split(/\s+/).includes(target);
+}
+
+/** The two ways an extract test reaches the native engine: the package's own
+ *  loader module, or the package root export that re-exports it. A session
+ *  test that mentions either belongs flat in tests/ and in ENGINE_BOUND. */
+function loadsNativeEngine(source: string): boolean {
+  return source.includes('index-v2') || source.includes("'@animus-ui/extract'");
 }
 
 describe('extract test enumeration', () => {
@@ -57,7 +86,7 @@ describe('extract test enumeration', () => {
     const command = taskCommand('verify:unit:ts');
     const missing = extractTestFiles()
       .filter((file) => !ENGINE_BOUND.has(file))
-      .filter((file) => !command.includes(`${EXTRACT_TESTS_PREFIX}/${file}`));
+      .filter((file) => !hasTarget(command, `${EXTRACT_TESTS_PREFIX}/${file}`));
 
     expect(
       missing,
@@ -73,8 +102,10 @@ describe('extract test enumeration', () => {
     const unit = taskCommand('verify:unit:ts');
     const coverage = taskCommand('verify:coverage:ts');
     const drift = extractTestFiles()
-      .filter((file) => unit.includes(`${EXTRACT_TESTS_PREFIX}/${file}`))
-      .filter((file) => !coverage.includes(`${EXTRACT_TESTS_PREFIX}/${file}`));
+      .filter((file) => hasTarget(unit, `${EXTRACT_TESTS_PREFIX}/${file}`))
+      .filter(
+        (file) => !hasTarget(coverage, `${EXTRACT_TESTS_PREFIX}/${file}`)
+      );
 
     expect(drift).toEqual([]);
   });
@@ -85,10 +116,21 @@ describe('extract test enumeration', () => {
     // PREPARE: line from verify:canary.
     const command = taskCommand('verify:unit:ts');
     const smuggled = [...ENGINE_BOUND].filter((file) =>
-      command.includes(`${EXTRACT_TESTS_PREFIX}/${file}`)
+      hasTarget(command, `${EXTRACT_TESTS_PREFIX}/${file}`)
     );
 
     expect(smuggled).toEqual([]);
+  });
+
+  it('declares as ENGINE_BOUND exactly the flat tests that load the native engine', () => {
+    // ENGINE_BOUND is a hand-written list; the detector below is what decides
+    // engine-boundness for the session directory. Holding the two equal keeps
+    // one authority: a flat test that starts loading the engine must be
+    // declared, and a declared name must still load it.
+    const detected = extractTestFiles().filter((file) =>
+      loadsNativeEngine(readFileSync(join(EXTRACT_TESTS_DIR, file), 'utf8'))
+    );
+    expect(detected).toEqual([...ENGINE_BOUND].sort());
   });
 
   it('keeps ENGINE_BOUND free of names that no longer exist', () => {
@@ -96,5 +138,35 @@ describe('extract test enumeration', () => {
     const stale = [...ENGINE_BOUND].filter((file) => !present.has(file));
 
     expect(stale).toEqual([]);
+  });
+});
+
+describe('extract session test directory', () => {
+  it('discovers session test files (non-vacuity)', () => {
+    expect(sessionTestFiles().length).toBeGreaterThan(5);
+  });
+
+  it('runs the session directory as one target in verify:unit:ts', () => {
+    // `extractTestFiles()` is a non-recursive read, so a session test dropped
+    // into the subdirectory is invisible to the flat guard; the directory
+    // target is what puts every file there in a tier.
+    expect(hasTarget(taskCommand('verify:unit:ts'), SESSION_TESTS_TARGET)).toBe(
+      true
+    );
+  });
+
+  it('covers the session directory in verify:coverage:ts', () => {
+    expect(
+      hasTarget(taskCommand('verify:coverage:ts'), SESSION_TESTS_TARGET)
+    ).toBe(true);
+  });
+
+  it('keeps every session test engine-free', () => {
+    // The directory runs under the bun-install-only tier. A test that loads
+    // the native module belongs flat in tests/ and in ENGINE_BOUND instead.
+    const loadsNative = sessionTestFiles().filter((file) =>
+      loadsNativeEngine(readFileSync(join(SESSION_TESTS_DIR, file), 'utf8'))
+    );
+    expect(loadsNative).toEqual([]);
   });
 });

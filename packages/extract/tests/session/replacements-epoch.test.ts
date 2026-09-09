@@ -1,3 +1,7 @@
+import { readFileSync, rmSync, statSync, writeFileSync } from 'fs';
+import { join } from 'path';
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
+
 /**
  * Replacement-epoch publication (openspec:
  * next-webpack-served-transform-coherence, design D3/D5 — increment 01):
@@ -11,13 +15,10 @@
  * same-session restarts leave bytes AND mtime untouched). A failed analysis
  * advances nothing and never suppresses an equal-content retry.
  *
- * Same harness as watch-asset-batch.test.ts: the NAPI boundary is mocked,
+ * Same setup as watch-asset-batch.test.ts: the NAPI boundary is mocked,
  * the session and pure pipeline helpers run for real over a temp project.
  */
-import { contentHash } from '@animus-ui/extract/pipeline';
-import { readFileSync, rmSync, statSync, writeFileSync } from 'fs';
-import { join } from 'path';
-import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
+import { contentHash } from '../../pipeline';
 
 const mocks = vi.hoisted(() => ({
   loadSystemModule: vi.fn(),
@@ -25,7 +26,7 @@ const mocks = vi.hoisted(() => ({
   clearAnalysisCache: vi.fn(),
 }));
 
-import { setEngineApiOverride } from '../../extract/session/singleton';
+import { setEngineApiOverride } from '../../session/singleton';
 
 // Engine API injection through the singleton's globalThis-keyed test
 // seam — reaches every copy of the module (source or dist), which a
@@ -37,13 +38,13 @@ setEngineApiOverride(() => ({
   clearAnalysisCache: mocks.clearAnalysisCache,
 }));
 
-import { ExtractionSession } from '../../extract/session/extraction-session';
-import { replacementEpochPath } from '../../extract/session/session-paths';
+import { ExtractionSession } from '../../session/extraction-session';
+import { replacementEpochPath } from '../../session/session-paths';
 import {
   getAnalyzedHashes,
   getManifestJson,
   getReplacementEpoch,
-} from '../../extract/session/singleton';
+} from '../../session/singleton';
 import {
   buildManifest,
   // The fixture's edit corpus: this source MOVES the replacement plans,
@@ -58,9 +59,9 @@ import {
   PLAN_B,
   resetAnimusGlobals,
   SYSTEM_CONFIG,
-} from './singleton-fixtures';
+} from './session-fixtures';
 
-import type { ManifestComponentDescriptor } from '@animus-ui/extract/pipeline';
+import type { ManifestComponentDescriptor } from '../../pipeline';
 
 let restoreGlobals: () => void;
 

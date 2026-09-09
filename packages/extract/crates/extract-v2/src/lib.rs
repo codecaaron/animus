@@ -86,7 +86,7 @@ pub struct NapiSystemConfig {
     pub vocabulary_witnesses: Option<String>,
     /// Canonical absolute paths of every module evaluated for the system
     /// (sorted; entry included, runtime stubs excluded). The plugins use this
-    /// as the geological-reset membership set.
+    /// as the system-reload membership set.
     pub dependencies: Vec<String>,
     /// Per-module built-theme token manifests captured during evaluation
     /// (`{ modulePath: { exportName: [token paths] } }`) — the source-token

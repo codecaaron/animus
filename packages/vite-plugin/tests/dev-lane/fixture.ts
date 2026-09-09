@@ -58,7 +58,7 @@ export function paletteSource(brandHex: string): string {
 /**
  * A theme that imports its brand hex from `./palette` — two hops from the
  * system entry (`ds.ts → theme.ts → palette.ts`). The loader reports every
- * evaluated module, so palette.ts must join the geological-reset set.
+ * evaluated module, so palette.ts must join the system-reload set.
  */
 export function themeViaPaletteSource(): string {
   return `import { createTheme } from '@animus-ui/system';
@@ -87,7 +87,7 @@ export const tokens = createTheme(
 }
 
 /**
- * The system module. `marker` only changes a comment: the geological reset
+ * The system module. `marker` only changes a comment: the system reload
  * fires on the system file changing at all, so the marker makes each touch a
  * distinct on-disk revision without altering the system's meaning.
  */

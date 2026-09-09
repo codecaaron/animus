@@ -338,7 +338,7 @@ export class ExtractionSession {
   sourceOwnership: Record<string, SourceEntryOwnership> = {};
 
   // Membership keys (lexical + canonical) for the system's evaluated
-  // module-file set — the geological-reset classification set. Refreshed on
+  // module-file set — the system-reload classification set. Refreshed on
   // every successful system load; a failed reload keeps the last
   // successful set, matching the stale config still being served.
   private systemDependencyKeys: Set<string> = new Set();
@@ -585,7 +585,7 @@ export class ExtractionSession {
   }
 
   /**
-   * Incremental watch pass: geological reset when the system file changed,
+   * Incremental watch pass: system reload when the system file changed,
    * otherwise content-hash diffing restricted to the watcher's change sets
    * (falling back to a full discovery walk when no sets are provided).
    */
@@ -611,7 +611,7 @@ export class ExtractionSession {
       ...(changes.removedFiles ?? []),
     ];
 
-    // Geological reset: any changed or removed file in the system's
+    // System reload: any changed or removed file in the system's
     // evaluated module-file set (loader-reported dependencies plus the
     // entry). Membership is keyed lexically and canonically, so events via
     // symlinked or already-deleted paths still classify. One reset per
@@ -642,12 +642,12 @@ export class ExtractionSession {
     } catch (err) {
       // Detection-only failure: with no way to know whether a reset is due,
       // degrade to the ordinary incremental diff — diagnosable via the warn.
-      this.warn(`HMR geological-reset check failed: ${String(err)}`);
+      this.warn(`HMR system-reload check failed: ${String(err)}`);
     }
 
     if (systemHit) {
       this.log(
-        `geological reset: system dependency changed (${relative(rootDir, systemHit)})`
+        `system reload: system dependency changed (${relative(rootDir, systemHit)})`
       );
       this.resetForHmr();
       try {
@@ -966,7 +966,7 @@ export class ExtractionSession {
    * transaction slot `handleWatchUpdate` joins (design D3): a full pipeline
    * is a publishing transaction like any watch batch, so a batch entering
    * the startup window joins it instead of driving a second, concurrent
-   * analysis. The geological reset re-enters from INSIDE a watch
+   * analysis. The system reload re-enters from INSIDE a watch
    * transaction — that nested call leaves the enclosing registration
    * untouched.
    */
@@ -974,7 +974,7 @@ export class ExtractionSession {
     // Publication exclusivity is the PIPELINE's claim, not a per-driver
     // opt-in: every driver inherits it, and the per-instance payload write
     // guards (`artifactRecords`, `lastCommit`, `lastEpochValue`) become true
-    // by construction. Re-entrant for this instance — the geological reset
+    // by construction. Re-entrant for this instance — the system reload
     // re-enters from inside a watch transaction, and drivers re-run the
     // pipeline on the same session.
     this.releasePublicationClaim ??= claimExclusiveSessionOwner(
@@ -1039,7 +1039,7 @@ export class ExtractionSession {
     this.assetDependencyPaths.clear();
     this.assetDependencyKeys.clear();
     {
-      // Refresh the geological-reset membership set: every loader-evaluated
+      // Refresh the system-reload membership set: every loader-evaluated
       // module plus (defensively) the entry, keyed lexically and
       // canonically so symlinked/deleted event paths still match.
       const deps = this.system.dependencies ?? [];
@@ -1271,7 +1271,7 @@ export class ExtractionSession {
       );
       bt.fileCount = accepted.analysisEntries.length;
       // Only clear the native cache after source adaptation has produced a
-      // parser-ready corpus. A failed geological reset must leave the
+      // parser-ready corpus. A failed system reload must leave the
       // last-good transform engine usable.
       clearEngineCache(engineApi);
       await this.analyzeAndEmit(
@@ -1356,7 +1356,7 @@ export class ExtractionSession {
   }
 
   /**
-   * Reset analysis state for HMR geological reset. Payload write guards go
+   * Reset analysis state for HMR system reload. Payload write guards go
    * back to null so the next publication reseeds them from the disk
    * envelopes — a byte-identical post-reset artifact is still not
    * rewritten.
@@ -1369,7 +1369,7 @@ export class ExtractionSession {
 
   /**
    * The (sourceKey, observedSourceHash) pairs of a watch batch — cheap
-   * evidence for the status file's pending set on the geological-reset
+   * evidence for the status file's pending set on the system-reload
    * path, where the batch's component edits ride along with the system
    * edit (design D3: loaders wait only on observed inputs).
    */
@@ -2039,8 +2039,8 @@ export class ExtractionSession {
     const manifestHash = this.artifactRecords.manifest?.diskHash ?? '';
     // Webpack mode persists no hydration corpus, so its commit carries no
     // inputsHash field at all (spec: "Webpack mode skips the hydration
-    // corpus"; the seqlock reader only verifies hashes for artifacts it
-    // reads).
+    // corpus"; the loader's artifact read only verifies hashes for the
+    // artifacts it reads).
     const inputsHash = this.persistAnalysisInputs
       ? (this.artifactRecords.inputs?.diskHash ?? '')
       : undefined;

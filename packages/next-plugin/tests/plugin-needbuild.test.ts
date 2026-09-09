@@ -10,7 +10,7 @@
  * appended to `watchOptions.ignored` (preserving user shapes), and a
  * webpack without the needBuild hook API fails loudly at apply time.
  *
- * Same harness as plugin-pipeline.test.ts (mocked NAPI boundary, real
+ * Same setup as plugin.test.ts (mocked NAPI boundary, real
  * plugin/session), with the compiler fake extended to model
  * `compiler.webpack.NormalModule` and `hooks.thisCompilation`.
  */
@@ -40,7 +40,6 @@ import {
   replacementEpochPath,
   sessionArtifactDir,
 } from '../../extract/session/session-paths';
-import { AnimusWebpackPlugin } from '../src/plugin';
 import {
   buildManifest,
   BUTTON_STYLE_EDIT,
@@ -50,7 +49,8 @@ import {
   PLAN_B,
   resetAnimusGlobals,
   SYSTEM_CONFIG,
-} from './singleton-fixtures';
+} from '../../extract/tests/session/session-fixtures';
+import { AnimusWebpackPlugin } from '../src/plugin';
 
 import type { AnimusNextOptions } from '../src/types';
 
@@ -326,7 +326,7 @@ describe('runtime existence check (design D7)', () => {
   });
 });
 
-describe('watchOptions.ignored gains the session epoch artifact path (design D2)', () => {
+describe('watchOptions.ignored gains the replacements-epoch artifact path (design D2)', () => {
   /** The session-scoped epoch path a plugin instance derives (identity is
    *  process-claimed, so every in-process instance derives the same one). */
   const epochPathFor = (root: string, plugin: AnimusWebpackPlugin): string =>
@@ -394,7 +394,7 @@ describe('watchOptions.ignored gains the session epoch artifact path (design D2)
   });
 });
 
-describe('epoch-driven needBuild fan-out (design D1)', () => {
+describe('needBuild fan-out after a replacements-epoch move (design D1)', () => {
   test('shape edit forces animus-loader-chain modules in the next compilation; style edit and cold start do not', async () => {
     const root = createProject();
     const harness = createCompiler(root);

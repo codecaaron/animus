@@ -18,7 +18,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { afterEach, describe, expect, test } from 'vitest';
 
-import { createWatchState, runWatchSession } from './harness';
+import { createWatchState, runWatchSession } from './watch-session';
 
 const disposers: Array<() => void> = [];
 
@@ -29,14 +29,14 @@ afterEach(() => {
 // The scripted compiler answers the SAME contracts `runWatchSession` drives
 // on a real fixture webpack, derived from that owner rather than restated —
 // the scheduling hazard only reproduces if the fake is driven identically.
-type GauntletWebpack = Parameters<typeof runWatchSession>[0]['webpack'];
-type GauntletCompiler = ReturnType<GauntletWebpack>;
-type GauntletWatch = GauntletCompiler['watch'];
+type HarnessWebpack = Parameters<typeof runWatchSession>[0]['webpack'];
+type HarnessCompiler = ReturnType<HarnessWebpack>;
+type HarnessWatch = HarnessCompiler['watch'];
 type WatchRunTap = Parameters<
-  GauntletCompiler['hooks']['watchRun']['tapPromise']
+  HarnessCompiler['hooks']['watchRun']['tapPromise']
 >[1];
-type WatchDoneCallback = Parameters<GauntletWatch>[1];
-type GauntletStats = Parameters<WatchDoneCallback>[1];
+type WatchDoneCallback = Parameters<HarnessWatch>[1];
+type HarnessStats = Parameters<WatchDoneCallback>[1];
 
 /**
  * Scripted stand-in for a watching webpack compiler: every turn runs the
@@ -46,7 +46,7 @@ type GauntletStats = Parameters<WatchDoneCallback>[1];
  * (real watchpack's changed-during-build behavior). One spontaneous "echo"
  * turn starts `echo.delayMs` after turn `echo.afterTurn` completes —
  * unprompted, empty-handed, exactly like the redelivery/cold-artifact turns
- * the gauntlet probes tolerate.
+ * the harness probes tolerate.
  */
 function makeFakeCompiler(opts: {
   buildMs: number;
@@ -54,7 +54,7 @@ function makeFakeCompiler(opts: {
   echo?: { afterTurn: number; delayMs: number };
 }) {
   const taps: WatchRunTap[] = [];
-  const stats: GauntletStats = {
+  const stats: HarnessStats = {
     hasErrors: () => false,
     compilation: { errors: [], modules: [] },
   };
@@ -104,7 +104,7 @@ function makeFakeCompiler(opts: {
     }, opts.aggregateMs);
   };
 
-  const compiler: GauntletCompiler = {
+  const compiler: HarnessCompiler = {
     options: {},
     hooks: {
       watchRun: {

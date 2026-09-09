@@ -22,7 +22,7 @@ export interface DevArtifacts {
   systemProps: string;
   /**
    * Monotonic invalidation stamp for the static module. Bumps whenever the
-   * bundler invalidates it, which is how a geological reset is observed
+   * bundler invalidates it, which is how a system reload is observed
    * independently of whether the CSS text happened to change.
    */
   staticRevision: number;

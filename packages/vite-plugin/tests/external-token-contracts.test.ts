@@ -81,7 +81,7 @@ describe('enforceExternalTokenContracts', () => {
   });
 
   // Every analysis pass — buildStart, HMR re-analysis, new-file detection,
-  // geological reset — flows through PluginContext.runAnalysis, so the gate
+  // system reload — flows through PluginContext.runAnalysis, so the gate
   // must fire there (next-plugin parity: both hosts share one pipeline
   // gate). Driven through the real method via the injected engine seam so
   // the pin is behavioral, not source-text layout.

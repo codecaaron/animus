@@ -1,4 +1,3 @@
-import { contentHash } from '@animus-ui/extract/pipeline';
 import {
   mkdirSync,
   mkdtempSync,
@@ -12,6 +11,8 @@ import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
+import { contentHash } from '../../pipeline';
+
 const mocks = vi.hoisted(() => ({
   loadSystemModule: vi.fn(),
   extractFacts: vi.fn<(filesJson: string) => string>(),
@@ -21,21 +22,15 @@ const mocks = vi.hoisted(() => ({
   clearAnalysisCache: vi.fn(),
 }));
 
-import { ExtractionSession } from '../../extract/session/extraction-session';
-import {
-  engineApi,
-  setEngineApiOverride,
-} from '../../extract/session/singleton';
+import { ExtractionSession } from '../../session/extraction-session';
+import { engineApi, setEngineApiOverride } from '../../session/singleton';
 import {
   makeManifest,
   resetAnimusGlobals,
   SYSTEM_CONFIG,
-} from './singleton-fixtures';
+} from './session-fixtures';
 
-import type {
-  AnalysisSourceEntry,
-  AnalyzeProjectArgs,
-} from '@animus-ui/extract/pipeline';
+import type { AnalysisSourceEntry, AnalyzeProjectArgs } from '../../pipeline';
 
 // Engine API injection through the singleton's globalThis-keyed test
 // seam — reaches every copy of the module (source or dist), which a
@@ -241,7 +236,7 @@ afterEach(() => {
   }
 });
 
-describe('Next opted-in Svelte source ownership', () => {
+describe('opted-in Svelte source ownership', () => {
   test('fails loud when a source-compatible legacy engine lacks extractFacts', async () => {
     const workspace = createWorkspace();
     workspaces.push(workspace);
@@ -359,7 +354,7 @@ describe('Next opted-in Svelte source ownership', () => {
     );
   });
 
-  test('a failed geological reset leaves the last-good transform engine usable', async () => {
+  test('a failed system reload leaves the last-good transform engine usable', async () => {
     const workspace = createWorkspace();
     workspaces.push(workspace);
     const session = makeSession(workspace.app, true);

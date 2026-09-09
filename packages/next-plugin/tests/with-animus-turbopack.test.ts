@@ -1,9 +1,12 @@
 /**
- * Behavior pins for the Turbopack orchestration path (spec:
+ * Behavior pins for `withAnimus` in Turbopack mode (spec:
  * next-turbopack-integration): config resolution completes the extraction
- * and leaves the full artifact set on disk; the dev watcher feeds
- * existence-partitioned change sets into the session. Engine mocked at the
- * singleton seam, same harness as plugin-pipeline.test.ts.
+ * and leaves the full artifact set on disk, session identity travels
+ * through the loader options, a same-session re-analysis rewrites nothing,
+ * and a started watcher's death reaches the plugin diagnostic surface.
+ * Engine mocked at the singleton seam, same setup as plugin.test.ts. The
+ * watcher's own event flow lives in
+ * packages/extract/tests/session/turbopack-watcher-events.test.ts.
  */
 import {
   isJsonBoolean,
@@ -15,16 +18,12 @@ import {
   mkdirSync,
   readFileSync,
   realpathSync,
-  rmSync,
   statSync,
   writeFileSync,
 } from 'fs';
 import { join } from 'path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
-import { startTurbopackWatcher } from '../../extract/session/turbopack-orchestrator';
-import { ANIMUS_TURBOPACK_RULE_GLOB } from '../src/turbopack-config';
-import { bindTurbopackWatchDeathReport, withAnimus } from '../src/with-animus';
 import {
   BUTTON_SOURCE,
   disposeTempRoots,
@@ -32,13 +31,12 @@ import {
   makeTempRoot,
   resetAnimusGlobals,
   SYSTEM_CONFIG,
-} from './singleton-fixtures';
+} from '../../extract/tests/session/session-fixtures';
+import { ANIMUS_TURBOPACK_RULE_GLOB } from '../src/turbopack-config';
+import { bindTurbopackWatchDeathReport, withAnimus } from '../src/with-animus';
 
 import type { AnalyzeProjectInputs } from '../../extract/pipeline';
-import type {
-  TurbopackWatcherHandle,
-  TurbopackWatchOutcome,
-} from '../../extract/session/turbopack-orchestrator';
+import type { TurbopackWatcherHandle } from '../../extract/session/turbopack-orchestrator';
 import type { TurbopackLoaderOptions } from '../src/turbopack-loader';
 import type { JsonValue } from '@animus-ui/assertions';
 import type {
@@ -74,15 +72,6 @@ let savedCwd: string;
  *  `manifest.components` directly, so a manifest that omits fields is not a
  *  manifest. */
 const MANIFEST = JSON.stringify(makeManifest({ css: '.btn{margin:8;}' }));
-
-/** The handle of a started claim — a test asserting on `close`/`settle`
- *  states which outcome it expects rather than assuming one. */
-function startedHandle(outcome: TurbopackWatchOutcome): TurbopackWatcherHandle {
-  if (outcome.kind !== 'started') {
-    throw new Error(`expected a started watcher, got ${outcome.kind}`);
-  }
-  return outcome.handle;
-}
 
 function createProject(): string {
   const root = makeTempRoot('animus-turbo-orch-');
@@ -377,163 +366,5 @@ describe('Turbopack watcher death reporting (Next driver)', () => {
     // The orchestrator already warned for `unavailable`; a duplicate claim
     // means a live watcher for this root exists in this process.
     expect(error).not.toHaveBeenCalled();
-  });
-});
-
-describe('startTurbopackWatcher', () => {
-  test('feeds debounced, existence-partitioned change sets to the session', async () => {
-    const root = createProject();
-    // A real session with its analysis entry point replaced: this test owns
-    // the watcher's change sets only, so the pipeline behind
-    // handleWatchUpdate never runs.
-    const { ExtractionSession } =
-      await import('../../extract/session/extraction-session');
-    const session = new ExtractionSession({ system: './src/system.ts' });
-    session.rootDir = root;
-    const handleWatchUpdate = vi
-      .spyOn(session, 'handleWatchUpdate')
-      .mockImplementation(async () => {});
-
-    const claim = startTurbopackWatcher(session, root, 20);
-    expect(claim.kind).toBe('started');
-    const watcher = startedHandle(claim);
-    try {
-      let stamp = 0;
-      await vi.waitFor(
-        () => {
-          // Re-arm the trigger on every poll: FSEvents registration can lag
-          // under parallel suite load, and a one-shot write that lands
-          // before the watcher is live would never be delivered.
-          writeFileSync(
-            join(root, 'src', 'New.tsx'),
-            `export const N = ${stamp++};\n`
-          );
-          expect(
-            handleWatchUpdate.mock.calls.some((c) =>
-              c[0].modifiedFiles?.has(join(root, 'src', 'New.tsx'))
-            )
-          ).toBe(true);
-        },
-        { timeout: 10000, interval: 250 }
-      );
-
-      rmSync(join(root, 'src', 'New.tsx'));
-      await vi.waitFor(
-        () =>
-          expect(
-            handleWatchUpdate.mock.calls.some((c) =>
-              c[0].removedFiles?.has(join(root, 'src', 'New.tsx'))
-            )
-          ).toBe(true),
-        { timeout: 10000 }
-      );
-    } finally {
-      watcher.close();
-    }
-    // FSEvents registration + delivery latency under parallel suite load.
-  }, 30000);
-
-  test('debounce-window events surface as debouncing status evidence before the flush', async () => {
-    const root = createProject();
-    // A REAL session (no analysis runs — the huge debounce keeps the flush
-    // away): the watcher must feed its observations into the session's
-    // status file so loaders ahead of the analysis can wait on evidence
-    // (design D3 'debouncing').
-    const { ExtractionSession } =
-      await import('../../extract/session/extraction-session');
-    const session = new ExtractionSession({ system: './src/system.ts' });
-    session.rootDir = root;
-
-    const watcher = startedHandle(startTurbopackWatcher(session, root, 60_000));
-    try {
-      // The watcher's debounce is the status deadline's ceiling.
-      expect(session.debounceCeilingMs).toBe(60_000);
-
-      const statusPath = join(session.sessionDir, 'analysis-status.json');
-      let stamp = 0;
-      await vi.waitFor(
-        () => {
-          // Re-arm per poll: FSEvents registration can lag under load.
-          writeFileSync(
-            join(root, 'src', 'Pending.tsx'),
-            `export const P = ${stamp++};\n`
-          );
-          const status: JsonValue = JSON.parse(
-            readFileSync(statusPath, 'utf-8')
-          );
-          expect(status).toMatchObject({
-            state: 'debouncing',
-            sessionId: session.sessionId,
-            pending: expect.arrayContaining([
-              ['src/Pending.tsx', expect.any(String)],
-            ]),
-          });
-        },
-        { timeout: 10000, interval: 250 }
-      );
-    } finally {
-      watcher.close();
-    }
-  }, 30000);
-
-  test('is idempotent per process and ignores .animus writes', async () => {
-    const root = createProject();
-    const { ExtractionSession } =
-      await import('../../extract/session/extraction-session');
-    const session = new ExtractionSession({ system: './src/system.ts' });
-    session.rootDir = root;
-    const handleWatchUpdate = vi
-      .spyOn(session, 'handleWatchUpdate')
-      .mockImplementation(async () => {});
-
-    const first = startedHandle(startTurbopackWatcher(session, root, 20));
-    const second = startTurbopackWatcher(session, root, 20);
-    expect(second).toEqual({ kind: 'already-watched' });
-    try {
-      // FSEvents may replay events from just before the watcher started —
-      // let those flush, then measure only the .animus write.
-      await new Promise((resolve) => setTimeout(resolve, 150));
-      handleWatchUpdate.mockClear();
-
-      mkdirSync(join(root, '.animus'), { recursive: true });
-      writeFileSync(join(root, '.animus', 'styles.css'), '/* generated */');
-      await new Promise((resolve) => setTimeout(resolve, 150));
-      expect(handleWatchUpdate).not.toHaveBeenCalled();
-    } finally {
-      first.close();
-    }
-  });
-});
-
-describe('deferred status write containment', () => {
-  test('a failing deferred status write warns instead of escaping the microtask', async () => {
-    const root = createProject();
-    const { ExtractionSession } =
-      await import('../../extract/session/extraction-session');
-    const session = new ExtractionSession({ system: './src/system.ts' });
-    session.rootDir = root;
-    // Occupy `.animus` with a regular FILE: the deferred microtask's
-    // mkdirSync(sessionDir) then throws ENOTDIR on the session's first-ever
-    // artifact write — the path that used to run OUTSIDE the watch handler's
-    // try/catch and reach the process as an uncaught exception, killing the
-    // dev server.
-    writeFileSync(join(root, '.animus'), 'not a directory\n');
-    const warned: string[] = [];
-    // The session's own warn path emits one preformatted line per call.
-    const warnSpy = vi
-      .spyOn(console, 'warn')
-      .mockImplementation((message: string) => {
-        warned.push(message);
-      });
-    try {
-      session.noteDebouncedWatchEvents([join(root, 'src', 'Button.tsx')]);
-      // The status write is deferred to a microtask; let it run.
-      await new Promise((resolve) => setTimeout(resolve, 0));
-      expect(
-        warned.some((m) => m.includes('debounce status write failed'))
-      ).toBe(true);
-    } finally {
-      warnSpy.mockRestore();
-    }
   });
 });

@@ -16,9 +16,9 @@ import { mkdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
-import { ExtractionSession } from '../../extract/session/extraction-session';
-import { startTurbopackWatcher } from '../../extract/session/turbopack-orchestrator';
-import { disposeTempRoots, makeTempRoot } from './singleton-fixtures';
+import { ExtractionSession } from '../../session/extraction-session';
+import { startTurbopackWatcher } from '../../session/turbopack-orchestrator';
+import { disposeTempRoots, makeTempRoot } from './session-fixtures';
 
 import type { FSWatcher, WatchListener, WatchOptions, watch } from 'fs';
 
@@ -322,7 +322,7 @@ describe('generation-fenced reset reconciliation (design D4)', () => {
     const { session, updates } = makeSession(root, [kitA]);
     // The reset transaction: resolves kitB mid-flight, then fails before
     // publishing — driven from inside handleWatchUpdate exactly like the
-    // real session's geological reset.
+    // real session's system reload.
     updates.mockImplementationOnce(async () => {
       session.onExternalRootResolved!(kitB);
       // onExternalRootsCommitted is never called — the reset fails.

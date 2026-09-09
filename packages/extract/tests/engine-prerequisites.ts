@@ -11,7 +11,7 @@ import { fileURLToPath } from 'url';
  * from exactly this directory — so a new target triple moves in one place
  * instead of once per consuming lane. Previously the same list, the same
  * required dists and the same build commands were restated in
- * `packages/next-plugin/tests/webpack-gauntlet/prerequisites.ts` and
+ * `packages/next-plugin/tests/webpack-watch/prerequisites.ts` and
  * `packages/vite-plugin/tests/dev-lane/prerequisites.ts`, whose failure mode
  * is a silent green skip.
  *

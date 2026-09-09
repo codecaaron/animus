@@ -1,7 +1,7 @@
 // @vitest-environment node
 /**
  * `backdateTree` walks fixture trees that contain symlinks into the REAL
- * repo (real-engine.test.ts links packages/system + packages/properties
+ * repo (real-engine-descendant-rebuild.test.ts links packages/system + packages/properties
  * into the fixture's node_modules). The backdate must stamp the links
  * themselves, never their targets — `utimesSync` follows symlinks, and a
  * followed stamp rewrites real source mtimes, firing phantom rebuilds in
@@ -22,7 +22,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { afterEach, describe, expect, test } from 'vitest';
 
-import { backdateTree } from './harness';
+import { backdateTree } from './watch-session';
 
 const disposers: Array<() => void> = [];
 

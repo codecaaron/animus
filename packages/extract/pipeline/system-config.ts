@@ -39,7 +39,7 @@ export interface SystemConfig {
   vocabularyWitnessesJson?: string | null;
   /** Canonical absolute paths of every module the loader evaluated for this
    *  system (sorted; entry included, runtime stubs excluded). Plugins use it
-   *  as the geological-reset membership set. Optional so pre-load
+   *  as the system-reload membership set. Optional so pre-load
    *  `emptySystemConfig()` defaults need not restate it. */
   dependencies?: string[];
   /** Per-module built-theme token manifests captured during evaluation

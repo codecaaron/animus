@@ -1,6 +1,6 @@
 /**
- * Coalesces bursts of system-dependency events into single geological
- * resets: a quiescence window before starting, at most one reset in
+ * Coalesces bursts of system-dependency events into single system
+ * reloads: a quiescence window before starting, at most one reset in
  * flight, and exactly one follow-up when requests arrive mid-reset. A
  * package build regenerating its dist fires one reset, not one per file.
  *

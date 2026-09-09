@@ -19,6 +19,9 @@ const typescriptTestTargets = [
   // (canary.test.ts and static-css-overrides.test.ts) and run via `bun test`
   // in verify:canary instead; this tier's only prerequisite is `bun install`.
   // A new extract test goes HERE unless it loads the native engine.
+  // `tests/session/` holds the driver-shared session-engine suites; none of
+  // them loads the native engine, so the directory is one target.
+  'packages/extract/tests/session',
   'packages/extract/tests/asset-placeholders.test.ts',
   'packages/extract/tests/collect-external-packages.test.ts',
   'packages/extract/tests/core-options.test.ts',

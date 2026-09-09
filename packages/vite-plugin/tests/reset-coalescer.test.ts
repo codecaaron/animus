@@ -171,7 +171,7 @@ describe('ResetCoalescer', () => {
   });
 });
 
-describe('PluginContext geological-reset error wiring', () => {
+describe('PluginContext system-reload error wiring', () => {
   it('a strict reset failure surfaces as warn + overlay, not a process kill', async () => {
     const ctx = new PluginContext({ system: './src/ds.ts', strict: true });
     const warnings: string[] = [];
@@ -183,18 +183,16 @@ describe('PluginContext geological-reset error wiring', () => {
     ctx.devServer = {
       hot: { send: (payload: ErrorPayload) => sent.push(payload) },
     };
-    ctx.performGeologicalReset = () => {
+    ctx.performSystemReload = () => {
       throw new Error(
         '[animus-extract] unresolvable asset() specifier: @acme/typo.woff2'
       );
     };
 
-    ctx.requestGeologicalReset('test');
+    ctx.requestSystemReload('test');
     await new Promise((resolve) => setTimeout(resolve, 120));
 
-    expect(warnings.some((w) => w.includes('geological reset failed'))).toBe(
-      true
-    );
+    expect(warnings.some((w) => w.includes('system reload failed'))).toBe(true);
     expect(sent).toHaveLength(1);
     expect(sent[0].type).toBe('error');
     expect(sent[0].err.message).toContain('@acme/typo.woff2');

@@ -1,5 +1,5 @@
 /**
- * Geological-reset failure semantics: a failed system-config reload during a
+ * System reload failure semantics: a failed system-config reload during a
  * watch cycle is a FAILED CYCLE, not a fallback signal.
  *
  * The regression this pins: the reset re-run was wrapped in a swallow-warn
@@ -11,7 +11,7 @@
  * `failed` with the diagnostic, and no incremental analysis runs against the
  * stale system.
  *
- * Same harness as watch-transaction.test.ts (mocked NAPI boundary, real
+ * Same setup as watch-transaction.test.ts (mocked NAPI boundary, real
  * session, temp project on disk).
  */
 import { readFileSync, writeFileSync } from 'fs';
@@ -24,7 +24,7 @@ const mocks = vi.hoisted(() => ({
   clearAnalysisCache: vi.fn(),
 }));
 
-import { setEngineApiOverride } from '../../extract/session/singleton';
+import { setEngineApiOverride } from '../../session/singleton';
 
 // Engine API injection through the singleton's globalThis-keyed test
 // seam — reaches every copy of the module (source or dist), which a
@@ -36,18 +36,18 @@ setEngineApiOverride(() => ({
   clearAnalysisCache: mocks.clearAnalysisCache,
 }));
 
-import { ExtractionSession } from '../../extract/session/extraction-session';
-import { ANALYSIS_STATUS_ARTIFACT } from '../../extract/session/session-paths';
-import { getManifestJson } from '../../extract/session/singleton';
+import { ExtractionSession } from '../../session/extraction-session';
+import { ANALYSIS_STATUS_ARTIFACT } from '../../session/session-paths';
+import { getManifestJson } from '../../session/singleton';
 import {
   buildManifest,
   createProject as createFixtureProject,
   disposeTempRoots,
   resetAnimusGlobals,
   SYSTEM_CONFIG,
-} from './singleton-fixtures';
+} from './session-fixtures';
 
-import type { AnalysisStatus } from '../../extract/session/session-paths';
+import type { AnalysisStatus } from '../../session/session-paths';
 
 let restoreGlobals: () => void;
 
@@ -64,7 +64,7 @@ afterEach(() => {
   disposeTempRoots();
 });
 
-describe('geological-reset failure', () => {
+describe('system reload failure', () => {
   test('a failed system reload rejects the cycle, lands failed status, and never falls through to incremental', async () => {
     const root = createFixtureProject('animus-geo-fail-');
     mocks.analyzeProject.mockImplementation(() => buildManifest({}));

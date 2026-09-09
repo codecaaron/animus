@@ -6,22 +6,22 @@
  * crashing the dev server. A fake watch is injected through the orchestrator's
  * test seam (fs builtins are not interceptable by the runner's module
  * mocker); event-flow behavior over the real fs lives in
- * turbopack-orchestrator.test.ts.
+ * turbopack-watcher-events.test.ts.
  */
 import { EventEmitter } from 'events';
 import { mkdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
-import { ExtractionSession } from '../../extract/session/extraction-session';
-import { startTurbopackWatcher } from '../../extract/session/turbopack-orchestrator';
-import { disposeTempRoots, makeTempRoot } from './singleton-fixtures';
+import { ExtractionSession } from '../../session/extraction-session';
+import { startTurbopackWatcher } from '../../session/turbopack-orchestrator';
+import { disposeTempRoots, makeTempRoot } from './session-fixtures';
 
-import type { WatchChanges } from '../../extract/session/extraction-session';
+import type { WatchChanges } from '../../session/extraction-session';
 import type {
   TurbopackWatcherHandle,
   TurbopackWatchOutcome,
-} from '../../extract/session/turbopack-orchestrator';
+} from '../../session/turbopack-orchestrator';
 import type { FSWatcher, WatchListener, WatchOptions, watch } from 'fs';
 
 /** The registered handle: a real `FSWatcher` surface (the orchestrator

@@ -1,9 +1,9 @@
 /**
- * Turbopack protocol gauntlet — READER side (openspec:
+ * Turbopack protocol — READER side (openspec:
  * next-turbopack-served-transform-coherence, design D1 read half + D3 + D4
  * — increment 02).
  *
- * Seqlock hydration keyed by commit CONTENT, foreign-session rejection,
+ * Retried artifact reads keyed by commit CONTENT, foreign-session rejection,
  * and the full catch-up decision table, exercised at the seam level per D4:
  * fabricated commit/status artifacts (plus the REAL session writer for the
  * end-to-end style-only case), the loader's fs reads intercepted through
@@ -61,17 +61,17 @@ import {
   stylesPath,
 } from '../../extract/session/session-paths';
 import { setEngineApiOverride } from '../../extract/session/singleton';
-import animusTurbopackLoader, {
-  __setTurbopackLoaderEngineApiForTests,
-  __setTurbopackLoaderFsForTests,
-  __resetTurbopackLoaderStateForTests,
-} from '../src/turbopack-loader';
 import {
   disposeTempRoots,
   makeComponent,
   makeManifest,
   makeTempRoot,
-} from './singleton-fixtures';
+} from '../../extract/tests/session/session-fixtures';
+import animusTurbopackLoader, {
+  __setTurbopackLoaderEngineApiForTests,
+  __setTurbopackLoaderFsForTests,
+  __resetTurbopackLoaderStateForTests,
+} from '../src/turbopack-loader';
 
 import type { AnalysisStatus } from '../../extract/session/session-paths';
 import type { TurbopackLoaderOptions } from '../src/turbopack-loader';
@@ -287,7 +287,7 @@ afterEach(() => {
   disposeTempRoots();
 });
 
-describe('seqlock hydration (design D1 read half)', () => {
+describe('retried artifact reads (design D1 read half)', () => {
   test('a commit rewritten between reads is retried and the transform derives from one consistent generation', async () => {
     const root = makeTempRoot('animus-turbo-protocol-');
     writeGeneration(root, {
@@ -332,7 +332,7 @@ describe('seqlock hydration (design D1 read half)', () => {
     // never a G1-commit/G2-payload mixture.
     const g2Inputs = buildInputs([{ path: 'src/C.tsx', source: NEW_SOURCE }]);
     expect(code).toContain(replayedManifest(g2Inputs.filesJson));
-    // The seqlock actually retried: commit read at least twice.
+    // The read actually retried: commit read at least twice.
     expect(commitReads).toBeGreaterThanOrEqual(2);
   });
 
@@ -587,7 +587,7 @@ describe('catch-up decision table (design D3 — verbatim)', () => {
   });
 });
 
-describe('epoch fan-out dependency (T attachment)', () => {
+describe("the replacements-epoch artifact is the transform's only registered dependency", () => {
   test('a successful transform registers the session epoch artifact — and ONLY it — as its artifact dependency', async () => {
     const root = makeTempRoot('animus-turbo-protocol-');
     const { sessionDir } = writeGeneration(root, {

@@ -6,7 +6,7 @@
  * stale cache analyzes old component source and, because the cache was
  * never updated, the edit never re-surfaces on a later cycle.
  *
- * Same harness as plugin-pipeline.test.ts: the NAPI boundary is mocked, the
+ * Same setup as packages/next-plugin/tests/plugin.test.ts: the NAPI boundary is mocked, the
  * pure pipeline helpers and the session run for real over a temp project.
  */
 import { mkdirSync, realpathSync, rmSync, writeFileSync } from 'fs';
@@ -19,7 +19,7 @@ const mocks = vi.hoisted(() => ({
   clearAnalysisCache: vi.fn(),
 }));
 
-import { setEngineApiOverride } from '../../extract/session/singleton';
+import { setEngineApiOverride } from '../../session/singleton';
 
 // Engine API injection through the singleton's globalThis-keyed test
 // seam — reaches every copy of the module (source or dist), which a
@@ -31,7 +31,7 @@ setEngineApiOverride(() => ({
   clearAnalysisCache: mocks.clearAnalysisCache,
 }));
 
-import { ExtractionSession } from '../../extract/session/extraction-session';
+import { ExtractionSession } from '../../session/extraction-session';
 import {
   BUTTON_SOURCE,
   BUTTON_STYLE_EDIT as BUTTON_SOURCE_CHANGED,
@@ -40,9 +40,9 @@ import {
   makeTempRoot,
   resetAnimusGlobals,
   SYSTEM_CONFIG,
-} from './singleton-fixtures';
+} from './session-fixtures';
 
-import type { AnalyzeProjectArgs } from '@animus-ui/extract/pipeline';
+import type { AnalyzeProjectArgs } from '../../pipeline';
 
 function createProject() {
   const root = makeTempRoot('animus-watch-asset-');

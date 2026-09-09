@@ -69,7 +69,7 @@ pub struct SystemConfig {
     pub vocabulary_witnesses: Option<String>,
     /// Canonical absolute paths of every module evaluated for this system —
     /// the entry plus its transitive graph, excluding runtime stubs (which
-    /// have no path). Sorted. Plugins use this as the geological-reset
+    /// have no path). Sorted. Plugins use this as the system-reload
     /// membership set so transitive system edits invalidate correctly.
     pub dependencies: Vec<String>,
     /// Per-module built-theme token manifests captured during the one

@@ -1,6 +1,6 @@
 // @vitest-environment node
 /**
- * W-CACHE-EPOCH — persistent filesystem-cache restart fixtures (openspec:
+ * Persistent filesystem-cache restart (openspec:
  * next-webpack-served-transform-coherence, increment 03 — resolves DEF-1).
  *
  * Five steps (consult §W): (1) snapshot-contains-epoch, (2) warm negative —
@@ -44,12 +44,13 @@ import { replacementEpochPath } from '../../../extract/session/session-paths';
 import { getSessionArtifactDir } from '../../../extract/session/singleton';
 import animusLoader from '../../src/loader';
 import { AnimusWebpackPlugin } from '../../src/plugin';
+import { probeFixtureWebpack, WEBPACK_FIXTURES } from './prerequisites';
 import {
   armCannedEngine,
-  buildGauntletConfig,
+  buildHarnessWebpackConfig,
   bundleMarker,
   CHILD_REL,
-  createGauntletProject,
+  createHarnessProject,
   createWatchState,
   entrySource,
   epochHygieneViolations,
@@ -62,10 +63,13 @@ import {
   runsFor,
   runWatchSession,
   writeLoaderShim,
-} from './harness';
-import { probeFixtureWebpack, WEBPACK_FIXTURES } from './prerequisites';
+} from './watch-session';
 
-import type { CompilationRecord, GauntletProject, WatchState } from './harness';
+import type {
+  CompilationRecord,
+  HarnessProject,
+  WatchState,
+} from './watch-session';
 import type { JsonValue } from '@animus-ui/assertions';
 
 vi.setConfig({ testTimeout: 90_000, hookTimeout: 90_000 });
@@ -92,7 +96,7 @@ type FixtureWebpack = ReturnType<typeof loadFixtureWebpack>;
 /** One dev-server session over the shared project + cache dir. */
 async function runSession(args: {
   webpack: FixtureWebpack;
-  project: GauntletProject;
+  project: HarnessProject;
   steps?: Array<(record: CompilationRecord) => void>;
   settleMs?: number;
 }): Promise<{ records: CompilationRecord[]; state: WatchState }> {
@@ -109,7 +113,7 @@ async function runSession(args: {
   const records = await runWatchSession({
     webpack: args.webpack,
     root: project.root,
-    config: buildGauntletConfig({
+    config: buildHarnessWebpackConfig({
       root: project.root,
       shimPath,
       plugins: [plugin],
@@ -170,7 +174,7 @@ function lastSessionEpochPath(): string {
  */
 async function runStabilizedFirstSession(
   webpack: FixtureWebpack,
-  project: GauntletProject
+  project: HarnessProject
 ): Promise<CompilationRecord[]> {
   const { records } = await runSession({
     webpack,
@@ -182,14 +186,14 @@ async function runStabilizedFirstSession(
   return records;
 }
 
-describe.skipIf(!prereq.ok)(`W-CACHE-EPOCH [${FIXTURE.id}]`, () => {
+describe.skipIf(!prereq.ok)(`persistent cache restart [${FIXTURE.id}]`, () => {
   test(`prerequisites present${prereq.ok ? '' : ` — SKIPPED: ${prereq.reason}`}`, () => {
     expect(prereq.ok).toBe(true);
   });
 
   test('step 1: a filesystem-cached animus module snapshot contains the epoch artifact', async () => {
     const webpack = loadFixtureWebpack(FIXTURE.webpackPath);
-    const project = createGauntletProject();
+    const project = createHarnessProject();
     disposers.push(() => project.dispose());
     project.backdateAll();
 
@@ -202,7 +206,7 @@ describe.skipIf(!prereq.ok)(`W-CACHE-EPOCH [${FIXTURE.id}]`, () => {
 
   test('steps 2+3: warm restart restores without loaders and rewrites nothing; an offline epoch move re-runs loaders with fresh output first', async () => {
     const webpack = loadFixtureWebpack(FIXTURE.webpackPath);
-    const project = createGauntletProject();
+    const project = createHarnessProject();
     disposers.push(() => project.dispose());
     project.backdateAll();
 
@@ -259,9 +263,9 @@ describe.skipIf(!prereq.ok)(`W-CACHE-EPOCH [${FIXTURE.id}]`, () => {
     );
   });
 
-  test('step 4 (hot hygiene — DEF-1 decider): live shape edit fans out same-compilation under the filesystem cache with no epoch-triggered compilation', async () => {
+  test('step 4: a live shape edit under the filesystem cache fans out in the same compilation with no epoch-triggered compilation (decides DEF-1)', async () => {
     const webpack = loadFixtureWebpack(FIXTURE.webpackPath);
-    const project = createGauntletProject();
+    const project = createHarnessProject();
     disposers.push(() => project.dispose());
     project.backdateAll();
 
@@ -295,7 +299,7 @@ describe.skipIf(!prereq.ok)(`W-CACHE-EPOCH [${FIXTURE.id}]`, () => {
 
   test('step 5 (lazy restore): a module restored on demand rebuilds from the CURRENT epoch, never its stale cached transform', async () => {
     const webpack = loadFixtureWebpack(FIXTURE.webpackPath);
-    const project = createGauntletProject();
+    const project = createHarnessProject();
     disposers.push(() => project.dispose());
     project.backdateAll();
 

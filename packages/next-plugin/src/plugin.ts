@@ -37,9 +37,9 @@ type WatchIgnoreEntry = string | RegExp;
 type WatchIgnoreMatcher = (path: string) => boolean;
 
 /** Every shape `watchOptions.ignored` reaches this plugin in. Mirrors the
- *  webpack-gauntlet harness's model of the same option (its own
- *  `WatchIgnored`), which is what drives the real webpack watcher in the
- *  gauntlet lanes — one vocabulary for one option. */
+ *  webpack-watch driver's model of the same option (its own `WatchIgnored`
+ *  in tests/webpack-watch/watch-session.ts), which is what drives the real
+ *  webpack watcher in those suites — one vocabulary for one option. */
 type WatchIgnored =
   | WatchIgnoreEntry
   | WatchIgnoreEntry[]
@@ -54,8 +54,8 @@ const isWatchIgnoreString = (ignored: WatchIgnored): ignored is string =>
   Object.prototype.toString.call(ignored) === '[object String]';
 
 /** The callable variant, distinguished by the same tag after the null, array,
- *  string, and RegExp variants are excluded (house precedent: the gauntlet
- *  harness's own watch-ignore composition). */
+ *  string, and RegExp variants are excluded (house precedent: the
+ *  webpack-watch driver's own watch-ignore composition). */
 const isWatchIgnoreMatcher = (
   ignored: WatchIgnored
 ): ignored is WatchIgnoreMatcher =>
@@ -176,7 +176,7 @@ type Compiler = {
 const UNSUPPORTED_WEBPACK_MESSAGE =
   '[animus-extract] Unsupported webpack: NormalModule.getCompilationHooks(compilation).needBuild ' +
   'is required for dev transform coherence and this webpack does not expose it. ' +
-  'Use a Next.js version covered by the animus webpack gauntlet.';
+  'Use a Next.js version whose webpack exposes this hook.';
 
 const PLUGIN_NAME = 'AnimusWebpackPlugin';
 
@@ -376,7 +376,7 @@ export class AnimusWebpackPlugin {
         compiler.webpack?.Compilation.PROCESS_ASSETS_STAGE_ADDITIONAL ?? -2000;
       const RawSource = compiler.webpack?.sources.RawSource;
       compilation.hooks.processAssets.tap({ name: PLUGIN_NAME, stage }, () => {
-        // The pipeline (and a possible geological reset) ran by now —
+        // The pipeline (and a possible system reload) ran by now —
         // re-register so a refreshed dependency set reaches this
         // compilation's watch inputs too.
         registerSystemDependencies();
@@ -465,7 +465,7 @@ export class AnimusWebpackPlugin {
   }
 
   /**
-   * Reset analysis state for HMR geological reset.
+   * Reset analysis state for HMR system reload.
    */
   resetForHmr(): void {
     this.session.resetForHmr();

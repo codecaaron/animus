@@ -20,16 +20,17 @@ import {
   buildManifest,
   makeComponent,
   SYSTEM_CONFIG,
-} from '../singleton-fixtures';
+} from '../../../extract/tests/session/session-fixtures';
 
-import type { ReplacementPlan } from '../singleton-fixtures';
+import type { ReplacementPlan } from '../../../extract/tests/session/session-fixtures';
 import type { JsonValue } from '@animus-ui/assertions';
 import type { ManifestComponentDescriptor } from '@animus-ui/extract/pipeline';
 import type { Mock } from 'vitest';
 
 /**
- * Shared gauntlet harness (openspec: next-webpack-served-transform-coherence,
- * increment 03), built on the probe idioms proven in
+ * Scripted webpack watch-session driver for the webpack-watch suites
+ * (openspec: next-webpack-served-transform-coherence, increment 03), built on
+ * the probe idioms proven in
  * evidence/webpack-probe/: programmatic watch with a compilation counter in
  * watchRun, a loader run log, bundle greps for the generation each module's
  * output derived from, delayed edits between compilations, and a settle
@@ -141,18 +142,18 @@ export function loadFixtureWebpack(webpackPath: string): FixtureWebpack {
 }
 
 // Shared fixtures (globals hygiene, SYSTEM_CONFIG, manifest builder) —
-// re-exported so gauntlet test files import ONE surface.
+// re-exported so the webpack-watch test files import ONE surface.
 export {
   ANIMUS_GLOBAL_KEYS,
   buildManifest,
   resetAnimusGlobals,
   SYSTEM_CONFIG,
-} from '../singleton-fixtures';
+} from '../../../extract/tests/session/session-fixtures';
 
 /** Key the on-disk loader shim delegates to — the REAL animus loader (from
  *  increment 02) runs inside the vitest process; the shim exists only
  *  because webpack `require`s loaders from disk and cannot load TS. */
-export const LOADER_IMPL_KEY = '__ANIMUS_GAUNTLET_LOADER_IMPL__';
+export const LOADER_IMPL_KEY = '__ANIMUS_HARNESS_LOADER_IMPL__';
 
 /** Write the require-able loader shim into the project and return its path.
  *  Idempotent (a later session must not touch the existing file — the shim
@@ -206,7 +207,7 @@ export function newcomerChainSource(): string {
   return `module.exports = 'newcomer'; // chain\n`;
 }
 
-export interface GauntletProject {
+export interface HarnessProject {
   root: string;
   write(relPath: string, content: string): void;
   read(relPath: string): string;
@@ -219,10 +220,12 @@ export interface GauntletProject {
   dispose(): void;
 }
 
-export function createGauntletProject(opts?: {
+export function createHarnessProject(opts?: {
   entryModules?: string[];
-}): GauntletProject {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), 'animus-gauntlet-')));
+}): HarnessProject {
+  const root = realpathSync(
+    mkdtempSync(join(tmpdir(), 'animus-webpack-watch-'))
+  );
   const write = (relPath: string, content: string): void => {
     const abs = join(root, relPath);
     mkdirSync(dirname(abs), { recursive: true });
@@ -487,11 +490,11 @@ export function installLoaderRecorder(
 }
 
 /**
- * The one gauntlet webpack config shape (differential's superset): memory
+ * The one harness webpack config shape (differential's superset): memory
  * cache by default, filesystem cache via `cache`, resolver/rule overrides
  * for suites compiling TS sources.
  */
-interface GauntletConfigArguments {
+interface HarnessWebpackConfigArguments {
   root: string;
   shimPath: string;
   plugins: object[];
@@ -500,7 +503,7 @@ interface GauntletConfigArguments {
   rulesTest?: RegExp;
 }
 
-interface GauntletConfig {
+interface HarnessWebpackConfig {
   mode: 'development';
   context: string;
   entry: string;
@@ -514,10 +517,10 @@ interface GauntletConfig {
   plugins: object[];
 }
 
-export function buildGauntletConfig(
-  args: GauntletConfigArguments
-): GauntletConfig {
-  const config: GauntletConfig = {
+export function buildHarnessWebpackConfig(
+  args: HarnessWebpackConfigArguments
+): HarnessWebpackConfig {
+  const config: HarnessWebpackConfig = {
     mode: 'development',
     context: args.root,
     entry: join(args.root, 'entry.js'),
@@ -673,7 +676,7 @@ export function runWatchSession(opts: {
     // own taps (config.plugins apply first), so the turn number is stable
     // by the time loaders run.
     compiler.hooks.watchRun.tapPromise(
-      'gauntlet-recorder',
+      'coherence-recorder',
       async (c: HarnessWatchCompilerState) => {
         building = true;
         state.turn += 1;
@@ -689,7 +692,7 @@ export function runWatchSession(opts: {
       changeTime: number | null;
     }> = [];
     compiler.hooks.invalid.tap(
-      'gauntlet-recorder',
+      'coherence-recorder',
       (file: string | null, changeTime: number | null) => {
         pendingInvalidations.push({
           file: file ?? null,

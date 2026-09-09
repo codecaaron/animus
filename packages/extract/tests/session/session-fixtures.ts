@@ -1,25 +1,26 @@
-import {
-  buildSystemPropsModule,
-  hashReplacementPlans,
-  snapshotFilePlans,
-} from '@animus-ui/extract/pipeline';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
-import { SINGLETON_GLOBAL_KEYS } from '../../extract/session/singleton';
+import {
+  buildSystemPropsModule,
+  hashReplacementPlans,
+  snapshotFilePlans,
+} from '../../pipeline';
+import { SINGLETON_GLOBAL_KEYS } from '../../session/singleton';
 
 import type {
   ManifestComponentDescriptor,
   ProjectManifest,
-} from '@animus-ui/extract/pipeline';
+} from '../../pipeline';
 
 /**
- * Shared, webpack-free fixtures for the next-plugin behavioral suites: the
- * singleton globalThis hygiene, the canned SystemConfig, the Button project
- * corpus, the canonical manifest builder, the temp-root lifecycle, and the
- * replacement-epoch witness. Suites (and the webpack gauntlet harness, which
- * re-exports for its test files) import these instead of re-declaring them.
+ * Shared, bundler-free fixtures for the extract session suites and the
+ * next-plugin behavioral suites: the singleton globalThis hygiene, the canned
+ * SystemConfig, the Button project corpus, the canonical manifest builder,
+ * the temp-root lifecycle, and the replacements-epoch witness. Suites (and
+ * the next-plugin webpack-watch driver, which re-exports for its test files)
+ * import these instead of re-declaring them.
  */
 
 /** Every globalThis key owned by the session singleton (packages/extract/session/singleton.ts) — sourced from the
@@ -32,7 +33,7 @@ type AnimusGlobalKey = (typeof ANIMUS_GLOBAL_KEYS)[number];
 /**
  * Clear every singleton-owned global (simulating a fresh process) and
  * return a restorer for afterEach. Callers that only want the clearing
- * (gauntlet sessions) ignore the return value.
+ * (webpack-watch driver sessions) ignore the return value.
  *
  * The singleton keeps each slot's value type private (`AnimusSingletonStore`
  * in packages/extract/session/singleton.ts), so this fixture never names or
@@ -80,9 +81,9 @@ export const BUTTON_PLAN_EDIT =
 
 /**
  * A COMPLETE `ProjectManifest` at its empty-universe values, overridden per
- * test — the next-plugin twin of `packages/vite-plugin/tests/manifest-fixture
- * .ts` (each package keeps a local copy; test directories are not importable
- * across packages).
+ * test — the session-side twin of `packages/vite-plugin/tests/manifest-fixture
+ * .ts` (the vite plugin keeps its own copy; the next-plugin suites reach this
+ * one by relative path, the way they reach `engine-prerequisites.ts`).
  *
  * The engine's `AnalyzeResult` declares no `Option` and no
  * `skip_serializing_if` at the top level (see `manifest-schema.ts`), so an

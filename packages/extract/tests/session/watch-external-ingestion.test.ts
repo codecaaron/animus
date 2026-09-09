@@ -4,8 +4,8 @@
  * external-source-watch-ingestion, increment 01; design D1/D2/D5; specs
  * workspace-source-ingestion + next-dev-hmr).
  *
- * Engine mocked at the singleton seam (same harness as
- * plugin-pipeline.test.ts); everything else — discovery, collection, the
+ * Engine mocked at the singleton seam (same setup as
+ * packages/next-plugin/tests/plugin.test.ts); everything else — discovery, collection, the
  * identity handle, the session watch pass — runs for real against temp
  * workspace trees shaped like a monorepo (app root + sibling kits).
  */
@@ -22,19 +22,16 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import {
   ExtractionSession,
   type SessionOptions,
-} from '../../extract/session/extraction-session';
+} from '../../session/extraction-session';
 import {
   disposeTempRoots,
   makeManifest,
   makeTempRoot,
   resetAnimusGlobals,
   SYSTEM_CONFIG,
-} from './singleton-fixtures';
+} from './session-fixtures';
 
-import type {
-  AnalysisSourceEntry,
-  EngineApi,
-} from '@animus-ui/extract/pipeline';
+import type { AnalysisSourceEntry, EngineApi } from '../../pipeline';
 
 // Each mock carries the engine function's own signature (EngineApi is the
 // contract the session calls through), so recorded calls stay typed at
@@ -45,7 +42,7 @@ const mocks = vi.hoisted(() => ({
   clearAnalysisCache: vi.fn<EngineApi['clearAnalysisCache']>(),
 }));
 
-import { setEngineApiOverride } from '../../extract/session/singleton';
+import { setEngineApiOverride } from '../../session/singleton';
 
 // Engine API injection through the singleton's globalThis-keyed test
 // seam — reaches every copy of the module (source or dist), which a
@@ -395,7 +392,7 @@ describe('dirty-root reconciliation (design D3)', () => {
     expect(lastAnalyzedSource(kitNewKey)).toBe('export const New = 1;\n');
   });
 
-  test('a directory report hiding a system-dependency edit wins the geological reset', async () => {
+  test('a directory report hiding a system-dependency edit triggers the system reload', async () => {
     const { app, kit } = createWorkspace();
     writeFileSync(join(kit, 'src', 'theme.ts'), 'export const theme = 1;\n');
     mocks.loadSystemModule.mockReset().mockImplementation(() => ({
@@ -417,7 +414,7 @@ describe('dirty-root reconciliation (design D3)', () => {
       removedFiles: new Set(),
     });
 
-    // The geological reset path won: the system reloaded and the analysis
+    // The system reload path won: the system reloaded and the analysis
     // ran as a FULL pipeline (devMode=false).
     expect(mocks.loadSystemModule.mock.calls.length).toBe(loadsAfterFull + 1);
     const lastCall =

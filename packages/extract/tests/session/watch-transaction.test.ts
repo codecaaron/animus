@@ -7,7 +7,7 @@
  * its generation, and a failed transaction rejects every joiner without
  * wedging the gate.
  *
- * Same harness as watch-asset-batch.test.ts (mocked NAPI boundary, real
+ * Same setup as watch-asset-batch.test.ts (mocked NAPI boundary, real
  * session). Concurrency is real: an `.mdx` entry in the batch suspends the
  * owning transaction at the async preprocessing seam before analysis runs.
  */
@@ -21,7 +21,7 @@ const mocks = vi.hoisted(() => ({
   clearAnalysisCache: vi.fn(),
 }));
 
-import { setEngineApiOverride } from '../../extract/session/singleton';
+import { setEngineApiOverride } from '../../session/singleton';
 
 // Engine API injection through the singleton's globalThis-keyed test
 // seam — reaches every copy of the module (source or dist), which a
@@ -33,11 +33,8 @@ setEngineApiOverride(() => ({
   clearAnalysisCache: mocks.clearAnalysisCache,
 }));
 
-import { ExtractionSession } from '../../extract/session/extraction-session';
-import {
-  getManifestJson,
-  getWatchTransaction,
-} from '../../extract/session/singleton';
+import { ExtractionSession } from '../../session/extraction-session';
+import { getManifestJson, getWatchTransaction } from '../../session/singleton';
 import {
   buildManifest as buildFixtureManifest,
   BUTTON_STYLE_EDIT as BUTTON_SOURCE_CHANGED,
@@ -45,7 +42,7 @@ import {
   disposeTempRoots,
   resetAnimusGlobals,
   SYSTEM_CONFIG,
-} from './singleton-fixtures';
+} from './session-fixtures';
 
 let restoreGlobals: () => void;
 

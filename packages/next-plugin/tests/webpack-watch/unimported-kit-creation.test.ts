@@ -46,11 +46,12 @@ setEngineApiOverride(() => ({
 
 import animusLoader from '../../src/loader';
 import { AnimusWebpackPlugin } from '../../src/plugin';
+import { probeFixtureWebpack, WEBPACK_FIXTURES } from './prerequisites';
 import {
   armCannedEngine,
   backdateTree,
-  buildGauntletConfig as buildConfig,
-  createGauntletProject,
+  buildHarnessWebpackConfig as buildConfig,
+  createHarnessProject,
   createWatchState,
   installLoaderRecorder,
   loadFixtureWebpack,
@@ -58,10 +59,9 @@ import {
   resetAnimusGlobals,
   runWatchSession,
   writeLoaderShim,
-} from './harness';
-import { probeFixtureWebpack, WEBPACK_FIXTURES } from './prerequisites';
+} from './watch-session';
 
-import type { GauntletProject, WatchState } from './harness';
+import type { HarnessProject, WatchState } from './watch-session';
 import type { JsonValue } from '@animus-ui/assertions';
 
 vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 });
@@ -82,7 +82,7 @@ function armSuiteEngine(): void {
 
 /** Everything one external-workspace scenario drives its watch session with. */
 interface ExternalProjectSetup {
-  project: GauntletProject;
+  project: HarnessProject;
   kitRoot: string;
   state: WatchState;
   plugin: AnimusWebpackPlugin;
@@ -92,14 +92,14 @@ interface ExternalProjectSetup {
 function setUpExternalProject(): ExternalProjectSetup {
   resetAnimusGlobals();
   armSuiteEngine();
-  const project = createGauntletProject();
+  const project = createHarnessProject();
   disposers.push(() => project.dispose());
 
   // The kit lives OUTSIDE the project root (sibling temp dir) — the
   // monorepo workspace shape.
   const kitRoot = realpathSync(mkdtempSync(join(tmpdir(), 'animus-kit-')));
   disposers.push(() => rmSync(kitRoot, { recursive: true, force: true }));
-  writeFileSync(join(kitRoot, 'package.json'), '{"name":"@gauntlet/kit"}');
+  writeFileSync(join(kitRoot, 'package.json'), '{"name":"@harness/kit"}');
   mkdirSync(join(kitRoot, 'src'), { recursive: true });
   writeFileSync(join(kitRoot, 'src', 'index.js'), "module.exports = 'kit';\n");
   writeFileSync(join(kitRoot, 'src', 'card.js'), "module.exports = 'card';\n");
@@ -162,69 +162,72 @@ function analyzedFileSets(): AnalyzedFile[][] {
 for (const fixture of WEBPACK_FIXTURES) {
   const prereq = probeFixtureWebpack(fixture.id);
 
-  describe.skipIf(!prereq.ok)(`external ingestion [${fixture.id}]`, () => {
-    test(`prerequisites present${prereq.ok ? '' : ` — SKIPPED: ${prereq.reason}`}`, () => {
-      expect(prereq.ok).toBe(true);
-    });
-
-    test('an unimported kit creation reaches analysis via the context-dependency watch turn', async () => {
-      const webpack = loadFixtureWebpack(fixture.webpackPath);
-      const { project, kitRoot, state, plugin, shimPath } =
-        setUpExternalProject();
-
-      const records = await runWatchSession({
-        webpack,
-        root: project.root,
-        config: buildConfig({
-          root: project.root,
-          shimPath,
-          plugins: [plugin],
-        }),
-        // The kit tree is a deliberate external watch surface — the
-        // context-dependency turn under test rides its directory events.
-        watchRoots: [kitRoot],
-        state,
-        steps: [
-          () =>
-            writeFileSync(
-              join(kitRoot, 'src', 'newcomer.js'),
-              "module.exports = 'newcomer';\n"
-            ),
-        ],
-        settleMs: 1500,
+  describe.skipIf(!prereq.ok)(
+    `unimported kit creation is analyzed [${fixture.id}]`,
+    () => {
+      test(`prerequisites present${prereq.ok ? '' : ` — SKIPPED: ${prereq.reason}`}`, () => {
+        expect(prereq.ok).toBe(true);
       });
 
-      // Cold discovery ingested the declared kit.
-      const sets = analyzedFileSets();
-      expect(sets.length).toBeGreaterThanOrEqual(1);
-      const cardKey = relative(project.root, join(kitRoot, 'src', 'card.js'));
-      expect(sets[0].some((f) => f.path === cardKey)).toBe(true);
+      test('an unimported kit creation reaches analysis via the context-dependency watch turn', async () => {
+        const webpack = loadFixtureWebpack(fixture.webpackPath);
+        const { project, kitRoot, state, plugin, shimPath } =
+          setUpExternalProject();
 
-      // The UNIMPORTED create produced a watch turn at all — without the
-      // kit root as a compilation context dependency webpack has no watch
-      // input covering it and the session never runs again.
-      expect(records.length).toBeGreaterThanOrEqual(2);
-      const kitTurn = records
-        .slice(1)
-        .find((r) =>
-          r.modifiedFiles.some(
-            (f) => f === join(kitRoot, 'src') || f.startsWith(kitRoot + sep)
-          )
+        const records = await runWatchSession({
+          webpack,
+          root: project.root,
+          config: buildConfig({
+            root: project.root,
+            shimPath,
+            plugins: [plugin],
+          }),
+          // The kit tree is a deliberate external watch surface — the
+          // context-dependency turn under test rides its directory events.
+          watchRoots: [kitRoot],
+          state,
+          steps: [
+            () =>
+              writeFileSync(
+                join(kitRoot, 'src', 'newcomer.js'),
+                "module.exports = 'newcomer';\n"
+              ),
+          ],
+          settleMs: 1500,
+        });
+
+        // Cold discovery ingested the declared kit.
+        const sets = analyzedFileSets();
+        expect(sets.length).toBeGreaterThanOrEqual(1);
+        const cardKey = relative(project.root, join(kitRoot, 'src', 'card.js'));
+        expect(sets[0].some((f) => f.path === cardKey)).toBe(true);
+
+        // The UNIMPORTED create produced a watch turn at all — without the
+        // kit root as a compilation context dependency webpack has no watch
+        // input covering it and the session never runs again.
+        expect(records.length).toBeGreaterThanOrEqual(2);
+        const kitTurn = records
+          .slice(1)
+          .find((r) =>
+            r.modifiedFiles.some(
+              (f) => f === join(kitRoot, 'src') || f.startsWith(kitRoot + sep)
+            )
+          );
+        expect(kitTurn).toBeDefined();
+
+        // The analyzed universe gained the file from its watch signal alone.
+        const newcomerKey = relative(
+          project.root,
+          join(kitRoot, 'src', 'newcomer.js')
         );
-      expect(kitTurn).toBeDefined();
-
-      // The analyzed universe gained the file from its watch signal alone.
-      const newcomerKey = relative(
-        project.root,
-        join(kitRoot, 'src', 'newcomer.js')
-      );
-      expect(
-        analyzedFileSets().some((files) =>
-          files.some(
-            (f) => f.path === newcomerKey && f.source.includes('newcomer')
+        expect(
+          analyzedFileSets().some((files) =>
+            files.some(
+              (f) => f.path === newcomerKey && f.source.includes('newcomer')
+            )
           )
-        )
-      ).toBe(true);
-    });
-  });
+        ).toBe(true);
+      });
+    }
+  );
 }

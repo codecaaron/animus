@@ -20,15 +20,15 @@ import {
   analysisCommitPath,
   sessionArtifactDir,
 } from '../../extract/session/session-paths';
-import animusTurbopackLoader, {
-  __resetTurbopackLoaderStateForTests,
-  __setTurbopackLoaderEngineApiForTests,
-} from '../src/turbopack-loader';
 import {
   disposeTempRoots,
   makeManifest,
   makeTempRoot,
-} from './singleton-fixtures';
+} from '../../extract/tests/session/session-fixtures';
+import animusTurbopackLoader, {
+  __resetTurbopackLoaderStateForTests,
+  __setTurbopackLoaderEngineApiForTests,
+} from '../src/turbopack-loader';
 
 import type { TurbopackLoaderOptions } from '../src/turbopack-loader';
 

@@ -25,8 +25,11 @@ import {
   replacementEpochPath,
   sessionArtifactDir,
 } from '../../extract/session/session-paths';
+import {
+  disposeTempRoots,
+  makeTempRoot,
+} from '../../extract/tests/session/session-fixtures';
 import animusLoader from '../src/loader';
-import { disposeTempRoots, makeTempRoot } from './singleton-fixtures';
 
 import type { AnimusEngine } from '../../extract/session/singleton';
 import type { V2ExtractEngine } from '@animus-ui/extract/pipeline';
@@ -142,7 +145,7 @@ function runLoader(args: {
   return { output, dependencies };
 }
 
-describe('epoch artifact file dependency (design D2)', () => {
+describe('replacements-epoch artifact registered as a file dependency (design D2)', () => {
   test('every dev invocation registers the session-scoped artifact — transform-eligible, passthrough, and manifest-absent alike', () => {
     const { root, epochPath } = createRoot(true);
 

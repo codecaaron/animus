@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 
-import { engineApi, setSharedEngine } from '../../extract/session/singleton';
+import { engineApi, setSharedEngine } from '../../session/singleton';
 
-import type { AnimusEngine } from '../../extract/session/singleton';
-import type { V2ExtractEngine } from '@animus-ui/extract/pipeline';
+import type { V2ExtractEngine } from '../../pipeline';
+import type { AnimusEngine } from '../../session/singleton';
 
 /** globalThis keys owned by the session singleton (packages/extract/session/singleton.ts) — the ESM/CJS shared contract. */
 const ENGINE_KEY = '__animus_engine__';
@@ -55,7 +55,7 @@ afterEach(() => {
   Object.assign(g, saved);
 });
 
-describe('v2 transformFile adapter', () => {
+describe('engineApi transformFile adapter', () => {
   test('passes through paths absent from the last analyze() set without calling the engine', () => {
     const calls: string[] = [];
     g[V2_ENGINE_KEY] = transformOnlyEngine((p) => {

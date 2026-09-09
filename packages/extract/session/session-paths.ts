@@ -189,7 +189,7 @@ export interface SessionEnvelope {
 }
 
 // ── Envelope encoding (single authority: writer, readers, and the protocol
-// gauntlet's fabricators all consume these — the format is defined ONCE) ──
+// reader tests' fabricators all consume these — the format is defined ONCE) ──
 
 /** Splice the session envelope into a JSON-object payload as a leading
  *  `__animusSession` field, byte-preserving the payload's own content

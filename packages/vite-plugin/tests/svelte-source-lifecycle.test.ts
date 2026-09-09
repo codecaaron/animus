@@ -499,7 +499,7 @@ describe('opted-in Svelte source ownership in the Vite lifecycle', () => {
     const beforeReset = probe.analyses
       .at(-1)!
       .map(({ path, source }) => ({ path, source }));
-    await ctx.performGeologicalReset();
+    await ctx.performSystemReload();
     expect(
       probe.analyses.at(-1)!.map(({ path, source }) => ({ path, source }))
     ).toEqual(beforeReset);
@@ -538,7 +538,7 @@ describe('opted-in Svelte source ownership in the Vite lifecycle', () => {
       })
     );
 
-    await ctx.performGeologicalReset();
+    await ctx.performSystemReload();
 
     let transformError: string | null = null;
     try {
@@ -579,7 +579,7 @@ describe('opted-in Svelte source ownership in the Vite lifecycle', () => {
 
     // A second reset over the unchanged bad file re-quarantines silently —
     // the (path, diagnostic) pair already warned, so no repeat noise.
-    await ctx.performGeologicalReset();
+    await ctx.performSystemReload();
     expect(warnings).toHaveLength(1);
   });
 
@@ -639,7 +639,7 @@ describe('opted-in Svelte source ownership in the Vite lifecycle', () => {
     expect(ctx.fileCache.has(badPath)).toBe(false);
   });
 
-  test('a geological reset evicts exactly the source modules whose replacement plans changed', async () => {
+  test('a system reload evicts exactly the source modules whose replacement plans changed', async () => {
     const root = mkdtempSync(join(tmpdir(), 'animus-vite-svelte-plans-'));
     scratchRoots.push(root);
     const { appRoot } = writeProject(root, false);
@@ -717,7 +717,7 @@ describe('opted-in Svelte source ownership in the Vite lifecycle', () => {
     // Changed plan: every node for the definition file is evicted in every
     // environment graph BEFORE the full reload is sent.
     replacement = 'createClassResolver(["b"])';
-    await ctx.performGeologicalReset();
+    await ctx.performSystemReload();
     expect(events).toEqual([
       `client:${definitionAbs}`,
       `client:${definitionAbs}?v=1`,
@@ -728,7 +728,7 @@ describe('opted-in Svelte source ownership in the Vite lifecycle', () => {
 
     // Equal plan: the republished identical plan evicts nothing.
     events.length = 0;
-    await ctx.performGeologicalReset();
+    await ctx.performSystemReload();
     expect(events).toEqual(['hot:full-reload']);
 
     // Failed reset: no publication, no eviction — and the manifest that
@@ -736,10 +736,10 @@ describe('opted-in Svelte source ownership in the Vite lifecycle', () => {
     // still evicts nothing.
     events.length = 0;
     failNext = true;
-    await ctx.performGeologicalReset();
+    await ctx.performSystemReload();
     expect(events).toEqual(['hot:full-reload']);
     events.length = 0;
-    await ctx.performGeologicalReset();
+    await ctx.performSystemReload();
     expect(events).toEqual(['hot:full-reload']);
   });
 });

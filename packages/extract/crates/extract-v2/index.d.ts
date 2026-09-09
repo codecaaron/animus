@@ -154,7 +154,7 @@ export interface NapiSystemConfig {
   /**
    * Canonical absolute paths of every module evaluated for the system
    * (sorted; entry included, runtime stubs excluded). The plugins use this
-   * as the geological-reset membership set.
+   * as the system-reload membership set.
    */
   dependencies: Array<string>
   /**
