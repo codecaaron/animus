@@ -23,7 +23,12 @@ import {
   validateBaselineEnvelope,
   writeValidatedBaselinePair,
 } from './baseline';
-import { baselineStaleFailureMessage } from './cli-messages';
+import {
+  EXIT_GATE_FAILED,
+  ParityRefusal,
+  baselineStaleFailureMessage,
+  classifyCliFailure,
+} from './cli-messages';
 import { compareUnit } from './compare';
 import { hashArtifact } from './content-hash';
 import { enumerateUnits, loadFamilies } from './corpus';
@@ -51,11 +56,11 @@ function validateArgs(): void {
     if (VALUE_OPTIONS.has(option)) {
       const value = args[i + 1];
       if (!value || value.startsWith('--')) {
-        throw new Error(`${option} requires a value`);
+        throw new ParityRefusal(`${option} requires a value`);
       }
       i++;
     } else if (!BOOLEAN_OPTIONS.has(option)) {
-      throw new Error(
+      throw new ParityRefusal(
         option.startsWith('--')
           ? `unknown option: ${option}`
           : `unexpected argument: ${option}`
@@ -102,7 +107,7 @@ function baselinePath(mode: BaselineMode): string {
 function loadBaseline(mode: BaselineMode): BaselineEnvelope {
   const path = baselinePath(mode);
   if (!existsSync(path)) {
-    throw new Error(
+    throw new ParityRefusal(
       `committed v2 baseline missing: ${path} — run: scripts/verify/refresh-parity-baseline.sh <checked-intent-id>`
     );
   }
@@ -242,7 +247,9 @@ async function baselinePass(
 
 async function refreshBaselines(intent: string): Promise<void> {
   if (!existsSync(REFRESH_JOURNAL)) {
-    throw new Error(`baseline refresh journal missing: ${REFRESH_JOURNAL}`);
+    throw new ParityRefusal(
+      `baseline refresh journal missing: ${REFRESH_JOURNAL}`
+    );
   }
   assertRefreshIntent(intent, readFileSync(REFRESH_JOURNAL, 'utf8'));
   const corpus = await enumerateUnits();
@@ -252,7 +259,9 @@ async function refreshBaselines(intent: string): Promise<void> {
     existsSync(baselinePath(mode))
   );
   if (existingPaths[0] !== existingPaths[1]) {
-    throw new Error('baseline refresh refuses a partial existing mode pair');
+    throw new ParityRefusal(
+      'baseline refresh refuses a partial existing mode pair'
+    );
   }
 
   /** One mode's refresh state: its green-ness checks, its drift against the
@@ -278,7 +287,7 @@ async function refreshBaselines(intent: string): Promise<void> {
         corpusSha256: existing.corpusSha256,
       });
       if (existingErrors.length) {
-        throw new Error(
+        throw new ParityRefusal(
           `baseline refresh refuses an invalid existing envelope (${mode}): ${existingErrors.join('; ')}`
         );
       }
@@ -334,10 +343,12 @@ async function main() {
   const selfCheck = flags.has('--self-check');
   const threads = (arg('--threads') ?? '').split(',').filter(Boolean);
   if (threads.length && threads.length !== 2) {
-    throw new Error('--threads requires exactly two comma-separated values');
+    throw new ParityRefusal(
+      '--threads requires exactly two comma-separated values'
+    );
   }
   if (threads.length === 2 && !selfCheck) {
-    throw new Error('--threads is available only with --self-check');
+    throw new ParityRefusal('--threads is available only with --self-check');
   }
   const modes = flags.has('--dev')
     ? [true]
@@ -366,9 +377,9 @@ async function main() {
         ? `PARITY GATE: FAIL (${snapName} NOT updated; details in last-failure.txt)`
         : baselineStaleFailureMessage()
     );
-    // 1 = THE GATE RAN AND FAILED. See the taxonomy note at the `.catch`
-    // below; this harness's codes are its own, not the CLI's.
-    process.exit(1);
+    // THE GATE RAN AND FAILED. See the taxonomy note at the `.catch` below;
+    // this harness's codes are its own, not the CLI's.
+    process.exit(EXIT_GATE_FAILED);
   }
   writeFileSync(join(HERE, snapName), full);
   console.log(full);
@@ -376,25 +387,31 @@ async function main() {
 }
 
 /**
- * This harness's exit taxonomy — two values, and deliberately NOT the
- * `packages/cli` taxonomy (`EXIT_USAGE`/`EXIT_ENVIRONMENT`):
+ * This harness's exit taxonomy — three values, and deliberately NOT the
+ * `packages/cli` taxonomy (`EXIT_USAGE`/`EXIT_ENVIRONMENT`). The codes and
+ * the classification live in `cli-messages.ts`:
  *
  *   1 — the gate RAN and FAILED (a real parity regression; see above).
- *   2 — the harness REFUSED TO RUN: an unhandled throw, which includes
- *       every argument-safety rejection. A `2` never means "parity is
- *       broken", so a caller must not read it as a regression.
+ *   2 — the harness REFUSED TO RUN: a `ParityRefusal`, covering every
+ *       argument-safety and missing-input rejection. It prints its message as
+ *       one line and nothing else, so the output does not vary with machine,
+ *       runtime, or checkout path.
+ *   3 — the harness BROKE: any other throw, printed with its stack because
+ *       there the stack is the diagnosis. A failed engine subprocess lands
+ *       here, so an environment-dependent hiccup can never be mistaken for a
+ *       refusal or for a parity regression.
  *
- * Pinned by `__tests__/cli.test.ts` ("a refresh flag without an intent…"
- * and "an unknown option…"): each asserts status 2 AND asserts that
- * `PARITY GATE: PASS` was not printed. Nothing else in the repo branches on
- * these values — `scripts/verify/parity.sh` and its refresh sibling are
- * `set -euo pipefail` + `exec`, so any nonzero propagates identically.
+ * Neither 2 nor 3 means "parity is broken", so a caller must not read either
+ * as a regression. Nothing else in the repo branches on these values —
+ * `scripts/verify/parity.sh` and its refresh sibling are `set -euo pipefail`
+ * + `exec`, so any nonzero propagates identically.
  *
  * Do not unify with `packages/cli`'s codes: `_parity` has no dependency on
- * that package, and creating one for two integers would be boundary
+ * that package, and creating one for three integers would be boundary
  * laundering between two tools answering different questions.
  */
-main().catch((error) => {
-  console.error(String(error?.stack ?? error));
-  process.exit(2);
+main().catch((error: Error) => {
+  const failure = classifyCliFailure(error);
+  console.error(failure.stderr);
+  process.exit(failure.exitCode);
 });

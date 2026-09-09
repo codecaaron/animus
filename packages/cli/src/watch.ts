@@ -35,28 +35,29 @@ import {
   getSharedSystemProps,
   startTurbopackWatcher,
 } from '@animus-ui/extract/session';
-import { rmSync } from 'fs';
 
 import {
   createCliSession,
+  createRunClaimRelease,
   err,
   ExtractionFailure,
   publishSharedPayloads,
   reportDiscoveryOutcomes,
   runPreflight,
 } from './build';
-import { acquireLock } from './writer';
+import { installShutdownSignals } from './signals';
+import { acquireLock, PublishSwapIncompleteError } from './writer';
 
+import type { PublishOutcome } from './build';
 import type { ResolvedCliConfig } from './config';
 import type {
   ExtractionSession,
   TurbopackWatcherHandle,
+  TurbopackWatchOutcome,
 } from '@animus-ui/extract/session';
 
-/** Signal exit conventions (128 + signal number) plus the degraded-exit
- *  class: watch capability loss is an environment failure (taxonomy 3). */
-const EXIT_SIGINT = 130;
-const EXIT_SIGTERM = 143;
+/** The degraded-exit class: watch capability loss is an environment failure
+ *  (taxonomy 3). Signal exit conventions live in signals.ts. */
 const EXIT_DEGRADED = 3;
 
 export interface WatchFlags {
@@ -139,6 +140,21 @@ export function formatDegradedRootLine(entry: DegradedRoot): string {
   return `watch degraded root=${entry.root} — ${entry.reason}`;
 }
 
+/**
+ * The per-cycle publication-failure report. The two endings must not share
+ * wording: a rejection BEFORE the swap leaves the previous generation
+ * byte-untouched, while a swap that already replaced names has destroyed it.
+ */
+export function formatCyclePublishFailure<Thrown>(
+  outDir: string,
+  error: Thrown
+): string {
+  if (error instanceof PublishSwapIncompleteError) {
+    return `watch cycle publication failed mid-swap — ${outDir} is NOT last-good: ${String(error)}`;
+  }
+  return `watch cycle publication rejected — keeping last-good artifacts in ${outDir}: ${String(error)}`;
+}
+
 /** Composite key of the shared payload set — the cycle-level dedupe gate
  *  (a no-op analysis republishes nothing; disk bytes stay untouched). */
 function currentPayloadKey(): string {
@@ -147,6 +163,14 @@ function currentPayloadKey(): string {
     contentHash(getSharedCss()),
     contentHash(getSharedSystemProps()),
   ].join(':');
+}
+
+/** What a watch's startup produced: the running session, the project-watch
+ *  claim it took, and the counts of its first publication. */
+interface WatchStartup {
+  session: ExtractionSession;
+  claim: TurbopackWatchOutcome;
+  publication: PublishOutcome;
 }
 
 /**
@@ -170,113 +194,167 @@ export async function runWatch(
   // the watch's publications. Released only on shutdown/startup failure.
   const release = acquireLock(outDir);
 
-  let session!: ExtractionSession;
-  let firstPublication: { componentCount: number; fileCount: number };
+  // A watch keeps its session tree alive WHILE RUNNING (transform consumers
+  // may exist) and gives it up at the ending — the CLI outDir is the
+  // surviving artifact surface.
+  let constructed: ExtractionSession | null = null;
+  const releaseClaims = createRunClaimRelease(() => constructed, release);
+  let watcher: TurbopackWatcherHandle | null = null;
+
+  let startup: WatchStartup;
   try {
-    session = createCliSession(config);
+    const created = createCliSession(config);
+    constructed = created;
+    // Registered BEFORE the first analysis, holding what it observes: the
+    // orchestrator registers claim state and watchers once and never
+    // re-diffs against the analyzed hashes, so an edit landing in the
+    // analysis window would otherwise be undeliverable forever.
+    const claim = startTurbopackWatcher(created, root, { holdEvents: true });
+    if (claim.kind === 'started') watcher = claim.handle;
+
     try {
-      await session.runFullPipeline();
+      await created.runFullPipeline();
     } catch (error) {
       throw new ExtractionFailure(String(error));
     }
-    firstPublication = publishSharedPayloads(config, session);
-    reportDiscoveryOutcomes(config, session);
+    const publication = publishSharedPayloads(config, created);
+    reportDiscoveryOutcomes(config, created);
+    startup = { session: created, claim, publication };
   } catch (error) {
-    release();
-    // Startup failed before the loop: no reader exists for the session
-    // tree the pipeline may have published — remove it. Only this run's
-    // OWN tree: a construction failure leaves no session to ask, and the
-    // process-global slot would then necessarily name a different
-    // session's tree (nothing this call may delete).
-    // SAFETY: `session` carries a definite-assignment assertion for the
-    // loop below, but THIS catch is reachable from `createCliSession`
-    // itself — the one point where the binding is still unassigned, which
-    // only the widened read can observe.
-    const started = session as ExtractionSession | undefined;
-    const dir = started?.sessionDir;
-    if (dir) rmSync(dir, { recursive: true, force: true });
-    // Released with the tree it protected: a later in-process run
-    // (programmatic `main()`) must find the publication claim free.
-    started?.close();
+    // Closed with the claim it took: `activeWatcherRoots` is process-global,
+    // so a startup failure that left the root claimed would make the next
+    // in-process run (programmatic `main()`) report a duplicate watcher.
+    watcher?.close();
+    // Startup failed before the loop: no reader exists for the session tree
+    // the pipeline may have published, so the same two claims every other
+    // ending gives up are given up here.
+    releaseClaims();
     throw error;
   }
 
+  const { session, claim } = startup;
+  // What the LATEST publication produced: readiness is announced after the
+  // held events are drained, so a drained edit that republished supersedes
+  // the first publication's counts.
+  let lastPublication = startup.publication;
   let publications = 1;
   let lastPublishedKey = currentPayloadKey();
 
   return new Promise<number>((resolvePromise) => {
-    let settled = false;
-    // Assigned after the cycle observer below is installed; declared first
-    // so shutdown and the degradation report can read them.
-    let watcher: TurbopackWatcherHandle | null = null;
-    let rootAlreadyWatched = false;
-
     // The session watcher unrefs every handle by design — the CLI is the
     // process owner, so it holds its own ref'd keepalive.
     const keepalive = setInterval(() => {}, 2 ** 30);
 
-    const shutdown = (code: number, reason: string): void => {
-      if (settled) return;
-      settled = true;
-      process.removeListener('SIGINT', onSigint);
-      process.removeListener('SIGTERM', onSigterm);
-      watcher?.close();
-      void (async () => {
-        // Drain the in-flight cycle BEFORE removing the session tree: an
-        // extraction transaction still writing would otherwise re-create
-        // the tree (writeSessionArtifact opens with mkdirSync) after the
-        // removal and keep writing past the lock release. close() already
-        // stopped new cycles; a bounded wait keeps a hung analysis from
-        // wedging shutdown.
-        try {
-          await Promise.race([
-            watcher?.settle() ?? Promise.resolve(),
-            new Promise<void>((res) => setTimeout(res, 10_000).unref?.()),
-          ]);
-        } catch {
-          // A rejected cycle already reported itself.
-        }
-        // A watch keeps its session tree alive while running (transform
-        // consumers may exist); clean shutdown removes it — the CLI outDir
-        // is the surviving artifact surface.
-        try {
-          rmSync(session.sessionDir, { recursive: true, force: true });
-        } catch {
-          // Best-effort: a missing tree is already gone.
-        }
-        // Released with the tree it protected: a later in-process run
-        // (programmatic `main()`) must find the publication claim free.
-        session.close();
-        release();
-        // Cleared LAST: the ref'd keepalive is what guarantees the process
-        // survives the drain above — an otherwise-empty event loop would
-        // exit before the lock release and tree removal ran.
-        clearInterval(keepalive);
-        err(`watch shutdown reason=${reason} publications=${publications}`);
-        resolvePromise(code);
-      })();
+    /** The ending in progress, or null while the loop is running. The FIRST
+     *  ending wins: a signal arriving during another ending's drain joins
+     *  that drain instead of starting a second one. */
+    let shuttingDown: Promise<void> | null = null;
+    let finished = false;
+
+    /** The one terminal line every ending emits, so a supervisor parses one
+     *  shape and learns which ending it got. */
+    const reportShutdown = (reason: string, drain?: string): void => {
+      err(
+        `watch shutdown reason=${reason} publications=${publications}` +
+          (drain === undefined ? '' : ` drain=${drain}`)
+      );
     };
 
-    const onSigint = (): void => shutdown(EXIT_SIGINT, 'SIGINT');
-    const onSigterm = (): void => shutdown(EXIT_SIGTERM, 'SIGTERM');
-    process.on('SIGINT', onSigint);
-    process.on('SIGTERM', onSigterm);
+    /** Give up the claim and end the loop: the one ending, drained or
+     *  abandoned. */
+    const finish = (code: number, reason: string, drain?: string): void => {
+      if (finished) return;
+      finished = true;
+      releaseClaims();
+      // Removed only now: the listeners stay armed for the whole drain so a
+      // second signal reaches the escalation instead of the kernel default.
+      removeShutdownSignals();
+      // Cleared LAST: the ref'd keepalive is what guarantees the process
+      // survives the drain — an otherwise-empty event loop would exit
+      // before the lock release and tree removal ran.
+      clearInterval(keepalive);
+      reportShutdown(reason, drain);
+      resolvePromise(code);
+    };
+
+    const drainThenFinish = async (
+      code: number,
+      reason: string
+    ): Promise<void> => {
+      watcher?.close();
+      // Announced BEFORE the drain, which can take as long as the in-flight
+      // analysis: a second signal is the documented way out of a drain that
+      // is taking too long.
+      err(
+        `watch shutdown starting reason=${reason} — draining the in-flight ` +
+          `cycle before releasing ${outDir} (signal again to exit at once)`
+      );
+      // Drain the in-flight cycle BEFORE removing the session tree: an
+      // extraction transaction still writing would otherwise re-create the
+      // tree (writeSessionArtifact opens with mkdirSync) after the removal
+      // and keep writing past the lock release. close() already stopped new
+      // cycles; a bounded wait keeps a hung analysis from wedging shutdown.
+      let bound: ReturnType<typeof setTimeout> | null = null;
+      try {
+        await Promise.race([
+          watcher?.settle() ?? Promise.resolve(),
+          new Promise<void>((res) => {
+            bound = setTimeout(res, 10_000);
+            bound.unref?.();
+          }),
+        ]);
+      } catch {
+        // A rejected cycle already reported itself.
+      } finally {
+        // An unref'd timer still holds its handle until it fires.
+        if (bound !== null) clearTimeout(bound);
+      }
+      finish(code, reason);
+    };
+
+    /** Begin an ending. Idempotent, and it resolves when the ending has
+     *  finished, so a caller waiting on it (the signal owner's escalation
+     *  window) stays open for the whole drain. */
+    const shutdown = (code: number, reason: string): Promise<void> => {
+      if (shuttingDown !== null) return shuttingDown;
+      shuttingDown = drainThenFinish(code, reason);
+      return shuttingDown;
+    };
+
+    const removeShutdownSignals = installShutdownSignals({
+      drain: shutdown,
+      release: ({ exitCode, signal, abandoned }) => {
+        // A drained ending has already given up the claim from the drain's
+        // own tail; only the abandoned one is left to end here.
+        if (!abandoned) return;
+        // The operator asked again: abandon the unfinished cycle, never the
+        // claim. A process killed here leaves `lock.json` behind, and an
+        // unprovably-dead lock is refused rather than stolen, so the next
+        // run exits 2 over a directory nobody owns.
+        err(
+          `watch ${signal} during shutdown — abandoning the drain and ` +
+            `releasing ${outDir}`
+        );
+        finish(exitCode, signal, 'abandoned');
+      },
+    });
 
     /** Print the per-publication degradation warnings. Returns true when
      *  --fail-on-degraded tripped (shutdown already initiated). */
     const reportDegradation = (): boolean => {
       // Liveness, not handle-presence: a watcher that DIED after
       // registration (post-registration EMFILE/ENOSPC) leaves a non-null
-      // handle observing nothing. Every caller runs after the claim, so a
-      // handle-less state is one of the two claim failures — kept apart,
-      // because only one of them is fixed by restarting.
+      // handle observing nothing. A duplicate claim is reported as itself:
+      // it leaves this session unwired exactly like a platform failure does,
+      // but restarting cannot fix it.
       const degraded = collectDegradedRoots({
         projectRoot: root,
-        projectWatch: rootAlreadyWatched
-          ? 'already-watched'
-          : watcher !== null && !watcher.died
-            ? 'active'
-            : 'unavailable',
+        projectWatch:
+          claim.kind === 'already-watched'
+            ? 'already-watched'
+            : watcher !== null && !watcher.died
+              ? 'active'
+              : 'unavailable',
         externalWatchRoots: session.externalWatchRoots,
         stickyDiagnostics: session.stickyDiagnostics,
       });
@@ -287,7 +365,7 @@ export async function runWatch(
         err(
           `watch degraded and --fail-on-degraded is set — exiting ${EXIT_DEGRADED}`
         );
-        shutdown(EXIT_DEGRADED, 'fail-on-degraded');
+        void shutdown(EXIT_DEGRADED, 'fail-on-degraded');
         return true;
       }
       return false;
@@ -299,9 +377,9 @@ export async function runWatch(
     // seam. Installed before the watcher starts so every cycle it ever
     // drives is observed. Suppression after shutdown belongs to the
     // watcher's close() (no cycle is scheduled or entered past it); the
-    // `settled` checks here cover only a cycle that outlived the handle.
+    // shutdown checks here cover only a cycle that outlived the handle.
     session.onCycleSettled = (cause) => {
-      if (settled) return; // cycle outlived shutdown (inc 06 review S2)
+      if (shuttingDown !== null) return; // cycle outlived the ending
       if (cause !== null) {
         // D5: mid-run failures keep last-good output and report per-cycle.
         err(
@@ -317,12 +395,11 @@ export async function runWatch(
       } catch (error) {
         // Structural emptiness / consistency failure of the NEW generation:
         // publishing it would be worse than keeping last-good.
-        err(
-          `watch cycle publication rejected — keeping last-good artifacts in ${outDir}: ${String(error)}`
-        );
+        err(formatCyclePublishFailure(outDir, error));
         return;
       }
       lastPublishedKey = key;
+      lastPublication = outcome;
       publications += 1;
       err(
         `watch republished components=${outcome.componentCount} files=${outcome.fileCount} outDir=${outDir}`
@@ -330,30 +407,38 @@ export async function runWatch(
       reportDegradation();
     };
 
-    const claim = startTurbopackWatcher(session, root);
-    if (claim.kind === 'started') {
-      watcher = claim.handle;
-      // A dead watcher produces no further cycles, so the per-publication
-      // degradation report would never run again — report (and trip
-      // --fail-on-degraded) at the moment of death instead.
+    // A dead watcher produces no further cycles, so the per-publication
+    // degradation report would never run again — report (and trip
+    // --fail-on-degraded) at the moment of death instead. A death before
+    // this assignment is still reported, since the report reads `died`.
+    if (watcher) {
       watcher.onDied = () => {
-        if (!settled) reportDegradation();
+        if (shuttingDown === null) reportDegradation();
       };
-    } else {
-      // Reported as itself: a duplicate claim leaves this session unwired
-      // exactly like a platform failure does, but restarting cannot fix it.
-      rootAlreadyWatched = claim.kind === 'already-watched';
     }
 
-    // Startup degradation report precedes readiness so an orchestrator
-    // waiting on `watch ready` has already seen every unwatched root.
-    if (reportDegradation()) return;
+    void (async () => {
+      // Deliver what the watcher held during the first analysis, through the
+      // ordinary cycle path above, so a file edited in that window is in the
+      // artifacts BEFORE readiness is announced.
+      try {
+        await watcher?.deliverHeldEvents();
+      } catch {
+        // A rejected cycle already reported itself through onCycleSettled.
+      }
+      // A shutdown during the delivery already owns this loop's ending.
+      if (shuttingDown !== null) return;
 
-    // D5: readiness is an explicit observable event distinct from idle —
-    // exactly one structured stderr line, emitted only after the first
-    // complete, consistent publication (which happened above).
-    err(
-      `watch ready components=${firstPublication.componentCount} files=${firstPublication.fileCount} outDir=${outDir}`
-    );
+      // Startup degradation report precedes readiness so an orchestrator
+      // waiting on `watch ready` has already seen every unwatched root.
+      if (reportDegradation()) return;
+
+      // D5: readiness is an explicit observable event distinct from idle —
+      // exactly one structured stderr line, emitted only after the first
+      // complete, consistent publication INCLUDING the drained window.
+      err(
+        `watch ready components=${lastPublication.componentCount} files=${lastPublication.fileCount} outDir=${outDir}`
+      );
+    })();
   });
 }

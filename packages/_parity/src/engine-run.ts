@@ -19,6 +19,7 @@ import {
 import { createRequire } from 'module';
 import { join } from 'path';
 
+import { classifyCliFailure } from './cli-messages';
 import { canonicalJson } from './content-hash';
 import { enumerateUnits } from './corpus';
 
@@ -65,8 +66,6 @@ interface ParityManifest extends Pick<
   system_prop_map: JsonObject;
   dynamic_props: JsonObject;
 }
-
-type EngineFailure = Error | JsonValue;
 
 type NativeEngineConstructor =
   (typeof import('../../extract/crates/extract-v2'))['ExtractEngine'];
@@ -270,12 +269,21 @@ function parseManifest(manifestJson: string): ParityManifest {
   };
 }
 
-function engineFailureText(failure: EngineFailure): string {
-  if (failure instanceof Error) return failure.stack ?? String(failure);
-  if (isJsonObject(failure) && isJsonString(failure.stack)) {
-    return failure.stack;
+/**
+ * The engine's failure as an `Error`. The NAPI can reject with a plain JSON
+ * value carrying a `stack` string instead of an `Error`; that is the one
+ * shape decoded here. Every failure leaves this boundary as an `Error`, so
+ * one classifier renders both entry points of this package.
+ */
+function toEngineError<Thrown>(thrown: Thrown): Error {
+  if (thrown instanceof Error) return thrown;
+  const error = new Error(String(thrown));
+  const stack =
+    thrown instanceof Object && 'stack' in thrown ? thrown.stack : null;
+  if (Object.prototype.toString.call(stack) === '[object String]') {
+    error.stack = String(stack);
   }
-  return String(failure);
+  return error;
 }
 
 async function main() {
@@ -297,86 +305,96 @@ async function main() {
   const out: Record<string, UnitSurface> = {};
 
   for (const unit of units) {
-    api.clearAnalysisCache();
-    const manifestJson: string = api.analyzeProject(
-      ...buildAnalyzeProjectArgs({
-        filesJson: JSON.stringify(unit.files),
-        scalesJson: theme.scalesJson,
-        variableMapJson: theme.variableMapJson,
-        contextualVarsJson: theme.contextualVarsJson || null,
-        propConfigJson: config.propConfig,
-        groupRegistryJson: config.groupRegistry,
-        packageResolutionJson: '{}',
-        devMode,
-        // emitterConfigJson — the oracle compares raw engine output, so it
-        // declares no bundler emitter identity (runtime import / css module
-        // id / system-props module id all stay at the engine defaults).
-        emitterConfigJson: null,
-        selectorAliasesJson: config.selectorAliases ?? null,
-        globalStyleBlocksJson: HARNESS_GLOBAL_BLOCKS,
-        pathAliasesJson: null,
-        keyframesJson: HARNESS_KEYFRAMES,
-        // staticCssJson — current parity corpus has no forced-emission input.
-        staticCssJson: null,
-        conditionAliasesJson: HARNESS_CONDITION_ALIASES,
-        // externalDirsJson — the harness declares no external packages.
-        externalDirsJson: null,
-        // Transform sources from the evaluated test system. Without this the
-        // oracle would record every package-shipped transform (`size`,
-        // `gridItem`, …) as unresolvable, blessing a raw-value fallback that
-        // real consumers do not get.
-        transformSourcesJson: config.transformSources ?? null,
-      })
-    );
-    const manifest = parseManifest(manifestJson);
+    try {
+      api.clearAnalysisCache();
+      const manifestJson: string = api.analyzeProject(
+        ...buildAnalyzeProjectArgs({
+          filesJson: JSON.stringify(unit.files),
+          scalesJson: theme.scalesJson,
+          variableMapJson: theme.variableMapJson,
+          contextualVarsJson: theme.contextualVarsJson || null,
+          propConfigJson: config.propConfig,
+          groupRegistryJson: config.groupRegistry,
+          packageResolutionJson: '{}',
+          devMode,
+          // emitterConfigJson — the oracle compares raw engine output, so it
+          // declares no bundler emitter identity (runtime import / css module
+          // id / system-props module id all stay at the engine defaults).
+          emitterConfigJson: null,
+          selectorAliasesJson: config.selectorAliases ?? null,
+          globalStyleBlocksJson: HARNESS_GLOBAL_BLOCKS,
+          pathAliasesJson: null,
+          keyframesJson: HARNESS_KEYFRAMES,
+          // staticCssJson — current parity corpus has no forced-emission input.
+          staticCssJson: null,
+          conditionAliasesJson: HARNESS_CONDITION_ALIASES,
+          // externalDirsJson — the harness declares no external packages.
+          externalDirsJson: null,
+          // Transform sources from the evaluated test system. Without this the
+          // oracle would record every package-shipped transform (`size`,
+          // `gridItem`, …) as unresolvable, blessing a raw-value fallback that
+          // real consumers do not get.
+          transformSourcesJson: config.transformSources ?? null,
+        })
+      );
+      const manifest = parseManifest(manifestJson);
 
-    const code: Record<string, string> = {};
-    const hasComponents: Record<string, boolean> = {};
-    for (const f of unit.files) {
-      const r = api.transformFile(f.source, f.path, manifestJson);
-      code[f.path] = r.code;
-      hasComponents[f.path] = r.hasComponents;
+      const code: Record<string, string> = {};
+      const hasComponents: Record<string, boolean> = {};
+      for (const f of unit.files) {
+        const r = api.transformFile(f.source, f.path, manifestJson);
+        code[f.path] = r.code;
+        hasComponents[f.path] = r.hasComponents;
+      }
+
+      const diagnostics = manifest.diagnostics
+        .map(
+          (diagnostic) =>
+            `${diagnostic.file}|${diagnostic.kind}|${diagnostic.component}|${diagnostic.message}`
+        )
+        .sort();
+
+      out[unit.id] = {
+        css: manifest.css,
+        code,
+        hasComponents,
+        diagnostics,
+        observables: {
+          componentFragmentKeys: Object.keys(
+            manifest.component_fragments
+          ).sort(),
+          reverseProvenanceEdges: Object.entries(manifest.reverse_provenance)
+            .flatMap(([parent, children]) =>
+              children.map((child) => `${parent}->${child}`)
+            )
+            .sort(),
+          // Key-sorted via the comparator's own canonical form — native maps
+          // can vary iteration order across fresh processes; the observable is
+          // sorted content, not incidental emission order.
+          systemPropMapJson: canonicalJson(manifest.system_prop_map),
+          dynamicPropsJson: canonicalJson(manifest.dynamic_props),
+          sheetsJson: canonicalJson(manifest.sheets),
+          componentFragmentsJson: canonicalJson(manifest.component_fragments),
+        },
+        parseCount: manifest.parseCount,
+      };
+    } catch (thrown) {
+      // Normalized at the boundary that calls the engine, so the classifier
+      // below stays the one place an exit code and a print shape are decided.
+      throw toEngineError(thrown);
     }
-
-    const diagnostics = manifest.diagnostics
-      .map(
-        (diagnostic) =>
-          `${diagnostic.file}|${diagnostic.kind}|${diagnostic.component}|${diagnostic.message}`
-      )
-      .sort();
-
-    out[unit.id] = {
-      css: manifest.css,
-      code,
-      hasComponents,
-      diagnostics,
-      observables: {
-        componentFragmentKeys: Object.keys(manifest.component_fragments).sort(),
-        reverseProvenanceEdges: Object.entries(manifest.reverse_provenance)
-          .flatMap(([parent, children]) =>
-            children.map((child) => `${parent}->${child}`)
-          )
-          .sort(),
-        // Key-sorted via the comparator's own canonical form — native maps
-        // can vary iteration order across fresh processes; the observable is
-        // sorted content, not incidental emission order.
-        systemPropMapJson: canonicalJson(manifest.system_prop_map),
-        dynamicPropsJson: canonicalJson(manifest.dynamic_props),
-        sheetsJson: canonicalJson(manifest.sheets),
-        componentFragmentsJson: canonicalJson(manifest.component_fragments),
-      },
-      parseCount: manifest.parseCount,
-    };
   }
 
   process.stdout.write(JSON.stringify(out, null, 1));
 }
 
-/** 2 = the harness refused to run, matching `cli.ts`'s taxonomy (documented
- *  in full at its `.catch`). This subprocess never emits a 1: it reports
- *  engine facts on stdout and lets `cli.ts` decide whether the gate passed,
- *  so "ran and failed" is not a state this entry point can be in. */
-main().catch((error: EngineFailure) => {
-  process.stderr.write(engineFailureText(error));
-  process.exit(2);
+/** Codes and print shape come from `cli-messages`, the one authority `cli.ts`
+ *  also reads: 2 refuses on a single line, 3 reports a break with its stack.
+ *  This subprocess never emits a 1 — it reports engine facts on stdout and
+ *  lets `cli.ts` decide whether the gate passed, so "ran and failed" is not a
+ *  state this entry point can be in. */
+main().catch((error: Error) => {
+  const failure = classifyCliFailure(error);
+  process.stderr.write(failure.stderr);
+  process.exit(failure.exitCode);
 });

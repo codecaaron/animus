@@ -12,7 +12,7 @@ import { dirname, join } from 'path';
 import { REPO_ROOT } from '../../../extract/tests/engine-prerequisites';
 
 /**
- * The dev-lane fixture app: the smallest project shape that still has every
+ * The dev-server fixture app: the smallest project shape that still has every
  * feature the dev server's incremental machinery depends on.
  *
  *   src/theme.ts   — tokens, imported RELATIVELY by the system module, so a
@@ -151,7 +151,7 @@ export const App = () => <Box p={${paddingStep}} />;
 const INDEX_HTML = `<!doctype html>
 <html>
   <head>
-    <title>animus dev lane</title>
+    <title>animus dev-server fixture</title>
   </head>
   <body>
     <div id="root"></div>
@@ -187,7 +187,7 @@ export const INITIAL_USAGE_STEP = 4;
 export function createDevFixture(): DevFixture {
   // realpath: macOS hands back /var/... while the watcher reports /private/var,
   // and the plugin compares the system path against `resolve(root, system)`.
-  const root = realpathSync(mkdtempSync(join(tmpdir(), 'animus-dev-lane-')));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'animus-dev-server-')));
 
   const write = (relativePath: string, source: string): void => {
     const absolute = join(root, relativePath);
@@ -206,7 +206,7 @@ export function createDevFixture(): DevFixture {
     'package.json',
     `${JSON.stringify(
       {
-        name: 'animus-dev-lane-fixture',
+        name: 'animus-dev-server-fixture',
         private: true,
         version: '0.0.0',
         type: 'module',

@@ -121,7 +121,10 @@ function makeSession(root: string, roots: string[]) {
 type WatchUpdates = ReturnType<typeof makeSession>['updates'];
 
 function start(session: ExtractionSession, root: string) {
-  const outcome = startTurbopackWatcher(session, root, 20, fakeWatch);
+  const outcome = startTurbopackWatcher(session, root, {
+    debounceMs: 20,
+    watchFn: fakeWatch,
+  });
   if (outcome.kind !== 'started') {
     throw new Error(`expected a started watcher, got ${outcome.kind}`);
   }

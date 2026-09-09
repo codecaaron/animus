@@ -325,7 +325,7 @@ const CATCHUP_WAIT_MARGIN_MS = 50;
 /** The session publishes `deadlineAt` on every status write and IS the sole
  *  authority on how long an attempt may take; the loader never re-derives
  *  one from an assumed watcher debounce, which silently expired healthy
- *  attempts under a non-default `startTurbopackWatcher(…, debounceMs)`.
+ *  attempts under a non-default `startTurbopackWatcher(…, { debounceMs })`.
  *
  *  This cap bounds the ONE case that carries no such deadline: `readStatus`
  *  parses disk bytes unvalidated, so a torn or foreign-version status can

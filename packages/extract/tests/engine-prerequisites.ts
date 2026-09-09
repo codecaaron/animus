@@ -9,11 +9,8 @@ import { fileURLToPath } from 'url';
  * Owned here because the resolution being probed is this package's own —
  * `packages/extract/index-v2.js` tries exactly these three candidate names
  * from exactly this directory — so a new target triple moves in one place
- * instead of once per consuming lane. Previously the same list, the same
- * required dists and the same build commands were restated in
- * `packages/next-plugin/tests/webpack-watch/prerequisites.ts` and
- * `packages/vite-plugin/tests/dev-lane/prerequisites.ts`, whose failure mode
- * is a silent green skip.
+ * instead of once per consuming suite. A restated copy of the list, the
+ * required dists, or the build commands fails as a silent green skip.
  *
  * Test support, not shipped API: `packages/extract/tests/` is outside the
  * package's `files` list and unreachable through its `exports` map, so this

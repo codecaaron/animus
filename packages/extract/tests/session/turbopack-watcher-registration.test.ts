@@ -124,7 +124,10 @@ describe('startTurbopackWatcher OS registration', () => {
   test('registers eligible top-level dirs only, never vendored trees', () => {
     const root = createProject();
     const handle = startedHandle(
-      startTurbopackWatcher(makeSession(root), root, 20, fakeWatch)
+      startTurbopackWatcher(makeSession(root), root, {
+        debounceMs: 20,
+        watchFn: fakeWatch,
+      })
     );
     try {
       const registered = new Map(calls.map((c) => [c.dir, c.recursive]));
@@ -148,7 +151,10 @@ describe('startTurbopackWatcher OS registration', () => {
     const root = createProject();
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const handle = startedHandle(
-      startTurbopackWatcher(makeSession(root), root, 20, fakeWatch)
+      startTurbopackWatcher(makeSession(root), root, {
+        debounceMs: 20,
+        watchFn: fakeWatch,
+      })
     );
 
     watchers[0].emit('error', new Error('EMFILE: too many open files'));
@@ -162,7 +168,10 @@ describe('startTurbopackWatcher OS registration', () => {
     calls.length = 0;
     watchers.length = 0;
     const second = startedHandle(
-      startTurbopackWatcher(makeSession(root), root, 20, fakeWatch)
+      startTurbopackWatcher(makeSession(root), root, {
+        debounceMs: 20,
+        watchFn: fakeWatch,
+      })
     );
     second.close();
 
@@ -174,7 +183,10 @@ describe('startTurbopackWatcher OS registration', () => {
     const root = createProject();
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     const handle = startedHandle(
-      startTurbopackWatcher(makeSession(root), root, 20, fakeWatch)
+      startTurbopackWatcher(makeSession(root), root, {
+        debounceMs: 20,
+        watchFn: fakeWatch,
+      })
     );
     const deaths: number[] = [];
     handle.onDied = () => deaths.push(1);
@@ -192,7 +204,10 @@ describe('startTurbopackWatcher OS registration', () => {
     calls.length = 0;
     watchers.length = 0;
     const second = startedHandle(
-      startTurbopackWatcher(makeSession(root), root, 20, fakeWatch)
+      startTurbopackWatcher(makeSession(root), root, {
+        debounceMs: 20,
+        watchFn: fakeWatch,
+      })
     );
     second.close();
     expect(second.died).toBe(false);
@@ -211,7 +226,10 @@ describe('startTurbopackWatcher OS registration', () => {
       events.push('cycle-end');
     });
     const handle = startedHandle(
-      startTurbopackWatcher(session, root, 5, fakeWatch)
+      startTurbopackWatcher(session, root, {
+        debounceMs: 5,
+        watchFn: fakeWatch,
+      })
     );
 
     // Drive one event through the debounce into the update chain.
@@ -244,7 +262,10 @@ describe('startTurbopackWatcher OS registration', () => {
       entries.push('cycle');
       await cycleGate;
     });
-    const outcome = startTurbopackWatcher(session, root, 5, fakeWatch);
+    const outcome = startTurbopackWatcher(session, root, {
+      debounceMs: 5,
+      watchFn: fakeWatch,
+    });
     expect(outcome.kind).toBe('started');
     const handle = startedHandle(outcome);
     const srcWatcher = watchers.find((w) => w.dir === join(root, 'src'))!;
@@ -275,15 +296,16 @@ describe('startTurbopackWatcher OS registration', () => {
 describe('project-watch claim outcomes', () => {
   test('a duplicate root claim is reported as such, never as a platform failure', () => {
     const root = createProject();
-    const first = startTurbopackWatcher(makeSession(root), root, 20, fakeWatch);
+    const first = startTurbopackWatcher(makeSession(root), root, {
+      debounceMs: 20,
+      watchFn: fakeWatch,
+    });
     expect(first.kind).toBe('started');
     try {
-      const second = startTurbopackWatcher(
-        makeSession(root),
-        root,
-        20,
-        fakeWatch
-      );
+      const second = startTurbopackWatcher(makeSession(root), root, {
+        debounceMs: 20,
+        watchFn: fakeWatch,
+      });
       // The misreport this pins: a registry collision and a genuine platform
       // failure both returned `null`, so the CLI told the user the platform
       // watcher was unavailable and prescribed a restart that collides
@@ -297,12 +319,10 @@ describe('project-watch claim outcomes', () => {
   test('a failed registration reports unavailable and frees the root', () => {
     const root = createProject();
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const outcome = startTurbopackWatcher(
-      makeSession(root),
-      root,
-      20,
-      failingWatch
-    );
+    const outcome = startTurbopackWatcher(makeSession(root), root, {
+      debounceMs: 20,
+      watchFn: failingWatch,
+    });
     expect(outcome).toEqual({ kind: 'unavailable' });
     expect(warn).toHaveBeenCalledWith(
       expect.stringContaining('Turbopack dev watcher unavailable')
@@ -310,8 +330,134 @@ describe('project-watch claim outcomes', () => {
 
     // Distinct from the duplicate claim above: the failed claim released the
     // root, so the next claim starts rather than colliding.
-    const retry = startTurbopackWatcher(makeSession(root), root, 20, fakeWatch);
+    const retry = startTurbopackWatcher(makeSession(root), root, {
+      debounceMs: 20,
+      watchFn: fakeWatch,
+    });
     expect(retry.kind).toBe('started');
     startedHandle(retry).close();
+  });
+});
+
+/**
+ * Held delivery (openspec: standalone-extraction-cli — the CLI `watch`
+ * verb's readiness clause). An owner that registers the watcher before its
+ * first analysis needs somewhere for that window's events to go: the
+ * session's transaction slot would absorb them (a cycle entering a running
+ * pipeline joins it and returns having analyzed nothing), so registration
+ * holds them and delivers them as one ordinary batch once the owner's first
+ * publication is done. Fake timers make the debounce window an assertion
+ * rather than a wait.
+ */
+describe('startTurbopackWatcher held delivery', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** The registered fake for one directory — named rather than indexed, so
+   *  a registration-order change fails as a lookup, not as a wrong event. */
+  const watcherFor = (dir: string): FakeWatcher => {
+    const found = watchers.find((entry) => entry.dir === dir);
+    if (!found) throw new Error(`no watcher registered for ${dir}`);
+    return found;
+  };
+
+  const collectingSession = (
+    root: string,
+    batches: WatchChanges[]
+  ): ExtractionSession =>
+    makeSession(root, async (changes) => {
+      batches.push(changes);
+    });
+
+  test('events observed while held are delivered once, on demand', async () => {
+    const root = createProject();
+    const batches: WatchChanges[] = [];
+    const handle = startedHandle(
+      startTurbopackWatcher(collectingSession(root, batches), root, {
+        debounceMs: 20,
+        watchFn: fakeWatch,
+        holdEvents: true,
+      })
+    );
+    const edited = join(root, 'src', 'Button.tsx');
+    try {
+      writeFileSync(edited, 'export const Button = 1;\n');
+      watcherFor(join(root, 'src')).listener?.('change', 'Button.tsx');
+
+      // Without the hold, an owner registering before its first analysis
+      // either drops this window's events or hands them to a cycle that
+      // joins the running pipeline transaction and returns without
+      // analyzing them — a permanent loss.
+      vi.advanceTimersByTime(1000);
+      await handle.settle();
+      expect(batches).toEqual([]);
+
+      await handle.deliverHeldEvents();
+      expect(batches).toHaveLength(1);
+      expect(batches[0].modifiedFiles?.has(edited)).toBe(true);
+
+      // The held set is consumed by its delivery, never replayed.
+      await handle.deliverHeldEvents();
+      expect(batches).toHaveLength(1);
+    } finally {
+      handle.close();
+    }
+  });
+
+  test('the same injection without holdEvents is delivered on the debounce', async () => {
+    // Vacuity guard for the negative above: "no batch while held" must be
+    // the hold, not a broken injection.
+    const root = createProject();
+    const batches: WatchChanges[] = [];
+    const handle = startedHandle(
+      startTurbopackWatcher(collectingSession(root, batches), root, {
+        debounceMs: 20,
+        watchFn: fakeWatch,
+      })
+    );
+    const edited = join(root, 'src', 'Button.tsx');
+    try {
+      writeFileSync(edited, 'export const Button = 1;\n');
+      watcherFor(join(root, 'src')).listener?.('change', 'Button.tsx');
+      vi.advanceTimersByTime(1000);
+      await handle.settle();
+      expect(batches).toHaveLength(1);
+      expect(batches[0].modifiedFiles?.has(edited)).toBe(true);
+    } finally {
+      handle.close();
+    }
+  });
+
+  test('after delivery starts, later events take the ordinary debounce path', async () => {
+    const root = createProject();
+    const batches: WatchChanges[] = [];
+    const handle = startedHandle(
+      startTurbopackWatcher(collectingSession(root, batches), root, {
+        debounceMs: 20,
+        watchFn: fakeWatch,
+        holdEvents: true,
+      })
+    );
+    try {
+      // Nothing was observed during the held window: delivery is a no-op
+      // and costs no cycle.
+      await handle.deliverHeldEvents();
+      expect(batches).toEqual([]);
+
+      const later = join(root, 'src', 'Later.tsx');
+      writeFileSync(later, 'export const Later = 1;\n');
+      watcherFor(join(root, 'src')).listener?.('change', 'Later.tsx');
+      vi.advanceTimersByTime(1000);
+      await handle.settle();
+      expect(batches).toHaveLength(1);
+      expect(batches[0].modifiedFiles?.has(later)).toBe(true);
+    } finally {
+      handle.close();
+    }
   });
 });

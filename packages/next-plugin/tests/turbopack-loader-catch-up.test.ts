@@ -490,7 +490,7 @@ describe('catch-up decision table (design D3 — verbatim)', () => {
 
   test('the session-published deadline is the ONLY wait ceiling: a non-default watcher debounce is not cut short by a locally assumed default', async () => {
     const { root, sessionDir } = mismatchRoot();
-    // What `startTurbopackWatcher(session, root, 4000)` publishes: the
+    // What `startTurbopackWatcher(session, root, { debounceMs: 4000 })` publishes: the
     // session derives `deadlineAt` from its configured debounce ceiling plus
     // the status watchdog, so a project that widened the watcher debounce
     // has a deadline far beyond the default one.

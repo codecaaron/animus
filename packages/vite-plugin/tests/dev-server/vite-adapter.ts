@@ -54,7 +54,7 @@ function decodeComponentCss(code: string): string {
 
 /**
  * A free loopback port for this server's HMR websocket. Every dev server in the
- * lane gets its own: Vite's default 24678 is a process-wide singleton, and the
+ * suite gets its own: Vite's default 24678 is a process-wide singleton, and the
  * cold-vs-incremental scenario runs two servers at once.
  */
 function reserveHmrPort(): Promise<number> {
@@ -136,7 +136,7 @@ export function createViteDevAdapter(): DevServerAdapter {
         server: {
           middlewareMode: true,
           // `hmr: false` would switch the watcher's HMR dispatch off entirely
-          // and the plugin's hot-update hook would never run — the lane needs
+          // and the plugin's hot-update hook would never run — the suite needs
           // it on, just on a port of its own.
           hmr: { port: await reserveHmrPort() },
         },
@@ -228,7 +228,7 @@ export function createViteDevAdapter(): DevServerAdapter {
       // Vite's transform middleware normalizes a browser URL via `unwrapId`
       // before serving it (see BRIDGE_SCRIPT_SRC in src/constants.ts);
       // `transformRequest` does not, so requesting the raw URL would assert on
-      // a path no browser takes. Mirrored here, and nowhere else in the lane,
+      // a path no browser takes. Mirrored here, and nowhere else in the suite,
       // because this is the only URL that is not a plain file path.
       const stripped = url.startsWith('/@id/')
         ? url.slice('/@id/'.length)

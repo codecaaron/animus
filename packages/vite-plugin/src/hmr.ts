@@ -71,9 +71,10 @@ async function handleHotUpdateExclusive(
     timestamp
   );
   const absFile = resolve(file);
-  // Entry evidence for the dev-lane trace: which events actually reached the
-  // plugin, and which dispatch owned them. A watcher event that never prints
-  // this line was lost upstream (chokidar throttle or Vite's dispatch chain).
+  // Entry evidence for the dev-server test trace: which events actually
+  // reached the plugin, and which dispatch owned them. A watcher event that
+  // never prints this line was lost upstream (chokidar throttle or Vite's
+  // dispatch chain).
   ctx.log(
     `hotUpdate ${type} ${relative(ctx.rootDir, absFile)} env=${environment.name} owns=${ownsEvent}`
   );
@@ -168,9 +169,10 @@ async function handleHotUpdateExclusive(
  * event, that empty source would be cached permanently.
  *
  * Vite always supplies `read`, so the direct read is NOT a fallback for Vite:
- * it exists for hosts that drive this hook without one. The dev-lane's adapter
- * contract is deliberately bundler-neutral, and a second runtime satisfying it
- * must not be forced to fabricate a helper to get correct behavior.
+ * it exists for hosts that drive this hook without one. The dev-server
+ * test's adapter contract is deliberately bundler-neutral, and a second
+ * runtime satisfying it must not be forced to fabricate a helper to get
+ * correct behavior.
  */
 async function readChangedSource(
   absFile: string,

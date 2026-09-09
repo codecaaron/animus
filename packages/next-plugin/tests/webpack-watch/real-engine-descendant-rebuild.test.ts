@@ -1,16 +1,16 @@
 // @vitest-environment node
 /**
- * Real-pipeline coherence lane (openspec:
- * next-webpack-served-transform-coherence, increment 03): ONE scenario runs
- * the entire stack for real — NAPI engine, real system module evaluation,
- * real analysis, the real plugin and the real loader — against the
- * next-app fixture's compiled webpack. A parent component gains a new
- * variant; the extending descendant must serve the merged config from the
- * TRIGGERING compilation (spec: next-webpack-integration, "Shape edit
- * rebuilds descendants in the triggering compilation").
+ * Real-pipeline coherence (openspec:
+ * next-webpack-served-transform-coherence): one scenario runs the entire
+ * stack for real — NAPI engine, system module evaluation, analysis, the
+ * plugin and the loader — against the next-app fixture's compiled webpack.
+ * A parent component gains a new variant; the extending descendant must
+ * serve the merged config from the triggering compilation (spec:
+ * next-webpack-integration, "Shape edit rebuilds descendants in the
+ * triggering compilation").
  *
- * Skips loudly (with the exact build command) when the NAPI binary or the
- * package dists are absent — mirroring the dev-lane prerequisites idiom.
+ * Skips loudly, naming the build command, when the NAPI binary or the
+ * package dists are absent.
  */
 import { mkdirSync, symlinkSync } from 'fs';
 import { join, sep } from 'path';
@@ -166,7 +166,6 @@ describe.skipIf(!prereq.ok)(
           // Absorb the one-time cold-artifact snapshot (see differential N0).
           () =>
             project.write('src/Button.ts', buttonSource(false) + '// touch\n'),
-          // The real shape edit: the parent gains a variant.
           () => project.write('src/Button.ts', buttonSource(true)),
         ],
         settleMs: 1500,
@@ -177,8 +176,8 @@ describe.skipIf(!prereq.ok)(
         expect(record.errors).toEqual([]);
       }
 
-      // Cold build extracted BOTH components for real (transform output is
-      // engine-emitted createComponent code, not source passthrough).
+      // The cold build extracted both components for real: transform output
+      // is engine-emitted createComponent code, not source passthrough.
       const coldFancy = outputs.find(
         (o) => o.file === 'src/Fancy.ts' && o.turn === 1
       );
@@ -186,8 +185,8 @@ describe.skipIf(!prereq.ok)(
       expect(coldFancy!.code).toContain('createComponent');
       expect(coldFancy!.code).not.toContain('tone');
 
-      // The variant edit's triggering compilation re-ran the DESCENDANT's
-      // loader and its freshly served transform carries the merged variant
+      // The variant edit's triggering compilation re-ran the descendant's
+      // loader, and its freshly served transform carries the merged variant
       // config — same-compilation delivery through the real engine.
       const fancyAfterEdit = outputs.filter(
         (o) => o.file === 'src/Fancy.ts' && o.turn >= 3
@@ -198,8 +197,8 @@ describe.skipIf(!prereq.ok)(
       expect(merged.code).toContain('tone');
       expect(merged.code).toContain('loud');
 
-      // The Fancy rebuild happened in the SAME turn that carried the Button
-      // edit — never a later catch-up turn.
+      // The Fancy rebuild happened in the same turn that carried the Button
+      // edit, not a later catch-up turn.
       const buttonEditTurns = state.modifiedByTurn.size
         ? [...state.modifiedByTurn.entries()]
             .filter(([, files]) =>
@@ -210,7 +209,6 @@ describe.skipIf(!prereq.ok)(
       expect(buttonEditTurns.length).toBeGreaterThanOrEqual(1);
       expect(buttonEditTurns).toContain(merged.turn);
 
-      // The served bundle's Fancy module region carries the merged config.
       const finalBundle = records[records.length - 1].bundle;
       const fancyRegion = finalBundle.slice(
         finalBundle.indexOf('src/Fancy.ts')

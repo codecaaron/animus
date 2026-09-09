@@ -1,4 +1,10 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
@@ -7,12 +13,16 @@ import {
   hashReplacementPlans,
   snapshotFilePlans,
 } from '../../pipeline';
+import { ExtractionSession } from '../../session/extraction-session';
 import { SINGLETON_GLOBAL_KEYS } from '../../session/singleton';
 
 import type {
+  AnalysisSourceEntry,
   ManifestComponentDescriptor,
   ProjectManifest,
 } from '../../pipeline';
+import type { SessionOptions } from '../../session/extraction-session';
+import type { CliLockRecord } from '../../session/published-set';
 
 /**
  * Shared, bundler-free fixtures for the extract session suites and the
@@ -222,6 +232,116 @@ export function createProject(prefix: string): string {
   );
   writeFileSync(join(root, 'src', 'Button.tsx'), BUTTON_SOURCE);
   return root;
+}
+
+/** An app system module that includes a sibling kit — the source that makes
+ *  the kit an admitted external root, which every workspace suite here needs
+ *  before it can say anything about external ingestion. */
+export const KIT_SYSTEM_SOURCE = `import { createSystem } from '@animus-ui/system';
+import kit from '../../kits/ui/src/index.ts';
+export const system = createSystem({}).extend(kit);
+`;
+
+/** The trees `createKitWorkspace` lays down. `kitOld` is not reachable from
+ *  the app's system module: it is the root a suite proves is never
+ *  admitted. */
+export interface KitWorkspace {
+  parent: string;
+  app: string;
+  kit: string;
+  kitOld: string;
+}
+
+/**
+ * A temp monorepo: an app root whose system module includes a sibling kit,
+ * plus a second kit nothing references. Realpath'd, because macOS resolves
+ * `/var` through a symlink and the session compares resolved roots.
+ */
+export function createKitWorkspace(
+  systemSource: string = KIT_SYSTEM_SOURCE
+): KitWorkspace {
+  const parent = realpathSync(makeTempRoot('animus-kit-workspace-'));
+  const app = join(parent, 'app');
+  mkdirSync(join(app, 'src'), { recursive: true });
+  writeFileSync(join(app, 'package.json'), '{"name":"app"}');
+  writeFileSync(join(app, 'src', 'system.ts'), systemSource);
+  writeFileSync(join(app, 'src', 'App.tsx'), 'export const App = 1;\n');
+  const kit = join(parent, 'kits', 'ui');
+  mkdirSync(join(kit, 'src'), { recursive: true });
+  writeFileSync(join(kit, 'package.json'), '{"name":"@kits/ui"}');
+  writeFileSync(join(kit, 'src', 'index.ts'), "export * from './Button';\n");
+  writeFileSync(join(kit, 'src', 'Button.tsx'), BUTTON_SOURCE);
+  const kitOld = join(parent, 'kits', 'ui-old');
+  mkdirSync(join(kitOld, 'src'), { recursive: true });
+  writeFileSync(join(kitOld, 'src', 'Rogue.tsx'), 'export const Rogue = 1;\n');
+  return { parent, app, kit, kitOld };
+}
+
+/** A session rooted at `root` with `src/system.ts` as its system module —
+ *  the one construction every session suite here starts from. */
+export function makeSession(
+  root: string,
+  options: Partial<SessionOptions> = {}
+): ExtractionSession {
+  const session = new ExtractionSession({
+    system: './src/system.ts',
+    ...options,
+  });
+  session.rootDir = root;
+  return session;
+}
+
+/** `makeSession` plus its first full pipeline. */
+export async function startSession(
+  root: string,
+  options: Partial<SessionOptions> = {}
+): Promise<ExtractionSession> {
+  const session = makeSession(root, options);
+  await session.runFullPipeline();
+  return session;
+}
+
+/** An `analyzeProject` mock, read at slot 0 of the positional tuple — the
+ *  serialized analysis entry set (`buildAnalysisInputs`' `filesJson`). */
+interface AnalyzeProjectRecorder {
+  mock: { calls: ReadonlyArray<readonly [string, ...unknown[]]> };
+}
+
+/** The file set the last analysis received. Throws when no call was
+ *  recorded: an empty answer would compare equal to a corpus that analyzed
+ *  nothing. */
+export function lastAnalyzedFiles(
+  analyzeProject: AnalyzeProjectRecorder
+): AnalysisSourceEntry[] {
+  const { calls } = analyzeProject.mock;
+  if (calls.length === 0) {
+    throw new Error('no analyzeProject call was recorded');
+  }
+  const corpus: unknown = JSON.parse(calls[calls.length - 1][0]);
+  if (!Array.isArray(corpus)) {
+    throw new Error('analyzeProject was called with a non-array corpus');
+  }
+  // SAFETY: the recorder captured the session's own serialized corpus, whose
+  // element type the session declares (`AnalysisSourceEntry`).
+  return corpus as AnalysisSourceEntry[];
+}
+
+/** Paths (rootDir-relative) of the file set the last analysis received. */
+export function lastAnalyzedPaths(
+  analyzeProject: AnalyzeProjectRecorder
+): string[] {
+  return lastAnalyzedFiles(analyzeProject).map((entry) => entry.path);
+}
+
+/** One owner claim (`lock.json`'s record) as a holder would have written it
+ *  `ageMs` ago: the pid defaults to this process, and both timestamps carry
+ *  the same age, which is what the shared liveness policy reads. */
+export function lockRecord({
+  pid = process.pid,
+  ageMs = 0,
+}: { pid?: number; ageMs?: number } = {}): CliLockRecord {
+  const at = new Date(Date.now() - ageMs).toISOString();
+  return { pid, startedAt: at, heartbeatAt: at };
 }
 
 /** The (file, replacement) projection of one component descriptor — the two

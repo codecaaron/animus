@@ -11,7 +11,8 @@ export type ManifestDiagnostic = {
   /** Stable diagnostic code (`animus.<namespace>.<slug>`). */
   code?: string;
   /** `"error"` fails strict builds at this policy point; `"warn"`/absent
-   *  never does. */
+   *  never does. A property of the diagnostic's code, read from
+   *  `DIAGNOSTIC_SEVERITY` below rather than chosen per emission site. */
   severity?: string;
 };
 
@@ -115,11 +116,38 @@ export function collectSelectorAliasDiagnostics(
         kind: 'warn',
         message: `selector alias '${name}' value '${value}' has no substitutable '&' subject outside quoted text (${SELECTOR_UNSUPPORTED_SUBJECT})`,
         code: SELECTOR_UNSUPPORTED_SUBJECT,
-        severity: 'error',
+        severity: severityFor(SELECTOR_UNSUPPORTED_SUBJECT),
       });
     }
   }
   return diagnostics;
+}
+
+/** Stable code for a configured source file the collector could not read. */
+export const UNREADABLE_SOURCE_FILE = 'animus.ingestion.unreadable-source-file';
+
+/**
+ * The diagnostic for a source file the project configured — one under a
+ * package its `includes` graph named — that could not be read, so it never
+ * joined the analysis corpus. A lost input: the emitted artifacts are
+ * missing whatever that file declared, and nothing downstream can tell that
+ * from a file that declared nothing. `error` reaches the same conclusion
+ * `--strict` reaches for an unresolvable include. The thrown value comes
+ * straight out of the collector's `catch`, so it is stringified, never
+ * interpreted.
+ */
+export function unreadableSourceDiagnostic<Thrown>(
+  relPath: string,
+  error: Thrown
+): ManifestDiagnostic {
+  return {
+    file: relPath,
+    component: 'source',
+    kind: 'warn',
+    message: `configured source file ${relPath} could not be read and was skipped: ${String(error)}`,
+    code: UNREADABLE_SOURCE_FILE,
+    severity: severityFor(UNREADABLE_SOURCE_FILE),
+  };
 }
 
 /** Stable code for a vocabulary-record collision witness (mirrors the
@@ -129,6 +157,40 @@ export const VOCABULARY_COLLISION = 'animus.vocabulary.collision';
 /** Stable code for a legacy-verb carriage refusal (a sealed kit with
  *  registered vocabulary consumed through `from()`/`includes:`). */
 export const VOCABULARY_LEGACY_VERB = 'animus.vocabulary.legacy-verb';
+
+/**
+ * The severity every diagnostic code this host mints carries. One table, so
+ * "which code is this" and "does it fail --strict" cannot be answered
+ * differently at two emission sites; emission sites must not pick a severity
+ * of their own.
+ *
+ * A code meaning a configured input was lost or unreadable — an include or
+ * entry that does not resolve, a file that cannot be read — is `error`: the
+ * artifacts are missing content the project asked for, which is what
+ * `--strict` refuses. Degradation — a per-property skip, a name collision,
+ * an unsupported-value fallback, a deprecated verb dropping what it cannot
+ * carry while naming the migration — is `warn`: the input was read and the
+ * output is complete, just less than the source hoped for; failing those
+ * would contradict the engine's per-property degradation design.
+ */
+type DiagnosticSeverity = 'error' | 'warn';
+
+const DIAGNOSTIC_SEVERITY: ReadonlyMap<string, DiagnosticSeverity> = new Map([
+  [SELECTOR_UNSUPPORTED_SUBJECT, 'error'],
+  [UNREADABLE_SOURCE_FILE, 'error'],
+  [VOCABULARY_COLLISION, 'warn'],
+  [VOCABULARY_LEGACY_VERB, 'warn'],
+]);
+
+/** The severity of a diagnostic code. An unlisted code — a witness kind
+ *  recorded by a newer @animus-ui/system than this host — is degradation,
+ *  never a lost input: it must not fail the strict build of a host that
+ *  predates its writer. */
+function severityFor(code: string | undefined): DiagnosticSeverity {
+  return (
+    (code === undefined ? undefined : DIAGNOSTIC_SEVERITY.get(code)) ?? 'warn'
+  );
+}
 
 /**
  * Map the sealed system's vocabulary witness entries
@@ -164,7 +226,7 @@ export function vocabularyWitnessDiagnostics(
         kind: 'warn',
         message: `keyframes vocabulary "${entry.name}" is registered by both ${entry.loser} and ${entry.winner} — ${entry.winner} wins; rename one collection (${entry.code})`,
         code: entry.code,
-        severity: 'warn',
+        severity: severityFor(entry.code),
       });
     } else if (entry.code === VOCABULARY_LEGACY_VERB) {
       diagnostics.push({
@@ -173,7 +235,7 @@ export function vocabularyWitnessDiagnostics(
         kind: 'warn',
         message: `a sealed system (${entry.source ?? `'${entry.verb}' source`}) with registered vocabulary [${(entry.names ?? []).join(', ')}] was consumed through the deprecated '${entry.verb}' verb, which cannot carry it — those collections do NOT reach this consumer; use createSystem().extend(source) (${entry.code})`,
         code: entry.code,
-        severity: 'warn',
+        severity: severityFor(entry.code),
       });
     } else {
       // Fail closed (arch-fail-closed-diagnostics): a witness entry this
@@ -185,7 +247,7 @@ export function vocabularyWitnessDiagnostics(
         kind: 'warn',
         message: `unrecognized vocabulary witness entry ${JSON.stringify(entry)} — a newer @animus-ui/system may have recorded a witness kind this host predates${entry.code ? ` (${entry.code})` : ''}`,
         code: entry.code,
-        severity: 'warn',
+        severity: severityFor(entry.code),
       });
     }
   }

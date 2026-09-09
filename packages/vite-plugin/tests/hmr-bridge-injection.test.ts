@@ -83,7 +83,7 @@ describe('bridge delivery via transformIndexHtml', () => {
   test('the src is the browser-addressable form of the virtual id', () => {
     // Why `/@id/` and why the UNPREFIXED specifier: see BRIDGE_SCRIPT_SRC in
     // src/constants.ts. That the resulting URL is actually servable is proven
-    // against a real dev server in tests/dev-lane/dev-server.test.ts.
+    // against a real dev server in tests/dev-server/dev-server.test.ts.
     expect(BRIDGE_SCRIPT_SRC).toBe(`/@id/${VIRTUAL_BRIDGE_ID}`);
   });
 

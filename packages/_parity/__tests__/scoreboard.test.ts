@@ -187,6 +187,44 @@ describe('renderScoreboard', () => {
     ]);
   });
 
+  test('rows within a unit order by artifact, not by discovery order', () => {
+    const rows = (divergences: Divergence[]) =>
+      renderScoreboard({ ...BASE, unitIds: ['unit-a'], divergences })
+        .split('\n')
+        .filter((l) => l.startsWith('  unit-'));
+
+    const forward = rows([
+      divergence({ artifact: 'code', detail: 'code differs' }),
+      divergence({ artifact: 'css', detail: 'css differs' }),
+    ]);
+
+    expect(forward).toEqual(
+      rows([
+        divergence({ artifact: 'css', detail: 'css differs' }),
+        divergence({ artifact: 'code', detail: 'code differs' }),
+      ])
+    );
+    expect(forward.map((l) => l.split(' · ')[1]?.split(' ')[0])).toEqual([
+      'code',
+      'css',
+    ]);
+  });
+
+  test('rows sharing an artifact order by detail, not by discovery order', () => {
+    const rows = (divergences: Divergence[]) =>
+      renderScoreboard({ ...BASE, unitIds: ['unit-a'], divergences })
+        .split('\n')
+        .filter((l) => l.startsWith('  unit-'))
+        .map((l) => l.split(' — ')[1]);
+
+    expect(
+      rows([
+        divergence({ artifact: 'css', detail: 'b differs' }),
+        divergence({ artifact: 'css', detail: 'a differs' }),
+      ])
+    ).toEqual(['a differs', 'b differs']);
+  });
+
   test('family verdict errors are appended after the family list', () => {
     const out = renderScoreboard({
       ...BASE,

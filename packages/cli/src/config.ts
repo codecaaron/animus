@@ -52,10 +52,21 @@ export interface CliFlags {
   exclude?: string[];
 }
 
+/**
+ * How the effective root was decided. Kept on the resolved config because one
+ * of the four is invisible to the user: `config-dir` moves every relative
+ * input to a directory they never named (see `inferredRootNotice`). Not a
+ * term in the shared `provenance` map, which has no term for "inferred from
+ * the config file's directory" and is shared by drivers with no such rule.
+ */
+export type CliRootSource = 'flag' | 'config-file' | 'config-dir' | 'cwd';
+
 export interface ResolvedCliConfig {
   driver: 'cli';
   /** Absolute root every relative input resolves against. */
   root: string;
+  /** Which authority decided `root`. */
+  rootSource: CliRootSource;
   /** Absolute path of the config file consulted, or null. */
   configFile: string | null;
   /** The effective core options handed to the session. */
@@ -329,13 +340,21 @@ export async function resolveCliConfig(
   const raw = loaded.core;
   const fileRoot = raw.root;
   const configDir = configFile ? dirname(configFile) : cwd;
-  const effectiveRoot =
-    flagRoot ??
-    (fileRoot !== undefined
-      ? resolve(configDir, fileRoot)
-      : configFile
-        ? configDir
-        : cwd);
+  let rootSource: CliRootSource;
+  let effectiveRoot: string;
+  if (flagRoot !== null) {
+    rootSource = 'flag';
+    effectiveRoot = flagRoot;
+  } else if (fileRoot !== undefined) {
+    rootSource = 'config-file';
+    effectiveRoot = resolve(configDir, fileRoot);
+  } else if (configFile) {
+    rootSource = 'config-dir';
+    effectiveRoot = configDir;
+  } else {
+    rootSource = 'cwd';
+    effectiveRoot = cwd;
+  }
 
   const provenance: Record<string, OptionProvenance> = {};
   const pick = <K extends keyof AnimusCoreOptions>(
@@ -363,10 +382,18 @@ export async function resolveCliConfig(
     );
   }
 
-  const fileExclude = raw.exclude ?? [];
-  const exclude = [...fileExclude, ...(flags.exclude ?? [])];
-  if (exclude.length > 0) provenance['exclude'] = 'explicit';
-  else provenance['exclude'] = 'default';
+  // `exclude: []` is a STATEMENT ("exclude nothing"), not an absence, and
+  // only the config file can express it: `--exclude` is repeatable, so an
+  // absent flag arrives as `undefined` and a present one always carries a
+  // value. An empty list that decays to `undefined` downstream reinstates
+  // REPLACEABLE_DEFAULT_EXCLUDE.
+  const fileExclude = raw.exclude;
+  const flagExclude = flags.exclude;
+  const excludeIsExplicit =
+    fileExclude !== undefined ||
+    (flagExclude !== undefined && flagExclude.length > 0);
+  const exclude = [...(fileExclude ?? []), ...(flagExclude ?? [])];
+  provenance['exclude'] = excludeIsExplicit ? 'explicit' : 'default';
 
   if (
     flags.mode !== undefined &&
@@ -396,7 +423,7 @@ export async function resolveCliConfig(
 
   const options: AnimusCoreOptions = {
     system,
-    exclude: exclude.length > 0 ? exclude : undefined,
+    exclude: excludeIsExplicit ? exclude : undefined,
     extensions: pick('extensions', undefined),
     strict: pick('strict', flags.strict),
     verbose: pick('verbose', flags.verbose),
@@ -413,6 +440,7 @@ export async function resolveCliConfig(
   return {
     driver: 'cli',
     root: effectiveRoot,
+    rootSource,
     configFile,
     options,
     outDir,
@@ -420,6 +448,26 @@ export async function resolveCliConfig(
     mode: resolvedMode.mode,
     provenance,
   };
+}
+
+/**
+ * The line that tells a user their root moved, emitted only for the one root
+ * authority the invocation does not state: a `--config` path outside the
+ * working directory makes the config file's directory the root every relative
+ * input resolves against. `--root` and a config-file `root` key are the
+ * user's own words and are never announced. Null when there is nothing to
+ * report.
+ */
+export function inferredRootNotice(
+  config: ResolvedCliConfig,
+  cwd: string
+): string | null {
+  if (config.rootSource !== 'config-dir' || config.root === cwd) return null;
+  return (
+    `root ${config.root} was inferred from the directory of ${config.configFile} ` +
+    `— every relative path resolves against it, not against ${cwd}. ` +
+    `Pass --root to choose the root yourself.`
+  );
 }
 
 /** The `--print-config` projection: everything effective, nothing hidden. */
@@ -437,6 +485,8 @@ export function projectResolvedConfig(config: ResolvedCliConfig) {
     minify: config.options.minify ?? null,
     prefix: config.options.prefix ?? null,
     layers: config.options.layers ?? null,
+    extensions: config.options.extensions ?? null,
+    staticCss: config.options.staticCss ?? null,
     exclude: config.excludePatterns,
     provenance: config.provenance,
   };

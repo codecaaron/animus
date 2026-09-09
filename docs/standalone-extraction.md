@@ -239,17 +239,36 @@ line goes to stderr.
 | 1    | Extraction failure: error-kind diagnostics, `--strict` escalations, zero discovered files, structural emptiness, system-module evaluation failure |
 | 2    | Config/usage error: unknown option key, unresolvable `--system` path, unknown command, another process holds the artifact lock                    |
 | 3    | Engine/environment failure: native engine failed to load, published set failed its own consistency check                                          |
+| 4    | The `@animus-ui/cli` install could not be loaded — a broken or partial install, decided by the `animus` bin shim before any command runs          |
 
-`animus watch` adds: **130** on SIGINT, **143** on SIGTERM (lock released,
-last-good artifacts kept), and **3** when `--fail-on-degraded` is set and
-any root cannot be watched.
+Both commands exit **130** on SIGINT and **143** on SIGTERM, releasing the
+advisory lock and keeping last-good artifacts; `animus watch` also exits
+**3** when `--fail-on-degraded` is set and any root cannot be watched.
+
+`animus watch` acknowledges the signal on stderr and then drains the
+in-flight cycle before releasing the output directory. A **second** signal
+during that drain gives up the unfinished cycle and exits at once — still
+unlinking the advisory lock and removing the session tree, because a lock
+left behind is refused (exit 2) by the next run rather than stolen. Every
+ending emits one terminal line, `watch shutdown reason=<signal>
+publications=<n>`, with ` drain=abandoned` appended on the second-signal
+path.
 
 Silent-empty success is impossible in every mode: system-load failure, zero
 discovered files, and structural emptiness (empty component CSS, missing
 `:root`, broken layer order, placeholder residue) are fatal regardless of
 `--strict`. Per-specifier discovery outcomes (`resolved | unresolvable |
 empty | stale-dist`) and never-matching exclusion patterns are reported on
-stderr; `--strict` escalates warnings to failures.
+stderr.
+
+`--strict` fails the build on every diagnostic that means a configured
+input could not be read or resolved — an include or entry that does not
+resolve, a configured file that cannot be read, a configured package or
+path that cannot be found, registered vocabulary that never reaches the
+build. Genuine degradation (per-property skips, name collisions,
+unsupported-value fallbacks) stays a warning in every mode. Without
+`--strict` those input failures print as warnings and the build still
+exits 0.
 
 ### `animus watch`
 
@@ -262,6 +281,10 @@ dependent steps:
 ```
 [animus] watch ready components=10 files=15 outDir=/path/to/app/.animus
 ```
+
+The watcher is registered before the first analysis, and edits observed
+while it runs are held and analyzed before the ready line, so the first
+publication a gating orchestrator sees includes them.
 
 Mid-run failures keep the last-good artifact set and report per-cycle on
 stderr. The advisory lock is held for the watch's lifetime, so a concurrent
@@ -325,7 +348,9 @@ completion, and never part of the published contract.
 
 The outDir is force-excluded from source discovery regardless of your
 exclude configuration, so publishing into the tree you extract from cannot
-self-ingest.
+self-ingest. An outDir that IS the root (`--out-dir .`) is refused as a
+usage error (exit 2): there is no exclusion that protects the artifacts and
+still leaves any source discoverable.
 
 ## CI recipe
 
@@ -378,7 +403,8 @@ changed two observable behaviors in the existing Vite and Next plugins:
   leading `./` is equivalent to the bare root-relative path; metachar-free
   patterns keep substring compatibility. Supplying `exclude` replaces the
   replaceable defaults (`dist`, `.test.`, `.spec.`) — the historical
-  contract — while the structural exclusions (`node_modules`, `.next`,
+  contract, and an explicit empty list means no user exclusions at all —
+  while the structural exclusions (`node_modules`, `.next`,
   `.animus`) always apply and cannot be re-admitted: `node_modules` is
   owned by the external-package collection path, and the artifact output
   directories must never be re-ingested as source. Vite consumers gained

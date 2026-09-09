@@ -1,5 +1,5 @@
 /**
- * Bundler-neutral scenario contract for the dev-server conformance lane.
+ * Bundler-neutral scenario contract for the dev-server conformance tests.
  *
  * A scenario drives file mutations against a running dev server and asserts on
  * the ARTIFACTS the server hands a browser plus the REVISION the bundler
@@ -133,7 +133,7 @@ const REASSERT_EVERY_POLLS = 40;
  *
  * The plugin coalesces resets behind a short quiescence window, so every
  * post-mutation assertion goes through here rather than through a sleep: the
- * loop absorbs the window and the timeout is the only clock in the lane.
+ * loop absorbs the window and the timeout is the only clock in the suite.
  */
 export async function until<T>(
   probe: () => T | false | Promise<T | false>,

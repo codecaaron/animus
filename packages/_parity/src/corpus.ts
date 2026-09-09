@@ -12,6 +12,8 @@
 import { readFileSync, readdirSync, statSync, existsSync } from 'fs';
 import { join, basename } from 'path';
 
+import { ParityRefusal } from './cli-messages';
+
 import type { CorpusUnit, FamilyDecl } from './types';
 
 const ROOT = join(import.meta.dirname, '../../..');
@@ -41,7 +43,7 @@ export function assertCorpusDirectories(
       !existsSync(directory.path) ||
       !statSync(directory.path).isDirectory()
     ) {
-      throw new Error(
+      throw new ParityRefusal(
         `fixture corpus missing: ${directory.label} at ${directory.path} — restore the required directory from version control, then rerun vp run verify:parity`
       );
     }
@@ -172,11 +174,13 @@ export function validateFamilies(
       family.expectedVerdict !== 'identical' &&
       family.expectedVerdict !== 'registered-divergence'
     ) {
-      throw new Error(`family ${family.family} lacks a valid expectedVerdict`);
+      throw new ParityRefusal(
+        `family ${family.family} lacks a valid expectedVerdict`
+      );
     }
     for (const unit of family.units) {
       if (!unitIds.has(unit)) {
-        throw new Error(
+        throw new ParityRefusal(
           `family ${family.family} references unknown unit ${unit}`
         );
       }
@@ -185,14 +189,16 @@ export function validateFamilies(
   for (const required of REQUIRED_FAMILIES) {
     const decl = families.find((f) => f.family === required);
     if (!decl)
-      throw new Error(`required usage-case family missing: ${required}`);
+      throw new ParityRefusal(
+        `required usage-case family missing: ${required}`
+      );
   }
 }
 
 export function loadFamilies(unitIds: Set<string>): FamilyDecl[] {
   const path = join(PARITY_CORPUS, 'families.json');
   if (!existsSync(path)) {
-    throw new Error(
+    throw new ParityRefusal(
       `families.json missing at ${path} — usage-case families are a spec requirement`
     );
   }

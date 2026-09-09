@@ -38,7 +38,6 @@ setEngineApiOverride(() => ({
   clearAnalysisCache: mocks.clearAnalysisCache,
 }));
 
-import { ExtractionSession } from '../../session/extraction-session';
 import { replacementEpochPath } from '../../session/session-paths';
 import {
   getAnalyzedHashes,
@@ -58,10 +57,12 @@ import {
   PLAN_A,
   PLAN_B,
   resetAnimusGlobals,
+  startSession as startFixtureSession,
   SYSTEM_CONFIG,
 } from './session-fixtures';
 
 import type { ManifestComponentDescriptor } from '../../pipeline';
+import type { ExtractionSession } from '../../session/extraction-session';
 
 let restoreGlobals: () => void;
 
@@ -85,15 +86,13 @@ function createProject(): string {
   return createFixtureProject('animus-epoch-');
 }
 
-async function startSession(
+/** The shared session start, over a manifest naming `components`. */
+function startSession(
   root: string,
   components: Record<string, ManifestComponentDescriptor>
 ): Promise<ExtractionSession> {
   mocks.analyzeProject.mockImplementation(() => buildManifest(components));
-  const session = new ExtractionSession({ system: './src/system.ts' });
-  session.rootDir = root;
-  await session.runFullPipeline();
-  return session;
+  return startFixtureSession(root);
 }
 
 function epochArtifact(session: ExtractionSession): EpochArtifactReading {

@@ -1,20 +1,18 @@
 // @vitest-environment node
 /**
- * Differential webpack probes P0/N0/P1/N1 + the zero→present hash-guard
- * end-to-end case (openspec: next-webpack-served-transform-coherence,
- * increment 03 — resolves DEF-2).
+ * Differential webpack probes P0/N0/P1/N1 plus the zero→present hash-guard
+ * end-to-end case (openspec: next-webpack-served-transform-coherence).
  *
- * Runs the REAL AnimusWebpackPlugin and REAL webpack loader (increment 02)
- * against each Next fixture's exact compiled webpack, with the NAPI engine
- * canned at the singleton seam (the same seam every next-plugin unit test
- * uses). The on-disk loader is a delegation shim only because webpack
- * `require`s loaders from disk and cannot load TypeScript — the executed
- * loader body is `src/loader.ts`.
+ * Runs the real AnimusWebpackPlugin and the real webpack loader against each
+ * Next fixture's exact compiled webpack, with the NAPI engine canned at the
+ * singleton seam (the same seam every next-plugin unit test uses). The
+ * on-disk loader is a delegation shim only because webpack `require`s
+ * loaders from disk and cannot load TypeScript — the executed loader body is
+ * `src/loader.ts`.
  *
- * Correctness vs hygiene split (consult §W): correctness = the first
- * successful publication after an epoch move carries every fresh
- * descendant transform; hygiene = no compilation is triggered by the
- * integration's own epoch write.
+ * Two claims are kept apart. Correctness: the first successful publication
+ * after an epoch move carries every fresh descendant transform. Hygiene: no
+ * compilation is triggered by the integration's own epoch write.
  */
 import { readFileSync, writeFileSync } from 'fs';
 import { join, relative, sep } from 'path';
@@ -134,13 +132,13 @@ for (const fixture of WEBPACK_FIXTURES) {
 
         // Assert over the turn evidence so a spurious extra compilation names
         // its trigger set and errors in the failure output. The evidence rides
-        // the assertion MESSAGE: vitest's inline diff truncates nested objects
-        // (`…(2)` — CI flake run #374 shipped no trigger evidence).
+        // the assertion message because vitest's inline diff truncates nested
+        // objects (`…(2)`).
         const evidence = turnEvidence(records);
         expect(evidence, JSON.stringify(evidence, null, 2)).toHaveLength(1);
         expect(records[0].errors).toEqual([]);
         expect(records[0].hasErrors).toBe(false);
-        // The dependency is the SESSION-scoped epoch artifact of the session
+        // The dependency is the session-scoped epoch artifact of the session
         // that ran this watch (still published on the singleton here).
         const sessionEpochPath = replacementEpochPath(getSessionArtifactDir()!);
         const childDeps = records[0].moduleFileDependencies.get(CHILD_REL);
@@ -154,12 +152,11 @@ for (const fixture of WEBPACK_FIXTURES) {
         const { project, state, plugin, shimPath } = setUpProject();
         project.backdateAll();
 
-        // KNOWN ONE-TIME COLD COST (probe-verified, this suite's harness):
-        // the compilation whose watchRun CREATES the epoch artifact snapshots
-        // it "too new" (webpack fileSystemInfo safe-time), so the FIRST edit
-        // after the artifact's first-ever creation rebuilds every animus
-        // module once and re-snapshots them safely. c2 absorbs that; the
-        // steady-state claim — the spec scenario — is measured at c3.
+        // One-time cold cost: the compilation whose watchRun creates the
+        // epoch artifact snapshots it "too new" (webpack fileSystemInfo
+        // safe-time), so the first edit after the artifact's first creation
+        // rebuilds every animus module once and re-snapshots them safely. c2
+        // absorbs that; the steady-state claim is measured at c3.
         const records = await runWatchSession({
           webpack,
           root: project.root,
@@ -180,15 +177,15 @@ for (const fixture of WEBPACK_FIXTURES) {
         expect(records.length, n0Evidence).toBeGreaterThanOrEqual(3);
         expect(records.length, n0Evidence).toBeLessThanOrEqual(5);
         // The measured claim: after the absorb compilation, style-only edits
-        // re-ran the parent but NEVER the sibling, and no compilation was
+        // re-ran the parent and never the sibling, and no compilation was
         // triggered by the integration's own writes.
         const measured = records.slice(2);
         expect(measured.some((r) => runsFor(r, PARENT_REL).length > 0)).toBe(
           true
         );
         for (const record of measured) {
-          // The error STRINGS first — a failure names what broke (e.g. a
-          // catching-up loader) instead of a bare boolean.
+          // The error strings first — a failure names what broke (a
+          // catching-up loader, say) instead of a bare boolean.
           expect(record.errors).toEqual([]);
           expect(record.hasErrors).toBe(false);
           expect(runsFor(record, CHILD_REL)).toHaveLength(0);
@@ -210,8 +207,8 @@ for (const fixture of WEBPACK_FIXTURES) {
 
         // c2 (style edit) absorbs the one-time cold-artifact snapshot cost
         // and re-snapshots every animus module safely; the ignored epoch is
-        // never re-stat'd live (probe-verified), so a c3 descendant rebuild
-        // can come from ONE mechanism only: the needBuild fan-out.
+        // never re-stat'd live, so a c3 descendant rebuild can come from one
+        // mechanism only: the needBuild fan-out.
         const records = await runWatchSession({
           webpack,
           root: project.root,
@@ -227,8 +224,8 @@ for (const fixture of WEBPACK_FIXTURES) {
           ],
         });
 
-        // Correctness: the shape edit's triggering compilation ITSELF re-ran
-        // the descendant's loader exactly once and published both fresh
+        // Correctness: the shape edit's own triggering compilation re-ran the
+        // descendant's loader exactly once and published both fresh
         // transforms — same-compilation delivery, no later catch-up.
         const p1Evidence = JSON.stringify(turnEvidence(records), null, 2);
         expect(records.length, p1Evidence).toBeGreaterThanOrEqual(3);
@@ -241,7 +238,7 @@ for (const fixture of WEBPACK_FIXTURES) {
         const fanOut = fanOuts[0];
         expect(fanOut.hasErrors).toBe(false);
         expect(runsFor(fanOut, CHILD_REL)).toHaveLength(1);
-        // The trigger was the parent SOURCE edit — the fan-out rode the
+        // The trigger was the parent source edit: the fan-out rode the
         // triggering compilation, not a follow-up.
         expect(
           fanOut.modifiedFiles.some((f) => f.endsWith(`${sep}parent.js`))
@@ -259,12 +256,11 @@ for (const fixture of WEBPACK_FIXTURES) {
       });
 
       test('N1, control: a deliberately late epoch write without needBuild publishes stale same-compilation output', async () => {
-        // Probe-discrimination control (consult §W; probe variants A/B): NO
-        // animus plugin, plain addDependency on a watched epoch file written
-        // late (finishModules). The control PASSES iff the triggering
-        // compilation publishes the sibling STALE and only an echo
-        // compilation recovers — proving this suite can tell lagged delivery
-        // from same-compilation delivery.
+        // Discrimination control: no animus plugin, plain addDependency on a
+        // watched epoch file written late (finishModules). It passes only if
+        // the triggering compilation publishes the sibling stale and an echo
+        // compilation recovers it, which is what shows this suite can tell
+        // lagged delivery from same-compilation delivery.
         const webpack = loadFixtureWebpack(fixture.webpackPath);
         resetAnimusGlobals();
         const project = createHarnessProject({
@@ -340,13 +336,13 @@ for (const fixture of WEBPACK_FIXTURES) {
           ],
         });
 
-        // The compilation that carried the a-edit publishes b STALE at E0 —
-        // the mixed-generation shape the live mechanism exists to kill.
+        // The compilation that carried the a-edit publishes b stale at E0 —
+        // the mixed-generation shape the live mechanism exists to prevent.
         const editCompilation = records.find((r) => r.bundle.includes("'a1'"));
         expect(editCompilation).toBeDefined();
         expect(runsFor(editCompilation!, 'src/b.js')).toHaveLength(0);
         expect(editCompilation!.bundle).toMatch(/epoch:E0 via src\/b\.js/);
-        // Recovery arrives only via a LATER (echo) compilation.
+        // Recovery arrives only on a later (echo) compilation.
         const recovery = records.find(
           (r) =>
             r.n > editCompilation!.n && /epoch:E1 via src\/b\.js/.test(r.bundle)
@@ -367,9 +363,9 @@ for (const fixture of WEBPACK_FIXTURES) {
           entrySource([PARENT_REL, CHILD_REL, NEWCOMER_REL])
         );
 
-        // Post-transaction editor: registered AFTER the animus plugin, so on
-        // the armed turn it rewrites the newcomer AFTER analysis committed —
-        // the loader then observes content the committed analysis never saw.
+        // Post-transaction editor: registered after the animus plugin, so on
+        // the armed turn it rewrites the newcomer once analysis has committed
+        // and the loader observes content that analysis never saw.
         const arm = { midEdit: false };
         const midCompilationEditor = {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -396,9 +392,9 @@ for (const fixture of WEBPACK_FIXTURES) {
           steps: [
             () => {
               arm.midEdit = true;
-              // The observable trigger: a benign newcomer touch — still zero
+              // The observable trigger: a benign newcomer touch, still zero
               // entries when analyzed; the mid-compilation edit then lands
-              // the FIRST chain before the loader runs.
+              // the first chain before the loader runs.
               project.write(NEWCOMER_REL, `${newcomerRawSource()}// touch\n`);
             },
           ],

@@ -74,6 +74,20 @@ function isIntrinsicString<Value>(value: Value): value is Value & string {
   );
 }
 
+/** How one project-watch registration differs from the defaults. */
+export interface TurbopackWatcherOptions {
+  /** Debounce window before observed paths become one update batch. Also the
+   *  ceiling the session's status deadlines derive from (design D3). */
+  debounceMs?: number;
+  /** Test seam: fs builtins are not interceptable by the runner's module
+   *  mocker, so registration/error-path tests inject a fake here. */
+  watchFn?: typeof watch;
+  /** Accumulate observed paths and schedule nothing until
+   *  `handle.deliverHeldEvents()` — for an owner that registers before its
+   *  first analysis. */
+  holdEvents?: boolean;
+}
+
 /**
  * Start the dev watcher: fs.watch per eligible top-level directory (plus a
  * non-recursive watch on the root itself), debounced into
@@ -88,15 +102,24 @@ function isIntrinsicString<Value>(value: Value): value is Value & string {
  * watcher, a duplicate claim on an already-watched root, or an unavailable
  * platform watcher (recursive fs.watch missing on Linux before Node 20, or
  * registration failure — degrades to no-watch with a warning).
+ *
+ * `holdEvents` serves an owner that registers before its first analysis:
+ * observed paths accumulate and no cycle is scheduled until
+ * `handle.deliverHeldEvents()`, which delivers them as one ordinary batch.
+ * Without it a cycle scheduled during that window enters a running pipeline,
+ * where the session's transaction slot absorbs it — it joins and returns
+ * having analyzed nothing.
  */
 export function startTurbopackWatcher(
   session: ExtractionSession,
   rootDir: string,
-  debounceMs = DEFAULT_WATCH_DEBOUNCE_MS,
-  // Test seam: fs builtins are not interceptable by the runner's module
-  // mocker, so registration/error-path tests inject a fake here.
-  watchFn: typeof watch = watch
+  options: TurbopackWatcherOptions = {}
 ): TurbopackWatchOutcome {
+  const {
+    debounceMs = DEFAULT_WATCH_DEBOUNCE_MS,
+    watchFn = watch,
+    holdEvents = false,
+  } = options;
   if (activeWatcherRoots.has(rootDir)) return { kind: 'already-watched' };
   activeWatcherRoots.add(rootDir);
 
@@ -114,6 +137,11 @@ export function startTurbopackWatcher(
   let updateChain: Promise<void> = Promise.resolve();
   let closed = false;
   let died = false;
+  // While held, observation continues and scheduling does not: paths join
+  // `pendingPaths` but arm no debounce timer and publish no debounce status
+  // evidence — there is no analysis for a loader to wait on yet, and the
+  // owner's first pipeline is writing that status file.
+  let holdingEvents = holdEvents;
 
   // ── External workspace-source watchers (openspec:
   // external-source-watch-ingestion, design D4/D7) ──────────────────────
@@ -236,6 +264,7 @@ export function startTurbopackWatcher(
 
   const enqueuePath = (abs: string): void => {
     pendingPaths.add(abs);
+    if (holdingEvents) return;
     // Debounce-window evidence (design D3): record the observation in the
     // session's status file so a loader running ahead of the analysis can
     // wait on positive evidence instead of failing NOT_SCHEDULED. Optional
@@ -400,6 +429,15 @@ export function startTurbopackWatcher(
       return died;
     },
     onDied: null,
+    // Ends the hold and delivers what it collected through the same flush
+    // the debounce timer uses; there is no second change-detection path.
+    // Returns the update chain including that batch, so an owner can await
+    // the delivery before announcing readiness.
+    deliverHeldEvents: () => {
+      holdingEvents = false;
+      if (pendingPaths.size > 0) flush();
+      return updateChain;
+    },
     // The serialized update chain AT CALL TIME: after close() no new cycle
     // can be scheduled (the debounce timer is cleared and events stop), so
     // awaiting this drains any in-flight `handleWatchUpdate` — a shutdown
@@ -430,10 +468,14 @@ export type TurbopackWatchOutcome =
  *  caller-initiated teardown; `died` flips only on an ASYNC watcher error
  *  (EMFILE/ENOSPC after registration) with `onDied` invoked once so the
  *  process owner can surface the degradation; `settle()` resolves when the
- *  in-flight update chain has drained. */
+ *  in-flight update chain has drained; `deliverHeldEvents()` ends a
+ *  `holdEvents` registration's hold and resolves once the events it
+ *  collected have been analyzed (a no-op for an unheld registration, and
+ *  for a held one that observed nothing). */
 export interface TurbopackWatcherHandle {
   close(): void;
   readonly died: boolean;
   onDied: (() => void) | null;
   settle(): Promise<void>;
+  deliverHeldEvents(): Promise<void>;
 }

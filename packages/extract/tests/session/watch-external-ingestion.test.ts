@@ -20,13 +20,14 @@ import { join, relative } from 'path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 import {
-  ExtractionSession,
-  type SessionOptions,
-} from '../../session/extraction-session';
-import {
+  BUTTON_SOURCE,
+  BUTTON_STYLE_EDIT,
+  createKitWorkspace,
   disposeTempRoots,
+  lastAnalyzedFiles as analyzedFiles,
+  lastAnalyzedPaths as analyzedPaths,
   makeManifest,
-  makeTempRoot,
+  makeSession,
   resetAnimusGlobals,
   SYSTEM_CONFIG,
 } from './session-fixtures';
@@ -62,67 +63,13 @@ let restoreGlobals: () => void;
  *  cares about: the component CSS the Button sources produce. */
 const MANIFEST = JSON.stringify(makeManifest({ css: '.btn{margin:8;}' }));
 
-const SYSTEM_SOURCE = `import { createSystem } from '@animus-ui/system';
-import kit from '../../kits/ui/src/index.ts';
-export const system = createSystem({}).extend(kit);
-`;
-
-const BUTTON_V1 =
-  "export const Button = animus.styles({ margin: 8 }).asElement('button');\n";
-const BUTTON_V2 =
-  "export const Button = animus.styles({ margin: 16 }).asElement('button');\n";
-
-interface Workspace {
-  parent: string;
-  app: string;
-  kit: string;
-  kitOld: string;
-}
-
-function createWorkspace(systemSource: string = SYSTEM_SOURCE): Workspace {
-  const parent = realpathSync(makeTempRoot('animus-ext-watch-'));
-  const app = join(parent, 'app');
-  mkdirSync(join(app, 'src'), { recursive: true });
-  writeFileSync(join(app, 'package.json'), '{"name":"app"}');
-  writeFileSync(join(app, 'src', 'system.ts'), systemSource);
-  writeFileSync(join(app, 'src', 'App.tsx'), 'export const App = 1;\n');
-  const kit = join(parent, 'kits', 'ui');
-  mkdirSync(join(kit, 'src'), { recursive: true });
-  writeFileSync(join(kit, 'package.json'), '{"name":"@kits/ui"}');
-  writeFileSync(join(kit, 'src', 'index.ts'), "export * from './Button';\n");
-  writeFileSync(join(kit, 'src', 'Button.tsx'), BUTTON_V1);
-  const kitOld = join(parent, 'kits', 'ui-old');
-  mkdirSync(join(kitOld, 'src'), { recursive: true });
-  writeFileSync(join(kitOld, 'src', 'Rogue.tsx'), 'export const Rogue = 1;\n');
-  return { parent, app, kit, kitOld };
-}
-
-function makeSession(app: string, options: Partial<SessionOptions> = {}) {
-  const session = new ExtractionSession({
-    system: './src/system.ts',
-    ...options,
-  });
-  session.rootDir = app;
-  return session;
-}
-
-/** The file set the LAST analysis received: slot 0 of the engine call is
- *  the serialized analysis entry set (`buildAnalysisInputs`' `filesJson`). */
-function lastAnalyzedFiles(): AnalysisSourceEntry[] {
-  const calls = mocks.analyzeProject.mock.calls;
-  return JSON.parse(calls[calls.length - 1][0]);
-}
-
-/** Paths (rootDir-relative) of the file set the LAST analysis received. */
-function lastAnalyzedPaths(): string[] {
-  expect(mocks.analyzeProject.mock.calls.length).toBeGreaterThan(0);
-  return lastAnalyzedFiles().map((f) => f.path);
-}
-
-/** Source of one path in the LAST analyzed file set, or undefined. */
-function lastAnalyzedSource(path: string): string | undefined {
-  return lastAnalyzedFiles().find((f) => f.path === path)?.source;
-}
+/** The file set, the paths, and one source of the last analysis, read over
+ *  this suite's engine mock. */
+const lastAnalyzedFiles = (): AnalysisSourceEntry[] =>
+  analyzedFiles(mocks.analyzeProject);
+const lastAnalyzedPaths = (): string[] => analyzedPaths(mocks.analyzeProject);
+const lastAnalyzedSource = (path: string): string | undefined =>
+  lastAnalyzedFiles().find((f) => f.path === path)?.source;
 
 beforeEach(() => {
   restoreGlobals = resetAnimusGlobals();
@@ -139,7 +86,7 @@ afterEach(() => {
 
 describe('external membership in the watch pass', () => {
   test('a declared kit edit is ingested while an undeclared sibling is dropped', async () => {
-    const { app, kit, kitOld } = createWorkspace();
+    const { app, kit, kitOld } = createKitWorkspace();
     const session = makeSession(app);
     await session.runFullPipeline();
 
@@ -148,7 +95,7 @@ describe('external membership in the watch pass', () => {
     const callsAfterFull = mocks.analyzeProject.mock.calls.length;
 
     // Edit the kit file AND touch the undeclared sibling in one batch.
-    writeFileSync(join(kit, 'src', 'Button.tsx'), BUTTON_V2);
+    writeFileSync(join(kit, 'src', 'Button.tsx'), BUTTON_STYLE_EDIT);
     writeFileSync(
       join(kitOld, 'src', 'Rogue.tsx'),
       'export const Rogue = 2;\n'
@@ -164,13 +111,13 @@ describe('external membership in the watch pass', () => {
     // The kit edit re-analyzed with the edited content; the sibling never
     // entered the universe.
     expect(mocks.analyzeProject.mock.calls.length).toBe(callsAfterFull + 1);
-    expect(lastAnalyzedSource(kitButtonKey)).toBe(BUTTON_V2);
+    expect(lastAnalyzedSource(kitButtonKey)).toBe(BUTTON_STYLE_EDIT);
     const paths = lastAnalyzedPaths();
     expect(paths.some((p) => p.includes('ui-old'))).toBe(false);
   });
 
   test('symlink alias and canonical spellings collapse to one source identity', async () => {
-    const { parent, app, kit } = createWorkspace();
+    const { parent, app, kit } = createKitWorkspace();
     const alias = join(parent, 'link-ui');
     symlinkSync(kit, alias, 'dir');
     const session = makeSession(app);
@@ -180,13 +127,13 @@ describe('external membership in the watch pass', () => {
     const kitButtonKey = relative(app, join(kit, 'src', 'Button.tsx'));
 
     // Edit reported via the ALIAS spelling.
-    writeFileSync(join(kit, 'src', 'Button.tsx'), BUTTON_V2);
+    writeFileSync(join(kit, 'src', 'Button.tsx'), BUTTON_STYLE_EDIT);
     await session.handleWatchUpdate({
       modifiedFiles: new Set([join(alias, 'src', 'Button.tsx')]),
       removedFiles: new Set(),
     });
     expect(mocks.analyzeProject.mock.calls.length).toBe(callsAfterFull + 1);
-    expect(lastAnalyzedSource(kitButtonKey)).toBe(BUTTON_V2);
+    expect(lastAnalyzedSource(kitButtonKey)).toBe(BUTTON_STYLE_EDIT);
     // Exactly one entry for the physical file — no alias-forked duplicate.
     expect(
       lastAnalyzedPaths().filter((p) => p.endsWith('Button.tsx'))
@@ -202,7 +149,7 @@ describe('external membership in the watch pass', () => {
   });
 
   test('a nested symlink escape is rejected and never grows the universe', async () => {
-    const { parent, app, kit } = createWorkspace();
+    const { parent, app, kit } = createKitWorkspace();
     const session = makeSession(app);
     await session.runFullPipeline();
     const callsAfterFull = mocks.analyzeProject.mock.calls.length;
@@ -215,7 +162,7 @@ describe('external membership in the watch pass', () => {
 
     // A positive control rides the same batch so RED/GREEN is observable:
     // the kit edit must ingest, the escape must not.
-    writeFileSync(join(kit, 'src', 'Button.tsx'), BUTTON_V2);
+    writeFileSync(join(kit, 'src', 'Button.tsx'), BUTTON_STYLE_EDIT);
     await session.handleWatchUpdate({
       modifiedFiles: new Set([
         join(kit, 'src', 'Button.tsx'),
@@ -231,7 +178,7 @@ describe('external membership in the watch pass', () => {
   });
 
   test('a deleted kit file is pruned through its recorded alias identity', async () => {
-    const { parent, app, kit } = createWorkspace();
+    const { parent, app, kit } = createKitWorkspace();
     const alias = join(parent, 'link-ui');
     symlinkSync(kit, alias, 'dir');
     const session = makeSession(app);
@@ -240,7 +187,7 @@ describe('external membership in the watch pass', () => {
     const kitButtonKey = relative(app, join(kit, 'src', 'Button.tsx'));
 
     // Record the alias spelling while the file exists.
-    writeFileSync(join(kit, 'src', 'Button.tsx'), BUTTON_V2);
+    writeFileSync(join(kit, 'src', 'Button.tsx'), BUTTON_STYLE_EDIT);
     await session.handleWatchUpdate({
       modifiedFiles: new Set([join(alias, 'src', 'Button.tsx')]),
       removedFiles: new Set(),
@@ -269,7 +216,7 @@ describe('external membership in the watch pass', () => {
    * the session (owners are otherwise rebuilt only by a full pipeline run).
    */
   test('a failed deletion attempt keeps the file owner alongside the restored cache', async () => {
-    const { app, kit } = createWorkspace();
+    const { app, kit } = createKitWorkspace();
     const session = makeSession(app);
     await session.runFullPipeline();
 
@@ -298,7 +245,7 @@ describe('external membership in the watch pass', () => {
   });
 
   test('duplicate specifiers on one canonical root share set-valued ownership', async () => {
-    const { app, kit } = createWorkspace(
+    const { app, kit } = createKitWorkspace(
       `import { createSystem } from '@animus-ui/system';
 import kitA from '../../kits/ui/src/index.ts';
 import kitB from '../../kits/ui/src/Button.tsx';
@@ -318,7 +265,7 @@ export const system = createSystem({}).extend(kitA).extend(kitB);
 
 describe('orchestrator seams (design D4)', () => {
   test('roots are announced before analysis and committed after publication', async () => {
-    const { app, kit } = createWorkspace();
+    const { app, kit } = createKitWorkspace();
     const session = makeSession(app);
     const events: string[] = [];
     session.onExternalRootResolved = (root) => events.push(`resolved:${root}`);
@@ -340,7 +287,7 @@ describe('orchestrator seams (design D4)', () => {
   });
 
   test('a cross-volume root is never announced and commits an empty set', async () => {
-    const { app } = createWorkspace();
+    const { app } = createKitWorkspace();
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     const session = makeSession(app);
     session.sharesProjectVolume = () => false;
@@ -357,7 +304,7 @@ describe('orchestrator seams (design D4)', () => {
 
 describe('dirty-root reconciliation (design D3)', () => {
   test('a dirty-root report reconstructs creations, edits, and deletions before analysis', async () => {
-    const { app, kit } = createWorkspace();
+    const { app, kit } = createKitWorkspace();
     const session = makeSession(app);
     await session.runFullPipeline();
     const callsAfterFull = mocks.analyzeProject.mock.calls.length;
@@ -369,7 +316,7 @@ describe('dirty-root reconciliation (design D3)', () => {
     // The hidden delta: one create, one edit, one delete — the watcher
     // reports ONLY the kit directory (webpack context-dependency shape).
     writeFileSync(join(kit, 'src', 'New.tsx'), 'export const New = 1;\n');
-    writeFileSync(join(kit, 'src', 'Button.tsx'), BUTTON_V2);
+    writeFileSync(join(kit, 'src', 'Button.tsx'), BUTTON_STYLE_EDIT);
     rmSync(join(kit, 'src', 'index.ts'));
     await session.handleWatchUpdate({
       modifiedFiles: new Set([join(kit, 'src')]),
@@ -388,12 +335,12 @@ describe('dirty-root reconciliation (design D3)', () => {
     expect(paths).toContain(kitNewKey);
     expect(paths).toContain(kitButtonKey);
     expect(paths).not.toContain(kitIndexKey);
-    expect(lastAnalyzedSource(kitButtonKey)).toBe(BUTTON_V2);
+    expect(lastAnalyzedSource(kitButtonKey)).toBe(BUTTON_STYLE_EDIT);
     expect(lastAnalyzedSource(kitNewKey)).toBe('export const New = 1;\n');
   });
 
   test('a directory report hiding a system-dependency edit triggers the system reload', async () => {
-    const { app, kit } = createWorkspace();
+    const { app, kit } = createKitWorkspace();
     writeFileSync(join(kit, 'src', 'theme.ts'), 'export const theme = 1;\n');
     mocks.loadSystemModule.mockReset().mockImplementation(() => ({
       ...SYSTEM_CONFIG,
@@ -425,7 +372,7 @@ describe('dirty-root reconciliation (design D3)', () => {
   });
 
   test('a removed root directory reconciles as full deletion', async () => {
-    const { app, kit } = createWorkspace();
+    const { app, kit } = createKitWorkspace();
     const session = makeSession(app);
     await session.runFullPipeline();
     const kitButtonKey = relative(app, join(kit, 'src', 'Button.tsx'));
@@ -446,7 +393,7 @@ describe('dirty-root reconciliation (design D3)', () => {
 
 describe('cross-volume external roots (design D5)', () => {
   test('strict mode fails the pipeline naming the package', async () => {
-    const { app } = createWorkspace();
+    const { app } = createKitWorkspace();
     const session = makeSession(app, { strict: true });
     session.sharesProjectVolume = () => false;
 
@@ -456,7 +403,7 @@ describe('cross-volume external roots (design D5)', () => {
   });
 
   test('non-strict excludes the package atomically with a sticky diagnostic', async () => {
-    const { app, kit } = createWorkspace();
+    const { app, kit } = createKitWorkspace();
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const session = makeSession(app);
     session.sharesProjectVolume = () => false;
@@ -481,7 +428,7 @@ describe('cross-volume external roots (design D5)', () => {
     ).toBe(true);
     // A kit-file event after exclusion is not ingested.
     const calls = mocks.analyzeProject.mock.calls.length;
-    writeFileSync(join(kit, 'src', 'Button.tsx'), BUTTON_V2);
+    writeFileSync(join(kit, 'src', 'Button.tsx'), BUTTON_STYLE_EDIT);
     await session.handleWatchUpdate({
       modifiedFiles: new Set([join(kit, 'src', 'Button.tsx')]),
       removedFiles: new Set(),
@@ -490,7 +437,7 @@ describe('cross-volume external roots (design D5)', () => {
   });
 
   test('an admitted kit that becomes cross-volume on reset is excluded like a removal', async () => {
-    const { app, kit } = createWorkspace();
+    const { app, kit } = createKitWorkspace();
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const session = makeSession(app);
 
@@ -536,12 +483,12 @@ describe('external keyframes discovery', () => {
 import kit from '../../kits/compiled/dist/index.mjs';
 export const system = createSystem({}).extend(kit);
 `;
-    const ws = createWorkspace(systemSource);
+    const ws = createKitWorkspace(systemSource);
     const distKit = join(ws.parent, 'kits', 'compiled');
     mkdirSync(join(distKit, 'dist'), { recursive: true });
     writeFileSync(join(distKit, 'package.json'), '{"name":"@kits/compiled"}');
     writeFileSync(join(distKit, 'dist', 'index.mjs'), 'export default {};\n');
-    writeFileSync(join(distKit, 'dist', 'Button.mjs'), BUTTON_V1);
+    writeFileSync(join(distKit, 'dist', 'Button.mjs'), BUTTON_SOURCE);
 
     const session = makeSession(ws.app);
     await session.runFullPipeline();
@@ -562,11 +509,11 @@ export const system = createSystem({}).extend(kit);
     expect(fileCache.has(kitButtonKey)).toBe(true);
 
     // And a later `.mjs` edit is still ingestible through classification.
-    writeFileSync(join(distKit, 'dist', 'Button.mjs'), BUTTON_V2);
+    writeFileSync(join(distKit, 'dist', 'Button.mjs'), BUTTON_STYLE_EDIT);
     await session.handleWatchUpdate({
       modifiedFiles: new Set([join(distKit, 'dist', 'Button.mjs')]),
       removedFiles: new Set(),
     });
-    expect(lastAnalyzedSource(kitButtonKey)).toBe(BUTTON_V2);
+    expect(lastAnalyzedSource(kitButtonKey)).toBe(BUTTON_STYLE_EDIT);
   });
 });

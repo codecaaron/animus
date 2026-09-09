@@ -20,6 +20,7 @@ import {
   runStructuralSelfCheck,
 } from '@animus-ui/extract/pipeline';
 import {
+  ANIMUS_ARTIFACT_DIR,
   collectSessionAssets,
   ExtractionSession,
   getAnalyzedHashes,
@@ -30,10 +31,14 @@ import {
 import { existsSync, rmSync } from 'fs';
 import { relative, resolve } from 'path';
 
+import { installShutdownSignals } from './signals';
 import {
   acquireLock,
+  MANIFEST_FILE,
   publishArtifacts,
   PublishInconsistencyError,
+  STYLES_FILE,
+  SYSTEM_PROPS_FILE,
 } from './writer';
 
 import type { ResolvedCliConfig } from './config';
@@ -98,6 +103,21 @@ export function createCliSession(config: ResolvedCliConfig): ExtractionSession {
 
   const session = new ExtractionSession(options);
   const relOut = relative(root, outDir);
+  // Refused rather than guarded: an outDir that IS the root has no exclusion
+  // that both protects the artifacts and leaves any source discoverable, so
+  // the published `system-props.js`/`manifest.json` would be re-ingested as
+  // source on the next run. Publishing into the source tree also puts
+  // `lock.json` and a `.staging-<pid>` tree there, and points the asset
+  // prune at a user-owned `assets/`.
+  if (relOut === '') {
+    throw new UsageFailure(
+      `The artifact directory is the root itself (${outDir}) — the published ` +
+        `${STYLES_FILE}/${SYSTEM_PROPS_FILE}/${MANIFEST_FILE} would be ` +
+        `re-ingested as source on the next run. Pass --out-dir with a ` +
+        `subdirectory (the default is ${ANIMUS_ARTIFACT_DIR}) or point ` +
+        `--root at the source tree.`
+    );
+  }
   if (
     !relOut.startsWith('..') &&
     !config.excludePatterns.some((p) => relOut.includes(p) || p === relOut)
@@ -117,6 +137,13 @@ export function createCliSession(config: ResolvedCliConfig): ExtractionSession {
 
   session.driverLabel = 'animus';
   session.rootDir = root;
+  // The CLI republishes the WHOLE session assets directory every cycle
+  // (`collectSessionAssets` → the published set), so a superseded copy left
+  // by the incremental pass would ship in a tree a fresh build of the same
+  // source never produces. Nothing serves this directory in place, so the
+  // dev-server's reason for keeping the copy until the next full pipeline
+  // does not apply here.
+  session.staleAssetPruning = 'every-cycle';
   const aliasPairs = readTsconfigAliasPairs(root);
   const builtAliases = buildPathAliasesJson(aliasPairs, root);
   if (builtAliases) {
@@ -211,10 +238,58 @@ export function publishSharedPayloads(
       // previous generation is genuinely still in place.
       throw new EnvironmentFailure(error.message);
     }
+    // Everything else, `PublishSwapIncompleteError` included, travels as
+    // itself: it carries its own account of what the output directory now
+    // holds to whichever caller reports it.
     throw error;
   }
 
   return { componentCount, fileCount };
+}
+
+/**
+ * Give up what one run claimed: the session-scoped tree it published into
+ * and the advisory lock on the output directory. The single implementation
+ * for every ending, so an interrupted run cleans up exactly as a completed
+ * one does. Synchronous by requirement — the signal paths call
+ * `process.exit` next, which runs no pending microtask. The tree goes FIRST,
+ * with the lock still held, so a concurrent claimant cannot publish into a
+ * directory this run is still writing under. A null `session` is a run whose
+ * construction failed and owns no tree.
+ */
+function releaseRunClaims(
+  session: ExtractionSession | null,
+  releaseLock: () => void
+): void {
+  if (session) {
+    try {
+      rmSync(session.sessionDir, { recursive: true, force: true });
+    } catch {
+      // Best-effort: a missing tree is already gone.
+    }
+    // Released with the tree it protected: a later in-process run
+    // (programmatic `main()`) must find the publication claim free.
+    session.close();
+  }
+  releaseLock();
+}
+
+/**
+ * The once-only latch over `releaseRunClaims`, shared by every ending a run
+ * has, so a second call cannot release a claim a later run already took. The
+ * session is read through `getSession` because the endings are installed
+ * before the session exists; a `null` reading is a run that owns no tree.
+ */
+export function createRunClaimRelease(
+  getSession: () => ExtractionSession | null,
+  releaseLock: () => void
+): () => void {
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    releaseRunClaims(getSession(), releaseLock);
+  };
 }
 
 /** Discovery-outcome report (stderr): per-specifier accounting plus
@@ -254,6 +329,19 @@ export async function runBuild(
   // singleton slot (which can name a DIFFERENT session's tree in a
   // multi-session process).
   let session: ExtractionSession | null = null;
+  // One-shot: the session tree has no reader once the raw set is published,
+  // so CI runs never accumulate session dirs.
+  const releaseClaims = createRunClaimRelease(() => session, release);
+  // Without a listener the process dies where it stands, leaving lock.json
+  // for the next run to steal and a staging tree nothing reclaims. No drain:
+  // a one-shot build has nothing in flight to finish.
+  const removeShutdownSignals = installShutdownSignals({
+    release: ({ exitCode, signal }) => {
+      err(`build interrupted by ${signal} — releasing ${outDir}`);
+      releaseClaims();
+      process.exit(exitCode);
+    },
+  });
   try {
     session = createCliSession(config);
 
@@ -278,17 +366,7 @@ export async function runBuild(
     );
     return { outDir, componentCount, fileCount };
   } finally {
-    release();
-    // One-shot: the session-scoped tree has no reader once the raw set is
-    // published — remove it so CI runs never accumulate session dirs. Only
-    // this run's OWN tree: when construction failed there is no session to
-    // ask, and the process-global slot would then necessarily name a
-    // different session's tree (nothing this call may delete).
-    if (session) {
-      rmSync(session.sessionDir, { recursive: true, force: true });
-      // Programmatic entry point: `main()` is published, so a second
-      // in-process run must find the publication claim free.
-      session.close();
-    }
+    removeShutdownSignals();
+    releaseClaims();
   }
 }

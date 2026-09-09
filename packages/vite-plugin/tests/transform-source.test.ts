@@ -216,7 +216,7 @@ describe('transform: dependencies resolved outside the root are not new files', 
   // after buildStart buys a full spurious re-analysis, an unconditional
   // invalidation of both virtual modules, and a client full-reload per dist
   // chunk on the first dev request that imports the package (observed in the
-  // dev lane: `New file detected: ../../home/runner/.../dist/index.js`).
+  // dev-server test: `New file detected: ../../home/runner/.../dist/index.js`).
   it('an out-of-root dist file is not cached, analyzed, or invalidated', async () => {
     const probe = makeProbe();
 

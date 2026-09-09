@@ -5,7 +5,7 @@
  * into the fixture's node_modules). The backdate must stamp the links
  * themselves, never their targets — `utimesSync` follows symlinks, and a
  * followed stamp rewrites real source mtimes, firing phantom rebuilds in
- * every mtime-keyed consumer outside the fixture (turbo caches, dev-lane
+ * every mtime-keyed consumer outside the fixture (turbo caches, dev-server test
  * watchers, a running `next dev`).
  */
 import {

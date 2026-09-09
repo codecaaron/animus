@@ -470,7 +470,7 @@ describe('Vite injection option: absent by default (G4 parity)', () => {
     // `order: 'pre'`, delegation to buildIndexHtmlTags — not the layer-present
     // output. The production path with a real layer declaration is covered by
     // `vp run verify:integration` and by the built-HTML assertions in the
-    // consumer verify lanes.
+    // consumer verify fixtures.
     const result = await hook.handler.call(HTML_HOOK_CONTEXT, '', {
       path: '/',
       filename: join(process.cwd(), 'index.html'),

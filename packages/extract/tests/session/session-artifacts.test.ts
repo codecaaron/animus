@@ -59,7 +59,11 @@ setEngineApiOverride(() => ({
 }));
 
 import { ExtractionSession } from '../../session/extraction-session';
-import { readCliLockRecord } from '../../session/published-set';
+import {
+  checkLockLiveness,
+  CLI_LOCK_STALE_AFTER_MS,
+  readCliLockRecord,
+} from '../../session/published-set';
 import {
   ANALYSIS_COMMIT_ARTIFACT,
   ANALYSIS_STATUS_ARTIFACT,
@@ -76,6 +80,7 @@ import {
   createProject as createFixtureProject,
   disposeTempRoots,
   expectedEpoch,
+  lockRecord,
   PLAN_A,
   PLAN_B,
   resetAnimusGlobals,
@@ -826,7 +831,7 @@ describe('session-start hygiene (design D2)', () => {
     writeFileSync(join(flat, 'styles.css'), '.newer-generation{}');
     writeFileSync(
       join(flat, 'lock.json'),
-      JSON.stringify({ pid: 1, startedAt: 'boot' })
+      JSON.stringify(lockRecord({ pid: 1 }))
     );
 
     await startSession(root, PLAN_A);
@@ -875,10 +880,7 @@ describe('session-start hygiene (design D2)', () => {
     // Mid-publish instant: payloads renamed, commit not yet rewritten…
     writeFileSync(join(flat, 'styles.css'), '.newer-generation{}');
     // …while a live CLI invocation holds the advisory lock (this pid).
-    writeFileSync(
-      join(flat, 'lock.json'),
-      JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() })
-    );
+    writeFileSync(join(flat, 'lock.json'), JSON.stringify(lockRecord()));
 
     await startSession(root, PLAN_A);
 
@@ -886,6 +888,100 @@ describe('session-start hygiene (design D2)', () => {
       expect(existsSync(join(flat, name)), name).toBe(true);
     }
     expect(existsSync(join(flat, 'commit.json'))).toBe(true);
+  });
+
+  test('a lock whose heartbeat stopped long ago stops protecting the flat tree', async () => {
+    const root = createProject();
+    const flat = join(root, '.animus');
+    writeCliPublishedSet(flat);
+    // Inconsistent set (aborted publish) under a lock whose pid is running —
+    // this test process — but whose animus run died two days ago, leaving the
+    // heartbeat frozen. A pid probe alone would let such a record fence
+    // hygiene off the tree forever, so real debris is never cleaned.
+    writeFileSync(join(flat, 'styles.css'), '.newer-generation{}');
+    writeFileSync(
+      join(flat, 'lock.json'),
+      JSON.stringify(lockRecord({ ageMs: 48 * 60 * 60 * 1000 }))
+    );
+
+    await startSession(root, PLAN_A);
+
+    for (const name of ['styles.css', 'system-props.js', 'manifest.json']) {
+      expect(existsSync(join(flat, name)), name).toBe(false);
+    }
+    expect(existsSync(join(flat, 'commit.json'))).toBe(false);
+  });
+});
+
+describe('CLI lock liveness policy', () => {
+  const stamp = (agoMs: number): string =>
+    new Date(Date.now() - agoMs).toISOString();
+
+  test('a running holder with a fresh heartbeat is live', () => {
+    expect(
+      checkLockLiveness({ pid: process.pid, heartbeatAt: stamp(0) })
+    ).toEqual({ live: true });
+  });
+
+  test('a holder process that is gone is not live, and the reason names it', () => {
+    const liveness = checkLockLiveness({ pid: 2 ** 30, heartbeatAt: stamp(0) });
+    expect(liveness.live).toBe(false);
+    expect(liveness.live === false && liveness.reason).toContain('not running');
+  });
+
+  test('a running pid with a frozen heartbeat is not live, and the reason names the heartbeat', () => {
+    // The pid-reuse case: the number is in use, but by a process that never
+    // wrote this record.
+    const liveness = checkLockLiveness({
+      pid: process.pid,
+      heartbeatAt: stamp(CLI_LOCK_STALE_AFTER_MS + 60_000),
+    });
+    expect(liveness.live).toBe(false);
+    expect(liveness.live === false && liveness.reason).toMatch(/heartbeat/);
+  });
+
+  test('a heartbeat inside the staleness window keeps the claim live', () => {
+    expect(
+      checkLockLiveness({
+        pid: process.pid,
+        heartbeatAt: stamp(CLI_LOCK_STALE_AFTER_MS - 1_000),
+      })
+    ).toEqual({ live: true });
+  });
+
+  test('a record with no readable heartbeat falls back to the pid probe', () => {
+    // Written by a version that refreshed no heartbeat: absence of the field
+    // is absence of staleness evidence, never evidence of death.
+    expect(checkLockLiveness({ pid: process.pid })).toEqual({ live: true });
+    expect(
+      checkLockLiveness({ pid: process.pid, heartbeatAt: 'not-a-date' })
+    ).toEqual({ live: true });
+    expect(checkLockLiveness({ pid: 2 ** 30 }).live).toBe(false);
+  });
+
+  test('the heartbeat rides through the record decode as a string or not at all', () => {
+    const root = createProject();
+    const flat = join(root, '.animus');
+    mkdirSync(flat, { recursive: true });
+    const beat = stamp(0);
+    writeFileSync(
+      join(flat, 'lock.json'),
+      JSON.stringify({ pid: 4242, startedAt: 'then', heartbeatAt: beat })
+    );
+    expect(readCliLockRecord(flat)).toEqual({
+      kind: 'held',
+      record: { pid: 4242, startedAt: 'then', heartbeatAt: beat },
+    });
+    // An unvalidated field renders as `[object Object]` in the conflict
+    // message and parses as NaN in the staleness window.
+    writeFileSync(
+      join(flat, 'lock.json'),
+      JSON.stringify({ pid: 4242, heartbeatAt: { at: beat } })
+    );
+    expect(readCliLockRecord(flat)).toEqual({
+      kind: 'held',
+      record: { pid: 4242 },
+    });
   });
 });
 

@@ -18,6 +18,7 @@ import {
   buildSystemPropsModule,
   clearEngineCache,
   collectExternalPackageSources,
+  compareDiscoveryOrder,
   contentHash,
   createExcludeMatcher,
   createSourceIdentity,
@@ -47,12 +48,14 @@ import {
   staleDistIncludesMessage,
   substituteAssetPlaceholders,
   toWatchKeys,
+  unreadableSourceDiagnostic,
   unresolvableIncludesMessage,
   walkPackageSources,
   withoutInvalidOriginals,
 } from '../pipeline/index';
 import {
-  isLockHolderAlive,
+  checkLockLiveness,
+  holdDirectoryClaim,
   readCliLockRecord,
   verifyCommitRecord,
 } from './published-set';
@@ -326,6 +329,11 @@ export class ExtractionSession {
   /** Vocabulary witness diagnostics from the sealed system's registration
    *  record (vocabulary-registration), awaiting the shared surfacing pass. */
   private systemVocabularyDiagnostics: ManifestDiagnostic[] = [];
+  /** Configured external-package files that could not be read. Rebuilt by
+   *  every full collection and replayed by the incremental passes in between
+   *  — an incremental pass re-collects nothing, so dropping them would let a
+   *  strict watch cycle pass over a corpus still missing the file. */
+  private ingestionFailureDiagnostics: ManifestDiagnostic[] = [];
   /** Full package-resolution map from the last full pipeline — replayed by
    *  incremental passes (sourceEntries alone omits dist-resolved packages). */
   private lastPackageMap: Record<string, string> = {};
@@ -366,11 +374,12 @@ export class ExtractionSession {
    *  AnalysisCommit) — the per-instance counter is correct only because
    *  one session owns the directory. */
   private lastCommit: AnalysisCommit | null = null;
-  /** Release handle of this session's process-exclusive publication claim,
-   *  or null when unheld. Taken by the first `runFullPipeline` and held
-   *  until `close()`: the guards above are per-INSTANCE while `sessionDir`
-   *  is process-shared, so a second live publisher is what makes them
-   *  lie. */
+  /** Release handle of this session's publication claim — the in-process
+   *  exclusive-owner slot AND the session directory's on-disk owner record,
+   *  taken and given up as one — or null when unheld. Taken by the first
+   *  `runFullPipeline` and held until `close()`: the guards above are
+   *  per-INSTANCE while `sessionDir` is process-shared, so a second live
+   *  publisher is what makes them lie. */
   private releasePublicationClaim: (() => void) | null = null;
   /** Session identity — claimed once per PROCESS (one Next invocation),
    *  adopted by every subsequent session instance so all compilers share
@@ -458,6 +467,18 @@ export class ExtractionSession {
    *  first — the CLI's publish path reads this instead of re-parsing the
    *  manifest JSON every cycle. */
   lastComponentCount: number | null = null;
+
+  /**
+   * When superseded copies leave the session's `assets/` directory. Asset
+   * copies are content-addressed and never overwritten, so a revised asset
+   * leaves its previous revision behind until something deletes it, and the
+   * driver decides when that is safe. `'full-pipeline'` (default) suits a
+   * driver that serves the directory in place, where an already-loaded page
+   * still requests the previous revision's url. `'every-cycle'` suits a
+   * driver that republishes the whole directory each cycle, where a
+   * surviving copy would ship in a tree a fresh build never produces.
+   */
+  staleAssetPruning: 'full-pipeline' | 'every-cycle' = 'full-pipeline';
 
   /** Driver-owned STRUCTURAL exclusions (a CLI outDir inside the root),
    *  joined to the never-replaceable set — never the user `exclude` list,
@@ -977,9 +998,25 @@ export class ExtractionSession {
     // by construction. Re-entrant for this instance — the system reload
     // re-enters from inside a watch transaction, and drivers re-run the
     // pipeline on the same session.
-    this.releasePublicationClaim ??= claimExclusiveSessionOwner(
-      `${this.driverLabel}:${this.sessionDir}`
-    );
+    if (this.releasePublicationClaim === null) {
+      const releaseOwner = claimExclusiveSessionOwner(
+        `${this.driverLabel}:${this.sessionDir}`
+      );
+      // The same claim, said where another PROCESS can read it: the owner
+      // slot above only stops a second host inside this one, while the
+      // on-disk record is what lets a sibling session see that this tree
+      // still has a live owner instead of pruning it. Only the winner of the
+      // in-process claim writes it and the two are released together — a
+      // record outliving the claim would fence off a tree nobody publishes
+      // into. The directory may not exist yet; the claim says one is about
+      // to.
+      mkdirSync(this.sessionDir, { recursive: true });
+      const releaseClaimRecord = holdDirectoryClaim(this.sessionDir);
+      this.releasePublicationClaim = () => {
+        releaseOwner();
+        releaseClaimRecord();
+      };
+    }
 
     // The loaded system is assigned at pipeline step 1 — BEFORE the
     // source-state try below opens — while `handleWatchUpdate` decides
@@ -1105,6 +1142,11 @@ export class ExtractionSession {
     // survive the cross-volume gate.
     const rawExternalFiles = new Map<string, string>();
 
+    // Published to the session only once the collection completes, so a
+    // throw in between leaves the previous generation's set in place — like
+    // every other per-generation field.
+    const ingestionFailures: ManifestDiagnostic[] = [];
+
     const collected = await collectExternalPackageSources({
       specifiers: packageNames,
       resolveSpecifier: (name) =>
@@ -1116,7 +1158,10 @@ export class ExtractionSession {
         rawExternalFiles.set(absPath, contentHash(source));
       },
       onUnreadable: (relPath, err) =>
-        this.warn(`skipped unreadable package file ${relPath}: ${String(err)}`),
+        // A configured file that could not be read is lost input, not
+        // degradation: error severity, so a strict build fails on it exactly
+        // as it does on an unresolvable include.
+        ingestionFailures.push(unreadableSourceDiagnostic(relPath, err)),
       onPackageResolved: (_specifier, packageDir) => {
         if (!this.onExternalRootResolved) return;
         // The cross-volume gate runs after collection; a rejected root
@@ -1137,6 +1182,7 @@ export class ExtractionSession {
     // this after a one-shot pipeline (per-specifier accounting; the
     // strict/warn policy below stays the single policy point).
     this.lastExternalOutcomes = collected.outcomes;
+    this.ingestionFailureDiagnostics = ingestionFailures;
 
     for (const record of collected.outcomes) {
       if (record.outcome === 'empty') {
@@ -1333,6 +1379,7 @@ export class ExtractionSession {
       externalSourceEntries: this.externalSourceEntries,
       externalPackageDirs: this.externalPackageDirs,
       systemVocabularyDiagnostics: this.systemVocabularyDiagnostics,
+      ingestionFailureDiagnostics: this.ingestionFailureDiagnostics,
     };
   }
 
@@ -1537,13 +1584,27 @@ export class ExtractionSession {
     return { key: resolved.sourceKey, owningRoot: resolved.owningRoot };
   }
 
-  /** Build full raw originals for one shared adaptation attempt. */
+  /**
+   * Build full raw originals for one shared adaptation attempt.
+   *
+   * Ordered as the full pipeline assembles its corpus — project files in
+   * `discoverFiles` walk order, then external-package entries — so both
+   * paths satisfy the same identical-inputs → byte-identical-artifacts
+   * contract. Insertion order alone does not give that: a file created
+   * mid-watch is appended to the cache, landing after the external block a
+   * fresh walk would put it before. External entries keep their collection
+   * order, which the cache cannot reconstruct.
+   */
   private buildRawEntriesFromCache(): RawSourceEntry[] {
-    const entries: RawSourceEntry[] = [];
+    const project: RawSourceEntry[] = [];
+    const external: RawSourceEntry[] = [];
     for (const [path, { hash, source }] of this.fileCache) {
-      entries.push({ path, source, hash });
+      const target =
+        this.externalFileOwners[path] === undefined ? project : external;
+      target.push({ path, source, hash });
     }
-    return entries;
+    project.sort((a, b) => compareDiscoveryOrder(a.path, b.path));
+    return [...project, ...external];
   }
 
   /**
@@ -1578,11 +1639,12 @@ export class ExtractionSession {
    * runIncrementalPipeline (HMR).
    *
    * Owns diagnostic surfacing, CSS assembly + styles.css write guard,
-   * system-props module emit, and the timing log. The engine's own
-   * `dev_mode` (reconciliation pruning) is derived separately via
-   * `engineDevMode` — an explicit `mode` option overrides the pipeline
-   * path there. For everything else the `devMode` flag is the ONLY
-   * behavioral fork:
+   * system-props module emit, and the timing log. Two decisions are derived
+   * separately, because neither belongs to the pipeline path: the engine's
+   * own `dev_mode` (reconciliation pruning) via `engineDevMode`, which an
+   * explicit `mode` option overrides, and superseded-asset deletion, which
+   * the driver's `staleAssetPruning` decides. For everything else the
+   * `devMode` flag is the ONLY behavioral fork:
    *
    * - `false` (production): computes bt.analysis + logs the extraction
    *   report, and writes system-props.js UNCONDITIONALLY (no
@@ -1681,7 +1743,10 @@ export class ExtractionSession {
       ...analysisOptions,
       warn: (message) => this.warn(message),
       strict: this.options.strict,
-      extraDiagnostics: this.systemVocabularyDiagnostics,
+      extraDiagnostics: [
+        ...this.systemVocabularyDiagnostics,
+        ...this.ingestionFailureDiagnostics,
+      ],
     });
 
     // Error-diagnostic escalation (extraction-diagnostics §Error diagnostics
@@ -1729,7 +1794,12 @@ export class ExtractionSession {
     // asset() placeholder substitution (global-styles-system) happens before
     // assembly so every consumer of the CSS (shared copy, disk artifact,
     // Turbopack hydration) receives substituted urls.
-    const globalCss = this.substituteAssetReferences(result.globalCss, devMode);
+    // Superseded asset copies go on every full pass, and on an incremental
+    // one only where the driver asked for it.
+    const globalCss = this.substituteAssetReferences(
+      result.globalCss,
+      !devMode || this.staleAssetPruning === 'every-cycle'
+    );
 
     // Assemble full stylesheet (canonical order via shared function)
     const { declaration, variables, body } = assembleStylesheet({
@@ -2121,6 +2191,12 @@ export class ExtractionSession {
    * restores stay valid). Deleting a stale artifact is pruning, not a
    * foreign-session write; races with concurrent sessions are tolerated
    * (S14).
+   *
+   * A sibling that is still running is exempt: its snapshots are valid for
+   * its own epoch, so deleting the artifact reconciles nothing and costs
+   * that session a full rebuild (`animus build --mode production` beside a
+   * live dev server). Liveness comes from the sibling's own claim record
+   * through the shared policy (`checkLockLiveness`), never a second one.
    */
   /** sessions-root listing memo, keyed by the root dir's mtime — a new or
    *  pruned sibling DIRECTORY moves it; agreeing siblings stay listed. */
@@ -2146,11 +2222,8 @@ export class ExtractionSession {
       // whenever its publish finds it missing (the self-heal above), so
       // only the sibling's current bytes can answer whether it still
       // disagrees. The read below is that single witness.
-      const siblingEpochPath = join(
-        rootPath,
-        entry,
-        REPLACEMENT_EPOCH_ARTIFACT
-      );
+      const siblingDir = join(rootPath, entry);
+      const siblingEpochPath = join(siblingDir, REPLACEMENT_EPOCH_ARTIFACT);
       try {
         // SAFETY: sibling sessions write this artifact through the same
         // `publishReplacementEpoch` below, whose payload is
@@ -2173,12 +2246,53 @@ export class ExtractionSession {
         // Unreadable/corrupt sibling artifact: fall through to deletion —
         // fail-safe invalidation beats a stale-but-valid snapshot.
       }
+      const ownerPid = this.liveSiblingOwnerPid(siblingDir);
+      if (ownerPid !== null) {
+        this.warn(
+          `sibling session ${entry} still has a live owner (pid ${ownerPid}) ` +
+            `and its replacement epoch disagrees with this session's ` +
+            `(${epoch}) — leaving its epoch artifact in place`
+        );
+        continue;
+      }
       try {
         unlinkSync(siblingEpochPath);
       } catch {
         // Concurrent prune/removal — the invalidation already happened.
       }
     }
+  }
+
+  /**
+   * The pid of `siblingDir`'s live owner, or null when nothing proves one.
+   * Reads the shared claim record through the shared liveness policy
+   * (published-set) — the same two the CLI's advisory lock is judged by — so
+   * there is one answer to "is that process still there", not two.
+   *
+   * Only a decoded, live claim exempts a sibling from pruning: a missing
+   * record, an undecodable one, and an unreadable directory all mean no
+   * evidence anyone is publishing into that tree, so the fail-safe
+   * invalidation stands. That is the opposite default from
+   * `cliWriterHoldsLock` below, deliberately — keeping a dead sibling's
+   * epoch artifact keeps stale restored modules valid, while keeping the
+   * CLI's payloads costs nothing.
+   *
+   * A claim naming THIS process is never a live other publisher, whatever
+   * its heartbeat says: publication is process-exclusive
+   * (`claimExclusiveSessionOwner`), so a sibling directory carrying our own
+   * pid is a tree this process abandoned without releasing.
+   */
+  private liveSiblingOwnerPid(siblingDir: string): number | null {
+    let claim: ReturnType<typeof readCliLockRecord>;
+    try {
+      claim = readCliLockRecord(siblingDir);
+    } catch {
+      // An unreadable claim (EACCES, a raced-away tree) is not a live one.
+      return null;
+    }
+    if (claim.kind !== 'held') return null;
+    if (claim.record.pid === process.pid) return null;
+    return checkLockLiveness(claim.record).live ? claim.record.pid : null;
   }
 
   /** Epoch value held by this session's on-disk artifact, or null when
@@ -2212,7 +2326,7 @@ export class ExtractionSession {
     // gate must not hand-roll a second reading of the artifact it shares.
     const lock = readCliLockRecord(animusDir);
     if (lock.kind === 'none') return false;
-    return lock.kind === 'indeterminate' || isLockHolderAlive(lock.record.pid);
+    return lock.kind === 'indeterminate' || checkLockLiveness(lock.record).live;
   }
 
   /** Session-start hygiene (design D2): delete legacy flat artifacts
@@ -2276,9 +2390,13 @@ export class ExtractionSession {
       if (entry === this.sessionId) continue;
       const dir = join(sessionsRootDir(this.rootDir!), entry);
       try {
-        if (statSync(dir).mtimeMs < cutoff) {
-          rmSync(dir, { recursive: true, force: true });
-        }
+        if (statSync(dir).mtimeMs >= cutoff) continue;
+        // Age is evidence of abandonment, not proof: a dev server up longer
+        // than the window without publishing has an old directory and a live
+        // owner, and this would delete its whole tree. The claim record is
+        // the proof, read through the one liveness policy both prunes share.
+        if (this.liveSiblingOwnerPid(dir) !== null) continue;
+        rmSync(dir, { recursive: true, force: true });
       } catch {
         // raced away — another live session may be pruning too
       }
@@ -2314,7 +2432,7 @@ export class ExtractionSession {
    */
   private substituteAssetReferences(
     globalCss: string,
-    devMode: boolean
+    pruneSuperseded: boolean
   ): string {
     const specifiers = findAssetSpecifiers(globalCss);
     const assetsDir = join(this.sessionDir, SESSION_ASSETS_DIR);
@@ -2383,7 +2501,7 @@ export class ExtractionSession {
     // (and copies of assets no longer referenced at all) accumulate without
     // this sync — runs AFTER the writes so the current set is always on
     // disk, including when no asset() remains and everything is stale.
-    if (!devMode) pruneStaleAssets(assetsDir, expected);
+    if (pruneSuperseded) pruneStaleAssets(assetsDir, expected);
 
     return substituteAssetPlaceholders(globalCss, urlBySpecifier);
   }

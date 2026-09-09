@@ -15,13 +15,19 @@
 export { ExtractionSession, pruneStaleAssets } from './extraction-session';
 export type { SessionOptions, WatchChanges } from './extraction-session';
 export {
+  checkLockLiveness,
+  CLI_LOCK_HEARTBEAT_INTERVAL_MS,
+  CLI_LOCK_STALE_AFTER_MS,
   collectSessionAssets,
   decodeCommitRecord,
+  holdDirectoryClaim,
   isLockHolderAlive,
+  lockRecordBytes,
   readCliLockRecord,
   verifyCommitRecord,
 } from './published-set';
 export type {
+  CliLockLiveness,
   CliLockRecord,
   CommitRecord,
   SessionAsset,

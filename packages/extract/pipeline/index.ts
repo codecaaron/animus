@@ -45,7 +45,7 @@ export {
   STRUCTURAL_EXCLUDE,
   resolveMode,
 } from './core-options';
-export { discoverFiles } from './discover-files';
+export { compareDiscoveryOrder, discoverFiles } from './discover-files';
 export type {
   CollectedExternalPackages,
   ExternalPackageOutcome,
@@ -157,6 +157,7 @@ export type { ManifestDiagnostic } from './manifest-diagnostics';
 export {
   isUnresolvedParentDrop,
   surfaceManifestDiagnostics,
+  unreadableSourceDiagnostic,
   unresolvedParentName,
   VOCABULARY_COLLISION,
   VOCABULARY_LEGACY_VERB,

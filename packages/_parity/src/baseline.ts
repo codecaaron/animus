@@ -2,6 +2,7 @@ import { isJsonObject, isJsonString } from '@animus-ui/assertions';
 import { existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 
+import { ParityRefusal } from './cli-messages';
 import { compareUnit } from './compare';
 import {
   canonicalPrettyJson,
@@ -214,7 +215,7 @@ export function assertRefreshEligible(
   const classified = matchRegister(divergences, register);
   const registerErrors = validateRegister(register, divergences);
   if (registerErrors.length) {
-    throw new Error(
+    throw new ParityRefusal(
       `baseline refresh register invalid: ${registerErrors.join('; ')}`
     );
   }
@@ -226,7 +227,9 @@ export function assertRefreshEligible(
           `${d.unit} · ${d.artifact} (${d.baselineSha256} -> ${d.candidateSha256})`
       )
       .join(', ');
-    throw new Error(`baseline refresh has unregistered drift: ${detail}`);
+    throw new ParityRefusal(
+      `baseline refresh has unregistered drift: ${detail}`
+    );
   }
 }
 
@@ -269,7 +272,7 @@ export function assertRefreshIntent(intent: string, journal: string): void {
   const escaped = intent.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const checked = new RegExp('^- \\[x\\] `' + escaped + '`(?:\\s|$)', 'm');
   if (!checked.test(journal)) {
-    throw new Error(
+    throw new ParityRefusal(
       `baseline refresh requires a checked journal intent: ${intent}`
     );
   }
@@ -342,7 +345,7 @@ export function writeValidatedBaselinePair(
     );
   }
   if (envelopeErrors.length) {
-    throw new Error(
+    throw new ParityRefusal(
       `baseline refresh envelope invalid: ${envelopeErrors.join('; ')}`
     );
   }
@@ -354,7 +357,7 @@ export function writeValidatedBaselinePair(
       result.parseBudget.length +
       result.families.length;
     if (failures) {
-      throw new Error(
+      throw new ParityRefusal(
         `baseline refresh candidate is not green (${mode}): determinism=${result.determinism.length}, css=${result.cssValidity.length}, budget=${result.parseBudget.length}, families=${result.families.length}`
       );
     }

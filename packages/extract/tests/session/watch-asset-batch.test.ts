@@ -9,7 +9,13 @@
  * Same setup as packages/next-plugin/tests/plugin.test.ts: the NAPI boundary is mocked, the
  * pure pipeline helpers and the session run for real over a temp project.
  */
-import { mkdirSync, realpathSync, rmSync, writeFileSync } from 'fs';
+import {
+  mkdirSync,
+  readdirSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'fs';
 import { join, relative } from 'path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
@@ -32,6 +38,7 @@ setEngineApiOverride(() => ({
 }));
 
 import { ExtractionSession } from '../../session/extraction-session';
+import { SESSION_ASSETS_DIR } from '../../session/session-paths';
 import {
   BUTTON_SOURCE,
   BUTTON_STYLE_EDIT as BUTTON_SOURCE_CHANGED,
@@ -159,5 +166,52 @@ describe('handleWatchUpdate asset+component batches', () => {
     });
 
     expect(mocks.analyzeProject.mock.calls.length).toBe(callsBefore + 1);
+  });
+});
+
+/**
+ * When the superseded copy of a revised asset is deleted. The copies are
+ * content-addressed and never overwritten, so a new revision leaves the
+ * previous one behind until something prunes it; which driver reads the
+ * directory decides when that is safe (`staleAssetPruning`).
+ */
+describe('superseded asset copies after an incremental cycle', () => {
+  /** Copy names in the session's assets directory. */
+  function sessionAssets(session: ExtractionSession): string[] {
+    return readdirSync(join(session.sessionDir, SESSION_ASSETS_DIR)).sort();
+  }
+
+  async function reviseAsset(
+    session: ExtractionSession,
+    assetPath: string
+  ): Promise<void> {
+    writeFileSync(assetPath, '<svg><title>revised</title></svg>');
+    await session.handleWatchUpdate({
+      modifiedFiles: new Set([assetPath]),
+      removedFiles: new Set(),
+    });
+  }
+
+  test('the default keeps them — a dev server still serves the previous revision', async () => {
+    const { root, assetPath } = createProject();
+    const session = await startSession(root, assetPath);
+    expect(sessionAssets(session)).toHaveLength(1);
+
+    await reviseAsset(session, assetPath);
+
+    expect(sessionAssets(session)).toHaveLength(2);
+  });
+
+  test("'every-cycle' deletes them on the incremental cycle itself", async () => {
+    const { root, assetPath } = createProject();
+    const session = await startSession(root, assetPath);
+    session.staleAssetPruning = 'every-cycle';
+    const [current] = sessionAssets(session);
+
+    await reviseAsset(session, assetPath);
+
+    const remaining = sessionAssets(session);
+    expect(remaining).toHaveLength(1);
+    expect(remaining[0]).not.toBe(current);
   });
 });

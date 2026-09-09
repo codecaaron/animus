@@ -5,6 +5,9 @@ import {
   hasSelectorSubject,
   collectSelectorAliasDiagnostics,
   surfaceManifestDiagnostics,
+  VOCABULARY_COLLISION,
+  VOCABULARY_LEGACY_VERB,
+  vocabularyWitnessDiagnostics,
 } from '../pipeline/manifest-diagnostics';
 
 import type { ManifestDiagnostic } from '../pipeline/manifest-diagnostics';
@@ -150,5 +153,71 @@ describe('collectSelectorAliasDiagnostics', () => {
     expect(diagnostics[0].component).toBe('_broken');
     expect(diagnostics[0].code).toBe(SELECTOR_UNSUPPORTED_SUBJECT);
     expect(diagnostics[0].severity).toBe('error');
+  });
+});
+
+/**
+ * The `--strict` severity contract: a diagnostic that means "a configured
+ * input could not be read or resolved" carries `severity: 'error'` and
+ * therefore fails `--strict` at the one escalation point above. Genuine
+ * degradation — a per-property skip, a name collision, an unsupported-value
+ * fallback — stays `warn` in every mode.
+ */
+describe('ingestion failures vs degradation under strict', () => {
+  /** The sealed system's own witness wire: a kit registered vocabulary that
+   *  the deprecated carriage verb cannot deliver, so those collections never
+   *  reach this build. */
+  const legacyVerbWitness = JSON.stringify([
+    {
+      code: VOCABULARY_LEGACY_VERB,
+      verb: 'from',
+      source: '@acme/kit',
+      names: ['dsKitMotion'],
+    },
+  ]);
+  /** Two collections registering one name: both were ingested, one wins. */
+  const collisionWitness = JSON.stringify([
+    {
+      code: VOCABULARY_COLLISION,
+      name: 'fade',
+      winner: '@acme/kit',
+      loser: '@acme/legacy',
+    },
+  ]);
+
+  const surface = (witnessJson: string, strict: boolean): string[] => {
+    const warned: string[] = [];
+    surfaceManifestDiagnostics({ diagnostics: [] }, (m) => warned.push(m), {
+      strict,
+      prepend: vocabularyWitnessDiagnostics(witnessJson),
+    });
+    return warned;
+  };
+
+  it('a deprecated verb dropping registered vocabulary stays a warning under strict', () => {
+    const warned = surface(legacyVerbWitness, true);
+    expect(warned).toHaveLength(1);
+    expect(warned[0]).toContain(VOCABULARY_LEGACY_VERB);
+  });
+
+  it('the same case warns without strict', () => {
+    const warned = surface(legacyVerbWitness, false);
+    expect(warned).toHaveLength(1);
+    expect(warned[0]).toContain(VOCABULARY_LEGACY_VERB);
+  });
+
+  it('a vocabulary name collision stays a warning under strict', () => {
+    const warned = surface(collisionWitness, true);
+    expect(warned).toHaveLength(1);
+    expect(warned[0]).toContain(VOCABULARY_COLLISION);
+  });
+
+  it('an unrecognized witness kind stays a warning under strict', () => {
+    const warned = surface(
+      JSON.stringify([{ code: 'animus.vocabulary.from-a-newer-system' }]),
+      true
+    );
+    expect(warned).toHaveLength(1);
+    expect(warned[0]).toContain('animus.vocabulary.from-a-newer-system');
   });
 });

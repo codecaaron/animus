@@ -1,23 +1,23 @@
 /**
  * @vitest-environment node
  *
- * Dev-server conformance lane.
+ * Dev-server conformance tests.
  *
- * Every other consumer lane in this repo builds for production and asserts on
+ * Every other consumer fixture in this repo builds for production and asserts on
  * `dist/`. Nothing exercised the dev server, so the hot-update hook, the
  * system reload and the transform-time new-file path had no regression
- * coverage at all. This lane closes that gap: one real Vite dev server, one
+ * coverage at all. This suite closes that gap: one real Vite dev server, one
  * real watcher, one real fixture app on disk, and assertions on the artifacts
  * the server hands a browser.
  *
- * Rules of the lane:
+ * Rules of this suite:
  *   - no wall-clock sleeps: every wait is `until(...)` over an observable
  *     artifact, or a sentinel-based watcher barrier (see scenario.ts)
  *   - assertions are on served CSS and on bundler revisions, never on timings
  *   - the scenarios share one server and run in order; only the last scenario
  *     starts a second one
  *
- * (Historical note: the lane once carried GAP-marked scenarios pinning
+ * (Historical note: this suite once carried GAP-marked scenarios pinning
  * known-wrong behavior; all have since been resolved and swapped for their
  * regression assertions.)
  */
@@ -73,9 +73,9 @@ function exportLine(source: string, name: string): string {
 
 /**
  * Unlike the rest of `packages/vite-plugin/tests` (whose only prerequisite is
- * `bun install`), this lane boots a real Vite dev server that loads the design
+ * `bun install`), this suite boots a real Vite dev server that loads the design
  * system through the v2 NAPI binary and the sibling package dists. Those are
- * NOT materialized by `verify:unit:ts`, so the lane probes for them through
+ * NOT materialized by `verify:unit:ts`, so the suite probes for them through
  * their owner and skips with an actionable reason instead of failing the fast
  * unit tier.
  */
@@ -83,7 +83,7 @@ const prerequisites = probeEnginePrerequisites();
 
 // Fail-loud skip. Two carriers so the reason cannot be swallowed: this test's
 // skip note (printed by the reporter) and the suite name below.
-it('dev-lane prerequisites are materialized', (context) => {
+it('dev-server test prerequisites are materialized', (context) => {
   if (!prerequisites.ok) context.skip(prerequisites.reason);
   expect(prerequisites.reason).toBe('');
 });
@@ -227,7 +227,7 @@ suite(
           // watcher's per-path change-throttle window, this write's event is
           // dropped outright, so the write must be re-asserted on a slow
           // pickup (see UntilOptions.reassert). Every other mutation in the
-          // lane is either the first event on its path or sits behind the
+          // suite is either the first event on its path or sits behind the
           // reset coalescer's quiescence window, which outlasts the throttle.
           reassert: () =>
             fixture.write(
@@ -770,7 +770,7 @@ suite(
       writeMixed();
 
       // STOP condition: output changed, so the update MUST reach the browser. In
-      // this JSX-free lane Button has no self-accepting boundary, so genuine
+      // this JSX-free fixture Button has no self-accepting boundary, so genuine
       // delivery surfaces as a full reload — the point is that the gate did
       // NOT swallow it.
       await until(

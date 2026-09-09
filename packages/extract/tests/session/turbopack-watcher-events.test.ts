@@ -1,5 +1,5 @@
 /**
- * Behavior pins for the Turbopack dev watcher's event flow (spec:
+ * The Turbopack dev watcher's event flow (spec:
  * next-turbopack-integration, "Dev watch re-extraction"): a started
  * `startTurbopackWatcher` feeds debounced, existence-partitioned change sets
  * from real OS watchers into the session, surfaces debounce-window events as
@@ -51,8 +51,8 @@ setEngineApiOverride(() => ({
 
 let restoreGlobals: () => void;
 
-/** What the engine double returns: a COMPLETE engine manifest carrying this
- *  suite's component CSS. The shared pipeline reads `manifest.sheets` /
+/** What the engine double returns: a complete engine manifest carrying this
+ *  suite's component CSS. The shared pipeline reads `manifest.sheets` and
  *  `manifest.components` directly, so a manifest that omits fields is not a
  *  manifest. */
 const MANIFEST = JSON.stringify(makeManifest({ css: '.btn{margin:8;}' }));
@@ -101,7 +101,7 @@ describe('startTurbopackWatcher', () => {
       .spyOn(session, 'handleWatchUpdate')
       .mockImplementation(async () => {});
 
-    const claim = startTurbopackWatcher(session, root, 20);
+    const claim = startTurbopackWatcher(session, root, { debounceMs: 20 });
     expect(claim.kind).toBe('started');
     const watcher = startedHandle(claim);
     try {
@@ -142,7 +142,7 @@ describe('startTurbopackWatcher', () => {
 
   test('debounce-window events surface as debouncing status evidence before the flush', async () => {
     const root = createProject();
-    // A REAL session (no analysis runs — the huge debounce keeps the flush
+    // A real session (no analysis runs — the huge debounce keeps the flush
     // away): the watcher must feed its observations into the session's
     // status file so loaders ahead of the analysis can wait on evidence
     // (design D3 'debouncing').
@@ -151,7 +151,9 @@ describe('startTurbopackWatcher', () => {
     const session = new ExtractionSession({ system: './src/system.ts' });
     session.rootDir = root;
 
-    const watcher = startedHandle(startTurbopackWatcher(session, root, 60_000));
+    const watcher = startedHandle(
+      startTurbopackWatcher(session, root, { debounceMs: 60_000 })
+    );
     try {
       // The watcher's debounce is the status deadline's ceiling.
       expect(session.debounceCeilingMs).toBe(60_000);
@@ -193,8 +195,10 @@ describe('startTurbopackWatcher', () => {
       .spyOn(session, 'handleWatchUpdate')
       .mockImplementation(async () => {});
 
-    const first = startedHandle(startTurbopackWatcher(session, root, 20));
-    const second = startTurbopackWatcher(session, root, 20);
+    const first = startedHandle(
+      startTurbopackWatcher(session, root, { debounceMs: 20 })
+    );
+    const second = startTurbopackWatcher(session, root, { debounceMs: 20 });
     expect(second).toEqual({ kind: 'already-watched' });
     try {
       // FSEvents may replay events from just before the watcher started —
@@ -219,11 +223,11 @@ describe('deferred status write containment', () => {
       await import('../../session/extraction-session');
     const session = new ExtractionSession({ system: './src/system.ts' });
     session.rootDir = root;
-    // Occupy `.animus` with a regular FILE: the deferred microtask's
+    // Occupy `.animus` with a regular file: the deferred microtask's
     // mkdirSync(sessionDir) then throws ENOTDIR on the session's first-ever
-    // artifact write — the path that used to run OUTSIDE the watch handler's
-    // try/catch and reach the process as an uncaught exception, killing the
-    // dev server.
+    // artifact write. That write runs outside the watch handler's try/catch,
+    // so an uncaught throw there reaches the process and kills the dev
+    // server.
     writeFileSync(join(root, '.animus'), 'not a directory\n');
     const warned: string[] = [];
     // The session's own warn path emits one preformatted line per call.

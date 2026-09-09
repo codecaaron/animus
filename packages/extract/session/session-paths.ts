@@ -51,8 +51,13 @@ export const SESSION_ASSETS_DIR = 'assets';
  *  either side would silently re-arm deletion of the CLI's published output. */
 export const CLI_COMMIT_ARTIFACT = 'commit.json';
 
-/** The standalone CLI's single-writer advisory lock in the flat `.animus/`
- *  tree. A live holder means a CLI invocation owns that tree right now. */
+/** The advisory claim record of whichever directory holds it: a pid plus a
+ *  heartbeat naming the process that owns that directory right now. The
+ *  standalone CLI writes it into the flat `.animus/` tree as its
+ *  single-writer lock; a session writes the same record into its own session
+ *  tree, which is what lets a sibling tell a live session from an abandoned
+ *  one. One name and one shape (published-set.ts); the `CLI_` prefix is the
+ *  published spelling, not a claim that only the CLI writes it. */
 export const CLI_LOCK_ARTIFACT = 'lock.json';
 
 /** The project-relative artifact directory: the flat tree the standalone CLI

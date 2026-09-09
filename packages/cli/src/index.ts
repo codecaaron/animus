@@ -5,7 +5,8 @@
  * Contract (design D5): stdout carries machine output ONLY (today: the
  * `--print-config` JSON projection); every human-facing line goes to
  * stderr. Exit taxonomy: 0 success · 1 extraction/strict failure · 2
- * config/usage error · 3 engine/environment failure.
+ * config/usage error · 3 engine/environment failure · 4 the CLI install
+ * itself could not be loaded (decided by bin/animus.mjs, never by `main`).
  *
  * UNSTABLE MODULE SURFACE: the package's programmatic exports (`main`,
  * `exitCodeFor`, the EXIT_* constants) exist for the repo's own lanes and
@@ -17,14 +18,26 @@
 import { AnimusConfigError } from '@animus-ui/extract/pipeline';
 import { parseArgs } from 'node:util';
 
-import { EnvironmentFailure, runBuild, UsageFailure } from './build';
-import { projectResolvedConfig, resolveCliConfig } from './config';
+import { EnvironmentFailure, err, runBuild, UsageFailure } from './build';
+import {
+  inferredRootNotice,
+  projectResolvedConfig,
+  resolveCliConfig,
+} from './config';
 import { runWatch } from './watch';
 
 export const EXIT_OK = 0;
 export const EXIT_EXTRACTION = 1;
 export const EXIT_USAGE = 2;
 export const EXIT_ENVIRONMENT = 3;
+/**
+ * The CLI package itself could not be loaded — a broken or partial install.
+ * `main()` never returns it: only `bin/animus.mjs` runs when this module is
+ * unloadable, and it carries the literal 4 with this constant as its
+ * authority. A class of its own because the remedy is reinstalling the CLI,
+ * not fixing a project's config (2), sources (1), or environment (3).
+ */
+export const EXIT_INSTALL = 4;
 
 const USAGE = `animus — standalone Animus extraction
 
@@ -39,18 +52,20 @@ Options:
   --root <path>       Root every relative input resolves against
   --config <path>     Explicit config file (default: animus.config.* in root)
   --out-dir <path>    Artifact directory (default: <root>/.animus)
-  --exclude <glob>    Additional exclusion (repeatable; MERGES with defaults)
+  --exclude <glob>    Additional exclusion (repeatable; MERGES with defaults;
+                      an explicit exclude: [] in the config file means none)
   --mode <m>          'development' | 'production' (default: production)
   --targets <query>   Browserslist query for CSS lowering
-  --strict            Escalate extraction warnings to failures
+  --strict            Fail on inputs that could not be read or resolved
   --fail-on-degraded  watch only: exit 3 instead of running with unwatched
                       roots (degradation is otherwise reported and tolerated)
   --verbose           Verbose logging (stderr)
   --print-config      Alias of the print-config command
   --help              This text
 
-Exit codes: 0 success · 1 extraction failure · 2 config error · 3 engine failure
-Watch shutdown: SIGINT exits 130, SIGTERM 143 (lock released, last-good kept)
+Exit codes: 0 success · 1 extraction failure · 2 config error · 3 engine
+failure · 4 the animus install could not be loaded
+Shutdown signals: SIGINT exits 130, SIGTERM 143 (lock released, last-good kept)
 `;
 
 type ErrorMessageValue =
@@ -93,6 +108,14 @@ export function exitCodeFor<Thrown>(error: Thrown): number {
   return EXIT_EXTRACTION;
 }
 
+/** The one way a malformed invocation is reported: the reason, the usage
+ *  text, and the config/usage exit class, in that order. */
+function reportUsageError(reason: string): void {
+  console.error(`[animus] ${reason}`);
+  console.error(USAGE);
+  process.exitCode = EXIT_USAGE;
+}
+
 export async function main(
   argv: string[] = process.argv.slice(2)
 ): Promise<void> {
@@ -117,9 +140,7 @@ export async function main(
       },
     });
   } catch (error) {
-    console.error(`[animus] ${String(readThrownMessage(error))}`);
-    console.error(USAGE);
-    process.exitCode = EXIT_USAGE;
+    reportUsageError(String(readThrownMessage(error)));
     return;
   }
 
@@ -132,6 +153,25 @@ export async function main(
   }
 
   const command = positionals[0];
+  // Command shape is decided from argv ALONE, before any filesystem work, so
+  // a malformed invocation is not reported as whatever config resolution
+  // failed on first. Narrowing here is also what makes the dispatch below
+  // total — its last branch is provably `watch`.
+  if (positionals.length > 1) {
+    reportUsageError(
+      `Unexpected argument '${positionals[1]}' — one command per invocation`
+    );
+    return;
+  }
+  if (
+    command !== 'build' &&
+    command !== 'watch' &&
+    command !== 'print-config'
+  ) {
+    reportUsageError(`Unknown command '${command}'`);
+    return;
+  }
+
   const flags = {
     system: values.system,
     root: values.root,
@@ -144,8 +184,13 @@ export async function main(
     exclude: values.exclude,
   };
 
+  const cwd = process.cwd();
   try {
-    const config = await resolveCliConfig(flags, process.cwd());
+    const config = await resolveCliConfig(flags, cwd);
+    // Reported once, for every command; nothing else tells the user that the
+    // root every relative input resolves against has moved.
+    const rootNotice = inferredRootNotice(config, cwd);
+    if (rootNotice !== null) err(rootNotice);
 
     if (command === 'print-config' || values['print-config']) {
       // The ONLY stdout surface: a complete JSON document.
@@ -160,19 +205,12 @@ export async function main(
       return;
     }
 
-    if (command === 'watch') {
-      // Long-lived: resolves only at shutdown, carrying the exit code
-      // (130 SIGINT / 143 SIGTERM / 3 fail-on-degraded). Startup failures
-      // throw into the shared taxonomy catch below.
-      process.exitCode = await runWatch(config, {
-        failOnDegraded: values['fail-on-degraded'] === true,
-      });
-      return;
-    }
-
-    console.error(`[animus] Unknown command '${command}'`);
-    console.error(USAGE);
-    process.exitCode = EXIT_USAGE;
+    // Long-lived: resolves only at shutdown, carrying the exit code
+    // (130 SIGINT / 143 SIGTERM / 3 fail-on-degraded). Startup failures
+    // throw into the shared taxonomy catch below.
+    process.exitCode = await runWatch(config, {
+      failOnDegraded: values['fail-on-degraded'] === true,
+    });
   } catch (error) {
     console.error(`[animus] ${String(readThrownMessage(error) ?? error)}`);
     process.exitCode = exitCodeFor(error);

@@ -123,10 +123,10 @@ describe('extract test enumeration', () => {
   });
 
   it('declares as ENGINE_BOUND exactly the flat tests that load the native engine', () => {
-    // ENGINE_BOUND is a hand-written list; the detector below is what decides
-    // engine-boundness for the session directory. Holding the two equal keeps
-    // one authority: a flat test that starts loading the engine must be
-    // declared, and a declared name must still load it.
+    // ENGINE_BOUND is a hand-written list, while `loadsNativeEngine` is what
+    // decides engine-boundness for the session directory. Holding the two
+    // equal keeps one authority: a flat test that starts loading the engine
+    // must be declared, and a declared name must still load it.
     const detected = extractTestFiles().filter((file) =>
       loadsNativeEngine(readFileSync(join(EXTRACT_TESTS_DIR, file), 'utf8'))
     );
