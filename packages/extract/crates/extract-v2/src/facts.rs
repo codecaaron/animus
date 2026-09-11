@@ -1,13 +1,5 @@
-//! Per-file fact extraction: the eager-evaluation half of the parse-once
-//! spine. Everything here happens INSIDE the per-file
-//! pass — chain discovery, stage evaluation, statics — producing owned
-//! facts; no `program()` read occurs after cross-file facts resolve.
-//!
-//! Stage arguments are located by SPAN-INDEXED LOOKUP over the already-
-//! stored AST (a second read, never a parse). Evaluation semantics
-//! come from the verbatim-ported evaluator (`eval.rs`); v1's stage-arg
-//! contract is object-expressions-only, with the wrap-and-reparse error
-//! shape replicated as an eval error fact rather than a panic.
+//! Per-file fact extraction: chain discovery, stage evaluation and statics
+//! over one stored AST, producing owned facts and adding no parse.
 
 use std::collections::BTreeMap;
 
@@ -24,10 +16,9 @@ use crate::usage_facts::{collect_import_facts, ImportFact, UsageFact};
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CapturedTransformFact {
-    /// Dotted key path within the stage object (v1 `CapturedTransform.key`).
+    /// Dotted key path within the stage object.
     pub key: String,
-    /// User-authored function source text, owned (a fact of the INPUT —
-    /// not generated code; the distinction is recorded deliberately).
+    /// User-authored function source text, copied from the input file.
     pub source: String,
 }
 
@@ -48,28 +39,23 @@ pub struct StageFacts {
     pub second_value: Option<Value>,
     pub skipped: Vec<(String, String)>,
     pub captured: Vec<CapturedTransformFact>,
-    /// v1-shaped evaluation error (whole-object bail), if any.
+    /// Whole-object evaluation bail for this stage, if any.
     pub eval_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChainFacts {
-    /// v1-identical class identity (default prefix "animus"; option-driven
-    /// prefixes arrive with the row-07 config inputs). The corpus oracle
-    /// pins this against v1 manifest class names.
     pub class_name: String,
     pub descriptor: ChainDescriptor,
     pub stages: Vec<StageFacts>,
-    /// v1's `?` semantics: ANY stage evaluation error drops the whole
-    /// component from the manifest. First error, v1-formatted.
+    /// Any stage evaluation error drops the whole component from the
+    /// manifest; this holds the first such error.
     pub fatal_error: Option<String>,
 }
 
-/// Owned directive-prologue metadata retained after the arena AST drops.
-/// OXC has already applied ECMAScript lexical grammar and ASI when it
-/// classifies `Program.directives`, so emission must not infer these
-/// boundaries a second time from bytes.
+/// Directive-prologue boundary owned by the parser: OXC applies lexical
+/// grammar and ASI, so emission must not re-infer it from bytes.
 #[derive(Debug, Clone)]
 pub struct DirectivePrologueFact {
     /// Byte offset just past the last directive's same-line trailing trivia.
@@ -82,9 +68,8 @@ pub struct DirectivePrologueFact {
 }
 
 impl DirectivePrologueFact {
-    /// Remap this parser-owned boundary across the legacy line strip. Returns
-    /// false when a removal destroys OXC-confirmed directive/comment
-    /// structure, or when the supplied offsets violate their source bounds.
+    /// Remap this boundary across an import strip. Returns false when a
+    /// removal destroys directive/comment structure or exceeds the source.
     pub(crate) fn remap_after_strip(
         &mut self,
         source_len: usize,
@@ -147,10 +132,8 @@ fn is_ecmascript_line_terminator(ch: char) -> bool {
     matches!(ch, '\n' | '\r' | '\u{2028}' | '\u{2029}')
 }
 
-/// Extend an OXC-classified directive statement through comments attached to
-/// its line. This does not classify directives or infer ASI: OXC supplies the
-/// statement boundary, and this scanner only retains trailing lexical trivia
-/// above imports inserted after the prologue.
+/// Extend a directive statement through comments attached to its line. OXC
+/// supplies the boundary; this only retains trailing lexical trivia.
 fn extend_directive_trailing_trivia(source: &str, statement_end: u32) -> u32 {
     let mut end = statement_end as usize;
 
@@ -227,33 +210,30 @@ fn directive_prologue_protected_ranges(
 #[serde(rename_all = "camelCase")]
 pub struct FileFacts {
     pub path: String,
-    /// Internal emission fact; excluded from the public manifest surface.
     #[serde(skip)]
     pub directive_prologue: Option<DirectivePrologueFact>,
     pub chains: Vec<ChainFacts>,
     /// Same-file static const values (feeds identifier resolution).
     pub statics: BTreeMap<String, Value>,
-    /// Raw JSX/createElement usage facts (component-agnostic; cross-file
-    /// filtering happens as fact algebra — usage_facts.rs).
+    /// Raw JSX/createElement usage facts, component-agnostic; cross-file
+    /// filtering happens later.
     pub usage: Vec<UsageFact>,
-    /// Usage facts enriched with same-file/imported statics for CSS analysis.
-    /// The public manifest and cross-file facts intentionally retain `usage`
-    /// above as the raw syntax classification.
+    /// Usage facts enriched with same-file and imported statics; `usage`
+    /// above stays the raw syntax classification.
     #[serde(skip)]
     pub(crate) usage_enriched: Option<Vec<UsageFact>>,
     /// compose() families found in this file.
     pub compose: Vec<ComposeFamilyInfo>,
-    /// Top-level `const X = Y;` bare-identifier aliases (assertion-peeled,
-    /// `const` only — rendered-usage-semantics › local const aliases).
-    /// Internal resolution input; not a public manifest surface.
+    /// Top-level `const X = Y;` bare-identifier aliases, assertion-peeled
+    /// and `const` only.
     #[serde(skip)]
     pub aliases: BTreeMap<String, String>,
     /// Named-import specifiers (alias augmentation inputs).
     pub imports: Vec<ImportFact>,
     /// Named-export facts (re-export following for provenance/statics).
     pub exports: Vec<crate::usage_facts::ExportFact>,
-    /// Extracted createTransform() declarations (evaluator registration
-    /// inputs — v1 project_analyzer Phase 1 parity).
+    /// Extracted createTransform() declarations, registered with the
+    /// evaluator.
     pub transforms: Vec<crate::transforms::ExtractedTransform>,
     pub parse_diagnostics: Vec<String>,
 }
@@ -293,9 +273,8 @@ fn index_objects<'a, 'b>(
         Expression::ParenthesizedExpression(paren) => {
             index_objects(&paren.expression, index);
         }
-        // Erased type-level wrappers: `{...} as const`, `{...} satisfies T`,
-        // `x!` — index the operand so span lookups resolve to the inner
-        // object (semantic-const-resolution, type-assertion transparency).
+        // Erased type wrappers (`as const`, `satisfies T`, `x!`): index the
+        // operand so span lookups resolve to the inner object.
         Expression::TSAsExpression(x) => {
             index_objects(&x.expression, index);
         }
@@ -345,9 +324,8 @@ fn build_object_index<'a, 'b>(
     index
 }
 
-/// Identifier spans → names, for v1's identifier-stage-arg fallback
-/// (`.styles(BASE)` resolves BASE from same-file statics — v1
-/// lib.rs parse_object_from_source_with_statics identifier arm).
+/// Identifier spans → names, so `.styles(BASE)` can resolve BASE from
+/// same-file statics.
 fn index_identifiers<'a>(expr: &Expression<'a>, index: &mut BTreeMap<(u32, u32), String>) {
     match expr {
         Expression::Identifier(id) => {
@@ -364,8 +342,8 @@ fn index_identifiers<'a>(expr: &Expression<'a>, index: &mut BTreeMap<(u32, u32),
         Expression::StaticMemberExpression(member) => {
             index_identifiers(&member.object, index);
         }
-        // Erased type-level wrappers: `styles(s as const)` resolves the same
-        // identifier as `styles(s)` (semantic-const-resolution).
+        // Erased type wrappers: `styles(s as const)` resolves the same
+        // identifier as `styles(s)`.
         Expression::TSAsExpression(x) => {
             index_identifiers(&x.expression, index);
         }
@@ -382,11 +360,8 @@ fn index_identifiers<'a>(expr: &Expression<'a>, index: &mut BTreeMap<(u32, u32),
     }
 }
 
-/// Top-level `const X = Y;` aliases where the init, after type-wrapper
-/// peeling, is a bare identifier reference. `let`/`var` are excluded
-/// (mutable bindings carry no static guarantee — mirrors
-/// semantic-const-resolution), as are destructuring patterns and any
-/// non-identifier init.
+/// Top-level `const X = Y;` aliases whose init peels to a bare identifier.
+/// `let`/`var` are excluded: a mutable binding carries no static guarantee.
 fn collect_local_aliases(program: &Program<'_>) -> BTreeMap<String, String> {
     use oxc::ast::ast::{Declaration, Statement, VariableDeclarationKind};
     let mut aliases = BTreeMap::new();
@@ -469,8 +444,6 @@ fn eval_stage_object(
     }
 }
 
-/// The per-file pass: discovery + eager stage evaluation + statics, all
-/// against one stored AST, zero parses added.
 pub fn extract_file_facts(ast: &OwnedAst) -> FileFacts {
     extract_file_facts_with_prefix(ast, "animus")
 }
@@ -479,11 +452,8 @@ pub fn extract_file_facts_with_prefix(ast: &OwnedAst, prefix: &str) -> FileFacts
     extract_file_facts_enriched(ast, prefix, &rustc_hash::FxHashMap::default())
 }
 
-/// Chain-fact extraction with SUPPLEMENTAL statics (v1 Phase 2b parity —
-/// imported consts + keyframes bindings resolved by the engine's pass A;
-/// journal 2026-07-13 10:50). Same-file statics win nothing over the
-/// supplement in v1: Phase 2b starts from the file's own values and
-/// OVERWRITES with resolved imports, so the supplement is applied last.
+/// Chain-fact extraction with supplemental statics (imported consts and
+/// keyframes bindings); the supplement overwrites same-file values.
 pub fn extract_file_facts_enriched(
     ast: &OwnedAst,
     prefix: &str,
@@ -550,15 +520,6 @@ pub(crate) fn extract_file_facts_from_static_maps(
 
     let identifier_index = build_identifier_index(program);
 
-    // Per-method dispatch mirrors v1 process_chain with ONE deliberate,
-    // register-tracked departure from v1 parity (openspec:
-    // semantic-const-resolution): variant stages and the compound second
-    // arg now evaluate WITH statics — v1 left both statics-blind, silently
-    // emitting empty variant axes for identifier-backed maps. Everything
-    // else is v1-verbatim: no transform capture in variant stages, compound
-    // second-arg captures discarded (skips kept), identifier args resolve
-    // from statics, and ANY stage error is CHAIN-FATAL (v1's `?` drops the
-    // whole component) and stops further stage evaluation.
     let chains = chain_walk::walk_program(program)
         .into_iter()
         .map(|descriptor| {
@@ -632,7 +593,6 @@ pub(crate) fn extract_file_facts_from_static_maps(
                             let label = if stage.method == "compound" {
                                 "compound condition eval failed"
                             } else {
-                                // matches v1's "{method} eval failed:" prefix
                                 facts.eval_error =
                                     Some(format!("{} eval failed: {}", stage.method, e));
                                 fatal_error = facts.eval_error.clone();
@@ -645,10 +605,6 @@ pub(crate) fn extract_file_facts_from_static_maps(
                             continue;
                         }
                     }
-                    // compound second arg: statics-AWARE (the statics
-                    // departure), captures discarded, skips kept, failure
-                    // chain-fatal (v1 lib.rs "compound styles eval failed"
-                    // + `?`).
                     if stage.method == "compound" {
                         if let Some(sspan) = stage.second_arg_span {
                             match object_index.get(&sspan) {
@@ -698,8 +654,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
         .collect();
 
     let imports = collect_import_facts(program);
-    // v1 Phase-1 parity (project_analyzer ~482-493): createTransform alias
-    // bindings come from named imports; the literal name always matches.
+    // Alias bindings only: the literal `createTransform` name always matches.
     let ct_bindings: rustc_hash::FxHashSet<String> = imports
         .iter()
         .filter(|imp| imp.imported == "createTransform" && imp.local != "createTransform")
@@ -738,7 +693,6 @@ mod tests {
         let counter = ParseCounter::new(0);
         let ast = OwnedAst::parse("test.tsx".into(), source.into(), &counter);
         let facts = extract_file_facts(&ast);
-        // Parse-once invariant: fact extraction adds ZERO parses.
         assert_eq!(counter.load(std::sync::atomic::Ordering::SeqCst), 1);
         facts
     }
@@ -870,8 +824,6 @@ mod tests {
 
     #[test]
     fn identifier_stage_arg_resolves_from_statics() {
-        // v1: `.styles(BASE)` resolves BASE via same-file statics
-        // (inc-11 review F1b — the fixture that motivated the fix).
         let facts = facts_for(
             r#"
             const BASE = { p: 4 };
@@ -900,9 +852,6 @@ mod tests {
 
     #[test]
     fn compound_second_arg_failure_is_chain_fatal() {
-        // v1 evaluates the compound styles object statics-BLIND and a
-        // structural bail (`...spread`) propagates via `?` — the WHOLE
-        // component is dropped (inc-11 review F1c).
         let facts = facts_for(
             r#"
             export const Btn = ds
@@ -916,15 +865,12 @@ mod tests {
             err.starts_with("compound styles eval failed:"),
             "got: {err}"
         );
-        // Evaluation stopped at the failing stage (v1 short-circuit).
+        // Evaluation stopped at the failing stage.
         assert_eq!(facts.chains[0].stages.len(), 2);
     }
 
     #[test]
     fn variant_stage_uses_variant_parser_without_capture() {
-        // v1's variant path never captures transform fns (F1a): a
-        // `transform` key inside variant styles is a skip in v1's variant
-        // parser semantics, not a CapturedTransform.
         let facts = facts_for(
             r#"
             export const Box = ds

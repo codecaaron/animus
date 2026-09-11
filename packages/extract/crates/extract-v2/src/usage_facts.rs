@@ -1,13 +1,5 @@
-//! Raw JSX usage FACTS + cross-file filtering as fact algebra — design (b)
-//! of the D4 experiment (journal 2026-07-13 00:05).
-//!
-//! Collection is AST-local (one Visit inside the per-file pass; classifies
-//! every attribute of every candidate tag with NO knowledge of which
-//! components exist). Filtering reproduces the verbatim-ported scanners'
-//! OUTCOMES from facts alone — proven by property tests below that compare
-//! both paths on the same inputs. If filtering matches everywhere, no
-//! stored `program()` is ever read after cross-file facts resolve, and
-//! D4's falsification criterion fires.
+//! Raw JSX usage facts plus the cross-file filters over them. Collection is
+//! component-agnostic; filtering applies the component maps afterwards.
 
 use oxc::ast::ast::{
     Argument, CallExpression, Expression, IdentifierReference, ImportDeclarationSpecifier,
@@ -37,28 +29,23 @@ pub struct UsageResidueRecord {
     pub kind: DynamicExpressionKind,
 }
 
-/// AST-local classification of one attribute value, computed at collect
-/// time (owned mirror of the scanner's PropValueResult + variant string).
+/// Classification of one JSX attribute value, computed at collect time.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AttrFact {
     pub name: String,
-    /// Static value when the attribute is statically evaluable.
     pub static_value: Option<Value>,
     /// Statically known alternatives at a still-dynamic conditional or
-    /// logical site. Each value fattens the ordinary utility-input stream.
+    /// logical site; each one still enters the utility-input stream.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub enumerable_values: Vec<Value>,
-    /// True when the value is a non-static expression (dynamic slot).
     pub dynamic: bool,
-    /// Machine-readable reason for a dynamic classification.
     pub dynamic_kind: Option<DynamicExpressionKind>,
     /// Byte span of the dynamic expression in its source file.
     pub dynamic_span: Option<UsageSpan>,
-    /// True when the scanner would skip entirely (empty expressions etc.).
+    /// True when the attribute is skipped entirely (empty expressions).
     pub skip: bool,
-    /// classify_jsx_attribute_as_variant_value output (string or
-    /// "__dynamic__"), used by variant tracking.
+    /// Variant classification: a literal string or `"__dynamic__"`.
     pub variant_class: String,
 }
 
@@ -89,10 +76,6 @@ pub enum UsageFact {
     },
 }
 
-/// Per-file import specifier fact: v1's Phase-5b augments usage maps by
-/// LOCAL alias, matching the IMPORTED name against the global map by NAME
-/// (no re-export following — bug-compatible; the aliased-reexport corpus
-/// unit witnesses that v1 does NOT follow export chains for usage maps).
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ImportFact {
@@ -101,7 +84,7 @@ pub struct ImportFact {
     pub source: String,
 }
 
-/// Collect named-import facts (top-level statements; AST-local).
+/// Collect import facts from top-level statements.
 pub fn collect_import_facts(program: &Program<'_>) -> Vec<ImportFact> {
     let mut out = Vec::new();
     for stmt in &program.body {
@@ -116,14 +99,8 @@ pub fn collect_import_facts(program: &Program<'_>) -> Vec<ImportFact> {
                                 source: import.source.value.to_string(),
                             });
                         }
-                        // v1 import_resolver records default imports as
-                        // imported_name "default" (import_resolver 97-104)
-                        // — extension provenance needs them so a
-                        // default-imported parent resolves to a dangling
-                        // `file::default` root and the child is kept
-                        // STANDALONE (inc-07 review F3). "default" never
-                        // matches a component name, so the Phase-5b alias
-                        // augmentation is unaffected.
+                        // `imported` is "default" for a default import, so
+                        // the parent dangles and the child stands alone.
                         ImportDeclarationSpecifier::ImportDefaultSpecifier(def) => {
                             out.push(ImportFact {
                                 local: def.local.name.to_string(),
@@ -140,16 +117,14 @@ pub fn collect_import_facts(program: &Program<'_>) -> Vec<ImportFact> {
     out
 }
 
-/// Per-file named-export fact (v1 import_resolver ExportInfo). Feeds
-/// static-export enrichment (v1 Phase 2b), keyframes local-binding
-/// injection, and re-export chain following (source/original).
+/// Per-file named-export fact; feeds static enrichment and re-export
+/// following.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExportFact {
     pub exported: String,
-    /// Local binding name; None for pure re-exports (v1 ExportInfo shape —
-    /// keeps static-export collection from matching a same-named local;
-    /// re-export chains are FOLLOWED at row 13 via source/original).
+    /// Local binding name; None for a pure re-export, so static-export
+    /// collection cannot match a same-named local.
     pub local: Option<String>,
     /// Re-export source specifier (`export { X } from './x'`).
     pub source: Option<String>,
@@ -158,7 +133,7 @@ pub struct ExportFact {
     pub original: Option<String>,
 }
 
-/// Collect named-export facts (top-level statements; AST-local).
+/// Collect export facts from top-level statements.
 pub fn collect_export_facts(program: &Program<'_>) -> Vec<ExportFact> {
     use oxc::ast::ast::Declaration;
     let mut out = Vec::new();
@@ -213,9 +188,6 @@ impl<'a, 's> Visit<'a> for FactCollector<'a, 's> {
             JSXElementName::Identifier(id) => TagFact::Ident(id.name.to_string()),
             JSXElementName::IdentifierReference(id) => TagFact::Ident(id.name.to_string()),
             JSXElementName::MemberExpression(member) => {
-                // Mirror resolve_jsx_member_expr's AST half: root identifier
-                // + property → dotted key; unresolvable roots are skipped
-                // exactly as the scanners skip them.
                 let Some(root) = member.get_identifier() else {
                     return;
                 };
@@ -356,8 +328,7 @@ impl<'a, 's> Visit<'a> for FactCollector<'a, 's> {
     }
 }
 
-/// The per-file collection pass: every candidate tag/call, classified,
-/// component-agnostic. One read of the stored AST.
+/// Collect every candidate tag and createElement call, component-agnostic.
 pub fn collect_usage_facts(program: &Program<'_>) -> Vec<UsageFact> {
     let static_values = FxHashMap::default();
     let mut collector = FactCollector {
@@ -436,10 +407,8 @@ fn evaluate_with_statics(
     skipped.is_empty().then_some(value)
 }
 
-/// Static values are keyed by project-level names, so an expression may use
-/// one only when OXC resolves that reference to the same root binding. This
-/// prevents a parameter or local declaration from borrowing the value of a
-/// shadowed top-level const/import merely because the spellings match.
+/// Static values are keyed by top-level names, so a reference may use one
+/// only when it resolves to that root binding, never to a shadowing local.
 struct StaticReferenceGuard<'s> {
     static_values: &'s FxHashMap<String, Value>,
     scoping: &'s Scoping,
@@ -480,7 +449,7 @@ fn resolve_tag<'m>(
     }
 }
 
-/// Fact-algebra mirror of the ported `scan_jsx` (custom-prop scan).
+/// Custom-prop scan over collected facts.
 pub fn filter_custom_prop_scan(
     facts: &[UsageFact],
     component_props: &FxHashMap<String, FxHashSet<String>>,
@@ -543,7 +512,7 @@ pub fn filter_custom_prop_scan(
     }
 }
 
-/// Fact-algebra mirror of the ported `scan_jsx_usage` (extended scan).
+/// Variant/state/system-prop usage scan over collected facts.
 pub fn filter_usage_scan(
     facts: &[UsageFact],
     component_props: &FxHashMap<String, FxHashSet<String>>,
@@ -734,8 +703,8 @@ mod tests {
             .collect()
     }
 
-    /// The adjudicating property: the fact-algebra path must reproduce the
-    /// verbatim-ported scanners' outputs on the same inputs, field by field.
+    /// The fact path must reproduce the direct scanners' output on the same
+    /// input, field by field.
     fn assert_paths_agree(
         source: &str,
         component_props: &FxHashMap<String, FxHashSet<String>>,

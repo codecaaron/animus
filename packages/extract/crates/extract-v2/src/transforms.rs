@@ -1,18 +1,5 @@
-//! createTransform() extraction — v1 `transform_extractor.rs` ported
-//! VERBATIM (row 07 Task 07.6.iii): finds `createTransform('name', fn)`
-//! declarations, validates self-containment (free-variable check against
-//! an allowlist), and strips TS annotations via oxc transformer+codegen.
-//! v1's test module carried verbatim as the contract.
-//!
-//! Deltas from v1 (mechanical only):
-//!  - oxc facade paths + 0.139 `ParserReturn.diagnostics` field name;
-//!  - the tiny `const __x = <fn>;` wrapper parse is NOT counted in the
-//!    engine's parseCount (v2 counts FILE parses only; v1 counted the
-//!    wrapper via count_parse — parseCount is not a parity surface).
-//!
-//! Module layout: this file owns discovery and TS-stripping; the
-//! free-variable check lives in `self_contained`. The dependency runs one
-//! way — extraction calls the validator, never the reverse.
+//! createTransform() extraction: finds `createTransform('name', fn)`
+//! declarations, validates self-containment, and strips TS annotations.
 
 use rustc_hash::FxHashSet;
 use std::path::Path;
@@ -37,18 +24,16 @@ use self_contained::validate_self_contained;
 pub struct ExtractedTransform {
     /// The transform name (first argument string literal).
     pub name: String,
-    /// The callback source text (second argument, raw from source — may contain TS).
+    /// The callback source text; TypeScript-stripped unless validation failed.
     pub source: String,
     /// File path where the transform was found.
     pub file: String,
-    /// Diagnostics — external reference violations, etc.
     pub diagnostics: Vec<String>,
     /// Whether the transform passed validation (no external refs).
     pub valid: bool,
 }
 
 /// Scan a parsed program for `createTransform('name', fn)` calls.
-/// Returns extracted transforms with validation results.
 pub fn extract_transforms(
     program: &Program<'_>,
     source: &str,
@@ -114,8 +99,6 @@ fn is_create_transform_declarator(
     is_create_transform_call(call, known_bindings)
 }
 
-/// Try to extract a transform from a variable declarator.
-/// Looks for: `const x = createTransform('name', fn)`
 fn try_extract_transform(
     declarator: &VariableDeclarator<'_>,
     source: &str,
@@ -125,18 +108,15 @@ fn try_extract_transform(
 ) -> Option<ExtractedTransform> {
     let init = declarator.init.as_ref()?;
 
-    // Must be a call expression
     let call = match init {
         Expression::CallExpression(call) => call,
         _ => return None,
     };
 
-    // Check if callee is createTransform (or an alias)
     if !is_create_transform_call(call, known_bindings) {
         return None;
     }
 
-    // First argument: must be a string literal (the transform name)
     let name = match call.arguments.first() {
         Some(Argument::StringLiteral(lit)) => lit.value.to_string(),
         _ => {
@@ -153,7 +133,6 @@ fn try_extract_transform(
         }
     };
 
-    // Second argument: the callback function
     let callback_arg = match call.arguments.get(1) {
         Some(arg) => arg,
         None => {
@@ -170,7 +149,6 @@ fn try_extract_transform(
         }
     };
 
-    // Extract the callback span
     let callback_span = match callback_arg {
         Argument::ArrowFunctionExpression(arrow) => arrow.span,
         Argument::FunctionExpression(func) => func.span,
@@ -188,14 +166,11 @@ fn try_extract_transform(
         }
     };
 
-    // Grab the raw source text for the callback
     let callback_source = &source[callback_span.start as usize..callback_span.end as usize];
 
-    // Validate: check for external references in the callback
     let mut diagnostics = Vec::new();
     let valid = validate_self_contained(callback_arg, &name, &mut diagnostics, scoping);
 
-    // Strip TypeScript annotations via oxc transformer + codegen pipeline
     let js_source = if valid {
         match strip_typescript(callback_source) {
             Ok(js) => js,
@@ -220,7 +195,6 @@ fn try_extract_transform(
     })
 }
 
-/// Check if a CallExpression's callee is `createTransform` or a known alias.
 fn is_create_transform_call(
     call: &CallExpression<'_>,
     known_bindings: &FxHashSet<String>,
@@ -235,8 +209,6 @@ fn is_create_transform_call(
 }
 
 /// Strip TypeScript annotations from a callback source string.
-/// Wraps the source as `const __x = <source>;`, parses, transforms (strip TS), and
-/// extracts the cleaned expression via codegen.
 fn strip_typescript(callback_source: &str) -> Result<String, String> {
     let wrapper = format!("const __x = {};", callback_source);
     let allocator = Allocator::default();
@@ -253,11 +225,9 @@ fn strip_typescript(callback_source: &str) -> Result<String, String> {
         return Err(format!("parse error: {}", parse_errors[0]));
     }
 
-    // Build semantic info (required by transformer for scoping)
     let semantic_ret = SemanticBuilder::new().build(&program);
     let scoping = semantic_ret.semantic.into_scoping();
 
-    // Run transformer to strip TypeScript
     let options = TransformOptions::default();
     let transformer = Transformer::new(&allocator, Path::new("callback.ts"), &options);
     let _transform_ret = transformer.build_with_scoping(scoping, &mut program);
@@ -403,7 +373,6 @@ const transform = createTransform('external', (values) => {
             Ok(js) => {
                 assert!(!js.contains(": number"), "should not contain type annotations: {}", js);
                 assert!(!js.contains("as string"), "should not contain 'as string': {}", js);
-                // Verify it can be registered and evaluated in boa
                 let eval = crate::evaluator::TransformEvaluator::new();
                 eval.register("size", js).unwrap();
                 assert_eq!(eval.evaluate("size", &serde_json::Value::Number(28.into())).unwrap(), "28px");

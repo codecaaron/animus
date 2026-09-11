@@ -1,10 +1,5 @@
-//! Runtime-config JSON construction for a replacement.
-//!
-//! Split out of `assemble.rs` unchanged: this is v1's
-//! `build_runtime_config` (transform_emitter 232-338) including its verbatim
-//! string-splice tail. The splices are load-bearing — key order and the
-//! `[].concat(...)` shape are compared byte-for-byte by the parity oracle —
-//! so this module is deliberately literal rather than idiomatic.
+//! Runtime-config JSON for a replacement. Key order and the
+//! `[].concat(...)` splice shape are compared byte-for-byte downstream.
 
 use std::collections::BTreeMap;
 
@@ -17,9 +12,8 @@ use crate::ids::class_name_for;
 
 use super::{AssembleError, ReplacementPayload};
 
-/// Build the runtime-config JSON string for the facts-derivable subset —
-/// key order matches v1's inc-01-patched serialization exactly (sorted
-/// compound conditions; insertion order variants→compounds→states).
+/// Runtime-config JSON for the facts-derivable subset. Compound conditions
+/// are sorted; keys are emitted variants, compounds, states.
 pub(super) fn build_config(
     filename: &str,
     binding: &str,
@@ -30,7 +24,6 @@ pub(super) fn build_config(
 ) -> Result<String, AssembleError> {
     let mut config = Map::new();
 
-    // Variants (v1: {prop: {options[, default]}} keyed per variant stage)
     let mut variants = Map::new();
     let mut compounds: Vec<Value> = Vec::new();
     let mut states: Vec<String> = Vec::new();
@@ -61,13 +54,10 @@ pub(super) fn build_config(
                 }
             }
             "compound" => {
-                // v1 lib.rs 536-554: a CompoundConfig exists ONLY when the
-                // second (styles) argument does — one-arg .compound(cond)
-                // contributes neither config nor CSS, and the positional
-                // class index counts styled compounds only.
+                // A compound entry exists only when the second (styles)
+                // argument does; the class index counts those compounds.
                 if stage.second_value.is_some() {
                     if let Some(cond) = &stage.value {
-                        // Sorted conditions (v1 inc-01 determinism patch).
                         let sorted: BTreeMap<String, Value> = cond
                             .as_object()
                             .map(|m| {
@@ -93,9 +83,7 @@ pub(super) fn build_config(
                 }
             }
             "system" | "props"
-                // Payload-fed when analyze ran with config inputs; a bare
-                // call without payloads still fails loud (never a wrong
-                // template).
+                // Fail loud rather than emit a template without prop config.
                 if payload.is_none() => {
                     return Err(AssembleError::NeedsConfig(format!(
                         "{binding}: '{}' stage payloads require prop config (row 07)",
@@ -107,7 +95,6 @@ pub(super) fn build_config(
     }
 
     if let Some(merged) = use_merged {
-        // v1 build_runtime_config 195-227 over the POST-MERGE config.
         for (prop, options, default) in &merged.variant_config {
             let mut entry = Map::new();
             entry.insert("options".into(), json!(options));
@@ -140,8 +127,6 @@ pub(super) fn build_config(
         return Ok(base_json);
     };
 
-    // v1 build_runtime_config tail (transform_emitter 232-338), verbatim
-    // string-splice semantics.
     let mut result = if !p.system_group_names.is_empty() {
         let mut concat_parts: Vec<String> = p
             .system_group_names

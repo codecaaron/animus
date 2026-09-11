@@ -1,20 +1,5 @@
-//! Chain discovery over stored ASTs — a read-only pass producing owned
-//! chain-descriptor FACTS (spans/ids, no source slices, no code strings).
-//!
-//! BUG-COMPATIBILITY CONTRACT (design.md D3): this walk replicates v1
-//! `chain_walker.rs` OUTCOMES exactly — name-based root capture, zero-arg
-//! `.extend()` as extension marker, zero-arg known methods silently
-//! unrecorded, unknown methods bail, and v1's argument-span fallback (call
-//! span for argument kinds outside v1's macro list). v1's test module is
-//! ported verbatim below as the executable contract. Deviations are
-//! register material, not improvements.
-//!
-//! Module layout — the public surface is unchanged; `chain_walk::walk_program`
-//! and the descriptor types resolve exactly as before:
-//!
-//!   `walk`     — the backward chain walk (entry point)
-//!   `terminal` — terminal-argument resolution + v1-parity argument spans
-//!   `expr`     — expression-shape helpers (leaf; no chain knowledge)
+//! Chain discovery over stored ASTs: a read-only pass producing owned
+//! chain-descriptor facts — spans and ids, never source slices.
 
 use serde::Serialize;
 
@@ -54,10 +39,6 @@ pub struct ChainDescriptor {
     pub extends_from: Option<String>,
 }
 
-// ─── v1 chain_walker test module, ported VERBATIM as the bug-compatibility
-// contract (design.md D3). Do not "fix" expectations here — a behavioral
-// difference is a register entry, not a test edit. Source of truth:
-// packages/extract/src/chain_walker.rs tests at the port date (2026-07-12).
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -68,8 +49,6 @@ mod tests {
         let ast = OwnedAst::parse("test.tsx".into(), source.into(), &counter);
         walk_program(ast.program())
     }
-
-    // ── Existing primary-chain tests ──────────────────────────────────────────
 
     #[test]
     fn finds_simple_styles_chain() {
@@ -148,8 +127,6 @@ mod tests {
         assert_eq!(chains[0].tag, "Link");
         assert_eq!(chains[0].extends_from, None);
     }
-
-    // ── Inline-asserted terminal targets ──────────────────────────────────────
 
     #[test]
     fn extracts_as_component_with_inline_as_assertion() {
@@ -239,8 +216,7 @@ mod tests {
 
     #[test]
     fn bails_on_computed_member_as_component_target() {
-        // Computed access stays a bail even with a literal key — evaluation
-        // territory, and the bail is loud (named reason), never silent.
+        // Computed access bails even with a literal key.
         let chains = parse_chains(
             r#"
             import { animus } from '@animus-ui/core';
@@ -259,9 +235,8 @@ mod tests {
 
     #[test]
     fn bails_on_unresolvable_as_component_target() {
-        // A computed target has no static name to emit; the chain must bail
-        // to the runtime path, never emit a placeholder identifier
-        // (`createComponent(unknown, …)` is a ReferenceError in the browser).
+        // An unresolvable target must bail to the runtime path: a placeholder
+        // identifier would emit `createComponent(unknown, …)` and throw.
         let chains = parse_chains(
             r#"
             import { animus } from '@animus-ui/core';
@@ -373,7 +348,6 @@ mod tests {
 
     #[test]
     fn still_bails_on_extend() {
-        // .extend(BaseStyles) has an argument → still bails
         let chains = parse_chains(
             r#"
             import { animus } from '@animus-ui/core';
@@ -411,12 +385,8 @@ mod tests {
         assert_eq!(chains[0].extends_from, None);
     }
 
-    // ── New extension-chain tests ─────────────────────────────────────────────
-
     #[test]
     fn extension_chain_recognized() {
-        // Button.extend().styles({...}).asElement('button')
-        // extends_from: Some("Button"), extractable, stages: ["styles"]
         let chains = parse_chains(
             r#"
             const Extended = Button.extend().styles({ borderRadius: 8 }).asElement('button');
@@ -435,8 +405,6 @@ mod tests {
 
     #[test]
     fn extension_chain_with_as_component() {
-        // Link.extend().states({...}).asComponent(NextLink)
-        // extends_from: Some("Link"), extractable, terminal: AsComponent, tag: "NextLink"
         let chains = parse_chains(
             r#"
             const NavLink = Link.extend().states({ active: { fontWeight: 700 } }).asComponent(NextLink);
@@ -455,7 +423,6 @@ mod tests {
 
     #[test]
     fn extension_chain_extends_from_set() {
-        // Verify extends_from captures the exact root identifier name
         let chains = parse_chains(
             r#"
             const Child = Anchor.extend().styles({ color: 'blue' }).asElement('a');
@@ -467,7 +434,6 @@ mod tests {
 
     #[test]
     fn primary_chain_as_component_is_extractable() {
-        // animus.styles({}).asComponent(Link) — primary chain, asComponent is extractable
         let chains = parse_chains(
             r#"
             import { animus } from '@animus-ui/core';
@@ -483,7 +449,6 @@ mod tests {
 
     #[test]
     fn extend_with_args_still_bails() {
-        // animus.styles({}).extend(Base).asElement('div') — extend has argument → bails
         let chains = parse_chains(
             r#"
             import { animus } from '@animus-ui/core';
@@ -501,7 +466,6 @@ mod tests {
 
     #[test]
     fn extension_and_primary_in_same_file() {
-        // File has both a primary chain and an extension chain
         let chains = parse_chains(
             r#"
             import { animus } from '@animus-ui/core';
@@ -511,13 +475,11 @@ mod tests {
         );
         assert_eq!(chains.len(), 2);
 
-        // A is a primary chain
         let a = &chains[0];
         assert_eq!(a.binding, "A");
         assert!(a.extractable);
         assert_eq!(a.extends_from, None);
 
-        // B is an extension chain with extends_from pointing at A
         let b = &chains[1];
         assert_eq!(b.binding, "B");
         assert!(b.extractable);
@@ -526,11 +488,8 @@ mod tests {
         assert_eq!(b.stages[0].method, "styles");
     }
 
-    // ── Unknown method bail tests ─────────────────────────────────────────────
-
     #[test]
     fn bails_on_unknown_method() {
-        // animus.styles({}).unknownMethod({}).asElement('div') — unknown method should bail
         let chains = parse_chains(
             r#"
             import { animus } from '@animus-ui/core';
@@ -549,7 +508,6 @@ mod tests {
 
     #[test]
     fn bails_on_unknown_method_in_extension() {
-        // Button.extend().styles({}).futureAPI({}).asElement('button') — unknown method should bail
         let chains = parse_chains(
             r#"
             const Button2 = Button.extend().styles({ color: 'blue' }).futureAPI({}).asElement('button');

@@ -1,8 +1,5 @@
-//! Visit-based JSX scanner for system prop usages.
-//!
-//! Split out of `jsx_scan.rs` unchanged. Walks JSX opening elements, matches
-//! them to known component bindings by name (v1's name-based contract), and
-//! records each active system prop as either a static usage or a dynamic one.
+//! Visit-based JSX scanner for system prop usages: opening elements match
+//! component bindings by name, and each active prop is recorded.
 
 use std::marker::PhantomData;
 
@@ -17,14 +14,8 @@ use super::usage::resolve_jsx_member_expr;
 use super::value_eval::eval_jsx_attribute_value;
 use super::{CustomPropScanResult, DynamicPropUsage, PropValueResult, SystemPropUsage};
 
-/// Scan JSX elements in a parsed program for system prop usages.
-///
-/// `component_props` maps component binding names to their set of active system prop names.
-/// Example: `{ "Box": {"p", "m", "mt", "display"}, "Text": {"fontSize", "color"} }`
-///
-/// Returns deduplicated static usages and dynamic usages found across all JSX elements.
-/// Static deduplication key is `(prop_name, serde_json::to_string(&value))`.
-/// Dynamic deduplication key is `(binding, prop_name)` — scoped per component.
+/// Scan JSX for system prop usages. Static usages dedupe on prop and value,
+/// dynamic usages on binding and prop.
 pub fn scan_jsx<'a>(
     program: &Program<'a>,
     component_props: &FxHashMap<String, FxHashSet<String>>,
@@ -46,10 +37,6 @@ pub fn scan_jsx<'a>(
         dynamic_usages: scanner.dynamic_results,
     }
 }
-
-// ---------------------------------------------------------------------------
-// SystemPropScanner — Visit-based JSX scanner for system prop usages
-// ---------------------------------------------------------------------------
 
 struct SystemPropScanner<'a, 'b> {
     component_props: &'b FxHashMap<String, FxHashSet<String>>,
@@ -128,7 +115,6 @@ impl<'a, 'b> Visit<'a> for SystemPropScanner<'a, 'b> {
                 JSXAttributeItem::SpreadAttribute(_) => {}
             }
         }
-        // Do NOT call walk_jsx_opening_element — we processed attributes ourselves
-        // and don't need to recursively visit them as AST nodes.
+        // Attributes are handled here; walk_jsx_opening_element is not called.
     }
 }

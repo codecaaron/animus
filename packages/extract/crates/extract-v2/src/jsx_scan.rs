@@ -1,21 +1,5 @@
-//! JSX usage scan — v1 `jsx_scanner.rs` ported for the v2 spine
-//! (increment 11, Task 11.3). BUG-COMPATIBILITY CONTRACT (design.md D3):
-//! name-based component matching, createElement callee-name tracking,
-//! member-expression (`<Family.Slot>`) maps, and the static/dynamic prop
-//! classification replicate v1 OUTCOMES; v1's test module is carried
-//! verbatim below as the executable contract. Runs as a second READ of the
-//! stored AST inside the per-file pass (G1: zero parses added).
-//!
-//! Module layout — the public surface is unchanged; every `jsx_scan::X` path
-//! resolves exactly as before:
-//!
-//!   `system_props` — Visit scanner for system prop usages (`scan_jsx`)
-//!   `usage`        — variant/state usage tracking (`scan_jsx_usage`)
-//!   `compose`      — compose() family detection (`scan_compose_calls`)
-//!   `value_eval`   — static attribute-value evaluation (leaf)
-//!
-//! The result types stay here at the root: they are shared by more than one
-//! scanner, so pushing them down would only create a cross-import.
+//! JSX usage scan: system prop usages, variant/state usage, and compose()
+//! families, read from the stored AST without adding a parse.
 
 use serde_json::Value;
 
@@ -33,18 +17,14 @@ pub use usage::{
 pub(crate) use usage::{classify_jsx_attribute_as_variant_value, is_component_like_identifier};
 pub(crate) use value_eval::eval_jsx_attribute_value;
 
-/// A system prop usage found in JSX.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct SystemPropUsage {
     pub prop_name: String,
     pub value: Value,
-    /// Which component binding this was found on. Retained for future per-component usage tracking.
     #[allow(dead_code)]
     pub binding: String,
 }
 
-/// A dynamic prop usage found in JSX — the prop received a non-static value
-/// (identifier, call expression, conditional, etc.).
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct DynamicPropUsage {
     pub prop_name: String,
@@ -80,29 +60,20 @@ pub struct UsageResidueSite {
     pub span: UsageSpan,
 }
 
-/// Result of evaluating a JSX attribute value.
 pub(crate) enum PropValueResult {
-    /// Static literal value — extractable to utility class.
     Static(Value),
-    /// Dynamic expression — triggers CSS variable slot generation.
     Dynamic {
         kind: DynamicExpressionKind,
         span: UsageSpan,
     },
-    /// Skip entirely — spreads, empty expressions, non-prop attributes.
     Skip,
 }
 
-/// Result of scanning JSX for custom prop usages (static + dynamic).
 pub struct CustomPropScanResult {
     pub static_usages: Vec<SystemPropUsage>,
     pub dynamic_usages: Vec<DynamicPropUsage>,
 }
 
-// ─── v1 jsx_scanner test module, ported VERBATIM as the bug-compatibility
-// contract (design.md D3). Do not "fix" expectations — behavioral
-// differences are register material. Source of truth:
-// packages/extract/src/jsx_scanner.rs tests at the port date.
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -154,9 +125,6 @@ mod tests {
         map! { "Box" => props.iter().map(|s| s.to_string()).collect() }
     }
 
-    // ------------------------------------------------------------------
-    // 1. Numeric prop
-    // ------------------------------------------------------------------
     #[test]
     fn collects_numeric_prop() {
         let usages = parse_and_scan(
@@ -173,9 +141,6 @@ mod tests {
         assert_eq!(usages[0].binding, "Box");
     }
 
-    // ------------------------------------------------------------------
-    // 2. String prop (bare string attribute)
-    // ------------------------------------------------------------------
     #[test]
     fn collects_string_prop() {
         let usages = parse_and_scan(
@@ -191,9 +156,6 @@ mod tests {
         assert_eq!(usages[0].value, "flex");
     }
 
-    // ------------------------------------------------------------------
-    // 3. Responsive object prop
-    // ------------------------------------------------------------------
     #[test]
     fn collects_responsive_object() {
         let usages = parse_and_scan(
@@ -210,9 +172,6 @@ mod tests {
         assert_eq!(usages[0].value["sm"], 16);
     }
 
-    // ------------------------------------------------------------------
-    // 4. Skips prop not in the active group set
-    // ------------------------------------------------------------------
     #[test]
     fn skips_non_group_prop() {
         let usages = parse_and_scan(
@@ -221,16 +180,13 @@ mod tests {
                 return <Box variant="fill" p={8} />;
             }
             "#,
-            box_with_props(&["p"]), // "variant" is NOT in the active set
+            box_with_props(&["p"]),
         );
         assert_eq!(usages.len(), 1);
         assert_eq!(usages[0].prop_name, "p");
         assert_eq!(usages[0].value, 8);
     }
 
-    // ------------------------------------------------------------------
-    // 5. Skips unknown component
-    // ------------------------------------------------------------------
     #[test]
     fn skips_unknown_component() {
         let usages = parse_and_scan(
@@ -239,14 +195,11 @@ mod tests {
                 return <Unknown p={8} />;
             }
             "#,
-            box_with_props(&["p"]), // "Unknown" is not in map
+            box_with_props(&["p"]),
         );
         assert!(usages.is_empty());
     }
 
-    // ------------------------------------------------------------------
-    // 6. Skips dynamic (non-static) value — identifier reference
-    // ------------------------------------------------------------------
     #[test]
     fn skips_dynamic_value() {
         let usages = parse_and_scan(
@@ -260,9 +213,6 @@ mod tests {
         assert!(usages.is_empty());
     }
 
-    // ------------------------------------------------------------------
-    // 7. Deduplicates identical (prop, value) pairs
-    // ------------------------------------------------------------------
     #[test]
     fn deduplicates_same_value() {
         let usages = parse_and_scan(
@@ -283,9 +233,6 @@ mod tests {
         assert_eq!(usages[0].value, 8);
     }
 
-    // ------------------------------------------------------------------
-    // 8. Different values for the same prop are kept as separate entries
-    // ------------------------------------------------------------------
     #[test]
     fn different_values_kept() {
         let usages = parse_and_scan(
@@ -307,9 +254,6 @@ mod tests {
         assert!(values.contains(&16));
     }
 
-    // ------------------------------------------------------------------
-    // 9. Nested JSX inside a function body is found
-    // ------------------------------------------------------------------
     #[test]
     fn nested_jsx_found() {
         let usages = parse_and_scan(
@@ -330,9 +274,6 @@ mod tests {
         assert!(names.contains("p"));
     }
 
-    // ------------------------------------------------------------------
-    // Bonus: negative numeric value
-    // ------------------------------------------------------------------
     #[test]
     fn collects_negative_number() {
         let usages = parse_and_scan(
@@ -347,10 +288,6 @@ mod tests {
         assert_eq!(usages[0].value, -4);
     }
 
-    // ------------------------------------------------------------------
-    // Bonus: multiple components sharing the same prop name — deduplication
-    // still applies by (prop_name, value), not by binding.
-    // ------------------------------------------------------------------
     #[test]
     fn multiple_components_same_prop_name() {
         let component_props = map! {
@@ -358,7 +295,6 @@ mod tests {
             "Text" => set!["p"],
         };
 
-        // Both use p={8} — still deduplicated to one entry.
         let usages = parse_and_scan(
             r#"
             function App() {
@@ -379,9 +315,6 @@ mod tests {
         );
     }
 
-    // ------------------------------------------------------------------
-    // Bonus: call expression value is skipped
-    // ------------------------------------------------------------------
     #[test]
     fn skips_call_expression_value() {
         let usages = parse_and_scan(
@@ -395,9 +328,6 @@ mod tests {
         assert!(usages.is_empty());
     }
 
-    // ------------------------------------------------------------------
-    // Bonus: conditional expression value is skipped
-    // ------------------------------------------------------------------
     #[test]
     fn skips_conditional_expression_value() {
         let usages = parse_and_scan(
@@ -411,9 +341,6 @@ mod tests {
         assert!(usages.is_empty());
     }
 
-    // ------------------------------------------------------------------
-    // Bonus: spread attributes are silently skipped, other props collected
-    // ------------------------------------------------------------------
     #[test]
     fn skips_spread_attributes() {
         let usages = parse_and_scan(
@@ -428,9 +355,6 @@ mod tests {
         assert_eq!(usages[0].prop_name, "p");
     }
 
-    // ------------------------------------------------------------------
-    // Bonus: JSX inside a variable initializer is found
-    // ------------------------------------------------------------------
     #[test]
     fn jsx_in_variable_initializer() {
         let usages = parse_and_scan(
@@ -443,11 +367,6 @@ mod tests {
         assert_eq!(usages[0].value, 24);
     }
 
-    // ==================================================================
-    // scan_jsx_usage tests
-    // ==================================================================
-
-    /// Build a parse + scan_jsx_usage helper
     fn parse_and_scan_usage(
         source: &str,
         component_props: FxHashMap<String, FxHashSet<String>>,
@@ -459,8 +378,6 @@ mod tests {
         scan_jsx_usage(result_program, &component_props, &component_configs, &empty)
     }
 
-    /// Build a ComponentUsageConfig for Button with a single "variant" prop
-    /// that has options "fill" and "stroke", default "fill".
     fn button_config_variant() -> FxHashMap<String, ComponentUsageConfig> {
         map! {
             "Button" => ComponentUsageConfig {
@@ -470,7 +387,6 @@ mod tests {
         }
     }
 
-    /// Build a ComponentUsageConfig for Layout with a "sidebar" state.
     fn layout_config_state() -> FxHashMap<String, ComponentUsageConfig> {
         map! {
             "Layout" => ComponentUsageConfig {
@@ -480,9 +396,6 @@ mod tests {
         }
     }
 
-    // ------------------------------------------------------------------
-    // scan_usage_collects_variant_value
-    // ------------------------------------------------------------------
     #[test]
     fn scan_usage_collects_variant_value() {
         let result = parse_and_scan_usage(
@@ -500,9 +413,6 @@ mod tests {
         assert_eq!(result.variant_usages[0].value, "stroke");
     }
 
-    // ------------------------------------------------------------------
-    // scan_usage_collects_dynamic_variant
-    // ------------------------------------------------------------------
     #[test]
     fn scan_usage_collects_dynamic_variant() {
         let result = parse_and_scan_usage(
@@ -518,10 +428,6 @@ mod tests {
         assert_eq!(result.variant_usages[0].value, "__dynamic__");
     }
 
-    // ------------------------------------------------------------------
-    // scan_usage_detects_absent_variant
-    // When a tracked component is rendered WITHOUT the variant prop, we emit __default__.
-    // ------------------------------------------------------------------
     #[test]
     fn scan_usage_detects_absent_variant() {
         let result = parse_and_scan_usage(
@@ -539,9 +445,6 @@ mod tests {
         assert_eq!(result.variant_usages[0].value, "__default__");
     }
 
-    // ------------------------------------------------------------------
-    // scan_usage_collects_state
-    // ------------------------------------------------------------------
     #[test]
     fn scan_usage_collects_state() {
         let result = parse_and_scan_usage(
@@ -558,9 +461,6 @@ mod tests {
         assert_eq!(result.state_usages[0].state_name, "sidebar");
     }
 
-    // ------------------------------------------------------------------
-    // scan_usage_tracks_rendered_component
-    // ------------------------------------------------------------------
     #[test]
     fn scan_usage_tracks_rendered_component() {
         let configs = map! {
@@ -581,10 +481,6 @@ mod tests {
         assert!(result.rendered_components.contains("Box"));
     }
 
-    // ------------------------------------------------------------------
-    // scan_usage_still_collects_system_props
-    // Verify SystemPropUsage still works alongside new tracking.
-    // ------------------------------------------------------------------
     #[test]
     fn scan_usage_still_collects_system_props() {
         let component_props = map! { "Button" => set!["p"] };
@@ -599,22 +495,15 @@ mod tests {
             button_config_variant(),
         );
 
-        // System prop collected
         assert_eq!(result.system_prop_usages.len(), 1);
         assert_eq!(result.system_prop_usages[0].prop_name, "p");
         assert_eq!(result.system_prop_usages[0].value, 8);
 
-        // Variant also collected
         assert_eq!(result.variant_usages.len(), 1);
         assert_eq!(result.variant_usages[0].value, "stroke");
 
-        // Component tracked
         assert!(result.rendered_components.contains("Button"));
     }
-
-    // ==================================================================
-    // createElement render-tracking tests
-    // ==================================================================
 
     fn parse_and_scan_usage_with_members(
         source: &str,
@@ -836,10 +725,6 @@ mod tests {
         assert!(result.rendered_components.contains("CallOnly"));
     }
 
-    // ==================================================================
-    // Dynamic prop detection tests
-    // ==================================================================
-
     fn parse_dynamic_usages(source: &str) -> UsageScanResult {
         let ast = parse_tsx(source);
         let result_program = ast.program();
@@ -1019,10 +904,6 @@ mod tests {
         assert_eq!(result.residue_sites[1].kind, DynamicExpressionKind::Call);
     }
 
-    // ==================================================================
-    // Custom prop dynamic detection tests (scan_jsx path)
-    // ==================================================================
-
     fn card_with_custom_props(props: &[&str]) -> FxHashMap<String, FxHashSet<String>> {
         map! { "Card" => props.iter().map(|s| s.to_string()).collect() }
     }
@@ -1060,10 +941,6 @@ mod tests {
         assert!(result.dynamic_usages.is_empty());
     }
 
-    // ------------------------------------------------------------------
-    // compose() family extraction
-    // ------------------------------------------------------------------
-
     fn parse_compose_families(source: &str) -> Vec<ComposeFamilyInfo> {
         let ast = parse_tsx(source);
         let result_program = ast.program();
@@ -1095,7 +972,6 @@ mod tests {
 
     #[test]
     fn compose_no_shared_arg() {
-        // compose() with only the slots arg (no options) — still extracts slots
         let families = parse_compose_families(r#"const F = compose({ Root, Child });"#);
         assert_eq!(families.len(), 1);
         assert!(families[0].shared_keys.is_empty());

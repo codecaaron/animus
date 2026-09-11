@@ -1,23 +1,12 @@
-//! The v2 stateful NAPI handle: rolldown
-//! `BindingBundler`-style two-tier state — the instance owns per-build
-//! fact state Rust-side, so nothing round-trips through JS per file.
-//! Instances are per-plugin-instance: there is no process-global engine, so
-//! two differently-configured plugins in one process cannot stomp each
-//! other.
-//!
-//! Fail-loud contract (extraction-diagnostics §V2 boundary error
-//! reporting): malformed input and out-of-order calls are ERRORS with
-//! actionable text, never silent no-ops.
+//! Stateful NAPI handle owning per-build facts and sources. State is
+//! per-instance; malformed input and out-of-order calls are loud errors.
 
 use std::collections::BTreeMap;
 
 use crate::{analyze_css, assemble, ast_store, cross_file, emit, facts};
 
-/// v1 default system-props virtual module id (EmitterConfig default).
 const SYSTEM_PROPS_MODULE_ID: &str = "virtual:animus/system-props";
 
-/// v1 derive_compose_context_import verbatim:
-/// `@scope/pkg[/subpath]` → `@scope/pkg/compose-with-context`.
 fn derive_compose_context_import(runtime_import: &str) -> String {
     if runtime_import.starts_with('@') {
         let parts: Vec<&str> = runtime_import.splitn(3, '/').collect();
@@ -28,11 +17,6 @@ fn derive_compose_context_import(runtime_import: &str) -> String {
     format!("{}/compose-with-context", runtime_import)
 }
 
-/// The analyze() manifest. Field naming CONTRACT: plugin-consumed fields
-/// carry v1's EXACT serde names (snake_case: system_prop_map,
-/// dynamic_props, components, files, timing, report, css, sheets,
-/// diagnostics) so the plugins' v2 legs read one manifest shape;
-/// v2-native additions (fileFacts, crossFile, parseCount) stay camelCase.
 #[derive(serde::Serialize)]
 struct AnalyzeResult<'a> {
     #[serde(rename = "fileFacts")]
@@ -46,7 +30,6 @@ struct AnalyzeResult<'a> {
     css: &'a str,
     sheets: &'a crate::css::CssSheets,
     diagnostics: &'a [analyze_css::CssDiagnostic],
-    /// v1 manifest `report` (reconciliation report).
     report: &'a serde_json::Value,
     system_prop_map:
         &'a std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>,
@@ -55,66 +38,30 @@ struct AnalyzeResult<'a> {
     reverse_provenance: &'a std::collections::BTreeMap<String, Vec<String>>,
     components: &'a std::collections::BTreeMap<String, analyze_css::ComponentDescriptor>,
     files: &'a std::collections::BTreeMap<String, Vec<String>>,
-    /// v1 timing subset (parseCount camelCase inside, matching v1's
-    /// PipelineTiming serde).
     timing: serde_json::Value,
 }
 
-/// Engine options (row 07 Task 07.3 — replaces the RF-53 hardcodes).
-/// All fields optional; absent = v1 defaults.
 #[napi(object)]
 #[derive(Default)]
 pub struct EngineOptions {
-    /// Class-identity prefix (v1 default "animus").
     pub prefix: Option<String>,
-    /// Runtime import source (v1 default "@animus-ui/system").
     pub runtime_import: Option<String>,
-    /// CSS virtual module id (v1 default "virtual:animus/styles.css").
     pub css_module_id: Option<String>,
-    /// System-props virtual module id (v1 EmitterConfig default
-    /// "virtual:animus/system-props").
     pub system_props_module_id: Option<String>,
-    /// Flat theme scales JSON (v1 analyzeProject `theme_json`).
     pub theme_json: Option<String>,
-    /// Token-alias variable map JSON (v1 `variable_map_json`).
     pub variable_map_json: Option<String>,
-    /// Contextual vars JSON (v1 `contextual_vars_json`).
     pub contextual_vars_json: Option<String>,
-    /// Prop config map JSON (v1 `config_json`).
     pub config_json: Option<String>,
-    /// Group registry JSON (v1 `group_registry_json`).
     pub group_registry_json: Option<String>,
-    /// Transform source texts (`{ transformName: sourceText }` JSON) from the
-    /// system evaluation. `config_json` names each prop's transform but cannot
-    /// carry its body, and the extractor's other seed is `createTransform()`
-    /// calls parsed out of project files — so without this, transforms shipped
-    /// inside a package are unresolvable at build time and their props fall
-    /// back to the raw value.
     pub transform_sources_json: Option<String>,
-    /// Selector aliases JSON (v1 `selector_aliases_json`).
     pub selector_aliases_json: Option<String>,
-    /// Condition aliases JSON (the `conditionAliases` manifest field):
-    /// `{ "_motionReduce": { "value": "@media …", "order": 500, "kind":
-    /// "media" } }`. Absent = no registrations.
     pub condition_aliases_json: Option<String>,
-    /// Global style blocks JSON (v1 `global_style_blocks_json`).
     pub global_style_blocks_json: Option<String>,
-    /// Keyframes blocks JSON (v1 `keyframes_blocks_json` — feeds BOTH the
-    /// global sheet and the static keyframes registry, v1 Phase 2a).
     pub keyframes_json: Option<String>,
-    /// Package resolution JSON (v1 `package_resolution_json`).
     pub package_resolution_json: Option<String>,
-    /// Path aliases JSON (`{aliases: [...]}` wrapper, v1 shape).
     pub path_aliases_json: Option<String>,
-    /// Forced-emission declarations (spec: static-emission-overrides) —
-    /// the serialized `staticCss` plugin option.
     pub static_css_json: Option<String>,
-    /// rootDir-relative directory prefixes of discovered external packages
-    /// (JSON string array). Files under these dirs get the external-token
-    /// candidate walk (extraction-diagnostics: cross-source correlation);
-    /// absent = no candidates recorded.
     pub external_dirs_json: Option<String>,
-    /// v1 `dev_mode`: retain all components (skip reconciliation pruning).
     pub dev_mode: Option<bool>,
 }
 
@@ -126,9 +73,6 @@ struct ResolvedOptions {
     css_inputs: analyze_css::CssInputs,
 }
 
-/// Runtime capabilities referenced by surviving component replacements.
-/// Derived only from parsed chain facts plus the post-analysis replacement
-/// payload; generated JavaScript is deliberately not an input.
 #[derive(Default)]
 struct ReplacementImportNeeds {
     create_component: bool,
@@ -164,10 +108,6 @@ fn replacement_import_needs(
         needs.system_prop_groups |= !payload.system_group_names.is_empty();
         needs.dynamic_prop_config |= has_system_props && payload.has_dynamic_props;
 
-        // Named custom transforms are the only payload field that emits a
-        // direct `transforms.<name>` reference. Dynamic-prop rebinding also
-        // needs the registry because its emitted loop indexes `transforms`
-        // for entries carrying transformName metadata.
         needs.transforms |= needs.dynamic_prop_config
             || payload
                 .custom_dynamic_config
@@ -185,21 +125,13 @@ fn replacement_import_needs(
 #[napi]
 pub struct ExtractEngine {
     opts: ResolvedOptions,
-    /// Retained per-file facts — the build state consumers query without
-    /// re-serializing anything through JS.
     facts: BTreeMap<String, facts::FileFacts>,
-    /// Cross-file facts computed ONCE per analyze() — per-transform
-    /// recomputation would be O(files²).
+    /// Computed once per analyze(); recomputing per transform is O(files²).
     cross: Option<cross_file::CrossFileFacts>,
-    /// Retained source text per file (emission input: source + facts
-    /// suffice, no AST survives analyze()).
     sources: BTreeMap<String, String>,
-    /// Input order of the last analyze() call — v1 iterates files in
-    /// caller order (registration collisions + utility-class first-wins
-    /// dedup are ORDER-SENSITIVE).
+    /// Caller order of the last analyze(): registration collisions and
+    /// utility-class first-wins dedup are order-sensitive.
     order: Vec<String>,
-    /// CSS output of the last analyze() (manifest surface; retained for
-    /// future incremental surfaces).
     css: Option<analyze_css::CssOutput>,
     parse_count: usize,
 }
@@ -254,9 +186,6 @@ impl ExtractEngine {
         })
     }
 
-    /// Parse-once fact extraction over the file set; facts and sources are
-    /// RETAINED on the handle for subsequent per-file calls. Returns the
-    /// fact manifest (files + parseCount) as JSON.
     #[napi]
     pub fn analyze(&mut self, file_entries_json: String) -> napi::Result<String> {
         #[derive(serde::Deserialize)]
@@ -282,9 +211,6 @@ impl ExtractEngine {
         );
         self.parse_count = store.parse_count();
 
-        // Pass A (v1 Phases 1-2b over the SAME parsed store — no
-        // re-parse): per-file statics/imports/exports, static-export
-        // maps, keyframes registry, then binding-resolved enrichment.
         use crate::usage_facts::{collect_export_facts, collect_import_facts};
         let mut statics_by_file: std::collections::BTreeMap<
             String,
@@ -308,7 +234,6 @@ impl ExtractEngine {
             let statics = crate::eval::collect_static_values(program);
             let complete_statics = crate::eval::collect_complete_static_values(program);
             let exports = collect_export_facts(program);
-            // v1 collect_static_exports (style_evaluator 502-519).
             let mut static_exports = rustc_hash::FxHashMap::default();
             let mut complete_static_exports = rustc_hash::FxHashMap::default();
             for exp in &exports {
@@ -328,9 +253,6 @@ impl ExtractEngine {
             complete_static_exports_by_file.insert(ast.path.clone(), complete_static_exports);
         }
 
-        // Keyframes registry (v1 project_analyzer 551-567 verbatim shape):
-        // {exportName: {keyName: {name, frames}}} → exportName →
-        // {keyName: "resolved-name"}.
         let keyframes_registry: rustc_hash::FxHashMap<String, serde_json::Value> = self
             .opts
             .css_inputs
@@ -356,10 +278,6 @@ impl ExtractEngine {
             })
             .unwrap_or_default();
 
-        // Per-file enrichment (v1 Phase 2b, 581-615): imported consts via
-        // DIRECT import resolution (re-export following is the registered
-        // gap), keyframes bindings by resolved export name, and local
-        // keyframes exports.
         let mut enriched_by_file: std::collections::BTreeMap<
             String,
             rustc_hash::FxHashMap<String, serde_json::Value>,
@@ -380,11 +298,6 @@ impl ExtractEngine {
                 ) else {
                     continue;
                 };
-                // v1's binding_map hit requires the source file to EXPORT
-                // the imported name (import_resolver resolve_bindings) —
-                // both the static value and the keyframes injection are
-                // gated on it (project_analyzer 586-600) — and FOLLOWS
-                // re-export hops to the defining file.
                 let export_exists = imports_by_file
                     .get(&direct_file)
                     .is_some_and(|(_, exps)| exps.iter().any(|e| e.exported == imp.imported));
@@ -393,10 +306,6 @@ impl ExtractEngine {
                 }
                 let mut resolved_file = direct_file;
                 let mut resolved_name = imp.imported.clone();
-                // v1 follow_export_chain (import_resolver 273-318): an
-                // enrichment entry exists ONLY when the chain terminates
-                // at a LOCAL export; a dangling hop yields nothing
-                // (row-13 review A1). 32-hop cap mirrors v1.
                 let mut terminated_locally = false;
                 {
                     let mut seen: rustc_hash::FxHashSet<(String, String)> =
@@ -463,7 +372,6 @@ impl ExtractEngine {
             }
         }
 
-        // Pass B: chain facts with enriched statics.
         let empty = rustc_hash::FxHashMap::default();
         for ast in store.iter() {
             self.order.push(ast.path.clone());
@@ -489,7 +397,6 @@ impl ExtractEngine {
             self.sources
                 .insert(ast.path.clone(), ast.source().to_string());
         }
-        // The store — and with it every AST — drops here.
 
         let cross = cross_file::resolve_cross_file(&self.facts);
         let css = analyze_css::run(
@@ -520,7 +427,6 @@ impl ExtractEngine {
         out.map_err(|e| napi::Error::from_reason(format!("serialize failed: {e}")))
     }
 
-    /// Reset all retained build state.
     #[napi]
     pub fn clear_cache(&mut self) {
         self.facts.clear();
@@ -536,12 +442,6 @@ impl ExtractEngine {
         self.parse_count as u32
     }
 
-    /// Per-file transformation from retained source + facts (no-config
-    /// subset: variants/compounds/states; system/custom payloads need the
-    /// row-07 config inputs and FAIL LOUD). Returns {code, hasComponents}
-    /// JSON. Import decisions come from surviving chain/payload metadata;
-    /// consumed-import stripping and directive handling are the ported v1
-    /// semantics.
     #[napi]
     pub fn transform_file(&mut self, path: String) -> napi::Result<String> {
         let (Some(source), Some(file_facts)) = (self.sources.get(&path), self.facts.get(&path))
@@ -557,11 +457,8 @@ impl ExtractEngine {
                 "transformFile: analyze() must run first".to_string(),
             ));
         }
-        // v1 replaces only manifest SURVIVORS — payload presence IS the
-        // survival record (inc-07 review F2: the earlier binding-name
-        // ancestry re-walk here disagreed with analyze_css's provenance
-        // resolution and dropped aliased-parent extension chains; the
-        // payload map already encodes the authoritative decision).
+        // Payload presence is the survival record; re-deriving it from
+        // binding ancestry drops aliased-parent extension chains.
         let file_payloads: std::collections::HashMap<String, assemble::ReplacementPayload> = self
             .css
             .as_ref()
@@ -577,10 +474,6 @@ impl ExtractEngine {
             })
             .unwrap_or_default();
 
-        // v1 lib.rs 950-958 (inc-07 review F5): a file with NO surviving
-        // components is returned UNCHANGED — before compose handling, so
-        // compose-only files (slots imported from elsewhere) and files
-        // whose chains all eval-failed pass through untransformed.
         if file_payloads.is_empty() {
             return Ok(serde_json::json!({ "code": source, "hasComponents": false }).to_string());
         }
@@ -599,9 +492,6 @@ impl ExtractEngine {
             )),
         })?;
 
-        // compose()/composeWithContext() replacements (v1 lib.rs 990-1035):
-        // every scanned family emits createComposedFamily(WithContext) at
-        // its span — facts carry the spans, no re-scan needed.
         let has_any_compose = !file_facts.compose.is_empty();
         let has_compose_replacements = file_facts.compose.iter().any(|f| !f.context);
         let has_compose_context_replacements = file_facts.compose.iter().any(|f| f.context);
@@ -660,7 +550,6 @@ impl ExtractEngine {
         if import_needs.class_resolver {
             system_imports.push("createClassResolver");
         }
-        // createComposedFamily (RSC-safe) — but NOT WithContext (v1 412-416).
         if has_compose_replacements {
             system_imports.push("createComposedFamily");
         }
@@ -669,7 +558,6 @@ impl ExtractEngine {
             system_imports.join(", "),
             self.opts.runtime_import
         );
-        // Separate WithContext import (v1 436-442 + derive_compose_context_import).
         let compose_ctx_import_str = if has_compose_context_replacements {
             format!(
                 "import {{ createComposedFamilyWithContext }} from '{}';\n",
@@ -678,8 +566,6 @@ impl ExtractEngine {
         } else {
             String::new()
         };
-        // v1 apply_replacements 444-469: virtual import + transform
-        // rebinding loop sit between the system import and the css import.
         let import_lines = if !virtual_imports.is_empty() {
             let virtual_import = format!(
                 "import {{ {} }} from '{}';\n",
@@ -706,10 +592,8 @@ impl ExtractEngine {
             )
         };
 
-        // v1 lib.rs 1007-1014 (inc-07 review F4): "primary extracted"
-        // means a MANIFEST SURVIVOR with no extends_from — payload
-        // presence, not mere fatal-error absence (a props-serde-rejected
-        // chain is non-fatal but dropped, and its import must survive).
+        // Payload presence, not absence of a fatal error: a chain rejected
+        // after parsing is dropped, and its import must survive.
         let has_primary_extracted = file_facts.chains.iter().any(|c| {
             c.descriptor.extends_from.is_none() && file_payloads.contains_key(&c.descriptor.binding)
         });
@@ -717,7 +601,6 @@ impl ExtractEngine {
         if has_primary_extracted || has_any_compose {
             consumed.push(self.opts.runtime_import.as_str());
         }
-        // v1 1042-1051: compose sources are LITERAL strings (quirk parity).
         if has_compose_replacements {
             consumed.push("@animus-ui/system");
             consumed.push("@animus-ui/system/compose");
@@ -737,16 +620,9 @@ impl ExtractEngine {
             extracted.push("composeWithContext");
         }
 
-        // v1 1053-1054: composeWithContext files need 'use client'.
         let needs_use_client =
             has_compose_context_replacements || file_facts.compose.iter().any(|f| f.context);
 
-        // v1 apply_replacements ORDER, exactly (transform_emitter 361-490;
-        // inc-07 review F6/F7): (1) span replacements, (2) VERBATIM
-        // strip_consumed_imports over the resulting string — the split/
-        // rebuild loop is the trailing-newline quirk's origin, so porting
-        // the loop replaces the diverging replay — (3) directive handling
-        // on the POST-STRIP string, (4) directive + imports prepended.
         let body = emit::apply_plan(
             source,
             &emit::EmissionPlan {
@@ -760,10 +636,6 @@ impl ExtractEngine {
         let mut code = body.code;
         let mut directive_prologue = file_facts.directive_prologue.clone();
         if !consumed.is_empty() && !extracted.is_empty() {
-            // The v1-compatible line stripper can remove import-looking
-            // lines even from leading block-comment trivia. Removal metadata
-            // remaps content-only deletions, but invalidates the parser fact
-            // if the strip destroys an OXC-confirmed directive or delimiter.
             let (stripped, removals) =
                 assemble::strip_consumed_imports_with_removals(&code, &consumed, &extracted);
             if let Some(prologue) = directive_prologue.as_mut() {
@@ -986,9 +858,8 @@ mod tests {
 
     #[test]
     fn directive_after_ecmascript_unicode_trivia_stays_above_imports() {
-        // ECMAScript WhiteSpace includes BOM and every Unicode Zs code point;
-        // U+2028/U+2029 are LineTerminators. OXC recognizes the directive
-        // after all of them, so emission must preserve the same prologue.
+        // ECMAScript WhiteSpace covers BOM and every Zs code point; U+2028
+        // and U+2029 are LineTerminators. OXC sees the directive after all.
         let trivia = "\u{feff}\u{00a0}\u{1680}\u{2000}\u{2001}\u{2002}\u{2003}\u{2004}\u{2005}\u{2006}\u{2007}\u{2008}\u{2009}\u{200a}\u{202f}\u{205f}\u{3000}\u{2028}\u{2029}";
         let source = format!(
             "{trivia}'use client';\nexport const Box = ds.styles({{ display: 'flex' }}).asElement('div');\nexport const App = () => <Box />;\n"
@@ -1100,8 +971,6 @@ mod tests {
 
     #[test]
     fn two_instances_are_isolated() {
-        // Interleaved engines with different file sets must not observe
-        // each other's state (no globals).
         let mut a = ExtractEngine::new(None).unwrap();
         let mut b = ExtractEngine::new(None).unwrap();
         a.analyze(r#"[{"path":"a.tsx","source":"export const A = ds.styles({ p: 1 }).asElement('div');\nexport const UseA = () => <A/>;"}]"#.to_string()).unwrap();
@@ -1127,7 +996,6 @@ mod tests {
         let out = engine.transform_file("fam.tsx".to_string()).unwrap();
         assert!(out.contains("createComposedFamily({ Root: Root }"), "{out}");
         assert!(out.contains(r#"name: \"Card\""#), "{out}");
-        // compose import consumed; createComposedFamily imported.
         assert!(!out.contains("@animus-ui/system/compose'"), "{out}");
         assert!(out.contains("createComposedFamily }"), "{out}");
     }
@@ -1275,15 +1143,12 @@ export const App = () => <Box tone="red" />;
             )
             .unwrap();
         let out = engine.transform_file("child.tsx".to_string()).unwrap();
-        // Child inherits Parent's variant + state config (v1 908-929 merge).
         assert!(out.contains(r#"\"variants\":{\"size\""#), "{out}");
         assert!(out.contains(r#"\"states\":[\"loading\"]"#), "{out}");
     }
 
     #[test]
     fn imported_static_resolves_cross_file() {
-        // v1 Phase 2b parity (journal 10:50): a const exported from one
-        // file resolves as a static in the importer's chain eval.
         let mut engine = ExtractEngine::new(None).unwrap();
         let out = engine
             .analyze(
@@ -1292,7 +1157,6 @@ export const App = () => <Box tone="red" />;
                     .to_string(),
             )
             .unwrap();
-        // The chain evaluates (no fatal error) and the style lands.
         assert!(
             out.contains(r#""p":4"#) || out.contains(r#""p":4"#),
             "{out}"
@@ -1301,12 +1165,6 @@ export const App = () => <Box tone="red" />;
 
     #[test]
     fn external_package_keyframes_collection_resolves_via_named_import() {
-        // A collection registered inside an external kit's definition graph
-        // (carried to the consumer through the sealed kit and delivered as a
-        // keyframesJson record entry) resolves through a regular named
-        // import — the animation-name ref and exactly one @keyframes block
-        // emit, identical to a collection registered in the consumer's own
-        // definition graph.
         let mut engine = ExtractEngine::new(Some(EngineOptions {
             keyframes_json: Some(
                 r#"{"kitMotion":{"pulse":{"name":"animus-kf-abc123","frames":{"from":{"opacity":0.4},"to":{"opacity":1}}}}}"#
@@ -1341,7 +1199,6 @@ export const App = () => <Box tone="red" />;
             1,
             "{global}"
         );
-        // No skip diagnostic — the member expression resolved.
         let diagnostics = manifest["diagnostics"].as_array().cloned().unwrap_or_default();
         let skips: Vec<_> = diagnostics
             .iter()
@@ -1352,9 +1209,6 @@ export const App = () => <Box tone="red" />;
 
     #[test]
     fn imported_as_const_variant_map_matches_inline_manifest() {
-        // Statics resolution + type-assertion transparency: a variant map exported
-        // `as const` from another file produces the same options and CSS as
-        // inlining the literal in the consumer.
         let source_binding = serde_json::json!([
             { "path": "kit.ts", "source": "export const sizes = { sm: { p: 8 }, md: { p: 16 } } as const;\n" },
             { "path": "a.tsx", "source": "import { sizes } from './kit';\nexport const Control = ds.styles({ display: 'flex' }).variant({ prop: 'size', variants: sizes, defaultVariant: 'md' }).asElement('button');\nexport const App = () => <><Control size='sm' /><Control size='md' /></>;\n" }
@@ -1468,9 +1322,6 @@ export const App = () => <Box tone="red" />;
         assert_eq!(manifest["usageResidue"][0]["kind"], "conditional");
     }
 
-    /// Messages of every diagnostic carrying the unregistered-keyframe-reference
-    /// code — the witness channel for a reference the registration record
-    /// cannot answer.
     fn unregistered_keyframe_diagnostics(manifest: &serde_json::Value) -> Vec<String> {
         manifest["diagnostics"]
             .as_array()
@@ -1485,10 +1336,6 @@ export const App = () => <Box tone="red" />;
 
     #[test]
     fn registration_key_equal_to_the_export_name_resolves_member_lookup() {
-        // Key identity: the record's outer key IS the module-scope export
-        // name the collection leaves its defining module under, so
-        // `animations.pulse` substitutes the content-hashed name into the
-        // consuming component's CSS and nothing is witnessed as missing.
         let mut engine = ExtractEngine::new(Some(EngineOptions {
             keyframes_json: Some(
                 r#"{"animations":{"pulse":{"name":"animus-kf-abc123","frames":{"from":{"opacity":0.4},"to":{"opacity":1}}}}}"#
@@ -1522,7 +1369,6 @@ export const App = () => <Box tone="red" />;
             1,
             "{global}"
         );
-        // Negative control: a resolving reference is not witnessed as missing.
         assert!(
             unregistered_keyframe_diagnostics(&manifest).is_empty(),
             "{manifest}"
@@ -1531,10 +1377,6 @@ export const App = () => <Box tone="red" />;
 
     #[test]
     fn registration_key_mismatched_with_the_export_name_skips_and_is_witnessed() {
-        // Registered under `motion`, exported as `animations`. The engine
-        // resolves by EXPORT name, so the reference finds no record entry:
-        // the property drops AND the coded diagnostic names the binding —
-        // the mismatch is not a silent miss.
         let mut engine = ExtractEngine::new(Some(EngineOptions {
             keyframes_json: Some(
                 r#"{"motion":{"pulse":{"name":"animus-kf-abc123","frames":{"from":{"opacity":0.4},"to":{"opacity":1}}}}}"#
@@ -1562,13 +1404,7 @@ export const App = () => <Box tone="red" />;
         assert_eq!(coded.len(), 1, "{coded:?}");
         assert!(coded[0].contains("animationName"), "{}", coded[0]);
         assert!(coded[0].contains("animations.pulse"), "{}", coded[0]);
-        // Analysis continues: the component still extracts.
         assert!(!manifest["components"].as_object().unwrap().is_empty());
-        // Pinned (inc-04 review objection 3, pre-existing behavior): the
-        // record entry still emits its `@keyframes` block into the global
-        // sheet even though nothing can reference it — a dead block, not a
-        // missing one. If this pin starts failing because orphan emission
-        // was removed, that is an improvement; retire the pin deliberately.
         let global_sheet = manifest["sheets"]["global"].as_str().unwrap_or("");
         assert!(
             global_sheet.contains("@keyframes animus-kf-abc123"),
@@ -1578,11 +1414,6 @@ export const App = () => <Box tone="red" />;
 
     #[test]
     fn record_entry_wins_over_a_same_named_static_export() {
-        // Precedence witness (inc-04 review objection 8): the registration
-        // record's entry OVERWRITES a statically-foldable export of the
-        // same name in the statics map (`static_exports_by_file` inserts
-        // first, the record second — last write wins). A plain-object
-        // export `motion` must not shadow the registered collection.
         let mut engine = ExtractEngine::new(Some(EngineOptions {
             keyframes_json: Some(
                 r#"{"motion":{"ember":{"name":"animus-kf-abc123","frames":{"from":{"opacity":0.4},"to":{"opacity":1}}}}}"#
@@ -1632,9 +1463,8 @@ export const App = () => <Box tone="red" />;
 
     #[test]
     fn multibyte_preamble_does_not_shear_spans() {
-        // oxc spans are BYTE offsets; a CJK/emoji preamble before the
-        // chain shifts byte offsets away from char counts — the splice
-        // must land exactly on the chain (parity corpus: multibyte.tsx).
+        // oxc spans are BYTE offsets, so a multibyte preamble shifts them
+        // away from char counts; the splice must still land on the chain.
         let mut engine = ExtractEngine::new(None).unwrap();
         engine
             .analyze(
@@ -1644,10 +1474,8 @@ export const App = () => <Box tone="red" />;
             .unwrap();
         let out = engine.transform_file("a.tsx".to_string()).unwrap();
         assert!(out.contains("createComponent('div'"), "{out}");
-        // The preamble consts survive untouched — byte-exact.
         assert!(out.contains("日本語ラベル"), "{out}");
         assert!(out.contains("🔥頑張って"), "{out}");
-        // The chain text is fully replaced (no straddled splice remnant).
         assert!(!out.contains("ds.styles"), "{out}");
     }
 

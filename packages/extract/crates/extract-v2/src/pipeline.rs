@@ -1,13 +1,5 @@
-//! Per-component pipeline over FACTS (row 07 Task 07.6): v1
-//! `process_chain`'s post-eval half, reimplemented over ChainFacts — the
-//! evaluation already happened eagerly in facts.rs, so this consumes
-//! stage VALUES (no source, no spans, no re-parse; G1).
-//!
-//! Bug-compat mirror of packages/extract/src/lib.rs process_chain
-//! (~396-660): styles/variant/compound/states/system/props handling,
-//! variant base-merge semantics, positional compound classes, group
-//! expansion, PropConfigMap parsing with captured-transform injection,
-//! and the ComponentCss/tail assembly.
+//! Per-component pipeline over facts: consumes already-evaluated stage
+//! values — no source, no spans, no re-parse — and assembles component CSS.
 
 use rustc_hash::{FxHashMap, FxHashSet};
 use serde_json::Value;
@@ -19,8 +11,8 @@ use crate::theme::{
     ResolveContext, ResolvedStyles,
 };
 
-/// Facts-level ComponentReplacement precursor (emission/config fields the
-/// cross-file phases fill later, mirroring v1's staged population).
+/// Per-component pipeline output; the cross-file phases fill in the
+/// emission and config fields later.
 #[derive(Debug, Clone)]
 pub struct ComponentPipelineOutput {
     pub component_css: ComponentCss,
@@ -60,9 +52,8 @@ impl PipelineState {
     }
 }
 
-/// Err carries `(failing stage method, detail)` so the caller (analyze_css
-/// Phase 5a) can emit a bail diagnostic naming file, binding, and failing
-/// stage (extract-quirk-shed inc 02 — v1 967-969 discards the error).
+/// Err carries `(failing stage method, detail)` so the caller can name the
+/// failing stage in its bail diagnostic.
 pub fn process_chain_facts(
     chain: &ChainFacts,
     ctx: &ResolveContext,
@@ -120,8 +111,6 @@ fn process_stage(
 }
 
 fn resolve_variant_stage(value: &Value, ctx: &ResolveContext) -> VariantCss {
-    // Facts carry {prop, defaultVariant, base, variants} from the verbatim
-    // parse_variant_arg.
     let base = value
         .get("base")
         .filter(|candidate| !candidate.is_null())
@@ -132,12 +121,8 @@ fn resolve_variant_stage(value: &Value, ctx: &ResolveContext) -> VariantCss {
         .into_iter()
         .flat_map(|variants| variants.iter())
         .map(|(name, styles)| {
-            // Stamp variant provenance onto whatever failures THIS option's
-            // resolve produces. Every option is resolved here unconditionally,
-            // but reconciliation prunes the unused ones much later (and only
-            // in production), so the drain needs to know which option a
-            // failure belongs to before it can decide whether the failure
-            // describes CSS that actually ships.
+            // Stamp variant provenance onto this option's failures: pruning
+            // happens much later, so a failure must name its option.
             let before = ctx
                 .transform_failures
                 .map(|sink| sink.borrow().len())
@@ -181,21 +166,11 @@ fn merge_variant_base(
             declarations.clone(),
         );
     }
-    // Iterate the base breakpoint groups directly (reviewer R9): `base` and
-    // `resolved` are disjoint borrows, so the intermediate owned clone the
-    // earlier code collected was unnecessary. `merge_responsive_base` copies
-    // per-group via `to_vec`, so no borrow of `base` outlives the loop body.
     for (breakpoint, declarations) in base.breakpoint_groups() {
         merge_responsive_base(&mut resolved, breakpoint, declarations);
     }
-    // Carry the base's condition groups into each option — a variant
-    // `base`'s condition block would otherwise be dropped from every option
-    // (spec: "Condition block in a variant"). D4's no-cross-rule-merge
-    // choice makes a plain append cascade-correct; the emission sorter
-    // re-orders by kind/registry/source. Selectorless single-breakpoint
-    // groups already merged via `breakpoint_groups()` above; everything
-    // else — non-breakpoint groups AND `[Breakpoint]`+selector groups
-    // (responsive maps inside selector blocks, inc 05 review F2) — appends.
+    // Carry the base's condition groups into each option. Selectorless
+    // single-breakpoint groups merged above, so only the rest append here.
     for group in &base.conditioned {
         let is_plain_breakpoint = matches!(group.emit_order, ConditionEmitOrder::Breakpoint)
             && group.selector.is_none()
@@ -285,8 +260,6 @@ fn resolve_props_stage(
     Ok((!parsed.is_empty()).then_some(parsed))
 }
 
-/// Detect `Value` shapes theme resolution can't take yet in v2 (facts may
-/// carry them; the caller gates loud).
 pub fn value_is_object(v: &Value) -> bool {
     v.is_object()
 }
@@ -380,9 +353,6 @@ mod tests {
 
     #[test]
     fn variant_base_condition_block_merges_into_each_option() {
-        // media-condition-aliases: "Condition block in a variant" — a condition
-        // block on the variant `base` must reach EVERY option (variants layer),
-        // not be dropped by merge_variant_base.
         let out = resolve_fixture(
             r#"export const C = ds.variant({ prop: 'size', base: { '@media (prefers-reduced-motion: reduce)': { display: 'none' } }, variants: { sm: { p: 8 }, lg: { fontSize: 14 } } }).asElement('div');"#,
         );
@@ -406,9 +376,6 @@ mod tests {
 
     #[test]
     fn variant_base_carries_breakpoint_selector_groups() {
-        // F2 (inc-05 review): a responsive map inside a selector block on the
-        // variant `base` ([Breakpoint]+selector group) must reach every
-        // option — previously silently dropped by the Breakpoint-order skip.
         use crate::theme::{Condition, ConditionEmitOrder, ConditionedGroup};
         let base = ResolvedStyles {
             declarations: vec![],
@@ -432,7 +399,6 @@ mod tests {
 
     #[test]
     fn variant_option_condition_block_resolves() {
-        // The option's own condition block flows straight through resolve_styles.
         let out = resolve_fixture(
             r#"export const C = ds.variant({ prop: 'size', variants: { sm: { p: 8, '@supports (display: grid)': { display: 'flex' } } } }).asElement('div');"#,
         );

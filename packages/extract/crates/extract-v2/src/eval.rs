@@ -1,12 +1,5 @@
-//! Stage-argument evaluation — v1 `style_evaluator.rs` ported for the v2
-//! spine. BUG-COMPATIBILITY CONTRACT (design.md D3): the
-//! per-property skip model, structural bails, transform capture, and
-//! static-value collection replicate v1 OUTCOMES; v1's test module is
-//! carried verbatim below as the executable contract.
-//!
-//! v2 difference (facts, not spans-into-dropped-arenas): captured
-//! transforms carry OWNED SOURCE TEXT (user-authored input, recorded as
-//! such), taken from the stored source at capture time.
+//! Stage-argument evaluation into JSON values, with per-property skips for
+//! non-static values and captured `transform` functions.
 
 use oxc::ast::ast::{
     ArrayExpressionElement, Declaration, Expression, ObjectExpression, ObjectPropertyKind,
@@ -16,7 +9,6 @@ use oxc::span::Span;
 use rustc_hash::FxHashMap;
 use serde_json::{Map, Value};
 
-/// Error when a style value cannot be statically evaluated.
 #[derive(Debug)]
 pub struct BailError {
     pub reason: String,
@@ -30,35 +22,16 @@ impl BailError {
     }
 }
 
-/// A property that was skipped during evaluation because its value is non-static.
 #[derive(Debug, Clone)]
 pub struct SkippedProperty {
     pub key: String,
     pub reason: String,
 }
 
-/// Stable diagnostic code for selector keys with no substitutable subject.
-/// Ancestor-prefixed and repeated subjects are SUPPORTED — the
-/// resolver substitutes the class at every unquoted `&` — so the only
-/// unrepresentable form left is a key whose every `&` sits inside a quoted
-/// attribute value (nothing to anchor the class to).
 pub const SELECTOR_UNSUPPORTED_SUBJECT: &str = "animus.selector.unsupported-subject";
 
-/// Stable diagnostic code for an `object.property` reference whose base
-/// binding carries no entry in the system's keyframe registration record.
-/// Registration is the only channel that puts a collection in front of the
-/// extractor, so a reference the record cannot answer is an authoring
-/// mistake with a specific repair — distinct in kind from the generic
-/// dynamic-value per-property skip, which has none.
-///
-/// Severity: WARN, deliberately (the spec's "skipped without aborting
-/// analysis") — `diagnostic_severity_for_code`'s default arm applies;
-/// escalation belongs to the strict-mode contract, which is a separate
-/// change. Severity-pinned in the analyze_css test module.
 pub const KEYFRAMES_UNREGISTERED_REFERENCE: &str = "animus.keyframes.unregistered-reference";
 
-/// True when a style key looks selector-shaped (`&` present) but carries no
-/// substitutable subject — every `&` is inside quotes.
 pub(crate) fn unsupported_selector_key(key: &str) -> bool {
     key.contains('&') && !crate::selector_subject::has_subject(key)
 }
@@ -72,31 +45,18 @@ fn unsupported_selector_skip(key: &str) -> SkippedProperty {
     }
 }
 
-/// A function expression captured from a `transform` field instead of being evaluated.
-/// The span references the source text of the function body.
 #[derive(Debug, Clone)]
 pub struct CapturedTransform {
-    /// Dotted key path (e.g., "sizing.transform" for nested `{ sizing: { transform: fn } }`).
     pub key: String,
-    /// Source span of the function expression in the parsed AST.
     pub span: Span,
 }
 
-/// Evaluate an ObjectExpression AST node into a serde_json::Value.
-///
-/// Returns `Ok((value, skipped, captured))` where:
-/// - `skipped` lists properties whose values could not be statically evaluated
-/// - `captured` lists function expressions captured from `transform` fields
-///
-/// Structural errors (spread, computed keys, getters/setters) still bail the
-/// entire object with `Err(BailError)`.
 pub fn eval_object_expr(
     obj: &ObjectExpression<'_>,
 ) -> Result<(Value, Vec<SkippedProperty>, Vec<CapturedTransform>), BailError> {
     eval_object_expr_with_statics(obj, None)
 }
 
-/// Evaluate an ObjectExpression with optional static value context for identifier resolution.
 pub fn eval_object_expr_with_statics(
     obj: &ObjectExpression<'_>,
     static_values: Option<&FxHashMap<String, Value>>,
@@ -104,21 +64,6 @@ pub fn eval_object_expr_with_statics(
     eval_object_expr_scoped(obj, static_values, false)
 }
 
-/// The recursive core, carrying keyframe ELIGIBILITY: whether the value
-/// position being evaluated sits under an animation-name property
-/// (`animationName`/`animation`), directly or through any nested block —
-/// responsive maps (`animationName: { _: ref, sm: ref }`), selector and
-/// at-rule blocks all inherit the owning property's eligibility. Only
-/// eligible positions may carry the `KEYFRAMES_UNREGISTERED_REFERENCE`
-/// code (a keyframes-coded diagnostic on `color: palette.brand` would
-/// re-create the false-alarm class registration eliminates); the decision
-/// is made where the reason is MINTED, never by post-hoc string surgery.
-/// Property-name authority note: the type surface widens `KeyframeRef`
-/// onto `animationName` only (`PassThroughProp<'animationName'>` in
-/// packages/system/src/types/config.ts); `animation` is admitted here
-/// because the shorthand can embed a keyframe name, and the kebab twins
-/// (`animation-name`) are deliberately absent — quoted-kebab authoring is
-/// outside the typed surface and gets the neutral reason.
 fn eval_object_expr_scoped(
     obj: &ObjectExpression<'_>,
     static_values: Option<&FxHashMap<String, Value>>,
@@ -131,7 +76,6 @@ fn eval_object_expr_scoped(
     for prop_kind in &obj.properties {
         match prop_kind {
             ObjectPropertyKind::ObjectProperty(prop) => {
-                // Structural issues → bail entire object
                 if prop.kind != PropertyKind::Init {
                     return Err(BailError::new("getter/setter in style object"));
                 }
@@ -143,17 +87,13 @@ fn eval_object_expr_scoped(
                 let eligible = keyframes_eligible
                     || matches!(key.as_str(), "animationName" | "animation");
 
-                // Selector-shaped keys whose every `&` is quoted have no
-                // substitutable subject: record a coded skip instead of
-                // letting theme resolution drop the rule silently.
-                // Ancestor and repeated subjects flow through — the resolver
-                // substitutes the class at every unquoted `&`.
+                // Without a coded skip, theme resolution drops the rule
+                // silently.
                 if unsupported_selector_key(&key) {
                     skipped.push(unsupported_selector_skip(&key));
                     continue;
                 }
 
-                // Special case: capture function expressions on `transform` fields
                 if key == "transform" {
                     match &prop.value {
                         Expression::ArrowFunctionExpression(arrow) => {
@@ -170,18 +110,14 @@ fn eval_object_expr_scoped(
                             });
                             continue;
                         }
-                        // Other expressions (string literals, identifiers, etc.)
-                        // fall through to normal evaluation below
                         _ => {}
                     }
                 }
 
-                // Handle nested objects directly to propagate inner captures
                 if let Expression::ObjectExpression(inner_obj) = &prop.value {
                     match eval_object_expr_scoped(inner_obj, static_values, eligible) {
                         Ok((value, inner_skips, inner_captured)) => {
                             skipped.extend(inner_skips);
-                            // Prefix inner captures with the outer key
                             for mut cap in inner_captured {
                                 cap.key = format!("{}.{}", key, cap.key);
                                 captured.push(cap);
@@ -189,7 +125,6 @@ fn eval_object_expr_scoped(
                             map.insert(key, value);
                         }
                         Err(bail) => {
-                            // Nested structural bail → skip this property on the parent
                             skipped.push(SkippedProperty {
                                 key,
                                 reason: bail.reason,
@@ -199,7 +134,6 @@ fn eval_object_expr_scoped(
                     continue;
                 }
 
-                // Try to evaluate the value. On failure, skip this property.
                 match eval_expression_scoped(
                     &prop.value,
                     &mut skipped,
@@ -210,7 +144,6 @@ fn eval_object_expr_scoped(
                         map.insert(key, value);
                     }
                     Err(bail) => {
-                        // Value-level error: skip this property, continue with the rest.
                         skipped.push(SkippedProperty {
                             key,
                             reason: bail.reason,
@@ -219,7 +152,6 @@ fn eval_object_expr_scoped(
                 }
             }
             ObjectPropertyKind::SpreadProperty(_) => {
-                // Structural issue → bail entire object
                 return Err(BailError::new("spread element in style object"));
             }
         }
@@ -228,7 +160,6 @@ fn eval_object_expr_scoped(
     Ok((Value::Object(map), skipped, captured))
 }
 
-/// Evaluate a property key to a string.
 fn eval_property_key(key: &PropertyKey<'_>) -> Result<String, BailError> {
     match key {
         PropertyKey::StaticIdentifier(id) => Ok(id.name.to_string()),
@@ -238,8 +169,6 @@ fn eval_property_key(key: &PropertyKey<'_>) -> Result<String, BailError> {
     }
 }
 
-/// Evaluate an expression to a JSON value.
-/// The `skips` accumulator collects any per-property skips from nested objects.
 fn eval_expression(
     expr: &Expression<'_>,
     skips: &mut Vec<SkippedProperty>,
@@ -247,7 +176,6 @@ fn eval_expression(
     eval_expression_with_statics(expr, skips, None)
 }
 
-/// Evaluate an expression with optional static value context for identifier resolution.
 pub(crate) fn eval_expression_with_statics(
     expr: &Expression<'_>,
     skips: &mut Vec<SkippedProperty>,
@@ -256,23 +184,17 @@ pub(crate) fn eval_expression_with_statics(
     eval_expression_scoped(expr, skips, static_values, false)
 }
 
-/// The recursive expression core, carrying keyframe eligibility (see
-/// `eval_object_expr_scoped`).
 fn eval_expression_scoped(
     expr: &Expression<'_>,
     skips: &mut Vec<SkippedProperty>,
     static_values: Option<&FxHashMap<String, Value>>,
     keyframes_eligible: bool,
 ) -> Result<Value, BailError> {
-    // `as`/`satisfies`/non-null/parens are erased type-level syntax: a wrapped
-    // expression evaluates exactly like its operand (semantic-const-resolution,
-    // "Type assertions are transparent to static evaluation").
     let expr = crate::chain_walk::unwrap_type_assertions(expr);
     match expr {
         Expression::StringLiteral(lit) => Ok(Value::String(lit.value.to_string())),
 
         Expression::NumericLiteral(lit) => {
-            // Preserve integer vs float distinction
             if lit.value.fract() == 0.0 && lit.value.abs() < (i64::MAX as f64) {
                 Ok(Value::Number(
                     serde_json::Number::from(lit.value as i64),
@@ -290,7 +212,6 @@ fn eval_expression_scoped(
         Expression::NullLiteral(_) => Ok(Value::Null),
 
         Expression::UnaryExpression(unary) => {
-            // Handle negative numbers: -1, -0.5
             if unary.operator == oxc::syntax::operator::UnaryOperator::UnaryNegation {
                 if let Expression::NumericLiteral(lit) = &unary.argument {
                     let val = -lit.value;
@@ -308,12 +229,6 @@ fn eval_expression_scoped(
         }
 
         Expression::ObjectExpression(obj) => {
-            // Nested object: per-property skip applies recursively.
-            // If the nested object has a structural bail, convert to a value-level
-            // error so the parent can skip this property.
-            // Note: captures from nested objects are discarded here — this path is
-            // only reached for non-object properties in eval_object_expr (objects are
-            // handled directly). This path remains for eval_array_element contexts.
             match eval_object_expr_scoped(obj, static_values, keyframes_eligible) {
                 Ok((value, inner_skips, _captures)) => {
                     skips.extend(inner_skips);
@@ -332,9 +247,7 @@ fn eval_expression_scoped(
         }
 
         Expression::TemplateLiteral(tpl) => {
-            // Only static template literals (no expressions) are allowed
             if tpl.expressions.is_empty() {
-                // Single quasi with no expressions
                 if let Some(quasi) = tpl.quasis.first() {
                     return Ok(Value::String(quasi.value.raw.to_string()));
                 }
@@ -344,7 +257,6 @@ fn eval_expression_scoped(
             ))
         }
 
-        // Identifier: check static value map first, then bail if not resolved
         Expression::Identifier(ident) => {
             if let Some(sv) = static_values {
                 if let Some(val) = sv.get(ident.name.as_str()) {
@@ -361,11 +273,6 @@ fn eval_expression_scoped(
         Expression::TaggedTemplateExpression(_) => {
             Err(BailError::new("tagged template (non-static)"))
         }
-        // Static member expression: resolve `object.property` when `object`
-        // is an Identifier bound in `static_values` to a JSON object. This
-        // covers cases like `animationName: motion.ember` where `motion` is
-        // an extraction-time binding carrying a keyframes collection map.
-        // Only single-hop lookups are supported; deeper chains fall through.
         Expression::StaticMemberExpression(member) => {
             if let Some(sv) = static_values {
                 if let Expression::Identifier(ident) = &member.object {
@@ -391,23 +298,6 @@ fn eval_expression_scoped(
     }
 }
 
-/// Why an `object.property` value could not be evaluated.
-///
-/// A bare "member expression (non-static)" names neither the binding nor the
-/// contract it failed, so an author reading the skip cannot tell a typo from a
-/// keyframe collection that was never registered. Everything needed is already
-/// at this seam: `static_values` is the same map the engine seeds from the
-/// keyframe registration record (`engine.rs` injects each registered
-/// collection under the local binding its export name resolves to), so its
-/// membership IS the registration answer. Every reason keeps the
-/// `(non-static)` marker so existing skip surfacing is unchanged in kind; the
-/// unregistered case additionally carries the stable
-/// `KEYFRAMES_UNREGISTERED_REFERENCE` code, which the manifest lifts out of
-/// the message into `CssDiagnostic::code` — but ONLY when the value position
-/// is keyframe-ELIGIBLE (under an animation-name property, directly or
-/// through nested blocks; see `eval_object_expr_scoped`). Ineligible
-/// positions get the neutral non-static reason: the code is minted here or
-/// not at all, never stripped after the fact.
 fn member_expression_skip_reason(
     object: &Expression<'_>,
     property: &str,
@@ -415,17 +305,12 @@ fn member_expression_skip_reason(
     keyframes_eligible: bool,
 ) -> String {
     let Expression::Identifier(ident) = object else {
-        // Nested/computed object — no single binding to name.
         return "member expression (non-static)".to_string();
     };
     let base = ident.name.as_str();
-    // Every named reason opens the same way and differs only in what follows.
     let named = format!("member expression '{base}.{property}' (non-static)");
-    // No statics at all: this arm's production callers are array-element
-    // evaluation and the module-statics collection pass, whose skips never
-    // surface as manifest diagnostics (the variant stage and the compound
-    // second argument DO evaluate with statics). Keyframe advice here would
-    // be unactionable; report the missing context instead.
+    // Callers without statics (array elements, module-statics collection)
+    // never reach manifest diagnostics, so keyframe advice is unactionable.
     let Some(sv) = static_values else {
         return format!("{named} — evaluated without extraction-time statics");
     };
@@ -441,7 +326,6 @@ fn member_expression_skip_reason(
     }
 }
 
-/// Evaluate an array element directly (without casting to Expression).
 fn eval_array_element(elem: &ArrayExpressionElement<'_>) -> Result<Value, BailError> {
     match elem {
         ArrayExpressionElement::StringLiteral(lit) => Ok(Value::String(lit.value.to_string())),
@@ -458,9 +342,6 @@ fn eval_array_element(elem: &ArrayExpressionElement<'_>) -> Result<Value, BailEr
         ArrayExpressionElement::BooleanLiteral(lit) => Ok(Value::Bool(lit.value)),
         ArrayExpressionElement::NullLiteral(_) => Ok(Value::Null),
         ArrayExpressionElement::ObjectExpression(obj) => {
-            // Discard per-property skips from nested objects in arrays — arrays
-            // in style values are rare (e.g., boxShadow arrays) and partial
-            // extraction within them is not meaningful.
             eval_object_expr(obj).map(|(val, _skips, _captures)| val)
         }
         ArrayExpressionElement::ArrayExpression(arr) => {
@@ -488,30 +369,14 @@ fn eval_array_element(elem: &ArrayExpressionElement<'_>) -> Result<Value, BailEr
     }
 }
 
-/// Parsed representation of a `.variant()` call argument.
 #[derive(Debug)]
 pub struct VariantStageConfig {
-    /// The prop name (default: "variant")
     pub prop: String,
-    /// Default variant option name
     pub default_variant: Option<String>,
-    /// Base styles shared across all variant options
     pub base: Option<Value>,
-    /// Map of variant option name → styles
     pub variants: Map<String, Value>,
 }
 
-/// Parse the argument of a `.variant({ prop?, defaultVariant?, base?, variants: {...} })` call.
-/// Returns the config and any per-property skip warnings from style evaluation.
-///
-/// Every recognized key that is not the literal shape this parser can read
-/// records a SkippedProperty instead of falling through silently, so an
-/// emitted class always has a witness for what it lost. The extraction outcome
-/// is unchanged (a non-literal `variants` still yields an empty option map
-/// with a surviving `defaultVariant`), but the disappearance now carries a
-/// diagnostic — the skip vector returned here becomes `StageFacts::skipped`
-/// (facts.rs) → `PipelineState::skip_warnings` (pipeline.rs) → a
-/// `kind: "skip"` manifest diagnostic (analyze_css.rs).
 pub fn parse_variant_arg(
     obj: &ObjectExpression<'_>,
     static_values: Option<&FxHashMap<String, Value>>,
@@ -556,9 +421,6 @@ pub fn parse_variant_arg(
                         &mut Vec::new(),
                         static_values,
                     ) {
-                        // Identifier-backed base styles resolve through the
-                        // same statics as `.styles()` arguments
-                        // (semantic-const-resolution, variant stage).
                         base = Some(Value::Object(map));
                     } else {
                         all_skips.push(skip("base", "variant base styles (non-static)"));
@@ -579,10 +441,6 @@ pub fn parse_variant_arg(
                                     all_skips.extend(skips);
                                     variants.insert(vkey, vstyles);
                                 }
-                                // `variants: { ...sizes }` IS an object
-                                // literal, so it clears the shape check above
-                                // and then contributes no options at all —
-                                // the same zero-CSS class by a second route.
                                 ObjectPropertyKind::SpreadProperty(_) => {
                                     all_skips
                                         .push(skip("variants", "variant map spread (non-static)"));
@@ -594,26 +452,16 @@ pub fn parse_variant_arg(
                         &mut Vec::new(),
                         static_values,
                     ) {
-                        // A whole variant map bound to a top-level const —
-                        // same-file or imported through the module graph —
-                        // resolves to its object-of-objects and produces the
-                        // identical manifest as inlining the literal.
                         for (vkey, vstyles) in map {
                             variants.insert(vkey, vstyles);
                         }
                     } else {
-                        // A genuinely dynamic map leaves `options: []` while
-                        // `defaultVariant` survives; record the loss so the
-                        // zero-CSS class has a witness.
                         all_skips.push(skip("variants", "variant map (non-static)"));
                     }
                 }
-                _ => {} // ignore unknown keys
+                _ => {}
             }
         } else {
-            // `.variant({ ...cfg })` reads as an absent config — no prop, no
-            // variants — while the author did supply one. Record the loss at
-            // the config level so the disappearance has a witness.
             all_skips.push(skip(
                 "variant config",
                 "variant config spread (non-static)",
@@ -632,8 +480,6 @@ pub fn parse_variant_arg(
     ))
 }
 
-/// Parse the argument of a `.states({ stateName: { ...styles } })` call.
-/// Returns the states map and any per-property skip warnings from style evaluation.
 #[allow(dead_code)]
 pub fn parse_states_arg(
     obj: &ObjectExpression<'_>,
@@ -659,19 +505,12 @@ pub fn parse_states_arg(
     Ok((states, all_skips))
 }
 
-/// Collect statically-evaluable top-level `const` declarations from a parsed program.
-///
-/// Walks `program.body` for `const` variable declarations, evaluates init expressions,
-/// and returns a map of `binding_name → Value` for successfully evaluated declarations.
-/// `let`/`var` declarations are skipped (mutable, cannot be statically guaranteed).
-/// Non-static init expressions (function calls, identifiers, etc.) are silently skipped.
 pub fn collect_static_values(program: &Program<'_>) -> FxHashMap<String, Value> {
     collect_static_values_impl(program, false)
 }
 
-/// Strict static values for reachability enrichment. Unlike the style-stage
-/// collector, this rejects partially evaluated objects so inferred JSX value
-/// sets can never omit a runtime-reachable member.
+/// Rejects partially evaluated objects, so an inferred JSX value set can
+/// never omit a runtime-reachable member.
 pub fn collect_complete_static_values(program: &Program<'_>) -> FxHashMap<String, Value> {
     collect_static_values_impl(program, true)
 }
@@ -706,14 +545,11 @@ fn collect_static_values_impl(
                 oxc::ast::ast::BindingPattern::BindingIdentifier(ident) => {
                     ident.name.to_string()
                 }
-                _ => continue, // Destructuring patterns — skip
+                _ => continue,
             };
 
             if let Some(init) = &declarator.init {
-                // `const sizes = {...} as const` collects exactly like the
-                // unwrapped literal (type assertions are erased syntax).
                 let init = crate::chain_walk::unwrap_type_assertions(init);
-                // Try evaluating the init expression
                 let mut dummy_skips = Vec::new();
                 match init {
                     Expression::ObjectExpression(obj) => {
@@ -738,11 +574,6 @@ fn collect_static_values_impl(
     values
 }
 
-/// Extract the subset of static values that correspond to exported names.
-///
-/// v1 takes `import_resolver::FileModuleInfo`; the v2 module graph is a
-/// later row, so the port accepts the same (local_name, exported_name)
-/// pairs directly — semantics identical, coupling deferred.
 pub fn collect_static_exports(
     exports_pairs: &[(Option<String>, String)],
     static_values: &FxHashMap<String, Value>,
@@ -761,10 +592,6 @@ pub fn collect_static_exports(
 }
 
 
-// ─── v1 style_evaluator test module, ported VERBATIM as the
-// bug-compatibility contract (design.md D3). Do not "fix" expectations —
-// behavioral differences are register material. Source of truth:
-// packages/extract/src/style_evaluator.rs tests at the port date.
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -775,7 +602,6 @@ mod tests {
         OwnedAst::parse("test.ts".into(), full, &counter)
     }
 
-    /// Parse an object expression and return the value + skipped + captured.
     fn parse_obj_all(source: &str) -> (Value, Vec<SkippedProperty>, Vec<CapturedTransform>) {
         let ast = parse_ts(format!("const x = {};", source));
         let program = ast.program();
@@ -790,18 +616,15 @@ mod tests {
         panic!("failed to parse object expression");
     }
 
-    /// Parse an object expression and return the value + skipped properties.
     fn parse_obj_full(source: &str) -> (Value, Vec<SkippedProperty>) {
         let (val, skips, _captures) = parse_obj_all(source);
         (val, skips)
     }
 
-    /// Parse an object expression, returning just the value (for tests that don't care about skips).
     fn parse_obj(source: &str) -> Value {
         parse_obj_full(source).0
     }
 
-    /// Parse an object expression that should structurally bail (spread, computed key, getter).
     fn parse_obj_err(source: &str) -> String {
         let ast = parse_ts(format!("const x = {};", source));
         let program = ast.program();
@@ -816,13 +639,10 @@ mod tests {
         panic!("failed to parse");
     }
 
-    /// Parse a `.variant()` argument object and return the config + skips.
     fn parse_variant(source: &str) -> (VariantStageConfig, Vec<SkippedProperty>) {
         parse_variant_with_statics(source, None)
     }
 
-    /// Same, with an extraction-time statics map (the statics-aware departure
-    /// from v1 parity — semantic-const-resolution).
     fn parse_variant_with_statics(
         source: &str,
         sv: Option<&FxHashMap<String, Value>>,
@@ -840,17 +660,13 @@ mod tests {
         panic!("failed to parse variant config object");
     }
 
-    // ── variant-stage fall-throughs are recorded skips ───────────────────────
-
     #[test]
     fn variant_identifier_map_records_skip_instead_of_silent_empty() {
         let (cfg, skips) =
             parse_variant("{ prop: 'size', defaultVariant: 'lg', variants: selectSizes }");
-        // Extraction OUTCOME unchanged: options stay empty, default survives.
         assert!(cfg.variants.is_empty(), "{:?}", cfg.variants);
         assert_eq!(cfg.default_variant.as_deref(), Some("lg"));
         assert_eq!(cfg.prop, "size");
-        // ...but the disappearance is no longer silent.
         assert_eq!(skips.len(), 1, "{:?}", skips);
         assert_eq!(skips[0].key, "variants");
         assert!(
@@ -862,9 +678,6 @@ mod tests {
 
     #[test]
     fn variant_spread_map_records_skip_instead_of_silent_empty() {
-        // `{ ...sizes }` clears the object-literal shape check and then
-        // contributes no options — the same zero-CSS class the identifier
-        // form produces, by a route the shape check cannot see.
         let (cfg, skips) =
             parse_variant("{ prop: 'size', defaultVariant: 'lg', variants: { ...sizes } }");
         assert!(cfg.variants.is_empty(), "{:?}", cfg.variants);
@@ -880,9 +693,6 @@ mod tests {
 
     #[test]
     fn variant_config_spread_records_skip_instead_of_silent_absence() {
-        // `.variant({ ...cfg })` spreads at the CONFIG level: no key ever
-        // matches, so the whole stage reads as unauthored — options `[]`,
-        // no default — with the author none the wiser.
         let (cfg, skips) = parse_variant("{ ...cfg }");
         assert!(cfg.variants.is_empty(), "{:?}", cfg.variants);
         assert_eq!(cfg.default_variant, None);
@@ -897,8 +707,6 @@ mod tests {
 
     #[test]
     fn variant_spread_alongside_literal_options_still_records_the_spread() {
-        // Partial extraction: the literal options survive, the spread does not
-        // — and the loss is witnessed rather than inferred from a short list.
         let (cfg, skips) =
             parse_variant("{ prop: 'size', variants: { sm: { p: 8 }, ...rest } }");
         assert_eq!(cfg.variants.len(), 1);
@@ -925,7 +733,6 @@ mod tests {
         let (cfg, skips) = parse_variant(
             "{ prop: propName, defaultVariant: fallback, base: sharedBase, variants: {} }",
         );
-        // Fall-through defaults are unchanged.
         assert_eq!(cfg.prop, "variant");
         assert!(cfg.default_variant.is_none());
         assert!(cfg.base.is_none());
@@ -940,8 +747,6 @@ mod tests {
             skips
         );
     }
-
-    // ── Static evaluation tests (unchanged) ──────────────────────────────────
 
     #[test]
     fn eval_simple_object() {
@@ -996,8 +801,6 @@ mod tests {
         assert_eq!(val["content"], "\"\"");
     }
 
-    // ── Per-property skip tests (NEW — value-level errors skip, don't bail) ──
-
     #[test]
     fn skip_variable_reference_keep_others() {
         let (val, skips) = parse_obj_full(r#"{ color: someVariable, display: 'flex' }"#);
@@ -1044,7 +847,6 @@ mod tests {
 
     #[test]
     fn skip_inside_pseudo_selector() {
-        // Non-static value inside a pseudo block: skip just that inner property
         let (val, skips) = parse_obj_full(r#"{ '&:hover': { color: dynamicVar, bg: 'red' } }"#);
         assert_eq!(val["&:hover"]["bg"], "red");
         assert!(val["&:hover"].get("color").is_none());
@@ -1054,7 +856,6 @@ mod tests {
 
     #[test]
     fn skip_non_static_pseudo_value() {
-        // The pseudo block value itself is non-static (not an object)
         let (val, skips) = parse_obj_full(r#"{ '&:hover': someFunction(), color: 'red' }"#);
         assert_eq!(val["color"], "red");
         assert!(val.get("&:hover").is_none());
@@ -1064,7 +865,6 @@ mod tests {
 
     #[test]
     fn spread_inside_nested_skips_parent() {
-        // Spread in nested object → structural bail in nested → skip the parent property
         let (val, skips) = parse_obj_full(r#"{ '&:hover': { ...hoverOverrides, bg: 'red' }, color: 'blue' }"#);
         assert_eq!(val["color"], "blue");
         assert!(val.get("&:hover").is_none());
@@ -1072,8 +872,6 @@ mod tests {
         assert_eq!(skips[0].key, "&:hover");
         assert!(skips[0].reason.contains("spread"));
     }
-
-    // ── Structural bail tests (still bail entire object) ──────────────────────
 
     #[test]
     fn bail_on_spread() {
@@ -1083,21 +881,16 @@ mod tests {
 
     #[test]
     fn bail_on_spread_even_with_static_props() {
-        // Spread at top level ALWAYS bails — even if other properties are static
         let reason = parse_obj_err(r#"{ ...baseStyles, color: 'red' }"#);
         assert!(reason.contains("spread"));
     }
-
-    // ── Transform function capture tests ─────────────────────────────────────
 
     #[test]
     fn capture_arrow_on_transform_field() {
         let (val, skips, captured) = parse_obj_all(
             r#"{ property: 'flexBasis', transform: (v) => v + 'px' }"#,
         );
-        // Static property evaluates normally
         assert_eq!(val["property"], "flexBasis");
-        // Transform is captured, not in JSON
         assert!(val.get("transform").is_none());
         assert_eq!(skips.len(), 0);
         assert_eq!(captured.len(), 1);
@@ -1121,7 +914,6 @@ mod tests {
             r#"{ property: 'flexBasis', transform: myTransform }"#,
         );
         assert_eq!(val["property"], "flexBasis");
-        // Identifier → skipped (not captured)
         assert_eq!(skips.len(), 1);
         assert_eq!(skips[0].key, "transform");
         assert!(skips[0].reason.contains("non-static"));
@@ -1145,7 +937,6 @@ mod tests {
             r#"{ property: 'flexBasis', scale: (v) => v * 2 }"#,
         );
         assert_eq!(val["property"], "flexBasis");
-        // Arrow on `scale` field → skipped (bailed), not captured
         assert_eq!(skips.len(), 1);
         assert_eq!(skips[0].key, "scale");
         assert!(skips[0].reason.contains("arrow function"));
@@ -1157,7 +948,6 @@ mod tests {
         let (val, skips, captured) = parse_obj_all(
             r#"{ sizing: { property: 'flexBasis', transform: (v) => v + 'px' } }"#,
         );
-        // Nested object evaluates, with transform captured
         assert_eq!(val["sizing"]["property"], "flexBasis");
         assert!(val["sizing"].get("transform").is_none());
         assert_eq!(skips.len(), 0);
@@ -1177,10 +967,6 @@ mod tests {
         assert!(keys.contains(&"sizing.transform"));
         assert!(keys.contains(&"ratio.transform"));
     }
-
-    // -----------------------------------------------------------------------
-    // Static const resolution tests
-    // -----------------------------------------------------------------------
 
     #[test]
     fn intra_file_numeric_const_resolution() {
@@ -1258,11 +1044,6 @@ const Component = { gap: GAP };"#;
         assert_eq!(values.get("SPACING"), Some(&Value::Number(8.into())));
     }
 
-    // ── Member-expression resolution via static_values ──────────────────────
-    // These cover the keyframes binding-substitution path: `motion.ember`
-    // resolves when `motion` is bound to a JSON object in the static-values
-    // map.
-
     #[test]
     fn member_expression_resolved_via_static_values_object() {
         let mut sv = FxHashMap::default();
@@ -1303,7 +1084,6 @@ const Component = { gap: GAP };"#;
 
     #[test]
     fn member_expression_falls_back_when_base_is_not_object() {
-        // Base resolves to a scalar (not an object) → skip, do not panic.
         let mut sv = FxHashMap::default();
         sv.insert("GAP".to_string(), Value::Number(16.into()));
         let (val, skips, _) =
@@ -1328,8 +1108,6 @@ const Component = { gap: GAP };"#;
         assert!(skips.is_empty());
     }
 
-    // ── the member-expression skip names its binding ─────────────────────────
-
     #[test]
     fn member_expression_skip_codes_an_unregistered_collection_and_names_the_repair() {
         let sv = FxHashMap::default();
@@ -1345,8 +1123,6 @@ const Component = { gap: GAP };"#;
             reason.contains("is neither a registered keyframe collection"),
             "{reason}"
         );
-        // The repair, not the mechanism: register between the terminals under
-        // the export name.
         assert!(
             reason.contains("register it on the system between build() and seal()"),
             "{reason}"
@@ -1355,8 +1131,6 @@ const Component = { gap: GAP };"#;
             reason.contains("the registration key must equal the export name"),
             "{reason}"
         );
-        // Trailing marker in the manifest's extractable position, so the
-        // diagnostic carries a stable code rather than only prose.
         assert!(
             reason.ends_with(&format!("({KEYFRAMES_UNREGISTERED_REFERENCE})")),
             "{reason}"
@@ -1370,10 +1144,6 @@ const Component = { gap: GAP };"#;
 
     #[test]
     fn keyframes_code_is_scoped_to_animation_name_properties() {
-        // vocabulary-registration user story 10: a build using no keyframes
-        // emits ZERO `animus.keyframes.*` diagnostics — an unknown member
-        // base under an unrelated property must not carry the keyframes
-        // code or advice, only the neutral non-static reason.
         let sv = FxHashMap::default();
         let (_, skips, _) = parse_obj_with_statics("{ color: palette.brand }", Some(&sv));
         assert_eq!(skips.len(), 1, "{:?}", skips);
@@ -1399,9 +1169,6 @@ const Component = { gap: GAP };"#;
 
     #[test]
     fn keyframes_code_fires_through_the_responsive_form() {
-        // The type surface licenses `animationName: { _: ref, sm: ref }`
-        // (ResponsiveProp<KeyframeRef ...>); eligibility must survive the
-        // nested-block recursion, not read only the immediate key.
         let sv = FxHashMap::default();
         let (_, skips, _) =
             parse_obj_with_statics("{ animationName: { _: motion.pulse } }", Some(&sv));
@@ -1450,7 +1217,6 @@ const Component = { gap: GAP };"#;
             reason.contains("registered collection with no 'pulse' member"),
             "{reason}"
         );
-        // A present-but-incomplete collection is NOT the unregistered case.
         assert_eq!(
             crate::analyze_css::diagnostic_code_from_message(reason),
             None,
@@ -1460,13 +1226,6 @@ const Component = { gap: GAP };"#;
 
     #[test]
     fn member_expression_skip_without_statics_reports_missing_context() {
-        // No-statics callers (array-element evaluation and the
-        // module-statics collection pass — the variant stage and the compound
-        // second argument DO evaluate with statics) never consulted the
-        // registration record, and their skips never surface as manifest
-        // diagnostics — keyframe advice there would be unactionable. Name
-        // the binding and the missing context instead, and do NOT code it as
-        // an unregistered reference.
         let (_, skips) = parse_obj_full("{ animationName: motion.pulse }");
         assert_eq!(skips.len(), 1, "{:?}", skips);
         let reason = &skips[0].reason;
@@ -1511,9 +1270,6 @@ const Component = { gap: GAP };"#;
 
     #[test]
     fn variant_map_resolves_from_statics() {
-        // `variants: sizes` with `sizes` in the statics map
-        // resolves to the same config as the inline literal; base identifiers
-        // resolve too; genuinely-unresolved identifiers keep the skip.
         let mut sv = FxHashMap::default();
         sv.insert(
             "sizes".to_string(),
@@ -1531,7 +1287,6 @@ const Component = { gap: GAP };"#;
         assert_eq!(cfg.variants.len(), 2);
         assert_eq!(cfg.variants["sm"], serde_json::json!({ "height": 32 }));
 
-        // Without statics the fall-through skip is unchanged (v1 shape).
         let (cfg2, skips2) = parse_variant(
             "{ prop: 'size', defaultVariant: 'md', variants: sizes }",
         );
@@ -1567,8 +1322,6 @@ const Component = { gap: GAP };"#;
 
     #[test]
     fn unsupported_selector_key_predicate() {
-        // Ancestor, leading, and repeated subjects are all SUPPORTED — only
-        // a key whose every `&` is quoted has nothing to substitute.
         assert!(unsupported_selector_key(r#"[data-x="a&b"]"#));
         assert!(unsupported_selector_key("[data-x='&']"));
         assert!(!unsupported_selector_key(r#"[aria-sort="ascending"] &"#));

@@ -1,15 +1,5 @@
-//! Forced-emission overrides (spec: static-emission-overrides).
-//!
-//! Parses the `staticCss` declaration (EngineOptions `static_css_json`) and
-//! synthesizes USAGE — a `UsageScanResult` fed to the ordinary ledger, plus
-//! utility/custom-dynamic stream entries — so forced styles survive
-//! reconciliation through the exact machinery observed JSX usage uses.
-//! There is no parallel generator: wildcard variants ride the ledger's
-//! `"__dynamic__"` expansion, wildcard states enumerate the component's
-//! declared set, system-prop values enter the utility stream verbatim.
-//!
-//! Unmatched names warn (kind `"warn"` diagnostics) and never fail the
-//! build. Synthesis is deterministic: maps are iterated in sorted order.
+//! Forced-emission overrides: parses the `staticCss` declaration and
+//! synthesizes usage so forced styles survive ordinary reconciliation.
 
 use rustc_hash::{FxHashMap, FxHashSet};
 use serde::Deserialize;
@@ -24,10 +14,6 @@ use crate::reconcile::{EliminatedDetail, UsageLedger};
 
 /// Pseudo-file attributed to staticCss diagnostics.
 const STATIC_CSS_SOURCE: &str = "staticCss";
-
-// ---------------------------------------------------------------------------
-// Declaration schema (camelCase JSON from the plugins)
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -74,12 +60,7 @@ impl StaticCssConfig {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Injection result
-// ---------------------------------------------------------------------------
-
-/// Flat forced counts + labeled detail rows, merged into the
-/// `ReconciliationReport` by the caller (spec: extraction-report).
+/// Forced counts and detail rows merged into the reconciliation report.
 #[derive(Debug, Clone, Default)]
 pub struct ForcedReport {
     pub components_forced: usize,
@@ -90,12 +71,11 @@ pub struct ForcedReport {
 
 #[derive(Debug, Default)]
 pub struct ForcedInjection {
-    /// Synthetic usage appended to the per-file scan results before
-    /// `build_ledger` (variants/states/rendered membership).
+    /// Synthetic usage appended to the per-file scan results before the
+    /// ledger is built.
     pub scan: UsageScanResult,
     /// Forced system-prop `(prop, value)` pairs for the utility stream.
     pub utility_values: Vec<(String, Value)>,
-    /// Forced per-component custom dynamic slots.
     pub custom_dynamic: Vec<DynamicPropUsage>,
     /// Component bindings to include in identity reachability (activity
     /// floors for their system props).
@@ -105,8 +85,6 @@ pub struct ForcedInjection {
     pub report: ForcedReport,
 }
 
-/// Merge forced counts + labeled detail rows into the reconciliation
-/// report (both dev and prod report paths).
 pub fn merge_into_report(
     report: &mut crate::reconcile::ReconciliationReport,
     forced: &ForcedReport,
@@ -141,19 +119,8 @@ fn is_star(s: &str) -> bool {
     s == "*"
 }
 
-/// Build the synthetic injection for a parsed declaration.
-///
-/// `known_bindings` — every evaluated component binding (existence check).
-/// `usage_configs` — binding → EVERY declared variant/state (wildcard bounds
-///   and existence checks). Variants without a `default_option` are declared
-///   but never participate in usage reconciliation (reconcile keeps props
-///   with no ledger entry in full), so no synthetic usage is pushed for them
-///   — a ledger entry would flip them from kept-in-full to
-///   pruned-to-the-forced-options. They are still validated and counted.
-/// `custom_props_by_binding` — binding → declared custom prop names.
-/// `system_prop_exists` — membership in the system prop config.
-/// `observed` — the ledger built from OBSERVED scan results only, used to
-/// label/count entries that exist solely because they were forced.
+/// Build the synthetic injection for a parsed declaration. A variant with no
+/// default option gets no ledger entry: one would prune it to the forced set.
 pub fn build_forced_injection(
     config: &StaticCssConfig,
     known_bindings: &FxHashSet<String>,
@@ -176,7 +143,6 @@ pub fn build_forced_injection(
             continue;
         }
 
-        // Survival: forced components count as rendered.
         out.scan.rendered_components.insert(name.clone());
         out.forced_bindings.push(name.clone());
         if !observed.rendered_components.contains(name) {
@@ -192,7 +158,6 @@ pub fn build_forced_injection(
 
         let declared = usage_configs.get(name);
 
-        // ----- variants ---------------------------------------------------
         match &ov.variants {
             None => {}
             Some(VariantsOverride::All(star)) => {
@@ -262,9 +227,7 @@ pub fn build_forced_injection(
                                     );
                                     continue;
                                 }
-                                // Synthetic usage only for reconciliation-
-                                // participating (default-bearing) props — see
-                                // the `usage_configs` doc above.
+                                // Only default-bearing props get a ledger row.
                                 if default_option.is_some() {
                                     out.scan.variant_usages.push(VariantUsage {
                                         component_binding: name.clone(),
@@ -280,7 +243,6 @@ pub fn build_forced_injection(
             }
         }
 
-        // ----- states -----------------------------------------------------
         match &ov.states {
             None => {}
             Some(ListOrAll::All(star)) => {
@@ -325,7 +287,6 @@ pub fn build_forced_injection(
             }
         }
 
-        // ----- custom dynamic slots ---------------------------------------
         for prop in &ov.dynamic_props {
             let declared_prop = custom_props_by_binding
                 .get(name)
@@ -349,7 +310,6 @@ pub fn build_forced_injection(
         }
     }
 
-    // ----- system props ---------------------------------------------------
     for prop in sorted_keys(&config.system_props) {
         if !system_prop_exists(prop) {
             warn(
@@ -372,9 +332,8 @@ pub fn build_forced_injection(
     out
 }
 
-/// Wildcard variant forcing: the ledger's own `"__dynamic__"` expansion
-/// transacts every declared option; details/counts resolve the concrete
-/// options here.
+/// Wildcard variant forcing: the ledger's `"__dynamic__"` expansion covers
+/// every declared option; counts and details resolve the concrete options.
 fn force_variant_prop_all(
     out: &mut ForcedInjection,
     binding: &str,
@@ -383,8 +342,7 @@ fn force_variant_prop_all(
     observed: &UsageLedger,
 ) {
     let (options, default_option) = &cfg.variants[prop];
-    // Synthetic usage only for reconciliation-participating (default-bearing)
-    // props — see the `usage_configs` doc on build_forced_injection.
+    // Only default-bearing props get a ledger entry.
     if default_option.is_some() {
         out.scan.variant_usages.push(VariantUsage {
             component_binding: binding.to_string(),
@@ -452,10 +410,6 @@ fn push_forced_state(
     }
 }
 
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -501,8 +455,8 @@ mod tests {
                 &["disabled", "loading"],
             ),
         );
-        // Declared variant WITHOUT a default_option: never participates in
-        // usage reconciliation, but must still be forceable by name.
+        // Declared variant without a default option: never participates in
+        // reconciliation, but must still be forceable by name.
         configs.insert(
             "Card".to_string(),
             usage_config(&[("tone", &["light", "dark"], None)], &[]),
@@ -632,7 +586,7 @@ mod tests {
         assert!(messages.iter().any(|m| m.contains("unknown state 'missing'")));
         assert!(messages.iter().any(|m| m.contains("unknown custom prop 'ghost'")));
         assert!(messages.iter().any(|m| m.contains("unknown system prop 'zzz'")));
-        // The valid component membership still applied.
+        // Warnings do not abort the valid parts of the declaration.
         assert!(injection.scan.rendered_components.contains("Button"));
     }
 

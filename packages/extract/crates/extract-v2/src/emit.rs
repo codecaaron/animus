@@ -1,27 +1,14 @@
-//! Span-chunk emission mechanism (row 05 / DEF-2 spike → adoption).
-//!
-//! Design.md D8: MagicString-style span-preserving edits over ORIGINAL
-//! source — never `String::replace_range` (G3), never JSON-string surgery.
-//! `string_wizard` (rolldown's published MagicString port) supplies the
-//! chunk model and a sourcemap-capable layer (NS4: every emitted byte
-//! traceable; maps shippable when DEF-3 resolves).
-//!
-//! animus's three edit shapes, per the DEF-2 deferral:
-//!   1. replace a chain expression span with generated replacement text
-//!   2. prepend import lines
-//!   3. remove consumed-import spans
-//!
-//! All edits are span-addressed FACTS consumed here — no AST access, no
-//! re-parse (G1), consistent with the D4 outcome (source + facts suffice).
+//! Span-preserving edits over the original source: replace chain spans,
+//! prepend import lines, remove consumed-import spans. No AST, no re-parse.
 
 use string_wizard::{MagicString, UpdateOptions};
 
-/// One file's emission plan — pure owned data derived from facts.
+/// One file's emission plan.
 #[derive(Debug, Default)]
 pub struct EmissionPlan {
-    /// (start, end, replacement) — chain spans → generated calls.
+    /// (start, end, replacement) — chain spans to generated calls.
     pub replacements: Vec<(u32, u32, String)>,
-    /// Import statements (and directives handling) prepended verbatim.
+    /// Import lines and directives prepended verbatim.
     pub prepend: String,
     /// (start, end) spans to delete (consumed imports).
     pub removals: Vec<(u32, u32)>,
@@ -30,16 +17,11 @@ pub struct EmissionPlan {
 #[derive(Debug)]
 pub struct EmissionOutput {
     pub code: String,
-    /// Sourcemap JSON from the same chunk model. Generation is WIRED here;
-    /// positional correctness proof rides with DEF-3 (inc-05 review).
     pub map_json: String,
 }
 
-/// Plan invariants: spans are byte offsets into `source` on char
-/// boundaries (oxc spans satisfy this); replacement spans must not
-/// overlap each other or removals. Violations are ERRORS, never silent
-/// drops (inc-05 review, BLOCKING: string_wizard's Result was being
-/// discarded — the exact v1 silent-failure class G5 bans).
+/// Spans are byte offsets into `source` on char boundaries; replacements
+/// must not overlap each other or removals. Violations error, never drop.
 pub fn apply_plan(source: &str, plan: &EmissionPlan) -> Result<EmissionOutput, String> {
     let mut ms = MagicString::new(source);
     for (start, end, replacement) in &plan.replacements {
@@ -126,15 +108,12 @@ mod tests {
         );
         assert!(out.code.starts_with("'use client';\n"));
         assert!(out.code.contains("export const Box = X();"));
-        // NS4: the same chunk model yields a real sourcemap.
         assert!(out.map_json.contains("\"mappings\""));
         assert!(!out.map_json.contains("\"mappings\":\"\""));
     }
 
     #[test]
     fn overlapping_edits_error_loudly() {
-        // A removal overlapping an applied replacement must surface as an
-        // error — never a silently missing edit.
         let start = SRC.find("ds.styles").unwrap() as u32;
         let end = (SRC.find(".asElement('div')").unwrap() + ".asElement('div')".len()) as u32;
         let result = apply_plan(
@@ -150,8 +129,7 @@ mod tests {
 
     #[test]
     fn multibyte_source_before_edit_span() {
-        // oxc spans are UTF-8 byte offsets; string_wizard is byte-indexed
-        // over &str — pin the compatibility with a multi-byte prefix.
+        // oxc spans are UTF-8 byte offsets; string_wizard indexes bytes too.
         let src = "const label = '日本語ラベル';
 const x = old();
 ";
@@ -169,8 +147,6 @@ const x = old();
 
     #[test]
     fn untouched_bytes_are_preserved_exactly() {
-        // Span-preservation is the whole point vs replace_range: edits
-        // must not disturb neighboring bytes.
         let out = try_apply(
             SRC,
             &EmissionPlan {

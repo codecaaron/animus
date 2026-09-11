@@ -1,18 +1,7 @@
-//! Subject (`&`) handling for selector keys and alias values
-//! (nested-selector-resolution).
-//!
-//! The stored selector form is the full `&`-carrying branch; emission and
-//! composition substitute an anchor at every subject position. CSS nesting
-//! semantics: `& + &` names the composed class twice (`.C + .C`), an
-//! ancestor prefix keeps the class at the marked position (`[x] &` →
-//! `[x] .C`), and `&` inside functional pseudo-class arguments substitutes
-//! like any other occurrence (`:is(&, .peer)` → `:is(.C, .peer)`). The walk
-//! is quote- and escape-aware so attribute values containing a literal `&`
-//! (`[data-x="a&b"]`, `[data-x="a\"&b"]`) and escaped identifier characters
-//! (`.a\&`) are never rewritten.
+//! Subject (`&`) handling for selector keys and alias values: the stored
+//! form keeps every `&`, and emission substitutes an anchor at each one.
 
-/// True when the branch carries at least one substitutable subject — a `&`
-/// outside quoted strings.
+/// True when the branch carries a `&` outside quoted strings.
 pub(crate) fn has_subject(branch: &str) -> bool {
     let mut quote: Option<char> = None;
     let mut escaped = false;
@@ -41,12 +30,8 @@ pub(crate) fn has_subject(branch: &str) -> bool {
     false
 }
 
-/// The subject suffix: the text following the LAST unquoted `&`, or the
-/// whole branch when no subject exists. Cascade classification keys on this
-/// — for a leading-subject branch it is exactly the branch text that preceded
-/// subject substitution, so every existing bucket assignment is preserved
-/// byte-for-byte; ancestor branches classify by whatever is attached to their
-/// subject.
+/// Text after the last unquoted `&`, or the whole branch when none exists.
+/// Cascade classification keys on this, not on the full branch.
 pub(crate) fn subject_suffix(branch: &str) -> &str {
     let mut quote: Option<char> = None;
     let mut escaped = false;
@@ -132,9 +117,8 @@ mod tests {
 
     #[test]
     fn quote_tracking_is_escape_aware() {
-        // An escaped quote inside an attribute string must not close the
-        // string: the `&` after it is literal text, and only the trailing
-        // unquoted `&` is a substitutable subject.
+        // An escaped quote does not close the attribute string: the `&`
+        // after it is literal text, not a subject.
         assert!(has_subject("[data-x=\"a\\\"&b\"] &"));
         assert!(!has_subject("[data-x=\"a\\\"&b\"]"));
         assert_eq!(subject_suffix("[data-x=\"a\\\"&b\"] &"), "");
@@ -142,11 +126,10 @@ mod tests {
             substitute_subjects("[data-x=\"a\\\"&b\"] &", ".C"),
             "[data-x=\"a\\\"&b\"] .C"
         );
-        // A doubled backslash ends its own escape — the quote after it is a
-        // real string terminator.
+        // A doubled backslash ends its own escape; the next quote closes.
         assert!(!has_subject("[data-x=\"a\\\\\"]"));
-        // An escaped `&` outside quotes is an identifier character
-        // (`.a\&` names the class "a&"), never a subject.
+        // An escaped `&` outside quotes is an identifier character,
+        // never a subject.
         assert!(!has_subject(".a\\& span"));
         assert_eq!(substitute_subjects(".a\\&:hover &", ".C"), ".a\\&:hover .C");
     }

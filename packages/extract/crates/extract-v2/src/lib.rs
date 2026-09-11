@@ -1,12 +1,10 @@
-//! animus extract v2 — the parity-gated extraction spine.
+//! animus extract v2 — NAPI entry points for the extraction spine.
 
 #[macro_use]
 extern crate napi_derive;
 
 
-/// Build/probe identity: proves the v2 binary loads and its oxc linkage
-/// parses. Consumed by the dual-build verification and the parity harness
-/// engine registry.
+/// Probe identity: proves the binary loads and its oxc linkage parses.
 #[napi]
 pub fn engine_version() -> String {
     let counter = owned_ast::ParseCounter::new(0);
@@ -66,32 +64,21 @@ pub struct NapiSystemConfig {
     pub selector_aliases: Option<String>,
     pub selector_order: Option<String>,
     /// Condition alias map JSON (the `conditionAliases` manifest field):
-    /// alias → `{ value, order, kind }`. Absent when the system registers none.
+    /// alias → `{ value, order, kind }`. Absent when none are registered.
     pub condition_aliases: Option<String>,
-    /// Transform source texts (`{ transformName: sourceText }` JSON) captured
-    /// during system evaluation — the only channel by which transforms shipped
-    /// inside a package reach the build-time evaluator. Absent against a system
-    /// built by an older @animus-ui/system.
+    /// Transform source texts (`{ transformName: sourceText }` JSON): the
+    /// only channel by which transforms shipped in a package reach evaluation.
     pub transform_sources: Option<String>,
     pub global_style_blocks: Option<String>,
     pub keyframes_blocks: Option<String>,
-    /// Vocabulary witnesses from the sealed system's registration record:
-    /// one JSON array of coded entries — collisions
-    /// (`animus.vocabulary.collision`) and legacy-verb witnesses
-    /// (`animus.vocabulary.legacy-verb`: registered vocabulary consumed
-    /// through `from()`/`includes:`, which cannot carry it). The record is
-    /// the witness channel (the evaluation host shims console); hosts
-    /// surface each entry as a diagnostic keyed by its `code`. Absent when
-    /// the record carries no witnesses.
+    /// Vocabulary witnesses as a JSON array of coded entries; hosts surface
+    /// each as a diagnostic keyed by its `code`. Absent when there are none.
     pub vocabulary_witnesses: Option<String>,
-    /// Canonical absolute paths of every module evaluated for the system
-    /// (sorted; entry included, runtime stubs excluded). The plugins use this
-    /// as the system-reload membership set.
+    /// Canonical absolute paths of every module evaluated for the system,
+    /// sorted; the entry is included, runtime stubs are not.
     pub dependencies: Vec<String>,
-    /// Per-module built-theme token manifests captured during evaluation
-    /// (`{ modulePath: { exportName: [token paths] } }`) — the source-token
-    /// witness for the cross-source correlation diagnostic. Absent when no
-    /// evaluated module exports a built theme.
+    /// Per-module built-theme token manifests, shaped
+    /// `{ modulePath: { exportName: [token paths] } }`. Absent when none exist.
     pub source_theme_manifests: Option<String>,
 }
 
@@ -136,16 +123,15 @@ struct InputEntry {
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct DiscoverResult {
-    /// path → chain descriptors (BTreeMap: deterministic key order across
-    /// processes and thread counts — NS6).
+    /// path → chain descriptors. BTreeMap: key order must be deterministic
+    /// across processes and thread counts.
     files: BTreeMap<String, Vec<chain_walk::ChainDescriptor>>,
     parse_count: usize,
     diagnostics: Vec<String>,
 }
 
-/// Chain discovery over a file set: parse once per file (parallel), walk
-/// every stored AST, return owned facts. The v2 spine's first real surface;
-/// consumed by the parity comparison tooling.
+/// Chain discovery over a file set: one parse per file, then one walk per
+/// stored AST.
 #[napi]
 pub fn discover_chains(file_entries_json: String) -> napi::Result<String> {
     let entries: Vec<InputEntry> = serde_json::from_str(&file_entries_json)
@@ -187,11 +173,8 @@ struct FactsResult {
     parse_count: usize,
 }
 
-/// Full per-file fact extraction: chains + eagerly evaluated
-/// stages + statics + raw usage facts + compose families — one parse per
-/// file. The store (and every AST) is dropped when this call returns; the
-/// invariant is that no program() read happens after
-/// cross-file facts resolve.
+/// Full per-file fact extraction, one parse per file. The store and its
+/// ASTs drop on return: no `program()` read survives cross-file resolve.
 #[napi]
 pub fn extract_facts(file_entries_json: String) -> napi::Result<String> {
     let entries: Vec<InputEntry> = serde_json::from_str(&file_entries_json)

@@ -1,12 +1,5 @@
-//! The backward chain walk itself.
-//!
-//! Split out of `chain_walk.rs` unchanged. Discovers `.asElement()` /
-//! `.asComponent()` / `.asClass()` terminals and walks the member chain
-//! backwards to its root, recording one `ChainStage` per known method.
-//!
-//! BUG-COMPATIBILITY: the bail rules, the zero-arg `.extend()` marker, and
-//! the silent non-recording of zero-arg known methods are v1 outcomes carried
-//! verbatim. A behavioural difference here is register material, not a fix.
+//! The backward chain walk: find an `.asElement()`/`.asComponent()`/
+//! `.asClass()` terminal, then walk the member chain back to its root.
 
 use oxc::ast::ast::{
     BindingPattern, CallExpression, Declaration, Expression, Program, Statement,
@@ -31,7 +24,7 @@ pub fn walk_program(program: &Program<'_>) -> Vec<ChainDescriptor> {
                     }
                 }
             }
-            // export default chains are uncommon in Animus — v1 skips them.
+            // Chains bound by export default are not extracted.
             Statement::ExportDefaultDeclaration(_) => {}
             Statement::ExportNamedDeclaration(export) => {
                 if let Some(Declaration::VariableDeclaration(decl)) = &export.declaration {
@@ -52,7 +45,7 @@ fn try_extract_chain(declarator: &VariableDeclarator<'_>) -> Option<ChainDescrip
     let init = declarator.init.as_ref()?;
     let binding = match &declarator.id {
         BindingPattern::BindingIdentifier(id) => id.name.to_string(),
-        _ => return None, // destructuring not supported (v1 parity)
+        _ => return None, // destructuring bindings are not extracted
     };
     let call = match init {
         Expression::CallExpression(call) => call.as_ref(),
@@ -99,8 +92,8 @@ fn try_walk_chain(call: &CallExpression<'_>, binding: String) -> Option<ChainDes
     let extends_from = if has_extend_marker {
         Some(root_identifier)
     } else if !stages.is_empty() {
-        // PRIMARY CHAIN: method pattern suffices; root NAME is irrelevant
-        // (v1 parity — supports `animus.styles(...)` and custom instances).
+        // Primary chain: the method pattern suffices, so any root name
+        // works (`animus.styles(...)`, custom instances).
         None
     } else {
         return None;
@@ -147,8 +140,7 @@ fn walk_chain_backwards(
                     }
                 }
                 if CHAIN_METHODS.contains(&method_name) || BAIL_METHODS.contains(&method_name) {
-                    // v1 parity: zero-arg known methods record NOTHING and
-                    // do not bail.
+                    // Zero-arg known methods record nothing and do not bail.
                     if let Some(arg_span) = first_arg_span(call) {
                         let second_arg_span = if method_name == "compound" {
                             second_arg_span_fn(call)

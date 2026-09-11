@@ -1,12 +1,5 @@
-//! Theme/scale resolution — v1 `theme_resolver.rs` ported VERBATIM.
-//! Consumes evaluated style Values (facts) + the flat
-//! theme; produces CssDeclarations. Bug-compat contracts carried whole:
-//! shorthand-tier cascade ordering, token-alias resolution ({scale.path}
-//! → var()) INCLUDING the unresolvable-alias raw passthrough (register
-//! known-quirk; baselined by the seam battery), contextual vars,
-//! responsive objects, pseudo/selector merging, and the silent eval-error
-//! fallback at the transform seam (baselined: content: \r).
-//! v1's test module is carried verbatim below as the executable contract.
+//! Theme and scale resolution: evaluated style values and the flat theme
+//! produce CSS declarations, shorthand tiers ordered before longhands.
 
 use std::cell::RefCell;
 
@@ -17,13 +10,6 @@ use serde_json::{Map, Value};
 
 use crate::evaluator::{EvalError, TransformEvaluator};
 
-// ---------------------------------------------------------------------------
-// CSS shorthand properties for cascade-tier ordering.
-// Mirrors packages/core/src/properties/orderPropNames.ts.
-// Props whose `property` field matches one of these are "shorthand-tier"
-// and must sort before longhand props to ensure override correctness
-// (e.g., `px` emits before `pl` so `pl`'s padding-left wins by cascade).
-// ---------------------------------------------------------------------------
 const CSS_SHORTHANDS: &[&str] = &[
     "border",
     "borderTop",
@@ -47,16 +33,8 @@ const CSS_SHORTHANDS: &[&str] = &[
     "overflow",
 ];
 
-// ---------------------------------------------------------------------------
-// CSS color-family pass-through properties.
-// These properties typecheck via `ThemedCSSProps` in the TS contract (scale
-// values autocomplete against `colors`) but are NOT registered in propConfig.
-// Their string values SHALL resolve via the `colors` scale so authoring
-// feedback matches the TS surface — at EVERY position a style value is
-// resolved (top level, responsive slot, nested selector/condition block), per
-// the selector-alias-registry requirement. The single consultation point is
-// `resolve_single_prop`'s unregistered-prop arm.
-// ---------------------------------------------------------------------------
+// Not registered in propConfig, but typed against the `colors` scale in TS:
+// their string values resolve through that scale at every position.
 pub(crate) const COLOR_FAMILY_PASS_THROUGH: &[&str] = &[
     "outlineColor",
     "caretColor",
@@ -77,38 +55,24 @@ pub(crate) const COLOR_FAMILY_PASS_THROUGH: &[&str] = &[
     "borderInlineEndColor",
 ];
 
-/// Returns a cascade-ordering key for a DS prop based on its config.
-/// Lower key = less specific = should emit first in CSS.
-///
-/// Tier 0: True CSS shorthand (e.g., `p` → padding, no multi-properties)
-/// Tier 1: Multi-target shorthand (e.g., `px` → paddingLeft + paddingRight)
-///         Within tier 1, more properties = less specific = sorts earlier.
-/// Tier 2: Direct longhand (e.g., `pl` → paddingLeft)
-/// Tier 3: Unknown prop (pass-through CSS, no config entry)
 fn prop_cascade_tier(prop_name: &str, config: &PropConfigMap) -> (usize, usize) {
     match config.get(prop_name) {
         Some(pc) => {
             let is_shorthand = CSS_SHORTHANDS.iter().any(|&s| s == pc.property);
             if is_shorthand {
                 if pc.properties.is_empty() {
-                    // True shorthand: `p` → padding (sets all sides)
                     (0, 0)
                 } else {
-                    // Multi-target: `px` → paddingLeft + paddingRight
-                    // More properties = less specific = lower sort value
                     (1, 1000 - pc.properties.len())
                 }
             } else {
-                // Direct longhand: `pl` → paddingLeft
                 (2, 0)
             }
         }
-        // Unknown / pass-through CSS property
         None => (3, 0),
     }
 }
 
-/// Configuration for a single prop (from config.ts serialized).
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct PropConfig {
     pub property: String,
@@ -120,33 +84,20 @@ pub struct PropConfig {
     pub transform: Option<String>,
     #[serde(default, rename = "currentVar")]
     pub current_var: Option<String>,
-    /// Inline transform function source text, captured from `.props()` configs.
-    /// When present, emitted directly in replacement JS instead of using the
-    /// shared `transforms` registry. Populated by style_evaluator span capture.
     #[serde(default, rename = "transformFnSource")]
     pub transform_fn_source: Option<String>,
 }
 
-/// The full prop config map: prop_name → PropConfig.
 pub type PropConfigMap = FxHashMap<String, PropConfig>;
 
-/// The flattened theme: "scale.key" → "css_value".
 pub type FlatTheme = FxHashMap<String, String>;
 
-/// Map of token paths to CSS variable names: "colors.primary" → "--color-primary".
 pub type VariableMap = FxHashMap<String, String>;
 
-/// Contextual vars registry: scale_name → [var_name]. CSS prop derived as --{name}.
 pub type ContextualVarsMap = FxHashMap<String, Vec<String>>;
 
-/// Selector alias map: "_hover" → "&:hover", "_disabled" → "&:disabled, &[disabled], ..."
 pub type SelectorAliasesMap = FxHashMap<String, String>;
 
-/// One registered condition alias. Mirror of the TS
-/// `ConditionAlias { value, order, kind }` serialized into the manifest
-/// `conditionAliases` field. `value` is the full at-rule string, `kind` is
-/// `"media" | "container" | "supports"` (inferred TS-side from the prefix),
-/// `order` is the registry cascade order.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ConditionAliasEntry {
     pub value: String,
@@ -155,9 +106,6 @@ pub struct ConditionAliasEntry {
 }
 
 impl ConditionAliasEntry {
-    /// Build the axis `Condition` for this alias from its kind + value.
-    /// An unrecognized kind falls back to `Media` (kind is TS-inferred and
-    /// therefore always one of the three, but the resolver stays total).
     pub fn to_condition(&self) -> Condition {
         match self.kind.as_str() {
             "container" => Condition::Container(self.value.clone()),
@@ -167,13 +115,8 @@ impl ConditionAliasEntry {
     }
 }
 
-/// Condition alias registry: "_motionReduce" → { value, order, kind }.
 pub type ConditionAliasesMap = FxHashMap<String, ConditionAliasEntry>;
 
-/// Infer the axis `Condition` from a RAW `@`-prefixed block key: the at-rule
-/// prefix names the kind, and the full key is the verbatim prelude. Returns
-/// `None` for unknown prefixes (the type layer rejects them; the resolver
-/// silently ignores them here).
 pub fn condition_from_raw_key(key: &str) -> Option<Condition> {
     if key.starts_with("@media") {
         Some(Condition::Media(key.to_string()))
@@ -186,37 +129,16 @@ pub fn condition_from_raw_key(key: &str) -> Option<Condition> {
     }
 }
 
-/// One recorded transform-evaluation failure, captured during deep style
-/// resolution (design D3/D4, spec `transform-evaluation-contract`
-/// §Evaluation failures produce diagnostics under v2). The resolve seam has
-/// no file/component context — the analyze loop drains the sink after each
-/// component/file resolve and attaches that context there.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TransformFailure {
-    /// Registered transform name (`PropConfig::transform`).
     pub transform_name: String,
-    /// The DS prop whose value was being resolved (e.g. `w`, `p`).
     pub prop: String,
     pub failure: EvalError,
-    /// `(variant prop, option name)` when this failure was produced while
-    /// resolving one variant option's styles. Stamped by the variant stage
-    /// after the fact — the deep resolve path has no variant context.
-    ///
-    /// Reconciliation prunes unused variant options ~1000 lines after the
-    /// per-component drain, and only in production, so a build-failing
-    /// `kind:"error"` recorded here can belong to a declaration that never
-    /// ships. This is the provenance the drain needs to hold that error back
-    /// until the surviving option set is known.
     pub variant_origin: Option<(String, String)>,
 }
 
-/// Interior-mutable transform-failure sink, carried next to
-/// `transform_evaluator` (same lifetime) so deep resolution can record
-/// failures without changing every return type on the resolve path.
 pub type TransformFailureSink = RefCell<Vec<TransformFailure>>;
 
-/// Shared immutable context for style resolution. Constructed once per extraction run
-/// and threaded by reference through every `resolve_styles` call.
 pub struct ResolveContext<'a> {
     pub config: &'a PropConfigMap,
     pub theme: &'a FlatTheme,
@@ -224,42 +146,26 @@ pub struct ResolveContext<'a> {
     pub contextual_vars: &'a ContextualVarsMap,
     pub breakpoint_keys: &'a FxHashSet<String>,
     pub selector_aliases: &'a SelectorAliasesMap,
-    /// Registered condition aliases (`_motionReduce` → { value, order, kind }).
     pub condition_aliases: &'a ConditionAliasesMap,
     pub transform_evaluator: Option<&'a crate::evaluator::TransformEvaluator>,
-    /// Failure sink for `transform_evaluator` errors; drained by the analyze
-    /// loop into `CssDiagnostic`s. `None` disables recording (legacy paths).
     pub transform_failures: Option<&'a TransformFailureSink>,
 }
 
-/// A resolved CSS property-value pair.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CssDeclaration {
     pub property: String,
     pub value: String,
 }
 
-/// A condition under which a declaration group applies — the single ordered
-/// condition axis. `Breakpoint` resolves through `BreakpointMap`; the
-/// `Media`/`Container`/`Supports` kinds each carry the FULL at-rule prelude
-/// string (e.g. `@container card (min-width: 400px)`) and are emitted
-/// verbatim.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Condition {
-    /// Theme-derived breakpoint name (emitted via `BreakpointMap`).
     Breakpoint(String),
-    /// Raw or alias-resolved `@media` at-rule prelude (full string).
     Media(String),
-    /// Raw or alias-resolved `@container` at-rule prelude (full string).
     Container(String),
-    /// Raw or alias-resolved `@supports` at-rule prelude (full string).
     Supports(String),
 }
 
 impl Condition {
-    /// The verbatim at-rule prelude for a non-breakpoint condition
-    /// (`@media …` / `@container …` / `@supports …`). Breakpoints resolve
-    /// through `BreakpointMap` and return `None` here.
     pub fn prelude(&self) -> Option<&str> {
         match self {
             Condition::Breakpoint(_) => None,
@@ -268,35 +174,22 @@ impl Condition {
     }
 }
 
-/// Emission-ordering discriminator for a conditioned group.
-/// Within a rule, the total order is: declarations → pseudos → breakpoint
-/// media queries (px ascending) → aliased conditions (registry `order`) →
-/// raw condition keys (source order).
 #[derive(Debug, Clone, PartialEq)]
 pub enum ConditionEmitOrder {
-    /// Breakpoint-kind group — ordered by px ascending via `BreakpointMap`.
     Breakpoint,
-    /// Registered condition alias — ordered by its registry `order`.
     Aliased(u32),
-    /// Raw at-rule block key — ordered by source appearance index.
     Raw(usize),
 }
 
-/// One conditioned declaration group: a condition stack (outermost first),
-/// an optional selector inside the conditions, and the declarations.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ConditionedGroup {
     pub conditions: Vec<Condition>,
-    /// Selector within the conditions (`None` = the component's own rule).
     pub selector: Option<String>,
     pub declarations: Vec<CssDeclaration>,
-    /// How this group orders against its siblings at emission.
     pub emit_order: ConditionEmitOrder,
 }
 
 impl ConditionedGroup {
-    /// Single-breakpoint group with no selector — the shape every legacy
-    /// `responsive` entry maps onto.
     pub fn breakpoint(bp: impl Into<String>, declarations: Vec<CssDeclaration>) -> Self {
         Self {
             conditions: vec![Condition::Breakpoint(bp.into())],
@@ -306,8 +199,6 @@ impl ConditionedGroup {
         }
     }
 
-    /// A single non-breakpoint condition group (aliased or raw), no nested
-    /// selector.
     pub fn single(condition: Condition, declarations: Vec<CssDeclaration>, emit_order: ConditionEmitOrder) -> Self {
         Self {
             conditions: vec![condition],
@@ -318,19 +209,7 @@ impl ConditionedGroup {
     }
 }
 
-/// Compose a nested selector against an outer composed selector context.
-/// Both sides may be comma-separated; composition is the cartesian product
-/// of the parts. Inner parts follow the same grammar as top-level selector
-/// keys/alias values; each inner branch's `&` subjects substitute the OUTER
-/// branch (itself `&`-carrying), so `&` refers to the outer composition at
-/// every nesting level and at every position — leading, ancestor-prefixed,
-/// or repeated. The result stays in the STORED `&`-carrying form; the class
-/// anchor substitutes at emission time.
 fn compose_selectors(outer: &str, inner_raw: &str) -> String {
-    // The inner's branches come from normalization directly. Joining them and
-    // splitting the join back apart would cartesian-product `:is(a, b)`
-    // arguments into separate branches. `outer` is already in stored form, so
-    // it splits on `,`.
     let outer_parts = split_top_level_commas(outer);
     let mut composed: Vec<String> = Vec::new();
     for inner_part in normalize_pseudo_branches(inner_raw) {
@@ -344,16 +223,10 @@ fn compose_selectors(outer: &str, inner_raw: &str) -> String {
     composed.join(",")
 }
 
-/// The resolution frame for nested block descent: the composed selector
-/// context and condition stack under which declarations sink.
 #[derive(Clone, Default)]
 struct NestFrame {
-    /// Composed selector in stored normalized form (`":hover .icon"`).
     selector: Option<String>,
-    /// Condition stack, outermost first.
     conditions: Vec<Condition>,
-    /// Emission order of the OUTERMOST non-breakpoint condition — the whole
-    /// stack orders by its outermost block.
     emit_order: Option<ConditionEmitOrder>,
 }
 
@@ -381,28 +254,16 @@ impl NestFrame {
     }
 }
 
-/// Result of resolving a style object.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ResolvedStyles {
-    /// Regular CSS declarations.
     pub declarations: Vec<CssDeclaration>,
-    /// Pseudo-selector groups: selector → declarations.
-    ///
-    /// SINGLE-HOME RULE: UNCONDITIONED selector groups live here and ONLY
-    /// here — `ConditionedGroup { conditions: [], selector: Some }` is a
-    /// forbidden second representation (unconstructible today: every group
-    /// constructor pushes ≥ 1 condition, and condition-free selector frames
-    /// sink here). Rehoming would change class-hash coverage (pseudo content
-    /// is deliberately unhashed; condition groups are hashed) and break
-    /// byte-identity.
+    /// Unconditioned selector groups live only here; a conditioned group with
+    /// an empty stack would change class-hash coverage and byte-identity.
     pub pseudo_selectors: Vec<(String, Vec<CssDeclaration>)>,
-    /// Conditioned declaration groups, insertion-ordered.
     pub conditioned: Vec<ConditionedGroup>,
 }
 
 impl ResolvedStyles {
-    /// Legacy `responsive` view: breakpoint-kind groups with no selector,
-    /// in insertion order.
     pub fn breakpoint_groups(&self) -> impl Iterator<Item = (&String, &Vec<CssDeclaration>)> {
         self.conditioned.iter().filter_map(|g| match (g.conditions.as_slice(), &g.selector) {
             ([Condition::Breakpoint(bp)], None) => Some((bp, &g.declarations)),
@@ -410,13 +271,6 @@ impl ResolvedStyles {
         })
     }
 
-    /// Legacy `responsive_pseudos` view: breakpoint-kind groups that carry a
-    /// selector, in insertion order.
-    ///
-    /// Populated by nested resolution — a responsive map inside a selector
-    /// block sinks here. The composed emitter wraps per-(breakpoint,
-    /// selector) triple, not per-breakpoint as the legacy nested shape
-    /// grouped.
     pub fn breakpoint_selector_groups(
         &self,
     ) -> impl Iterator<Item = (&String, &String, &Vec<CssDeclaration>)> {
@@ -426,18 +280,12 @@ impl ResolvedStyles {
         })
     }
 
-    /// Non-breakpoint conditioned groups (Media/Container/Supports) in
-    /// deterministic emission order: aliased conditions first, sorted by
-    /// registry `order`, then raw condition keys in source order.
-    /// Breakpoint-kind groups are excluded (they emit before these via
-    /// `breakpoint_groups`).
     pub fn conditioned_emission_order(&self) -> Vec<&ConditionedGroup> {
         let mut groups: Vec<&ConditionedGroup> = self
             .conditioned
             .iter()
             .filter(|g| !matches!(g.emit_order, ConditionEmitOrder::Breakpoint))
             .collect();
-        // Stable sort by (is_raw, key): aliased(order) < raw(source_index).
         groups.sort_by_key(|g| match &g.emit_order {
             ConditionEmitOrder::Aliased(order) => (0usize, *order as usize),
             ConditionEmitOrder::Raw(idx) => (1usize, *idx),
@@ -446,8 +294,6 @@ impl ResolvedStyles {
         groups
     }
 
-    /// Find-or-insert the selectorless group for `bp`, returning its
-    /// declarations for in-place extension (legacy merge semantics).
     pub fn breakpoint_decls_mut(&mut self, bp: &str) -> &mut Vec<CssDeclaration> {
         let pos = self.conditioned.iter().position(|g| {
             matches!(
@@ -466,11 +312,6 @@ impl ResolvedStyles {
     }
 }
 
-/// Resolve a style value map against the config and theme.
-///
-/// `auto_content`: when true, `_before`/`_after` blocks auto-inject `content: ""`.
-/// Should be true for `.styles()` (base definitions) and false for variant/compound/state
-/// overrides where the base pseudo-element already provides content.
 pub fn resolve_styles(
     styles: &Value,
     ctx: &ResolveContext,
@@ -483,28 +324,17 @@ pub fn resolve_styles(
         None => return result,
     };
 
-    // Sort props by cascade tier: true shorthands → multi-target shorthands → longhands.
-    // Uses stable sort to preserve IndexMap insertion order within each tier.
     let mut entries: Vec<(&String, &Value)> = obj.iter().collect();
     entries.sort_by(|(a, _), (b, _)| {
         prop_cascade_tier(a, ctx.config).cmp(&prop_cascade_tier(b, ctx.config))
     });
 
-    // Source-order index for RAW `@`-prefixed condition keys: raw condition
-    // keys emit in source order. Incremented as each raw at-rule block key
-    // is encountered in cascade-tier-stable iteration order (all `@`/`_`
-    // keys share tier 3, so their relative order is source order).
     let mut raw_condition_index = 0usize;
 
     for (key, value) in entries {
-        // Check if this is a selector alias (_hover, _disabled, etc.) or a
-        // registered condition alias (_motionReduce, _cardSm, …). Selector
-        // aliases take precedence when a name is registered as both.
         if key.starts_with('_') {
             if let Some(alias_selector) = ctx.selector_aliases.get(key) {
                 if let Some(nested_obj) = value.as_object() {
-                    // Recursive descent: the block body may nest further
-                    // selectors, conditions, and responsive maps.
                     let frame = NestFrame::default().with_selector(alias_selector);
                     let inject = auto_content && (key == "_before" || key == "_after");
                     resolve_block_entries(
@@ -512,8 +342,6 @@ pub fn resolve_styles(
                     );
                 }
             } else if let Some(cond_alias) = ctx.condition_aliases.get(key) {
-                // Registered condition alias → condition axis, ordered by
-                // its registry `order`. Body recurses.
                 if let Some(nested_obj) = value.as_object() {
                     let frame = NestFrame::default().with_condition(
                         cond_alias.to_condition(),
@@ -527,7 +355,6 @@ pub fn resolve_styles(
             continue;
         }
 
-        // Check if this is a raw pseudo-selector
         if crate::selector_subject::has_subject(key) || key.starts_with(':') {
             if let Some(nested_obj) = value.as_object() {
                 let frame = NestFrame::default().with_selector(key);
@@ -538,10 +365,6 @@ pub fn resolve_styles(
             continue;
         }
 
-        // Check if this is a RAW at-rule condition block key: `@media …` /
-        // `@container …` / `@supports …`. The kind is inferred from the
-        // prefix and the full key is the verbatim prelude. Unknown prefixes
-        // are ignored here (the type layer rejects them).
         if key.starts_with('@') {
             if let Some(condition) = condition_from_raw_key(key) {
                 let idx = raw_condition_index;
@@ -557,7 +380,6 @@ pub fn resolve_styles(
             continue;
         }
 
-        // Check if value is a responsive object
         if is_responsive_value(value, ctx.breakpoint_keys) {
             resolve_responsive_prop(
                 key,
@@ -573,7 +395,6 @@ pub fn resolve_styles(
             continue;
         }
 
-        // Regular prop resolution
         let declarations =
             resolve_single_prop(key, value, ctx.config, ctx.theme, ctx.variable_map, ctx.contextual_vars, ctx.transform_evaluator, ctx.transform_failures);
         result.declarations.extend(declarations);
@@ -582,19 +403,6 @@ pub fn resolve_styles(
     result
 }
 
-/// Recursive block resolution: resolve one nested block's entries under a
-/// `NestFrame`, descending into further selector/condition blocks and
-/// sinking this block's own declarations at the end.
-///
-/// Sink rules (byte-compat with the pre-recursion depth-1 behavior):
-/// - frame has NO conditions (pure selector): merge into `pseudo_selectors`,
-///   even when empty (legacy merged empty blocks too).
-/// - frame has conditions: push one `ConditionedGroup` per block instance,
-///   skipping empty declaration sets (legacy skipped empty condition blocks).
-/// - nested responsive values: the `_` slot joins this block's declarations;
-///   breakpoint slots form `[frame.conditions…, Breakpoint(bp)]` groups under
-///   the frame's selector — the at-rule nests INSIDE the outer block
-///   (spec: "Responsive value map inside a condition block").
 #[allow(clippy::too_many_arguments)]
 fn resolve_block_entries(
     obj: &Map<String, Value>,
@@ -605,18 +413,13 @@ fn resolve_block_entries(
     result: &mut ResolvedStyles,
     raw_condition_index: &mut usize,
 ) {
-    // Same cascade-tier ordering as the top level.
     let mut entries: Vec<(&String, &Value)> = obj.iter().collect();
     entries.sort_by(|(a, _), (b, _)| {
         prop_cascade_tier(a, ctx.config).cmp(&prop_cascade_tier(b, ctx.config))
     });
 
-    // Children push their groups into `result` during iteration, but this
-    // block's OWN declaration group must precede them (spec: base
-    // declarations "followed by" their breakpoint overrides inside a
-    // condition block — otherwise the override is cascade-dead at equal
-    // specificity). Remember where this block's children start so the
-    // frame's own group can be inserted before them at sink time.
+    // This block's own declarations must precede its children's groups, or
+    // the breakpoint override is cascade-dead at equal specificity.
     let child_groups_start = result.conditioned.len();
 
     let mut plain_decls: Vec<CssDeclaration> = Vec::new();
@@ -685,16 +488,12 @@ fn resolve_block_entries(
             continue;
         }
 
-        // Color-family pass-through is consulted inside `resolve_single_prop`
-        // (one seam for every position), so this block needs no pre-check.
         let declarations = resolve_single_prop(
             key, value, ctx.config, ctx.theme, ctx.variable_map, ctx.contextual_vars, ctx.transform_evaluator, ctx.transform_failures,
         );
         plain_decls.extend(declarations);
     }
 
-    // Auto-default content: "" for _before / _after blocks (any depth, base
-    // definitions only — same rule as the legacy depth-1 injection).
     if inject_content && !plain_decls.iter().any(|d| d.property == "content") {
         plain_decls.insert(
             0,
@@ -725,9 +524,6 @@ fn resolve_block_entries(
     }
 }
 
-/// Find-or-create the `[frame.conditions…, Breakpoint(bp)]` group under the
-/// frame's selector and extend its declarations (one group per composed
-/// target, merged across props within the same block).
 fn push_nested_breakpoint_group(
     result: &mut ResolvedStyles,
     frame: &NestFrame,
@@ -754,16 +550,12 @@ fn push_nested_breakpoint_group(
     }
 }
 
-/// Merge declarations into the pseudo_selectors list.
-/// If the selector already exists, merge declarations (last-write-wins per property).
-/// If not, append a new entry.
 pub fn merge_pseudo_selectors(
     pseudo_selectors: &mut Vec<(String, Vec<CssDeclaration>)>,
     selector: String,
     new_declarations: Vec<CssDeclaration>,
 ) {
     if let Some((_, existing)) = pseudo_selectors.iter_mut().find(|(s, _)| *s == selector) {
-        // Merge: for each new declaration, replace existing with same property or append
         for new_decl in new_declarations {
             if let Some(pos) = existing.iter().position(|d| d.property == new_decl.property) {
                 existing[pos] = new_decl;
@@ -776,10 +568,6 @@ pub fn merge_pseudo_selectors(
     }
 }
 
-/// Check if a value is a responsive breakpoint object.
-/// Responsive objects have keys that are ALL either `_` (default) or members
-/// of the theme-derived breakpoint key set.
-/// The `_` key is optional — `{ sm: 16, lg: 24 }` is valid (no default).
 fn is_responsive_value(value: &Value, breakpoint_keys: &FxHashSet<String>) -> bool {
     if let Some(obj) = value.as_object() {
         !obj.is_empty()
@@ -791,8 +579,6 @@ fn is_responsive_value(value: &Value, breakpoint_keys: &FxHashSet<String>) -> bo
     }
 }
 
-/// Resolve a responsive prop into default + breakpoint declarations.
-// This internal pipeline boundary keeps its explicit dataflow visible.
 #[allow(clippy::too_many_arguments)]
 fn resolve_responsive_prop(
     prop_name: &str,
@@ -814,16 +600,13 @@ fn resolve_responsive_prop(
         let declarations =
             resolve_single_prop(prop_name, bp_value, config, theme, variable_map, contextual_vars, evaluator, failures);
         if bp_key == "_" {
-            // Default (no media query)
             result.declarations.extend(declarations);
         } else {
-            // Find existing breakpoint group or create new (insertion order kept)
             result.breakpoint_decls_mut(bp_key).extend(declarations);
         }
     }
 }
 
-/// Resolve a flat style object (no responsive, no pseudo) into declarations.
 #[allow(clippy::too_many_arguments)]
 fn resolve_flat_styles(
     obj: &Map<String, Value>,
@@ -834,7 +617,6 @@ fn resolve_flat_styles(
     evaluator: Option<&TransformEvaluator>,
     failures: Option<&TransformFailureSink>,
 ) -> Vec<CssDeclaration> {
-    // Sort props by cascade tier (same as resolve_styles).
     let mut entries: Vec<(&String, &Value)> = obj.iter().collect();
     entries.sort_by(|(a, _), (b, _)| {
         prop_cascade_tier(a, config).cmp(&prop_cascade_tier(b, config))
@@ -842,8 +624,6 @@ fn resolve_flat_styles(
 
     let mut declarations = Vec::new();
     for (key, value) in entries {
-        // Color-family pass-through is consulted inside `resolve_single_prop`
-        // (one seam for every position), so this loop needs no pre-check.
         declarations.extend(resolve_single_prop(
             key,
             value,
@@ -858,12 +638,6 @@ fn resolve_flat_styles(
     declarations
 }
 
-/// Resolve a bare string value against the `colors` scale. Returns `Some(css)`
-/// when the value is a recognized scale key (including contextual vars) and
-/// `None` otherwise — callers fall through to literal emission.
-///
-/// Scoped to pass-through CSS props in the color family; see
-/// `COLOR_FAMILY_PASS_THROUGH` and `resolve_single_prop` for the call site.
 fn resolve_color_family_pass_through(
     value: &Value,
     theme: &FlatTheme,
@@ -874,7 +648,6 @@ fn resolve_color_family_pass_through(
         return None;
     };
 
-    // Theme scale lookup: "primary" → theme.get("colors.primary") → "var(--color-primary)"
     let lookup_key = format!("colors.{}", raw);
     if let Some(theme_value) = theme.get(&lookup_key) {
         return Some(resolve_token_aliases(
@@ -885,7 +658,6 @@ fn resolve_color_family_pass_through(
         ));
     }
 
-    // Contextual-var fallback (color-mode-adaptive bindings registered under "colors").
     if let Some(ctx) = resolve_contextual_var("colors", raw, contextual_vars) {
         return Some(ctx);
     }
@@ -893,7 +665,6 @@ fn resolve_color_family_pass_through(
     None
 }
 
-/// Resolve a single prop to one or more CSS declarations.
 #[allow(clippy::too_many_arguments)]
 fn resolve_single_prop(
     prop_name: &str,
@@ -905,14 +676,9 @@ fn resolve_single_prop(
     evaluator: Option<&TransformEvaluator>,
     failures: Option<&TransformFailureSink>,
 ) -> Vec<CssDeclaration> {
-    // If no config entry, treat as pass-through CSS property
     let prop_config = match config.get(prop_name) {
         Some(c) => c,
         None => {
-            // Color-family pass-through: not in propConfig but typed against
-            // the `colors` scale by ThemedCSSProps → resolve the string value
-            // through that scale (selector-alias-registry). Unrecognized scale
-            // keys fall through to literal emission below.
             if COLOR_FAMILY_PASS_THROUGH.contains(&prop_name) {
                 if let Some(resolved) =
                     resolve_color_family_pass_through(value, theme, variable_map, contextual_vars)
@@ -923,7 +689,6 @@ fn resolve_single_prop(
                     }];
                 }
             }
-            // Direct CSS property (e.g., userSelect, cursor, content)
             if let Some(css_value) = value_to_css_string(value) {
                 let resolved =
                     resolve_token_aliases(&css_value, theme, variable_map, contextual_vars);
@@ -936,13 +701,11 @@ fn resolve_single_prop(
         }
     };
 
-    // Resolve: token manifest first (via scale lookup), then contextual vars, then raw passthrough
     let resolved_value = {
         let rv = resolve_value(prop_name, value, prop_config, theme, evaluator, failures);
         match rv {
             Some(v) => {
                 let aliased = resolve_token_aliases(&v, theme, variable_map, contextual_vars);
-                // If scale lookup didn't match (value passed through raw), check contextual vars
                 if let Value::String(val_str) = value {
                     if aliased == *val_str {
                         if let Some(Value::String(scale_name)) = &prop_config.scale {
@@ -967,7 +730,6 @@ fn resolve_single_prop(
         }
     };
 
-    // Determine which CSS properties to emit
     let properties = if prop_config.properties.is_empty() {
         vec![prop_config.property.clone()]
     } else {
@@ -982,10 +744,7 @@ fn resolve_single_prop(
         })
         .collect();
 
-    // Auto-emission: if prop has currentVar, emit a sibling CSS custom property declaration
     if let Some(current_var) = &prop_config.current_var {
-        // Self-referential guard: skip if resolved value REFERENCES the contextual var
-        // (exact match OR contained within a color-mix/expression)
         let self_ref = format!("var({})", current_var);
         if !resolved_value.contains(&self_ref) {
             declarations.push(CssDeclaration {
@@ -998,9 +757,6 @@ fn resolve_single_prop(
     declarations
 }
 
-/// Check if a value is a contextual var name for a given scale.
-/// Returns the resolved CSS var reference if found: var(--{name}).
-/// Token manifest takes precedence — only resolves if NOT in the theme.
 fn resolve_contextual_var(
     scale_name: &str,
     value: &str,
@@ -1014,11 +770,6 @@ fn resolve_contextual_var(
     None
 }
 
-/// Resolve a value using scale lookup and transform.
-///
-/// `prop_name` and `failures` exist for the transform-failure sink only:
-/// evaluation errors are recorded there (design D3/D4) with the prop
-/// context; the analyze loop attaches file/component at drain time.
 fn resolve_value(
     prop_name: &str,
     value: &Value,
@@ -1027,8 +778,7 @@ fn resolve_value(
     evaluator: Option<&TransformEvaluator>,
     failures: Option<&TransformFailureSink>,
 ) -> Option<String> {
-    // 0. Detect negative numeric values — abs for lookup, negate result
-    // Preserve integer representation to avoid "8.0" vs "8" key mismatch
+    // Look up the absolute value; integer form avoids an "8.0" vs "8" miss.
     let (is_negative, lookup_value) = match value {
         Value::Number(n) => {
             if let Some(i) = n.as_i64() {
@@ -1052,7 +802,6 @@ fn resolve_value(
         _ => (false, value.clone()),
     };
 
-    // 1. Try scale lookup
     let mut resolved = None;
     if let Some(scale_value) = &config.scale {
         let key = match &lookup_value {
@@ -1062,14 +811,12 @@ fn resolve_value(
         };
         if !key.is_empty() {
             match scale_value {
-                // String → theme scale reference (e.g. "colors" → lookup "colors.primary")
                 Value::String(scale_name) => {
                     let lookup_key = format!("{}.{}", scale_name, key);
                     if let Some(theme_value) = theme.get(&lookup_key) {
                         resolved = Some(Value::String(theme_value.clone()));
                     }
                 }
-                // Object → inline map scale (e.g. { xs: "10rem", sm: "15rem" })
                 Value::Object(inline_map) => {
                     if let Some(map_value) = inline_map.get(&key) {
                         if let Some(s) = map_value.as_str() {
@@ -1079,11 +826,8 @@ fn resolve_value(
                         }
                     }
                 }
-                // Array → if empty (createScale phantom), passthrough.
-                // If non-empty, check membership.
                 Value::Array(arr)
                     if !arr.is_empty() => {
-                        // Non-empty array scale: value must be a member
                         let found = arr.iter().any(|item| {
                             match (item, &lookup_value) {
                                 (Value::String(a), Value::String(b)) => a == b,
@@ -1092,12 +836,9 @@ fn resolve_value(
                             }
                         });
                         if found {
-                            // Value is valid, use as-is (no transformation from scale)
                             resolved = Some(lookup_value.clone());
                         }
                     }
-                    // Empty array (createScale phantom) → passthrough, resolved stays None
-                    // Value passes through raw — it already type-checked in TS
                 _ => {}
             }
         }
@@ -1105,9 +846,6 @@ fn resolve_value(
 
     let final_value = resolved.as_ref().unwrap_or(&lookup_value);
 
-    // 2. Evaluate transform if configured (in-process via boa_engine).
-    // Apply transform when: scale resolved, no scale configured, or scale is an
-    // empty array (createScale phantom — value passes through to transform).
     if let Some(transform_name) = &config.transform {
         let scale_is_empty_array = matches!(&config.scale, Some(Value::Array(a)) if a.is_empty());
         let use_transform = resolved.is_some() || config.scale.is_none() || scale_is_empty_array;
@@ -1131,17 +869,11 @@ fn resolve_value(
                             });
                         }
                         if matches!(err, EvalError::InvalidResultShape { .. }) {
-                            // D3: invalid result shape → no declaration.
-                            // Returns BEFORE negation handling — nothing to
-                            // negate when nothing is emitted.
                             return None;
                         }
-                        // D4 (Throw): fall through to raw-value emission —
-                        // today's fallback behavior, now diagnosed above.
                     }
                 }
             } else if let Some(raw_str) = value_to_css_string(final_value) {
-                // No evaluator available — emit placeholder for legacy path
                 let css = format!("__TRANSFORM__{}__{}__", transform_name, raw_str);
                 return Some(if is_negative {
                     negate_css_value(&css)
@@ -1152,7 +884,6 @@ fn resolve_value(
         }
     }
 
-    // 3. Convert to CSS string, negate if needed
     let css = value_to_css_string(final_value);
     if is_negative {
         css.map(|v| negate_css_value(&v))
@@ -1161,30 +892,20 @@ fn resolve_value(
     }
 }
 
-/// Negate a CSS value string: numeric → prepend minus, string with unit → prepend minus.
 fn negate_css_value(val: &str) -> String {
     if let Some(stripped) = val.strip_prefix('-') {
-        // Already negative (double negation) → strip the minus
         stripped.to_string()
     } else {
         format!("-{}", val)
     }
 }
 
-/// Resolve `{scale.path}` token alias patterns in a CSS value string.
-///
-/// Scans for `{...}` patterns and resolves each against the theme.
-/// Supports alpha modifier: `{colors.primary/50}` → `color-mix(in srgb, var(--color-primary) 50%, transparent)`.
-///
-/// Dot-path-to-flat-key conversion: first segment is the scale name, remaining
-/// segments are joined with hyphens. `{colors.pink.600}` → flat key `colors.pink-600`.
 fn resolve_token_aliases(
     value: &str,
     theme: &FlatTheme,
     variable_map: &VariableMap,
     contextual_vars: &ContextualVarsMap,
 ) -> String {
-    // Fast path: no braces → no aliases
     if !value.contains('{') {
         return value.to_string();
     }
@@ -1194,7 +915,6 @@ fn resolve_token_aliases(
 
     while let Some((i, ch)) = chars.next() {
         if ch == '{' {
-            // Find matching closing brace
             let _start = i;
             let mut end = None;
             let content_start = i + 1;
@@ -1212,7 +932,6 @@ fn resolve_token_aliases(
                     resolve_single_alias(alias_content, theme, variable_map, contextual_vars);
                 result.push_str(&resolved);
             } else {
-                // No closing brace — emit as-is
                 result.push('{');
                 result.push_str(&value[content_start..]);
                 break;
@@ -1225,16 +944,12 @@ fn resolve_token_aliases(
     result
 }
 
-/// Resolve a single token alias content (without braces).
-///
-/// Handles: `scale.path`, `scale.path/alpha`
 fn resolve_single_alias(
     content: &str,
     theme: &FlatTheme,
     variable_map: &VariableMap,
     contextual_vars: &ContextualVarsMap,
 ) -> String {
-    // Split on '/' to extract alpha modifier
     let (token_path, alpha) = match content.split_once('/') {
         Some((path, alpha_str)) => {
             let alpha: Option<u32> = alpha_str.parse().ok();
@@ -1243,30 +958,24 @@ fn resolve_single_alias(
         None => (content, None),
     };
 
-    // Convert dot path to flat key: first.rest.of.path → first.rest-of-path
     let flat_key = dot_path_to_flat_key(token_path);
 
-    // Resolve: check variable map first, then flat theme, then contextual vars
     let resolved = if let Some(var_name) = variable_map.get(&flat_key) {
         format!("var({})", var_name)
     } else if let Some(literal) = theme.get(&flat_key) {
         literal.clone()
     } else if let Some(dot_idx) = token_path.find('.') {
-        // Check contextual vars: extract scale name and var name from dot path
         let scale_name = &token_path[..dot_idx];
         let var_name = &token_path[dot_idx + 1..];
         if let Some(ctx_resolved) = resolve_contextual_var(scale_name, var_name, contextual_vars) {
             ctx_resolved
         } else {
-            // Unresolved — return original alias text as-is
             return format!("{{{}}}", content);
         }
     } else {
-        // Unresolved — return original alias text as-is
         return format!("{{{}}}", content);
     };
 
-    // Apply alpha modifier if present
     match alpha {
         Some(0) => "transparent".to_string(),
         Some(100) | None => resolved,
@@ -1276,18 +985,10 @@ fn resolve_single_alias(
     }
 }
 
-/// Convert a dot path to a flat theme key.
-///
-/// With nested theme storage, the tokenMap uses dot-path keys throughout.
-/// This is now a passthrough — the dot path IS the flat key.
-/// `colors.pink.600` → `colors.pink.600`
-/// `colors.primary` → `colors.primary`
-/// `space.8` → `space.8`
 fn dot_path_to_flat_key(path: &str) -> String {
     path.to_string()
 }
 
-/// Convert a JSON value to a CSS-safe string.
 fn value_to_css_string(value: &Value) -> Option<String> {
     match value {
         Value::String(s) => Some(s.clone()),
@@ -1307,9 +1008,7 @@ fn value_to_css_string(value: &Value) -> Option<String> {
     }
 }
 
-/// Convert camelCase to kebab-case for CSS property names.
 fn camel_to_kebab(s: &str) -> String {
-    // Handle vendor prefixes
     if let Some(rest) = s.strip_prefix("Webkit") {
         return format!("-webkit-{}", camel_to_kebab_inner(rest));
     }
@@ -1339,28 +1038,13 @@ fn camel_to_kebab_inner(s: &str) -> String {
     result
 }
 
-/// Report the byte index of each TOP-LEVEL comma in `selector`, in order.
-///
-/// A comma is top-level at paren depth 0, bracket depth 0, and outside a
-/// quoted string — so `:is()` / `:has()` / `:where()` / `:not()` arguments,
-/// attribute selectors, and quoted attribute values are never split. A
-/// backslash escapes the following character (CSS identifier escapes).
-///
-/// UNBALANCED-DELIMITER POLICY: an unterminated quote or an unclosed
-/// `(`/`[` never returns to depth 0, so every remaining comma is swallowed
-/// and the rest of the input stays in ONE branch. That is the deliberate
-/// conservative choice — a malformed selector emits as authored instead of
-/// being torn into fragments that would each get a class prefix. A stray
-/// closing `)`/`]` saturates at 0 rather than underflowing.
-///
-/// Scanning stops early when `on_comma` returns `false`.
 fn scan_top_level_commas(selector: &str, mut on_comma: impl FnMut(usize) -> bool) {
     let mut paren_depth = 0usize;
     let mut bracket_depth = 0usize;
     let mut quote: Option<char> = None;
     let mut escaped = false;
-    // Set by the comma arm; checked after the match so the (side-effecting)
-    // callback never runs from inside a match guard.
+    // Checked after the match so the side-effecting callback never runs
+    // from inside a match guard.
     let mut stop = false;
 
     for (i, c) in selector.char_indices() {
@@ -1386,12 +1070,6 @@ fn scan_top_level_commas(selector: &str, mut on_comma: impl FnMut(usize) -> bool
     }
 }
 
-/// Split a selector string into its top-level comma branches.
-///
-/// See `scan_top_level_commas` for what counts as top-level and for the
-/// unbalanced-delimiter policy. Shape-compatible with `str::split(',')` for
-/// degenerate inputs: the result is never empty (an empty input yields one
-/// empty part) and a trailing comma yields a trailing empty part.
 pub fn split_top_level_commas(selector: &str) -> Vec<&str> {
     let mut parts: Vec<&str> = Vec::new();
     let mut start = 0usize;
@@ -1405,10 +1083,6 @@ pub fn split_top_level_commas(selector: &str) -> Vec<&str> {
     parts
 }
 
-/// The first top-level branch — `split_top_level_commas(s)[0]` without the
-/// allocation. Emission's `sort_by_key` calls this at least once per element
-/// sorted, and emission's comma-free fast paths call it on every selector, so
-/// the Vec the full split would build is pure waste at both.
 pub fn first_top_level_branch(selector: &str) -> &str {
     let mut end = selector.len();
     scan_top_level_commas(selector, |i| {
@@ -1418,30 +1092,10 @@ pub fn first_top_level_branch(selector: &str) -> &str {
     &selector[..end]
 }
 
-/// Normalize pseudo-selector from Emotion format to CSS format.
-/// `&:hover` → `:hover`, `&:before` → `::before`, `&:after` → `::after`
-///
-/// Handles comma-separated selectors: `&:hover, &:focus` → `:hover,:focus`.
-/// Branches join with `","` and NOT `", "`: each branch is
-/// trimmed before its `&` is stripped, so whatever whitespace survives at the
-/// head of a stored branch is the AUTHORED descendant combinator
-/// (`& p + ul, & ul + p` → `" p + ul, ul + p"`). Emitters must therefore split
-/// this form WITHOUT trimming; a `", "` join would be indistinguishable from a
-/// combinator. Splitting is depth-aware, so functional-pseudo arguments and
-/// quoted attribute values stay in one branch.
 fn normalize_pseudo_selector(selector: &str) -> String {
     normalize_pseudo_branches(selector).join(",")
 }
 
-/// The normalized branches before they are joined — what `compose_selectors`
-/// needs, and the only place the per-branch normalization lives.
-///
-/// STORED FORM: the full `&`-carrying branch. A branch with no subject
-/// (bare `:hover` shorthand) gains its implicit leading `&`; emission
-/// substitutes the class anchor at every subject position instead of
-/// appending after a stripped prefix. Single-colon pseudo-elements
-/// normalize to double-colon exactly as before (whole-branch match, on the
-/// text after the implicit/explicit leading `&`).
 fn normalize_pseudo_branches(selector: &str) -> Vec<String> {
     split_top_level_commas(selector)
         .into_iter()
@@ -1452,7 +1106,6 @@ fn normalize_pseudo_branches(selector: &str) -> Vec<String> {
             } else {
                 format!("&{}", trimmed)
             };
-            // Normalize single-colon pseudo-elements to double-colon
             match with_subject.as_str() {
                 "&:before" | "&:after" | "&:first-line" | "&:first-letter" => {
                     format!("&:{}", &with_subject[1..])
@@ -1463,18 +1116,6 @@ fn normalize_pseudo_branches(selector: &str) -> Vec<String> {
         .collect()
 }
 
-// ---------------------------------------------------------------------------
-// Global style block resolution
-// ---------------------------------------------------------------------------
-
-/// Resolve a global style block into raw CSS.
-///
-/// The input `block` is a JSON object: `{ selector → { prop → value } }`.
-/// Each selector's style object is resolved through prop config (scale lookup,
-/// transforms, token aliases).
-///
-/// `@keyframes` selectors receive special handling: their values are
-/// `{ "0%" → { prop → value }, "100%" → { prop → value } }`.
 pub fn resolve_global_block(
     block: &Value,
     ctx: &ResolveContext,
@@ -1488,7 +1129,6 @@ pub fn resolve_global_block(
 
     for (selector, style_obj) in selectors {
         if selector.starts_with("@keyframes") {
-            // @keyframes: value is { "0%" → { prop → value }, "100%" → { ... } }
             let stops = match style_obj.as_object() {
                 Some(o) => o,
                 None => continue,
@@ -1523,7 +1163,6 @@ pub fn resolve_global_block(
             continue;
         }
 
-        // Regular selector: value is { prop → value }
         let style_map = match style_obj.as_object() {
             Some(o) => o,
             None => continue,
@@ -1550,10 +1189,6 @@ pub fn resolve_global_block(
     rules.join("\n\n")
 }
 
-/// Resolve all global style blocks into a single CSS string.
-///
-/// Input: `{ blockName → { selector → { prop → value } } }`.
-/// Block names are for identification only — all blocks emit into the same CSS output.
 pub fn resolve_all_global_blocks(
     blocks: &Value,
     ctx: &ResolveContext,
@@ -1565,9 +1200,6 @@ pub fn resolve_all_global_blocks(
 
     let mut parts: Vec<String> = Vec::new();
     for (_name, block) in block_map {
-        // Wrapped loader form: { styles, fontFaces } — typed font faces
-        // render AHEAD of the block's selector rules (global-styles-system).
-        // A legacy bare selector map passes through unchanged.
         let (styles, faces) = match block.as_object() {
             Some(obj)
                 if obj.get("styles").map(|s| s.is_object()).unwrap_or(false)
@@ -1592,11 +1224,6 @@ pub fn resolve_all_global_blocks(
     parts.join("\n\n")
 }
 
-/// Render a wrapped block's typed `@font-face` descriptors
-/// (global-styles-system). `src` urls are emitted byte-exact as authored —
-/// asset resolution belongs to the host bundler's CSS pipeline. `family`
-/// resolves through the token vocabulary; every other descriptor is a CSS
-/// literal. Descriptors missing `family` or a non-empty `src` are skipped.
 fn render_font_faces(faces: &Value, ctx: &ResolveContext) -> String {
     let list = match faces.as_array() {
         Some(l) => l,
@@ -1662,12 +1289,6 @@ fn render_font_faces(faces: &Value, ctx: &ResolveContext) -> String {
     blocks.join("\n")
 }
 
-/// Resolve a single keyframes block (from the top-level `keyframes()` primitive)
-/// into `@keyframes <name> { ... }` CSS. The block shape is `{ name, frames }`
-/// where `frames` is `{ "0%" → { prop → value }, ... }`. Each frame's styles
-/// resolve through prop config (scale lookups, transforms, token aliases) —
-/// identical to the structured `@keyframes` selector form inside
-/// `createGlobalStyles`.
 pub fn resolve_keyframes_block(block: &Value, ctx: &ResolveContext) -> String {
     let obj = match block.as_object() {
         Some(o) => o,
@@ -1716,15 +1337,6 @@ pub fn resolve_keyframes_block(block: &Value, ctx: &ResolveContext) -> String {
     format!("@keyframes {} {{\n{}\n}}", name, rendered_frames.join("\n"))
 }
 
-/// Resolve all keyframes collections into a single CSS string.
-///
-/// Input: `{ exportName → { keyName → { name, frames } } }`. Each exported
-/// `keyframes()` collection carries one entry per named keyframe; each named
-/// keyframe emits its own `@keyframes <name> { ... }` block. The `name` is the
-/// runtime-generated stable hash from the `keyframes()` factory (authored in
-/// `packages/system/src/keyframes.ts`) and becomes the `@keyframes <name>`
-/// identifier; identical frame bodies across keys dedupe naturally because
-/// `name` is derived from the frame body.
 pub fn resolve_all_keyframes_blocks(
     blocks: &Value,
     ctx: &ResolveContext,
@@ -1890,7 +1502,6 @@ mod tests {
         set!["_", "xs", "sm", "md", "lg", "xl"]
     }
 
-    /// Owns all resolution data and provides a `ctx()` method for borrowing.
     struct TestCtxOwner {
         config: PropConfigMap,
         theme: FlatTheme,
@@ -2035,10 +1646,8 @@ mod tests {
         let owner = TestCtxOwner::new();
         let styles = json!({ "p": { "_": 8, "sm": 16 } });
         let resolved = resolve_styles(&styles, &owner.ctx(), true);
-        // Default value
         assert_eq!(resolved.declarations.len(), 1);
         assert_eq!(resolved.declarations[0].value, "0.5rem");
-        // Breakpoint value
         let bps: Vec<_> = resolved.breakpoint_groups().collect();
         assert_eq!(bps.len(), 1);
         assert_eq!(bps[0].0, "sm");
@@ -2075,14 +1684,9 @@ mod tests {
         let styles = json!({ "borderRadius": 4 });
         let resolved = resolve_styles(&styles, &owner.ctx(), true);
         assert_eq!(resolved.declarations[0].property, "border-radius");
-        // Scale lookup finds "4px", then emits placeholder for JS transform
         assert_eq!(resolved.declarations[0].value, "__TRANSFORM__size__4px__");
     }
 
-    // --- Transform-failure sink (design D3/D4) ---
-
-    /// Resolve `{ width: 5 }` through a registered `size` transform with a
-    /// failure sink attached; returns the resolved styles and drained sink.
     fn resolve_with_failing_transform(source: &str) -> (ResolvedStyles, Vec<TransformFailure>) {
         let owner = TestCtxOwner::new();
         let evaluator = TransformEvaluator::new();
@@ -2099,7 +1703,6 @@ mod tests {
 
     #[test]
     fn object_transform_result_drops_declaration_and_records_invalid_shape() {
-        // D3: invalid result shape → NO declaration emitted, failure recorded.
         let (resolved, failures) = resolve_with_failing_transform("(v) => ({ w: v })");
         assert!(resolved.declarations.is_empty(), "{:?}", resolved.declarations);
         assert_eq!(
@@ -2126,7 +1729,6 @@ mod tests {
 
     #[test]
     fn throwing_transform_keeps_raw_value_fallback_and_records_throw() {
-        // D4: throw → raw-value fall-through unchanged, failure recorded.
         let (resolved, failures) =
             resolve_with_failing_transform("(v) => { throw new Error('kaboom') }");
         assert_eq!(resolved.declarations.len(), 1, "{:?}", resolved.declarations);
@@ -2143,8 +1745,6 @@ mod tests {
         }
     }
 
-    // --- Token alias tests ---
-
     fn test_variable_map() -> VariableMap {
         map! {
             "colors.primary" => "--color-primary".to_string(),
@@ -2155,7 +1755,6 @@ mod tests {
 
     #[test]
     fn dot_path_conversion() {
-        // With nested storage, dot paths are now passthrough — the dot path IS the key
         assert_eq!(dot_path_to_flat_key("colors.primary"), "colors.primary");
         assert_eq!(dot_path_to_flat_key("colors.pink.600"), "colors.pink.600");
         assert_eq!(dot_path_to_flat_key("colors.gradient.pink.soft"), "colors.gradient.pink.soft");
@@ -2250,8 +1849,6 @@ mod tests {
         assert_eq!(result, "0 4px 12px color-mix(in srgb, var(--color-primary) 20%, transparent)");
     }
 
-    // --- Selector alias tests ---
-
     fn test_selector_aliases() -> SelectorAliasesMap {
         map! {
             "_hover" => "&:hover".to_string(),
@@ -2280,7 +1877,6 @@ mod tests {
         let styles = json!({ "_disabled": { "p": 8 } });
         let resolved = resolve_styles(&styles, &owner.ctx(), true);
         assert_eq!(resolved.pseudo_selectors.len(), 1);
-        // Compound selector preserved as comma-separated (normalized)
         assert!(resolved.pseudo_selectors[0].0.contains(":disabled"));
         assert!(resolved.pseudo_selectors[0].0.contains("[data-disabled]"));
         assert_eq!(resolved.pseudo_selectors[0].1[0].property, "padding");
@@ -2294,10 +1890,8 @@ mod tests {
         let resolved = resolve_styles(&styles, &owner.ctx(), true);
         assert_eq!(resolved.pseudo_selectors.len(), 1);
         assert_eq!(resolved.pseudo_selectors[0].0, "&::before");
-        // content: "" auto-injected
         assert_eq!(resolved.pseudo_selectors[0].1[0].property, "content");
         assert_eq!(resolved.pseudo_selectors[0].1[0].value, "\"\"");
-        // Original declaration follows
         assert_eq!(resolved.pseudo_selectors[0].1[1].property, "display");
     }
 
@@ -2306,7 +1900,6 @@ mod tests {
         let owner = TestCtxOwner::new().with_aliases();
         let styles = json!({ "_after": { "content": "\"→\"", "display": "block" } });
         let resolved = resolve_styles(&styles, &owner.ctx(), true);
-        // Should NOT inject auto content since explicit content is provided
         let content_count = resolved.pseudo_selectors[0].1.iter().filter(|d| d.property == "content").count();
         assert_eq!(content_count, 1);
         assert_eq!(resolved.pseudo_selectors[0].1.iter().find(|d| d.property == "content").unwrap().value, "\"→\"");
@@ -2315,7 +1908,6 @@ mod tests {
     #[test]
     fn raw_before_no_content_autodefault() {
         let owner = TestCtxOwner::new().with_aliases();
-        // Raw selector — should NOT get content auto-default
         let styles = json!({ "&::before": { "display": "block" } });
         let resolved = resolve_styles(&styles, &owner.ctx(), true);
         let has_content = resolved.pseudo_selectors[0].1.iter().any(|d| d.property == "content");
@@ -2325,16 +1917,13 @@ mod tests {
     #[test]
     fn merge_alias_and_raw_same_selector() {
         let owner = TestCtxOwner::new().with_aliases();
-        // Both _hover (alias) and raw &:hover target the same selector
         let styles = json!({
             "_hover": { "color": "primary" },
             "&:hover": { "p": 8 }
         });
         let resolved = resolve_styles(&styles, &owner.ctx(), true);
-        // Should merge into a single pseudo_selector entry
         assert_eq!(resolved.pseudo_selectors.len(), 1);
         assert_eq!(resolved.pseudo_selectors[0].0, "&:hover");
-        // Both declarations present
         assert!(resolved.pseudo_selectors[0].1.iter().any(|d| d.property == "color"));
         assert!(resolved.pseudo_selectors[0].1.iter().any(|d| d.property == "padding"));
     }
@@ -2342,32 +1931,24 @@ mod tests {
     #[test]
     fn unknown_alias_key_ignored() {
         let owner = TestCtxOwner::new().with_aliases();
-        // _groupHover is not in the alias map
         let styles = json!({ "_groupHover": { "color": "primary" }, "p": 8 });
         let resolved = resolve_styles(&styles, &owner.ctx(), true);
-        // Unknown alias key is silently skipped
         assert_eq!(resolved.pseudo_selectors.len(), 0);
-        // Regular prop still resolves
         assert_eq!(resolved.declarations.len(), 1);
     }
 
     #[test]
     fn variant_level_before_no_content_autodefault() {
         let owner = TestCtxOwner::new().with_aliases();
-        // Variant override: only changes bg, should NOT inject content
         let styles = json!({ "_before": { "color": "primary" } });
-        // auto_content = false (variant context)
         let resolved = resolve_styles(&styles, &owner.ctx(), false);
         let has_content = resolved.pseudo_selectors[0].1.iter().any(|d| d.property == "content");
         assert!(!has_content, "Variant-level _before should not auto-inject content");
     }
 
-    // --- Cascade-tier ordering tests ---
-
     #[test]
     fn prop_cascade_tier_ordering() {
         let config = test_config();
-        // p (true shorthand) < px (multi-target) < pl (longhand) < unknown
         let p_tier = prop_cascade_tier("p", &config);
         let px_tier = prop_cascade_tier("px", &config);
         let pl_tier = prop_cascade_tier("pl", &config);
@@ -2381,7 +1962,6 @@ mod tests {
     #[test]
     fn prop_cascade_tier_multi_target_specificity() {
         let config = test_config();
-        // px and py are both tier 1 with same number of properties
         let px_tier = prop_cascade_tier("px", &config);
         let py_tier = prop_cascade_tier("py", &config);
         assert_eq!(px_tier, py_tier, "px and py should have equal cascade tier");
@@ -2389,15 +1969,12 @@ mod tests {
 
     #[test]
     fn shorthand_before_longhand_in_resolve() {
-        // px: 3, pl: 8 → pl's padding-left must appear AFTER px's padding-left
         let owner = TestCtxOwner::new();
         let styles = json!({ "px": 16, "pl": 8 });
         let resolved = resolve_styles(&styles, &owner.ctx(), true);
 
-        // Should have 3 declarations: padding-left (from px), padding-right (from px), padding-left (from pl)
         assert_eq!(resolved.declarations.len(), 3);
 
-        // Find the two padding-left declarations
         let pl_positions: Vec<usize> = resolved.declarations.iter()
             .enumerate()
             .filter(|(_, d)| d.property == "padding-left")
@@ -2405,51 +1982,40 @@ mod tests {
             .collect();
         assert_eq!(pl_positions.len(), 2, "should have two padding-left declarations");
 
-        // First padding-left (from px) should have px's value (1rem = space.16)
         assert_eq!(resolved.declarations[pl_positions[0]].value, "1rem");
-        // Second padding-left (from pl) should have pl's value (0.5rem = space.8)
         assert_eq!(resolved.declarations[pl_positions[1]].value, "0.5rem");
-        // pl's value comes last → wins by CSS cascade
     }
 
     #[test]
     fn shorthand_before_longhand_reversed_source_order() {
-        // Even when pl is written BEFORE px in source, px should still emit first
         let owner = TestCtxOwner::new();
         let styles = json!({ "pl": 8, "px": 16 });
         let resolved = resolve_styles(&styles, &owner.ctx(), true);
 
         assert_eq!(resolved.declarations.len(), 3);
-        // px (multi-target shorthand) should emit before pl (longhand)
         assert_eq!(resolved.declarations[0].property, "padding-left");
-        assert_eq!(resolved.declarations[0].value, "1rem"); // from px
+        assert_eq!(resolved.declarations[0].value, "1rem");
         assert_eq!(resolved.declarations[1].property, "padding-right");
-        assert_eq!(resolved.declarations[1].value, "1rem"); // from px
+        assert_eq!(resolved.declarations[1].value, "1rem");
         assert_eq!(resolved.declarations[2].property, "padding-left");
-        assert_eq!(resolved.declarations[2].value, "0.5rem"); // from pl — wins
+        assert_eq!(resolved.declarations[2].value, "0.5rem");
     }
 
     #[test]
     fn true_shorthand_before_multi_target_before_longhand() {
-        // p, px, pl — all three tiers
         let owner = TestCtxOwner::new();
         let styles = json!({ "pl": 8, "px": 16, "p": 24 });
         let resolved = resolve_styles(&styles, &owner.ctx(), true);
 
-        // p (tier 0) should emit first as padding
         assert_eq!(resolved.declarations[0].property, "padding");
-        assert_eq!(resolved.declarations[0].value, "1.5rem"); // space.24
-        // px (tier 1) next — padding-left + padding-right
+        assert_eq!(resolved.declarations[0].value, "1.5rem");
         assert_eq!(resolved.declarations[1].property, "padding-left");
-        assert_eq!(resolved.declarations[1].value, "1rem"); // space.16
+        assert_eq!(resolved.declarations[1].value, "1rem");
         assert_eq!(resolved.declarations[2].property, "padding-right");
-        assert_eq!(resolved.declarations[2].value, "1rem"); // space.16
-        // pl (tier 2) last — padding-left override
+        assert_eq!(resolved.declarations[2].value, "1rem");
         assert_eq!(resolved.declarations[3].property, "padding-left");
-        assert_eq!(resolved.declarations[3].value, "0.5rem"); // space.8 — wins
+        assert_eq!(resolved.declarations[3].value, "0.5rem");
     }
-
-    // --- Color-family pass-through resolution inside nested selector blocks ---
 
     #[test]
     fn color_family_pass_through_resolves_in_aliased_block() {
@@ -2479,11 +2045,6 @@ mod tests {
 
     #[test]
     fn color_family_pass_through_at_top_level_resolves() {
-        // The earlier top-level-stays-literal pin contradicted the governing
-        // selector-alias-registry requirement, which asks for scale
-        // resolution on EVERY pass-through color prop regardless of position.
-        // Consultation now lives in `resolve_single_prop`, so top level,
-        // responsive slots, and nested blocks share one behavior.
         let owner = TestCtxOwner::new();
         let styles = json!({ "outlineColor": "primary" });
         let resolved = resolve_styles(&styles, &owner.ctx(), true);
@@ -2493,8 +2054,6 @@ mod tests {
 
     #[test]
     fn background_color_pass_through_resolves_at_top_level() {
-        // `backgroundColor` belongs to COLOR_FAMILY_PASS_THROUGH — the DS
-        // registers `bg`, not the raw CSS property name.
         let owner = TestCtxOwner::new();
         let styles = json!({ "backgroundColor": "primary" });
         let resolved = resolve_styles(&styles, &owner.ctx(), true);
@@ -2510,8 +2069,6 @@ mod tests {
         assert_eq!(resolved.declarations[0].property, "background-color");
         assert_eq!(resolved.declarations[0].value, "rgb(1 2 3)");
     }
-
-    // ── typed @font-face resources ───────────────────────────────────────
 
     #[test]
     fn font_faces_render_ahead_of_selector_rules_in_wrapped_blocks() {
@@ -2554,10 +2111,6 @@ mod tests {
 
     #[test]
     fn font_face_asset_placeholder_passes_through_byte_exact() {
-        // standardize-inheritance-and-assets: `asset()` placeholders
-        // (`animus-asset:<specifier>`) are just strings to the emitter —
-        // the shipped byte-exact url pass-through carries them verbatim for
-        // host-plugin substitution.
         let owner = TestCtxOwner::new();
         let blocks = json!({
             "globals": {
@@ -2617,8 +2170,6 @@ mod tests {
 
     #[test]
     fn dotted_literal_on_non_color_prop_stays_untouched() {
-        // `fontFamily` is pass-through but outside the color family — a dotted
-        // value must NOT be probed against the `colors` scale.
         let owner = TestCtxOwner::new();
         let styles = json!({ "fontFamily": "brand.sans" });
         let resolved = resolve_styles(&styles, &owner.ctx(), true);
@@ -2655,7 +2206,6 @@ mod tests {
 
     #[test]
     fn non_color_pass_through_in_aliased_stays_literal() {
-        // `cursor` is pass-through but not in the color family — must not resolve.
         let owner = TestCtxOwner::new().with_aliases();
         let styles = json!({
             "_hover": { "cursor": "pointer" }
@@ -2669,8 +2219,6 @@ mod tests {
 
     #[test]
     fn registered_color_prop_in_aliased_still_resolves() {
-        // Regression guard: `color` is propConfig-registered and must continue
-        // to resolve via its existing scale-lookup path (not the new bypass).
         let owner = TestCtxOwner::new().with_aliases();
         let styles = json!({
             "_hover": { "color": "primary" }
@@ -2684,9 +2232,6 @@ mod tests {
 
     #[test]
     fn color_family_brace_syntax_still_resolves_in_aliased_block() {
-        // Brace-wrapped token refs `{colors.primary}` should continue to resolve
-        // via the existing `resolve_token_aliases` path regardless of the new
-        // bare-key fallback.
         let owner = TestCtxOwner::new().with_aliases();
         let styles = json!({
             "_hover": { "outlineColor": "{colors.primary}" }
@@ -2698,10 +2243,6 @@ mod tests {
         assert_eq!(hover_decls[0].value, "var(--colors-primary)");
     }
 
-    // ------------------------------------------------------------------
-    // Condition-block resolution
-    // ------------------------------------------------------------------
-
     fn only_cond(resolved: &ResolvedStyles) -> &ConditionedGroup {
         assert_eq!(resolved.conditioned.len(), 1, "expected one conditioned group");
         &resolved.conditioned[0]
@@ -2709,7 +2250,6 @@ mod tests {
 
     #[test]
     fn raw_container_block_resolves_kind_and_prelude() {
-        // container-query-support: "Basic container condition".
         let owner = TestCtxOwner::new();
         let styles = json!({ "@container (min-width: 400px)": { "p": 16 } });
         let resolved = resolve_styles(&styles, &owner.ctx(), true);
@@ -2724,7 +2264,6 @@ mod tests {
 
     #[test]
     fn raw_named_container_prelude_preserved_verbatim() {
-        // container-query-support: "Named container query".
         let owner = TestCtxOwner::new();
         let styles = json!({ "@container card (min-width: 400px)": { "display": "grid" } });
         let resolved = resolve_styles(&styles, &owner.ctx(), true);
@@ -2735,12 +2274,9 @@ mod tests {
 
     #[test]
     fn container_unit_transits_pass_through_verbatim() {
-        // Container-relative units transit unchanged.
         let owner = TestCtxOwner::new();
         let styles = json!({ "@container card (min-width: 400px)": { "width": "50cqw" } });
         let resolved = resolve_styles(&styles, &owner.ctx(), true);
-        // `width` has a `size` transform (no evaluator in tests → placeholder),
-        // proving the cq-unit string enters the transform seam intact.
         let g = only_cond(&resolved);
         assert_eq!(g.declarations[0].property, "width");
         assert_eq!(g.declarations[0].value, "__TRANSFORM__size__50cqw__");
@@ -2748,7 +2284,6 @@ mod tests {
 
     #[test]
     fn empty_container_block_emits_no_group() {
-        // container-query-support: "No rule emitted for empty container block".
         let owner = TestCtxOwner::new();
         let styles = json!({ "@container (min-width: 400px)": {} });
         let resolved = resolve_styles(&styles, &owner.ctx(), true);
@@ -2757,7 +2292,6 @@ mod tests {
 
     #[test]
     fn raw_media_feature_block_resolves() {
-        // media-condition-aliases: "Reduced motion query".
         let owner = TestCtxOwner::new();
         let styles = json!({ "@media (prefers-reduced-motion: reduce)": { "display": "none" } });
         let resolved = resolve_styles(&styles, &owner.ctx(), true);
@@ -2768,31 +2302,26 @@ mod tests {
 
     #[test]
     fn raw_supports_block_resolves_tokens_and_shorthands() {
-        // supports-condition-blocks: "Basic supports condition" (token + shorthand).
         let owner = TestCtxOwner::new();
         let styles = json!({ "@supports (display: grid)": { "color": "primary", "p": 8 } });
         let resolved = resolve_styles(&styles, &owner.ctx(), true);
         let g = only_cond(&resolved);
         assert_eq!(g.conditions, vec![Condition::Supports("@supports (display: grid)".to_string())]);
-        // token resolution (color → var) + shorthand (p → padding 0.5rem)
         assert!(g.declarations.iter().any(|d| d.property == "color" && d.value == "var(--colors-primary)"));
         assert!(g.declarations.iter().any(|d| d.property == "padding" && d.value == "0.5rem"));
     }
 
     #[test]
     fn unknown_at_rule_prefix_ignored() {
-        // selector-alias-registry: "Misspelled at-rule prefix" — resolver
-        // silently drops it (the type layer rejects it).
         let owner = TestCtxOwner::new();
         let styles = json!({ "@containr card (min-width: 400px)": { "p": 8 }, "p": 4 });
         let resolved = resolve_styles(&styles, &owner.ctx(), true);
         assert!(resolved.conditioned.is_empty());
-        assert_eq!(resolved.declarations.len(), 1); // the valid `p: 4` survives
+        assert_eq!(resolved.declarations.len(), 1);
     }
 
     #[test]
     fn registered_media_alias_resolves() {
-        // media-condition-aliases: "Media alias in a style object" + token body.
         let owner = TestCtxOwner::new().with_conditions();
         let styles = json!({ "_motionReduce": { "color": "primary" } });
         let resolved = resolve_styles(&styles, &owner.ctx(), true);
@@ -2804,7 +2333,6 @@ mod tests {
 
     #[test]
     fn registered_container_alias_resolves() {
-        // container-query-support: "Container alias in a style object".
         let owner = TestCtxOwner::new().with_conditions();
         let styles = json!({ "_cardSm": { "display": "grid" } });
         let resolved = resolve_styles(&styles, &owner.ctx(), true);
@@ -2815,7 +2343,6 @@ mod tests {
 
     #[test]
     fn registered_supports_alias_resolves() {
-        // supports-condition-blocks: "Supports alias in a style object".
         let owner = TestCtxOwner::new().with_conditions();
         let styles = json!({ "_hasGrid": { "display": "grid" } });
         let resolved = resolve_styles(&styles, &owner.ctx(), true);
@@ -2827,7 +2354,6 @@ mod tests {
     #[test]
     fn unregistered_condition_alias_ignored() {
         let owner = TestCtxOwner::new().with_conditions();
-        // _notRegistered is neither a selector nor a condition alias → dropped.
         let styles = json!({ "_notRegistered": { "p": 8 }, "p": 4 });
         let resolved = resolve_styles(&styles, &owner.ctx(), true);
         assert!(resolved.conditioned.is_empty());
@@ -2836,8 +2362,6 @@ mod tests {
 
     #[test]
     fn selector_alias_wins_over_condition_alias_same_name() {
-        // Precedence: a `_` name registered as a selector alias resolves as a
-        // pseudo, not a condition (selector_aliases checked first).
         let mut owner = TestCtxOwner::new().with_conditions();
         owner.selector_aliases.insert("_dual".to_string(), "&:hover".to_string());
         owner.condition_aliases.insert(
@@ -2852,20 +2376,14 @@ mod tests {
 
     #[test]
     fn value_position_condition_key_produces_no_condition_group() {
-        // media-condition-aliases: "Condition alias in value position produces
-        // no media rule" — value-position maps admit only `_`/breakpoint keys.
         let owner = TestCtxOwner::new().with_conditions();
         let styles = json!({ "p": { "_motionReduce": 12 } });
         let resolved = resolve_styles(&styles, &owner.ctx(), true);
-        // `{ _motionReduce: 12 }` is not a responsive value (key not `_`/bp),
-        // so `p`'s value is a non-stringifiable object → dropped, no condition.
         assert!(resolved.conditioned.is_empty());
     }
 
     #[test]
     fn container_establishment_longhands_emit_as_pass_through_declarations() {
-        // container-query-support: "Establishing a named container" — plain
-        // pass-through declarations, no dedicated machinery.
         let owner = TestCtxOwner::new();
         let styles = json!({ "containerType": "inline-size", "containerName": "card" });
         let resolved = resolve_styles(&styles, &owner.ctx(), true);
@@ -2881,7 +2399,6 @@ mod tests {
 
     #[test]
     fn container_establishment_shorthand_emits_as_pass_through_declaration() {
-        // container-query-support: "Container shorthand".
         let owner = TestCtxOwner::new();
         let styles = json!({ "container": "card / inline-size" });
         let resolved = resolve_styles(&styles, &owner.ctx(), true);
@@ -2892,8 +2409,6 @@ mod tests {
 
     #[test]
     fn condition_emission_order_alias_before_raw_and_by_registry() {
-        // stylesheet-assembly: aliased conditions precede raw keys; raw keys
-        // keep source order; aliased sort by registry order.
         let owner = TestCtxOwner::new().with_conditions();
         let styles = json!({
             "@supports (display: grid)": { "display": "grid" },
@@ -2904,15 +2419,11 @@ mod tests {
         let resolved = resolve_styles(&styles, &owner.ctx(), true);
         let ordered = resolved.conditioned_emission_order();
         assert_eq!(ordered.len(), 4);
-        // aliased first, by registry order: _motionReduce(500) then _cardSm(510)
         assert!(matches!(ordered[0].emit_order, ConditionEmitOrder::Aliased(500)));
         assert!(matches!(ordered[1].emit_order, ConditionEmitOrder::Aliased(510)));
-        // then raw, in source order: @supports (idx 0) then @container (idx 1)
         assert_eq!(ordered[2].conditions[0].prelude(), Some("@supports (display: grid)"));
         assert_eq!(ordered[3].conditions[0].prelude(), Some("@container (min-width: 400px)"));
     }
-
-    // ---- recursive nested resolution ----
 
     #[test]
     fn nested_alias_in_alias_composes_selector() {
@@ -2926,14 +2437,11 @@ mod tests {
         let resolved = resolve_styles(&styles, &owner.ctx(), true);
         let hover: Vec<_> = resolved.pseudo_selectors.iter().filter(|(s, _)| s == "&:hover::before").collect();
         assert_eq!(hover.len(), 1, "composed :hover::before entry: {:?}", resolved.pseudo_selectors);
-        // Auto-content applies to nested _before under base definitions.
         assert_eq!(hover[0].1[0].property, "content");
         assert!(hover[0].1.iter().any(|d| d.property == "opacity" && d.value == "1"));
-        // Ordering: hover-composed entry precedes active-composed entry (insertion).
         let hi = resolved.pseudo_selectors.iter().position(|(s, _)| s == "&:hover::before").unwrap();
         let ai = resolved.pseudo_selectors.iter().position(|(s, _)| s == "&:active::before").unwrap();
         assert!(hi < ai);
-        // Depth-2 content did NOT flatten into :hover itself.
         assert!(!resolved.pseudo_selectors.iter().any(|(s, d)| s == "&:hover" && d.iter().any(|x| x.property == "opacity")));
     }
 
@@ -2999,8 +2507,6 @@ mod tests {
         assert!(matches!(&nested.conditions[1], Condition::Breakpoint(bp) if bp == "sm"));
         assert_eq!(nested.declarations[0].value, "16px");
         assert_eq!(nested.emit_order, ConditionEmitOrder::Raw(0));
-        // The block's own declarations group must PRECEDE its breakpoint
-        // child, or the override is cascade-dead.
         let base_idx = resolved.conditioned.iter().position(|g| g.conditions.len() == 1).unwrap();
         let nested_idx = resolved.conditioned.iter().position(|g| g.conditions.len() == 2).unwrap();
         assert!(base_idx < nested_idx, "base group must precede its breakpoint override");
@@ -3022,10 +2528,6 @@ mod tests {
         assert_eq!(groups[0].2[0].value, "1rem");
     }
 
-    // ------------------------------------------------------------------
-    // Depth-aware comma splitting + descendant-combinator storage
-    // ------------------------------------------------------------------
-
     #[test]
     fn split_top_level_commas_tracks_depth_and_quotes() {
         assert_eq!(split_top_level_commas(":hover,:focus"), vec![":hover", ":focus"]);
@@ -3045,23 +2547,16 @@ mod tests {
             split_top_level_commas(":has(+ [data-part=\"trailing\"]),:last-child"),
             vec![":has(+ [data-part=\"trailing\"])", ":last-child"]
         );
-        // Escaped commas are identifier text, not separators.
         assert_eq!(split_top_level_commas("a\\,b"), vec!["a\\,b"]);
-        // Degenerate inputs keep `str::split(',')`'s shape.
         assert_eq!(split_top_level_commas(""), vec![""]);
         assert_eq!(split_top_level_commas("a,"), vec!["a", ""]);
     }
 
     #[test]
     fn split_top_level_commas_swallows_the_tail_of_unbalanced_input() {
-        // Conservative policy: an unterminated quote or unclosed delimiter
-        // never returns to depth 0, so the remainder stays in ONE branch and
-        // a malformed selector emits as authored rather than as fragments.
         assert_eq!(split_top_level_commas("[a=\"x,y"), vec!["[a=\"x,y"]);
         assert_eq!(split_top_level_commas(":is(a,b"), vec![":is(a,b"]);
-        // A trailing backslash escapes nothing and must not panic.
         assert_eq!(split_top_level_commas("a\\"), vec!["a\\"]);
-        // A stray closer saturates at depth 0 instead of underflowing.
         assert_eq!(split_top_level_commas("a),b"), vec!["a)", "b"]);
     }
 
@@ -3086,8 +2581,6 @@ mod tests {
 
     #[test]
     fn normalize_pseudo_selector_keeps_descendant_combinators() {
-        // The stored form joins branches with "," (no space), so a branch's
-        // LEADING space unambiguously IS an authored combinator.
         assert_eq!(
             normalize_pseudo_selector("& p + ul, & ul + p"),
             "& p + ul,& ul + p"
@@ -3101,8 +2594,6 @@ mod tests {
 
     #[test]
     fn normalize_pseudo_selector_ampersand_adjacent_list_has_no_artifact_space() {
-        // Byte-identity anchor: `&`-adjacent branches carry NO leading space,
-        // so the emitter's ", " join reproduces today's output exactly.
         assert_eq!(
             normalize_pseudo_selector("&:hover, &[data-x]"),
             "&:hover,&[data-x]"
@@ -3111,7 +2602,6 @@ mod tests {
             normalize_pseudo_selector("&:disabled, &[disabled]"),
             "&:disabled,&[disabled]"
         );
-        // The real built-in `_disabled` alias value.
         assert_eq!(
             normalize_pseudo_selector(
                 "&:disabled, &[disabled], &[aria-disabled=\"true\"], &[data-disabled]"
@@ -3122,8 +2612,6 @@ mod tests {
 
     #[test]
     fn normalize_pseudo_selector_preserves_functional_and_quoted_commas() {
-        // Commas inside :is()/:has() and inside quoted attribute values are
-        // not branch separators.
         assert_eq!(
             normalize_pseudo_selector("& [data-part=\"add-row\"] :is(:focus-visible, [data-focus-visible])"),
             "& [data-part=\"add-row\"] :is(:focus-visible, [data-focus-visible])"
@@ -3140,14 +2628,10 @@ mod tests {
 
     #[test]
     fn compose_selectors_does_not_cartesian_functional_arguments() {
-        // A functional selector under a condition/selector frame is ONE
-        // branch — the pre-fix double split turned it into two.
         assert_eq!(
             compose_selectors("&:hover", "& .x:is(a, b)"),
             "&:hover .x:is(a, b)"
         );
-        // Genuine multi-branch composition still cartesian-products, with the
-        // outer branch's own combinator preserved on each product.
         assert_eq!(
             compose_selectors("&:hover,&:focus", "& .a, & .b"),
             "&:hover .a,&:focus .a,&:hover .b,&:focus .b"

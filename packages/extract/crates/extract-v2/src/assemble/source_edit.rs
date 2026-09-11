@@ -1,22 +1,10 @@
 //! Source-text surgery: consumed-import stripping and directive-prologue
-//! placement.
-//!
-//! Split out of `assemble.rs` unchanged. This half is pure text
-//! manipulation — its only type dependency is `DirectivePrologueFact` — and
-//! it shares no private helper with the config/replacement half, which is
-//! what made the seam mechanical.
-//!
-//! Every function here is a verbatim port of a v1 routine whose *quirks* are
-//! the contract (the line-based strip, the trailing-newline behaviour, the
-//! single-blank-line eat after a prologue). Registered parity entries depend
-//! on those quirks, so resist tidying them.
+//! placement. The line-based quirks are the contract, pinned by the tests.
 
 use crate::facts::DirectivePrologueFact;
 
-/// v1 strip_consumed_imports VERBATIM (transform_emitter 497-535): the
-/// split/rebuild loop IS the trailing-newline quirk's origin — porting the
-/// loop, not a replay of its observed behavior (inc-07 review F7: the
-/// replay diverged at EOF-consumed-import corners).
+/// Remove import lines whose source is consumed and whose bindings were all
+/// extracted.
 pub fn strip_consumed_imports(
     source: &str,
     consumed_sources: &[&str],
@@ -25,9 +13,8 @@ pub fn strip_consumed_imports(
     strip_consumed_imports_with_removals(source, consumed_sources, extracted_bindings).0
 }
 
-/// The verbatim v1 strip plus byte ranges removed from its input. The ranges
-/// are observation-only metadata: output construction remains the exact loop
-/// used by `strip_consumed_imports`.
+/// The strip plus the byte ranges removed from its input; the ranges are
+/// observation-only and do not affect the output.
 pub fn strip_consumed_imports_with_removals(
     source: &str,
     consumed_sources: &[&str],
@@ -87,12 +74,8 @@ fn leading_line_terminator_len(source: &str) -> usize {
     }
 }
 
-/// v1 apply_replacements directive tail (transform_emitter 471-490),
-/// operating on the POST-STRIP string (inc-07 review F6), with the
-/// offset-0 quirk shed (inc 03): OXC's parsed directive list supplies the
-/// authoritative prologue boundary (including ECMAScript trivia + ASI),
-/// and the whole prologue stays ABOVE the injected imports.
-/// v1's single-blank-line strip after the prologue is retained.
+/// Split a post-strip source into directive prologue and body. The whole
+/// prologue stays above injected imports; one blank line after it is cut.
 pub fn directive_prefix_and_body(
     result: String,
     needs_use_client: bool,
@@ -102,9 +85,7 @@ pub fn directive_prefix_and_body(
         Some(prologue) => {
             let end = prologue.end as usize;
             let mut rest_start = end;
-            // Consume the line terminator ending the directive line.
             rest_start += leading_line_terminator_len(&result[rest_start..]);
-            // v1 quirk parity: strip ONE blank line following the directive.
             if result[rest_start..].starts_with('\n') {
                 rest_start += 1;
             }
@@ -121,10 +102,8 @@ pub fn directive_prefix_and_body(
     }
 }
 
-/// v1 parse_named_import, ported: single-line `import { a, b as c } from 's'`
-/// ONLY (the line-based quirk is the contract — multi-line imports are NOT
-/// stripped; anticipated register entry). Returns IMPORTED names (left of
-/// `as`) and the source specifier.
+/// Parse a single-line `import { a, b as c } from 's'`; a multi-line import
+/// never matches. Returns the imported names (left of `as`) and the source.
 fn parse_named_import(line: &str) -> Option<(Vec<String>, String)> {
     let rest = line.strip_prefix("import")?.trim_start();
     let brace_start = rest.find('{')?;
@@ -149,11 +128,8 @@ fn parse_named_import(line: &str) -> Option<(Vec<String>, String)> {
     Some((bindings, spec[1..end].to_string()))
 }
 
-/// Consumed-import removal SPANS over the ORIGINAL source — v1's
-/// line-based strip semantics (transform_emitter::strip_consumed_imports)
-/// mapped to the span model: a line is removed iff it single-line-parses
-/// as a named import, its source is consumed, and ALL its imported names
-/// were extracted.
+/// Removal spans over the original source: a line goes when it parses as a
+/// named import from a consumed source and all its names were extracted.
 pub fn consumed_import_removals(
     source: &str,
     consumed_sources: &[&str],
@@ -171,7 +147,7 @@ pub fn consumed_import_removals(
                         .iter()
                         .all(|b| extracted_bindings.contains(&b.as_str()))
                 {
-                    // Remove the line INCLUDING its newline when present.
+                    // Include the line's newline when it has one.
                     let end = if offset + line_len < source.len() {
                         offset + line_len + 1
                     } else {
@@ -186,12 +162,8 @@ pub fn consumed_import_removals(
     out
 }
 
-/// Directive + import prepend (v1 apply_replacements tail, span form),
-/// offset-0 quirk shed (inc 03): an EXISTING directive prologue —
-/// including leading comments/blank lines — is kept ABOVE the injected
-/// imports; `needs_use_client` injects one when absent. v1's
-/// single-blank-line strip after the prologue is retained.
-/// Returns (prepend_text, extra_removals).
+/// Prepend text plus the spans it replaces. An existing prologue, comments
+/// included, stays above the injected imports; one blank line after it is cut.
 pub fn directive_and_imports(
     source: &str,
     import_lines: &str,
@@ -202,10 +174,7 @@ pub fn directive_and_imports(
         Some(prologue) => {
             let end = prologue.end as usize;
             let mut consumed_end = end;
-            // Consume the line terminator ending the directive line.
             consumed_end += leading_line_terminator_len(&source[consumed_end..]);
-            // v1 quirk parity: strip ONE blank line following the directive
-            // (transform_emitter: `if result.starts_with('\n')` after removal).
             if source[consumed_end..].starts_with('\n') {
                 consumed_end += 1;
             }
@@ -260,8 +229,8 @@ mod tests {
         let src = "import { A, B } from './x';\nimport {\n  C,\n} from './y';\nimport { D, E } from './x';\nconst k = 1;\n";
         let removals =
             consumed_import_removals(src, &["./x", "./y"], &["A", "B", "D"]);
-        // Line 1: all extracted → removed. Multi-line ./y import: NOT
-        // stripped (quirk). Line with D,E: E not extracted → kept.
+        // Line 1: all extracted → removed. The multi-line ./y import is
+        // never stripped. The D,E line keeps E, so it stays.
         assert_eq!(removals.len(), 1);
         assert_eq!(removals[0].0, 0);
         let out = crate::emit::apply_plan(
@@ -297,10 +266,6 @@ mod tests {
             &crate::emit::EmissionPlan { prepend, removals, ..Default::default() },
         )
         .unwrap();
-        // Shed (inc 03): the whole prologue — comment included — stays
-        // above the injected imports (v1's offset-0 quirk put them above
-        // the directive; licensed register entry
-        // parity/use-client-comment.tsx).
         assert!(
             out.code
                 .starts_with("// note\n'use client';\nimport Z from 'z';\nconst x = 1;"),
@@ -321,8 +286,6 @@ mod tests {
 
     #[test]
     fn prologue_prefix_blank_line_then_directive() {
-        // Leading blank lines are trivia; the directive is still in
-        // prologue position and stays above the imports.
         let (prefix, rest) = directive_prefix_and_body_for(
             "\n\n'use client';\nconst x = 1;\n".to_string(),
             false,
@@ -333,8 +296,6 @@ mod tests {
 
     #[test]
     fn prologue_prefix_directive_then_blank_line_strips_one_blank() {
-        // v1 parity: exactly one blank line after the prologue is eaten
-        // (keeps use-client-blank-line.tsx byte-identical across engines).
         let (prefix, rest) = directive_prefix_and_body_for(
             "'use client';\n\nimport { ds } from './x';\n".to_string(),
             false,
@@ -355,8 +316,8 @@ mod tests {
 
     #[test]
     fn non_directive_string_is_not_a_prologue() {
-        // A string literal in expression (non-statement) position is not
-        // a directive; neither is one consumed by a member expression.
+        // A string literal in expression position is not a directive, nor
+        // is one consumed by a member expression.
         let (prefix, rest) =
             directive_prefix_and_body_for("const s = 'use client';\n".to_string(), false);
         assert_eq!(prefix, "");

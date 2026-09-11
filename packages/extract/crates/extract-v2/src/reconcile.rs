@@ -1,9 +1,5 @@
-//! Usage reconciliation — v1 `reconciler.rs` ported VERBATIM (row 07
-//! Task 07.6.i). Builds the usage ledger from scan results (union
-//! semantics; asClass/slot unconditional rendering is applied by the
-//! CALLER per v1 project_analyzer, mirrored in cross_file/engine) and
-//! prunes unused components/variants/states from ComponentCss.
-//! v1's test module carried verbatim as the contract.
+//! Usage ledger construction, and pruning of unused components, variants
+//! and states. Unconditional asClass/slot rendering is the caller's job.
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -13,26 +9,13 @@ use crate::jsx_scan::{UsageScanResult, VariantUsage};
 pub type VariantConfigMap =
     FxHashMap<String, FxHashMap<String, (FxHashSet<String>, Option<String>)>>;
 
-// ---------------------------------------------------------------------------
-// Usage Ledger
-// ---------------------------------------------------------------------------
-
-/// Aggregated usage data across all files
 #[derive(Debug, Clone, Default)]
 pub struct UsageLedger {
-    /// Component bindings that appear as JSX element tags
     pub rendered_components: FxHashSet<String>,
-    /// binding → variant_prop → Set<used_option_values>
     pub variant_usage: FxHashMap<String, FxHashMap<String, FxHashSet<String>>>,
-    /// binding → Set<used_state_names>
     pub state_usage: FxHashMap<String, FxHashSet<String>>,
 }
 
-/// Build a usage ledger from scan results across multiple files.
-///
-/// `all_results` - scan results from each file
-/// `variant_configs` - binding → variant_prop → (all_options, default_option)
-///   Used to resolve "__dynamic__" (expand to all options) and "__default__" (expand to default option)
 pub fn build_ledger(
     all_results: &[UsageScanResult],
     variant_configs: &VariantConfigMap,
@@ -40,12 +23,10 @@ pub fn build_ledger(
     let mut ledger = UsageLedger::default();
 
     for result in all_results {
-        // 1. Union rendered components
         for binding in &result.rendered_components {
             ledger.rendered_components.insert(binding.clone());
         }
 
-        // 2. Resolve variant usages
         for usage in &result.variant_usages {
             let VariantUsage {
                 component_binding,
@@ -62,7 +43,6 @@ pub fn build_ledger(
 
             match value.as_str() {
                 "__dynamic__" => {
-                    // Expand to all known options for this variant prop
                     if let Some(prop_config) = variant_configs
                         .get(component_binding)
                         .and_then(|vc| vc.get(variant_prop))
@@ -71,10 +51,8 @@ pub fn build_ledger(
                             used_set.insert(option.clone());
                         }
                     }
-                    // If no config exists, nothing to expand — dynamic with unknown options is a no-op here
                 }
                 "__default__" => {
-                    // Expand to the default option if one exists
                     if let Some(default) = variant_configs
                         .get(component_binding)
                         .and_then(|vc| vc.get(variant_prop))
@@ -89,7 +67,6 @@ pub fn build_ledger(
             }
         }
 
-        // 3. Union state usages
         for usage in &result.state_usages {
             ledger
                 .state_usage
@@ -99,10 +76,8 @@ pub fn build_ledger(
         }
     }
 
-    // Guard: remove empty variant entries created by __dynamic__/__default__ with no config.
-    // An empty FxHashSet means "we saw the variant but couldn't determine any used options."
-    // The reconciler treats Some(empty) as "nothing used → eliminate all" which is wrong.
-    // Removing the empty entry makes it None → conservative "keep all" behavior.
+    // An empty used-set would read as "nothing used, eliminate all"; dropping
+    // the entry makes it absent, which reconcile treats as "keep all".
     for prop_map in ledger.variant_usage.values_mut() {
         prop_map.retain(|_prop, used_set| !used_set.is_empty());
     }
@@ -113,11 +88,6 @@ pub fn build_ledger(
     ledger
 }
 
-// ---------------------------------------------------------------------------
-// CSS Reconciler
-// ---------------------------------------------------------------------------
-
-/// Report of what was eliminated during reconciliation
 #[derive(Debug, Clone, Default, serde::Serialize)]
 pub struct ReconciliationReport {
     pub components_total: usize,
@@ -129,8 +99,6 @@ pub struct ReconciliationReport {
     pub states_total: usize,
     pub states_used: usize,
     pub states_eliminated: usize,
-    /// Forced-emission counts (spec: static-emission-overrides) — entries
-    /// kept solely because a staticCss declaration forced them.
     pub components_forced: usize,
     pub variants_forced: usize,
     pub states_forced: usize,
@@ -140,22 +108,11 @@ pub struct ReconciliationReport {
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct EliminatedDetail {
     pub component: String,
-    pub kind: String,         // "component", "variant", "state"
-    pub name: Option<String>, // variant option or state name (None for whole component)
+    pub kind: String,
+    pub name: Option<String>,
     pub reason: String,
 }
 
-/// Reconcile component CSS list by removing unused variants, states, and whole components.
-///
-/// `components` - mutable list of (component_id, ComponentCss) to filter
-/// `ledger` - the usage ledger, keyed by COMPONENT ID
-/// `parent_components` - set of component IDs that are parents in the provenance graph
-///   (these are kept even if not rendered, because children inherit from them)
-///
-/// Every lookup keys on the component id; the bare binding is used only for
-/// the report's human-facing `component` field (v1's bytes).
-///
-/// Returns a reconciliation report.
 pub fn reconcile(
     components: &mut Vec<(String, ComponentCss)>,
     ledger: &UsageLedger,
@@ -166,7 +123,6 @@ pub fn reconcile(
         ..Default::default()
     };
 
-    // Pre-count variant and state totals
     for (_, css) in components.iter() {
         for variant in &css.variants {
             report.variants_total += variant.options.len();
@@ -174,8 +130,6 @@ pub fn reconcile(
         report.states_total += css.states.len();
     }
 
-    // --- Step 1: Component-level elimination ---
-    // Collect indices to remove (removing backwards to preserve indices)
     let mut to_remove: Vec<usize> = Vec::new();
 
     for (i, (component_id, css)) in components.iter().enumerate() {
@@ -189,7 +143,6 @@ pub fn reconcile(
                 name: None,
                 reason: "component not rendered and not a parent".to_string(),
             });
-            // Count variants and states being eliminated with the whole component
             for variant in &css.variants {
                 report.variants_eliminated += variant.options.len();
             }
@@ -197,7 +150,6 @@ pub fn reconcile(
         }
     }
 
-    // Remove from back to front to preserve indices
     for &i in to_remove.iter().rev() {
         components.remove(i);
     }
@@ -205,11 +157,9 @@ pub fn reconcile(
     report.components_eliminated = to_remove.len();
     report.components_extracted = components.len();
 
-    // --- Step 2: Variant option elimination and Step 3: State elimination ---
     for (component_id, css) in components.iter_mut() {
         let binding = extract_binding(component_id).to_string();
 
-        // Variant option filtering
         for variant in css.variants.iter_mut() {
             let used_options = ledger
                 .variant_usage
@@ -217,12 +167,9 @@ pub fn reconcile(
                 .and_then(|vu| vu.get(&variant.prop));
 
             match used_options {
-                None => {
-                    // No usage data for this variant prop — conservative: keep all
-                }
+                None => {}
                 Some(used_set) => {
                     let before_count = variant.options.len();
-                    // Retain only options whose name is in the used set
                     let mut eliminated_here: Vec<String> = Vec::new();
                     variant.options.retain(|(option_name, _)| {
                         let keep = used_set.contains(option_name);
@@ -250,12 +197,9 @@ pub fn reconcile(
             }
         }
 
-        // State filtering
         let used_states = ledger.state_usage.get(component_id.as_str());
         match used_states {
-            None => {
-                // No usage data for this binding's states — conservative: keep all
-            }
+            None => {}
             Some(used_set) => {
                 let before_count = css.states.len();
                 let mut eliminated_here: Vec<String> = Vec::new();
@@ -285,19 +229,12 @@ pub fn reconcile(
         }
     }
 
-    // --- Step 4: Calculate used counts ---
     report.variants_used = report.variants_total - report.variants_eliminated;
     report.states_used = report.states_total - report.states_eliminated;
 
     report
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/// Extract the binding name from a component_id of the form "file::binding" or
-/// "path/to/file.tsx::Binding". Returns the segment after the last "::".
 fn extract_binding(component_id: &str) -> &str {
     component_id
         .rfind("::")
@@ -305,18 +242,6 @@ fn extract_binding(component_id: &str) -> &str {
         .unwrap_or(component_id)
 }
 
-// ---------------------------------------------------------------------------
-// Prospective Elimination (dev-mode parity diagnostic)
-// ---------------------------------------------------------------------------
-
-/// Identify components that `reconcile` WOULD eliminate, without mutating the
-/// components list. Used in dev mode to surface JSX-scanner blind spots as
-/// authoring-time diagnostics — without this, scanner gaps only surface at
-/// production build time. See `css-reconciler` spec: dev/build parity.
-///
-/// Returned entries carry `kind: "prospective_component"` so consumers can
-/// distinguish prospective diagnostics from actual eliminations while iterating
-/// the single `eliminated_details` array.
 pub fn identify_prospective_eliminations(
     components: &[(String, ComponentCss)],
     ledger: &UsageLedger,
@@ -338,10 +263,6 @@ pub fn identify_prospective_eliminations(
     details
 }
 
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -350,15 +271,10 @@ mod tests {
     use crate::theme::ResolvedStyles;
     use rustc_hash::FxHashSet;
 
-    // ------------------------------------------------------------------
-    // Test helpers
-    // ------------------------------------------------------------------
-
     fn empty_styles() -> ResolvedStyles {
         ResolvedStyles::default()
     }
 
-    /// Build a simple ComponentCss with named variants and states.
     fn make_component(
         class_name: &str,
         variant_prop: &str,
@@ -408,9 +324,6 @@ mod tests {
         ledger
     }
 
-    // ------------------------------------------------------------------
-    // eliminates_unused_variant_option
-    // ------------------------------------------------------------------
     #[test]
     fn eliminates_unused_variant_option() {
         let mut components = vec![(
@@ -439,9 +352,6 @@ mod tests {
         assert_eq!(report.variants_used, 1);
     }
 
-    // ------------------------------------------------------------------
-    // keeps_all_options_when_all_used
-    // ------------------------------------------------------------------
     #[test]
     fn keeps_all_options_when_all_used() {
         let mut components = vec![(
@@ -459,9 +369,6 @@ mod tests {
         assert_eq!(report.variants_used, 2);
     }
 
-    // ------------------------------------------------------------------
-    // eliminates_unused_state
-    // ------------------------------------------------------------------
     #[test]
     fn eliminates_unused_state() {
         let mut components = vec![(
@@ -491,16 +398,12 @@ mod tests {
         assert_eq!(report.states_used, 1);
     }
 
-    // ------------------------------------------------------------------
-    // eliminates_entire_unused_component
-    // ------------------------------------------------------------------
     #[test]
     fn eliminates_entire_unused_component() {
         let mut components = vec![(
             "src/Ghost.tsx::Ghost".to_string(),
             make_component("animus-Ghost-nnn", "variant", &["fill"], &["loading"]),
         )];
-        // Ledger has no rendered components, no parents
         let ledger = UsageLedger::default();
         let parents: FxHashSet<String> = FxHashSet::default();
 
@@ -511,16 +414,13 @@ mod tests {
         assert_eq!(report.components_extracted, 0);
     }
 
-    // ------------------------------------------------------------------
-    // keeps_parent_component_even_if_not_rendered
-    // ------------------------------------------------------------------
     #[test]
     fn keeps_parent_component_even_if_not_rendered() {
         let mut components = vec![(
             "src/Base.tsx::Base".to_string(),
             make_component("animus-Base-ppp", "variant", &["fill"], &[]),
         )];
-        let ledger = UsageLedger::default(); // Base is NOT in rendered_components
+        let ledger = UsageLedger::default();
         let mut parents: FxHashSet<String> = FxHashSet::default();
         parents.insert("src/Base.tsx::Base".to_string());
 
@@ -533,12 +433,8 @@ mod tests {
         );
     }
 
-    // ------------------------------------------------------------------
-    // default_variant_kept_via_ledger
-    // ------------------------------------------------------------------
     #[test]
     fn default_variant_kept_via_ledger() {
-        // Build a scan result with __default__ usage → build_ledger resolves to "fill"
         let mut variant_configs = VariantConfigMap::default();
         let options: FxHashSet<String> = ["fill", "stroke"].iter().map(|s| s.to_string()).collect();
         variant_configs
@@ -566,7 +462,6 @@ mod tests {
 
         let ledger = build_ledger(&[scan_result], &variant_configs);
 
-        // "fill" (the default) should be in the used set
         let used = &ledger.variant_usage["src/Button.tsx::Button"]["variant"];
         assert!(
             used.contains("fill"),
@@ -574,7 +469,6 @@ mod tests {
         );
         assert!(!used.contains("stroke"), "stroke was not used");
 
-        // Now reconcile: only fill kept
         let mut components = vec![(
             "src/Button.tsx::Button".to_string(),
             make_component("animus-Button-abc", "variant", &["fill", "stroke"], &[]),
@@ -591,12 +485,8 @@ mod tests {
         assert!(!remaining.contains(&"stroke"));
     }
 
-    // ------------------------------------------------------------------
-    // dynamic_variant_keeps_all_options
-    // ------------------------------------------------------------------
     #[test]
     fn dynamic_variant_keeps_all_options() {
-        // __dynamic__ expands to all options in the config
         let mut variant_configs = VariantConfigMap::default();
         let options: FxHashSet<String> = ["fill", "stroke"].iter().map(|s| s.to_string()).collect();
         variant_configs
@@ -628,7 +518,6 @@ mod tests {
         assert!(used.contains("fill"));
         assert!(used.contains("stroke"));
 
-        // Reconcile — both options kept since both are in used set
         let mut components = vec![(
             "src/Button.tsx::Button".to_string(),
             make_component("animus-Button-abc", "variant", &["fill", "stroke"], &[]),
@@ -640,13 +529,8 @@ mod tests {
         assert_eq!(report.variants_eliminated, 0);
     }
 
-    // ------------------------------------------------------------------
-    // report_counts_correct
-    // ------------------------------------------------------------------
     #[test]
     fn report_counts_correct() {
-        // 2 components: Button (2 variants fill/stroke, no states) and Layout (no variants, 2 states loading/sidebar)
-        // Ledger: Button rendered, only stroke used. Layout rendered, only sidebar used.
         let mut components = vec![
             (
                 "src/Button.tsx::Button".to_string(),
@@ -684,21 +568,16 @@ mod tests {
         assert_eq!(report.components_total, 2);
         assert_eq!(report.components_extracted, 2);
         assert_eq!(report.components_eliminated, 0);
-        assert_eq!(report.variants_total, 2); // fill + stroke
-        assert_eq!(report.variants_used, 1); // stroke
-        assert_eq!(report.variants_eliminated, 1); // fill
-        assert_eq!(report.states_total, 2); // loading + sidebar
-        assert_eq!(report.states_used, 1); // sidebar
-        assert_eq!(report.states_eliminated, 1); // loading
+        assert_eq!(report.variants_total, 2);
+        assert_eq!(report.variants_used, 1);
+        assert_eq!(report.variants_eliminated, 1);
+        assert_eq!(report.states_total, 2);
+        assert_eq!(report.states_used, 1);
+        assert_eq!(report.states_eliminated, 1);
     }
 
-    // ------------------------------------------------------------------
-    // conservative_when_no_usage_data
-    // ------------------------------------------------------------------
     #[test]
     fn conservative_when_no_usage_data() {
-        // Component is in rendered_components but has NO variant or state usage entries.
-        // All variants and states should be kept (conservative).
         let mut components = vec![(
             "src/Button.tsx::Button".to_string(),
             make_component(
@@ -712,7 +591,6 @@ mod tests {
         ledger
             .rendered_components
             .insert("src/Button.tsx::Button".to_string());
-        // No variant_usage or state_usage entries for Button
 
         let parents: FxHashSet<String> = FxHashSet::default();
         let report = reconcile(&mut components, &ledger, &parents);
@@ -726,10 +604,6 @@ mod tests {
         assert_eq!(report.variants_eliminated, 0);
         assert_eq!(report.states_eliminated, 0);
     }
-
-    // ------------------------------------------------------------------
-    // identify_prospective_eliminations
-    // ------------------------------------------------------------------
 
     #[test]
     fn prospective_elimination_flags_unrendered_non_parent() {
@@ -789,7 +663,7 @@ mod tests {
             "src/Base.tsx::Base".to_string(),
             make_component("animus-Base-ppp", "variant", &["fill"], &[]),
         )];
-        let ledger = UsageLedger::default(); // Base not rendered
+        let ledger = UsageLedger::default();
         let mut parents: FxHashSet<String> = FxHashSet::default();
         parents.insert("src/Base.tsx::Base".to_string());
 
@@ -820,7 +694,6 @@ mod tests {
         assert_eq!(actual_report.eliminated_details.len(), 1);
         assert_eq!(prospective_details[0].kind, "prospective_component");
         assert_eq!(actual_report.eliminated_details[0].kind, "component");
-        // Same component, different discriminators — consumer can filter cleanly.
         assert_eq!(
             prospective_details[0].component,
             actual_report.eliminated_details[0].component

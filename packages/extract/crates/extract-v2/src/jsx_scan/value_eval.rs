@@ -1,8 +1,5 @@
-//! Static JSX attribute-value evaluation.
-//!
-//! Split out of `jsx_scan.rs` unchanged. The leaf of this module's layering:
-//! turns a JSX attribute into a static JSON value, a classified dynamic
-//! expression, or a skip. Knows nothing about components, usage, or compose.
+//! Static JSX attribute-value evaluation: an attribute becomes a static
+//! JSON value, a classified dynamic expression, or a skip.
 
 use oxc::ast::ast::{
     Expression, JSXAttributeValue, JSXExpression, ObjectPropertyKind, PropertyKey, PropertyKind,
@@ -12,11 +9,9 @@ use serde_json::{Map, Value};
 
 use super::{DynamicExpressionKind, PropValueResult, UsageSpan};
 
-/// Evaluate a JSX attribute value to a static JSON `Value`.
-/// Returns `None` for non-static or unsupported forms — this is a silent skip, not an error.
 pub(crate) fn eval_jsx_attribute_value(value: &Option<JSXAttributeValue>) -> PropValueResult {
     match value {
-        // Bare boolean attribute, e.g. `<Box disabled />` — treat as `true`.
+        // A valueless attribute (`<Box disabled />`) is `true`.
         None => PropValueResult::Static(Value::Bool(true)),
 
         Some(JSXAttributeValue::StringLiteral(lit)) => {
@@ -26,7 +21,7 @@ pub(crate) fn eval_jsx_attribute_value(value: &Option<JSXAttributeValue>) -> Pro
         Some(JSXAttributeValue::ExpressionContainer(container)) => {
             match &container.expression {
                 JSXExpression::EmptyExpression(_) => PropValueResult::Skip,
-                // JSXExpression @inherits Expression — match directly on static literal variants.
+                // JSXExpression inherits Expression; match static literals directly.
                 JSXExpression::StringLiteral(lit) => {
                     PropValueResult::Static(Value::String(lit.value.to_string()))
                 }
@@ -65,13 +60,10 @@ pub(crate) fn eval_jsx_attribute_value(value: &Option<JSXAttributeValue>) -> Pro
                         None => PropValueResult::Skip,
                     }
                 }
-                // All dynamic / non-static forms — identifier, call expression,
-                // conditional, member expression, template literal with expressions, etc.
                 _ => dynamic_expression(container.expression.to_expression()),
             }
         }
 
-        // Element or fragment as attribute value — not a system prop value.
         Some(JSXAttributeValue::Element(_)) | Some(JSXAttributeValue::Fragment(_)) => {
             PropValueResult::Skip
         }
@@ -107,12 +99,6 @@ fn dynamic_expression(expr: &Expression<'_>) -> PropValueResult {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Static expression evaluation helpers
-// ---------------------------------------------------------------------------
-
-/// Evaluate an `Expression` to a static JSON `Value`.
-/// Only handles the static subset defined in the spec.
 fn eval_static_expression(expr: &Expression) -> Option<Value> {
     match expr {
         Expression::StringLiteral(lit) => Some(Value::String(lit.value.to_string())),
@@ -142,8 +128,6 @@ fn eval_static_expression(expr: &Expression) -> Option<Value> {
     }
 }
 
-/// Evaluate an `ObjectExpression` whose keys and values are all statically known.
-/// Returns `None` if any property is non-static (computed key, spread, dynamic value).
 fn eval_static_object(obj: &oxc::ast::ast::ObjectExpression) -> Option<Value> {
     let mut map = Map::new();
 
@@ -164,7 +148,6 @@ fn eval_static_object(obj: &oxc::ast::ast::ObjectExpression) -> Option<Value> {
     Some(Value::Object(map))
 }
 
-/// Evaluate a property key to a `String`.
 pub(super) fn eval_property_key(key: &PropertyKey) -> Option<String> {
     match key {
         PropertyKey::StaticIdentifier(id) => Some(id.name.to_string()),
@@ -174,7 +157,6 @@ pub(super) fn eval_property_key(key: &PropertyKey) -> Option<String> {
     }
 }
 
-/// Convert an `f64` to a `serde_json::Value::Number`, preserving integer form where possible.
 fn make_json_number(v: f64) -> Value {
     if v.fract() == 0.0 && v.abs() < (i64::MAX as f64) {
         Value::Number(serde_json::Number::from(v as i64))

@@ -1,5 +1,3 @@
-//! DynamicPropMeta — v1 project_analyzer's shape, mirrored for the CSS
-//! port (row 07). Sorted serialization per the row-09 determinism class.
 use std::collections::BTreeMap;
 
 use serde::Serialize;
@@ -14,6 +12,6 @@ pub struct DynamicPropMeta {
     pub properties: Vec<String>,
     pub transform_name: Option<String>,
     pub transform_fn_source: Option<String>,
-    /// BTreeMap: deterministic key order by construction.
+    /// BTreeMap: serialization order must be deterministic.
     pub scale_values: BTreeMap<String, String>,
 }

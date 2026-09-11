@@ -1,11 +1,5 @@
-//! Terminal-argument resolution and v1-parity argument spans.
-//!
-//! Split out of `chain_walk.rs` unchanged. Owns what a terminal call's
-//! arguments resolve to, plus the `get_arg_span!` macro encoding v1's exact
-//! variant list. The macro stays here with both of its callers: `macro_rules!`
-//! is textually scoped from its definition point, so separating it from
-//! `second_arg_span_fn`/`first_arg_span` would need a `#[macro_use]` dance for
-//! no benefit.
+//! Terminal-argument resolution and argument spans. `get_arg_span!` sits
+//! above its callers: `macro_rules!` is textually scoped from its definition.
 
 use oxc::ast::ast::{Argument, CallExpression, Expression};
 use oxc::span::Span;
@@ -13,10 +7,8 @@ use oxc::span::Span;
 use super::expr::{static_member_path, unwrap_type_assertions};
 use super::TerminalKind;
 
-/// What the terminal argument resolved to: a static name the emitter may
-/// compile into the replacement, or a bail. Emitting a placeholder for an
-/// unresolvable target is never an option — `createComponent(unknown, …)`
-/// is a ReferenceError in the browser.
+/// The terminal argument: a static name, or a bail. A placeholder is not an
+/// option — `createComponent(unknown, …)` is a runtime ReferenceError.
 pub(super) enum TerminalArg {
     Resolved(String),
     Unresolvable(String),
@@ -26,7 +18,6 @@ pub(super) fn extract_terminal_arg(call: &CallExpression<'_>, terminal: &Termina
     match terminal {
         TerminalKind::AsClass => TerminalArg::Resolved(String::new()),
         TerminalKind::AsElement => {
-            // v1 parity: a missing or non-literal tag keeps the empty tag.
             match call
                 .arguments
                 .first()
@@ -56,13 +47,8 @@ pub(super) fn extract_terminal_arg(call: &CallExpression<'_>, terminal: &Termina
     }
 }
 
-/// v1-parity argument span, plus one intentional departure from v1 parity
-/// (semantic-const-resolution): erased TS
-/// wrappers (`as`/`satisfies`/`!`/parens) peel to their operand's span so
-/// `.styles(x as const)` resolves like `.styles(x)` instead of falling back
-/// to the whole call span (which reads as "failed to parse object
-/// expression" and drops the chain). Other kinds outside the v1 list (e.g.
-/// arrow functions) still fall back to the whole call span.
+/// Argument span. Erased TS wrappers peel to their operand's span, so
+/// `.styles(x as const)` resolves like `.styles(x)` instead of bailing.
 macro_rules! get_arg_span {
     ($arg:expr, $fallback:expr) => {
         match $arg {
@@ -87,9 +73,6 @@ macro_rules! get_arg_span {
     };
 }
 
-/// Span of the fully-unwrapped operand when it is a kind the v1 span list
-/// accepts; the fallback otherwise (an arrow function stays fallback even
-/// when wrapped).
 fn unwrapped_span(expr: &Expression<'_>, fallback: Span) -> Span {
     match unwrap_type_assertions(expr) {
         Expression::BooleanLiteral(x) => x.span,

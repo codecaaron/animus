@@ -1,18 +1,5 @@
-//! Self-containment validation for `createTransform` callbacks.
-//!
-//! Split out of `transforms.rs` unchanged. A transform callback must be a
-//! closed term: every runtime identifier it mentions has to resolve to a
-//! binding declared *inside* the callback, or to a well-known global. This
-//! module owns that check — the free-variable walk, the allowlist, and the
-//! diagnostics it emits.
-//!
-//! The seam is one-directional: extraction calls `validate_self_contained`,
-//! and nothing here calls back into extraction.
-//!
-//! Note the deliberate gaps in the walk (nested arrows are not descended
-//! into; `UpdateExpression` targets are skipped). Those are v1 behaviour
-//! carried verbatim, not oversights — widening them would reject callbacks
-//! v1 accepted.
+//! Self-containment validation for `createTransform` callbacks: every
+//! runtime identifier must resolve inside the callback or to a global.
 
 use rustc_hash::FxHashSet;
 
@@ -22,7 +9,6 @@ use oxc::ast::ast::{
 use oxc::semantic::Scoping;
 use oxc::span::Span;
 
-/// Well-known JavaScript globals that are allowed in self-contained callbacks.
 const ALLOWED_GLOBALS: &[&str] = &[
     "String",
     "Number",
@@ -47,9 +33,7 @@ const ALLOWED_GLOBALS: &[&str] = &[
     "globalThis",
 ];
 
-/// Validate that a callback has no external references.
-/// Walks runtime expressions in the callback and uses OXC's symbol resolution
-/// to distinguish callback-local bindings from outer or unresolved names.
+/// True when the callback references nothing declared outside itself.
 pub(super) fn validate_self_contained(
     arg: &Argument<'_>,
     transform_name: &str,
@@ -105,7 +89,6 @@ impl ReferenceValidation<'_> {
     }
 }
 
-/// Collect invalid runtime identifier references from function body statements.
 fn collect_invalid_references_from_body(
     stmts: &[Statement<'_>],
     callback_span: Span,
@@ -252,8 +235,8 @@ fn collect_references_from_expr(
             }
         }
         Expression::ArrowFunctionExpression(_) => {
-            // Nested arrow functions — skip deep validation.
-            // The top-level free-variable check is sufficient for the self-contained constraint.
+            // Nested arrows are not descended into; the top-level check
+            // is what the self-contained constraint rests on.
         }
         Expression::ParenthesizedExpression(paren) => {
             collect_references_from_expr(&paren.expression, validation);
@@ -264,10 +247,9 @@ fn collect_references_from_expr(
             }
         }
         Expression::UpdateExpression(_) => {
-            // UpdateExpression operand is a SimpleAssignmentTarget, not Expression.
-            // For i++/i-- the target is already a local variable — skip.
+            // The operand is a SimpleAssignmentTarget, not an Expression;
+            // an `i++` target is already a local binding.
         }
-        // TS type expression wrappers — collect from the inner expression
         Expression::TSAsExpression(ts_as) => {
             collect_references_from_expr(&ts_as.expression, validation);
         }
@@ -281,7 +263,6 @@ fn collect_references_from_expr(
     }
 }
 
-/// Emit one diagnostic for each invalid runtime identifier reference.
 fn report_invalid_references(
     invalid_names: &FxHashSet<String>,
     transform_name: &str,

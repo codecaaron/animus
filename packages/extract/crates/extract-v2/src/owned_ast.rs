@@ -1,11 +1,5 @@
-//! THE ownership module: self-referential bundling of an arena + source with
-//! the `Program` that borrows from them, making a parsed file an ordinary
-//! owned, movable value. This is the ONLY module allowed to contain
-//! `self_cell!` (arch-extract-v2-spine §Construction and ownership
-//! containment).
-//!
-//! Pattern provenance: rolldown `EcmaAst`/`ProgramCell`, oxc type checker
-//! `SourceFile`, oxc linter `ModuleContent` (brainstorm citations).
+//! Bundles the arena and source with the `Program` that borrows from them.
+//! The only module that may use `self_cell!` or call `Parser::new`.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -15,10 +9,8 @@ use oxc::parser::Parser;
 use oxc::span::SourceType;
 use self_cell::self_cell;
 
-/// Per-BUILD parser-invocation counter (NS1 budget): passed into every
-/// parse so concurrent NAPI calls cannot race each other's counts —
-/// a process-global here was rejected at the inc-04 review (F3).
-/// `Parser::new` containment (this module only) is the structural leg.
+/// Per-build parser-invocation counter: passed into every parse so
+/// concurrent NAPI calls cannot race each other's counts.
 pub type ParseCounter = AtomicUsize;
 
 /// Backing storage the AST borrows from: the arena and the owned source.
@@ -40,33 +32,21 @@ self_cell!(
 );
 
 // SAFETY: the cell owns the arena and source together with the `Program`
-// that borrows from them; no outside borrows exist. Moving the cell moves
-// the arena with its dependents, so references stay valid across threads.
-// The arena is only mutated during construction (single-threaded, inside
-// `new`); afterwards access is read-only. Mirrors rolldown's
-// `unsafe impl Send for EcmaAst` invariant.
+// borrowing from them; the arena is mutated only during construction.
 unsafe impl Send for AstCell {}
 
-/// A parsed source file as an owned value: parse ONCE at construction,
-/// read the `Program` for the rest of the build.
+/// A parsed source file as an owned value: parsed once at construction.
 pub struct OwnedAst {
     cell: AstCell,
     pub path: String,
     pub source_type: SourceType,
-    /// Rendered parser diagnostics (owned; the arena-bound originals do not
-    /// escape).
+    /// Rendered parser diagnostics; the arena-bound originals never escape.
     pub diagnostics: Vec<String>,
     pub panicked: bool,
 }
 
-/// Source-type selection replicating v1 `chain_walker::walk_chains`
-/// (bug-compatibility: `.mjs` fallback for unknown extensions), with one
-/// deliberate departure: `.js` parses JSX-ENABLED. The ecosystem treats
-/// JSX-in-`.js` as ordinary source (Babel/SWC React presets, esbuild
-/// `loader: jsx` — the CRA / legacy-React / Next `pages/*.js` idiom), and
-/// parsing it as plain modules produced recovered diagnostics with partial
-/// facts. JSX grammar activates only at expression start, so plain-JS
-/// comparisons (`a < b`) are unaffected.
+/// `.js` parses JSX-enabled: the ecosystem treats JSX in `.js` as ordinary
+/// source, and plain-module parsing yields recovered diagnostics.
 pub fn source_type_for(path: &str) -> SourceType {
     if path.ends_with(".tsx") {
         SourceType::tsx()
@@ -135,8 +115,6 @@ mod tests {
 
     #[test]
     fn js_parses_jsx_enabled_without_diagnostics() {
-        // The CRA / legacy-React / Next `pages/*.js` idiom: JSX in a plain
-        // `.js` file is ordinary source, not a recovered parse error.
         let counter = ParseCounter::new(0);
         let ast = OwnedAst::parse(
             "app.js".into(),
@@ -146,8 +124,8 @@ mod tests {
         assert!(ast.diagnostics.is_empty(), "{:?}", ast.diagnostics);
         assert!(!ast.panicked);
 
-        // Plain-JS comparison chains stay untouched by the JSX grammar
-        // (it activates only at expression start).
+        // JSX grammar activates only at expression start, so plain-JS
+        // comparison chains still parse.
         let plain = OwnedAst::parse(
             "math.js".into(),
             "export const cmp = (a, b, c) => a < b > c;".into(),

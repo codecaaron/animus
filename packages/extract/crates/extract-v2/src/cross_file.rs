@@ -1,21 +1,5 @@
-//! Cross-file fact algebra (row 06 Task 06.2) — the phase that consumes
-//! per-file FACTS and produces project-level facts, with NO AST access
-//! anywhere (the D4 outcome made this a pure data phase).
-//!
-//! Bug-compatibility contract (design.md D3), mirrored from v1
-//! project_analyzer Phase 5b semantics as adjudicated at inc 11:
-//!  - global component names = extractable chain bindings (all files);
-//!  - member-expression bindings = compose families' `family.slot` keys;
-//!  - per-file ALIAS AUGMENTATION: a named import whose IMPORTED name
-//!    matches a known component NAME adds its LOCAL name for that file —
-//!    no re-export following (v1 witnessed);
-//!  - rendered components: asClass chains and ALL compose slot bindings
-//!    unconditionally (v1 comment, project_analyzer ~1514-1530), plus
-//!    JSX tags / createElement matches per file (ledger records the name
-//!    AS WRITTEN — the local alias);
-//!  - variant/state configs per binding derive from variant/states stage
-//!    facts (config-independent); system-prop maps need prop config and
-//!    ride with row 07's config inputs.
+//! Cross-file fact algebra: per-file facts in, project-level facts out,
+//! with no AST access anywhere.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -34,11 +18,11 @@ pub struct CrossFileFacts {
     pub class_resolvers: BTreeSet<String>,
     /// `Family.Slot` dotted key → slot binding name.
     pub member_bindings: BTreeMap<String, String>,
-    /// v1-ledger-compatible rendered set (names as written at use sites).
+    /// Rendered components, named as written at the use site (local alias).
     pub rendered_components: BTreeSet<String>,
-    /// binding → variant prop → option names (from variant stage facts).
+    /// binding → variant prop → option names.
     pub variant_options: BTreeMap<String, BTreeMap<String, BTreeSet<String>>>,
-    /// binding → state names (from states stage facts).
+    /// binding → state names.
     pub state_names: BTreeMap<String, BTreeSet<String>>,
 }
 
@@ -139,8 +123,7 @@ fn collect_rendered_components(
     metadata: &ComponentMetadata,
 ) -> BTreeSet<String> {
     let mut rendered_components = metadata.class_resolvers.clone();
-    // v1: asClass chains and ALL compose slot bindings are unconditionally
-    // rendered.
+    // asClass chains and every compose slot binding render unconditionally.
     rendered_components.extend(metadata.member_bindings.values().cloned());
 
     for file in files.values() {

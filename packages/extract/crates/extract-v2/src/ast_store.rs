@@ -1,6 +1,5 @@
-//! Index-keyed owned-AST store: every source file parsed exactly once,
-//! in parallel, then read for the rest of the build. Dropped by value after
-//! the last reader (rolldown `IndexEcmaAst` pattern).
+//! Owned-AST store: every source file is parsed exactly once, in parallel,
+//! then read for the rest of the build.
 
 use rayon::prelude::*;
 
@@ -13,17 +12,13 @@ pub struct FileEntry {
 
 pub struct AstStore {
     asts: Vec<OwnedAst>,
-    /// Parses performed by THIS store build — counted by the parser
-    /// invocations themselves (threaded counter), not derived from input
-    /// length, so an accidental extra parse anywhere in the build closure
-    /// is caught (inc-04 review F3).
+    /// Parses performed by this build, counted at the parser rather than
+    /// derived from input length, so an accidental extra parse shows up.
     parse_count: usize,
 }
 
 impl AstStore {
-    /// Parallel parse fan-out — one arena per task. DEF-4 resolved (inc 11):
-    /// per-task `Allocator::default()` is adequate at measured scale;
-    /// a pool is unjustified absent pressure.
+    /// Parallel parse fan-out: one arena per task.
     pub fn build(entries: Vec<FileEntry>) -> Self {
         let counter = ParseCounter::new(0);
         let asts: Vec<OwnedAst> = entries
@@ -70,7 +65,7 @@ mod tests {
         let store = AstStore::build(entries);
         assert_eq!(store.len(), 8);
         assert_eq!(store.parse_count(), 8);
-        // Reading every program re-parses nothing (count is fixed at build).
+        // Reading every program re-parses nothing.
         let total: usize = store.iter().map(|a| a.program().body.len()).sum();
         assert_eq!(total, 8);
         assert_eq!(store.parse_count(), 8);

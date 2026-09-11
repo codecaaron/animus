@@ -1,7 +1,5 @@
-//! Extension-chain topology + config merging — v1 `chain_merger.rs`
-//! ported VERBATIM (row 07 Task 07.6.ii). Provides topological_sort over
-//! the extension-provenance graph and parent→child ComponentCss merging.
-//! v1's test module carried verbatim as the contract.
+//! Extension-chain topology: topological sort over the extension-provenance
+//! graph, and parent→child config merging.
 
 #[cfg(test)]
 use serde_json::{Map, Value};
@@ -9,33 +7,26 @@ use std::collections::VecDeque;
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
-/// Deep merge two JSON values with lodash `merge()` semantics.
-///
-/// - Both objects: merged key-by-key, recursing into shared keys
-/// - Any other combination: child replaces parent entirely
+/// Deep merge with lodash `merge()` semantics: objects merge key-by-key,
+/// any other combination replaces the parent wholesale.
 #[cfg(test)]
 pub fn deep_merge(parent: &Value, child: &Value) -> Value {
     match (parent, child) {
-        // Both objects: merge key-by-key
         (Value::Object(parent_map), Value::Object(child_map)) => {
             let mut merged = parent_map.clone();
             for (key, child_val) in child_map {
                 if let Some(parent_val) = parent_map.get(key) {
-                    // Key exists in both: recurse
                     merged.insert(key.clone(), deep_merge(parent_val, child_val));
                 } else {
-                    // Key only in child: add
                     merged.insert(key.clone(), child_val.clone());
                 }
             }
             Value::Object(merged)
         }
-        // Any other case: child replaces parent
         (_, child) => child.clone(),
     }
 }
 
-/// A node in the provenance graph describing a component's extension relationship.
 #[derive(Debug, Clone)]
 pub struct ProvenanceNode {
     /// Component identifier in "file::binding" format.
@@ -44,7 +35,6 @@ pub struct ProvenanceNode {
     pub parent_id: Option<String>,
 }
 
-/// Result of a topological sort over the provenance graph.
 #[derive(Debug)]
 pub enum TopoResult {
     /// Valid ordering: parents appear before their children.
@@ -53,49 +43,39 @@ pub enum TopoResult {
     Cycle(Vec<String>),
 }
 
-/// Topologically sort components by their extension provenance using Kahn's algorithm.
-///
-/// Components with no parent come first, followed by their children in dependency order.
-/// Returns `TopoResult::Cycle` if any circular extension chain is detected.
+/// Topologically sort components by extension provenance (Kahn's algorithm);
+/// returns `Cycle` when an extension chain is circular.
 pub fn topological_sort(nodes: &[ProvenanceNode]) -> TopoResult {
-    // Build a set of all known IDs so we can handle parent references to nodes
-    // not present in the slice gracefully (treat as external roots).
     let known_ids: FxHashSet<&str> = nodes.iter().map(|n| n.component_id.as_str()).collect();
 
-    // in_degree: how many incoming edges (parents) each node has within the known set
     let mut in_degree: FxHashMap<&str, usize> = FxHashMap::default();
-    // children: parent_id → list of child IDs
     let mut children: FxHashMap<&str, Vec<&str>> = FxHashMap::default();
 
-    // Initialise every node with in_degree 0
     for node in nodes {
         in_degree.entry(node.component_id.as_str()).or_insert(0);
     }
 
-    // Build edges only between nodes that are both present in the slice
     for node in nodes {
         if let Some(parent_id) = &node.parent_id {
             if known_ids.contains(parent_id.as_str()) {
-                // Parent is present: add a real edge
                 *in_degree.entry(node.component_id.as_str()).or_insert(0) += 1;
                 children
                     .entry(parent_id.as_str())
                     .or_default()
                     .push(node.component_id.as_str());
             }
-            // If parent is NOT in the slice it is an external root; treat this node as a
-            // root itself (in_degree stays 0).
+            // A parent outside the slice is an external root, so this node
+            // stays a root itself (in_degree 0).
         }
     }
 
-    // Seed the queue with all nodes that have no in-slice parent
     let mut queue: VecDeque<&str> = in_degree
         .iter()
         .filter(|(_, &deg)| deg == 0)
         .map(|(&id, _)| id)
         .collect();
 
-    // Sort the initial queue for deterministic output
+    // Sorted for deterministic output.
     let mut queue_vec: Vec<&str> = queue.drain(..).collect();
     queue_vec.sort_unstable();
     queue.extend(queue_vec);
@@ -106,7 +86,7 @@ pub fn topological_sort(nodes: &[ProvenanceNode]) -> TopoResult {
         sorted.push(id.to_string());
 
         if let Some(child_list) = children.get(id) {
-            // Sort children for deterministic output
+            // Sorted for deterministic output.
             let mut sorted_children = child_list.clone();
             sorted_children.sort_unstable();
 
@@ -120,7 +100,6 @@ pub fn topological_sort(nodes: &[ProvenanceNode]) -> TopoResult {
         }
     }
 
-    // If sorted length < total nodes, a cycle exists
     if sorted.len() < nodes.len() {
         let sorted_set: FxHashSet<&str> = sorted.iter().map(|s| s.as_str()).collect();
         let cycle_nodes: Vec<String> = nodes
@@ -134,15 +113,8 @@ pub fn topological_sort(nodes: &[ProvenanceNode]) -> TopoResult {
     TopoResult::Sorted(sorted)
 }
 
-/// Merge an extension chain: given the evaluated configs of a parent and child component,
-/// produce the merged config.
-///
-/// Each config maps field names to `serde_json::Value`. Known fields are:
-/// `"baseStyles"`, `"variants"`, `"statesConfig"`, `"activeGroups"`, `"custom"`.
-///
-/// Fields present only in the parent are preserved. Fields present in the child are
-/// deep-merged with the parent's corresponding value (defaulting to an empty object
-/// when the parent lacks that field).
+/// Merge a parent and child component config field by field: parent-only
+/// fields survive, shared fields deep-merge with the child winning.
 #[cfg(test)]
 pub fn merge_chain_configs(
     parent_config: &FxHashMap<String, Value>,
@@ -151,7 +123,6 @@ pub fn merge_chain_configs(
     let empty_obj = Value::Object(Map::new());
     let mut merged: FxHashMap<String, Value> = FxHashMap::default();
 
-    // Collect all field names from both configs
     let all_keys: FxHashSet<&String> = parent_config.keys().chain(child_config.keys()).collect();
 
     for key in all_keys {
@@ -173,10 +144,6 @@ pub fn merge_chain_configs(
 mod tests {
     use super::*;
     use serde_json::json;
-
-    // -------------------------------------------------------------------------
-    // deep_merge tests
-    // -------------------------------------------------------------------------
 
     #[test]
     fn merge_flat_objects() {
@@ -250,10 +217,6 @@ mod tests {
         assert_eq!(result, json!({ "a": 1 }));
     }
 
-    // -------------------------------------------------------------------------
-    // topological_sort tests
-    // -------------------------------------------------------------------------
-
     fn node(id: &str, parent: Option<&str>) -> ProvenanceNode {
         ProvenanceNode {
             component_id: id.to_string(),
@@ -278,7 +241,6 @@ mod tests {
 
     #[test]
     fn sorts_forest() {
-        // Two independent chains: A→B and C→D
         let nodes = vec![
             node("A", None),
             node("B", Some("A")),
@@ -301,7 +263,6 @@ mod tests {
 
     #[test]
     fn detects_cycle() {
-        // A extends B, B extends A
         let nodes = vec![node("A", Some("B")), node("B", Some("A"))];
         match topological_sort(&nodes) {
             TopoResult::Cycle(cycle) => {
@@ -335,10 +296,6 @@ mod tests {
         }
     }
 
-    // -------------------------------------------------------------------------
-    // merge_chain_configs tests
-    // -------------------------------------------------------------------------
-
     fn make_config(entries: &[(&str, Value)]) -> FxHashMap<String, Value> {
         entries
             .iter()
@@ -368,7 +325,6 @@ mod tests {
             json!({ "color": { "blue": { "color": "blue" } } }),
         )]);
         let result = merge_chain_configs(&parent, &child);
-        // Both variant keys should be present
         assert!(result["variants"]["size"].is_object());
         assert!(result["variants"]["color"].is_object());
     }
@@ -398,7 +354,6 @@ mod tests {
 
     #[test]
     fn child_only_field() {
-        // Parent has no statesConfig; child adds it
         let parent = make_config(&[("baseStyles", json!({ "display": "flex" }))]);
         let child = make_config(&[(
             "statesConfig",
@@ -407,20 +362,17 @@ mod tests {
         let result = merge_chain_configs(&parent, &child);
         assert!(result.contains_key("statesConfig"));
         assert_eq!(result["statesConfig"]["loading"]["opacity"], json!(0));
-        // Parent field still present
         assert!(result.contains_key("baseStyles"));
     }
 
     #[test]
     fn parent_only_field_preserved() {
-        // Parent has custom props; child doesn't declare them
         let parent = make_config(&[
             ("baseStyles", json!({ "padding": "4px" })),
             ("custom", json!({ "size": { "property": "flexBasis" } })),
         ]);
         let child = make_config(&[("baseStyles", json!({ "color": "blue" }))]);
         let result = merge_chain_configs(&parent, &child);
-        // custom field from parent must survive
         assert!(result.contains_key("custom"));
         assert_eq!(
             result["custom"]["size"]["property"],

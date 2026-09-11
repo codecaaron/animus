@@ -1,28 +1,5 @@
-//! Project-level CSS orchestration: v1 `project_analyzer::analyze`
-//! Phases 3–6 reimplemented over retained FACTS — no AST access, no
-//! re-parse (v1 re-parses every file for JSX scanning; v2 filters the
-//! usage facts collected at parse time).
-//!
-//! Bug-compat mirrors (v1 project_analyzer line refs):
-//!  - eval-failed chains still DROP from the manifest and the source file
-//!    stays untransformed (967-969), but the drop now bails LOUD (v1
-//!    emits no diagnostic; divergence licensed);
-//!  - cycle in extension provenance ⇒ the ordering degrades to the
-//!    lexically-sorted non-cyclic set (700-712) — not a re-topo;
-//!  - usage configs only track variant props WITH a default (982-1001),
-//!    but every evaluated binding is inserted (1006-1010);
-//!  - inline-transform custom props are forced onto the dynamic path and
-//!    filtered from BOTH static utility streams (1302-1316, 1335-1353);
-//!  - .asClass() chains and ALL compose slots are unconditionally
-//!    rendered; shared variant keys pre-populate child-slot usage
-//!    (1514-1559);
-//!  - dev_mode retains all components and reports prospective
-//!    eliminations only (1584-1602).
-//!
-//! Input surface: global style blocks + keyframes feed `sheets.global`;
-//! extension parents resolve through relative imports, path aliases, the
-//! package map, AND re-export chains (follow_reexports) — mirroring v1's
-//! import_resolver.
+//! Project-level CSS orchestration over retained facts: extension provenance,
+//! chain evaluation, usage reconciliation, and `@layer` CSS generation.
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write as _;
@@ -54,7 +31,6 @@ use crate::usage_facts::UsageResidueRecord;
 
 type ComponentPropSetMap = FxHashMap<String, FxHashSet<String>>;
 
-/// v1 project_analyzer AliasType/AliasEntry VERBATIM serde shapes.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum AliasType {
@@ -70,8 +46,7 @@ pub struct AliasEntry {
     pub alias_type: AliasType,
 }
 
-/// v1 expand_alias VERBATIM (project_analyzer 132-150): first match in
-/// GIVEN order (v1 does not sort at parse).
+/// First alias that matches wins, so entry order is significant.
 pub fn expand_alias(source: &str, aliases: &[AliasEntry]) -> Option<String> {
     for alias in aliases {
         match alias.alias_type {
@@ -91,8 +66,7 @@ pub fn expand_alias(source: &str, aliases: &[AliasEntry]) -> Option<String> {
     None
 }
 
-/// Parsed configuration/theme inputs (EngineOptions JSON blobs → owned
-/// maps; parsed ONCE at engine construction, fail-loud).
+/// Configuration and theme inputs, parsed once from EngineOptions JSON.
 #[derive(Default)]
 pub struct CssInputs {
     pub theme: FlatTheme,
@@ -101,27 +75,16 @@ pub struct CssInputs {
     pub config: PropConfigMap,
     pub group_registry: FxHashMap<String, Vec<String>>,
     pub selector_aliases: SelectorAliasesMap,
-    /// Condition alias registry (`conditionAliases` manifest field):
-    /// `_motionReduce` → { value, order, kind }. Empty = no registrations.
     pub condition_aliases: ConditionAliasesMap,
-    /// v1 `global_style_blocks_json` (resolved into sheets.global).
     pub global_style_blocks: Option<Value>,
-    /// v1 `keyframes_blocks_json` (keyframes registry + global CSS).
     pub keyframes_blocks: Option<Value>,
-    /// v1 `package_resolution_json`: import source → resolved path.
     pub package_map: FxHashMap<String, String>,
-    /// v1 `path_aliases_json` (`{aliases: [...]}` wrapper), given order.
     pub path_aliases: Vec<AliasEntry>,
-    /// Forced-emission declarations (spec: static-emission-overrides).
     pub static_css: Option<crate::forced_usage::StaticCssConfig>,
-    /// rootDir-relative directory prefixes of discovered external packages
-    /// (`externalDirsJson`). Files under these dirs get the external-token
-    /// candidate walk (cross-source correlation); empty = no candidates.
+    /// Directory prefixes, relative to rootDir, of external packages.
     pub external_dirs: Vec<String>,
-    /// `{ transformName: sourceText }` for transforms the extractor cannot
-    /// find by parsing project files — i.e. every transform shipped inside a
-    /// package. Seeded from the system evaluation; project-file
-    /// `createTransform()` sources register afterwards and win on collision.
+    /// `{ transformName: sourceText }` for package-shipped transforms the
+    /// parser cannot see; project-file `createTransform()` wins on collision.
     pub transform_sources: FxHashMap<String, String>,
     pub dev_mode: bool,
 }
@@ -164,8 +127,6 @@ impl CssInputs {
                     .map_err(|e| format!("EngineOptions.{name}: invalid JSON — {e}")),
             }
         }
-        // v1 lib.rs 877-888: `{aliases: [...]}` wrapper, silently-empty on
-        // parse failure in v1 — v2 fails loud instead.
         let path_aliases = match path_aliases_json {
             None => Vec::new(),
             Some(s) if s.trim().is_empty() || s.trim() == "null" => Vec::new(),
@@ -214,9 +175,6 @@ impl CssInputs {
         })
     }
 
-    /// Seed the package-shipped transform sources (`transformSourcesJson`).
-    /// Kept off `from_json`'s parameter list so the field can be populated
-    /// independently of the fourteen-argument construction path.
     pub fn set_transform_sources(&mut self, json: Option<&str>) -> Result<(), String> {
         self.transform_sources = match json {
             None => FxHashMap::default(),
@@ -228,8 +186,7 @@ impl CssInputs {
     }
 }
 
-/// v1 manifest ComponentDescriptor (project_analyzer 1784-1793), the
-/// plugin-consumed subset — field names match v1's serde output.
+/// Manifest component entry; field names are the plugin-consumed wire shape.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ComponentDescriptor {
     pub file: String,
@@ -249,23 +206,17 @@ pub struct CssDiagnostic {
     pub component: String,
     pub kind: String,
     pub message: String,
-    /// Structured token path (`scale.key`) for diagnostics that reference a
-    /// specific theme token — set only by the external-token candidate walk
-    /// (cross-source correlation). Skipped from the manifest when absent, so
-    /// every existing diagnostic serializes byte-identically.
+    /// Theme token path (`scale.key`); set only by the external-token walk.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub token: Option<String>,
-    /// Stable diagnostic code (`animus.<namespace>.<slug>`). Absent fields
-    /// keep existing diagnostics serializing byte-identically.
+    /// Stable diagnostic code, `animus.<namespace>.<slug>`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub code: Option<String>,
-    /// `"error"` diagnostics fail strict builds at the plugin policy point;
-    /// `"warn"` and absent never do.
+    /// `"error"` fails strict builds in the plugin; `"warn"` does not.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub severity: Option<String>,
 }
 
-/// Extract a trailing `(animus.<ns>.<slug>)` marker from a diagnostic message.
 pub(crate) fn diagnostic_code_from_message(message: &str) -> Option<String> {
     let start = message.rfind("(animus.")?;
     let rest = &message[start + 1..];
@@ -276,8 +227,6 @@ pub(crate) fn diagnostic_code_from_message(message: &str) -> Option<String> {
         .then(|| code.to_string())
 }
 
-/// Severity assignment for coded diagnostics: unrepresentable-selector codes
-/// are error-severity (strict builds fail); everything else stays warn.
 pub(crate) fn diagnostic_severity_for_code(code: &str) -> &'static str {
     if code == crate::eval::SELECTOR_UNSUPPORTED_SUBJECT {
         "error"
@@ -292,26 +241,20 @@ pub struct CssOutput {
     pub fragments: CssFragmentStore,
     pub diagnostics: Vec<CssDiagnostic>,
     pub reconciliation: Value,
-    /// component_id → config-dependent replacement payloads (v1 Phase
-    /// 5c/6 equivalents; consumed by engine.transform_file).
+    /// component_id → replacement payload.
     pub replacement_configs: FxHashMap<String, crate::assemble::ReplacementPayload>,
-    /// v1 manifest `system_prop_map` (utility class_map; key-sorted).
     pub system_prop_map: BTreeMap<String, BTreeMap<String, String>>,
-    /// v1 manifest `dynamic_props` (global dynamic prop metadata; sorted).
     pub dynamic_props: BTreeMap<String, DynamicPropMeta>,
-    /// v1 manifest `component_fragments` (per-component sheet fragments).
     pub component_fragments: BTreeMap<String, crate::css::PerComponentSheets>,
-    /// v1 manifest `reverse_provenance` (parent → direct children, sorted).
+    /// parent id → direct child ids.
     pub reverse_provenance: BTreeMap<String, Vec<String>>,
-    /// v1 manifest `components` (id → descriptor; evaluated survivors).
+    /// component id → descriptor, for evaluated survivors only.
     pub components: BTreeMap<String, ComponentDescriptor>,
-    /// v1 manifest `files` (path → [component_ids]; evaluated survivors).
+    /// file path → the component ids defined there.
     pub files_map: BTreeMap<String, Vec<String>>,
-    /// V2-native, additive per-site dynamic usage residue.
     pub usage_residue: Vec<UsageResidueRecord>,
 }
 
-/// v1 lib.rs:748 verbatim: breakpoints live under `breakpoints.` theme keys.
 pub fn extract_breakpoints(theme: &FlatTheme) -> BreakpointMap {
     let mut bps = FxHashMap::default();
     for (key, value) in theme {
@@ -325,7 +268,6 @@ pub fn extract_breakpoints(theme: &FlatTheme) -> BreakpointMap {
     BreakpointMap::new(bps)
 }
 
-/// v1 project_analyzer:2117 verbatim.
 fn extract_layer_content(layer_block: &str) -> String {
     let trimmed = layer_block.trim();
     if let Some(start) = trimmed.find('{') {
@@ -337,19 +279,14 @@ fn extract_layer_content(layer_block: &str) -> String {
     String::new()
 }
 
-/// Resolve an import specifier against the analyzed file set — v1
-/// resolve_path order: relative → alias+probe → package map. Re-export
-/// hops are followed by the CALLER via follow_reexports.
+/// Resolve an import specifier against the analyzed file set. Re-export hops
+/// are not followed here; callers use `follow_reexports`.
 pub fn resolve_import_source<T>(
     from_file: &str,
     spec: &str,
     files: &BTreeMap<String, T>,
     inputs: &CssInputs,
 ) -> Option<String> {
-    // v1 resolve_path order (project_analyzer 528-536): relative →
-    // expand_alias + probe → package-map lookup (path returned
-    // UNCONDITIONALLY — a non-project path becomes a dangling external
-    // root and the child stays standalone).
     if !spec.starts_with('.') {
         if let Some(expanded) = expand_alias(spec, &inputs.path_aliases) {
             return probe_files(&expanded, files);
@@ -374,10 +311,7 @@ pub fn resolve_import_source<T>(
     probe_files(&base, files)
 }
 
-/// v1 probe_known_files order EXACTLY (project_analyzer 2027-2047):
-/// bare, .ts, .tsx, .js, .jsx, /index.ts, /index.tsx, /index.js,
-/// /index.jsx — a sibling .ts/.tsx pair must resolve to the SAME parent
-/// v1 picks.
+/// Candidate order decides which file wins when several extensions exist.
 fn probe_files<T>(base: &str, files: &BTreeMap<String, T>) -> Option<String> {
     let candidates = [
         base.to_string(),
@@ -393,11 +327,8 @@ fn probe_files<T>(base: &str, files: &BTreeMap<String, T>) -> Option<String> {
     candidates.into_iter().find(|c| files.contains_key(c))
 }
 
-/// Follow re-export chains (v1 import_resolver resolve_bindings): from
-/// (file, exported name), hop through `export {{ X as Y }} from '...'`
-/// links until a file that defines the name locally (or has no matching
-/// re-export). Cycle-guarded; unresolvable hops stop at the last node
-/// (dangling — v1 keeps the child standalone).
+/// Follow `export { X as Y } from '...'` hops to the file defining the name.
+/// Cycle-guarded; an unresolvable hop returns the last node reached.
 pub fn follow_reexports(
     mut file: String,
     mut name: String,
@@ -426,12 +357,8 @@ pub fn follow_reexports(
     (file, name)
 }
 
-/// Is `binding` in `file` a chain, and if so did it extract?
-///
-/// `Some(true)` = an extractable chain; `Some(false)` = a real animus chain
-/// that failed its own extraction; `None` = no chain there at all. The middle
-/// case is a different fact from the last one and earns a different bail
-/// reason, so the two answers come off one pass over the file's chains.
+/// `Some(true)` = an extractable chain, `Some(false)` = a chain that failed
+/// its own extraction, `None` = no chain for that binding.
 fn chain_extractable(
     files: &BTreeMap<String, FileFacts>,
     file: &str,
@@ -446,13 +373,10 @@ fn chain_extractable(
     })
 }
 
-/// The extension-system spec's reason for a parent that cannot be traced to
-/// any animus chain definition in the project.
 fn parent_unresolvable_reason(named: &str) -> String {
     format!("chain dropped: could not resolve parent component '{}'", named)
 }
 
-/// The parent WAS traced to a chain; that chain failed its own extraction.
 fn parent_failed_reason(named: &str) -> String {
     format!(
         "chain dropped: parent chain '{}' failed evaluation before extension",
@@ -460,12 +384,6 @@ fn parent_failed_reason(named: &str) -> String {
     )
 }
 
-/// The parent id a chain-bearing `binding` in `file` resolves to, or the bail
-/// reason its absence earns. Both arms of `resolve_extension_parent` end here.
-///
-/// The unresolvable reason names `as_written` — the binding the CHILD spells,
-/// which is what an author reading the diagnostic can look up — while the
-/// failed reason names the declarator the chain is keyed by.
 fn classify_parent(
     files: &BTreeMap<String, FileFacts>,
     file: &str,
@@ -479,30 +397,8 @@ fn classify_parent(
     }
 }
 
-/// Resolve `extends_binding` (as written in `file_path`) to the component id
-/// of the chain it extends.
-///
-/// `Ok(parent_id)` enters the provenance map; `Err(reason)` drops the child
-/// from emission with that bail reason.
-///
-/// v1's binding map records ANY resolvable export whose file sits OUTSIDE the
-/// analyzed universe — such a parent id never evaluates, stays an external
-/// root in the topological order, and leaves the child STANDALONE rather than
-/// dropped. That licence is narrowed here: when binding resolution lands on a
-/// file that is in the universe AND locally DEFINES the name, the parent is
-/// locally analyzable, so "no extractable chain there" is decisive evidence —
-/// the same evidence the same-file arm acts on. Those children bail instead of
-/// degrading to silent partial CSS.
-///
-/// "Locally defines" is the load-bearing half, and it is narrower than "an
-/// export fact exists". Resolution also STOPS at an in-universe file it cannot
-/// see through — an `export * from` barrel (star exports are not collected), a
-/// re-export whose source does not resolve, or an `import { X } … export { X }`
-/// barrel whose export fact names an IMPORTED binding rather than a
-/// declarator. Landing on any of those proves nothing about the parent, so
-/// they keep the standalone fallback, as does a parent file outside the
-/// universe (a true npm dependency, or a local barrel whose re-export resolves
-/// out of the universe).
+/// A parent bails only when its landing file is in the analyzed set AND
+/// declares the name locally; barrels and outside files stay standalone.
 fn resolve_extension_parent(
     file_path: &str,
     ff: &FileFacts,
@@ -511,7 +407,6 @@ fn resolve_extension_parent(
     inputs: &CssInputs,
 ) -> Result<String, String> {
     let Some(imp) = ff.imports.iter().find(|i| i.local == extends_binding) else {
-        // Same-file parent: the binding as written IS the declarator.
         return classify_parent(files, file_path, extends_binding, extends_binding);
     };
 
@@ -521,11 +416,8 @@ fn resolve_extension_parent(
     let (pf, pn) = follow_reexports(f, imp.imported.clone(), files, inputs);
     let landing = files.get(&pf);
 
-    // `export { CardBase as Card }` lands here as the EXPORTED name, but
-    // chains — and the component ids the topological sort and chain lookup key
-    // on — use the DECLARATOR. Resolve through the export fact's `local` so
-    // both the chain check and the parent id name the declarator; comparing
-    // the exported name instead false-bails a real chain.
+    // Component ids key on the DECLARATOR, not the exported name, so an
+    // aliased export resolves through the export fact's `local`.
     let local_export = landing.and_then(|pff| {
         pff.exports
             .iter()
@@ -533,9 +425,8 @@ fn resolve_extension_parent(
     });
     let binding = local_export.and_then(|e| e.local.clone()).unwrap_or(pn);
 
-    // ...but that `local` is only a DECLARATOR when the landing file actually
-    // declares it: a re-export barrel records `local: Some(X)` with
-    // `source: None` for a name it merely imported.
+    // A barrel records `local: Some(X)`, `source: None` for a name it merely
+    // imported, so `local` is a declarator only when the file declares it.
     let locally_defined = landing.is_some_and(|pff| {
         let imported_here = pff.imports.iter().any(|i| i.local == binding);
         !imported_here
@@ -544,17 +435,14 @@ fn resolve_extension_parent(
     });
 
     if !locally_defined {
-        // Nothing was proven about the parent — keep the standalone fallback.
+        // Nothing proven about the parent: keep the standalone fallback.
         return Ok(format!("{}::{}", pf, binding));
     }
     classify_parent(files, &pf, &binding, extends_binding)
 }
 
-/// Every complete `{...}` span remaining in a POST-resolution CSS value.
-/// The resolver (theme.rs `resolve_single_alias`) passes unresolvable
-/// `{scale.path}` aliases through verbatim, so any surviving brace-delimited
-/// span IS an unresolved token alias — resolved aliases were replaced by
-/// `var()` / theme literals, which never contain braces.
+/// Brace spans surviving resolution are unresolved token aliases: the resolver
+/// passes them through verbatim and resolved values never contain braces.
 fn unresolved_alias_spans(value: &str) -> Vec<String> {
     if !value.contains('{') {
         return Vec::new();
@@ -577,13 +465,6 @@ fn unresolved_alias_spans(value: &str) -> Vec<String> {
     spans
 }
 
-/// An unresolvable token alias SHALL NOT leak raw into emitted CSS
-/// (deterministic-extraction); the carrying declaration is DROPPED and a
-/// warn diagnostic names the component, CSS property, and unresolved alias
-/// (extraction-diagnostics). v1 retains the raw passthrough until
-/// retirement — the resulting v1-vs-v2 divergence is licensed in
-/// packages/_parity/register.json (intentional-correctness entries for the
-/// css-validity witnesses).
 fn shed_unresolved_alias_decls(
     decls: &mut Vec<CssDeclaration>,
     scale_family: &FxHashSet<String>,
@@ -594,8 +475,6 @@ fn shed_unresolved_alias_decls(
     decls.retain(|d| {
         let spans = unresolved_alias_spans(&d.value);
         if spans.is_empty() {
-            // Survives emission — but a token SHAPE on a scale-family property
-            // still warns (emit-as-authored; see warn_token_shaped_value).
             warn_token_shaped_value(d, scale_family, file, component, diagnostics);
             return true;
         }
@@ -616,10 +495,8 @@ fn shed_unresolved_alias_decls(
     });
 }
 
-/// CSS properties whose values legitimately carry dotted bare identifiers, so a
-/// dotted value there is NEVER evidence of an unresolved token: font stacks
-/// (`Inter.var`), grid line/area names, `content` strings, counter and
-/// animation/transition NAMES, and `will-change` property lists.
+/// Properties whose values legitimately carry dotted bare identifiers, so a
+/// dotted value there is never evidence of an unresolved token.
 const TOKEN_SHAPE_EXEMPT_PROPERTIES: &[&str] = &[
     "font-family",
     "font",
@@ -636,10 +513,6 @@ const TOKEN_SHAPE_EXEMPT_PROPERTIES: &[&str] = &[
     "will-change",
 ];
 
-/// The kebab-case CSS properties that carry theme meaning: every property a
-/// scale-bearing propConfig entry writes (`property` + fan-out `properties`),
-/// plus the color-family pass-throughs that resolve against `colors` without a
-/// propConfig entry. A token-shaped value is only suspicious on these.
 fn scale_family_css_properties(config: &PropConfigMap) -> FxHashSet<String> {
     let mut props: FxHashSet<String> = FxHashSet::default();
     for pc in config.values() {
@@ -657,26 +530,20 @@ fn scale_family_css_properties(config: &PropConfigMap) -> FxHashSet<String> {
     props
 }
 
-/// A BARE dotted token path — `^[A-Za-z][\w-]*(\.[\w-]+)+$`. Only `[A-Za-z0-9_-]`
-/// and the separating dots are admitted, so anything carrying whitespace, a
-/// comma, a paren (`url(...)`, `var(...)`), a quote, `#`, `%` or a non-ASCII
-/// char is rejected outright — as is a leading `-` (custom properties) and a
-/// trailing dot (`transforms.`). A value of this shape is never valid standalone
-/// CSS for a color or a length, which is what makes the warn safe to raise
-/// without full grammar validation.
+/// A bare dotted token path, `^[A-Za-z][\w-]*(\.[\w-]+)+$`. Never valid
+/// standalone CSS for a color or a length, which makes the warn safe.
 fn is_token_shaped_value(value: &str) -> bool {
     let mut chars = value.chars();
     match chars.next() {
         Some(c) if c.is_ascii_alphabetic() => {}
         _ => return false,
     }
-    // Chars in the current dot-separated segment (the first is consumed above).
     let mut segment_len = 1usize;
     let mut dots = 0usize;
     for c in chars {
         if c == '.' {
             if segment_len == 0 {
-                return false; // empty segment: `a..b`
+                return false;
             }
             dots += 1;
             segment_len = 0;
@@ -689,12 +556,8 @@ fn is_token_shaped_value(value: &str) -> bool {
     dots >= 1 && segment_len > 0
 }
 
-/// A token-SHAPED literal surviving on a scale-family property is a token that
-/// failed to resolve — `bg: 'accent.solid'` reaching CSS as `accent.solid`.
-/// The declaration is EMITTED AS AUTHORED (a browser discards the invalid
-/// declaration on its own, and the value may be legal under another named
-/// theme, forced through by staticCss, or arrive via a spread whose provenance
-/// extraction cannot see); the diagnostic is the entire value of this check.
+/// Warns without dropping: the value may be legal under another theme or
+/// arrive through a spread, and browsers discard an invalid declaration.
 fn warn_token_shaped_value(
     decl: &CssDeclaration,
     scale_family: &FxHashSet<String>,
@@ -725,10 +588,7 @@ fn warn_token_shaped_value(
     });
 }
 
-/// CSS property → theme scale NAME, for every propConfig entry whose scale is
-/// a string reference (`property` + fan-out `properties`), plus the
-/// color-family pass-throughs → `colors`. Inline object/array scales resolve
-/// locally and never correspond to theme tokens, so they contribute nothing.
+/// Inline object/array scales resolve locally, so only string scales map.
 fn scale_name_by_css_property(config: &PropConfigMap) -> FxHashMap<String, String> {
     let mut map: FxHashMap<String, String> = FxHashMap::default();
     for pc in config.values() {
@@ -747,18 +607,14 @@ fn scale_name_by_css_property(config: &PropConfigMap) -> FxHashMap<String, Strin
     map
 }
 
-/// A value that could be an unresolved SCALE KEY: a single bare segment or a
-/// dotted path over `[A-Za-z0-9_-]` (leading digits admitted — numeric scale
-/// keys are common). Resolved outputs (`var(...)`, `#hex`, values with
-/// whitespace/commas/quotes) are rejected by shape. Deliberately broad — the
-/// TS-side join only reports a candidate whose token the SOURCE package's own
-/// manifest defines, which is what keeps CSS literals silent.
+/// A possible unresolved scale key (bare segment or dotted path). Broad on
+/// purpose: the TS-side join filters candidates against the source manifest.
 fn is_scale_key_shaped_value(value: &str) -> bool {
     let mut segment_len = 0usize;
     for (i, c) in value.chars().enumerate() {
         if c == '.' {
             if segment_len == 0 {
-                return false; // leading dot or empty segment
+                return false;
             }
             segment_len = 0;
         } else if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
@@ -773,24 +629,14 @@ fn is_scale_key_shaped_value(value: &str) -> bool {
     segment_len > 0
 }
 
-/// Bare values that are valid CSS in (nearly) any property position: the
-/// CSS-wide keywords plus a handful of universally-common keyword values.
-/// A bare candidate matching one of these is presumed a CSS LITERAL even
-/// when a source package happens to define a same-named token —
-/// `colors.transparent` is near-universal in design-system palettes, and
-/// reporting `borderColor: 'transparent'` against it would turn a correct
-/// declaration into a strict-mode build failure. Keywords are matched
-/// case-insensitively (CSS keywords are; `currentColor` is authored camel).
-/// Dotted paths and brace aliases are never keyword-shaped, so only the
-/// bare-segment candidate arm consults this.
+/// Bare values presumed CSS literals even when a source package defines a
+/// same-named token; reporting them would fail correct strict-mode builds.
 const CSS_KEYWORD_VALUES: &[&str] = &[
-    // CSS-wide keywords (valid on every property).
     "inherit",
     "initial",
     "unset",
     "revert",
     "revert-layer",
-    // Universally-common keyword values on scale-qualified properties.
     "auto",
     "none",
     "normal",
@@ -807,11 +653,6 @@ fn is_css_keyword_value(value: &str) -> bool {
         .any(|kw| value.eq_ignore_ascii_case(kw))
 }
 
-/// The invariants of one external-token candidate walk: what the walk is
-/// looking at (`file`, `component`) and what it judges against (`scale_names`
-/// for property→scale qualification, `theme` for consumer-side membership).
-/// Constant for the whole traversal — only the declarations being inspected
-/// and the diagnostics sink vary.
 struct CandidateWalk<'a> {
     scale_names: &'a FxHashMap<String, String>,
     theme: &'a FlatTheme,
@@ -829,10 +670,8 @@ fn record_external_candidates_in_decls(
         if d.property.starts_with("--") {
             continue;
         }
-        // An unresolved brace alias already carries its full token path and
-        // may sit on ANY property (`boxShadow: '0 0 8px {colors.glow}'`); a
-        // bare or dotted survivor is only a candidate on a scale-qualified,
-        // non-exempt property, qualified by that property's scale name.
+        // A brace alias carries its own token path and may sit on any
+        // property; a bare survivor needs a scale-qualified, non-exempt one.
         let spans = unresolved_alias_spans(&d.value);
         let tokens: Vec<String> = if spans.is_empty() {
             if TOKEN_SHAPE_EXEMPT_PROPERTIES.contains(&d.property.as_str()) {
@@ -845,15 +684,8 @@ fn record_external_candidates_in_decls(
                 continue;
             }
             let synthesized = format!("{}.{}", scale, d.value);
-            // The walk runs AFTER resolution, so a NON-EMITTED
-            // identity-valued token (`space.0: '0'`) round-trips — its
-            // resolved value re-synthesizes the very path that produced it.
-            // If the consumer theme defines that path, resolution SUCCEEDED
-            // and there is nothing to correlate; reporting it would tell the
-            // consumer to perform an inheritance already performed (a
-            // strict-mode false positive). Theme keys are dot paths
-            // (`dot_path_to_flat_key` is identity), so this is a direct
-            // lookup. Membership alone decides — no extra heuristic.
+            // An identity-valued token round-trips: its resolved value
+            // re-synthesizes its own path, so a theme hit means it resolved.
             if theme.contains_key(&synthesized) {
                 continue;
             }
@@ -863,8 +695,8 @@ fn record_external_candidates_in_decls(
                 .iter()
                 .map(|s| {
                     let content = s.trim_matches(|c| c == '{' || c == '}');
-                    // `{colors.primary/40}` alpha syntax: the token is the
-                    // path before the alpha suffix.
+                    // `{colors.primary/40}`: the token is the path before
+                    // the alpha suffix.
                     content.split('/').next().unwrap_or(content).to_string()
                 })
                 .collect()
@@ -900,13 +732,8 @@ fn record_external_candidates_in_styles(
     }
 }
 
-/// The external-token candidate walk (extraction-diagnostics: cross-source
-/// correlation). Runs only for components whose file lives under a declared
-/// external package dir, BEFORE the alias shed — so unresolved brace aliases
-/// are still present and contribute their token paths. Candidates use their
-/// own diagnostic kind, which the default plugin surfacing drops (unknown
-/// kind): the TS-side correlation join owns their presentation after checking
-/// each token against the source package's captured manifest.
+/// Runs before the alias shed, so unresolved brace aliases still contribute
+/// their token paths. Its diagnostic kind is consumed by the TS-side join.
 fn record_external_token_candidates(
     walk: &CandidateWalk<'_>,
     css: &ComponentCss,
@@ -928,12 +755,9 @@ fn record_external_token_candidates(
     }
 }
 
-/// Is this rootDir-relative file under one of the declared external dirs?
-/// Both sides originate from the host's `path.relative`, which emits
-/// backslashes on Windows — normalize to `/` before the containment check
-/// (comparison only; recorded diagnostics keep the authored paths).
+/// Paths come from the host's `path.relative`, so Windows sends backslashes;
+/// normalization is for comparison only and diagnostics keep authored paths.
 fn is_external_file(file: &str, external_dirs: &[String]) -> bool {
-    // The common case — no external packages declared — pays nothing.
     if external_dirs.is_empty() {
         return false;
     }
@@ -976,14 +800,6 @@ fn shed_unresolved_aliases_in_styles(
     }
 }
 
-/// A builder chain dropped because stage evaluation failed emits a bail
-/// diagnostic naming the file, binding, and failing stage
-/// (extraction-diagnostics) — silent disappearance from the manifest no
-/// longer occurs. The chain still drops and its source file stays
-/// untransformed for that chain (existing behavior; only the diagnostic is
-/// new). v1 keeps the empty Err arm (project_analyzer 967-969) until
-/// retirement — the resulting diagnostics divergence is licensed in
-/// packages/_parity/register.json.
 fn emit_eval_drop_bail(
     diagnostics: &mut Vec<CssDiagnostic>,
     file: &str,
@@ -1005,12 +821,7 @@ fn emit_eval_drop_bail(
     });
 }
 
-/// Resolve one compose slot's LOCAL binding to the class of the component
-/// it names. Slot values are identifiers at the compose() callsite, so the
-/// owning file decides what they mean: the file's own component first, then
-/// whatever its import (following re-exports) brought the name in from. An
-/// aliased import — `import { Root as CardRoot }` — resolves through the
-/// same path, which bare-name matching could never do.
+/// Slot bindings are local identifiers, resolved in the composing file.
 fn resolve_compose_slot_class<'a>(
     family_file: &str,
     binding: &str,
@@ -1035,12 +846,6 @@ fn resolve_compose_slot_class<'a>(
     id_to_class.get(defining_id.as_str()).copied()
 }
 
-/// A compose slot whose binding names no extracted component — neither in
-/// the composing file nor through its imports — no longer disappears
-/// silently. The slot still drops from the composed variant CSS (existing
-/// behavior); only the diagnostic is new. Under the retired bare-name
-/// scheme this case could also resolve to the WRONG component when two
-/// files shared a local recipe name.
 fn emit_compose_slot_bail(
     diagnostics: &mut Vec<CssDiagnostic>,
     file: &str,
@@ -1063,10 +868,8 @@ fn emit_compose_slot_bail(
     });
 }
 
-/// Walk every ResolvedStyles surface of a freshly evaluated component
-/// (base, variant options, compounds, states) — runs BEFORE the extension
-/// merge, so parent contributions pulled from `evaluated` are already shed
-/// (each leak is diagnosed once, on its defining component).
+/// Runs before the extension merge, so parent contributions are already shed
+/// and each leak is diagnosed once, on its defining component.
 fn shed_unresolved_aliases(
     css: &mut ComponentCss,
     scale_family: &FxHashSet<String>,
@@ -1099,27 +902,13 @@ pub fn run(
     run_with_system_floor(files, order, inputs, class_prefix, true)
 }
 
-// ---------------------------------------------------------------------------
-// Canonical usage identity
-// ---------------------------------------------------------------------------
-//
-// Every usage-side map below is keyed by a COMPONENT ID
-// (`{defining_file}::{binding}`), never by a bare binding name: two files
-// exporting the same component name must not pool their JSX usage, or
-// reconciliation — and, in a production build, ELIMINATION — is decided by
-// the wrong callsites.
-//
-// `resolve_usage_identity` is the single producer of those keys. The lookup
-// maps handed to the JSX filter carry two disjoint key spaces: component ids
-// (which always contain `::`) and bare binding names (JS identifiers, which
-// never do). The bare-name space is the fallback layer described on the
-// resolver; it is what keeps unique-name corpora byte-identical.
+// Usage maps are keyed by component id (`{file}::{binding}`); bare-binding
+// fallback keys share the space and are told apart by the absence of `::`.
 
 /// bare binding → the component ids that define it, in `sorted_ids` order.
 type IdsByBinding = FxHashMap<String, Vec<String>>;
 
-/// The bare binding of a component id. Used ONLY for human-facing report
-/// text and the residue record — never as a map key.
+/// For report text and the residue record only — never as a map key.
 fn binding_of(component_id: &str) -> &str {
     component_id
         .rfind("::")
@@ -1127,38 +916,8 @@ fn binding_of(component_id: &str) -> &str {
         .unwrap_or(component_id)
 }
 
-/// Resolve the LOCAL name `local`, as written in `file`, to the canonical
-/// component ids it can name.
-///
-/// Order:
-///  1. a component DEFINED in this file wins (`{file}::{local}`);
-///  2. an import is resolved through `resolve_import_source` to the file the
-///     name is imported FROM (`{source}::{imported}`);
-///  3. otherwise the bare-name fallback applies — against the IMPORTED name
-///     when the name came from an import, against the local name otherwise.
-///
-/// The fallback is what reproduces v1's global-by-name usage maps for every
-/// name that resolves to exactly one component; it also decides the
-/// AMBIGUOUS case (a bare name defined by several files with no usable
-/// import) by returning EVERY candidate. Attributing to all possible origins
-/// is the only choice that cannot eliminate CSS that v1 kept: dropping the
-/// attribution would silently prune the variants observed at that callsite,
-/// and picking one arbitrarily would prune them for the losers.
-///
-/// Re-export chains are deliberately NOT followed here (unlike extension
-/// provenance, which does follow them): v1's Phase-5b matches the imported
-/// name against the usage maps BY NAME, and the `aliased-reexport` corpus
-/// unit pins that a component reached only through a renaming barrel stays
-/// UNATTRIBUTED — which makes the scan identity-uncertain and therefore
-/// conservative. Following the chain here would start attributing it, and
-/// reconciliation would begin pruning its variants.
-///
-/// An empty result means "not a known component": the caller keeps the
-/// scanner's existing unknown-tag handling.
-/// Follow a file's local `const X = Y;` bare-identifier aliases to their
-/// terminal name, cycle-safe (rendered-usage-semantics › local const
-/// aliases). A name with no alias entry — or a cycle — resolves to itself,
-/// so every existing spelling is unchanged.
+/// Follow a file's local `const X = Y;` aliases to the terminal name.
+/// A name with no alias entry, or one in a cycle, resolves to itself.
 fn resolve_alias_terminal<'a>(
     file: &str,
     binding: &'a str,
@@ -1186,12 +945,8 @@ fn resolve_usage_identity(
     evaluated_ids: &FxHashSet<String>,
     ids_by_binding: &IdsByBinding,
 ) -> Vec<String> {
-    // Dotted static-member path (`Compound.Item`, `Ns.Compound.Item`): the
-    // ROOT resolves through the import table to its defining file and the
-    // LAST segment names the component there (the `const Compound = { Item }`
-    // namespace idiom), falling back to the bare-name layer. Used by the
-    // asComponent wrap-target keep; JSX member tags resolve separately via
-    // compose `member_expr_bindings`.
+    // Dotted member path: the root resolves through the import table and the
+    // last segment names the component there (`const Compound = { Item }`).
     if let Some((path_head, last)) = local.rsplit_once('.') {
         let root = path_head.split('.').next().unwrap_or(path_head);
         let root_file = files
@@ -1219,17 +974,8 @@ fn resolve_usage_identity(
             if evaluated_ids.contains(&imported_id) {
                 return vec![imported_id];
             }
-            // Renamed export chains: the direct probe above only matches
-            // when the imported name IS the defining binding. Walk until a
-            // chain id lands, alternating three hop kinds — sourced
-            // re-exports (`export { badge as pill } from './definition'`,
-            // via follow_reexports), defining-module local renames
-            // (`const badge = …; export { badge as fancyBadge }`), and
-            // import-then-local-export barrels (`import { badge } from
-            // './definition'; export { badge as pill }`, where the unwrapped
-            // local is itself an import). Otherwise a renamed consumer's
-            // usage never reaches the chain and another consumer's literal
-            // can prune the variant this one renders.
+            // Without this walk a renamed consumer's usage never reaches the
+            // chain, and another consumer prunes the variant it renders.
             let (mut terminal_file, mut terminal_name) =
                 follow_reexports(source_file, imp.imported.clone(), files, inputs);
             let mut hop_guard: FxHashSet<(String, String)> = FxHashSet::default();
@@ -1276,10 +1022,8 @@ fn resolve_usage_identity(
     ids_by_binding.get(local).cloned().unwrap_or_default()
 }
 
-/// The maps the per-file JSX filter consults, plus the attribution map that
-/// turns whatever the filter recorded back into component ids. All four are
-/// keyed by the same LOOKUP KEY space (component ids + bare bindings), so a
-/// key present in one is present in the others' key space by construction.
+/// The maps the per-file JSX filter consults. All four share one lookup-key
+/// space: component ids plus bare bindings.
 #[derive(Default, Clone)]
 struct UsageLookupMaps {
     props: ComponentPropSetMap,
@@ -1296,11 +1040,8 @@ struct UsageSourceMaps {
 }
 
 impl UsageLookupMaps {
-    /// Publish one lookup key resolving to `ids`. Values are the UNION over
-    /// the candidates: the filter only ever reads key SETS (which props are
-    /// active, which attribute names are variants/states), so a union is the
-    /// sound view for an ambiguous name and is exactly the single
-    /// component's view for an unambiguous one.
+    /// Values union over the candidates: the filter reads only key sets, so a
+    /// union is sound for an ambiguous name and exact for a single component.
     fn publish(&mut self, key: &str, ids: &[String], source: &UsageSourceMaps) {
         if ids.is_empty() {
             return;
@@ -1331,9 +1072,8 @@ impl UsageLookupMaps {
                 config.states.extend(c.states.iter().cloned());
             }
         }
-        // v1 keeps NO entry for a component with no active props; an empty
-        // set and a missing key behave identically downstream, but the
-        // missing key is what the emptiness gates observe.
+        // An empty set and a missing key behave the same downstream, but the
+        // emptiness gates observe the missing key.
         if !props.is_empty() {
             self.props.insert(key.to_string(), props);
         }
@@ -1346,10 +1086,6 @@ impl UsageLookupMaps {
     }
 }
 
-/// Reachability + attribution over component ids. Replaces v1's
-/// bare-binding "canonical floor": the scan already records lookup keys, so
-/// this only maps them through `attribution` and records what stayed
-/// unattributable.
 #[derive(Default)]
 struct UsageIdentityPolicy {
     rendered_ids: FxHashSet<String>,
@@ -1357,14 +1093,8 @@ struct UsageIdentityPolicy {
 }
 
 impl UsageIdentityPolicy {
-    /// Component ids for a recorded lookup key.
-    ///
-    /// An unresolvable key is the same conservative signal v1 raised when
-    /// its canonical floor failed: the whole run goes identity-uncertain.
-    /// The record is KEPT under the unresolved key rather than dropped —
-    /// system-prop records feed the utility stream by (prop, value) with the
-    /// binding unread, and dropping them would delete utility CSS v1 emits.
-    /// Under id keying an unresolved key simply matches no component.
+    /// An unresolved key makes the run identity-uncertain and comes back
+    /// as-is; dropping the record would delete the utility CSS it feeds.
     fn resolve_all(&mut self, key: &str, attribution: &IdsByBinding) -> Vec<String> {
         match attribution.get(key) {
             Some(ids) => ids.clone(),
@@ -1375,8 +1105,7 @@ impl UsageIdentityPolicy {
         }
     }
 
-    /// One representative id, for records whose binding is not read
-    /// downstream. `None` leaves the record's key untouched.
+    /// One representative id, for records whose binding is unread downstream.
     fn resolve_one(&mut self, key: &str, attribution: &IdsByBinding) -> Option<String> {
         match attribution.get(key) {
             Some(ids) => ids.first().cloned(),
@@ -1392,8 +1121,6 @@ impl UsageIdentityPolicy {
         usages: &mut [SystemPropUsage],
         attribution: &IdsByBinding,
     ) {
-        // The binding is not read downstream (only prop/value are), so one
-        // representative id keeps the record shape without fanning out.
         for usage in usages {
             if let Some(id) = self.resolve_one(&usage.binding, attribution) {
                 usage.binding = id;
@@ -1471,9 +1198,7 @@ impl UsageIdentityPolicy {
     }
 }
 
-/// Re-key an id-keyed ledger by bare binding, unioning same-named entries.
-/// staticCss is USER configuration that names components by binding, so the
-/// forced-vs-observed comparison happens in that name space.
+/// staticCss names components by binding, so the comparison happens there.
 fn project_ledger_to_bindings(
     ledger: &crate::reconcile::UsageLedger,
 ) -> crate::reconcile::UsageLedger {
@@ -1503,14 +1228,12 @@ fn project_ledger_to_bindings(
     out
 }
 
-/// Expand staticCss's binding-named synthetic usage onto every component of
-/// that name — a forced declaration is a statement about the NAME, so it
-/// keeps every component that answers to it (v1 behavior, since v1's ledger
-/// was name-keyed throughout).
+/// A forced declaration is a statement about the NAME, so it keeps every
+/// component that answers to it.
 fn expand_forced_scan(scan: UsageScanResult, ids_by_binding: &IdsByBinding) -> UsageScanResult {
     let ids_for = |binding: &str| ids_by_binding.get(binding).cloned().unwrap_or_default();
     let mut out = UsageScanResult {
-        // System-prop values ride the utility stream by (prop, value); the
+        // System-prop values ride the utility stream by (prop, value), so the
         // pseudo-binding is never attributed to a component.
         system_prop_usages: scan.system_prop_usages,
         identity_uncertain: scan.identity_uncertain,
@@ -1594,33 +1317,16 @@ fn sorted_resolvable_component_ids(
     }
 }
 
-/// Drain recorded transform-evaluation failures into diagnostics (design
-/// D3/D4, spec `transform-evaluation-contract` §Evaluation failures produce
-/// diagnostics under v2). Called after each component/file resolve — the
-/// caller supplies the file/component context the resolve seam lacks.
-/// `component` is the owning component binding where known; failures
-/// recorded outside a component resolve fall back to naming the transform.
-/// Entries drain in recording order (input order within each resolve), so
-/// emission order is deterministic.
-/// A `kind:"error"` diagnostic whose emission depends on reconciliation.
-///
-/// Every variant option is resolved unconditionally, and the per-component
-/// drain runs immediately afterwards — but reconciliation prunes unused
-/// options (and eliminates unreferenced components outright) much later, and
-/// only in the non-dev arm. Emitting the error at drain time therefore fails
-/// production builds over declarations that provably do not ship, while dev
-/// builds — which prune nothing — pass.
+/// An error diagnostic held until reconciliation decides what ships: emitting
+/// at drain time would fail production builds over pruned declarations.
 struct DeferredComponentError {
     component_id: String,
-    /// `(variant prop, option name)`; `None` for a failure outside any
-    /// variant option, which survives as long as its component does.
+    /// `(variant prop, option name)`; `None` = a failure outside any variant
+    /// option, which survives as long as its component does.
     variant_origin: Option<(String, String)>,
     diagnostic: CssDiagnostic,
 }
 
-/// Admit each deferred error only if the CSS it describes survived
-/// reconciliation. In dev nothing is pruned, so every deferred error is
-/// admitted — correctly, since dev emits the offending declaration.
 fn resolve_deferred_component_errors(
     deferred: &mut Vec<DeferredComponentError>,
     reconciled: &[(String, ComponentCss)],
@@ -1661,11 +1367,8 @@ fn drain_transform_failures(
     deferred: &mut Vec<DeferredComponentError>,
 ) {
     for failure in sink.borrow_mut().drain(..) {
-        // File attribution: the resolving file where the drain has one
-        // (component resolves); otherwise the transform's own registration
-        // file — the actionable location for a result-shape bug — with a
-        // `system` sentinel for config-carried transforms that have no
-        // in-universe source (mirrors manifest-diagnostics' `file: 'system'`).
+        // Falls back to the transform's own registration file, or the `system`
+        // sentinel for config-carried transforms with no in-universe source.
         let file = if file.is_empty() {
             transform_files
                 .get(&failure.transform_name)
@@ -1678,7 +1381,6 @@ fn drain_transform_failures(
             .map(str::to_string)
             .unwrap_or_else(|| format!("transform '{}'", failure.transform_name));
         let diagnostic = match &failure.failure {
-            // D3: invalid result shape → error; the declaration was dropped.
             EvalError::InvalidResultShape { shape } => CssDiagnostic {
                 token: None,
                 file: file.to_string(),
@@ -1693,7 +1395,6 @@ fn drain_transform_failures(
                 code: None,
                 severity: Some("error".to_string()),
             },
-            // D4: throw → warn; the raw value fell through unchanged.
             EvalError::Throw { message } => CssDiagnostic {
                 token: None,
                 file: file.to_string(),
@@ -1708,9 +1409,7 @@ fn drain_transform_failures(
                 severity: None,
             },
         };
-        // Only an error that names a component can be pruned by
-        // reconciliation; warnings and owner-less drains (utilities, global
-        // blocks, keyframes) emit immediately as before.
+        // Only an error that names a component can be pruned by reconciliation.
         match (&failure.failure, component_id) {
             (EvalError::InvalidResultShape { .. }, Some(id)) => {
                 deferred.push(DeferredComponentError {
@@ -1734,23 +1433,12 @@ fn run_with_system_floor(
     let breakpoints = extract_breakpoints(&inputs.theme);
     let bp_keys: FxHashSet<String> = breakpoints.breakpoints.keys().cloned().collect();
     let evaluator = TransformEvaluator::new();
-    // Transform-failure sink (design D3/D4): deep resolution records
-    // evaluation failures here; drained into `diagnostics` after each
-    // component/file resolve with the context known at the drain site.
     let transform_failures = TransformFailureSink::default();
     let mut diagnostics: Vec<CssDiagnostic> = Vec::new();
-    // Error diagnostics held back until reconciliation has decided what ships.
     let mut deferred_errors: Vec<DeferredComponentError> = Vec::new();
 
-    // Register package-shipped transform sources FIRST (system evaluation
-    // capture). These are transforms the extractor cannot discover by parsing
-    // project files — notably every transform shipped inside @animus-ui/system
-    // — so without this seed their props resolve to nothing and fall back to
-    // the raw value. Registered before the project-file loop below so a
-    // same-named project transform still wins under last-registration-wins.
-    //
-    // Iterated in sorted order: FxHashMap iteration is unspecified, and
-    // registration order is observable through collision resolution.
+    // Sorted: FxHashMap iteration order is unspecified and is observable
+    // through collision resolution, where the last registration wins.
     let mut seeded: Vec<(&String, &String)> = inputs.transform_sources.iter().collect();
     seeded.sort_by(|a, b| a.0.cmp(b.0));
     for (name, source) in seeded {
@@ -1767,11 +1455,8 @@ fn run_with_system_floor(
         }
     }
 
-    // Register extracted createTransform sources (v1 750-762) — INPUT
-    // order, so cross-file name collisions keep last-registration-wins.
-    // `transform_files` mirrors the same last-wins order: it maps each
-    // registered name to its defining file for drain-site attribution when
-    // a failure surfaces outside any component resolve.
+    // Input order, so a cross-file collision keeps last-registration-wins;
+    // `transform_files` follows the same order for drain-site attribution.
     let mut transform_files: FxHashMap<String, String> = FxHashMap::default();
     for path in order {
         let Some(ff) = files.get(path) else { continue };
@@ -1793,9 +1478,6 @@ fn run_with_system_floor(
         }
     }
 
-    // Invalid-transform bail diagnostics (v1 1928-1940; emitted at
-    // manifest build in v1 — multiset position is what the harness
-    // compares, so emission point here is equivalent).
     for path in order {
         let Some(ff) = files.get(path) else { continue };
         for t in &ff.transforms {
@@ -1827,7 +1509,6 @@ fn run_with_system_floor(
         transform_failures: Some(&transform_failures),
     };
 
-    // -- Phase 3 mirror: extension provenance -------------------------------
     let mut parent_map: FxHashMap<String, String> = FxHashMap::default();
     let mut unresolvable_extensions: FxHashSet<String> = FxHashSet::default();
     for (file_path, ff) in files {
@@ -1856,14 +1537,8 @@ fn run_with_system_floor(
                         parent_map.insert(component_id, parent_id);
                     }
                     Err(reason) => {
-                        // The child was already dropped from emission (it is
-                        // excluded from `sorted_ids`); this is the witness for
-                        // that drop. Two distinct facts earn two distinct
-                        // reasons: the parent is not an animus chain at all
-                        // (the extension-system spec's "could not resolve
-                        // parent component"), or it IS a chain that failed its
-                        // own extraction — in which case it also emits its own
-                        // bail above and the two correlate by binding name.
+                        // The child is excluded from `sorted_ids` elsewhere;
+                        // this diagnostic is the only witness for that drop.
                         diagnostics.push(CssDiagnostic {
                             token: None,
                             file: file_path.clone(),
@@ -1880,10 +1555,8 @@ fn run_with_system_floor(
         }
     }
 
-    // -- Phase 4 mirror: topological sort ------------------------------------
     let sorted_ids = sorted_resolvable_component_ids(files, &parent_map, &unresolvable_extensions);
 
-    // chain lookup: id → (file, chain index)
     let mut chain_lookup: FxHashMap<&str, (&str, usize)> = FxHashMap::default();
     for (file_path, ff) in files {
         for (i, chain) in ff.chains.iter().enumerate() {
@@ -1896,21 +1569,17 @@ fn run_with_system_floor(
         }
     }
 
-    // -- Phase 5a mirror: evaluate chains (topo order) -----------------------
     type EvalEntry = (
         ComponentCss,
         String,       // binding
-        TerminalKind, // terminal (asClass detection)
+        TerminalKind, // terminal
         Option<FxHashSet<String>>,
         Vec<String>, // active group names (sorted)
         Option<PropConfigMap>,
         Vec<(BTreeMap<String, Value>, String)>, // POST-MERGE compound configs
     );
     let mut evaluated: FxHashMap<String, EvalEntry> = FxHashMap::default();
-    // Derived once per run — the properties on which a token SHAPE is suspicious.
     let scale_family_props = scale_family_css_properties(&inputs.config);
-    // Derived once per run — CSS property → scale name, for qualifying
-    // external-token candidates (empty external_dirs skips the walk entirely).
     let scale_names = if inputs.external_dirs.is_empty() {
         FxHashMap::default()
     } else {
@@ -1924,9 +1593,6 @@ fn run_with_system_floor(
         };
         let chain = &files[*file_path].chains[*chain_idx];
         if let Some(fatal) = &chain.fatal_error {
-            // Quirk shed 02 (v1 967-969 dropped these SILENTLY): the chain
-            // still drops from the manifest, but the drop is diagnosed —
-            // the failing stage is the one whose eval_error went fatal.
             let stage = chain
                 .stages
                 .iter()
@@ -1942,8 +1608,8 @@ fn run_with_system_floor(
             continue;
         }
         let result = process_chain_facts(chain, &resolve_ctx, &inputs.group_registry);
-        // Drain per component resolve (topo order → deterministic emission),
-        // in BOTH arms — failures recorded before a later bail still report.
+        // Drained before the match so failures recorded before a later bail
+        // still report; topo order keeps emission deterministic.
         drain_transform_failures(
             &transform_failures,
             file_path,
@@ -1975,8 +1641,6 @@ fn run_with_system_floor(
                     });
                 }
 
-                // Cross-source correlation: candidate walk BEFORE the shed so
-                // unresolved brace aliases still carry their token paths.
                 if is_external_file(file_path, &inputs.external_dirs) {
                     record_external_token_candidates(
                         &CandidateWalk {
@@ -1990,8 +1654,6 @@ fn run_with_system_floor(
                     );
                 }
 
-                // Quirk shed 01: unresolvable-alias leak → drop declaration
-                // + warn (v1 leaks the raw `{scale.path}` literal).
                 shed_unresolved_aliases(
                     &mut component_css,
                     &scale_family_props,
@@ -2000,14 +1662,10 @@ fn run_with_system_floor(
                     &mut diagnostics,
                 );
 
-                // Own compound configs from facts (v1 process_chain:
-                // sorted String|Array conditions + positional class).
                 let mut compound_configs: Vec<(BTreeMap<String, Value>, String)> = Vec::new();
                 {
                     let mut idx = 0usize;
                     for stage in &chain.stages {
-                        // v1 lib.rs 536-554: config + index only for styled
-                        // (two-arg) compounds.
                         if stage.method == "compound" && stage.second_value.is_some() {
                             if let Some(cond) = &stage.value {
                                 let sorted: BTreeMap<String, Value> = cond
@@ -2029,7 +1687,6 @@ fn run_with_system_floor(
                     }
                 }
 
-                // Extension merge (v1 840-931 verbatim over ComponentCss).
                 if let Some(parent_id) = parent_map.get(component_id) {
                     if let Some((parent_css, _, _, _, _, _, parent_compound_configs)) =
                         evaluated.get(parent_id)
@@ -2056,19 +1713,8 @@ fn run_with_system_floor(
                                     }
                                 }
 
-                                // Extension merge: start from the parent's
-                                // condition groups, then let the child's
-                                // groups replace-by-key. The legacy
-                                // two-bucket bug-compat only ever licensed
-                                // dropping the child's SELECTOR-BEARING
-                                // groups; the child's selectorless
-                                // breakpoint AND non-breakpoint
-                                // (Media/Container/Supports) groups both
-                                // carry through — breakpoints by name,
-                                // conditions by (conditions, selector).
-                                // Byte-safe for fixtures that declare no
-                                // non-breakpoint groups: the loop is a
-                                // no-op for them.
+                                // Child groups replace parent groups by name
+                                // (breakpoints) or by conditions+selector.
                                 let mut merged = ResolvedStyles {
                                     declarations: merged_decls,
                                     pseudo_selectors: merged_pseudos,
@@ -2079,11 +1725,6 @@ fn run_with_system_floor(
                                     *slot = decls.clone();
                                 }
                                 for child_group in &child_base.conditioned {
-                                    // Selectorless single-breakpoint groups
-                                    // merged via breakpoint_decls_mut
-                                    // above; every other shape — incl.
-                                    // [Breakpoint]+selector — replaces-by-
-                                    // (conditions, selector) or appends.
                                     let plain_breakpoint = matches!(
                                         child_group.emit_order,
                                         crate::theme::ConditionEmitOrder::Breakpoint
@@ -2134,20 +1775,8 @@ fn run_with_system_floor(
                             component_css.compounds = merged_compounds;
                         }
 
-                        // v1 908-913: inherit compound configs, parent first.
-                        //
-                        // The inherited entries still carry the PARENT's
-                        // class prefix and their original indices, while
-                        // the emitter enumerates the merged
-                        // `component_css.compounds` positionally under the
-                        // CHILD's class (css.rs `generate_css_sheets_ordered`
-                        // / `generate_layer_content`). Renumbering the whole
-                        // flattened list here makes the runtime config agree
-                        // with emission by construction — the two lists are
-                        // built from the same two-arg compound stages, so
-                        // index i names rule i. Field 7 is post-merge, so a
-                        // grandchild renumbers an already-renumbered parent
-                        // list and multi-level extension composes.
+                        // The emitter enumerates merged compounds positionally
+                        // under the child class, so index i must name rule i.
                         if !parent_compound_configs.is_empty() {
                             let mut merged_configs = parent_compound_configs.clone();
                             merged_configs.append(&mut compound_configs);
@@ -2160,7 +1789,6 @@ fn run_with_system_floor(
                     }
                 }
 
-                // Active-prop inheritance (v1 933-960 verbatim).
                 let mut merged_active_props: FxHashSet<String> = FxHashSet::default();
                 if let Some(parent_id) = parent_map.get(component_id) {
                     if let Some(parent_inherited) = inherited_active_props.get(parent_id) {
@@ -2197,10 +1825,6 @@ fn run_with_system_floor(
                 );
             }
             Err((stage, detail)) => {
-                // Quirk shed 02: same v1 967-969 mirror as the fatal_error
-                // gate above — the post-facts eval path (e.g. a props()
-                // config that evaluates statically but fails PropConfigMap
-                // deserialization) bails loud instead of vanishing.
                 emit_eval_drop_bail(
                     &mut diagnostics,
                     file_path,
@@ -2212,8 +1836,6 @@ fn run_with_system_floor(
         }
     }
 
-    // -- Phase 5b mirror: usage configs + scans ------------------------------
-    // Authoritative per-component maps, keyed by component id.
     let evaluated_ids: FxHashSet<String> = evaluated.keys().cloned().collect();
     let mut ids_by_binding: IdsByBinding = FxHashMap::default();
     for component_id in &sorted_ids {
@@ -2276,8 +1898,6 @@ fn run_with_system_floor(
         }
     }
 
-    // The global lookup layer: every component id under its own key, plus
-    // the bare-name fallback layer (v1's global-by-name maps).
     let mut global_lookup = UsageLookupMaps::default();
     for component_id in &sorted_ids {
         if evaluated_ids.contains(component_id) {
@@ -2297,19 +1917,15 @@ fn run_with_system_floor(
         }
     }
 
-    // Families carry the path of the file whose compose() call declared them.
-    // Slot names are the compose callsite's LOCAL identifiers, so the owning
-    // file is what turns them into qualified component ids.
+    // Paired with the file whose compose() call declared the family.
     let mut compose_families: Vec<(&String, &ComposeFamilyInfo)> = Vec::new();
     for path in order {
         if let Some(ff) = files.get(path) {
             compose_families.extend(ff.compose.iter().map(|family| (path, family)));
         }
     }
-    // A member tag resolves to the SLOT's canonical origin, resolved in the
-    // file that composed the family — not to the textual member tail and not
-    // through the consuming file's own bindings. Unresolvable slots keep the
-    // raw binding name so they land on the bare-name layer exactly as before.
+    // A member tag resolves in the file that composed the family, not in the
+    // consuming file; an unresolvable slot keeps its raw binding name.
     let resolve_slot_ids = |family_file: &str, binding_name: &str| -> Vec<String> {
         resolve_usage_identity(
             family_file,
@@ -2351,12 +1967,6 @@ fn run_with_system_floor(
         }
         let Some(ff) = files.get(path) else { continue };
 
-        // Per-file view (replaces v1's alias augmentation, 1147-1213): every
-        // name this file BINDS is resolved through the canonical resolver,
-        // and only the names whose resolution differs from the bare-name
-        // layer are republished. For a codebase with unique component names
-        // nothing differs and the global maps are used by reference — the
-        // same fast path the alias check used to give.
         let mut file_lookup: Option<UsageLookupMaps> = None;
         let bound_names = ff
             .imports
@@ -2372,12 +1982,8 @@ fn run_with_system_floor(
             let ids =
                 resolve_usage_identity(path, name, files, inputs, &evaluated_ids, &ids_by_binding);
             if ids.is_empty() {
-                // An IMPORTED name that resolves to nothing extractable is
-                // v1's canonical-floor failure: the tag still reads as a
-                // component (the lookup entry stays) but nothing may be
-                // attributed to it, and the run goes conservative. A name
-                // bound only by a local chain that did not evaluate keeps
-                // the bare-name layer, exactly as v1's floor did.
+                // Dropping only the attribution entry keeps the tag readable
+                // as a component while nothing may be attributed to it.
                 if from_import && global_lookup.attribution.contains_key(name) {
                     file_lookup
                         .get_or_insert_with(|| global_lookup.clone())
@@ -2408,8 +2014,6 @@ fn run_with_system_floor(
                 .residue_sites
                 .iter()
                 .map(|site| UsageResidueRecord {
-                    // The record is a consumer surface: it names the
-                    // component, not the internal key.
                     binding: binding_of(&site.binding).to_string(),
                     prop: site.prop_name.clone(),
                     file: path.clone(),
@@ -2458,9 +2062,6 @@ fn run_with_system_floor(
         ))
     });
 
-    // -- Forced-emission overrides (spec: static-emission-overrides) ---------
-    // Synthetic usage rides the ordinary ledger/utility/dynamic streams;
-    // forced counts are labeled against the observed-only ledger.
     let forced_report = if let Some(static_css) = inputs.static_css.as_ref() {
         let known_bindings: FxHashSet<String> = evaluated
             .values()
@@ -2481,22 +2082,13 @@ fn run_with_system_floor(
             .iter()
             .map(|(component_id, config)| (component_id.clone(), config.variants.clone()))
             .collect();
-        // staticCss names components by BINDING (it is user configuration,
-        // not an internal key), so the observed ledger is projected back to
-        // bindings for the forced-vs-observed comparison, and the synthetic
-        // usage it returns is expanded to every component of that name.
         let observed_ledger = project_ledger_to_bindings(&crate::reconcile::build_ledger(
             &all_usage_results,
             &observed_variant_configs,
         ));
 
-        // Forced-emission metadata covers EVERY declared variant.
-        // component_usage_configs deliberately drops variants without a
-        // default_option (they never participate in usage reconciliation and
-        // are always emitted in full), but staticCss must still recognize
-        // them as declared — validation and forced counting run against this
-        // full map, while forced_usage only synthesizes ledger usage for
-        // default-bearing props.
+        // Unlike the usage configs, this map keeps variants with no default:
+        // staticCss must still recognize them as declared.
         let declared_usage_configs: FxHashMap<String, ComponentUsageConfig> = sorted_ids
             .iter()
             .filter_map(|component_id| evaluated.get(component_id))
@@ -2555,7 +2147,6 @@ fn run_with_system_floor(
         None
     };
 
-    // Dynamic prop metadata (v1 1247-1289).
     let detected_dynamic_prop_names: FxHashSet<String> = all_usage_results
         .iter()
         .flat_map(|r| r.dynamic_prop_usages.iter())
@@ -2631,7 +2222,6 @@ fn run_with_system_floor(
         None
     };
 
-    // Global custom config union + inline-transform filtering (v1 1291-1316).
     let mut global_custom_config: PropConfigMap = PropConfigMap::default();
     for component_id in &sorted_ids {
         if let Some((_, _, _, _, _, Some(custom_configs), _)) = evaluated.get(component_id) {
@@ -2656,8 +2246,6 @@ fn run_with_system_floor(
             slot_entries,
             class_prefix,
         ));
-        // Utility usages span files/components — no single owner, so the
-        // drain falls back to naming the transform itself.
         drain_transform_failures(
             &transform_failures,
             "",
@@ -2672,7 +2260,6 @@ fn run_with_system_floor(
         None
     };
 
-    // Per-component custom dynamic metadata (v1 1325-1447).
     let mut custom_dynamic_by_id: FxHashMap<String, FxHashSet<String>> = FxHashMap::default();
     for dyn_usage in &all_custom_dynamic_usages {
         custom_dynamic_by_id
@@ -2793,7 +2380,6 @@ fn run_with_system_floor(
         None
     };
 
-    // -- Phase 5c mirror: replacement payloads --------------------------------
     let mut replacement_configs: FxHashMap<String, crate::assemble::ReplacementPayload> =
         FxHashMap::default();
     for component_id in &sorted_ids {
@@ -2838,7 +2424,6 @@ fn run_with_system_floor(
             .is_some_and(|config| !config.is_empty());
         let has_dynamic_props = has_system_dynamic_props || has_custom_dynamic_props;
 
-        // Extension children get the POST-MERGE config trio (v1 908-929).
         let merged_config = if parent_map.contains_key(component_id) {
             let (component_css, ..) = &evaluated[component_id];
             Some(crate::assemble::MergedChainConfig {
@@ -2877,7 +2462,6 @@ fn run_with_system_floor(
         );
     }
 
-    // -- Phase 5d mirror: usage ledger ---------------------------------------
     let variant_configs_for_ledger: VariantConfigMap = usage_sources
         .configs
         .iter()
@@ -2931,24 +2515,8 @@ fn run_with_system_floor(
         }
     }
 
-    // asComponent() wrap targets are runtime-rendered whenever their wrapper
-    // is: the emitted wrapper calls `createComponent(<target>, …)`, which
-    // merges the target's own class onto the element — so the target's CSS
-    // must survive reconciliation even when the target never appears as a
-    // JSX tag itself. A bare target resolves like any other local/imported
-    // usage; a dotted target resolves its ROOT through the import table to
-    // the defining file and takes the LAST segment there (the
-    // `const Compound = { Item }` namespace idiom), falling back to the
-    // bare-name layer. A non-animus target resolves to nothing and nothing
-    // is kept. Kept unconditionally (exactly like compose slots above) —
-    // over-keeping is safe; under-keeping ships a wrapper whose merged
-    // class has no rule (dev keeps it, production silently dropped it).
-    // The target's variant OPTIONS and STATES are retained in full: props
-    // the wrapper does not consume forward to the target at runtime and
-    // activate the target's own variant/state classes, but the scan filter
-    // attributes `<Wrapper tone="…">` only against the WRAPPER's config
-    // (which lacks the target's variants), so per-usage pruning has no
-    // sound signal here — conservative retention is the only safe floor.
+    // The wrapper merges the target's class at runtime, so the target's CSS
+    // must survive even though it never appears as a JSX tag itself.
     for component_id in &sorted_ids {
         let Some((file_path, chain_idx)) = chain_lookup.get(component_id.as_str()) else {
             continue;
@@ -2984,7 +2552,6 @@ fn run_with_system_floor(
         }
     }
 
-    // -- Phase 5e mirror: reconcile ------------------------------------------
     let mut reconciled_components: Vec<(String, ComponentCss)> = sorted_ids
         .iter()
         .filter_map(|component_id| {
@@ -2996,8 +2563,6 @@ fn run_with_system_floor(
         })
         .collect();
 
-    // Parents are kept regardless of usage; the id is the parent itself, not
-    // every component that happens to share its name.
     let parent_ids: FxHashSet<String> = parent_map.values().cloned().collect();
 
     let reconciliation = if inputs.dev_mode {
@@ -3021,17 +2586,12 @@ fn run_with_system_floor(
         serde_json::to_value(&report).unwrap_or(serde_json::json!({}))
     };
 
-    // Reconciliation has now decided what ships, so the held-back errors can
-    // be judged: an error over an eliminated component or a pruned variant
-    // option describes a declaration that never reaches the stylesheet, and
-    // failing the build on it would be a false failure.
     resolve_deferred_component_errors(
         &mut deferred_errors,
         &reconciled_components,
         &mut diagnostics,
     );
 
-    // -- Phase 6b mirror: CSS generation --------------------------------------
     let reconciled_order: Vec<String> = reconciled_components
         .iter()
         .map(|(id, _)| id.clone())
@@ -3048,13 +2608,9 @@ fn run_with_system_floor(
         class_prefix,
     );
 
-    // Phase 6c: composed variant CSS.
     let mut composed_variant_css = String::new();
     let mut composed_compound_css = String::new();
     if !compose_families.is_empty() {
-        // Keyed by component_id, not by bare binding: two files may define
-        // the same local recipe name, and a bare-name map let whichever one
-        // hashed last win for every family in the universe.
         let id_to_class: FxHashMap<&str, &str> = evaluated
             .iter()
             .map(|(id, (css, _, _, _, _, _, _))| (id.as_str(), css.class_name.as_str()))
@@ -3111,11 +2667,6 @@ fn run_with_system_floor(
         if !family_refs.is_empty() {
             composed_variant_css =
                 generate_composed_variant_css(&family_refs, &component_css_list, &breakpoints);
-            // Ancestor forms for child compounds that require a shared axis
-            // (see `generate_composed_compound_css` for which transport makes
-            // the flat rule unreachable). The conditions come from the
-            // POST-MERGE compound configs, which stand positionally beside the
-            // compound styles the emitter enumerates.
             let compound_conditions: CompoundConditionMap = evaluated
                 .iter()
                 .map(|(_, (css, _, _, _, _, _, configs))| {
@@ -3131,20 +2682,16 @@ fn run_with_system_floor(
         }
     }
 
-    // The expansion joins the flat rules inside the compounds layer: the flat
-    // fragments are re-wrapped byte-for-byte and keep their source position,
-    // and the ancestor forms outrank them on class count alone, so no
-    // cross-layer precedence moves.
+    // Ancestor forms outrank the flat rules on class count inside the same
+    // layer, so no cross-layer precedence moves.
     if !composed_compound_css.is_empty() {
-        // Rebuilt from the fragments rather than re-read out of the wrapped
-        // sheet: `extract_layer_content` returns the newline that follows the
-        // opening brace, which a second wrap would turn into a blank line.
+        // Rebuilt from fragments: `extract_layer_content` keeps the newline
+        // after the brace, which a second wrap would turn into a blank line.
         let mut compounds_content = fragments.concat_compounds();
         compounds_content.push_str(&composed_compound_css);
         sheets.compounds = wrap_layer("compounds", &compounds_content);
     }
 
-    // Unconditional variants sublayering (v1 1675-1694 verbatim).
     {
         let standalone_content = extract_layer_content(&sheets.variants);
         let variants_layer = layer_name("variants");
@@ -3174,7 +2721,6 @@ fn run_with_system_floor(
         }
     }
 
-    // Global style blocks + keyframes → sheets.global (v1 1708-1736).
     let global_css_raw = if let Some(blocks) = &inputs.global_style_blocks {
         let css = crate::theme::resolve_all_global_blocks(blocks, &resolve_ctx);
         // Global blocks come from system config, not a resolved source file.
@@ -3224,7 +2770,7 @@ fn run_with_system_floor(
         );
     }
 
-    // Concatenated CSS (v1 1738-1748; global excluded — flows via sheets).
+    // Global is excluded here; it flows through `sheets`.
     let mut css = sheets.declaration.clone();
     css.push('\n');
     for sheet in [
@@ -3241,7 +2787,6 @@ fn run_with_system_floor(
         }
     }
 
-    // Manifest observables (v1 1922-1994).
     let system_prop_map: BTreeMap<String, BTreeMap<String, String>> = utility_output
         .as_ref()
         .map(|u| {
@@ -3260,7 +2805,6 @@ fn run_with_system_floor(
         dynamic_props.into_iter().collect();
     let component_fragments: BTreeMap<String, crate::css::PerComponentSheets> =
         fragments.to_per_component_map().into_iter().collect();
-    // v1 Phase 7 components/files maps (evaluated survivors only).
     let mut components: BTreeMap<String, ComponentDescriptor> = BTreeMap::new();
     let mut files_map: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for component_id in &sorted_ids {
@@ -3309,8 +2853,6 @@ fn run_with_system_floor(
 
     let mut reverse_provenance: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for component_id in &sorted_ids {
-        // v1 builds provenance only for EVALUATED survivors (Phase 7
-        // components_map gate).
         if !evaluated.contains_key(component_id) {
             continue;
         }
@@ -3352,8 +2894,6 @@ mod tests {
         analyze_with_total_system_floor(entries, inputs, true)
     }
 
-    /// Every diagnostic of one kind, in emission order. Call sites narrow
-    /// further on component or message.
     fn diagnostics_of<'a>(out: &'a CssOutput, kind: &str) -> Vec<&'a CssDiagnostic> {
         out.diagnostics.iter().filter(|d| d.kind == kind).collect()
     }
@@ -3385,7 +2925,7 @@ mod tests {
             Some(r#"{"p": {"property": "padding", "scale": "space"}, "display": {"property": "display"}}"#),
             Some(r#"{"space": ["p", "m"]}"#),
             None,
-            None, // condition_aliases_json
+            None,
             None,
             None,
             None,
@@ -3513,7 +3053,6 @@ mod tests {
 
     #[test]
     fn import_source_resolution_follows_v1_order() {
-        // relative → alias-expand+probe → package map (v1 528-536).
         let mut files: BTreeMap<String, ()> = BTreeMap::new();
         files.insert("src/ui/button.tsx".into(), ());
         files.insert("lib/theme.ts".into(), ());
@@ -3535,7 +3074,6 @@ mod tests {
             resolve_import_source("x.tsx", "@ui/button", &files, &inputs).as_deref(),
             Some("src/ui/button.tsx")
         );
-        // Package map returns the path UNCONDITIONALLY (dangling roots ok).
         assert_eq!(
             resolve_import_source("x.tsx", "@corp/tokens", &files, &inputs).as_deref(),
             Some("vendor/tokens.ts")
@@ -3583,12 +3121,6 @@ mod tests {
 
     #[test]
     fn as_component_targets_survive_prod_reconciliation() {
-        // The wrapper renders `createComponent(<target>, …)` at runtime, so
-        // the target's class is on the element whenever the wrapper is —
-        // production must keep the target's CSS even though it never appears
-        // as a JSX tag. Covers the bare-identifier form and the
-        // `const Compound = { Item }` static-member namespace idiom
-        // (dev/prod parity: dev always kept these).
         let out = analyze(
             &[(
                 "a.tsx",
@@ -3601,8 +3133,8 @@ mod tests {
             )],
             &test_inputs(),
         );
-        // Full declarations: `display: grid` is not a substring of
-        // `display: inline-grid`, so each arm is asserted independently.
+        // `display: grid` is not a substring of `display: inline-grid`, so
+        // each arm is asserted independently.
         assert!(
             out.sheets.base.contains("display: grid"),
             "{}",
@@ -3617,11 +3149,8 @@ mod tests {
 
     #[test]
     fn as_component_target_variants_and_states_survive_prod() {
-        // Props the wrapper does not consume forward to the target at
-        // runtime and activate the target's OWN variant/state classes, but
-        // the scan attributes `<Wrapped tone="…">` only against the
-        // wrapper's config — so the target's options and states must be
-        // retained in full, not pruned per observed usage.
+        // Unconsumed props forward to the target at runtime and activate its
+        // own variant and state classes, so they are retained in full.
         let out = analyze(
             &[(
                 "a.tsx",
@@ -3653,9 +3182,6 @@ mod tests {
 
     #[test]
     fn external_file_containment_normalizes_windows_separators() {
-        // Both sides originate from the host's `path.relative`, which emits
-        // backslashes on Windows; containment must hold across separator
-        // styles, and a sibling-prefix dir must never claim the file.
         let dirs = vec!["kit/src".to_string()];
         assert!(is_external_file("kit\\src\\Card.tsx", &dirs));
         assert!(is_external_file(
@@ -3681,8 +3207,6 @@ mod tests {
 
     #[test]
     fn unresolvable_alias_declaration_dropped_with_warn_diagnostic() {
-        // Raw `{scale.path}` leaks are shed, not emitted; each dropped
-        // declaration gets a warn naming component, property, and alias.
         let out = analyze(
             &[(
                 "a.tsx",
@@ -3717,9 +3241,8 @@ mod tests {
         );
     }
 
-    /// Inputs whose propConfig carries scale-BEARING entries for a color
-    /// property and for two properties on the token-shape exemption list, so
-    /// the exemptions are load-bearing rather than vacuous.
+    /// Scale entries on two exemption-list properties keep the exemption
+    /// assertions from being vacuous.
     fn token_shape_inputs() -> CssInputs {
         let mut inputs = CssInputs::from_json(
             None,
@@ -3733,7 +3256,7 @@ mod tests {
             ),
             Some(r#"{"color": ["bg"]}"#),
             None,
-            None, // condition_aliases_json
+            None,
             None,
             None,
             None,
@@ -3751,10 +3274,6 @@ mod tests {
 
     #[test]
     fn token_shaped_value_warns_but_is_emitted_as_authored() {
-        // A dotted color typo on a scale-family property: the declaration is
-        // NOT dropped (a browser discards it on its own, and the value may be
-        // legal under another named theme or forced through by staticCss) —
-        // the warn diagnostic is the entire value of the check.
         let out = analyze(
             &[(
                 "a.tsx",
@@ -3762,7 +3281,6 @@ mod tests {
             )],
             &token_shape_inputs(),
         );
-        // Emission is byte-identical to the pre-warn behavior.
         assert!(
             out.sheets.base.contains("background-color: accent.solid"),
             "{}",
@@ -3788,8 +3306,6 @@ mod tests {
         assert!(w.message.contains("emitted as authored"), "{}", w.message);
     }
 
-    /// token_shape_inputs with `kit/src` declared as an external package dir
-    /// (extraction-diagnostics: cross-source correlation candidates).
     fn external_dir_inputs() -> CssInputs {
         let mut inputs = token_shape_inputs();
         inputs.external_dirs = vec!["kit/src".into()];
@@ -3798,10 +3314,6 @@ mod tests {
 
     #[test]
     fn external_scale_key_miss_records_candidate_with_token() {
-        // The flagship correlation case: a kit component references a kit
-        // token via a BARE scale key the consumer theme does not define.
-        // Emission keeps the shipped pass-through; the candidate (not a warn)
-        // carries the scale-qualified token for the TS-side witness join.
         let out = analyze(
             &[(
                 "kit/src/Card.tsx",
@@ -3826,10 +3338,6 @@ mod tests {
 
     #[test]
     fn external_brace_alias_records_candidate_before_shed() {
-        // The candidate walk runs BEFORE the alias shed, so a dropped
-        // declaration still contributes its token path (alpha suffix
-        // stripped). The shed itself is unchanged: declaration dropped, warn
-        // emitted.
         let out = analyze(
             &[(
                 "kit/src/Card.tsx",
@@ -3851,12 +3359,8 @@ mod tests {
 
     #[test]
     fn bare_css_keywords_record_no_candidate() {
-        // `transparent` / `inherit` on a scale-qualified property are valid
-        // CSS literals, and near-universal token names in kit palettes — the
-        // witness join would misfire on them, turning correct declarations
-        // into strict-mode build failures. Keyword-shaped bare values are
-        // presumed literals and never become candidates; a non-keyword bare
-        // key on the same property still does (positive control).
+        // A non-keyword bare key on the same property still becomes a
+        // candidate (positive control).
         let out = analyze(
             &[(
                 "kit/src/Card.tsx",
@@ -3883,8 +3387,6 @@ mod tests {
 
     #[test]
     fn consumer_local_miss_records_no_candidate() {
-        // Consumer-local components keep the existing pass-through with no
-        // candidate — the correlation covers discovered sources only.
         let out = analyze(
             &[(
                 "src/App.tsx",
@@ -3897,9 +3399,8 @@ mod tests {
 
     #[test]
     fn external_resolved_and_literal_values_record_no_scale_key_candidate_noise() {
-        // A resolving key becomes a theme literal (`#ff2800` — rejected by
-        // shape); `display: flex` has no scale. Only shape-plausible misses
-        // on scale-qualified properties survive as candidates.
+        // A resolving key becomes a theme literal (rejected by shape) and
+        // `display` has no scale, so neither is a candidate.
         let out = analyze(
             &[(
                 "kit/src/Card.tsx",
@@ -3912,12 +3413,6 @@ mod tests {
 
     #[test]
     fn identity_valued_token_round_trip_records_no_candidate() {
-        // `space.0: '0'` is a NON-EMITTED token — its raw value goes
-        // verbatim into the theme, so resolution emits `0`, which the
-        // candidate walk re-synthesizes as `space.0`. That path IS a key of
-        // the consumer theme, i.e. resolution succeeded, so reporting it told
-        // the consumer to perform an inheritance already performed (a
-        // strict-mode false positive).
         let mut inputs = external_dir_inputs();
         inputs.config.insert(
             "p".into(),
@@ -3941,8 +3436,7 @@ mod tests {
 
     #[test]
     fn unresolved_token_in_external_file_still_records_candidate() {
-        // True-positive control for the membership rule: a path the consumer
-        // theme does NOT define stays a candidate even with the theme in hand.
+        // True-positive control for the membership rule.
         let mut inputs = external_dir_inputs();
         inputs.theme.insert("space.0".into(), "0".into());
         let out = analyze(
@@ -3959,11 +3453,8 @@ mod tests {
 
     #[test]
     fn same_scale_value_collision_is_decided_by_membership_alone() {
-        // A resolving token whose VALUE collides with another key of its own
-        // scale: `colors.pill: '0'` resolves, then re-synthesizes as
-        // `colors.0` — a path the consumer theme does not define. The
-        // membership rule alone decides, so this stays a candidate; no extra
-        // heuristic suppresses it.
+        // `colors.pill: '0'` resolves, then re-synthesizes as `colors.0`, a
+        // path the theme does not define: membership alone decides.
         let mut inputs = external_dir_inputs();
         inputs.theme.insert("colors.pill".into(), "0".into());
         let out = analyze(
@@ -4020,8 +3511,8 @@ mod tests {
 
     #[test]
     fn exempt_properties_do_not_warn_on_dotted_values() {
-        // fontFamily/gridArea are scale-family in these inputs, so only the
-        // exemption list keeps them quiet — `Inter.var` is a real font stack.
+        // Both are scale-family in these inputs, so only the exemption list
+        // keeps them quiet.
         let out = analyze(
             &[(
                 "a.tsx",
@@ -4044,9 +3535,8 @@ mod tests {
 
     #[test]
     fn dotted_value_on_non_scale_property_does_not_warn() {
-        // `display` is registered WITHOUT a scale; `maskImage` is not
-        // registered at all. Neither carries theme meaning, so a dotted value
-        // there is the author's own CSS.
+        // `display` has no scale and `maskImage` is unregistered, so neither
+        // carries theme meaning.
         let out = analyze(
             &[(
                 "a.tsx",
@@ -4062,24 +3552,20 @@ mod tests {
         assert!(is_token_shaped_value("accent.solid"));
         assert!(is_token_shaped_value("colors.accent.solid-2"));
         assert!(is_token_shaped_value("a.b"));
-        // Not token-shaped: no dot at all (may be perfectly valid CSS).
         assert!(!is_token_shaped_value("red"));
         assert!(!is_token_shaped_value("not-allowed"));
-        // Whitespace, commas, parens, quotes, url() and braces.
         assert!(!is_token_shaped_value("2px solid accent.solid"));
         assert!(!is_token_shaped_value("Inter, sans-serif"));
         assert!(!is_token_shaped_value("var(--current-bg)"));
         assert!(!is_token_shaped_value("url(a.png)"));
         assert!(!is_token_shaped_value("\"a.b\""));
         assert!(!is_token_shaped_value("{colors.missing}"));
-        // Custom properties, leading digits, trailing/empty segments.
         assert!(!is_token_shaped_value("--color-primary"));
         assert!(!is_token_shaped_value("1.5rem"));
         assert!(!is_token_shaped_value("transforms."));
         assert!(!is_token_shaped_value("a..b"));
         assert!(!is_token_shaped_value(".leading"));
         assert!(!is_token_shaped_value(""));
-        // Non-ASCII never qualifies.
         assert!(!is_token_shaped_value("こんにちは.solid"));
     }
 
@@ -4118,8 +3604,7 @@ mod tests {
 
     #[test]
     fn brace_leak_shed_still_wins_over_token_warn() {
-        // A `{...}` leak is still DROPPED (the shed behavior is untouched)
-        // and reports exactly one warn, not two.
+        // Exactly one warn: the shed pre-empts the token-shape warn.
         let out = analyze(
             &[(
                 "a.tsx",
@@ -4139,10 +3624,6 @@ mod tests {
 
     #[test]
     fn serde_rejected_props_chain_emits_bail_diagnostic() {
-        // A props() config that evaluates statically but fails
-        // PropConfigMap deserialization no longer vanishes silently — a
-        // bail names file, binding, and stage. Mirrors
-        // packages/_parity/corpus/props-serde-reject.tsx.
         let out = analyze(
             &[(
                 "a.tsx",
@@ -4150,7 +3631,6 @@ mod tests {
             )],
             &test_inputs(),
         );
-        // The chain still drops from the manifest (existing behavior).
         assert!(out.components.is_empty(), "{:?}", out.components.keys());
         let bails = diagnostics_of(&out, "bail");
         assert_eq!(bails.len(), 1, "{:?}", out.diagnostics);
@@ -4170,9 +3650,6 @@ mod tests {
 
     #[test]
     fn fatal_stage_eval_error_emits_bail_diagnostic() {
-        // fatal_error leg: a stage whose evaluation failed at fact
-        // extraction (chain-fatal in v1 via `?`) also bails loud with the
-        // failing stage named.
         let out = analyze(
             &[(
                 "a.tsx",
@@ -4528,12 +4005,6 @@ mod tests {
 
     #[test]
     fn identifier_variant_map_resolves_through_statics() {
-        // Intentional departure from v1 parity (semantic-const-resolution,
-        // variant stage): `variants: <identifier>` bound to a top-level
-        // const resolves through the same extraction-time statics as
-        // `.styles()` arguments — the manifest is identical to inlining the
-        // literal, with zero skips. (v1 was statics-blind here: options:[]
-        // + a surviving default.)
         let out = analyze(
             &[(
                 "a.tsx",
@@ -4559,8 +4030,7 @@ mod tests {
             desc.replacement
         );
 
-        // Inline-vs-binding parity: the same map authored inline produces an
-        // identical replacement payload and identical CSS.
+        // The same map authored inline must produce identical output.
         let inline = analyze(
             &[(
                 "a.tsx",
@@ -4579,9 +4049,6 @@ mod tests {
 
     #[test]
     fn as_const_chain_arguments_are_not_fatal() {
-        // Type-assertion transparency end-to-end: `.styles({...} as const)`
-        // and `.styles(x as const)` both extract exactly like the unwrapped
-        // forms (previously chain-fatal via the whole-call span fallback).
         let out = analyze(
             &[(
                 "a.tsx",
@@ -4596,9 +4063,6 @@ mod tests {
 
     #[test]
     fn genuinely_dynamic_variant_map_still_surfaces_a_skip_diagnostic() {
-        // The witness contract survives the statics departure: a map the
-        // evaluator genuinely cannot resolve (function call) still records a
-        // skip instead of silently emitting an empty axis.
         let out = analyze(
             &[(
                 "a.tsx",
@@ -4628,9 +4092,6 @@ mod tests {
 
     #[test]
     fn ancestor_subject_selectors_emit_with_class_at_subject_position() {
-        // Ancestor-prefixed, suffixed, mixed comma-list, and repeated
-        // subjects all emit with the composed class substituted at every
-        // `&` — no drops, no dead rules, no diagnostics.
         let out = analyze(
             &[(
                 "a.tsx",
@@ -4677,9 +4138,6 @@ mod tests {
 
     #[test]
     fn variant_descendant_selectors_keep_combinator_space() {
-        // A comma-list of descendant subjects inside a variant option must
-        // keep the space after each substituted `&` — `& span` composes to
-        // `.C--density-roomy span`, never `.C--density-roomyspan`.
         let out = analyze(
             &[(
                 "a.tsx",
@@ -4715,9 +4173,7 @@ mod tests {
 
     #[test]
     fn quoted_only_subject_key_surfaces_coded_error_diagnostic() {
-        // The one remaining unrepresentable form: every `&` inside a quoted
-        // attribute value — nothing to anchor the class to. Coded,
-        // error-severity, and the rule stays out of the CSS.
+        // Every `&` sits inside a quoted attribute value: nothing to anchor to.
         let out = analyze(
             &[(
                 "a.tsx",
@@ -4739,8 +4195,6 @@ mod tests {
 
     #[test]
     fn unregistered_keyframe_reference_severity_is_warn() {
-        // Deliberate warn (the spec's "skipped without aborting analysis");
-        // escalation belongs to the strict-mode contract, a separate change.
         assert_eq!(
             diagnostic_severity_for_code(crate::eval::KEYFRAMES_UNREGISTERED_REFERENCE),
             "warn"
@@ -4762,7 +4216,6 @@ mod tests {
             ],
             &test_inputs(),
         );
-        // Child overrides display but inherits padding from Parent.
         let child_rule = child_rule(&out);
         assert!(child_rule.contains("display: grid"), "{}", out.sheets.base);
         assert!(
@@ -4772,10 +4225,6 @@ mod tests {
         );
     }
 
-    // --- extension parent resolution -----------------------------------------
-
-    /// The child component's emitted base rule: its class name through the
-    /// first `}`.
     fn child_rule(out: &CssOutput) -> &str {
         let start = out
             .sheets
@@ -4786,8 +4235,6 @@ mod tests {
         &rule[..rule.find('}').unwrap()]
     }
 
-    /// Bails carrying the extension system's "could not resolve parent
-    /// component" outcome for the parent named as the child spells it.
     fn unresolvable_parent_bails<'a>(out: &'a CssOutput, parent: &str) -> Vec<&'a CssDiagnostic> {
         let reason = parent_unresolvable_reason(parent);
         diagnostics_of(out, "bail")
@@ -4805,13 +4252,6 @@ mod tests {
 
     #[test]
     fn aliased_local_export_parent_resolves_to_its_declarator_and_inherits() {
-        // `export { CardBase as Card }` lands binding resolution on the
-        // EXPORTED name, but chains are keyed by the DECLARATOR. Comparing the
-        // exported name against chain bindings makes a perfectly good parent
-        // look "locally defined but not a chain" — a false bail. Resolving
-        // through `ExportFact.local` fixes the predicate AND names the parent
-        // id the topo/chain lookup actually uses, so the child inherits
-        // instead of degrading to standalone.
         let out = analyze(
             &[
                 (
@@ -4841,8 +4281,7 @@ mod tests {
 
     #[test]
     fn aliased_local_export_of_non_chain_parent_still_bails() {
-        // The alias fix must not blunt the discrimination: resolving through
-        // `local` lands on a declarator that is provably not a chain.
+        // Resolving through `local` lands on a declarator that is not a chain.
         let out = analyze(
             &[
                 (
@@ -4868,13 +4307,7 @@ mod tests {
 
     #[test]
     fn import_then_reexport_barrel_stays_standalone() {
-        // `import { CardBase } from './base'` + `export { CardBase }` (no
-        // `from`, renamed or not) records a local export fact whose `local` is
-        // an IMPORTED binding, not a declarator. Landing on this barrel proves
-        // nothing about the parent — the same epistemic position as
-        // `export * from` — so the standalone fallback must hold. Reaching the
-        // real chain would need another follow-import hop; standalone is the
-        // conservative outcome until it exists.
+        // The barrel's export fact names an import, not a declarator.
         for (barrel_export, imported) in [
             ("export { CardBase as Card };", "Card"),
             ("export { CardBase };", "CardBase"),
@@ -4911,7 +4344,6 @@ mod tests {
             );
             let child_rule = child_rule(&out);
             assert!(child_rule.contains("display: grid"), "{}", out.sheets.base);
-            // Standalone: the parent's declarations do NOT merge in.
             assert!(
                 !child_rule.contains("padding"),
                 "standalone fallback, not inheritance:\n{}",
@@ -4922,10 +4354,8 @@ mod tests {
 
     #[test]
     fn extend_of_bailed_parent_chain_reports_evaluation_failure_not_resolution() {
-        // A parent that IS a chain but failed its own extraction is NOT
-        // "unresolvable" — it resolved fine and then bailed. The child still
-        // drops (emitting it standalone would silently lose the inherited
-        // styles), but the reason must say what actually happened.
+        // The child still drops: standalone would silently lose the
+        // inherited styles.
         let out = analyze(
             &[
                 (
@@ -4958,8 +4388,7 @@ mod tests {
             "{}",
             out.sheets.base
         );
-        // The parent keeps reporting its OWN failure, so the two diagnostics
-        // correlate by binding name.
+        // The parent keeps reporting its own failure, so the two correlate.
         assert!(!bails_for(&out, "Parent").is_empty(), "{:?}", out.diagnostics);
     }
 
@@ -4984,13 +4413,7 @@ mod tests {
 
     #[test]
     fn cross_file_extend_of_non_chain_parent_bails_loudly() {
-        // `const P = ds.styles({...})` never terminates, so it is not a chain.
-        // A child extending it from ANOTHER file used to resolve through the
-        // import branch with no chain check, then silently skip the ENTIRE
-        // inheritance block at merge time — partial CSS with no witness. The
-        // parent file IS inside the analyzed universe, so the parent is
-        // provably not an animus chain: the child must bail (extension-system
-        // spec: "could not resolve parent component").
+        // `ds.styles({...})` never terminates, so P is not a chain.
         let out = analyze(
             &[
                 (
@@ -5008,7 +4431,6 @@ mod tests {
         assert_eq!(bails.len(), 1, "{:?}", out.diagnostics);
         assert_eq!(bails[0].file, "child.tsx");
         assert_eq!(bails[0].component, "Child");
-        // Dropped from emission, like every other chain bail.
         assert!(
             !out.sheets.base.contains("animus-Child-"),
             "{}",
@@ -5023,8 +4445,6 @@ mod tests {
 
     #[test]
     fn same_file_extend_of_non_chain_parent_bails_loudly() {
-        // The same-file arm already dropped these; it reports the spec's
-        // reason string too, so both arms read identically.
         let out = analyze(
             &[(
                 "a.tsx",
@@ -5044,9 +4464,7 @@ mod tests {
 
     #[test]
     fn extend_of_parent_outside_the_universe_stays_standalone() {
-        // A parent whose FILE is not in the analyzed file set is an external
-        // root — the child keeps its OWN styles standalone and does NOT bail.
-        // Only in-universe parents can be provably-not-a-chain.
+        // Only an in-universe parent can be provably not a chain.
         let mut inputs = test_inputs();
         inputs
             .package_map
@@ -5077,10 +4495,8 @@ mod tests {
 
     #[test]
     fn extend_through_opaque_barrel_stays_standalone() {
-        // Binding resolution stops at an `export * from` barrel (star exports
-        // are not collected), so landing there proves nothing about the
-        // parent — the standalone fallback must hold, NOT a bail. Guards the
-        // parent predicate against the most common barrel shape.
+        // Star exports are not collected, so landing on the barrel proves
+        // nothing about the parent.
         let out = analyze(
             &[
                 (
@@ -5112,9 +4528,7 @@ mod tests {
 
     #[test]
     fn extend_through_named_barrel_still_inherits() {
-        // The positive control for the parent predicate: a named re-export
-        // resolves all the way to the defining file's chain, so inheritance
-        // still merges.
+        // Positive control: a named re-export reaches the defining chain.
         let out = analyze(
             &[
                 (
@@ -5148,11 +4562,7 @@ mod tests {
 
     #[test]
     fn extension_child_condition_block_carries_through_merge() {
-        // Regression: the extend-merge previously dropped the CHILD's
-        // selectorless Media/Container/Supports groups (only the parent's
-        // carried through). A child's own condition block must survive into
-        // the child's emitted rule, wrapping the child's class inside its
-        // @layer.
+        // The child's own condition block must wrap the child's class.
         let out = analyze(
             &[
                 (
@@ -5184,9 +4594,7 @@ mod tests {
 
     #[test]
     fn extension_child_responsive_selector_group_carries() {
-        // The child's [Breakpoint]+selector group (responsive map inside a
-        // selector block) must survive the extend-merge — same silent-drop
-        // family as the condition-block regression above.
+        // A child [Breakpoint]+selector group must survive the extend-merge.
         let out = analyze(
             &[
                 (
@@ -5243,10 +4651,6 @@ mod tests {
         );
     }
 
-    // --- Transform-failure diagnostics (design D3/D4) ------------------------
-
-    /// Analyze one component whose `w` prop routes through a registered
-    /// `battle` transform with the given source.
     fn analyze_with_battle_transform(transform_source: &str) -> CssOutput {
         let mut inputs = test_inputs();
         inputs.config.insert(
@@ -5270,8 +4674,6 @@ mod tests {
 
     #[test]
     fn invalid_transform_result_emits_error_diagnostic_and_drops_declaration() {
-        // D3 / G4 tripwire: static invalid-shape failure is `kind:"error"`
-        // with the exact message format, and the declaration is ABSENT.
         let out = analyze_with_battle_transform("(v) => ({ w: v })");
         let errors = diagnostics_of(&out, "error");
         assert_eq!(errors.len(), 1, "{:?}", out.diagnostics);
@@ -5284,15 +4686,13 @@ mod tests {
              return a string or finite number; rule-level styling ships as \
              declaration scales (see composite-style-scales)"
         );
-        // The declaration is absent (its only source was C's `.styles()`),
-        // and no `[object Object]` value ships anywhere in the output.
+        // Its only source was C's `.styles()`, so no value ships anywhere.
         assert!(!out.sheets.base.contains("width"), "{}", out.sheets.base);
         assert!(!out.css.contains("[object"), "{}", out.css);
     }
 
     #[test]
     fn throwing_transform_emits_warn_diagnostic_and_keeps_raw_fallback() {
-        // D4: throw keeps today's raw-value fall-through, now diagnosed.
         let out = analyze_with_battle_transform("(v) => { throw new Error('kaboom') }");
         let warns: Vec<_> = diagnostics_of(&out, "warn")
             .into_iter()
@@ -5311,8 +4711,6 @@ mod tests {
         assert!(warns[0].message.contains("kaboom"), "{}", warns[0].message);
         assert!(out.sheets.base.contains("width: 3"), "{}", out.sheets.base);
     }
-
-    // --- Compose slots resolve through qualified component ids --------------
 
     fn class_of(out: &CssOutput, component_id: &str) -> String {
         out.components
@@ -5336,8 +4734,7 @@ mod tests {
 
     #[test]
     fn compose_slots_resolve_per_file_not_by_bare_binding_name() {
-        // Two files defining the SAME local recipe names: the bare-name map
-        // let one file's components win every family in the universe.
+        // Two files define the same local recipe names.
         let one = slot_family_source("One", "Root", "Body");
         let two = slot_family_source("Two", "Root", "Body");
         let out = analyze(
@@ -5376,8 +4773,6 @@ mod tests {
 
     #[test]
     fn compose_slots_resolve_through_aliased_imports() {
-        // `import { Root as CardRoot }` had no bare-name entry, so the slot
-        // was silently dropped from the composed CSS.
         let out = analyze(
             &[
                 (
@@ -5416,9 +4811,7 @@ mod tests {
 
     #[test]
     fn compose_slot_unresolvable_by_qualified_id_bails_loud() {
-        // The composing file neither defines nor imports the slot bindings;
-        // under bare-name matching these silently bound to whichever same-named
-        // component hashed first. Now the drop is diagnosed.
+        // The composing file neither defines nor imports the slot bindings.
         let out = analyze(
             &[
                 (
@@ -5456,9 +4849,6 @@ mod tests {
 
     #[test]
     fn compose_slot_through_local_alias_resolves_identically() {
-        // Binding≡inline invariant at the slot seam (rendered-usage-semantics
-        // › local const aliases): a one-hop `const Alias = CardRoot;` slot
-        // spelling emits byte-identical CSS to the direct spelling.
         let direct = "export const CardRoot = ds.styles({ display: 'flex' }).asElement('div');\n\
              export const CardBody = ds.variant({ prop: 'size', variants: { sm: { p: 8 } } }).asElement('div');\n\
              export const Card = compose({ Root: CardRoot, Body: CardBody }, { name: 'Card', shared: { size: true } });\n\
@@ -5488,9 +4878,6 @@ mod tests {
 
     #[test]
     fn unresolvable_compose_slot_bail_carries_code_and_severity() {
-        // extraction-diagnostics › unresolvable compose slots: the bail is
-        // coded and error-severity so the shared policy point escalates it
-        // under strict.
         let out = analyze(
             &[(
                 "fam.tsx",
@@ -5514,8 +4901,6 @@ mod tests {
             assert_eq!(bail.severity.as_deref(), Some("error"), "{:?}", bail);
         }
     }
-
-    // --- Compound class names agree with emitter enumeration ----------------
 
     fn merged_compound_configs(
         out: &CssOutput,
@@ -5560,8 +4945,8 @@ mod tests {
         for (idx, (_, class)) in configs.iter().enumerate() {
             assert_eq!(*class, format!("{child_class}--compound-{idx}"));
         }
-        // Condition-to-index pairing follows the flattened parent-first order,
-        // which is exactly what the emitter enumerates.
+        // Pairing follows the flattened parent-first order the emitter
+        // enumerates.
         assert_eq!(configs[0].0["size"], Value::from("sm"));
         assert_eq!(configs[1].0["size"], Value::from("lg"));
         assert_eq!(configs[2].0["tone"], Value::from("loud"));
@@ -5656,17 +5041,10 @@ mod tests {
         );
     }
 
-    // --- Shared-axis compound expansion through the composed path ----------
-
     #[test]
     fn shared_axis_child_compounds_expand_beside_their_flat_rules() {
         // Body's compounds require `size`, which the family shares from the
-        // Root: the Body runtime never receives it, so the flat rules alone
-        // are unreachable under composition. The expansion joins them in the
-        // same layer — flat first, ancestor forms after. Both sides of the
-        // mixed condition set carry their owner's default-keyed alternative
-        // (`size` defaults on the Root, `tone` on Body itself), and Body's own
-        // `size` options stay excluded so a directly-set slot prop wins.
+        // Root, so the flat rules alone are unreachable under composition.
         let out = analyze(
             &[(
                 "card.tsx",
@@ -5707,10 +5085,8 @@ mod tests {
 
     #[test]
     fn expansion_leaves_flat_class_numbering_and_per_component_fragments_alone() {
-        // The child slot is an extension, so its compound classes are the
-        // flattened parent-first ordinals. Expansion reads that data and adds
-        // nothing to it — neither the config list nor the per-component
-        // fragment (the HMR/splitting surface) may move.
+        // Expansion only reads the compound data: neither the config list nor
+        // the per-component fragment may move.
         let out = analyze(
             &[
                 (
@@ -5801,10 +5177,6 @@ mod tests {
         );
     }
 
-    // ------------------------------------------------------------------
-    // Usage identity is keyed by component id, not by bare binding name
-    // ------------------------------------------------------------------
-
     fn variant_inputs() -> CssInputs {
         CssInputs::from_json(
             None,
@@ -5825,10 +5197,8 @@ mod tests {
         .unwrap()
     }
 
-    /// Two files export the SAME component name; an app imports both under
-    /// aliases and uses a different option of each. Each origin must keep
-    /// exactly the option used at ITS callsite — under bare-name keying the
-    /// two usage sets pooled and both components kept both options.
+    /// Two files export the same component name and an app aliases both: each
+    /// origin keeps exactly the option used at its own callsite.
     #[test]
     fn duplicate_binding_attributes_variant_usage_to_each_defining_file() {
         let variant = |quiet: &str, loud: &str| {
@@ -5888,10 +5258,8 @@ mod tests {
         inputs
     }
 
-    /// One variant option is rendered, the other is not. Both resolve — and
-    /// both hit the invalid-result-shape gate — but reconciliation prunes the
-    /// unrendered one, so only the rendered option's declaration ever ships.
-    /// Failing the build on the pruned option is a false failure.
+    /// Both options hit the invalid-result-shape gate, but reconciliation
+    /// prunes the unrendered one, so failing on it would be a false failure.
     #[test]
     fn pruned_variant_option_does_not_emit_a_build_failing_error() {
         let source = "export const Button = ds.styles({}).variant({ prop: 'tone', defaultVariant: 'quiet', variants: { quiet: { w: 1 }, loud: { w: 2 } } }).asElement('button');\n";
@@ -5919,9 +5287,8 @@ mod tests {
         );
     }
 
-    /// Development prunes nothing, so the unrendered option's CSS IS emitted
-    /// and its error is real. The production carve-out above must not leak
-    /// into dev and hide a genuine failure.
+    /// Dev prunes nothing, so the unrendered option's CSS ships and its
+    /// error is real.
     #[test]
     fn dev_mode_keeps_errors_for_every_resolved_variant_option() {
         let source = "export const Button = ds.styles({}).variant({ prop: 'tone', defaultVariant: 'quiet', variants: { quiet: { w: 1 }, loud: { w: 2 } } }).asElement('button');\n";
@@ -5944,9 +5311,6 @@ mod tests {
         );
     }
 
-    /// A single-candidate bare name with no import and no local definition
-    /// still attributes — this fallback is what keeps unique-name projects
-    /// byte-identical.
     #[test]
     fn single_candidate_bare_name_fallback_still_attributes() {
         let out = analyze(
@@ -5973,9 +5337,6 @@ mod tests {
         assert_eq!(out.reconciliation["components_eliminated"], 0);
     }
 
-    /// `Family.Slot` resolves to the slot component's origin — the file that
-    /// COMPOSED the family — not to a same-named component elsewhere and not
-    /// to the member tail.
     #[test]
     fn member_expression_attributes_to_the_slot_origin_not_a_same_named_component() {
         let out = analyze(
@@ -6002,8 +5363,8 @@ mod tests {
             "the family's own Panel got the usage: {}",
             css
         );
-        // The decoy is unrendered but compose marks slots rendered; the
-        // member usage must NOT have reached it, so its unused option goes.
+        // Compose marks slots rendered, so the decoy survives; its unused
+        // option goes because the member usage never reached it.
         assert!(
             !css.contains("padding: 8px"),
             "decoy Panel must not receive the member-expression usage: {}",
@@ -6011,9 +5372,8 @@ mod tests {
         );
     }
 
-    /// Ambiguous: a bare name with several defining files and no usable
-    /// import. Attribution fans out to every candidate — the only choice
-    /// that cannot eliminate CSS the bare-name keying kept.
+    /// A bare name with several defining files and no usable import fans out
+    /// to every candidate: any other choice could eliminate live CSS.
     #[test]
     fn ambiguous_bare_name_attributes_to_every_candidate() {
         let variant = |quiet: &str, loud: &str| {
@@ -6045,9 +5405,7 @@ mod tests {
         assert_eq!(out.reconciliation["components_eliminated"], 0);
     }
 
-    /// An imported name that resolves to nothing extractable keeps v1's
-    /// canonical-floor failure: the run goes conservative rather than
-    /// silently attributing to a same-named component elsewhere.
+    /// An import that resolves to nothing makes the run conservative.
     #[test]
     fn unresolvable_import_stays_conservative_instead_of_borrowing_a_namesake() {
         let out = analyze(
@@ -6075,11 +5433,8 @@ mod tests {
 
     #[test]
     fn renamed_sourced_reexport_usage_prunes_through_the_hop() {
-        // `export { badge as pill } from './definition'` — the direct
-        // `source_file::imported` probe misses (barrel::pill was never
-        // evaluated), so usage identity must hop the sourced re-export to
-        // the defining chain. Losing the hop retains every option AND lets
-        // another consumer's literal prune the option this consumer renders.
+        // The direct `source_file::imported` probe misses, so the hop must
+        // find the defining chain.
         let out = analyze(
             &[
                 (
@@ -6111,9 +5466,7 @@ mod tests {
 
     #[test]
     fn import_then_local_export_barrel_usage_prunes_through_both_hops() {
-        // `import { badge } from './definition'; export { badge as pill }` —
-        // the local-rename unwrap lands on a name that is an IMPORT in the
-        // barrel, so the walk must hop through it to the defining chain.
+        // The unwrapped local is itself an import, so the walk hops again.
         let out = analyze(
             &[
                 (
@@ -6145,9 +5498,8 @@ mod tests {
 
     #[test]
     fn defining_module_rename_export_usage_prunes_to_the_local_binding() {
-        // `const badge = …; export { badge as fancyBadge }` — the terminal
-        // of the re-export walk is the EXPORTED name; the local-rename
-        // unwrap must map it back to the chain's own binding.
+        // The walk's terminal is the exported name; it maps back to the
+        // chain's own binding.
         let out = analyze(
             &[
                 (
