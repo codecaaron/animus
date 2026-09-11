@@ -14,15 +14,6 @@ import {
   resolveThroughPathAliases,
 } from '../pipeline/resolve-asset';
 
-/**
- * `pathAliasesJson` has exactly one encoder — `buildPathAliasesJson`, declared
- * "the single authoritative encoder of the wire format" — and every plugin
- * assignment routes through it. The old `catch { aliases = [] }` turned a
- * broken encoder into "no aliases configured", disabling ALL alias-based
- * `asset()` resolution and emitting dangling `url()`s instead of an error, and
- * it MEMOIZED that empty table against the same string for the process
- * lifetime.
- */
 describe('resolveThroughPathAliases — internal wire', () => {
   it('throws on malformed alias JSON, naming the wire and the cause', () => {
     expect(() =>

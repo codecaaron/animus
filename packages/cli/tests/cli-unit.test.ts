@@ -63,9 +63,6 @@ import type { CliLockRecord } from '@animus-ui/extract/session';
 
 const makeRoot = (): string => mkdtempSync(join(tmpdir(), 'animus-cli-'));
 
-/** One owner claim as a holder would have written it `ageMs` ago: the pid
- *  defaults to this process, and both timestamps carry the same age, which
- *  is what the shared liveness policy reads. */
 const lockRecord = ({
   pid = process.pid,
   ageMs = 0,
@@ -157,9 +154,6 @@ describe('config resolution', () => {
     );
     const config = await resolveCliConfig({ root, outDir: 'out/animus' }, root);
     const session = createCliSession(config);
-    // The regression this pins: appending the guard to the USER list made
-    // its presence replace the replaceable defaults — a custom outDir
-    // silently re-admitted dist/.test./.spec. paths to discovery.
     const patterns = [...session.getExcludeStats().keys()];
     expect(session.structuralExclude).toEqual(['out/animus/**']);
     expect(patterns).toContain('out/animus/**');
@@ -175,8 +169,6 @@ describe('config resolution', () => {
     );
     const config = await resolveCliConfig({ root, outDir: 'out' }, root);
     const session = createCliSession(config);
-    // `structuralExclude` carrying a pattern is not evidence that the
-    // pattern EXCLUDES anything, so the matcher is asked directly.
     const matcher = createExcludeMatcher(
       config.options.exclude,
       session.structuralExclude
@@ -197,9 +189,6 @@ describe('config resolution', () => {
     );
     const config = await resolveCliConfig({ root, outDir: '.' }, root);
     expect(config.outDir).toBe(root);
-    // `relative(root, outDir)` is '' here, and no exclusion pattern built
-    // from it can protect the artifacts while leaving source discoverable,
-    // so the run is refused rather than guarded.
     expect(() => createCliSession(config)).toThrow(UsageFailure);
     expect(() => createCliSession(config)).toThrow(/--out-dir/);
   });
@@ -210,9 +199,6 @@ describe('config resolution', () => {
       join(root, 'animus.config.json'),
       JSON.stringify({ system: './ds.ts', engine: 'v1' })
     );
-    // `engine` is a CORE key, so the shared key validator vouches for it and
-    // the CLI then drops the value on the floor: the one driver that never
-    // applied the retirement gate silently ran v2 instead (flow row A).
     await expect(resolveCliConfig({ root }, root)).rejects.toThrow(
       RETIRED_ENGINE_MESSAGE
     );
@@ -259,12 +245,10 @@ describe('config resolution', () => {
     );
     const config = await resolveCliConfig({ root }, root);
     // An empty list that decays to `undefined` reads as "no user list" to
-    // `createExcludeMatcher`, which then answers with
-    // REPLACEABLE_DEFAULT_EXCLUDE.
+    // `createExcludeMatcher`, which answers with the replaceable defaults.
     expect(config.options.exclude).toEqual([]);
     expect(config.excludePatterns).not.toContain('dist');
     expect(config.excludePatterns).not.toContain('.test.');
-    // The structural set is never replaceable by any user list.
     expect(config.excludePatterns).toContain('node_modules');
     expect(projectResolvedConfig(config).provenance.exclude).toBe('explicit');
   });
@@ -295,8 +279,6 @@ describe('config resolution', () => {
     const projected = projectResolvedConfig(
       await resolveCliConfig({ root }, root)
     );
-    // Both are known config keys resolved into the effective options, so a
-    // projection that omits them reads as "your config had no effect".
     expect(projected.extensions).toEqual(['.ts', '.tsx']);
     expect(projected.staticCss).toEqual(staticCss);
     expect(projected.provenance.extensions).toBe('explicit');
@@ -332,8 +314,6 @@ describe('inferred root reporting', () => {
       { config: writeConfig(configDir) },
       cwd
     );
-    // Every relative input (system, out-dir, exclude) now resolves against a
-    // directory the user never named, so the notice is the only record of it.
     expect(config.root).toBe(configDir);
     expect(config.rootSource).toBe('config-dir');
     const notice = inferredRootNotice(config, cwd);
@@ -426,9 +406,6 @@ describe('artifact writer', () => {
   });
 
   test('a record whose payloads is an ARRAY is not a schema-1 record', () => {
-    // The hole this pins: a `typeof record.payloads !== 'object'` gate admits
-    // an array, whose zero entries then verify vacuously — a record naming no
-    // payload at all would certify any tree it sits in.
     const outDir = join(makeRoot(), '.animus');
     publishArtifacts(outDir, payloads);
     writeFileSync(
@@ -449,9 +426,6 @@ describe('artifact writer', () => {
   });
 
   test('a record of bare `null` fails the check instead of throwing', () => {
-    // `JSON.parse('null')` is a successful parse, so a field read off the
-    // result throws out of a function whose contract is to RETURN failures —
-    // the session's hygiene gate calls this and does not catch.
     const outDir = join(makeRoot(), '.animus');
     publishArtifacts(outDir, payloads);
     writeFileSync(join(outDir, 'commit.json'), 'null');
@@ -462,8 +436,7 @@ describe('artifact writer', () => {
     const root = makeRoot();
     const sessionDir = join(root, 'session');
     mkdirSync(join(sessionDir, 'assets'), { recursive: true });
-    // Binary bytes (not valid UTF-8) — the woff2 case the verify read must
-    // survive without mangling.
+    // Not valid UTF-8: the verify read must survive binary assets unmangled.
     const fontBytes = Buffer.from([0x77, 0x4f, 0x46, 0x32, 0x00, 0xff, 0xfe]);
     writeFileSync(join(sessionDir, 'assets', 'font.abc123.woff2'), fontBytes);
     const outDir = join(root, '.animus');
@@ -482,7 +455,6 @@ describe('artifact writer', () => {
     );
     expect(record.payloads['assets/font.abc123.woff2']?.hash).toBeTruthy();
     expect(verifyCommitRecord(outDir)).toEqual([]);
-    // No staging residue survives the publish.
     expect(
       readdirSync(outDir).filter((name) => name.startsWith('.staging'))
     ).toEqual([]);
@@ -518,17 +490,12 @@ describe('artifact writer', () => {
 
   test('publication never deletes assets it did not publish — outDir is not animus-exclusive', () => {
     const root = makeRoot();
-    // The lock-conflict remediation advertises --out-dir, so a shared,
-    // user-owned target (public/ with its own assets/) is a supported
-    // shape — a zero-asset publish must not clear it.
     const outDir = join(root, 'public');
     mkdirSync(join(outDir, 'assets'), { recursive: true });
     writeFileSync(join(outDir, 'assets', 'logo.svg'), '<svg/>');
     publishArtifacts(outDir, payloads);
     expect(existsSync(join(outDir, 'assets', 'logo.svg'))).toBe(true);
 
-    // A generation that publishes its own asset, then drops it: the prune
-    // removes exactly the previously-published name, never the user file.
     const sessionDir = join(root, 'session');
     mkdirSync(join(sessionDir, 'assets'), { recursive: true });
     writeFileSync(join(sessionDir, 'assets', 'font.aaa11111.woff2'), 'a');
@@ -551,36 +518,26 @@ describe('artifact writer', () => {
   test('a live lock holder fails loud; a stale lock is stolen', () => {
     const outDir = join(makeRoot(), '.animus');
     mkdirSync(outDir, { recursive: true });
-    // Live holder: this very process.
     writeFileSync(join(outDir, 'lock.json'), JSON.stringify(lockRecord()));
     expect(() => acquireLock(outDir)).toThrow(/owns .*--out-dir/s);
-    // Stale holder: a pid that cannot exist.
     writeFileSync(
       join(outDir, 'lock.json'),
       JSON.stringify(lockRecord({ pid: 2 ** 30 }))
     );
     const release = acquireLock(outDir);
     release();
-    expect(verifyCommitRecord(outDir).length).toBeGreaterThan(0); // no commit yet — check runs
+    expect(verifyCommitRecord(outDir).length).toBeGreaterThan(0);
   });
 
   test('a lock that exists but does not decode is never stolen', () => {
     const outDir = join(makeRoot(), '.animus');
     mkdirSync(outDir, { recursive: true });
-    // A torn or hand-edited lock names no pid, so its holder cannot be
-    // proven dead. Stealing it is the unsafe direction — two writers over
-    // one tree — so the conflict is loud and names the file to remove.
     writeFileSync(join(outDir, 'lock.json'), '{"pid":');
     expect(() => acquireLock(outDir)).toThrow(/lock\.json/);
     expect(existsSync(join(outDir, 'lock.json'))).toBe(true);
   });
 
   test('a holder this process may not signal is live, not stale', () => {
-    // pid 1 (launchd/init) exists and is root-owned, so `process.kill(1, 0)`
-    // from an unprivileged runner throws EPERM — "the process is there, you
-    // may not signal it". Reading that as DEAD is how a second writer steals
-    // a live holder's tree. Under a root runner the probe simply succeeds and
-    // the verdict is the same, so the assertion holds either way.
     const outDir = join(makeRoot(), '.animus');
     mkdirSync(outDir, { recursive: true });
     writeFileSync(
@@ -597,10 +554,6 @@ describe('lock liveness', () => {
     new Date(Date.now() - TWO_DAYS_MS).toISOString();
 
   test('a live pid whose heartbeat stopped long ago no longer owns the tree', () => {
-    // Pid reuse: the recorded pid IS running (it is this test process), but
-    // the run that wrote the record stopped its heartbeat two days ago. A
-    // pid-existence probe alone reads this as a live holder and wedges the
-    // outDir forever.
     const outDir = join(makeRoot(), '.animus');
     mkdirSync(outDir, { recursive: true });
     const stopped = lockRecord({ ageMs: TWO_DAYS_MS });
@@ -624,8 +577,6 @@ describe('lock liveness', () => {
         heartbeatAt: new Date().toISOString(),
       })
     );
-    // The honest conflict case: a long-running watch keeps refreshing its
-    // heartbeat, and an old `startedAt` is not evidence of death.
     expect(() => acquireLock(outDir)).toThrow(/owns .*--out-dir/s);
   });
 
@@ -643,17 +594,13 @@ describe('lock liveness', () => {
       vi.advanceTimersByTime(CLI_LOCK_HEARTBEAT_INTERVAL_MS + 1);
       const refreshed = readLock();
       expect(refreshed.pid).toBe(process.pid);
-      // Proof of life: the record another writer reads is younger than the
-      // staleness window for as long as this process holds the claim.
       expect(refreshed.heartbeatAt! > first.heartbeatAt!).toBe(true);
-      // No debris from the write-then-rename refresh.
       expect(
         readdirSync(outDir).filter((name) => name.startsWith('.lock-heartbeat'))
       ).toEqual([]);
 
       release();
       expect(existsSync(join(outDir, 'lock.json'))).toBe(false);
-      // A stopped heartbeat must not re-create the released claim.
       vi.advanceTimersByTime(CLI_LOCK_HEARTBEAT_INTERVAL_MS * 3);
       expect(existsSync(join(outDir, 'lock.json'))).toBe(false);
     } finally {
@@ -662,9 +609,6 @@ describe('lock liveness', () => {
   });
 
   test('a lock record carrying no heartbeat is judged by its pid alone', () => {
-    // Absence of the heartbeat field is absence of staleness evidence, and
-    // stealing a tree from a holder that may be alive is the unsafe
-    // direction.
     const outDir = join(makeRoot(), '.animus');
     mkdirSync(outDir, { recursive: true });
     writeFileSync(
@@ -675,11 +619,8 @@ describe('lock liveness', () => {
   });
 });
 
-/**
- * Run `fn` with console.error captured, and return what it said — one line
- * per call, joined the way the CLI wrote it. Read BEFORE the spy is
- * restored: `mockRestore` also clears the recorded calls.
- */
+/** Read the captured lines before the finally block: `mockRestore` also
+ *  clears the recorded calls. */
 async function withCapturedStderr(
   fn: () => void | Promise<void>
 ): Promise<string[]> {
@@ -692,7 +633,6 @@ async function withCapturedStderr(
   }
 }
 
-/** A resolved config for a minimal project the CLI can preflight. */
 async function projectConfig(root: string) {
   writeFileSync(join(root, 'ds.ts'), 'export const notASystem = 1;\n');
   writeFileSync(
@@ -705,13 +645,9 @@ async function projectConfig(root: string) {
 describe('interrupted-writer debris', () => {
   test('acquireLock reaps staging trees left by dead writers, keeping live ones', () => {
     const outDir = join(makeRoot(), '.animus');
-    // Debris from an interrupted publish: the writer removes its own
-    // `.staging-<pid>` in a `finally` that a hard kill never reaches.
     const deadStaging = join(outDir, `.staging-${2 ** 30}`);
     mkdirSync(deadStaging, { recursive: true });
     writeFileSync(join(deadStaging, 'styles.css'), 'abandoned');
-    // A live writer's staging tree is its private working set — reaping it
-    // would delete files that process is mid-way through staging.
     const liveStaging = join(outDir, `.staging-${process.pid}`);
     mkdirSync(liveStaging, { recursive: true });
     writeFileSync(join(outDir, 'styles.css'), 'published');
@@ -732,9 +668,6 @@ describe('interrupted-writer debris', () => {
     let heldSigint = -1;
     let heldSigterm = -1;
     const config = await projectConfig(makeRoot());
-    // `excludePatterns` is read only by createCliSession, which runs inside
-    // the guarded region — the one reachable observation point between the
-    // lock claim and the cleanup.
     Object.defineProperty(config, 'excludePatterns', {
       get(): string[] {
         heldSigint = process.listenerCount('SIGINT');
@@ -749,8 +682,6 @@ describe('interrupted-writer debris', () => {
 
     expect(heldSigint).toBe(baseSigint + 1);
     expect(heldSigterm).toBe(baseSigterm + 1);
-    // Programmatic entry point: a returned build must leave no listener
-    // behind, or a long-lived host accumulates one per invocation.
     expect(process.listenerCount('SIGINT')).toBe(baseSigint);
     expect(process.listenerCount('SIGTERM')).toBe(baseSigterm);
   });
@@ -763,9 +694,6 @@ describe('interrupted publication swap', () => {
     manifestJson: '{"components":{"X":{}}}',
   };
 
-  /** Publish into an outDir whose second payload name is an occupied
-   *  directory: the first rename lands, the second cannot, and the swap
-   *  stops with the directory holding a mix of two generations. */
   function tearPublication(
     outDir: string
   ): PublishSwapIncompleteError<unknown> {
@@ -788,9 +716,6 @@ describe('interrupted publication swap', () => {
   test('a swap that stops after a payload lands says so, naming what landed', () => {
     const outDir = join(makeRoot(), '.animus');
     const error = tearPublication(outDir);
-    // The claim that must not be made here: "the previous generation is
-    // untouched". styles.css is already the new generation's bytes while
-    // commit.json still describes the old one.
     expect(String(error)).toContain('styles.css');
     expect(String(error)).toMatch(/mix|torn|did not (finish|complete)/i);
     expect(verifyCommitRecord(outDir).length).toBeGreaterThan(0);
@@ -800,7 +725,6 @@ describe('interrupted publication swap', () => {
     const outDir = join(makeRoot(), '.animus');
     publishArtifacts(outDir, payloads);
     const before = readFileSync(join(outDir, 'styles.css'), 'utf-8');
-    // The FIRST rename target is occupied, so no name is ever replaced.
     rmSync(join(outDir, 'styles.css'));
     mkdirSync(join(outDir, 'styles.css'), { recursive: true });
     writeFileSync(join(outDir, 'styles.css', 'blocker'), 'x');
@@ -810,7 +734,6 @@ describe('interrupted publication swap', () => {
         systemPropsJs: 'export const q=1;',
       })
     ).toThrow();
-    // Untouched: the record and the two payloads that were never renamed.
     expect(readFileSync(join(outDir, 'system-props.js'), 'utf-8')).toBe(
       payloads.systemPropsJs
     );
@@ -842,14 +765,10 @@ describe('interrupted publication swap', () => {
     const outDir = join(makeRoot(), '.animus');
     const torn = tearPublication(outDir);
     const tornLine = formatCyclePublishFailure(outDir, torn);
-    // "keeping last-good artifacts" stops being true the moment the first
-    // rename lands.
     expect(tornLine).not.toContain('last-good artifacts');
     expect(tornLine).toContain(outDir);
     expect(tornLine).toContain('styles.css');
 
-    // A rejection BEFORE the swap keeps the contracted wording: that path
-    // genuinely leaves the previous generation in place.
     const rejected = formatCyclePublishFailure(
       outDir,
       new Error('Structural self-check failed')
@@ -860,8 +779,6 @@ describe('interrupted publication swap', () => {
 });
 
 describe('shutdown signals', () => {
-  /** One recorded release: its exit code, its signal, and whether a second
-   *  signal cut an unfinished drain short. */
   type Released = [number, string, boolean];
 
   test('both signals reach the release once, with their exit codes', () => {
@@ -872,8 +789,6 @@ describe('shutdown signals', () => {
     });
     try {
       process.emit('SIGINT');
-      // A second signal must not start a second cleanup — two concurrent
-      // lock releases over one tree is the failure mode.
       process.emit('SIGTERM');
       expect(seen).toEqual([[EXIT_SIGINT, 'SIGINT', false]]);
     } finally {
@@ -955,16 +870,11 @@ describe('shutdown signals', () => {
     });
     try {
       process.emit('SIGINT');
-      // The listeners must stay armed through the drain: handing this second
-      // signal to the kernel default would kill the process before the lock
-      // file is unlinked and the session tree removed.
       process.emit('SIGTERM');
       expect(seen).toEqual([[EXIT_SIGTERM, 'SIGTERM', true]]);
       expect(exits).toEqual([EXIT_SIGTERM]);
-      // A third signal has nothing left to escalate to.
       process.emit('SIGINT');
       expect(seen).toHaveLength(1);
-      // The abandoned release stands: the drain finishing later adds none.
       finishDrain();
       await draining;
       await Promise.resolve();
@@ -992,8 +902,6 @@ describe('shutdown signals', () => {
 });
 
 describe('command-line positionals', () => {
-  /** Run `main` with console.error captured and `process.exitCode` restored
-   *  — `main` reports through the process, so a test must own both. */
   async function runMain(
     argv: string[]
   ): Promise<{ exitCode: number | string | null | undefined; stderr: string }> {
@@ -1006,7 +914,6 @@ describe('command-line positionals', () => {
       });
       return { exitCode, stderr: lines.join('\n') };
     } finally {
-      // `null` and `undefined` both mean "the process set no code".
       process.exitCode = previous ?? undefined;
     }
   }
@@ -1027,9 +934,6 @@ describe('command-line positionals', () => {
 
 describe('bin shim', () => {
   test('a CLI that cannot load exits with the install-failure code, not the extraction code', () => {
-    // The real shim text, run from a directory where `../dist/index.mjs`
-    // does not exist. An unhandled rejection would exit 1, which a
-    // supervisor reads as "extraction failed" and retries.
     const shimSource = readFileSync(
       join(import.meta.dirname, '..', 'bin', 'animus.mjs'),
       'utf-8'
@@ -1049,9 +953,6 @@ describe('bin shim', () => {
 
 describe('session-tree cleanup ownership', () => {
   test('a run that never constructed a session deletes no session tree', async () => {
-    // Run 1 reaches pipeline start (which publishes its session dir into
-    // the process-global slot) and then fails — the slot now names THIS
-    // root's tree for the rest of the process.
     const rootA = makeRoot();
     await expect(runBuild(await projectConfig(rootA))).rejects.toThrow();
     const slotDir = getSessionArtifactDir();
@@ -1059,10 +960,6 @@ describe('session-tree cleanup ownership', () => {
     mkdirSync(slotDir!, { recursive: true });
     writeFileSync(join(slotDir!, 'manifest.json'), '{}');
 
-    // Run 2 is a DIFFERENT root whose session construction fails:
-    // `excludePatterns` is read only by createCliSession (preflight never
-    // touches it), so a throwing accessor reproduces the one reachable path
-    // to the cleanup fallback.
     const configB = await projectConfig(makeRoot());
     Object.defineProperty(configB, 'excludePatterns', {
       get(): string[] {
@@ -1073,8 +970,6 @@ describe('session-tree cleanup ownership', () => {
       'session construction failed'
     );
 
-    // A run that owns no session must delete no tree: the process-global
-    // slot names a DIFFERENT session's here.
     expect(existsSync(join(slotDir!, 'manifest.json'))).toBe(true);
   });
 });
@@ -1089,11 +984,6 @@ describe('exit taxonomy', () => {
   });
 });
 
-// Automated equivalent of the platform-degraded watch negative (increment
-// 06 task 06.2 step 2): forcing a real recursive-fs.watch failure is not
-// portably simulable, so the degradation LIST derivation and its loud
-// per-root formatting are pinned here; the e2e lane covers the healthy
-// watch loop end to end.
 describe('watch degradation reporting', () => {
   const healthy = {
     projectRoot: '/proj',
@@ -1126,9 +1016,6 @@ describe('watch degradation reporting', () => {
     });
     expect(degraded).toHaveLength(1);
     expect(degraded[0].root).toBe('/proj');
-    // The misreport this pins: the orchestrator returned the same `null` for
-    // a duplicate claim and a platform failure, so the CLI blamed the
-    // platform and prescribed a restart that collides identically (S9).
     expect(degraded[0].reason).not.toMatch(/platform watcher unavailable/);
     expect(degraded[0].reason).toMatch(/already/i);
     expect(degraded[0].reason).toMatch(/NO source edits will be observed/);

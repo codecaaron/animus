@@ -24,31 +24,13 @@ import type {
 import type { SessionOptions } from '../../session/extraction-session';
 import type { CliLockRecord } from '../../session/published-set';
 
-/**
- * Shared, bundler-free fixtures for the extract session suites and the
- * next-plugin behavioral suites: the singleton globalThis hygiene, the canned
- * SystemConfig, the Button project corpus, the canonical manifest builder,
- * the temp-root lifecycle, and the replacements-epoch witness. Suites (and
- * the next-plugin webpack-watch driver, which re-exports for its test files)
- * import these instead of re-declaring them.
- */
-
-/** Every globalThis key owned by the session singleton (packages/extract/session/singleton.ts) — sourced from the
- *  singleton's own exported list, never re-declared. */
 export const ANIMUS_GLOBAL_KEYS = SINGLETON_GLOBAL_KEYS;
 
-/** One singleton-owned key, taken from the singleton's own exported list. */
 type AnimusGlobalKey = (typeof ANIMUS_GLOBAL_KEYS)[number];
 
 /**
- * Clear every singleton-owned global (simulating a fresh process) and
- * return a restorer for afterEach. Callers that only want the clearing
- * (webpack-watch driver sessions) ignore the return value.
- *
- * The singleton keeps each slot's value type private (`AnimusSingletonStore`
- * in packages/extract/session/singleton.ts), so this fixture never names or
- * inspects a value: it carries each key's own property descriptor out and
- * back. Clearing writes the same `undefined` assignment it always did.
+ * Restores through saved property descriptors: the singleton's slot value
+ * types are private, so no value is named or inspected here.
  */
 export function resetAnimusGlobals(): () => void {
   const saved = new Map<AnimusGlobalKey, PropertyDescriptor>();
@@ -58,16 +40,13 @@ export function resetAnimusGlobals(): () => void {
     Object.assign(globalThis, { [key]: undefined });
   }
   return () => {
-    // Keys with no saved descriptor were absent before the reset; restoring
-    // them has always meant leaving an own key valued `undefined`, which the
-    // clearing pass above already wrote.
+    // Keys absent before the reset keep the own `undefined` the clearing wrote.
     for (const [key, descriptor] of saved) {
       Object.defineProperty(globalThis, key, descriptor);
     }
   };
 }
 
-/** Canned loadSystemModule return value (NAPI camelCase surface). */
 export const SYSTEM_CONFIG = {
   propConfig: '{"props":{}}',
   groupRegistry: '{"groups":{}}',
@@ -90,17 +69,8 @@ export const BUTTON_PLAN_EDIT =
   "export const Button = animus.styles({ margin: 16 }).variant({}).asElement('button');\n";
 
 /**
- * A COMPLETE `ProjectManifest` at its empty-universe values, overridden per
- * test — the session-side twin of `packages/vite-plugin/tests/manifest-fixture
- * .ts` (the vite plugin keeps its own copy; the next-plugin suites reach this
- * one by relative path, the way they reach `engine-prerequisites.ts`).
- *
- * The engine's `AnalyzeResult` declares no `Option` and no
- * `skip_serializing_if` at the top level (see `manifest-schema.ts`), so an
- * empty project still serializes `{}` / `[]` / `""` for every field — absence
- * means "not a manifest". Fakes that omitted fields were the only thing
- * keeping `manifest?.sheets`-style shape guards alive in the shared pipeline;
- * building every fake from this base is what lets those guards go.
+ * A complete `ProjectManifest` at empty-universe values: the engine
+ * serializes every field, so a missing field means "not a manifest".
  */
 export function makeManifest(
   overrides: Partial<ProjectManifest> = {}
@@ -155,11 +125,6 @@ export function makeManifest(
   };
 }
 
-/**
- * One component descriptor. `file` and `replacement` are the two fields the
- * epoch/plan derivation reads; the rest carry the engine's own empty values
- * so a fake descriptor is a whole one.
- */
 export function makeComponent(
   file: string,
   replacement = ''
@@ -189,8 +154,6 @@ export const PLAN_B = {
   ),
 };
 
-/** Canonical engine-manifest JSON for a component set — a COMPLETE
- *  `ProjectManifest`, so the pipeline's typed reads hold in these suites. */
 export function buildManifest(
   components: Record<string, ManifestComponentDescriptor>,
   css = '.btn{margin:8px;}'
@@ -200,29 +163,18 @@ export function buildManifest(
 
 const tempRoots: string[] = [];
 
-/**
- * Make a temp directory under the OS temp dir and register it for
- * `disposeTempRoots`. The one disposal policy for every temp tree these
- * suites create — recursive + force, per-file `afterEach`, and never through
- * a symlinked fixture tree (nothing here links out of `tmpdir()`).
- */
 export function makeTempRoot(prefix: string): string {
   const root = mkdtempSync(join(tmpdir(), prefix));
   tempRoots.push(root);
   return root;
 }
 
-/** Remove every root registered since the last disposal — raw roots from
- *  `makeTempRoot` and project fixtures from `createProject` alike. Call it
- *  from afterEach. */
 export function disposeTempRoots(): void {
   for (const root of tempRoots.splice(0)) {
     rmSync(root, { recursive: true, force: true });
   }
 }
 
-/** Temp project carrying src/system.ts + src/Button.tsx. Roots are
- *  registered for `disposeTempRoots` (call it from afterEach). */
 export function createProject(prefix: string): string {
   const root = makeTempRoot(prefix);
   mkdirSync(join(root, 'src'), { recursive: true });
@@ -234,17 +186,15 @@ export function createProject(prefix: string): string {
   return root;
 }
 
-/** An app system module that includes a sibling kit — the source that makes
- *  the kit an admitted external root, which every workspace suite here needs
- *  before it can say anything about external ingestion. */
+/** App system module importing a sibling kit: the import is what admits the
+ *  kit as an external root. */
 export const KIT_SYSTEM_SOURCE = `import { createSystem } from '@animus-ui/system';
 import kit from '../../kits/ui/src/index.ts';
 export const system = createSystem({}).extend(kit);
 `;
 
-/** The trees `createKitWorkspace` lays down. `kitOld` is not reachable from
- *  the app's system module: it is the root a suite proves is never
- *  admitted. */
+/** `kitOld` is unreachable from the app's system module, so it is never
+ *  admitted as an external root. */
 export interface KitWorkspace {
   parent: string;
   app: string;
@@ -253,9 +203,8 @@ export interface KitWorkspace {
 }
 
 /**
- * A temp monorepo: an app root whose system module includes a sibling kit,
- * plus a second kit nothing references. Realpath'd, because macOS resolves
- * `/var` through a symlink and the session compares resolved roots.
+ * Realpath'd because macOS resolves `/var` through a symlink and the session
+ * compares resolved roots.
  */
 export function createKitWorkspace(
   systemSource: string = KIT_SYSTEM_SOURCE
@@ -277,8 +226,6 @@ export function createKitWorkspace(
   return { parent, app, kit, kitOld };
 }
 
-/** A session rooted at `root` with `src/system.ts` as its system module —
- *  the one construction every session suite here starts from. */
 export function makeSession(
   root: string,
   options: Partial<SessionOptions> = {}
@@ -291,7 +238,6 @@ export function makeSession(
   return session;
 }
 
-/** `makeSession` plus its first full pipeline. */
 export async function startSession(
   root: string,
   options: Partial<SessionOptions> = {}
@@ -301,15 +247,12 @@ export async function startSession(
   return session;
 }
 
-/** An `analyzeProject` mock, read at slot 0 of the positional tuple — the
- *  serialized analysis entry set (`buildAnalysisInputs`' `filesJson`). */
 interface AnalyzeProjectRecorder {
   mock: { calls: ReadonlyArray<readonly [string, ...unknown[]]> };
 }
 
-/** The file set the last analysis received. Throws when no call was
- *  recorded: an empty answer would compare equal to a corpus that analyzed
- *  nothing. */
+/** Throws when no call was recorded: an empty answer would compare equal to
+ *  a corpus that analyzed nothing. */
 export function lastAnalyzedFiles(
   analyzeProject: AnalyzeProjectRecorder
 ): AnalysisSourceEntry[] {
@@ -326,16 +269,13 @@ export function lastAnalyzedFiles(
   return corpus as AnalysisSourceEntry[];
 }
 
-/** Paths (rootDir-relative) of the file set the last analysis received. */
+/** rootDir-relative paths of the file set the last analysis received. */
 export function lastAnalyzedPaths(
   analyzeProject: AnalyzeProjectRecorder
 ): string[] {
   return lastAnalyzedFiles(analyzeProject).map((entry) => entry.path);
 }
 
-/** One owner claim (`lock.json`'s record) as a holder would have written it
- *  `ageMs` ago: the pid defaults to this process, and both timestamps carry
- *  the same age, which is what the shared liveness policy reads. */
 export function lockRecord({
   pid = process.pid,
   ageMs = 0,
@@ -344,31 +284,20 @@ export function lockRecord({
   return { pid, startedAt: at, heartbeatAt: at };
 }
 
-/** The (file, replacement) projection of one component descriptor — the two
- *  fields the epoch derivation reads (`snapshotFilePlans`,
- *  packages/extract/pipeline/replacement-plans.ts). Reader-side validators
- *  assert artifacts read back from disk carry at least this projection. */
 export type ReplacementPlan = Pick<
   ManifestComponentDescriptor,
   'file' | 'replacement'
 >;
 
-/** The manifest `components` map these fixtures drive, keyed by
- *  `<file>::<binding>` component id. */
+/** Keyed by `<file>::<binding>` component id. */
 export type ReplacementPlans = Record<string, ReplacementPlan>;
 
-/** The served system-props module the fixture pipeline emits — the epoch's
- *  served-dependency witness (fixture manifests carry empty prop maps). */
 const SYSTEM_PROPS_WITNESS = buildSystemPropsModule({
   systemPropMapJson: '{}',
   groupRegistryJson: SYSTEM_CONFIG.groupRegistry,
   dynamicProps: {},
 });
 
-/** The canonical replacement epoch for a component set — the value the
- *  session must publish and write to its epoch artifact. Takes complete
- *  descriptors (`makeComponent`) because the epoch derivation reads a
- *  typed manifest projection. */
 export function expectedEpoch(
   components: Record<string, ManifestComponentDescriptor>
 ): string {

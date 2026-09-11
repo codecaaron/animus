@@ -7,12 +7,6 @@ import type { ConfigEnv, HookHandler, Plugin } from 'vite';
 type ConfigHook = HookHandler<NonNullable<Plugin['config']>>;
 type ConfigHookCall = OmitThisParameter<ConfigHook>;
 
-/**
- * The system runtime gates its development-only diagnostics on the
- * `__ANIMUS_DEV__` define. The plugin is what supplies it, keyed on Vite's own
- * command, so a production build folds those branches away and a dev server
- * keeps them.
- */
 describe('__ANIMUS_DEV__ define', () => {
   const runConfigHook = (command: ConfigEnv['command']) => {
     const hook = animusExtract({ system: './src/ds.ts' }).config;

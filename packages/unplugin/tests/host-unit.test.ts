@@ -3,8 +3,6 @@ import { TURBOPACK_SYSTEM_PROPS_ID } from '@animus-ui/extract/session';
 import { sep } from 'node:path';
 import { describe, expect, test } from 'vitest';
 
-// State mutator deliberately OFF the public barrel — tests reach it via
-// source (the next-plugin test convention).
 import {
   claimExclusiveSessionOwner as claimProcessHost,
   setSessionArtifactDir,
@@ -211,12 +209,6 @@ describe('transform delegation', () => {
 
 describe('session-dir cleanup', () => {
   test('a failed pipeline disposes the session dir before rethrowing — REAL ordering: the dir is NOT yet recorded on state at throw time', async () => {
-    // Production assigns state.sessionDir only AFTER the pipeline await
-    // resolves; on failure it is still null and the dir is recoverable
-    // only from the session singleton (which publishes it at pipeline
-    // START). The first version of this test assigned state.sessionDir
-    // inside the fake — masking exactly the leak it existed to prevent
-    // (inc 05 review B1). This version fails against the pre-fix code.
     const state = createHostState();
     const removed: string[] = [];
     setSessionArtifactDir('/tmp/animus-session-from-singleton');
@@ -225,8 +217,6 @@ describe('session-dir cleanup', () => {
         drivePipeline(
           state,
           async () => {
-            // state.sessionDir deliberately NOT assigned — the real
-            // failure-path shape.
             throw new Error('analysis failed');
           },
           (dir) => removed.push(dir)
@@ -274,9 +264,8 @@ describe('transform claim (node_modules skip)', () => {
   });
 
   test('dependency-graph node_modules files are NOT claimed', () => {
-    // The regression this pins: without the exclusion every module in
-    // node_modules (react, lodash, …) rode through joinPipeline + a NAPI
-    // transform round trip, scaling build time with dependency-graph size.
+    // Without the exclusion every node_modules module runs the pipeline and a
+    // NAPI transform round trip, scaling build time with the dependency graph.
     expect(
       shouldClaimTransform('/app/node_modules/react/index.js', claimState)
     ).toBe(false);
@@ -310,8 +299,6 @@ describe('transform claim (node_modules skip)', () => {
   });
 });
 
-// The claim itself now lives on the session (ExtractionSession.runFullPipeline
-// claims, close() releases); these pin the mechanism the host inherits.
 describe('process publication claim (one live publisher per process)', () => {
   test('sequential claim/release cycles are legal', () => {
     const releaseA = claimProcessHost('animus-host:/app');
@@ -332,7 +319,6 @@ describe('process publication claim (one live publisher per process)', () => {
     } finally {
       release();
     }
-    // Released: the next claim succeeds again.
     claimProcessHost('animus-host:/app-server')();
   });
 
@@ -340,7 +326,6 @@ describe('process publication claim (one live publisher per process)', () => {
     const releaseA = claimProcessHost('animus-host:/a');
     releaseA();
     const releaseB = claimProcessHost('animus-host:/b');
-    // A's release handle fired again after B claimed must NOT free B.
     releaseA();
     expect(() => claimProcessHost('animus-host:/c')).toThrow(/still active/);
     releaseB();

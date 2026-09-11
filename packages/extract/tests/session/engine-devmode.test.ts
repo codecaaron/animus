@@ -1,18 +1,3 @@
-/**
- * Engine devMode derivation (core-options: `mode` "decides emitted bytes …
- * engine devMode").
- *
- * The engine's `dev_mode` flag (retain all components vs reconciliation
- * pruning) must follow an EXPLICIT `mode` option on every pipeline path —
- * a pinned-production watch must not flip to unpruned CSS on its first
- * incremental republication, and a pinned-development full build must
- * retain all components. Without an explicit mode the historical
- * per-pipeline default applies (full = false, incremental = true).
- *
- * Same setup as session-artifacts.test.ts: NAPI boundary mocked, session
- * real, temp project on disk. `devMode` is slot 7 of the positional
- * `analyzeProject` tuple (analyze-project-args.ts).
- */
 import { writeFileSync } from 'fs';
 import { join } from 'path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
@@ -25,9 +10,6 @@ const mocks = vi.hoisted(() => ({
 
 import { setEngineApiOverride } from '../../session/singleton';
 
-// Engine API injection through the singleton's globalThis-keyed test
-// seam — reaches every copy of the module (source or dist), which a
-// module mock cannot.
 setEngineApiOverride(() => ({
   loadSystemModule: mocks.loadSystemModule,
   extractFacts: () => '{"files":{},"parseCount":0}',
@@ -62,8 +44,6 @@ function lastDevModeArg(): boolean {
 async function startSession(mode?: AnimusMode): Promise<ExtractionSession> {
   const root = createFixtureProject('animus-devmode-');
   mocks.analyzeProject.mockImplementation(() => buildManifest({}));
-  // `mode` stays ABSENT unless the caller pins one — the historical
-  // per-pipeline default only applies to an option object without the key.
   const options: SessionOptions = { system: './src/system.ts' };
   if (mode) options.mode = mode;
   const session = new ExtractionSession(options);
@@ -108,8 +88,6 @@ describe('engine devMode derivation', () => {
     const session = await startSession('production');
     expect(lastDevModeArg()).toBe(false);
     await runComponentEditCycle(session);
-    // The regression this pins: a pinned-production watch republished
-    // unpruned dev CSS on its first incremental cycle.
     expect(lastDevModeArg()).toBe(false);
   });
 

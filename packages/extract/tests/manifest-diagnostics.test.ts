@@ -32,13 +32,9 @@ describe('hasSelectorSubject', () => {
   });
 
   it('tracks backslash escapes (mirrors the Rust walk)', () => {
-    // An escaped quote must not close the string — the `&` after it is
-    // literal attribute text, and only a trailing unquoted `&` counts.
     expect(hasSelectorSubject('[data-x="a\\"&b"]')).toBe(false);
     expect(hasSelectorSubject('[data-x="a\\"&b"] &')).toBe(true);
-    // A doubled backslash ends its own escape — the quote after it closes.
     expect(hasSelectorSubject('[data-x="a\\\\"]')).toBe(false);
-    // An escaped `&` outside quotes is an identifier character, not a subject.
     expect(hasSelectorSubject('.a\\& span')).toBe(false);
   });
 });
@@ -128,14 +124,6 @@ describe('collectSelectorAliasDiagnostics', () => {
     expect(collectSelectorAliasDiagnostics(null)).toEqual([]);
   });
 
-  /**
-   * RECORDED CONTRACT REVERSAL (campaign cluster F). This assertion previously
-   * pinned `'not-json'` yielding `[]`. The function's own header names the
-   * system-config boundary as "where these must fail loud", and `[]` reads as
-   * "every registered alias validated" — the exact failure the collector
-   * exists to prevent. `selectorAliasesJson` comes from `loadSystemConfig`,
-   * animus's own loader, so a parse failure is an engine bug.
-   */
   it('throws on malformed selector-alias JSON, naming the wire and the cause', () => {
     expect(() => collectSelectorAliasDiagnostics('not-json')).toThrow(
       /selectorAliasesJson/
@@ -156,17 +144,7 @@ describe('collectSelectorAliasDiagnostics', () => {
   });
 });
 
-/**
- * The `--strict` severity contract: a diagnostic that means "a configured
- * input could not be read or resolved" carries `severity: 'error'` and
- * therefore fails `--strict` at the one escalation point above. Genuine
- * degradation — a per-property skip, a name collision, an unsupported-value
- * fallback — stays `warn` in every mode.
- */
 describe('ingestion failures vs degradation under strict', () => {
-  /** The sealed system's own witness wire: a kit registered vocabulary that
-   *  the deprecated carriage verb cannot deliver, so those collections never
-   *  reach this build. */
   const legacyVerbWitness = JSON.stringify([
     {
       code: VOCABULARY_LEGACY_VERB,
@@ -175,7 +153,6 @@ describe('ingestion failures vs degradation under strict', () => {
       names: ['dsKitMotion'],
     },
   ]);
-  /** Two collections registering one name: both were ingested, one wins. */
   const collisionWitness = JSON.stringify([
     {
       code: VOCABULARY_COLLISION,

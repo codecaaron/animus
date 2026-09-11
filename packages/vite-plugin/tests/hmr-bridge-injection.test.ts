@@ -18,27 +18,8 @@ import {
 
 import type { HtmlTagDescriptor } from 'vite';
 
-/**
- * HMR bridge delivery (openspec: dev-stylesheet-management, "HMR bridge
- * auto-injected in dev mode"): TWO dev paths, none in production. The
- * `transformIndexHtml` tag fires once per SERVED DOCUMENT and never on HMR,
- * so document apps get delivery that no server-lifetime flag can spend and no
- * transform-cache invalidation can strand (the deps-optimizer's
- * `invalidateAll()` discards transform results with no file change behind
- * them). The transform-time import prepended to every component-bearing
- * module is the MODULE-GRAPH path: unconditional per transform, so a
- * re-transform re-adds it — and it is the only path that reaches
- * document-rendering SSR hosts (Remix, React Router), which never invoke
- * `transformIndexHtml`. That path is covered in transform-source.test.ts;
- * the bridge body's server-side no-op is pinned below.
- *
- * The bridge module tolerates loading before any analysis has completed: its
- * body is generated at request time from whatever `resolvedComponentCss` holds
- * (empty string included) and it dedupes the `CSSStyleSheet` behind a
- * `globalThis` key, so a document served ahead of the first analysis simply
- * adopts an empty sheet and picks up content on the next
- * `virtual:animus/components.js` update. Hence: no `storedSheets` gate.
- */
+/** Two dev delivery paths: this index-html tag, and the import prepended at
+ *  transform time — the only one document-rendering SSR hosts reach. */
 
 const BRIDGE_TAG: HtmlTagDescriptor = {
   tag: 'script',
@@ -65,9 +46,8 @@ function withGlobalThis<Context extends object>(context: Context) {
 
 describe('bridge delivery via transformIndexHtml', () => {
   test('dev emits a module script on every served document, before any analysis', () => {
-    // index.html can be served before the first analysis completes; a document
-    // without the bridge has no adopted stylesheet for the life of the page.
-    // The hook holds no per-server state, so re-serving must keep emitting.
+    // A document served without the bridge has no adopted stylesheet for the
+    // life of the page, and the hook holds no per-server state to spend.
     const ctx = contextWith({ isProd: false });
     expect(ctx.storedSheets).toBeNull();
 
@@ -81,9 +61,6 @@ describe('bridge delivery via transformIndexHtml', () => {
   });
 
   test('the src is the browser-addressable form of the virtual id', () => {
-    // Why `/@id/` and why the UNPREFIXED specifier: see BRIDGE_SCRIPT_SRC in
-    // src/constants.ts. That the resulting URL is actually servable is proven
-    // against a real dev server in tests/dev-server/dev-server.test.ts.
     expect(BRIDGE_SCRIPT_SRC).toBe(`/@id/${VIRTUAL_BRIDGE_ID}`);
   });
 
@@ -100,11 +77,8 @@ describe('bridge delivery via transformIndexHtml', () => {
   });
 
   test('the bridge rides head-prepend, after the bootstrap and layer tags', () => {
-    // All three share the `head-prepend` bucket, which Vite serializes in array
-    // order, so array order is document order. A `type="module"` script is
-    // deferred, so its position cannot delay the inline classic bootstrap; the
-    // guarantee that matters is that a HEAD module script evaluates before the
-    // BODY entry module, i.e. before any component module runs.
+    // Vite serializes the head-prepend bucket in array order, so array order
+    // is document order; a module script still runs before the body entry.
     const tags = buildIndexHtmlTags(
       contextWith({
         isProd: false,
@@ -130,8 +104,6 @@ describe('the wired hook delivers the bridge', () => {
       );
     }
 
-    // `isProd` is false and `layerDeclaration` is '' until `configResolved` /
-    // `buildStart` run, so this observes exactly the bridge branch.
     const result = await hook.handler.call(HTML_HOOK_CONTEXT, '', {
       path: '/',
       filename: join(process.cwd(), 'index.html'),
@@ -147,9 +119,7 @@ describe('the wired hook delivers the bridge', () => {
 describe('the bridge module is server-safe', () => {
   test('evaluating the bridge body without a document is a no-op, not a throw', () => {
     // SSR hosts reach the bridge through the import prepended to transformed
-    // component modules, so the module body evaluates on the server too. The
-    // ESM shell is swapped for scriptable equivalents; the DOM logic under
-    // test is byte-identical.
+    // component modules, so the module body also evaluates on the server.
     const source = bridgeModuleSource();
 
     const scriptable = source
@@ -158,14 +128,12 @@ describe('the bridge module is server-safe', () => {
 
     const context = withGlobalThis({});
     expect(() => runInNewContext(scriptable, context)).not.toThrow();
-    // No sheet was created and no global key was written.
     expect(Object.keys(context)).toEqual(['globalThis']);
   });
 
   test('the hot-accept callback is also a no-op without a document', () => {
-    // The server module runner has a hot channel of its own: any style edit
-    // dispatches the accept callback server-side, where `sheet` is null and
-    // the <style> fallback would dereference `document`.
+    // The server module runner has its own hot channel, so a style edit runs
+    // the accept callback where `sheet` is null and the fallback needs a DOM.
     const source = bridgeModuleSource();
 
     const scriptable = source

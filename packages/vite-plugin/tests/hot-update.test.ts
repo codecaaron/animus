@@ -23,20 +23,13 @@ import type { ContextProbe } from './context-probe';
 import type { DevEnvironment, HotUpdateOptions } from 'vite';
 
 /**
- * Vite dispatches `hotUpdate` once per environment for a single file event —
- * client first, then every non-client environment (measured against the
- * installed vite 8.1.4: one client and one ssr call per event, sharing the
- * event timestamp). The plugin's analysis work must run exactly once across
- * those dispatches while module invalidation runs in each environment's own
- * graph, so both dispatches are driven here in Vite's order.
+ * Vite dispatches `hotUpdate` once per environment (client first) for one file
+ * event: analysis runs once across them, invalidation once per module graph.
  */
 
 interface HotUpdateProbe extends ContextProbe {
   resets: string[];
-  /**
-   * What the next analysis publishes into the system-props module's inputs.
-   * An omitted field is left untouched, i.e. republished identically.
-   */
+  /** Inputs the next analysis publishes; an omitted one is republished. */
   setNextSystemProps(next: { map?: string; dynamicProps?: string }): void;
   setSystemDependency(file: string): void;
 }
@@ -63,8 +56,8 @@ function makeContext(rootDir: string): HotUpdateProbe {
     if (nextDynamicProps !== undefined) {
       base.ctx.storedDynamicPropsJson = nextDynamicProps;
     }
-    // Publishing the inputs is the whole writer contract: the served module
-    // is keyed on them by its reader, so nothing here refreshes a memo.
+    // The served module is keyed on these inputs by its reader, so publishing
+    // them is the whole writer contract; there is no memo to refresh.
     return true;
   };
   return Object.assign(base, {
@@ -96,15 +89,13 @@ function runHotUpdate(
 ) {
   return handleHotUpdate(
     ctx,
-    // SAFETY: The fixture models every DevEnvironment field read by handleHotUpdate: name, moduleGraph, and transformRequest.
+    // SAFETY: The fixture supplies every DevEnvironment field the hook reads.
     environment as DevEnvironment,
-    // SAFETY: The fixture provides every option read by handleHotUpdate; server is unused, and read is optional for its documented non-Vite host path.
+    // SAFETY: The fixture supplies every option the hook actually reads.
     options as HotUpdateOptions
   );
 }
 
-/** Named-environment wrapper over the shared graph double — the graph body
- *  is `makeEnvGraph`; this only names the environment for the dispatcher. */
 function makeEnvironment(name: string, moduleIds: string[]) {
   const { moduleGraph, invalidated } = makeEnvGraph({
     rootDir: '/',
@@ -123,7 +114,6 @@ const VIRTUAL_IDS = [RESOLVED_COMPONENTS_ID, RESOLVED_SYSTEM_PROPS_ID];
 describe('hotUpdate across environment dispatches', () => {
   let root: string;
   let file: string;
-  /** What Vite's own `read()` helper would hand the hook for `file`. */
   let readFile: () => Promise<string>;
 
   beforeEach(() => {
@@ -155,10 +145,8 @@ describe('hotUpdate across environment dispatches', () => {
       read: readFile,
     });
 
-    // The analysis half ran for the client dispatch only.
     expect(probe.analyses).toBe(1);
     expect(probe.ctx.fileCache.size).toBe(1);
-    // The invalidation half ran in both environments, against their own graph.
     expect(client.invalidated).toEqual(VIRTUAL_IDS);
     expect(ssr.invalidated).toEqual(VIRTUAL_IDS);
     expect(clientModules?.map((m) => m.id)).toEqual(VIRTUAL_IDS);
@@ -166,13 +154,8 @@ describe('hotUpdate across environment dispatches', () => {
   });
 
   it('invalidates conservatively when the burst evicted the decision', async () => {
-    // Vite does not serialize watcher handlers, so a mass edit (git checkout,
-    // format-on-save-all) puts many events in flight between one event's
-    // client dispatch and its ssr dispatch. Past the bounded history the ssr
-    // dispatch can no longer read the owner's decision — and the one thing it
-    // must not do is skip invalidation: its graph would keep the pre-edit
-    // component CSS and system-props module while the client has the new
-    // ones, which renders as a hydration mismatch.
+    // Past the bounded event history the ssr dispatch cannot read the owner's
+    // decision; skipping invalidation there is a hydration mismatch.
     const probe = makeContext(root);
     probe.setNextSystemProps({ map: '{"p":{"8":"animus-u-abc"}}' });
     const client = makeEnvironment('client', VIRTUAL_IDS);
@@ -184,9 +167,8 @@ describe('hotUpdate across environment dispatches', () => {
       modules: [],
       read: readFile,
     });
-    // Seventeen other files change while the ssr dispatch is still queued —
-    // every one of them claims its own event first, exactly as a dispatch
-    // does, and the oldest key falls out of the 16-entry window.
+    // Seventeen other events claim their own keys, so the 16-entry window
+    // drops this event's decision before the ssr dispatch reads it.
     for (let index = 0; index < 17; index++) {
       probe.ctx.hotUpdateEvents.claim(
         'client',
@@ -201,8 +183,6 @@ describe('hotUpdate across environment dispatches', () => {
       read: readFile,
     });
 
-    // No second analysis: the owner already ran it, and the file's content
-    // has not moved since.
     expect(probe.analyses).toBe(1);
     expect(ssr.invalidated).toEqual(VIRTUAL_IDS);
     expect(ssrModules?.map((m) => m.id)).toEqual(VIRTUAL_IDS);
@@ -223,7 +203,6 @@ describe('hotUpdate across environment dispatches', () => {
 
     await dispatch(client.environment, 10);
     await dispatch(ssr.environment, 10);
-    // A save that did not change the bytes: same hash, no re-analysis.
     const clientModules = await dispatch(client.environment, 20);
     const ssrModules = await dispatch(ssr.environment, 20);
 
@@ -254,17 +233,14 @@ describe('hotUpdate across environment dispatches', () => {
       }
     }
 
-    // Membership is tested first for all three event types, and each event
-    // schedules exactly one reset.
     expect(probe.resets).toEqual(['Button.tsx', 'Button.tsx', 'Button.tsx']);
     expect(probe.analyses).toBe(0);
     expect(client.invalidated).toEqual([]);
   });
 
   it('ingests a created file like an edit', async () => {
-    // openspec: hmr-new-file-detection, "Watcher creation ingestion" — a
-    // created eligible source feeds the same analysis path as an edit, so
-    // the graph is usually complete before any consumer refetches.
+    // A created eligible source feeds the same analysis path as an edit, so
+    // the graph is complete before any consumer refetches.
     const probe = makeContext(root);
     probe.setNextSystemProps({ map: '{"p":{"8":"animus-u-abc"}}' });
     const client = makeEnvironment('client', VIRTUAL_IDS);
@@ -290,10 +266,8 @@ describe('hotUpdate across environment dispatches', () => {
   });
 
   it('records external ownership for a watcher-created package file', async () => {
-    // Cross-source token diagnostics correlate through
-    // `externalFileOwners[diagnostic.file]`; a watcher-created external file
-    // must be owned BEFORE its first analysis — it enters the cache here, so
-    // the transform-time registration block never runs for it.
+    // Diagnostics correlate through `externalFileOwners`, so a watcher-created
+    // external file must be owned before its first analysis.
     const kitSrc = join(root, 'kit', 'src');
     mkdirSync(kitSrc, { recursive: true });
     const kitFile = join(kitSrc, 'Chip.tsx');
@@ -320,12 +294,8 @@ describe('hotUpdate across environment dispatches', () => {
   });
 
   it('coalesces a pre-registered create without overriding the module list', async () => {
-    // The backstop (or rediscovery's fold) registered the file first; the
-    // late watcher event must coalesce into a no-op instead of buying a
-    // second analysis — but it must return undefined, NOT []. Vite 8 treats
-    // a returned [] as an explicit empty module list (truthy gate) and would
-    // drop the resolve-failed importers it seeds on create, cancelling the
-    // full-reload that clears the "Failed to resolve import" overlay.
+    // A late create must return undefined, not []: Vite reads [] as an explicit
+    // module list and drops the resolve-failed importers it seeds on create.
     const probe = makeContext(root);
     const source = readFileSync(file, 'utf-8');
     probe.ctx.mutateFileCache((cache) =>
@@ -373,7 +343,6 @@ describe('hotUpdate across environment dispatches', () => {
   });
 });
 
-/** A fake environment graph holding one node for `absPath`. */
 function makeFileGraph(absPath: string) {
   const invalidated: string[] = [];
   const node = { id: absPath, url: absPath, file: absPath };
@@ -389,12 +358,6 @@ function makeFileGraph(absPath: string) {
   };
 }
 
-/**
- * Plan-changed consumers are re-delivered by every analysis path — the delete
- * half here (openspec: hmr-new-file-detection, "Consumers of a deleted parent
- * are invalidated"; dev-transform-coherence, "Definition-module invalidation
- * tracks the published analysis").
- */
 describe('hotUpdate delete re-delivers consumers whose plan changed', () => {
   let root: string;
   let file: string;
@@ -451,11 +414,8 @@ describe('hotUpdate delete re-delivers consumers whose plan changed', () => {
 });
 
 /**
- * An imported extension parent exists on disk (created mid-session; its
- * create event was lost), and a consumer edit analyzes to `chain dropped:
- * could not resolve parent component`. The source corpus is reconciled
- * BEFORE that result is acted on, so the consumer's first re-serve is
- * extracted, never the runtime fallback.
+ * The source corpus is reconciled before a dropped-chain analysis is acted on,
+ * so the consumer's first re-serve is extracted, never the runtime fallback.
  */
 describe('hotUpdate recovers a new imported parent found on disk', () => {
   let root: string;
@@ -485,7 +445,6 @@ describe('hotUpdate recovers a new imported parent found on disk', () => {
     ctx.runAnalysis = () => {
       probe.analyses++;
       if (probe.analyses === 1) {
-        // The parent is not in the analyzed corpus yet: chains drop.
         ctx.storedManifest = makeManifest({
           diagnostics: [
             {
@@ -498,7 +457,6 @@ describe('hotUpdate recovers a new imported parent found on disk', () => {
           ],
         });
       } else {
-        // The fold made the parent visible: the whole graph resolves.
         ctx.storedManifest = makeManifest({
           components: {
             'Parent.tsx::Parent': makeComponent('Parent.tsx', 'rp'),
@@ -522,19 +480,15 @@ describe('hotUpdate recovers a new imported parent found on disk', () => {
       read: async () => readFileSync(consumer, 'utf-8'),
     });
 
-    // One reconciliation pass: drop → fold Parent.tsx → one re-analysis.
     expect(probe.analyses).toBe(2);
     expect(probe.ctx.fileCache.has('Parent.tsx')).toBe(true);
-    // The update publishes normally (no suppression, no fallback path).
     expect(returned?.map((m) => m.id)).toContain(RESOLVED_COMPONENTS_ID);
   });
 });
 
 /**
- * A failed analysis must not record its content as successfully analyzed —
- * otherwise the hash gate suppresses the same-content retry and the session
- * never recovers (openspec: dev-transform-coherence, "Failed analyses do not
- * suppress equal-content retries").
+ * A failed analysis must not record its content as analyzed: the hash gate
+ * would then suppress the same-content retry and the session never recovers.
  */
 describe('hotUpdate failed analysis reopens the hash gate', () => {
   let root: string;
@@ -575,7 +529,6 @@ describe('hotUpdate failed analysis reopens the hash gate', () => {
 
     const first = await dispatch(60);
 
-    // The failed attempt rolled the entry back to the pre-edit content.
     expect(first).toBeUndefined();
     expect(probe.ctx.fileCache.get('Button.tsx')).toEqual({
       hash: contentHash(old),
@@ -584,17 +537,12 @@ describe('hotUpdate failed analysis reopens the hash gate', () => {
 
     await dispatch(61);
 
-    // Same bytes again — analysis retries instead of 'unchanged' suppression.
     expect(probe.analyses).toBe(2);
   });
 
   /**
-   * The FIRST analysis publishes, then source-corpus reconciliation
-   * re-analyzes — and `runAnalysis` throws in every mode on error
-   * diagnostics, since that escalation sits outside its non-strict catch.
-   * That throw escaped past the rollback, leaving the cache advanced to the
-   * offending content, so re-saving the corrected file byte-identically hit
-   * the unchanged-hash gate and never re-analyzed.
+   * A throw from the reconciling re-analysis must still roll the cache entry
+   * back, or a byte-identical re-save hits the unchanged-hash gate.
    */
   it('restores the cache entry when stabilization throws after a good analysis', async () => {
     const old = 'export const Button = 1;\n';
@@ -611,7 +559,6 @@ describe('hotUpdate failed analysis reopens the hash gate', () => {
     ctx.runAnalysis = () => {
       probe.analyses++;
       if (probe.analyses === 1) {
-        // Publishes, but leaves an unresolved-parent drop for stabilize.
         ctx.storedManifest = makeManifest({
           diagnostics: [
             {
@@ -640,7 +587,6 @@ describe('hotUpdate failed analysis reopens the hash gate', () => {
     ).rejects.toThrow();
 
     expect(probe.analyses).toBe(2);
-    // Rolled back to the pre-edit content, so a same-content re-save retries.
     expect(probe.ctx.fileCache.get('Button.tsx')).toEqual({
       hash: contentHash(old),
       source: old,
@@ -649,13 +595,8 @@ describe('hotUpdate failed analysis reopens the hash gate', () => {
 });
 
 /**
- * Editors save atomically: the file is truncated and rewritten, so a watcher
- * event can arrive while the path is momentarily EMPTY. Vite hands the hook a
- * `read()` helper that retries on empty content for exactly this reason; a raw
- * `readFileSync` at the same moment sees `''`, hashes it, and writes that into
- * `fileCache` — permanently, because the corrective content produces no second
- * event. Every later analysis then rebuilds from a blank source and the file's
- * components are gone from the manifest for the life of the process.
+ * An atomic save leaves the path momentarily empty, so the hook reads through
+ * Vite's retrying `read()` helper; a raw read caches `''` for the process.
  */
 describe('hotUpdate reads through the retry-guarded read helper', () => {
   let root: string;
@@ -709,11 +650,8 @@ describe('hotUpdate reads through the retry-guarded read helper', () => {
 });
 
 /**
- * The shared system prop map is only re-delivered when its CONTENT moved
- * (openspec: vite-extraction-plugin, "System prop map HMR invalidation";
- * shared-system-prop-map, "HMR invalidation of shared map"). A style-only edit
- * that introduces no new system-prop usage must not push an update to every
- * module that imports the map.
+ * Every module that renders a system prop imports the map module, so it is
+ * re-delivered only when its content moved.
  */
 describe('hotUpdate gates system-props invalidation on a changed map', () => {
   let root: string;
@@ -747,13 +685,10 @@ describe('hotUpdate gates system-props invalidation on a changed map', () => {
   it('leaves the map module alone when the analysis republished it unchanged', async () => {
     const probe = makeContext(root);
     probe.setNextSystemProps({ map: '{"p":{"8":"animus-u-abc"}}' });
-    // Seed the map, then edit again without moving it.
     const client = makeEnvironment('client', VIRTUAL_IDS);
     const ssr = makeEnvironment('ssr', VIRTUAL_IDS);
     await dispatch(probe, client.environment, 70);
     await dispatch(probe, ssr.environment, 70);
-    // Baseline: whatever the seeding edit invalidated is not this test's
-    // subject, so only what the SECOND edit adds is asserted.
     const seeded = {
       client: client.invalidated.length,
       ssr: ssr.invalidated.length,
@@ -784,10 +719,8 @@ describe('hotUpdate gates system-props invalidation on a changed map', () => {
   });
 
   it('invalidates when only the dynamic prop config moved', async () => {
-    // The map is ONE of four inputs to the served module, and they move
-    // independently — see the system-props compare in src/hmr.ts
-    // `analyzeChangedFile` for why the comparison is over the generated
-    // module, not the map.
+    // The map is one of several inputs to the served module and they move
+    // independently, so the comparison is over the generated module.
     const probe = makeContext(root);
     const client = makeEnvironment('client', VIRTUAL_IDS);
     // The meta must carry the manifest's real shape — the config builder
@@ -806,12 +739,8 @@ describe('hotUpdate gates system-props invalidation on a changed map', () => {
 });
 
 /**
- * A file can be BOTH a system dependency and a discovered component source
- * (a theme module that also exports components). The dependency branch returns
- * before the cache write, so without an explicit refresh that file's pre-edit
- * text survives in `fileCache` for the life of the process — and the system
- * reload rebuilds its full-source analysis from that same cache, so every reset
- * re-analyzes the stale text.
+ * The system-dependency branch returns before the cache write, so a file that
+ * is also a discovered source keeps stale text that every reset re-analyzes.
  */
 describe('hotUpdate refreshes a system dependency that is also a source', () => {
   let root: string;
@@ -876,15 +805,8 @@ describe('hotUpdate refreshes a system dependency that is also a source', () => 
   });
 
   it('prunes the cached source on a delete event', async () => {
-    // Deletion pruning applies here too (openspec: hmr-new-file-detection,
-    // "Watcher deletion pruning"): this branch is terminal, so an entry left
-    // behind is a ghost source that every later reset re-analyzes and that no
-    // watcher event can ever name again.
-    //
-    // The `read` helper below SUCCEEDS and returns empty content — the witness
-    // that the delete is decided on the event type. If the read were reached,
-    // the entry would be overwritten with `''` rather than removed, and the
-    // assertion would fail on the entry still existing.
+    // Terminal branch: an entry left behind is re-analyzed by every later
+    // reset. The read returns '' — reaching it would overwrite, not prune.
     const probe = makeContext(root);
     probe.setSystemDependency(file);
     probe.ctx.mutateFileCache((cache) =>

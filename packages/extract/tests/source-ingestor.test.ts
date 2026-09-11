@@ -1,5 +1,3 @@
-/** The ingestion policy point every driver routes through, driven here at its
- *  own interface rather than through any one driver. */
 import { describe, expect, test } from 'vitest';
 
 import { createSourceIngestor } from '../pipeline/source-ingestion';
@@ -54,8 +52,6 @@ describe('createSourceIngestor', () => {
   });
 
   test('recovered native parse diagnostics are advisory: warn-only, never strict-fatal, never quarantined', () => {
-    // OXC recovers diagnostics for sources the host bundler accepts (JSX in
-    // a `.js` file); extraction must not be stricter than the host bundler.
     const warnings: string[] = [];
     const strict = createSourceIngestor(makeHost({ strict: true, warnings }));
 

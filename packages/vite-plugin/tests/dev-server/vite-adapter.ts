@@ -21,15 +21,11 @@ interface ViteDevLaneConfig {
 type StartViteDevLane = (config: ViteDevLaneConfig) => Promise<ViteDevServer>;
 
 /**
- * The one real bundler adapter: a programmatic Vite dev server running the
- * plugin from source, with a real chokidar watcher and real virtual modules.
- *
- * Nothing is stubbed. Artifacts are read back through
- * `environment.transformRequest`, i.e. the exact path a browser request takes,
- * so an assertion failure means the browser would have received that byte.
+ * A programmatic Vite dev server running the plugin from source; artifacts are
+ * read back through `transformRequest`, the path a browser request takes.
  */
 
-/** Resolved ids the plugin serves — the `\0` prefix is Vite's virtual marker. */
+/** Resolved ids the plugin serves; `\0` is Vite's virtual-module marker. */
 const STATIC_MODULE_ID = '\0virtual:animus/styles.css';
 const COMPONENT_MODULE_ID = '\0virtual:animus/components.js';
 const SYSTEM_PROPS_MODULE_ID = '\0virtual:animus/system-props';
@@ -53,9 +49,8 @@ function decodeComponentCss(code: string): string {
 }
 
 /**
- * A free loopback port for this server's HMR websocket. Every dev server in the
- * suite gets its own: Vite's default 24678 is a process-wide singleton, and the
- * cold-vs-incremental scenario runs two servers at once.
+ * A free loopback port per server: Vite's default HMR port is process-wide and
+ * the suite runs two dev servers at once.
  */
 function reserveHmrPort(): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -80,11 +75,8 @@ export function createViteDevAdapter(): DevServerAdapter {
     return server!;
   };
 
-  // Bounded evidence trail for timeout forensics: raw chokidar events plus
-  // everything the plugin and Vite log. The server runs with a capturing
-  // logger instead of `logLevel: 'silent'` — silent DISCARDS the
-  // `logger.error` that Vite's watcher handlers route swallowed exceptions
-  // into, which is exactly the line that explains a lost file event.
+  // A capturing logger rather than `logLevel: 'silent'`: silent discards the
+  // `logger.error` Vite's watcher handlers route swallowed exceptions into.
   const trace: string[] = [];
   const record = (line: string): void => {
     trace.push(`${new Date().toISOString().slice(11, 23)} ${line}`);
@@ -100,10 +92,8 @@ export function createViteDevAdapter(): DevServerAdapter {
     hasWarned: false,
   };
 
-  // Every hot payload the client environment sends, oldest first. This is the
-  // suppression gate's direct observable: a js-update for a module PROVES the
-  // browser would re-execute it (and remount its React subtree); its absence
-  // while the components virtual module updates proves the gate held.
+  // A js-update for a module proves the browser would re-execute it, so these
+  // payloads are the suppression gate's direct observable.
   const sentUpdatePaths: string[] = [];
 
   const readModule = async (id: string, decode: (code: string) => string) => {
@@ -122,9 +112,7 @@ export function createViteDevAdapter(): DevServerAdapter {
     async start(root: string): Promise<void> {
       projectRoot = root;
       // SAFETY: vite-plus runs Vite's server implementation and consumes the
-      // same runtime plugin hooks as the peer-vite Plugin returned by
-      // animusExtract; this named seam avoids comparing the duplicate nominal
-      // declaration graphs while preserving the exact config and server API.
+      // same runtime plugin hooks; only the nominal declarations differ.
       const startViteDevLane = createServer as StartViteDevLane;
       server = await startViteDevLane({
         root,
@@ -135,14 +123,12 @@ export function createViteDevAdapter(): DevServerAdapter {
         optimizeDeps: { noDiscovery: true, include: [] },
         server: {
           middlewareMode: true,
-          // `hmr: false` would switch the watcher's HMR dispatch off entirely
-          // and the plugin's hot-update hook would never run — the suite needs
-          // it on, just on a port of its own.
+          // `hmr: false` switches the watcher's HMR dispatch off and the
+          // hot-update hook never runs, so HMR stays on with its own port.
           hmr: { port: await reserveHmrPort() },
         },
-        // verbose: the plugin's HMR decision log (skip/analyzed/reset) goes to
-        // the capturing logger, so a barrier timeout can name the layer that
-        // dropped an event instead of guessing.
+        // verbose routes the plugin's HMR decision log into the capturing
+        // logger, so a barrier timeout names the layer that dropped an event.
         plugins: [animusExtract({ system: './src/ds.ts', verbose: true })],
       });
       server.watcher.on('all', (event, path) =>
@@ -151,10 +137,8 @@ export function createViteDevAdapter(): DevServerAdapter {
       server.watcher.on('error', (error) =>
         record(`watcher error ${String(error)}`)
       );
-      // Capture the client environment's outgoing hot payloads. `hot.send` is
-      // the exact seam Vite's updateModules routes through, so what lands in
-      // `sentUpdatePaths` is byte-for-byte what a connected browser would act
-      // on — no browser needed for update-delivery assertions.
+      // `hot.send` is the seam Vite's updateModules routes through, so the
+      // captured payloads are what a connected browser would act on.
       const hot = server.environments.client.hot;
       // Vite's overloaded send contract forwards either an HMR payload or a
       // custom event tuple; the wrapper preserves both argument forms.
@@ -225,11 +209,8 @@ export function createViteDevAdapter(): DevServerAdapter {
     },
 
     async requestUrl(url: string): Promise<string> {
-      // Vite's transform middleware normalizes a browser URL via `unwrapId`
-      // before serving it (see BRIDGE_SCRIPT_SRC in src/constants.ts);
-      // `transformRequest` does not, so requesting the raw URL would assert on
-      // a path no browser takes. Mirrored here, and nowhere else in the suite,
-      // because this is the only URL that is not a plain file path.
+      // Vite's transform middleware normalizes a browser URL before serving it
+      // and `transformRequest` does not, so the `/@id/` form is unwrapped here.
       const stripped = url.startsWith('/@id/')
         ? url.slice('/@id/'.length)
         : url;
@@ -240,10 +221,8 @@ export function createViteDevAdapter(): DevServerAdapter {
     },
 
     async indexHtml(): Promise<string> {
-      // `server.transformIndexHtml` is the same call the dev HTML middleware
-      // makes for a `/` request: it runs the pre/normal/post hook chain over
-      // the file on disk, so the returned string is byte-for-byte what a
-      // browser is handed.
+      // The same call the dev HTML middleware makes for `/`, so the returned
+      // string is what a browser is handed.
       const raw = readFileSync(join(projectRoot, 'index.html'), 'utf-8');
       return startedServer().transformIndexHtml('/index.html', raw, '/');
     },

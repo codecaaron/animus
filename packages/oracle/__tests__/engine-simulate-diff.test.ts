@@ -24,11 +24,6 @@ const large: ScenarioPoint = {
 const contextsOf = (entries: readonly { context: string }[]): string[] =>
   Array.from(new Set(entries.map((entry) => entry.context.split(' @ ')[0])));
 
-/**
- * `ProbeResult.semanticDiff` is typed `SemanticDiff` and OPTIONAL — present
- * exactly when the operation compared two worlds. Every operation asked here
- * compares, so absence is a fixture error, not a shape question.
- */
 const semanticDiffOf = (result: ProbeResult): SemanticDiff => {
   const diff = result.semanticDiff;
   if (diff === undefined) {
@@ -143,7 +138,7 @@ describe('simulate — collateral sweep', () => {
 
   it('catches the second component that shares the rule', () => {
     const components = contextsOf(entries);
-    // Vacuity guard: the sweep must have reached more than the focal target.
+    // Vacuity guard: the sweep reaches more than the focal target.
     expect(components.length).toBeGreaterThan(1);
     expect(components.sort()).toEqual(['Card', 'Panel']);
   });
@@ -201,13 +196,13 @@ describe('simulate — force-dimension', () => {
       },
     });
 
-    // A domain override is world identity — different quantifications must
-    // not collide in the probe ledger (same hazard as prove's override).
+    // The domain override is part of world identity: two quantified domains
+    // must not share a probe state.
     expect(narrow.verdict).not.toBe('FIXPOINT');
     expect(wide.verdict).not.toBe('FIXPOINT');
     expect(wide.probeStateId).not.toBe(narrow.probeStateId);
 
-    // Vacuity guard: the domains genuinely differ in size.
+    // Vacuity guard: the domains differ in size.
     expect(wide.coverage.scenarioCells).toBeGreaterThan(
       narrow.coverage.scenarioCells
     );
@@ -240,8 +235,8 @@ describe('diff — classification and context classes', () => {
       before: '4px',
       after: '5px',
     });
-    // The token moves in every mode, so both mode cells report the change
-    // with their own prior value — that is the point of a token diff.
+    // The token moves in every mode, so each mode cell reports the change
+    // against its own prior value.
     expect(
       Array.from(
         new Set(
@@ -275,7 +270,7 @@ describe('diff — classification and context classes', () => {
 
     expect(diff.entries.length).toBeGreaterThan(0);
     expect(diff.affectedContextClasses).toBeGreaterThan(0);
-    // Vacuity guard: the change must NOT touch every context class.
+    // Vacuity guard: the change does not touch every context class.
     expect(diff.unaffectedContextClasses).toBeGreaterThan(0);
     expect(diff.affectedContextClasses + diff.unaffectedContextClasses).toBe(
       classes.classes.length
@@ -294,9 +289,8 @@ describe('diff — classification and context classes', () => {
 });
 
 describe('simulate — tokens declared only in :root', () => {
-  // The animus provider declares aliases in `:root` and only leaf values per
-  // mode; a mode lookup falls back to the root layer. The overlay must walk
-  // with the same fallback or a replace-token behind an alias is a no-op.
+  // Aliases live in `:root` with leaf values per mode, so a mode lookup falls
+  // back to root; an overlay without it makes replace-token a no-op.
   const ALIASED = new Map<string, TokenDefinition>([
     [
       '--space-4',
@@ -374,8 +368,7 @@ describe('simulate — tokens declared only in :root', () => {
 });
 
 describe('partial sweeps', () => {
-  // A delta that changes nothing observable: replacing a declaration with
-  // its own value. Only a complete sweep may say "no change anywhere".
+  // The delta rewrites base-card's padding to its current value: a no-op.
   const noopDeltas = [
     {
       kind: 'replace-declaration' as const,
@@ -421,7 +414,7 @@ describe('probe identity across operations', () => {
 
     expect(simulated.verdict).not.toBe('FIXPOINT');
     expect(diffed.verdict).not.toBe('FIXPOINT');
-    // diff makes no causal claims — a collided answer would carry simulate's.
+    // diff makes no causal claims: a collided answer would carry simulate's.
     expect(diffed.causalFindings).toBeUndefined();
   });
 

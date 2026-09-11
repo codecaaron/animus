@@ -13,12 +13,6 @@ import { MANIFEST_FILE } from '../src/host/animus/loader';
 import { asManifest } from '../src/host/animus/manifest-types';
 import { compareSnapshots, loadSnapshot } from '../src/places';
 
-/**
- * PLACES.md §6 — cross-build identity at MVP depth. Two snapshots relate by
- * program hash, component id, and place occurrence; refused files produce no
- * place claims at all.
- */
-
 const FIXTURE = join(__dirname, 'fixtures/rollup-app');
 const SOURCE_ROOT = join(__dirname, '../../../e2e/rollup-app');
 const GROUP_FILE = 'src/Group.tsx';
@@ -62,7 +56,7 @@ describe('compareSnapshots', () => {
       throw new Error('fixture: the manifest must carry fileFacts');
     }
     const { [GROUP_FILE]: dropped, ...keptFacts } = facts;
-    // Vacuity guard: the file whose places must vanish was really in there.
+    // Vacuity guard: the file whose places must vanish is present.
     expect(dropped).toBeDefined();
     writeFileSync(
       manifestPath,
@@ -74,7 +68,7 @@ describe('compareSnapshots', () => {
     const comparison = compareSnapshots(before, after);
 
     expect(comparison.identical).toBe(false);
-    // The component definition survives — only its invocation places went.
+    // GroupItem is defined elsewhere, so only its invocation places vanish.
     expect(comparison.components.removed).toEqual([]);
     const groupPlaces = comparison.places.filter(
       (place) => place.component === GROUP_ITEM_ID
@@ -106,7 +100,6 @@ describe('compareSnapshots', () => {
         reason: 'diverged',
       })
     );
-    // Neither removed nor added nor persisted — the refusal IS the answer.
     expect(
       comparison.places.filter((place) => place.file === GROUP_FILE)
     ).toEqual([]);

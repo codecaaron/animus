@@ -1,25 +1,9 @@
-/**
- * Tests for ThemeBuilder v3: nested storage, dot-path, type-state chain.
- *
- * These catch regressions in:
- * - Nested storage (colors, scales, modes stored as raw inputs)
- * - Build-time flattening (manifest, serialize produce correct flat output)
- * - Composition via from() and spreading
- * - varRef() accessor
- * - Non-enumerable boundary methods
- */
 import { describe, expect, it, vi } from 'vitest';
 
 import { createTheme } from '../src';
 
-// ─── Fixtures ────────────────────────────────────────────────
-
 const breakpoints = { xs: 480, sm: 768, md: 1024, lg: 1200, xl: 1440 } as const;
 
-/**
- * Representative theme chain matching showcase complexity:
- * scales + colors + color modes + nested color objects
- */
 function buildTestTheme() {
   return createTheme()
     .addBreakpoints(breakpoints)
@@ -63,7 +47,6 @@ interface TestThemeRuntimeColors {
   gray: { 300: '#666666'; 600: '#333333' };
 }
 
-/** Recover the nested runtime palette hidden by the public flat-path type. */
 function readTestThemeRuntimeColors(
   theme: ReturnType<typeof buildTestTheme>
 ): TestThemeRuntimeColors {
@@ -89,13 +72,10 @@ function readTestThemeRuntimeColors(
   };
 }
 
-// ─── Tests: Nested Storage ──────────────────────────────────
-
 describe('ThemeBuilder nested storage', () => {
   const nestedTheme = buildTestTheme();
 
   it('colors are stored nested after build', () => {
-    // Runtime stores nested objects; type is LiteralPaths (flat dot-paths)
     expect(nestedTheme.colors).toEqual({
       void: '#000000',
       ember: '#ff2800',
@@ -152,12 +132,9 @@ describe('ThemeBuilder nested storage', () => {
       })
       .build();
 
-    // Runtime stores nested objects; type is LiteralPaths (flat dot-paths)
     expect(theme.test).toEqual({ nested: { a: '1px', b: '2px' } });
   });
 });
-
-// ─── Tests: Build-Time Flatten (Manifest) ───────────────────
 
 describe('ThemeManifest', () => {
   const theme = buildTestTheme();
@@ -186,7 +163,6 @@ describe('ThemeManifest', () => {
       'colors.gray.300': '--color-gray-300',
       'colors.primary': '--color-primary',
     });
-    // Breakpoints never materialize as CSS variables.
     expect(theme.manifest.variableMap['breakpoints.xs']).toBeUndefined();
   });
 
@@ -201,19 +177,15 @@ describe('ThemeManifest', () => {
 
   it('manifest.modes contains resolved raw values', () => {
     expect(theme.manifest.modes).toMatchObject({
-      dark: { 'colors.primary': '#ff2800', 'colors.bg': '#000000' }, // ember / void
-      light: { 'colors.primary': '#000000', 'colors.bg': '#e8e0d0' }, // void / bone
+      dark: { 'colors.primary': '#ff2800', 'colors.bg': '#000000' },
+      light: { 'colors.primary': '#000000', 'colors.bg': '#e8e0d0' },
     });
   });
 });
 
-// ─── Tests: Serialization ───────────────────────────────────
-
 describe('theme.serialize()', () => {
   const theme = buildTestTheme();
 
-  // Field stringness is subsumed: every serialized field below is either
-  // JSON.parsed or matched as a string by these tests.
   it('scalesJson parses to dot-path keyed token map with breakpoints', () => {
     expect(JSON.parse(theme.serialize().scalesJson)).toMatchObject({
       'space.4': '0.25rem',
@@ -232,7 +204,6 @@ describe('theme.serialize()', () => {
       'colors.gray.300': '--color-gray-300',
       'colors.primary': '--color-primary',
     });
-    // Breakpoints never materialize as CSS variables.
     expect(varMap['breakpoints.xs']).toBeUndefined();
   });
 
@@ -274,8 +245,6 @@ describe('theme.serialize()', () => {
   });
 });
 
-// ─── Tests: addBreakpoints & createTheme ────────────────────
-
 describe('createTheme & addBreakpoints', () => {
   it('zero-arg createTheme builds minimal theme', () => {
     const theme = createTheme().addBreakpoints(breakpoints).build();
@@ -288,8 +257,6 @@ describe('createTheme & addBreakpoints', () => {
     );
   });
 });
-
-// ─── Tests: addScale ────────────────────────────────────────
 
 describe('addScale', () => {
   it('stores raw values for non-emitted scales', () => {
@@ -312,11 +279,9 @@ describe('addScale', () => {
       })
       .build();
 
-    // Raw values preserved on theme
     expect(theme.sizes.navHeight).toBe('48px');
     expect(theme.sizes.sidebarWidth).toBe('200px');
 
-    // Manifest has var() refs
     expect(theme.manifest.tokenMap['sizes.navHeight']).toBe(
       'var(--sizes-navHeight)'
     );
@@ -325,8 +290,6 @@ describe('addScale', () => {
     );
   });
 });
-
-// ─── Tests: Token Ref Resolution ────────────────────────────
 
 describe('token ref resolution', () => {
   it('resolves {colors.key} to var(--color-key) in manifest', () => {
@@ -343,7 +306,6 @@ describe('token ref resolution', () => {
       })
       .build();
 
-    // Token ref resolves in manifest tokenMap
     expect(theme.manifest.tokenMap['shadows.glow']).toContain(
       'var(--color-text)'
     );
@@ -432,8 +394,6 @@ describe('token ref resolution', () => {
   });
 });
 
-// ─── Tests: varRef ──────────────────────────────────────────
-
 describe('varRef', () => {
   const theme = buildTestTheme();
 
@@ -460,14 +420,11 @@ describe('varRef', () => {
   });
 });
 
-// ─── Tests: Composition ─────────────────────────────────────
-
 describe('theme composition via from()', () => {
   const libTokens = buildTestTheme();
 
   it('round-trip: from() with no changes produces matching serialize', () => {
     const consumer = createTheme().from(libTokens).build();
-    // Both should produce the same scalesJson
     expect(consumer.serialize().scalesJson).toBe(
       libTokens.serialize().scalesJson
     );
@@ -479,9 +436,7 @@ describe('theme composition via from()', () => {
       .addColors({ brand: { 500: '#cc5500' } })
       .build();
 
-    // Library colors preserved
     expect(consumer.colors.ember).toBe('#ff2800');
-    // New color added
     expect(consumer.colors).toHaveProperty('brand', {
       500: '#cc5500',
     });
@@ -495,7 +450,6 @@ describe('theme composition via from()', () => {
       .build();
 
     expect(consumer.colors.ember).toBe('#ff2800');
-    // No space scale (not spread)
     expect(consumer).not.toHaveProperty('space');
   });
 
@@ -511,13 +465,10 @@ describe('theme composition via from()', () => {
       .build();
 
     expect(viaBundle.serialize()).toEqual(direct.serialize());
-    // The bundle's other halves never leak into the theme
     expect(viaBundle).not.toHaveProperty('system');
     expect(viaBundle).not.toHaveProperty('tokens');
   });
 });
-
-// ─── Tests: declareContextualVars ───────────────────────────
 
 describe('declareContextualVars', () => {
   it('validates scale exists', () => {
@@ -542,11 +493,6 @@ describe('declareContextualVars', () => {
   });
 });
 
-// ─── Tests: @property registration (D6) ─────────────────────
-//
-// Spec list: typed-property-registration delta + the contextual-vars phantom
-// invariants those additions must preserve.
-
 describe('declareContextualVars @property registration', () => {
   function buildRegistered() {
     return createTheme()
@@ -565,7 +511,6 @@ describe('declareContextualVars @property registration', () => {
       .build();
   }
 
-  // typed-property-registration › "Registered contextual var emits @property"
   it('emits an @property rule with syntax, inherits, and initial-value', () => {
     const css = buildRegistered().serialize().variableCss;
     expect(css).toContain(
@@ -581,13 +526,12 @@ describe('declareContextualVars @property registration', () => {
     expect(rootIdx).toBeGreaterThan(propIdx);
   });
 
-  // stylesheet-assembly relies on ALL of variableCss preceding @layer; there is
-  // no @layer inside variableCss itself, so guard that invariant here.
+  // Stylesheet assembly places all of variableCss before @layer, so
+  // variableCss must never contain an @layer of its own.
   it('emits no @layer inside the variables part', () => {
     expect(buildRegistered().serialize().variableCss).not.toContain('@layer');
   });
 
-  // typed-property-registration › "Property registration is opt-in"
   it('emits no @property when a contextual var is declared without metadata', () => {
     const css = createTheme()
       .addBreakpoints(breakpoints)
@@ -598,8 +542,6 @@ describe('declareContextualVars @property registration', () => {
     expect(css).not.toContain('@property');
   });
 
-  // Byte-identical guarantee (G1): a metadata-free theme's variable CSS is
-  // untouched by the registration feature.
   it('produces variable CSS identical to the pre-feature output when no metadata is supplied', () => {
     const withoutFeatureUsage = createTheme()
       .addBreakpoints(breakpoints)
@@ -612,8 +554,6 @@ describe('declareContextualVars @property registration', () => {
       .declareContextualVars({ colors: ['current-bg'] })
       .build()
       .serialize().variableCss;
-    // Contextual vars are phantom (no runtime var), so declaring one without
-    // registration metadata changes nothing in the emitted variable CSS.
     expect(withUnregisteredCtxVar).toBe(withoutFeatureUsage);
   });
 
@@ -652,24 +592,20 @@ describe('declareContextualVars @property registration', () => {
     expect(borderIdx).toBeGreaterThan(bgIdx);
   });
 
-  // ── Phantom-typing invariants (contextual-vars spec) preserved ──
-
-  // contextual-vars › "Runtime theme unchanged"
   it('leaves the runtime theme object free of the registered var name', () => {
     const theme = buildRegistered();
     expect(theme.colors).not.toHaveProperty('current-bg');
     expect(Object.keys(theme.colors)).toEqual(['bg']);
   });
 
-  // contextual-vars › "Phantom keys do not appear in manifest"
   it('does not surface the registered var as an emitted token in the manifest', () => {
     const theme = buildRegistered();
     expect(theme.manifest.variableMap).not.toHaveProperty('colors.current-bg');
     expect(theme.manifest.tokenMap).not.toHaveProperty('colors.current-bg');
   });
 
-  // contextual-vars › "Serialized output includes registry" — and the wire
-  // shape the Rust extractor consumes (names-only) must NOT change.
+  // The Rust extractor consumes this names-only wire shape, so the shape must
+  // not change.
   it('keeps contextualVarsJson as the names-only registry shape', () => {
     const ctx = JSON.parse(buildRegistered().serialize().contextualVarsJson);
     expect(ctx).toEqual({ colors: ['current-bg'] });
@@ -681,8 +617,6 @@ describe('declareContextualVars @property registration', () => {
     });
   });
 });
-
-// ─── Tests: extendScale ─────────────────────────────────────
 
 describe('extendScale', () => {
   it('extends scale with computed values', () => {

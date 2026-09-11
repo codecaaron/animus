@@ -31,7 +31,6 @@ describe('inspect — the envelope', () => {
       kind: 'exact',
       value: '#111',
     });
-    // An unmodeled custom property is an addressable unknown, never a guess.
     expect(byProperty['outline-color'].value.kind).toBe('unknown');
   });
 
@@ -275,8 +274,6 @@ describe('explain — missing declaration', () => {
   });
 
   it('answers a false premise with the winner, not a story about absence', () => {
-    // padding IS set at this point — asking why it is "missing" must not
-    // produce a summary asserting it is unset.
     const result = createOracle(host()).explain({
       target: 'Card',
       at: smallNarrow,
@@ -289,11 +286,8 @@ describe('explain — missing declaration', () => {
   });
 
   /**
-   * `explain` re-checks its symptom at runtime because callers also reach it
-   * through the JSON surface, where the declared union guarantees nothing.
-   * Exercising a refusal therefore needs a value the union forbids: start
-   * from a valid symptom and install one own property at runtime, with the
-   * key order and descriptor flags an object literal would have given it.
+   * The union forbids these values, so the offending field is installed at
+   * runtime with the descriptor flags an object literal would have given it.
    */
   const symptomWith = (
     field: 'kind' | 'detail',

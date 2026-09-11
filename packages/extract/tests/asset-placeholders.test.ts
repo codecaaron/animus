@@ -6,18 +6,7 @@ import {
   substituteAssetPlaceholders,
 } from '../pipeline/asset-placeholders';
 
-/**
- * Shared asset() placeholder mechanics (global-styles-system). D5 pins the
- * placeholder format as `animus-asset:<specifier>` verbatim, so fidelity for
- * specifiers carrying whitespace or parentheses lives entirely in the
- * quoted-url scan and the delimiter-anchored substitution.
- */
-
 test('the scanner-side scheme matches the producer constant in @animus-ui/system', () => {
-  // packages/system/__tests__/global-styles-font-faces.test.ts pins the
-  // producer constant to the same literal — the two assertions together tie
-  // the wire format across the package boundary without extract taking a
-  // runtime dependency on system.
   expect(ASSET_PLACEHOLDER_PREFIX).toBe('animus-asset:');
 });
 

@@ -1,17 +1,3 @@
-/**
- * Characterization tests for renderScoreboard.
- *
- * The scoreboard is a committed, diffable text artifact (scoreboard.snap,
- * self-check.snap) that `verify:parity` compares byte-for-byte. Until now the
- * renderer had no unit coverage at all — only `familyViolations` was tested —
- * so every structural change to it was licensed solely by a medium-cost parity
- * run that needs a freshly built NAPI.
- *
- * These tests pin the exact rendered bytes across every branch of the renderer
- * (empty corpus, registered vs unregistered divergences, CSS classification,
- * both family verdicts, and appended family-verdict errors) so that a
- * structural refactor is provably output-preserving in milliseconds.
- */
 import { describe, expect, test } from 'vitest';
 
 import { renderScoreboard } from '../src/scoreboard';
@@ -30,9 +16,6 @@ function divergence(overrides: Partial<Divergence> = {}): Divergence {
   };
 }
 
-// The renderer's own input contract types this fixture, so each empty
-// collection carries the element type the renderer declares instead of an
-// assertion per field.
 const BASE: ScoreboardInput = {
   mode: 'baseline',
   engines: ['baseline:v2', 'v2'],

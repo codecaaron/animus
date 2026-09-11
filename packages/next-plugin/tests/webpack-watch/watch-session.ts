@@ -27,19 +27,6 @@ import type { JsonValue } from '@animus-ui/assertions';
 import type { ManifestComponentDescriptor } from '@animus-ui/extract/pipeline';
 import type { Mock } from 'vitest';
 
-/**
- * Scripted webpack watch-session driver for the webpack-watch suites
- * (openspec: next-webpack-served-transform-coherence, increment 03), built on
- * the probe idioms proven in
- * evidence/webpack-probe/: programmatic watch with a compilation counter in
- * watchRun, a loader run log, bundle greps for the generation each module's
- * output derived from, delayed edits between compilations, and a settle
- * window that catches echo compilations.
- *
- * The webpack under test is ALWAYS a Next fixture's compiled copy, loaded
- * via `loadFixtureWebpack` — never a top-level webpack import.
- */
-
 const requireCjs = createRequire(import.meta.url);
 
 interface HarnessWatchCompilerState {
@@ -122,7 +109,8 @@ function initializeFixtureWebpackModule(
   if (Object.prototype.toString.call(candidate.init) !== '[object Function]') {
     throw new TypeError('fixture webpack module has an invalid init export');
   }
-  // SAFETY: The function tag validates the optional init method; calling it through the module preserves Next 15's receiver and materializes its lazy webpack export.
+  // SAFETY: The function tag validates the optional init method; calling it
+  // through the module keeps the receiver its lazy webpack export needs.
   (candidate as FixtureWebpackModuleCandidate & { init(): void }).init();
 }
 
@@ -137,12 +125,11 @@ export function loadFixtureWebpack(webpackPath: string): FixtureWebpack {
   ) {
     throw new TypeError('fixture webpack module has an invalid webpack export');
   }
-  // SAFETY: The post-init function tag establishes the callable webpack factory returned by both supported Next fixture module surfaces.
+  // SAFETY: The post-init function tag establishes the callable webpack
+  // factory both supported Next fixture module surfaces return.
   return webpackModule.webpack as FixtureWebpack;
 }
 
-// Shared fixtures (globals hygiene, SYSTEM_CONFIG, manifest builder) —
-// re-exported so the webpack-watch test files import ONE surface.
 export {
   ANIMUS_GLOBAL_KEYS,
   buildManifest,
@@ -150,15 +137,10 @@ export {
   SYSTEM_CONFIG,
 } from '../../../extract/tests/session/session-fixtures';
 
-/** Key the on-disk loader shim delegates to — the REAL animus loader (from
- *  increment 02) runs inside the vitest process; the shim exists only
- *  because webpack `require`s loaders from disk and cannot load TS. */
+/** Key the on-disk shim delegates to: webpack requires loaders from disk and
+ *  cannot load TS, so the real loader stays inside the vitest process. */
 export const LOADER_IMPL_KEY = '__ANIMUS_HARNESS_LOADER_IMPL__';
 
-/** Write the require-able loader shim into the project and return its path.
- *  Idempotent (a later session must not touch the existing file — the shim
- *  is a file dependency of every processed module) and backdated on first
- *  write so its fresh mtime can never fire a too-new phantom rebuild. */
 export function writeLoaderShim(root: string): string {
   const shimPath = join(root, 'animus-loader-shim.js');
   const content = `'use strict';
@@ -168,27 +150,17 @@ module.exports = function (source) {
 `;
   try {
     if (readFileSync(shimPath, 'utf-8') === content) return shimPath;
-  } catch {
-    // first write below
-  }
+  } catch {}
   writeFileSync(shimPath, content);
   const stamp = new Date(Date.now() - 10_000);
   utimesSync(shimPath, stamp, stamp);
   return shimPath;
 }
 
-// ── Fixture project ────────────────────────────────────────────────────────
-
 export const PARENT_REL = 'src/parent.js';
 export const CHILD_REL = 'src/child.js';
 export const NEWCOMER_REL = 'src/newcomer.js';
 
-/**
- * Parent module carrying two independent markers: `shape:` feeds the canned
- * analysis' replacement plans (a config-shape edit), `style:` feeds only the
- * emitted CSS (a style-value-only edit). Descendant `child.js`'s plan is
- * derived from the parent's shape marker — the transitive-propagation model.
- */
 export function parentSource(generation: string, style: string): string {
   return `module.exports = 'parent'; // shape:${generation} style:${style}\n`;
 }
@@ -197,12 +169,10 @@ export function childSource(): string {
   return `module.exports = 'child';\n`;
 }
 
-/** Newcomer content with zero animus entries (no chain marker). */
 export function newcomerRawSource(): string {
   return `module.exports = 'newcomer';\n`;
 }
 
-/** Newcomer content whose FIRST builder chain appears (chain marker). */
 export function newcomerChainSource(): string {
   return `module.exports = 'newcomer'; // chain\n`;
 }
@@ -211,11 +181,8 @@ export interface HarnessProject {
   root: string;
   write(relPath: string, content: string): void;
   read(relPath: string): string;
-  /** Backdate every file currently in the project (10s) so watchpack's
-   *  too-new initial-scan heuristic cannot fire a phantom rebuild for
-   *  files written moments before the watch started. Call ONLY before a
-   *  project's FIRST session — later calls would perturb the mtimes that
-   *  persistent-cache snapshots depend on. */
+  /** Valid only before a project's first session: later calls perturb the
+   *  mtimes persistent-cache snapshots depend on. */
   backdateAll(): void;
   dispose(): void;
 }
@@ -236,11 +203,8 @@ export function createHarnessProject(opts?: {
   write('src/system.ts', 'export const system = {};\n');
   write(PARENT_REL, parentSource('G0', 'S0'));
   write(CHILD_REL, childSource());
-  // Pre-create the artifact + output dirs exactly like real Next consumers:
-  // with-animus creates `.animus/` at config time and `.next/` predates the
-  // compiler. Creating them mid-session would bump the watched project-root
-  // directory's mtime (webpack watches it via resolution existence probes)
-  // and fire a phantom directory-change compilation.
+  // Creating these mid-session would bump the watched root's mtime (webpack
+  // watches it via resolution probes) and fire a phantom compilation.
   mkdirSync(join(root, '.animus'), { recursive: true });
   mkdirSync(join(root, 'out'), { recursive: true });
   return {
@@ -252,19 +216,15 @@ export function createHarnessProject(opts?: {
   };
 }
 
-/** Backdate a tree (files + dirs, 10s) — the phantom-compilation
- *  prophylaxis for newly watched dirs (watchpack treats too-new mtimes as
- *  changes). Exported: external-workspace suites backdate their kit roots
- *  with the SAME policy. */
+/** Backdate files and directories 10s: watchpack treats a too-new mtime as a
+ *  change and fires a phantom compilation on a newly watched tree. */
 export function backdateTree(dir: string): void {
   const stamp = new Date(Date.now() - 10_000);
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const abs = join(dir, entry.name);
     if (entry.isSymbolicLink()) {
-      // Stamp the LINK, never its target: fixtures symlink the repo's real
-      // packages into node_modules, and utimesSync follows links — stamping
-      // through one rewrites real source mtimes and fires phantom rebuilds
-      // in every mtime-keyed consumer outside the fixture.
+      // Stamp the LINK, never its target: utimesSync follows links, and
+      // fixtures symlink real packages whose mtimes must not move.
       lutimesSync(abs, stamp, stamp);
       continue;
     }
@@ -273,9 +233,6 @@ export function backdateTree(dir: string): void {
     }
     utimesSync(abs, stamp, stamp);
   }
-  // Directories too: webpack watches ancestor directories through
-  // resolution existence probes, and a too-new directory mtime fires the
-  // same phantom initial rebuild a too-new file does.
   utimesSync(dir, stamp, stamp);
 }
 
@@ -283,9 +240,6 @@ export function entrySource(relModules: string[]): string {
   return relModules.map((rel) => `require('./${rel}');`).join('\n') + '\n';
 }
 
-// ── Canned engine (NAPI boundary stand-in) ────────────────────────────────
-
-/** The mock surface armCannedEngine arms (each suite's vi.hoisted set). */
 export interface CannedEngineMocks {
   loadSystemModule: Mock;
   analyzeProject: Mock;
@@ -319,10 +273,6 @@ function parseCannedAnalysisFiles(serialized: string): CannedAnalysisFile[] {
   });
 }
 
-/** Read the (file, replacement) projection back out of a served manifest —
- *  `ReplacementPlan` is the fixtures' name for exactly that projection. Both
- *  fields are required: the manifest reaching the loader is always a complete
- *  `ProjectManifest` (see `buildManifest`). */
 function parseCannedManifestComponents(serialized: string): ReplacementPlan[] {
   const manifest: JsonValue = JSON.parse(serialized);
   if (!isJsonObject(manifest)) {
@@ -346,10 +296,6 @@ function parseCannedManifestComponents(serialized: string): ReplacementPlan[] {
   });
 }
 
-/**
- * Arm the canned NAPI engine: system config + canned analyze/transform.
- * `extra` runs after the standard arming for suite-specific mocks.
- */
 export function armCannedEngine(
   mocks: CannedEngineMocks,
   extra?: () => void
@@ -361,17 +307,6 @@ export function armCannedEngine(
   extra?.();
 }
 
-/**
- * Canned `analyzeProject`: derives the replacement plans from the CURRENT
- * file entries it receives (positional NAPI contract — filesJson first).
- *
- * - parent plan = `parent@<shape>`; child plan = `child@<shape>` — a parent
- *   shape edit changes the DESCENDANT's replacement (transitive model).
- * - the style marker feeds only the CSS — a style edit commits identical
- *   plans (style-only negative model).
- * - `newcomer.js` gains its plan only when its source carries a chain
- *   marker (zero-entries→first-chain model).
- */
 export function cannedAnalyzeProject(filesJson: string): string {
   const files = parseCannedAnalysisFiles(filesJson);
   const parent = files.find((f) => f.path === PARENT_REL);
@@ -400,12 +335,6 @@ export function cannedAnalyzeProject(filesJson: string): string {
   return buildManifest(components, `.p{--style:${style}}`);
 }
 
-/**
- * Canned `transformFile` (v1-parity 3-arg surface consumed by loader-core):
- * appends one greppable marker per manifest entry owned by the file, so the
- * emitted bundle records exactly which generation each module's output
- * derived from — the probe suite's bundle-grep witness.
- */
 export function cannedTransformFile(
   source: string,
   filename: string,
@@ -421,7 +350,6 @@ export function cannedTransformFile(
   return { code: `${source}\n${markers}\n`, hasComponents: true };
 }
 
-/** Generation marker the bundle carries for one file, or null. */
 export function bundleMarker(bundle: string, relPath: string): string | null {
   const match = bundle.match(
     new RegExp(
@@ -430,8 +358,6 @@ export function bundleMarker(bundle: string, relPath: string): string | null {
   );
   return match?.[1] ?? null;
 }
-
-// ── Watch session driver ──────────────────────────────────────────────────
 
 export interface LoaderRun {
   file: string;
@@ -461,12 +387,6 @@ export function createWatchState(): WatchState {
   };
 }
 
-/**
- * Install the on-disk shim's delegation target: records (file, turn, epoch)
- * per loader run into `state.log`, then delegates to `loaderFn` (the REAL
- * loader under test). `onCode` observes each run's emitted code (suites
- * asserting on served output). Returns a disposer that removes the global.
- */
 export function installLoaderRecorder(
   root: string,
   state: WatchState,
@@ -489,11 +409,6 @@ export function installLoaderRecorder(
   };
 }
 
-/**
- * The one harness webpack config shape (differential's superset): memory
- * cache by default, filesystem cache via `cache`, resolver/rule overrides
- * for suites compiling TS sources.
- */
 interface HarnessWebpackConfigArguments {
   root: string;
   shimPath: string;
@@ -538,27 +453,8 @@ export function buildHarnessWebpackConfig(
   return config;
 }
 
-/**
- * Watcher scope control (P0's determinism): webpack watches the project's
- * ancestor directories (description-file probes up to `/`, including the
- * OS tmpdir) and the root/src directories themselves as existence deps.
- * Under a busy tmpdir — the parallel unit tier's steady state on CI —
- * inotify event storms make watchpack report those DIRECTORIES changed
- * with nothing written inside the project (diag branch stress run:
- * invalid=<root>/src, modified=[<root>/src, <root>]), landing phantom
- * compilations in the probes' counts. Ignore directory paths and
- * everything outside the project: FILE events — every probe's real
- * trigger — ride each file's parent DirectoryWatcher and are unaffected.
- *
- * Composed at WATCH time over whatever `watchOptions.ignored` the plugin
- * installed at apply time (webpack's config schema rejects functions, so
- * this cannot live in the config). Base string entries match as exact
- * paths — the only string producer here is the plugin's exact epoch path.
- *
- * `extraRoots` are DELIBERATE external watch surfaces (external-workspace
- * kit trees observed via context dependencies) — nothing under them is
- * scoped out, directory events included.
- */
+/** Ignores directory paths and everything outside the project: a busy tmpdir
+ *  makes watchpack report ancestor dirs changed with no write inside. */
 function scopeWatcherToProjectFiles(
   root: string,
   base: WatchIgnored,
@@ -573,7 +469,8 @@ function scopeWatcherToProjectFiles(
       );
     }
     if (Object.prototype.toString.call(base) === '[object Function]') {
-      // SAFETY: WatchIgnored admits exactly one callable variant, and the function tag distinguishes it after null, RegExp, and array variants are excluded.
+      // SAFETY: WatchIgnored admits one callable variant, and the function tag
+      // distinguishes it once null, RegExp, and array are excluded.
       return Boolean((base as WatchIgnoreMatcher)(path));
     }
     return path === base;
@@ -601,9 +498,6 @@ export interface CompilationRecord {
   loaderRuns: LoaderRun[];
   modifiedFiles: string[];
   removedFiles: string[];
-  /** `compiler.hooks.invalid` firings that preceded this compilation — the
-   *  watcher names the exact file whose change (or watchpack's
-   *  "outdated on attach" re-emission) triggered the turn. */
   invalidations: Array<{ file: string | null; changeTime: number | null }>;
   hasErrors: boolean;
   errors: string[];
@@ -611,12 +505,8 @@ export interface CompilationRecord {
   moduleFileDependencies: Map<string, string[]>;
 }
 
-/** Serializable per-turn evidence for count assertions: a spurious extra
- *  compilation must name its trigger set (modified/removed/invalidation)
- *  and errors IN the failure output — vitest's inline preview truncates
- *  nested objects (`…(2)`), which is how CI flake #374 shipped no evidence.
- *  Pass `JSON.stringify(turnEvidence(records), null, 2)` as the assertion
- *  message. */
+/** Serializable per-turn evidence: vitest truncates nested objects in a
+ *  failure preview, so pass a JSON.stringify of this as the message. */
 export function turnEvidence(records: CompilationRecord[]): Array<{
   n: number;
   turn: number;
@@ -637,19 +527,8 @@ export function turnEvidence(records: CompilationRecord[]): Array<{
   }));
 }
 
-/**
- * Drive one programmatic watch session: build, then apply the steps one at
- * a time — each scheduled 150ms after a compilation completes and DEFERRED
- * while any compilation is in flight, so a spontaneous extra turn (OS event
- * redelivery, a cold-artifact re-check) can never swallow a scripted edit
- * mid-build. A mid-compilation write would make the loader read newer
- * source than the published analysis and fail closed with
- * ANIMUS_ANALYSIS_CATCHING_UP — a harness artifact, not integration
- * behavior (bit CI's differential N0 probes on Linux runners). Once steps
- * are exhausted, a quiet settle window (default 900ms — long enough to
- * catch an echo compilation) closes the watcher AND the compiler (flushing
- * any filesystem cache).
- */
+/** Steps are deferred while a compilation is in flight: a mid-build write
+ *  makes the loader read newer source than the published analysis. */
 export function runWatchSession(opts: {
   webpack: FixtureWebpack;
   root: string;
@@ -657,8 +536,8 @@ export function runWatchSession(opts: {
   state: WatchState;
   steps?: Array<(record: CompilationRecord) => void>;
   settleMs?: number;
-  /** Deliberate watch surfaces OUTSIDE the project root (external kit
-   *  trees) that the watcher scope must not filter. */
+  /** Watch surfaces outside the project root that the scope must not
+   *  filter. */
   watchRoots?: readonly string[];
 }): Promise<CompilationRecord[]> {
   const { webpack, root, config, state } = opts;
@@ -668,13 +547,10 @@ export function runWatchSession(opts: {
   return new Promise((resolvePromise, rejectPromise) => {
     const compiler = webpack(config);
 
-    // Whether a compilation is currently in flight — the quiescence gate
-    // for step application (set at watchRun, cleared in the done callback).
     let building = false;
 
-    // Turn counter + modifiedFiles capture. Registered AFTER the plugin's
-    // own taps (config.plugins apply first), so the turn number is stable
-    // by the time loaders run.
+    // Registered after the plugin's own taps (config.plugins apply first) so
+    // the turn number is stable by the time loaders run.
     compiler.hooks.watchRun.tapPromise(
       'coherence-recorder',
       async (c: HarnessWatchCompilerState) => {
@@ -685,8 +561,6 @@ export function runWatchSession(opts: {
       }
     );
 
-    // The watcher's own account of WHY a turn fired — watchpack passes the
-    // triggering file to `invalid` (null for aggregated/manual invalidates).
     const pendingInvalidations: Array<{
       file: string | null;
       changeTime: number | null;
@@ -711,10 +585,6 @@ export function runWatchSession(opts: {
       });
     };
 
-    // Single-flight step dispatch: at most one scripted edit is pending at
-    // a time, fired 150ms after a completed turn and deferred while any
-    // turn is in flight — spontaneous extra compilations shift WHEN an
-    // edit lands, never WHERE (always between turns).
     let nextStep = 0;
     let stepPending = false;
     const scheduleNextStep = (record: CompilationRecord): boolean => {
@@ -733,10 +603,8 @@ export function runWatchSession(opts: {
       return true;
     };
 
-    // Watch with the COMPILER's own watchOptions — exactly what Next does —
-    // so the plugin's `watchOptions.ignored` epoch entry (applied at
-    // plugin-apply time) governs the live watcher, scoped to project FILES
-    // (scopeWatcherToProjectFiles) against environmental directory noise.
+    // Reuse the compiler's watchOptions so the plugin's epoch `ignored` entry
+    // governs the live watcher; webpack's config schema rejects a function.
     const baseWatchOptions = compiler.options?.watchOptions ?? {};
     const watching = compiler.watch(
       {
@@ -765,9 +633,8 @@ export function runWatchSession(opts: {
             const resource: string | undefined = compiledModule.resource;
             if (!resource || !resource.startsWith(root)) continue;
             const deps = new Set<string>();
-            // Live builds expose fileDependencies until the snapshot is
-            // taken; snapshotted/restored modules expose the same set via
-            // buildInfo.snapshot.getFileIterable().
+            // Live builds expose fileDependencies until the snapshot is taken;
+            // restored modules expose the same set via the snapshot instead.
             const direct = compiledModule.buildInfo?.fileDependencies;
             if (direct) for (const dep of direct) deps.add(dep);
             const snapshot = compiledModule.buildInfo?.snapshot;
@@ -779,9 +646,7 @@ export function runWatchSession(opts: {
               moduleFileDependencies.set(relative(root, resource), [...deps]);
             }
           }
-        } catch {
-          // module introspection is best-effort evidence
-        }
+        } catch {}
         const record: CompilationRecord = {
           n: doneCount,
           turn: state.turn,
@@ -804,9 +669,8 @@ export function runWatchSession(opts: {
           stepPending ||
           nextStep < steps.length
         ) {
-          // A step is pending (scheduled now or still deferred) — even one
-          // that fails to trigger a compilation must not hang the session:
-          // keep a long stop-loss settle.
+          // A pending step that triggers no compilation must not hang the
+          // session, so the settle window is extended instead.
           settleTimer = setTimeout(finish, settleMs + 4000);
         } else {
           settleTimer = setTimeout(finish, settleMs);
@@ -816,7 +680,6 @@ export function runWatchSession(opts: {
   });
 }
 
-/** Loader runs for one file within one compilation record. */
 export function runsFor(
   record: CompilationRecord,
   relPath: string
@@ -824,15 +687,6 @@ export function runsFor(
   return record.loaderRuns.filter((run) => run.file === relPath);
 }
 
-/**
- * Epoch-echo hygiene detector (consult §W correctness/hygiene split): after
- * the cold build, every compilation must carry a NON-EMPTY trigger set that
- * names neither the epoch artifact nor anything under `.animus/` — the
- * integration's own writes never fire a compilation. OS-level redelivery of
- * a genuine SOURCE edit (the same edited file re-appearing in a later
- * trigger set) is environmental and deliberately not a violation.
- * Returns human-readable violations; expect it to be empty.
- */
 export function epochHygieneViolations(
   records: CompilationRecord[],
   epochPath: string

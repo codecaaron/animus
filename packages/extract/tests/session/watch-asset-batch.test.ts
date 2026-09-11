@@ -1,13 +1,6 @@
 /**
- * Watch batches that touch an asset() dependency (spec:
- * global-styles-system): a branch switch, editor save-all, or git checkout
- * delivers the asset AND component edits in ONE batch, so the asset path
- * must not short-circuit the component read/re-hash/prune flow — a replayed
- * stale cache analyzes old component source and, because the cache was
- * never updated, the edit never re-surfaces on a later cycle.
- *
- * Same setup as packages/next-plugin/tests/plugin.test.ts: the NAPI boundary is mocked, the
- * pure pipeline helpers and the session run for real over a temp project.
+ * An asset edit and a component edit can arrive in one batch; if the asset
+ * path short-circuits the component read, that edit never re-surfaces.
  */
 import {
   mkdirSync,
@@ -27,9 +20,8 @@ const mocks = vi.hoisted(() => ({
 
 import { setEngineApiOverride } from '../../session/singleton';
 
-// Engine API injection through the singleton's globalThis-keyed test
-// seam — reaches every copy of the module (source or dist), which a
-// module mock cannot.
+// Injection through the singleton's globalThis seam reaches every copy of
+// the module (source or dist); a module mock does not.
 setEngineApiOverride(() => ({
   extractFacts: () => '{"files":{},"parseCount":0}',
   loadSystemModule: mocks.loadSystemModule,
@@ -65,17 +57,12 @@ function createProject() {
   return { root, assetPath };
 }
 
-/** Complete manifest whose global sheet references the asset by absolute
- *  specifier — the only field this suite gives a meaningful value beyond the
- *  empty-universe base. */
 function buildManifest(assetPath: string): string {
   const manifest = makeManifest({ css: '.btn{margin:8;}' });
   manifest.sheets.global = `@layer anm-global{body{background:url('animus-asset:${assetPath}')}}`;
   return JSON.stringify(manifest);
 }
 
-/** File entries JSON from the most recent analyzeProject invocation — slot 0
- *  of the positional NAPI tuple (analyze-project-args.ts). */
 function lastAnalyzedEntries(): Array<{ path: string; source: string }> {
   const calls = mocks.analyzeProject.mock.calls;
   expect(calls.length).toBeGreaterThan(0);
@@ -87,10 +74,8 @@ function lastAnalyzedEntries(): Array<{ path: string; source: string }> {
 let restoreGlobals: () => void;
 
 beforeEach(() => {
-  // Each test drives its own session over its own root — in production a
-  // separate PROCESS. The singleton reset (the sibling suites' convention)
-  // gives each one a fresh process image, including the publication claim
-  // the session holds until close().
+  // The singleton reset gives each test a fresh process image, including the
+  // publication claim a session holds until close().
   restoreGlobals = resetAnimusGlobals();
   mocks.loadSystemModule.mockReset().mockReturnValue({ ...SYSTEM_CONFIG });
   mocks.analyzeProject.mockReset();
@@ -108,8 +93,8 @@ async function startSession(root: string, assetPath: string) {
   const session = new ExtractionSession({ system: './src/system.ts' });
   session.rootDir = root;
   await session.runFullPipeline();
-  // The asset is a registered watch dependency after the full pipeline
-  // (require.resolve canonicalizes, so compare realpaths).
+  // require.resolve canonicalizes the registered dependency, so this
+  // comparison is between realpaths.
   expect(session.assetDependencyPaths.has(realpathSync(assetPath))).toBe(true);
   return session;
 }
@@ -170,13 +155,10 @@ describe('handleWatchUpdate asset+component batches', () => {
 });
 
 /**
- * When the superseded copy of a revised asset is deleted. The copies are
- * content-addressed and never overwritten, so a new revision leaves the
- * previous one behind until something prunes it; which driver reads the
- * directory decides when that is safe (`staleAssetPruning`).
+ * Asset copies are content-addressed and never overwritten, so a revision
+ * leaves the previous copy behind until `staleAssetPruning` removes it.
  */
 describe('superseded asset copies after an incremental cycle', () => {
-  /** Copy names in the session's assets directory. */
   function sessionAssets(session: ExtractionSession): string[] {
     return readdirSync(join(session.sessionDir, SESSION_ASSETS_DIR)).sort();
   }

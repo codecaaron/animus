@@ -4,17 +4,8 @@ import { describe, expect, test } from 'vitest';
 import { PluginContext } from '../src/context';
 import { makeComponent, makeManifest } from './manifest-fixture';
 
-/**
- * The gates over external-package discovery outcomes
- * (external-package-file-discovery: silence is never an outcome): an include
- * that resolved but yielded no sources is a silent misconfiguration and must
- * surface, and an UNRESOLVABLE include warns in non-strict mode and FAILS
- * the build under strict (ani-ledger-closeout).
- */
-
-/** A context whose other self-verify checks all pass — including the
- *  inverse-emptiness check (components discovered ⇒ component CSS
- *  present; openspec: standalone-extraction-cli). */
+/** The fixture satisfies every other self-verify check: discovered components
+ *  require component CSS, so an empty sheet fails for the wrong reason. */
 function makeContext(strict: boolean): PluginContext {
   const ctx = new PluginContext({ system: './src/ds.ts', strict });
   ctx.storedManifest = makeManifest({

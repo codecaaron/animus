@@ -1,43 +1,12 @@
-/**
- * Tests for manifest v2 foundation (openspec change: multi-theme-support,
- * increment 01 — envelope specs `theme-variable-emission` /
- * `system-serialization`, plus the fragment byte-fidelity half of
- * `named-theme-variants` § "Composition of variant-enabled themes and legacy
- * manifests" and the strengthened `theme-composition` § "Round-trip fidelity").
- *
- * Scenario mapping (spec header → test):
- * - theme-variable-emission › Zero-variant emission parity › "Existing
- *   fixtures diff empty" → 'pins the exact variableCss of the reference
- *   fixture...' (plus `vp run verify:parity`, G1)
- * - theme-variable-emission › Zero-variant emission parity › "System-enabled
- *   theme is unchanged" → 'pins the exact variableCss of the system-enabled
- *   registered fixture...'
- * - theme-variable-emission › Zero-variant emission parity › "No variant
- *   constructs leak into variant-less output" → 'introduces no variant
- *   construct into variant-less output'
- * - named-theme-variants › Composition… › "Unaugmented round trip is
- *   byte-identical" (fragment half) → 'unmutated round-trip reproduces
- *   variableCss and every fragment byte-exactly'
- * - named-theme-variants › Composition… › "Augmentation preserves untouched
- *   fragments" (registrations half) → 'augmentation preserves the untouched
- *   registrations fragment byte-exactly'
- * - named-theme-variants › Composition… › "Legacy manifest produces a
- *   targeted error" → increment 03 (NOT covered here); this increment covers
- *   the v1 pass-through half → 'a v1-shaped source round-trips with NO
- *   fabricated v2 fields'
- * - system-serialization › Theme self-serialization → wire stays FOUR keys in
- *   this increment: 'serialize() still returns exactly the four legacy keys'
- *   (the fifth-key scenario is increment 05's obligation)
- */
 import { describe, expect, it } from 'vitest';
 
 import { createTheme } from '../src';
 
-// ─── Fixtures (factories — `merge` adopts and mutates source literals) ──────
+// Fixtures are factories: `merge` deep-merges into its source literals in
+// place, so one shared literal would couple unrelated tests.
 
 const breakpoints = { xs: 480, sm: 768, md: 1024, lg: 1200, xl: 1440 } as const;
 
-/** Mirrors theme.test.ts buildTestTheme() — the reference fixture style. */
 function buildReferenceFixture() {
   return createTheme()
     .addBreakpoints(breakpoints)
@@ -66,11 +35,6 @@ function buildReferenceFixture() {
     .build();
 }
 
-/**
- * System-enabled + `@property`-registered fixture (system-scheme-emission
- * style): produces BOTH fragment kinds and the guarded media blocks that must
- * stay INSIDE the `base` fragment on the legacy path.
- */
 function buildSystemRegisteredFixture() {
   return createTheme()
     .addBreakpoints({ sm: 768, lg: 1200 })
@@ -101,17 +65,14 @@ function buildSystemRegisteredFixture() {
 
 type BuiltReferenceTheme = ReturnType<typeof buildReferenceFixture>;
 
-/** The manifest field set a pre-v2 `build()` published — no v2 discriminant. */
 type V1Manifest = Pick<
   BuiltReferenceTheme['manifest'],
   'tokenMap' | 'variableMap' | 'modes' | 'variableCss'
 >;
 
 /**
- * A built theme's enumerable data half carrying a v1-only manifest. `build()`
- * attaches `manifest`, `serialize`, and `varRef` as NON-enumerable own
- * properties (and `__emitted` is phantom), so the key copy below reproduces
- * exactly the data half a v1 build published.
+ * build() attaches manifest, serialize, and varRef as non-enumerable own
+ * properties, so a key copy reproduces exactly a v1 build's data half.
  */
 interface V1Facsimile extends Omit<
   BuiltReferenceTheme,
@@ -120,11 +81,6 @@ interface V1Facsimile extends Omit<
   manifest: V1Manifest;
 }
 
-/**
- * Hand-construct a v1-built-theme facsimile from a real built theme: same raw
- * data, manifest limited to the v1 field set (no manifestVersion
- * discriminant), non-enumerable exactly like build() defines it.
- */
 function buildV1Facsimile(real: BuiltReferenceTheme): V1Facsimile {
   const v1Manifest: V1Manifest = {
     tokenMap: real.manifest.tokenMap,
@@ -138,7 +94,6 @@ function buildV1Facsimile(real: BuiltReferenceTheme): V1Facsimile {
   });
 }
 
-/** Authored-graph fixture: literal, plain ref, and opacity ref side by side. */
 function buildAuthoredGraphFixture() {
   return createTheme()
     .addBreakpoints({ sm: 768 })
@@ -155,8 +110,6 @@ function buildAuthoredGraphFixture() {
     .addScale({ name: 'space', values: { 8: '0.5rem' } })
     .build();
 }
-
-// ─── Task 01.2: authored graph capture ──────────────────────
 
 describe('manifest v2 authored token definitions', () => {
   it('distinguishes literal, reference, and opacity-reference authored forms', () => {
@@ -194,28 +147,13 @@ describe('manifest v2 authored token definitions', () => {
       dark: { primary: 'ember', muted: 'gray.300' },
       light: { primary: 'ink', muted: 'gray.300' },
     });
-    // The discarded-string hazard: the capture must be the colorRef, not the
-    // value `flatColors[colorRef]` resolves it to.
     expect(modeAliases?.dark.primary).not.toBe('#ff2800');
     expect(modeAliases?.dark.muted).not.toBe('#666666');
   });
 });
 
-// ─── Ambient slots the contract hash probes at call time ────
-
-/**
- * Node ≥ 22.3's `process.getBuiltinModule` — the slot `sha256Hex` reads to
- * reach `node:crypto` without a static import edge, returning the builtin
- * module namespace or `undefined`. The local signature keeps the test's
- * cross-runtime boundary explicit without coupling it to Node's overload set.
- */
 type BuiltinModuleLookup = (id: string) => object | undefined;
 
-/**
- * The two ambient slots whose ABSENCE selects the pure FIPS 180-4 fallback.
- * Both are optional because the tests below remove and restore them, and
- * `globalThis` is the very object `sha256Hex` probes at call time.
- */
 interface HashingAmbients {
   process?: Omit<NodeJS.Process, 'getBuiltinModule'> & {
     getBuiltinModule?: BuiltinModuleLookup;
@@ -224,8 +162,6 @@ interface HashingAmbients {
 }
 
 const ambients: HashingAmbients = globalThis;
-
-// ─── Task 01.3: version, hash, fragments ────────────────────
 
 describe('manifest v2 version, contract hash, and CSS fragments', () => {
   it('carries manifestVersion 2 and an emitter version on every fresh build', () => {
@@ -258,11 +194,8 @@ describe('manifest v2 version, contract hash, and CSS fragments', () => {
   });
 
   it('computes the same contractHash regardless of authored insertion order', () => {
-    // Evidences canonicalize()'s at-every-depth key sort: without it these two
-    // builds would digest differently-ordered JSON. Deliberate semantics this
-    // increment — the hash identifies the authored token GRAPH, not the
-    // emitted wire (declaration order does affect CSS; increment 05 owns
-    // deciding whether wire identity needs a broader digest).
+    // The hash identifies the authored token graph, not the emitted wire:
+    // canonicalization sorts keys at every depth.
     const forward = createTheme()
       .addBreakpoints({ sm: 768 })
       .addScale({ name: 'space', values: { 4: '0.25rem' } })
@@ -279,10 +212,8 @@ describe('manifest v2 version, contract hash, and CSS fragments', () => {
   });
 
   it('computes an identical contractHash when node:crypto is unavailable (pure fallback)', () => {
-    // sha256Hex reads `globalThis.process.getBuiltinModule` at call time;
-    // removing it forces the pure FIPS 180-4 fallback that non-Node runtimes
-    // use (built themes execute inside client bundles). Cross-environment
-    // composition identity requires both paths to digest identically.
+    // sha256Hex reads process.getBuiltinModule at call time; removing it forces
+    // the pure fallback non-Node runtimes take, which must digest identically.
     const nodeCryptoHash = buildSystemRegisteredFixture().manifest.contractHash;
     const proc = ambients.process;
     expect(proc?.getBuiltinModule).toBeDefined();
@@ -300,9 +231,8 @@ describe('manifest v2 version, contract hash, and CSS fragments', () => {
   });
 
   it('computes an identical contractHash without node:crypto or TextEncoder (QuickJS)', () => {
-    // The Rust system-loader evaluates the system bundle in QuickJS, which
-    // provides ES built-ins only — no Node globals and no WHATWG APIs
-    // (rust-system-loader spec). The fallback must digest without either.
+    // The Rust system-loader runs the bundle in QuickJS: ES built-ins only, no
+    // Node globals and no WHATWG APIs, so the fallback needs neither.
     const nodeCryptoHash = buildSystemRegisteredFixture().manifest.contractHash;
     const proc = ambients.process;
     expect(proc?.getBuiltinModule).toBeDefined();
@@ -343,8 +273,6 @@ describe('manifest v2 version, contract hash, and CSS fragments', () => {
       'registrations',
       'base',
     ]);
-    // The fragments RECORD what build() composed — variableCss is still the
-    // independent join of exactly those strings (zero-delta contract).
     expect(`${fragments?.[0].cssText}\n\n${fragments?.[1].cssText}`).toBe(
       theme.manifest.variableCss
     );
@@ -358,8 +286,6 @@ describe('manifest v2 version, contract hash, and CSS fragments', () => {
     expect(theme.manifest.variableCss).not.toContain('@property');
   });
 });
-
-// ─── Task 01.4: from() copy-on-write ────────────────────────
 
 describe('manifest v2 from() copy-on-write fidelity', () => {
   it('unmutated round-trip reproduces variableCss and every fragment byte-exactly', () => {
@@ -429,13 +355,11 @@ describe('manifest v2 from() copy-on-write fidelity', () => {
       (fragment) => fragment.kind === 'registrations'
     );
 
-    // The mutated section (base) regenerates and picks up the new scale…
     expect(
       augmented.manifest.cssFragments?.find(
         (fragment) => fragment.kind === 'base'
       )?.cssText
     ).toContain('--radii-sm: 2px;');
-    // …while the untouched registrations section passes through byte-exactly.
     expect(augmentedRegistrations?.cssText).toBe(sourceRegistrations?.cssText);
   });
 
@@ -443,10 +367,9 @@ describe('manifest v2 from() copy-on-write fidelity', () => {
     const real = buildReferenceFixture();
     const rebuilt = createTheme().from(buildV1Facsimile(real)).build();
 
-    // Round-trips unchanged…
     expect(rebuilt.serialize().variableCss).toBe(real.manifest.variableCss);
-    // …and gains NO fabricated v2 fields (D8: the authored graph behind a v1
-    // manifest is unknowable — never inferred from resolved values).
+    // The authored graph behind a v1 manifest is unknowable, so v2 fields are
+    // never inferred from resolved values.
     expect(rebuilt.manifest.manifestVersion).toBeUndefined();
     expect(rebuilt.manifest.tokenDefinitions).toBeUndefined();
     expect(rebuilt.manifest.modeAliasDefinitions).toBeUndefined();
@@ -457,9 +380,6 @@ describe('manifest v2 from() copy-on-write fidelity', () => {
   });
 
   it('suppresses v2 fields on a MUTATED legacy composition chain', () => {
-    // The v1 taint is fail-closed: it must survive copyState through every
-    // later phase call, not just the unmutated round-trip — the genuinely
-    // authored additions below still sit atop an unknowable v1 graph (D8).
     const real = buildReferenceFixture();
     const mutated = createTheme()
       .from(buildV1Facsimile(real))
@@ -475,18 +395,9 @@ describe('manifest v2 from() copy-on-write fidelity', () => {
   });
 });
 
-// ─── Task 01.5: zero-variant emission parity pins + wire lock ─
-
 /**
- * Captured from the PRE-increment emitter (2026-08-03, branch
- * feat/color-system, clean tree) for the reference fixture above; re-captured
- * 2026-08-04 under first-class-extension increment 03 (D4): deterministic
- * emission sorts `:root` token declarations by token path. Re-captured again
- * 2026-08-04 under increment 04 (G3 closure): `--breakpoint-*` lines and
- * mode-block lines sort by property name and mode blocks by mode name —
- * order mutations only, every declaration multiset-identical. Manifest v2 is
- * metadata-only: this string may NEVER change while the fixture stands
- * (G1 — zero-variant themes emit byte-identical CSS).
+ * Pinned emission for the reference fixture: zero-variant themes emit
+ * byte-identical CSS, so a diff is a failure rather than a pin to regenerate.
  */
 const REFERENCE_FIXTURE_VARIABLE_CSS = `:root {
   --color-bg: var(--color-void);
@@ -516,7 +427,6 @@ const REFERENCE_FIXTURE_VARIABLE_CSS = `:root {
   --color-primary: #000000;
 }`;
 
-/** Same capture for the system-enabled registered fixture (both fragments). */
 const SYSTEM_FIXTURE_VARIABLE_CSS = `@property --current-bg { syntax: "<color>"; inherits: true; initial-value: transparent; }
 
 :root {
@@ -589,8 +499,6 @@ describe('zero-variant emission parity (G1 pin)', () => {
   });
 
   it('serialize() still returns exactly the four legacy keys', () => {
-    // Cross-change lock (change:system-color-scheme G5): the fifth key
-    // (themeCssPlanJson) belongs to increment 05 and must NOT appear here.
     expect(Object.keys(buildSystemRegisteredFixture().serialize())).toEqual([
       'scalesJson',
       'variableMapJson',

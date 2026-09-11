@@ -1,13 +1,3 @@
-/**
- * Behavior pins for `withAnimus` in Turbopack mode (spec:
- * next-turbopack-integration): config resolution completes the extraction
- * and leaves the full artifact set on disk, session identity travels
- * through the loader options, a same-session re-analysis rewrites nothing,
- * and a started watcher's death reaches the plugin diagnostic surface.
- * Engine mocked at the singleton seam, same setup as plugin.test.ts. The
- * watcher's own event flow lives in
- * packages/extract/tests/session/turbopack-watcher-events.test.ts.
- */
 import {
   isJsonBoolean,
   isJsonObject,
@@ -54,9 +44,6 @@ const mocks = vi.hoisted(() => ({
 
 import { setEngineApiOverride } from '../../extract/session/singleton';
 
-// Engine API injection through the singleton's globalThis-keyed test
-// seam — reaches every copy of the module (source or dist), which a
-// module mock cannot.
 setEngineApiOverride(() => ({
   extractFacts: () => '{"files":{},"parseCount":0}',
   loadSystemModule: mocks.loadSystemModule,
@@ -67,10 +54,6 @@ setEngineApiOverride(() => ({
 let restoreGlobals: () => void;
 let savedCwd: string;
 
-/** What the engine double returns: a COMPLETE engine manifest carrying this
- *  suite's component CSS. The shared pipeline reads `manifest.sheets` /
- *  `manifest.components` directly, so a manifest that omits fields is not a
- *  manifest. */
 const MANIFEST = JSON.stringify(makeManifest({ css: '.btn{margin:8;}' }));
 
 function createProject(): string {
@@ -81,15 +64,6 @@ function createProject(): string {
   return root;
 }
 
-// ── Artifact readers ───────────────────────────────────────────────────────
-// The bundler only ever sees disk artifacts. Documents this suite asserts
-// whole are matched as JSON; the one artifact whose value is consumed —
-// the hydration corpus — is validated back into its owner's vocabulary.
-
-/** The hydration corpus artifact, in the analyze-time input vocabulary the
- *  engine itself consumes. The corpus itself is a nested JSON string, so
- *  this read has to name its two fields rather than assert on the document
- *  as a whole. */
 function parseAnalysisInputs(
   bytes: string
 ): Pick<AnalyzeProjectInputs, 'devMode' | 'filesJson'> {
@@ -104,18 +78,8 @@ function parseAnalysisInputs(
   return { devMode: candidate.devMode, filesJson: candidate.filesJson };
 }
 
-// ── Emitted Turbopack config readers ───────────────────────────────────────
-// Next types a merged rule as a union of shorthands and forwards loader
-// options across a process boundary as JSON; both owner contracts — the
-// fragment `buildTurbopackConfig` emits and the `TurbopackLoaderOptions`
-// the loader receives — are recovered by validation, never by assertion.
-
-/** withAnimus's return union: the webpack config it builds synchronously,
- *  or the Turbopack config it resolves after the out-of-band extraction. */
 type AnimusNextConfig = ReturnType<ReturnType<typeof withAnimus>>;
 
-/** Turbopack forwards loader options as JSON; Next's loader item names that
- *  JSON value domain. */
 type ForwardedLoaderOptions = Extract<
   TurbopackLoaderItem,
   { loader: string }
@@ -153,8 +117,6 @@ function isForwardedString(
   return Object.prototype.toString.call(value) === '[object String]';
 }
 
-/** The session identity `buildTurbopackConfig` always emits, read back out
- *  of the merged config into the loader's own option contract. */
 function animusLoaderOptions(
   turbopack: TurbopackOptions
 ): Required<
@@ -224,7 +186,6 @@ describe('withAnimus Turbopack wiring', () => {
     const options = animusLoaderOptions(turbopack);
     // process.cwd() resolves the macOS /var → /private/var symlink
     expect(options).toMatchObject({ rootDir: realpathSync(root) });
-    // Session identity travels via loader options (design D2).
     expect(options.sessionId).toMatch(/^[0-9a-f-]{36}$/);
     const sessionDir = options.sessionDir;
     expect(sessionDir).toBe(
@@ -240,11 +201,9 @@ describe('withAnimus Turbopack wiring', () => {
       'analysis-status.json',
     ]) {
       expect(existsSync(join(sessionDir, artifact)), artifact).toBe(true);
-      // Flat legacy paths are gone.
       expect(existsSync(join(root, '.animus', artifact)), artifact).toBe(false);
     }
 
-    // The hydration artifact replays the exact analyze-time inputs
     const inputs = parseAnalysisInputs(
       readFileSync(join(sessionDir, 'analysis-inputs.json'), 'utf-8')
     );
@@ -258,7 +217,6 @@ describe('withAnimus Turbopack wiring', () => {
       ])
     );
     expect(inputs.devMode).toBe(false);
-    // The disk manifest is the engine manifest plus the session envelope.
     const diskManifest = JSON.parse(
       readFileSync(join(sessionDir, 'manifest.json'), 'utf-8')
     );
@@ -269,7 +227,6 @@ describe('withAnimus Turbopack wiring', () => {
       ...JSON.parse(MANIFEST),
     });
 
-    // Aliases point into the session-scoped tree.
     expect(turbopack.resolveAlias?.['virtual:animus/system-props']).toBe(
       `./.animus/sessions/${options.sessionId}/system-props.js`
     );
@@ -300,9 +257,6 @@ describe('withAnimus Turbopack wiring', () => {
       commit: statOf('analysis-commit'),
     };
 
-    // A second config resolution in the SAME process (Next dev re-evaluates
-    // the config): the new session instance adopts the process-claimed
-    // identity and re-analyzes identical content over the same session dir.
     await withAnimus({
       system: './src/system.ts',
       unstable_turbopack: { mode: 'on' },
@@ -331,8 +285,6 @@ describe('withAnimus Turbopack wiring', () => {
 });
 
 describe('Turbopack watcher death reporting (Next driver)', () => {
-  /** A watcher handle standing in for a registered project watch — the
-   *  driver reaction under test is what happens when it DIES. */
   function fakeHandle(): TurbopackWatcherHandle {
     return {
       close: () => {},
@@ -348,9 +300,6 @@ describe('Turbopack watcher death reporting (Next driver)', () => {
 
     bindTurbopackWatchDeathReport({ kind: 'started', handle }, '/proj');
 
-    // The loss this pins: Next discarded the handle, so post-registration
-    // watcher death (EMFILE/ENOSPC) had no driver reaction at all — the CLI
-    // re-reports its degradation, Next reported nothing (report S10).
     expect(handle.onDied).toBeTypeOf('function');
     handle.onDied?.();
     const line = String(error.mock.calls[0]?.[0]);
@@ -363,8 +312,6 @@ describe('Turbopack watcher death reporting (Next driver)', () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {});
     bindTurbopackWatchDeathReport({ kind: 'already-watched' }, '/proj');
     bindTurbopackWatchDeathReport({ kind: 'unavailable' }, '/proj');
-    // The orchestrator already warned for `unavailable`; a duplicate claim
-    // means a live watcher for this root exists in this process.
     expect(error).not.toHaveBeenCalled();
   });
 });

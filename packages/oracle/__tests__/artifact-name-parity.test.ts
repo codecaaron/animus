@@ -1,12 +1,6 @@
 /**
- * The oracle's artifact filenames and its default artifact directory are
- * copies of the session's, on purpose: importing `@animus-ui/extract` at
- * runtime would put a devDependency — and a built dist — on the runtime path
- * of a package whose `bin` is `./src/cli.ts`. This test is the tether, the
- * same contract as `host-layer-parity.test.ts` — if the session renames an
- * artifact or moves its tree, the copies must move with it, because a drifted
- * name makes `loadAnimusArtifacts` refuse a perfectly good build and makes
- * `revalidate` blind to the file that actually changed.
+ * The oracle copies these names instead of importing them at runtime: its
+ * `bin` runs from source, so the extract dist stays off the runtime path.
  */
 
 import {
@@ -32,12 +26,8 @@ describe('artifact-name parity with the session', () => {
   });
 
   it('defaults to the directory the writers publish into', () => {
-    // Policy pairing, not just a name: `packages/oracle/src/cli/run.ts`
-    // DEFAULT_ARTIFACT_DIR is where the oracle LOOKS, and the session's
-    // ANIMUS_ARTIFACT_DIR is where the CLI writes (its `--out-dir` default,
-    // `packages/cli/src/config.ts`) and where session hygiene sweeps. A split
-    // between them makes the oracle read an empty directory and report a
-    // missing build.
+    // The oracle reads from this directory and the writers publish into it;
+    // a split makes the oracle read an empty directory and report no build.
     expect(DEFAULT_ARTIFACT_DIR).toBe(ANIMUS_ARTIFACT_DIR);
   });
 });

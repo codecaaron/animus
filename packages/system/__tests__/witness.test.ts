@@ -7,7 +7,6 @@ import { loadUnderNodeEnv } from './load-under-node-env';
 import type { DynamicPropConfig } from '../src/runtime/resolveClasses';
 import type { WitnessRecord } from '../src/runtime/witness';
 
-/** The dev-only handle `recordWitness` installs, named exactly as it types it. */
 type WitnessRuntimeGlobal = typeof globalThis & {
   __ANIMUS_WITNESS__?: WitnessRecord[];
 };
@@ -23,11 +22,8 @@ const buffer = (): WitnessRecord[] => {
 };
 
 /**
- * A dynamic entry whose transform returns null at runtime — outside the
- * `string | number` return its own contract declares. `defineProperty`
- * installs exactly the own, enumerable, writable, configurable property an
- * object literal would, without claiming the violating callback satisfies
- * that contract.
+ * `defineProperty` installs the same own enumerable property an object
+ * literal would, without claiming the null-returning callback type-checks.
  */
 const nullResultTransformEntry = (): DynamicPropConfig[string] => {
   const entry: DynamicPropConfig[string] = {

@@ -1,19 +1,3 @@
-/**
- * Packaging + entry-point isolation tests for the bootstrap generator
- * (increment 02).
- *
- * Covers spec `color-mode-bootstrap` → "Bootstrap entry-point isolation":
- * the generator is reachable ONLY from the dedicated `./bootstrap` subpath, and
- * no import path leads from the component/runtime entries into `src/bootstrap/`
- * (guardrail G3 — extracted component bundles gain no runtime exports).
- *
- * The reachability crawl is local and deliberately OVER-approximating: the
- * specifier regex also matches specifier-shaped text inside comments, which can
- * only add edges, never hide one. (The repo's oxc-backed scanner in
- * `scripts/verify/topology.ts` is not importable here — this package's
- * type-contract tier pins `rootDir` to `packages/system`, so a cross-root
- * import fails `verify:types` with TS6059.)
- */
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -43,11 +27,6 @@ function isJsonString(value: JsonValue): value is string {
   return Object.prototype.toString.call(value) === '[object String]';
 }
 
-/**
- * Read the package manifest's export map off disk. The bytes are an I/O
- * boundary, so every declared subpath is validated as a condition map of
- * strings before the assertions below read one.
- */
 function readExportMap(
   manifestPath: string
 ): Record<string, Record<string, string>> {
@@ -66,15 +45,13 @@ function readExportMap(
       );
     }
   }
-  // SAFETY: the loop above checked every entry of `declared` to be an object
-  // whose values are all strings; the parsed object itself is returned so the
-  // declared condition keys and their order stay observable to the assertions.
+  // SAFETY: the loop above proved every entry is an object of string values;
+  // returning the parsed object keeps the declared key order observable.
   return declared as JsonObject & Record<string, Record<string, string>>;
 }
 
 const packageExports = readExportMap(resolve(packageRoot, 'package.json'));
 
-/** Resolve a relative specifier to a source file on disk, or null. */
 function resolveSourceFile(fromFile: string, specifier: string): string | null {
   const base = resolve(dirname(fromFile), specifier).replace(/\.js$/, '');
   const candidates = [
@@ -90,10 +67,8 @@ function resolveSourceFile(fromFile: string, specifier: string): string | null {
   return null;
 }
 
-/** Matches `from '…'`, `import '…'`, and `import('…')` specifiers. */
 const SPECIFIER_PATTERN = /(?:from|import)\s*\(?\s*['"]([^'"]+)['"]/g;
 
-/** Every source file transitively reachable from `entries` via relative imports. */
 function reachableFiles(entries: string[]): Set<string> {
   const seen = new Set<string>();
   const queue = [...entries];
@@ -167,9 +142,6 @@ describe('bootstrap entry-point isolation (G3)', () => {
   });
 
   it('the crawl DOES report src/bootstrap when an edge exists', () => {
-    // Control for the ban check above: crawling the bootstrap entry itself must
-    // surface a src/bootstrap file, so an empty result there means "no edge",
-    // not "crawl blind".
     const reachable = reachableFiles([resolve(bootstrapRoot, 'index.ts')]);
     const inBootstrap = [...reachable].filter((file) =>
       file.startsWith(`${bootstrapRoot}/`)

@@ -1,18 +1,3 @@
-/**
- * Transform identity across the snapshot boundary (design D12/D7): the
- * registry snapshot wraps every transform in a forwarding arrow whose OWN
- * `toString()` is byte-identical for all transforms, so equality must see
- * through the wrapper to the original source text — otherwise divergent
- * anonymous transforms coalesce silently (first registered wins) and the
- * serialization duplicate-name guard is blind. Also pins the producer-side
- * variant: `createTransform(name, fn)` capturing a WRAPPER's text when `fn`
- * is itself a createTransform product.
- *
- * Plus the structural-scale half of the same comparison family: the
- * snapshot replaces object/array scales with frozen copies, so
- * addGroup/addProps re-registration checks must compare scales
- * structurally, as extend() already does.
- */
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -73,9 +58,6 @@ describe('anonymous transform identity across extend()', () => {
 
 describe('serialization duplicate-name guard', () => {
   it('two different anonymous transforms sharing an inferred name fail loud', () => {
-    // Both inline arrows infer the property name `transform`, so they land
-    // on one key in the serialized transforms map — silently letting the
-    // last one win would apply pad's transform to gap's values.
     const { system } = createSystem()
       .addGroup('layout', {
         gap: prop({ property: 'gap', transform: (v) => `${v}px` }),

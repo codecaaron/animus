@@ -11,13 +11,6 @@ import { afterEach, describe, expect, test } from 'vitest';
 
 import { pruneStaleAssets } from '../../session/extraction-session';
 
-/**
- * `.animus/assets/` sync (asset() delivery): copies are content-addressed
- * and never overwritten, so every pass prunes whatever the current build
- * did not produce — superseded revisions and copies of removed references
- * alike — while tolerating a missing directory and per-entry failures.
- */
-
 let scratch: string | null = null;
 
 function assetsDir(files: string[]): string {

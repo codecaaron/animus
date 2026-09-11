@@ -1,17 +1,4 @@
 // @vitest-environment node
-/**
- * External workspace-source ingestion under the exact compiled webpack of
- * each Next fixture (openspec: external-source-watch-ingestion, increment
- * 02 — design D3; spec workspace-source-ingestion, "Unimported kit
- * creation is ingested").
- *
- * The decisive probe-proven behavior: webpack does not watch unimported
- * files, so a file created in a declared kit reaches analysis ONLY through
- * the kit root's registration as a compilation context dependency — the
- * watcher then reports the DIRECTORY, and the session's root-dirty rewalk
- * reconstructs the creation. Engine canned at the singleton seam; the real
- * AnimusWebpackPlugin, loader, and session run throughout.
- */
 import { isJsonObject, isJsonString } from '@animus-ui/assertions';
 import {
   mkdirSync,
@@ -33,9 +20,6 @@ const mocks = vi.hoisted(() => ({
 
 import { setEngineApiOverride } from '../../../extract/session/singleton';
 
-// Engine API injection through the singleton's globalThis-keyed test
-// seam — reaches every copy of the module (source or dist, and the
-// loader's CJS require inside webpack), which a module mock cannot.
 setEngineApiOverride(() => ({
   extractFacts: () => '{"files":{},"parseCount":0}',
   loadSystemModule: mocks.loadSystemModule,
@@ -75,12 +59,10 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-/** Suite arming: the shared canned engine. */
 function armSuiteEngine(): void {
   armCannedEngine(mocks, () => {});
 }
 
-/** Everything one external-workspace scenario drives its watch session with. */
 interface ExternalProjectSetup {
   project: HarnessProject;
   kitRoot: string;
@@ -95,8 +77,6 @@ function setUpExternalProject(): ExternalProjectSetup {
   const project = createHarnessProject();
   disposers.push(() => project.dispose());
 
-  // The kit lives OUTSIDE the project root (sibling temp dir) — the
-  // monorepo workspace shape.
   const kitRoot = realpathSync(mkdtempSync(join(tmpdir(), 'animus-kit-')));
   disposers.push(() => rmSync(kitRoot, { recursive: true, force: true }));
   writeFileSync(join(kitRoot, 'package.json'), '{"name":"@harness/kit"}');
@@ -104,8 +84,8 @@ function setUpExternalProject(): ExternalProjectSetup {
   writeFileSync(join(kitRoot, 'src', 'index.js'), "module.exports = 'kit';\n");
   writeFileSync(join(kitRoot, 'src', 'card.js'), "module.exports = 'card';\n");
 
-  // Declare the kit from the system file. The canned loadSystemModule never
-  // reads it — extractSystemFilePackages (real) does.
+  // The canned loadSystemModule never reads this file; the real
+  // extractSystemFilePackages does, and that is what declares the kit.
   project.write(
     'src/system.ts',
     `import { createSystem } from '@animus-ui/system';\n` +
@@ -125,11 +105,6 @@ function setUpExternalProject(): ExternalProjectSetup {
   return { project, kitRoot, state, plugin, shimPath };
 }
 
-// ── analyzeProject payload boundary ───────────────────────────────────────
-// The engine's first positional argument crosses the NAPI seam as JSON text,
-// so the recorded call is decoded here rather than asserted through casts.
-
-/** One entry of the analyzed universe the engine received. */
 interface AnalyzedFile {
   path: string;
   source: string;
@@ -152,7 +127,6 @@ function parseAnalyzedFiles(filesJson: string): AnalyzedFile[] {
   });
 }
 
-/** All analyzed file sets, parsed from every analyzeProject call. */
 function analyzedFileSets(): AnalyzedFile[][] {
   return mocks.analyzeProject.mock.calls.map((call) =>
     parseAnalyzedFiles(call[0])
@@ -182,8 +156,6 @@ for (const fixture of WEBPACK_FIXTURES) {
             shimPath,
             plugins: [plugin],
           }),
-          // The kit tree is a deliberate external watch surface — the
-          // context-dependency turn under test rides its directory events.
           watchRoots: [kitRoot],
           state,
           steps: [
@@ -196,15 +168,11 @@ for (const fixture of WEBPACK_FIXTURES) {
           settleMs: 1500,
         });
 
-        // Cold discovery ingested the declared kit.
         const sets = analyzedFileSets();
         expect(sets.length).toBeGreaterThanOrEqual(1);
         const cardKey = relative(project.root, join(kitRoot, 'src', 'card.js'));
         expect(sets[0].some((f) => f.path === cardKey)).toBe(true);
 
-        // The UNIMPORTED create produced a watch turn at all — without the
-        // kit root as a compilation context dependency webpack has no watch
-        // input covering it and the session never runs again.
         expect(records.length).toBeGreaterThanOrEqual(2);
         const kitTurn = records
           .slice(1)
@@ -215,7 +183,6 @@ for (const fixture of WEBPACK_FIXTURES) {
           );
         expect(kitTurn).toBeDefined();
 
-        // The analyzed universe gained the file from its watch signal alone.
         const newcomerKey = relative(
           project.root,
           join(kitRoot, 'src', 'newcomer.js')

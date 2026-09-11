@@ -144,9 +144,8 @@ describe('invalid transform result gate', () => {
   });
 
   /**
-   * Installs a contract-violating transform result at runtime so the defensive
-   * gate is exercised without claiming that the value satisfies its static
-   * string-or-number return contract.
+   * Installs a contract-violating transform result without claiming it
+   * satisfies the static string-or-number return contract.
    */
   const withRuntimeTransformResult = (
     result: RejectedTransformFixtureResult,
@@ -216,9 +215,6 @@ describe('invalid transform result gate', () => {
     expect(String(warn.mock.calls[0][0])).toContain('non-finite-number');
   });
 
-  // The staging target aliases the live dynStyle once one exists; these two
-  // pin that an earlier prop's applied variables survive a later prop's drop
-  // (and the reverse), which no single-prop case can observe.
   test("valid prop then invalid prop: the first prop's slot and variable survive", () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     const res = resolveClasses(

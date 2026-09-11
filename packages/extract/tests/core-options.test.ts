@@ -38,16 +38,14 @@ describe('assertKnownOptionKeys', () => {
   });
 
   test('wrongly-typed core values always throw — never silently coerce', () => {
-    // The polarity keys: a string "false" is truthy, so an untyped
-    // passthrough ENABLES what the config reads as disabling.
     expect(() =>
       assertKnownOptionKeys({ system: './ds.ts', strict: 'false' })
     ).toThrow(/"strict".*boolean/);
     expect(() =>
       assertKnownOptionKeys({ system: './ds.ts', minify: 'false' })
     ).toThrow(/"minify".*boolean/);
-    // A bare-string exclude/extensions is the natural single-value
-    // misspelling; untyped it becomes zero patterns / a Set of CHARACTERS.
+    // Untyped, a bare-string exclude/extensions becomes zero patterns or a
+    // Set of characters.
     expect(() =>
       assertKnownOptionKeys({ system: './ds.ts', exclude: 'fixtures' })
     ).toThrow(/"exclude".*array/);
@@ -64,14 +62,12 @@ describe('assertKnownOptionKeys', () => {
         prefix: 5,
       })
     ).toThrow(AnimusConfigError);
-    // Type errors are fatal even in warn mode — only unknown KEYS warn.
     expect(() =>
       assertKnownOptionKeys({ system: './ds.ts', strict: 'true' }, [], [], {
         onUnknownKey: 'warn',
         warn: () => {},
       })
     ).toThrow(/"strict"/);
-    // Valid shapes stay accepted (string-or-array targets included).
     expect(() =>
       assertKnownOptionKeys({ system: './ds.ts', targets: ['defaults'] })
     ).not.toThrow();
@@ -84,7 +80,6 @@ describe('assertKnownOptionKeys', () => {
     expect(() =>
       assertKnownOptionKeys({ system: './ds.ts', exclide: [] })
     ).toThrow(AnimusConfigError);
-    // The message names the offending key AND the suggested spelling.
     expect(() =>
       assertKnownOptionKeys({ system: './ds.ts', exclide: [] })
     ).toThrow('"exclide"');
@@ -126,9 +121,6 @@ describe('assertKnownOptionKeys', () => {
   test('warn mode surfaces unknown and rejected keys without throwing (published entry points)', () => {
     const warnings: string[] = [];
     const warn = (message: string) => warnings.push(message);
-    // The regression this pins: the published withAnimus/animusExtract
-    // entry points threw at config load for any extra top-level key —
-    // including previously-inert `root` — with no deprecation window.
     expect(() =>
       assertKnownOptionKeys(
         { system: './ds.ts', extraneous: 1, root: '/elsewhere' },
@@ -163,9 +155,6 @@ describe('createExcludeMatcher', () => {
   });
 
   test('a user list can re-admit a replaceable default like "dist"', () => {
-    // The HEAD driver contract: `exclude` REPLACES the defaults. A consumer
-    // whose components live under src/dist-utils/ excludes only tests and
-    // must get dist-substring paths back.
     const matcher = createExcludeMatcher(['.test.', '.spec.']);
     expect(
       matcher.matches(
@@ -201,7 +190,6 @@ describe('createExcludeMatcher', () => {
       matcher.matches('/app/fixtures/deep/b.tsx', 'fixtures/deep/b.tsx')
     ).toBe(true);
     expect(matcher.matches('/app/src/a.tsx', 'src/a.tsx')).toBe(false);
-    // The original spelling stays the reporting key.
     expect(matcher.explain('/app/fixtures/a.tsx', 'fixtures/a.tsx')).toBe(
       './fixtures/**'
     );
@@ -220,9 +208,7 @@ describe('createExcludeMatcher', () => {
     expect(withUser.matches('/app/out/styles.css', 'out/styles.css')).toBe(
       true
     );
-    // The user list still replaces the replaceable defaults…
     expect(withUser.matches('/app/dist/a.ts', 'dist/a.ts')).toBe(false);
-    // …and can never re-admit a structural entry.
     expect(
       withUser.matches('/app/node_modules/p/i.ts', 'node_modules/p/i.ts')
     ).toBe(true);
@@ -236,8 +222,6 @@ describe('createExcludeMatcher', () => {
   test('substring patterns keep matching both path forms', () => {
     const matcher = createExcludeMatcher();
     expect(matcher.matches('/app/src/a.test.ts', 'src/a.test.ts')).toBe(true);
-    // Absolute-path substring hit even when the relative path is clean —
-    // historical behavior preserved for patterns without glob metacharacters.
     expect(matcher.matches('/opt/dist-host/app/src/a.ts', 'src/a.ts')).toBe(
       true
     );
@@ -271,8 +255,6 @@ describe('createExcludeMatcher', () => {
 
   test('a directory-shaped glob excludes files under it (watch parity)', () => {
     const matcher = createExcludeMatcher(['**/generated']);
-    // Discovery prunes at the directory; watch classification only ever
-    // sees file paths — both must agree.
     expect(matcher.matches('/a/src/generated', 'src/generated')).toBe(true);
     expect(matcher.matches('/a/src/generated/x.ts', 'src/generated/x.ts')).toBe(
       true
@@ -334,8 +316,6 @@ describe('discoverFiles with an ExcludeMatcher', () => {
 
   test('discovery order is deterministic depth-first lexicographic', () => {
     const root = mkdtempSync(join(tmpdir(), 'core-options-discover-'));
-    // Created in anti-alphabetical order so filesystems that surface
-    // creation order would betray an unsorted walk.
     mkdirSync(join(root, 'zeta'), { recursive: true });
     writeFileSync(join(root, 'zeta', 'z.tsx'), 'export {};');
     writeFileSync(join(root, 'zeta', 'a.tsx'), 'export {};');

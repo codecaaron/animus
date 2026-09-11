@@ -6,16 +6,8 @@ import { loadVirtualModule } from '../src/virtual-modules';
 
 import type { AnimusExtractOptions } from '../src/index';
 
-/**
- * The browser bridge holds its `CSSStyleSheet` in a `globalThis` registry
- * entry so an HMR re-evaluation of the module adopts the existing sheet
- * instead of appending a duplicate. That entry is shared build-time state
- * across every plugin instance on the page, and each instance's
- * `replaceSync(css)` overwrites the whole sheet — so two instances landing on
- * one key means the last loader's component CSS wins and the other's
- * components lose every rule (openspec: vite-extraction-plugin, "HMR state
- * namespaced by system path hash").
- */
+/** The bridge adopts its sheet from a `globalThis` key: two plugin instances
+ *  sharing one key overwrite each other's component CSS on every update. */
 
 function bridgeModule(options: AnimusExtractOptions): string {
   const ctx = new PluginContext(options);
@@ -33,9 +25,7 @@ function registryKey(options: AnimusExtractOptions): string {
 describe('browser bridge sheet registry key', () => {
   it('separates instances whose emitted bytes differ', () => {
     // Same system module, different emission: `prefix` renames every class
-    // and every custom property in the served component CSS. Sharing a sheet
-    // here is not a near-miss — each instance wholesale-replaces the other's
-    // stylesheet on every update.
+    // and every custom property in the served component CSS.
     const base: AnimusExtractOptions = { system: './src/ds.ts' };
 
     expect(registryKey({ ...base, prefix: 'app' })).not.toBe(
@@ -59,17 +49,13 @@ describe('browser bridge sheet registry key', () => {
   });
 
   it('keeps one key for one configuration, however it is spelled', () => {
-    // The key must be stable across module re-evaluation, and two instances
-    // configured identically SHOULD share — that is what stops a second
-    // adoption of the same stylesheet.
+    // Identical configurations share, which prevents a duplicate adoption.
     expect(registryKey({ system: './src/ds.ts', prefix: 'app' })).toBe(
       registryKey({ prefix: 'app', system: './src/ds.ts' })
     );
   });
 
   it('namespaces the style-element fallback with the same key', () => {
-    // The non-adoptedStyleSheets branch writes a `<style>` element instead;
-    // an unnamespaced selector collides for exactly the same reason.
     const source = bridgeModule({ system: './src/ds.ts' });
     const key = registryKey({ system: './src/ds.ts' });
     const hash = key.slice('__animus_sheet_'.length, -'__'.length);

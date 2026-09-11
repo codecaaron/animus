@@ -6,14 +6,6 @@ import { resolveComponentTag } from '../src/places/resolve';
 
 import type { ComponentRecord } from '../src/providers/identity';
 
-/**
- * Attributing a JSX tag to an extracted component (PLACES.md §1, seam S4).
- * A bare binding that matches two components must never resolve to an
- * arbitrary winner — but a relative import specifier names one file, so the
- * path can decide what the binding cannot. What remains ambiguous is
- * surfaced through `PlaceAnalysis.unresolved`, never silently dropped.
- */
-
 const record = (
   id: string,
   file: string,

@@ -1,16 +1,5 @@
 import { isJsonObject, parseJsonObject } from '@animus-ui/assertions';
 import { RETIRED_ENGINE_MESSAGE } from '@animus-ui/extract/pipeline';
-/**
- * Behavior pins for AnimusWebpackPlugin (src/plugin.ts) ahead of refactor.
- *
- * The NAPI boundary (engineApi: loadSystemModule / analyzeProject /
- * clearAnalysisCache) is mocked; the pure pipeline helpers from
- * `@animus-ui/extract/pipeline` (assembleStylesheet, applyUnitFallback,
- * extractSystemFilePackages, ...) and the singleton shared-state
- * getters/setters run for real. Every assertion targets observable
- * behavior: files written, globalThis state, mock call counts and args,
- * CSS content — never internal method names.
- */
 import { readFileSync, rmSync, statSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
@@ -44,9 +33,6 @@ const mocks = vi.hoisted(() => ({
 
 import { setEngineApiOverride } from '../../extract/session/singleton';
 
-// Engine API injection through the singleton's globalThis-keyed test
-// seam — reaches every copy of the module (source or dist), which a
-// module mock cannot.
 setEngineApiOverride(() => ({
   extractFacts: () => '{"files":{},"parseCount":0}',
   loadSystemModule: mocks.loadSystemModule,
@@ -60,29 +46,18 @@ const SYSTEM_SOURCE = 'export const system = { space: [0, 4, 8] };\n';
 const SYSTEM_SOURCE_CHANGED =
   'export const system = { space: [0, 4, 8, 16] };\n';
 
-/** Component CSS returned by the analyzeProject mock; mutable per test. */
 let nextComponentCss = '.btn{margin:8;}';
 
 interface ManifestOverrides {
   diagnostics?: ManifestDiagnostic[];
 }
 
-/**
- * The engine manifest the `analyzeProject` mock returns — a COMPLETE
- * `ProjectManifest` (`makeManifest`, session-fixtures) carrying this
- * suite's meaningful values. The shared pipeline reads `manifest.sheets
- * .global` and `manifest.css` as typed fields, so a partial literal is not
- * a manifest.
- */
 function buildManifest(overrides: ManifestOverrides = {}): string {
   const manifest = makeManifest({
     css: nextComponentCss,
-    // prop name → VALUE → utility class name (manifest-schema.ts): the map
-    // `resolveClasses` indexes as `systemPropMap[prop][value]`. The session
-    // hands it to the served system-props module verbatim.
+    // Nesting is prop name → value → utility class: `resolveClasses`
+    // indexes it as `systemPropMap[prop][value]`.
     system_prop_map: { m: { '8': 'anm-m-8' } },
-    // Verbatim manifest spelling: `DynamicPropMeta` serializes camelCase, with
-    // absent transforms as `null` and an empty scale map as `{}`.
     dynamic_props: {
       color: {
         varName: '--anm-color',
@@ -103,9 +78,6 @@ function buildManifest(overrides: ManifestOverrides = {}): string {
     },
     ...overrides,
   });
-  // `sheets` stays a whole `ManifestSheets`; only the layer this suite reads
-  // carries content. `makeManifest` returns fresh objects, so this mutates
-  // nobody else's fixture.
   manifest.sheets.global = '@layer anm-global{body{margin:0}}';
   return JSON.stringify(manifest);
 }
@@ -157,9 +129,6 @@ type ProcessAssetsOptions = Parameters<ProcessAssetsTap>[0];
 type ProcessAssetsHandler = Parameters<ProcessAssetsTap>[1];
 type WebpackSource = Parameters<PluginCompilation['updateAsset']>[1];
 
-/** The alias map the plugin declares it harvests from — derived rather than
- *  restated, so the non-string webpack variants (`false`, candidate lists)
- *  stay reachable from this harness. */
 type PluginAliasMap = NonNullable<
   NonNullable<NonNullable<PluginCompiler['options']>['resolve']>['alias']
 >;
@@ -200,8 +169,6 @@ function createCompiler(
     webpack: {
       Compilation: { PROCESS_ASSETS_STAGE_ADDITIONAL: -100 },
       sources: { RawSource: FakeRawSource },
-      // Minimal model of webpack 5's NormalModule compilation hooks — the
-      // plugin's runtime existence check (design D7) requires it.
       NormalModule: {
         getCompilationHooks: () => ({
           needBuild: { tapAsync: () => {} },
@@ -255,7 +222,6 @@ function createCompilation(assetNames: string[]) {
   return { compilation, taps, assets };
 }
 
-/** Session-scoped artifact path for a plugin's (process-claimed) session. */
 function artifactPath(
   root: string,
   plugin: AnimusWebpackPlugin,
@@ -385,14 +351,13 @@ describe('production run (full pipeline)', () => {
     expect(mocks.analyzeProject).toHaveBeenCalledTimes(1);
 
     const args = analyzeCall(0);
-    // Positional NAPI contract (buildAnalyzeProjectArgs, @animus-ui/extract/pipeline)
     expect(args[1]).toBe(SYSTEM_CONFIG.scalesJson);
     expect(args[2]).toBe(SYSTEM_CONFIG.variableMapJson);
     expect(args[3]).toBeNull();
     expect(args[4]).toBe(SYSTEM_CONFIG.propConfig);
     expect(args[5]).toBe(SYSTEM_CONFIG.groupRegistry);
-    expect(args[6]).toBe('{}'); // no external packages resolved
-    expect(args[7]).toBe(false); // production devMode
+    expect(args[6]).toBe('{}');
+    expect(args[7]).toBe(false);
     expect(parseRequiredJsonObject(args[8], 'emitter config')).toEqual({
       runtime_import: '@animus-ui/system/runtime',
       css_module_id: '.animus/styles.css',
@@ -401,8 +366,6 @@ describe('production run (full pipeline)', () => {
     expect(args[9]).toBeNull();
     expect(args[10]).toBeNull();
     expect(args[11]).toBeNull();
-    // Webpack resolve.alias translated to path aliases (own .animus alias skipped,
-    // longest pattern first, prefix aliases get trailing slashes)
     expect(parseRequiredJsonObject(args[12], 'path aliases')).toEqual({
       aliases: [
         {
@@ -415,7 +378,6 @@ describe('production run (full pipeline)', () => {
     });
     expect(args[13]).toBeNull();
 
-    // Discovered files ride along with full source + md5 hash
     const files = parseFiles(args);
     expect(files.map((f) => f.path).sort()).toEqual([
       'src/Button.tsx',
@@ -430,13 +392,9 @@ describe('production run (full pipeline)', () => {
     const root = createProject();
     const { compiler, runHandlers } = createCompiler(root, {
       alias: {
-        // Webpack tries a candidate list in order, so the FIRST entry is the
-        // target a resolution would land on and the one this harvest reports.
         '@first': [join(root, 'src', 'components'), join(root, 'src')],
-        // `false` disables an alias outright, and an empty list names no
-        // candidate at all: neither yields a pattern→target pair, and
-        // reporting either would point the engine at a path webpack never
-        // resolves to.
+        // `false` disables an alias and an empty list names no candidate, so
+        // neither yields a pattern→target pair to report.
         '@disabled': false,
         '@empty': [],
       },
@@ -460,12 +418,8 @@ describe('production run (full pipeline)', () => {
   });
 
   test('an offline system-props change moves the replacement epoch', async () => {
-    // The epoch is webpack's persistent-cache witness: restored modules
-    // import the building session's system-props.js. A group-registry
-    // change while the server is down alters that module's content WITHOUT
-    // touching any replacement, so the epoch must still move — an equal
-    // epoch would keep restored modules bound to the dead session's stale
-    // artifact.
+    // Restored modules import the building session's system-props.js, so an
+    // unmoved epoch would keep them bound to a dead session's stale artifact.
     const root = createProject();
     const session = new ExtractionSession(OPTIONS);
     session.rootDir = root;
@@ -493,30 +447,21 @@ describe('production run (full pipeline)', () => {
     await runHandlers[0](compiler);
 
     const css = readFileSync(artifactPath(root, plugin, 'styles.css'), 'utf-8');
-    // Canonical assembly: layer declaration, then variables, then the
-    // Lightning-processed body (dev mode: autoprefix-only reprint).
     expect(css).toContain(
       '@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;'
     );
-    // Variables segment is never processed — byte-identical.
     expect(css).toContain(':root{--anm-space-1: 4px}');
     expect(css).toMatch(/@layer anm-global\s*\{\s*body\s*\{\s*margin:\s*0/);
-    // Unit fallback appended px to the bare numeric margin
     expect(css).toMatch(/\.btn\s*\{\s*margin:\s*8px/);
     expect(css.indexOf('@layer anm-global,')).toBe(0);
     expect(css.indexOf(':root')).toBeLessThan(
       css.search(/@layer anm-global\s*\{/)
     );
 
-    // Shared CSS is the authoritative copy of what hit disk (the disk
-    // artifact additionally carries the trailing session envelope comment).
     expect(css.startsWith(getSharedCss())).toBe(true);
     expect(css).toContain('__animusSession');
-    // Manifest is stored verbatim for the loader
     expect(getManifestJson()).toBe(analyzeResult(0));
 
-    // system-props module: null transforms and empty scale maps are omitted,
-    // systemPropGroups is the raw groupRegistry JSON string
     const sysProps = readFileSync(
       artifactPath(root, plugin, 'system-props.js'),
       'utf-8'
@@ -539,8 +484,6 @@ describe('production run (full pipeline)', () => {
 
     const manifestPath = artifactPath(root, plugin, 'manifest.json');
     const written = readFileSync(manifestPath, 'utf-8');
-    // The disk artifact is the engine manifest plus the leading
-    // __animusSession envelope field; the payload fields are verbatim.
     expect(JSON.parse(written)).toEqual({
       __animusSession: expect.objectContaining({
         sessionId: plugin.sessionId,
@@ -553,8 +496,6 @@ describe('production run (full pipeline)', () => {
     });
     const mtimeAfterFull = statSync(manifestPath).mtimeMs;
 
-    // A source change whose re-analysis yields a byte-identical manifest
-    // must not rewrite the artifact.
     writeFileSync(join(root, 'src', 'Button.tsx'), BUTTON_SOURCE_CHANGED);
     await watchRunHandlers[0](compiler);
     expect(mocks.analyzeProject).toHaveBeenCalledTimes(2);
@@ -570,10 +511,8 @@ describe('production run (full pipeline)', () => {
     await runHandlers[0](compiler);
 
     const css = readFileSync(artifactPath(root, plugin, 'styles.css'), 'utf-8');
-    // Untouched segments survive byte-for-byte
     expect(css.indexOf('@layer anm-global,')).toBe(0);
     expect(css).toContain(':root{--anm-space-1: 4px}');
-    // Minified body: no trailing semicolon before the brace, no indentation
     expect(css).toContain('.btn{margin:8px}');
     expect(css).toContain('@layer anm-global{body{margin:0}}');
   });
@@ -620,11 +559,10 @@ describe('production run (full pipeline)', () => {
     applyPlugin(plugin, compiler);
     const absName = artifactPath(root, plugin, 'styles.css');
 
-    // Before any pipeline run there is no shared CSS — asset stays untouched
     const pre = createCompilation([absName]);
     compilationHandlers[0](pre.compilation);
     expect(pre.taps).toHaveLength(1);
-    expect(pre.taps[0].options.stage).toBe(-100); // PROCESS_ASSETS_STAGE_ADDITIONAL
+    expect(pre.taps[0].options.stage).toBe(-100);
     pre.taps[0].fn({});
     expect(pre.assets.get(absName)?.source()).toBe('/* stub */');
 
@@ -656,9 +594,6 @@ describe('production run (full pipeline)', () => {
     expect(mocks.loadSystemModule).toHaveBeenCalledTimes(1);
     expect(mocks.analyzeProject).toHaveBeenCalledTimes(1);
 
-    // The non-owning server instance still serves the shared CSS. Both
-    // plugin instances adopt the process-claimed session identity, so the
-    // server's aliased asset path IS the owner's session-scoped stylesheet.
     expect(serverPlugin.sessionId).toBe(clientPlugin.sessionId);
     const absName = artifactPath(root, serverPlugin, 'styles.css');
     const comp = createCompilation([absName]);
@@ -714,24 +649,20 @@ describe('watch mode (dev/HMR)', () => {
     await watchRunHandlers[0](compiler);
     expect(mocks.loadSystemModule).toHaveBeenCalledTimes(1);
     expect(mocks.analyzeProject).toHaveBeenCalledTimes(1);
-    expect(analyzeCall(0)[7]).toBe(false); // first build is the full pipeline
+    expect(analyzeCall(0)[7]).toBe(false);
     const clearsAfterFull = mocks.clearAnalysisCache.mock.calls.length;
 
     nextComponentCss = '.btn{margin:16;}';
     writeFileSync(join(root, 'src', 'Button.tsx'), BUTTON_SOURCE_CHANGED);
     await watchRunHandlers[0](compiler);
 
-    // Incremental: re-analyzed, but the system was NOT reloaded and the
-    // Rust analysis cache was NOT cleared
     expect(mocks.loadSystemModule).toHaveBeenCalledTimes(1);
     expect(mocks.analyzeProject).toHaveBeenCalledTimes(2);
     expect(mocks.clearAnalysisCache.mock.calls.length).toBe(clearsAfterFull);
 
     const args = analyzeCall(1);
-    expect(args[7]).toBe(true); // HMR devMode
-    expect(args[6]).toBe('{}'); // package map replayed from (empty) cache
-    // v2 engine contract: every cached file rides with FULL source + hash,
-    // changed or not (v2 has no Rust-side cache)
+    expect(args[7]).toBe(true);
+    expect(args[6]).toBe('{}');
     const files = parseFiles(args);
     const button = files.find((f) => f.path === 'src/Button.tsx');
     expect(button?.source).toBe(BUTTON_SOURCE_CHANGED);
@@ -739,7 +670,6 @@ describe('watch mode (dev/HMR)', () => {
     expect(system?.source).toBe(SYSTEM_SOURCE);
     expect(system?.hash).toMatch(/^[0-9a-f]{32}$/);
 
-    // CSS output updated on disk and in shared state
     const css = readFileSync(artifactPath(root, plugin, 'styles.css'), 'utf-8');
     expect(css).toMatch(/\.btn\s*\{\s*margin:\s*16px/);
     expect(css.startsWith(getSharedCss())).toBe(true);
@@ -778,14 +708,13 @@ describe('watch mode (dev/HMR)', () => {
     writeFileSync(join(root, 'src', 'system.ts'), SYSTEM_SOURCE_CHANGED);
     await watchRunHandlers[0](compiler);
 
-    expect(mocks.loadSystemModule).toHaveBeenCalledTimes(2); // system reloaded
+    expect(mocks.loadSystemModule).toHaveBeenCalledTimes(2);
     expect(mocks.analyzeProject).toHaveBeenCalledTimes(2);
-    expect(analyzeCall(1)[7]).toBe(false); // full pipeline, not HMR
+    expect(analyzeCall(1)[7]).toBe(false);
     expect(mocks.clearAnalysisCache.mock.calls.length).toBeGreaterThan(
       clearsBefore
     );
 
-    // Watch state recovered: a further unchanged watchRun stays quiet
     await watchRunHandlers[0](compiler);
     expect(mocks.analyzeProject).toHaveBeenCalledTimes(2);
   });
@@ -797,7 +726,6 @@ describe('watch mode (dev/HMR)', () => {
 
     await watchRunHandlers[0](compiler);
 
-    // Both files change on disk, but webpack only reports Button.tsx
     writeFileSync(join(root, 'src', 'Button.tsx'), BUTTON_SOURCE_CHANGED);
     writeFileSync(join(root, 'src', 'Other.tsx'), 'export const Other = 1;\n');
     await watchRunHandlers[0]({
@@ -808,7 +736,6 @@ describe('watch mode (dev/HMR)', () => {
 
     expect(mocks.analyzeProject).toHaveBeenCalledTimes(2);
     const files = parseFiles(analyzeCall(1));
-    // The listed file was re-read; the unlisted new file was never scanned
     expect(files.find((f) => f.path === 'src/Button.tsx')?.source).toBe(
       BUTTON_SOURCE_CHANGED
     );
@@ -835,9 +762,6 @@ describe('watch mode (dev/HMR)', () => {
   });
 
   test('a non-owning instance with no reported set stays a no-op', async () => {
-    // Real webpack passes real (possibly empty) sets on incremental turns;
-    // an absent set on a NON-OWNING instance (initial replay, bare
-    // harnesses) must not trigger the owner's full-discovery fallback.
     const root = createProject();
     const owner = createCompiler(root);
     const follower = createCompiler(root, { name: 'server' });
@@ -850,23 +774,18 @@ describe('watch mode (dev/HMR)', () => {
 
     writeFileSync(join(root, 'src', 'Button.tsx'), BUTTON_SOURCE_CHANGED);
 
-    // No modified set on the follower → nothing to forward.
     await follower.watchRunHandlers[0](follower.compiler);
     expect(mocks.analyzeProject).toHaveBeenCalledTimes(1);
     expect(mocks.loadSystemModule).toHaveBeenCalledTimes(1);
 
-    // The owner picks the change up
     await owner.watchRunHandlers[0](owner.compiler);
     expect(mocks.analyzeProject).toHaveBeenCalledTimes(2);
     expect(analyzeCall(1)[7]).toBe(true);
   });
 
   test('a non-owning instance forwards its real modified set to the owner', async () => {
-    // Each MultiCompiler child has its own watcher and its own modified
-    // set: a server-graph-only edit arrives ONLY on the server compiler,
-    // whose session lost the init race and never loaded system state.
-    // Dropping that batch strands the file at its pre-edit hash and the
-    // loader throws ANIMUS_ANALYSIS_CATCHING_UP on every rebuild forever.
+    // Each MultiCompiler child has its own watcher and modified set:
+    // dropping the server's batch strands the file in permanent catch-up.
     const root = createProject();
     const owner = createCompiler(root);
     const follower = createCompiler(root, { name: 'server' });
@@ -884,9 +803,6 @@ describe('watch mode (dev/HMR)', () => {
       removedFiles: new Set<string>(),
     });
 
-    // The batch reached the owner's analysis instead of being dropped —
-    // with the edited bytes, and without a second system load (ownership
-    // did not move).
     expect(mocks.analyzeProject).toHaveBeenCalledTimes(2);
     const files = parseFiles(analyzeCall(1));
     expect(files.find((f) => f.path === 'src/Button.tsx')?.source).toBe(
@@ -900,8 +816,8 @@ describe('engine retirement (retire-extract-v1)', () => {
   test('constructing the plugin with engine:v1 throws the canonical message', () => {
     const retiredEngineOptions = { ...OPTIONS, engine: 'v1' };
     expect(
-      // SAFETY: This deliberately crosses the typed option boundary to prove
-      // the constructor rejects a stale JavaScript config's retired engine.
+      // SAFETY: Crosses the typed option boundary to prove the constructor
+      // rejects a stale JavaScript config's retired engine.
       () => new AnimusWebpackPlugin(retiredEngineOptions as AnimusNextOptions)
     ).toThrow(RETIRED_ENGINE_MESSAGE);
   });

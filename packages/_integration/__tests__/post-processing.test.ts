@@ -3,15 +3,7 @@ import {
   applyUnitFallback,
   assembleStylesheet,
 } from '@animus-ui/extract/pipeline';
-/**
- * Targeted unit tests for post-processing utilities.
- *
- * These are pure functions used by the vite-plugin in production.
- * Each test exercises known inputs and asserts expected output.
- */
 import { describe, expect, test } from 'vitest';
-
-// ─── applyUnitFallback ────────────────────────────────────
 
 describe('applyUnitFallback', () => {
   test('appends px to bare numeric on length property', () => {
@@ -65,8 +57,6 @@ describe('applyUnitFallback', () => {
     expect(result).toMatch(/margin:\s*0(px)?;/);
   });
 });
-
-// ─── applyPrefix ──────────────────────────────────────────
 
 describe('applyPrefix', () => {
   test('prefixes variable map entries', () => {
@@ -183,8 +173,6 @@ describe('applyPrefix', () => {
   });
 });
 
-// ─── assembleStylesheet ───────────────────────────────────
-
 describe('assembleStylesheet', () => {
   test('canonical order: layer decl → variables → globals → components', () => {
     const result = assembleStylesheet({
@@ -211,15 +199,12 @@ describe('assembleStylesheet', () => {
         '@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n@layer anm-base { .a { } }',
     });
 
-    // Should have exactly one @layer declaration (our canonical one)
     const declarations = result.match(
       /@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;/g
     );
     expect(declarations).toHaveLength(1);
   });
 
-  // Custom-layer declaration content is pinned byte-for-byte by
-  // packages/extract/tests/canary.test.ts 'custom layers with bookends'.
   test('throws on invalid layer order', () => {
     expect(() =>
       assembleStylesheet({
@@ -245,8 +230,6 @@ describe('assembleStylesheet', () => {
   });
 });
 
-// ─── assembleStylesheet split + Lightning CSS round-trip ──
-
 describe('assembleStylesheet split + post-processing', () => {
   const opts = {
     variableCss:
@@ -266,7 +249,7 @@ describe('assembleStylesheet split + post-processing', () => {
     try {
       lcss = require('lightningcss');
     } catch {
-      // lightningcss may not be available in _integration context — skip
+      // lightningcss is optional in this package; skip rather than fail.
       return;
     }
 
@@ -287,8 +270,4 @@ describe('assembleStylesheet split + post-processing', () => {
       output.indexOf('@layer anm-global {')
     );
   });
-
-  // Split-mode :root placement is pinned (with variable content) by
-  // packages/extract/tests/canary.test.ts 'variables contains :root block,
-  // not in body'.
 });

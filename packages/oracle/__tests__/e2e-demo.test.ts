@@ -1,16 +1,6 @@
 /**
- * The demonstration path (DESIGN §12) end to end, against the real artifacts
- * of `__tests__/fixtures/rollup-app`.
- *
- * This is the acceptance test for the whole package: one oracle session, one
- * narrative, every value asserted exactly. It runs programmatically
- * (`loadAnimusArtifacts` → `createAnimusHost` → `createOracle`) because the
- * CLI is a projection of this surface and is covered separately in
- * `cli.test.ts`.
- *
- * The steps deliberately share one session — that is what makes step 6's
- * FIXPOINT meaningful — so the requests are issued at module scope, in order,
- * and the assertions only read the recorded results.
+ * Every request runs once at module scope against one shared session, in
+ * order: the FIXPOINT step needs the repeated prove to follow the first one.
  */
 
 import { join } from 'node:path';
@@ -34,7 +24,6 @@ const FIXTURE = join(__dirname, 'fixtures/rollup-app');
 const host = createAnimusHost(loadAnimusArtifacts(FIXTURE));
 const oracle = createOracle(host);
 
-/** Compound-1 applies here: the outline Alert with a danger intent. */
 const POINT: ScenarioPoint = {
   'viewport.inline': 390,
   mode: 'dark',
@@ -46,7 +35,6 @@ const MODES: ScenarioDomain = {
   mode: { kind: 'finite', values: ['dark', 'light'] },
 };
 
-/** The Alert axes pinned to exactly the point above, mode left free. */
 const OUTLINE_DANGER: ScenarioDomain = {
   ...MODES,
   'variant:Alert:variant': { kind: 'finite', values: ['outline'] },
@@ -67,32 +55,19 @@ const originOf = (fact: RenderFact): RuleId => {
       candidate.kind === 'origin' || candidate.kind === 'inherited-from'
   );
   if (edge === undefined) throw new Error('fixture: fact has no origin edge');
-  // An origin/inherited-from edge names a rule, and `ref` is the identity
-  // module's own untyped carrier — `asRuleId` is how every reader brands it.
   return asRuleId(edge.ref);
 };
 
-/**
- * `ProbeResult.semanticDiff` is typed `SemanticDiff` and OPTIONAL — present
- * exactly when the operation compared two worlds. The fixture only ever asks
- * comparing operations, so absence is a fixture error, not a shape question.
- */
 const semanticDiffOf = (result: ProbeResult): SemanticDiff => {
   const diff = result.semanticDiff;
   if (diff === undefined) throw new Error('fixture: result carries no diff');
   return diff;
 };
 
-// ---------------------------------------------------------------------------
-// Step 1 — inspect the compound-styled Alert.
-// ---------------------------------------------------------------------------
 const inspected = oracle.inspect({ target: 'Alert', at: POINT });
 const colorFact = factFor(inspected, 'color');
 const compoundRule = originOf(colorFact);
 
-// ---------------------------------------------------------------------------
-// Step 2 — explain the colour.
-// ---------------------------------------------------------------------------
 const explained = oracle.explain({
   target: 'Alert',
   at: POINT,
@@ -102,9 +77,6 @@ const explained = oracle.explain({
   },
 });
 
-// ---------------------------------------------------------------------------
-// Step 3 — simulate removing the compound's colour declaration.
-// ---------------------------------------------------------------------------
 const removal: readonly WorldDelta[] = [
   { kind: 'remove-declaration', rule: compoundRule, property: 'color' },
 ];
@@ -120,14 +92,8 @@ const afterRemoval = oracle.inspect({
   world: candidateWorld,
 });
 
-// ---------------------------------------------------------------------------
-// Step 4 — diff the hypothetical world against the baseline.
-// ---------------------------------------------------------------------------
 const diffed = oracle.diff({ target: 'Alert', candidate: { deltas: removal } });
 
-// ---------------------------------------------------------------------------
-// Step 5 — prove an invariant, then break one.
-// ---------------------------------------------------------------------------
 const proved = oracle.prove({
   assertions: [
     { kind: 'mode-invariant', target: 'Alert', property: 'padding' },
@@ -146,9 +112,6 @@ const disproved = oracle.prove({
   domain: OUTLINE_DANGER,
 });
 
-// ---------------------------------------------------------------------------
-// Step 6 — the same question again.
-// ---------------------------------------------------------------------------
 const repeated = oracle.prove({
   assertions: [
     {
@@ -161,9 +124,6 @@ const repeated = oracle.prove({
   domain: OUTLINE_DANGER,
 });
 
-// ---------------------------------------------------------------------------
-// Step 7 — ask a geometry question.
-// ---------------------------------------------------------------------------
 const card = oracle.inspect({
   target: 'Card',
   at: { 'viewport.inline': 390, mode: 'dark' },
@@ -217,8 +177,7 @@ describe('§12.1 inspect — effective declarations, winners, provenance', () =>
       (edge) => edge.ref === 'token:--color-danger'
     );
     expect(token?.note).toBe("--color-danger = #ef4444 under mode 'dark'");
-    // Vacuity guard: the same token resolves elsewhere in the other mode, so
-    // the value above is a mode-dependent answer, not a constant.
+    // Vacuity guard: the token is mode-dependent, not a constant.
     expect(host.tokens?.resolve('--color-danger', 'light')?.value).toBe(
       '#b91c1c'
     );
@@ -236,8 +195,6 @@ describe('§12.1 inspect — effective declarations, winners, provenance', () =>
   });
 
   it('reports the defeated candidates with the reason each lost', () => {
-    // The variant rules and the intent rules compete for the background at
-    // this point; the intent rule wins on emission order inside its layer.
     const background = factFor(inspected, 'background-color');
     const defeats = background.derivation.filter(
       (edge) => edge.kind === 'defeats'
@@ -248,9 +205,8 @@ describe('§12.1 inspect — effective declarations, winners, provenance', () =>
     );
     expect(inspected.summary).toContain('2 declarations defeated');
 
-    // `--variant-filled` is the other rule that declares color, and it is not
-    // even a candidate here: candidacy is structural, and the outline point
-    // never carries its class. Nothing was defeated for color.
+    // Candidacy is structural: the outline point never carries the filled
+    // variant's class, so its color declaration is not even a candidate.
     expect(colorFact.derivation.filter((e) => e.kind === 'defeats')).toEqual(
       []
     );
@@ -312,7 +268,7 @@ describe('§12.3 simulate — the hypothetical world and its collateral', () => 
       "no rule on the target declares color; inherited from 'body' in layer " +
         'anm-global'
     );
-    // Vacuity guard: the baseline really did answer differently.
+    // Vacuity guard: the baseline value differs, so the winner really moves.
     expect(colorFact.value).toEqual({ kind: 'exact', value: '#ef4444' });
   });
 
@@ -327,7 +283,7 @@ describe('§12.3 simulate — the hypothetical world and its collateral', () => 
     expect(moved[0].kind).toBe('rule-activated');
     expect(simulated.summary).toContain('Properties moved: color.');
     expect(simulated.summary).toContain('in 10 components');
-    // Vacuity guard: the sweep visited far more than the probed cell.
+    // Vacuity guard: the sweep visits far more than the probed cell.
     expect(simulated.coverage.cellsEvaluated).toBeGreaterThan(100);
   });
 
@@ -347,9 +303,8 @@ describe('§12.4 diff — classified changes, affected context classes only', ()
     const diff = semanticDiffOf(diffed);
     const colors = diff.entries.filter((entry) => entry.property === 'color');
 
-    // 2 modes × 7 viewport bands of the danger cells. Both modes' colours
-    // appear because the mode axis is genuinely swept now: the removal
-    // exposes the inherited body colour per mode.
+    // 14 = 2 modes × 7 viewport bands of the danger cells; both modes appear
+    // because the removal exposes the per-mode inherited body colour.
     expect(colors).toHaveLength(14);
     expect(new Set(colors.map((entry) => entry.kind))).toEqual(
       new Set(['rule-activated'])
@@ -373,9 +328,8 @@ describe('§12.5 prove — an invariant, then a counterexample', () => {
   it('proves padding is mode-invariant over the whole domain', () => {
     expect(proved.verdict).toBe('PROVED');
     expect(proved.unknowns).toEqual([]);
-    // Vacuity guard: a single-cell "proof" would prove nothing, and without
-    // the mode axis mode-invariance would hold vacuously.
-    // 3 variants × 2 intents × 2 modes × 7 viewport bands.
+    // Vacuity guard: 3 variants × 2 intents × 2 modes × 7 viewport bands; a
+    // single-cell sweep makes mode-invariance hold vacuously.
     expect(proved.coverage.cellsEvaluated).toBe(84);
     expect(proved.summary).toContain(
       'PROVED under this program revision, scenario domain, environment ' +
@@ -409,15 +363,15 @@ describe('§12.6 fixpoint — repetition cannot look like progress', () => {
       newObligations: 0,
     });
     expect(repeated.nextOperations).toEqual(disproved.nextOperations);
-    // Vacuity guard: the first probe of that state really did learn something.
+    // Vacuity guard: the first probe of that state learns something.
     expect(disproved.knowledgeDelta.newFacts).toBeGreaterThan(0);
   });
 });
 
 describe('shared axes are part of every target domain', () => {
   it('disproves a mode-invariance the target does not have', () => {
-    // No explicit domain: the default target domain must already carry the
-    // mode axis, or this proof is vacuous over 0 mode cells.
+    // The default target domain must carry the mode axis; without it this
+    // disproof is vacuous over zero mode cells.
     const fresh = createOracle(createAnimusHost(loadAnimusArtifacts(FIXTURE)));
     const result = fresh.prove({
       assertions: [
@@ -432,8 +386,8 @@ describe('shared axes are part of every target domain', () => {
 
 describe('§12.7 geometry — an addressable obligation, not a number', () => {
   it('never invents a value for a container-dependent property', () => {
-    // The geometry unknown below touches this target, so even inspect's
-    // reading is CONDITIONAL — same contract its prove sibling pins.
+    // A geometry unknown touching this target makes even an inspect reading
+    // CONDITIONAL.
     expect(card.verdict).toBe('CONDITIONAL');
     expect(card.summary).toContain('6 conditionally-inactive');
     // `@container card (width>=400px) { width: 50cqw }` is a candidate rule
@@ -482,7 +436,7 @@ describe('the invariants that hold across the whole path', () => {
       )
     );
     expect(fabricated).toEqual([]);
-    // Vacuity guard: the sweep above really did look at facts.
+    // Vacuity guard: the sweep looks at a non-empty set of facts.
     expect(
       EVERY_RESULT.reduce((total, result) => total + result.facts.length, 0)
     ).toBeGreaterThan(20);

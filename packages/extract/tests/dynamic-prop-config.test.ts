@@ -4,12 +4,6 @@ import { buildDynamicPropConfig } from '../pipeline/dynamic-prop-config';
 
 import type { DynamicPropMeta } from '../pipeline/dynamic-prop-config';
 
-/**
- * The manifest's `dynamic_props` block is serialized from the Rust
- * `DynamicPropMeta` with `serde(rename_all = "camelCase")`
- * (crates/extract-v2/src/dynamic_meta.rs), so camelCase is the only spelling
- * the builder reads.
- */
 describe('buildDynamicPropConfig', () => {
   test('omits absent property, empty properties, null transform, empty scales', () => {
     expect(
@@ -49,18 +43,13 @@ describe('buildDynamicPropConfig', () => {
   });
 
   test('a meta with no slot metadata fails loudly', () => {
-    // A serde rename on DynamicPropMeta has to surface as a CI failure: the
-    // silent version of this shipped a config of empty entries.
-    // What the rename leaves behind: the slot fields gone, the rest intact.
     const renamedSlotFields: Partial<DynamicPropMeta> = {
       property: 'lineHeight',
     };
     const build = () =>
       buildDynamicPropConfig({
-        // SAFETY: the assertion IS the test — it reaches the runtime guard
-        // with a meta that violates `DynamicPropMeta`, which is the only
-        // state a Rust-side rename can produce and the one the builder must
-        // reject loudly instead of emitting an empty entry.
+        // SAFETY: the assertion is the test — a meta violating
+        // `DynamicPropMeta` must reach the builder's runtime guard.
         lineHeight: renamedSlotFields as DynamicPropMeta,
       });
     expect(build).toThrow(/lineHeight/);
@@ -68,16 +57,6 @@ describe('buildDynamicPropConfig', () => {
   });
 });
 
-/**
- * The hand-written fixtures above are the shape this builder was *written*
- * for; this block is the shape the engine actually hands it. Fields mirror
- * the manifest's `dynamic_props` block verbatim — camelCase keys, `null`
- * transforms, an empty `scaleValues` map, `properties` omitted when the prop
- * declares one property — as asserted for real pipeline runs in
- * packages/_integration/__tests__/manifest-shape.test.ts ('dynamic prop
- * entries carry required metadata') and in the Rust manifest test in
- * crates/extract-v2/src/engine.rs.
- */
 const engineManifestDynamicProps = {
   p: {
     varName: '--animus-p',

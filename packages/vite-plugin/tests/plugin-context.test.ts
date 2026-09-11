@@ -34,23 +34,9 @@ function isEmitterJsonObject(
   return value !== null && Object(value) === value && !Array.isArray(value);
 }
 
-/**
- * `PluginContext`'s own behavior, driven on a real instance rather than through
- * a hook. The constructor loads no engine (the NAPI handle is created lazily
- * behind `engineApi`), so the state operations here are unit-testable.
- */
-
 describe('invalidateExtractedModules: the shared create/delete path', () => {
-  /**
-   * BOTH out-of-band re-analyses use this path — transform-time new-file
-   * detection and the `hotUpdate` delete event (openspec:
-   * hmr-new-file-detection, "Creation and deletion share this invalidation
-   * path"). Neither carries a content condition: the spec names the component
-   * CSS module and the system props module outright, and a client reload does
-   * not rescue a module that was never invalidated (Vite keeps serving its
-   * cached transform result). Asserted here rather than at either call site,
-   * because a condition, if one were reintroduced, would live here.
-   */
+  /** Invalidation carries no content condition: Vite keeps serving the
+   *  cached transform result, so a reload never rescues a live module. */
   function contextWithGraph() {
     const invalidated: string[] = [];
     const ctx = new PluginContext({ system: './ds.ts' });
@@ -82,8 +68,6 @@ describe('invalidateExtractedModules: the shared create/delete path', () => {
   });
 
   it('coalesces overlapping reload timers into one full-reload', () => {
-    // The delayed reload is coalescing, not correctness: N out-of-band
-    // invalidations inside one burst must not stack N reloads.
     vi.useFakeTimers();
     try {
       const sends: FullReloadPayload[] = [];
@@ -108,8 +92,6 @@ describe('invalidateExtractedModules: the shared create/delete path', () => {
 });
 
 describe('info: visible without verbose', () => {
-  // openspec: hmr-new-file-detection, "New file detection logging" — the
-  // standard level exists so a developer sees the event without opting in.
   it('emits when verbose is off, while log() stays silent', () => {
     const lines: string[] = [];
     const ctx = new PluginContext({ system: './ds.ts' });
@@ -214,13 +196,8 @@ describe('runtimeImport override guards its terminal contract', () => {
 });
 
 describe('systemPropsModuleSource: keyed on the inputs it generates from', () => {
-  /**
-   * The served module is a pure function of four context inputs, all already
-   * strings. Invalidation belongs to the READER: a memo the writers have to
-   * remember to refresh is a standing obligation, and the one writer that
-   * forgets serves a module from a generation that no longer exists — the
-   * `??=` store-on-generate then makes that staleness permanent and invisible.
-   */
+  /** The served module regenerates from its context inputs on every call: a
+   *  memo a writer forgets to refresh serves a dead generation forever. */
   it('serves a hand-moved input without any writer refreshing a memo', () => {
     const ctx = new PluginContext({ system: './ds.ts' });
 
@@ -234,8 +211,8 @@ describe('systemPropsModuleSource: keyed on the inputs it generates from', () =>
   });
 
   it('tracks the group registry the loaded system carries', () => {
-    // `system` is replaced wholesale by `loadSystem`, so the registry moves
-    // without any per-field write the memo could hang a refresh on.
+    // `loadSystem` replaces `system` wholesale, so the registry moves with
+    // no per-field write a refresh could hang on.
     const ctx = new PluginContext({ system: './ds.ts' });
 
     systemPropsModuleSource(ctx);
@@ -276,8 +253,6 @@ describe('runExclusive: the analysis-transaction lock', () => {
     await expect(first).resolves.toBe('a');
     await expect(second).rejects.toThrow('planned transaction failure');
     await expect(third).resolves.toBe(42);
-    // No interleaving: each transaction starts only after the previous one
-    // settled, and the rejected one did not block the next.
     expect(order).toEqual(['a-start', 'a-end', 'b', 'c']);
   });
 });

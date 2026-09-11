@@ -3,12 +3,8 @@ import { describe, expect, test } from 'vitest';
 
 import { pruneFileCache } from '../src/context';
 
-/**
- * The key-computation seam of the dev deletion path (the `hotUpdate` delete
- * event). The hook itself needs a running dev server + watcher, so the cache
- * keying — the part that actually decides whether a deleted file keeps
- * haunting every later re-analysis — is tested directly.
- */
+/** Cache keying for the dev delete path: a key the prune misses keeps the
+ *  deleted file in every later re-analysis. */
 
 const ROOT = join('/', 'repo', 'e2e', 'app');
 
@@ -36,8 +32,8 @@ describe('pruneFileCache', () => {
   });
 
   test('removes the raw MDX original key', () => {
-    // Parser-ready `.tsx` children live in the separate projection cache;
-    // watcher deletion removes the original `.mdx` owner.
+    // Parser-ready `.tsx` children live in the projection cache; the watcher
+    // deletion removes the original `.mdx` owner.
     const cache = makeCache([join('src', 'Doc.mdx')]);
 
     const removed = pruneFileCache(cache, ROOT, join(ROOT, 'src', 'Doc.mdx'));

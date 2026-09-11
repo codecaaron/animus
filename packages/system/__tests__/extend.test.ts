@@ -29,10 +29,8 @@ function snapshotOf(system: {
 }
 
 /**
- * Post-build mutation as a consumer performs it. `build()` hands back
- * key-exact registry types, so a name the builder chain never declared cannot
- * be written through them; `defineProperty` installs precisely the own,
- * enumerable, writable, configurable property a plain assignment would.
+ * build() hands back key-exact registry types, so an undeclared name cannot
+ * be assigned; defineProperty installs exactly what assignment would.
  */
 function installUndeclaredEntry<Registry extends object>(
   registry: Registry,
@@ -48,9 +46,8 @@ function installUndeclaredEntry<Registry extends object>(
 }
 
 /**
- * In-place growth of a registry member list whose declared element domain
- * (or `readonly` modifier) excludes the appended name: installing the next
- * index is exactly what `push` performs on an extensible array.
+ * The declared element domain (and `readonly`) forbid `push`; installing the
+ * next index is exactly what `push` performs on an extensible array.
  */
 function appendMember(members: readonly string[], member: string): void {
   Object.defineProperty(members, String(members.length), {
@@ -61,8 +58,6 @@ function appendMember(members: readonly string[], member: string): void {
   });
 }
 
-/** `Prop.scale` carries the whole string/map/array union; the fixtures below
- *  mutate props they declared with an inline object scale. */
 function isMapScale(scale: Prop['scale']): scale is MapScale {
   return Object.prototype.toString.call(scale) === '[object Object]';
 }
@@ -92,8 +87,7 @@ describe('areTransformsEqual (design D12)', () => {
   });
 
   it('rejects a name match when the captured source is missing on either side', () => {
-    // Simulates an instance built by an older @animus-ui/system: named, but
-    // no transformSource captured at creation.
+    // An older @animus-ui/system named transforms without capturing a source.
     const legacyBody: TransformFn = (v) => `${v}px`;
     const legacy = Object.assign(legacyBody, { transformName: 'px' });
     expect(areTransformsEqual(named(), legacy)).toBe(false);
@@ -130,14 +124,11 @@ describe('SystemBuilder extend()', () => {
       .build()
       .seal();
 
-  // Scenario: "Extended prop is present end to end" (runtime half; the type
-  // half lives in types.test-d.tsx) + the G5 runtime witness.
   it('merges an extended prop into the built config end to end', () => {
     const kitDs = buildKit();
     const { system } = createSystem().extend(kitDs).build();
     const config = system.toConfig();
 
-    // G5 witness: the type-admitted name is present in the runtime config.
     expect(Object.keys(JSON.parse(config.propConfig))).toContain('gap');
     expect(JSON.parse(config.propConfig).gap).toEqual(
       JSON.parse(kitDs.toConfig().propConfig).gap
@@ -174,11 +165,6 @@ describe('SystemBuilder extend()', () => {
     );
   });
 
-  // Inc-12 F7 witness: selector order allocation CONTINUES past the existing
-  // maximum across successive merges (mirrors mergeConditions) — two kits
-  // each contributing one alias must never share order 500, and allocation
-  // is deterministic under either extension order (no conflict exists, so
-  // both orderings build).
   it('allocates distinct selector orders across repeated extends, stable under re-ordering', () => {
     const kitA = createSystem()
       .addSelectors({ _cardHover: '&[data-card]:hover' })
@@ -196,21 +182,15 @@ describe('SystemBuilder extend()', () => {
       createSystem().extend(kitB).extend(kitA).build().system
     ).selectors;
 
-    // Distinct orders in both orderings — the F7 failure mode was both
-    // aliases landing on order 500.
     expect(ab._cardHover.order).not.toBe(ab._railOpen.order);
     expect(ba._railOpen.order).not.toBe(ba._cardHover.order);
 
-    // Stable, deterministic allocation: the first-extended alias takes the
-    // 500 slot, the next continues at 510 — under either call order.
     expect(ab._cardHover.order).toBe(500);
     expect(ab._railOpen.order).toBe(510);
     expect(ba._railOpen.order).toBe(500);
     expect(ba._cardHover.order).toBe(510);
   });
 
-  // Same F7 seam, builder-chain half: successive addSelectors calls on one
-  // chain continue numbering instead of restarting at 500.
   it('continues selector order allocation across chained addSelectors calls', () => {
     const { system } = createSystem()
       .addSelectors({ _chainOne: '&[data-chain-one]' })
@@ -221,7 +201,6 @@ describe('SystemBuilder extend()', () => {
     expect(selectors._chainTwo.order).toBe(510);
   });
 
-  // Scenario: "Bundle object feeds the system half".
   it('consumes the system half of a bundle and ignores the theme half', () => {
     const kitDs = buildKit();
     const direct = createSystem().extend(kitDs).build().system.toConfig();
@@ -246,7 +225,6 @@ describe('SystemBuilder extend()', () => {
     );
   });
 
-  // Scenario: "Identical definitions coalesce".
   it('coalesces byte-equivalent definitions from source and consumer', () => {
     const kitDs = createSystem()
       .addProps({ m: prop({ scale: 'space' }) })
@@ -262,9 +240,6 @@ describe('SystemBuilder extend()', () => {
     });
   });
 
-  // Scenario: "Divergent prop definition fails" — the consumer's own chain
-  // diverging from an extended definition fails naming the prop, both scale
-  // bindings, and both origins.
   it('fails a consumer addProps that diverges from an extended prop, naming both origins', () => {
     const kitDs = buildKit();
     expect(() =>
@@ -285,8 +260,6 @@ describe('SystemBuilder extend()', () => {
     ).toThrow(/extended source #1.*builder state/s);
   });
 
-  // Scenario: "Sibling sources conflict loudly" (G4, selector half) —
-  // order-independent, naming both extended sources.
   it('fails divergent sibling selector aliases naming both sources, order-independent', () => {
     const kitA = createSystem()
       .addSelectors({ _hover: '&:hover:not([data-frozen])' })
@@ -305,7 +278,6 @@ describe('SystemBuilder extend()', () => {
     );
   });
 
-  // G4 (prop half): sibling divergence and dual-version divergence.
   it('fails divergent sibling prop definitions naming both sources, order-independent', () => {
     const kitA = createSystem()
       .addProps({ gap: prop({ property: 'gap', scale: 'space' }) })
@@ -325,7 +297,6 @@ describe('SystemBuilder extend()', () => {
   });
 
   it('fails one package present as two divergent instances, identifying both', () => {
-    // Simulates the same kit at two versions: same names, divergent values.
     const v1 = createSystem()
       .addProps({ gap: prop({ property: 'gap', scale: 'space' }) })
       .build()
@@ -409,9 +380,8 @@ describe('SystemBuilder extend()', () => {
     );
   });
 
-  // Cached-instance coalesce: semantic function equality cannot be inferred
-  // from source text because equal-looking functions may capture different
-  // closure values.
+  // Function equality cannot be inferred from source text: equal-looking
+  // functions may capture different closure values.
   it('coalesces repeated extension of one cached kit instance', () => {
     const buildDualKit = () =>
       createSystem()
@@ -438,9 +408,8 @@ describe('SystemBuilder extend()', () => {
       .build()
       .system.toConfig();
 
-    // `transforms` carries live function references (distinct per kit
-    // instance), so the serialized fields and the transform key set are the
-    // comparable surface.
+    // `transforms` carries live function references, so the serialized fields
+    // and the transform key set are the comparable surface.
     expect(twice.propConfig).toEqual(once.propConfig);
     expect(twice.groupRegistry).toEqual(once.groupRegistry);
     expect(twice.selectorAliases).toEqual(once.selectorAliases);
@@ -448,12 +417,8 @@ describe('SystemBuilder extend()', () => {
     expect(Object.keys(twice.transforms)).toEqual(Object.keys(once.transforms));
   });
 
-  // D12's documented accepted residual (inc-02 review F3): byte-identical
-  // source with divergent closure captures COALESCES — source text is the
-  // cross-instance identity, and the closure environment is invisible to it.
-  // The first-registered instance wins. Pinned so the trade-off stays
-  // deliberate; the loud alternative (identity-only) was tried in-tree and
-  // reverted (false-conflicts every dual-install, forbids re-registration).
+  // Byte-identical source with divergent closure captures coalesces and the
+  // first registration wins; identity comparison false-conflicts dual installs.
   it('coalesces equal-source transforms that capture different closure values (documented residual)', () => {
     const buildUnitKit = (unit: string) =>
       createSystem()
@@ -472,7 +437,6 @@ describe('SystemBuilder extend()', () => {
       .build();
     const config = system.toConfig();
     expect(JSON.parse(config.propConfig).size.transform).toBe('unit');
-    // First-registered wins: the 'px' capture is the surviving behavior.
     expect(config.transforms.unit(4)).toBe('4px');
   });
 
@@ -505,12 +469,9 @@ describe('SystemBuilder extend()', () => {
     ).toThrow(/Transform name "shared".*"first".*"second"/);
   });
 
-  // Scenario: "Anonymous transform survives extension" (G7) — serialization
-  // would have dropped it; the snapshot-based merge must not.
   it('carries an anonymous transform through extension and applies it identically', () => {
-    // Truly anonymous: an arrow assigned to a binding (or object property)
-    // gets an inferred fn.name, which serializeInstance would treat as a
-    // usable name — returning it from a factory keeps fn.name === ''.
+    // An arrow assigned to a binding gets an inferred fn.name; returning it
+    // from a factory is what keeps fn.name === ''.
     const makeGlow = () => (value: string | number) => `0 0 ${value}px`;
     const glowTransform = makeGlow();
     expect(glowTransform.name).toBe('');
@@ -521,8 +482,6 @@ describe('SystemBuilder extend()', () => {
       .build()
       .seal();
 
-    // The serialized form drops the unnamed transform — reconstruction from
-    // toConfig() would lose it (the G7 failure mode).
     const serialized = kitDs.toConfig();
     expect(JSON.parse(serialized.propConfig).glow.transform).toBeUndefined();
     expect(serialized.transforms).toEqual({});
@@ -530,8 +489,6 @@ describe('SystemBuilder extend()', () => {
     const { system: merged } = createSystem().extend(kitDs).build();
     const mergedTransform = snapshotOf(merged).props.glow.transform;
     expect(mergedTransform).not.toBe(glowTransform);
-    // Styled-output application through the runtime resolution path matches
-    // the source system exactly.
     expect(
       resolveValue(4, { varName: '--glow', transform: glowTransform })
     ).toBe('0 0 4px');
@@ -540,7 +497,6 @@ describe('SystemBuilder extend()', () => {
     );
   });
 
-  // Scenario: "Post-build mutation does not leak" + snapshot immutability.
   it('ignores post-build registry mutation in toConfig() and extension', () => {
     const system = createSystem()
       .addGroup('space', { m: prop({ scale: 'space' }) })
@@ -554,7 +510,7 @@ describe('SystemBuilder extend()', () => {
     system.propRegistry.m.scale = 'sizes';
     appendMember(system.groupRegistry.space, 'rogue');
 
-    // The mutation has to LAND on the public fields, or every assertion below
+    // The mutation must land on the public fields, or every assertion below
     // would hold for the wrong reason.
     expect(system.propRegistry).toHaveProperty('rogue');
     expect(system.propRegistry.m.scale).toBe('sizes');
@@ -569,10 +525,6 @@ describe('SystemBuilder extend()', () => {
     expect(JSON.parse(consumer.groupRegistry)).toEqual({ space: ['m'] });
   });
 
-  // Review probe P9 (inc 12): build() hands the instance shallow-copied
-  // registry containers, so instance-field mutation cannot reach the
-  // builder's private state — a second build() on the same builder must not
-  // bake the mutation into its snapshot.
   it('keeps a rebuild pristine after instance-field mutation of a prior build (P9)', () => {
     const builder = createSystem().addGroup('space', {
       m: prop({ scale: 'space' }),
@@ -584,8 +536,6 @@ describe('SystemBuilder extend()', () => {
       property: 'color',
     });
     installUndeclaredEntry(first.groupRegistry, 'rogueGroup', ['rogue']);
-    // Entry-depth mutation (review probe P9, second pass): a field inside a
-    // shared Prop entry must not reach a later build either.
     first.propRegistry.m.scale = 'sizes';
     appendMember(first.groupRegistry.space, 'rogue');
 
@@ -597,8 +547,6 @@ describe('SystemBuilder extend()', () => {
     expect(first.groupRegistry.space).toEqual(['m', 'rogue']);
 
     const { system: second } = builder.build();
-    // `before` was captured pre-mutation, so exact equality subsumes every
-    // per-field absence check (no rogue entries, scale/space unchanged).
     expect(second.toConfig()).toEqual(before);
   });
 
@@ -680,8 +628,6 @@ describe('deprecated extension aliases (frozen semantics)', () => {
       .build()
       .seal();
 
-  // Scenario: "from() behavior is unchanged during the window" — byte-identical
-  // to a builder that never called from() (no registry merge).
   it('keeps from() merge-free and byte-identical during the deprecation window', () => {
     const kitDs = buildKit();
     const withFrom = createSystem()
@@ -700,8 +646,8 @@ describe('deprecated extension aliases (frozen semantics)', () => {
     expect(withFrom.conditionAliases).toEqual(without.conditionAliases);
   });
 
-  // Scenario: "Deprecation is visible to consumers" — the published types are
-  // emitted from these docblocks, so the source-level tags are the witness.
+  // The published types carry these docblocks verbatim, so the source-level
+  // tags are the only witness a runtime test can check.
   it('marks from() and includes as deprecated pointing at extend()', () => {
     // NOT `new URL(relative, import.meta.url)` — Vite rewrites that pattern
     // into a non-file asset URL under the test runner.

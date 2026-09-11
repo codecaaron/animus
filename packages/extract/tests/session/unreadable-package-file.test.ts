@@ -1,14 +1,3 @@
-/**
- * A configured external package file that cannot be read: the collector
- * skips it and the analysis runs over a corpus missing a file the project's
- * own `includes` graph named. That is lost input, not degraded output, so it
- * carries `severity: 'error'` and fails `--strict` through the one
- * escalation point in manifest-diagnostics, as an unresolvable include does.
- * Without strict it warns and the build proceeds.
- *
- * NAPI boundary mocked; discovery, collection, and the session pipeline run
- * for real over a temp workspace shaped like a monorepo.
- */
 import { chmodSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
@@ -41,11 +30,8 @@ import {
 
 let restoreGlobals: () => void;
 let warned: string[];
-/** Restored before disposal so the temp tree is removable everywhere. */
 const lockedFiles: string[] = [];
 
-/** The shared kit workspace with one of the kit's source files made
- *  unreadable — the configured input this suite is about. */
 function createWorkspace() {
   const { app, kit } = createKitWorkspace();
   const unreadable = join(kit, 'src', 'Button.tsx');

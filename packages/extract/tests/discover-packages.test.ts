@@ -370,8 +370,6 @@ describe('extractSystemFilePackages', () => {
     `);
 
     try {
-      // Every named package appears exactly once — the package declared
-      // through both the includes: constructor and the extend() chain dedupes.
       const pkgs = extractSystemFilePackages(path).sort();
       expect(pkgs).toEqual([
         '@acme/base',
@@ -385,10 +383,6 @@ describe('extractSystemFilePackages', () => {
   });
 
   test('extend() sources survive a reformatted chain', () => {
-    // Trivia sits between the argument and the closing paren — the one
-    // position the tolerance block's trailing-comma fixture never reaches
-    // (there the comma follows the identifier directly). Both spellings run
-    // the same link scan, so extend() carries this shape for from() too.
     const path = writeFixture(`
       import { createSystem } from '@animus-ui/system';
       import { ds as kitDs } from '@acme/ui-kit';
@@ -452,13 +446,8 @@ describe('extractSystemFilePackages', () => {
   });
 });
 
-/**
- * Trivia tolerance for the extension-chain scan: comments, multiline
- * argument formatting, and builder chains split across statements are
- * ordinary authoring shapes — a scanner that stops at them drops kits with
- * no diagnostic (outcomes derive only from the returned specifiers, so a
- * missing kit is invisible to the strict gates).
- */
+/** A scanner that stops at ordinary trivia drops kits silently: outcomes
+ *  derive only from the returned specifiers, so a missing kit is invisible. */
 describe('extractSystemFilePackages chain-scan tolerance', () => {
   const expectDiscovered = (contents: string, expected: string[]): void => {
     const path = writeFixture(contents);

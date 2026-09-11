@@ -7,8 +7,6 @@ import { compose } from '../src';
 import { composeWithContext } from '../src/composeWithContext';
 import { ds } from './test-system';
 
-// ─── Test Fixtures (real builder chain) ─────────────────────────
-
 const Root = ds
   .styles({ display: 'flex' })
   .variant({
@@ -50,7 +48,6 @@ const RootWithDefault = ds
   })
   .asElement('div');
 
-/** Plain React component behind `.asComponent()` — the wrapped-slot fixture. */
 const Leaf = (props: { className?: string; children?: ReactNode }) =>
   createElement('section', props);
 
@@ -62,9 +59,6 @@ const WrappedRoot = ds
   })
   .asComponent(Leaf);
 
-// ─── Assertion Helpers ──────────────────────────────────────────
-
-/** Check if a specific HTML element tag has a variant class */
 function tagHasClass(html: string, tag: string, cls: string): boolean {
   return new RegExp(`<${tag}[^>]*class="[^"]*${cls}`).test(html);
 }
@@ -72,8 +66,6 @@ function tagHasClass(html: string, tag: string, cls: string): boolean {
 function tagLacksClass(html: string, tag: string, cls: string): boolean {
   return !tagHasClass(html, tag, cls);
 }
-
-// ─── Tests ──────────────────────────────────────────────────────
 
 describe('compose()', () => {
   it('returns exact slot keys (PascalCase)', () => {
@@ -87,8 +79,6 @@ describe('compose()', () => {
       { Root, Control, Label },
       { shared: { size: true } }
     );
-    // No `name` option — the family name falls back to the literal 'Composed'
-    // (nothing is derived from the Root component), so pin the exact strings.
     expect(Family.Root.displayName).toBe('Composed.Root');
     expect(Family.Control.displayName).toBe('Composed.Control');
     expect(Family.Label.displayName).toBe('Composed.Label');
@@ -96,21 +86,16 @@ describe('compose()', () => {
 
   it('throws without a Root slot', () => {
     expect(() =>
-      // SAFETY: This deliberately crosses compose's typed slot boundary. The
-      // `Slots extends { Root: AnyBrandedComponent }` constraint is what keeps
-      // a well-typed caller from ever reaching assertRootSlot, and that
-      // runtime guard is exactly what this test proves still fires.
+      // SAFETY: crosses the `Slots extends { Root }` constraint on purpose —
+      // the runtime guard behind it is what this test proves still fires.
       compose({ Control } as never, { shared: {} })
     ).toThrow(/No "Root" slot found/);
   });
 
   it('throws when Root is inherited rather than an own enumerable slot', () => {
-    // Every implementation iterates the slot map with Object.entries, so a
-    // prototype-carried Root would validate and then vanish from the family.
     expect(() =>
-      // SAFETY: Same deliberate crossing of the `Slots extends { Root }`
-      // constraint — a prototype-carried Root satisfies neither the type nor
-      // the own-enumerable rule assertRootSlot enforces.
+      // SAFETY: crosses the `Slots extends { Root }` constraint on purpose — a
+      // prototype Root satisfies neither it nor the own-enumerable rule.
       compose(Object.create({ Root }) as never, { shared: {} })
     ).toThrow(/No "Root" slot found/);
   });
@@ -136,10 +121,7 @@ describe('compose()', () => {
       )
     );
 
-    // Root has the variant class (direct prop)
     expect(tagHasClass(html, 'div', '--size-sm')).toBe(true);
-    // Children do NOT get shared variant classes at runtime —
-    // CSS descendant selectors (.Root.Root--size-sm .Child) handle propagation
     expect(tagLacksClass(html, 'input', '--size-sm')).toBe(true);
     expect(tagLacksClass(html, 'span', '--size-sm')).toBe(true);
   });
@@ -224,10 +206,8 @@ describe('compose()', () => {
       )
     );
 
-    // Root has both variant classes (direct props)
     expect(tagHasClass(html, 'div', '--size-sm')).toBe(true);
     expect(tagHasClass(html, 'div', '--tone-muted')).toBe(true);
-    // Label does NOT get shared classes at runtime — CSS handles propagation
     expect(tagLacksClass(html, 'span', '--size')).toBe(true);
     expect(tagLacksClass(html, 'span', '--tone')).toBe(true);
   });
@@ -254,7 +234,6 @@ describe('compose()', () => {
   it('React keys propagate through forwardRef wrappers', () => {
     const Family = compose({ Root, Label }, { shared: { size: true } });
 
-    // Render a list of keyed Root elements — should not throw
     const html = renderToString(
       createElement(
         'div',
@@ -280,13 +259,10 @@ describe('compose()', () => {
       createElement(Family.Root, { size: 'sm' }, createElement(Family.Control))
     );
 
-    // Wrapped Root renders its wrapped element with the variant class
     expect(tagHasClass(html, 'section', '--size-sm')).toBe(true);
     expect(tagLacksClass(html, 'input', '--size-sm')).toBe(true);
   });
 });
-
-// ─── composeWithContext() Tests ────────────────────────────────
 
 describe('composeWithContext()', () => {
   it('child receives shared prop values from context', () => {
@@ -304,9 +280,7 @@ describe('composeWithContext()', () => {
       )
     );
 
-    // Root has the variant class (direct prop)
     expect(tagHasClass(html, 'div', '--size-sm')).toBe(true);
-    // Children receive shared values via context → variant runtime resolves classes
     expect(tagHasClass(html, 'input', '--size-sm')).toBe(true);
     expect(tagHasClass(html, 'span', '--size-sm')).toBe(true);
   });
@@ -326,7 +300,6 @@ describe('composeWithContext()', () => {
     );
 
     expect(tagHasClass(html, 'div', '--size-sm')).toBe(true);
-    // Direct prop wins over context value
     expect(tagHasClass(html, 'input', '--size-lg')).toBe(true);
     expect(tagLacksClass(html, 'input', '--size-sm')).toBe(true);
   });
@@ -350,10 +323,6 @@ describe('composeWithContext()', () => {
       createElement(Family.Root, null, createElement(Family.Control))
     );
 
-    // Root emits the sentinel class (CSS transport handles descendants);
-    // the child receives the RESOLVED default via context and emits the
-    // explicit option class — matching what the `--size-default` descendant
-    // rule produces for non-portaled children.
     expect(tagHasClass(html, 'div', '--size-default')).toBe(true);
     expect(tagHasClass(html, 'input', '--size-sm')).toBe(true);
   });
@@ -390,9 +359,6 @@ describe('composeWithContext()', () => {
       )
     );
 
-    // The resolver's `props[prop] ?? default` gives the Root the EXPLICIT
-    // default-option class for present-but-undefined; the provider must
-    // resolve the same way so the child still receives the default.
     expect(tagHasClass(html, 'input', '--size-sm')).toBe(true);
   });
 
@@ -410,8 +376,6 @@ describe('composeWithContext()', () => {
       )
     );
 
-    // `size={undefined}` must not erase the inherited default — a
-    // DOM-descendant child in this state keeps it via the CSS transport.
     expect(tagHasClass(html, 'input', '--size-sm')).toBe(true);
   });
 
@@ -438,18 +402,14 @@ describe('composeWithContext()', () => {
       )
     );
 
-    // The shared value (Root default sm) wins over the child-local default
-    // (lg): a child that wants its own default states the option explicitly.
     expect(tagHasClass(html, 'input', '--size-sm')).toBe(true);
     expect(tagLacksClass(html, 'input', '--size-lg')).toBe(true);
   });
 
   it('throws without a Root slot (source form)', () => {
     expect(() =>
-      // SAFETY: This deliberately crosses composeWithContext's typed slot
-      // boundary; its `Slots extends { Root: AnyBrandedComponent }` constraint
-      // makes assertRootSlot unreachable from a well-typed caller, and that
-      // runtime guard is what this test proves.
+      // SAFETY: crosses the `Slots extends { Root }` constraint on purpose —
+      // the runtime guard behind it is what this test proves.
       composeWithContext({ Control } as never, { shared: {} })
     ).toThrow(/No "Root" slot found/);
   });
@@ -469,7 +429,6 @@ describe('composeWithContext()', () => {
   });
 
   it('exposes variantDefaults on created components', () => {
-    // Cast-free: the public AnimusComponent type carries the field.
     expect(RootWithDefault.variantDefaults.size).toBe('sm');
     expect(Root.variantDefaults.size).toBeUndefined();
   });

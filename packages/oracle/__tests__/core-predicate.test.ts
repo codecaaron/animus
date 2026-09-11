@@ -53,8 +53,8 @@ describe('evalPredicate', () => {
     expect(evalPredicate(eq('theme', 'brand'), point)).toBe(false);
     expect(evalPredicate(inSet('theme', ['brand']), point)).toBe(false);
     expect(evalPredicate(range('density', { min: 0 }), point)).toBe(false);
-    // The consequence engines must surface as an assumption: the negation of
-    // an inactive condition is vacuously true.
+    // The negation of a leaf on an unbound dimension is vacuously true, which
+    // engines must surface as an assumption.
     expect(evalPredicate(not(eq('theme', 'brand')), point)).toBe(true);
   });
 
@@ -111,7 +111,6 @@ describe('constructor normalisation', () => {
     expect(inSet('a', [])).toEqual(FALSE);
     expect(inSet('a', ['x', 'x'])).toEqual(eq('a', 'x'));
     expect(inSet('a', ['b', 'a', 'b'])).toEqual(inSet('a', ['a', 'b']));
-    // 1 and '1' are distinct members, never merged.
     expect(inSet('a', [1, '1'])).toEqual({
       kind: 'in',
       dim: 'a',

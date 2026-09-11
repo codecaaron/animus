@@ -1,23 +1,4 @@
 import { join } from 'node:path';
-/**
- * Selector-rule extraction regression tests.
- *
- * Audits the extractor's handling of:
- *   - `_aliased` selector keys inside `.styles({...})` (e.g. `_focusVisible`)
- *   - raw `'&:selector'` keys inside `.styles({...})`
- *   - scale lookup of typed props inside aliased blocks
- *   - component-usage recognition via `createElement(bareIdent, ...)`
- *
- * Exercises the production analysis inputs: `runPipeline` passes the system's
- * `selectorAliasesJson`, closing the coverage gap that let this regression
- * class slip past integration.
- *
- * Historical regressions, now fixed and retained as active guards:
- *   - Bare-identifier `createElement` usage is recognized as rendering, so the
- *     reconciler retains the referenced component. (Pattern E)
- *   - Pass-through CSS props such as `outlineColor` resolve scale values inside
- *     nested selector-alias blocks. (Pattern C)
- */
 import { describe, expect, test } from 'vitest';
 
 import { readFixtureFile } from '../fixtures/read-fixtures';
@@ -31,8 +12,6 @@ const FIXTURES = join(
   'components',
   'selector-rules'
 );
-
-// ─── Patterns that currently extract correctly (regression guards) ────
 
 describe('selector rules — clean _aliased key with literal values', () => {
   const entry = readFixtureFile(FIXTURES, 'selector-rules-clean.tsx');
@@ -102,8 +81,6 @@ describe('selector rules — compound _selected + token ref', () => {
   });
 });
 
-// ─── Fixed-regression acceptance guards ──────────────────────────────
-
 describe('[Bug 1] createElement(bareIdent, ...) usage recognition', () => {
   const entry = readFixtureFile(FIXTURES, 'selector-rules-create-element.tsx');
   const { manifest, css } = runPipeline([entry]);
@@ -114,8 +91,6 @@ describe('[Bug 1] createElement(bareIdent, ...) usage recognition', () => {
   });
 });
 
-// ─── Behavioral characterization ──────────────────────────────────────
-
 describe('unresolvable token ref inside _alias — v2 drops the declaration', () => {
   const entry = readFixtureFile(
     FIXTURES,
@@ -123,16 +98,11 @@ describe('unresolvable token ref inside _alias — v2 drops the declaration', ()
   );
   const { css } = runPipeline([entry]);
 
-  // v2 intentionally drops the unresolvable declaration (per-property skip) and
-  // emits the diagnostic captured by verify:parity, but keeps the surrounding
-  // selector. (v1 preserved the raw `{colors.…}` text as CSS — retired.)
   test('surrounding selector is emitted and the raw unresolved token text is dropped', () => {
     expect(css).toMatch(/\.animus-PatternF-\w+:focus-visible/);
     expect(css).not.toContain('{colors.does-not-exist.999}');
   });
 });
-
-// ─── Dev/build reconciler parity (Position 3) ─────────────────────────
 
 describe('dev/build reconciler parity — prospective elimination in dev mode', () => {
   const entry = readFixtureFile(
@@ -160,7 +130,6 @@ describe('dev/build reconciler parity — prospective elimination in dev mode', 
     );
     expect(prospective.length).toBe(1);
     expect(prospective[0].reason).toContain('would be eliminated');
-    // Dev mode must NOT report actual eliminations
     expect(manifest.report?.components_eliminated ?? 0).toBe(0);
   });
 });

@@ -48,7 +48,6 @@ describe('toWatchKeys', () => {
     const link = join(scratch, 'del-link');
     symlinkSync(target, link);
 
-    // The file never exists — a post-unlink event path via the symlink.
     const keys = toWatchKeys(join(link, 'src', 'gone.ts'));
     expect(keys).toContain(join(realpathSync(target), 'src', 'gone.ts'));
   });
@@ -73,8 +72,6 @@ describe('toWatchKeys', () => {
 
     const messy = join(dir, '..', 'norm', 'b.ts');
     const keys = toWatchKeys(messy);
-    // Lexical key has the `..` collapsed; canonical key resolves symlinks
-    // (on macOS tmpdir itself is a /var → /private/var symlink).
     expect(keys[0]).toBe(join(dir, 'b.ts'));
     expect(keys).toContain(join(realpathSync(dir), 'b.ts'));
   });

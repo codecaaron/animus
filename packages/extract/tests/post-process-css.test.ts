@@ -5,7 +5,6 @@ import {
   resolveLightningTargets,
 } from '../pipeline/post-process-css';
 
-// Fixed targets so assertions don't depend on the repo's browserslist.
 const SAFARI15 = resolveLightningTargets('safari 15', process.cwd());
 const CHROME120 = resolveLightningTargets('chrome 120', process.cwd());
 
@@ -22,10 +21,8 @@ describe('postProcessCss', () => {
 
     const out = postProcessCss(css, { minify: true, targets: SAFARI15 });
     expect(out).toContain('-webkit-backdrop-filter:blur(8px)');
-    // Minification removes unnecessary newlines and indentation entirely.
     expect(out).not.toContain('\n');
     expect(out).not.toContain('  ');
-    // Layer wrapper preserved
     expect(out).toContain('@layer anm-base');
   });
 
@@ -72,10 +69,6 @@ describe('postProcessCss', () => {
   });
 });
 
-// Ported from packages/vite-plugin/tests/post-process.test.ts (deleted): that
-// suite ran a test-local Lightning CSS mirror and never executed this
-// production helper. These are the css-post-processing spec scenarios the
-// mirror alone witnessed, now against the real export with fixed targets.
 describe('postProcessCss — layer topology (css-post-processing spec)', () => {
   test('preserves all six cascade layer blocks in declared order', () => {
     const input = [
@@ -99,9 +92,7 @@ describe('postProcessCss — layer topology (css-post-processing spec)', () => {
       'anm-system',
       'anm-custom',
     ].map(blockIdx);
-    // Every block survives...
     expect(order.filter((i) => i < 0)).toEqual([]);
-    // ...in declared order.
     expect([...order].sort((a, b) => a - b)).toEqual(order);
   });
 

@@ -1,8 +1,3 @@
-/**
- * Synthetic-divergence tests: the harness must DETECT fabricated
- * divergences in every artifact class and classify CSS failures — a green
- * identity run means nothing if the comparator is blind.
- */
 import { describe, expect, test } from 'vitest';
 
 import {
@@ -269,12 +264,6 @@ describe('register matching', () => {
   });
 
   test('an unknown JSON category cannot license exact drift', () => {
-    // `register.json` is hand-edited JSON that nothing validates before
-    // `loadRegister` hands it to these two functions, so a row whose
-    // `category` falls outside `RegisterCategory` is reachable at runtime and
-    // unrepresentable in the type. The fixture therefore enters through the
-    // loader's own boundary — register TEXT, decoded — rather than asserting
-    // a shape past the compiler.
     const register: RegisterEntry[] = JSON.parse(
       JSON.stringify([
         {

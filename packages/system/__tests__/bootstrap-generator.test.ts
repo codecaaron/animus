@@ -1,21 +1,9 @@
-/**
- * Generator-shape tests for `createAppearanceBootstrap` (increment 02).
- *
- * Covers spec `color-mode-bootstrap`:
- * - "Generated bootstrap artifact" (artifact shape, deterministic output,
- *   custom storage key honored)
- * - "Appearance record contract" (single key, default `animus:appearance`)
- *
- * Snippet BEHAVIOR lives in bootstrap-snippet.test.ts; packaging/isolation in
- * bootstrap-packaging.test.ts.
- */
 import { createHash } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 
 import { createTheme } from '../src';
 import { createAppearanceBootstrap } from '../src/bootstrap';
 
-/** The `document` slice the generated snippet touches. */
 interface SnippetDocument {
   documentElement: {
     setAttribute: (name: string, value: string) => void;
@@ -23,26 +11,22 @@ interface SnippetDocument {
   };
 }
 
-/** The `localStorage` slice the generated snippet reads. */
 interface SnippetStorage {
   getItem: (key: string) => string | null;
   setItem: (key: string, value: string) => void;
 }
 
-/** The snippet's calling convention: free globals shadowed as parameters. */
 type SnippetEntry = (
   documentGlobal: SnippetDocument,
   storageGlobal: SnippetStorage
 ) => void;
 
-/** The same convention plus the shadowed breakout target the hostile tests add. */
 type ShadowedSnippetEntry = (
   documentGlobal: SnippetDocument,
   storageGlobal: SnippetStorage,
   injectedGlobal: () => void
 ) => void;
 
-/** Minimal structural stand-in for a built theme's manifest. */
 function themeWithModes(...modeNames: string[]) {
   return {
     manifest: {
@@ -53,7 +37,6 @@ function themeWithModes(...modeNames: string[]) {
   };
 }
 
-/** A real built theme — proves the generator reads `manifest.modes`. */
 function builtTheme() {
   return createTheme()
     .addBreakpoints({ xs: 480, sm: 768, md: 1024, lg: 1200, xl: 1440 })
@@ -182,10 +165,6 @@ describe('createAppearanceBootstrap — generation guards', () => {
   });
 });
 
-// Mode names reach the generator as manifest KEYS — the theme builder does not
-// reject punctuation today, so the embedding must be hostile-input safe. A
-// naive template interpolation passes every other test in this file and fails
-// every assertion here.
 describe('createAppearanceBootstrap — hostile mode names', () => {
   // Built from code points so this source file stays pure ASCII — an invisible
   // separator pasted into a test is exactly the bug being guarded against.
@@ -193,11 +172,11 @@ describe('createAppearanceBootstrap — hostile mode names', () => {
   const PARAGRAPH_SEPARATOR = String.fromCharCode(0x2029);
 
   const HOSTILE_MODES = [
-    'mid"night', // double quote — closes a naive string literal
-    'back\\slash', // backslash — escapes the following character
-    '</script><script>injected()</script>', // inline-script breakout
-    '");injected();("', // expression breakout
-    `sep${LINE_SEPARATOR}ara${PARAGRAPH_SEPARATOR}tor`, // line separators
+    'mid"night',
+    'back\\slash',
+    '</script><script>injected()</script>',
+    '");injected();("',
+    `sep${LINE_SEPARATOR}ara${PARAGRAPH_SEPARATOR}tor`,
   ];
 
   const hostileTheme = themeWithModes(...HOSTILE_MODES);
@@ -223,13 +202,8 @@ describe('createAppearanceBootstrap — hostile mode names', () => {
     const storageStub = { getItem: () => null, setItem: vi.fn() };
 
     expect(() => {
-      // Construction throws SyntaxError if the embedding broke the literal;
-      // `injected` is shadowed so a successful breakout would still be caught.
-      // SAFETY: `new Function` returns a function whose parameters are exactly
-      // the names listed before the body, in that order — `document`,
-      // `localStorage`, `injected`, matching ShadowedSnippetEntry — and `code`
-      // is a generated artifact this suite pins as a self-contained IIFE
-      // statement with no imports, no placeholders and no return value.
+      // SAFETY: `new Function` binds parameters in the listed order, matching
+      // ShadowedSnippetEntry; `code` is a generated self-contained IIFE.
       // oxlint-disable-next-line no-new-func
       const run = new Function(
         'document',
@@ -259,11 +233,8 @@ describe('createAppearanceBootstrap — hostile mode names', () => {
     });
     const storageStub = { getItem: () => record, setItem: vi.fn() };
 
-    // SAFETY: `new Function` returns a function whose parameters are exactly
-    // the names listed before the body, in that order — `document` then
-    // `localStorage`, matching SnippetEntry — and `code` is a generated
-    // artifact this suite pins as a self-contained IIFE statement with no
-    // imports, no placeholders and no return value.
+    // SAFETY: `new Function` binds parameters in the listed order, matching
+    // SnippetEntry; `code` is a generated self-contained IIFE.
     // oxlint-disable-next-line no-new-func
     const run = new Function('document', 'localStorage', code) as SnippetEntry;
     run(documentStub, storageStub);

@@ -1,10 +1,4 @@
 import { join } from 'node:path';
-/**
- * Composition integration tests: compose() through the full extraction pipeline.
- *
- * Verifies that composed slot components are extractable and produce
- * correct CSS with shared variant resolution.
- */
 import { beforeAll, describe, expect, test } from 'vitest';
 
 import { readFixtureFile } from '../fixtures/read-fixtures';
@@ -63,13 +57,11 @@ describe('composition extraction', () => {
   });
 
   test('composed inheritance rules emitted for shared variant', () => {
-    // Rule 1: .Root--size-option .Child (inheritance) — (0,2,0)
     expect(css).toMatch(/\.animus-Root-\w+--size-small\s+\.animus-Child-\w+/);
     expect(css).toMatch(/\.animus-Root-\w+--size-large\s+\.animus-Child-\w+/);
   });
 
   test('composed override rules emitted for shared variant', () => {
-    // Rule 2: .Root .Child.Child--size-option (override)
     expect(css).toMatch(
       /\.animus-Root-\w+\s+\.animus-Child-\w+\.animus-Child-\w+--size-small/
     );
@@ -79,12 +71,10 @@ describe('composition extraction', () => {
   });
 
   test('non-shared variant (intent) has no composed rules', () => {
-    // intent is not in shared config, so no composed rules for it
     expect(css).not.toMatch(/\.animus-Root-\w+.*--intent/);
   });
 
   test('standalone variant CSS unchanged for components in a family', () => {
-    // Direct variant rules still emitted alongside composed rules
     expect(css).toMatch(/\.animus-Child-\w+--size-small\s*\{/);
     expect(css).toMatch(/\.animus-Child-\w+--size-large\s*\{/);
     expect(css).toMatch(/\.animus-Child-\w+--intent-primary\s*\{/);

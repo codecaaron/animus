@@ -1,19 +1,3 @@
-/**
- * System reload failure semantics: a failed system-config reload during a
- * watch cycle is a FAILED CYCLE, not a fallback signal.
- *
- * The regression this pins: the reset re-run was wrapped in a swallow-warn
- * catch, so a broken system edit (syntax error in ds.ts) fell through to the
- * ordinary incremental diff — the watch loop reported success, wrote no
- * `failed` status, and kept analyzing against the pre-edit system config.
- * The contract: the transaction rejects (so a host's per-cycle handler keeps
- * last-good artifacts and reports on stderr), the status artifact lands
- * `failed` with the diagnostic, and no incremental analysis runs against the
- * stale system.
- *
- * Same setup as watch-transaction.test.ts (mocked NAPI boundary, real
- * session, temp project on disk).
- */
 import { readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
@@ -26,9 +10,8 @@ const mocks = vi.hoisted(() => ({
 
 import { setEngineApiOverride } from '../../session/singleton';
 
-// Engine API injection through the singleton's globalThis-keyed test
-// seam — reaches every copy of the module (source or dist), which a
-// module mock cannot.
+// Injection through the singleton's globalThis seam reaches every copy of
+// the module (source or dist); a module mock does not.
 setEngineApiOverride(() => ({
   loadSystemModule: mocks.loadSystemModule,
   extractFacts: () => '{"files":{},"parseCount":0}',
@@ -77,8 +60,6 @@ describe('system reload failure', () => {
       'utf-8'
     );
 
-    // The system edit that breaks evaluation: the reloader throws the way
-    // loadSystemModule does on a syntax error.
     const systemPath = join(root, 'src', 'system.ts');
     writeFileSync(systemPath, 'export const system = {;\n');
     mocks.loadSystemModule.mockImplementation(() => {
@@ -92,18 +73,14 @@ describe('system reload failure', () => {
       })
     ).rejects.toThrow(/unexpected token/);
 
-    // No incremental analysis against the stale system config.
     expect(mocks.analyzeProject.mock.calls.length).toBe(analysesAfterFull);
 
-    // The status artifact carries the terminal failure for loaders; the
-    // session's own artifact contract (session-paths.ts) names its fields.
     const status: AnalysisStatus = JSON.parse(
       readFileSync(join(session.sessionDir, ANALYSIS_STATUS_ARTIFACT), 'utf-8')
     );
     expect(status.state).toBe('failed');
     expect(status.diagnostic).toContain('unexpected token');
 
-    // Last-good artifacts stay in place for consumers.
     expect(readFileSync(join(session.sessionDir, 'styles.css'), 'utf-8')).toBe(
       cssAfterFull
     );
@@ -116,17 +93,15 @@ describe('failed full pipeline', () => {
     const session = new ExtractionSession({ system: './src/system.ts' });
     session.rootDir = root;
 
-    // The system LOADS (pipeline step 1 assigns it) and the analysis then
-    // fails — so the pass registers no owner and populates no caches.
+    // The system loads and the analysis then fails, so the pass registers no
+    // owner and fills no caches.
     mocks.analyzeProject.mockImplementation(() => {
       throw new Error('analysis boom');
     });
     await expect(session.runFullPipeline()).rejects.toThrow('analysis boom');
 
-    // A watch batch entering this session must take the NON-OWNING branch:
-    // ownership is decided by the loaded-system field, and a failed pass
-    // that leaves it set makes the session publish a generation built from
-    // caches it never filled.
+    // Ownership is decided by the loaded-system field: leaving it set after a
+    // failed pass publishes a generation built from caches never filled.
     mocks.analyzeProject.mockImplementation(() => buildManifest({}));
     const analysesAfterFailure = mocks.analyzeProject.mock.calls.length;
     await session.handleWatchUpdate({
@@ -135,8 +110,7 @@ describe('failed full pipeline', () => {
     });
 
     expect(mocks.analyzeProject.mock.calls.length).toBe(analysesAfterFailure);
-    // Nothing published: the singleton spells "unset" as either absent or
-    // null (the per-test reset writes undefined).
+    // The singleton spells "unset" as either absent or null.
     expect(getManifestJson() ?? null).toBeNull();
   });
 });

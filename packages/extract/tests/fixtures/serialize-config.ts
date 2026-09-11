@@ -1,11 +1,6 @@
 /**
- * Programmatically serialize the prop config from @animus-ui/system.
- *
- * This imports the REAL config — the source of truth — and serializes it
- * to the JSON format expected by the Rust extraction pipeline. Transform
- * functions are mapped to string identifiers that Rust dispatches natively.
- *
- * If system's groups change, this serialization changes with it. No hand-maintenance.
+ * Serializes the real @animus-ui/system prop config into the JSON the Rust
+ * pipeline reads, so a group change needs no hand-maintained copy.
  */
 
 import {
@@ -30,7 +25,6 @@ import {
 
 import type { Prop } from '@animus-ui/system';
 
-/** Known transform functions → Rust string identifiers */
 const TRANSFORM_MAP = new Map<Function, string>([
   [size, 'size'],
   [borderShorthand, 'borderShorthand'],
@@ -38,8 +32,6 @@ const TRANSFORM_MAP = new Map<Function, string>([
   [gridItem, 'gridItem'],
 ]);
 
-/** Prop name → the system's OWN prop contract: the registry
- *  `createSystem().addGroup()` accumulates. */
 interface PropRegistry {
   readonly [propName: string]: Prop;
 }
@@ -52,19 +44,16 @@ interface SerializedEntry {
 }
 
 /**
- * A theme scale reference is the scale's NAME. Strict identity under `String`
- * holds only for a primitive string — an inline `createScale()` scale, like an
- * absent one, can never equal its own `String()` rendering — so this admits
- * exactly the scale names the Rust config reads and drops the rest (inline
- * scales are type-only constraints the config never carries).
+ * `String(scale) === scale` holds only for a primitive name, so inline and
+ * absent scales — which the Rust config never carries — are dropped.
  */
 function isThemeScaleName(scale: Prop['scale']): scale is string {
   return String(scale) === scale;
 }
 
 /**
- * All prop groups flattened — matches what createSystem().addGroup() accumulates.
- * Order matches the addGroup calls in the canonical system config.
+ * Every prop group flattened; the spread order must match the `addGroup`
+ * calls in the canonical system config.
  */
 const allProps: PropRegistry = {
   ...flex,
@@ -92,7 +81,6 @@ function serializeProps() {
       serialized.properties = entry.properties;
     }
 
-    // Only theme scale names (theme lookups) reach the Rust config.
     if (isThemeScaleName(entry.scale)) {
       serialized.scale = entry.scale;
     }
@@ -113,9 +101,8 @@ function serializeProps() {
 export const serializedConfig = JSON.stringify(serializeProps());
 
 /**
- * Group registry — maps group name to array of prop names.
- * This mirrors what createSystem().addGroup(name, props) builds.
- * Group names must match the addGroup() calls exactly.
+ * Group names must match the `addGroup()` calls exactly (`borders` is the
+ * registered name for the `border` group).
  */
 function buildGroupRegistry() {
   return {

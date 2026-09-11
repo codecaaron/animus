@@ -16,9 +16,8 @@ import type { JsonObject, JsonValue } from '@animus-ui/assertions';
 const FIXTURES_ROOT = join(__dirname, '..', 'fixtures');
 const FIXTURE_DIR = join(FIXTURES_ROOT, 'components', 'svelte-usage');
 
-/** The single native-loader surface the barrel-hop case reaches for: the fact
- *  extractor `ingestSourceEntries` drives. Direct-path require per the
- *  _integration NAPI-loading contract (see the package CLAUDE.md). */
+/** Types the direct-path require below: a package specifier can resolve to
+ *  the `.d.ts` instead, leaving every engine export undefined. */
 interface NativeFactExtractor {
   extractFacts(filesJson: string): string;
 }
@@ -78,17 +77,11 @@ describe('isolated native Svelte usage projection', () => {
   });
 
   test('barrel hops: same-name AND renamed re-exports prune through the real index and engine', async () => {
-    // Two-layer proof against the REAL index and REAL engine. The index
-    // walk reconciles both barrel shapes to the `.asClass()` binding, and
-    // engine usage identity now follows renamed chains too (sourced
-    // re-export hops + the defining-module local-rename unwrap), so both
-    // consumers witness and prune end-to-end.
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const nativeEngine: NativeFactExtractor = require('../../extract/index-v2.js');
     const extractFacts = (filesJson: string) =>
       nativeEngine.extractFacts(filesJson);
 
-    // Same-name hop: witnesses, and the engine prunes through the barrel.
     const sameNameIngested = await ingestSourceEntries(
       [
         definitionEntry,
@@ -113,8 +106,6 @@ describe('isolated native Svelte usage projection', () => {
     expect(sameName.css).toContain('--tone-quiet');
     expect(sameName.css).not.toContain('--tone-loud');
 
-    // Renamed hop: witnesses, and the engine reconciles the projected
-    // usage back through the rename to prune unselected variants.
     const renamedIngested = await ingestSourceEntries(
       [
         definitionEntry,

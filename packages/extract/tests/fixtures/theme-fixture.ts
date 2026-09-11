@@ -1,14 +1,3 @@
-/**
- * Programmatic theme fixture for canary tests.
- *
- * Structurally modeled on the showcase theme (packages/showcase/src/ds.ts).
- * Uses createTheme() and exports the serialized output, replacing
- * the hand-maintained JSON blobs in canary.test.ts.
- *
- * Some scales referenced by prop configs (gradients, letterSpacings, etc.)
- * are intentionally absent — the extraction pipeline handles missing scales
- * gracefully. What matters is the structural pattern matches production.
- */
 import { createTheme } from '@animus-ui/system';
 
 export const tokens = createTheme()
@@ -137,8 +126,6 @@ export const tokens = createTheme()
     colors: ['current-bg'],
   })
   .build();
-
-// ─── Serialized Output ─────────────────────────────────────
 
 const serialized = tokens.serialize();
 

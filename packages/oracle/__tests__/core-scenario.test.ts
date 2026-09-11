@@ -146,9 +146,8 @@ describe('countCells', () => {
 });
 
 /**
- * The soundness core: a predicate whose thresholds are all in `cuts` must be
- * constant on every cell, which is what makes evaluating one representative a
- * proof over the whole cell.
+ * A predicate whose thresholds are all in `cuts` is constant on every cell,
+ * which makes evaluating one representative a proof over the whole cell.
  */
 describe('cell invariant', () => {
   const min = 0;
@@ -160,8 +159,8 @@ describe('cell invariant', () => {
     contains: (v: number) => boolean;
   }
 
-  // Independently reconstructed partition — deliberately NOT built from
-  // enumerateCells, so a bug in the partition cannot agree with itself.
+  // Reconstructed independently of enumerateCells, so a bug in the partition
+  // cannot agree with itself.
   const expectedCells: ExpectedCell[] = [
     { rep: 2, contains: (v) => v >= 0 && v < 4 },
     { rep: 4, contains: (v) => v === 4 },
@@ -172,7 +171,7 @@ describe('cell invariant', () => {
     { rep: 14, contains: (v) => v > 12 && v <= 16 },
   ];
 
-  // Exact binary fractions only — no floating-point slack in the sweep.
+  // A 0.25 step keeps every sweep value an exact binary fraction.
   const sweep: number[] = [];
   for (let v = min; v <= max; v += 0.25) sweep.push(v);
 

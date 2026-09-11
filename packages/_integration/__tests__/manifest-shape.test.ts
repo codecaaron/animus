@@ -1,19 +1,8 @@
 import { isJsonObject, isJsonString } from '@animus-ui/assertions';
 import { join } from 'node:path';
 /**
- * Manifest shape + completeness assertions.
- *
- * Covers the `manifest-completeness-testing` capability from the
- * integration-test-infrastructure change. Validates the structural shape and
- * internal consistency of the manifest returned by `analyzeProject()`.
- *
- * This suite is ALSO the tether for `ProjectManifest`
- * (`@animus-ui/extract/pipeline`): that declaration mirrors a Rust struct, so
- * nothing in TypeScript can keep it honest. Here the mirror is checked against
- * a REAL engine manifest at runtime — the decoder below narrows to the owner's
- * own types, so a Rust-side rename, a spelling change, or a field that stops
- * being emitted fails this file instead of rotting the declaration silently.
- * Types are the vocabulary here, never the proof: the checks stay.
+ * `ProjectManifest` mirrors a Rust struct with no compile-time link, so the
+ * runtime decoding below is what catches a renamed or dropped field.
  */
 import { beforeAll, describe, expect, test } from 'vitest';
 
@@ -30,9 +19,6 @@ import type {
 
 const COMPONENTS = join(__dirname, '..', 'fixtures', 'components');
 
-/** The manifest slice this suite decodes — the owner's declaration, sliced,
- *  never restated. Every field here is required because the producer emits
- *  every one of them unconditionally; that is exactly the claim under test. */
 type IntegrationManifest = Pick<
   ProjectManifest,
   | 'components'
@@ -136,11 +122,6 @@ function parseComponentFragments(candidate: JsonValue) {
   return fragments;
 }
 
-/** The splittable layers a fragment record may carry. Named here because the
- *  record is keyed, not open: an unexpected key means the emitter grew a layer
- *  this suite has never seen. `satisfies` ties the list to the owner type, so a
- *  renamed or dropped layer fails to compile rather than silently widening the
- *  check. */
 const FRAGMENT_LAYERS = [
   'base',
   'variants',
@@ -197,9 +178,8 @@ function parseIntegrationManifest(candidate: JsonValue): IntegrationManifest {
   if (!isJsonObject(candidate)) {
     throw new TypeError('pipeline manifest must be an object');
   }
-  // Every field is read unconditionally: the producer emits all of them for
-  // every universe (empty ones as `{}`), so an absent field is a contract
-  // break the decoder must surface, not default away.
+  // The producer emits every field for every project, empty ones as `{}`, so
+  // an absent field is a contract break rather than something to default.
   return {
     components: parseManifestComponents(candidate.components),
     files: parseStringLists(candidate.files, 'files'),
@@ -223,13 +203,11 @@ describe('component descriptor completeness', () => {
   );
 
   test('manifest.components is a non-empty object', () => {
-    // Non-empty: the vacuity anchor for the descriptor loop below.
+    // Vacuity anchor for the descriptor loop in the next test.
     expect(Object.keys(manifest.components).length).toBeGreaterThan(0);
   });
 
   test('every component descriptor has required non-empty fields', () => {
-    // The manifest decoder already guarantees string types; non-emptiness
-    // (and the class_name prefix) is the claim here.
     for (const [id, descriptor] of Object.entries(manifest.components)) {
       expect(id.length).toBeGreaterThan(0);
       expect(descriptor.class_name).toMatch(/^animus-/);
@@ -247,7 +225,7 @@ describe('files-to-components consistency', () => {
   );
 
   test('every component_id in manifest.files exists in manifest.components', () => {
-    // Non-empty: the vacuity anchor for the loop below.
+    // Vacuity anchor for the loop below.
     expect(Object.keys(manifest.files).length).toBeGreaterThan(0);
     for (const [filePath, componentIds] of Object.entries(manifest.files)) {
       for (const id of componentIds) {
@@ -306,10 +284,7 @@ describe('fragment consistency', () => {
     const layersWithContent = (sheets: ManifestComponentSheets) =>
       Object.values(sheets).filter((value) => value.trim().length > 0);
 
-    // Unconditional: a fragment record only exists for a component that
-    // produced CSS. (A `bailed` skip used to guard this loop; the emitter has
-    // no such field, so the guard never fired — the check is the same one,
-    // now without a condition that could never be true.)
+    // A fragment record exists only for a component that produced CSS.
     for (const sheets of Object.values(fragments)) {
       expect(layersWithContent(sheets).length).toBeGreaterThan(0);
     }
@@ -321,7 +296,6 @@ describe('dynamic props boundary', () => {
     const manifest = parseIntegrationManifest(
       runPipeline([readFixtureFile(COMPONENTS, 'button.tsx')]).manifest
     );
-    // button.tsx uses only static literal values → no dynamic props expected.
     const dp = manifest.dynamic_props;
     expect(Object.keys(dp).length).toBe(0);
   });
@@ -332,9 +306,6 @@ describe('dynamic props boundary', () => {
     );
     const dp = manifest.dynamic_props;
     for (const [_propName, meta] of Object.entries(dp)) {
-      // v2 emits dynamic_props metadata with camelCase keys (varName/slotClass);
-      // v1 used snake_case (var_name/slot_class). The metadata contract itself
-      // is unchanged.
       expect(meta.varName).toEqual(expect.any(String));
       expect(meta.varName).toMatch(/^--animus-/);
       expect(meta.slotClass).toEqual(expect.any(String));
@@ -351,8 +322,7 @@ describe('system_prop_map validation', () => {
   );
 
   test('system_prop_map is populated for used props', () => {
-    // system-props.tsx uses p, mt, display, color — at minimum p should
-    // appear. This is the vacuity anchor for the class-name loop below.
+    // Vacuity anchor for the class-name loop in the next test.
     expect(manifest.system_prop_map.p).toBeDefined();
   });
 

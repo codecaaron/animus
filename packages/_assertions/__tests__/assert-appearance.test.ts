@@ -17,22 +17,6 @@ import {
   assertNoBootstrapScript,
 } from '../src/assert-html';
 
-/**
- * Arming cases for the system-color-scheme structural checks
- * (openspec: system-color-scheme, increment 04).
- *
- * The fixtures below are transcribed from REAL build output, minifier artifacts
- * included, so a matcher that only works on pretty-printed emission fails here
- * instead of in a consumer lane:
- * - `e2e/vite-app/dist/assets/index-*.css` (Lightning CSS): unquoted attribute
- *   selectors and the injected `--lightningcss-light` / `--lightningcss-dark`
- *   pair on every rule that declares `color-scheme`;
- * - `e2e/next-app/.next/static/css/*.css` (Next): unquoted attribute selectors,
- *   no injected pair.
- */
-
-// `e2e/vite-app` Lightning CSS artifact — theme blocks AND an
-// application-authored `_osDark` condition block in the same sheet.
 const VITE_APP_LIGHTNING_CSS_ARTIFACT = `:root{--color-primary:var(--color-blue-500);--lightningcss-light: ;--lightningcss-dark:initial;color-scheme:dark}@media (prefers-color-scheme:light){:root:not([data-color-mode]){--color-primary:#1d4ed8;--lightningcss-light:initial;--lightningcss-dark: ;color-scheme:light}}@media (prefers-color-scheme:dark){:root:not([data-color-mode]){--color-primary:#3b82f6;--lightningcss-light: ;--lightningcss-dark:initial;color-scheme:dark}}[data-color-mode=dark]{--color-primary:#3b82f6;--lightningcss-light: ;--lightningcss-dark:initial;color-scheme:dark}[data-color-mode=light]{--color-primary:#1d4ed8;--lightningcss-light:initial;--lightningcss-dark: ;color-scheme:light}@layer anm-base{@media (prefers-color-scheme:dark){.animus-Card-74286a66{border-color:var(--color-border)}}}`;
 
 describe('assertSystemSchemeGuard', () => {
@@ -61,9 +45,6 @@ describe('assertSystemSchemeGuard', () => {
   });
 
   it('ignores an app-authored html rule inside a prefers-color-scheme block', () => {
-    // `html { _osDark: { … } }` in an app's global styles emits an unguarded
-    // root-element block that is the app's own business — the guard contract
-    // governs the emitter's fallback blocks, which are always `:root`-based.
     const authored = `${VITE_APP_LIGHTNING_CSS_ARTIFACT}@media (prefers-color-scheme:dark){html{--app-owned:1}}`;
     expect(() =>
       assertSystemSchemeGuard(authored, { expectSchemes: ['light', 'dark'] })
@@ -146,20 +127,7 @@ describe('assertSystemFallbackParity', () => {
   });
 });
 
-/**
- * `systemSchemeVariableSpans` is the only thing in this package that LOOSENS a
- * gate: each span it returns switches `assertConditionsInsideLayers` off across
- * that character range. Its three earning conditions are therefore the load-
- * bearing code here, and every one of them gets a case that goes red when the
- * condition is deleted.
- *
- * Contract (arch-css-structural-gates): a `prefers-color-scheme` block earns a
- * span only when it sits unlayered ahead of the first `@layer` block, every
- * rule inside it is the root guard, and it contains no nested at-rule.
- */
 describe('systemSchemeVariableSpans', () => {
-  // Offset of the AUTHOR-written `_osDark` component block, which lives inside
-  // `@layer anm-base` and must never be covered.
   const authorBlock = VITE_APP_LIGHTNING_CSS_ARTIFACT.indexOf(
     '@media (prefers-color-scheme:dark){.animus-Card'
   );
@@ -193,7 +161,6 @@ describe('systemSchemeVariableSpans', () => {
   });
 
   it('(c) withholds the span when one extra unguarded rule joins the block', () => {
-    // The guard is still there; a second, unguarded rule rides beside it.
     const extraRule = VITE_APP_LIGHTNING_CSS_ARTIFACT.replace(
       'color-scheme:dark}}',
       'color-scheme:dark}.animus-Card-74286a66{color:red}}'
@@ -223,9 +190,6 @@ describe('systemSchemeVariableSpans', () => {
   });
 
   it('(f) forfeits the exemption when an at-rule nests inside the guarded block', () => {
-    // The nested rule is ITSELF the root guard, so the all-guarded condition
-    // alone still passes — this is exactly the shape that would otherwise ride
-    // into the sheet under blanket cover.
     const nested = VITE_APP_LIGHTNING_CSS_ARTIFACT.replace(
       'color-scheme:dark}}',
       'color-scheme:dark}@supports (color:red){:root:not([data-color-mode]){--color-primary:red}}}'
@@ -251,15 +215,11 @@ describe('systemSchemeVariableSpans', () => {
       assertConditionsInsideLayers(relocated, { exemptSpans: spans })
     ).toThrow(AssertionError);
 
-    // Same block, same bytes, positioned in the variables part → earns its span.
     const inPlace = `:root{--color-primary:#000}${guarded}@layer anm-base{.animus-Card-74286a66{color:red}}`;
     expect(systemSchemeVariableSpans(inPlace)).toHaveLength(1);
   });
 });
 
-// `e2e/next-app/.next/server/pages/legacy.html`, trimmed: the Pages Router
-// document places the script itself, and Next's own CSS preload link is the
-// first stylesheet reference after it.
 const CODE = '(function(){try{}catch(e){}})();';
 const NEXT_APP_LEGACY_PAGE_HTML_ARTIFACT = `<!DOCTYPE html><html lang="en"><head><meta charSet="utf-8"/><script data-animus-bootstrap="">${CODE}</script><link rel="preload" href="/_next/static/css/a.css" as="style"/><link rel="stylesheet" href="/_next/static/css/a.css"/></head><body></body></html>`;
 
@@ -271,7 +231,6 @@ describe('assertBootstrapScriptFirst', () => {
   });
 
   it('compares the emitted text to the artifact code and its CSP hash', () => {
-    // sha256 of CODE, base64 — recomputed the way a browser would.
     const cspHash = `sha256-${createHash('sha256').update(CODE, 'utf8').digest('base64')}`;
     expect(() =>
       assertBootstrapScriptFirst(NEXT_APP_LEGACY_PAGE_HTML_ARTIFACT, {
@@ -323,8 +282,6 @@ describe('assertCharsetWithinByteBudget', () => {
   });
 
   it('measures bytes, not UTF-16 code units', () => {
-    // é is 1 code unit but 2 UTF-8 bytes: the meta sits inside the limit by
-    // string offset yet past it by bytes, which is what the browser counts.
     const padded = `<!DOCTYPE html><html><head><script>/*${'é'.repeat(500)}*/</script><meta charset="utf-8"/></head></html>`;
     expect(padded.indexOf('/></head>')).toBeLessThanOrEqual(1024);
     expect(() => assertCharsetWithinByteBudget(padded)).toThrow(AssertionError);

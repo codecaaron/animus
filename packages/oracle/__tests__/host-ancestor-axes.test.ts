@@ -27,25 +27,16 @@ const ruleBySelector = (raw: string): StyleRuleRecord => {
   return matches[0];
 };
 
-// PLACES.md §3: relational selectors stop being silently-active (or silently
-// absent) cascade candidates. The ancestor prefix becomes a decidable guard —
-// the mode attribute on the mode axis, everything else on an `ancestor:*`
-// axis only a place binding can decide.
 describe('ancestor axes on relational selectors', () => {
   it('guards a [data-color-mode] ancestor on the mode axis', () => {
     const rule = ruleBySelector(`[data-color-mode="dark"] .${GROUP_ITEM}`);
 
     expect(referencedDimensions(rule.condition)).toContain(MODE_DIMENSION);
     expect(evalPredicate(rule.condition, { mode: 'dark' })).toBe(true);
-    // Bug (h) of the cold review: this rule used to win at mode=light with
-    // static-proof authority.
     expect(evalPredicate(rule.condition, { mode: 'light' })).toBe(false);
   });
 
   it('guards a generic ancestor prefix on an ancestor:* axis', () => {
-    // The manifest sheet quotes the attribute value; the axis name does not —
-    // canonicalization is what lets a place binding built from structure name
-    // the same axis the sheet-derived guard references.
     const rule = ruleBySelector(`[data-active="true"] .${GROUP_ITEM}`);
 
     expect(referencedDimensions(rule.condition)).toEqual([
@@ -54,8 +45,6 @@ describe('ancestor axes on relational selectors', () => {
     expect(
       evalPredicate(rule.condition, { 'ancestor:[data-active=true]': true })
     ).toBe(true);
-    // An unbound ancestor axis evaluates false — never a silent match. The
-    // conditional channel, not the winner table, is where it surfaces.
     expect(evalPredicate(rule.condition, {})).toBe(false);
   });
 
@@ -65,8 +54,6 @@ describe('ancestor axes on relational selectors', () => {
     expect(referencedDimensions(rule.condition)).toEqual([
       'ancestor:.group:hover',
     ]);
-    // The ancestor's :hover must NOT leak into a `pseudo:hover` conjunct —
-    // that would attribute the ancestor's interaction state to the subject.
     expect(referencedDimensions(effectiveGuard(rule))).toEqual([
       'ancestor:.group:hover',
     ]);
@@ -75,8 +62,6 @@ describe('ancestor axes on relational selectors', () => {
   it('takes candidacy from the subject compound, not the flat class list', () => {
     const rule = ruleBySelector(`.group:hover .${GROUP_ITEM}`);
 
-    // Previously NOT a candidate at all: flat candidacy required `group` on
-    // the target itself, so this rule silently vanished from every cascade.
     expect(isCandidateSelector(rule, new Set([GROUP_ITEM]))).toBe(true);
     expect(isCandidateSelector(rule, new Set(['group']))).toBe(false);
   });
@@ -99,8 +84,8 @@ describe('ancestor axes on relational selectors', () => {
 
     expect(guards).toEqual([
       { kind: 'mode', value: 'dark' },
-      // Quoted attribute values canonicalize when they are ident-safe, so the
-      // axis name is the same whether the sheet quoted them or not.
+      // Quoted attribute values canonicalize when ident-safe, so the axis name
+      // is the same whether the sheet quoted them or not.
       { kind: 'axis', dimension: 'ancestor:[data-active=true]' },
     ]);
   });

@@ -145,10 +145,6 @@ describe('baseline envelope and refresh protocol', () => {
     });
     const expected = { mode: 'production', corpusSha256: digest } as const;
 
-    // `RegExp.test` coerces, so a digest recorded as a one-element list used
-    // to stringify into a passing 64-hex value. The refresh path validates an
-    // existing envelope against its OWN digest, so the equality check cannot
-    // see this one — the shape check is the only witness.
     expect(
       validateBaselineEnvelope(
         { ...envelope, corpusSha256: [digest] },
@@ -158,7 +154,6 @@ describe('baseline envelope and refresh protocol', () => {
       expect.arrayContaining([expect.stringContaining('must be SHA-256')])
     );
 
-    // A list is not a keyed block, and a non-string intent is not an intent.
     expect(
       validateBaselineEnvelope({ ...envelope, units: [] }, expected)
     ).toEqual(

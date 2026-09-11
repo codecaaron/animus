@@ -1,15 +1,3 @@
-/**
- * Behavior tests for the appearance record WRITE path
- * (`@animus-ui/system/appearance`) — the client half of the contract the
- * generated bootstrap reads.
- *
- * The workspace has no DOM library, so the module resolves storage off
- * `globalThis` structurally; tests install an in-memory store with
- * `vi.stubGlobal`. The round-trip block at the end is the load-bearing part:
- * the two subpaths share no code on purpose (bootstrap is build tooling,
- * appearance is client runtime), so key/shape agreement is proven here by
- * writing with one and restoring with the other.
- */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -208,17 +196,10 @@ describe('migrateLegacyModeKey', () => {
   });
 });
 
-/**
- * Round-trip: write with `appearance`, restore with the GENERATED snippet.
- * This is the parity pin for the deliberately duplicated key/shape constants —
- * if either module drifts, a persisted mode stops restoring pre-paint.
- */
 describe('appearance ↔ bootstrap round-trip', () => {
   function runSnippet(store: MemoryStorage): {
     attributes: Record<string, string>;
   } {
-    // The snippet only ever READS storage, so a getItem view of the store the
-    // appearance module wrote to is a faithful round-trip.
     const harness = createHarness((key) => store.getItem(key));
     return runSnippetCode(
       createAppearanceBootstrap(SNIPPET_THEME).code,

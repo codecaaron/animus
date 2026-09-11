@@ -1,10 +1,3 @@
-/**
- * static-emission-overrides evidence (spec: static-emission-overrides) —
- * REAL v2 engine, reconciliation fixture. Proves: the baseline drop exists
- * (unused variants/states/components pruned), forcing restores each scope
- * axis through the ordinary ledger, empty config is byte-identical,
- * unmatched names warn, and forcing is deterministic.
- */
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import { beforeAll, describe, expect, test } from 'vitest';
@@ -76,7 +69,7 @@ function analyze(staticCssJson: string | null) {
     config.propConfig,
     config.groupRegistry,
     '{}',
-    false, // prod: reconciliation prunes
+    false,
     null,
     null,
     null,
@@ -85,10 +78,8 @@ function analyze(staticCssJson: string | null) {
     null,
     staticCssJson
   );
-  // SAFETY: `manifestJson` is this call's own `analyzeProject` return value —
-  // serde output from the Rust `AnalyzeResult` that `manifest-schema.ts`
-  // mirrors. A Rust-side rename fails the manifest tether test in
-  // `packages/_integration`, so the declaration cannot silently rot here.
+  // SAFETY: `manifestJson` is this call's own `analyzeProject` return, serde
+  // output from the Rust `AnalyzeResult` that `manifest-schema.ts` mirrors.
   const manifest = JSON.parse(manifestJson) as ProjectManifest;
   return { manifestJson, manifest };
 }
@@ -104,8 +95,6 @@ const FORCED = JSON.stringify({
 describe('static-emission-overrides (real engine)', () => {
   test('baseline: unobserved usage demonstrably drops', () => {
     const { manifest } = analyze(null);
-    // ghost variant unused → pruned; loading state unused → pruned;
-    // Spacer never rendered → eliminated.
     expect(manifest.css).not.toContain('ghost');
     expect(manifest.css).not.toContain('loading');
     expect(manifest.report.components_eliminated).toBeGreaterThanOrEqual(1);
@@ -120,22 +109,15 @@ describe('static-emission-overrides (real engine)', () => {
   test('forcing restores variants, states, components, and system values', () => {
     const { manifest } = analyze(FORCED);
 
-    // Variant list forcing
     expect(manifest.css).toContain('ghost');
-    // States wildcard: the unobserved 'loading' state now emits
     expect(manifest.css).toContain('loading');
-    // Never-rendered component survives
     expect(
       manifest.report.eliminated_details.some(
         (d) => d.component === 'Spacer' && d.kind === 'component'
       )
     ).toBe(false);
-    // System prop value reaches the utility stream
     expect(manifest.css).toMatch(/padding:\s*7px/);
 
-    // Report: forced counts + labeled details. Button is observed-rendered
-    // so only Spacer counts as a forced component; 'disabled' is observed
-    // so only 'loading' counts as a forced state.
     expect(manifest.report.components_forced).toBe(1);
     expect(manifest.report.variants_forced).toBe(1);
     expect(manifest.report.states_forced).toBe(1);
@@ -146,7 +128,6 @@ describe('static-emission-overrides (real engine)', () => {
     expect(forcedDetails.some((d) => d.name === 'ghost')).toBe(true);
     expect(forcedDetails.some((d) => d.name === 'loading')).toBe(true);
 
-    // No warnings for a fully-matched declaration
     expect(
       (manifest.diagnostics ?? []).filter((d) => d.file === 'staticCss')
     ).toEqual([]);
@@ -154,7 +135,6 @@ describe('static-emission-overrides (real engine)', () => {
 
   test('observed and forced usage compose', () => {
     const { manifest } = analyze(FORCED);
-    // Observed stroke + default fill still present alongside forced ghost
     expect(manifest.css).toContain('stroke');
     expect(manifest.css).toContain('ghost');
   });
@@ -166,7 +146,6 @@ describe('static-emission-overrides (real engine)', () => {
     );
     expect(warnings).toHaveLength(1);
     expect(warnings[0].message).toContain("unknown component 'Buton'");
-    // Build proceeded: observed extraction unaffected
     expect(manifest.css).toContain('stroke');
   });
 

@@ -7,15 +7,6 @@ import { createPlaceAnalysis, loadSnapshot } from '../src/places';
 
 import type { PlaceAnalysis, Snapshot } from '../src/places';
 
-/**
- * PLACES.md §4 — the first validation: the active, dark-mode GroupItem
- * producing gray text on blue, from its real source invocations in
- * e2e/rollup-app/src/Group.tsx. The kit rules share layer `anm-base` and
- * specificity (0,2,0); the dark rule is emitted after the active rule, so at
- * active ∧ dark it wins `color` by order while the active rule keeps the
- * primary background.
- */
-
 const FIXTURE = join(__dirname, 'fixtures/rollup-app');
 const SOURCE_ROOT = join(__dirname, '../../../e2e/rollup-app');
 const GROUP_FILE = 'src/Group.tsx';
@@ -51,9 +42,8 @@ describe('snapshot correspondence (mixed-generation prevention)', () => {
   it('refuses a file that drifted since extraction, naming the divergence', () => {
     const drifted = mkdtempSync(join(tmpdir(), 'places-drift-'));
     mkdirSync(join(drifted, 'src'), { recursive: true });
-    // The full opening tag, not the bare attribute — the file's header
-    // comment quotes `data-active="true"` too, and editing the comment is
-    // exactly the kind of change that must NOT count as drift.
+    // Replace the whole opening tag: the bare attribute text also appears in
+    // the source file's comments, and a comment edit is not structural drift.
     const edited = sourceText.replace(
       '<div className="group" data-active="true">',
       '<div className="group" data-active="maybe">'
@@ -94,8 +84,8 @@ describe('invocations and places', () => {
         witness: expect.objectContaining({ tag: 'div' }),
       })
     );
-    // The wrapper carries className="group", so the hover axis is
-    // structurally present but stays state-conditional — never established.
+    // The wrapper carries className="group", so the hover axis is structurally
+    // present, yet a stateful pseudo is never established from structure.
     expect(place.bindings).toContainEqual(
       expect.objectContaining({
         axis: HOVER_AXIS,
@@ -163,7 +153,6 @@ describe('the gray-on-blue explanation (PLACES.md §4)', () => {
         reason: 'earlier-order',
       })
     );
-    // The required ancestor relationship, identified from this very place.
     expect(explanation.requiredAncestors).toContainEqual(
       expect.objectContaining({ axis: ACTIVE_AXIS, state: 'established' })
     );
@@ -217,27 +206,18 @@ describe('carrying a candidate repair across places (charter step 4)', () => {
       return row;
     };
 
-    // The repair fixes the symptom at the active dark place: muted gray
-    // (the dark token value) gives way to the active rule's background
-    // color. Carried values are token-resolved — the place reports what the
-    // user would see, not the var() indirection.
+    // Carried values are token-resolved: an outcome reports the computed
+    // colour, not the var() indirection.
     expect(at('active kit item', 'dark')).toMatchObject({
       outcome: 'changed',
       from: '#737373',
       to: '#171717',
     });
-    // …but collaterally changes the refuted place too: dark muted text was
-    // load-bearing for every non-active GroupItem.
     expect(at('inactive kit item', 'dark')?.outcome).toBe('changed');
-    // Light mode never consulted the dark rule.
     expect(at('active kit item', 'light')?.outcome).toBe('stable');
     expect(at('inactive kit item', 'light')?.outcome).toBe('stable');
-    // Behind the opaque wrapper the deciding axis is hidden — inaccessible,
-    // in both modes, rather than a guessed answer.
     expect(at('framed kit item', 'dark')?.outcome).toBe('inaccessible');
     expect(at('framed kit item', 'light')?.outcome).toBe('inaccessible');
-    // The dynamic wrapper is ambiguous: the axis is real but undecidable
-    // from structure alone.
     expect(at('conditional kit item', 'dark')?.outcome).toBe('ambiguous');
   });
 });

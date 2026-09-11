@@ -12,15 +12,8 @@ import type {
 const FRAMES_A = { '0%': { opacity: 0 }, '100%': { opacity: 1 } };
 const FRAMES_B = { '0%': { opacity: 1 }, '100%': { opacity: 0 } };
 
-/** A value the untyped path may hand to registration: a real collection,
- *  or a malformed shape the runtime rejection is under test for. */
 type ErasedRegistrable = RegisterableKeyframes | { frames: object };
 
-/** The deliberately type-erased bundle view the untyped-path tests drive:
- *  the runtime linearity/collision witnesses — not the compiler — are under
- *  test here. Real bundles are structurally assignable (method params check
- *  bivariantly), so the erasure is a plain parameter widening — no
- *  assertion anywhere. */
 interface ErasedBundle {
   registerKeyframes(map: Record<string, ErasedRegistrable>): ErasedBundle;
   registerGlobalStyles(
@@ -240,8 +233,6 @@ describe('vocabulary registration — two-phase terminal (runtime)', () => {
     expect(record.globalStyles).toEqual([]);
   });
 
-  // SPEC(vocabulary-registration §"Extending an unsealed instance fails
-  // loud") — the DEF-11 flip, landed with the migration increment.
   it('extending a built-but-unsealed system instance fails loud', () => {
     const kit = createSystem()
       .addGroup('kitSurface', { kitGlow: { property: 'boxShadow' } })
@@ -269,8 +260,6 @@ describe('vocabulary registration — two-phase terminal (runtime)', () => {
       source: 'includes source #1',
       names: ['kitMotion'],
     });
-    // The record is the SOLE witness channel — a runtime warn would ship in
-    // production consumer bundles and be swallowed by the extraction host.
     expect(warn).not.toHaveBeenCalled();
   });
 
@@ -317,8 +306,6 @@ describe('vocabulary registration — two-phase terminal (runtime)', () => {
       .registerKeyframes({ kitMotion })
       .registerKeyframes({ kitFade })
       .seal();
-    // A second kit registering ONLY kitMotion, extended — delivering one of
-    // kitA's two names through a different source.
     const kitBBundle = createSystem().build();
     const kitB = kitBBundle
       .registerKeyframes({

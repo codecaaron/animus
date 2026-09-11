@@ -4,14 +4,6 @@ import { describe, expect, test } from 'vitest';
 import { PluginContext } from '../src/context';
 import { makeManifest } from './manifest-fixture';
 
-/**
- * The post-analysis gate over cross-source token contracts
- * (extraction-diagnostics): a discovered component referencing a token its
- * OWN package defines but the consumer theme does not warns in non-strict
- * mode and FAILS the build under `strict: true`; witness misses and
- * consumer-local files stay silent.
- */
-
 const KIT_DIR = '/repo/packages/kit/src';
 
 function makeContext(strict: boolean): PluginContext {
@@ -80,11 +72,6 @@ describe('enforceExternalTokenContracts', () => {
     expect(() => ctx.enforceExternalTokenContracts()).not.toThrow();
   });
 
-  // Every analysis pass — buildStart, HMR re-analysis, new-file detection,
-  // system reload — flows through PluginContext.runAnalysis, so the gate
-  // must fire there (next-plugin parity: both hosts share one pipeline
-  // gate). Driven through the real method via the injected engine seam so
-  // the pin is behavioral, not source-text layout.
   function makeAnalysisContext(strict: boolean): PluginContext {
     const manifest = makeManifest({
       diagnostics: [
@@ -108,11 +95,8 @@ describe('enforceExternalTokenContracts', () => {
     return ctx;
   }
 
-  // The gate runs on PUBLICATION, not inside runAnalysis: the join
-  // correlates diagnostics raised against generated MDX/Svelte children
-  // through `externalFileOwners`, and those child keys enter the owner map
-  // in `publishSourceIngestion` itself — enforcing inside runAnalysis
-  // dropped a violation on the exact pass that introduced it.
+  // The gate runs on publication, not in runAnalysis: generated-child owner
+  // keys enter the map in publishSourceIngestion, on the pass that raises them.
   const cardEntry = {
     path: 'packages/kit/src/Card.tsx',
     source: 'export const KitCard = 1;\n',
@@ -152,8 +136,7 @@ describe('enforceExternalTokenContracts', () => {
 
   test('a published corpus without the file retires its owner entry', () => {
     // Ownership is projected from the corpus that just published, so an
-    // owner whose original is gone cannot outlive it — the next generation's
-    // diagnostics can only join through files that generation analyzed.
+    // owner whose original is gone cannot outlive it.
     const ctx = makeAnalysisContext(false);
     ctx.logger = createLogger('silent');
     ctx.logger.warn = () => {};
@@ -169,9 +152,8 @@ describe('enforceExternalTokenContracts', () => {
   });
 
   test('a generated child inherits its original external owner', () => {
-    // The correlation the projection exists for: diagnostics name the
-    // generated `.tsx` child, ownership is recorded for the `.svelte`
-    // original.
+    // Diagnostics name the generated `.tsx` child, not the `.svelte`
+    // original that ownership is recorded for.
     const ctx = makeAnalysisContext(false);
     ctx.logger = createLogger('silent');
     ctx.logger.warn = () => {};

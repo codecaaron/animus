@@ -1,18 +1,3 @@
-/**
- * Builder-state isolation for ThemeBuilder: `merge` adopts nested source
- * objects by reference and mutates them on later folds, so every builder
- * step must deep-copy before merging. Without that, branching a builder
- * cross-contaminates the branches AND the parent, build() outputs keep
- * mutating after the fact, and from() corrupts the consumed kit's exported
- * theme for every other consumer in the process (an SSR worker, a
- * multi-environment build, a second ds.ts in one test file).
- *
- * Also pins the composition-boundary halves of the same review family: the
- * canonical `theme` bundle spelling on from(), structural (not reference)
- * equality for array-valued tokens in the sibling-conflict gate, and the
- * transitive withholding of a synthesized mode-alias `var()` whose target
- * declaration was itself withheld.
- */
 import { describe, expect, it, vi } from 'vitest';
 
 import { createTheme } from '../src';
@@ -27,8 +12,6 @@ describe('ThemeBuilder state isolation', () => {
     const builtB = branchB.build();
     const builtBase = base.build();
 
-    // Exact objects: an isolation failure is a leakage failure, so the whole
-    // value is the claim — extra keys must fail, not just missing ones.
     expect(builtA.colors).toEqual({
       brand: { primary: '#111111' },
       onlyA: { x: '#222222' },
@@ -46,7 +29,6 @@ describe('ThemeBuilder state isolation', () => {
 
     builder.addColors({ z: { b: '#444444' } });
 
-    // Whole-object: a leaked mutation would show up as an extra `z.b` here.
     expect(built.colors).toEqual({ z: { a: '#333333' } });
   });
 
@@ -127,14 +109,10 @@ describe('mode-alias declarations with withheld targets', () => {
         .build();
 
       const css = built.serialize().variableCss;
-      // The unresolvable target is withheld (pre-existing behavior)…
       expect(css).not.toContain('--color-accent:');
-      // …and the alias pointing at it must not ship a dangling var().
       expect(css).not.toContain('var(--color-accent)');
       expect(css).not.toContain('--color-primary:');
-      // Healthy declarations still emit.
       expect(css).toContain('--color-ink:');
-      // Both drops are named in the aggregated omission warning.
       const warned = warn.mock.calls.map((call) => String(call[0])).join('\n');
       expect(warned).toContain('--color-accent');
       expect(warned).toContain('--color-primary');

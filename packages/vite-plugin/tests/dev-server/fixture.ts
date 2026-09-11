@@ -12,25 +12,8 @@ import { dirname, join } from 'path';
 import { REPO_ROOT } from '../../../extract/tests/engine-prerequisites';
 
 /**
- * The dev-server fixture app: the smallest project shape that still has every
- * feature the dev server's incremental machinery depends on.
- *
- *   src/theme.ts   — tokens, imported RELATIVELY by the system module, so a
- *                    transitive system dependency exists to mutate
- *   src/ds.ts      — the system module named in the plugin options
- *   src/Button.ts  — a builder-chain component
- *   src/Sentinel.ts— a second component used purely as a watcher barrier
- *   src/Box.ts     — a component opted into the `space` prop group
- *   src/Usage.tsx  — a JSX usage of Box, the only thing that populates the
- *                    shared system prop map
- *   src/main.ts    — the html entry's module
- *   index.html     — the app document
- *
- * The fixture lives in a fresh `mkdtemp` directory per run so no two runs (or
- * two servers in one run) can share watcher or cache state. `@animus-ui/system`
- * is symlinked in rather than installed: the Rust system loader resolves the
- * workspace package from the system file's directory, and the fixture must
- * resolve it exactly as a consumer app would.
+ * The dev-server fixture app. `@animus-ui/system` is symlinked in rather than
+ * installed: the system loader resolves it from the system file's directory.
  */
 
 export function themeSource(brandHex: string): string {
@@ -56,9 +39,8 @@ export function paletteSource(brandHex: string): string {
 }
 
 /**
- * A theme that imports its brand hex from `./palette` — two hops from the
- * system entry (`ds.ts → theme.ts → palette.ts`). The loader reports every
- * evaluated module, so palette.ts must join the system-reload set.
+ * A theme that imports its brand hex from `./palette`, putting palette.ts two
+ * hops from the system entry.
  */
 export function themeViaPaletteSource(): string {
   return `import { createTheme } from '@animus-ui/system';
@@ -78,7 +60,6 @@ export const tokens = createTheme()
 `;
 }
 
-/** A theme file that cannot be parsed — used by the failure/recovery scenarios. */
 export function brokenThemeSource(): string {
   return `import { createTheme } from '@animus-ui/system';
 
@@ -87,9 +68,8 @@ export const tokens = createTheme(
 }
 
 /**
- * The system module. `marker` only changes a comment: the system reload
- * fires on the system file changing at all, so the marker makes each touch a
- * distinct on-disk revision without altering the system's meaning.
+ * The system module. `marker` only changes a comment, so each touch is a
+ * distinct on-disk revision with the same meaning.
  */
 export function systemSource(marker: string): string {
   return `import { createSystem } from '@animus-ui/system';
@@ -120,10 +100,8 @@ export const ${name} = ds
 }
 
 /**
- * A component that opts into the `space` group. Static styles alone never
- * populate the shared system prop map — only a JSX USAGE of an opted-in prop
- * mints a utility class — so the fixture needs this pair to have any prop map
- * at all to observe.
+ * A component that opts into the `space` group. Only a JSX usage of an opted-in
+ * prop mints a utility class, so the prop map needs this and `usageSource`.
  */
 export function systemComponentSource(groups: string[] = ['space']): string {
   const optIn = groups.map((group) => `${group}: true`).join(', ');
@@ -137,9 +115,8 @@ export const Box = ds
 }
 
 /**
- * The usage site, at one step of the theme's `space` scale. Nothing imports it:
- * the plugin discovers it by walking the project, and the dev server never has
- * to transform JSX (the fixture has no JSX runtime installed).
+ * The usage site. Nothing imports it: the plugin discovers it by walking the
+ * project, so the dev server never has to transform its JSX.
  */
 export function usageSource(paddingStep: number): string {
   return `import { Box } from './Box';
@@ -169,13 +146,10 @@ export const roots = [Button, Sentinel];
 export interface DevFixture {
   /** Absolute, symlink-resolved project root handed to the dev server. */
   readonly root: string;
-  /** Overwrite one project-relative file. */
   write(relativePath: string, source: string): void;
-  /** Delete one project-relative file. */
   remove(relativePath: string): void;
-  /** Write the sentinel component with a unique padding value. */
+  /** Write the sentinel component; the padding must be unique per barrier. */
   writeSentinel(padding: string): void;
-  /** Remove the whole temp directory. */
   dispose(): void;
 }
 

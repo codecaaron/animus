@@ -5,17 +5,6 @@ import {
   assertConditionsInsideLayers,
 } from '../src/assert-css';
 
-/**
- * arch-css-structural-gates › "Condition at-rules gated inside layer blocks".
- *
- * These cases arm the structural check `assertConditionsInsideLayers`: a
- * passing shape that
- * mirrors the extractor's real emission (condition at-rules nested inside the
- * owning @layer block), a failing shape (a condition at-rule hoisted to the
- * top level), and a vacuous shape (no conditions) that must stay green.
- */
-
-// Real emission shape: every condition at-rule nests inside a named @layer.
 const CONDITIONS_IN_LAYERS = `
 @layer anm-global, anm-base, anm-variants, anm-system;
 :root { --color-primary: #abc; }
@@ -100,9 +89,6 @@ describe('assertConditionsInsideLayers (Guardrail G2)', () => {
       throw new Error('expected assertion to throw');
     } catch (err) {
       expect(err).toBeInstanceOf(AssertionError);
-      // Narrowing, not a second assertion: anything that is not the
-      // AssertionError under test (including the `expected assertion to
-      // throw` guard above) leaves this catch by the same route it entered.
       if (!(err instanceof AssertionError)) throw err;
       expect(err.message).toContain('@container');
       expect(err.details).toHaveProperty('offenders');

@@ -1,17 +1,4 @@
 // @vitest-environment node
-/**
- * Real-pipeline coherence (openspec:
- * next-webpack-served-transform-coherence): one scenario runs the entire
- * stack for real — NAPI engine, system module evaluation, analysis, the
- * plugin and the loader — against the next-app fixture's compiled webpack.
- * A parent component gains a new variant; the extending descendant must
- * serve the merged config from the triggering compilation (spec:
- * next-webpack-integration, "Shape edit rebuilds descendants in the
- * triggering compilation").
- *
- * Skips loudly, naming the build command, when the NAPI binary or the
- * package dists are absent.
- */
 import { mkdirSync, symlinkSync } from 'fs';
 import { join, sep } from 'path';
 import { afterEach, describe, expect, test, vi } from 'vitest';
@@ -110,7 +97,6 @@ describe.skipIf(!prereq.ok)(
 
       const project = createHarnessProject({ entryModules: [] });
       disposers.push(() => project.dispose());
-      // Real workspace packages, resolved exactly as a consumer app would.
       mkdirSync(join(project.root, 'node_modules/@animus-ui'), {
         recursive: true,
       });
@@ -163,7 +149,8 @@ describe.skipIf(!prereq.ok)(
         }),
         state,
         steps: [
-          // Absorb the one-time cold-artifact snapshot (see differential N0).
+          // A throwaway edit: the turn after cold absorbs a one-time
+          // cold-artifact recheck.
           () =>
             project.write('src/Button.ts', buttonSource(false) + '// touch\n'),
           () => project.write('src/Button.ts', buttonSource(true)),
@@ -176,8 +163,6 @@ describe.skipIf(!prereq.ok)(
         expect(record.errors).toEqual([]);
       }
 
-      // The cold build extracted both components for real: transform output
-      // is engine-emitted createComponent code, not source passthrough.
       const coldFancy = outputs.find(
         (o) => o.file === 'src/Fancy.ts' && o.turn === 1
       );
@@ -185,9 +170,6 @@ describe.skipIf(!prereq.ok)(
       expect(coldFancy!.code).toContain('createComponent');
       expect(coldFancy!.code).not.toContain('tone');
 
-      // The variant edit's triggering compilation re-ran the descendant's
-      // loader, and its freshly served transform carries the merged variant
-      // config — same-compilation delivery through the real engine.
       const fancyAfterEdit = outputs.filter(
         (o) => o.file === 'src/Fancy.ts' && o.turn >= 3
       );
@@ -197,8 +179,6 @@ describe.skipIf(!prereq.ok)(
       expect(merged.code).toContain('tone');
       expect(merged.code).toContain('loud');
 
-      // The Fancy rebuild happened in the same turn that carried the Button
-      // edit, not a later catch-up turn.
       const buttonEditTurns = state.modifiedByTurn.size
         ? [...state.modifiedByTurn.entries()]
             .filter(([, files]) =>
@@ -215,7 +195,6 @@ describe.skipIf(!prereq.ok)(
       );
       expect(fancyRegion).toContain('tone');
 
-      // Hygiene holds under the real pipeline too (session-scoped path).
       expect(
         epochHygieneViolations(
           records,

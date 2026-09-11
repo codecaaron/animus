@@ -4,7 +4,6 @@ import { assertNoErrorDiagnostics } from '../pipeline/error-diagnostics';
 
 import type { CssDiagnosticLike } from '../pipeline/error-diagnostics';
 
-/** A D8-shaped error entry as the Rust static gate records it. */
 const objectResultError: CssDiagnosticLike & { severity?: string } = {
   file: 'src/invalid.tsx',
   component: 'Broken',
@@ -16,11 +15,6 @@ const objectResultError: CssDiagnosticLike & { severity?: string } = {
   severity: 'error',
 };
 
-/**
- * A warning KIND carrying error SEVERITY. Declared with the gate's own field
- * contract plus the severity the Rust record can carry, so the entry stays a
- * value of that contract instead of an assertion over a narrower one.
- */
 const severityErrorOnWarnKind: CssDiagnosticLike & { severity?: string } = {
   file: 'd.tsx',
   component: '_broken',
@@ -29,12 +23,6 @@ const severityErrorOnWarnKind: CssDiagnosticLike & { severity?: string } = {
   severity: 'error',
 };
 
-/**
- * The `Error` the gate threw, or `null` when it returned. The gate's contract
- * is ONE aggregated `Error`, so a non-Error throw is a contract break: it is
- * re-thrown as a loud failure rather than narrowed away into `null`, which
- * would read here as "the gate accepted the diagnostics".
- */
 function thrownFrom(run: () => void): Error | null {
   try {
     run();
@@ -75,8 +63,6 @@ describe('assertNoErrorDiagnostics', () => {
           kind: 'warn',
           message: "transform 'size' threw for prop 'width'; raw value applied",
         },
-        // Error SEVERITY on a warning kind routes through the strict policy
-        // in surfaceManifestDiagnostics — never through this gate.
         severityErrorOnWarnKind,
       ])
     ).not.toThrow();
@@ -107,8 +93,7 @@ describe('assertNoErrorDiagnostics', () => {
 
   it('collapses byte-identical duplicate entries to one line', () => {
     // The engine records one entry per resolve position (a responsive value
-    // can fail per breakpoint); the build failure repeats nothing. Distinct
-    // errors are never collapsed — pinned by the two-entry test above.
+    // can fail per breakpoint); the build failure repeats nothing.
     const thrown = thrownFrom(() =>
       assertNoErrorDiagnostics([
         objectResultError,
@@ -132,12 +117,6 @@ describe('assertNoErrorDiagnostics', () => {
   });
 
   it('pins the exact failure content (identical escalation in every host)', () => {
-    // Both plugins call this one helper at their accept points; the message
-    // is composed purely from the diagnostics, so identical input yields
-    // this exact text in the Vite build error and the Next build error alike
-    // (extraction-diagnostics §Identical escalation in both bundler plugins).
-    // Whole-message equality, not toThrow containment — a stray prefix or
-    // suffix must fail this pin.
     const thrown = thrownFrom(() =>
       assertNoErrorDiagnostics([objectResultError])
     );

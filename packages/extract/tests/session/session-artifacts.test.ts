@@ -1,25 +1,3 @@
-/**
- * Session-scoped artifact transaction — WRITER side (openspec:
- * next-turbopack-served-transform-coherence, design D1 data half + D2 —
- * increment 01).
- *
- * Every completed analysis writes its artifacts under
- * `.animus/sessions/<sessionId>/` in transaction order: payloads (manifest →
- * analysis-inputs [Turbopack orchestration only — webpack mode skips the
- * hydration corpus] → styles.css) → analysis-commit → replacements-epoch
- * (last, only when the value moved). Payload artifacts embed a
- * `__animusSession` envelope; the in-process manifest is envelope-free. The
- * session maintains `analysis-status.json` around every analysis, prunes
- * stale session directories at session start, deletes legacy flat
- * artifacts, and reconciles sibling sessions' epoch artifacts on every
- * epoch move (the webpack cold-cache validity witness — a sibling artifact
- * whose value disagrees with the fresh epoch is deleted so restored-module
- * snapshots referencing it invalidate; an agreeing sibling stays
- * byte-untouched so warm restores survive).
- *
- * Same setup as replacements-epoch.test.ts: NAPI boundary mocked, session
- * and pure pipeline helpers real, temp project on disk.
- */
 import {
   isJsonBoolean,
   isJsonNumber,
@@ -48,9 +26,8 @@ const mocks = vi.hoisted(() => ({
 
 import { setEngineApiOverride } from '../../session/singleton';
 
-// Engine API injection through the singleton's globalThis-keyed test
-// seam — reaches every copy of the module (source or dist), which a
-// module mock cannot.
+// Injection through the singleton's globalThis seam reaches every copy of
+// the module (source or dist); a module mock does not.
 setEngineApiOverride(() => ({
   extractFacts: () => '{"files":{},"parseCount":0}',
   loadSystemModule: mocks.loadSystemModule,
@@ -296,8 +273,7 @@ function parseCliCommitRecord(bytes: string): CliCommitRecord {
   return { schema: 1, payloads };
 }
 
-/** Byte-identical config-plan edit used by the shared fixture; these source
- *  bytes feed the watched-file content hash. */
+/** The exact bytes matter: they feed the watched-file content hash. */
 const BUTTON_COMPONENT_PLAN_EDIT =
   "export const Button = animus.styles({ margin: 16 }).variant({}).asElement('button');\n";
 
@@ -316,9 +292,6 @@ async function startSession(
   mocks.analyzeProject.mockImplementation(() => buildManifest(components));
   const session = new ExtractionSession({ system: './src/system.ts' });
   session.rootDir = root;
-  // Turbopack orchestration persists the analysis-inputs hydration corpus;
-  // webpack mode (the default here) skips it (spec:
-  // next-turbopack-integration, "Webpack mode skips the hydration corpus").
   if (opts?.turbopack) session.persistAnalysisInputs = true;
   if (writes) {
     session.onArtifactWrite = (name, content) => {
@@ -378,7 +351,6 @@ describe('session directory + transaction write order (design D1/D2)', () => {
       ANALYSIS_STATUS_ARTIFACT,
     ]) {
       expect(existsSync(join(session.sessionDir, name)), name).toBe(true);
-      // The flat legacy path is never written.
       expect(existsSync(join(root, '.animus', name)), `flat ${name}`).toBe(
         false
       );
@@ -389,13 +361,10 @@ describe('session directory + transaction write order (design D1/D2)', () => {
     const root = createProject();
     const session = await startSession(root, PLAN_A);
 
-    // No analysis-inputs artifact under webpack orchestration...
     expect(existsSync(join(session.sessionDir, 'analysis-inputs.json'))).toBe(
       false
     );
-    // ...while the loader reads the manifest from process memory as before.
     expect(getManifestJson()).toBe(buildManifest(PLAN_A));
-    // The webpack-mode commit carries NO inputsHash field.
     const commit = parseAnalysisCommit(
       readSessionArtifact(session, ANALYSIS_COMMIT_ARTIFACT)
     );
@@ -449,7 +418,6 @@ describe('session directory + transaction write order (design D1/D2)', () => {
     const names = payloadNames(writes);
     expect(names).not.toContain(REPLACEMENT_EPOCH_ARTIFACT);
     expect(names).toContain(ANALYSIS_COMMIT_ARTIFACT);
-    // The commit is the last artifact of a style-only transaction.
     expect(names[names.length - 1]).toBe(ANALYSIS_COMMIT_ARTIFACT);
   });
 });
@@ -483,10 +451,8 @@ describe('analysis-commit content (design D1)', () => {
     const root = createProject();
     const session = await startSession(root, PLAN_A);
 
-    // A SUCCESSOR session in the same process re-analyzes identical
-    // content: byte-identical artifacts are not rewritten and the
-    // generation holds. The predecessor closes first — publication
-    // ownership is exclusive, so the handoff is sequential by contract.
+    // The predecessor closes first: publication ownership is exclusive, so
+    // the handoff to a successor session is sequential.
     const commitStatBefore = statSync(
       join(session.sessionDir, ANALYSIS_COMMIT_ARTIFACT),
       { bigint: true }
@@ -501,7 +467,6 @@ describe('analysis-commit content (design D1)', () => {
     expect(commitStatAfter.ino).toBe(commitStatBefore.ino);
     expect(commitStatAfter.mtimeNs).toBe(commitStatBefore.mtimeNs);
 
-    // A plan change advances the generation.
     mocks.analyzeProject.mockImplementation(() => buildManifest(PLAN_B));
     writeFileSync(join(root, 'src', 'Button.tsx'), BUTTON_COMPONENT_PLAN_EDIT);
     await again.handleWatchUpdate({
@@ -533,7 +498,6 @@ describe('payload envelopes (spec: Manifest disk artifact)', () => {
     expect(disk.components).toEqual(
       parseEngineManifest(manifestJson).components
     );
-    // In-process manifest is the verbatim engine output.
     expect(getManifestJson()).toBe(manifestJson);
   });
 
@@ -595,11 +559,9 @@ describe('analysis-status lifecycle (design D3 data half)', () => {
       expect(status.sessionId).toBe(session.sessionId);
       expect(status.attemptId).toBe(2);
     }
-    // The active states carry the observed batch (relPath, sourceHash).
     expect(statuses[0].pending).toEqual([
       ['src/Button.tsx', contentHash(BUTTON_STYLE_EDIT)],
     ]);
-    // Idle clears the pending set.
     expect(statuses[3].pending).toEqual([]);
     // deadlineAt = now + debounce ceiling + 2000ms watchdog.
     expect(statuses[0].deadlineAt).toBeGreaterThanOrEqual(before + 2000);
@@ -627,7 +589,6 @@ describe('analysis-status lifecycle (design D3 data half)', () => {
     expect(status.state).toBe('failed');
     expect(status.diagnostic).toContain('analysis boom');
 
-    // The retry attempt increments attemptId and returns to idle.
     mocks.analyzeProject.mockImplementation(() => buildManifest(PLAN_B));
     await session.handleWatchUpdate({
       modifiedFiles: new Set([join(root, 'src', 'Button.tsx')]),
@@ -644,9 +605,6 @@ describe('analysis-status lifecycle (design D3 data half)', () => {
     const root = createProject();
     const session = await startSession(root, PLAN_A);
     const settled: string[] = [];
-    // The seam the CLI watch used to obtain by REPLACING this method: its
-    // publication policy needs the cycle boundary AND the failure (report
-    // S8), which the success-only on* observers cannot carry.
     session.onCycleSettled = (cause) => {
       settled.push(cause === null ? 'ok' : `failed:${String(cause)}`);
     };
@@ -722,8 +680,6 @@ describe('session-start hygiene (design D2)', () => {
     }
   });
 
-  /** A flat CLI published set: three payloads plus a commit record whose
-   *  hashes match the payload bytes (writer.ts contract, schema 1). */
   function writeCliPublishedSet(flat: string): void {
     mkdirSync(flat, { recursive: true });
     const payloads = {
@@ -760,9 +716,6 @@ describe('session-start hygiene (design D2)', () => {
   });
 
   test('a verified set carrying a BINARY asset entry survives hygiene (byte-domain parity)', async () => {
-    // The drift this pins: the hygiene gate once verified payloads as
-    // utf-8 strings while the writer hashed raw bytes — any set with a
-    // font could never verify and was deleted as debris.
     const root = createProject();
     const flat = join(root, '.animus');
     writeCliPublishedSet(flat);
@@ -786,14 +739,10 @@ describe('session-start hygiene (design D2)', () => {
     const root = createProject();
     const flat = join(root, '.animus');
     writeCliPublishedSet(flat);
-    // The marker outlives its payloads (aborted publish / manual edits):
-    // the recorded hash no longer matches the bytes on disk.
     writeFileSync(join(flat, 'styles.css'), '.tampered{}');
 
     await startSession(root, PLAN_A);
 
-    // The regression this pins: a bare existsSync(commit.json) gate let one
-    // stale marker disable flat cleanup forever.
     for (const name of ['styles.css', 'system-props.js', 'manifest.json']) {
       expect(existsSync(join(flat, name)), name).toBe(false);
     }
@@ -804,9 +753,8 @@ describe('session-start hygiene (design D2)', () => {
     const root = createProject();
     const flat = join(root, '.animus');
     writeCliPublishedSet(flat);
-    // An array `payloads` enumerates zero entries: every hash it records
-    // matches, vacuously. Admitting it would let a forged four-byte record
-    // fence off any tree from hygiene forever.
+    // Zero payload entries verify vacuously; admitting such a record would
+    // fence a tree off from hygiene forever.
     writeFileSync(
       join(flat, 'commit.json'),
       JSON.stringify({ schema: 1, payloads: [] })
@@ -824,10 +772,8 @@ describe('session-start hygiene (design D2)', () => {
     const root = createProject();
     const flat = join(root, '.animus');
     writeCliPublishedSet(flat);
-    // Mid-publish instant (see below), but the holder is pid 1 — root-owned,
-    // so the liveness probe gets EPERM rather than success. "Exists, not
-    // ours" must read as LIVE here: reading it as dead deletes artifacts a
-    // running CLI is mid-way through publishing.
+    // pid 1 is root-owned, so the liveness probe gets EPERM: "exists, not
+    // ours" must read as live, or a mid-publish tree is deleted.
     writeFileSync(join(flat, 'styles.css'), '.newer-generation{}');
     writeFileSync(
       join(flat, 'lock.json'),
@@ -845,10 +791,8 @@ describe('session-start hygiene (design D2)', () => {
     const root = createProject();
     const flat = join(root, '.animus');
     writeCliPublishedSet(flat);
-    // Mid-publish instant (the set does not verify) under a lock whose
-    // bytes are torn. "Cannot decode this lock" is not "nothing claims this
-    // tree": reading it as unclaimed authorizes deleting the payloads a
-    // live CLI may be publishing right now (ledger boundary row).
+    // A lock whose bytes are torn still claims the tree: reading undecodable
+    // as unclaimed authorizes deleting a live CLI's payloads.
     writeFileSync(join(flat, 'styles.css'), '.newer-generation{}');
     writeFileSync(join(flat, 'lock.json'), '{"pid":');
 
@@ -864,9 +808,8 @@ describe('session-start hygiene (design D2)', () => {
     const flat = join(root, '.animus');
     mkdirSync(join(flat, 'lock.json'), { recursive: true });
 
-    // EISDIR, not ENOENT: the read failed, so the holder is unknown. The
-    // fail-open catch answered "no holder" for every errno — including the
-    // EACCES case, on the branch that goes on to delete published payloads.
+    // EISDIR, not ENOENT: the read failed, so the holder is unknown and must
+    // not read as "no holder" on the branch that deletes payloads.
     expect(() => readCliLockRecord(flat)).toThrow(/EISDIR/);
     expect(readCliLockRecord(join(root, 'no-such-dir'))).toEqual({
       kind: 'none',
@@ -877,9 +820,7 @@ describe('session-start hygiene (design D2)', () => {
     const root = createProject();
     const flat = join(root, '.animus');
     writeCliPublishedSet(flat);
-    // Mid-publish instant: payloads renamed, commit not yet rewritten…
     writeFileSync(join(flat, 'styles.css'), '.newer-generation{}');
-    // …while a live CLI invocation holds the advisory lock (this pid).
     writeFileSync(join(flat, 'lock.json'), JSON.stringify(lockRecord()));
 
     await startSession(root, PLAN_A);
@@ -894,10 +835,8 @@ describe('session-start hygiene (design D2)', () => {
     const root = createProject();
     const flat = join(root, '.animus');
     writeCliPublishedSet(flat);
-    // Inconsistent set (aborted publish) under a lock whose pid is running —
-    // this test process — but whose animus run died two days ago, leaving the
-    // heartbeat frozen. A pid probe alone would let such a record fence
-    // hygiene off the tree forever, so real debris is never cleaned.
+    // The holder pid is this live process, so only the frozen heartbeat marks
+    // the claim dead; a pid probe alone would fence hygiene off forever.
     writeFileSync(join(flat, 'styles.css'), '.newer-generation{}');
     writeFileSync(
       join(flat, 'lock.json'),
@@ -950,8 +889,8 @@ describe('CLI lock liveness policy', () => {
   });
 
   test('a record with no readable heartbeat falls back to the pid probe', () => {
-    // Written by a version that refreshed no heartbeat: absence of the field
-    // is absence of staleness evidence, never evidence of death.
+    // Absence of the heartbeat field is absence of staleness evidence, never
+    // evidence of death.
     expect(checkLockLiveness({ pid: process.pid })).toEqual({ live: true });
     expect(
       checkLockLiveness({ pid: process.pid, heartbeatAt: 'not-a-date' })
@@ -990,11 +929,8 @@ describe('publication exclusivity (one publishing session per process)', () => {
     const root = createProject();
     const first = await startSession(root, PLAN_A);
 
-    // Same process ⇒ same claimed sessionId ⇒ the SAME session directory,
-    // while each instance carries its own payload write guards. Two live
-    // publishers therefore wedge the manifest/commit pair permanently
-    // (ANIMUS_ARTIFACT_READ_TORN); the second publication must be refused
-    // instead, naming both claimants.
+    // Same process means the same session directory, and each instance keeps
+    // its own write guards, so two live publishers wedge manifest/commit.
     const second = new ExtractionSession({ system: './src/system.ts' });
     second.rootDir = root;
     second.driverLabel = 'animus-second';
@@ -1040,7 +976,7 @@ describe('sibling epoch reconciliation (webpack cold-cache witness)', () => {
     await startSession(root, PLAN_A);
 
     expect(existsSync(disagreeing)).toBe(false);
-    // The dir itself survives (age-based pruning owns dir lifecycle).
+    // Age-based pruning, not reconciliation, owns the directory lifecycle.
     expect(existsSync(join(root, '.animus', 'sessions', 'stale-prior'))).toBe(
       true
     );
@@ -1056,11 +992,8 @@ describe('sibling epoch reconciliation (webpack cold-cache witness)', () => {
     const session = await startSession(root, PLAN_A);
     expect(existsSync(prior)).toBe(false);
 
-    // The peer publishes: its own `publishReplacementEpoch` probes DISK,
-    // finds the artifact this session deleted, and rewrites it with the
-    // peer's (still disagreeing) epoch — the self-heal that keeps loaders
-    // from registering a permanently-satisfiable dependency. A later move
-    // here must invalidate it AGAIN.
+    // Models the peer republishing its own epoch artifact after this session
+    // deleted it; a later move here must invalidate it again.
     writeSiblingEpoch(root, 'peer-prior', 'stale-epoch');
 
     mocks.analyzeProject.mockImplementation(() => buildManifest(PLAN_B));

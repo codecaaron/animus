@@ -1,16 +1,3 @@
-/**
- * Behavior pins for the Turbopack loader (spec: next-turbopack-integration /
- * Stateless per-file transformation + turbopack-artifact-transactions):
- * everything derives from the incoming source, serializable options
- * (carrying the session identity), and the session's COMMITTED disk
- * artifacts. The engine doubles reach the loader through its own worker-local
- * engine seam — it builds its engine at module scope, so no module mock or
- * singleton override can reach it. Hydration replays analyzeProject from the
- * committed analysis-inputs, keyed by commit CONTENT (never file stat). The
- * loader is async
- * (webpack-loader convention: `this.async()`), required for the catch-up
- * wait.
- */
 import { contentHash } from '@animus-ui/extract/pipeline';
 import { mkdirSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
@@ -39,16 +26,8 @@ const mocks = {
 
 const SESSION_ID = 'loader-test-session';
 
-/**
- * A COMPLETE engine manifest at its empty-universe values — both the payload
- * these fabricated generations commit to disk and the value the replayed
- * `analyzeProject` double hands back. The shared pipeline reads
- * `manifest.sheets` / `manifest.components` with no shape guard, so a fake
- * manifest that omits fields is no longer a manifest at all.
- */
 const EMPTY_MANIFEST = JSON.stringify(makeManifest());
 
-/** Fabricate a committed generation covering the given files. */
 function makeRoot(files: Array<{ path: string; source: string }>): string {
   const root = makeTempRoot('animus-turbo-loader-');
   if (files.length === 0) return root;
@@ -132,8 +111,6 @@ function runLoader(
           else resolve(content ?? '');
         },
     };
-    // The loader is async by contract (it returns void and always answers
-    // through `this.async()`), so every outcome reaches the callback above.
     animusTurbopackLoader.call(ctx, source);
   });
 }
@@ -179,8 +156,6 @@ describe('turbopack loader hydration', () => {
     const root = makeRoot([]);
     const sessionDir = sessionArtifactDir(root, SESSION_ID);
     mkdirSync(sessionDir, { recursive: true });
-    // A commit whose hashes MATCH corrupt payload bytes — committed garbage
-    // must not be half-consumed or silently passed through.
     const manifestBytes = '{"files":';
     const inputsBytes = '{"filesJson":';
     const stylesBytes = '';
@@ -213,7 +188,6 @@ describe('turbopack loader hydration', () => {
     await runLoader(root, 'app/a.tsx', 'export const a = 1;\n');
     await runLoader(root, 'app/b.tsx', 'export const b = 2;\n');
     expect(mocks.analyzeProject.mock.calls.length).toBe(before + 1);
-    // Transform receives the hydrated (replayed) manifest verbatim
     expect(mocks.transformFile).toHaveBeenLastCalledWith(
       'export const b = 2;\n',
       'app/b.tsx',
@@ -226,9 +200,6 @@ describe('turbopack loader hydration', () => {
     await runLoader(root, 'app/a.tsx', 'export {};\n');
     const before = mocks.analyzeProject.mock.calls.length;
 
-    // A second generation whose committed manifest payload differs in
-    // content (one declared file) — the commit content is what keys
-    // hydration.
     writeCommitted(
       root,
       [{ path: 'app/a.tsx', source: 'export {};\n' }],
@@ -240,8 +211,6 @@ describe('turbopack loader hydration', () => {
 
   test('fails loudly when the loader runner cannot run it async', () => {
     const root = makeRoot([]);
-    // A sync-only runner: `async` is optional on the loader context, so a
-    // host that never offers the handle is a real, typed possibility.
     const ctx: ThisParameterType<typeof animusTurbopackLoader> = {
       resourcePath: join(root, 'app/a.tsx'),
       rootContext: root,

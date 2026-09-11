@@ -16,15 +16,13 @@ const ALERT_ID = `${TEST_DS}/Alert.tsx::Alert`;
 describe('animus host — program identity', () => {
   it('moves the program hash when the stylesheet moves', () => {
     const stylesheetText = input.stylesheetText ?? '';
-    // Vacuity guard: the edit below must actually land in the stylesheet.
+    // Vacuity guard: the edit below lands in the stylesheet.
     expect(stylesheetText).toContain('#ef4444');
     const recolored = createAnimusHost({
       ...input,
       stylesheetText: stylesheetText.replace('#ef4444', '#ee4444'),
     });
 
-    // Same manifest, different token CSS → different exact facts, so the
-    // program identity (and every world id built on it) must move too.
     expect(recolored.program.hash).not.toBe(host.program.hash);
   });
 
@@ -36,8 +34,8 @@ describe('animus host — program identity', () => {
 describe('animus host — tokens', () => {
   it('reads the data-color-mode blocks as the modes and :root as default', () => {
     expect([...(host.tokens?.modes() ?? [])].sort()).toEqual(['dark', 'light']);
-    // `:root` declares `color-scheme: dark`, so the dark block is the one whose
-    // values already apply when no mode is pinned.
+    // `:root` declares `color-scheme: dark`, so the dark block applies when
+    // no mode is pinned.
     expect(host.tokens?.defaultMode()).toBe('dark');
     expect(host.tokens?.all().length).toBe(22);
   });
@@ -216,9 +214,8 @@ describe('animus host — identity', () => {
   });
 
   it('scopes a target to its own axes plus the unscoped ones', () => {
-    // Same contract as the in-memory provider: shared axes (mode, viewport)
-    // affect every component, so leaving them out silently stops every
-    // domain-quantified engine from sweeping them.
+    // Shared axes (mode, viewport) affect every component; omitting them
+    // stops every domain-quantified engine from sweeping them.
     expect(
       Object.keys(host.identity.resolveTarget('Alert')?.dimensions ?? {}).sort()
     ).toEqual([
@@ -255,8 +252,8 @@ describe('animus host — dependencies', () => {
     expect(dependencies).toContain(`file:${TEST_DS}/Alert.tsx`);
     expect(dependencies).toContain(`component:${ALERT_ID}`);
     expect(dependencies).toContain('token:--color-danger');
-    // `--color-danger: var(--color-red-500)` at :root — a change to the link
-    // has to invalidate this rule too, or stale evidence survives it.
+    // `--color-danger: var(--color-red-500)` at :root: a change to the link
+    // must invalidate this rule too, or stale evidence survives.
     expect(dependencies).toContain('token:--color-red-500');
     expect(dependencies).toContain(`manifest:${host.program.hash}`);
   });
@@ -353,9 +350,6 @@ describe('animus host — degraded and failing inputs', () => {
   });
 
   it('names what a rejected non-manifest actually was', () => {
-    // The refusal has to be actionable: a list and a `null` are different
-    // mistakes, and reporting both as the same coarse bucket would send a
-    // reader looking for the wrong thing.
     expect(() => createAnimusHost({ manifest: [] })).toThrow(/got array/);
     expect(() => createAnimusHost({ manifest: null })).toThrow(/got null/);
     expect(() => createAnimusHost({ manifest: 'nope' })).toThrow(/got string/);

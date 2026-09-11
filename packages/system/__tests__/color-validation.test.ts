@@ -123,9 +123,7 @@ describe('ThemeManifest', () => {
   test('build() attaches non-enumerable manifest', () => {
     const tokens = createTheme().addColors({ ember: '#FF2800' }).build();
 
-    // manifest exists
     expect(tokens.manifest).toBeDefined();
-    // non-enumerable — not in spread
     const spread = { ...tokens };
     expect(spread.manifest).toBeUndefined();
   });

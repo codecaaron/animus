@@ -1,13 +1,3 @@
-/**
- * SourceId derivation authority + allowlist membership (openspec:
- * external-source-watch-ingestion, design D1/D2/D5).
- *
- * Containment and volume helpers are pure and path-API-injectable, so the
- * Windows cases run via `path.win32` on any host (no Windows CI needed);
- * the identity handle's runtime behavior (canonicalization, alias
- * recording, symlink-escape rejection, cached-identity deletion) runs
- * against real temp trees.
- */
 import {
   mkdirSync,
   mkdtempSync,
@@ -180,16 +170,12 @@ describe('createSourceIdentity', () => {
     expect(recorded).not.toBeNull();
 
     rmSync(join(kit, 'src', 'Button.tsx'));
-    // The alias spelling was recorded while the file existed.
     expect(
       identity.resolveDeletedSourceId(join(alias, 'src', 'Button.tsx'))
     ).toEqual(recorded);
-    // The canonical spelling was recorded as a side effect of resolution.
     expect(
       identity.resolveDeletedSourceId(join(kit, 'src', 'Button.tsx'))
     ).toEqual(recorded);
-    // A spelling never seen while the file existed resolves nothing —
-    // deletion never freshly canonicalizes a gone path.
     expect(
       identity.resolveDeletedSourceId(join(kit, 'src', 'Other.tsx'))
     ).toBeNull();
@@ -204,7 +190,6 @@ describe('createSourceIdentity', () => {
     const identity = createSourceIdentity(app);
     identity.registerExternalRoot(join(kit, 'src'));
     identity.registerExternalRoot(nested);
-    // Duplicate spelling of an already-registered root collapses.
     identity.registerExternalRoot(join(kit, 'src'));
     expect(identity.externalRoots()).toHaveLength(2);
 

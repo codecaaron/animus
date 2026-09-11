@@ -1,16 +1,3 @@
-/**
- * Single-flight watch-analysis transaction (openspec:
- * next-webpack-served-transform-coherence, design D3): concurrent
- * `handleWatchUpdate` entries for one event batch coalesce into ONE
- * analysis; every joiner — including a non-owning compiler's session that
- * cannot analyze on its own — resolves only after the transaction publishes
- * its generation, and a failed transaction rejects every joiner without
- * wedging the gate.
- *
- * Same setup as watch-asset-batch.test.ts (mocked NAPI boundary, real
- * session). Concurrency is real: an `.mdx` entry in the batch suspends the
- * owning transaction at the async preprocessing seam before analysis runs.
- */
 import { writeFileSync } from 'fs';
 import { join } from 'path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
@@ -23,9 +10,8 @@ const mocks = vi.hoisted(() => ({
 
 import { setEngineApiOverride } from '../../session/singleton';
 
-// Engine API injection through the singleton's globalThis-keyed test
-// seam — reaches every copy of the module (source or dist), which a
-// module mock cannot.
+// Injection through the singleton's globalThis seam reaches every copy of
+// the module (source or dist); a module mock does not.
 setEngineApiOverride(() => ({
   extractFacts: () => '{"files":{},"parseCount":0}',
   loadSystemModule: mocks.loadSystemModule,
@@ -46,7 +32,6 @@ import {
 
 let restoreGlobals: () => void;
 
-/** Component-free manifest — this suite only moves CSS. */
 function buildManifest(css: string): string {
   return buildFixtureManifest({}, css);
 }
@@ -65,9 +50,8 @@ async function startOwner(root: string): Promise<ExtractionSession> {
   return session;
 }
 
-/** A batch whose FIRST entry is an .mdx file: the transaction suspends at
- *  the async MDX preprocessing seam before any analysis, so a concurrent
- *  entry genuinely races the in-flight transaction. */
+/** A batch whose first entry is an `.mdx` file: the transaction suspends at
+ *  the async preprocessing seam, so a concurrent entry really races it. */
 function makeSuspendingBatch(root: string): Set<string> {
   const mdxPath = join(root, 'src', 'note.mdx');
   writeFileSync(mdxPath, '# note\n');
@@ -93,8 +77,6 @@ describe('single-flight watch transaction', () => {
   test('a non-owning session entering the same batch awaits the published generation', async () => {
     const root = createProject();
     const owner = await startOwner(root);
-    // A second compiler's session for the same root: never ran a pipeline,
-    // cannot analyze on its own.
     const follower = new ExtractionSession({ system: './src/system.ts' });
     follower.rootDir = root;
 
@@ -146,11 +128,8 @@ describe('single-flight watch transaction', () => {
 
   test('a watch batch entering during an in-flight FULL pipeline joins it', async () => {
     const root = createProject();
-    // The startup pipeline suspends at the same async seam the watch
-    // transaction does; a batch arriving in that window must join it. The
-    // full pipeline sets `this.system` before its first await, so the
-    // entering batch takes the OWNER branch and would otherwise analyze and
-    // publish concurrently with the pipeline it raced.
+    // The full pipeline sets the loaded system before its first await, so a
+    // batch arriving in that window takes the owner branch and must join it.
     mocks.analyzeProject.mockImplementation(() =>
       buildManifest('.btn{margin:8px;}')
     );
@@ -166,8 +145,6 @@ describe('single-flight watch transaction', () => {
     });
 
     await Promise.all([pipeline, joiner]);
-    // ONE analysis: the joiner resolved against the pipeline's generation
-    // instead of driving a second, concurrent one.
     expect(mocks.analyzeProject.mock.calls.length).toBe(1);
     expect(getWatchTransaction()).toBeNull();
   });

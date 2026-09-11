@@ -20,18 +20,8 @@ import type { ContextProbe } from './context-probe';
 import type { ManifestSheets } from '@animus-ui/extract/pipeline';
 
 /**
- * The `transform` hook's own contracts, driven through the hook body with a
- * canned engine (the injected-fn seam — `vi.mock` is a no-op in this repo's
- * runner).
- *
- * Two of them are about what the hook must NOT do:
- * - the plugin's OWN virtual modules pass back through `transform`, and they
- *   are not source files: registering them would seed permanent `\0` keys in
- *   `fileCache` (which `pruneFileCache` can never remove, since no watcher
- *   event ever names them) and buy a full spurious re-analysis each;
- * - the HMR bridge is delivered by `transformIndexHtml` (openspec:
- *   dev-stylesheet-management, "HMR bridge auto-injected in dev mode"), so the
- *   transform emitter must not import it.
+ * The `transform` hook driven through its body with a canned engine: `vi.mock`
+ * is a no-op in this runner, so the engine arrives through an injected seam.
  */
 
 const ROOT = join('/tmp', 'animus-transform-root');
@@ -80,12 +70,8 @@ function makeProbe(
 }
 
 describe('transform: the plugin never treats its own virtual modules as sources', () => {
-  // Both `.js`-suffixed resolved ids pass the shared engine-transform file
-  // class on their raw text, which is exactly why the `\0` guard comes first.
-  // A dev page load sends every one of these back through `transform`; the
-  // guard returns before any `fileCache` or analysis mutation, so an empty
-  // cache per id is also the statement that a full pass accumulates no
-  // permanent `\0` keys.
+  // The `.js`-suffixed resolved ids pass the engine-transform file class, so
+  // the `\0` guard must come first — a `\0` cache key can never be pruned.
   const VIRTUAL_IDS = [
     RESOLVED_COMPONENTS_ID,
     RESOLVED_BRIDGE_ID,
@@ -122,11 +108,8 @@ describe('transform: the plugin never treats its own virtual modules as sources'
 });
 
 describe('transform: the file-class gate is the shared engine-transform set', () => {
-  // The driver may not re-decide which file classes the engine transform
-  // rewrites — `ENGINE_TRANSFORM_EXTENSIONS` owns that, and a driver-local
-  // spelling silently skips a whole file class on one bundler family. A
-  // LOCAL `.mjs` is the case that used to fall through the hand-written
-  // `/\.[jt]sx?$/`: the manifest listed it and the hook served it raw.
+  // `ENGINE_TRANSFORM_EXTENSIONS` owns the file class; a driver-local spelling
+  // silently skips a whole class on one bundler family.
   it.each([...ENGINE_TRANSFORM_EXTENSIONS])(
     'transforms a manifest-listed local .%s file',
     async (ext) => {
@@ -183,9 +166,8 @@ describe('transform: dev output carries the bridge import, prod is engine-verbat
       )
     );
 
-    // Unconditional per transform — the module-graph half of bridge delivery.
-    // A re-transform after any invalidation re-adds it, and SSR hosts that
-    // never serve index.html receive it through hydrated component modules.
+    // Unconditional per transform: a re-transform re-adds it, and SSR hosts
+    // that never serve index.html receive it through component modules.
     const withBridge = `import '${VIRTUAL_BRIDGE_ID}';\nTRANSFORMED`;
     expect(emitted).toEqual([withBridge, withBridge, withBridge]);
   });
@@ -210,13 +192,8 @@ describe('transform: dev output carries the bridge import, prod is engine-verbat
 });
 
 describe('transform: dependencies resolved outside the root are not new files', () => {
-  // Vite realpaths module ids, so a workspace-SYMLINKED package's dist file
-  // reaches `transform` as a real path with no `node_modules` segment — the
-  // dependency filter never sees it. Treating it as a project file created
-  // after buildStart buys a full spurious re-analysis, an unconditional
-  // invalidation of both virtual modules, and a client full-reload per dist
-  // chunk on the first dev request that imports the package (observed in the
-  // dev-server test: `New file detected: ../../home/runner/.../dist/index.js`).
+  // Vite realpaths module ids, so a symlinked package's dist file arrives with
+  // no `node_modules` segment and the dependency filter never sees it.
   it('an out-of-root dist file is not cached, analyzed, or invalidated', async () => {
     const probe = makeProbe();
 
@@ -233,9 +210,8 @@ describe('transform: dependencies resolved outside the root are not new files', 
   });
 
   it('a declared external package file outside the root is still folded in', async () => {
-    // The one legitimate out-of-root population: `.includes()`-declared DS
-    // packages resolve to workspace directories beyond the app root, and
-    // their newly created files must keep flowing through new-file detection.
+    // Declared DS packages resolve outside the app root, and their new files
+    // must still flow through new-file detection.
     const externalDir = join('/tmp', 'animus-workspace', 'ui-kit/dist');
     const probe = makeProbe();
     probe.ctx.externalPackageDirs.push(externalDir);
@@ -252,8 +228,6 @@ describe('transform: dependencies resolved outside the root are not new files', 
 });
 
 describe('transform: new-file detection logs at the standard level', () => {
-  // openspec: hmr-new-file-detection — "New file detection events SHALL be
-  // logged at the standard logging level (not verbose-only)."
   it('routes the detection line through the non-verbose channel', async () => {
     const probe = makeProbe();
 
@@ -272,8 +246,6 @@ describe('transform: new-file detection logs at the standard level', () => {
 });
 
 describe('transform: new-file invalidation is unconditional', () => {
-  // openspec: hmr-new-file-detection, "CSS invalidation after new file
-  // analysis" — the argument is on `invalidateExtractedModules` in src/context.ts.
   it('invalidates even when the system-props inputs did not move', async () => {
     const probe = makeProbe({
       discoversOnAnalysis: { 'src/New.tsx': ['New#1'] },
@@ -292,10 +264,8 @@ describe('transform: new-file invalidation is unconditional', () => {
   });
 
   it('invalidates even when the new file yields no components of its own', async () => {
-    // A usage-only file (<Box p={16} /> and nothing else) mints utility
-    // classes and moves the system-prop map without defining a component —
-    // and a non-invalidated virtual module is served from Vite's cache for
-    // the life of the server, page reloads included.
+    // A usage-only file mints utility classes without defining a component,
+    // and an un-invalidated virtual module is served from cache indefinitely.
     const probe = makeProbe();
 
     await transformSource(
@@ -309,18 +279,15 @@ describe('transform: new-file invalidation is unconditional', () => {
   });
 
   it('re-delivers definitions whose plan changed in the recovery analysis', async () => {
-    // openspec: dev-transform-coherence, "Definition-module invalidation
-    // tracks the published analysis" — a detection re-analysis can resurrect
-    // previously-dropped chains in OTHER, already-served files; their nodes
-    // must be evicted before the recovery reload re-fetches them.
+    // A detection re-analysis can resurrect dropped chains in other, already
+    // served files; their nodes must be evicted before the reload re-fetches.
     const consumerAbs = join(ROOT, 'src/Fancy.tsx');
     const probe = makeProbe();
     const ctx = probe.ctx;
     ctx.runAnalysis = () => {
       probe.analyses++;
-      // Publish a FRESH manifest object, as the real runAnalysis does
-      // (`this.storedManifest = result.manifest` from a fresh JSON.parse) —
-      // snapshot derivation is keyed on manifest identity.
+      // Publish a fresh manifest object as the real analysis does: snapshot
+      // derivation is keyed on manifest identity.
       ctx.storedManifest = makeManifest({
         ...ctx.storedManifest,
         components: {
@@ -356,16 +323,15 @@ describe('transform: new-file invalidation is unconditional', () => {
       join(ROOT, 'src/New.tsx')
     );
 
-    // The consumer was re-delivered; the newly detected file itself was NOT
-    // self-invalidated (its in-flight transform is the current serve).
+    // The detected file is not self-invalidated: its in-flight transform is
+    // the current serve.
     expect(invalidated).toEqual([consumerAbs]);
     expect(probe.extractedInvalidations).toBe(1);
   });
 
   it('leaves an undetected file retryable after a failed analysis', async () => {
-    // openspec: dev-transform-coherence, "Failed analyses do not suppress
-    // equal-content retries" — a failed detection must not register the file,
-    // or the next transform would skip detection forever.
+    // A failed detection must not register the file, or the next transform
+    // skips detection forever.
     const probe = makeProbe();
     probe.ctx.runAnalysis = () => {
       probe.analyses++;
@@ -392,9 +358,8 @@ describe('transform: new-file invalidation is unconditional', () => {
   });
 
   it('stabilizes interdependent new files found on disk during detection', async () => {
-    // A detected file can itself extend ANOTHER undiscovered file (burst
-    // creation). Detection's analysis reports the drop; reconciliation folds
-    // the on-disk base and re-analyzes before the result is served.
+    // A detected file can extend another undiscovered file: reconciliation
+    // folds the on-disk base and re-analyzes before the result is served.
     const root = mkdtempSync(join(tmpdir(), 'animus-transform-stab-'));
     try {
       writeFileSync(
@@ -458,9 +423,8 @@ describe('transform: new-file invalidation is unconditional', () => {
   });
 
   it('inserts the bridge import below a directive prologue', async () => {
-    // The engine hoists 'use client'/'use strict' to byte 0; an import above
-    // them would demote the directives to plain expression statements and
-    // silently un-mark client modules on RSC-capable hosts.
+    // An import above a directive prologue demotes the directives to plain
+    // expression statements and silently un-marks client modules on RSC hosts.
     const probe = makeProbe({
       knownFiles: { 'src/Client.tsx': ['Client#1'] },
       engineOutput: `'use client';\n'use strict';\nTRANSFORMED`,

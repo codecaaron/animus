@@ -1,25 +1,8 @@
 /**
  * @vitest-environment node
  *
- * Dev-server conformance tests.
- *
- * Every other consumer fixture in this repo builds for production and asserts on
- * `dist/`. Nothing exercised the dev server, so the hot-update hook, the
- * system reload and the transform-time new-file path had no regression
- * coverage at all. This suite closes that gap: one real Vite dev server, one
- * real watcher, one real fixture app on disk, and assertions on the artifacts
- * the server hands a browser.
- *
- * Rules of this suite:
- *   - no wall-clock sleeps: every wait is `until(...)` over an observable
- *     artifact, or a sentinel-based watcher barrier (see scenario.ts)
- *   - assertions are on served CSS and on bundler revisions, never on timings
- *   - the scenarios share one server and run in order; only the last scenario
- *     starts a second one
- *
- * (Historical note: this suite once carried GAP-marked scenarios pinning
- * known-wrong behavior; all have since been resolved and swapped for their
- * regression assertions.)
+ * Scenarios share one dev server and run in order: each scenario's edits are
+ * the next scenario's starting state.
  */
 import { beforeAll, afterAll, describe, expect, it, vi } from 'vitest';
 
@@ -60,7 +43,6 @@ const RESTYLED_BUTTON_PADDING = '32px';
 /** A `space` scale step the fixture's usage site does not start on. */
 const EDITED_USAGE_STEP = 16;
 
-/** One `export const <name> = ...;` line of the served system-props module. */
 function exportLine(source: string, name: string): string {
   const line = source
     .split('\n')
@@ -72,17 +54,13 @@ function exportLine(source: string, name: string): string {
 }
 
 /**
- * Unlike the rest of `packages/vite-plugin/tests` (whose only prerequisite is
- * `bun install`), this suite boots a real Vite dev server that loads the design
- * system through the v2 NAPI binary and the sibling package dists. Those are
- * NOT materialized by `verify:unit:ts`, so the suite probes for them through
- * their owner and skips with an actionable reason instead of failing the fast
- * unit tier.
+ * The NAPI binary and sibling package dists this suite needs are not built by
+ * the fast unit tier, so it skips with a reason instead of failing there.
  */
 const prerequisites = probeEnginePrerequisites();
 
-// Fail-loud skip. Two carriers so the reason cannot be swallowed: this test's
-// skip note (printed by the reporter) and the suite name below.
+// The skip reason rides both this test's skip note and the suite name, so a
+// reporter that prints only one of them still shows it.
 it('dev-server test prerequisites are materialized', (context) => {
   if (!prerequisites.ok) context.skip(prerequisites.reason);
   expect(prerequisites.reason).toBe('');
@@ -133,10 +111,8 @@ suite(
     });
 
     it('the served document carries the HMR bridge, and the URL resolves', async () => {
-      // The bridge is what creates the adopted stylesheet, so a document
-      // served without it renders with ZERO component CSS for the life of the
-      // page. Delivery is per served document (`transformIndexHtml`), which is
-      // the only place immune to a module-graph invalidation dropping it.
+      // Without the bridge the document adopts no component stylesheet at all,
+      // and per-document delivery survives a module-graph invalidation.
       const html = await adapter.indexHtml();
 
       expect(html, `served document:\n${html}`).toContain('data-animus-bridge');
@@ -146,8 +122,6 @@ suite(
         .match(/src="([^"]+)"/)?.[1];
       expect(src, `no src on the bridge tag:\n${html}`).toBeTruthy();
 
-      // The URL form is only correct if the server can actually serve it —
-      // this is the assertion that a hand-written `/@id/` prefix earns.
       const bridgeModule = await adapter.requestUrl(src!);
       expect(bridgeModule).toContain('adoptedStyleSheets');
       expect(bridgeModule).toContain('virtual:animus/components.js');
@@ -158,10 +132,8 @@ suite(
         html.indexOf('/src/main.ts')
       );
 
-      // Transformed component modules carry the bridge import too — the
-      // module-graph half of delivery. Unconditional per transform, so an
-      // invalidation of any carrying module re-adds it on re-transform, and
-      // SSR hosts that never serve index.html still receive it.
+      // Component transforms carry the bridge import too: a re-transform
+      // re-adds it, and SSR hosts that never serve index.html receive it.
       const transformed = await adapter.requestSource('src/Button.ts');
       expect(transformed).toContain('hmr-bridge');
     });
@@ -204,10 +176,8 @@ suite(
         `system props module:\n${before.systemProps}`
       ).toContain(`"${INITIAL_USAGE_STEP}"`);
 
-      // A static padding change: no system-prop usage is added, removed or
-      // moved, so no utility class can appear or disappear. Every module that
-      // renders a system prop imports this map — pushing it here would update
-      // the whole graph for an edit that changed nothing in it.
+      // A static padding change mints no utility class, and every module that
+      // renders a system prop imports the map — pushing it updates them all.
       fixture.write(
         'src/Button.ts',
         componentSource('Button', 'button', RESTYLED_BUTTON_PADDING)
@@ -222,13 +192,8 @@ suite(
         },
         {
           what: `component CSS picks up padding ${RESTYLED_BUTTON_PADDING}`,
-          // The ONLY scenario whose write targets the file the previous
-          // scenario just edited: when that edit's until() passes within the
-          // watcher's per-path change-throttle window, this write's event is
-          // dropped outright, so the write must be re-asserted on a slow
-          // pickup (see UntilOptions.reassert). Every other mutation in the
-          // suite is either the first event on its path or sits behind the
-          // reset coalescer's quiescence window, which outlasts the throttle.
+          // This write targets the file the previous scenario just edited, so
+          // it can land inside the watcher's per-path throttle and be dropped.
           reassert: () =>
             fixture.write(
               'src/Button.ts',
@@ -239,7 +204,6 @@ suite(
         }
       );
 
-      // The edit landed (component CSS moved), and the map did not.
       expect(after.componentRevision).toBeGreaterThan(before.componentRevision);
       expect(after.systemProps).toEqual(before.systemProps);
       expect(after.systemPropsRevision).toBe(before.systemPropsRevision);
@@ -250,10 +214,8 @@ suite(
 
       fixture.write('src/Usage.tsx', usageSource(EDITED_USAGE_STEP));
 
-      // The barrier must watch the systemPropMap EXPORT LINE, not the whole
-      // module text: dynamicPropConfig carries scale keys, so the bare value
-      // ("4") already appears in the served module at startup and a
-      // whole-text match returns before the watcher event is even delivered.
+      // Match the systemPropMap export line, not the whole module: scale keys
+      // in dynamicPropConfig already carry the bare value at startup.
       const after = await until(
         async () => {
           const served = await adapter.read();
@@ -278,13 +240,8 @@ suite(
     it('widening a component system opt-in re-delivers the module', async () => {
       const before = await adapter.read();
 
-      // Adding a group to `.system({ ... })` mints NO new utility class — the
-      // usage site's padding is untouched — but every prop in the added group
-      // joins `dynamicPropConfig`. A decision keyed on the prop map alone reads
-      // this as unchanged and the client keeps a config that cannot render the
-      // added props, for the life of the server: Vite serves the module's
-      // cached transform result across full page reloads, so no later event
-      // repairs it.
+      // Widening the opt-in moves dynamicPropConfig but not the prop map: a
+      // gate keyed on the map strands the client on a config it cannot render.
       fixture.write('src/Box.ts', systemComponentSource(['space', 'surface']));
 
       const after = await until(
@@ -299,8 +256,6 @@ suite(
         }
       );
 
-      // The witness for what this pins: the prop map did NOT move, so only a
-      // comparison over the whole served module can have delivered the update.
       expect(exportLine(after.systemProps, 'systemPropMap')).toEqual(
         exportLine(before.systemProps, 'systemPropMap')
       );
@@ -317,9 +272,8 @@ suite(
 
       fixture.write('src/theme.ts', themeSource(EDITED_BRAND_HEX));
 
-      // Contract (dependency-set membership): the theme file is in the
-      // loader-reported system module graph, so a transitive token edit
-      // coalesces into a system reload and lands in the variable CSS.
+      // The theme file is in the loader-reported system module graph, so a
+      // token edit coalesces into a reload and reaches the variable CSS.
       const after = await until(
         async () => {
           const served = await adapter.read();
@@ -366,9 +320,6 @@ suite(
 
       fixture.remove('src/Button.ts');
 
-      // Contract (hotUpdate migration): the delete event reaches the plugin,
-      // the cache entry is pruned, and the served CSS regenerates without
-      // the class.
       await until(
         async () => {
           const served = await adapter.read();
@@ -389,10 +340,8 @@ suite(
       );
       await barrier();
 
-      // Deletion genuinely pruned the cache entry, so restoration flows
-      // through transform-time new-file detection — which fires when the
-      // browser re-requests the module after the delete's reload. Emulate
-      // that request; a real session gets it from the full-reload.
+      // Restoration flows through transform-time new-file detection, which
+      // needs the module request a browser makes after the delete's reload.
       await adapter.requestSource('src/Button.ts');
 
       const after = await until(
@@ -436,13 +385,8 @@ suite(
     });
 
     it('a new imported extension parent recovers mid-session (ANI-035)', async () => {
-      // The ticket's shape: two existing modules change to extend a parent
-      // module that appears mid-session — in the stickiest ordering, the
-      // consumer edits land BEFORE the parent file exists, so their analyses
-      // drop the chains ("could not resolve parent component"). The session
-      // must converge to fully-extracted serving without a restart, and the
-      // consumers' next serves must be extracted, never the runtime
-      // fallback (openspec: dev-transform-coherence).
+      // The consumer edits land before the parent file exists, so their chains
+      // drop; the session must converge to extracted serves without a restart.
       fixture.write(
         'src/Card.ts',
         "import { LedgerParent } from './LedgerParent';\n\n" +
@@ -459,9 +403,8 @@ suite(
       );
       await barrier();
 
-      // Now the parent appears — a watcher `create` feeds the same analysis
-      // path as an edit, so the recovery analysis resolves the whole graph
-      // and re-delivers the previously-dropped consumers.
+      // A watcher create feeds the same analysis path as an edit, so this
+      // resolves the whole graph and re-delivers the dropped consumers.
       fixture.write(
         'src/LedgerParent.ts',
         "import { ds } from './ds';\n\n" +
@@ -482,8 +425,8 @@ suite(
             `served Card:\n${await adapter.requestSource('src/Card.ts')}${renderTrace(adapter)}`,
         }
       );
-      // Extracted, and the runtime chain is gone — the fallback that used to
-      // stick (raw consumer + extracted parent → runtime guard) never serves.
+      // The runtime fallback (a raw consumer over an extracted parent) must
+      // never serve.
       expect(card).not.toContain('.extend()');
 
       const button = await adapter.requestSource('src/Button.ts');
@@ -514,9 +457,8 @@ suite(
     it('a broken system dependency keeps the server up on the last good config', async () => {
       const before = await adapter.read();
 
-      // The plugin reports a failed system load through console.warn (non-strict
-      // mode). Capturing it turns the scenario's expected stderr noise into an
-      // assertion instead of leaving a stack trace in the run output.
+      // A failed system load warns in non-strict mode; capturing it turns
+      // expected stderr noise into an assertion.
       const warnings: string[] = [];
       const warnSpy = vi
         .spyOn(console, 'warn')
@@ -528,9 +470,8 @@ suite(
         fixture.write('src/theme.ts', brokenThemeSource());
         fixture.write('src/ds.ts', systemSource('reset-over-broken-theme'));
 
-        // The reset is the observable event here — it invalidates the static
-        // module even when loading the system fails, so waiting on the revision
-        // proves the failed reset was attempted and survived.
+        // The reset invalidates the static module even when the system load
+        // fails, so the revision is the observable that it was attempted.
         const after = await until(
           async () => {
             const served = await adapter.read();
@@ -545,7 +486,6 @@ suite(
           }
         );
 
-        // Non-strict mode: warn and keep the previous config rather than throw.
         expect(
           warnings.some((line) => line.includes('Failed to load system from')),
           `expected a failed-system-load warning, saw: ${JSON.stringify(warnings)}`
@@ -582,16 +522,13 @@ suite(
     });
 
     it('a two-hop transitive dependency joins the reset set after a reload', async () => {
-      // Broader transitive system-registry invalidation. The loader
-      // reports every module it evaluated; membership must extend to a
-      // dependency introduced two hops from the entry (ds.ts → theme.ts →
-      // palette.ts), not just to files the entry imports directly.
+      // The loader reports every module it evaluated, so membership must reach
+      // a dependency two hops from the entry, not only direct imports.
       const TRANSITIVE_HEX = '#123456';
       const before = await adapter.read();
 
-      // Introduce the second hop at the current (repaired) hex. The theme
-      // edit is already a member, so this write resets and re-reports the
-      // dependency graph — which now includes palette.ts.
+      // Introduce the second hop at the current hex: the theme file is already
+      // a member, so this write re-reports a graph that includes palette.ts.
       fixture.write('src/palette.ts', paletteSource(REPAIRED_BRAND_HEX));
       fixture.write('src/theme.ts', themeViaPaletteSource());
       await until(
@@ -606,9 +543,8 @@ suite(
         }
       );
 
-      // Now edit ONLY the two-hop module. If membership stopped at the first
-      // hop this write is treated as a plain component-file event and the
-      // variable CSS never changes.
+      // Editing only the two-hop module: if membership stopped at the first
+      // hop this is a plain component event and the variable CSS never moves.
       fixture.write('src/palette.ts', paletteSource(TRANSITIVE_HEX));
       const after = await until(
         async () => {
@@ -633,17 +569,12 @@ suite(
       try {
         const cold = await coldAdapter.read();
 
-        // Same mode (dev vs dev), same fixture state on disk: a server that
-        // reached this state through every edit above must serve what a server
-        // that never saw an edit serves.
         expect(canonicalizeCss(cold.staticCss)).toEqual(
           canonicalizeCss(incremental.staticCss)
         );
         expect(canonicalizeCss(cold.componentCss)).toEqual(
           canonicalizeCss(incremental.componentCss)
         );
-        // Byte equality holds today; keep it asserted so a whitespace-level
-        // divergence between the cold and incremental paths is also caught.
         expect(cold.staticCss).toEqual(incremental.staticCss);
         expect(cold.componentCss).toEqual(incremental.componentCss);
       } finally {
@@ -673,11 +604,8 @@ suite(
       fixture = createDevFixture();
       adapter = createViteDevAdapter();
       await adapter.start(fixture.root);
-      // Materialize the graph a browser would build: the component modules,
-      // and the bridge (whose import-analysis registers acceptance of the
-      // components virtual module — without it every components.js update
-      // would dead-end into a full reload and the payload assertions below
-      // would measure propagation, not the gate).
+      // The bridge request registers acceptance of the components module;
+      // without it every components.js update dead-ends in a full reload.
       await adapter.read();
       await adapter.requestSource('src/main.ts');
       await adapter.requestSource('src/Button.ts');
@@ -711,9 +639,8 @@ suite(
         }
       );
 
-      // The gate: CSS moved, the components virtual module updated, and the
-      // edited module itself received NO update of any kind — a browser
-      // holding React state in Button's subtree would keep it.
+      // The edited module receives no update at all, so a browser holding
+      // React state in its subtree keeps it.
       const paths = updatesSince(mark);
       expect(paths.filter((p) => p.includes('Button.ts'))).toEqual([]);
       expect(paths).not.toContain('full-reload');
@@ -769,10 +696,8 @@ suite(
         );
       writeMixed();
 
-      // STOP condition: output changed, so the update MUST reach the browser. In
-      // this JSX-free fixture Button has no self-accepting boundary, so genuine
-      // delivery surfaces as a full reload — the point is that the gate did
-      // NOT swallow it.
+      // Button has no self-accepting boundary in this JSX-free fixture, so
+      // genuine delivery surfaces as a full reload, not a module update.
       await until(
         async () => {
           const served = await adapter.read();
@@ -797,9 +722,8 @@ suite(
     });
 
     it('suppression state survives a later unrelated update', async () => {
-      // Re-establish a suppressed style-only state on Button (the mixed edit
-      // above delivered normally), then edit an unrelated component and prove
-      // the earlier suppressed module is not dragged back into delivery.
+      // Re-adding buttonMeta keeps this edit style-only relative to the mixed
+      // edit above, so Button is suppressed again before the unrelated edit.
       const styleOnly = (): void =>
         fixture.write(
           'src/Button.ts',
@@ -823,8 +747,7 @@ suite(
         updatesSince(markA).filter((p) => p.includes('Button.ts'))
       ).toEqual([]);
 
-      // The unrelated edit: another component's style-only change — its own
-      // delivery is suppressed too, so the observation window stays clean of
+      // The sentinel edit is style-only too, so the window stays free of
       // reloads and any Button payload would be the gate leaking.
       const markB = adapter.hotUpdatePaths!().length;
       fixture.writeSentinel('41px');

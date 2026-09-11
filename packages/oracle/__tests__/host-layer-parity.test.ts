@@ -1,10 +1,6 @@
 /**
- * The oracle's layer list is a copy of the emitter's, on purpose: importing
- * `@animus-ui/extract` at runtime would couple the oracle package to the
- * emitter's build. This test is the tether — if the emitter grows or reorders
- * a layer, the copy must move with it, because `buildUniverse` silently
- * ignores any sheet whose layer it does not know and `analyzeCascade`
- * excludes rules in unordered layers.
+ * The layer list is copied, not imported, to keep the emitter's build off the
+ * runtime path; a sheet in an unknown or unordered layer is dropped silently.
  */
 
 import { ANIMUS_LAYERS } from '@animus-ui/extract/pipeline';

@@ -11,15 +11,6 @@ import { makeComponent, makeManifest } from './manifest-fixture';
 import type { ContextProbe } from './context-probe';
 import type { ManifestDiagnostic } from '@animus-ui/extract/pipeline';
 
-/**
- * Source-corpus reconciliation before unresolved-parent fallbacks
- * (openspec: dev-transform-coherence): when an analysis reports `chain
- * dropped: could not resolve parent component`, the discoverable on-disk
- * corpus is re-walked and re-analyzed before that result is acted on — a
- * parent that exists on disk is folded in instead of publishing the runtime
- * fallback.
- */
-
 interface RediscoveryProbe extends ContextProbe {
   warns: string[];
 }
@@ -74,7 +65,6 @@ describe('reconcileSourceCorpus', () => {
     });
     ctx.runAnalysis = () => {
       probe.analyses++;
-      // The fold made the parent visible: the re-analysis resolves the graph.
       ctx.storedManifest = makeManifest({
         components: {
           'Consumer.tsx::Fancy': makeComponent('Consumer.tsx', 'r'),
@@ -89,7 +79,6 @@ describe('reconcileSourceCorpus', () => {
     expect(reanalyzed).toBe(true);
     expect(probe.analyses).toBe(1);
     expect(probe.ctx.fileCache.has('Parent.tsx')).toBe(true);
-    // Diagnostics resolved — no residual warn.
     expect(probe.warns).toEqual([]);
   });
 
@@ -100,7 +89,6 @@ describe('reconcileSourceCorpus', () => {
 
     expect(await reconcileSourceCorpus(probe.ctx)).toBe(false);
     expect(probe.analyses).toBe(0);
-    // The un-dropped New.tsx is NOT folded — rediscovery is drop-triggered.
     expect(probe.ctx.fileCache.has('New.tsx')).toBe(false);
   });
 
@@ -114,13 +102,8 @@ describe('reconcileSourceCorpus', () => {
     expect(probe.analyses).toBe(0);
   });
 
-  /**
-   * `runAnalysis` requires callers that advanced the file cache to roll it
-   * back when the analysis does not publish. Keeping the folded entries
-   * stranded the retry: the next call folds 0, reads that as a barren walk,
-   * memoizes it, and short-circuits every later call — so stabilize could
-   * never run again for the lifetime of the context.
-   */
+  /** A caller that advanced the file cache rolls it back when the analysis
+   *  does not publish; stranded entries memoize the next walk as barren. */
   for (const [label, fail] of [
     [
       'returns false',
@@ -156,12 +139,8 @@ describe('reconcileSourceCorpus', () => {
       if (label === 'throws') await expect(first).rejects.toThrow();
       else await first;
 
-      // The failed attempt published nothing, so the cache must be back to
-      // its pre-fold state.
       expect(ctx.fileCache.has('Parent.tsx')).toBe(false);
 
-      // And the next call must genuinely retry rather than short-circuit on
-      // a barren-walk memo.
       let retried = false;
       ctx.runAnalysis = () => {
         retried = true;
@@ -174,15 +153,8 @@ describe('reconcileSourceCorpus', () => {
     });
   }
 
-  /**
-   * The barren-walk memo exists to skip a walk that provably cannot fold
-   * anything new. "The cache has not moved" is the load-bearing half of that
-   * claim, and a size comparison does not carry it: a delete and an unrelated
-   * create return the cache to the same size holding different files. If the
-   * skip fires there, the on-disk parent whose watcher event was lost is never
-   * folded, and the consumer keeps being served as an unresolved-parent raw
-   * fallback for the rest of the session.
-   */
+  /** A size comparison cannot stand in for "the cache has not moved": a
+   *  delete plus an unrelated create strands the parent for the session. */
   it('walks again after a delete and a create that restore the cache size', async () => {
     const probe = makeProbe(root);
     const ctx = probe.ctx;
@@ -200,15 +172,9 @@ describe('reconcileSourceCorpus', () => {
       diagnostics: [dropDiagnostic('Consumer.tsx', 'Fancy', 'Parent')],
     });
 
-    // The parent is genuinely absent: the walk folds nothing and memoizes
-    // that verdict.
     await reconcileSourceCorpus(probe.ctx);
     expect(probe.analyses).toBe(0);
 
-    // An unrelated file is deleted (the delete path prunes without walking),
-    // the missing parent lands on disk with its watcher event lost, and an
-    // ordinary create restores the cache to its previous SIZE with different
-    // content.
     rmSync(join(root, 'Note.tsx'));
     ctx.mutateFileCache((cache) => cache.delete('Note.tsx'));
     writeFileSync(
@@ -241,9 +207,8 @@ describe('reconcileSourceCorpus', () => {
     const ctx = probe.ctx;
     ctx.options.system = './ds.ts';
     ctx.options.exclude = ['generated'];
-    // Mirror buildStart's refresh: the context's matcher is memoized, so a
-    // post-construction options mutation must rebuild it (production does
-    // this at every buildStart).
+    // The matcher is memoized, so mutating `options.exclude` after
+    // construction only takes effect once it is rebuilt.
     ctx.excludeMatcher = createExcludeMatcher(ctx.options.exclude);
     ctx.mutateFileCache((cache) =>
       cache.set('Consumer.tsx', {

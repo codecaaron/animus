@@ -1,12 +1,3 @@
-/**
- * Parity test: the structured `@keyframes <name>` form inside `createGlobalStyles`
- * and the top-level `keyframes()` primitive collection MUST produce identical
- * emitted CSS for the same frame map + theme context.
- *
- * Under the collection shape, the `keyframesBlocksJson` payload is:
- *   { exportName: { keyName: { name, frames } } }
- * mirroring what `system_loader.rs::extract_keyframes_blocks` now produces.
- */
 import { describe, expect, test } from 'vitest';
 
 import { analyzeProject } from './run-pipeline';
@@ -15,10 +6,8 @@ import type { KeyframesBlocks } from './run-pipeline';
 import type { KeyframeFrameMap } from '@animus-ui/system';
 
 /**
- * The `globalStyleBlocksJson` payload this parity test builds: one named block
- * per export, keyed by the structured `@keyframes <name>` selector whose body
- * is a frame map. The suite emits no other global-style selector, so the value
- * type says exactly what these fixtures carry.
+ * The `globalStyleBlocksJson` payload narrowed to the one selector form these
+ * fixtures use: a structured `@keyframes <name>` block.
  */
 type StructuredKeyframeBlocks = {
   [exportName: string]: { [keyframesSelector: string]: KeyframeFrameMap };
@@ -29,7 +18,6 @@ const frameMap = {
   '100%': { opacity: 1, transform: 'scale(1)' },
 };
 
-// Extract everything between the outermost braces of an `@keyframes <name> { ... }` block.
 const extractFrames = (css: string): string | null => {
   const match = css.match(/@keyframes\s+[\w-]+\s*\{([\s\S]*?)\}\s*(?=@|$)/);
   return match ? match[1].trim() : null;
@@ -40,7 +28,7 @@ const run = (
   keyframesBlocks: KeyframesBlocks | null
 ) => {
   const manifestJson = analyzeProject(
-    JSON.stringify([]), // no component files — we just want the global layer
+    JSON.stringify([]), // no component files: this case reads the global layer
     {
       globalStyleBlocksJson: globalBlocks ? JSON.stringify(globalBlocks) : null,
       keyframesJson: keyframesBlocks ? JSON.stringify(keyframesBlocks) : null,

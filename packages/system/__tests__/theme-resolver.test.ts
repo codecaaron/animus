@@ -1,41 +1,10 @@
-/**
- * Tests for the late-binding theme reference resolver (openspec change:
- * first-class-extension, increment 03 — spec `theme-composition`, D4).
- *
- * Scenario mapping (spec header → test):
- * - "Late-binding reference resolution over the merged theme" ›
- *   "Declaration order is not observable" → 'G3: reversed declaration order
- *   produces byte-identical tokenMap and variableCss' (+ the forward-refs
- *   resolution check)
- * - … › "Emitted and inlined forms agree" → 'G1: emitted and inlined forms
- *   of the same scale resolve every path to the same value' + the
- *   mode-block witness beside it (inc 04 closure of the review-registered
- *   G1 blind spot: the original witness covered the base mode only)
- * - … › "Reference cycle fails the build" → the three cycle tests
- * - … › "Override recolors source-internal references" → mechanism witness
- *   're-resolves kit-authored references against later overrides' (the
- *   `.extend()`-spelled form of this scenario landed with increment 04 in
- *   theme-extend.test.ts; the late-binding mechanism it depends on is
- *   witnessed here through `from()`)
- * - "Emitted scale references resolve in emitted CSS" › "Cross-scale
- *   reference in an emitted scale" → 'G2: cross-scale reference in an
- *   emitted scale resolves to a var() chain'
- *
- * Boundary pinned elsewhere: unresolvable references stay warn-and-literal
- * (supported kit pattern — dangling-reference ERRORS belong to increment 04
- * with the explicit replacement form); the warn-once discipline is covered
- * below.
- */
 import { describe, expect, it, vi } from 'vitest';
 
 import { createTheme } from '../src';
 
 const breakpoints = { sm: 768 } as const;
 
-// ─── Helpers: var() chasing for emission-parity comparison ───
-
 /**
- * Custom-property declarations of the block that opens at or after `start`.
  * A `start` of -1 yields an empty map, so each caller keeps its own
  * block-not-found policy.
  */
@@ -56,15 +25,13 @@ function blockVariables(css: string, start: number) {
   return map;
 }
 
-/** Parse the `:root` block's custom-property declarations into a map. */
 function rootVariables(css: string) {
   return blockVariables(css, css.indexOf(':root {'));
 }
 
 /**
- * Substitute `var(--x)` occurrences from `vars` to a fixpoint — the cascade's
- * late binding, replayed textually. This is what makes emitted and inlined
- * forms comparable: both must chase to the same final value.
+ * Substitutes var() to a fixpoint — the cascade's late binding replayed
+ * textually, so emitted and inlined forms become comparable.
  */
 function chaseVars(value: string, vars: Record<string, string>): string {
   let current = value;
@@ -78,13 +45,6 @@ function chaseVars(value: string, vars: Record<string, string>): string {
   throw new Error(`var() chase did not terminate for: ${value}`);
 }
 
-// ─── G3: declaration order is not observable ─────────────────
-
-/**
- * Forward references in BOTH directions plus reversed key order inside a
- * scale: under the old single-pass resolver the reversed build left
- * `{base.unit}` literal (verified by execution during exploration).
- */
 function buildForwardDeclared() {
   return createTheme()
     .addBreakpoints(breakpoints)
@@ -142,8 +102,6 @@ describe('declaration-order independence (G3)', () => {
   });
 });
 
-// ─── G1: emitted and inlined forms agree ─────────────────────
-
 describe('emission parity (G1)', () => {
   function buildEmitFlipped(emit: boolean) {
     return createTheme()
@@ -176,21 +134,12 @@ describe('emission parity (G1)', () => {
     expect(emittedResolved).toEqual(inlined.manifest.tokenMap);
   });
 
-  // ── Mode-block coverage (inc 04 — closes the registered G1 blind spot:
-  // the witness above covers the base mode on one fixture only) ──
-
-  /** Parse the declarations of the `[data-color-mode="X"]` block. */
   function modeBlockVariables(css: string, mode: string) {
     const start = css.indexOf(`[data-color-mode="${mode}"]`);
     if (start === -1) throw new Error(`mode block '${mode}' not found`);
     return blockVariables(css, start);
   }
 
-  /**
-   * A moded theme whose color values are REFERENCES into another scale, with
-   * the colors scale's emission flipped — under the pre-inc-04 emitter the
-   * mode blocks carried the raw `{palette.…}` strings verbatim.
-   */
   function buildModedEmitFlipped(emit: boolean) {
     return createTheme()
       .addBreakpoints(breakpoints)
@@ -229,12 +178,9 @@ describe('emission parity (G1)', () => {
       };
       expect(chase(emitted)).toEqual(chase(inlined));
     }
-    // The manifest's mode value maps agree across the flip as well.
     expect(emitted.manifest.modes).toEqual(inlined.manifest.modes);
   });
 });
-
-// ─── G2: references inside emitted scales resolve into CSS ───
 
 describe('emitted-scale reference resolution (G2)', () => {
   it('G2: cross-scale reference in an emitted scale resolves to a var() chain', () => {
@@ -250,7 +196,6 @@ describe('emitted-scale reference resolution (G2)', () => {
     const css = theme.serialize().variableCss;
     expect(css).toContain('--shadows-glow: 0 0 12px var(--color-ember);');
     expect(css).not.toMatch(/\{[a-zA-Z0-9_.]+\}/);
-    // The tokenMap keeps the emitted indirection.
     expect(theme.manifest.tokenMap['shadows.glow']).toBe('var(--shadows-glow)');
   });
 
@@ -275,8 +220,6 @@ describe('emitted-scale reference resolution (G2)', () => {
     warnSpy.mockRestore();
   });
 });
-
-// ─── Same-scale references are legal DAG edges ───────────────
 
 describe('same-scale references', () => {
   it('resolves same-scale references in a non-emitted scale without warning', () => {
@@ -308,8 +251,6 @@ describe('same-scale references', () => {
   });
 });
 
-// ─── Chains through emitted AND inlined targets ──────────────
-
 describe('mixed-emission reference chains', () => {
   it('resolves chains that pass through both emitted and inlined targets', () => {
     const theme = createTheme()
@@ -323,15 +264,12 @@ describe('mixed-emission reference chains', () => {
       .addScale({ name: 'composed', values: { hero: '{frames.card}' } })
       .build();
 
-    // inlined → emitted target: var() substitution
     expect(theme.manifest.tokenMap['edges.hot']).toBe(
       '1px solid var(--color-ember)'
     );
-    // emitted → inlined target: the resolved literal lands in the declaration
     expect(theme.serialize().variableCss).toContain(
       '--frames-card: 1px solid var(--color-ember);'
     );
-    // inlined → emitted target again: the var() chain, never the raw ref
     expect(theme.manifest.tokenMap['composed.hero']).toBe('var(--frames-card)');
   });
 
@@ -363,8 +301,6 @@ describe('mixed-emission reference chains', () => {
     expect(theme.manifest.tokenMap['q.bad']).toBe('#123456');
   });
 });
-
-// ─── Cycles: hard error naming the cycle ─────────────────────
 
 describe('reference cycles', () => {
   it('fails the build naming both tokens of a reference cycle', () => {
@@ -399,8 +335,6 @@ describe('reference cycles', () => {
   });
 });
 
-// ─── Unresolvable references: warn once, keep literal ────────
-
 describe('unresolvable references (supported kit pattern)', () => {
   it('warns once per missing path and keeps the literal', () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -419,8 +353,6 @@ describe('unresolvable references (supported kit pattern)', () => {
   });
 });
 
-// ─── Late binding over the merged map ────────────────────────
-
 describe('late binding over the composed theme', () => {
   it('re-resolves kit-authored references against later overrides', () => {
     const kit = createTheme()
@@ -435,8 +367,6 @@ describe('late binding over the composed theme', () => {
       .from(kit)
       .addScale({ name: 'palette', values: { ember: '#7c3aed' } })
       .build();
-    // The kit's authored reference survives composition raw and resolves
-    // against the FINAL merged map — the consumer's override wins.
     expect(composed.manifest.tokenMap['shadows.glow']).toBe('0 0 12px #7c3aed');
   });
 });

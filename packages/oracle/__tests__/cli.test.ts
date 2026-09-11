@@ -1,12 +1,3 @@
-/**
- * The CLI surface, driven in process.
- *
- * `runCli` takes its streams as arguments precisely so this file needs no
- * subprocess: the assertions are about the two things a command line
- * guarantees — the stream discipline (stdout is machine-only) and the exit
- * taxonomy (the code is the verdict, not a success flag).
- */
-
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
@@ -24,7 +15,6 @@ const ALERT_POINT =
   'viewport.inline=390,mode=dark,variant:Alert:variant=outline,' +
   'variant:Alert:intent=danger';
 
-/** A real `CliStream`, plus everything the CLI has written to it. */
 interface CaptureStream extends CliStream {
   text(): string;
 }
@@ -45,13 +35,6 @@ const capture = (): Capture => {
   return { stdout: sink(), stderr: sink() };
 };
 
-/**
- * The `--json` document, named at the types the CLI serialised it from:
- * `renderJson` writes a `CliEnvelope` whose `result` is the answer the command
- * produced. `ProbeResult.semanticDiff` is a `SemanticDiff` the moment it is
- * present; `ComparedProbeResult` below only removes the optionality, which is
- * what a comparing command guarantees.
- */
 interface ProbeEnvelope extends CliEnvelope {
   result: ProbeResult;
 }
@@ -148,8 +131,6 @@ describe('cli — the human report on stderr', () => {
     expect(result.code).toBe(0);
     expect(result.stdout).toBe('');
 
-    // Vacuity guards: the named sections and a real fact line, not merely
-    // non-empty output.
     expect(result.stderr).toContain('VERDICT ESTABLISHED');
     expect(result.stderr).toContain(
       'TARGET Alert · ../../packages/test-ds/src/components/Alert.tsx::Alert'
@@ -190,7 +171,7 @@ describe('cli — the human report on stderr', () => {
     expect(simulated.stderr).toContain('SEMANTIC DIFF');
     expect(simulated.stderr).toContain('color: rule-activated #ef4444 → ');
     expect(simulated.stderr).toContain('CAUSAL FINDINGS');
-    // `--remove color` resolved the *current winner* — the compound rule.
+    // `--remove <property>` resolves to the rule that currently wins it.
     expect(simulated.stderr).toMatch(
       /Simulating remove color from rule [0-9a-f]{16}/
     );

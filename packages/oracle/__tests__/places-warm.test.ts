@@ -13,15 +13,6 @@ import { describe, expect, it } from 'vitest';
 import { COMMIT_FILE, MANIFEST_FILE } from '../src/host/animus/loader';
 import { loadSnapshot } from '../src/places';
 
-/**
- * PLACES.md §6 — warm operation. A warm process lives while the working tree
- * and the artifacts change under it, so the cold path's one-shot honesty has
- * to hold over time: `structureOf` answers about the file as it is NOW
- * (correspondence re-checked when content changes), and `revalidate` detects
- * a rebuilt artifact set instead of letting a warm session keep answering
- * from a dead generation.
- */
-
 const FIXTURE = join(__dirname, 'fixtures/rollup-app');
 const SOURCE_ROOT = join(__dirname, '../../../e2e/rollup-app');
 const GROUP_FILE = 'src/Group.tsx';
@@ -48,8 +39,6 @@ describe('structureOf stays correspondence-checked over time', () => {
 
     expect(snapshot.structureOf(GROUP_FILE).ok).toBe(true);
 
-    // The same drift edit the cold guard catches — but applied AFTER the
-    // first read, which a load-time-only cache would never see.
     writeFileSync(
       join(root, GROUP_FILE),
       groupSource.replace(
@@ -60,8 +49,6 @@ describe('structureOf stays correspondence-checked over time', () => {
     const drifted = snapshot.structureOf(GROUP_FILE);
     expect(drifted).toMatchObject({ ok: false, reason: 'diverged' });
 
-    // Reverting the file restores the answer — the refusal was about the
-    // file's content, not about the session's history.
     writeFileSync(join(root, GROUP_FILE), groupSource);
     expect(snapshot.structureOf(GROUP_FILE).ok).toBe(true);
   });

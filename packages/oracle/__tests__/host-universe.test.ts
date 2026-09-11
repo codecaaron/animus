@@ -16,16 +16,8 @@ const input = loadAnimusArtifacts(FIXTURE);
 const host = createAnimusHost(input);
 const universe = host.universe.universe();
 
-/** The adapter's own reading of the fixture manifest — the same validating
- *  narrow `createAnimusHost` performs, so the variants below start from the
- *  emitter's contract instead of a locally restated slice of it. */
 const manifest = asManifest(input.manifest);
 
-/**
- * The fixture manifest with one sheet added or replaced. `sheets` is read per
- * key, so a variant is a new map rather than a mutated fixture — the shared
- * `input` stays the artifact every other test in this file reads.
- */
 const withSheet = (name: string, css: string): AnimusHostInput => ({
   manifest: { ...manifest, sheets: { ...manifest.sheets, [name]: css } },
 });
@@ -51,8 +43,8 @@ describe('createAnimusHost — the style universe over the emitted artifacts', (
       'anm-states': 2,
       'anm-system': 268,
     });
-    // Every modeled layer has to be rankable, or its rules sit outside the
-    // precedence contract in `providers/style-universe.ts`.
+    // Every modeled layer must be rankable, or its rules sit outside the
+    // precedence order entirely.
     for (const layer of byLayer.keys()) {
       expect(universe.layerOrder).toContain(layer);
     }
@@ -82,9 +74,8 @@ describe('createAnimusHost — the style universe over the emitted artifacts', (
       (rule) => rule.layer === 'anm-variants/composed'
     );
     expect(standalone.length).toBeGreaterThan(0);
-    // `@layer composed` is emitted and empty in this fixture — the declared
-    // sub-layer still has to hold its rank, or a later composed rule would
-    // silently change every neighbouring rule's precedence.
+    // `@layer composed` is emitted empty here; the declared sub-layer still
+    // holds its rank, or a later composed rule shifts every neighbour.
     expect(composed).toHaveLength(0);
     expect(universe.layerOrder.indexOf('anm-variants/composed')).toBeLessThan(
       universe.layerOrder.indexOf('anm-variants')
@@ -130,7 +121,7 @@ describe('createAnimusHost — the style universe over the emitted artifacts', (
       method: 'compound',
       compoundIndex: 1,
     });
-    // The compound's *styles* are its second argument, not its conditions.
+    // A compound's styles are its second argument, not its conditions.
     expect(compound.declarations.map((d) => d.authoredProperty)).toEqual([
       'borderColor',
       'color',
@@ -243,7 +234,7 @@ describe('createAnimusHost — the style universe over the emitted artifacts', (
 
   it('refuses a manifest with no sheets instead of a confident empty universe', () => {
     const { sheets, ...thin } = manifest;
-    // Vacuity guard: the fixture really did carry the map being removed.
+    // Vacuity guard: the fixture carries the map being removed.
     expect(Object.keys(sheets).length).toBeGreaterThan(0);
 
     expect(() => createAnimusHost({ manifest: thin })).toThrow(
@@ -263,8 +254,8 @@ describe('createAnimusHost — the style universe over the emitted artifacts', (
       .exclusions.join('\n');
 
     expect(exclusions).toMatch(/sheet 'overrides'/);
-    // The build's own `declaration` sheet (the `@layer` precedence statement)
-    // is likewise never read, and that must be said, not implied away.
+    // The build's `declaration` sheet is the `@layer` precedence statement
+    // and is never read either, so it is excluded too.
     expect(exclusions).toMatch(/sheet 'declaration'/);
   });
 });

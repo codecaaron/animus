@@ -5,8 +5,6 @@ import { describe, expect, it } from 'vitest';
 
 import { ds } from './test-system';
 
-// ─── Test Fixtures ─────────────────────────────────────────────
-
 const Box = ds
   .styles({ display: 'flex' })
   .variant({
@@ -15,13 +13,6 @@ const Box = ds
   })
   .asElement('div');
 
-// ─── Tests ─────────────────────────────────────────────────────
-
-// The normal render path (no asChild, no compose) merges a consumer-supplied
-// className AFTER the generated classes. The documented `.group:hover &`
-// ancestor pattern presupposes this: consumers must be able to put
-// className="group" directly on an Animus component. forwardProps skips
-// className because this merge owns it.
 describe('consumer className on the normal render path', () => {
   it('merges consumer className after the generated classes', () => {
     const html = renderToString(

@@ -17,12 +17,6 @@ import {
 
 import type { ManifestDiagnostic } from '../pipeline/manifest-diagnostics';
 
-/**
- * The cross-source correlation join (extraction-diagnostics): engine
- * candidates only become findings when the file belongs to a discovered
- * source AND that source's own token manifest defines the token.
- */
-
 const KIT_DIR = '/repo/packages/kit/src';
 
 function candidate(
@@ -140,15 +134,6 @@ describe('buildSourceTokenIndex', () => {
     ).toBe(0);
   });
 
-  /**
-   * RECORDED CONTRACT REVERSAL (campaign ledger D11a). This assertion
-   * previously pinned the opposite: `'not json'` yielded an empty index. An
-   * empty index is indistinguishable from "no source defines this token", so
-   * the swallow silently disabled the entire cross-source correlation gate.
-   * `sourceThemeManifestsJson` is animus's own wire (the QuickJS system
-   * loader's capture, carried by `loadSystemConfig`), so a parse failure is an
-   * engine bug and must be loud.
-   */
   test('malformed manifests JSON throws, naming the wire and the cause', () => {
     expect(() =>
       buildSourceTokenIndex({
@@ -165,13 +150,6 @@ describe('buildSourceTokenIndex', () => {
   });
 });
 
-/**
- * The src/dist join: collection keys `dirOwners` by the package's src/ dir,
- * but the QuickJS loader resolves the same specifier through the exports map
- * — its canonical module paths live under dist/. The index must join the two
- * at the PACKAGE boundary (the package.json root) or the whole gate is inert
- * for exactly the src-shipping workspace kits it targets.
- */
 describe('buildSourceTokenIndex package-boundary join', () => {
   const tempRoots: string[] = [];
 
@@ -181,7 +159,6 @@ describe('buildSourceTokenIndex package-boundary join', () => {
     }
   });
 
-  /** A real on-disk package: package.json + src/ + dist/, realpath'd. */
   function makeKit() {
     const scratch = mkdtempSync(join(tmpdir(), 'animus-correlate-'));
     tempRoots.push(scratch);

@@ -1,12 +1,4 @@
 import { join } from 'node:path';
-/**
- * Full pipeline integration tests: serialize → NAPI → post-process → assert CSS.
- *
- * Every step calls the real function from the real package.
- * Same code path as the vite-plugin, minus file discovery and subprocess.
- *
- * Organized by BEHAVIOR, not by component fixture.
- */
 import { beforeAll, describe, expect, test } from 'vitest';
 
 import { readFixtureFile, readFixtureFiles } from '../fixtures/read-fixtures';
@@ -22,8 +14,6 @@ const COMPONENTS = join(__dirname, '..', 'fixtures', 'components');
 beforeAll(() => {
   clearAnalysisCache();
 });
-
-// ─── Variant Resolution ──────────────────────────────────────
 
 describe('variant resolution', () => {
   const entry = readFixtureFile(COMPONENTS, 'button.tsx');
@@ -66,8 +56,6 @@ describe('variant resolution', () => {
     assertNoUnresolvedTokens(css);
   });
 });
-
-// ─── Compound Resolution ─────────────────────────────────────
 
 describe('compound resolution', () => {
   const entry = readFixtureFile(COMPONENTS, 'compounds.tsx');
@@ -114,8 +102,6 @@ describe('compound resolution', () => {
   });
 });
 
-// ─── Transform Resolution ────────────────────────────────────
-
 describe('transform resolution', () => {
   test('evaluates extracted named transforms in Rust', () => {
     const entry = readFixtureFile(COMPONENTS, 'transforms.tsx');
@@ -135,8 +121,6 @@ describe('transform resolution', () => {
   });
 });
 
-// ─── Responsive Extraction ───────────────────────────────────
-
 describe('responsive extraction', () => {
   test('produces @media queries with correct breakpoint values', () => {
     const entry = readFixtureFile(COMPONENTS, 'layout.tsx');
@@ -152,8 +136,6 @@ describe('responsive extraction', () => {
     assertNoUnresolvedTokens(css);
   });
 });
-
-// ─── Multi-File Extraction ───────────────────────────────────
 
 describe('multi-file extraction', () => {
   test('extracts all components when given multiple files', () => {

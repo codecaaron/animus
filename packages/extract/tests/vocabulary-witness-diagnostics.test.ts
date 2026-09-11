@@ -29,11 +29,6 @@ describe('vocabularyWitnessDiagnostics — the one host mapper for the sealed re
     expect(diagnostics[0]?.message).toContain(VOCABULARY_COLLISION);
   });
 
-  /**
-   * Vocabulary a configured kit registered but the deprecated carriage verb
-   * cannot deliver is lost INPUT, not degraded output — the same class as an
-   * include that does not resolve, so it fails `--strict`.
-   */
   it('maps a legacy-verb entry to a coded warning naming the verb, the source, and the refused names', () => {
     const diagnostics = vocabularyWitnessDiagnostics(
       JSON.stringify([

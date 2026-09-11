@@ -13,10 +13,7 @@ import {
 
 const ROOT = join(import.meta.dirname, '..');
 const CLI = join(ROOT, 'src/cli.ts');
-/** A run still alive at this point has hung; the timeout makes it fail as a
- *  hang instead of as a message mismatch. */
 const SPAWN_TIMEOUT_MS = 60_000;
-/** A stack frame line, which a refusal must never print. */
 const STACK_FRAME = /\n\s+at /;
 
 function run(...args: string[]) {
@@ -69,11 +66,6 @@ describe('parity CLI argument safety', () => {
   });
 
   test('an engine that cannot start is unexpected: exit 3 with a stack', () => {
-    // Nothing on PATH, so the CLI's own `spawnSync('bun', …)` for the engine
-    // fails to launch — the environment-dependent subprocess failure that
-    // must not be printed or exit-coded as a refusal. The launch itself has
-    // to survive the empty PATH, so bun is asked for its own binary rather
-    // than resolved by name.
     const bun = spawnSync('bun', ['--eval', 'console.log(process.execPath)'], {
       encoding: 'utf8',
       timeout: SPAWN_TIMEOUT_MS,

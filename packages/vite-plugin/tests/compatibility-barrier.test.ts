@@ -8,15 +8,8 @@ import { makeComponent, makeManifest } from './manifest-fixture';
 import type { ContextProbe } from './context-probe';
 import type { ManifestSheets } from '@animus-ui/extract/pipeline';
 
-/**
- * The compatibility publication barrier (openspec: dev-transform-coherence,
- * "Runtime-incompatible publications are withheld"): a transform response
- * that would let a raw-served extension consumer execute `.extend()` against
- * an extracted ancestor is failed with `ANIMUS_COMPOSITION_RECOVERING`
- * instead of served — the incompatible JavaScript never evaluates, the
- * affected consumers are invalidated, and the recovery reload re-serves
- * everything extracted.
- */
+/** A raw-served consumer running `.extend()` against an extracted ancestor
+ *  breaks at runtime, so the ancestor's transform is withheld instead. */
 
 const ROOT = join('/tmp', 'animus-barrier-root');
 
@@ -35,7 +28,6 @@ interface BarrierProbe extends ContextProbe {
   invalidatedNodes: string[];
 }
 
-/** Per-file engine outcome: extracted, component-less, or a hard failure. */
 type EngineOutcome = 'extracted' | 'no-components' | 'throws';
 
 function makeProbe(
@@ -68,7 +60,6 @@ function makeProbe(
   return Object.assign(base, { invalidatedNodes: graph.invalidated });
 }
 
-/** Serve the consumer while its parent is unresolved: a raw fallback. */
 async function serveConsumerRaw(probe: BarrierProbe): Promise<void> {
   probe.ctx.mutateFileCache((cache) =>
     cache.set('src/Consumer.tsx', { hash: 'h', source: 's' })
@@ -91,10 +82,9 @@ async function serveConsumerRaw(probe: BarrierProbe): Promise<void> {
     "import { Parent } from './Parent';\nexport const Fancy = Parent.extend();",
     resolve(ROOT, 'src/Consumer.tsx')
   );
-  expect(served).toBeNull(); // raw fallback
+  expect(served).toBeNull();
 }
 
-/** Publish the recovered manifest: both files extracted, provenance linked. */
 function publishRecoveredManifest(probe: BarrierProbe): void {
   probe.ctx.storedManifest = makeManifest({
     components: {
@@ -125,14 +115,11 @@ describe('compatibility publication barrier', () => {
       )
     ).rejects.toThrow(/ANIMUS_COMPOSITION_RECOVERING/);
 
-    // The raw consumer was invalidated and the recovery reload scheduled.
     expect(probe.invalidatedNodes).toContain(resolve(ROOT, 'src/Consumer.tsx'));
     expect(probe.extractedInvalidations).toBe(1);
 
-    // The trip is one-shot and self-clearing: the invalidation killed the
-    // cached raw transform and the withheld response never reached a page,
-    // so the very next parent request serves — even if the consumer is
-    // never re-imported by the reloaded page.
+    // The withheld response never reached a page and the invalidation killed
+    // the cached raw transform, so the next parent request serves.
     const retried = await transformSource(
       probe.ctx,
       'export const Parent = 1;',
@@ -146,8 +133,6 @@ describe('compatibility publication barrier', () => {
     await serveConsumerRaw(probe);
     publishRecoveredManifest(probe);
 
-    // The recovery reload re-fetches the consumer first: extracted serve
-    // clears its fallback record.
     const consumerOut = await transformSource(
       probe.ctx,
       'export const Fancy = 1;',
@@ -163,13 +148,8 @@ describe('compatibility publication barrier', () => {
     expect(parentOut?.code).toContain('TRANSFORMED');
   });
 
-  /**
-   * The two raw-serve exits taken AFTER the manifest confirmed this file is
-   * extracted. Both produce exactly the pair the barrier exists to prevent —
-   * a raw consumer running `.extend()` against an extracted ancestor — so
-   * both must land in the fallback record, not just the unresolved-parent
-   * exit above.
-   */
+  /** Every raw-serve exit after the manifest calls the file extracted must
+   *  record the fallback, not only the unresolved-parent exit. */
   const POST_MANIFEST_RAW_EXITS = [
     ['a non-strict transform failure', 'throws'],
     ['an engine result carrying no components', 'no-components'],
@@ -185,8 +165,6 @@ describe('compatibility publication barrier', () => {
         );
         publishRecoveredManifest(probe);
 
-        // The consumer is manifest-known and extracted-by-belief, yet the
-        // hook serves it raw.
         expect(
           await transformSource(
             probe.ctx,
@@ -212,8 +190,6 @@ describe('compatibility publication barrier', () => {
   );
 
   it('clears the record once the file serves extracted again', async () => {
-    // Worst ordering from the audit: fallback → extracted → fallback. The
-    // clear must be the file's own state transition, not a one-shot.
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     try {
       let consumerOutcome: EngineOutcome = 'throws';
@@ -247,7 +223,6 @@ describe('compatibility publication barrier', () => {
 
   it('ignores raw serves that carry no unresolved-extension drop', async () => {
     const probe = makeProbe();
-    // A plain helper file: known, no manifest entries, no drop diagnostic.
     probe.ctx.mutateFileCache((cache) =>
       cache.set('src/util.ts', { hash: 'h', source: 's' })
     );

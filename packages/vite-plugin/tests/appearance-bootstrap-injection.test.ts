@@ -20,24 +20,8 @@ import type { Node, StringLiteral } from 'oxc-parser';
 import type { HtmlTagDescriptor } from 'vite';
 
 /**
- * Delivery-only bootstrap injection (openspec: system-color-scheme, D6).
- *
- * The plugin embeds a PRE-GENERATED artifact string. It never imports the
- * generator (`@animus-ui/system/bootstrap`), never inspects appearance
- * semantics, and emits nothing at all when the option is absent.
- *
- * Ordering note (read out of the installed vite 8.1.4,
- * `dist/node/chunks/node.js`; cross-checked against 8.0.3 by this increment's
- * audit):
- * - `applyHtmlTransforms` buckets a returned array by `injectTo`, then calls
- *   `injectToHead(html, headPrependTags, true)` ONCE for the whole bucket;
- * - `serializeTags` maps the bucket in ARRAY ORDER, so array order is document
- *   order inside a single returned array;
- * - `head-prepend` lands the bucket immediately after `<head>`, while the
- *   build-html plugin appends its `<link rel="stylesheet">` tags with
- *   `injectToHead(result, assetTags)` (no prepend, i.e. before `</head>`).
- *   Both facts together are why the script precedes every stylesheet
- *   reference in built HTML.
+ * Vite buckets returned tags by `injectTo` and serializes each bucket in array
+ * order, so array order is document order within one returned array.
  */
 
 const ARTIFACT = {
@@ -46,14 +30,8 @@ const ARTIFACT = {
 };
 
 /**
- * The layer-declaration descriptor exactly as the plugin produced it BEFORE
- * this change. G4's parity baseline: with no `appearanceBootstrap` option the
- * handler must still return this and nothing else.
- *
- * Provenance: transcribed from the pre-change `transformIndexHtml` handler at
- * `git show HEAD:packages/vite-plugin/src/index.ts`. The load-bearing pins are
- * `tag` / `attrs` / `injectTo` / array length; `children` is a pass-through
- * identity (whatever `ctx.layerDeclaration` holds), not a frozen string.
+ * The only tag an unconfigured build emits. `children` is a pass-through of
+ * `ctx.layerDeclaration`; the pins are tag, attrs and injectTo.
  */
 const PRE_CHANGE_LAYER_TAG: HtmlTagDescriptor = {
   tag: 'style',
@@ -116,13 +94,8 @@ function hasSystemModuleReference(file: string, source: string): boolean {
 }
 
 /**
- * Every assertion in this file is about BUILT HTML — the bootstrap artifact and
- * the layer declaration are both build-time deliveries, and the exact-array
- * pins below state that an unconfigured build emits nothing of its own. The
- * builder's third branch, the dev-only HMR bridge module script, is therefore
- * out of frame here (`isProd: true` on every context); it has its own file
- * (`tests/hmr-bridge-injection.test.ts`), which also pins the ordering of all
- * three tags together.
+ * Build-mode context: `isProd` keeps the dev-only bridge tag out of frame, so
+ * the exact-array assertions below state what an unconfigured build emits.
  */
 function prodContext(
   overrides: {
@@ -162,8 +135,8 @@ describe('Vite injection option: opt-in injection', () => {
     expect(scriptIndex).toBeGreaterThanOrEqual(0);
     expect(styleIndex).toBeGreaterThanOrEqual(0);
     expect(scriptIndex).toBeLessThan(styleIndex);
-    // Every tag rides the same head-prepend bucket, so array order survives
-    // into the document (see the ordering note above).
+    // Every tag rides the same head-prepend bucket, so array order is
+    // document order.
     expect(tags.every((t) => t.injectTo === 'head-prepend')).toBe(true);
   });
 
@@ -172,9 +145,8 @@ describe('Vite injection option: opt-in injection', () => {
       prodContext({ appearanceBootstrap: ARTIFACT, layerDeclaration: '' })
     );
 
-    // The exact array is also the pin on D6's delivery-only clause: the script
-    // carries `code` and nothing else the plugin was handed, so the artifact's
-    // `cspHash` has no position in the emitted document to leak into.
+    // The script carries `code` and nothing else the plugin was handed, so
+    // `cspHash` has no position in the document to leak into.
     expect(tags).toEqual([
       {
         tag: 'script',
@@ -186,8 +158,7 @@ describe('Vite injection option: opt-in injection', () => {
   });
 
   test('an empty-code artifact emits no script tag', () => {
-    // A caller defect, not a configuration: the guard is symmetric with the
-    // layer-declaration branch, so an empty artifact must not leave an inert
+    // An empty artifact is a caller defect: it must not leave an inert
     // `<script data-animus-bootstrap></script>` behind.
     const tags = buildIndexHtmlTags(
       prodContext({ appearanceBootstrap: { code: '', cspHash: '' } })
@@ -197,9 +168,6 @@ describe('Vite injection option: opt-in injection', () => {
     expect(tags).toEqual([PRE_CHANGE_LAYER_TAG]);
     expect(JSON.stringify(tags)).not.toContain('bootstrap');
 
-    // The bootstrap and layer guards are independent build-time branches, so
-    // the same empty artifact with the layer branch also empty leaves nothing
-    // at all behind.
     expect(
       buildIndexHtmlTags(
         prodContext({
@@ -212,14 +180,8 @@ describe('Vite injection option: opt-in injection', () => {
 });
 
 /**
- * G3 executable witness — bootstrap entry-point isolation.
- *
- * The literal `rg -n "system/bootstrap"` gate is comment-sensitive: this
- * package's option JSDoc legitimately NAMES the subpath in a consumer example,
- * so the grep is non-empty and a human has to adjudicate it every time. These
- * assertions restate the guardrail in a form that cannot be tripped by prose
- * and cannot be forgotten — they fail only on a genuine dependency or a
- * genuine module-specifier position.
+ * A text search for the subpath is tripped by option JSDoc that names it, so
+ * isolation is asserted on parsed module specifiers instead.
  */
 describe('G3: the plugin never depends on or imports @animus-ui/system', () => {
   const packageDir = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -260,7 +222,6 @@ describe('G3: the plugin never depends on or imports @animus-ui/system', () => {
       .filter((e) => e.isFile() && /\.[cm]?tsx?$/.test(e.name))
       .map((e) => join(e.parentPath, e.name));
 
-    // Non-vacuity: the scan must actually have files to scan.
     expect(files.length).toBeGreaterThan(0);
 
     const offenders = files.filter((file) => {
@@ -272,7 +233,6 @@ describe('G3: the plugin never depends on or imports @animus-ui/system', () => {
   });
 
   test('the witness catches real module references without matching prose', () => {
-    // Positive controls — genuine specifier positions.
     expect(
       hasSystemModuleReference(
         'fixture.ts',
@@ -304,8 +264,6 @@ describe('G3: the plugin never depends on or imports @animus-ui/system', () => {
       )
     ).toBe(true);
 
-    // Negative controls — module-shaped prose and the exact multiline JSDoc
-    // adjacency that previously made the source scan fail.
     expect(
       hasSystemModuleReference(
         'fixture.ts',
@@ -322,22 +280,8 @@ describe('G3: the plugin never depends on or imports @animus-ui/system', () => {
 });
 
 /**
- * Structural-mirror type parity — Shape A of the pair
- * (openspec: system-color-scheme, cross-cutting 2.1; inc-03 review).
- *
- * `AnimusExtractOptions['appearanceBootstrap']` is declared INLINE as
- * `{ code: string; cspHash: string }` precisely so this package never imports
- * `@animus-ui/system` (G3, asserted above). The cost of that isolation is that
- * no compiler edge connects the mirror to `AppearanceBootstrapArtifact` — they
- * can drift in silence.
- *
- * This is the source-text half of the fix: it reads the generator's declaration
- * off disk and pins its MEMBER NAMES. `readFileSync` of a relative path is not
- * an import specifier, so the topology stays clean and no dependency is added.
- * The twin — Shape B, an `Exact<>` assignability assertion that also catches
- * member-TYPE drift — lives in
- * `packages/system/__tests__/appearance-artifact-parity.test-d.ts` and runs
- * under `vp run verify:types`.
+ * No compiler edge connects the plugin's inline artifact mirror to the
+ * generator's interface, so its member names are pinned by reading the source.
  */
 describe('Shape A: the inline artifact mirror tracks AppearanceBootstrapArtifact', () => {
   const generatorPath = join(
@@ -349,11 +293,8 @@ describe('Shape A: the inline artifact mirror tracks AppearanceBootstrapArtifact
   const MIRROR_MEMBERS = ['code', 'cspHash'];
 
   /**
-   * Member names of `export interface <name>` in a TS source string.
-   *
-   * Comments are stripped BEFORE the interface is located: this particular
-   * interface documents the CSP header inside a fenced JSDoc block, so prose
-   * would otherwise be parsed as declarations.
+   * Comments are stripped before the interface is located: the declaration's
+   * JSDoc carries braces and member-shaped prose.
    */
   function interfaceMemberNames(source: string, name: string): string[] {
     const withoutComments = source
@@ -423,7 +364,6 @@ describe('Vite injection option: absent by default (G4 parity)', () => {
     const tags = buildIndexHtmlTags(prodContext());
 
     expect(tags).toEqual([PRE_CHANGE_LAYER_TAG]);
-    // No empty tags, no attribute stubs — the word "bootstrap" cannot appear.
     expect(JSON.stringify(tags)).not.toContain('bootstrap');
   });
 
@@ -437,7 +377,6 @@ describe('Vite injection option: absent by default (G4 parity)', () => {
     const plugin = animusExtract({ system: './ds.ts' });
     const hook = plugin.transformIndexHtml;
 
-    // Object form with `order: 'pre'` — unchanged by this increment.
     if (hook === undefined || !('handler' in hook)) {
       throw new Error(
         'transformIndexHtml must stay in object-with-handler form'
@@ -445,11 +384,8 @@ describe('Vite injection option: absent by default (G4 parity)', () => {
     }
     expect(hook.order).toBe('pre');
 
-    // Drive the real `configResolved` into BUILD mode first. Without it the
-    // context is in dev and the builder's dev-only bridge tag rides along,
-    // which would cost this test its exact-array pin — the one assertion that
-    // proves an unconfigured build emits no tag, attribute, or whitespace of
-    // its own. `command: 'build'` is the only field the emptiness depends on.
+    // Build mode first: in dev the builder's bridge tag rides along and the
+    // exact-array pin below stops stating what a build emits.
     const configResolved = plugin.configResolved;
     if (configResolved === undefined || 'handler' in configResolved) {
       throw new Error('configResolved must stay in plain-function form');
@@ -464,13 +400,8 @@ describe('Vite injection option: absent by default (G4 parity)', () => {
       'build'
     );
 
-    // SCOPE: `ctx.layerDeclaration` is '' until buildStart runs (which needs
-    // the NAPI engine), so this can only ever observe the EMPTY branch of the
-    // bootstrap/layer pair. It pins the hook's wiring — object form,
-    // `order: 'pre'`, delegation to buildIndexHtmlTags — not the layer-present
-    // output. The production path with a real layer declaration is covered by
-    // `vp run verify:integration` and by the built-HTML assertions in the
-    // consumer verify fixtures.
+    // `ctx.layerDeclaration` is '' until buildStart runs, so this observes the
+    // empty branch: it pins the hook's wiring, not the layer-present output.
     const result = await hook.handler.call(HTML_HOOK_CONTEXT, '', {
       path: '/',
       filename: join(process.cwd(), 'index.html'),

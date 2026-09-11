@@ -1,13 +1,3 @@
-/**
- * Behavior pins for the loader's single-CSS-import policy: strip the
- * emitter-injected stylesheet import everywhere, re-inject it only in the
- * root entry — detected by convention (ROOT_ENTRY_RE) or set explicitly via
- * the `cssImportTarget` option, which replaces the convention.
- *
- * The v2 engine adapter passes through paths absent from the last analyze()
- * set, so with an empty sent-sources map the loader's transform leg is a
- * no-op and only the CSS handling is exercised — no native engine involved.
- */
 import { join } from 'path';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 
@@ -22,10 +12,6 @@ const ENGINE_KEY = '__animus_engine__';
 const V2_ENGINE_KEY = '__animus_v2_engine__';
 const V2_SENT_SOURCES_KEY = '__animus_v2_sent_sources__';
 
-/** The singleton slots this suite publishes, carrying the value types their
- *  owner declares (`AnimusSingletonStore` in
- *  packages/extract/session/singleton.ts) plus the `undefined` an unpublished
- *  slot holds — the state each slot is saved to and restored from here. */
 interface LoaderSingletonSlots {
   [MANIFEST_KEY]: string | null | undefined;
   [ENGINE_KEY]: AnimusEngine | undefined;
@@ -33,19 +19,14 @@ interface LoaderSingletonSlots {
   [V2_SENT_SOURCES_KEY]: Map<string, string> | null | undefined;
 }
 
-// SAFETY: singleton.ts owns these exact globalThis keys and publishes them
-// with exactly these value types; the engine slots have no exported setter,
-// so writing the same keys the loader's singleton reads is the only way to
-// stand the engine down. The keys are private to that module, so no other
-// declaration of globalThis can disagree about them.
+// SAFETY: singleton.ts owns these globalThis keys and publishes exactly
+// these value types; the engine slots have no exported setter.
 const g = globalThis as typeof globalThis & LoaderSingletonSlots;
 let saved: LoaderSingletonSlots;
 
 const ROOT = '/proj';
 const CSS_IMPORT = "import '.animus/styles.css';\n";
 
-/** Every path in this suite is absent from the last analyze() set, so the
- *  adapter must pass it through without ever reaching the engine. */
 const unreachableEngine: V2ExtractEngine = {
   analyze: () => {
     throw new Error('engine must not be called for unknown paths');

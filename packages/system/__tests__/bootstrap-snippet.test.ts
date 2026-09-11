@@ -1,19 +1,3 @@
-/**
- * Behavior tests for the GENERATED snippet (increment 02).
- *
- * The workspace has no DOM library, so the artifact's code is executed with
- * shadowed globals: `new Function('document', 'localStorage', code)` — which
- * only works because the IIFE references `document` and `localStorage` as free
- * identifiers. Keep it that way.
- *
- * Covers spec `color-mode-bootstrap`:
- * - "Validation and tri-state restoration" (including blocked storage, which
- *   is treated as NO record and therefore removes the attribute)
- * - "Legacy key migration" (including the empty-string record, pinned as
- *   "absent")
- * - "OS preference is never materialized into the attribute"
- * - "Appearance record contract" (explicit mode round-trips, record version)
- */
 import { describe, expect, it } from 'vitest';
 
 import { createAppearanceBootstrap } from '../src/bootstrap';
@@ -32,7 +16,6 @@ function runCode(harness: Harness): Harness {
   return runSnippetCode(createAppearanceBootstrap(SNIPPET_THEME).code, harness);
 }
 
-/** Runs the snippet against a plain key/value store. */
 function runBootstrap(
   store: Record<string, string>,
   serverRendered: Record<string, string> = {}
@@ -45,10 +28,6 @@ function runBootstrap(
   );
 }
 
-/**
- * Runs the snippet against a store whose reads THROW for `blockedKeys` —
- * private browsing / blocked-storage behavior.
- */
 function runWithBlockedStorage(
   blockedKeys: string[],
   store: Record<string, string> = {},
@@ -124,8 +103,6 @@ describe('bootstrap snippet — tri-state restoration', () => {
   });
 
   it('removes the attribute when the store throws on every read', () => {
-    // Blocked storage means "no knowledge", not "keep what the server said":
-    // freezing a server-rendered mode would defeat the media-query fallback.
     const harness = runWithBlockedStorage(
       [RECORD_KEY, LEGACY_KEY],
       {},
@@ -170,10 +147,6 @@ describe('bootstrap snippet — record version', () => {
   });
 
   it('a version mismatch is terminal — legacy is not consulted', () => {
-    // Pins the interpretation: an unreadable-version record is still a
-    // RECORD, so the pre-record key does not get a second vote. The
-    // server-rendered attribute makes the removal observable in the markup —
-    // a future version leaves nothing behind.
     const harness = runBootstrap(
       {
         [RECORD_KEY]: '{"v":2,"mode":"midnight"}',
@@ -260,7 +233,6 @@ describe('bootstrap snippet — legacy key migration', () => {
       expect(store).toEqual(before);
     }
 
-    // …including the blocked-storage path, which reaches the removal branch.
     const blocked = runWithBlockedStorage([RECORD_KEY, LEGACY_KEY]);
     expect(blocked.localStorage.setItem).not.toHaveBeenCalled();
   });

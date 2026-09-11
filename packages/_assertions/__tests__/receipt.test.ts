@@ -22,7 +22,6 @@ function scratchDir(): string {
   return dir;
 }
 
-/** A consumer config that selects no engine — the shape every lane ships. */
 function cleanConfig(dir: string): string {
   const path = join(dir, 'vite.config.ts');
   writeFileSync(
@@ -54,9 +53,6 @@ describe('writeLaneReceipt', () => {
       engineConfigPath: cleanConfig(dir),
     });
 
-    // Decoded, not asserted: the round-trip claim is what `toEqual` below
-    // proves, so the reader only needs the bytes to BE a JSON object — which
-    // this package's own boundary parser establishes rather than assumes.
     const parsed = parseJsonObject(readFileSync(path, 'utf8'), 'lane receipt');
     expect(parsed).toEqual(returned);
     expect(parsed).toEqual({
@@ -73,7 +69,6 @@ describe('writeLaneReceipt', () => {
 
   it('creates missing parent directories and appends a trailing newline', () => {
     const dir = scratchDir();
-    // Nested, not-yet-existing path proves mkdirSync recursive.
     const path = join(dir, 'nested', '.receipts', 'verify-assert-next.json');
 
     const returned = writeLaneReceipt(path, {
@@ -90,9 +85,6 @@ describe('writeLaneReceipt', () => {
     expect(JSON.parse(raw)).toEqual(returned);
   });
 
-  // The V12(a) ruling: the retirement guard and the engine constants are ONE
-  // step. A lane cannot record `v2` without proving its own config selects no
-  // engine, so each rejection below must also leave NO receipt behind.
   for (const [label, source] of [
     ['an explicit engine option', "animusExtract({ engine: 'v1' })"],
     ['a spaced engine option', 'animusExtract({ engine : "v2" })'],
@@ -156,7 +148,6 @@ describe('installedHostVersion', () => {
       join(root, 'node_modules', 'vinext', 'package.json'),
       JSON.stringify({ name: 'vinext', version: '1.0.0-beta.1' })
     );
-    // The lane's own manifest ranges the host; the receipt must not read it.
     writeFileSync(
       join(root, 'package.json'),
       JSON.stringify({ dependencies: { vinext: '^1.0.0' } })

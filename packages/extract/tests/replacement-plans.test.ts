@@ -12,19 +12,6 @@ import type {
   ProjectManifest,
 } from '../pipeline/manifest-schema';
 
-/**
- * Canonical replacement-epoch helper (openspec:
- * next-webpack-served-transform-coherence, design D5): ONE semantic epoch
- * definition shared by every integration —
- * `hashReplacementPlans(snapshotFilePlans(manifest))` over the sorted
- * canonical serialization with the domain prefix
- * `animus-replacement-plans-v1\0`.
- */
-
-/** A complete `ManifestComponentDescriptor` at the engine's empty-universe
- *  values — `file` and `replacement` are the two fields the epoch derivation
- *  reads; the rest carry the engine's own empty values so a fake descriptor
- *  is a whole one (the schema in `manifest-schema.ts` is the authority). */
 function descriptor(
   file: string,
   replacement: string
@@ -108,11 +95,6 @@ describe('hashReplacementPlans', () => {
   });
 
   it('moves with the served-dependency witness independently of plans', () => {
-    // The epoch is the webpack persistent-cache witness for RESTORED
-    // modules, and those modules import the session's served system-props
-    // artifact — content the replacement plans alone cannot see. An offline
-    // system-props change (e.g. a group-registry edit while the server is
-    // down) must move the epoch even when every replacement is unchanged.
     const snapshot = snapshotFilePlans(
       manifestWith({
         'src/A.tsx::A': descriptor('src/A.tsx', 'ra'),
@@ -123,18 +105,13 @@ describe('hashReplacementPlans', () => {
     const withB = hashReplacementPlans(snapshot, 'module-source-b');
     expect(withA).not.toBe(bare);
     expect(withA).not.toBe(withB);
-    // Same plans + same witness → same epoch (restart stability).
     expect(hashReplacementPlans(snapshot, 'module-source-a')).toBe(withA);
-    // An empty witness is a witness, not absence.
     expect(hashReplacementPlans(snapshot, '')).not.toBe(bare);
   });
 
   it('pins the domain prefix and canonical serialization', () => {
-    // Empty snapshot: canonical serialization is the bare domain prefix.
     expect(hashReplacementPlans(new Map())).toBe(contentHash(DOMAIN_PREFIX));
 
-    // Non-empty: sorted (file, planJson) entries, each contributing
-    // `file\0plan\0`, exactly as snapshotFilePlans produced each plan string.
     const snapshot = snapshotFilePlans(
       manifestWith({
         'src/B.tsx::B': descriptor('src/B.tsx', 'rb'),
@@ -167,7 +144,6 @@ describe('snapshotFilePlans / diffFilePlans (moved from vite-plugin)', () => {
       })
     );
     expect(diffFilePlans(prev, next)).toEqual(['src/A.tsx', 'src/B.tsx']);
-    // Absent→present (the reverse direction) is a plan change too.
     expect(diffFilePlans(next, prev)).toEqual(['src/A.tsx', 'src/B.tsx']);
     expect(diffFilePlans(prev, prev)).toEqual([]);
     expect(diffFilePlans(prev, next, { exclude: 'src/A.tsx' })).toEqual([
@@ -185,7 +161,6 @@ describe('snapshotFilePlans / diffFilePlans (moved from vite-plugin)', () => {
     expect(diffFilePlans(emptyReplacement, absent)).toEqual(['src/Card.tsx']);
     expect(diffFilePlans(absent, emptyReplacement)).toEqual(['src/Card.tsx']);
 
-    // Two components 'x' + 'y' must not equal one component 'xy'.
     const two = snapshotFilePlans(
       manifestWith({
         'src/Kit.tsx::A': descriptor('src/Kit.tsx', 'x'),

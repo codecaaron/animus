@@ -6,7 +6,6 @@ import { ResetCoalescer } from '../src/reset-coalescer';
 
 import type { ErrorPayload } from 'vite';
 
-/** Manual timer harness — injected seams, no builtin mocking. */
 function harness(run: () => void | Promise<void>, quietMs = 60) {
   const pending: Array<{ id: number; fn: () => void | Promise<void> }> = [];
   const errors: unknown[] = [];
@@ -40,7 +39,6 @@ describe('ResetCoalescer', () => {
     });
 
     for (let i = 0; i < 10; i++) coalescer.request();
-    // Each request cancels the previous timer — exactly one remains.
     expect(pending.length).toBe(1);
 
     fire();
@@ -53,7 +51,6 @@ describe('ResetCoalescer', () => {
     const h = harness(() => {
       runs++;
       if (runs === 1) {
-        // Three events arrive while the reset is executing.
         h.coalescer.request();
         h.coalescer.request();
         h.coalescer.request();
@@ -63,7 +60,6 @@ describe('ResetCoalescer', () => {
     h.coalescer.request();
     h.fire();
     expect(runs).toBe(1);
-    // The mid-reset requests coalesced into one scheduled follow-up.
     expect(h.pending.length).toBe(1);
     h.fire();
     expect(runs).toBe(2);
@@ -77,7 +73,7 @@ describe('ResetCoalescer', () => {
     });
 
     coalescer.request();
-    // The schedule callback runs on a bare timer in production — anything
+    // The schedule callback runs on a bare timer in production, so anything
     // escaping it is an unhandled exception that kills the dev server.
     expect(() => fire()).not.toThrow();
     expect(errors).toEqual([boom]);

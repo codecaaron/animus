@@ -28,13 +28,6 @@ import type {
   PlaceExplanation,
 } from '../src/places';
 
-/**
- * PLACES.md §6 — warm operation and the CI gate. One loaded snapshot answers
- * many JSONL requests; artifact staleness turns every answer into an
- * explicit refusal; and `check` runs the correspondence guard over every
- * file as a batch gate with the exit code as the verdict.
- */
-
 const FIXTURE = join(__dirname, 'fixtures/rollup-app');
 const SOURCE_ROOT = join(__dirname, '../../../e2e/rollup-app');
 const GROUP_FILE = 'src/Group.tsx';
@@ -55,11 +48,8 @@ const okResult = (response: SessionResponse): SessionResult => {
 };
 
 /**
- * `dispatch` (cli/session.ts) pairs each op with one member of
- * `SessionResult`, but the wire type carries the whole union — the
- * correspondence is protocol, not declaration. Each reader below therefore
- * names the field that only its member has, so a mis-dispatched op fails the
- * test loudly instead of being asserted into the answer the test wanted.
+ * The wire type carries the whole result union, so each reader names the
+ * field only its own member has: a mis-dispatched op then fails loudly.
  */
 const snapshotDescriptionOf = (response: SessionResponse) => {
   const result = okResult(response);
@@ -93,8 +83,6 @@ const observedOf = (response: SessionResponse): ObserveResult => {
   return result;
 };
 
-/** The one result that is a list of outcome rows; every row of a real `carry`
- *  answer carries its outcome class. */
 const isCarriedOutcomes = (
   result: SessionResult
 ): result is readonly CarriedOutcome[] =>
@@ -108,8 +96,6 @@ const carriedOf = (response: SessionResponse): readonly CarriedOutcome[] => {
   return result;
 };
 
-/** `--json` writes exactly one `CliEnvelope`; `check` fills its `result` with
- *  the `CheckReport` `checkSnapshot` returned. */
 type CheckEnvelope = Omit<CliEnvelope, 'result'> & { result: CheckReport };
 
 const parseCheckEnvelope = (text: string): CheckEnvelope => {
@@ -250,7 +236,6 @@ describe('staleness ends the warmth, explicitly', () => {
     expect(refused).toMatchObject({ ok: false, kind: 'stale-snapshot' });
     if (!refused.ok) expect(refused.changed).toContain(MANIFEST_FILE);
 
-    // `snapshot` still answers — it is how the client learns to restart.
     const described = snapshotDescriptionOf(
       session.handle({ op: 'snapshot' }).response
     );
@@ -279,8 +264,6 @@ describe('the JSONL stream loop', () => {
     );
 
     expect(code).toBe(0);
-    // One JSON value per line is the whole protocol — read the lines back in
-    // the session's own wire domain, not in a restatement of the response.
     const responses = out.map((line): SessionInput => JSON.parse(line));
     expect(responses).toHaveLength(2);
     expect(responses[0]).toMatchObject({ id: 'a', ok: true });

@@ -3,19 +3,11 @@ import { describe, expect, it } from 'vitest';
 import { deepMerge } from '../src/utils/deepMerge';
 
 /**
- * A merge source that carries `a` as an own key it explicitly sets to
- * undefined. The number branch stays in the declared type on purpose:
- * `deepMerge` returns `A & B`, so an undefined-only `a` would reduce the
- * whole result to `never` and hide the surviving keys from the assertions.
+ * `number` stays in the union because `deepMerge` returns `A & B`: an
+ * undefined-only `a` collapses the result to `never` and hides other keys.
  */
 type UndefinedOverwriteSource = { a: number | undefined };
 
-/**
- * Boundary tests documenting the CURRENT behavior of deepMerge.
- * These are characterization tests — they assert what the implementation
- * actually does today, not what it "should" do. Do not change semantics
- * to make these pass; change these when the semantics intentionally change.
- */
 describe('deepMerge (current behavior)', () => {
   describe('nested object merge recursion', () => {
     it('recursively merges nested plain objects', () => {
@@ -50,7 +42,6 @@ describe('deepMerge (current behavior)', () => {
       const target = { list: [1, 2] };
       const source = { list: { 0: 'a' } };
 
-      // target array is not mergeable, so source object wins wholesale
       expect(deepMerge(target, source)).toEqual({ list: { 0: 'a' } });
     });
 
@@ -138,9 +129,7 @@ describe('deepMerge (current behavior)', () => {
 
       const result = deepMerge(target, source);
 
-      // original nested object is left intact...
       expect(nested).toEqual({ x: 1 });
-      // ...and the merged result is a fresh object, not the same reference
       expect(result.nested).not.toBe(nested);
       expect(result.nested).toEqual({ x: 1, y: 2 });
     });
@@ -163,7 +152,6 @@ describe('deepMerge (current behavior)', () => {
 
       const result = deepMerge(target, source);
 
-      // scalar target replaced by object source: assigned by reference
       expect(result.a).toBe(shared);
     });
   });

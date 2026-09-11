@@ -7,8 +7,6 @@ import { describe, expect, it } from 'vitest';
 
 import { ds } from './test-system';
 
-// ─── Test Fixtures ─────────────────────────────────────────────
-
 const Box = ds
   .styles({ display: 'flex' })
   .variant({
@@ -17,18 +15,10 @@ const Box = ds
   })
   .asElement('div');
 
-// ─── Assertion Helpers ─────────────────────────────────────────
-
 function tagHasClass(html: string, tag: string, cls: string): boolean {
   return new RegExp(`<${tag}[^>]*class="[^"]*${cls}`).test(html);
 }
 
-/**
- * Mount into a detached container with the client renderer and hand the
- * mounted DOM back to the caller, then unmount. flushSync makes the commit
- * synchronous; the test env is happy-dom, so `document` is available.
- * Needed for the handler tests — renderToString cannot fire events.
- */
 function mountAndInspect(
   element: ReactElement,
   inspect: (container: HTMLElement) => void
@@ -49,8 +39,6 @@ function mountAndInspect(
   }
 }
 
-// ─── Tests ─────────────────────────────────────────────────────
-
 describe('asChild', () => {
   it('renders child element with parent className merged', () => {
     const html = renderToString(
@@ -61,12 +49,9 @@ describe('asChild', () => {
       )
     );
 
-    // Should render <a>, not <div>
     expect(html).toMatch(/^<a /);
     expect(html).not.toContain('<div');
-    // Should have the Animus class
     expect(tagHasClass(html, 'a', '--size-sm')).toBe(true);
-    // Should preserve child's href
     expect(html).toContain('href="/foo"');
   });
 
@@ -124,7 +109,6 @@ describe('asChild', () => {
       )
     );
 
-    // asChild wins — renders <span>, not <article>
     expect(html).toMatch(/^<span /);
     expect(html).not.toContain('<article');
   });
@@ -132,7 +116,6 @@ describe('asChild', () => {
   it('without asChild, renders own element normally', () => {
     const html = renderToString(createElement(Box, { size: 'sm' }, 'content'));
 
-    // Should render <div> (the defined element)
     expect(html).toMatch(/^<div /);
     expect(tagHasClass(html, 'div', '--size-sm')).toBe(true);
   });
@@ -214,7 +197,6 @@ describe('asChild', () => {
       }
     );
 
-    // Child-wins replacement, not handler chaining.
     expect(childClicks).toBe(1);
     expect(parentClicks).toBe(0);
   });

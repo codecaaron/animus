@@ -1,18 +1,5 @@
-/**
- * Shared harness for executing the GENERATED bootstrap snippet in tests.
- *
- * The workspace has no DOM library, so the artifact's code runs with shadowed
- * globals: `new Function('document', 'localStorage', code)` — which only works
- * because the IIFE references `document` and `localStorage` as free
- * identifiers. That calling convention is the contract this module pins; the
- * suites that consume it (`bootstrap-snippet`, `appearance`) must not re-state
- * it locally, or a generator change needs N edits instead of one.
- *
- * Not a test file — vitest only collects `*.test.ts`.
- */
 import { vi } from 'vitest';
 
-/** The canonical two-mode theme the snippet suites generate from. */
 export const SNIPPET_THEME = {
   manifest: {
     modes: {
@@ -33,7 +20,6 @@ export interface Harness {
     removeAttribute: ReturnType<typeof vi.fn>;
   };
   attributes: Record<string, string>;
-  /** Every attribute mutation, in order — empty means "markup untouched". */
   mutations: string[];
 }
 
@@ -63,24 +49,14 @@ export function createHarness(
   };
 }
 
-/**
- * The snippet's calling convention, derived from the harness that supplies the
- * shadowed globals: each parameter's domain is exactly the `Harness` field
- * passed for it, so narrowing a harness field narrows this contract with it.
- */
 type SnippetEntry = (
   documentGlobal: Harness['document'],
   storageGlobal: Harness['localStorage']
 ) => void;
 
-/** Execute snippet `code` against the harness's shadowed globals. */
 export function runSnippetCode(code: string, harness: Harness): Harness {
-  // SAFETY: `new Function` returns a function whose parameters are exactly the
-  // names listed before the body, in that order — here `document` then
-  // `localStorage`, matching SnippetEntry. `code` is a generated bootstrap
-  // artifact, which bootstrap-generator's artifact tests pin as a
-  // self-contained IIFE statement: no imports, no placeholders, no return
-  // value, and no free identifier other than those two.
+  // SAFETY: `new Function` binds parameters in the listed order, matching
+  // SnippetEntry; `code` is a generated self-contained IIFE.
   // oxlint-disable-next-line no-new-func
   const run = new Function('document', 'localStorage', code) as SnippetEntry;
   run(harness.document, harness.localStorage);

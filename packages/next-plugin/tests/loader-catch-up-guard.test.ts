@@ -1,21 +1,3 @@
-/**
- * Loader epoch dependency + unconditional analyzed-content-hash guard
- * (openspec: next-webpack-served-transform-coherence, design D2/D4 —
- * increment 02).
- *
- * Every dev invocation — transform, raw passthrough, manifest-absent —
- * registers the epoch artifact as a file dependency (the persistent-cache
- * restart witness). When an analyzed file's current source hash mismatches
- * its analyzed hash, the loader fails with the stable diagnostic
- * `ANIMUS_ANALYSIS_CATCHING_UP` after exactly one refreshed re-check —
- * regardless of how many entries the stale manifest holds (the
- * zero-entries→first-chain case must never publish raw bytes). Files with
- * no analyzed identity keep the raw passthrough.
- *
- * Same engine-free harness as loader-css-import.test.ts: globalThis keys
- * drive the singleton; the v2 adapter passes through paths absent from the
- * sent-sources map, so no native engine is involved.
- */
 import { contentHash } from '@animus-ui/extract/pipeline';
 import { mkdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
@@ -41,14 +23,8 @@ const V2_SENT_SOURCES_KEY = '__animus_v2_sent_sources__';
 const ANALYZED_HASHES_KEY = '__animus_analyzed_hashes__';
 const SESSION_DIR_KEY = '__animus_session_artifact_dir__';
 
-/** Fabricated owning-session id for the singleton-published session dir. */
 const SESSION_ID = 'loader-epoch-session';
 
-/** The singleton slots this suite publishes, carrying the value types their
- *  owner declares (`AnimusSingletonStore` in
- *  packages/extract/session/singleton.ts) plus the `undefined` an
- *  unpublished slot holds — the state each slot is saved to and restored
- *  from here. */
 interface LoaderSingletonSlots {
   [MANIFEST_KEY]: string | null | undefined;
   [ENGINE_KEY]: AnimusEngine | undefined;
@@ -58,17 +34,11 @@ interface LoaderSingletonSlots {
   [SESSION_DIR_KEY]: string | null | undefined;
 }
 
-// SAFETY: singleton.ts owns these exact globalThis keys and publishes them
-// with exactly these value types; its setters cannot clear a slot and the
-// engine slots have no setter at all, so writing the same keys the loader's
-// singleton reads is the only way to drive this suite's lifecycle. The keys
-// are private to that module, so no other declaration of globalThis can
-// disagree about them.
+// SAFETY: singleton.ts owns these globalThis keys with exactly these value
+// types; its setters cannot clear a slot and the engine slots have none.
 const g = globalThis as typeof globalThis & LoaderSingletonSlots;
 let saved: LoaderSingletonSlots;
 
-/** No path in this suite is inside the last analyze() set, so the adapter
- *  must pass it through without ever reaching the engine. */
 const unreachableEngine: V2ExtractEngine = {
   analyze: () => {
     throw new Error('engine must not be called for unknown paths');
@@ -107,9 +77,6 @@ afterEach(() => {
   disposeTempRoots();
 });
 
-/** Fabricate a project whose owning session published its artifact dir
- *  through the singleton (the loader's source for the session-scoped epoch
- *  dependency path). */
 function createRoot(withArtifact: boolean) {
   const root = makeTempRoot('animus-loader-epoch-');
   const sessionDir = sessionArtifactDir(root, SESSION_ID);
@@ -149,12 +116,10 @@ describe('replacements-epoch artifact registered as a file dependency (design D2
   test('every dev invocation registers the session-scoped artifact — transform-eligible, passthrough, and manifest-absent alike', () => {
     const { root, epochPath } = createRoot(true);
 
-    // Raw passthrough (no analyzed identity).
     expect(runLoader({ root, source: OLD_SOURCE }).dependencies).toEqual([
       epochPath,
     ]);
 
-    // Manifest-absent passthrough.
     g[MANIFEST_KEY] = undefined;
     const absent = runLoader({ root, source: OLD_SOURCE });
     expect(absent.output).toBe(OLD_SOURCE);
@@ -195,9 +160,6 @@ describe('unconditional analyzed-content-hash guard (design D4)', () => {
 
   test('zero-entries→first-chain: a file analyzed with no animus entries is never published raw after gaining its first chain', () => {
     const { root } = createRoot(true);
-    // The committed analysis saw the file with ZERO entries (manifest holds
-    // nothing for it) — extension-relevance consulted on this stale
-    // manifest would say "irrelevant"; the guard must fail anyway.
     g[MANIFEST_KEY] = JSON.stringify({ components: {} });
     g[ANALYZED_HASHES_KEY] = new Map([['src/C.tsx', contentHash(OLD_SOURCE)]]);
     expect(() => runLoader({ root, source: NEW_SOURCE })).toThrow(
@@ -224,8 +186,6 @@ describe('unconditional analyzed-content-hash guard (design D4)', () => {
     const stale = new Map([['src/C.tsx', contentHash(OLD_SOURCE)]]);
     const fresh = new Map([['src/C.tsx', contentHash(NEW_SOURCE)]]);
     let reads = 0;
-    // Model a watchRun transaction publishing between the loader's first
-    // read and its refresh re-check.
     Object.defineProperty(g, ANALYZED_HASHES_KEY, {
       configurable: true,
       get: () => (reads++ === 0 ? stale : fresh),

@@ -53,9 +53,6 @@ describe('fixEmptyModules', () => {
   });
 
   test('file with only whitespace is NOT treated as empty', () => {
-    // Whitespace files compile as empty scripts too, but playing it safe:
-    // we only touch literally 0-byte files. Anything with content (even
-    // whitespace) is left alone.
     const dir = scratch();
     try {
       const f = write(dir, 'packages/a/src/utils.ts', '\n\n');
@@ -236,7 +233,6 @@ describe('fixStaleBarrelReExports — whole-declaration removal', () => {
   test('removes `export { X } from` when target file has been deleted', () => {
     const dir = scratch();
     try {
-      // target './gone' deliberately never created
       const barrel = write(
         dir,
         'packages/a/src/index.ts',
@@ -258,7 +254,6 @@ describe('fixStaleBarrelReExports — `export * from` handling', () => {
     const dir = scratch();
     try {
       const empty = write(dir, 'packages/a/src/source.ts', '');
-      // sanity: file is 0 bytes
       expect(readFileSync(empty, 'utf-8')).toBe('');
       const barrel = write(
         dir,
@@ -331,11 +326,6 @@ describe('fixStaleBarrelReExports — type-only re-exports', () => {
 });
 
 describe('getExportsOfFile — binding-pattern walker', () => {
-  // Regression: a destructured binding export
-  //   export const { system: ds, theme } = factory();
-  // was silently treated as zero-export by the reconciler, causing barrels
-  // re-exporting `ds` or `theme` to be erased as "all-stale" on 2026-04-26.
-
   test('object binding pattern: collects every renamed local binding', () => {
     const dir = scratch();
     try {
@@ -348,7 +338,6 @@ describe('getExportsOfFile — binding-pattern walker', () => {
       const exports = getExportsOfFile(f);
       expect(exports.has('ds')).toBe(true);
       expect(exports.has('theme')).toBe(true);
-      // The factory const is private (no export modifier) — must NOT be added
       expect(exports.has('_factory')).toBe(false);
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -387,7 +376,6 @@ describe('getExportsOfFile — binding-pattern walker', () => {
         `export { ds } from './system';\n`
       );
       const fixed = fixStaleBarrelReExports([barrel]);
-      // No fix needed — `ds` is a real export of system.ts.
       expect(fixed).toEqual([]);
       expect(readFileSync(barrel, 'utf-8')).toContain(
         "export { ds } from './system';"
@@ -399,13 +387,6 @@ describe('getExportsOfFile — binding-pattern walker', () => {
 });
 
 describe('fixStaleBarrelReExports — span-preserving partial removals', () => {
-  // These fixtures lock in the trivia-preservation contract added in the
-  // refine-code-hygiene-dx change. The prior synthesis path
-  // (`el.getText().join(', ')`) silently dropped JSDoc, biome-ignore
-  // directives, and per-element type modifiers from retained elements. The
-  // span-preserving rewrite touches only the stale-element ranges in the
-  // original source.
-
   test('JSDoc above a retained element is preserved', () => {
     const dir = scratch();
     try {
@@ -426,7 +407,7 @@ describe('fixStaleBarrelReExports — span-preserving partial removals', () => {
       expect(out).toContain('/** doc-A */');
       expect(out).toContain('a');
       expect(out).toContain('c');
-      expect(out).not.toContain(' b'); // ` b` would indicate stale element retained
+      expect(out).not.toContain(' b'); // the space avoids a substring hit
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -480,12 +461,8 @@ describe('fixStaleBarrelReExports — span-preserving partial removals', () => {
 });
 
 describe('fixStaleBarrelReExports — CJS export = (Tier 3 corner case)', () => {
-  // refine-code-hygiene-dx D10 / task 11.3: getExportsOfFile maps
-  // `export = X;` (TSExportAssignment) to the symbol "default". A barrel
-  // re-exporting that default under a named binding is live; stripping it
-  // is the regression this pins. The `from './cjs-target'` form forces the
-  // reconciler to resolve and read the target, so removing the
-  // TSExportAssignment mapping fails this test.
+  // `export = X` maps to the symbol `default`, so a barrel re-exporting it
+  // under a named binding is live.
   test('does not strip a live `default as X` re-export from an `export =` target', () => {
     const dir = scratch();
     try {
@@ -510,10 +487,8 @@ describe('fixStaleBarrelReExports — CJS export = (Tier 3 corner case)', () => 
 });
 
 describe('fixStaleBarrelReExports — .d.ts targets (Tier 3 corner case)', () => {
-  // A live `.d.ts` target must be resolvable, or the caller's
-  // unresolvable-means-deleted branch strips a LIVE re-export and logs it as
-  // `target-deleted` — silent data loss. refine-code-hygiene-dx D10: prefer
-  // leaving a stale re-export in place over stripping a live one.
+  // An unresolvable target is treated as deleted, so a `.d.ts` target must
+  // resolve; leaving a stale re-export beats stripping a live one.
   test('does not strip a live extensionless re-export whose target is a .d.ts file', () => {
     const dir = scratch();
     try {

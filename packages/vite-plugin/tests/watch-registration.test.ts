@@ -2,12 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { PluginContext } from '../src/context';
 
-/**
- * External DS package sources live outside the root walk, so
- * without an explicit `watcher.add` their edits and deletions never reach
- * `hotUpdate` — the pruning path exists but no event ever drives it, and the
- * last-extracted CSS survives for the life of the dev server.
- */
+/** External package sources live outside the root walk: without `watcher.add`
+ *  their edits never reach `hotUpdate` and stale CSS survives the session. */
 describe('registerSystemWatchPaths', () => {
   function contextWithWatcher() {
     const ctx = new PluginContext({ system: './src/ds.ts' });

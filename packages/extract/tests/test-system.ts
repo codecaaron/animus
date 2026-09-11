@@ -1,17 +1,3 @@
-/**
- * Shared test fixture: theme + system for extract test fixtures.
- *
- * Provides:
- * - `tokens` — a built theme with scales matching the canary test theme JSON
- * - `ds` — a system builder instance with all prop groups
- *
- * This matches the consumer API pattern (showcase/ds.ts uses the same approach).
- * Fixture files import `ds` and use `ds.styles({...}).asElement('div')` etc.
- *
- * The Rust chain walker detects builder chains structurally — it looks for
- * .styles()/.variant()/.states()/.system()/.asElement() patterns, not import
- * source. So `ds.styles({...})` works identically to the legacy `animus.styles({...})`.
- */
 import { createSystem, createTheme } from '@animus-ui/system';
 import {
   background,
@@ -28,8 +14,6 @@ import {
   typography,
 } from '@animus-ui/system/groups';
 
-// ─── Theme ─────────────────────────────────────────────────
-// Mirrors the flattened theme in canary.test.ts
 export const tokens = createTheme()
   .addBreakpoints({ xs: 480, sm: 768, md: 1024, lg: 1200, xl: 1440 })
   .addScale({
@@ -125,10 +109,8 @@ declare module '@animus-ui/system' {
   interface Theme extends TestTheme {}
 }
 
-// ─── System ────────────────────────────────────────────────
-
-// Sealed (vocabulary-registration): the loader consumes sealed instances
-// only; a vocabulary-free fixture seals with an empty record.
+// The loader consumes sealed instances only; a vocabulary-free fixture
+// seals with an empty record.
 export const ds = createSystem()
   .addGroup('flex', flex)
   .addGroup('grid', grid)

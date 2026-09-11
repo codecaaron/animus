@@ -1,18 +1,6 @@
 /**
- * Sibling-epoch reconciliation against a live sibling session.
- *
- * Every epoch value move deletes each sibling session's
- * `replacements-epoch` artifact whose bytes disagree, so restored webpack
- * snapshots built by a session that is gone invalidate. A sibling that is
- * still running is a different case: its snapshots are valid for its own
- * epoch, deleting its artifact reconciles nothing, and the deletion costs it
- * a full rebuild (`animus build --mode production` beside a dev server). A
- * sibling whose directory carries a live owner claim — the same `lock.json`
- * record and `checkLockLiveness` policy the CLI's advisory lock uses — is
- * skipped with one warning; every other sibling prunes.
- *
- * NAPI boundary mocked; the session and the pure pipeline helpers run for
- * real over a temp project.
+ * Deleting a live sibling's epoch artifact reconciles nothing and costs that
+ * sibling a full rebuild, so a sibling holding a live owner claim is skipped.
  */
 import { existsSync, mkdirSync, utimesSync, writeFileSync } from 'fs';
 import { join } from 'path';
@@ -26,7 +14,8 @@ const mocks = vi.hoisted(() => ({
 
 import { setEngineApiOverride } from '../../session/singleton';
 
-// Engine API injection through the singleton's globalThis-keyed test seam.
+// Injection through the singleton's globalThis seam reaches every copy of
+// the module (source or dist); a module mock does not.
 setEngineApiOverride(() => ({
   extractFacts: () => '{"files":{},"parseCount":0}',
   loadSystemModule: mocks.loadSystemModule,
@@ -60,8 +49,6 @@ import type { CliLockRecord } from '../../session/published-set';
 let restoreGlobals: () => void;
 let warned: string[];
 
-/** A sibling session directory holding an epoch this session disagrees with,
- *  plus whatever owner claim the case under test gives it. */
 function createSibling(
   root: string,
   id: string,
@@ -80,25 +67,20 @@ function createSibling(
 }
 
 /**
- * Pid 1 as the foreign live owner: it exists on every POSIX host this suite
- * runs on and is never this process, so the shared pid probe answers "alive"
- * for it either way (the signal succeeds, or it is refused with EPERM, which
- * the probe reads as a process that exists). A fabricated pid number would be
- * a guess about what the kernel has handed out.
+ * Pid 1 exists on every POSIX host and is never this process, so the probe
+ * reads it as alive whether the signal succeeds or is refused with EPERM.
  */
 const FOREIGN_LIVE_PID = 1;
 
-/** A foreign owner whose heartbeat is stamped now. */
 const liveClaim = (): CliLockRecord => lockRecord({ pid: FOREIGN_LIVE_PID });
 
-/** A running pid whose heartbeat stopped long enough ago that the shared
- *  liveness policy calls it dead — deterministic where killing a process and
- *  hoping its number stays unassigned is not. */
+/** A running pid whose heartbeat is stale — deterministic where killing a
+ *  process and hoping its number stays unassigned is not. */
 const stoppedClaim = (): CliLockRecord =>
   lockRecord({ pid: FOREIGN_LIVE_PID, ageMs: CLI_LOCK_STALE_AFTER_MS * 2 });
 
-/** A fresh claim naming THIS process — a tree this process abandoned, since
- *  only one session per process publishes at a time. */
+/** A fresh claim naming this process: one session per process publishes, so
+ *  such a tree is one this process abandoned. */
 const ownProcessClaim = (): CliLockRecord => lockRecord();
 
 beforeEach(() => {
@@ -174,7 +156,7 @@ describe('sibling epoch reconciliation', () => {
     const root = createFixtureProject('animus-sibling-retention-');
     const live = createSibling(root, 'live-old-sibling', liveClaim());
     const abandoned = createSibling(root, 'abandoned-sibling', stoppedClaim());
-    // Older than the sibling-directory retention window (design D2, 24h).
+    // Older than the 24h sibling-directory retention window.
     const stale = new Date(Date.now() - 25 * 60 * 60 * 1000);
     utimesSync(live, stale, stale);
     utimesSync(abandoned, stale, stale);

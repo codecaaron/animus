@@ -24,8 +24,6 @@ const SIDES = ['top', 'right', 'bottom', 'left'] as const;
 
 type Side = (typeof SIDES)[number];
 type CssProperty = 'padding' | 'margin';
-/** Closed over the four physical sides — a side this file cannot name is not a
- *  key this map can carry. */
 type SideValues = { [K in Side]?: string };
 type CascadeCase = {
   label: string;
@@ -55,8 +53,6 @@ function getBaseCss(binding: string): string {
   const layers = fragments[componentId];
   if (!isJsonObject(layers)) throw missing;
   const fragment = layers.base;
-  // Empty-string parity with the original falsy guard: a base layer that
-  // emitted nothing is a missing fragment, not a fragment worth transforming.
   if (!isJsonString(fragment) || fragment === '') throw missing;
   return fragment;
 }
@@ -69,9 +65,7 @@ function parseSides(css: string, prop: CssProperty): SideValues {
   );
   let declaration: RegExpExecArray | null;
   while ((declaration = declarationRe.exec(css)) !== null) {
-    // The longhand capture group is built from SIDES, so the same tuple that
-    // wrote the alternation decides which side the match names — no side can
-    // be spelled here that this file does not already know.
+    // `SIDES.find` narrows the capture to a known side without an assertion.
     const side = SIDES.find((candidate) => candidate === declaration?.[1]);
     const value = declaration[2].trim();
     if (side) {
@@ -106,8 +100,6 @@ function throughLcss(css: string, minify: boolean): string {
     minify,
   }).code.toString();
 }
-
-// Scale reference: space.4=0.25rem, space.8=0.5rem, space.16=1rem, space.24=1.5rem
 
 const CASCADE_CASES = [
   {

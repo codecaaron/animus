@@ -2,116 +2,46 @@
 /* eslint-disable */
 export declare class ExtractEngine {
   constructor(options?: EngineOptions | undefined | null)
-  /**
-   * Parse-once fact extraction over the file set; facts and sources are
-   * RETAINED on the handle for subsequent per-file calls. Returns the
-   * fact manifest (files + parseCount) as JSON.
-   */
   analyze(fileEntriesJson: string): string
-  /** Reset all retained build state. */
   clearCache(): void
   get parseCount(): number
-  /**
-   * Per-file transformation from retained source + facts (no-config
-   * subset: variants/compounds/states; system/custom payloads need the
-   * row-07 config inputs and FAIL LOUD). Returns {code, hasComponents}
-   * JSON. Import decisions come from surviving chain/payload metadata;
-   * consumed-import stripping and directive handling are the ported v1
-   * semantics.
-   */
   transformFile(path: string): string
 }
 
 /**
- * Chain discovery over a file set: parse once per file (parallel), walk
- * every stored AST, return owned facts. The v2 spine's first real surface;
- * consumed by the parity comparison tooling.
+ * Chain discovery over a file set: one parse per file, then one walk per
+ * stored AST.
  */
 export declare function discoverChains(fileEntriesJson: string): string
 
-/**
- * Engine options (row 07 Task 07.3 — replaces the RF-53 hardcodes).
- * All fields optional; absent = v1 defaults.
- */
 export interface EngineOptions {
-  /** Class-identity prefix (v1 default "animus"). */
   prefix?: string
-  /** Runtime import source (v1 default "@animus-ui/system"). */
   runtimeImport?: string
-  /** CSS virtual module id (v1 default "virtual:animus/styles.css"). */
   cssModuleId?: string
-  /**
-   * System-props virtual module id (v1 EmitterConfig default
-   * "virtual:animus/system-props").
-   */
   systemPropsModuleId?: string
-  /** Flat theme scales JSON (v1 analyzeProject `theme_json`). */
   themeJson?: string
-  /** Token-alias variable map JSON (v1 `variable_map_json`). */
   variableMapJson?: string
-  /** Contextual vars JSON (v1 `contextual_vars_json`). */
   contextualVarsJson?: string
-  /** Prop config map JSON (v1 `config_json`). */
   configJson?: string
-  /** Group registry JSON (v1 `group_registry_json`). */
   groupRegistryJson?: string
-  /**
-   * Transform source texts (`{ transformName: sourceText }` JSON) from the
-   * system evaluation. `config_json` names each prop's transform but cannot
-   * carry its body, and the extractor's other seed is `createTransform()`
-   * calls parsed out of project files — so without this, transforms shipped
-   * inside a package are unresolvable at build time and their props fall
-   * back to the raw value.
-   */
   transformSourcesJson?: string
-  /** Selector aliases JSON (v1 `selector_aliases_json`). */
   selectorAliasesJson?: string
-  /**
-   * Condition aliases JSON (the `conditionAliases` manifest field):
-   * `{ "_motionReduce": { "value": "@media …", "order": 500, "kind":
-   * "media" } }`. Absent = no registrations.
-   */
   conditionAliasesJson?: string
-  /** Global style blocks JSON (v1 `global_style_blocks_json`). */
   globalStyleBlocksJson?: string
-  /**
-   * Keyframes blocks JSON (v1 `keyframes_blocks_json` — feeds BOTH the
-   * global sheet and the static keyframes registry, v1 Phase 2a).
-   */
   keyframesJson?: string
-  /** Package resolution JSON (v1 `package_resolution_json`). */
   packageResolutionJson?: string
-  /** Path aliases JSON (`{aliases: [...]}` wrapper, v1 shape). */
   pathAliasesJson?: string
-  /**
-   * Forced-emission declarations (spec: static-emission-overrides) —
-   * the serialized `staticCss` plugin option.
-   */
   staticCssJson?: string
-  /**
-   * rootDir-relative directory prefixes of discovered external packages
-   * (JSON string array). Files under these dirs get the external-token
-   * candidate walk (extraction-diagnostics: cross-source correlation);
-   * absent = no candidates recorded.
-   */
   externalDirsJson?: string
-  /** v1 `dev_mode`: retain all components (skip reconciliation pruning). */
   devMode?: boolean
 }
 
-/**
- * Build/probe identity: proves the v2 binary loads and its oxc linkage
- * parses. Consumed by the dual-build verification and the parity harness
- * engine registry.
- */
+/** Probe identity: proves the binary loads and its oxc linkage parses. */
 export declare function engineVersion(): string
 
 /**
- * Full per-file fact extraction: chains + eagerly evaluated
- * stages + statics + raw usage facts + compose families — one parse per
- * file. The store (and every AST) is dropped when this call returns; the
- * invariant is that no program() read happens after
- * cross-file facts resolve.
+ * Full per-file fact extraction, one parse per file. The store and its
+ * ASTs drop on return: no `program()` read survives cross-file resolve.
  */
 export declare function extractFacts(fileEntriesJson: string): string
 
@@ -128,40 +58,29 @@ export interface NapiSystemConfig {
   selectorOrder?: string
   /**
    * Condition alias map JSON (the `conditionAliases` manifest field):
-   * alias → `{ value, order, kind }`. Absent when the system registers none.
+   * alias → `{ value, order, kind }`. Absent when none are registered.
    */
   conditionAliases?: string
   /**
-   * Transform source texts (`{ transformName: sourceText }` JSON) captured
-   * during system evaluation — the only channel by which transforms shipped
-   * inside a package reach the build-time evaluator. Absent against a system
-   * built by an older @animus-ui/system.
+   * Transform source texts (`{ transformName: sourceText }` JSON): the
+   * only channel by which transforms shipped in a package reach evaluation.
    */
   transformSources?: string
   globalStyleBlocks?: string
   keyframesBlocks?: string
   /**
-   * Vocabulary witnesses from the sealed system's registration record:
-   * one JSON array of coded entries — collisions
-   * (`animus.vocabulary.collision`) and legacy-verb witnesses
-   * (`animus.vocabulary.legacy-verb`: registered vocabulary consumed
-   * through `from()`/`includes:`, which cannot carry it). The record is
-   * the witness channel (the evaluation host shims console); hosts
-   * surface each entry as a diagnostic keyed by its `code`. Absent when
-   * the record carries no witnesses.
+   * Vocabulary witnesses as a JSON array of coded entries; hosts surface
+   * each as a diagnostic keyed by its `code`. Absent when there are none.
    */
   vocabularyWitnesses?: string
   /**
-   * Canonical absolute paths of every module evaluated for the system
-   * (sorted; entry included, runtime stubs excluded). The plugins use this
-   * as the system-reload membership set.
+   * Canonical absolute paths of every module evaluated for the system,
+   * sorted; the entry is included, runtime stubs are not.
    */
   dependencies: Array<string>
   /**
-   * Per-module built-theme token manifests captured during evaluation
-   * (`{ modulePath: { exportName: [token paths] } }`) — the source-token
-   * witness for the cross-source correlation diagnostic. Absent when no
-   * evaluated module exports a built theme.
+   * Per-module built-theme token manifests, shaped
+   * `{ modulePath: { exportName: [token paths] } }`. Absent when none exist.
    */
   sourceThemeManifests?: string
 }

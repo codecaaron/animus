@@ -1,18 +1,8 @@
 import { assertNoErrorDiagnostics } from '@animus-ui/extract/pipeline';
 import { join } from 'node:path';
 /**
- * Static transform-result hardening, end to end (transform-result-hardening
- * design D3/D8; spec extraction-diagnostics §Error diagnostics fail the
- * build): a registered transform returning an object produces a
- * `kind: "error"` manifest diagnostic, emits NO declaration (never
- * `[object Object]` — guardrail G4), and the shared plugin gate
- * `assertNoErrorDiagnostics` throws the D8 message both bundler plugins
- * escalate identically (each calls this one helper at its accept point).
- *
- * Fixture sources are inline (keyframes-binding-substitution.test.ts
- * convention) — they still travel the real OXC parse → chain walk →
- * QuickJS transform evaluation path via run-pipeline. The valid-transform
- * control reuses the on-disk transforms.tsx fixture.
+ * Both bundler plugins escalate error diagnostics through the one shared
+ * gate, so the failure proven here is the failure each of them raises.
  */
 import { describe, expect, test } from 'vitest';
 
@@ -23,15 +13,13 @@ import type { CssDiagnosticLike } from '@animus-ui/extract/pipeline';
 
 const COMPONENTS = join(__dirname, '..', 'fixtures', 'components');
 
-/** Registers `size` (the width prop's transform) with an OBJECT return —
- *  the legacy-runtime shape the static gate now rejects. */
 const invalidTransformFile = {
   path: 'fixtures/invalid-transform.tsx',
   source: `import { createTransform } from '@animus-ui/system';\nimport { ds } from './setup';\n\nexport const objectSize = createTransform('size', (value) => ({ width: value }));\n\nexport const Broken = ds.styles({ width: 4 }).asElement('div');\n\nexport function BrokenExample() {\n  return <Broken />;\n}\n`,
 };
 
-/** A second consumer in a DIFFERENT file — same invalid transform, so the
- *  aggregated failure must list both entries. */
+/** Consumes `width` without registering a transform of its own: registration
+ *  is project-wide, so the invalid transform reaches this file too. */
 const secondConsumerFile = {
   path: 'fixtures/also-broken.tsx',
   source: `import { ds } from './setup';\n\nexport const AlsoBroken = ds.styles({ width: 8 }).asElement('span');\n\nexport function AlsoBrokenExample() {\n  return <AlsoBroken />;\n}\n`,
@@ -42,9 +30,6 @@ const D8_MESSAGE =
   'return a string or finite number; rule-level styling ships as ' +
   'declaration scales (see composite-style-scales)';
 
-/** Manifest diagnostics as this suite reads them: the shared gate's structural
- *  contract (`CssDiagnosticLike`) plus the `severity` field the Rust emitter
- *  also writes and the D8 assertion below pins. */
 type ManifestDiagnostic = CssDiagnosticLike & { severity?: string };
 
 describe('invalid transform result — static escalation', () => {
@@ -86,9 +71,6 @@ describe('multiple invalid results — aggregated escalation', () => {
     try {
       assertNoErrorDiagnostics(manifest.diagnostics);
     } catch (e) {
-      // `assertNoErrorDiagnostics` fails by throwing an aggregated `Error`;
-      // anything else leaves this catch unchanged rather than being retyped
-      // into the assertions below.
       if (!(e instanceof Error)) throw e;
       thrown = e;
     }

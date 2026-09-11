@@ -51,10 +51,8 @@ function fixture(relativePath: string, path: string = relativePath): RawEntry {
 }
 
 function extractFacts(filesJson: string): string {
-  // SAFETY: `ingestSourceEntries` is the only caller of this seam, and it
-  // serializes exactly the `{ path, source }` entries this lifecycle handed
-  // it — the same objects, one `JSON.stringify` away. `parseCount` below
-  // counts them, so a drift in that wire would fail the receipts.
+  // SAFETY: `ingestSourceEntries` is this seam's only caller and serializes
+  // exactly the `{ path, source }` entries handed to it.
   const entries = JSON.parse(filesJson) as RawEntry[];
   const { manifest } = runPipeline(entries);
   return JSON.stringify({
@@ -327,11 +325,6 @@ describe('real-engine Svelte source lifecycle', () => {
   ])(
     'witnesses an aliased %s — engine usage identity follows renamed chains',
     async (_label, barrelSource) => {
-      // Formerly fail-closed: the engine could not attribute usage through
-      // a renamed hop, so witnessing would have under-emitted. Usage
-      // identity now walks sourced re-exports, local renames, and
-      // import-then-local-export barrels to the defining chain, so the
-      // renamed consumer behaves exactly like the same-name cases above.
       const receipt = await barrelReceipt(barrelSource, 'pill');
 
       expect(receipt).toEqual({

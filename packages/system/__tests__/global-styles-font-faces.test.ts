@@ -3,12 +3,6 @@ import { describe, expect, it } from 'vitest';
 import { asset, ASSET_PLACEHOLDER_PREFIX } from '../src';
 import { createGlobalStyles } from './test-system';
 
-/**
- * ani-ledger-closeout: typed @font-face resources (global-styles-system).
- * The factory carries descriptors on the block; the loader serializes them
- * and the extractor renders them ahead of selector rules — those halves are
- * pinned in Rust (theme.rs font_face tests). Here: the authoring surface.
- */
 describe('createGlobalStyles fontFaces', () => {
   it('carries typed descriptors on the block', () => {
     const block = createGlobalStyles(
@@ -80,9 +74,6 @@ describe('asset() references', () => {
       }
     );
 
-    // The placeholder is a plain string on the block — exactly what the
-    // sandbox's JSON serialization and the emitter's byte-exact pass-through
-    // will carry to the host plugin for substitution.
     expect(block.fontFaces?.[0].src[0].url).toBe(
       'animus-asset:@acme/tokens/fonts/inter.woff2'
     );

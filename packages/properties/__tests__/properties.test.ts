@@ -14,9 +14,6 @@ describe('UNITLESS_PROPERTIES', () => {
   });
 
   test('includes spec-named unitless members (standard, modern, legacy flexbox)', () => {
-    // openspec/specs/css-property-data scenarios: 'Contains standard unitless
-    // properties', 'Contains modern unitless properties', 'Contains legacy
-    // flexbox unitless properties'.
     const required = [
       'opacity',
       'z-index',

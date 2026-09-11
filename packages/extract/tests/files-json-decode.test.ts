@@ -1,17 +1,3 @@
-/**
- * `filesJson` decode policy.
- *
- * The serialized analysis corpus is animus's OWN wire — this package writes it
- * and every reader is in this repository — so a payload that is not an entry
- * array is a producer bug. One decoder (`parseFilesJson`) owns that judgement
- * for all three readers, and its policy is to THROW: a silently-empty corpus is
- * indistinguishable from "the project has no files" and would let a build
- * publish an empty stylesheet as a success.
- *
- * The adapter case is the one that used to differ: it cast the parsed value
- * without looking, so a malformed corpus reached the engine as an empty
- * drift-tracking map instead of a failure.
- */
 import { describe, expect, test } from 'vitest';
 
 import { createV2EngineApi, parseFilesJson } from '../pipeline';
@@ -60,10 +46,6 @@ describe('parseFilesJson', () => {
     );
   });
 
-  // RECORDED CONTRACT REVERSAL: this previously pinned a bare SyntaxError
-  // surfacing unchanged, while every other internal-wire decoder names the
-  // wire and cause via parseInternalWire. The asymmetry was the accident, so
-  // the pin now asserts the named form (wire + reader + cause).
   test('names the wire and reader on malformed JSON', () => {
     expect(() => parseFilesJson('not json', 'test')).toThrow(
       /test filesJson is not valid JSON/
@@ -71,8 +53,6 @@ describe('parseFilesJson', () => {
   });
 });
 
-/** A store whose engine slot is observable — the assertion below is that a
- *  refused corpus never reaches engine construction. */
 function makeStore(): V2EngineStateStore & { engine: V2ExtractEngine | null } {
   let engine: V2ExtractEngine | null = null;
   let sentSources: Map<string, string> | null = null;
@@ -99,8 +79,6 @@ function makeStore(): V2EngineStateStore & { engine: V2ExtractEngine | null } {
 describe('engine adapter analyzeProject', () => {
   test.each([
     ['a corpus that is not an array', '{"path":"a.tsx","source":""}'],
-    // The silent case: an array whose members are not source entries used to
-    // pass straight through, seeding the drift map with undefined keys.
     ['an array of non-entries', '[{"file":"a.tsx"}]'],
   ])('refuses %s before constructing the engine', (_case, filesJson) => {
     const store = makeStore();

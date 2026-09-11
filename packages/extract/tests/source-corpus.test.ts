@@ -1,5 +1,3 @@
-/** The corpus is shared by the Vite context and the extraction session, so it
- *  is driven here at its own interface rather than through either driver. */
 import { readdirSync, readFileSync } from 'fs';
 import { join, relative, resolve } from 'path';
 import { describe, expect, test } from 'vitest';
@@ -30,8 +28,6 @@ function makeCorpus(
 describe('createSourceCorpus', () => {
   test('assembles the corpus from the cache in discovery order, externals after', async () => {
     const { corpus, ingestor } = makeCorpus();
-    // Insertion order is the watch history, not the walk: an external entry
-    // first, a nested file, then a file created mid-watch that sorts first.
     const fileCache = new Map([
       ['../kit/src/Button.tsx', entry('../kit/src/Button.tsx')],
       ['src/b.tsx', entry('src/b.tsx')],
@@ -127,8 +123,6 @@ describe('createSourceCorpus', () => {
   });
 });
 
-/** Catches a second production owner of the ingestion policy point inside
- *  this package; other packages and the test-seam parameter are uncovered. */
 describe('ingestion policy has one owner', () => {
   const EXTRACT = resolve(__dirname, '..');
   const SKIP = new Set(['node_modules', 'dist', 'crates', 'tests']);
@@ -145,7 +139,6 @@ describe('ingestion policy has one owner', () => {
 
   test('createSourceIngestor is called only inside the source corpus', () => {
     const files = sourceFiles(EXTRACT);
-    // Vacuity guard: the walk must actually cover the session driver.
     expect(files.some((f) => f.endsWith('extraction-session.ts'))).toBe(true);
 
     const callers = files

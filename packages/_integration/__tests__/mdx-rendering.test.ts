@@ -1,19 +1,6 @@
 import { preprocessMdx } from '@animus-ui/extract/pipeline';
 import { readFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
-/**
- * MDX-only-rendered component extraction regression tests.
- *
- * The file-discovery walk in both bundler adapters hardcodes .ts/.tsx/.js/.jsx
- * (historical state). The MDX arc added an `extensions?: string[]` config
- * option with `.mdx` in the default list, and a preprocessor at
- * `@animus-ui/extract/pipeline`'s `preprocessMdx()` that compiles MDX to
- * scanner-consumable JSX (with path rewrite to `.mdx.tsx` for the Rust
- * source-type helper).
- *
- * This test exercises the preprocessor end-to-end by importing it directly
- * from the pipeline module — same code path the plugin uses at buildStart.
- */
 import { describe, expect, test } from 'vitest';
 
 import { assertNoUnresolvedTokens } from './assert-no-unresolved-tokens';
@@ -38,9 +25,8 @@ const mdxRelPath = relative(FIXTURES_ROOT, join(FIXTURE_DIR, 'usage.mdx'));
 
 describe('MDX-only-rendered component extraction', () => {
   test('[Regression guard — MDX-only rendering extracts in prod mode]', async () => {
-    // End-to-end: preprocess MDX via the shared pipeline preprocessor,
-    // pass to runPipeline with the path rewritten to `.mdx.tsx` (matching
-    // the plugin's internal buildStart rewrite).
+    // The `.tsx` suffix below is load-bearing: source type comes from the
+    // path extension, and a bare `.mdx` path is never scanned.
     const result = await preprocessMdx(mdxSource, mdxRelPath);
     expect(result.kind).toBe('ok');
     const mdxEntry = {
@@ -54,10 +40,6 @@ describe('MDX-only-rendered component extraction', () => {
   });
 
   test('Without MDX preprocessing, rendering is invisible (regression baseline)', () => {
-    // Baseline: without the preprocessor, the .mdx usage is invisible.
-    // Component is eliminated as unrendered. This guard ensures the
-    // preprocessor is actually doing something (if both pass/fail together,
-    // the primary test above isn't exercising the fix path).
     const { manifest } = runPipeline([componentEntry]);
     expect(manifest.report.components_eliminated).toBeGreaterThanOrEqual(1);
   });

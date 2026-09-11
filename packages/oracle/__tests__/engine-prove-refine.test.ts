@@ -17,18 +17,12 @@ import type { OracleHost } from '../src/providers/host';
 import type { InMemoryHostConfig } from '../src/providers/in-memory';
 import type { FixtureOptions } from './fixture-world';
 
-/** The only way this suite's world differs from the shared one: two rules its
- *  harvest must DISCOVER. `wide-1024` sits on a cut the domain does not
- *  declare, and `state-disabled` gives the fixpoint a state-guarded rule to
- *  reach. Everything else — components, dimensions, cuts, named scenarios,
- *  `classesFor` and the rule dependencies — is the shared fixture world, so a
- *  change to engine behaviour reaches this suite too. */
 const EXTRA_RULES: InMemoryHostConfig['rules'] = [
   {
     id: 'wide-1024',
     selector: { raw: '.anm-Card', classNames: ['anm-Card'] },
     declarations: [{ property: 'padding', value: '24px' }],
-    // 1024 is deliberately NOT in `cuts`: prove has to harvest it.
+    // 1024 is not in the domain's cuts: prove must harvest it from this guard.
     condition: range('viewport.inline', { min: 1024 }),
     layer: 'anm-system',
     order: 0,
@@ -87,8 +81,8 @@ describe('prove — PROVED', () => {
     expect(result.summary).toContain(
       'cuts harvested from rule guards: viewport.inline = 1024'
     );
-    // Vacuity guard: 1024 really did split the partition. Without it the
-    // domain is 2 modes × 3 viewport cells × 2 sizes × 2 states = 24.
+    // Vacuity guard: without the harvested 1024 cut the domain is
+    // 2 modes × 3 viewport cells × 2 sizes × 2 states = 24, not 40.
     expect(result.coverage.cellsEvaluated).toBe(40);
     expect(result.coverage.scenarioCells).toBe(40);
   });
@@ -246,11 +240,8 @@ describe('prove — CONDITIONAL and INCONCLUSIVE', () => {
   });
 
   /**
-   * `prove` re-checks every assertion at runtime because callers also reach
-   * it through the JSON surface, where the declared union guarantees nothing.
-   * Exercising a refusal therefore needs a value the union forbids: start
-   * from a valid assertion and install the offending kind at runtime, with
-   * the key order and descriptor flags an object literal would have given it.
+   * The union forbids an invalid kind, so the offending value is installed at
+   * runtime with the descriptor flags an object literal would have given it.
    */
   const assertionOfKind = (kind: string): OracleAssertion => {
     const assertion: OracleAssertion = { kind: 'no-important', target: 'Card' };
@@ -307,7 +298,7 @@ describe('prove — fixpoint', () => {
     expect(second.nextOperations).toEqual(first.nextOperations);
     expect(second.summary).toContain('FIXPOINT: no new information');
 
-    // Vacuity guard: the first probe really did learn something.
+    // Vacuity guard: the first probe learns something.
     expect(first.knowledgeDelta.newFacts).toBeGreaterThan(0);
   });
 
@@ -334,19 +325,18 @@ describe('prove — fixpoint', () => {
       domain: { mode: { kind: 'finite', values: ['dark', 'light'] } },
     });
 
-    // The override is world identity: a different quantified domain must
-    // never collide in the ledger and inherit the other domain's answer.
+    // The domain override is part of world identity: two quantified domains
+    // must not share a probe state and inherit each other's answer.
     expect(narrow.verdict).not.toBe('FIXPOINT');
     expect(wide.verdict).not.toBe('FIXPOINT');
     expect(wide.probeStateId).not.toBe(narrow.probeStateId);
     expect(repeat.verdict).toBe('FIXPOINT');
     expect(repeat.previous).toBe(wide.probeStateId);
 
-    // Vacuity guard: the two domains genuinely quantified differently.
+    // Vacuity guard: the two domains quantify differently.
     expect(wide.coverage.scenarioCells).toBeGreaterThan(
       narrow.coverage.scenarioCells
     );
-    // The pin is visible in the world, not smuggled around it.
     expect(wide.worldId === narrow.worldId ? 'collided' : 'distinct').toBe(
       'distinct'
     );
@@ -473,8 +463,8 @@ describe('prove — verdict honesty', () => {
       assertions: [{ kind: 'no-important', target: 'Card' }],
     });
 
-    // `pseudo:hover` is unbound in this world, so the rule is never active in
-    // any swept cell — but it exists, and PROVED would launder that away.
+    // `pseudo:hover` is unbound here, so the rule is never active in a swept
+    // cell; PROVED would hide that the rule exists at all.
     expect(result.verdict).toBe('CONDITIONAL');
     expect(result.summary).toContain('pseudo:hover');
   });
@@ -549,7 +539,6 @@ describe('refine', () => {
     });
 
     expect(split.verdict).toBe('ESTABLISHED');
-    // A collided answer would hand back the 2-branch split this policy refused.
     expect(refused.verdict).toBe('CONDITIONAL');
     expect(refused.unknowns).toHaveLength(1);
   });

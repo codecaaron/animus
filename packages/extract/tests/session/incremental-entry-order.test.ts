@@ -1,19 +1,3 @@
-/**
- * Entry order across the two pipelines.
- *
- * A full pipeline hands the engine its files in `discoverFiles` order; the
- * incremental pass builds its corpus from the session's file cache instead,
- * where a file created mid-watch enters at the end. Both must analyze the
- * same corpus in the same order, or identical inputs stop producing
- * byte-identical artifacts.
- *
- * The nested case matters: `src/b/c.tsx` precedes `src/b.tsx` in the walk
- * (directory `b` sorts before the file `b.tsx` among its siblings), which a
- * flat string sort of the two paths gets backwards.
- *
- * NAPI boundary mocked, session real, temp project on disk. `fileEntries` is
- * slot 0 of the positional `analyzeProject` tuple (analyze-project-args.ts).
- */
 import { mkdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
@@ -26,9 +10,6 @@ const mocks = vi.hoisted(() => ({
 
 import { setEngineApiOverride } from '../../session/singleton';
 
-// Engine API injection through the singleton's globalThis-keyed test seam —
-// reaches every copy of the module (source or dist), which a module mock
-// cannot.
 setEngineApiOverride(() => ({
   extractFacts: () => '{"files":{},"parseCount":0}',
   loadSystemModule: mocks.loadSystemModule,
@@ -49,7 +30,6 @@ import {
 
 import type { AnalyzeProjectArgs } from '../../pipeline';
 
-/** Analyzed file paths from the most recent analyzeProject invocation. */
 const lastAnalyzedPaths = (): string[] => analyzedPaths(mocks.analyzeProject);
 
 let restoreGlobals: () => void;
@@ -67,8 +47,6 @@ afterEach(() => {
   disposeTempRoots();
 });
 
-/** Temp project whose walk order is not the flat sort of its paths:
- *  `src/b/c.tsx` → `src/b.tsx` → `src/system.ts`. */
 function createNestedProject(): string {
   const root = makeTempRoot('animus-entry-order-');
   mkdirSync(join(root, 'src', 'b'), { recursive: true });

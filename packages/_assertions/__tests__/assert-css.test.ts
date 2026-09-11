@@ -59,9 +59,6 @@ describe('assertLayerOrder', () => {
   });
 
   it('names a missing string marker verbatim and a missing regex marker as a pattern', () => {
-    // The two marker kinds are reported differently on purpose: a literal is
-    // quoted as authored, a pattern is shown in `/…/` form so the reader can
-    // tell "this text is absent" from "nothing matched this shape".
     expect(() =>
       assertLayerOrder('/* empty */', { layers: ['@layer anm-base {'] })
     ).toThrow('missing expected layer markers: @layer anm-base {');
@@ -249,7 +246,6 @@ describe('assertKeyframesExtracted', () => {
     expect(() =>
       assertKeyframesExtracted(css, { namePrefix: 'custom-' })
     ).not.toThrow();
-    // And default prefix should fail on the same CSS.
     expect(() => assertKeyframesExtracted(css)).toThrow(
       /expected at least 1 @keyframes block/
     );
@@ -306,9 +302,6 @@ describe('assertVariantDeclarationParity', () => {
   });
 
   it('fails when equal declaration sets diverge in emitted order', () => {
-    // Order changes CSS semantics for duplicate-property and
-    // shorthand/longhand pairs: `margin:0; margin-left:1px` computes a 1px
-    // left margin, the reverse order computes 0.
     const css = parityCss(
       'margin: 0; margin-left: 1px',
       'margin-left: 1px; margin: 0',
@@ -341,7 +334,6 @@ describe('layerBlockBody', () => {
   });
 
   it('returns undefined when the sheet declares no such block', () => {
-    // The `@layer a, b, c;` DECLARATION is not a block.
     expect(layerBlockBody(ORDERED_CSS, 'anm-states')).toBeUndefined();
   });
 
@@ -349,7 +341,6 @@ describe('layerBlockBody', () => {
     const css =
       '@layer anm-global { @media (min-width: 10px) { body { margin: 0; } } .tail { gap: 1px; } }';
     const body = layerBlockBody(css, 'anm-global');
-    // A flat `[^{}]*` reader would stop at the first inner `}` and lose .tail.
     expect(body).toContain('.tail { gap: 1px; }');
     expect(body).toContain('@media');
   });

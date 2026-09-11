@@ -1,19 +1,3 @@
-/**
- * Turbopack protocol — READER side (openspec:
- * next-turbopack-served-transform-coherence, design D1 read half + D3 + D4
- * — increment 02).
- *
- * Retried artifact reads keyed by commit CONTENT, foreign-session rejection,
- * and the full catch-up decision table, exercised at the seam level per D4:
- * fabricated commit/status artifacts (plus the REAL session writer for the
- * end-to-end style-only case), the loader's fs reads intercepted through
- * its injected filesystem seam where a torn window must be staged. No real
- * `next dev --turbopack` harness is built here (DEF-1 stays lazy).
- *
- * The engine doubles are injected through the loader's own worker-local
- * engine seam exactly like turbopack-loader.test.ts; `contentHash` and the
- * artifact vocabulary run for real.
- */
 import { contentHash } from '@animus-ui/extract/pipeline';
 import {
   existsSync,
@@ -41,11 +25,6 @@ const engineDouble = () => ({
   transformFile: mocks.transformFile,
 });
 
-// Two injection points, one set of doubles. The loader builds its OWN
-// worker-local engine (guardrail G1: the singleton module must never be
-// imported from its graph), so it takes the doubles through its own seam
-// (in beforeEach, reset in afterEach); the session reaches the engine through
-// the singleton's globalThis-keyed override, set once for the file.
 setEngineApiOverride(engineDouble);
 
 import {
@@ -81,16 +60,12 @@ const OLD_SOURCE = 'export const c = 1;\n';
 const NEW_SOURCE =
   "export const C = animus.styles({ margin: 8 }).asElement('div');\n";
 
-// ── Fabricated generation writer (real artifact SHAPES, scripted content) ──
-
 interface GenerationSpec {
   sessionId?: string;
   generation?: number;
   epoch?: string;
   files: Array<{ path: string; source: string }>;
   manifestJson?: string;
-  /** Pad the commit's epoch so two commits can be written byte-length-equal
-   *  (the stat-masquerade case). */
   writeEpochArtifact?: boolean;
 }
 
@@ -120,32 +95,18 @@ function buildInputs(files: GenerationSpec['files']) {
   };
 }
 
-/**
- * What the engine double returns when the loader replays a committed corpus:
- * a COMPLETE manifest (the shared pipeline reads its fields unguarded) whose
- * CSS names the corpus it was analyzed from — the replay marker that lets a
- * test tell WHICH generation was hydrated. Assertions build the expected
- * value from this same function, so the marker is never restated by hand.
- */
 function replayedManifest(filesJson: string): string {
   return JSON.stringify(
     makeManifest({ css: `/* replayed ${contentHash(filesJson)} */` })
   );
 }
 
-/** Write a full committed generation the way the session writer shapes it:
- *  enveloped payloads (via the shared session-paths encoding helpers) + a
- *  commit whose hashes cover the DISK bytes. */
 function writeGeneration(root: string, spec: GenerationSpec) {
   const sessionId = spec.sessionId ?? SESSION_ID;
   const sessionDir = sessionArtifactDir(root, sessionId);
   mkdirSync(sessionDir, { recursive: true });
   const generation = spec.generation ?? 1;
   const epoch = spec.epoch ?? 'epoch-1';
-  // A COMPLETE manifest naming the generation's analyzed files (none of them
-  // declaring components) — the payload's own shape has to be a manifest now
-  // that the shared pipeline reads its fields unguarded. Generation identity
-  // rides in the envelope wrapped around it, never in the payload.
   const manifestJson =
     spec.manifestJson ??
     JSON.stringify(
@@ -208,10 +169,6 @@ function writeStatus(
   );
 }
 
-// ── Async loader driver ────────────────────────────────────────────────────
-
-/** Every loader failure carries the dependencies registered before it was
- *  thrown (design D3) — the driver below attaches them to the rejection. */
 interface LoaderRejection extends Error {
   dependencies?: string[];
 }
@@ -244,8 +201,6 @@ function runLoader(args: {
         },
     };
     const sync = animusTurbopackLoader.call(ctx, args.source);
-    // A legacy synchronous return would bypass the callback — surface it
-    // so assertions fail loudly instead of hanging.
     if (sync !== undefined) resolve({ code: String(sync), dependencies });
   });
 }
@@ -295,16 +250,10 @@ describe('retried artifact reads (design D1 read half)', () => {
       files: [{ path: 'src/C.tsx', source: OLD_SOURCE }],
     });
 
-    // Stage the tear through the loader's fs seam: after the FIRST commit
-    // read returns generation 1, generation 2 lands on disk — the payload
-    // reads then hash-mismatch commit 1 and the loader must retry against
-    // the settled generation 2.
     let commitReads = 0;
     let torn = false;
-    // The double IS `fs.readFileSync`: an apply trap observes each commit
-    // read and stages the tear, then the real reader answers the call — so
-    // the seam keeps every overload of the owner's declared reader instead
-    // of restating one of them.
+    // A Proxy over the real reader keeps every overload the seam declares;
+    // the apply trap only stages the tear.
     const tearingReadFileSync = new Proxy(readFileSync, {
       apply: (target, thisArg, callArgs) => {
         const bytes = target.apply(thisArg, callArgs);
@@ -328,11 +277,8 @@ describe('retried artifact reads (design D1 read half)', () => {
     });
 
     const { code } = await runLoader({ root, source: NEW_SOURCE });
-    // The served transform derives from generation 2's replayed manifest —
-    // never a G1-commit/G2-payload mixture.
     const g2Inputs = buildInputs([{ path: 'src/C.tsx', source: NEW_SOURCE }]);
     expect(code).toContain(replayedManifest(g2Inputs.filesJson));
-    // The read actually retried: commit read at least twice.
     expect(commitReads).toBeGreaterThanOrEqual(2);
   });
 
@@ -347,7 +293,6 @@ describe('retried artifact reads (design D1 read half)', () => {
     const after1 = mocks.analyzeProject.mock.calls.length;
     expect(after1).toBe(1);
 
-    // Byte-identical commit rewrite with a bumped mtime: NO re-hydration.
     const commitPath = analysisCommitPath(sessionDir);
     const commitBytes = readFileSync(commitPath, 'utf-8');
     writeFileSync(commitPath, commitBytes);
@@ -356,13 +301,10 @@ describe('retried artifact reads (design D1 read half)', () => {
     await runLoader({ root, source: OLD_SOURCE });
     expect(mocks.analyzeProject.mock.calls.length).toBe(after1);
 
-    // A DIFFERENT generation whose commit has the same byte length and a
-    // restored mtime (stat-identical) still re-hydrates: identity is the
-    // commit CONTENT, never file stat.
     const stat = statSync(commitPath);
     writeGeneration(root, {
       generation: 2,
-      epoch: 'epoch-b', // same length as 'epoch-a'
+      epoch: 'epoch-b',
       files: [{ path: 'src/C.tsx', source: NEW_SOURCE }],
     });
     const rewritten = readFileSync(commitPath, 'utf-8');
@@ -376,15 +318,12 @@ describe('retried artifact reads (design D1 read half)', () => {
 describe('session isolation (design D2)', () => {
   test('foreign-session artifacts are rejected with a stable diagnostic and registered dependencies', async () => {
     const root = makeTempRoot('animus-turbo-protocol-');
-    // Artifacts embedding ANOTHER session's id sit where this loader's
-    // options point (stale/foreign directory reuse).
     const foreignDir = sessionArtifactDir(root, SESSION_ID);
     mkdirSync(foreignDir, { recursive: true });
     writeGeneration(root, {
       sessionId: 'some-other-invocation',
       files: [{ path: 'src/C.tsx', source: OLD_SOURCE }],
     });
-    // Point the loader's sessionDir at the foreign artifacts.
     const err = await expectRejection(
       runLoader({
         root,
@@ -402,8 +341,6 @@ describe('session isolation (design D2)', () => {
 });
 
 describe('catch-up decision table (design D3 — verbatim)', () => {
-  /** One committed generation covering src/C.tsx at OLD_SOURCE; the loader
-   *  then observes NEW_SOURCE — the mismatch that enters the table. */
   function mismatchRoot() {
     const root = makeTempRoot('animus-turbo-protocol-');
     const { sessionDir } = writeGeneration(root, {
@@ -476,13 +413,10 @@ describe('catch-up decision table (design D3 — verbatim)', () => {
   test('row: commit absent + active state carrying NO deadline (legacy/torn status shape) → wait to the absolute cap; ANIMUS_ANALYSIS_CATCHING_UP with dependencies', async () => {
     const root = makeTempRoot('animus-turbo-protocol-');
     const sessionDir = sessionArtifactDir(root, SESSION_ID);
-    // The schema-2 writer always publishes `deadlineAt`; a status without it
-    // is the only shape whose wait the loader still has to bound itself.
     writeStatus(sessionDir, { state: 'starting', deadlineAt: undefined });
     const started = Date.now();
     const err = await expectRejection(runLoader({ root, source: NEW_SOURCE }));
     expect(err.message).toContain('ANIMUS_ANALYSIS_CATCHING_UP');
-    // It genuinely waited (watchdog + margin).
     expect(Date.now() - started).toBeGreaterThanOrEqual(2000);
     expect(err.dependencies).toContain(analysisCommitPath(sessionDir));
     expect(err.dependencies).toContain(analysisStatusPath(sessionDir));
@@ -490,10 +424,6 @@ describe('catch-up decision table (design D3 — verbatim)', () => {
 
   test('the session-published deadline is the ONLY wait ceiling: a non-default watcher debounce is not cut short by a locally assumed default', async () => {
     const { root, sessionDir } = mismatchRoot();
-    // What `startTurbopackWatcher(session, root, { debounceMs: 4000 })` publishes: the
-    // session derives `deadlineAt` from its configured debounce ceiling plus
-    // the status watchdog, so a project that widened the watcher debounce
-    // has a deadline far beyond the default one.
     const CONFIGURED_DEBOUNCE_MS = 4_000;
     const STATUS_WATCHDOG_MS = 2_000;
     writeStatus(sessionDir, {
@@ -501,9 +431,8 @@ describe('catch-up decision table (design D3 — verbatim)', () => {
       pending: [['src/C.tsx', contentHash(NEW_SOURCE)]],
       deadlineAt: Date.now() + CONFIGURED_DEBOUNCE_MS + STATUS_WATCHDOG_MS,
     });
-    // The covering commit lands after the ceiling the loader used to compute
-    // from the DEFAULT debounce (75 + watchdog 2000 + margin 50 ≈ 2.1s) and
-    // well inside the published deadline: a healthy in-flight analysis.
+    // 2.6s lands past the default-debounce ceiling (~2.1s) and well inside
+    // the published deadline: a healthy in-flight analysis.
     setTimeout(() => {
       writeGeneration(root, {
         generation: 2,
@@ -537,7 +466,6 @@ describe('catch-up decision table (design D3 — verbatim)', () => {
       pending: [['src/C.tsx', contentHash(NEW_SOURCE)]],
       deadlineAt: Date.now() + 60_000,
     });
-    // The orchestrator commits the covering generation mid-wait.
     setTimeout(() => {
       writeGeneration(root, {
         generation: 2,
@@ -552,7 +480,6 @@ describe('catch-up decision table (design D3 — verbatim)', () => {
     });
     const g2Inputs = buildInputs([{ path: 'src/C.tsx', source: NEW_SOURCE }]);
     expect(code).toContain(replayedManifest(g2Inputs.filesJson));
-    // Successful paths register no commit/status dependency (D3).
     expect(dependencies).not.toContain(analysisCommitPath(sessionDir));
     expect(dependencies).not.toContain(analysisStatusPath(sessionDir));
   });
@@ -566,8 +493,6 @@ describe('catch-up decision table (design D3 — verbatim)', () => {
 
   test('an analyzed file is never passed through raw: every failure path serves a diagnostic, not the source', async () => {
     const { root, sessionDir } = mismatchRoot();
-    // The writer's own parameter contract types every row, so the pending
-    // entries stay the status artifact's [sourceKey, hash] pairs.
     const statuses: Array<Parameters<typeof writeStatus>[1] | undefined> = [
       undefined,
       { state: 'idle' },
@@ -619,8 +544,6 @@ describe('style-only end-to-end through the real session writer', () => {
       globalStyleBlocks: null,
       keyframesBlocks: null,
     });
-    // One component with a fixed replacement: the plan the epoch is derived
-    // from, held constant across the style-only re-analysis below.
     const plan = {
       'src/C.tsx::C': makeComponent('src/C.tsx', 'r1'),
     };
@@ -628,9 +551,6 @@ describe('style-only end-to-end through the real session writer', () => {
       JSON.stringify(makeManifest({ components: plan, css }));
     mocks.analyzeProject.mockImplementation(() => sessionManifest('.c{x:1}'));
 
-    // Real writer: full pipeline, then a style-only watch analysis. The
-    // loader hydrates from the inputs corpus, so this session models
-    // Turbopack orchestration (which persists it).
     const { ExtractionSession } =
       await import('../../extract/session/extraction-session');
     const session = new ExtractionSession({ system: './src/system.ts' });
@@ -654,7 +574,6 @@ describe('style-only end-to-end through the real session writer', () => {
     const first = await run();
     expect(first.dependencies).toContain(epochPath);
 
-    // Style-only: same plans, new css → epoch bytes untouched.
     mocks.analyzeProject.mockImplementation(() => sessionManifest('.c{x:2}'));
     const edited = OLD_SOURCE.replace('c = 1', 'c = 2');
     writeFileSync(join(root, 'src', 'C.tsx'), edited);
@@ -666,7 +585,6 @@ describe('style-only end-to-end through the real session writer', () => {
     expect(readFileSync(epochPath, 'utf-8')).toBe(epochBefore);
     expect(statSync(epochPath).mtimeMs).toBe(mtimeBefore);
 
-    // The loader hydrates the advanced commit and serves the new source.
     const second = await runLoader({
       root,
       source: edited,

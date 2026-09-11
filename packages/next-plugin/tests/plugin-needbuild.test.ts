@@ -1,19 +1,3 @@
-/**
- * Epoch-driven needBuild fan-out + epoch watch-ignore (openspec:
- * next-webpack-served-transform-coherence, design D1/D2/D7 — increment 02).
- *
- * When a watchRun transaction moves the replacement epoch, every module
- * whose loader chain contains the animus loader is forced to rebuild within
- * that compilation via `NormalModule.getCompilationHooks(compilation)
- * .needBuild`; other modules are untouched; the force is armed per
- * compilation and cleared once captured. The epoch artifact path is
- * appended to `watchOptions.ignored` (preserving user shapes), and a
- * webpack without the needBuild hook API fails loudly at apply time.
- *
- * Same setup as plugin.test.ts (mocked NAPI boundary, real
- * plugin/session), with the compiler fake extended to model
- * `compiler.webpack.NormalModule` and `hooks.thisCompilation`.
- */
 import { writeFileSync } from 'fs';
 import { join } from 'path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
@@ -26,9 +10,6 @@ const mocks = vi.hoisted(() => ({
 
 import { setEngineApiOverride } from '../../extract/session/singleton';
 
-// Engine API injection through the singleton's globalThis-keyed test
-// seam — reaches every copy of the module (source or dist), which a
-// module mock cannot.
 setEngineApiOverride(() => ({
   extractFacts: () => '{"files":{},"parseCount":0}',
   loadSystemModule: mocks.loadSystemModule,
@@ -56,8 +37,6 @@ import type { AnimusNextOptions } from '../src/types';
 
 let restoreGlobals: () => void;
 
-/** Loader path injected via the internal option so the loader-chain
- *  predicate is exercised without resolving this package's dist. */
 const LOADER_PATH = '/harness/animus-loader.js';
 const BUTTON_VARIANT_EDIT =
   "export const Button = animus.styles({ margin: 16 }).variant({}).asElement('button');\n";
@@ -83,17 +62,12 @@ type CompilationIdentity = Record<never, never>;
 
 interface FakeNormalModule {
   getCompilationHooks(compilation: CompilationIdentity): {
-    /** Optional exactly as the plugin's own `NormalModuleCompilationHooks`
-     *  declares it: the second half of the D7 check is a webpack that
-     *  publishes the hooks object without this hook. */
     needBuild?: {
       tapAsync(name: string, fn: NeedBuildFn): void;
     };
   };
 }
 
-/** Per-compilation needBuild recorder mirroring
- *  NormalModule.getCompilationHooks' identity contract. */
 function makeFakeNormalModule() {
   const byCompilation = new Map<CompilationIdentity, { taps: NeedBuildFn[] }>();
   return {
@@ -234,13 +208,11 @@ function applyPlugin(
   plugin: AnimusWebpackPlugin,
   compiler: TestCompiler
 ): void {
-  // SAFETY: TestCompiler models every compiler field read by apply(). This
-  // file drives run/watchRun with TestCompiler and thisCompilation with its
-  // identity token; the registered asset-compilation callback is not invoked.
+  // SAFETY: TestCompiler models every compiler field apply() reads; the
+  // registered asset-compilation callback is never invoked here.
   plugin.apply(compiler as Parameters<AnimusWebpackPlugin['apply']>[0]);
 }
 
-/** Drive one tapped needBuild fn synchronously and capture its verdict. */
 function needBuildVerdict(
   fn: NeedBuildFn,
   module: CandidateModule
@@ -300,11 +272,6 @@ describe('runtime existence check (design D7)', () => {
   test('a compilation whose hooks omit needBuild fails loudly', () => {
     const root = createProject();
     const harness = createCompiler(root);
-    // A webpack that publishes the hooks object without the needBuild hook.
-    // The check is PER-COMPILATION, so the failure lands when the compilation
-    // opens rather than at apply() — the coherence mechanism cannot exist
-    // without this hook, and serving stale transforms instead is the outcome
-    // design D7 forbids.
     harness.compiler.webpack.NormalModule = {
       getCompilationHooks: () => ({}),
     };
@@ -327,8 +294,6 @@ describe('runtime existence check (design D7)', () => {
 });
 
 describe('watchOptions.ignored gains the replacements-epoch artifact path (design D2)', () => {
-  /** The session-scoped epoch path a plugin instance derives (identity is
-   *  process-claimed, so every in-process instance derives the same one). */
   const epochPathFor = (root: string, plugin: AnimusWebpackPlugin): string =>
     replacementEpochPath(sessionArtifactDir(root, plugin.sessionId));
 
@@ -360,8 +325,6 @@ describe('watchOptions.ignored gains the replacements-epoch artifact path (desig
     const second = new AnimusWebpackPlugin(OPTIONS);
     applyPlugin(first, compiler);
     applyPlugin(second, compiler);
-    // Both instances share the process-claimed session, so the appended
-    // path dedupes across compilers.
     expect(second.sessionId).toBe(first.sessionId);
     expect(compiler.options.watchOptions.ignored).toEqual([
       '**/custom/**',
@@ -400,9 +363,6 @@ describe('needBuild fan-out after a replacements-epoch move (design D1)', () => 
     const harness = createCompiler(root);
     applyPlugin(new AnimusWebpackPlugin(OPTIONS), harness.compiler);
 
-    // Cold start: first watchRun runs the full pipeline; the fan-out is
-    // NEVER armed by initialization (restart coherence belongs to the disk
-    // witness, not a whole-graph rebuild).
     await harness.watchRunHandlers[0](harness.compiler);
     const c1 = {};
     harness.thisCompilationHandlers.forEach((fn) => fn(c1));
@@ -452,8 +412,6 @@ describe('needBuild fan-out after a replacements-epoch move (design D1)', () => 
       forced: undefined,
     });
 
-    // The arm is captured per compilation: a follow-up compilation in the
-    // same session (no new watchRun transaction) is NOT forced.
     const c4 = {};
     harness.thisCompilationHandlers.forEach((fn) => fn(c4));
     expect(
@@ -471,8 +429,6 @@ describe('needBuild fan-out after a replacements-epoch move (design D1)', () => 
     await owner.watchRunHandlers[0](owner.compiler);
     await follower.watchRunHandlers[0](follower.compiler);
 
-    // Shape edit lands; the owner runs the transaction to completion
-    // BEFORE the follower's watchRun even enters (the late-compiler case).
     mocks.analyzeProject.mockImplementation(() =>
       buildManifest(PLAN_B, '.btn{margin:16px;}')
     );

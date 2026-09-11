@@ -3,17 +3,8 @@ import type {
   ProjectManifest,
 } from '@animus-ui/extract/pipeline';
 
-/**
- * A COMPLETE `ProjectManifest` at its empty-universe values, overridden per
- * test.
- *
- * The engine's `AnalyzeResult` declares no `Option` and no
- * `skip_serializing_if` at the top level (see `manifest-schema.ts`), so an
- * empty project still serializes `{}` / `[]` / `""` for every field — absence
- * means "not a manifest". Fakes that omitted fields were the only thing
- * keeping the plugin's `manifest?.sheets`-style shape guards alive; building
- * every fake from this base is what lets those guards go.
- */
+/** A complete `ProjectManifest` at its empty values. The engine serializes
+ *  every field even for an empty project, so absence means "not a manifest". */
 export function makeManifest(
   overrides: Partial<ProjectManifest> = {}
 ): ProjectManifest {
@@ -67,11 +58,6 @@ export function makeManifest(
   };
 }
 
-/**
- * One component descriptor. `file` and `replacement` are the two fields the
- * plugin reads (file-plan snapshots and raw-fallback provenance); the rest
- * carry the engine's own empty values so a fake descriptor is a whole one.
- */
 export function makeComponent(
   file: string,
   replacement = ''

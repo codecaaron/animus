@@ -17,14 +17,6 @@ import { createComponent } from '../src/runtime';
 import { createComposedFamily } from '../src/runtime/createComposedFamily';
 import { ds } from './test-system';
 
-// ─── Test Fixtures (real builder chain) ─────────────────────────
-//
-// createComposedFamily / createComposedFamilyWithContext are the
-// extraction-time replacements for compose() / composeWithContext().
-// They accept ALREADY-BUILT forwardRef components as slots (the emitter
-// hands them the terminal builder output), so we feed them the same
-// ds.asElement() components the compose() tests use.
-
 const Root = ds
   .styles({ display: 'flex' })
   .variant({
@@ -57,9 +49,6 @@ const Label = ds
   })
   .asElement('span');
 
-// ─── Assertion Helpers ──────────────────────────────────────────
-
-/** Check if a specific HTML element tag has a variant class */
 function tagHasClass(html: string, tag: string, cls: string): boolean {
   return new RegExp(`<${tag}[^>]*class="[^"]*${cls}`).test(html);
 }
@@ -68,16 +57,8 @@ function tagLacksClass(html: string, tag: string, cls: string): boolean {
   return !tagHasClass(html, tag, cls);
 }
 
-/** The variant props a mount forwards to a slot — `size` is the only axis the
- *  fixtures above declare. */
 type SlotVariantProps = { size?: 'sm' | 'lg' };
 
-/**
- * Mount a component with a ref via the client renderer and return the DOM
- * node the ref resolved to. Uses flushSync so the commit (and therefore ref
- * attachment) is synchronous. The test env is happy-dom, so `document` and
- * the HTML*Element globals are available.
- */
 function mountAndGetRefNode(
   Component: ForwardRefExoticComponent<any>,
   props: SlotVariantProps = {}
@@ -96,8 +77,6 @@ function mountAndGetRefNode(
   container.remove();
   return node;
 }
-
-// ─── createComposedFamily() Tests ───────────────────────────────
 
 describe('createComposedFamily()', () => {
   it('sets displayName as `${name}.${slot}`', () => {
@@ -139,13 +118,11 @@ describe('createComposedFamily()', () => {
   it('passes children through', () => {
     const Family = createComposedFamily({ Root, Label }, { name: 'Card' });
 
-    // Text child on a leaf slot
     const labelHtml = renderToString(
       createElement(Family.Label, null, 'hello')
     );
     expect(labelHtml).toContain('hello');
 
-    // Nested element children on the root slot render inside it
     const nestedHtml = renderToString(
       createElement(
         Family.Root,
@@ -173,9 +150,6 @@ describe('createComposedFamily()', () => {
   });
 
   it('slots are independent — no runtime shared/context propagation', () => {
-    // createComposedFamily is the RSC-safe replacement: no shared config,
-    // no context. A child rendered without its own size prop gets no class
-    // (CSS descendant selectors handle propagation at the stylesheet level).
     const Family = createComposedFamily({ Root, Control }, { name: 'Card' });
 
     const html = renderToString(
@@ -199,27 +173,17 @@ describe('createComposedFamily()', () => {
   });
 
   it('throws when no "Root" slot is present (matches compose)', () => {
-    // The extraction-time replacement mirrors compose()'s guard: a family
-    // with no Root slot has no cascade source, so the composed variant CSS
-    // rules would have nothing to inherit from and every slot would render
-    // unstyled by the shared axes. Source form and extracted form must agree
-    // on this contract — otherwise a dev build throws where the extracted
-    // production build stays silent.
     expect(() =>
       createComposedFamily({ Control, Label }, { name: 'Card' })
     ).toThrow(/No "Root" slot found/);
   });
 
   it('throws when Root is inherited rather than an own enumerable slot', () => {
-    // The wrapper loop iterates with Object.entries; a prototype-carried Root
-    // would validate under an `in` check and then vanish from the family.
     expect(() =>
       createComposedFamily(Object.create({ Root }), { name: 'Card' })
     ).toThrow(/No "Root" slot found/);
   });
 });
-
-// ─── createComposedFamilyWithContext() Tests ────────────────────
 
 describe('createComposedFamilyWithContext()', () => {
   it('omitted Root prop provides the default option via context (form parity with composeWithContext)', () => {
@@ -275,8 +239,6 @@ describe('createComposedFamilyWithContext()', () => {
       );
     });
 
-    // The child escaped Root's DOM subtree — CSS descendant rules cannot
-    // reach it — yet context carries the resolved default.
     const portaled = portalTarget.querySelector('input');
     expect(portaled?.className).toContain('--size-sm');
 
@@ -289,7 +251,6 @@ describe('createComposedFamilyWithContext()', () => {
     const Extracted = createComponent('div', 'animus-Probe-1', {
       variants: { size: { options: ['sm', 'lg'], default: 'lg' } },
     });
-    // Cast-free: createComponent's return type carries the field.
     expect(Extracted.variantDefaults.size).toBe('lg');
   });
 
@@ -356,9 +317,7 @@ describe('createComposedFamilyWithContext()', () => {
       )
     );
 
-    // Root has the class from its own direct prop
     expect(tagHasClass(html, 'div', '--size-sm')).toBe(true);
-    // Children receive the shared value via context → variant resolves
     expect(tagHasClass(html, 'input', '--size-sm')).toBe(true);
     expect(tagHasClass(html, 'span', '--size-sm')).toBe(true);
   });
@@ -378,7 +337,6 @@ describe('createComposedFamilyWithContext()', () => {
     );
 
     expect(tagHasClass(html, 'div', '--size-sm')).toBe(true);
-    // Direct prop wins over the inherited context value
     expect(tagHasClass(html, 'input', '--size-lg')).toBe(true);
     expect(tagLacksClass(html, 'input', '--size-sm')).toBe(true);
   });
@@ -397,7 +355,6 @@ describe('createComposedFamilyWithContext()', () => {
       )
     );
 
-    // tone is Root-only (not a sharedKey) → stays on Root, never inherited
     expect(tagHasClass(html, 'div', '--tone-muted')).toBe(true);
     expect(tagHasClass(html, 'input', '--size-sm')).toBe(true);
     expect(tagLacksClass(html, 'input', '--tone')).toBe(true);
@@ -429,9 +386,6 @@ describe('createComposedFamilyWithContext()', () => {
   });
 
   it('throws when no "Root" slot is present (matches composeWithContext)', () => {
-    // The extraction-time replacement mirrors composeWithContext()'s guard:
-    // a family without a Root slot would silently render children against
-    // the empty default context, so both forms fail loud instead.
     expect(() =>
       createComposedFamilyWithContext(
         { Control, Label },

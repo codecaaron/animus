@@ -28,9 +28,8 @@ function source(path: string): string {
 }
 
 /**
- * A value read out of a Wrangler JSONC config: a JSON scalar, list, or block,
- * plus the `undefined` an absent key reads as. Wrangler owns the schema; this
- * gate asserts about a handful of keys and never restates the rest.
+ * Wrangler owns the schema; this gate asserts a handful of keys and never
+ * restates the rest.
  */
 type WranglerValue =
   | undefined
@@ -77,7 +76,6 @@ const workerOwners = {
 const cloudflareAccountIdVariable = 'CLOUDFLARE_ACCOUNT_ID';
 const cloudflareApiTokenVariable = 'CLOUDFLARE_API_TOKEN';
 
-/** What one `scripts/deploy/workers.sh` run under the command double leaves behind. */
 interface WorkersRun {
   /** Every command line the double recorded, in invocation order. */
   commands: string[];
@@ -172,15 +170,14 @@ describe('Workers deployment topology', () => {
   });
 
   it('keeps the crate Rust channels and the CI toolchain pin aligned', () => {
-    // scripts/cloudflare/build-extract-v2.sh reads the channel out of
-    // rust-toolchain.toml and refuses to build on any other release, so a CI
-    // job that installs a different release builds nothing the pin describes.
+    // The extract-v2 build script reads the channel out of rust-toolchain.toml
+    // and refuses any other release, so a mismatched CI pin builds nothing.
     const [extractChannel, loaderChannel] = [
       'packages/extract/crates/extract-v2/rust-toolchain.toml',
       'packages/extract/crates/system-loader/rust-toolchain.toml',
     ].map((path) => source(path).match(/^\s*channel\s*=\s*"([^"]+)"/m)?.[1]);
-    // Only version-pinned refs are compared; @stable jobs install whatever the
-    // release train currently is and are deliberately not coupled to the crates.
+    // Only version-pinned refs are compared: @stable jobs install whatever the
+    // release train currently is and are not coupled to the crates.
     const pinnedToolchainRefs = [
       ...source('.github/workflows/ci.yaml').matchAll(
         /dtolnay\/rust-toolchain@(\d\S*)/g
@@ -314,11 +311,8 @@ describe('Workers deployment behavior', () => {
 });
 
 describe('Workers cold-build reproducibility', () => {
-  // On a cold ~/.cargo (CI cache miss), `cargo tree -e features` fetches the
-  // sparse index plus every crate manifest — measured ~4s locally and >5s on
-  // CI runners, which blew the default 5s test timeout. spawnSync blocks the
-  // worker thread, so the vitest timeout can never interrupt cargo — hang
-  // protection lives on the child process timeout instead.
+  // A cold cargo cache makes `cargo tree` slow, and spawnSync blocks the
+  // worker thread, so hang protection is the child timeout, not vitest's.
   it('uses published rquickjs bindings without bindgen', () => {
     const result = spawnSync(
       'cargo',

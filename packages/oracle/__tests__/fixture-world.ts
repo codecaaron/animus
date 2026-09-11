@@ -12,20 +12,6 @@ import type {
   TokenResolution,
 } from '../src/providers/tokens';
 
-/**
- * The fixture world the engine suites assert against: two components, one
- * token graph, one rule set, one scenario domain, and the obligations the
- * host declares over them. This is the shared semantic ground — a change to
- * engine behaviour has to be reflected here once instead of in four
- * separately-drifting copies (it was byte-identical in
- * `engine-{cascade,inspect-explain,prove-refine,simulate-diff}.test.ts`).
- *
- * Suites whose world genuinely differs keep only that difference local and
- * say why: `engine-prove-refine` adds two rules its harvest must discover,
- * and `engine-cascade` builds a host WITHOUT the declared obligations
- * because it drives its own `ObligationRegistry`.
- */
-
 export const card: ComponentRecord = {
   id: 'src/Card.tsx::Card',
   file: 'src/Card.tsx',
@@ -45,7 +31,6 @@ export const panel: ComponentRecord = {
 
 const SCOPED = /^(variant|state):([^:]+):(.+)$/;
 
-/** Component class + the shared `anm-surface` utility + variant/state. */
 export const classesFor = (
   component: ComponentRecord,
   point: ScenarioPoint
@@ -66,9 +51,8 @@ export const classesFor = (
   return classes;
 };
 
-/** Keyed by variable name, which is a lookup domain rather than a fixed set
- *  of fields — a missing variable must answer `undefined`, never a value
- *  inherited from `Object.prototype`. */
+/** A Map, not an object: a missing variable answers `undefined` rather than
+ *  a value inherited from `Object.prototype`. */
 const TOKENS = new Map<string, TokenDefinition>([
   [
     '--color-text',
@@ -113,17 +97,13 @@ export const tokens = (): TokenProvider => ({
 export interface FixtureOptions {
   pseudoDimension?: boolean;
   important?: boolean;
-  /** Rules a suite's world genuinely adds on top of the shared one. They are
-   *  spliced at one fixed point (after `wide`, before the pseudo-guarded
-   *  rules) rather than appended per caller: rule array order feeds the
-   *  synthetic program hash, so a caller-chosen position would make two
-   *  suites' worlds differ by more than their rules. */
+  /** Spliced at one fixed point in the rule array: array order feeds the
+   *  program hash, so a caller-chosen position changes world identity. */
   extraRules?: InMemoryHostConfig['rules'];
 }
 
-/** The axes every fixture models. `pseudo:hover` is deliberately absent: the
- *  unbound-pseudo-axis case is one of the behaviours under test, so it is
- *  added only when a fixture declares it. */
+/** `pseudo:hover` is absent here: the unbound-pseudo-axis behaviour is under
+ *  test, so that axis is added only when a fixture opts in. */
 export const BASE_DIMENSIONS = {
   mode: { kind: 'finite', values: ['light', 'dark'] },
   'viewport.inline': { kind: 'interval', min: 0, max: 1920 },

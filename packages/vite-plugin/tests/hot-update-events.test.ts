@@ -2,14 +2,8 @@ import { describe, expect, it } from 'vitest';
 
 import { HotUpdateEvents } from '../src/hot-update-events';
 
-/**
- * The once-per-event seam of the `hotUpdate` hook. Vite dispatches the hook
- * once per environment for a single file event (client first, then every
- * non-client environment), so the analysis half — cache mutation, engine
- * re-analysis, reset scheduling — must be claimed exactly once while every
- * environment still invalidates its own modules. The hook itself needs a
- * running dev server, so the claim/publish algebra is tested directly.
- */
+/** Vite dispatches `hotUpdate` once per environment for one file event, so
+ *  the analysis is claimed once while every environment still invalidates. */
 
 const FILE = '/repo/src/Button.tsx';
 
@@ -34,8 +28,7 @@ describe('HotUpdateEvents', () => {
     });
 
     events.claim('ssr', FILE, 1);
-    // The whole decision travels, including whether the served system-props
-    // module moved: only the owning dispatch held the before/after values.
+    // Only the owning dispatch holds the before/after values it reports.
     expect(events.resultOf(FILE, 1)).toEqual({
       kind: 'analyzed',
       staleDefinitionFiles: ['src/Card.tsx'],
@@ -45,8 +38,8 @@ describe('HotUpdateEvents', () => {
   });
 
   it('gives the event to the first dispatch when there is no client', () => {
-    // A plugin filtered out of the client environment never sees the client
-    // dispatch — the first environment that does still owns the analysis.
+    // A plugin filtered out of the client environment never sees that
+    // dispatch.
     const events = new HotUpdateEvents();
 
     expect(events.claim('ssr', FILE, 1)).toBe(true);
@@ -54,8 +47,7 @@ describe('HotUpdateEvents', () => {
   });
 
   it('always gives the client its own analysis, even on a repeated key', () => {
-    // Two saves within the same millisecond produce the same (file,
-    // timestamp) key; the client dispatch must never be starved by it.
+    // Two saves in the same millisecond produce the same (file, timestamp) key.
     const events = new HotUpdateEvents();
 
     events.claim('client', FILE, 1);
@@ -67,7 +59,6 @@ describe('HotUpdateEvents', () => {
     });
 
     expect(events.claim('client', FILE, 1)).toBe(true);
-    // Claiming resets the published result — the new event has not run yet.
     expect(events.resultOf(FILE, 1)).toEqual({ kind: 'ignored' });
   });
 
@@ -105,10 +96,8 @@ describe('HotUpdateEvents', () => {
   });
 
   it('reports an evicted decision as evicted, not as ignored', () => {
-    // History is bounded, and `ignored` is the LEAST conservative kind —
-    // "out of extraction scope, leave it to normal HMR". A decision that fell
-    // out of the window is the opposite: the file WAS analyzed and every
-    // environment still owes its own graph an invalidation.
+    // `ignored` means out of extraction scope, while an evicted decision
+    // means the file was analyzed and every graph still owes invalidation.
     const events = new HotUpdateEvents(2);
 
     events.claim('client', FILE, 1);
@@ -121,9 +110,8 @@ describe('HotUpdateEvents', () => {
   });
 
   it('never re-claims an evicted event for a later environment', () => {
-    // Re-claiming would re-run the whole analysis for an event the owner
-    // already analyzed — and the content-hash gate would then report
-    // `unchanged`, suppressing the update in that environment entirely.
+    // Re-claiming re-runs an analysis the owner already did, and the
+    // content-hash gate then reports `unchanged`, suppressing the update.
     const events = new HotUpdateEvents(2);
 
     events.claim('client', FILE, 1);
@@ -149,8 +137,6 @@ describe('HotUpdateEvents', () => {
     events.claim('client', FILE, 3);
     expect(events.resultOf(FILE, 1)).toEqual({ kind: 'evicted' });
 
-    // The same (file, timestamp) reaching the client again is a new event,
-    // not the evicted one: it claims and starts from a clean decision.
     expect(events.claim('client', FILE, 1)).toBe(true);
     expect(events.resultOf(FILE, 1)).toEqual({ kind: 'ignored' });
   });

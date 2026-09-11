@@ -3,10 +3,8 @@ import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 /**
- * A value read out of the parsed workflow: a YAML scalar, list, or mapping as
- * the `Bun.YAML.parse` -> JSON round-trip hands it back, plus the `undefined`
- * an absent key reads as. `on:` triggers and `strategy:` matrices are GitHub's
- * schemas, not this suite's, so they are compared whole rather than restated.
+ * `on:` triggers and `strategy:` matrices are GitHub's schemas, not this
+ * suite's, so they stay unmodeled here and are compared whole.
  */
 type WorkflowValue =
   | undefined
@@ -20,8 +18,8 @@ type WorkflowValue =
 type WorkflowMapping = { [key: string]: WorkflowValue };
 
 /**
- * A `with:` input. Actions forwards every input to the action as a string, so
- * only scalars are writable there.
+ * A `with:` input. Actions forwards every input as a string, so only scalars
+ * are writable there.
  */
 type WorkflowInput = boolean | number | string;
 
@@ -102,13 +100,8 @@ function readWorkflow(): Workflow {
     );
   }
 
-  // SAFETY: the guard above establishes the two mappings every test below
-  // navigates, so no read can fault. The fields under them are not claims about
-  // arbitrary bytes — `Workflow` is this suite's EXPECTATION of the repo's own
-  // ci.yaml, and every field it names is asserted by a test in this file
-  // (`runs-on`/`needs` by the runner and dependency test, `steps` and their
-  // `with` inputs by the step tests). A ci.yaml that drifts fails the assertion
-  // that names it, which is the whole job of this gate.
+  // SAFETY: the guard above establishes the `on:` and `jobs:` mappings every
+  // test navigates; `Workflow` is this suite's expectation, asserted below.
   return document as Workflow;
 }
 
@@ -365,8 +358,8 @@ describe('parsed CI graph', () => {
     for (const [jobName, [name, path]] of Object.entries(receipts)) {
       const upload = namedStep(jobs[jobName], 'Upload lane receipts');
       expect(upload.uses).toBe('actions/upload-artifact@v7');
-      // .receipts is a dot-directory — without include-hidden-files the
-      // upload silently (or, with error mode, loudly) finds nothing.
+      // .receipts is a dot-directory: without include-hidden-files the
+      // upload finds nothing.
       expect(upload.with).toMatchObject({
         name,
         path,
@@ -403,8 +396,6 @@ describe('parsed CI graph', () => {
 
   it('publishes via trusted publishing: id-token scoped to the release job', () => {
     const { jobs } = readWorkflow();
-    // OIDC floor (ani-ledger-closeout inc-04): the release job mints its
-    // npm credentials from the workflow identity - no NODE_AUTH_TOKEN.
     expect(jobs.release.permissions).toEqual({
       contents: 'read',
       'id-token': 'write',
@@ -425,16 +416,13 @@ describe('parsed CI graph', () => {
 
     expect(packIndex).toBeLessThan(verifyIndex);
     expect(verifyIndex).toBeLessThan(publishIndex);
-    // The ./ prefix is load-bearing: npm parses a bare packages/$pkg as a
-    // github:owner/repo shorthand, not a local folder (v0.1.2 release outage).
-    // Packer parity: the release bundles with the SAME packer the
-    // verify:packed lane proves on every push (bun pm pack — npm pack
-    // shipped two release-only bugs in v0.1.2).
+    // The release packs with the packer the verify:packed lane proves on
+    // every push; npm pack and bun pm pack diverge in release-only ways.
     expect(pack.run).toContain(
       '(cd "packages/$pkg" && bun pm pack --destination "$RELEASE_BUNDLE")'
     );
-    // retire-extract-v1: no v1 platform sub-packages are packed or published;
-    // v2 binaries ship inside the main extract tarball.
+    // No v1 platform sub-packages: v2 binaries ship inside the main extract
+    // tarball.
     expect(pack.run).not.toContain('packages/extract/npm');
 
     const exactTarballs = [

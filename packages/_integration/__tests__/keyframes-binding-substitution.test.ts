@@ -1,15 +1,6 @@
 /**
- * Keyframes binding substitution: `animationName: motion.ember` in component
- * styles must be resolved to the static keyframe name at extraction time.
- *
- * Registry shape from `system_loader::extract_keyframes_blocks`:
- *   { exportName: { keyName: { name, frames } } }
- *
- * The Rust `analyze()` parses this into a binding registry and injects each
- * collection into the per-file `resolved_static_values` map under whatever
- * local name binds to the collection (either via cross-file import resolution
- * or an in-file local export). `eval_expression_with_statics` resolves
- * `Identifier.property` member expressions against that map.
+ * The engine keys the keyframes registry by export name and resolves
+ * `binding.key` against whatever local name binds that collection.
  */
 import { describe, expect, test } from 'vitest';
 
@@ -41,9 +32,8 @@ const runWithKeyframes = (
 describe('keyframes binding substitution (animationName: motion.ember)', () => {
   test('cross-file import: animationName: motion.ember substitutes to resolved name', () => {
     const dsFile: FileEntry = {
-      // This file "exports" motion — the local const is a non-static keyframes()
-      // call so `collect_static_values` does NOT pick it up. The registry path
-      // is the ONLY way the resolution can succeed.
+      // A `keyframes()` call is not a static value, so the registry is the
+      // only path that can resolve `motion.ember`.
       path: 'fixtures/ds.ts',
       source: `import { keyframes } from '@animus-ui/system';\nexport const motion = keyframes({ ember: { '0%': { opacity: 0 }, '100%': { opacity: 1 } } });\n`,
     };
@@ -53,15 +43,8 @@ describe('keyframes binding substitution (animationName: motion.ember)', () => {
       source: `import { ds } from './setup';\nimport { motion } from './ds';\nexport const Glow = ds.styles({ animationName: motion.ember, animationDuration: '5s' }).asElement('div');\nexport const App = () => <Glow />;\n`,
     };
 
-    // Note: fixtures/setup imports ds from test-system — but we only need the
-    // import line to satisfy the chain walker; the `ds` binding itself comes
-    // from a builder chain that is externally provided via the test system.
-    // For this test we simplify by pointing the builder chain at the local
-    // setup-style fixture: extraction still works because the test fixture
-    // setup re-exports `ds` (a builder with extractable chains).
-    // We DO NOT need setup.ts in the file entries — builder detection walks
-    // the AST locally and the binding resolution is not required for chain
-    // recognition, only for parent `.extend()` chains.
+    // `./setup` stays out of the entries: chain recognition is local to the
+    // file, and cross-file binding resolution only matters for `.extend()`.
 
     const manifest = runWithKeyframes([dsFile, componentFile], {
       motion: {
@@ -73,16 +56,9 @@ describe('keyframes binding substitution (animationName: motion.ember)', () => {
     const fragment = manifest.component_fragments?.[componentId] ?? {};
     const baseCss: string = fragment.base ?? '';
 
-    // The resolved keyframe NAME must appear as a static animation-name value
-    // on the component's base class.
     expect(baseCss).toContain('animation-name: animus-kf-cross-file');
-    // And the animation-duration should still be present (the other static
-    // property is unaffected by the substitution path).
     expect(baseCss).toContain('animation-duration: 5s');
-    // The manifest CSS also contains the substituted value (double-check
-    // that the per-component fragment and the concatenated CSS agree).
     expect(manifest.css).toContain('animus-kf-cross-file');
-    // No __TRANSFORM__ placeholders or skipped-property fallback markers.
     expect(manifest.css).not.toContain('__TRANSFORM__');
   });
 
@@ -124,10 +100,7 @@ describe('keyframes binding substitution (animationName: motion.ember)', () => {
     const componentId = `${file.path}::Missing`;
     const fragment = manifest.component_fragments?.[componentId] ?? {};
     const baseCss: string = fragment.base ?? '';
-    // The other static property (color) still extracts normally.
     expect(baseCss).toContain('color:');
-    // The non-resolving member expression MUST NOT leak a placeholder value
-    // into the emitted CSS — it should simply be absent from the rule body.
     expect(baseCss).not.toContain('animation-name:');
   });
 });

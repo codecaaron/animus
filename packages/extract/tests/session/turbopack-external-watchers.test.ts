@@ -1,15 +1,6 @@
 /**
- * Turbopack external workspace-source watchers (openspec:
- * external-source-watch-ingestion, increment 02 — design D4/D7): per-root
- * recursive watchers over the admitted external roots, generation-fenced
- * reset reconciliation (open-new → snapshot → publish → replay →
- * close-old; rollback on failure), and per-root sticky degradation.
- *
- * A fake `watch` is injected through the orchestrator's seam (fs builtins
- * are not interceptable by the runner's module mocker); the session is a
- * REAL ExtractionSession with its analysis entry point replaced, whose
- * reset flow the tests drive through the seams the orchestrator installs
- * on it.
+ * The fake watch goes through the orchestrator's seam because the runner's
+ * module mocker cannot intercept fs builtins.
  */
 import { EventEmitter } from 'events';
 import { mkdirSync, writeFileSync } from 'fs';
@@ -22,9 +13,6 @@ import { disposeTempRoots, makeTempRoot } from './session-fixtures';
 
 import type { FSWatcher, WatchListener, WatchOptions, watch } from 'fs';
 
-/** The registered handle: a real `FSWatcher` surface (the orchestrator
- *  consumes `on('error')`, `unref()`, and `close()`) plus this scenario's
- *  event driver. */
 class FakeWatcher extends EventEmitter implements FSWatcher {
   closed = false;
 
@@ -35,7 +23,6 @@ class FakeWatcher extends EventEmitter implements FSWatcher {
     super();
   }
 
-  /** Deliver one change event exactly as the OS watcher would. */
   trigger(filename: string | null): void {
     this.listener('change', filename);
   }
@@ -55,16 +42,10 @@ class FakeWatcher extends EventEmitter implements FSWatcher {
 
 const calls: Array<{ dir: string; recursive: boolean }> = [];
 const watchers: FakeWatcher[] = [];
-/** Registration for these dirs throws a capacity error. */
 const failDirs = new Set<string>();
 
-// SAFETY: `fs.watch` publishes four overloads (buffer/encoding/string
-// filenames); its assignability cannot be met by any single signature, so a
-// seam fake must be asserted. This one is sound because
-// startTurbopackWatcher calls the seam exactly once per root as
-// `watchFn(root, { recursive: true }, listener)` and consumes only the
-// FSWatcher members implemented above — see openExternalWatcher/addWatcher
-// in packages/extract/session/turbopack-orchestrator.ts.
+// SAFETY: `fs.watch` has four overloads, so no single signature is
+// assignable; the seam is called as watchFn(root, { recursive: true }, cb).
 const fakeWatch = ((
   dir: string,
   opts?: WatchOptions | null,
@@ -76,8 +57,6 @@ const fakeWatch = ((
     });
   }
   if (listener === undefined) {
-    // The orchestrator always registers a listener; this fake's watchers are
-    // event drivers, so a listener-less registration is a harness bug.
     throw new Error('external watcher registered without a listener');
   }
   const watcher = new FakeWatcher(dir, listener);
@@ -105,9 +84,6 @@ function createTree() {
   return { root, kitA, kitB };
 }
 
-/** A real session carrying the admitted external roots, with its analysis
- *  entry point replaced: the orchestrator installs its reset seams on the
- *  genuine class and `updates` records the cycles it drives. */
 function makeSession(root: string, roots: string[]) {
   const session = new ExtractionSession({ system: './src/system.ts' });
   session.rootDir = root;
@@ -131,7 +107,6 @@ function start(session: ExtractionSession, root: string) {
   return outcome.handle;
 }
 
-/** Modified-file sets across every handleWatchUpdate call. */
 function allModified(updates: WatchUpdates): string[] {
   return updates.mock.calls.flatMap(([changes]) => [
     ...(changes.modifiedFiles ?? []),
@@ -206,13 +181,10 @@ describe('per-root degradation (design D7)', () => {
 
     const handle = start(session, root);
     try {
-      // The healthy root still ingests.
       watcherFor(kitA)!.trigger('Button.tsx');
       await vi.waitFor(() =>
         expect(allModified(updates)).toContain(join(kitA, 'Button.tsx'))
       );
-      // The sticky diagnostic names only the failing root, its reason,
-      // and the effect.
       const sticky = [...session.stickyDiagnostics.values()].join('\n');
       expect(sticky).toContain('ANIMUS_EXTERNAL_WATCH_UNAVAILABLE');
       expect(sticky).toContain('kits/b/src');
@@ -238,7 +210,6 @@ describe('per-root degradation (design D7)', () => {
     try {
       expect(session.stickyDiagnostics.size).toBe(1);
 
-      // Reset reconciliation with the capacity pressure relieved.
       failDirs.clear();
       session.onExternalRootResolved!(kitA);
       session.onExternalRootResolved!(kitB);
@@ -267,7 +238,6 @@ describe('per-root degradation (design D7)', () => {
       );
 
       expect(kitWatcher.closed).toBe(true);
-      // Project watchers survive — only the kit root degraded.
       expect(watcherFor(root)!.closed).toBe(false);
       expect([...session.stickyDiagnostics.values()].join('\n')).toContain(
         'ANIMUS_EXTERNAL_WATCH_UNAVAILABLE'
@@ -289,8 +259,8 @@ describe('generation-fenced reset reconciliation (design D4)', () => {
     const { session, updates } = makeSession(root, [kitA]);
     const handle = start(session, root);
     try {
-      // Reset resolves a NEW root: its watcher opens immediately (no blind
-      // gap), but events buffer until the generation publishes.
+      // A newly resolved root opens its watcher at once, leaving no blind
+      // gap; its events buffer until the generation publishes.
       session.onExternalRootResolved!(kitB);
       const kitBWatcher = watcherFor(kitB)!;
       expect(kitBWatcher).toBeDefined();
@@ -298,16 +268,12 @@ describe('generation-fenced reset reconciliation (design D4)', () => {
       await new Promise((resolve) => setTimeout(resolve, 80));
       expect(allModified(updates)).not.toContain(join(kitB, 'Button.tsx'));
 
-      // Publish: kitB admitted, kitA REMOVED from the universe.
       session.onExternalRootsCommitted!([kitB]);
 
-      // The captured event replays into the ordinary flow.
       await vi.waitFor(() =>
         expect(allModified(updates)).toContain(join(kitB, 'Button.tsx'))
       );
 
-      // The removed root's watcher is closed and its late events are
-      // rejected by the generation fence.
       const kitAWatcher = watcherFor(kitA)!;
       expect(kitAWatcher.closed).toBe(true);
       updates.mockClear();
@@ -323,23 +289,18 @@ describe('generation-fenced reset reconciliation (design D4)', () => {
     const { root, kitA, kitB } = createTree();
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     const { session, updates } = makeSession(root, [kitA]);
-    // The reset transaction: resolves kitB mid-flight, then fails before
-    // publishing — driven from inside handleWatchUpdate exactly like the
-    // real session's system reload.
+    // The reset resolves a root mid-cycle and fails before publishing,
+    // driven from inside handleWatchUpdate like the session's system reload.
     updates.mockImplementationOnce(async () => {
       session.onExternalRootResolved!(kitB);
-      // onExternalRootsCommitted is never called — the reset fails.
       throw new Error('analysis failed');
     });
 
     const handle = start(session, root);
     try {
-      // Trigger the transaction via an ordinary kitA event.
       watcherFor(kitA)!.trigger('Button.tsx');
       await vi.waitFor(() => expect(updates).toHaveBeenCalled());
 
-      // Rollback: the newly opened handle is closed, captured events die
-      // with it.
       const kitBWatcher = watcherFor(kitB)!;
       await vi.waitFor(() => expect(kitBWatcher.closed).toBe(true));
       updates.mockClear();

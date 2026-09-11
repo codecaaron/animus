@@ -1,17 +1,7 @@
 // @vitest-environment node
 /**
- * Step-scheduling contract of `runWatchSession`: scripted edits are
- * BETWEEN-TURNS events. The suite tolerates spontaneous extra compilations
- * (OS event redelivery, cold-artifact re-checks — the probes' record-count
- * bounds say so), and a fixed post-completion timer can land an edit in the
- * MIDDLE of such a turn. A mid-compilation source write makes the loader
- * read newer source than the published analysis and fail closed with
- * ANIMUS_ANALYSIS_CATCHING_UP — an environmental artifact of the harness,
- * not a behavior of the integration under test (observed as CI-only
- * hasErrors failures in the differential N0 probes).
- *
- * Driven by a scripted fake compiler so the hazard reproduces
- * deterministically on every platform.
+ * Scripted edits must land between compilation turns: a write during a turn
+ * makes the loader read newer source than the published analysis.
  */
 import { mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
@@ -26,9 +16,6 @@ afterEach(() => {
   for (const dispose of disposers.splice(0)) dispose();
 });
 
-// The scripted compiler answers the SAME contracts `runWatchSession` drives
-// on a real fixture webpack, derived from that owner rather than restated —
-// the scheduling hazard only reproduces if the fake is driven identically.
 type HarnessWebpack = Parameters<typeof runWatchSession>[0]['webpack'];
 type HarnessCompiler = ReturnType<HarnessWebpack>;
 type HarnessWatch = HarnessCompiler['watch'];
@@ -38,16 +25,6 @@ type WatchRunTap = Parameters<
 type WatchDoneCallback = Parameters<HarnessWatch>[1];
 type HarnessStats = Parameters<WatchDoneCallback>[1];
 
-/**
- * Scripted stand-in for a watching webpack compiler: every turn runs the
- * registered watchRun taps, then completes after `buildMs`. A source write
- * while idle triggers the next turn after `aggregateMs`; a write while a
- * turn is ACTIVE is recorded as a violation and queued for the turn after
- * (real watchpack's changed-during-build behavior). One spontaneous "echo"
- * turn starts `echo.delayMs` after turn `echo.afterTurn` completes —
- * unprompted, empty-handed, exactly like the redelivery/cold-artifact turns
- * the harness probes tolerate.
- */
 function makeFakeCompiler(opts: {
   buildMs: number;
   aggregateMs: number;
@@ -112,8 +89,6 @@ function makeFakeCompiler(opts: {
           taps.push(fn);
         },
       },
-      // Present-but-silent, mirroring production: the fake's turns start
-      // synchronously without a watcher, so no invalidation evidence fires.
       invalid: {
         tap: (_name, _fn) => {},
       },
@@ -143,8 +118,8 @@ describe('runWatchSession step scheduling', () => {
     const root = mkdtempSync(join(tmpdir(), 'animus-harness-sched-'));
     disposers.push(() => rmSync(root, { recursive: true, force: true }));
     const state = createWatchState();
-    // Echo turn starts 40ms after the cold build completes and runs 300ms —
-    // an unguarded 150ms step timer fires straight into it.
+    // Calibrated so the echo turn is still in flight when an unguarded step
+    // timer would fire; without that overlap the hazard does not reproduce.
     const fake = makeFakeCompiler({
       buildMs: 300,
       aggregateMs: 30,
@@ -163,10 +138,7 @@ describe('runWatchSession step scheduling', () => {
       settleMs: 250,
     });
 
-    // The contract under test: between-turns application, every time.
     expect(fake.violations()).toEqual([]);
-    // Both edits still applied, each producing its own turn after the echo:
-    // cold, echo, edit 1, edit 2.
     expect(records).toHaveLength(4);
     expect(records[1].modifiedFiles).toEqual(['<spontaneous>']);
     expect(records[2].modifiedFiles).toEqual(['src/parent.js']);

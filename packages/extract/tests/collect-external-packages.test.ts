@@ -25,7 +25,6 @@ function makeRoot(): string {
   return root;
 }
 
-/** Create a package dir with package.json and the given files. */
 function makePackage(base: string, files: Record<string, string>): string {
   mkdirSync(base, { recursive: true });
   writeFileSync(join(base, 'package.json'), '{"name":"pkg"}');
@@ -110,9 +109,8 @@ describe('collectExternalPackageSources', () => {
       '@x/ds/definition': join(pkg, 'dist', 'definition.mjs'),
     });
 
-    // ds.ts declares the kit at a subpath, but app code imports the package
-    // root — without the root key, root imports bypass the src redirect and
-    // ship untransformed dist chains.
+    // App code imports the package root; without the root key those imports
+    // bypass the src redirect and ship untransformed dist chains.
     expect(result.packageMap).toEqual({
       '@x/ds/definition': 'packages/ds/src/definition.ts',
       '@x/ds': 'packages/ds/src/index.ts',
@@ -120,14 +118,11 @@ describe('collectExternalPackageSources', () => {
     expect(result.sourceEntries.get('@x/ds')).toBe(
       join(pkg, 'src', 'index.ts')
     );
-    // The declared subpath key redirects to its own source module, never to
-    // the package root's src/index.ts.
     expect(result.sourceEntries.get('@x/ds/definition')).toBe(
       join(pkg, 'src', 'definition.ts')
     );
-    // The alias is derived, not declared: exactly one outcome record — and it
-    // carries the discovered file count (includes-driven-discovery
-    // §Resolved specifier records its file count).
+    // The root alias is derived, not declared, so only the declared specifier
+    // records an outcome.
     expect(result.outcomes).toEqual([
       { specifier: '@x/ds/definition', outcome: 'resolved', fileCount: 2 },
     ]);
@@ -151,7 +146,6 @@ describe('collectExternalPackageSources', () => {
   test('a package without a root source entry registers no root alias', async () => {
     const root = makeRoot();
     const pkg = makePackage(join(root, 'packages', 'ds'), {
-      // Subpath-only src layout: nothing for the root to redirect to.
       'src/definition.ts': 'export const system = 1;',
     });
 
@@ -204,12 +198,8 @@ describe('collectExternalPackageSources', () => {
   });
 
   test('a derived root alias keeps its module-resolution redirect', async () => {
-    // A kit declared at a subpath (`@x/kit/definition`) is routinely
-    // imported at its package ROOT by app code; the derived root alias
-    // redirects that import to src so the app never bundles untransformed
-    // dist chains. The redirect is resolution-only — nothing evaluates the
-    // root entry (vocabulary-registration ended discovery-by-scan; a kit's
-    // collections reach consumers through its sealed system's record).
+    // The derived root alias is resolution-only: it redirects root imports to
+    // src, and nothing evaluates the root entry.
     const root = makeRoot();
     const pkg = makePackage(join(root, 'packages', 'kit'), {
       'src/index.ts': 'export const kitMotion = 1;',
@@ -266,8 +256,8 @@ describe('collectExternalPackageSources', () => {
       'src/index.ts': 'export * from "./Card";',
       'src/Card.tsx': 'export const Card = 1;',
     });
-    // Extensionless, as a relative `includes` specifier resolves — the kind
-    // Node's resolver refuses, so the collector's own probe must answer.
+    // Extensionless, the way a relative `includes` specifier is written:
+    // Node's resolver refuses it, so the collector's own probe must answer.
     const specifier = join(pkg, 'src', 'index');
 
     const result = await collect(root, { [specifier]: null });
@@ -380,8 +370,8 @@ describe('collectExternalPackageSources', () => {
       { hasEntry: () => true }
     );
 
-    // Nothing new to add, but the sources ARE in the analysis set — this is
-    // not the silent "discovered nothing" failure the outcome exists to catch.
+    // Nothing new to add, but the sources are in the analysis set: not the
+    // silent "discovered nothing" failure the outcome exists to catch.
     expect(result.entries).toEqual([]);
     expect(result.outcomes).toEqual([
       { specifier: '@x/ds', outcome: 'resolved', fileCount: 1 },
@@ -406,9 +396,8 @@ describe('collectExternalPackageSources', () => {
       }
     );
 
-    // Discovery never rewrites or skips: adaptation happens later in
-    // ingestSourceEntries. The observer sees exactly what the analysis
-    // set receives.
+    // Discovery never rewrites or skips; adaptation happens later in
+    // ingestSourceEntries.
     expect(observed.sort()).toEqual([
       ['packages/ds/src/Doc.mdx', '# doc'],
       ['packages/ds/src/index.ts', 'export {};'],
@@ -496,11 +485,9 @@ describe('collectExternalPackageSources', () => {
 
   test('the freshness gate does not apply without a dist entry or without src/', async () => {
     const root = makeRoot();
-    // Entry resolves inside src/ — there is no dist entry to be stale.
     const srcOnly = makePackage(join(root, 'packages', 'src-only'), {
       'src/index.ts': 'export const ds = 1;',
     });
-    // No src/ tree — the dist entry is ingested directly, nothing to compare.
     const distOnly = makePackage(join(root, 'packages', 'dist-only'), {
       'dist/index.mjs': 'export const flat = 1;',
     });
@@ -526,9 +513,6 @@ describe('collectExternalPackageSources', () => {
       'src/definition.ts': 'export const system = 1;',
     });
 
-    // Two declared specifiers resolving into ONE package dir: the derived
-    // firstOwners view stays first-wins (correlation compatibility),
-    // dirOwnerSets carries the full set in declaration order.
     const result = await collect(root, {
       '@x/ds': join(pkg, 'src', 'index.ts'),
       '@x/ds/definition': join(pkg, 'src', 'definition.ts'),
@@ -581,8 +565,8 @@ describe('collectExternalPackageSources', () => {
     });
     // Outcome records are reporting inputs, not membership — untouched.
     expect(admitted.outcomes).toEqual(collected.outcomes);
-    // A derived root alias whose target lives under a rejected dir is
-    // excised too (nothing may keep resolving into the excluded package).
+    // A derived root alias under a rejected dir is excised too: nothing may
+    // keep resolving into an excluded package.
     const subpathCollected = await collect(root, {
       '@x/b/Card': join(kitB, 'src', 'Card.tsx'),
     });

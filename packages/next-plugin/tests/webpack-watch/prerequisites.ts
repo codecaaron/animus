@@ -8,22 +8,8 @@ import {
 
 import type { EnginePrerequisites } from '../../../extract/tests/engine-prerequisites';
 
-/**
- * Prerequisite probes for the webpack-watch suites (openspec:
- * next-webpack-served-transform-coherence, increment 03).
- *
- * The harness runs against the EXACT compiled webpack each Next e2e
- * fixture ships — never a separately installed webpack — so the only
- * prerequisite this file owns is the fixture install. The real-engine lane
- * also needs the NAPI binary + package dists, which are `packages/extract`'s
- * own prerequisites and are probed by their owner
- * (`packages/extract/tests/engine-prerequisites.ts`). Missing prerequisites
- * SKIP LOUDLY with the exact remediation.
- */
-
 export { REPO_ROOT };
 
-/** Fixture id → the compiled webpack module its Next install ships. */
 export const WEBPACK_FIXTURES = [
   {
     id: 'next-app',

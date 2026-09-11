@@ -44,9 +44,6 @@ function factsExtractor(
   calls: Array<Array<{ path: string; source: string; hash?: string }>> = []
 ): SourceIngestionOptions['extractFacts'] {
   return (filesJson) => {
-    // The double decodes the corpus with the wire's OWN parser, so a malformed
-    // `filesJson` fails here exactly as the native surface's readers do rather
-    // than being re-derived (and re-guessed) at the test boundary.
     const entries = parseFilesJson(filesJson, 'extractFacts test double');
     calls.push(entries);
     return JSON.stringify({
@@ -189,9 +186,6 @@ const attrs = localBadge.attrs({ tone: 'quiet' });
   test('resolves NodeNext-style relative specifiers carrying the emitted extension', async () => {
     const definitionPath = 'src/definition.ts';
     const sveltePath = 'src/Usage.svelte';
-    // `moduleResolution: nodenext` consumers MUST write `./definition.js`
-    // for a `definition.ts` neighbor; the probe maps the emitted extension
-    // back to its source forms instead of classifying the import 'other'.
     const svelteSource = `<script>
 import { badge } from './definition.js';
 const attrs = badge.attrs({ tone: 'quiet' });

@@ -1,17 +1,6 @@
 import { join } from 'path';
 import { describe, expect, test } from 'vitest';
 
-/**
- * verify:canary — v2 NAPI boundary snapshot tests.
- *
- * Since retire-extract-v1 the canary exercises the v2 engine's native boundary
- * only (`index-v2.js`). Engine extraction/parity behavior is owned by
- * verify:parity (committed baselines) and verify:integration (full pipeline);
- * this tier proves the v2 binary loads and its `loadSystemModule` NAPI function
- * evaluates a real SystemInstance module across the FFI boundary. The
- * `assembleStylesheet` blocks below cover the pure TS pipeline export (no
- * engine involvement) and require a fresh `dist/`.
- */
 const v2 = require('../index-v2.js');
 
 describe('v2 system loader NAPI boundary', () => {
@@ -21,9 +10,8 @@ describe('v2 system loader NAPI boundary', () => {
   test('loadSystemModule returns a fully-populated NapiSystemConfig', () => {
     const config = v2.loadSystemModule(systemPath, root);
 
-    // Required string fields (NAPI snake_case → camelCase auto-conversion).
-    // Explicit picks: NAPI class instances expose fields as getters, not own
-    // enumerable properties, so toMatchObject(config) cannot see them.
+    // NAPI class instances expose fields as getters, not own enumerable
+    // properties, so toMatchObject cannot see them; pick explicitly.
     expect({
       propConfig: config.propConfig,
       groupRegistry: config.groupRegistry,
@@ -40,7 +28,6 @@ describe('v2 system loader NAPI boundary', () => {
       contextualVarsJson: expect.any(String),
     });
 
-    // The JSON-bearing fields must parse.
     expect(() => JSON.parse(config.propConfig)).not.toThrow();
     expect(() => JSON.parse(config.groupRegistry)).not.toThrow();
     expect(() => JSON.parse(config.scalesJson)).not.toThrow();
@@ -62,9 +49,6 @@ describe('v2 system loader NAPI boundary', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// assembleStylesheet: canonical anm- layer names (pure TS pipeline export)
-// ---------------------------------------------------------------------------
 describe('assembleStylesheet: anm- layer names', () => {
   const { assembleStylesheet: assemble } = require('../dist/index.mjs');
 
@@ -158,17 +142,11 @@ describe('assembleStylesheet: split mode', () => {
   });
 });
 
-// assembleStylesheet: @property registration split contract (rehomed from
-// packages/vite-plugin/tests/property-registration-split.test.ts — the suite
-// exercises the shared pipeline export, not any Vite seam, so the extract
-// owner is its home). typed-property-registration: "@property rules SHALL
-// appear in the variables part of the assembled stylesheet, before any
-// @layer block."
 describe('assembleStylesheet: @property registration split', () => {
   const { assembleStylesheet: assemble } = require('../dist/index.mjs');
 
   // Exactly the shape createTheme's serialize().variableCss produces for a
-  // registered contextual var (see packages/system/__tests__/theme.test.ts).
+  // registered contextual var.
   const VARIABLE_CSS = [
     '@property --current-bg { syntax: "<color>"; inherits: true; initial-value: transparent; }',
     '',
@@ -187,7 +165,6 @@ describe('assembleStylesheet: @property registration split', () => {
     expect(variables).toContain('@property --current-bg');
     expect(body).not.toContain('@property');
     expect(declaration).not.toContain('@property');
-    // declaration remains only the @layer ordering statement.
     expect(declaration).toMatch(/@layer\s+[\w-]+(\s*,\s*[\w-]+)*\s*;/);
   });
 
@@ -219,8 +196,6 @@ describe('assembleStylesheet: @property registration split', () => {
     const declIdx = nonSplit.search(/@layer\s+[\w-]+(\s*,\s*[\w-]+)*\s*;/);
 
     expect(propIdx).toBeGreaterThanOrEqual(0);
-    // @property sits in the variables part, after the ordering declaration
-    // line but before any component @layer block.
     expect(propIdx).toBeGreaterThan(declIdx);
     expect(layerBaseIdx).toBeGreaterThan(propIdx);
   });

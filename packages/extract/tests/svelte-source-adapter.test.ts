@@ -69,13 +69,6 @@ describe('adaptSvelteSource', () => {
 
     const moduleEntry = result.entries[0];
     const instanceEntry = result.entries[1];
-    // Byte-exact projections: the entry list above fixes the entries, so
-    // these two literals pin the whole output — both resolver binding forms
-    // (direct named `badge`/`moduleBadge`, aliased `badge as badgeAlias`),
-    // all four prop forms (absent `<badge />`, literal `tone={'strong'}`,
-    // shorthand `active={active}`, dynamic `size={width + 1}`), and every
-    // absence: no manufactured export, no `<Wrapper>` template tag scanned,
-    // no `dynamicAttrs` local carried through.
     expect(moduleEntry.source).toBe(
       "import { moduleBadge } from './module-badge';\n<moduleBadge tone={'quiet'} />;\n"
     );
@@ -301,10 +294,8 @@ const attrs = badge.attrs({ tone: 'quiet' });
   });
 
   test('witnesses the direct callable string form alongside .attrs()', async () => {
-    // `ClassResolver` declares both `(props?) => string` and `.attrs()` —
-    // the callable form must witness with identical usage semantics, not
-    // silently contribute nothing while another consumer's literal prunes
-    // the variant it renders.
+    // `ClassResolver` is both callable and `.attrs()`; a callable form that
+    // witnesses nothing lets another consumer's literal prune its variant.
     const source = `<script>
 import { badge } from './badge';
 const a = badge.attrs({ tone: 'quiet' });
@@ -367,9 +358,6 @@ const attrs = styles.badge({ tone: 'quiet' });
   });
 
   test('a module-script import called from the instance script witnesses with its import copied', async () => {
-    // Svelte places `<script module>` bindings in scope for the instance
-    // script; the projection must carry the module import into the
-    // instance entry rather than dropping the call without a witness.
     const source = `<script module>
 import { badge } from './badge';
 </script>
@@ -391,8 +379,6 @@ const attrs = badge.attrs({ tone: 'quiet' });
       parseSync(instance.path, instance.source, { lang: 'tsx' }).errors
     ).toEqual([]);
 
-    // An instance import of the same name shadows the module import and
-    // is rendered exactly once.
     const shadowed = `<script module>
 import { badge } from './module-other';
 </script>
@@ -431,8 +417,6 @@ import { badge } from './badge';
       }),
     ]);
 
-    // The callable form and module-script bindings are covered by the same
-    // fragment scan.
     const constInEach = `<script module>
 import { badge } from './badge';
 </script>
@@ -451,7 +435,6 @@ import { badge } from './badge';
       expect.objectContaining({ code: 'SVELTE_ATTRS_TEMPLATE_UNSUPPORTED' }),
     ]);
 
-    // Unrelated calls in markup stay ignored.
     const unrelated = `<script>
 import { badge } from './badge';
 const attrs = badge.attrs({ tone: 'quiet' });

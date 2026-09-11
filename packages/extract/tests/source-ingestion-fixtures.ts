@@ -1,5 +1,3 @@
-/** Doubles for the ingestion seam: only the adaptation is scripted — the
- *  strict/warn verdict and publish lifecycle are the real policy point's. */
 import { contentHash } from '../pipeline/content-hash';
 import {
   createSourceIngestor,
@@ -27,14 +25,12 @@ export function makeHost(
   };
 }
 
-/** A fatal ingestion diagnostic: quarantines in warn mode, throws in strict. */
 export const FATAL_DIAGNOSTIC = {
   code: 'SOURCE_SVELTE_DEPENDENCY_MISSING' as const,
   originalPath: 'src/Usage.svelte',
   message: 'install svelte to project opted-in source',
 };
 
-/** An advisory diagnostic: warns in every mode, never quarantines. */
 export const ADVISORY_DIAGNOSTIC = {
   code: 'SOURCE_NATIVE_PARSE_ERROR' as const,
   originalPath: 'src/app.js',
@@ -42,8 +38,6 @@ export const ADVISORY_DIAGNOSTIC = {
   message: 'Unexpected JSX expression',
 };
 
-/** Identity ingestion unless `children` maps an original to generated
- *  entries; `diagnostics` ride on every result, each corpus on `ingested`. */
 export function scriptedSourceIngestor(
   host: SourceIngestorHost,
   options: {

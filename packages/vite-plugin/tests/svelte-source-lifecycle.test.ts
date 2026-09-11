@@ -279,9 +279,9 @@ async function dispatch(
   };
   await handleHotUpdate(
     ctx,
-    // SAFETY: The fixture models every DevEnvironment field read by handleHotUpdate: name, moduleGraph, and transformRequest.
+    // SAFETY: Models every DevEnvironment field handleHotUpdate reads.
     environment as DevEnvironment,
-    // SAFETY: The fixture provides every option read by handleHotUpdate; server is unused, and read is optional for its documented non-Vite host path.
+    // SAFETY: Provides every option handleHotUpdate reads; server is unused.
     options as HotUpdateOptions
   );
 }
@@ -482,9 +482,6 @@ describe('opted-in Svelte source ownership in the Vite lifecycle', () => {
       hotMessages,
       transformError,
       transformedPaths: probe.transformedPaths,
-      // Quarantine, not abort: the invalid original is excluded from the
-      // published generation while the rest of the corpus analyzed —
-      // the engine cache cleared once and the re-analysis re-seeded it.
       quarantinedOwnership: ctx.corpus.published.ownership[usagePath],
       engineActive: probe.isActive(),
     }).toEqual({
@@ -498,8 +495,7 @@ describe('opted-in Svelte source ownership in the Vite lifecycle', () => {
       engineActive: true,
     });
 
-    // A second reset over the unchanged bad file re-quarantines silently —
-    // the (path, diagnostic) pair already warned, so no repeat noise.
+    // Warn dedup is keyed on (path, diagnostic), not on the reset.
     await ctx.performSystemReload();
     expect(warnings).toHaveLength(1);
   });
@@ -518,15 +514,11 @@ describe('opted-in Svelte source ownership in the Vite lifecycle', () => {
 
     await runBuildStart(ctx, async () => null);
     const badPath = relative(appRoot, badFile);
-    // buildStart quarantined the invalid original: warned, excluded from
-    // ownership and from the accepted-corpus dev cache.
     expect(warnings).toEqual([
       expect.stringContaining(`SVELTE_PARSE_ERROR ${badPath}`),
     ]);
     expect(ctx.corpus.published.ownership[badPath]).toBeUndefined();
 
-    // An unrelated edit analyzes and publishes — the sibling diagnostic
-    // must not roll the edit out of the cache or skip the re-analysis.
     const analysesBefore = probe.analyses.length;
     const usagePath = relative(appRoot, localUsage);
     const edited = `<script>\nimport { badge } from './definition';\nconst attrs = badge.attrs({ tone: 'quiet' });\n</script>\n<!-- edited -->\n`;
@@ -537,23 +529,18 @@ describe('opted-in Svelte source ownership in the Vite lifecycle', () => {
       source: edited,
     });
 
-    // Editing the bad file itself re-ingests and re-quarantines it (cache
-    // keeps the new source for the next fix-edit), and the identical
-    // diagnostic does not warn twice.
+    // A quarantined original keeps its cached source for the next fix edit.
     await dispatch(ctx, 'update', badFile, 22, badSource);
     expect(ctx.fileCache.get(badPath)?.source).toBe(badSource);
     expect(ctx.corpus.published.ownership[badPath]).toBeUndefined();
     expect(warnings).toHaveLength(1);
 
-    // Deleting a file while the sibling stays diagnosable still prunes it —
-    // no ghost restore, and the prune's re-analysis ran.
     unlinkSync(localUsage);
     await dispatch(ctx, 'delete', localUsage, 23);
     expect(ctx.fileCache.has(usagePath)).toBe(false);
 
-    // A failed analysis after a delete also never re-inserts the entry:
-    // a delete fires exactly one watcher event, so a restored entry would
-    // be a permanent ghost.
+    // A delete fires exactly one watcher event, so an entry a failed
+    // analysis restores stays in the cache for good.
     probe.failNextAnalysis();
     unlinkSync(badFile);
     await dispatch(ctx, 'delete', badFile, 24);
@@ -567,8 +554,6 @@ describe('opted-in Svelte source ownership in the Vite lifecycle', () => {
     const definitionPath = 'src/definition.ts';
     const definitionAbs = join(appRoot, definitionPath);
 
-    // Plan-flipping engine: the replacement plan for the definition file is
-    // switchable between analysis passes, so pre/post reset diffs are exact.
     let replacement = 'createClassResolver(["a"])';
     let failNext = false;
     const engine = {
@@ -598,10 +583,6 @@ describe('opted-in Svelte source ownership in the Vite lifecycle', () => {
     };
     const ctx = makeContext(appRoot, engine, ['.ts', '.svelte']);
 
-    // One ordered event log across BOTH environment graphs and the hot
-    // channel: changed-plan evictions must precede the full reload, and the
-    // per-file node enumeration must cover query-suffixed ids in every
-    // environment (client and SSR).
     const events: string[] = [];
     const envGraph = (name: string) => {
       const nodes = [
@@ -635,8 +616,6 @@ describe('opted-in Svelte source ownership in the Vite lifecycle', () => {
     await runBuildStart(ctx, async () => null);
     events.length = 0;
 
-    // Changed plan: every node for the definition file is evicted in every
-    // environment graph BEFORE the full reload is sent.
     replacement = 'createClassResolver(["b"])';
     await ctx.performSystemReload();
     expect(events).toEqual([
@@ -647,14 +626,12 @@ describe('opted-in Svelte source ownership in the Vite lifecycle', () => {
       'hot:full-reload',
     ]);
 
-    // Equal plan: the republished identical plan evicts nothing.
     events.length = 0;
     await ctx.performSystemReload();
     expect(events).toEqual(['hot:full-reload']);
 
-    // Failed reset: no publication, no eviction — and the manifest that
-    // keeps serving is the last-good one, so a recovered equal-plan reset
-    // still evicts nothing.
+    // A failed reset publishes nothing and keeps serving the last good
+    // manifest, so the recovered equal-plan reset still evicts nothing.
     events.length = 0;
     failNext = true;
     await ctx.performSystemReload();

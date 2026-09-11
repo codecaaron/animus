@@ -1,16 +1,3 @@
-/**
- * The Turbopack dev watcher's event flow (spec:
- * next-turbopack-integration, "Dev watch re-extraction"): a started
- * `startTurbopackWatcher` feeds debounced, existence-partitioned change sets
- * from real OS watchers into the session, surfaces debounce-window events as
- * status evidence before the flush, claims the project watch once per
- * process while ignoring `.animus` writes, and keeps a failing deferred
- * status write from escaping its microtask. Engine mocked at the singleton
- * seam. OS registration outcomes and the vendored/generated exclusions live
- * in turbopack-watcher-registration.test.ts; the `withAnimus` config wiring
- * that starts this watcher lives in
- * packages/next-plugin/tests/with-animus-turbopack.test.ts.
- */
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
@@ -39,9 +26,8 @@ const mocks = vi.hoisted(() => ({
 
 import { setEngineApiOverride } from '../../session/singleton';
 
-// Engine API injection through the singleton's globalThis-keyed test
-// seam — reaches every copy of the module (source or dist), which a
-// module mock cannot.
+// Injection through the singleton's globalThis seam reaches every copy of
+// the module (source or dist); a module mock does not.
 setEngineApiOverride(() => ({
   extractFacts: () => '{"files":{},"parseCount":0}',
   loadSystemModule: mocks.loadSystemModule,
@@ -51,14 +37,8 @@ setEngineApiOverride(() => ({
 
 let restoreGlobals: () => void;
 
-/** What the engine double returns: a complete engine manifest carrying this
- *  suite's component CSS. The shared pipeline reads `manifest.sheets` and
- *  `manifest.components` directly, so a manifest that omits fields is not a
- *  manifest. */
 const MANIFEST = JSON.stringify(makeManifest({ css: '.btn{margin:8;}' }));
 
-/** The handle of a started claim — a test asserting on `close`/`settle`
- *  states which outcome it expects rather than assuming one. */
 function startedHandle(outcome: TurbopackWatchOutcome): TurbopackWatcherHandle {
   if (outcome.kind !== 'started') {
     throw new Error(`expected a started watcher, got ${outcome.kind}`);
@@ -90,9 +70,6 @@ afterEach(() => {
 describe('startTurbopackWatcher', () => {
   test('feeds debounced, existence-partitioned change sets to the session', async () => {
     const root = createProject();
-    // A real session with its analysis entry point replaced: this test owns
-    // the watcher's change sets only, so the pipeline behind
-    // handleWatchUpdate never runs.
     const { ExtractionSession } =
       await import('../../session/extraction-session');
     const session = new ExtractionSession({ system: './src/system.ts' });
@@ -108,9 +85,8 @@ describe('startTurbopackWatcher', () => {
       let stamp = 0;
       await vi.waitFor(
         () => {
-          // Re-arm the trigger on every poll: FSEvents registration can lag
-          // under parallel suite load, and a one-shot write that lands
-          // before the watcher is live would never be delivered.
+          // Re-arm on every poll: FSEvents registration can lag under load,
+          // and a write landing before it is live is never delivered.
           writeFileSync(
             join(root, 'src', 'New.tsx'),
             `export const N = ${stamp++};\n`
@@ -142,20 +118,17 @@ describe('startTurbopackWatcher', () => {
 
   test('debounce-window events surface as debouncing status evidence before the flush', async () => {
     const root = createProject();
-    // A real session (no analysis runs — the huge debounce keeps the flush
-    // away): the watcher must feed its observations into the session's
-    // status file so loaders ahead of the analysis can wait on evidence
-    // (design D3 'debouncing').
     const { ExtractionSession } =
       await import('../../session/extraction-session');
     const session = new ExtractionSession({ system: './src/system.ts' });
     session.rootDir = root;
 
+    // The 60s debounce keeps the flush away, so no analysis runs and the
+    // status file is the only evidence under test.
     const watcher = startedHandle(
       startTurbopackWatcher(session, root, { debounceMs: 60_000 })
     );
     try {
-      // The watcher's debounce is the status deadline's ceiling.
       expect(session.debounceCeilingMs).toBe(60_000);
 
       const statusPath = join(session.sessionDir, 'analysis-status.json');
@@ -223,14 +196,10 @@ describe('deferred status write containment', () => {
       await import('../../session/extraction-session');
     const session = new ExtractionSession({ system: './src/system.ts' });
     session.rootDir = root;
-    // Occupy `.animus` with a regular file: the deferred microtask's
-    // mkdirSync(sessionDir) then throws ENOTDIR on the session's first-ever
-    // artifact write. That write runs outside the watch handler's try/catch,
-    // so an uncaught throw there reaches the process and kills the dev
-    // server.
+    // A regular file at `.animus` makes the deferred write throw ENOTDIR; it
+    // runs outside the handler's try/catch, so an escape kills the server.
     writeFileSync(join(root, '.animus'), 'not a directory\n');
     const warned: string[] = [];
-    // The session's own warn path emits one preformatted line per call.
     const warnSpy = vi
       .spyOn(console, 'warn')
       .mockImplementation((message: string) => {

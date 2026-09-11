@@ -1,35 +1,11 @@
-// scripts/hygiene/delete-unused.test.ts
-//
-// Contract + behavior tests for the oxlint-JSON deleter.
-//
-// NB: the first `oxlint JSON shape contract` test is intentionally rigid.
-// If oxlint changes the diagnostic JSON schema (e.g., renaming `filename`
-// to `path` or moving coordinates out of `labels[0].span`), this test
-// fails loud and points the maintainer at scripts/hygiene/delete-unused.ts
-// as the single adaptation site.
-
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
 
-// vp lint's underlying `ignore` crate panics on absolute paths outside
-// the project root ("path is expected to be under the root"), and vp's
-// lint config (vite.config.ts ignorePatterns) excludes `tmp/`,
-// `node_modules/`, `dist/`, etc. — those skips apply even to explicit
-// path arguments. So live fixtures must sit at a project-root path that
-// matches no vp ignorePattern.
-//
-// The subtle part: the fixture path must ALSO not be in .gitignore. `vp lint
-// --no-ignore` disables `.eslintignore` / `--ignore-path` / `--ignore-pattern`
-// and nothing else — .gitignore still applies. The previous
-// `.live-test-fixtures-*` prefix WAS gitignored (added, reasonably enough, to
-// prevent leak commits), so oxlint skipped it, returned `number_of_files: 0`
-// plus a "No files found to lint" banner on stdout, and both live tests below
-// died on `JSON.parse`. The ignore entry meant to protect the fixture is what
-// made the gate vacuous. `livetestfixtures-*` is deliberately NOT ignored;
-// see the note in .gitignore. Each test removes its directory in a `finally`.
+// Live fixtures must sit at a project-root path matched by no vp
+// ignorePattern and no .gitignore entry, or oxlint lints nothing.
 function liveFixtureDir(prefix: string): string {
   return mkdtempSync(join(process.cwd(), prefix));
 }
@@ -52,11 +28,8 @@ import { applyDeletions } from './delete-unused.ts';
 
 import type { JsonObject } from '@animus-ui/assertions';
 
-// The shape claims below are about the WIRE record oxlint emits, so the
-// subject is read back as JSON and decided with the shared JSON vocabulary.
-// A `typeof` over the in-memory object would have been answered by the local
-// `OxlintDiagnostic` annotation — i.e. by the very declaration under test —
-// which is exactly the vacuous gate this suite exists to prevent.
+// The claims are about the wire record, so the subject is re-read as JSON:
+// a `typeof` over the annotated object would be answered by the annotation.
 function wireRecord(
   diagnostic: OxlintDiagnostic,
   boundary: string
@@ -64,9 +37,8 @@ function wireRecord(
   return parseJsonObject(JSON.stringify(diagnostic), boundary);
 }
 
-// `labels[0].span` is the coordinate path the deleter navigates. Reaching it
-// fails loud so a schema move (span hoisted onto the diagnostic, labels
-// renamed) surfaces here rather than as a silent no-op deletion pass.
+// `labels[0].span` is the coordinate path the deleter navigates; a schema
+// move surfaces here rather than as a silent no-op deletion pass.
 function firstLabelSpan(diagnostic: JsonObject): JsonObject {
   const labels = diagnostic.labels;
   if (!Array.isArray(labels)) {
@@ -118,13 +90,6 @@ function diag(
 
 describe('oxlint JSON shape contract', () => {
   test('live oxlint output uses `eslint(...)` code wrapper', () => {
-    // Empirical assertion against the real oxlint binary (via vp lint).
-    // Session 89 (2026-04-24, biome-era) caught a fictional-vs-real mismatch
-    // between the deleter's filter expectations and the linter's actual
-    // category strings. Under oxlint, the equivalent risk surface is the
-    // `eslint(<rule>)` code wrapper format. If oxlint changes this shape,
-    // this test fails loud and the adapter in delete-unused.ts is the
-    // one-file fix point.
     const dir = liveFixtureDir('livetestfixtures-contract-');
     try {
       const path = join(dir, 'fixture.ts');
@@ -148,8 +113,6 @@ describe('oxlint JSON shape contract', () => {
       expect(Array.isArray(wire.labels)).toBe(true);
       const span = firstLabelSpan(wire);
       expect(isJsonNumber(span.offset)).toBe(true);
-      // The deleter reads span.line/span.column (delete-unused.ts) — pin them
-      // against real oxlint output, not a synthetic literal.
       expect(isJsonNumber(span.line)).toBe(true);
       expect(isJsonNumber(span.column)).toBe(true);
     } finally {
@@ -159,14 +122,6 @@ describe('oxlint JSON shape contract', () => {
 });
 
 describe('classifyUnusedVar (single owner for Layer A + Layer C)', () => {
-  // This classifier decides BOTH what the Layer C deleter is allowed to
-  // remove and what the Layer A receipt CLAIMS was removed. It used to be
-  // declared twice — once in `_emit-oxlint-receipts.ts`, once in
-  // `delete-unused.ts`. The bodies had not in fact drifted (verified
-  // byte-identical before consolidation), but nothing prevented them from
-  // drifting, and a divergence would let the audit trail disagree with the
-  // mutation in a tool that deletes source. These cases pin the classification
-  // for the one surviving owner.
   test('import messages classify as `import` (Layer A deletes, Layer C skips)', () => {
     expect(
       classifyUnusedVar("Identifier 'unused' is imported but never used.")
@@ -198,8 +153,6 @@ describe('classifyUnusedVar (single owner for Layer A + Layer C)', () => {
   });
 
   test('the classification is prose-anchored: a mid-string match does not count', () => {
-    // The regexes are `^`-anchored on purpose. A diagnostic that merely
-    // mentions a variable must not be read as a declaration to delete.
     expect(classifyUnusedVar("Prefer const over let for Variable 'x'.")).toBe(
       'unknown'
     );
@@ -207,10 +160,7 @@ describe('classifyUnusedVar (single owner for Layer A + Layer C)', () => {
 });
 
 describe('external tool report decoding (one failure policy)', () => {
-  // `_tool-reports.ts` replaced three models of oxlint's wire format carrying
-  // two opposite failure policies (silent `catch { return }` in the Layer A/D
-  // receipt emitters vs `exit 1` in the Layer C deleter). The policy is now
-  // one: diagnose and raise, naming the tool. Never a silent empty report —
+  // Decoding raises and names the tool rather than yielding an empty report:
   // zero receipts is indistinguishable from a converged cascade.
   test('a well-formed oxlint report decodes', () => {
     const report = decodeOxlintReport(
@@ -228,10 +178,8 @@ describe('external tool report decoding (one failure policy)', () => {
   });
 
   test('oxlint\'s "No files found to lint" banner is diagnosed by name', () => {
-    // oxlint prints this banner on STDOUT ahead of its JSON whenever the
-    // invocation matches no lintable file, so it lands in the cascade's input
-    // (run.sh captures stdout). Decoding it as `{diagnostics: []}` would report
-    // "layer inspected nothing" as "layer found nothing to clean".
+    // oxlint prints this banner on stdout ahead of its JSON, so it lands in
+    // the cascade input; an empty decode reads as "nothing to clean".
     const banner =
       'No files found to lint. Please check your paths and ignore patterns.\n' +
       '{ "diagnostics": [], "number_of_files": 0 }';
@@ -408,7 +356,6 @@ describe('function parameter handling (destructured-field-only filter)', () => {
   test('destructured-field unused in function param IS deleted', () => {
     const src =
       'function f({ a, b }: Opts) {\n  return b;\n}\nexport const live = f({ a: 1, b: 2 });\n';
-    // oxlint reports destructured-field unused params with "Parameter '<X>'" prefix
     const out = applyDeletions('fixture.ts', src, [
       diag(
         "Parameter 'a' is declared but never used. Unused parameters should start with a '_'.",
@@ -423,18 +370,15 @@ describe('function parameter handling (destructured-field-only filter)', () => {
   test('positional function parameter is NOT deleted (arity-preserving rename is linter-owned)', () => {
     const src =
       'export function f(unusedA: number, b: number) {\n  return b;\n}\n';
-    // Synthetic case: oxlint with `args: 'after-used'` (default) does not flag
-    // positional unused params before a used param. This test pins the
-    // deleter's defensive behavior — even if a param-classified diagnostic
-    // resolves to a top-level (non-binding-element) position, it must NOT
-    // delete (preserve function arity).
+    // Synthetic: oxlint with the default `args: 'after-used'` never flags a
+    // positional param before a used one; the deleter must still refuse.
     const out = applyDeletions('fixture.ts', src, [
       diag(
         "Parameter 'unusedA' is declared but never used. Unused parameters should start with a '_'.",
         src.indexOf('unusedA')
       ),
     ]);
-    expect(out).toBe(src); // unchanged
+    expect(out).toBe(src);
   });
 });
 
@@ -459,7 +403,7 @@ describe('multi-diagnostic within a single file', () => {
     const dupOffset = src.indexOf('deadA');
     const out = applyDeletions('fixture.ts', src, [
       diag("Variable 'deadA' is declared but never used.", dupOffset),
-      diag("Variable 'deadA' is declared but never used.", dupOffset), // duplicate
+      diag("Variable 'deadA' is declared but never used.", dupOffset),
     ]);
     expect(out).toBe('export const live = 2;\n');
   });
@@ -467,9 +411,6 @@ describe('multi-diagnostic within a single file', () => {
 
 describe('non-target codes/messages are ignored', () => {
   test('import diagnostic is not processed by the deleter (Layer A handles imports)', () => {
-    // Under oxlint, unused imports are removed by Layer A's
-    // `vp lint --fix-suggestions`. Layer C must skip them so the layers
-    // do not collide on the same diagnostic.
     const src = "import { unused } from 'x';\nexport const live = 1;\n";
     const out = applyDeletions('fixture.ts', src, [
       diag(
@@ -477,7 +418,7 @@ describe('non-target codes/messages are ignored', () => {
         src.indexOf('unused')
       ),
     ]);
-    expect(out).toBe(src); // unchanged
+    expect(out).toBe(src);
   });
 
   test('unrelated linter rule is skipped', () => {
@@ -487,13 +428,10 @@ describe('non-target codes/messages are ignored', () => {
         code: 'eslint(prefer-const)',
       }),
     ]);
-    expect(out).toBe(src); // unchanged
+    expect(out).toBe(src);
   });
 
   test('code wrapper `eslint(...)` is unwrapped and accepted', () => {
-    // Real oxlint output emits codes as `eslint(no-unused-vars)`; the
-    // adapter unwraps the wrapper so internal logic operates on the bare
-    // rule name. This test pins that unwrap behavior.
     const src = 'const deadConst = 1;\nexport const live = 2;\n';
     const out = applyDeletions('fixture.ts', src, [
       diag(
@@ -516,10 +454,8 @@ describe('function overload groups', () => {
       'export const live = 1;',
       '',
     ].join('\n');
-    // oxlint flags only the implementation of an overloaded function; the
-    // signature-only overloads above are not separately flagged. The deleter
-    // must expand the range to include the full group (and any JSDoc trivia
-    // between signatures, exercised by Tier 3 fixture below).
+    // oxlint flags only the implementation of an overload group, so the
+    // deleter expands the range to the whole group.
     const implOffset =
       src.indexOf('function mapValues(obj: any') + 'function '.length;
     const out = applyDeletions('fixture.ts', src, [
@@ -531,13 +467,8 @@ describe('function overload groups', () => {
 });
 
 describe('Layer C code-drift canary', () => {
-  // Closes the session-89 silent-no-op class of regression: if oxlint ever
-  // renames a code in a way the deleter's discriminator doesn't catch, the
-  // drift receipt fires and the presenter surfaces a WARN.
-  //
-  // Direct in-process invocation of main() is not exposed; the canary lives
-  // inside main() so we drive it via a subprocess that pipes synthetic JSON
-  // and writes receipts to a temp file via env vars.
+  // The canary lives inside an unexported main(), so it runs through a
+  // subprocess fed synthetic JSON with a receipts file named by env.
   test('oxlint diagnostics with only unknown codes produce a drift receipt', () => {
     const dir = mkdtempSync(join(tmpdir(), 'hygiene-drift-'));
     try {
@@ -619,7 +550,6 @@ describe('Layer C code-drift canary', () => {
     try {
       const receiptsPath = join(dir, 'receipts.jsonl');
       writeFileSync(receiptsPath, '');
-      // Mix: one known (will match), one unknown (would otherwise trigger drift)
       const synthetic = {
         diagnostics: [
           {
@@ -693,17 +623,12 @@ describe('Tier 3 corner-case fixtures', () => {
       'scripts/hygiene/__fixtures__/deleter/overload-with-jsdoc.ts.in'
     );
     const src = readFileSync(fixturePath, 'utf-8');
-    // oxlint flags the implementation only — line 6 in the fixture
-    // ("function unused(x: number | string)..."). Compute the offset of
-    // the impl's `unused` identifier via indexOf on the impl signature.
     const implOffset =
       src.indexOf('function unused(x: number | string)') + 'function '.length;
     const out = applyDeletions(fixturePath, src, [
       diag("Function 'unused' is declared but never used.", implOffset),
     ]);
     expect(out).not.toContain('function unused');
-    // The JSDoc between signature 2 and the implementation must be removed
-    // along with the overload group rather than orphaned at top-level.
     expect(out).not.toContain('Overloaded helper');
   });
 
@@ -713,7 +638,6 @@ describe('Tier 3 corner-case fixtures', () => {
       'scripts/hygiene/__fixtures__/deleter/unused-namespace.ts.in'
     );
     const src = readFileSync(fixturePath, 'utf-8');
-    // Diagnostic targets the `Unused` identifier on line 1.
     const out = applyDeletions(fixturePath, src, [
       diag(
         "Variable 'Unused' is declared but never used.",
@@ -727,12 +651,6 @@ describe('Tier 3 corner-case fixtures', () => {
 
 describe('live oxlint pipeline integration', () => {
   test('real oxlint JSON flows through applyDeletions end-to-end', () => {
-    // Belt-and-suspenders check: spawn vp lint, pipe its real --format=json
-    // output into applyDeletions, assert the cascade's intra-file cleanup
-    // actually happens. If oxlint renames fields, changes code shape, or
-    // otherwise breaks the contract between the linter and this deleter,
-    // this test catches it — unit tests alone would still pass on stale
-    // shape assumptions.
     const dir = liveFixtureDir('livetestfixtures-live-');
     try {
       const path = join(dir, 'fixture.ts');
@@ -756,7 +674,6 @@ describe('live oxlint pipeline integration', () => {
       expect(Array.isArray(report.diagnostics)).toBe(true);
 
       const cleaned = applyDeletions(path, src, report.diagnostics);
-      // All four dead decls should be removed; the live export preserved.
       expect(cleaned).not.toContain('DeadType');
       expect(cleaned).not.toContain('DeadInterface');
       expect(cleaned).not.toContain('deadConst');

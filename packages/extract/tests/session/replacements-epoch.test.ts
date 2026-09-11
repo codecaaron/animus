@@ -2,22 +2,6 @@ import { readFileSync, rmSync, statSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
-/**
- * Replacement-epoch publication (openspec:
- * next-webpack-served-transform-coherence, design D3/D5 — increment 01):
- * after every successful analysis the session computes the canonical epoch
- * (`hashReplacementPlans(snapshotFilePlans(manifest), systemPropsContent)` —
- * the served system-props module rides as the served-dependency witness),
- * publishes it via
- * the singleton, and maintains the SESSION-SCOPED disk witness
- * `.animus/sessions/<id>/replacements-epoch` `{schema, sessionId, epoch}` —
- * rewritten ONLY when the epoch value changes (style-only analyses and
- * same-session restarts leave bytes AND mtime untouched). A failed analysis
- * advances nothing and never suppresses an equal-content retry.
- *
- * Same setup as watch-asset-batch.test.ts: the NAPI boundary is mocked,
- * the session and pure pipeline helpers run for real over a temp project.
- */
 import { contentHash } from '../../pipeline';
 
 const mocks = vi.hoisted(() => ({
@@ -28,9 +12,8 @@ const mocks = vi.hoisted(() => ({
 
 import { setEngineApiOverride } from '../../session/singleton';
 
-// Engine API injection through the singleton's globalThis-keyed test
-// seam — reaches every copy of the module (source or dist), which a
-// module mock cannot.
+// Injection through the singleton's globalThis seam reaches every copy of
+// the module (source or dist); a module mock does not.
 setEngineApiOverride(() => ({
   extractFacts: () => '{"files":{},"parseCount":0}',
   loadSystemModule: mocks.loadSystemModule,
@@ -46,8 +29,6 @@ import {
 } from '../../session/singleton';
 import {
   buildManifest,
-  // The fixture's edit corpus: this source MOVES the replacement plans,
-  // where BUTTON_STYLE_EDIT only moves style values.
   BUTTON_PLAN_EDIT,
   BUTTON_SOURCE,
   BUTTON_STYLE_EDIT,
@@ -66,16 +47,12 @@ import type { ExtractionSession } from '../../session/extraction-session';
 
 let restoreGlobals: () => void;
 
-/** The session-scoped epoch witness on disk, written by
- *  `ExtractionSession.publishReplacementEpoch`. */
 interface ReplacementEpochRecord {
   schema: number;
   sessionId: string;
   epoch: string;
 }
 
-/** One reading of that artifact: its bytes, its decoded record, and the
- *  mtime the rewrite-suppression proofs compare. */
 interface EpochArtifactReading {
   raw: string;
   parsed: ReplacementEpochRecord;
@@ -86,7 +63,6 @@ function createProject(): string {
   return createFixtureProject('animus-epoch-');
 }
 
-/** The shared session start, over a manifest naming `components`. */
 function startSession(
   root: string,
   components: Record<string, ManifestComponentDescriptor>
@@ -132,7 +108,6 @@ describe('epoch artifact publication', () => {
     const session = await startSession(root, PLAN_A);
     const before = epochArtifact(session);
 
-    // Same plans, different CSS — a style-value-only analysis.
     mocks.analyzeProject.mockImplementation(() =>
       buildManifest(PLAN_A, '.btn{margin:16px;}')
     );
@@ -167,7 +142,6 @@ describe('epoch artifact publication', () => {
     expect(after.parsed.sessionId).toBe(before.parsed.sessionId);
     expect(getReplacementEpoch()).toBe(after.parsed.epoch);
 
-    // A further style-only analysis does not rewrite the new artifact.
     mocks.analyzeProject.mockImplementation(() =>
       buildManifest(PLAN_B, '.btn{margin:24px;}')
     );
@@ -186,11 +160,8 @@ describe('epoch artifact publication', () => {
     const session = await startSession(root, PLAN_A);
     const before = epochArtifact(session);
 
-    // A sibling session that disagreed (a `next build` beside this live dev
-    // session) reconciled our artifact away. The next publish — even a
-    // same-value, style-only one — must recreate it: loaders keep
-    // registering the path as a dependency, and a missing witness is
-    // permanently satisfiable for every module built after the deletion.
+    // Loaders register this path as a dependency and a missing witness is
+    // permanently satisfiable, so the next publish must recreate it.
     rmSync(replacementEpochPath(session.sessionDir));
 
     mocks.analyzeProject.mockImplementation(() =>
@@ -213,12 +184,8 @@ describe('epoch artifact publication', () => {
     const first = await startSession(root, PLAN_A);
     const before = epochArtifact(first);
 
-    // Simulate a same-process config re-evaluation: the first session is
-    // closed (publication ownership is exclusive — the handoff is
-    // sequential by contract) and a NEW instance adopts the process-claimed
-    // identity (same session dir) over identical plans. Bytes and mtime
-    // must be untouched so persistent-cache snapshots that include the
-    // artifact stay valid.
+    // The predecessor closes first: publication ownership is exclusive, and
+    // untouched bytes keep persistent-cache snapshots valid.
     first.close();
     const second = await startSession(root, PLAN_A);
     expect(second.sessionId).toBe(first.sessionId);
@@ -269,15 +236,13 @@ describe('failed analyses publish no partial generation', () => {
       })
     ).rejects.toThrow('analysis boom');
 
-    // Previous generation stays current: manifest, epoch value, artifact.
     expect(getManifestJson()).toBe(manifestBefore);
     expect(getReplacementEpoch()).toBe(before.parsed.epoch);
     const afterFailure = epochArtifact(session);
     expect(afterFailure.raw).toBe(before.raw);
     expect(afterFailure.mtimeMs).toBe(before.mtimeMs);
 
-    // The SAME content observed again re-runs analysis (retry not
-    // suppressed by the content-hash cache) and now advances the epoch.
+    // The same content observed again must not be suppressed by the cache.
     mocks.analyzeProject.mockImplementation(() => buildManifest(PLAN_B));
     await session.handleWatchUpdate({
       modifiedFiles: new Set([join(root, 'src', 'Button.tsx')]),

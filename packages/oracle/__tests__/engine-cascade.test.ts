@@ -17,9 +17,8 @@ import type { CascadeContext, DefeatReason } from '../src/engines';
 import type { OracleHost } from '../src/providers/host';
 import type { FixtureOptions } from './fixture-world';
 
-/** The shared world WITHOUT the host's declared obligations: this suite
- *  drives its own `ObligationRegistry` through `contextOf`, so declared
- *  obligations must not be registered into the universe behind it. */
+/** No declared host obligations: this suite drives its own
+ *  `ObligationRegistry` through `contextOf`. */
 const host = (options: FixtureOptions = {}): OracleHost => ({
   ...createInMemoryHost(config(options)),
   tokens: tokens(),
@@ -83,7 +82,7 @@ describe('cascade — precedence', () => {
       'viewport.inline': 900,
     });
 
-    // `variant-large-strong` is emitted FIRST (order 0) yet wins on b=2.
+    // `variant-large-strong` is emitted first (order 0) yet wins on b = 2.
     expect(winnerOfProperty(analysis, 'padding')).toEqual({
       rule: 'variant-large-strong',
       value: '20px',
@@ -117,7 +116,7 @@ describe('cascade — precedence', () => {
       'viewport.inline': 900,
     });
 
-    // Both important: anm-base is EARLIER than anm-variants, so it wins.
+    // Both are important, so the earlier layer anm-base wins.
     expect(winnerOfProperty(analysis, 'padding')).toEqual({
       rule: 'base-important',
       value: '1px',
@@ -132,9 +131,9 @@ describe('cascade — precedence', () => {
   it('marks a candidate whose guard is false as condition-false', () => {
     const analysis = cascadeAt(host(), smallNarrow);
 
-    // `wide` matches the class set but its viewport guard is false here …
+    // `wide` matches the class set, but its viewport guard is false here.
     expect(reasonsFor(analysis, 'padding')['wide']).toBe('condition-false');
-    // … while the variant rules are not candidates: the class is absent.
+    // The variant rules are not even candidates: the class is absent.
     expect(
       analysis.candidates.map((candidate) => candidate.rule.id)
     ).not.toContain('variant-large');
@@ -247,7 +246,7 @@ describe('cascade — inheritance', () => {
     expect(
       analysis.inherited.get('font-size')?.declaration.declaration.value
     ).toBe('16px');
-    // Not inheritable, and not declared on the target: no fact at all.
+    // background is not inheritable, so no inherited entry exists.
     expect(analysis.inherited.has('background')).toBe(false);
   });
 

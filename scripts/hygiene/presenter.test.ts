@@ -1,12 +1,3 @@
-// scripts/hygiene/presenter.test.ts
-//
-// Synthetic-fixture tests for the receipts → verdict transformation.
-// The goal is to lock in the trust contract:
-//   - cap-hit-clean must NEVER warn (this is the regression session-90 caught)
-//   - cap-hit-divergent must surface the offending layer
-//   - Layer D NOTE thresholds must match the spec (≥1 file OR ≥5 exports)
-//   - code-drift must surface the codesSeen list
-
 import { describe, expect, test } from 'vitest';
 
 import { analyze, parseReceipts, type Verdict } from './presenter';
@@ -49,7 +40,7 @@ describe('parseReceipts', () => {
     const valid = JSON.stringify(
       rec({ iter: 1, layer: 'C', verb: 'delete', kind: 'const-decl' })
     );
-    const malformed = '{"v":1,"iter":2,"layer":"C","verb":"delete"'; // missing closing brace
+    const malformed = '{"v":1,"iter":2,"layer":"C","verb":"delete"';
     const parsed = parseReceipts(`\n${valid}\n\n${malformed}\n`);
     expect(parsed).toHaveLength(1);
     expect(parsed[0].iter).toBe(1);
@@ -91,11 +82,8 @@ describe('analyze: convergence verdict', () => {
   });
 
   test('ranIters override: clean trailing iterations are recognized as convergence', () => {
-    // Cascade ran 3 iterations: iter 1 had a Layer C delete, iters 2 & 3
-    // produced no receipts (clean). Without the orchestrator-supplied
-    // ranIters, the presenter would only see iter 1 and misclassify as
-    // divergent (final-iter delete count > 0). With ranIters=3, the verdict
-    // correctly reflects that iter 3 ran and emitted nothing.
+    // A clean iteration emits no receipts, so receipts alone stop at iter 1
+    // and read as divergent; ranIters reports the trailing iterations.
     const records = [
       rec({ iter: 1, layer: 'C', verb: 'delete', kind: 'const-decl' }),
     ];
@@ -112,14 +100,12 @@ describe('analyze: convergence verdict', () => {
     const records = [
       rec({ iter: 1, layer: 'C', verb: 'delete', kind: 'const-decl' }),
     ];
-    // ranIters = cap; iter 5 produced no receipts.
     const v = analyze(records, 5, 5);
     expect(v.convergence).toBe('cap-hit-clean');
     expect(v.finalIteration).toBe(5);
   });
 
   test('ranIters override: lower than receipts max — receipts max wins', () => {
-    // Defensive: orchestrator under-reports ranIters; receipts say iter 4.
     const records = [
       rec({ iter: 1, layer: 'C', verb: 'delete', kind: 'const-decl' }),
       rec({ iter: 4, layer: 'C', verb: 'delete', kind: 'const-decl' }),
@@ -139,7 +125,6 @@ describe('analyze: convergence verdict', () => {
         rec({ iter: i, layer: 'C', verb: 'delete', kind: 'const-decl' })
       );
     }
-    // iter 5: only format receipts, no deletes
     records.push(
       rec({ iter: 5, layer: 'A', verb: 'format', kind: 'format-only' })
     );
@@ -150,7 +135,6 @@ describe('analyze: convergence verdict', () => {
     expect(v.convergence).toBe('cap-hit-clean');
     expect(v.suggestedExitCode).toBe(0);
     expect(v.summaryLines[0]).toMatch(/INFO: cascade settled at iteration cap/);
-    // CRITICAL: must NOT contain the WARN string — this is the regression
     expect(
       v.summaryLines.some((l) => l.startsWith('WARN: cascade did not converge'))
     ).toBe(false);
@@ -207,7 +191,6 @@ describe('analyze: Layer D volume NOTE', () => {
     expect(
       v.summaryLines.some((l) => l.startsWith('MANUAL REVIEW REQUIRED'))
     ).toBe(true);
-    // The informational export NOTE must NOT fire for a file-only deletion.
     expect(
       v.summaryLines.some((l) => l.startsWith('NOTE: Layer D removed'))
     ).toBe(false);
@@ -283,7 +266,7 @@ describe('analyze: code-drift', () => {
     ];
     const v = analyze(records, 5);
     expect(v.convergence).toBe('converged');
-    expect(v.suggestedExitCode).toBe(0); // drift is informational, not divergent
+    expect(v.suggestedExitCode).toBe(0);
     expect(v.summaryLines.length).toBeGreaterThanOrEqual(2);
     expect(v.summaryLines[0]).toMatch(/converged/);
     expect(
@@ -304,9 +287,6 @@ describe('analyze: code-drift', () => {
 
 describe('analyze: combined signals', () => {
   test('export-only nudge on cap-hit-clean does not change exit code', () => {
-    // Export-only cleanup (no whole-file deletion) keeps the informational
-    // nudge and the successful exit — the spec's "export-only cleanup
-    // completes" scenario.
     const records: Receipt[] = [];
     for (let i = 1; i <= 4; i++) {
       records.push(
@@ -326,12 +306,10 @@ describe('analyze: combined signals', () => {
     });
     expect(v.riskyDeletion).toBe(false);
     expect(v.suggestedExitCode).toBe(0);
-    expect(v.summaryLines.length).toBe(2); // INFO + NOTE
+    expect(v.summaryLines.length).toBe(2);
   });
 
   test('whole-file deletion on cap-hit-clean forces manual-review exit (G7)', () => {
-    // The same clean-convergence shape but with whole-file deletions: the
-    // fail-closed policy overrides the otherwise-successful exit.
     const records: Receipt[] = [];
     for (let i = 1; i <= 4; i++) {
       records.push(
@@ -360,9 +338,6 @@ describe('analyze: combined signals', () => {
 
 describe('analyze: risky whole-file deletion (G7)', () => {
   test('requires manual review after whole-file deletion', () => {
-    // A converged receipt stream (no divergence) containing one Layer D
-    // verb=delete kind=file record must return a non-zero suggested exit and
-    // an explicit manual-review summary line.
     const records = [
       rec({ iter: 1, layer: 'C', verb: 'delete', kind: 'const-decl' }),
       rec({
@@ -385,10 +360,8 @@ describe('analyze: risky whole-file deletion (G7)', () => {
   });
 
   test('behavior-build proof suppresses the block', () => {
-    // The explicit seam for DEF-3 / row 04: a recorded proof marker clears the
-    // risky-deletion block without reshaping the verdict. A trailing clean
-    // iteration keeps convergence out of cap-hit-divergent so the proof effect
-    // is isolated.
+    // The trailing clean iteration keeps convergence out of cap-hit-divergent
+    // so the proof marker's effect is the only variable.
     const records = [
       rec({
         iter: 1,

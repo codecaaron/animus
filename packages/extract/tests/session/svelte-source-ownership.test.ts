@@ -32,9 +32,6 @@ import {
 
 import type { AnalysisSourceEntry, AnalyzeProjectArgs } from '../../pipeline';
 
-// Engine API injection through the singleton's globalThis-keyed test
-// seam — reaches every copy of the module (source or dist), which a
-// module mock cannot. The seam key survives resetAnimusGlobals by design.
 setEngineApiOverride(() => {
   const api = {
     loadSystemModule: mocks.loadSystemModule,
@@ -47,14 +44,8 @@ setEngineApiOverride(() => {
     : api;
 });
 
-/** The slice of one serialized engine file entry these fakes read. */
 type EngineFileEntry = Pick<AnalysisSourceEntry, 'path' | 'source'>;
 
-/**
- * Decode one engine payload. The fakes stand exactly where the NAPI boundary
- * stands — they receive a JSON string — so each payload is decoded and
- * checked once here instead of asserted at every read site.
- */
 function readFileEntries(filesJson: string): EngineFileEntry[] {
   const parsed: unknown = JSON.parse(filesJson);
   if (!Array.isArray(parsed)) {
@@ -71,11 +62,6 @@ function readFileEntries(filesJson: string): EngineFileEntry[] {
   });
 }
 
-/** The engine's manifest for these workspaces — a COMPLETE `ProjectManifest`
- *  at its empty values (the shared pipeline reads
- *  `manifest.sheets.global` and `manifest.css` as typed fields, not guarded
- *  ones). This suite asserts on source ownership, not on emitted CSS, so
- *  every field stays at its empty value. */
 const MANIFEST = JSON.stringify(makeManifest());
 
 function factsFor(filesJson: string): string {
@@ -181,9 +167,6 @@ function makeSession(app: string, strict = false): ExtractionSession {
   return session;
 }
 
-/** The live ownership state these assertions read. `fileCache` is private to
- *  ExtractionSession, so it is reached through TypeScript's element-access
- *  escape hatch: the owner's own declared type still applies, no assertion. */
 function sources(session: ExtractionSession) {
   return {
     fileCache: session['fileCache'],

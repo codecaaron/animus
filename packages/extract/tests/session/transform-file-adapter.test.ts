@@ -5,29 +5,22 @@ import { engineApi, setSharedEngine } from '../../session/singleton';
 import type { V2ExtractEngine } from '../../pipeline';
 import type { AnimusEngine } from '../../session/singleton';
 
-/** globalThis keys owned by the session singleton (packages/extract/session/singleton.ts) — the ESM/CJS shared contract. */
 const ENGINE_KEY = '__animus_engine__';
 const V2_ENGINE_KEY = '__animus_v2_engine__';
 const V2_SENT_SOURCES_KEY = '__animus_v2_sent_sources__';
 
-/** The three singleton slots this suite drives, each typed as
- *  `AnimusSingletonStore` declares it. */
 interface V2AdapterSlots {
   [ENGINE_KEY]: AnimusEngine | undefined;
   [V2_ENGINE_KEY]: V2ExtractEngine | null;
   [V2_SENT_SOURCES_KEY]: Map<string, string> | null | undefined;
 }
 
-// SAFETY: packages/extract/session/singleton.ts is the sole owner of these
-// three globalThis keys and declares exactly these value types on them; the
-// view adds no key that module does not already write, and beforeEach
-// snapshots / afterEach restores every one of them.
+// SAFETY: the session singleton is the sole owner of these three globalThis
+// keys and declares exactly these value types; afterEach restores each one.
 const g = globalThis as typeof globalThis & V2AdapterSlots;
 
 let saved: V2AdapterSlots;
 
-/** A published engine whose only reachable method is `transformFile` — the
- *  adapter's transform path must never analyze or clear the cache. */
 function transformOnlyEngine(
   transformFile: V2ExtractEngine['transformFile']
 ): V2ExtractEngine {

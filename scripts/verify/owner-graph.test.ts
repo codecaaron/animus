@@ -51,15 +51,11 @@ const compatibilityAssertionTasks = {
 function currentSurfaceFiles(): string[] {
   const directoryRoots = ['.github', 'docs', 'e2e', 'packages', 'scripts'];
   const fileRoots = ['AGENTS.md', 'CLAUDE.md', 'README.md', 'package.json'];
-  // Historical plans, archived/legacy source, and active OpenSpec artifacts
-  // are evidence inputs, not current executable/contributor surfaces.
+  // Archived plans, legacy source, and in-flight spec artifacts are evidence
+  // inputs, not current executable or contributor surfaces.
   const excludedTrees = ['docs/superpowers', 'legacy', 'openspec/changes'];
-  // NOT the same list as `PRUNE_DIRS` in scripts/verify/topology.ts, and
-  // deliberately not merged with it: that one answers "holds no authored,
-  // boundary-relevant source" for an import walk and so prunes `.git`,
-  // `.staging`, `.turbo`, and `coverage`. This one answers "holds no current
-  // contributor/executable surface", which is why `.receipts` and `tmp` are
-  // here and those four are not.
+  // Entry criterion: the directory holds no current contributor or
+  // executable surface.
   const ignoredDirectories = new Set([
     '.animus',
     '.next',
@@ -74,8 +70,8 @@ function currentSurfaceFiles(): string[] {
     'tmp',
   ]);
   const includedExtensions = /\.(?:c?js|jsonc?|mdx?|mjs|sh|tsx?|ya?ml)$/;
-  // These files mention retired names only as negative contracts or serialized
-  // receipt fixtures; they do not invoke or document executable commands.
+  // These files mention retired names only as negative contracts or receipt
+  // fixtures; they neither invoke nor document executable commands.
   const nonCallerContractFiles = new Set([
     'packages/_assertions/__tests__/receipt.test.ts',
     'scripts/verify/ci-graph.test.ts',
@@ -446,9 +442,6 @@ describe('root verification graph', () => {
   });
 
   it('keeps the root graph at or below the 30-task anti-reproliferation budget (G1)', () => {
-    // Budget provenance: enforce-workspace-topology design G1 — the ceiling
-    // that redirected topology work into the existing lint task instead of
-    // growing the graph.
     expect(Object.keys(rootTasks()).length).toBeLessThanOrEqual(30);
   });
 
@@ -536,9 +529,6 @@ fi
         },
       });
       const expectedCalls = [`run ${owner.manifest.name}#verify:build`];
-      // Consumer apps with their own tsconfig carry a verify:tsc step
-      // (added 2026-07-23: no gate type-checked the e2e apps, which let
-      // fixture-component type drift hide — see scripts/verify/tsc-consumer.sh).
       if (scripts['verify:tsc']) {
         expectedCalls.push(`run ${owner.manifest.name}#verify:tsc`);
       }

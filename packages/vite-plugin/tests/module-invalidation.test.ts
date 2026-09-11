@@ -4,16 +4,6 @@ import { describe, expect, it } from 'vitest';
 import { invalidateFileModules } from '../src/module-invalidation';
 import { makeContextProbe, makeEnvGraph } from './context-probe';
 
-// The file-plan snapshot/diff suite lives with its authoritative
-// definition in packages/extract/tests/replacement-plans.test.ts.
-
-/**
- * Node enumeration: invalidation covers every module node the dev server
- * holds for a physical file — each environment's graph and query-suffixed
- * variants (openspec: dev-transform-coherence, "Client and SSR nodes are
- * both evicted").
- */
-
 describe('invalidateFileModules', () => {
   it('invalidates every node for the file in every environment graph', () => {
     const probe = makeContextProbe('/tmp/proj');
