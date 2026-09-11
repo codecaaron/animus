@@ -1,11 +1,3 @@
-/**
- * ANIMUS — Declaration
- *
- * Void and vermilion. Serif fury. Zero compromise.
- * The builder chain IS the cascade. The config IS the language.
- *
- * createSystem() → one file, one instance, one truth.
- */
 import { createSystem, createTheme, createTransform } from '@animus-ui/system';
 import {
   background,
@@ -21,8 +13,6 @@ import {
   typography,
 } from '@animus-ui/system/groups';
 import { system as testDs } from '@animus-ui/test-ds/definition';
-
-// ─── Custom Transforms ──────────────────────────────────────
 
 const fluid = createTransform('fluid', (value) => {
   const [min, max] = String(value).split('-').map(Number);
@@ -42,8 +32,6 @@ const ratio = createTransform('ratio', (value) => {
   return str;
 });
 
-// ─── Tokens ─────────────────────────────────────────────────
-
 export const theme = createTheme()
   .addBreakpoints({
     '2xs': 400,
@@ -54,7 +42,6 @@ export const theme = createTheme()
     xl: 1440,
   })
   .addColors({
-    // ─── Gray (pure achromatic) ──────────────────────────
     gray: {
       50: '#fafafa',
       100: '#f0f0f0',
@@ -68,7 +55,6 @@ export const theme = createTheme()
       900: '#080808',
       950: '#000000',
     },
-    // ─── Fire (ember → spark spectrum) ───────────────────
     fire: {
       50: '#fff5f0',
       100: '#ffe0d4',
@@ -82,7 +68,6 @@ export const theme = createTheme()
       900: '#5c0a10',
       950: '#2e0508',
     },
-    // ─── Warm (parchment / sand) ─────────────────────────
     warm: {
       50: '#faf8f5',
       100: '#F2EBE0',
@@ -96,7 +81,6 @@ export const theme = createTheme()
       900: '#1a1815',
       950: '#0d0c0a',
     },
-    // ─── Gold (accent / spark spectrum) ──────────────────
     gold: {
       50: '#fffbf0',
       100: '#fff3d4',
@@ -110,7 +94,6 @@ export const theme = createTheme()
       900: '#332306',
       950: '#1a1203',
     },
-    // ─── Ocean (cool blue) ──────────────────────────────
     ocean: {
       50: '#f0f7ff',
       100: '#d6e8ff',
@@ -124,7 +107,6 @@ export const theme = createTheme()
       900: '#001a40',
       950: '#000d1a',
     },
-    // ─── Forest (green / growth) ────────────────────────
     forest: {
       50: '#f0faf4',
       100: '#d4f0df',
@@ -138,7 +120,6 @@ export const theme = createTheme()
       900: '#072614',
       950: '#03130a',
     },
-    // ─── Violet (purple / creative) ─────────────────────
     violet: {
       50: '#f8f0ff',
       100: '#ead4ff',
@@ -152,7 +133,6 @@ export const theme = createTheme()
       900: '#200040',
       950: '#10001a',
     },
-    // ─── Cyan (ocean complement / teal) ─────────────────
     cyan: {
       50: '#f0fdff',
       100: '#ccf7fe',
@@ -166,7 +146,6 @@ export const theme = createTheme()
       900: '#164e63',
       950: '#083344',
     },
-    // ─── Lime (forest complement / bright green) ────────
     lime: {
       50: '#f7fee7',
       100: '#ecfccb',
@@ -180,7 +159,6 @@ export const theme = createTheme()
       900: '#365314',
       950: '#1a2e05',
     },
-    // ─── Rose (violet complement / warm pink) ───────────
     rose: {
       50: '#fff1f2',
       100: '#ffe4e6',
@@ -194,7 +172,6 @@ export const theme = createTheme()
       900: '#881337',
       950: '#4c0519',
     },
-    // ─── Copper (terracotta / adobe / earth) ───────────
     copper: {
       50: '#fdf6f0',
       100: '#f8e8d8',
@@ -217,9 +194,8 @@ export const theme = createTheme()
         secondary: 'fire.400',
         accent: 'gold.300',
         bg: { _: 'gray.950', muted: 'gray.900', inverse: 'warm.100' },
-        // test-ds kit contract (cross-source token gate): components from
-        // @animus-ui/test-ds resolve `background` and `danger` against the
-        // consumer theme — every mode aliases them to its own roles.
+        // @animus-ui/test-ds components resolve `background` and `danger`
+        // against the consumer theme, so every mode must alias both.
         background: 'gray.950',
         danger: 'fire.600',
         surface: { _: 'gray.800', hover: 'gray.700' },
@@ -455,7 +431,6 @@ export const theme = createTheme()
           950: 'rose.950',
         },
       },
-      // ─── Copper Dark (earth + cyan complement) ─────────
       terra: {
         primary: { _: 'copper.400', hover: 'copper.300' },
         secondary: 'copper.300',
@@ -489,7 +464,6 @@ export const theme = createTheme()
           950: 'copper.950',
         },
       },
-      // ─── Copper Light (adobe + ocean complement) ───────
       adobe: {
         primary: { _: 'copper.700', hover: 'copper.500' },
         secondary: 'copper.600',
@@ -525,11 +499,11 @@ export const theme = createTheme()
       },
     },
     {
-      // OS preference → declared mode (D4). The attribute stays ABSENT while
-      // the OS drives the choice, so a live OS flip needs no script.
+      // OS preference → declared mode. The attribute stays absent while the
+      // OS drives the choice, so a live OS flip needs no script.
       systemPreference: { light: 'light', dark: 'dark' },
-      // TOTAL across every declared mode — left column of the palette is
-      // dark-class, right column light-class.
+      // Every declared mode needs an entry: a mode missing here emits no
+      // `color-scheme` for it, leaving browser UI at the default.
       browserColorScheme: {
         dark: 'dark',
         light: 'light',
@@ -640,7 +614,6 @@ export const theme = createTheme()
       'glow-md': '0 0 12px {colors.glow/50}',
       'glow-lg': '0 0 12px {colors.glow/60}',
       'glow-fire': '0 0 12px {colors.glow/40}, 0 0 40px {colors.glow/10}',
-      // Text shadow glow presets (semantic, shift per mode)
       'glow-edge': '0 0 12px {colors.glow/15}, 0 0 4px {colors.glow/25}',
       'glow-text': '0 0 30px {colors.glow/40}, 0 0 80px {colors.glow/15}',
       'glow-text-strong':
@@ -674,14 +647,6 @@ export const theme = createTheme()
     {
       colors: ['current-bg'],
     },
-    // `@property` registration for the contextual var (design D6). Emits
-    // `@property --current-bg { syntax: "<color>"; inherits: false;
-    // initial-value: transparent; }` at the head of the variables part, before
-    // any `@layer` block. Opt-in metadata — absent it, variable CSS is
-    // byte-identical. This is the first end-to-end registered-var fixture
-    // through the full NAPI pipeline (inc-07 V9), consumed by the test-ds
-    // `ContainerCard` family's `var(--current-bg)` reference rendered on the
-    // Examples page.
     {
       'current-bg': {
         syntax: '<color>',
@@ -699,16 +664,6 @@ declare module '@animus-ui/system' {
   interface Theme extends ShowcaseTheme {}
 }
 
-// ─── System ─────────────────────────────────────────────────
-
-// DELIBERATE holdout on the deprecated `includes:` alias (openspec:
-// first-class-extension, inc 07/row 13): this system re-spreads
-// `border`/`layout` into custom `surface`/`arrange` groups (Home.tsx
-// passes `border={1}` through `surface: true`). Under restored D12
-// transform equality (name + captured source) that re-spread now
-// COALESCES, so migration to `.extend(testDs)` is unblocked — it is
-// deferred to registry row 13 only to keep this increment's lane sweep
-// stable. Migrate there; do not add new `includes:` consumers.
 const bundle = createSystem({
   includes: [testDs],
 })
@@ -736,8 +691,6 @@ const bundle = createSystem({
 
 export const { createGlobalStyles, createKeyframes } = bundle;
 
-// ─── Animations ────────────────────────────────────────────
-
 export const animations = createKeyframes({
   ember: {
     '0%, 100%': { textShadow: '{shadows.glow-text}' },
@@ -752,8 +705,6 @@ export const animations = createKeyframes({
     '50%': { transform: 'scale(1.02)' },
   },
 });
-
-// ─── Global Styles ──────────────────────────────────────────
 
 export const globalStyles = createGlobalStyles({
   '*, *::before, *::after': { boxSizing: 'border-box' },
@@ -817,10 +768,6 @@ export const globalStyles = createGlobalStyles({
   },
 });
 
-// Sealed system (vocabulary-registration): `animations` registers under its
-// export name. The `includes:` holdout above cannot carry the kit's
-// registered `kitMotion` — the sealed record carries the coded
-// `animus.vocabulary.legacy-verb` witness the host surfaces as a warning.
 export const ds = bundle
   .registerKeyframes({ animations })
   .registerGlobalStyles({ globalStyles })

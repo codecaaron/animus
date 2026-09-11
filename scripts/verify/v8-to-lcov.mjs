@@ -1,22 +1,4 @@
 #!/usr/bin/env node
-// Remap NODE_V8_COVERAGE dumps to source-level lcov.
-//
-// Two paths per script, chosen by comparing the executed script's extent to
-// the on-disk file size:
-//
-// CLEAN (extent matches disk): the script ran from disk, so its cached
-// sourcemap positions are valid — remap per line via the source-map cache
-// Node captured (lineLengths + map data).
-//
-// TRANSFORMED (extent mismatch): Next's next.config.ts require hook SWC-
-// recompiles every module the config pulls in (mod._compile under the same
-// filename), and the resulting composed sourcemap positions are unreliable.
-// The V8 function records are still complete and correct, so fall back to
-// function granularity: match named records to declaration lines in the
-// original sources (order-preserving name search) and paint each function's
-// span with its execution count.
-//
-// Usage: node v8-to-lcov.mjs <raw-dir> <out-lcov> <repo-root>
 
 import { TraceMap, decodedMappings } from '@jridgewell/trace-mapping';
 import { readdirSync, readFileSync, writeFileSync, statSync } from 'node:fs';
@@ -31,7 +13,6 @@ if (!rawDir || !outFile || !rootArg) {
 const rootUrl = pathToFileURL(`${rootArg}/`).href;
 const EXTENT_TOLERANCE = 300; // CJS wrapper / BOM slack
 
-// srcPath -> { lines: Map(line -> max count), granularity: Set<string> }
 const files = new Map();
 const record = (srcPath, line, count, granularity) => {
   let entry = files.get(srcPath);
@@ -66,8 +47,6 @@ const resolveSources = (tracer, scriptUrl) =>
     }
   });
 
-// --- CLEAN path: per-line remap through the cached (valid) sourcemap -------
-
 const remapLines = (script, sm) => {
   const lineStarts = [0];
   for (const len of sm.lineLengths) {
@@ -85,9 +64,8 @@ const remapLines = (script, sm) => {
   for (const r of ranges) {
     counts.fill(r.count, r.startOffset, Math.min(r.endOffset, total));
   }
-  // Sample at the segment's exact generated column: one generated line can
-  // mix executed definition-site tokens with never-called function-body
-  // tokens, so any per-line aggregate smears counts across source lines.
+  // Sampling at the segment's exact generated column: one generated line mixes
+  // executed and never-called tokens, and a per-line aggregate smears counts.
   const countAt = (line, col) => {
     const lineEnd = Math.min(lineStarts[line + 1] - 1, total);
     for (let i = lineStarts[line] + col; i < lineEnd; i++) {
@@ -118,8 +96,6 @@ const remapLines = (script, sm) => {
   }
 };
 
-// --- TRANSFORMED path: function-granularity by declaration-name matching ---
-
 const DECL_PREFIX =
   '^\\s*(?:export\\s+)?(?:default\\s+)?(?:public\\s+|private\\s+|protected\\s+|static\\s+|readonly\\s+|override\\s+)*(?:async\\s+)?(?:function\\s*\\*?\\s*)?';
 
@@ -135,8 +111,8 @@ const remapFunctions = (script, sm) => {
   );
   if (!sources.length) return;
 
-  // Ordered declaration inventory across the bundle's sources (bundle
-  // concatenation preserves source order).
+  // Bundle concatenation preserves source order, which the order-preserving
+  // match below depends on.
   const decls = [];
   for (const srcPath of sources) {
     const lines = readSrc(srcPath);
@@ -162,7 +138,6 @@ const remapFunctions = (script, sm) => {
     }))
     .sort((a, b) => a.start - b.start);
 
-  // Order-preserving greedy match: executed order follows declaration order.
   let cursor = 0;
   const matches = [];
   for (const fn of named) {
@@ -178,9 +153,6 @@ const remapFunctions = (script, sm) => {
     cursor = Math.max(cursor, idx + 1);
   }
 
-  // Paint each function's span (decl line -> line before the next matched
-  // decl in the same file) with its count. Function granularity: interior
-  // branch detail is intentionally not claimed.
   matches.sort((a, b) =>
     a.srcPath === b.srcPath ? a.line - b.line : a.srcPath < b.srcPath ? -1 : 1
   );
@@ -195,15 +167,13 @@ const remapFunctions = (script, sm) => {
   }
 };
 
-// --- main -------------------------------------------------------------------
-
 for (const name of readdirSync(rawDir)) {
   if (!/^coverage-.*\.json$/.test(name)) continue;
   let dump;
   try {
     dump = JSON.parse(readFileSync(join(rawDir, name), 'utf8'));
   } catch {
-    continue; // partial flush from a killed worker
+    continue; // a partial flush from a killed worker
   }
   const cache = dump['source-map-cache'] ?? {};
   for (const script of dump.result ?? []) {
@@ -214,9 +184,7 @@ for (const name of readdirSync(rawDir)) {
     let diskSize = null;
     try {
       diskSize = statSync(fileURLToPath(script.url)).size;
-    } catch {
-      // transient artifact (e.g. next.config.compiled.js) — treat as transformed
-    }
+    } catch {}
     const extent = Math.max(
       ...(script.functions ?? []).flatMap((fn) =>
         fn.ranges.map((r) => r.endOffset)

@@ -1,15 +1,5 @@
 import type { JsonObject } from './json';
 
-/**
- * A failed assertion plus its evidence.
- *
- * `details` is the JSON value domain this package already owns (`./json`), not
- * an open `unknown` bag: every consumer renders it with `JSON.stringify` (the
- * six `assert-build` lanes and the showcase script all do), so a payload that
- * cannot survive that round-trip is evidence the reader will never see. Typing
- * it as `JsonObject` makes an unserializable detail a compile error at the
- * throw site instead of a silently missing key in a failing build's log.
- */
 export class AssertionError extends Error {
   details?: JsonObject;
 
@@ -21,9 +11,7 @@ export class AssertionError extends Error {
 }
 
 /**
- * Collapse ALL whitespace so a minified and a pretty-printed form compare
- * equal. The one owner for this normalization — post-build assertions run over
- * output whose whitespace no contract pins.
+ * Collapse all whitespace so minified and pretty-printed forms compare equal.
  */
 export function compact(value: string): string {
   return value.replace(/\s+/g, '');
@@ -89,9 +77,8 @@ export function assertLayerOrder(css: string, config?: LayerOrderConfig): void {
   }
 }
 
-// Pipeline-internal markers that must never survive into delivered CSS:
-// unresolved transform slots, and asset() placeholders the host plugin
-// failed to substitute (standardize-inheritance-and-assets).
+// `__TRANSFORM__` is an unresolved transform slot, `animus-asset:` an asset
+// reference the host plugin failed to substitute. Neither may reach delivery.
 const PLACEHOLDER_MARKERS = ['__TRANSFORM__', 'animus-asset:'] as const;
 
 export function assertNoPlaceholders(css: string): void {
@@ -155,9 +142,6 @@ export function assertNoUnresolvedTokens(
   }
 }
 
-/** All `@layer <name> { … }` block spans (single-name block opens, brace-
- *  matched). The layer DECLARATION statement (`@layer a, b, c;`) is not a block
- *  and is excluded. Nested sublayers (`@layer composed { … }`) are included. */
 function allLayerBlockSpans(css: string): [number, number][] {
   const openRe = /@layer\s+[\w-]+\s*\{/g;
   const spans: [number, number][] = [];
@@ -178,50 +162,17 @@ function allLayerBlockSpans(css: string): [number, number][] {
 }
 
 export interface ConditionsInsideLayersConfig {
-  /**
-   * At-rule families that must not appear outside a named `@layer` block.
-   * Default covers the modern-css-surface conditions: `@container`,
-   * `@supports`, and `@media` (breakpoint AND non-breakpoint — all conditioned
-   * rules emit inside a layer, so the check is uniform).
-   */
   atRules?: readonly string[];
   /**
-   * `[start, end]` character spans that are exempt from the layer requirement.
-   *
-   * The one legitimate producer of unlayered condition at-rules is the theme's
-   * VARIABLE part: the system-color-scheme fallback blocks live beside `:root`
-   * and the `[data-color-mode]` blocks, outside any layer, because variable
-   * resolution must not enter the layer order.
-   *
-   * Callers pass `systemSchemeVariableSpans(css)`, which grants a
-   * `prefers-color-scheme` block its span only when it sits **unlayered ahead
-   * of the first `@layer` block**, **every rule inside it targets
-   * `:root:not([data-color-mode])`**, and **the block contains no nested
-   * at-rule**. An unguarded rule, a nested at-rule, or a position past the
-   * first layer block forfeits the exemption and the block trips this gate.
-   *
-   * The nested-at-rule condition is load-bearing, not belt-and-braces: a span
-   * suppresses this check across its whole character range, so an at-rule
-   * nested inside an otherwise-exempt block would ride along unexamined. Cover
-   * is therefore withheld from the whole block rather than granted blindly.
+   * `[start, end]` spans exempt from the layer requirement; a span suppresses
+   * the check over its whole character range. See `systemSchemeVariableSpans`.
    */
   exemptSpans?: readonly (readonly [number, number])[];
 }
 
 /**
- * Assert arch-css-structural-gates › "Condition at-rules gated inside layer
- * blocks": new condition at-rules SHALL NOT appear outside a named `@layer`
- * block in any emitted sheet. Every
- * `@container` / `@supports` / `@media` at-rule occurrence must fall inside a
- * `@layer <name> { … }` span. Position-aware (character-index containment), so
- * a correctly-named-but-misplaced at-rule fails fast — the whole reason this
- * package exists over `grep`.
- *
- * Vacuously green on output with no condition at-rules (arming, not asserting
- * presence). Pure over the CSS string; no I/O.
- *
- * See `exemptSpans` for the one sanctioned unlayered producer — the theme's
- * variable-level system fallback blocks.
+ * Every condition at-rule occurrence must fall inside a `@layer <name>` span.
+ * Vacuously green on a sheet with no condition at-rules.
  */
 export function assertConditionsInsideLayers(
   css: string,
@@ -273,13 +224,8 @@ export function assertNoEmotionImports(jsContent: string): void {
 }
 
 /**
- * The production-fold witness: no development-only diagnostic string survives
- * in a production bundle. The runtime's dev paths are gated on the
- * `__ANIMUS_DEV__` define the Animus plugins supply, which a production build
- * sets to false so the minifier drops the gated code and its strings — the
- * drop warning's prefix is the stable marker. Its reappearance means the fold
- * stopped working and every gated diagnostic is shipping to users. See
- * packages/system/src/runtime/is-dev.ts for which hosts fold and which do not.
+ * A production bundle carries no dev-only diagnostic string: the
+ * `__ANIMUS_DEV__` define folds false so the minifier drops the gated code.
  */
 export function assertNoDevDiagnostics(
   jsContent: string,
@@ -334,13 +280,8 @@ function layerSpans(css: string, name: string): [number, number][] {
 }
 
 /**
- * Body text of the FIRST `@layer <name> { … }` block, brace-matched so a nested
- * at-rule or rule block never terminates the scan early, or `undefined` when
+ * Body of the FIRST `@layer <name>` block, brace-matched, or `undefined` when
  * the sheet declares no such block.
- *
- * The single owner of "give me what is inside this layer" — `layerSpans` is the
- * one brace-matching scan behind both this and `assertKeyframesExtracted`, so a
- * consumer lane never hand-rolls its own depth counter.
  */
 export function layerBlockBody(css: string, name: string): string | undefined {
   const [span] = layerSpans(css, name);
@@ -433,16 +374,8 @@ export interface KeyframesUniqueBodiesConfig {
 }
 
 /**
- * Assert exactly one `@keyframes` block per unique frame body
- * (rust-extraction-pipeline external-collection scenario): the FNV name
- * derives from the frame body, so a body emitted under two names, or the same
- * block emitted twice, means the single
- * `keyframes_blocks` emission path duplicated work (e.g. an external-package
- * collection emitted once by the kit scan and again by the consumer).
- *
- * Whitespace-normalized body comparison; vacuously green on output with no
- * prefixed `@keyframes` blocks (presence is assertKeyframesExtracted's job).
- * Pure over the CSS string; no I/O.
+ * One `@keyframes` block per unique frame body: the name derives from the body,
+ * so two names for one body means the emission path ran twice.
  */
 export function assertKeyframesUniqueBodies(
   css: string,
@@ -488,23 +421,14 @@ export function assertKeyframesUniqueBodies(
 }
 
 export interface SelectorEmissionConfig {
-  /** Tested against each innermost rule prelude in the sheet. */
   pattern: RegExp;
-  /** Names the witness in the failure message. */
   label: string;
-  /** Minimum number of matching rule preludes (default 1). */
   minMatches?: number;
 }
 
 /**
- * Assert that at least `minMatches` innermost rule preludes match `pattern`
- * (nested-selector-resolution): the ancestor/repeated/alias subject witnesses
- * check the COMPOSED selector text — e.g.
- * `[data-active="true"] .animus-…` with the class at the subject position —
- * which plain substring probes cannot pin to a selector position. Preludes
- * are matched after minification, so patterns must tolerate optional
- * attribute-value quotes and collapsed whitespace. Pure over the CSS string;
- * no I/O.
+ * At least `minMatches` innermost rule preludes match `pattern`, pinning the
+ * class to a selector position. Patterns must tolerate minified preludes.
  */
 export function assertSelectorEmitted(
   css: string,
@@ -525,13 +449,8 @@ export function assertSelectorEmitted(
 }
 
 /**
- * Assert that no literal `&` survives into a produced stylesheet
- * (nested-selector-resolution). Every unquoted `&` in an authored selector
- * must have been substituted with the composed class; ANY remaining
- * ampersand — even
- * inside quoted attribute text, which no current fixture emits — fails loud
- * with its offset and context so the sheet stays byte-auditable with
- * `grep -c '&'` → 0. Pure over the CSS string; no I/O.
+ * No literal `&` survives into an emitted sheet: every authored ampersand must
+ * have been substituted with the composed class.
  */
 export function assertNoLiteralAmpersand(css: string): void {
   const idx = css.indexOf('&');
@@ -546,13 +465,9 @@ export function assertNoLiteralAmpersand(css: string): void {
 }
 
 export interface VariantDeclarationParityConfig {
-  /** Component display names as they appear in emitted class tokens. */
   components: readonly [string, string];
-  /** Variant option suffixes that must exist on BOTH (e.g. 'size-sm'). */
   optionSuffixes: readonly string[];
-  /** Also compare the bare base classes (default true). */
   includeBase?: boolean;
-  /** Class name prefix (default 'animus-'). */
   prefix?: string;
 }
 
@@ -577,9 +492,8 @@ function componentClassBase(
 }
 
 function tokenDeclarations(css: string, token: string): string[] {
-  // Word-ish boundary: the base token must not swallow its own variant
-  // tokens (`token--size-sm`), and a suffix token must not match a longer
-  // suffix it happens to prefix.
+  // The lookahead keeps a base token from matching its own variant tokens
+  // (`token--size-sm`), and a suffix from matching a longer suffix it prefixes.
   const tokenRe = new RegExp(`${escapeForRegExp(token)}(?![\\w-])`);
   const declarations: string[] = [];
   for (const m of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
@@ -589,21 +503,14 @@ function tokenDeclarations(css: string, token: string): string[] {
       if (trimmed) declarations.push(trimmed);
     }
   }
-  // Emitted order is the comparison surface: order changes CSS semantics
-  // for duplicate properties and shorthand/longhand pairs, so sorting here
-  // would let order-divergent siblings pass as equal.
+  // Declaration order is part of the comparison: it changes CSS semantics for
+  // duplicate and shorthand/longhand pairs, so sorting would hide divergence.
   return declarations;
 }
 
 /**
- * Assert per-class declaration equality between a binding-backed component
- * and its inline-authored sibling (semantic-const-resolution): a variant map
- * imported across a package boundary must produce the SAME declarations as
- * inlining the literal —
- * base class and every option class. Classes are paired by variant-option
- * suffix; hashes and display names differ by construction, declaration lists
- * may not. A divergence is STOP evidence: the error carries both full
- * declaration lists for the byte diff. Pure over the CSS string; no I/O.
+ * Declaration equality between a binding-backed component and its
+ * inline-authored sibling, paired by variant-option suffix; hashes differ.
  */
 export function assertVariantDeclarationParity(
   css: string,

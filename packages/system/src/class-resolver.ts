@@ -1,8 +1,6 @@
 /**
- * Framework-neutral runtime for `.asClass()` output.
- *
- * This entry intentionally excludes the React component runtime so non-React
- * consumers can install and bundle class resolvers without React.
+ * Excludes the React component runtime so non-React consumers can bundle
+ * class resolvers without installing React.
  */
 export {
   type ClassResolver,

@@ -1,15 +1,3 @@
-/**
- * `simulate` — what changes in a hypothetical world.
- *
- * The interventions are evaluated as a view over the closed universe, never
- * written anywhere, and the answer is deliberately two-sided: the focal effect
- * at the probed context *and* the collateral sweep over every other component
- * and context class. DESIGN §7 governs the wording of the causal half —
- * "sufficient under domain D" is claimable only when the outcome moved in every
- * evaluated cell; a single witness cell earns only "model-relative intervention
- * witness".
- */
-
 import { applyDeltas, describeDelta, worldId } from '../core/world';
 import { pinDomain } from './cells';
 import {
@@ -48,9 +36,6 @@ const causalFindingsFor = (
 ): readonly CausalFinding[] => {
   if (changedProperties.length === 0 || cellsEvaluated === 0) return [];
 
-  // "Sufficient under domain D" is a claim about a *domain*. A simulation
-  // pinned to one point has no domain to generalise over, so it earns the
-  // witness status however completely it changed that single cell.
   const sufficient = cellsEvaluated > 1 && cellsChanged === cellsEvaluated;
   return [
     {
@@ -81,8 +66,6 @@ export const runSimulate = (
   const baselineWorld = pinDomain(rt.worldOf(request.world), request.domain);
   const candidateWorld = applyDeltas(baselineWorld, request.deltas);
 
-  // Eager: a delta naming an unknown rule or property must throw before any
-  // verdict exists, so the caller cannot read "no change" as "tested".
   rt.viewFor(candidateWorld);
 
   const resolution =
@@ -90,8 +73,6 @@ export const runSimulate = (
   const point =
     request.at === undefined ? undefined : rt.resolvePoint(request.at);
 
-  // Absent, not undefined: `probeStateId` hashes the descriptor, so a target
-  // or a point that was never asked for must not appear in it at all.
   const probe: RenderProbe = {
     operation: 'simulate',
     world: candidateWorld,
@@ -239,8 +220,6 @@ export const runSimulate = (
       ]),
     };
 
-    // Causal findings are domain-level claims; a partially walked focal
-    // domain supports none of them, so the key stays off the answer.
     if (!focalIncomplete) {
       result.causalFindings = causalFindingsFor(
         request.deltas,

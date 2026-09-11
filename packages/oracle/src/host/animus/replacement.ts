@@ -7,16 +7,6 @@ import type {
   ManifestJsonValue,
 } from './manifest-types';
 
-/**
- * The per-component authority on variants, compounds and states.
- *
- * `manifest.crossFile.variantOptions` / `stateNames` look like the same data
- * and are not: they are keyed by *bare binding*, so two components named
- * `Button` in different files collide into one entry. The emitted
- * `replacement` string carries the config the runtime actually resolves
- * against, per component id — so that is what is read here, and the crossFile
- * maps stay auxiliary.
- */
 export interface VariantConfig {
   options: readonly string[];
   default?: string;
@@ -38,7 +28,6 @@ export interface ParsedComponent {
   id: string;
   record: ManifestComponent;
   config: ReplacementConfig;
-  /** Set when the config had to be recovered key-by-key; see `parseConfig`. */
   note?: string;
 }
 
@@ -52,7 +41,6 @@ const parseReplacementJson = (text: string): ManifestJsonValue =>
 
 const FACTORY = /\b(createComponent|createClassResolver)\s*\(/;
 
-/** Scan a balanced `{…}` / `[…]` from `start`, respecting quotes. */
 const readBalanced = (text: string, start: number): string | undefined => {
   const open = text[start];
   const close = open === '{' ? '}' : ']';
@@ -79,7 +67,6 @@ const readBalanced = (text: string, start: number): string | undefined => {
   return undefined;
 };
 
-/** The first argument that is an object literal — the resolver config. */
 const configText = (replacement: string, id: string): string => {
   const factory = FACTORY.exec(replacement);
   if (factory === null) {
@@ -197,19 +184,6 @@ const asStrings = (
 ): string[] | undefined =>
   Array.isArray(value) ? value.filter(isManifestJsonString) : undefined;
 
-/**
- * Parse the config object out of a replacement string.
- *
- * The fast path is `JSON.parse` over the whole literal, which is what the
- * emitter produces for every statically known config. It is not universal:
- * a component whose system props come from group spreads emits
- * `{"systemPropNames":[].concat(systemPropGroups.layout,…)}` — valid JS,
- * invalid JSON. Rather than lose the *whole* config to one dynamic value, the
- * fallback recovers the JSON-valued keys individually and takes
- * `systemPropNames` from the manifest's own resolved `system_prop_names`
- * field. A key that is present but malformed still throws — the fallback
- * narrows what is unreadable, it never invents what it could not read.
- */
 export const parseConfig = (
   id: string,
   record: ManifestComponent
@@ -256,7 +230,6 @@ export const parseConfig = (
   };
 };
 
-/** Every component in the manifest, with its config, in manifest key order. */
 export const parseComponents = (
   manifest: AnimusManifest
 ): ParsedComponent[] => {

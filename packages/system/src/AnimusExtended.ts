@@ -63,7 +63,8 @@ export class AnimusExtendedWithAll<
     this.compounds = compounds;
   }
 
-  // Terminal-only affordance — see Animus.ts.
+  // `protected` keeps the terminals' bound `extend` working while keeping the
+  // call off every builder stage's type surface.
   protected extend(): AnimusExtended<
     PropRegistry,
     GroupRegistry,
@@ -103,10 +104,8 @@ export class AnimusExtendedWithAll<
     >;
   }
 
-  // The constraint is the FIXED type ComponentType<any> — never a second
-  // inferred parameter P with `C extends ComponentType<P>`, which would turn
-  // this into reverse-mapped inference and silently stop checking the
-  // argument (see types/config.ts § inferred-parameter constraints).
+  // The constraint stays the fixed `ComponentType<any>`: an inferred `P` in
+  // `C extends ComponentType<P>` silently stops checking the argument.
   asComponent<C extends ComponentType<any>>(AsComponent: C) {
     const config = this._buildComponentConfig();
     const Component = createComponent(AsComponent as any, '', config);

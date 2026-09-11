@@ -1,6 +1,3 @@
-/**
- * Deep merge utility — replaces lodash.merge for variant accumulation.
- */
 const isMergeable = (value: unknown) =>
   Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 

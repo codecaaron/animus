@@ -1,8 +1,5 @@
-// ANI-005 witness: a composed shared axis whose Root declares a default.
-// The emitter must produce the `--{prop}-default`-keyed inheritance rule
-// (`.FamRoot--pace-default .FamStep` with the default option's styles) so an
-// omitted Root prop propagates; the child's own defaulted axis still yields
-// to root inheritance (no child-side default override rule).
+// The Root declares a default on the shared axis, so an omitted Root prop must
+// still reach the slots through a default-keyed inheritance rule.
 import { compose } from '@animus-ui/system/compose';
 
 import { ds } from './test-system';

@@ -19,8 +19,6 @@ import {
 } from '../components';
 import { ds } from '../ds';
 
-// ─── Intersection Observer ──────────────────────────────────
-
 let revealCounter = 0;
 
 function Reveal({
@@ -70,8 +68,6 @@ function ReadingBar() {
   }, []);
   return <ReadingBarTrack id={id} />;
 }
-
-// ─── Pillar Components ──────────────────────────────────────
 
 const PillarCard = ds
   .styles({
@@ -134,8 +130,6 @@ const PillarMark = ds
   })
   .asElement('span');
 
-// ─── Code Examples ──────────────────────────────────────────
-
 const COMPONENT_SOURCE = `const Card = ds
   .styles({
     display: 'flex',
@@ -194,8 +188,6 @@ const CSS_OUTPUT = `/* Statically extracted. No runtime serialization. */
   }
 }`;
 
-// ─── Cascade Contract ───────────────────────────────────────
-
 const CASCADE_LAYERS = [
   {
     name: '@layer global',
@@ -234,8 +226,6 @@ const CASCADE_LAYERS = [
   },
 ] as const;
 
-// ─── Feature Pillars Data ───────────────────────────────────
-
 const PILLARS = [
   {
     mark: '{',
@@ -260,8 +250,6 @@ const PILLARS = [
   },
 ] as const;
 
-// ─── App ────────────────────────────────────────────────────
-
 const logoSize = { _: 'md', md: 'xxl' } as const;
 
 export default function Home() {
@@ -269,7 +257,6 @@ export default function Home() {
     <>
       <ReadingBar />
 
-      {/* ═══════ I. HERO ═══════ */}
       <Scene py={0} minHeight="100vh">
         <Stack alignItems="center" gap={48}>
           <Reveal>
@@ -291,7 +278,6 @@ export default function Home() {
         </Stack>
       </Scene>
 
-      {/* ═══════ II. THE HOOK ═══════ */}
       <Scene py={{ _: 96, md: 128 }} minHeight="auto" bg="bg.muted">
         <Stack gap={48} maxWidth="48rem" mx="auto" px={{ _: 24, md: 48 }}>
           <Stack gap={12}>
@@ -340,7 +326,6 @@ export default function Home() {
         </Stack>
       </Scene>
 
-      {/* ═══════ III. FEATURE PILLARS ═══════ */}
       <Scene py={{ _: 96, md: 128 }} minHeight="auto">
         <Stack gap={48} maxWidth="64rem" mx="auto" px={{ _: 24, md: 48 }}>
           <Row gap={{ _: 24, md: 32 }} flexWrap="wrap" alignItems="stretch">
@@ -367,7 +352,6 @@ export default function Home() {
 
       <FireLine />
 
-      {/* ═══════ IV. WHAT YOU WRITE / WHAT SHIPS ═══════ */}
       <Scene py={{ _: 96, md: 128 }} minHeight="auto">
         <Stack gap={48} maxWidth="48rem" mx="auto" px={{ _: 24, md: 48 }}>
           <Stack gap={16}>
@@ -397,7 +381,6 @@ export default function Home() {
         </Stack>
       </Scene>
 
-      {/* ═══════ V. THE CONTRACT ═══════ */}
       <Scene py={{ _: 96, md: 128 }} minHeight="auto" bg="bg.muted">
         <Stack gap={64} maxWidth="48rem" mx="auto" px={{ _: 24, md: 48 }}>
           <Stack gap={16}>
@@ -449,7 +432,6 @@ export default function Home() {
         </Stack>
       </Scene>
 
-      {/* ═══════ VI. CTA ═══════ */}
       <Scene py={{ _: 128, md: 160 }} minHeight="auto">
         <Stack gap={48} maxWidth="48rem" mx="auto" alignItems="center" px={24}>
           <Reveal>

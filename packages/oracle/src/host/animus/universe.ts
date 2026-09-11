@@ -35,7 +35,6 @@ import type {
 import type { ParsedComponent } from './replacement';
 import type { AnalyzedSelector } from './selector';
 
-/** A modeled rule plus the joins the other providers need back from it. */
 export interface UniverseRule {
   record: StyleRuleRecord;
   selector: AnalyzedSelector;
@@ -53,15 +52,7 @@ export interface UniverseBuild {
   fontFaces: readonly FontFaceBlock[];
 }
 
-/**
- * Animus shorthands → the CSS properties they land on. Only the shorthands
- * observed in the emitted artifacts are here; an unknown key falls back to
- * camel→kebab, and a key that resolves to no emitted property simply leaves
- * `authoredProperty` unset. Guessing wider would put a fabricated authoring
- * origin on a real declaration, which is exactly the failure DESIGN §8 names.
- */
 interface PropertyAliases {
-  /** Absent for every shorthand this table does not claim. */
   readonly [shorthand: string]: readonly string[] | undefined;
 }
 
@@ -100,8 +91,6 @@ const camelToKebab = (key: string): string =>
 
 const cssPropertiesFor = (key: string): readonly string[] => {
   if (key.startsWith('--')) return [key];
-  // Nested-block keys in the authored object: at-rules, `&`-selectors and the
-  // `_pseudo` shorthands. They own their own emitted rule, never a property.
   if (/^[@&_]/.test(key) || key.includes('&') || key.includes(' ')) return [];
   return PROPERTY_ALIASES[key] ?? [camelToKebab(key)];
 };
@@ -111,42 +100,20 @@ interface AuthoredEntry {
   value?: string;
 }
 
-/**
- * A nested authored block. The authored value is manifest JSON, so "is this a
- * block" is object identity, not a representation test: `Object(v) === v`
- * holds for exactly the objects and arrays `JSON.parse` produces, and the
- * array exclusion is what separates a block from a list value.
- */
 const isAuthoredObject = (
   value: ManifestJsonValue | undefined
 ): value is ManifestJsonObject =>
   Object(value) === value && !Array.isArray(value);
 
-/**
- * The single authored value a declaration can carry — a JSON string or number.
- * Blocks, lists, booleans and `null` name a key without naming one value, so
- * they resolve to no scalar and the caller decides what to record.
- */
 const authoredScalar = (
   value: ManifestJsonValue | undefined
 ): string | undefined => {
   if (value === null || value === undefined) return undefined;
   if (value === true || value === false) return undefined;
-  // Arrays and blocks are the only non-scalars left in the JSON domain.
   if (Object(value) === value) return undefined;
   return String(value);
 };
 
-/**
- * Index the *top level* of one authored stage value by the CSS property each
- * key lands on.
- *
- * Top level only, on purpose: a nested key (`_dark`, `@container …`,
- * `'[data-active="true"] &'`) produces a *different* emitted rule, so
- * descending would attach the outer `bg: 'surface'` to the rule whose authored
- * value was actually `bg: 'primary'`. The caller pairs this with a
- * plain-context check for the same reason.
- */
 const authoredIndex = (
   value: ManifestJsonValue | undefined
 ): Map<string, AuthoredEntry> => {
@@ -158,8 +125,6 @@ const authoredIndex = (
     if (properties.length === 0) continue;
 
     const scalar = authoredScalar(raw);
-    // A responsive object (`fontSize: { _: 14, sm: 16 }`) names the property
-    // but has no single authored value — record the key, withhold the value.
     if (scalar === undefined && !isAuthoredObject(raw)) continue;
 
     for (const property of properties) {
@@ -174,7 +139,6 @@ const authoredIndex = (
   return index;
 };
 
-/** The chain whose emitted class is this component's, else its binding's. */
 export const findChain = (
   manifest: AnimusManifest,
   component: ParsedComponent
@@ -190,7 +154,6 @@ export const findChain = (
 
 interface StageMatch {
   index: number;
-  /** Compound styles live in the *second* argument, not the conditions one. */
   second: boolean;
   note?: string;
 }
@@ -294,8 +257,6 @@ const sourceRefOf = (
 
   if (span != null) {
     const ref: SourceRef = { file: '', span: [span[0], span[1]] };
-    // `note` stays absent when the match needed none: an empty note would
-    // claim the adapter recorded a caveat it did not have.
     if (match.note !== undefined) ref.note = match.note;
     return ref;
   }
@@ -342,10 +303,8 @@ const buildIndexes = (
 };
 
 /**
- * `.animus-dyn-p-md` → `p`. Responsive slot classes suffix the breakpoint
- * name onto the base slot class, so one trailing segment is stripped when the
- * full class is unknown — never more, because `animus-dyn-z-index` is itself a
- * hyphenated prop and blind stripping would fold it into `animus-dyn-z`.
+ * One trailing segment is stripped to find the base slot class — never more,
+ * or `animus-dyn-z-index` folds into `animus-dyn-z`.
  */
 const dynamicPropOf = (
   className: string,
@@ -468,18 +427,6 @@ const originOf = (
   );
 };
 
-/**
- * Sub-layer precedence.
- *
- * CSS ranks the *unlayered* content of a layer above its nested sub-layers, so
- * `anm-variants` (rules written directly into it) outranks
- * `anm-variants/standalone` and `anm-variants/composed`. The universe's total
- * order is `indexOf(layer, layerOrder)` then `order`, so the expansion puts
- * every sub-layer *before* its parent: earlier index = lower precedence. The
- * sub-layer sequence itself comes from the sheet's own `@layer a, b;`
- * statement when it declares one, so the declared order is honoured rather
- * than re-derived from where rules happened to land.
- */
 const expandLayerOrder = (
   subLayers: ReadonlyMap<string, readonly string[]>
 ): string[] =>
@@ -500,9 +447,6 @@ export const buildUniverse = (
   const keyframes: KeyframesBlock[] = [];
   const fontFaces: FontFaceBlock[] = [];
   const subLayers = new Map<string, string[]>();
-  // Observed, not re-derived: the exclusion list below reports every sheet
-  // key this loop did not consume, and an unread sheet is exactly where a
-  // silently-dropped `!important` override would live.
   const consumedSheets = new Set<string>();
 
   for (const layer of ANIMUS_LAYER_ORDER) {
@@ -569,10 +513,6 @@ export const buildUniverse = (
         ? undefined
         : { ...rawSource, file: component.record.file };
 
-    // Authored provenance is attached only where the emitted rule is the
-    // *plain* form of its stage — one compound selector, no at-conditions.
-    // Every other rule came from a nested block whose authored keys this
-    // index deliberately does not descend into.
     const authored =
       chain !== undefined &&
       match !== undefined &&
@@ -585,10 +525,6 @@ export const buildUniverse = (
       (declaration) => {
         const tokenRefs = tokenReferencesIn(declaration.value);
         const entry = authored?.get(declaration.property);
-        // Each optional channel is added only where it was observed: an
-        // `authoredValue: undefined` would report that the adapter looked at
-        // the authored stage and found nothing, which is a different fact
-        // from never having had a stage to look at.
         const declarationRecord: DeclarationRecord = {
           property: declaration.property,
           value: declaration.value,
@@ -623,10 +559,6 @@ export const buildUniverse = (
       id,
       selector: selector.model,
       declarations,
-      // The ancestor prefix of a relational selector is part of the guard,
-      // not a silent match (PLACES.md §3): the mode attribute joins the mode
-      // axis, every other prefix an `ancestor:*` axis that stays unbound —
-      // and therefore conditional — until a place binding decides it.
       condition: and(
         conditionFor(rule.atStack),
         ...ancestorGuardsOf(selector).map((guard) =>
@@ -638,9 +570,6 @@ export const buildUniverse = (
       layer: layerKey,
       order,
     };
-    // `source` before `origin`, exactly where the emitted record has always
-    // carried it, and only when the stage span resolved — an absent source is
-    // "the chain did not say", never "the chain said nothing".
     if (source !== undefined) record.source = source;
     record.origin = origin;
 

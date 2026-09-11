@@ -1,18 +1,3 @@
-/**
- * `animus-oracle` — the six operations as a command line.
- *
- * Stream discipline (the animus CLI's design D5, kept identical here): stdout
- * carries machine output ONLY — the `--json` envelope — and every
- * human-readable line goes to stderr. The exit code is the verdict, not a
- * success flag: 0 for a settled answer, 1 for DISPROVED, 4 for an answer that
- * completed without settling (CONDITIONAL / INCONCLUSIVE / OUTSIDE_MODEL). A
- * supervisor can therefore branch on the oracle's epistemic state without
- * parsing anything.
- *
- * `runCli` takes its streams as arguments so the whole surface is testable in
- * process: no subprocess, no global capture, no `process.exit`.
- */
-
 import { resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 
@@ -50,12 +35,6 @@ import type { SnapshotOptions } from '../places/snapshot';
 import type { TargetResolution } from '../providers/identity';
 import type { RenderContext } from './render';
 
-/**
- * A sink the CLI writes text to. `void` is the whole contract — nothing here
- * reads what a write returned — and it is the spelling `SessionStreams` already
- * uses for the same three streams, so a real `process.stdout` (which returns a
- * backpressure flag) and a capturing test double satisfy one type.
- */
 export interface CliStream {
   write(text: string): void;
 }
@@ -63,7 +42,6 @@ export interface CliStream {
 export interface CliStreams {
   stdout: CliStream;
   stderr: CliStream;
-  /** Required only by `session`, which reads JSONL requests from it. */
   stdin?: AsyncIterable<string | Uint8Array>;
 }
 
@@ -87,12 +65,6 @@ const COMMANDS = [
   'session',
 ];
 
-/**
- * The verdict *is* the exit status (DESIGN §5). FIXPOINT joins the settled
- * codes deliberately: repeating a question is not an error, it is the answer
- * "you already know this", and a supervisor loop should treat it as a reason
- * to change the question rather than to fail.
- */
 export const exitCodeForVerdict = (verdict: ProbeVerdict): number => {
   switch (verdict) {
     case 'PROVED':
@@ -106,15 +78,6 @@ export const exitCodeForVerdict = (verdict: ProbeVerdict): number => {
   }
 };
 
-/**
- * The error taxonomy. A malformed request (ours or an engine's `TypeError`
- * over a bad request) is the caller's to fix; anything else — a missing
- * artifact directory, an unreadable manifest, an unmodeled construct the
- * adapter refuses — is the environment's, and is deliberately *not* reported
- * as a verdict. Universally quantified over what was thrown for the same
- * reason `failureLine` below is — a `catch` binding is — and decided by real
- * `instanceof` guards rather than by anything assumed about the value.
- */
 export const exitCodeForError = <Thrown>(thrown: Thrown): number =>
   thrown instanceof UsageError || thrown instanceof TypeError
     ? EXIT_USAGE
@@ -173,11 +136,6 @@ const resolveTarget = (
   );
 };
 
-/**
- * The classes are reported only when a point pins them: a domain-scoped
- * question (`prove`, `diff`) has no single class list, and printing the
- * unconstrained one would read like the answer's scope.
- */
 const contextFor = (
   command: string,
   resolution: TargetResolution,
@@ -190,13 +148,6 @@ const contextFor = (
   point,
 });
 
-/**
- * `--remove padding` means "remove whatever wins padding here", which is a
- * question before it is an intervention: the winner is read off a baseline
- * `inspect` at the same point, and the result is cached so several delta flags
- * cost one probe. A property nothing sets is a usage error listing what *is*
- * set — never a delta against a rule that does not declare it.
- */
 const winnerResolver = (
   oracle: Oracle,
   target: string,
@@ -305,7 +256,6 @@ const emitProbe = (
   return exitCodeForVerdict(result.verdict);
 };
 
-/** `check` — the correspondence guard as a CI gate (PLACES.md §6). */
 const executeCheck = (
   dir: string,
   values: CliValues,
@@ -460,8 +410,6 @@ const execute = async (
     }
 
     case 'classes': {
-      // The one command whose answer is not a `ProbeResult`: a partition of
-      // the domain, so there is no verdict to map and the exit is always 0.
       const equivalence = oracle.equivalenceClasses({ target });
       if (values.json === true) {
         io.stdout.write(
@@ -485,13 +433,6 @@ const execute = async (
   }
 };
 
-/**
- * The one line a failure prints. Universally quantified over what was thrown
- * because a `catch` binding is: `parseArgs` and every oracle layer reject with
- * an `Error` subclass (`UsageError`, `TypeError`, `AnimusAdapterError`), whose
- * message is the failure; anything else describes itself rather than printing
- * the `undefined` an absent `.message` would render.
- */
 const failureLine = <Thrown>(thrown: Thrown): string =>
   thrown instanceof Error ? thrown.message : String(thrown);
 

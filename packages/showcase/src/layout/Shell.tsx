@@ -17,8 +17,6 @@ const Main = ds
   })
   .asElement('main');
 
-// ─── Color Mode Trigger ───────────────────────────────────────────
-
 const ModeTrigger = ds
   .styles({
     fontFamily: 'mono',
@@ -39,8 +37,6 @@ const ModeTrigger = ds
   })
   .asElement('button');
 
-// ─── Breadcrumb Resolution ────────────────────────────────────────
-
 function resolveBreadcrumb(pathname: string) {
   for (const entry of DOCS_NAV) {
     if (hasChildren(entry)) {
@@ -56,8 +52,6 @@ function resolveBreadcrumb(pathname: string) {
   return {};
 }
 
-// ─── Shell ────────────────────────────────────────────────────────
-
 export function Shell() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -71,15 +65,13 @@ export function Shell() {
   const isDocsRoute = location.pathname.startsWith('/docs');
   const breadcrumb = isDocsRoute ? resolveBreadcrumb(location.pathname) : {};
 
-  // Close sidebar drawer on navigation
   // oxlint-disable-next-line react-hooks/exhaustive-deps -- pathname triggers close on route change
   useEffect(() => {
     setSidebarOpen(false);
   }, [location.pathname]);
 
-  // Read current mode for the trigger label. The attribute's ABSENCE is not
-  // "dark" — it is the OS-driven state, so the label says so rather than naming
-  // a mode the user never picked.
+  // The attribute's absence is not `dark` — it is the OS-driven state, so
+  // the label shows the system name, not a mode the user never picked.
   const [modeLabel, setModeLabel] = useState(
     () =>
       document.documentElement.getAttribute('data-color-mode') ?? SYSTEM_MODE
@@ -103,7 +95,6 @@ export function Shell() {
       <ScrollToTop />
       <SkipLink href="#main-content">Skip to content →</SkipLink>
 
-      {/* Single nav tree — responsive display inside variant CSS */}
       <NavBar.Root mode="inline">
         <NavBar.Container>
           <NavLink to="/" style={{ textDecoration: 'none' }}>

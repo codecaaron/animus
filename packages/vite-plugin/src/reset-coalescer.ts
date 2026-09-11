@@ -1,11 +1,6 @@
 /**
- * Coalesces bursts of system-dependency events into single system
- * reloads: a quiescence window before starting, at most one reset in
- * flight, and exactly one follow-up when requests arrive mid-reset. A
- * package build regenerating its dist fires one reset, not one per file.
- *
- * Timer functions are injected seams — `vi.mock` on node builtins silently
- * no-ops under vite-plus-test, so tests drive a manual scheduler instead.
+ * Timer functions are injected seams: `vi.mock` on node builtins silently
+ * no-ops under vite-plus-test, so tests drive a manual scheduler.
  */
 type ResetTimerHandle = ReturnType<typeof setTimeout> | number;
 
@@ -18,10 +13,8 @@ export class ResetCoalescer {
 
   constructor(
     private readonly run: () => void | Promise<void>,
-    // Required: the timer callback is a bare scheduler entry point — a
-    // throw escaping it (e.g. a strict-mode gate inside the reset) is an
-    // unhandled exception that kills the dev server, so every caller must
-    // decide where contained errors go.
+    // Required: a throw escaping the timer callback is an unhandled
+    // exception that kills the dev server, so every caller decides its fate.
     private readonly onError: ResetErrorHandler,
     private readonly quietMs = 60,
     private readonly schedule: (

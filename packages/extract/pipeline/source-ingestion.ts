@@ -14,16 +14,9 @@ import {
 export interface RawSourceEntry {
   path: string;
   source: string;
-  /** Optional precomputed hash of the raw original source. */
   hash?: string;
 }
 
-/**
- * The value domain of `filesJson` — exactly what `JSON.parse` produces for the
- * serialized analysis corpus. Declared beside the entry type it narrows to, so
- * the guards that decide it belong to this boundary rather than to whichever
- * consumer happened to decode first.
- */
 type FilesJsonValue =
   | null
   | boolean
@@ -33,10 +26,8 @@ type FilesJsonValue =
   | { [key: string]: FilesJsonValue };
 
 /**
- * One decoded corpus entry. Keys beyond `RawSourceEntry`'s are kept addressable
- * rather than dropped: callers that re-serialize the corpus after editing it
- * (the vite-plugin's empty-source rehydration) must not silently strip fields a
- * newer writer added.
+ * The index signature is load-bearing: a caller that re-serializes this corpus
+ * after editing it must not strip fields a newer writer added.
  */
 export type SerializedSourceEntry = RawSourceEntry & {
   [key: string]: FilesJsonValue;
@@ -54,21 +45,8 @@ function isSerializedSourceEntry(
 }
 
 /**
- * Decode a serialized analysis corpus (`filesJson`).
- *
- * `filesJson` is animus's OWN wire — `run-analysis.ts` writes it with
- * `JSON.stringify(fileEntries)` and every reader is in this repository. A
- * payload that is not an array of source entries is therefore a producer bug,
- * never user input, so this throws instead of yielding an empty corpus: an
- * empty corpus is indistinguishable from "the project has no files" and would
- * publish an empty stylesheet as a success.
- *
- * The throw is the single policy. Call sites that own a documented failure
- * channel translate it there (the Turbopack loader answers a committed-artifact
- * decode failure with `ANIMUS_ARTIFACT_READ_TORN`); none of them swallow it.
- *
- * `context` names the reader in the message — the same bytes reach three
- * decoders and the failure has to say which one refused them.
+ * Throws on a payload that is not a corpus: an empty corpus is
+ * indistinguishable from "no files" and would publish an empty stylesheet.
  */
 export function parseFilesJson(
   filesJson: string,
@@ -89,14 +67,12 @@ export function parseFilesJson(
 export interface OriginalSourceEntry {
   path: string;
   source: string;
-  /** Hash of the raw original source, never a generated projection. */
   hash: string;
 }
 
 export interface AnalysisSourceEntry {
   path: string;
   source: string;
-  /** Hash of this parser-ready entry. */
   hash: string;
 }
 
@@ -129,14 +105,8 @@ export interface ExtractChainFact {
 }
 
 /**
- * The engine's per-file facts record (`facts::FileFacts`), transcribed for the
- * channels this repository reads. `FileFacts` also serializes `statics`,
- * `usage`, `compose`, and `transforms`; those stay untranscribed rather than
- * addressable-as-`unknown`, because the two readers that want them —
- * `packages/oracle`'s adapter model and the `_integration` usage-facts helpers
- * — already declare the slices they consume, and an open index signature here
- * would let a THIRD reader invent a shape without ever naming the field.
- * Transcribe the channel when a reader in this package needs it.
+ * A partial transcription of the engine's per-file facts wire: `statics`,
+ * `usage`, `compose`, and `transforms` exist on it and are added when read.
  */
 export interface ExtractFileFacts {
   path: string;
@@ -159,14 +129,8 @@ export interface NativeSourceDiagnostic {
 }
 
 /**
- * Advisory diagnostics surface as warnings in EVERY mode and never
- * quarantine their file. OXC reports recovered parse diagnostics for
- * sources the consumer's own toolchain may accept (`.js` now parses
- * JSX-enabled, so genuinely malformed code is the remaining producer),
- * and the engine still analyzes whatever the recovered AST carries —
- * failing the build for that would make extraction stricter than the
- * host bundler, which surfaces its own error for the same file. Everything
- * else stays fatal: strict throws, non-strict warns and quarantines.
+ * Advisory diagnostics warn in every mode and never quarantine their file:
+ * OXC recovers parse errors the host bundler itself accepts. All else is fatal.
  */
 export function isAdvisorySourceDiagnostic(
   diagnostic: SourceIngestionDiagnostic
@@ -207,33 +171,25 @@ export type SourceIngestionDiagnostic =
   | SvelteAdapterDiagnostic;
 
 export interface SourceIngestionResult {
-  /** Raw inputs keyed and hashed by their original source identity. */
   originalEntries: OriginalSourceEntry[];
-  /** Parser-ready entries sent to analysis; Svelte itself is never a target. */
+  /** Parser-ready entries sent to analysis; a `.svelte` path is never one. */
   analysisEntries: AnalysisSourceEntry[];
-  /** Atomic original-to-generated ownership, including zero-entry owners. */
+  /** Ownership per original, including originals with zero analysis paths. */
   ownership: Record<string, SourceEntryOwnership>;
   diagnostics: SourceIngestionDiagnostic[];
 }
 
 export interface CachedFileFacts {
-  /** Hash of the analysis entry the facts were extracted from. */
   hash: string;
   facts: ExtractFileFacts;
 }
 
 export interface SourceIngestionOptions {
-  /** Typed pass-through to the native `extractFacts(filesJson)` surface. */
   extractFacts(filesJson: string): string;
-  /**
-   * Host-owned per-file facts memo: an incremental corpus pass re-extracts
-   * only entries whose (path, hash) pair changed and evicts paths absent
-   * from the current corpus. Without it every pass re-parses the whole
-   * corpus through the native boundary — a per-keystroke tax on the HMR
-   * and watch paths that both hosts route through here.
-   */
+  /** Host-owned memo reused across passes; without it every pass re-parses
+   *  the whole corpus through the native boundary. */
   factsCache?: Map<string, CachedFileFacts>;
-  /** Test seams; production callers use the dynamically loaded defaults. */
+  /** Test seams; production callers use the module defaults. */
   preprocessMdx?: (
     source: string,
     filename: string
@@ -263,14 +219,9 @@ function canonicalResolverPath(path: string): string {
   return posix.normalize(path.replaceAll('\\', '/'));
 }
 
-/** NodeNext-style relative specifiers carry the EMITTED extension
- *  (`./definition.js` for `definition.ts`); map each back to its source
- *  forms. The exact spelling is probed first by the suffix loop's empty
- *  suffix, so a literal `.js` neighbor still wins. */
+/** NodeNext relative specifiers carry the EMITTED extension (`./x.js` for
+ *  `x.ts`); the literal spelling is probed first, so a `.js` neighbor wins. */
 interface NodeNextExtensionMap {
-  /** Emitted extension → the source extensions it can have come from. An
-   *  extension with no NodeNext mapping has no key, and the probe loop below
-   *  falls back to an empty candidate list. */
   readonly [emitted: string]: readonly string[] | undefined;
 }
 
@@ -312,9 +263,8 @@ class ResolverExportIndex {
 
   private readonly files: ReadonlyMap<string, string>;
   private readonly resolverBindings = new Map<string, ReadonlySet<string>>();
-  /** The same (importer, request) pair repeats for every call site of one
-   *  resolver in one file; the index is rebuilt per ingest, so neither memo
-   *  needs invalidation. */
+  /** Both memos live for one ingest only — the index is rebuilt per call,
+   *  so neither needs invalidation. */
   private readonly attributionMemo = new Map<
     string,
     SvelteResolverAttribution
@@ -395,12 +345,6 @@ class ResolverExportIndex {
     );
     if (binding === null) return 'other';
 
-    // The walk above proved the export chain terminates in an extractable
-    // `.asClass()` binding, and the engine's usage identity now follows the
-    // same chains (sourced re-export hops via follow_reexports plus the
-    // defining-module local-rename unwrap), so a renamed import witnesses
-    // and prunes end-to-end — the former name-equality boundary guarded an
-    // engine gap that no longer exists.
     return request.access.kind === 'direct' &&
       request.access.importKind === 'named'
       ? 'resolver'
@@ -459,13 +403,8 @@ class ResolverExportIndex {
 }
 
 /**
- * Convert raw source identities into parser-ready analysis entries once.
- *
- * Native and MDX entries establish the resolver-export index through the
- * native fact collector before any Svelte projection. Svelte calls are then
- * attributed by exact relative import/export identity and parsed once. Bare
- * package and configured-alias sources deliberately remain `other`; callers
- * must not guess those identities.
+ * Native and MDX entries must establish the resolver index before any Svelte
+ * projection; bare-package and aliased sources stay unattributed by design.
  */
 export async function ingestSourceEntries(
   rawEntries: readonly RawSourceEntry[],
@@ -484,8 +423,6 @@ export async function ingestSourceEntries(
   const diagnostics: SourceIngestionDiagnostic[] = [];
   const svelteEntries: OriginalSourceEntry[] = [];
 
-  // Identity entries carry their original's precomputed hash; only generated
-  // MDX/Svelte projections hash fresh content here.
   const addAnalysisEntry = (
     originalPath: string,
     path: string,
@@ -629,9 +566,8 @@ export async function ingestSourceEntries(
 }
 
 /**
- * Run the native fact collector, re-extracting only changed entries when the
- * caller supplies a `factsCache`. `parseCount` keeps its meaning — parses
- * performed by THIS call — so a fully-memoized pass reports zero.
+ * `parseCount` counts the parses performed by THIS call, so a fully-memoized
+ * pass reports zero.
  */
 function collectFileFacts(
   analysisEntries: readonly AnalysisSourceEntry[],
@@ -639,11 +575,8 @@ function collectFileFacts(
 ): ExtractFactsResult {
   const cache = options.factsCache;
   if (!cache) {
-    // SAFETY: `extractFacts` is the engine's own NAPI surface and this is its
-    // return value for the call made on this line — serde output for the
-    // `{ files, parseCount }` record `ExtractFactsResult` mirrors. Unparseable
-    // bytes throw here, which is right: an empty facts set is
-    // indistinguishable from "this corpus declares no components".
+    // SAFETY: serde output of the engine's own `extractFacts` NAPI call on
+    // this line, shaped as `ExtractFactsResult`; unparseable bytes throw.
     return JSON.parse(
       options.extractFacts(JSON.stringify(analysisEntries))
     ) as ExtractFactsResult;
@@ -653,8 +586,8 @@ function collectFileFacts(
   );
   let parseCount = 0;
   if (pending.length > 0) {
-    // SAFETY: same engine surface, same wire as the uncached branch above —
-    // only the entry subset differs.
+    // SAFETY: same engine surface and wire as the uncached branch, over the
+    // pending subset.
     const fresh = JSON.parse(
       options.extractFacts(JSON.stringify(pending))
     ) as ExtractFactsResult;
@@ -678,12 +611,8 @@ function collectFileFacts(
 }
 
 /**
- * The per-file quarantine: drop every original a diagnostic named — and the
- * analysis children it owns — so one invalid source never aborts the rest
- * of the corpus. Shared by buildStart AND every incremental path in both
- * hosts; asymmetry here is how a permanently-diagnosable file (an `.mdx`
- * with the optional peer absent, an unsupported `.svelte` shape) froze all
- * re-analysis for the life of the dev server.
+ * Drops each named original and the analysis children it owns. Every corpus
+ * path applies it — skipping it on incremental passes freezes re-analysis.
  */
 export function withoutInvalidOriginals(
   result: SourceIngestionResult,
@@ -710,30 +639,15 @@ export function withoutInvalidOriginals(
   };
 }
 
-/** rootDir-relative source path → the external package specifier that owns it.
- *  A consumer-owned file has no key — absence means "not external", which is
- *  what every reader branches on. */
+/** rootDir-relative source path → the external package specifier owning it.
+ *  Absence of a key means "not external"; every reader branches on that. */
 export interface ExternalFileOwners {
   [sourcePath: string]: string;
 }
 
 /**
- * Project external-package ownership from raw originals onto the generated
- * analysis children the ingestion produced — the join the cross-source token
- * contract runs through.
- *
- * Diagnostics are raised against ANALYSIS paths (an `.mdx`/`.svelte` original
- * is analyzed as its generated `.tsx` child), while package ownership is only
- * ever recorded for the raw original a discovery walk or watcher event named.
- * Without this projection a violation inside a generated child correlates to
- * no package and is silently dropped.
- *
- * The result REPLACES the caller's owner map: an original that has left the
- * corpus takes its projected children with it, so a stale owner cannot
- * outlive the file it described. Every host projects at the same point — after
- * ingestion, before the analysis result is enforced — so two hosts cannot
- * raise different diagnostics for one kit (precedent:
- * `collectExternalPackageSources`).
+ * Diagnostics name ANALYSIS paths while ownership is recorded for originals,
+ * so projection is required; the result REPLACES the caller's owner map.
  */
 export function projectExternalFileOwners(
   result: SourceIngestionResult,
@@ -752,48 +666,36 @@ export function projectExternalFileOwners(
 }
 
 export interface SourceIngestorHost {
-  /** Engine access at call time; `extractFacts` stays optional on the shared
-   *  EngineApi for test doubles — the capability guard lives HERE, once. */
   engineApi(): { extractFacts?: (filesJson: string) => string };
-  /** Host log prefix, e.g. `[animus-extract]` / `[animus-next]`. */
+  /** Host log prefix, e.g. `[animus-extract]`. */
   prefix: string;
   strict(): boolean;
   warn(message: string): void;
 }
 
 export interface SourceIngestor {
-  /** Prepare one raw-source corpus through the shared adaptation boundary. */
   ingest(entries: readonly RawSourceEntry[]): Promise<SourceIngestionResult>;
-  /** Surface adapter diagnostics under ONE strict/warn/quarantine policy:
-   *  advisory diagnostics warn in every mode and never quarantine; fatal
-   *  diagnostics throw under strict, else warn once per (original, message)
-   *  and join the returned quarantine set. */
+  /** Returns originals to quarantine. Fatal diagnostics throw under strict,
+   *  else warn once per (original, message); advisory ones never quarantine. */
   surfaceDiagnostics(
     diagnostics: readonly SourceIngestionDiagnostic[]
   ): Set<string>;
-  /** Reset the warn dedupe for originals that published clean, so a future
-   *  regression re-warns. Call from the host's publish step. */
+  /** Clears the warn dedupe for the result's originals so a later regression
+   *  re-warns; hosts call it from their publish step. */
   markPublished(result: SourceIngestionResult): void;
 }
 
 /**
- * The one source-ingestion policy point shared by every host (vite-plugin,
- * next-plugin, cli, unplugin). Hosts hold exactly their prefix, strict flag,
- * and warn sink; the capability guard, facts memo, and warn-dedupe lifecycle
- * live here so the plugins cannot fork (precedent: pkg-collection
- * divergences; see also `enforceExternalTokenContracts`).
+ * One ingestion policy point for every host: a host supplies only a prefix, a
+ * strict flag, and a warn sink; policy and per-host memos stay here.
  */
 export function createSourceIngestor(host: SourceIngestorHost): SourceIngestor {
   const factsCache = new Map<string, CachedFileFacts>();
-  /** Non-strict warn dedupe: a quarantined-but-retained original re-ingests
-   *  on every later corpus pass, and re-warning each save is noise. Keyed by
-   *  original path; cleared when that original publishes clean again. */
+  /** Non-strict dedupe: a quarantined original re-ingests on every later
+   *  corpus pass, so re-warning it on each save is noise. */
   const warnedByOriginal = new Map<string, Set<string>>();
   return {
     async ingest(entries) {
-      // `extractFacts` is optional on `EngineApi`: an engine either exposes the
-      // parse-only surface or it does not, and absence is the only way it can
-      // say so (the field is a function on every engine that has it).
       const extractFacts = host.engineApi().extractFacts;
       if (extractFacts === undefined) {
         throw new Error(

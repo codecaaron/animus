@@ -1,78 +1,45 @@
 /**
- * Shared driver-config core (openspec: standalone-extraction-cli).
- *
- * One option schema, N drivers: the Vite plugin, the Next plugin, and the
- * standalone CLI all resolve their shared option core through this module so
- * key semantics, default exclusions, and the dev/prod mode authority cannot
- * drift per driver. Driver-specific options live in per-driver namespaces
- * (`vite:` / `next:` / `cli:`) or in the driver's own legacy top-level keys,
- * which the owning driver declares via `ownKeys`; any other unknown
- * top-level key is a hard error naming the key.
+ * One option schema shared by the Vite, Next, and CLI drivers: key semantics,
+ * default exclusions, and mode authority cannot drift per driver.
  */
 
 import type { StaticCssConfig } from './static-css';
 
-/** Closed set of driver namespaces a shared config file may carry. */
 export const DRIVER_NAMESPACES = ['vite', 'next', 'cli'] as const;
 export type DriverNamespace = (typeof DRIVER_NAMESPACES)[number];
 
-/** The same closed set as a membership test over arbitrary observed keys —
- *  derived from the list above so a new namespace joins both at once (same
- *  shape as `CORE_OPTION_KEYS` below). */
 const DRIVER_NAMESPACE_KEYS: ReadonlySet<string> = new Set(DRIVER_NAMESPACES);
 
 /**
- * Structural exclusions applied unconditionally, whether or not the user
- * supplies an `exclude` list. `node_modules` is owned by the external-package
- * collection path (never the source walk), and `.next`/`.animus` are artifact
- * output directories inside the scanned root that must never be re-ingested
- * as source.
+ * Applied unconditionally: `node_modules` belongs to external-package
+ * collection, and `.next`/`.animus` hold output, never source.
  */
 export const STRUCTURAL_EXCLUDE = ['node_modules', '.next', '.animus'];
 
-/**
- * Convenience defaults applied only when the user supplies no `exclude`
- * list — a user list replaces these (but never the structural set).
- */
+/** Defaults a user `exclude` list replaces; the structural set it cannot. */
 export const REPLACEABLE_DEFAULT_EXCLUDE = ['dist', '.test.', '.spec.'];
 
-/**
- * Default path patterns excluded from source discovery — the single
- * authoritative set for every driver when no user `exclude` is given.
- * Composed, never hand-listed: a structural addition must not silently
- * miss this union.
- */
 export const DEFAULT_EXCLUDE = [
   ...STRUCTURAL_EXCLUDE,
   ...REPLACEABLE_DEFAULT_EXCLUDE,
 ];
 
-/** Explicit dev/prod emission mode. When absent, each driver's documented
- *  default applies (Vite: `config.command`; Next: `NODE_ENV`; CLI:
- *  production). */
+/** Explicit dev/prod emission mode. When absent each driver defaults on its
+ *  own signal: Vite `config.command`, Next `NODE_ENV`, CLI production. */
 export type AnimusMode = 'development' | 'production';
 
-/** The shared option core every driver accepts with identical semantics. */
 export interface AnimusCoreOptions {
   /** Path to a module exporting a SystemInstance from `@animus-ui/system`. */
   system: string;
   /**
-   * Exclusion patterns. When present, this list REPLACES the replaceable
-   * defaults (`dist`, `.test.`, `.spec.`); the structural exclusions
-   * (`node_modules`, `.next`, `.animus`) always apply and cannot be
-   * re-admitted. Patterns containing `*` or `?` match as globs against the
-   * root-relative path (`**` spans directories, `*` and `?` stay within one
-   * segment; character classes and brace expansion are not supported); a
-   * leading `./` is equivalent to the bare root-relative path; patterns
-   * without glob metacharacters match as substrings of the full or
-   * root-relative path.
+   * Replaces the replaceable defaults, never the structural ones. Patterns
+   * with `*`/`?` are globs on the root-relative path; others are substrings.
    */
   exclude?: string[];
   /** File extensions to scan; replaces the default list entirely. */
   extensions?: string[];
   /** When true, extraction failures throw instead of warning. */
   strict?: boolean;
-  /** Enable verbose logging. */
   verbose?: boolean;
   /** Namespace prefix for CSS variables and class names. */
   prefix?: string;
@@ -84,23 +51,17 @@ export interface AnimusCoreOptions {
   staticCss?: StaticCssConfig;
   /** Full `@layer` declaration order. */
   layers?: string[];
-  /** Extraction engine selection; `'v2'` is the only engine. */
   engine?: 'v2';
   /**
-   * Explicit dev/prod EMISSION mode — it decides emitted bytes (minify
-   * default, dev-diagnostics define, engine devMode) and wins over every
-   * environment-derived signal for those decisions. It never drives process
-   * lifecycle (watchers, HMR ownership), which stays with each host's own
-   * signal. When absent, the driver's documented default applies.
+   * Decides emitted bytes (minify, dev diagnostics, engine devMode) and wins
+   * over environment signals; never process lifecycle (watchers, HMR).
    */
   mode?: AnimusMode;
-  /** Root every relative input resolves against. CLI-facing: the plugin
-   *  drivers derive their root from the host bundler and REJECT this key
-   *  (`assertKnownOptionKeys` rejectKeys). */
+  /** Root every relative input resolves against. Plugin drivers derive their
+   *  root from the host bundler and reject this key. */
   root?: string;
 }
 
-/** Core keys accepted at the top level of any driver's options. */
 export const CORE_OPTION_KEYS: ReadonlySet<string> = new Set([
   'system',
   'exclude',
@@ -117,8 +78,8 @@ export const CORE_OPTION_KEYS: ReadonlySet<string> = new Set([
   'root',
 ]);
 
-/** Configuration errors carry a stable name so drivers can map them to
- *  their config-error surface (the CLI's exit code 2). */
+/** Carries a stable `name` so drivers can map it to their own config-error
+ *  surface (the CLI's exit code 2). */
 export class AnimusConfigError extends Error {
   constructor(message: string) {
     super(message);
@@ -126,27 +87,15 @@ export class AnimusConfigError extends Error {
   }
 }
 
-/** How `assertKnownOptionKeys` surfaces unknown/rejected KEYS. Published
- *  plugin entry points use `'warn'` so a consumer upgrade cannot die at
- *  config load over a previously-inert extra key; new drivers (the CLI,
- *  the unplugin host) keep the `'throw'` default. Invalid VALUES (a bad
- *  `mode`) always throw — a silently flipped emission polarity is the
- *  exact failure this seam exists to kill, and `mode` is new surface with
- *  no inert-key history to stay compatible with. Warn mode REQUIRES the
- *  sink: a defaulted-away warning would be the silent failure again. */
+/** Applies to unknown and rejected KEYS only: invalid VALUES always throw.
+ *  Published plugin entries pass `'warn'` so a stale key cannot break them. */
 export type AssertKnownOptionKeysOpts =
   | { onUnknownKey?: 'throw' }
   | { onUnknownKey: 'warn'; warn: (message: string) => void };
 
 /**
- * Reject unknown top-level option keys and invalid core values. `ownKeys`
- * is the calling driver's legacy/driver-specific top-level surface (e.g.
- * Vite's `verify`, Next's `cssImportTarget`); driver namespaces are always
- * legal and inert for non-owning drivers. `rejectKeys` names core keys the
- * calling driver does NOT honor — accepting-and-ignoring a key the
- * validator vouches for is the exact silent failure this seam exists to
- * kill, so the driver must reject it with its reason (or, in `'warn'`
- * mode, name it loudly while the key stays inert as it always was).
+ * `ownKeys` is the caller's own top-level surface; `rejectKeys` names core
+ * keys it does not honor, which must fail rather than be silently ignored.
  */
 export function assertKnownOptionKeys<Value>(
   raw: Readonly<Record<string, Value>>,
@@ -185,18 +134,14 @@ export function assertKnownOptionKeys<Value>(
         `Driver namespaces: ${DRIVER_NAMESPACES.join(', ')}.`
     );
   }
-  // Value validation for keys whose invalid values would silently flip
-  // behavior instead of failing loud — always fatal, every driver.
   const mode = raw['mode'];
   if (mode !== undefined && mode !== 'development' && mode !== 'production') {
     throw new AnimusConfigError(
       `Invalid mode "${String(mode)}" — expected "development" or "production".`
     );
   }
-  // Primitive shape gate for the remaining core keys — a wrongly-typed
-  // value never behaves as written (the string "false" is truthy, a bare
-  // string spread into a Set becomes CHARACTERS), so unlike unknown keys
-  // these are fatal even in warn mode.
+  // Fatal even in warn mode: a wrongly-typed value never behaves as written
+  // ("false" is truthy; a string spread into a Set becomes characters).
   for (const { key, ok, expected } of CORE_VALUE_GATES) {
     const value = raw[key];
     if (value === undefined || ok(value)) continue;
@@ -207,24 +152,11 @@ export function assertKnownOptionKeys<Value>(
   }
 }
 
-/**
- * The domain of a core option value once its shape gate has accepted it —
- * the union of every `expected` phrase in the table below. Named so the
- * gates can answer "is this a legal value for this key" as a NARROWING
- * question rather than a bare boolean: a gate that returns `boolean` proves
- * nothing to its caller, and the table's whole purpose is to establish what
- * the value is before the option is honored.
- */
 type CoreOptionValue = string | boolean | readonly string[];
 
 /**
- * Intrinsic primitive brands. A driver's options object is foreign JS, not
- * parsed JSON, so a value can carry a hostile `Symbol.toStringTag` or be a
- * boxed `String`/`Boolean` — and a boxed primitive is NOT what any consumer
- * of these options goes on to use (`new String('x')` spread into a Set is one
- * object, not characters). `Object(value) !== value` admits only true
- * primitives; the intrinsic tag then names which one, unspoofably, because no
- * primitive carries an own `Symbol.toStringTag`.
+ * Options are foreign JS, so a boxed `String`/`Boolean` must not pass: a
+ * boxed value never behaves as the primitive its consumers expect.
  */
 const isString = (value: unknown): value is string =>
   Object(value) !== value &&
@@ -307,38 +239,22 @@ function editDistance(a: string, b: string): number {
   return dp[a.length][b.length];
 }
 
-/** Predicate over discovery paths; also consumable by watch filtering. */
 export interface ExcludeMatcher {
-  /** Effective pattern list (structural ∪ (user ?? replaceable defaults)),
-   *  for reporting surfaces. */
+  /** Effective list: structural ∪ (user ?? replaceable defaults). */
   readonly patterns: readonly string[];
-  /** Per-pattern exclusion hit counts accumulated over this matcher's
-   *  lifetime — the dead-pattern reporting surface (a user pattern with
-   *  zero hits after discovery matched nothing). */
+  /** Per-pattern hit counts over this matcher's lifetime; zero hits after
+   *  discovery means the pattern matched nothing. */
   stats(): ReadonlyMap<string, number>;
-  /** True when the path should be excluded. Both forms are tested so
-   *  absolute-substring compatibility is preserved. */
+  /** True when the path is excluded; both path forms are tested. */
   matches(fullPath: string, relativePath: string): boolean;
-  /** The first pattern excluding the path, or null — for diagnostics that
-   *  name the responsible pattern. */
   explain(fullPath: string, relativePath: string): string | null;
 }
 
 const GLOB_META = /[*?]/;
 
 /**
- * Compile one exclusion pattern. Glob patterns (containing `*` or `?`)
- * compile to a RegExp over the slash-normalized root-relative path — a
- * match on the path itself OR any ancestor directory excludes it, so a
- * directory-shaped glob (double-star slash "generated") excludes files
- * inside that directory identically for tree discovery (which prunes at
- * the directory) and per-file watch classification (which only ever sees
- * file paths).
- * Plain patterns keep the historical substring semantics over both path
- * forms.
- * A leading `./` is stripped first: relative paths are computed without
- * one, so `./fixtures/**` must mean exactly `fixtures/**` rather than
- * compiling to a regex that can never match.
+ * Globs compile to a RegExp over the root-relative path, matching the path or
+ * any ancestor directory; plain patterns are substrings. `./` is stripped.
  */
 function compilePattern(raw: string): (full: string, rel: string) => boolean {
   let pattern = raw.split('\\').join('/');
@@ -371,7 +287,6 @@ function globToRegExp(glob: string): RegExp {
     const ch = normalized[i];
     if (ch === '*') {
       if (normalized[i + 1] === '*') {
-        // `**/` or trailing `**`
         if (normalized[i + 2] === '/') {
           out += '(?:[^/]+/)*';
           i += 3;
@@ -395,15 +310,8 @@ function globToRegExp(glob: string): RegExp {
 }
 
 /**
- * Build the effective exclusion matcher. A user list REPLACES the
- * replaceable defaults (`dist`, `.test.`, `.spec.`) — the HEAD driver
- * contract (`options.exclude ?? DEFAULT_EXCLUDE`) — while the structural
- * exclusions (`node_modules`, `.next`, `.animus`) always apply: those
- * protect pipeline invariants, not preferences, so no user list can
- * re-admit them. `extraStructural` joins that never-replaceable set — the
- * channel for driver-owned invariants (a CLI outDir inside the root),
- * which must NOT ride the user list: appending there would flip the
- * replace semantics and silently drop the replaceable defaults.
+ * A user list replaces only the replaceable defaults. Driver-owned
+ * invariants belong in `extraStructural`; a user list would replace those.
  */
 export function createExcludeMatcher(
   userPatterns?: readonly string[],
@@ -437,7 +345,7 @@ export function createExcludeMatcher(
   };
 }
 
-/** How each resolved value was decided — the `--print-config` vocabulary. */
+/** How a resolved value was decided; surfaced by `--print-config`. */
 export type OptionProvenance = 'explicit' | 'driver-default' | 'default';
 
 export interface ResolvedMode {
@@ -445,11 +353,6 @@ export interface ResolvedMode {
   provenance: OptionProvenance;
 }
 
-/**
- * Resolve the effective mode: the explicit `mode` key wins over every
- * environment-derived signal; otherwise the driver's documented default
- * applies.
- */
 export function resolveMode(
   explicit: AnimusMode | undefined,
   driverDefault: () => AnimusMode

@@ -1,9 +1,6 @@
 import { isObject } from './utils';
 
-/**
- * Returns an exhaustive list of all possible paths of an object T for keys K.
- * Possibilities are returned as `k1.k2.k3`.
- */
+/** Every path through T reachable from K, joined by `D`. */
 export type FindPath<T, K extends keyof T, D extends string = '.'> = K extends
   | string
   | number
@@ -14,10 +11,8 @@ export type FindPath<T, K extends keyof T, D extends string = '.'> = K extends
     : K
   : never;
 
-/** Returns valid paths of object T */
 export type Path<T, D extends string = '.'> = FindPath<T, keyof T, D> | keyof T;
 
-/** Returns the value of a valid path P `k1.k2.k3` in object T */
 export type PathValue<
   T,
   P extends Path<T, D>,
@@ -32,7 +27,7 @@ export type PathValue<
     ? T[P]
     : never;
 
-/** Check if path has a primitive end value and return only the union of end paths */
+/** Only the paths whose value is a string or number, as a union. */
 export type PathToLiteral<
   T,
   K extends Path<T, D>,
@@ -48,9 +43,8 @@ export type PathToLiteral<
     : never;
 
 /**
- * Reduce all paths to a single map of paths with primitive values removing all extra non stateful paths
- * { path: { sub: 1 } } => { 'path-sub': 1 }
- *
+ * Flat map of the primitive-valued paths only: `{ a: { b: 1 } }` becomes
+ * `{ 'a-b': 1 }` when `D` is `-`.
  */
 export type LiteralPaths<
   T extends Record<string | number, any>,

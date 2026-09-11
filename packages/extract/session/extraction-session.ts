@@ -106,10 +106,6 @@ import type {
   ExternalPackageOutcome,
 } from '../pipeline/index';
 
-/** Options the artifact-publishing session consumes — exactly the shared
- *  driver core (shared-driver-config). Driver-specific surfaces
- *  (AnimusNextOptions and the CLI's flag layer) are structurally
- *  assignable; the session reads only core keys. */
 export type SessionOptions = AnimusCoreOptions;
 
 import type { ExcludeMatcher } from '../pipeline/index';
@@ -127,23 +123,14 @@ import type {
   SessionEnvelope,
 } from './session-paths';
 
-/** Retention window for sibling session directories (design D2). */
 const SESSION_DIR_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
-/** Watchdog added to the debounce ceiling for status deadlines (D3). */
 const STATUS_WATCHDOG_MS = 2000;
 
-/** Default watcher debounce, and therefore the session's default status
- *  deadline ceiling (D3). ONE definition: the watcher entry point
- *  (`startTurbopackWatcher`) defaults its `debounceMs` from this, so an
- *  unconfigured watcher can never publish a deadline the session did not
- *  already assume. */
+/** Default watcher debounce and the session's status-deadline ceiling.
+ *  The watcher entry point defaults its debounce from this — one definition. */
 export const DEFAULT_WATCH_DEBOUNCE_MS = 75;
 
-/** Flat legacy `.animus/` artifacts removed at session start — unreachable
- *  by session-scoped loaders. The standalone CLI still publishes the three
- *  payload names flat; its verified/live sets are fenced off inside
- *  `runSessionStartHygiene`. */
 const LEGACY_FLAT_ARTIFACTS = [
   MANIFEST_ARTIFACT,
   ANALYSIS_INPUTS_ARTIFACT,
@@ -154,45 +141,28 @@ const LEGACY_FLAT_ARTIFACTS = [
   ANALYSIS_STATUS_ARTIFACT,
 ] as const;
 
-// Exclusion defaults and glob semantics are owned by the shared pipeline
-// core (shared-driver-config): a user `exclude` list replaces the
-// replaceable defaults, while `createExcludeMatcher` keeps the structural
-// exclusions (node_modules and artifact directories) applied always.
-
 type FileEntry = { path: string; source: string; hash: string };
 
-/** Watch-cycle change sets, as reported by the bundler's watcher. */
 export interface WatchChanges {
   modifiedFiles?: ReadonlySet<string>;
   removedFiles?: ReadonlySet<string>;
 }
 
-/** One published artifact's write guards: `payloadHash` gates rewrites
- *  (a byte-identical payload leaves disk untouched), `diskHash` is the hash
- *  of the CURRENT disk bytes, envelope included, recorded in the commit. */
+/** `payloadHash` gates rewrites; `diskHash` covers the enveloped disk bytes
+ *  and is what the analysis-commit records. */
 interface ArtifactWriteRecord {
   payloadHash: string;
   diskHash: string;
 }
 
-/** The three payload artifacts a session publishes. `null` = not yet seeded
- *  (the first publication reads the artifact's own envelope, so a
- *  same-session restart never rewrites byte-identical bytes). */
 interface SessionArtifactRecords {
   manifest: ArtifactWriteRecord | null;
   inputs: ArtifactWriteRecord | null;
   styles: ArtifactWriteRecord | null;
 }
 
-/**
- * Primitive brands for values read back off DISK. These artifacts are
- * animus's own, but a torn write, a hand-edited file, or a tree left by a
- * different animus version can put anything in a field — and these decisions
- * are what keep such a record out of a write guard or an epoch comparison.
- * `Object(value) !== value` rejects boxed primitives (no `JSON.parse`
- * produces one, and none would match the comparisons downstream) and makes
- * the intrinsic tag unspoofable by a `Symbol.toStringTag`.
- */
+/** Brands values read back off DISK. `Object(value) !== value` rejects
+ *  boxed primitives; the tag is unspoofable by `Symbol.toStringTag`. */
 function isDiskString<Value>(value: Value): value is Value & string {
   return (
     Object(value) !== value &&
@@ -207,30 +177,16 @@ function isDiskNumber<Value>(value: Value): value is Value & number {
   );
 }
 
-/**
- * Bundler-agnostic extraction pipeline: system loading, source discovery
- * and ingestion, external-package collection, analysis, stylesheet and
- * system-props emission, and watch-cycle diffing.
- *
- * The webpack adapter (plugin.ts) owns only bundler wiring: hook
- * registration, alias harvesting from the compiler config, in-memory asset
- * replacement, and translating watch events into `handleWatchUpdate`
- * change sets. Keeping this class free of webpack types is deliberate — a
- * future Turbopack integration must drive the same session from outside
- * the bundler (Turbopack has no compiler-hook surface), reusing everything
- * here unchanged.
- *
- * Outputs are published through the package singleton (shared CSS,
- * manifest, system props) and written to `.animus/` on disk.
- */
+/** Bundler-agnostic extraction pipeline: system load, source ingestion,
+ *  analysis, emission, and watch-cycle diffing. Carries no bundler types. */
 export class ExtractionSession {
   /** Set by the adapter before any pipeline run. */
   rootDir: string | null = null;
   /** Serialized path aliases, harvested by the adapter from bundler config. */
   pathAliasesJson: string | null = null;
 
-  // Per-specifier resolve/copy memo for substituteAssetReferences — the
-  // result is stable per loaded system, so it is cleared on system load.
+  // Per-specifier asset resolve/copy memo — stable per loaded system, so
+  // loading a system clears it.
   private assetCopyCache = new Map<
     string,
     {
@@ -244,20 +200,14 @@ export class ExtractionSession {
   /** Physical asset files registered with the host watcher. */
   assetDependencyPaths = new Set<string>();
   private assetDependencyKeys = new Set<string>();
-  /** Emitter identity override for the system-props module id. Webpack mode
-   *  (null) injects the absolute `.animus/system-props.js` path, resolved by
-   *  NormalModuleReplacement; Turbopack rejects absolute-path imports, so
-   *  its driver sets the virtual id that `resolveAlias` maps to disk. */
+  /** System-props module id override. Turbopack rejects absolute-path
+   *  imports, so its driver sets a virtual id; null injects the abs path. */
   systemPropsModuleId: string | null = null;
-  /** Whether the analysis-inputs hydration corpus is serialized + written.
-   *  False (webpack mode): the loader shares the pipeline process and reads
-   *  the manifest from memory — the corpus is never persisted. True is set
-   *  by the Turbopack orchestration driver, whose isolated loader workers
-   *  replay it (spec: next-turbopack-integration, "Manifest disk artifact" /
-   *  "Webpack mode skips the hydration corpus"). */
+  /** Whether the analysis-inputs hydration corpus is written to disk. Only
+   *  isolated loader workers replay it; an in-process loader reads memory. */
   persistAnalysisInputs = false;
 
-  /** Absolute directory prefixes for external DS packages (loader allowlisting). */
+  /** Absolute directory prefixes for external packages (loader allowlist). */
   externalPackageDirs: string[] = [];
   /** Absolute package dir → owning specifier (cross-source correlation). */
   private externalDirOwners: Record<string, string> = {};
@@ -265,14 +215,11 @@ export class ExtractionSession {
   private externalFileOwners: Record<string, string> = {};
   /** External package specifier → absolute source entry path. */
   externalSourceEntries = new Map<string, string>();
-  /** SourceId derivation authority for the current generation (openspec:
-   *  external-source-watch-ingestion, design D2) — canonical roots
-   *  realpath'd once per full pipeline; alias→SourceId associations
-   *  recorded while files exist so deletion resolves through the cache. */
+  /** SourceId authority for this generation — roots realpath'd once per
+   *  pipeline; aliases recorded while files exist so deletions resolve. */
   private sourceIdentity: SourceIdentity | null = null;
-  /** Canonical admitted external root → declared specifiers (set-valued
-   *  ownership, design D2; duplicate specifiers resolving to one canonical
-   *  root share it). Engine watch wiring and tests read this. */
+  /** Canonical admitted external root → declared specifiers; duplicate
+   *  specifiers resolving to one canonical root share an entry. */
   externalRootOwners = new Map<string, Set<string>>();
   /** Canonical external root → the extension set its collection walk used
    *  (widened for dist-only roots); rewalks and classification share it. */
@@ -280,60 +227,40 @@ export class ExtractionSession {
   /** Canonical admitted external watch roots — the engine-side watch
    *  surface (webpack contextDependencies / Turbopack watchers). */
   externalWatchRoots: string[] = [];
-  /** Canonical external root → (raw sourceKey → {raw content hash, recorded
-   *  abs spelling}): the previous-generation inventory a dirty-root rewalk
-   *  diffs against (design D3). Raw hashes — MDX preprocessing never skews
-   *  the diff; the recorded abs path is a registered deletion alias, so a
-   *  reconstructed deletion always resolves through cached identity. */
+  /** Canonical external root → sourceKey → {raw content hash, recorded abs}:
+   *  the inventory a dirty-root rewalk diffs against, hashed before MDX. */
   private externalInventory = new Map<
     string,
     Map<string, { hash: string; abs: string }>
   >();
-  /** Sticky diagnostics (design D5/D7): stable key → message, re-surfaced
-   *  on every full pipeline until the underlying condition clears. */
+  /** Stable key → message, re-surfaced on every full pipeline until the
+   *  underlying condition clears. */
   readonly stickyDiagnostics = new Map<string, string>();
-  /** Volume-membership predicate for the cross-volume gate (design D5).
-   *  Injected seam: the shared predicate only discriminates on Windows
-   *  (win32 semantics are unit-tested via path.win32), so runtime tests
-   *  drive the gate through this. */
+  /** Volume-membership predicate for the cross-volume gate. Injected seam:
+   *  the real predicate only discriminates on Windows, so tests replace it. */
   sharesProjectVolume: (projectRoot: string, externalRoot: string) => boolean =
     sharesVolumeRoot;
-  /** Orchestrator seams (openspec: external-source-watch-ingestion, design
-   *  D4). `onExternalRootResolved` fires per volume-admitted external root
-   *  DURING collection — after resolution, BEFORE that root's sources are
-   *  walked — so a watching host can open its handle with no blind gap
-   *  between scan and watch. `onExternalRootsCommitted` fires once after a
-   *  successful full-pipeline publication with the complete admitted
-   *  canonical root set (the host's promote/replay/close-old phase; a
-   *  failed pipeline never fires it, so the host rolls back). */
+  /** `onExternalRootResolved` fires per admitted root DURING collection,
+   *  before its walk; `onExternalRootsCommitted` only after publication. */
   onExternalRootResolved: ((canonicalRoot: string) => void) | null = null;
   onExternalRootsCommitted: ((canonicalRoots: string[]) => void) | null = null;
-  /** Watch-cycle boundary seam (openspec: standalone-extraction-cli, design
-   *  D5): fires exactly once per settled `handleWatchUpdate` — with the
-   *  failure `cause`, or `null` when the cycle settled clean. Unlike the
-   *  success-only observers above it carries the OUTCOME, because its owner
-   *  (the CLI watch's publication policy) reports a contracted per-cycle
-   *  failure line and must not learn about failures from a swallowed
-   *  rejection. Observation never alters delivery: a rejected cycle still
-   *  rejects for its caller. */
+  /** Fires exactly once per settled `handleWatchUpdate` — the failure cause,
+   *  or null when clean. Observation never alters delivery. */
   onCycleSettled: ((cause: unknown) => void) | null = null;
 
   private readonly options: SessionOptions;
   private readonly staticCssJson: string | null;
   private system: SystemConfig | null = null;
   /** Vocabulary witness diagnostics from the sealed system's registration
-   *  record (vocabulary-registration), awaiting the shared surfacing pass. */
+   *  record, awaiting the shared surfacing pass. */
   private systemVocabularyDiagnostics: ManifestDiagnostic[] = [];
-  /** Configured external-package files that could not be read. Rebuilt by
-   *  every full collection and replayed by the incremental passes in between
-   *  — an incremental pass re-collects nothing, so dropping them would let a
-   *  strict watch cycle pass over a corpus still missing the file. */
+  /** Configured external files that could not be read. Incremental passes
+   *  re-collect nothing, so they replay these instead of passing strict. */
   private ingestionFailureDiagnostics: ManifestDiagnostic[] = [];
   /** Full package-resolution map from the last full pipeline — replayed by
    *  incremental passes (sourceEntries alone omits dist-resolved packages). */
   private lastPackageMap: Record<string, string> = {};
 
-  // File tracking for HMR
   // Raw/original paths and hashes only. Generated MDX/Svelte parser entries
   // live in the published source corpus.
   private fileCache = new Map<string, { hash: string; source: string }>();
@@ -345,70 +272,49 @@ export class ExtractionSession {
     warn: (message: string) => this.warn(message),
   });
 
-  // Membership keys (lexical + canonical) for the system's evaluated
-  // module-file set — the system-reload classification set. Refreshed on
-  // every successful system load; a failed reload keeps the last
-  // successful set, matching the stale config still being served.
+  // Membership keys (lexical + canonical) for the system's evaluated module
+  // files. A failed reload keeps the last set — the stale config still serves.
   private systemDependencyKeys: Set<string> = new Set();
 
   /** Loader-reported dependency paths for bundler watch registration. */
   systemDependencyPaths: string[] = [];
 
-  // Content hashes of the dependency files at load time — the fallback
-  // probe for watch passes that carry no modified/removed sets (webpack's
-  // first watchRun; harnesses without watch-event translation).
+  // Content hashes at load time — the fallback probe for watch passes that
+  // carry no modified/removed sets (webpack's first watchRun).
   private systemDependencyHashes: Map<string, string> = new Map();
   private lastSystemPropsHash: string | null = null;
-  /** Per-payload write guards: payloadHash gates rewrites (byte-identical
-   *  payloads leave disk untouched); diskHash is the hash of the CURRENT
-   *  disk bytes (envelope included) recorded in the analysis-commit. null =
-   *  not yet seeded (first publication reads the artifact's envelope so a
-   *  same-session restart never rewrites byte-identical artifacts). */
   private artifactRecords: SessionArtifactRecords = {
     manifest: null,
     inputs: null,
     styles: null,
   };
-  /** Last written analysis-commit; null = seeded from disk on first use.
-   *  Its `generation` is a forensic ordinal with no reader (see
-   *  AnalysisCommit) — the per-instance counter is correct only because
-   *  one session owns the directory. */
+  /** Last written analysis-commit; null seeds from disk on first use. Its
+   *  generation counter is correct only because one session owns the dir. */
   private lastCommit: AnalysisCommit | null = null;
-  /** Release handle of this session's publication claim — the in-process
-   *  exclusive-owner slot AND the session directory's on-disk owner record,
-   *  taken and given up as one — or null when unheld. Taken by the first
-   *  `runFullPipeline` and held until `close()`: the guards above are
-   *  per-INSTANCE while `sessionDir` is process-shared, so a second live
-   *  publisher is what makes them lie. */
+  /** Release handle for the in-process owner slot AND the directory's
+   *  on-disk owner record, taken and released as one; null when unheld. */
   private releasePublicationClaim: (() => void) | null = null;
-  /** Session identity — claimed once per PROCESS (one Next invocation),
-   *  adopted by every subsequent session instance so all compilers share
-   *  one artifact tree (design D2: `next dev`/`next build` co-writing are
-   *  separate processes and therefore separate sessions). */
+  /** Session identity, claimed once per PROCESS and adopted by every later
+   *  session instance so all compilers share one artifact tree. */
   readonly sessionId: string = claimProcessSessionId();
-  /** Epoch value of the last published analysis; null = not yet known
-   *  (seeded from the session dir's artifact on first publication so a
-   *  same-session restart with unchanged plans never rewrites bytes). */
+  /** Epoch of the last published analysis; null seeds from disk so a
+   *  same-session restart with unchanged plans rewrites no bytes. */
   private lastEpochValue: string | null = null;
-  /** Watcher debounce ceiling feeding status deadlines (design D3). */
+  /** Watcher debounce ceiling feeding status deadlines. */
   debounceCeilingMs = DEFAULT_WATCH_DEBOUNCE_MS;
   /** Test seam: observes every session-artifact write (name, content)
    *  post-rename — write ORDER is part of the transaction contract. */
   onArtifactWrite: ((name: string, content: string) => void) | null = null;
-  /** Status attempt bookkeeping (design D3). */
   private statusAttemptId = 0;
   private statusAttemptOpen = false;
-  /** Monotonic first-emission witness (openspec: standalone-extraction-cli,
-   *  watch readiness): flips true once the first complete publication
-   *  succeeds and never regresses — every later status write (idle AND
-   *  failed) carries it, so readiness stays observable across attempts. */
+  /** Monotonic readiness witness: flips true on the first complete
+   *  publication and never regresses; every later status write carries it. */
   private firstEmissionComplete = false;
   /** Debounce-window observations pending analysis (sourceKey → hash). */
   private debouncePending = new Map<string, string>();
-  /** Session-start hygiene (pruning + legacy cleanup) runs once. */
   private sessionStartHygieneDone = false;
   // Lightning CSS targets — resolved lazily once per session (browserslist
-  // config I/O), spec: css-post-processing.
+  // config I/O).
   private lcssTargets: LightningTargets | null = null;
 
   constructor(options: SessionOptions) {
@@ -418,7 +324,6 @@ export class ExtractionSession {
     this.staticCssJson = serializeStaticCss(options.staticCss);
   }
 
-  /** This session's artifact directory. Requires `rootDir` to be set. */
   get sessionDir(): string {
     return sessionArtifactDir(this.rootDir!, this.sessionId);
   }
@@ -433,8 +338,7 @@ export class ExtractionSession {
 
   private log(msg: string): void {
     if (this.verbose) {
-      // Stream discipline (openspec: standalone-extraction-cli D5): every
-      // human-facing session line goes to stderr — stdout belongs to the
+      // Human-facing session lines go to stderr — stdout belongs to the
       // drivers' machine surfaces.
       console.error(`[animus] ${msg}`);
     }
@@ -444,7 +348,6 @@ export class ExtractionSession {
     console.warn(`[animus] ${msg}`);
   }
 
-  // Zero-cost timer gate
   private now(): number {
     return this.verbose ? performance.now() : 0;
   }
@@ -452,39 +355,24 @@ export class ExtractionSession {
     return this.verbose ? Math.round(performance.now() - t) : 0;
   }
 
-  /** Lazily-computed scan config (options are constructor-fixed, so the
-   *  derivation is stable for the session's lifetime). */
-  /** Diagnostic prefix label — drivers set their own so a host's errors
-   *  never masquerade as another driver's (inc 05 review S1). The default
-   *  keeps the Next plugin's historical prefix. */
+  /** Diagnostic prefix label — drivers set their own so one host's errors
+   *  never masquerade as another driver's. */
   driverLabel = 'animus-next';
 
   /** Per-specifier discovery outcomes from the last full collection —
    *  driver-consumed reporting surface (the CLI's summary). */
   lastExternalOutcomes: ExternalPackageOutcome[] = [];
 
-  /** Component count of the last published analysis, or null before the
-   *  first — the CLI's publish path reads this instead of re-parsing the
-   *  manifest JSON every cycle. */
+  /** Component count of the last published analysis, null before the first —
+   *  read by drivers instead of re-parsing the manifest JSON every cycle. */
   lastComponentCount: number | null = null;
 
-  /**
-   * When superseded copies leave the session's `assets/` directory. Asset
-   * copies are content-addressed and never overwritten, so a revised asset
-   * leaves its previous revision behind until something deletes it, and the
-   * driver decides when that is safe. `'full-pipeline'` (default) suits a
-   * driver that serves the directory in place, where an already-loaded page
-   * still requests the previous revision's url. `'every-cycle'` suits a
-   * driver that republishes the whole directory each cycle, where a
-   * surviving copy would ship in a tree a fresh build never produces.
-   */
+  /** When superseded asset copies leave `assets/`: `'full-pipeline'` suits a
+   *  driver serving the dir in place, `'every-cycle'` one republishing it. */
   staleAssetPruning: 'full-pipeline' | 'every-cycle' = 'full-pipeline';
 
-  /** Driver-owned STRUCTURAL exclusions (a CLI outDir inside the root),
-   *  joined to the never-replaceable set — never the user `exclude` list,
-   *  whose presence would flip the replace semantics and silently drop the
-   *  replaceable defaults. Set before the first pipeline run (the scan
-   *  config is memoized). */
+  /** Driver-owned STRUCTURAL exclusions, joined to the never-replaceable set
+   *  — never the user list, whose presence flips the replace semantics. */
   structuralExclude: string[] = [];
 
   private scanConfigMemo: {
@@ -519,19 +407,8 @@ export class ExtractionSession {
     return this.scanConfigMemo;
   }
 
-  /**
-   * Watch entry point: one single-flight analysis transaction per event
-   * batch (openspec: next-webpack-served-transform-coherence, design D3).
-   * The first entering session runs the transaction; every concurrent
-   * entry — same session re-entered, or another compiler's session
-   * (client/server/RSC each hold their own instance) — joins the in-flight
-   * promise, so no compiler proceeds against a generation older than the
-   * one the transaction publishes. A rejected transaction rejects every
-   * joiner; the gate always clears.
-   *
-   * Every settled entry — joined, forwarded, or transacted — reports its
-   * outcome to `onCycleSettled` before returning or rejecting.
-   */
+  /** One single-flight analysis transaction per event batch: concurrent
+   *  entries join the in-flight promise; each settled entry reports outcome. */
   async handleWatchUpdate(changes: WatchChanges): Promise<void> {
     try {
       await this.routeWatchUpdate(changes);
@@ -544,8 +421,6 @@ export class ExtractionSession {
     this.onCycleSettled?.(null);
   }
 
-  /** The cycle itself: join an in-flight transaction, forward a batch this
-   *  instance cannot serve, or run the transaction. */
   private async routeWatchUpdate(changes: WatchChanges): Promise<void> {
     const inflight = getWatchTransaction();
     if (inflight) {
@@ -553,15 +428,8 @@ export class ExtractionSession {
       return;
     }
 
-    // Non-owning instance (system state never loaded — it lost the init
-    // race): each MultiCompiler child holds its own watcher and its own
-    // modified set, so a file only THIS compiler watches (a server-graph-
-    // only route) arrives nowhere else. Forward a non-empty batch to the
-    // owning session instead of dropping it; empty/absent sets stay a
-    // no-op (real webpack passes real sets on incremental turns — the
-    // undefined-set full-discovery fallback belongs to the owner alone).
-    // Checked AFTER the join so a non-owning session still awaits an
-    // in-flight transaction instead of proceeding stale.
+    // Non-owning instance: each compiler child watches its own files, so a
+    // batch only this one observes is forwarded, never dropped.
     if (!this.system) {
       const owner = getOwningWatchSession();
       const hasBatch =
@@ -582,13 +450,8 @@ export class ExtractionSession {
     }
   }
 
-  /**
-   * Owner-side entry for a batch observed by a NON-OWNING compiler's
-   * watcher. Serializes behind any in-flight transaction, then runs the
-   * forwarded batch as its own transaction — never drops it (a forwarded
-   * batch has no other delivery; content-hash diffing makes an
-   * already-covered batch a cheap no-op).
-   */
+  /** Owner-side entry for a batch a non-owning compiler observed. Serializes
+   *  behind any in-flight transaction — it has no other delivery. */
   async ingestForwardedBatch(changes: WatchChanges): Promise<void> {
     if (!this.system) return;
     for (;;) {
@@ -605,44 +468,30 @@ export class ExtractionSession {
     }
   }
 
-  /**
-   * Incremental watch pass: system reload when the system file changed,
-   * otherwise content-hash diffing restricted to the watcher's change sets
-   * (falling back to a full discovery walk when no sets are provided).
-   */
   private async processWatchUpdate(changes: WatchChanges): Promise<void> {
     const rootDir = this.rootDir!;
 
-    // Root-dirty inventory reconciliation FIRST (design D3): dirty external
-    // roots are rewalked and their created/edited/deleted deltas
-    // reconstructed BEFORE any event classification — a bare directory
-    // report cannot be classified (the hidden child could be a system
-    // dependency), so classification below always runs over concrete file
-    // paths. Reconciliation failures degrade to the raw change sets.
+    // Reconciliation runs FIRST: a bare directory report cannot be
+    // classified, so classification below sees only concrete file paths.
     try {
       changes = this.reconcileExternalRoots(changes);
     } catch (err) {
       this.warn(`external root reconciliation failed: ${String(err)}`);
     }
 
-    // The post-reconciliation batch, flattened once — shared by the
-    // system-dependency find and the asset-dependency check below.
     const changed = [
       ...(changes.modifiedFiles ?? []),
       ...(changes.removedFiles ?? []),
     ];
 
-    // System reload: any changed or removed file in the system's
-    // evaluated module-file set (loader-reported dependencies plus the
-    // entry). Membership is keyed lexically and canonically, so events via
-    // symlinked or already-deleted paths still classify. One reset per
-    // watch batch — the bundler already coalesces events per rebuild.
+    // System reload: any changed or removed file in the system's evaluated
+    // module set. Keys are lexical and canonical, so symlinked paths match.
     let assetChanged = false;
     let systemHit: string | undefined;
     try {
       if (!changes.modifiedFiles && !changes.removedFiles) {
-        // No change sets (first watchRun; harnesses without watch-event
-        // translation): probe the dependency files by content hash.
+        // No change sets (webpack's first watchRun): probe the dependency
+        // files by content hash.
         for (const [dep, hash] of this.systemDependencyHashes) {
           let current = '';
           try {
@@ -661,8 +510,7 @@ export class ExtractionSession {
         );
       }
     } catch (err) {
-      // Detection-only failure: with no way to know whether a reset is due,
-      // degrade to the ordinary incremental diff — diagnosable via the warn.
+      // Detection-only failure: degrade to the ordinary incremental diff.
       this.warn(`HMR system-reload check failed: ${String(err)}`);
     }
 
@@ -676,12 +524,8 @@ export class ExtractionSession {
         setAnalysisStartedPromise(promise);
         await promise;
       } catch (err) {
-        // A failed reset re-run is a FAILED CYCLE, not a fallback signal:
-        // swallowing it here would run the incremental diff against the
-        // stale system and republish as if the batch succeeded. Leave the
-        // status diagnostic (loadSystemConfig throws before analyzeAndEmit's
-        // own status wrapper opens) and let the host's per-cycle handler
-        // keep last-good artifacts and report.
+        // A failed reset re-run is a failed cycle, not a fallback: swallowing
+        // it would republish against the stale system.
         try {
           this.beginStatusAttempt();
           this.writeAnalysisStatus(
@@ -704,24 +548,16 @@ export class ExtractionSession {
         toWatchKeys(path).some((key) => this.assetDependencyKeys.has(key))
       )
     ) {
-      // A changed asset invalidates the copy memo and forces re-analysis,
-      // but the batch may ALSO carry component edits and removals (branch
-      // switch, editor save-all, git checkout): fall through to the shared
-      // read/re-hash/prune flow instead of replaying the cache — an entry
-      // analyzed stale here would never re-surface, since its cache hash
-      // was never updated.
+      // The batch may also carry component edits: fall through to the shared
+      // read/re-hash flow, or a stale entry never re-surfaces.
       this.assetCopyCache.clear();
       assetChanged = true;
     }
 
-    // Check for component file changes using content-hash diffing
     const { excludeMatcher, extensionsSet } = this.resolveScanConfig();
 
     // Prior cache entries for every path this batch touches — restored on
-    // analysis failure so the SAME content re-runs analysis on the next
-    // observation (spec: dev-served-transform-coherence, "Failed analyses
-    // publish no partial generation" — a poisoned hash cache would silently
-    // suppress the equal-content retry). null = the path had no entry.
+    // failure, or a poisoned hash would suppress the equal-content retry.
     const priorCacheEntries = new Map<
       string,
       { hash: string; source: string } | null
@@ -733,30 +569,20 @@ export class ExtractionSession {
       }
     };
 
-    // External-inventory mutations of this batch, applied only after the
-    // analysis publishes (mirror of the fileCache rollback below: a failed
-    // attempt must leave the previous generation's inventory in place so
-    // the same delta reconciles again).
+    // External-inventory mutations, applied only after the analysis
+    // publishes, so a failed attempt reconciles the same delta again.
     const inventoryUpdates: Array<{
       root: string;
       key: string;
       hash: string | null;
       abs: string;
     }> = [];
-    // Owner records for deleted files, deferred for the same reason: the
-    // `fileCache` rollback below restores a failed attempt's entries, so a
-    // file that comes back must still have an owner. Deleting eagerly left a
-    // restored cache entry with no owner, and
-    // `correlateExternalTokenDiagnostics` silently skips any diagnostic whose
-    // file has none — dropping that file's token-contract errors for the rest
-    // of the session, since owners are otherwise rebuilt only by a full
-    // pipeline run.
+    // Owner records for deleted files, deferred the same way: a rolled-back
+    // cache entry with no owner loses its token diagnostics for the session.
     const ownerRemovals: string[] = [];
 
-    // Prune deleted/renamed files so their last-known source stops riding
-    // along as a ghost entry on every subsequent incremental analysis.
-    // Out-of-root deletions resolve through cached identity only — never
-    // fresh canonicalization of a gone path (design D2).
+    // Prune deleted/renamed files so their last source stops riding along.
+    // Out-of-root deletions resolve through cached identity only.
     let removedAny = false;
     if (changes.removedFiles) {
       for (const removedPath of changes.removedFiles) {
@@ -787,12 +613,6 @@ export class ExtractionSession {
       }
     }
 
-    // Restrict the read+hash pass to the watcher's modified set when
-    // available; fall back to a full discovery walk otherwise. Membership
-    // routes through `classifyWatchPath` — project-root members keep the
-    // consumer filters, external members resolve through the identity
-    // authority (spec: next-dev-hmr, "External workspace events reach the
-    // incremental pass").
     let targets: Array<{ abs: string; key: string; owningRoot: string | null }>;
     if (changes.modifiedFiles) {
       targets = [];
@@ -835,9 +655,8 @@ export class ExtractionSession {
         recordPrior(relPath);
         this.fileCache.set(relPath, { hash, source });
         if (target.owningRoot) {
-          // Ownership records before the analysis runs (the in-flight
-          // analysis correlates diagnostics against it); most-specific
-          // root, first-declared specifier (design D2).
+          // Ownership recorded before the analysis, which correlates
+          // diagnostics against it: most-specific root, first specifier.
           const owner = this.externalRootOwners
             .get(target.owningRoot)
             ?.values()
@@ -856,8 +675,6 @@ export class ExtractionSession {
     }
 
     if (changedPaths.length > 0 || removedAny || assetChanged) {
-      // The observed batch — exactly the (sourceKey, sourceHash) pairs this
-      // attempt is analyzing — feeds the status file's pending set (D3).
       const pending: Array<[string, string]> = changedPaths.map((rel) => [
         rel,
         this.fileCache.get(rel)!.hash,
@@ -866,11 +683,8 @@ export class ExtractionSession {
       let ingested: SourceIngestionResult;
       try {
         this.beginStatusAttempt();
-        // A quarantine-drop here (vs aborting the batch) is load-bearing:
-        // aborting dropped the whole batch and wrote status 'idle', so
-        // waiting loaders raised the misleading
-        // ANIMUS_ANALYSIS_NOT_SCHEDULED. Strict mode still throws into the
-        // catch below, which writes 'failed'.
+        // Dropping a quarantined file beats aborting the batch: an aborted
+        // batch writes 'idle' and leaves waiting loaders unscheduled.
         ingested = await this.corpus.prepare({
           fileCache: this.fileCache,
           externalFileOwners: this.externalFileOwners,
@@ -888,9 +702,8 @@ export class ExtractionSession {
         setAnalysisStartedPromise(promise);
         await promise;
       } catch (err) {
-        // Roll the cache back to the pre-batch state: the failed attempt
-        // published nothing, so the next observation of the same content
-        // must analyze again instead of silently matching the cache.
+        // Roll the cache back: the failed attempt published nothing, so the
+        // same content must analyze again on the next observation.
         for (const [key, prior] of priorCacheEntries) {
           if (prior === null) this.fileCache.delete(key);
           else this.fileCache.set(key, prior);
@@ -903,9 +716,6 @@ export class ExtractionSession {
         throw err;
       }
       this.publishSourceIngestion(ingested);
-      // The batch published: fold its external deltas into the
-      // previous-generation inventory (a failed attempt above skipped
-      // this, so the same delta reconciles again on retry).
       for (const update of inventoryUpdates) {
         let inventory = this.externalInventory.get(update.root);
         if (!inventory) {
@@ -919,8 +729,8 @@ export class ExtractionSession {
         delete this.externalFileOwners[key];
       }
     } else if (this.statusAttemptOpen) {
-      // A debounced burst produced nothing analyzable — close the attempt
-      // so no loader waits on a status that will never commit (design D3).
+      // A debounced burst produced nothing analyzable — close the attempt so
+      // no loader waits on a status that never commits.
       this.debouncePending.clear();
       this.writeAnalysisStatus('idle', []);
     }
@@ -936,34 +746,17 @@ export class ExtractionSession {
     this.corpus.publish(result);
   }
 
-  /**
-   * Full analysis + publication. Registers in the ONE in-flight
-   * transaction slot `handleWatchUpdate` joins (design D3): a full pipeline
-   * is a publishing transaction like any watch batch, so a batch entering
-   * the startup window joins it instead of driving a second, concurrent
-   * analysis. The system reload re-enters from INSIDE a watch
-   * transaction — that nested call leaves the enclosing registration
-   * untouched.
-   */
+  /** Full analysis + publication, registered in the one in-flight
+   *  transaction slot; a nested reload leaves the enclosing registration. */
   async runFullPipeline(pending: Array<[string, string]> = []): Promise<void> {
-    // Publication exclusivity is the PIPELINE's claim, not a per-driver
-    // opt-in: every driver inherits it, and the per-instance payload write
-    // guards (`artifactRecords`, `lastCommit`, `lastEpochValue`) become true
-    // by construction. Re-entrant for this instance — the system reload
-    // re-enters from inside a watch transaction, and drivers re-run the
-    // pipeline on the same session.
+    // Publication exclusivity is the pipeline's claim, so the per-instance
+    // write guards hold by construction. Re-entrant for this instance.
     if (this.releasePublicationClaim === null) {
       const releaseOwner = claimExclusiveSessionOwner(
         `${this.driverLabel}:${this.sessionDir}`
       );
-      // The same claim, said where another PROCESS can read it: the owner
-      // slot above only stops a second host inside this one, while the
-      // on-disk record is what lets a sibling session see that this tree
-      // still has a live owner instead of pruning it. Only the winner of the
-      // in-process claim writes it and the two are released together — a
-      // record outliving the claim would fence off a tree nobody publishes
-      // into. The directory may not exist yet; the claim says one is about
-      // to.
+      // The on-disk record is what stops a sibling from pruning this tree.
+      // Only the in-process winner writes it, and both release together.
       mkdirSync(this.sessionDir, { recursive: true });
       const releaseClaimRecord = holdDirectoryClaim(this.sessionDir);
       this.releasePublicationClaim = () => {
@@ -972,13 +765,8 @@ export class ExtractionSession {
       };
     }
 
-    // The loaded system is assigned at pipeline step 1 — BEFORE the
-    // source-state try below opens — while `handleWatchUpdate` decides
-    // ownership by asking whether it is set. A failed pass that left it set
-    // made the session answer as the owner and publish a generation built
-    // from caches the failure never filled, so the failure path restores it
-    // (null on a first run; the last-good system on a later one, which the
-    // session legitimately still serves).
+    // Ownership is decided by whether `system` is set, so a failed pass must
+    // restore it — otherwise this session answers as owner with empty caches.
     const priorSystem = this.system;
 
     const nested = getWatchTransaction() !== null;
@@ -1000,10 +788,8 @@ export class ExtractionSession {
     const pipelineStart = this.now();
     const bt: Record<string, number> = {};
 
-    // Session-start hygiene (design D2): drop legacy flat artifacts (new
-    // loaders cannot reach them) and prune sibling session dirs beyond the
-    // retention window. Publish this session's artifact dir for the
-    // in-process webpack loader before any analysis can complete.
+    // Hygiene first, then publish this session's artifact dir for the
+    // in-process loader before any analysis can complete.
     this.runSessionStartHygiene();
     setSessionArtifactDir(this.sessionDir);
 
@@ -1011,28 +797,21 @@ export class ExtractionSession {
     const priorSourceState = this.snapshotSourceState();
     const resolvedSystemPath = resolve(rootDir, this.options.system);
 
-    // Step 1: Load system via NAPI
     let t = this.now();
     this.system = loadSystemConfig(engineApi, {
       systemPath: resolvedSystemPath,
       rootDir,
       prefix: this.options.prefix,
     });
-    // The sealed record is the witness channel (the loader's evaluation
-    // host shims console): map its coded entries for the shared surfacing
-    // policy point.
+    // The loader's evaluation host shims console, so the sealed record is
+    // the witness channel for these diagnostics.
     this.systemVocabularyDiagnostics = vocabularyWitnessDiagnostics(
       this.system.vocabularyWitnessesJson
     );
-    // Asset specifiers resolve against the system just loaded — drop the
-    // per-specifier copy memo so a changed reference re-reads and re-hashes.
     this.assetCopyCache.clear();
     this.assetDependencyPaths.clear();
     this.assetDependencyKeys.clear();
     {
-      // Refresh the system-reload membership set: every loader-evaluated
-      // module plus (defensively) the entry, keyed lexically and
-      // canonically so symlinked/deleted event paths still match.
       const deps = this.system.dependencies ?? [];
       const keys = new Set<string>();
       for (const key of toWatchKeys(resolvedSystemPath)) keys.add(key);
@@ -1056,7 +835,6 @@ export class ExtractionSession {
     }
     bt.systemLoad = this.elapsed(t);
 
-    // Step 2: Discover source files
     t = this.now();
     const { excludeMatcher, extensionsSet } = this.resolveScanConfig();
     const files = discoverFiles(
@@ -1068,8 +846,8 @@ export class ExtractionSession {
 
     bt.fileDiscovery = this.elapsed(t);
 
-    // Step 3: read raw originals. Local and external discovery establish one
-    // complete resolver index before shared adaptation runs.
+    // Local and external discovery establish one complete resolver index
+    // before shared adaptation runs.
     t = this.now();
     const rawEntries: FileEntry[] = [];
     for (const filePath of files) {
@@ -1081,24 +859,18 @@ export class ExtractionSession {
 
     bt.fileRead = this.elapsed(t);
 
-    // Step 4: Resolve external packages from system file imports. Workspace
-    // walk + require.resolve stays local (the Node-resolution seam); the
-    // traversal/ingest below is the shared collector
-    // (spec: external-package-file-discovery).
+    // Workspace walk + require.resolve stays local (the Node-resolution
+    // seam); the traversal and ingest below are the shared collector.
     t = this.now();
     const packageNames = extractSystemFilePackages(resolvedSystemPath);
     const preResolved = resolvePackagesByName(rootDir, packageNames);
 
-    // Raw content hashes of every external file the collection walked,
-    // keyed by absolute path — recorded BEFORE MDX preprocessing so the
-    // dirty-root inventory diff compares raw bytes (design D3), and
-    // resolved through the identity handle below only for packages that
-    // survive the cross-volume gate.
+    // Raw content hashes of every walked external file, keyed by absolute
+    // path — recorded before MDX preprocessing so the diff sees raw bytes.
     const rawExternalFiles = new Map<string, string>();
 
-    // Published to the session only once the collection completes, so a
-    // throw in between leaves the previous generation's set in place — like
-    // every other per-generation field.
+    // Published only once collection completes, so a throw in between leaves
+    // the previous generation's set in place.
     const ingestionFailures: ManifestDiagnostic[] = [];
 
     const collected = await collectExternalPackageSources({
@@ -1112,15 +884,13 @@ export class ExtractionSession {
         rawExternalFiles.set(absPath, contentHash(source));
       },
       onUnreadable: (relPath, err) =>
-        // A configured file that could not be read is lost input, not
-        // degradation: error severity, so a strict build fails on it exactly
-        // as it does on an unresolvable include.
+        // A configured file that cannot be read is lost input, not
+        // degradation: error severity fails a strict build.
         ingestionFailures.push(unreadableSourceDiagnostic(relPath, err)),
       onPackageResolved: (_specifier, packageDir) => {
         if (!this.onExternalRootResolved) return;
-        // The cross-volume gate runs after collection; a rejected root
-        // must never be watched, so the volume predicate also gates the
-        // open-new phase (design D5: atomic exclusion — no watcher).
+        // The cross-volume gate runs after collection, so the predicate also
+        // gates this phase — a rejected root must never be watched.
         if (!this.sharesProjectVolume(rootDir, packageDir)) return;
         let canonical = packageDir;
         try {
@@ -1132,9 +902,6 @@ export class ExtractionSession {
       },
     });
 
-    // Driver-consumed capture: the CLI's discovery-outcome report reads
-    // this after a one-shot pipeline (per-specifier accounting; the
-    // strict/warn policy below stays the single policy point).
     this.lastExternalOutcomes = collected.outcomes;
     this.ingestionFailureDiagnostics = ingestionFailures;
 
@@ -1145,9 +912,6 @@ export class ExtractionSession {
         );
       }
     }
-    // external-package-file-discovery: silence is never an outcome — an
-    // unresolvable include warns in non-strict mode and fails the build
-    // under strict, naming every offending specifier (vite-plugin parity).
     const unresolvableMessage = unresolvableIncludesMessage(collected.outcomes);
     if (unresolvableMessage !== null) {
       if (this.options.strict) {
@@ -1155,10 +919,8 @@ export class ExtractionSession {
       }
       this.warn(unresolvableMessage);
     }
-    // first-class-extension D13: a stale dist entry under an extended package
-    // rides the same strict/warn seam — a merge against it would silently
-    // skew registry content the discovered sources no longer match
-    // (vite-plugin parity).
+    // A stale dist entry rides the same strict/warn seam: merging against it
+    // skews registry content away from the discovered sources.
     const staleDistMessage = staleDistIncludesMessage(collected.outcomes);
     if (staleDistMessage !== null) {
       if (this.options.strict) {
@@ -1167,13 +929,8 @@ export class ExtractionSession {
       this.warn(staleDistMessage);
     }
 
-    // ── Cross-volume gate (design D5) ──────────────────────────────────
-    // A resolved source root on a different platform volume than the
-    // project root is rejected AT DISCOVERY — cold init and every reset,
-    // never lazily at event time. Strict fails the pipeline (nothing has
-    // been published, so a mid-session reset retains the previous
-    // generation); non-strict records the sticky diagnostic and excludes
-    // the package ATOMICALLY via the shared exclusion helper.
+    // A source root on a different volume than the project root is rejected
+    // AT DISCOVERY — never lazily at event time.
     const rejectedSpecifiers = new Set<string>();
     const crossVolumeDetails: string[] = [];
     for (const [dir, specifiers] of Object.entries(collected.dirOwnerSets)) {
@@ -1193,8 +950,6 @@ export class ExtractionSession {
       }
       this.stickyDiagnostics.set('cross-volume', message);
     }
-    // Sticky surfacing: every retained diagnostic re-warns on every full
-    // pipeline until its condition clears (design D5/D7).
     for (const message of this.stickyDiagnostics.values()) {
       this.warn(message);
     }
@@ -1205,10 +960,6 @@ export class ExtractionSession {
     );
 
     try {
-      // ── Source identity + set-valued ownership (design D2) ───────────
-      // One handle per generation: canonical roots realpath'd here, alias
-      // associations seeded from the walked files so a later deletion event
-      // under any discovery spelling resolves through the cache.
       const identity = createSourceIdentity(rootDir);
       this.externalRootOwners = new Map();
       this.externalRootExtensions = new Map();
@@ -1217,11 +968,8 @@ export class ExtractionSession {
         const owners = this.externalRootOwners.get(canonical) ?? new Set();
         for (const specifier of specifiers) owners.add(specifier);
         this.externalRootOwners.set(canonical, owners);
-        // Persist the exact extension set collection walked this dir with
-        // (dist-only roots widen with the entry's own extension): the dirty
-        // rewalk and watch-path classification MUST use the same set, or a
-        // widened root's files vanish from the rewalk and reconcile as a
-        // total deletion.
+        // The rewalk and watch classification MUST use this same set, or a
+        // widened root's files reconcile as a total deletion.
         const exts = admitted.dirExtensions[dir];
         if (exts) this.externalRootExtensions.set(canonical, new Set(exts));
       }
@@ -1253,9 +1001,6 @@ export class ExtractionSession {
 
       bt.packageResolve = this.elapsed(t);
 
-      // Step 5+: hand off to the shared analysis + emit core. Production pass
-      // (devMode=false) writes system-props.js unconditionally and logs the
-      // extraction report.
       this.beginStatusAttempt();
       let accepted: SourceIngestionResult;
       try {
@@ -1270,9 +1015,8 @@ export class ExtractionSession {
         this.externalFileOwners
       );
       bt.fileCount = accepted.analysisEntries.length;
-      // Only clear the native cache after source adaptation has produced a
-      // parser-ready corpus. A failed system reload must leave the
-      // last-good transform engine usable.
+      // Clear the native cache only after adaptation produced a corpus: a
+      // failed reload must leave the last-good transform engine usable.
       clearEngineCache(engineApi);
       await this.analyzeAndEmit(
         accepted.analysisEntries,
@@ -1284,21 +1028,15 @@ export class ExtractionSession {
       );
       this.publishSourceIngestion(accepted);
 
-      // Publish external package state for non-owning compiler instances in
-      // the same successful generation as the source projection.
+      // External package state publishes in the same successful generation
+      // as the source projection.
       setSharedExternalDirs(admitted.packageDirs);
       setSharedExternalEntries(admitted.sourceEntries);
 
-      // Publication succeeded: hand the watching host the admitted root set
-      // (design D4 — promote newly opened watchers, replay captured events,
-      // close removed roots). A throw above never reaches this, so the host
-      // rolls its open-new phase back instead.
       this.onExternalRootsCommitted?.(this.externalWatchRoots);
 
-      // This session is now the process's watch-analysis owner: non-owning
-      // compiler instances forward their watchers' batches here instead of
-      // dropping them. Registered only on SUCCESS — a failed pipeline leaves
-      // no target that would accept batches it cannot analyze.
+      // Registered only on SUCCESS: a failed pipeline leaves no owner that
+      // would accept batches it cannot analyze.
       setOwningWatchSession(this);
     } catch (err) {
       this.restoreSourceState(priorSourceState);
@@ -1306,10 +1044,8 @@ export class ExtractionSession {
     }
   }
 
-  /** The per-generation source state runFullPipeline mutates, captured as
-   *  ONE object so the restore below cannot omit a member. The three
-   *  deep-copied fields are the ones later steps mutate in place rather
-   *  than reassign; everything else is rebound wholesale on success. */
+  /** Per-generation source state captured as ONE object so the restore
+   *  cannot omit a member; deep-copied fields are mutated in place. */
   private snapshotSourceState() {
     return {
       sourceIdentity: this.sourceIdentity,
@@ -1343,37 +1079,23 @@ export class ExtractionSession {
     Object.assign(this, snapshot);
   }
 
-  /**
-   * The driver's end-of-life signal for this session: release the
-   * process-exclusive publication claim so a SUCCESSOR session over the
-   * same root may publish (sequential claim/release cycles are legal — a
-   * rollup watch rebuild, a second programmatic CLI run). Idempotent, and
-   * scoped to this session's own claim: a late close can never free a
-   * successor's. A session that never ran a pipeline holds nothing.
-   */
+  /** Release this session's publication claim so a successor may publish.
+   *  Idempotent, and scoped to this session's own claim. */
   close(): void {
     this.releasePublicationClaim?.();
     this.releasePublicationClaim = null;
   }
 
-  /**
-   * Reset analysis state for HMR system reload. Payload write guards go
-   * back to null so the next publication reseeds them from the disk
-   * envelopes — a byte-identical post-reset artifact is still not
-   * rewritten.
-   */
+  /** Reset analysis state for a system reload: write guards go back to null
+   *  and reseed from the disk envelopes on the next publication. */
   resetForHmr(): void {
     resetAnalysisStartedPromise();
     this.artifactRecords = { manifest: null, inputs: null, styles: null };
     this.lastSystemPropsHash = null;
   }
 
-  /**
-   * The (sourceKey, observedSourceHash) pairs of a watch batch — cheap
-   * evidence for the status file's pending set on the system-reload
-   * path, where the batch's component edits ride along with the system
-   * edit (design D3: loaders wait only on observed inputs).
-   */
+  /** The (sourceKey, observed hash) pairs of a watch batch — the status
+   *  file's pending set; loaders wait only on observed inputs. */
   private pendingFromBatch(changes: WatchChanges): Array<[string, string]> {
     const { excludeMatcher, extensionsSet } = this.resolveScanConfig();
     const pending: Array<[string, string]> = [];
@@ -1395,17 +1117,8 @@ export class ExtractionSession {
     return pending;
   }
 
-  /**
-   * Root-dirty inventory reconciliation (design D3): partition the
-   * watcher's change sets into explicit FILE events and external ROOT hits
-   * (a reported path that IS an admitted root, or a directory inside one),
-   * rewalk each dirty root through the shared discovery policy, diff the
-   * SourceId+raw-hash inventory against the previous generation, and merge
-   * the reconstructed created/edited/deleted deltas with the explicit
-   * events (identity-level dedup happens downstream at the cache gate).
-   * Deletion falls out of the inventory diff — webpack may report only the
-   * directory (probe-proven).
-   */
+  /** Rewalk dirty external roots and diff the inventory into created,
+   *  edited and deleted deltas: a watcher may report only the directory. */
   private reconcileExternalRoots(changes: WatchChanges): WatchChanges {
     const identity = this.sourceIdentity;
     if (!identity) return changes;
@@ -1417,9 +1130,8 @@ export class ExtractionSession {
     const modified = new Set<string>();
     const removed = new Set<string>();
 
-    // A file event is never a root hit; only directories (or vanished
-    // paths with no recorded file identity — a deleted directory, or a
-    // child created and gone between events) mark their root dirty.
+    // Only directories — or vanished paths with no recorded file identity —
+    // mark their root dirty; a file event is never a root hit.
     const rootHitFor = (path: string): string | null => {
       const containing = identity.containingExternalRoot(path);
       if (!containing) return null;
@@ -1446,19 +1158,15 @@ export class ExtractionSession {
         this.externalInventory.get(root) ??
         new Map<string, { hash: string; abs: string }>();
       const seen = new Set<string>();
-      // The rewalk IS the collection walk (shared walkPackageSources —
-      // guardrail G1, one policy) — including the root's own recorded
-      // extension set: a dist-only root was collected with a widened set,
-      // and rewalking it with the project default would see nothing and
-      // reconcile the whole kit as deleted.
+      // The rewalk IS the collection walk, down to the root's recorded
+      // extension set; the project default sees nothing under a dist root.
       const walked = walkPackageSources(
         root,
         this.externalRootExtensions.get(root) ?? extensionsSet
       );
       if (walked.length === 0 && previous.size > 0) {
-        // A vacuous rewalk of a previously-populated root is how a policy
-        // drift (extension set, walk filters) presents — make it loud
-        // before the diff below reconstructs every entry as a deletion.
+        // A vacuous rewalk of a populated root is how policy drift presents
+        // — loud before the diff reconstructs every entry as a deletion.
         this.warn(
           `external root rewalk found no files under ${root} while its ` +
             `inventory holds ${previous.size} — reconciling as full deletion`
@@ -1482,7 +1190,7 @@ export class ExtractionSession {
       }
       for (const [key, entry] of previous) {
         // Reconstructed deletions carry the RECORDED spelling, so the
-        // removal path resolves them through cached identity (design D2).
+        // removal path resolves them through cached identity.
         if (!seen.has(key)) removed.add(entry.abs);
       }
     }
@@ -1490,14 +1198,8 @@ export class ExtractionSession {
     return { modifiedFiles: modified, removedFiles: removed };
   }
 
-  /**
-   * Route one watcher-reported path (design D1/D2): a project-root member
-   * (lexical containment — existing local semantics preserved; consumer
-   * exclude patterns apply) or an admitted external member (identity
-   * resolution with symlink-escape rejection; package-relative excludes
-   * mirror the collection walk's filters — guardrail G1, one policy).
-   * Returns null for dropped paths.
-   */
+  /** Route one watcher path: a project-root member (consumer excludes apply)
+   *  or an admitted external member (symlink escapes rejected). */
   private classifyWatchPath(
     absPath: string,
     scan: { excludeMatcher: ExcludeMatcher; extensionsSet: ReadonlySet<string> }
@@ -1512,11 +1214,8 @@ export class ExtractionSession {
       }
       return { key: rel, owningRoot: null };
     }
-    // External paths gate on their OWNING ROOT's recorded extension set
-    // (widened for dist-only roots), so identity resolves before the
-    // extension check — a `.mjs` edit inside a dist-only kit must not be
-    // dropped by the narrower project set that would make the kit's files
-    // one-way removable.
+    // External paths gate on their owning root's extension set, so identity
+    // resolves first — the project set would drop a dist-only kit's edits.
     const resolved = this.sourceIdentity?.resolveSourceId(absPath);
     if (!resolved) return null;
     if (resolved.owningRoot === null) {
@@ -1538,10 +1237,6 @@ export class ExtractionSession {
     return { key: resolved.sourceKey, owningRoot: resolved.owningRoot };
   }
 
-  /**
-   * Run incremental pipeline with cache-aware file entries.
-   * Reuses system config from the last full pipeline run.
-   */
   private async runIncrementalPipeline(
     fileEntries: FileEntry[],
     pending: Array<[string, string]> = []
@@ -1549,10 +1244,6 @@ export class ExtractionSession {
     const bt: Record<string, number> = {};
     const pipelineStart = this.now();
 
-    // Replay the FULL package map resolved during the last full pipeline;
-    // the incremental pass never re-discovers external packages. Deriving it
-    // from externalSourceEntries would silently drop dist-resolved packages
-    // (those have no src/index.ts and live only in the package map).
     await this.analyzeAndEmit(
       fileEntries,
       this.lastPackageMap,
@@ -1563,33 +1254,8 @@ export class ExtractionSession {
     );
   }
 
-  /**
-   * Shared analysis + emit core for both pipelines — the single call site
-   * that routes every manifest through the shared `runProjectAnalysis`,
-   * reachable from both runFullPipeline (production) and
-   * runIncrementalPipeline (HMR).
-   *
-   * Owns diagnostic surfacing, CSS assembly + styles.css write guard,
-   * system-props module emit, and the timing log. Two decisions are derived
-   * separately, because neither belongs to the pipeline path: the engine's
-   * own `dev_mode` (reconciliation pruning) via `engineDevMode`, which an
-   * explicit `mode` option overrides, and superseded-asset deletion, which
-   * the driver's `staleAssetPruning` decides. For everything else the
-   * `devMode` flag is the ONLY behavioral fork:
-   *
-   * - `false` (production): computes bt.analysis + logs the extraction
-   *   report, and writes system-props.js UNCONDITIONALLY (no
-   *   lastSystemPropsHash guard).
-   * - `true` (HMR): skips the report log, and guards the system-props.js
-   *   write by lastSystemPropsHash.
-   *
-   * The disk artifacts land under the session directory in transaction
-   * order (design D1): manifest → analysis-inputs (Turbopack orchestration
-   * only) → styles.css → system-props → analysis-commit →
-   * replacements-epoch (last, only when moved). The analysis-status file walks starting → analyzing →
-   * committing → idle around the attempt, landing in `failed` (with the
-   * diagnostic) on any throw (design D3).
-   */
+  /** Shared analysis + emit core for both pipelines. `devMode` forks only
+   *  the report log and the system-props write guard. */
   private async analyzeAndEmit(
     fileEntries: FileEntry[],
     packageMap: Record<string, string>,
@@ -1610,30 +1276,20 @@ export class ExtractionSession {
         pipelineStart,
         pending
       );
-      // The attempt published a complete set — the monotonic readiness
-      // witness flips (at most once) BEFORE the terminal status write, so
-      // the first 'idle' after first emission already carries `ready`.
+      // The readiness witness flips BEFORE the terminal status write, so the
+      // first 'idle' after first emission already carries `ready`.
       this.firstEmissionComplete = true;
       this.writeAnalysisStatus('idle', []);
     } catch (err) {
-      // Failed analyses publish no partial generation (shared DSTC spec):
-      // nothing above advanced any artifact; the status carries the
-      // diagnostic for the loader's decision table.
+      // Failed analyses publish no partial generation: nothing above advanced
+      // an artifact, and the status carries the diagnostic.
       this.writeAnalysisStatus('failed', pending, String(err));
       throw err;
     }
   }
 
-  /**
-   * The engine's `dev_mode` flag (retain all components vs reconciliation
-   * pruning) is an EMISSION decision, so an explicit `mode` option wins over
-   * the pipeline path (core-options: `mode` "decides emitted bytes …
-   * engine devMode"). Without an explicit mode the historical per-pipeline
-   * default applies: full = production pruning, incremental = dev retention.
-   * A pinned-production watch must not flip to unpruned CSS on its first
-   * incremental republication, and a pinned-development full build must
-   * retain all components.
-   */
+  /** An explicit `mode` wins over the pipeline path: a pinned-production
+   *  watch must not emit unpruned CSS on its first incremental republish. */
   private engineDevMode(pipelineDefault: boolean): boolean {
     if (this.options.mode !== undefined) {
       return this.options.mode === 'development';
@@ -1680,19 +1336,10 @@ export class ExtractionSession {
       ],
     });
 
-    // Error-diagnostic escalation (extraction-diagnostics §Error diagnostics
-    // fail the build, design D8): the shared gate throws on any
-    // `kind: "error"` entry in EVERY mode, at the same accept seam as the
-    // vite plugin — before token contracts and before any stylesheet is
-    // assembled or written, so the outer analyzeAndEmit catch records the
-    // failed status with no partial generation.
+    // Throws on any error diagnostic in EVERY mode, before token contracts
+    // and before any stylesheet is assembled — no partial generation.
     assertNoErrorDiagnostics(result.manifest?.diagnostics);
 
-    // Cross-source token contracts (extraction-diagnostics): engine
-    // candidates × file ownership × source-token witness → the teaching
-    // error naming token, component, package, and the missing
-    // `createTheme().extend(...)`. Wiring and severity routing live in the
-    // shared pipeline gate (vite-plugin parity by construction).
     enforceExternalTokenContracts({
       diagnostics: result.manifest?.diagnostics,
       fileOwners: this.externalFileOwners,
@@ -1708,8 +1355,6 @@ export class ExtractionSession {
     bt.jsonParse = result.timings.parseMs;
 
     const manifest = result.manifest;
-    // Publication-count witness for drivers: the CLI's publish path was
-    // re-parsing the whole manifest JSON per cycle just to count keys.
     this.lastComponentCount = Object.keys(manifest?.components ?? {}).length;
 
     if (!devMode) {
@@ -1722,17 +1367,13 @@ export class ExtractionSession {
       }
     }
 
-    // asset() placeholder substitution (global-styles-system) happens before
-    // assembly so every consumer of the CSS (shared copy, disk artifact,
-    // Turbopack hydration) receives substituted urls.
-    // Superseded asset copies go on every full pass, and on an incremental
-    // one only where the driver asked for it.
+    // Substitution happens before assembly so every CSS consumer receives
+    // substituted urls. Pruning: every full pass, incremental on request.
     const globalCss = this.substituteAssetReferences(
       result.globalCss,
       !devMode || this.staleAssetPruning === 'every-cycle'
     );
 
-    // Assemble full stylesheet (canonical order via shared function)
     const { declaration, variables, body } = assembleStylesheet({
       layers: this.options.layers,
       variableCss: system.variableCss,
@@ -1741,10 +1382,8 @@ export class ExtractionSession {
       split: true,
     });
 
-    // Post-process the BODY only (spec: css-post-processing) — the @layer
-    // declaration and variable CSS pass through untouched. Every consumer
-    // (processAssets shared copy, disk artifact, Turbopack) receives the
-    // processed bytes.
+    // Post-process the BODY only — the @layer declaration and variable CSS
+    // pass through untouched.
     if (this.lcssTargets === null) {
       this.lcssTargets = resolveLightningTargets(
         this.options.targets,
@@ -1765,11 +1404,8 @@ export class ExtractionSession {
       .filter(Boolean)
       .join('\n');
 
-    // Store CSS in shared variable (authoritative source for processAssets)
     setSharedCss(fullCss);
 
-    // Build system-props module for runtime resolution via the shared
-    // generator (transforms resolve at extraction time in Rust).
     const systemPropsContent = buildSystemPropsModule({
       systemPropMapJson: JSON.stringify(manifest?.system_prop_map ?? {}),
       groupRegistryJson: system.groupRegistryJson,
@@ -1778,31 +1414,20 @@ export class ExtractionSession {
 
     setSharedSystemProps(systemPropsContent);
 
-    // Store manifest for loader
     setManifestJson(result.manifestJson);
 
-    // Publish the analyzed-hash map with the manifest (one generation, one
-    // publication): the exact bytes this analysis saw, keyed by relPath —
-    // the loader's mismatch witness for ANIMUS_ANALYSIS_CATCHING_UP
-    // (design D4).
+    // The analyzed-hash map publishes with the manifest — one generation,
+    // one publication; it is the loader's stale-input witness.
     setAnalyzedHashes(
       new Map(fileEntries.map((entry) => [entry.path, entry.hash]))
     );
 
-    // ── Disk transaction (design D1) ────────────────────────────────────
-    // Payloads first (manifest → inputs → styles, plus system-props), then
-    // the analysis-commit carrying content hashes of the disk bytes, then
-    // the replacement epoch LAST and only when its value moved — a reader
-    // awakened by the epoch can never observe an uncommitted transaction,
-    // and a throw anywhere above leaves the previous commit current.
+    // Payloads first, then the commit, then the epoch LAST and only when its
+    // value moved — an epoch-woken reader never sees an uncommitted write.
     this.writeAnalysisStatus('committing', pending);
 
-    // The served system-props module rides as the epoch's served-dependency
-    // witness: webpack's restored modules import the building session's
-    // system-props.js by absolute path, so content changes the plans can't
-    // see (an offline group-registry edit) must still move the epoch — a
-    // preserved epoch would keep those restored modules bound to the dead
-    // session's stale artifact.
+    // The served system-props module rides in the epoch: restored modules
+    // import it by absolute path, so offline content changes must move it.
     const epoch = hashReplacementPlans(
       snapshotFilePlans(manifest),
       systemPropsContent
@@ -1820,14 +1445,8 @@ export class ExtractionSession {
       generation,
       envelopeJsonArtifact
     );
-    // Hydration artifact for isolated Turbopack loader workers — the exact
-    // analyze-time input set, replayable via buildAnalyzeProjectArgs.
-    // Serialized + written under Turbopack orchestration ONLY (spec:
-    // next-turbopack-integration, "Webpack mode skips the hydration
-    // corpus" — the webpack loader shares this process and reads the
-    // manifest from memory). `analyzedHashes` rides top-level (covered by
-    // the commit's inputsHash) so loader workers read the per-file hash map
-    // without parsing the whole filesJson source corpus.
+    // Hydration artifact for isolated loader workers — the exact analyze-time
+    // input set. `analyzedHashes` rides top-level so workers skip the corpus.
     if (this.persistAnalysisInputs) {
       this.publishPayloadArtifact(
         'inputs',
@@ -1855,14 +1474,12 @@ export class ExtractionSession {
     );
 
     if (devMode) {
-      // HMR: skip the disk write when byte-identical to the last one written.
       const systemPropsHash = contentHash(systemPropsContent);
       if (systemPropsHash !== this.lastSystemPropsHash) {
         this.writeSessionArtifact(SYSTEM_PROPS_ARTIFACT, systemPropsContent);
         this.lastSystemPropsHash = systemPropsHash;
       }
     } else {
-      // Production: write unconditionally (no lastSystemPropsHash guard).
       this.writeSessionArtifact(SYSTEM_PROPS_ARTIFACT, systemPropsContent);
     }
 
@@ -1882,8 +1499,8 @@ export class ExtractionSession {
     }
   }
 
-  /** Write the session's analysis-status artifact (design D3). Terminal
-   *  states (idle/failed) close the attempt. */
+  /** Write the session's analysis-status artifact. Terminal states
+   *  (idle/failed) close the attempt. */
   private writeAnalysisStatus(
     state: AnalysisStatus['state'],
     pending: Array<[string, string]>,
@@ -1897,10 +1514,8 @@ export class ExtractionSession {
       pending,
       deadlineAt: Date.now() + this.debounceCeilingMs + STATUS_WATCHDOG_MS,
     };
-    // An ABSENT `diagnostic` key means this attempt recorded no reason —
-    // distinct from a present-but-empty one, which a loader would surface as
-    // a blank failure message. Assigned here rather than spread so the
-    // artifact's field order stays diagnostic-then-ready.
+    // An ABSENT `diagnostic` differs from an empty one, which a loader would
+    // surface as a blank failure message.
     if (diagnostic !== undefined) status.diagnostic = diagnostic;
     status.ready = this.firstEmissionComplete;
     this.writeSessionArtifact(ANALYSIS_STATUS_ARTIFACT, JSON.stringify(status));
@@ -1909,12 +1524,8 @@ export class ExtractionSession {
     }
   }
 
-  /**
-   * Orchestrator seam (Turbopack watcher): record watch events observed
-   * during the debounce window so a loader running ahead of the analysis
-   * has positive evidence to wait on (design D3 'debouncing'). Paths are
-   * filtered by the scan config and hashed at observation time.
-   */
+  /** Record watch events observed during the debounce window so a loader
+   *  running ahead of the analysis has evidence to wait on. */
   noteDebouncedWatchEvents(absPaths: Iterable<string>): void {
     if (!this.rootDir) return;
     const additions = this.pendingFromBatch({
@@ -1929,15 +1540,11 @@ export class ExtractionSession {
     this.debounceStatusWriteScheduled = true;
     queueMicrotask(() => {
       this.debounceStatusWriteScheduled = false;
-      // The burst may have been consumed already (analyzeAndEmit clears
-      // debouncePending and writes its own states) — never clobber a later
-      // state with a stale 'debouncing'.
+      // The burst may already be consumed — never clobber a later state with
+      // a stale 'debouncing'.
       if (this.debouncePending.size === 0) return;
-      // The microtask runs OUTSIDE the fs.watch handler's try/catch (the
-      // caller's guard ended when this tick was scheduled), and this can be
-      // the first-ever write into the session dir — EMFILE/ENOSPC/EACCES
-      // here must not escape a bare microtask and kill the dev server. A
-      // missed status write only lengthens a loader's catch-up wait.
+      // This microtask runs outside the caller's try/catch: an fs error must
+      // not escape and kill the dev server; a missed write only delays loaders.
       try {
         this.writeAnalysisStatus('debouncing', [
           ...this.debouncePending.entries(),
@@ -1951,14 +1558,8 @@ export class ExtractionSession {
   /** One pending microtask flushes a burst of debounce observations. */
   private debounceStatusWriteScheduled = false;
 
-  /**
-   * Write one payload artifact into the session directory, enveloped with
-   * `{sessionId, generation, replacementEpoch, payloadHash}` and rewritten
-   * only when the PAYLOAD bytes changed (byte-identical re-analyses leave
-   * disk untouched — spec: "Unchanged manifest is not rewritten"). The
-   * recorded diskHash (hash of the enveloped bytes) feeds the
-   * analysis-commit.
-   */
+  /** Write one enveloped payload artifact, rewritten only when the PAYLOAD
+   *  bytes changed; the recorded diskHash feeds the analysis-commit. */
   private publishPayloadArtifact(
     key: 'manifest' | 'inputs' | 'styles',
     name: string,
@@ -2010,12 +1611,8 @@ export class ExtractionSession {
   /** Last analysis-commit persisted in this session's directory, or null. */
   private seedCommitFromDisk(): AnalysisCommit | null {
     try {
-      // SAFETY: `writeAnalysisCommit` below is this artifact's only writer and
-      // serializes an `AnalysisCommit`. The three fields any reader acts on —
-      // schema, owning session, generation — are re-decided on the next line
-      // rather than trusted, because a torn write or a tree from a different
-      // animus version can leave anything here; a record failing them seeds
-      // nothing and the session starts its generation from scratch.
+      // SAFETY: the only writer of this artifact serializes an
+      // `AnalysisCommit`; the fields any reader acts on are re-decided below.
       const parsed = JSON.parse(
         readFileSync(analysisCommitPath(this.sessionDir), 'utf-8')
       ) as AnalysisCommit;
@@ -2029,19 +1626,10 @@ export class ExtractionSession {
     }
   }
 
-  /**
-   * Publish the analysis-commit — the transaction identity (design D1).
-   * Written AFTER every payload and BEFORE the epoch; skipped entirely when
-   * the payload set (disk hashes) and epoch are unchanged, so a no-op
-   * re-analysis neither re-keys loader-worker hydration nor burns a
-   * generation.
-   */
+  /** Publish the analysis-commit: written after every payload and before the
+   *  epoch, skipped when the payload hashes and epoch are unchanged. */
   private publishAnalysisCommit(epoch: string, generation: number): void {
     const manifestHash = this.artifactRecords.manifest?.diskHash ?? '';
-    // Webpack mode persists no hydration corpus, so its commit carries no
-    // inputsHash field at all (spec: "Webpack mode skips the hydration
-    // corpus"; the loader's artifact read only verifies hashes for the
-    // artifacts it reads).
     const inputsHash = this.persistAnalysisInputs
       ? (this.artifactRecords.inputs?.diskHash ?? '')
       : undefined;
@@ -2064,34 +1652,18 @@ export class ExtractionSession {
       manifestHash,
       stylesHash,
     };
-    // An ABSENT `inputsHash` key is what marks a webpack-mode commit: it
-    // persisted no hydration corpus, so there is no artifact for a reader to
-    // verify. A present-but-empty hash would instead claim an empty corpus.
+    // An ABSENT `inputsHash` marks a commit with no hydration corpus; a
+    // present-but-empty hash would instead claim an empty one.
     if (inputsHash !== undefined) commit.inputsHash = inputsHash;
     this.writeSessionArtifact(ANALYSIS_COMMIT_ARTIFACT, JSON.stringify(commit));
     this.lastCommit = commit;
   }
 
-  /**
-   * Publish the canonical replacement epoch: maintain the session-scoped
-   * disk witness `{schema, sessionId, epoch}`, rewritten ONLY when the
-   * epoch VALUE changes so style-only analyses and same-session restarts
-   * leave bytes and mtime untouched, then expose the value through the
-   * singleton for the plugin's needBuild fan-out and the loader's catch-up
-   * re-check. Every VALUE move also reconciles sibling sessions' epoch
-   * artifacts (below) — the webpack cold-cache validity witness.
-   */
+  /** Maintain the session's epoch witness, rewritten ONLY when the value
+   *  changes, then expose it through the singleton. */
   private publishReplacementEpoch(epoch: string): void {
-    // Self-heal on every publish: probe DISK, not just the memo. A sibling
-    // session's reconciliation (a `next build` beside a live dev server)
-    // deletes this session's artifact whenever the two disagree; with only
-    // the memo guarding, the file would stay missing until the next value
-    // move while loaders keep registering a dependency on the absent path —
-    // a permanently-satisfiable witness (webpack's checkFile passes when
-    // current and snapshot entries are both null), defeating the offline-
-    // change invalidation this artifact exists to provide. Same-value
-    // publishes over an intact artifact still leave bytes and mtime
-    // untouched.
+    // Probe DISK, not just the memo: a sibling's reconciliation can delete
+    // this artifact, and an absent witness always satisfies webpack's check.
     const onDisk = this.diskEpochValue();
     if (this.lastEpochValue === null) {
       this.lastEpochValue = onDisk;
@@ -2109,26 +1681,6 @@ export class ExtractionSession {
     setReplacementEpoch(epoch);
   }
 
-  /**
-   * Sibling epoch reconciliation — the cross-session half of the webpack
-   * persistent-cache witness (spec: dev-served-transform-coherence,
-   * "Offline change invalidates restored modules"). Restored-module
-   * snapshots reference the epoch artifact of the session that BUILT them;
-   * with session-scoped trees that file would otherwise sit untouched
-   * forever, keeping stale snapshots valid. Whenever this session's epoch
-   * value moves, delete every sibling epoch artifact that disagrees (their
-   * snapshots must invalidate — restore-on-demand then rebuilds from the
-   * current generation) and leave agreeing siblings byte-untouched (warm
-   * restores stay valid). Deleting a stale artifact is pruning, not a
-   * foreign-session write; races with concurrent sessions are tolerated
-   * (S14).
-   *
-   * A sibling that is still running is exempt: its snapshots are valid for
-   * its own epoch, so deleting the artifact reconciles nothing and costs
-   * that session a full rebuild (`animus build --mode production` beside a
-   * live dev server). Liveness comes from the sibling's own claim record
-   * through the shared policy (`checkLockLiveness`), never a second one.
-   */
   /** sessions-root listing memo, keyed by the root dir's mtime — a new or
    *  pruned sibling DIRECTORY moves it; agreeing siblings stay listed. */
   private siblingListing: { mtimeMs: number; entries: string[] } | null = null;
@@ -2149,18 +1701,13 @@ export class ExtractionSession {
     }
     for (const entry of entries) {
       if (entry === this.sessionId) continue;
-      // No "already reconciled" memo: a sibling REWRITES its own artifact
-      // whenever its publish finds it missing (the self-heal above), so
-      // only the sibling's current bytes can answer whether it still
-      // disagrees. The read below is that single witness.
+      // No "already reconciled" memo: a sibling rewrites its artifact
+      // whenever its own publish finds it missing, so only its bytes answer.
       const siblingDir = join(rootPath, entry);
       const siblingEpochPath = join(siblingDir, REPLACEMENT_EPOCH_ARTIFACT);
       try {
-        // SAFETY: sibling sessions write this artifact through the same
-        // `publishReplacementEpoch` below, whose payload is
-        // `{ schema, sessionId, epoch }`. `epoch` is optional here because a
-        // foreign or older artifact may carry none, and the comparison below
-        // treats a missing epoch as disagreement — the fail-safe direction.
+        // SAFETY: siblings write this artifact through the same publish path;
+        // a missing epoch counts as disagreement, the fail-safe direction.
         const parsed = JSON.parse(readFileSync(siblingEpochPath, 'utf-8')) as {
           epoch?: string;
         };
@@ -2168,11 +1715,8 @@ export class ExtractionSession {
         // later epoch value can turn them stale.
         if (parsed.epoch === epoch) continue;
       } catch (err) {
-        // SAFETY: `err` is `readFileSync`/`JSON.parse`'s throw. `?.code` reads
-        // through whatever it is (a `SyntaxError` simply has none), and the
-        // ONLY code acted on is `ENOENT` — every other value, missing or not,
-        // falls through to the fail-safe deletion below.
-        // Absent artifact: nothing to invalidate this round.
+        // SAFETY: `err` is the throw of `readFileSync`/`JSON.parse`; `?.code`
+        // reads through whatever it is and only `ENOENT` is acted on.
         if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') continue;
         // Unreadable/corrupt sibling artifact: fall through to deletion —
         // fail-safe invalidation beats a stale-but-valid snapshot.
@@ -2194,25 +1738,8 @@ export class ExtractionSession {
     }
   }
 
-  /**
-   * The pid of `siblingDir`'s live owner, or null when nothing proves one.
-   * Reads the shared claim record through the shared liveness policy
-   * (published-set) — the same two the CLI's advisory lock is judged by — so
-   * there is one answer to "is that process still there", not two.
-   *
-   * Only a decoded, live claim exempts a sibling from pruning: a missing
-   * record, an undecodable one, and an unreadable directory all mean no
-   * evidence anyone is publishing into that tree, so the fail-safe
-   * invalidation stands. That is the opposite default from
-   * `cliWriterHoldsLock` below, deliberately — keeping a dead sibling's
-   * epoch artifact keeps stale restored modules valid, while keeping the
-   * CLI's payloads costs nothing.
-   *
-   * A claim naming THIS process is never a live other publisher, whatever
-   * its heartbeat says: publication is process-exclusive
-   * (`claimExclusiveSessionOwner`), so a sibling directory carrying our own
-   * pid is a tree this process abandoned without releasing.
-   */
+  /** The pid of `siblingDir`'s live owner, or null when nothing proves one.
+   *  Our own pid is never one — publication is process-exclusive. */
   private liveSiblingOwnerPid(siblingDir: string): number | null {
     let claim: ReturnType<typeof readCliLockRecord>;
     try {
@@ -2230,11 +1757,8 @@ export class ExtractionSession {
    *  absent, unreadable, or not the expected schema. */
   private diskEpochValue(): string | null {
     try {
-      // SAFETY: `publishReplacementEpoch` below is this artifact's only
-      // writer and serializes `{ schema: 1, sessionId, epoch }`. Both fields
-      // are optional here and both are re-decided on the next line, because a
-      // torn write or an artifact from another animus version can carry
-      // anything — and this value gates whether the epoch is republished.
+      // SAFETY: this artifact's only writer serializes
+      // `{ schema: 1, sessionId, epoch }`; both fields are re-decided below.
       const parsed = JSON.parse(
         readFileSync(replacementEpochPath(this.sessionDir), 'utf-8')
       ) as { schema?: number; epoch?: string };
@@ -2246,50 +1770,29 @@ export class ExtractionSession {
     }
   }
 
-  /** True when the flat `.animus/` advisory lock claims the tree — a CLI
-   *  invocation (build mid-publish, or a whole watch run) owns it right
-   *  now, and any instantaneous inconsistency is its in-flight write, not
-   *  debris. A lock that EXISTS but cannot be decoded claims the tree too:
-   *  this gate guards deletion, and an unreadable claim is unknown, never
-   *  absent. */
+  /** True when the flat `.animus/` advisory lock claims the tree. A lock that
+   *  exists but cannot be decoded claims it too — unknown is never absent. */
   private cliWriterHoldsLock(animusDir: string): boolean {
-    // Shape and liveness are the writer-side contract (published-set) — this
-    // gate must not hand-roll a second reading of the artifact it shares.
+    // Shape and liveness are the writer-side contract — this gate must not
+    // hand-roll a second reading of the artifact it shares.
     const lock = readCliLockRecord(animusDir);
     if (lock.kind === 'none') return false;
     return lock.kind === 'indeterminate' || checkLockLiveness(lock.record).live;
   }
 
-  /** Session-start hygiene (design D2): delete legacy flat artifacts
-   *  (unreachable by session-scoped loaders; the standalone CLI is the one
-   *  remaining writer of flat payload names, and its live output is
-   *  fenced off below) and prune sibling session directories older than
-   *  the retention window — never the own dir, tolerating races with
-   *  concurrently-pruning sessions (S14). */
+  /** Delete legacy flat artifacts and prune sibling session directories past
+   *  the retention window — never this session's own dir. */
   private runSessionStartHygiene(): void {
     if (this.sessionStartHygieneDone) return;
     this.sessionStartHygieneDone = true;
     const animusDir = join(this.rootDir!, ANIMUS_ARTIFACT_DIR);
-    // Confinement (openspec: standalone-extraction-cli D3): a flat set
-    // whose commit.json VERIFIES against its payload bytes is the CLI's
-    // PUBLISHED artifact contract — deliberately written and
-    // consumer-consumed; a session sharing the tree must not destroy it.
-    // A live CLI lock protects the tree unconditionally (a mid-publish
-    // instant is legitimately inconsistent). Anything else claiming the
-    // record's name is debris — an aborted publish, or a marker orphaned
-    // by manual payload edits — and both the flat payloads AND the record
-    // are cleaned, so one stale marker can never disable hygiene forever.
-    // The verification is the WRITER'S OWN check (published-set.ts) — the
-    // CLI writes the record LAST, so a torn or aborted publish cannot
-    // verify, and an inconsistent set is debris whose cleanup (including
-    // the record itself) re-arms hygiene instead of one stale marker
-    // disabling it forever.
+    // A flat set whose commit record VERIFIES is the CLI's published output,
+    // and a live CLI lock protects the tree; anything else is debris.
     const isCliPublishedSet =
       this.cliWriterHoldsLock(animusDir) ||
       verifyCommitRecord(animusDir).length === 0;
-    // The skip covers ONLY the three names the CLI contract publishes;
-    // legacy-only session artifacts (epoch, commit, status, inputs) are
-    // never CLI output and stay cleaned regardless.
+    // The skip covers ONLY the names the CLI publishes; legacy session
+    // artifacts are never CLI output and stay cleaned regardless.
     const cliPublishedNames: readonly string[] = [
       MANIFEST_ARTIFACT,
       STYLES_ARTIFACT,
@@ -2322,10 +1825,8 @@ export class ExtractionSession {
       const dir = join(sessionsRootDir(this.rootDir!), entry);
       try {
         if (statSync(dir).mtimeMs >= cutoff) continue;
-        // Age is evidence of abandonment, not proof: a dev server up longer
-        // than the window without publishing has an old directory and a live
-        // owner, and this would delete its whole tree. The claim record is
-        // the proof, read through the one liveness policy both prunes share.
+        // Age is evidence of abandonment, not proof: a quiet dev server has
+        // an old directory and a live owner. The claim record is the proof.
         if (this.liveSiblingOwnerPid(dir) !== null) continue;
         rmSync(dir, { recursive: true, force: true });
       } catch {
@@ -2334,11 +1835,8 @@ export class ExtractionSession {
     }
   }
 
-  /** Ensure the session directory exists and write one artifact into it.
-   *  Write-then-rename so cross-process readers (Turbopack loader workers)
-   *  can never observe a torn half-written file. The tmp name carries the
-   *  pid — Next dev evaluates the config in more than one process, and two
-   *  sessions writing the same artifact must not race on one tmp path. */
+  /** Write one artifact write-then-rename, so a cross-process reader never
+   *  sees a torn file; the tmp name carries the pid to keep writers apart. */
   private writeSessionArtifact(name: string, content: string): void {
     const dir = this.sessionDir;
     // Unconditional: mkdirSync(recursive) is a no-op when the dir exists.
@@ -2349,18 +1847,8 @@ export class ExtractionSession {
     this.onArtifactWrite?.(name, content);
   }
 
-  /**
-   * asset() placeholder substitution (global-styles-system): resolve each
-   * referenced specifier through Node resolution, copy the bytes into the
-   * session directory's `assets/` under a content-hashed name, and
-   * substitute a RELATIVE url — relative to the session-scoped styles.css,
-   * which sits beside `assets/`, so the emitted `./assets/<file>` form is
-   * unchanged. The stylesheet is processed by Next's own CSS pipeline
-   * (webpack and Turbopack alike), which applies its native asset handling
-   * — publicPath and output hashing — to relative url() references.
-   * Unsubstitutable specifiers warn and emit literally in non-strict mode,
-   * fail the build under `strict: true`.
-   */
+  /** Copy each asset() specifier's bytes into `assets/` under a
+   *  content-hashed name and substitute a url relative to styles.css. */
   private substituteAssetReferences(
     globalCss: string,
     pruneSuperseded: boolean
@@ -2373,10 +1861,8 @@ export class ExtractionSession {
 
     const urlBySpecifier = new Map<string, string>();
     for (const specifier of specifiers) {
-      // This runs per HMR rebuild; the resolve/read/hash/copy result is
-      // stable for the lifetime of a loaded system, so a memo (cleared on
-      // system load) reduces steady-state passes to one existsSync each.
-      // A missing copy (concurrent prune) falls through and self-heals.
+      // The memo reduces a steady-state pass to one existsSync; a missing
+      // copy (concurrent prune) falls through and self-heals.
       const cached = this.assetCopyCache.get(specifier);
       if (cached && existsSync(join(assetsDir, cached.fileName))) {
         try {
@@ -2428,10 +1914,8 @@ export class ExtractionSession {
       });
     }
 
-    // Content-hashed copies are never overwritten, so superseded revisions
-    // (and copies of assets no longer referenced at all) accumulate without
-    // this sync — runs AFTER the writes so the current set is always on
-    // disk, including when no asset() remains and everything is stale.
+    // Runs AFTER the writes so the current set is always on disk: copies are
+    // content-hashed and never overwritten, so superseded ones accumulate.
     if (pruneSuperseded) pruneStaleAssets(assetsDir, expected);
 
     return substituteAssetPlaceholders(globalCss, urlBySpecifier);
@@ -2442,12 +1926,8 @@ export class ExtractionSession {
     for (const key of toWatchKeys(path)) this.assetDependencyKeys.add(key);
   }
 
-  /**
-   * Resolve an asset specifier to an absolute file via the shared pipeline
-   * resolver (host aliases → Node resolution → package root), with one
-   * session-local last resort: an already-discovered source entry's package
-   * root (dist-less workspace kits the shared resolver cannot see).
-   */
+  /** Resolve an asset specifier through the shared resolver, with one
+   *  last resort: a discovered source entry's package root. */
   private resolveAssetSpecifier(specifier: string): string | null {
     const resolved = resolveAssetFile(
       specifier,
@@ -2476,15 +1956,8 @@ export class ExtractionSession {
   }
 }
 
-/**
- * Sync `.animus/assets/` to the current build's content-hashed file set:
- * anything else in the directory is a superseded revision (the copies are
- * content-addressed and never overwritten) or the leftover of an asset()
- * reference that no longer exists. Failures are tolerated per entry — Next
- * dev evaluates the config in more than one process, and a concurrent
- * session may have removed (or be about to rewrite) the same file; every
- * pass rewrites whatever of its own set is missing, so races self-heal.
- */
+/** Sync `assets/` to the current build's file set; per-entry failures are
+ *  tolerated — a concurrent session may have removed the same file. */
 export function pruneStaleAssets(
   assetsDir: string,
   expected: ReadonlySet<string>

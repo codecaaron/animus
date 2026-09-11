@@ -1,8 +1,6 @@
-// Decorative
 export { FireLine } from './decorative/FireLine';
 export { HorizontalMark } from './decorative/HorizontalMark';
 export { ReadingBarTrack } from './decorative/ReadingBarTrack';
-// Docs
 export { APIBlock } from './docs/APIBlock';
 export { BeforeAfter } from './docs/BeforeAfter';
 export { BundleBar } from './docs/BundleBar';
@@ -25,7 +23,6 @@ export { Sidebar } from './docs/Sidebar';
 export { TabGroup } from './docs/TabGroup';
 export { TokenBadge } from './docs/TokenBadge';
 export { TypeSignature } from './docs/TypeSignature';
-// Layout
 export { CascadeLayer } from './layout/CascadeLayer';
 export { Drawer, DrawerSlots } from './layout/Drawer';
 export { NavBar, NavDivider, NavItem } from './layout/NavBar';
@@ -33,13 +30,11 @@ export { Row } from './layout/Row';
 export { Scene } from './layout/Scene';
 export { SkipLink } from './layout/SkipLink';
 export { Stack } from './layout/Stack';
-// Surfaces
 export { Card } from './surfaces/Card';
 export { RevealBlock } from './surfaces/RevealBlock';
 export { SyntaxBlock } from './surfaces/SyntaxBlock';
 export { TableContainer, Td, Th } from './surfaces/Table';
 export { Tooltip } from './surfaces/Tooltip';
-// Typography
 export { Display } from './typography/Display';
 export { InlineCode } from './typography/InlineCode';
 export { Label } from './typography/Label';

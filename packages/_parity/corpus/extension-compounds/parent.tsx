@@ -1,7 +1,5 @@
-// ANI-008 witness (parent): a terminal that OWNS compounds. The extension
-// chain in child.tsx inherits these; merged compound-config class names are
-// renumbered against the extending component's class over the flattened
-// (parent-first) order, so config `--compound-N` always names emitted rule N.
+// child.tsx extends these compounds: merged compound class names renumber over
+// the flattened parent-first order, so `--compound-N` names emitted rule N.
 import { ds } from '../test-system';
 
 export const Base = ds

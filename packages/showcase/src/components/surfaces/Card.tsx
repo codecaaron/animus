@@ -2,13 +2,6 @@ import { compose } from '@animus-ui/system';
 
 import { ds } from '../../ds';
 
-// ─── Slot Definitions ───────────────────────────────────────────
-//
-// Each slot is an independent Animus component with its own
-// cascade layers. The shared `density` variant exists on every
-// slot with matching value sets — compose() enforces this at
-// the type level.
-
 export const CardRoot = ds
   .styles({
     display: 'flex',
@@ -100,8 +93,6 @@ export const CardFooter = ds
     defaultVariant: 'comfortable',
   })
   .asElement('footer');
-
-// ─── Composed Family ────────────────────────────────────────────
 
 export const Card = compose(
   {

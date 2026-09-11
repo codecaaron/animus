@@ -1,8 +1,6 @@
 /**
- * The namespace every virtual module this plugin owns lives under. Exported so
- * the `transform` guard that keeps those modules out of source-file handling
- * matches on the same string the ids are built from — a rename of the
- * namespace cannot leave the guard behind.
+ * The namespace every virtual module here lives under; the `transform` guard
+ * matches on this same string so a rename cannot strand it.
  */
 export const VIRTUAL_PREFIX = 'virtual:animus/';
 
@@ -16,25 +14,14 @@ export const VIRTUAL_BRIDGE_ID = `${VIRTUAL_PREFIX}hmr-bridge.js`;
 export const RESOLVED_BRIDGE_ID = `\0${VIRTUAL_BRIDGE_ID}`;
 
 /**
- * Browser-addressable URL for the bridge, used as the `src` of the dev
- * `<script type="module">` (see index-html.ts). THE explanation of the `/@id/`
- * convention lives here; everything else points at it.
- *
- * Vite reserves `/@id/` for module ids that are not file paths. Its transform
- * middleware normalizes such a URL before serving it (`unwrapId`): strip the
- * prefix, then decode the `__x00__` placeholder back to a NUL byte. The
- * UNPREFIXED specifier is what travels here — `resolveVirtualId` is the hook
- * that answers it, and it answers with the `\0` form. (Vite's own `wrapId`
- * encodes an already-`\0`-prefixed id as `__x00__`; that form resolves too, but
- * it leans on the placeholder convention rather than on this plugin's own
- * `resolveId` contract.)
+ * Vite reserves `/@id/` for module ids that are not file paths and strips the
+ * prefix before `resolveId`, so the unprefixed specifier travels here.
  */
 export const BRIDGE_SCRIPT_SRC = `/@id/${VIRTUAL_BRIDGE_ID}`;
 
 export const VIRTUAL_SYSTEM_PROPS_ID = `${VIRTUAL_PREFIX}system-props`;
 export const RESOLVED_SYSTEM_PROPS_ID = `\0${VIRTUAL_SYSTEM_PROPS_ID}`;
 
-// The exclusion default set is owned by the shared pipeline core
-// (shared-driver-config): one authority, glob-aware merge semantics via
-// `createExcludeMatcher`. Re-exported here for any legacy importer.
+// The default exclusion set is owned by the shared pipeline core; this is a
+// re-export, not a second authority.
 export { DEFAULT_EXCLUDE } from '@animus-ui/extract/pipeline';

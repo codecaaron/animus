@@ -6,12 +6,6 @@ import type { DependencyId, EvidenceId } from './identity';
 import type { Predicate } from './predicate';
 import type { AbstractValue } from './value';
 
-/**
- * A discharged piece of knowledge, valid until one of its dependencies
- * changes. Evidence carries its own model version and dependency fingerprint
- * so a stale cache entry can never masquerade as a current one after the
- * semantics or the inputs move.
- */
 export interface RenderEvidence<T = unknown> {
   id: EvidenceId;
   subject: RenderSubject;
@@ -52,12 +46,6 @@ export class EvidenceLedger {
     );
   }
 
-  /**
-   * Drop every piece of evidence that rests on a changed dependency and return
-   * exactly those. Invalidation is by intersection, never by wholesale
-   * clearing: the point of the dependency provider is that an edit to one
-   * source file cannot silently expire proofs it does not touch.
-   */
   invalidate(changed: ReadonlySet<DependencyId>): RenderEvidence[] {
     const removed: RenderEvidence[] = [];
     for (const evidence of this.all()) {
@@ -69,11 +57,6 @@ export class EvidenceLedger {
     return removed;
   }
 
-  /**
-   * The content address of the whole valid set — this is what a `RenderWorld`
-   * pins as `evidenceRevision`, so assimilating or invalidating evidence moves
-   * every dependent world (and probe state) to a new identity.
-   */
   revision(): string {
     return stableHash(Array.from(this.#evidence.keys()).sort());
   }

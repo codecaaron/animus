@@ -21,11 +21,8 @@ export async function findBuildAssets(
     try {
       entries = await readdir(current, { withFileTypes: true });
     } catch (err) {
-      // SAFETY: the only awaited call in this `try` is `readdir`, and
-      // node:fs/promises rejects exclusively with a SystemError — an `Error`
-      // carrying the `errno`/`code` pair this narrowing reads. Nothing else in
-      // the block can throw, so `err` has no other possible producer. Any
-      // non-ENOENT code is rethrown unchanged.
+      // SAFETY: `readdir` is the only awaited call in this `try`, and
+      // node:fs/promises rejects only with an `Error` carrying `errno`/`code`.
       const e = err as NodeJS.ErrnoException;
       if (e.code === 'ENOENT') return;
       throw err;
@@ -69,10 +66,8 @@ export async function readAllConcat(paths: string[]): Promise<string> {
   return contents.join('\n');
 }
 
-// Require at least one non-empty CSS file beneath `root` and return only that
-// root's concatenated CSS. Used to assert semantic CSS beneath a Wrangler-
-// served client asset root (dist/client, build/client) independently from
-// server output — the served client is what a browser actually receives.
+// Checks a served-client asset root (dist/client, build/client) on its own:
+// the client output is what a browser receives, the server output is not.
 export async function readRequiredCss(
   root: string,
   label: string

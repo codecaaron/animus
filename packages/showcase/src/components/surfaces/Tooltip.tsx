@@ -5,13 +5,6 @@ import { composeWithContext } from '@animus-ui/system/compose-with-context';
 
 import { ds } from '../../ds';
 
-// ─── Slot Definitions ───────────────────────────────────────────
-//
-// Minimal tooltip demonstrating context: true for portal-crossing
-// shared variant propagation. Content renders via createPortal
-// into document.body — CSS descendant selectors can't reach it,
-// but React context carries shared variant props through.
-
 const TooltipRoot = ds
   .styles({
     display: 'inline-flex',
@@ -49,23 +42,13 @@ const TooltipContent = ds
   })
   .asElement('div');
 
-// ─── Composed Family ────────────────────────────────────────────
-//
-// context: true — Content renders through a portal (outside Root's
-// DOM subtree), so CSS descendant selectors can't propagate shared
-// variants. React context carries the shared `size` prop through
-// the portal boundary.
+// Content renders through a portal, outside Root's subtree, so CSS descendant
+// selectors cannot carry the shared `size` — React context does.
 
 const TooltipFamily = composeWithContext(
   { Root: TooltipRoot, Content: TooltipContent },
   { shared: { size: true }, name: 'Tooltip' }
 );
-
-// ─── Behavioral Wrapper ────────────────────────────────────────
-//
-// Animus handles styling. This wrapper adds tooltip behavior
-// (hover show/hide, positioning, portal rendering). In a real app
-// you'd use Radix/Ark — this is a minimal standalone demo.
 
 interface TooltipProps {
   children: ReactNode;

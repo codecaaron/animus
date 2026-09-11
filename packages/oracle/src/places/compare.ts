@@ -3,20 +3,6 @@ import { createPlaceAnalysis } from './analysis';
 import type { AxisBinding, Place } from './model';
 import type { Snapshot } from './snapshot';
 
-/**
- * Cross-build identity, MVP-deep (PLACES.md §6): relate two snapshots by
- * program hash, component id, and place occurrence. A place persists when
- * the same component's nth invocation in the same file exists on both sides;
- * axis-binding drift between the two generations is reported per axis. Files
- * the correspondence guard refuses on either side are excluded from every
- * place claim and listed as refusals — no claim beats a wrong one.
- *
- * This is deliberately not "complete cross-build identity": a moved
- * invocation reads as removed+added, and renamed files break the thread.
- * Occurrence order (not the global element ordinal) keys the match so that
- * unrelated edits elsewhere in the file do not shear every identity.
- */
-
 export interface BindingChange {
   axis: string;
   before?: AxisBinding['state'];
@@ -26,7 +12,6 @@ export interface BindingChange {
 export interface ComparedPlace {
   component: string;
   file: string;
-  /** Index among this component's invocations in this file, source order. */
   occurrence: number;
   status: 'persisted' | 'added' | 'removed';
   bindingChanges?: readonly BindingChange[];
@@ -40,7 +25,6 @@ export interface CompareRefusal {
 }
 
 export interface SnapshotComparison {
-  /** Same program hash — the two artifact sets describe one generation. */
   identical: boolean;
   generations: {
     before: { hash: string; label?: string };
@@ -57,10 +41,6 @@ export interface SnapshotComparison {
 
 type Generation = SnapshotComparison['generations']['before'];
 
-/**
- * An unlabelled build has no `label` key at all, matching the host's own
- * program envelope — the comparison never invents one.
- */
 const generationOf = (snapshot: Snapshot): Generation => {
   const generation: Generation = { hash: snapshot.host.program.hash };
   if (snapshot.host.program.label !== undefined) {
@@ -86,9 +66,6 @@ const bindingChanges = (
       (binding) => binding.axis === axis
     )?.state;
     if (beforeState !== afterState) {
-      // A side that had no binding for this axis contributes no key at all —
-      // an absent `before` is "the axis did not exist yet", which is not the
-      // same claim as any recorded state.
       const change: BindingChange = { axis };
       if (beforeState !== undefined) change.before = beforeState;
       if (afterState !== undefined) change.after = afterState;
@@ -168,8 +145,6 @@ export const compareSnapshots = (
     for (const row of ordered) {
       if (row.beforePlace !== undefined && row.afterPlace !== undefined) {
         const changes = bindingChanges(row.beforePlace, row.afterPlace);
-        // An unchanged place carries no `bindingChanges` key — the absence is
-        // how a reader tells "nothing drifted" from "drift not computed".
         const persisted: ComparedPlace = {
           component: componentId,
           file: row.file,

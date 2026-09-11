@@ -1,52 +1,23 @@
 /**
- * Selector alias registry — maps `_`-prefixed alias keys to CSS selectors.
- *
- * Sort order determines cascade precedence within a layer:
- * later entries override earlier ones when specificity is equal.
- * The ordering follows CSS conventions (LVHA) and interaction semantics
- * (disabled beats interaction states, pseudo-elements after states).
+ * `order` is cascade precedence inside a layer: a later entry overrides an
+ * earlier one at equal specificity.
  */
 
 export interface SelectorAlias {
-  /** CSS selector string (comma-separated for compound selectors) */
   selector: string;
-  /** Sort index for cascade ordering within a layer */
   order: number;
 }
 
 export type SelectorAliasMap = Record<string, SelectorAlias>;
 
 /**
- * Augmentable registry of registered CUSTOM selector alias keys (design D9).
- * Built-in selector aliases stay in the static `BuiltInSelectorAlias` union;
- * this interface publishes user registrations (`.addSelectors({ … })`) so they
- * become typed both as `ThemedCSSProps` block keys AND as component callsite
- * props (`SelectorAliasProps`) — making the `selector-alias-callsite`
- * custom-alias promise actually true. A consumer publishes with:
- *
- * ```ts
- * declare module '@animus-ui/system' {
- *   interface Selectors extends Record<SelectorsOf<typeof ds>, true> {}
- * }
- * ```
- *
- * Empty by default. JOINT NAMESPACE: publishing EITHER `Selectors` or
- * `Conditions` flips the WHOLE `_` block-key namespace to validating —
- * augmenting one without the other rejects the other's registered aliases.
- * When both are empty, `_` block keys stay fully permissive; built-in
- * selector aliases are the only `_` keys typed at CALLSITE-prop position.
+ * Module augmentation publishes custom aliases as typed `_` keys. Augmenting
+ * either `Selectors` or `Conditions` makes the whole `_` namespace validating.
  */
 // eslint-disable-next-line @typescript-eslint/no-empty-interface
 export interface Selectors {}
 
-/**
- * Built-in selector aliases.
- *
- * Compound selectors (e.g. `_disabled`) target multiple CSS selectors
- * via comma-separation to cover native, ARIA, and data attribute conventions.
- */
 export const BUILT_IN_SELECTORS: SelectorAliasMap = {
-  // ── Interactive (LVHA order) ──────────────────────────────
   _link: { selector: '&:link', order: 10 },
   _visited: { selector: '&:visited', order: 20 },
   _hover: { selector: '&:hover', order: 30 },
@@ -56,7 +27,6 @@ export const BUILT_IN_SELECTORS: SelectorAliasMap = {
   _active: { selector: '&:active', order: 70 },
   _target: { selector: '&:target', order: 80 },
 
-  // ── Form / ARIA states ────────────────────────────────────
   _checked: {
     selector: '&:checked, &[aria-checked="true"], &[data-checked]',
     order: 100,
@@ -83,20 +53,17 @@ export const BUILT_IN_SELECTORS: SelectorAliasMap = {
     order: 160,
   },
 
-  // ── Disabled (wins over interaction states) ───────────────
   _disabled: {
     selector:
       '&:disabled, &[disabled], &[aria-disabled="true"], &[data-disabled]',
     order: 200,
   },
 
-  // ── Pseudo-elements ───────────────────────────────────────
   _before: { selector: '&::before', order: 300 },
   _after: { selector: '&::after', order: 310 },
   _placeholder: { selector: '&::placeholder', order: 320 },
   _selection: { selector: '&::selection', order: 330 },
 
-  // ── Positional ────────────────────────────────────────────
   _first: { selector: '&:first-child', order: 400 },
   _last: { selector: '&:last-child', order: 410 },
   _even: { selector: '&:nth-child(even)', order: 420 },
@@ -105,30 +72,21 @@ export const BUILT_IN_SELECTORS: SelectorAliasMap = {
 };
 
 /**
- * Merge user-provided selectors with built-in defaults.
- * User selectors override built-in aliases of the same name.
- * New aliases allocate orders CONTINUING from the highest existing order
- * (floored at 490, so the first user alias lands at 500) rather than
- * restarting at 500 each call (mirrors `mergeConditions`) — aliases from
- * successive `.addSelectors()`/`extend()` merges must not collide on
- * order 500.
+ * Order allocation continues past the highest existing order (floor 490, so
+ * the first custom alias is 500); restarting per call would collide.
  */
 export function mergeSelectors(
   base: SelectorAliasMap,
   custom: Record<string, string>
 ): SelectorAliasMap {
   const merged = { ...base };
-  // Continue order allocation past every existing entry (floor 490 → first
-  // user alias is 500), instead of restarting at 500 per call.
   let nextOrder =
     Math.max(490, ...Object.values(merged).map((s) => s.order)) + 10;
 
   for (const [key, selector] of Object.entries(custom)) {
     if (key in merged) {
-      // Override: preserve the existing order, replace selector
       merged[key] = { selector, order: merged[key].order };
     } else {
-      // New alias: assign next available order
       merged[key] = { selector, order: nextOrder };
       nextOrder += 10;
     }
@@ -137,16 +95,10 @@ export function mergeSelectors(
   return merged;
 }
 
-/** Get the sorted alias keys for deterministic cascade ordering. */
 export function getSortedAliasKeys(map: SelectorAliasMap): string[] {
   return Object.keys(map).sort((a, b) => map[a].order - map[b].order);
 }
 
-/**
- * Serialize the selector map for the extraction pipeline.
- * Emits a flat `Record<string, string>` (alias → selector) plus
- * the ordered key list for cascade determinism.
- */
 export function serializeSelectorMap(map: SelectorAliasMap): {
   selectors: Record<string, string>;
   order: string[];

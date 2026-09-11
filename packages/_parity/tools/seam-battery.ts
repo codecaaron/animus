@@ -1,20 +1,4 @@
 import { existsSync, readFileSync } from 'fs';
-/**
- * G-SEAM battery (row 07 Task 07.1; transform-evaluation-contract):
- * characterizes the transform-evaluation seam with RECORDED expectations
- * from the v2 production (QuickJS) path. Cases cover: number/string
- * coercion + formatting, exponent thresholds, negatives (negation
- * helper), scale-key stringification, inline + named transforms,
- * cross-file name collisions (last-registration-wins), throwing
- * transforms, and exotic (\r) strings.
- *
- * Modes:
- *   bun run seam-battery.ts --record --intent ID  # privileged v2 refresh
- *   bun run seam-battery.ts               # assert v2 against the baseline
- *
- * Promoted from openspec/changes/extract-v2-spine/tools/ at row 07 close:
- * the battery is standing harness infrastructure (verify:parity tier).
- */
 import { createRequire } from 'module';
 import { join } from 'path';
 
@@ -37,15 +21,8 @@ const theme = tokens.serialize();
 interface Case {
   id: string;
   files: Array<{ path: string; source: string }>;
-  /** Extra propConfig entries merged over the shared test-system config —
-   *  the vehicle for routing a static styles value through a case-registered
-   *  transform (config-carried transform sources win registration, so a
-   *  case can only control evaluation through a name the config doesn't
-   *  already source).
-   *
-   *  A JSON document, because that is what it merges into: `propConfig`
-   *  crosses the engine boundary as JSON text, and this fragment is spread
-   *  over the parsed document before it is re-serialized. */
+  /** Extra propConfig entries merged over the test-system config. Config
+   *  transform sources win, so a case must use a name the config lacks. */
   configOverride?: JsonObject;
 }
 
@@ -131,9 +108,8 @@ const CASES: Case[] = [
       },
     ],
   },
-  // Result-shape rejections (transform-result-hardening): a registered named
-  // transform returning each invalid shape. Recorded expectation is the
-  // kind:"error" diagnostic + absent declaration, never coerced text.
+  // A registered transform returning each invalid shape: the expectation is
+  // an error diagnostic and no declaration, never coerced text.
   ...(
     [
       ['reject-object', '(v) => ({ a: 1 })'],
@@ -147,7 +123,6 @@ const CASES: Case[] = [
       ['reject-nan', '(v) => NaN'],
       ['reject-positive-infinity', '(v) => Infinity'],
       ['reject-negative-infinity', '(v) => -Infinity'],
-      // Previously coerced via implicit ToString — now rejected by contract.
       ['reject-tostring-wrapper', "(v) => ({ toString: () => '10px' })"],
       ['reject-boxed-string', "(v) => new String('10px')"],
     ] as const
@@ -155,10 +130,6 @@ const CASES: Case[] = [
     const name = `bad_${id.replace(/-/g, '_')}`;
     return {
       id,
-      // System-config prop `zap` names the case-registered transform (the
-      // Rust D3 fixture pattern): static styles resolution is the seam
-      // under record, and the expectation is the kind:"error" diagnostic
-      // with NO width declaration and never coerced text.
       configOverride: { zap: { property: 'width', transform: name } },
       files: [
         {
@@ -172,8 +143,8 @@ const CASES: Case[] = [
       ],
     };
   }),
-  // Inline-transform object return: inline transforms ride the dynamic path,
-  // so the build-time gate never fires — recorded to pin that indifference.
+  // Inline transforms ride the dynamic path, so the build-time result gate
+  // never fires; this case pins that.
   {
     id: 'reject-inline-object-dynamic-path',
     files: [

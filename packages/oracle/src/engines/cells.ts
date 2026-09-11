@@ -1,15 +1,3 @@
-/**
- * Scenario-domain plumbing: which axes a question is quantified over, and which
- * numeric thresholds have to partition them.
- *
- * The cell invariant in `core/scenario` is conditional — sampling one
- * representative per cell decides a guard only if every threshold that guard
- * mentions is a cut. So every engine that quantifies harvests the thresholds
- * out of the candidate rules' own guards first (`harvestCuts`); a breakpoint a
- * rule tests but the theme never declared would otherwise split a cell and turn
- * a "proof" into a sample.
- */
-
 import { collectCuts } from '../core/predicate';
 import {
   countCells,
@@ -26,16 +14,6 @@ import type { CascadeContext } from './cascade';
 
 export type Cuts = Readonly<Record<string, readonly number[]>>;
 
-/**
- * Fold a request-level domain override into the world itself, as
- * `pin-dimension-domain` interventions. A domain override changes what a
- * probe quantifies over, so it MUST change the world hash and therefore the
- * probe state id — otherwise two proofs over different domains collide in the
- * ledger and the second one FIXPOINTs into the first one's answer (the
- * invariant documented on `probeStateId`). Evaluation is unaffected: engines
- * still pass the override to `scopedDomain`, which is idempotent over the
- * pinned axes.
- */
 export const pinDomain = (
   world: RenderWorld,
   override?: ScenarioDomain
@@ -54,11 +32,8 @@ export const pinDomain = (
 };
 
 /**
- * The axes that can change this target's answer: the target's own declared
- * dimensions, each narrowed to the world's domain where the world has one (a
- * `force-dimension` intervention lives here), plus any explicit override.
  * Another component's variant axis cannot alter this target's classes, so
- * leaving it out shrinks the cell count without weakening the quantification.
+ * leaving it out shrinks the cell count without weakening quantification.
  */
 export const scopedDomain = (
   resolution: TargetResolution,
@@ -77,7 +52,6 @@ export const scopedDomain = (
   return domain;
 };
 
-/** The axes every component shares — viewport, mode, anything unscoped. */
 export const sharedDomain = (world: RenderWorld): ScenarioDomain => {
   const domain: Record<string, ScenarioDomain[string]> = {};
   for (const dim of Object.keys(world.scenario).sort()) {
@@ -103,20 +77,13 @@ export const mergeCuts = (a: Cuts, b: Cuts): Cuts => {
 
 export interface HarvestedCuts {
   cuts: Cuts;
-  /** Thresholds found on rule guards that the scenario provider omitted. */
   discovered: readonly string[];
-  /** True when the pre-harvest partition was already too large to walk. */
   truncated: boolean;
 }
 
 /**
- * Fold every candidate rule's guard thresholds into the declared cuts.
- *
- * Candidacy is structural (class membership), so one pass over the *declared*
- * partition already sees every rule that can apply anywhere in the domain —
- * including the ones whose guards test a threshold that pass never sampled.
- * Refining a partition is always sound, so the second pass over the merged cuts
- * is strictly stronger than the first.
+ * Candidacy is structural, so one pass over the declared partition already
+ * sees every rule that can apply anywhere in the domain.
  */
 export const harvestCuts = (
   ctx: CascadeContext,

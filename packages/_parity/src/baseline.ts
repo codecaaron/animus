@@ -42,12 +42,8 @@ export const SURFACE_SCHEMA_SHA256 = sha256(
 
 export type BaselineMode = 'production' | 'development';
 
-/**
- * The committed baseline document. A wire contract (it is the bytes under
- * `baselines/v2/<mode>.json`), so it is a `type` and not an `interface` — the
- * writer hands it to the JSON canonicalizer and the validator reads it back as
- * a decoded document.
- */
+/** The committed baseline document, written as `baselines/v2/<mode>.json`.
+ *  A `type`, not an `interface`, so it stays assignable to the JSON domain. */
 export type BaselineEnvelope = {
   version: typeof BASELINE_VERSION;
   engine: 'v2';
@@ -65,15 +61,8 @@ export interface BaselineRefreshChecks {
   families: string[];
 }
 
-/**
- * Both baseline modes, always both present.
- *
- * The refresh pair is atomic — `writeValidatedBaselinePair` publishes
- * production and development together or not at all — so the per-mode
- * collections it gates are named here rather than spelled as an open
- * dictionary at each use: a `Record<BaselineMode, …>` invites a half-filled
- * map, which is a state this harness refuses.
- */
+/** Both modes, always both present: a refresh publishes production and
+ *  development together or not at all, never a half-filled map. */
 export interface BaselineModePair<Value> {
   production: Value;
   development: Value;
@@ -109,20 +98,8 @@ export function createBaselineEnvelope(
   };
 }
 
-/**
- * Decide whether a decoded document is the baseline envelope this run expects.
- *
- * The parameter is the DOCUMENT, not `BaselineEnvelope`: the committed
- * baseline is bytes on disk that nothing in-process produced, and this
- * function is the thing that decides whether those bytes carry an envelope at
- * all — a `BaselineEnvelope` parameter would be claiming the very fact under
- * test. Freshly constructed envelopes flow in unchanged (the wire contract
- * composes with the JSON value domain), so the refresh writer validates its
- * own output through the same reader that validates a committed file.
- *
- * Every check is reported, never thrown: an ordinary run turns these into
- * "Baseline metadata errors" on the scoreboard and fails the gate.
- */
+/** Takes the decoded document, not a `BaselineEnvelope`: typing the parameter
+ *  as the envelope would assume the very fact this decides. */
 export function validateBaselineEnvelope(
   document: JsonObject,
   expected: { mode: BaselineMode; corpusSha256: string }
@@ -146,20 +123,14 @@ export function validateBaselineEnvelope(
   if (corpusDigest !== expected.corpusSha256) {
     errors.push('baseline corpus digest differs');
   }
-  // The string check is load-bearing, not decoration: `RegExp.test` coerces,
-  // so a digest recorded as `["<64 hex>"]` used to stringify into a PASS here.
-  // A digest that is not a string is not a SHA-256, and this is the one place
-  // that says so — the refresh path compares the digest against itself, so
-  // nothing else would have caught it there.
+  // `RegExp.test` coerces, so a digest recorded as `["<64 hex>"]` would
+  // stringify into a pass; the string check is what rejects it.
   if (!isJsonString(corpusDigest) || !sha.test(corpusDigest)) {
     errors.push('baseline corpus digest must be SHA-256');
   }
   if (!isJsonString(refreshIntent) || !refreshIntent.trim()) {
     errors.push('baseline refresh intent missing');
   }
-  // One representation-tag check covers the whole units contract: a missing
-  // key, a null, and a list are all rejected — the three shapes this check
-  // has always ruled out.
   if (!isJsonObject(document.units)) {
     errors.push('baseline units missing');
   }
@@ -251,11 +222,8 @@ export function refreshFamilyErrors(
   return familyViolations(families, matchRegister(divergences, register));
 }
 
-/**
- * Family verdicts guard the atomic production/development refresh pair.
- * A registered transition may be mode-specific, so evaluate its exact drift
- * across the pair instead of requiring the same family to diverge per mode.
- */
+/** A registered transition may be mode-specific, so family verdicts read the
+ *  union of both modes rather than requiring drift in each. */
 export function refreshPairFamilyErrors(
   families: FamilyDecl[],
   divergences: BaselineModePair<Divergence[]>,

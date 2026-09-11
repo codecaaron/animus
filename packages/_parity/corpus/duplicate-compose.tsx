@@ -1,6 +1,5 @@
-// Duplicate identical compose() calls witnessed the retired live oracle's
-// double-replacement bug. The committed v2 surface replaces each span once;
-// no standing divergence license remains.
+// Repeated `compose()` calls over the same slot binding: each call site must
+// be replaced exactly once, never twice.
 import { compose } from '@animus-ui/system/compose';
 
 const Root = ds.styles({ display: 'flex' }).asElement('div');

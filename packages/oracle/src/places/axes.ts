@@ -2,19 +2,12 @@ import { analyzeSelector, canonicalCompound } from '../host/animus/selector';
 
 import type { SourceElement } from './source';
 
-/**
- * What an `ancestor:<prefix>` axis demands of an ancestor element — shared by
- * the static structural matcher (source elements) and the observation matcher
- * (rendered elements, PLACES.md §5). One requirement reading, two witnesses.
- */
-
 export type MatchVerdict = 'yes' | 'no' | 'unknown';
 
 export interface AxisRequirement {
   classNames: readonly string[];
   attributes: readonly string[];
   stateful: boolean;
-  /** Undefined when the prefix is more than one descendant compound. */
   modeled: boolean;
 }
 
@@ -36,7 +29,6 @@ export const requirementOf = (axis: string): AxisRequirement => {
 
 export interface AttributeRequirement {
   name: string;
-  /** Absent for a bare `[name]` requirement. */
   value?: string;
 }
 
@@ -46,8 +38,6 @@ export const parseAttributeRequirement = (
   const parsed = /^\[([^\]=]+)(?:=([^\]]*))?\]$/.exec(raw);
   if (parsed === null) return undefined;
   const value = parsed[2]?.replace(/^["']|["']$/g, '');
-  // A bare `[name]` requirement has no `value` key at all — `elementSatisfies`
-  // reads its absence as "any value satisfies".
   const requirement: AttributeRequirement = { name: parsed[1] };
   if (value !== undefined) requirement.value = value;
   return requirement;
@@ -73,7 +63,6 @@ const attributeMatch = (
   return attr.value === requirement.value ? 'yes' : 'no';
 };
 
-/** How one structural ancestor relates to one axis requirement. */
 export const elementSatisfies = (
   element: SourceElement,
   requirement: AxisRequirement

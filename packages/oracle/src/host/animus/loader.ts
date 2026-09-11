@@ -13,28 +13,8 @@ export const STYLESHEET_FILE = 'styles.css';
 
 export const COMMIT_FILE = 'commit.json';
 
-/**
- * The manifest keeps travelling untrusted (`asManifest` is its validator);
- * `commit.json` is read key-by-key through the manifest module's guards, so
- * nothing in this module ever reads a field off a value it has not decided the
- * domain of first.
- */
 const parseArtifactJson = (text: string): ManifestJsonValue => JSON.parse(text);
 
-/**
- * Read one `.animus` output directory into a host input.
- *
- * Both `manifest.json` and `styles.css` are required. `createAnimusHost`
- * tolerates a missing stylesheet — that seam exists for synthetic and
- * in-memory callers — but a *directory* missing one of them is not a degraded
- * artifact set, it is an incomplete build, and quietly producing a
- * token-less host from it would hide the real problem behind an oracle that
- * merely answers a little less.
- *
- * `commit.json` is optional and supplies the program label: the content hash
- * the build recorded for the manifest, which is what makes two runs of the
- * same source recognisably the same program in a probe result.
- */
 export const loadAnimusArtifacts = (dir: string): AnimusHostInput => {
   const manifestPath = join(dir, MANIFEST_FILE);
   const stylesheetPath = join(dir, STYLESHEET_FILE);
@@ -88,9 +68,6 @@ export const loadAnimusArtifacts = (dir: string): AnimusHostInput => {
     manifest,
     stylesheetText: readFileSync(stylesheetPath, 'utf8'),
   };
-  // No `commit.json`, or one without a recorded manifest hash, leaves `label`
-  // off the input entirely — `createAnimusHost` distinguishes that from a
-  // label it was given.
   if (label !== undefined) input.label = label;
 
   return input;

@@ -6,8 +6,6 @@ import { RefreshCwIcon } from 'lucide-react';
 import { ds } from '../../ds';
 import { SyntaxBlock } from '../surfaces/SyntaxBlock';
 
-// ─── Layout ─────────────────────────────────────────────────────
-
 const CascadeGrid = ds
   .styles({
     display: 'grid',
@@ -29,8 +27,6 @@ const CascadeGrid = ds
     '--color-scheme-950': '{colors.fire.950}',
   })
   .asElement('div');
-
-// ─── Strata Column ──────────────────────────────────────────────
 
 const StrataColumn = ds
   .styles({
@@ -280,8 +276,6 @@ const SpecificityFooter = ds
   })
   .asElement('div');
 
-// ─── Strata Family (shared layer variant) ───────────────────────
-
 const Strata = compose(
   {
     Root: StrataRowEl,
@@ -295,8 +289,6 @@ const Strata = compose(
   },
   { shared: { layer: true } }
 );
-
-// ─── Detail Panel ───────────────────────────────────────────────
 
 const DetailPanel = ds
   .styles({
@@ -483,8 +475,6 @@ const DetailCodeFrameEl = ds
   })
   .asElement('div');
 
-// ─── Detail Family (shared layer variant) ───────────────────────
-
 const Detail = compose(
   {
     Root: DetailContainerEl,
@@ -495,8 +485,6 @@ const Detail = compose(
   },
   { shared: { layer: true } }
 );
-
-// ─── Detail internals ───────────────────────────────────────────
 
 const DetailDescription = ds
   .styles({
@@ -527,8 +515,6 @@ const DetailSectionLabel = ds
     mb: 8,
   })
   .asElement('div');
-
-// ─── Cascade Resolution ─────────────────────────────────────────
 
 const ResolutionList = ds
   .styles({
@@ -616,8 +602,6 @@ const ResolutionStatus = ds
   })
   .asElement('span');
 
-// ─── Empty State ────────────────────────────────────────────────
-
 const EmptyDetail = ds
   .styles({
     display: 'flex',
@@ -657,8 +641,6 @@ const Kbd = ds
     color: 'text.dim',
   })
   .asElement('kbd');
-
-// ─── Component ──────────────────────────────────────────────────
 
 export interface Step {
   label: string;

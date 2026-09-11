@@ -1,12 +1,5 @@
-/**
- * The CLI's only owner of SIGINT/SIGTERM registration, shared by `animus
- * watch` and `animus build`, so an interrupted run gives up its claim on the
- * output tree in exactly one way. Listeners run on the event loop, so a
- * handler can never land inside the writer's synchronous swap; with no
- * listener registered the kernel terminates the process wherever it is,
- * which for `build` is mid-publish, leaving the staging tree and the
- * advisory lock behind.
- */
+/** Listeners run on the event loop, so a handler never lands inside the
+ *  writer's synchronous swap; with none the kernel kills mid-publish. */
 
 /** Signal exit conventions (128 + signal number). */
 export const EXIT_SIGINT = 130;
@@ -17,11 +10,9 @@ const SHUTDOWN_SIGNALS = [
   ['SIGTERM', EXIT_SIGTERM],
 ] as const;
 
-/** How far one process's shutdown has got. */
 type ShutdownStage = 'armed' | 'draining' | 'released';
 
-/** The ending a shutdown reached: the signal that caused it, and whether a
- *  second signal cut an unfinished `drain` short. */
+/** `abandoned` means a second signal cut an unfinished drain short. */
 export interface ShutdownOutcome {
   exitCode: number;
   signal: string;
@@ -29,27 +20,16 @@ export interface ShutdownOutcome {
 }
 
 export interface ShutdownHandlers {
-  /**
-   * Give up what the run claimed and report the ending. Called once. An
-   * `abandoned` outcome must give up the SAME claims as a drained one, or
-   * `lock.json` outlives the process and the next run refuses a claim it
-   * cannot prove dead.
-   */
+  /** Called once. An abandoned outcome must give up the SAME claims as a
+   *  drained one, or `lock.json` outlives the process. */
   release: (outcome: ShutdownOutcome) => void;
-  /**
-   * Bounded work that must finish before the claim is given up (the watch's
-   * in-flight cycle). Listeners stay armed while it runs, so a second signal
-   * abandons it, takes the release, and exits at once. Omit it for a
-   * synchronous shutdown, which then has no escalation window.
-   */
+  /** Bounded work that must finish before the claim is given up; a second
+   *  signal during it abandons the drain and exits at once. */
   drain?: (exitCode: number, signal: string) => Promise<void>;
 }
 
-/**
- * Register SIGINT/SIGTERM handling, returning the function that removes both
- * listeners. Removal is mandatory on the normal path: `main()` is a published
- * entry point, so a listener left behind accumulates one per in-process call.
- */
+/** Removal is mandatory on the normal path: `main()` is re-enterable in
+ *  process, so a listener left behind accumulates one per call. */
 export function installShutdownSignals({
   release,
   drain,
@@ -74,7 +54,6 @@ export function installShutdownSignals({
             // A failed drain has already reported itself; the claim is given
             // up either way.
           }
-          // A second signal already released and exited.
           if (stage !== 'draining') return;
           stage = 'released';
           release({ exitCode, signal, abandoned: false });

@@ -3,8 +3,6 @@ import { useLocation } from 'react-router-dom';
 import { DOCS_NAV, hasChildren, type NavItem } from '../../constants/docsNav';
 import { ds } from '../../ds';
 
-// ─── Flatten nav into ordered page list ──────────────────────────
-
 function flattenNav(): NavItem[] {
   const pages: NavItem[] = [];
   for (const entry of DOCS_NAV) {
@@ -19,8 +17,6 @@ function flattenNav(): NavItem[] {
 }
 
 const ALL_PAGES = flattenNav();
-
-// ─── Styled Elements ─────────────────────────────────────────────
 
 const NavRow = ds
   .styles({
@@ -69,8 +65,6 @@ const NavLabel = ds
     color: 'text.muted',
   })
   .asElement('span');
-
-// ─── Component ───────────────────────────────────────────────────
 
 export function PageNav() {
   const { pathname } = useLocation();

@@ -1,11 +1,3 @@
-/**
- * `inspect` — what can be established about this target in this context.
- *
- * The cheapest projection of the fact substrate: read the cascade at one point
- * and report the winners with their provenance, the declarations they defeated
- * and the reason each lost, plus everything the model could not decide.
- */
-
 import { describeValue } from '../core/value';
 import {
   analyzeCascade,
@@ -45,16 +37,9 @@ export interface CascadeReading {
   facts: readonly RenderFact[];
   assumptions: readonly string[];
   raised: readonly UnknownObligation[];
-  /** Winner values, already token-resolved, keyed by property. */
   values: ReadonlyMap<string, string>;
 }
 
-/**
- * Derive every fact the cascade supports at one point. Shared with `refine`,
- * whose branches are just this reading under a pinned dimension — the branch
- * guard is threaded through as `contextGuard` so a forked fact records the
- * binding it holds under instead of claiming to be unconditional.
- */
 export const readCascade = (
   rt: OracleRuntime,
   world: RenderWorld,
@@ -111,7 +96,6 @@ export const readCascade = (
   };
 };
 
-/** The winner that beat the most declarations — the best probe to try. */
 const mostContested = (
   analysis: CascadeAnalysis
 ): DeclarationCandidate | undefined => {

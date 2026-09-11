@@ -11,8 +11,6 @@ import { Check, Link } from 'lucide-react';
 
 import { ds } from '../../ds';
 
-// ─── Styled Elements ─────────────────────────────────────────────
-
 const HeadingWrapper = ds
   .styles({
     display: 'flex',
@@ -76,8 +74,6 @@ const AnchorButton = ds
   })
   .asElement('button');
 
-// ─── Helpers ─────────────────────────────────────────────────────
-
 function toKebab(text: string): string {
   return text
     .toLowerCase()
@@ -96,8 +92,6 @@ function extractText(children: ReactNode): string {
     )
     .join('');
 }
-
-// ─── Component ───────────────────────────────────────────────────
 
 type HeadingElement = 'h1' | 'h2' | 'h3' | 'h4';
 

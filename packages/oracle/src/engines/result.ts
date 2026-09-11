@@ -1,13 +1,3 @@
-/**
- * Envelope assembly: coverage, knowledge deltas and the `nextOperations` list.
- *
- * DESIGN §5 requires every answer to expose what it learned and what would
- * produce *new* information — the anti-loop half of the contract. These
- * helpers keep those fields concrete (named rules, named dimensions, named
- * obligations) rather than generic advice, because a suggestion an agent
- * cannot execute verbatim is the same as no suggestion.
- */
-
 import { plural } from './format';
 
 import type { DischargeProcedure, UnknownObligation } from '../core/obligation';
@@ -15,26 +5,15 @@ import type { ProbeVerdict, SuggestedOperation } from '../core/probe';
 import type { ScenarioDomain } from '../core/scenario';
 import type { CascadeAnalysis, DeclarationCandidate } from './cascade';
 
-/**
- * The point-scoped verdict rule (DESIGN §8): an answer an open obligation
- * touches is CONDITIONAL, never ESTABLISHED. One home, so no engine can
- * forget the channel.
- */
 export const pointVerdict = (
   unknowns: readonly UnknownObligation[]
 ): ProbeVerdict => (unknowns.length === 0 ? 'ESTABLISHED' : 'CONDITIONAL');
 
-/**
- * The sweep-scoped verdict rule: a partially walked claim domain supports no
- * settled verdict at all (DESIGN §8), and only then do open obligations
- * decide between ESTABLISHED and CONDITIONAL.
- */
 export const sweepVerdict = (
   focalIncomplete: boolean,
   unknowns: readonly UnknownObligation[]
 ): ProbeVerdict => (focalIncomplete ? 'INCONCLUSIVE' : pointVerdict(unknowns));
 
-/** Cheapest sound procedure first — `refine` reports options in order. */
 const DISCHARGE_COST = {
   'partial-evaluation': 0,
   'branch-split': 1,
@@ -86,7 +65,6 @@ export const replacementOperation = (
   expectedInformationGain: 'HIGH',
 });
 
-/** Counted axes in dimension-name order — the order suggestions are reported in. */
 const byDimension = (
   counts: ReadonlyMap<string, number>
 ): readonly (readonly [string, number])[] =>
@@ -94,12 +72,6 @@ const byDimension = (
     left < right ? -1 : left > right ? 1 : 0
   );
 
-/**
- * One suggestion per axis a candidate rule tests but this point leaves free.
- * An axis the world never declared is the stronger signal — no fork can
- * decide it, the scenario provider has to grow first — so it is reported
- * separately.
- */
 export const forkOperations = (
   analysis: CascadeAnalysis,
   domain: ScenarioDomain

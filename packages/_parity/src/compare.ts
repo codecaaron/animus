@@ -1,8 +1,3 @@
-/**
- * Per-artifact-class comparison (design intent: CSS by bytes with parsed-CSS
- * classification; transformed code by normalized AST equivalence; manifest
- * by derived observables; diagnostics as multisets).
- */
 import { isJsonObject, parseJsonObject } from '@animus-ui/assertions';
 
 import { hashArtifact } from './content-hash';
@@ -16,7 +11,6 @@ import type {
 import type { JsonObject, JsonValue } from '@animus-ui/assertions';
 import type { Program } from 'oxc-parser';
 
-/** Parse CSS; returns error string or null. Uses lightningcss. */
 export async function cssParseError(css: string): Promise<string | null> {
   if (!css.trim()) return null;
   try {
@@ -33,7 +27,6 @@ export async function cssParseError(css: string): Promise<string | null> {
   }
 }
 
-/** Canonical form for formatting-insensitivity: lightningcss minified. */
 async function canonicalCss(css: string): Promise<string> {
   const { transform } = await import('lightningcss');
   const res = transform({
@@ -45,9 +38,8 @@ async function canonicalCss(css: string): Promise<string> {
   return new TextDecoder().decode(res.code);
 }
 
-/** Split CSS into sibling rule strings at one nesting level (brace scanner).
- *  Statement at-rules (`@layer a,b;`, `@import ...;`) end at a depth-0
- *  semicolon before any brace — without this they glue to the next rule. */
+/** Statement at-rules (`@layer a,b;`, `@import ...;`) end at a depth-0
+ *  semicolon before any brace; without that case they glue to the next rule. */
 function siblingRules(css: string): string[] {
   const rules: string[] = [];
   let depth = 0;
@@ -75,10 +67,8 @@ function siblingRules(css: string): string[] {
   return rules;
 }
 
-/** Flatten rules recursively: block at-rules (@layer/@media/@supports) are
- *  descended into, each inner rule prefixed with its at-rule header — so a
- *  reorder INSIDE a layer still classifies as rule-order for component CSS
- *  nested inside @layer blocks. */
+/** Inner rules carry their at-rule header, so a reorder inside a layer still
+ *  classifies as rule-order rather than as a selector change. */
 function flattenRules(css: string): string[] {
   const out: string[] = [];
   for (const rule of siblingRules(css)) {
@@ -120,8 +110,6 @@ export async function classifyCssDivergence(
   return 'selector';
 }
 
-/** Strip location fields and sort object-literal properties by key so the
- *  comparison is key-order-insensitive for embedded config literals. */
 function normalizeAst(node: JsonValue): JsonValue {
   if (Array.isArray(node)) return node.map(normalizeAst);
   if (isJsonObject(node)) {
@@ -140,11 +128,8 @@ function normalizeAst(node: JsonValue): JsonValue {
     }
     const properties = out.properties;
     if (out.type === 'ObjectExpression' && Array.isArray(properties)) {
-      // Key-order insensitivity is licensed ONLY for plain record literals:
-      // no spreads, no computed keys, no duplicate keys — those make order
-      // semantically load-bearing (spread/last-wins override order). Anything
-      // this walk cannot read as a keyed property node yields a null key,
-      // which is what withholds the licence.
+      // Sorting is safe only for plain record literals: spreads, computed
+      // keys and duplicates make property order semantically load-bearing.
       const keys = properties.map((property) => {
         if (!isJsonObject(property)) return null;
         if (property.type !== 'Property' || property.computed) return null;
@@ -170,17 +155,6 @@ function normalizeAst(node: JsonValue): JsonValue {
   return node;
 }
 
-/**
- * The one boundary between oxc's program graph and this comparison.
- *
- * AST equivalence here has always been decided on the SERIALIZED program —
- * the final step was `JSON.stringify` — so the graph is decoded once, up
- * front, through the shared named-boundary decoder, and the normalizer above
- * works in the JSON value domain instead of walking a foreign object graph it
- * cannot describe. The round trip is also what `JSON.stringify` would have
- * done at the end: undefined-valued and non-serializable properties drop out
- * either way, and key order is sorted by the normalizer regardless.
- */
 function astDocument(program: Program): JsonObject {
   return parseJsonObject(JSON.stringify(program), 'oxc parsed program');
 }
@@ -203,8 +177,6 @@ export async function codeAstEquivalent(
   );
 }
 
-/** Compare two engine surfaces for one unit. Returns divergences (empty =
- *  identical on the declared surface). */
 export async function compareUnit(
   unit: string,
   a: UnitSurface,
@@ -223,10 +195,8 @@ export async function compareUnit(
       baselineSha256: hashArtifact(a, artifact),
       candidateSha256: hashArtifact(b, artifact),
     };
-    // An ABSENT `classification` means no CSS classification was computed for
-    // this row — every artifact class other than `css`. The key stays absent
-    // rather than present-and-undefined: the scoreboard renders it only when
-    // present, and a recorded row is compared by its serialized form.
+    // The key stays absent rather than present-and-undefined: a recorded row
+    // is compared by its serialized form.
     if (classification !== undefined) row.classification = classification;
     return row;
   };

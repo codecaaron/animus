@@ -46,14 +46,10 @@ interface SerializedPropEntry {
 
 export type GlobalStyleMap = Record<string, Record<string, any>>;
 
-/** One `src` descriptor of a font-face resource. */
 export interface FontFaceSrc {
   /**
-   * A literal string is emitted byte-exact as authored — asset resolution
-   * and rewriting belong to the host bundler's CSS asset pipeline, not to
-   * extraction. An `AssetRef` (from `asset(specifier)`) rides through
-   * evaluation and emission as its placeholder string; the host plugin
-   * substitutes the bundler-resolved URL after extraction.
+   * A literal string is emitted byte-exact; an `AssetRef` emits its
+   * placeholder string, which the host plugin substitutes after extraction.
    */
   url: string | AssetRef;
   /** Format hint (`woff2`, `woff`, …), rendered as `format('…')`. */
@@ -61,9 +57,8 @@ export interface FontFaceSrc {
 }
 
 /**
- * A typed `@font-face` descriptor (global-styles-system). `family` may use a
- * font-scale token reference (`{fonts.body}`); other descriptors take CSS
- * literals only.
+ * `family` may use a font-scale token reference (`{fonts.body}`); the other
+ * descriptors take CSS literals only.
  */
 export interface FontFace {
   family: string;
@@ -104,22 +99,15 @@ export type CreateKeyframesFactory<
 type IncludableSystem = {
   toConfig(): SerializedConfig;
   /**
-   * Present on every system built by this version (attached non-enumerably
-   * next to `toConfig` — see `build()`). Optional in the type so systems
-   * built by an older @animus-ui/system remain structurally acceptable
-   * during the deprecation window; `extend()` fails loud at runtime when it
-   * is absent (design D7 — no `SerializedConfig` reconstruction).
+   * Optional only so systems built by an older @animus-ui/system stay
+   * structurally acceptable; `extend()` throws when it is absent.
    */
   getRegistrySnapshot?(): RegistrySnapshot;
 };
 
 /**
- * The frozen registry state captured at `build()` (design D7). `toConfig()`
- * serializes from it and `extend()` merges from it, so post-build mutation of
- * the public `propRegistry`/`groupRegistry` fields affects neither. Containers
- * and per-entry objects are frozen shallow copies. Transforms are immutable,
- * cached forwarding wrappers so later mutation of function metadata cannot
- * alter serialization while anonymous transform behavior is retained.
+ * Frozen at `build()`: `toConfig()` serializes and `extend()` merges from
+ * it, so post-build mutation of the public registries reaches neither.
  */
 export interface RegistrySnapshot {
   props: Record<string, Prop>;
@@ -129,27 +117,19 @@ export interface RegistrySnapshot {
 }
 
 /**
- * The structural shape `registerKeyframes` accepts: any `createKeyframes`
- * return value qualifies. The brand stays structural — a hand-rolled object
- * carrying it is admitted by design (vocabulary-registration: only shape
- * mismatches are rejected at compile time; provenance is not claimed).
+ * The shape `registerKeyframes` accepts. The brand is structural: a
+ * hand-rolled object carrying it is admitted; provenance is not checked.
  */
 export interface RegisterableKeyframes {
   readonly __brand: 'Keyframes';
   readonly __frames: object;
 }
 
-/**
- * The structural shape `registerGlobalStyles` accepts: any
- * `createGlobalStyles` return value qualifies (the brand stays structural,
- * mirroring `RegisterableKeyframes`).
- */
 export interface RegisterableGlobalStyles {
   readonly __brand: 'GlobalStyleBlock';
   readonly styles: object;
 }
 
-/** The per-key frame data a collection carries (`Keyframes['__frames']`). */
 export type KeyframesFrameData = Record<
   string,
   { readonly name: string; readonly frames: KeyframeFrameMap }
@@ -176,29 +156,21 @@ export interface VocabularyCollisionEntry {
 }
 
 /**
- * Witness for a sealed kit with registered vocabulary arriving through a
- * legacy verb (`from()` / `includes:`) that performs no registry merge —
- * the vocabulary named here does NOT reach the consumer. Registered
- * vocabulary requires `.extend()`. Entries whose names DO arrive through a
- * separate `.extend()` of the same vocabulary are filtered out at `seal()`
- * — the witness never claims an undelivered name that was delivered.
+ * Names a sealed source's registered vocabulary that `from()` / `includes:`
+ * did not deliver — those verbs merge no registries; `.extend()` does.
  */
 export interface VocabularyLegacyVerbEntry {
   readonly code: 'animus.vocabulary.legacy-verb';
   readonly verb: 'from' | 'includes';
-  /** Positional source label (`includes source #1`, `from source #2`) —
-   * the same origin-label vocabulary the collision entries use; sources
-   * have no knowable export name at this seam. */
+  /** Positional label (`includes source #1`) — a source has no knowable
+   *  export name at this seam. */
   readonly source: string;
-  /** The registered vocabulary names the verb could not carry. */
   readonly names: readonly string[];
 }
 
 /**
- * The declaration-ordered, version-marked registration record a sealed
- * system carries (vocabulary-registration). The loader reads collections
- * exclusively from here; `collisions` is the merge-point witness for paths
- * where no type information flows.
+ * The registration record a sealed system carries, in declaration order.
+ * The loader reads registered collections exclusively from here.
  */
 export interface VocabularyRecord {
   readonly version: 1;
@@ -208,8 +180,7 @@ export interface VocabularyRecord {
   readonly legacyVerbs: readonly VocabularyLegacyVerbEntry[];
 }
 
-/** Internal pending/merged vocabulary state (origin powers witness text).
- *  ONE name-space across both kinds: a global-style block and a keyframes
+/** ONE name-space across both kinds: a global-style block and a keyframes
  *  collection cannot share a registered name. */
 type VocabularyEntryState =
   | {
@@ -226,7 +197,6 @@ type VocabularyEntryState =
       origin: string;
     };
 
-/** A merge input — an entry state minus its origin (assigned by the merge). */
 type VocabularyEntryInput =
   | { kind: 'keyframes'; name: string; frames: KeyframesFrameData }
   | {
@@ -237,13 +207,8 @@ type VocabularyEntryInput =
     };
 
 /**
- * Legacy-verb witness helper shared by `from()` and the `includes:` config
- * path: a sealed source carrying registered vocabulary cannot deliver it
- * through a verb that performs no registry merge. The RECORD is the sole
- * witness channel (hosts surface it as a coded diagnostic; the extraction
- * host shims `console`, and a runtime warn here would ship in production
- * consumer bundles) — no console output. `seal()` filters out names that
- * a separate `.extend()` of the same vocabulary DID deliver.
+ * No console output: a warn here would ship in production consumer bundles,
+ * and the extraction host shims `console`. The record is the witness.
  */
 function legacyVerbWitness(
   source: IncludableSystem,
@@ -268,10 +233,8 @@ function legacyVerbWitness(
 }
 
 /**
- * Registration-time snapshot of a collection's frame data: copied and frozen
- * two levels deep (frame entries + stop bodies), so post-registration
- * mutation of the caller's live collection never reaches a sealed record.
- * (Blind spot: values nested deeper than a stop body are aliased.)
+ * Frozen two levels deep (frame entries + stop bodies) so later mutation of
+ * the caller's collection cannot reach a sealed record; deeper values alias.
  */
 function snapshotFrameData(frames: KeyframesFrameData): KeyframesFrameData {
   const copy: Record<string, { name: string; frames: KeyframeFrameMap }> = {};
@@ -289,13 +252,8 @@ function snapshotFrameData(frames: KeyframesFrameData): KeyframesFrameData {
 }
 
 /**
- * THE vocabulary merge — one policy, both call sites (`extend()` inheriting
- * a sealed source's record, and the bundle's registration window). A name
- * collision is resolved to the INCOMING side, witnessed with a coded entry,
- * and the winner takes its OWN declaration position: the loser is removed
- * and the winner appended, so record order always reads as declaration
- * order of the surviving registrations (inherited region first, then
- * locals; a later extension's win sits at that extension's position).
+ * A name collision resolves to the incoming side, and the winner takes the
+ * incoming declaration position so record order stays declaration order.
  */
 function mergeVocabularyEntries(
   existingEntries: readonly VocabularyEntryState[],
@@ -309,7 +267,6 @@ function mergeVocabularyEntries(
   const entries = existingEntries.map((entry) => ({ ...entry }));
   const collisions = [...existingCollisions];
   for (const input of incoming) {
-    // ONE name-space: the collision check spans both kinds.
     const existingIndex = entries.findIndex(
       (entry) => entry.name === input.name
     );
@@ -337,9 +294,8 @@ function mergeVocabularyEntries(
 declare const VOCABULARY_COLLISION_BRAND: unique symbol;
 
 /**
- * Impossible-to-satisfy marker type that surfaces a template-literal label
- * at a colliding registration site — the compile error names the offending
- * vocabulary name instead of a bare structural mismatch.
+ * Impossible-to-satisfy marker so a colliding registration site reports the
+ * offending vocabulary name instead of a bare structural mismatch.
  */
 export interface VocabularyNameCollision<Name extends string> {
   readonly [VOCABULARY_COLLISION_BRAND]: `Vocabulary name "${Name}" is already registered on this system`;
@@ -348,10 +304,8 @@ export interface VocabularyNameCollision<Name extends string> {
 declare const VOCABULARY_INDEX_SIGNATURE: unique symbol;
 
 /**
- * Impossible-to-satisfy marker rejecting index-signature registration maps:
- * a `Record<string, …>`-typed map cannot prove its names, would bypass the
- * collision mapping (`Extract<string, Vocab>` is `never`), and would poison
- * the accumulated axis to `string`. Registration maps require literal keys.
+ * Rejects index-signature maps: they bypass the collision mapping
+ * (`Extract<string, Vocab>` is `never`) and widen the axis to `string`.
  */
 export interface VocabularyIndexSignatureRejected {
   readonly [VOCABULARY_INDEX_SIGNATURE]: 'vocabulary registration requires literal keys — an index-signature map cannot prove its names';
@@ -364,11 +318,8 @@ type LiteralKeyMap<M> = string extends keyof M
 declare const VOCABULARY_BRAND: unique symbol;
 
 /**
- * The final instance the sealing terminal returns: a full system instance
- * plus the vocabulary record accessor, with the registered names carried as
- * phantom type state (`VocabularyOf` reads them back). `.extend()` threads
- * this axis into the consumer's chain so collisions are compile errors on
- * every typed path, published `.d.ts` included.
+ * What `seal()` returns. The registered names ride as phantom type state so
+ * `.extend()` can make a collision a compile error in a consumer's chain.
  */
 export type SealedSystemInstance<
   PropReg extends Record<string, Prop>,
@@ -381,7 +332,6 @@ export type SealedSystemInstance<
   readonly [VOCABULARY_BRAND]?: Vocab;
 };
 
-/** Read the registered vocabulary names off a sealed system's type. */
 export type VocabularyOf<S> = S extends {
   readonly [VOCABULARY_BRAND]?: infer V;
 }
@@ -389,12 +339,8 @@ export type VocabularyOf<S> = S extends {
   : never;
 
 /**
- * The `build()` return: the pinned `{ system, createGlobalStyles,
- * createKeyframes }` members unchanged, plus the registration window —
- * `registerKeyframes` accumulates vocabulary (chain the calls: the returned
- * bundle carries the widened axis) and `seal()` closes registration,
- * returning the final instance `.extend()` consumes. One sealed instance
- * per bundle; registering or re-sealing afterwards throws.
+ * The `build()` return. Registration is linear — chain the returned bundle;
+ * one `seal()` per bundle, and later registering or re-sealing throws.
  */
 export interface SystemBundle<
   PropReg extends Record<string, Prop>,
@@ -407,17 +353,8 @@ export interface SystemBundle<
   createGlobalStyles: GlobalStylesFactory<PropReg>;
   createKeyframes: CreateKeyframesFactory<PropReg>;
   /**
-   * Register keyframe collections between the terminals. Two obligations
-   * travel together: the registration KEY MUST equal the module-scope named
-   * export the collection leaves its defining module under (the engine
-   * resolves `motion.ember` references by export name — a mismatched key
-   * cannot resolve at reference sites), and the shorthand
-   * `registerKeyframes({ animations })` spelling keeps the two identical by
-   * construction. Registration is LINEAR: this call returns the bundle
-   * carrying the accumulated vocabulary and supersedes the receiver —
-   * chain the calls and seal the final bundle. Registration retains the
-   * collections' frame bodies through the system object in consumer
-   * bundles — declared weight, not a hidden zero.
+   * The registration key must equal the collection's module-scope export
+   * name — references resolve by export name. Registration is linear.
    */
   registerKeyframes<M extends Record<string, RegisterableKeyframes>>(
     map: M &
@@ -426,11 +363,8 @@ export interface SystemBundle<
       }
   ): SystemBundle<PropReg, GroupReg, Conds, Sels, Vocab | (keyof M & string)>;
   /**
-   * Register global-style blocks between the terminals — the SAME linear
-   * lifecycle, record carriage, and ONE shared vocabulary name-space as
-   * `registerKeyframes` (a block cannot share a registered name with a
-   * keyframes collection). Keys equal export names; blocks stay
-   * module-scope named exports.
+   * Keys equal the block's module-scope export name. Blocks and keyframes
+   * collections share ONE vocabulary name-space.
    */
   registerGlobalStyles<M extends Record<string, RegisterableGlobalStyles>>(
     map: M &
@@ -442,12 +376,8 @@ export interface SystemBundle<
 }
 
 /**
- * Derive a kit's publishable bundle type from its sealed system, so the
- * vocabulary axis is READ off the instance rather than hand-asserted:
- * `const bundle: LibraryBundleFor<typeof ds> = { system: ds, theme }`.
- * A hand-written `LibraryBundle<'…'>` parameter is author-asserted and
- * unchecked; the bare `LibraryBundle` annotation erases the axis entirely
- * (the runtime collision witness covers that path).
+ * Publishable bundle type whose vocabulary axis is read off the sealed
+ * system; a hand-written `LibraryBundle<'…'>` axis is unchecked.
  */
 export type LibraryBundleFor<S> = LibraryBundle<VocabularyOf<S>>;
 
@@ -460,13 +390,8 @@ function snapshotTransform(source: TransformFn): TransformFn {
   const wrapper: TransformFn = (value, property, props) =>
     source(value, property, props);
   Object.defineProperty(wrapper, 'name', { value: source.name });
-  // The wrapper's own source text is byte-identical for EVERY transform, so
-  // it must present the wrapped function's text instead: bare-function
-  // equality (design D12) and the QuickJS transform capture both go through
-  // `toString()`, and the generic forwarder body would make all anonymous
-  // transforms compare equal. `source.toString()` (not
-  // Function.prototype.toString) so re-snapshotting a wrapper across extend
-  // generations keeps yielding the ORIGINAL text.
+  // The forwarder body is byte-identical for every transform, so the wrapper
+  // presents `source.toString()` — else anonymous transforms compare equal.
   const sourceText = source.toString();
   Object.defineProperty(wrapper, 'toString', {
     value: () => sourceText,
@@ -490,18 +415,8 @@ function snapshotTransform(source: TransformFn): TransformFn {
 }
 
 /**
- * A library bundle groups one export for both builders: the system half is
- * consumed by `createSystem().extend()`, the theme half by
- * `createTheme().extend()`; each builder takes its half and ignores the rest.
- * `tokens` is the pre-D9 name for the theme half — both spellings are
- * accepted (design D9; removal horizon is DEF-8).
- *
- * `Vocab` is the vocabulary-axis amendment (vocabulary-registration): the
- * annotation still erases the system half's registry generics, but a kit may
- * declare its registered vocabulary names (`LibraryBundle<'kitMotion'>`) so
- * consumer-side collision typing survives publication. The bare annotation
- * (`LibraryBundle`) admits no names — the runtime collision witness covers
- * that path.
+ * One export for both builders: `createSystem().extend()` takes the system
+ * half, `createTheme().extend()` the theme half (`tokens` is accepted too).
  */
 export interface LibraryBundle<Vocab extends string = never> {
   system: IncludableSystem;
@@ -512,12 +427,8 @@ export interface LibraryBundle<Vocab extends string = never> {
 }
 
 /**
- * The one runtime discriminator for a library bundle: `system.toConfig`
- * being callable. A built system instance also has a `.system()` CHAIN
- * METHOD, so presence of a `system` key alone cannot discriminate the two
- * shapes. Both builders' `from()` use this guard; the QuickJS capture
- * script in the Rust system-loader mirrors it by necessity (it cannot
- * import TS) and points back here.
+ * A built system also carries a `.system()` chain method, so only
+ * `system.toConfig` being callable discriminates a bundle from an instance.
  */
 export function isLibraryBundle(value: unknown): value is LibraryBundle {
   const system = (value as { system?: { toConfig?: unknown } } | null)?.system;
@@ -526,11 +437,8 @@ export function isLibraryBundle(value: unknown): value is LibraryBundle {
 
 export interface CreateSystemConfig {
   /**
-   * @deprecated Use `createSystem().extend(source)` — the single extension
-   * verb on both builders, which actually merges the source's registries.
-   * The alias keeps its frozen pre-existing semantics (discovery membership
-   * via the same source list, NO registry merge, no type-surface admission)
-   * for at least one minor release after `extend()` ships.
+   * @deprecated Use `createSystem().extend(source)`, which merges the
+   * source's registries. `includes` adds discovery membership only.
    */
   includes?: readonly IncludableSystem[];
 }
@@ -538,12 +446,8 @@ export interface CreateSystemConfig {
 declare const STAGE_BRAND: unique symbol;
 
 /**
- * Builder type-state for the inherit-first rule: `extend()` (and the
- * deprecated `from()`) is only callable while the builder is in the
- * `'inherit'` stage; every extension call (`addGroup`, `addProps`,
- * `addSelectors`, `addConditions`) advances to `'extend'`, making "inherit
- * first, then extend" a compile error rather than a lint. Phantom — never
- * present at runtime.
+ * Phantom type-state: `extend()` / `from()` are callable only in
+ * `'inherit'`, and every `add*` call advances the builder to `'extend'`.
  */
 export type SystemBuilderStage = 'inherit' | 'extend';
 
@@ -620,13 +524,6 @@ function orderedMembersEqual(
   );
 }
 
-/**
- * Divergent-prop error naming both definitions AND both origins — used by the
- * `extend()` merge (sibling/dual-version conflicts, design D3/G4) and by
- * `addGroup`/`addProps` when the colliding entry arrived through `extend()`
- * (origin labels "extended source #n" / "builder state"). When no extension
- * provenance exists, the pre-existing origin-less messages are kept verbatim.
- */
 function divergentPropError(
   key: string,
   existing: Prop,
@@ -649,9 +546,8 @@ export class SystemBuilder<
   Stage extends SystemBuilderStage = 'inherit',
   Vocab extends string = never,
 > {
-  // Structural anchor for the phantom Stage parameter — without a member
-  // referencing it, 'inherit' and 'extend' builders would be mutually
-  // assignable and the `this`-typed `from()` gate would never fire.
+  // Without a member referencing Stage, 'inherit' and 'extend' builders stay
+  // mutually assignable and the `this`-typed `from()` gate never fires.
   declare readonly [STAGE_BRAND]?: Stage;
 
   #propRegistry: PropReg;
@@ -659,20 +555,14 @@ export class SystemBuilder<
   #selectorRegistry: SelectorAliasMap;
   #includesRegistry: readonly IncludableSystem[];
   #conditionRegistry: ConditionAliasMap;
-  // Per-name extension provenance (design D3): registry-prefixed name
-  // (`prop:gap`, `group:space`, `selector:_hover`, `condition:_cardSm`) →
-  // 1-based index of the `extend()` call that introduced it. Sibling and
-  // dual-version conflicts name both origins from this map; entries the
-  // builder registered itself have no key ("builder state").
+  // `prop:gap` / `group:space` / `selector:_hover` / `condition:_cardSm` →
+  // 1-based index of the `extend()` call; absent means builder state.
   #extendProvenance: ReadonlyMap<string, number>;
-  // Number of `extend()` calls made so far — the label index for the next
-  // extended source. Distinct from the provenance map's max value: an extend
-  // whose entries all coalesce still consumes an index.
+  // Count of `extend()` calls — the label index for the next source. An
+  // extend whose entries all coalesce still consumes an index.
   #extendCount: number;
-  // Vocabulary inherited from sealed extended sources, in extension order
-  // (vocabulary-registration: inherited entries precede local registrations
-  // in the eventual record). Collisions recorded here are extend-time
-  // (kit-vs-kit); registration-time collisions accumulate in the bundle.
+  // Vocabulary inherited from sealed sources, in extension order; inherited
+  // entries precede local registrations in the sealed record.
   #vocabularyRegistry: readonly VocabularyEntryState[];
   #vocabularyCollisions: readonly VocabularyCollisionEntry[];
   #legacyVerbWitnesses: readonly VocabularyLegacyVerbEntry[];
@@ -701,28 +591,14 @@ export class SystemBuilder<
     this.#legacyVerbWitnesses = legacyVerbWitnesses || [];
   }
 
-  // Origin label for divergence errors: where did the existing entry for
-  // `provenanceKey` come from?
   #originOf(provenanceKey: string): string {
     const index = this.#extendProvenance.get(provenanceKey);
     return index === undefined ? 'builder state' : `extended source #${index}`;
   }
 
   /**
-   * Declare inheritance from a consumed library: the source's TYPE surface is
-   * admitted (prop/component types for compose/extend interop) and the source
-   * joins extraction discovery membership. NO registry merge — consumer
-   * configuration remains the singular authority, so props, groups,
-   * selectors, and conditions the source registered do not enter this
-   * builder's runtime registries. Chainable and repeatable, but only before
-   * extension calls ("inherit first, then extend" — enforced by the phantom
-   * builder stage). Accepts a built system instance or a library bundle
-   * (`{ system, tokens }`), taking the system half and ignoring the rest.
-   *
-   * @deprecated Use `extend(source)` — the single extension verb on both
-   * builders, whose type admission is backed by a real registry merge.
-   * `from()` keeps these frozen semantics (type admission + discovery
-   * membership, no merge) for at least one minor release.
+   * @deprecated Use `extend(source)`, which merges the source's registries.
+   * `from()` admits types and discovery membership only — no merge.
    */
   from<
     SrcProps extends Record<string, Prop>,
@@ -747,15 +623,8 @@ export class SystemBuilder<
     Vocab
   >;
   /**
-   * A value annotated as the exported {@link LibraryBundle} interface has
-   * already erased its system half's generics (`system: IncludableSystem`),
-   * so there is no type surface to admit — discovery and runtime semantics
-   * are identical, and the builder's own type state passes through unchanged.
-   *
-   * @deprecated Use `extend(source)` — the single extension verb on both
-   * builders, whose type admission is backed by a real registry merge.
-   * `from()` keeps these frozen semantics (type admission + discovery
-   * membership, no merge) for at least one minor release.
+   * @deprecated Use `extend(source)`. A `LibraryBundle` annotation has
+   * already erased the system half's generics — no type surface to admit.
    */
   from(
     this: SystemBuilder<PropReg, GroupReg, Conds, Sels, 'inherit', Vocab>,
@@ -789,20 +658,8 @@ export class SystemBuilder<
   }
 
   /**
-   * Extend this system from a consumed library: the source's prop, group,
-   * selector, and condition registries MERGE into the builder (design D1), so
-   * the built system's type surface, `toConfig()` output, and extraction
-   * reachability describe the same configuration. Identical definitions
-   * coalesce; divergent definitions fail loud naming the entry and both
-   * origins (design D3), including a post-extend attempt to redefine an
-   * inherited prop. Local calls may add new entries and may replace inherited
-   * group membership, selectors, or conditions; prop definitions never rebind
-   * silently. Chainable and repeatable, but only before extension calls ("inherit first, then
-   * extend" — enforced by the phantom builder stage). Accepts a built system
-   * instance or a library bundle (`{ system, theme }`), taking the system
-   * half and ignoring the rest. The merge consumes the source's registry
-   * snapshot captured at its `build()` (design D7), never a serialized
-   * round-trip.
+   * Merges the source's prop, group, selector, and condition registries;
+   * identical entries coalesce, divergent ones throw naming both origins.
    */
   extend<
     SrcProps extends Record<string, Prop>,
@@ -832,11 +689,8 @@ export class SystemBuilder<
     Vocab | SrcVocab
   >;
   /**
-   * A value annotated as the exported {@link LibraryBundle} interface has
-   * already erased its system half's generics (`system: IncludableSystem`),
-   * so no source types are admitted — the runtime merge is identical, and
-   * the builder's own type state passes through unchanged, widened by the
-   * bundle's declared vocabulary axis (the erasure amendment).
+   * A `LibraryBundle` annotation has erased the system half's generics: the
+   * runtime merge is identical, but no source types are admitted.
    */
   extend<SrcVocab extends string = never>(
     this: SystemBuilder<PropReg, GroupReg, Conds, Sels, 'inherit', Vocab>,
@@ -862,8 +716,6 @@ export class SystemBuilder<
     const incomingOrigin = `extended source #${sourceIndex}`;
     const provenance = new Map(this.#extendProvenance);
 
-    // ── Props: absent → add; equal → coalesce; divergent → loud, both
-    // origins named (design D3; sibling/dual-version conflicts are G4).
     const nextProps: Record<string, Prop> = { ...this.#propRegistry };
     for (const [name, incoming] of Object.entries(snapshot.props)) {
       if (name in this.#groupRegistry) {
@@ -886,11 +738,8 @@ export class SystemBuilder<
           incomingOrigin
         );
       }
-      // Equal → coalesce: keep the existing entry and its first provenance.
     }
 
-    // ── Groups: ordered-membership equality → coalesce; divergent → loud;
-    // group-name-vs-prop-name cross-collision mirrors addGroup.
     const nextGroups: Record<string, readonly string[]> = {
       ...(this.#groupRegistry as Record<string, readonly string[]>),
     };
@@ -916,12 +765,8 @@ export class SystemBuilder<
       }
     }
 
-    // ── Selectors: entries identical to the built-in default are inert
-    // (every source carries the seeded built-ins — they must coalesce
-    // silently). A deliberate registration coalesces on string equality
-    // keeping the existing order, overrides a pristine built-in (source
-    // seeds the base, design D2), and conflicts loud with a deliberate
-    // registration from another extended source.
+    // Every source carries the seeded built-ins, so an entry identical to its
+    // built-in default is inert; a pristine built-in yields to an override.
     const selectorOverrides: SelectorAliasMap = {};
     const newSelectors: Record<string, string> = {};
     for (const [name, incoming] of Object.entries(snapshot.selectors)) {
@@ -944,8 +789,8 @@ export class SystemBuilder<
       } else if (existing.selector !== incoming.selector) {
         const existingIndex = provenance.get(`selector:${name}`);
         if (existingIndex === undefined) {
-          // Pristine built-in: the source's deliberate override wins,
-          // preserving the built-in order (mirrors mergeSelectors).
+          // No provenance means a pristine built-in: the source's override
+          // wins and keeps the built-in order.
           selectorOverrides[name] = {
             selector: incoming.selector,
             order: existing.order,
@@ -966,9 +811,7 @@ export class SystemBuilder<
       newSelectors
     );
 
-    // ── Conditions: same policy keyed on `value` (kind derives from it,
-    // `order` is a per-registry accident — existing order wins on coalesce);
-    // new entries number through mergeConditions.
+    // Equality is keyed on `value`; `order` is a per-registry accident.
     const conditionOverrides: ConditionAliasMap = {};
     const newConditions: Record<string, string> = {};
     for (const [name, incoming] of Object.entries(snapshot.conditions)) {
@@ -1013,15 +856,6 @@ export class SystemBuilder<
       new Set(Object.keys(nextSelectors))
     );
 
-    // ── Vocabulary (vocabulary-registration): a SEALED source contributes
-    // its registration record in declaration order, appended after entries
-    // from earlier extensions. A name collision between extended sources
-    // resolves to the later extension — one merge policy for both call
-    // sites, see `mergeVocabularyKeyframes` — with a coded witness entry;
-    // on typed paths the collision is a compile error at the consumer's
-    // registration site. A source WITHOUT a record fails loud: `.extend()`
-    // consumes sealed instances only (the hard cut — registered vocabulary
-    // has exactly one carriage channel).
     const sourceRecord = (
       instance as { getVocabularyRecord?(): VocabularyRecord }
     ).getVocabularyRecord?.();
@@ -1063,8 +897,6 @@ export class SystemBuilder<
       nextProps as PropReg,
       nextGroups as GroupReg,
       nextSelectors,
-      // Runtime parity with from(): the source instance stays discovery- and
-      // includes-visible (the tracer's extend() form lands in increment 06).
       [...this.#includesRegistry, instance],
       nextConditions,
       provenance,
@@ -1076,19 +908,8 @@ export class SystemBuilder<
   }
 
   /**
-   * Register custom selector aliases (`_hoverChild`, …) → `&`-relative selector
-   * strings. Overriding a built-in SELECTOR alias is legal; a name owned by the
-   * CONDITION registry (built-in or registered earlier in this chain) maps to
-   * the branded `ReservedByConditionRegistry` instead of its selector string —
-   * the compile-time complement of the cross-registry throw below. The clash is
-   * checked in VALUE position so `S` stays a naked inference site; subtracting
-   * the reserved names from the KEY position is impossible — `Exclude` is a
-   * silent no-op against a template-literal pattern. `NarrowedAliases` keeps a
-   * widened `Conds` from swallowing the whole `_` namespace.
-   *
-   * It wraps the ACCUMULATION too: a widened registration contributes nothing
-   * to `Sels` rather than widening it, so the pattern can never reach the
-   * published `RegistryBrand` — see `addConditions` for the full argument.
+   * Registers `_` aliases → `&`-relative selectors. The cross-registry clash
+   * is checked in VALUE position: `Exclude` on a `_${string}` key is a no-op.
    */
   addSelectors<S extends Record<`_${string}`, string>>(
     selectors: S & {
@@ -1104,10 +925,8 @@ export class SystemBuilder<
     'extend',
     Vocab
   > {
-    // Cross-registry clash guard, REVERSE direction (inc-11 full-pass F-1.4):
-    // a name already registered as a CONDITION alias must not be re-registered
-    // as a selector — Rust dispatch prefers selector aliases, so the condition
-    // would silently never resolve. addConditions guards the other direction.
+    // Rust dispatch prefers selector aliases, so re-registering a condition
+    // name as a selector would make the condition silently never resolve.
     for (const name of Object.keys(selectors)) {
       if (name in this.#conditionRegistry) {
         throw new Error(
@@ -1117,9 +936,6 @@ export class SystemBuilder<
       }
     }
     const merged = mergeSelectors(this.#selectorRegistry, selectors);
-    // Conds/Sels/Stage are phantom type-state (no runtime constructor slot);
-    // the accumulated union and the 'extend' stage advance are applied via
-    // explicit constructor type arguments.
     return new SystemBuilder<
       PropReg,
       GroupReg,
@@ -1142,30 +958,8 @@ export class SystemBuilder<
   }
 
   /**
-   * Register condition aliases (`_motionReduce`, `_cardSm`, …) → at-rule
-   * condition strings (`@media …` / `@container …` / `@supports …`).
-   * Recognized as block keys in style objects; user aliases override built-ins
-   * of the same name (design D3). Keys are constrained to `_`-prefixed aliases
-   * and values to `@`-prefixed at-rule strings — a value that does not begin
-   * with an at-rule name is a compile-time type error (design D9; the runtime
-   * `inferConditionKind` throw is defense-in-depth). The registered keys are
-   * accumulated into the phantom `Conds` union and surfaced on `build()`.
-   *
-   * A key owned by the SELECTOR registry (built-in or registered earlier in
-   * this chain) maps to the branded `ReservedBySelectorRegistry` — see
-   * `addSelectors` for why the clash is checked in value position. Overriding a
-   * built-in CONDITION alias stays legal (design D3); only the OPPOSITE
-   * registry is subtracted.
-   *
-   * `NarrowedAliases` wraps the ACCUMULATION, not just the gate: a widened
-   * registration (`Record<`_${string}`, …>`) contributes nothing to `Conds`.
-   * Accumulating the pattern instead would carry it out through `build()`'s
-   * `RegistryBrand`, and a consumer publishing `ConditionsOf` into the
-   * augmentable `Conditions` interface would then have every `_` key type as
-   * registered — `UnknownConditionAlias` would never fire again, anywhere in
-   * that project. The gate keeps its own `NarrowedAliases` regardless:
-   * `extend()`-sourced unions can still arrive widened from a system built
-   * before this narrowing.
+   * Registers `_` aliases → at-rule strings; user aliases override built-ins
+   * of the same name. A selector-owned key maps to the branded rejection.
    */
   addConditions<C extends Record<`_${string}`, AtRuleValue>>(
     conditions: C & {
@@ -1218,7 +1012,6 @@ export class SystemBuilder<
     'extend',
     Vocab
   > {
-    // Collision check: group name must not collide with any registered prop name
     if (name in this.#propRegistry) {
       throw new Error(
         `Group name "${name}" collides with an existing prop name. ` +
@@ -1226,22 +1019,14 @@ export class SystemBuilder<
       );
     }
 
-    // Overlap tolerance: check existing props for definition match
     for (const key of Object.keys(config)) {
       if (key in this.#propRegistry) {
         const existing = (this.#propRegistry as Record<string, Prop>)[key];
         const incoming = config[key];
-        // structuralScale only for entries that arrived through extend():
-        // those carry a frozen COPY of their object/array scale (registry
-        // snapshot), so identity comparison would false-conflict a
-        // byte-identical re-registration. Direct builder-vs-builder overlap
-        // keeps identity semantics — in one file, sharing the reference is
-        // the correct authoring.
+        // Extended entries carry a frozen COPY of their scale, so identity
+        // comparison would false-conflict a byte-identical re-registration.
         const viaExtend = this.#extendProvenance.has(`prop:${key}`);
         if (!arePropDefinitionsEqual(existing, incoming, viaExtend)) {
-          // Divergence against an entry that arrived through extend() names
-          // both origins (design D3); builder-vs-builder keeps the
-          // pre-existing message.
           if (this.#extendProvenance.has(`prop:${key}`)) {
             throw divergentPropError(
               key,
@@ -1293,7 +1078,6 @@ export class SystemBuilder<
   >(
     config: Conf
   ): SystemBuilder<PropReg & Conf, GroupReg, Conds, Sels, 'extend', Vocab> {
-    // Collision check: prop names must not collide with any registered group name
     for (const key of Object.keys(config)) {
       if (key in this.#groupRegistry) {
         throw new Error(
@@ -1303,17 +1087,12 @@ export class SystemBuilder<
       }
     }
 
-    // Overlap tolerance: same check as addGroup
     for (const key of Object.keys(config)) {
       if (key in this.#propRegistry) {
         const existing = (this.#propRegistry as Record<string, Prop>)[key];
         const incoming = (config as Record<string, Prop>)[key];
-        // structuralScale for extended entries — same rationale as addGroup.
         const viaExtend = this.#extendProvenance.has(`prop:${key}`);
         if (!arePropDefinitionsEqual(existing, incoming, viaExtend)) {
-          // Divergence against an entry that arrived through extend() names
-          // both origins (design D3); builder-vs-builder keeps the
-          // pre-existing message.
           if (this.#extendProvenance.has(`prop:${key}`)) {
             throw divergentPropError(
               key,
@@ -1353,17 +1132,8 @@ export class SystemBuilder<
   }
 
   build(): SystemBundle<PropReg, GroupReg, Conds, Sels, Vocab> {
-    // Everything both instances read is captured ONCE, here (adversarial
-    // pass on inc 02: reading builder/caller-mutable state again at seal
-    // time opened a build→seal divergence window). Copied containers AND
-    // entries (review probe P9, both depths) — an instance's public mutable
-    // propRegistry/groupRegistry fields must not alias the builder's
-    // private state at any level, or mutating a built instance would bake
-    // into a LATER build()'s snapshot on the same builder. Both minted
-    // instances serialize from this ONE frozen snapshot (design D7's
-    // isolation property: newly captured at build, immutable thereafter),
-    // and each gets its own mutable public copies minted from the captured
-    // sources, so the pair can never disagree.
+    // Captured ONCE here — re-reading builder or caller state at seal time
+    // opens a build→seal divergence; minted instances get their own copies.
     const propSource = Object.fromEntries(
       Object.entries(this.#propRegistry).map(([key, entry]) => [
         key,
@@ -1407,9 +1177,8 @@ export class SystemBuilder<
         },
       }) as SystemInstance<PropReg, GroupReg, Conds, Sels>;
 
-      // Non-enumerable next to toConfig: additive on the built instance, so
-      // the QuickJS capture script's bundle discriminator (keyed on
-      // `system.toConfig` being callable) is untouched.
+      // Non-enumerable: the QuickJS capture script's discriminators walk
+      // enumerable keys only.
       Object.defineProperty(instance, 'getRegistrySnapshot', {
         value: (): RegistrySnapshot => snapshot,
         enumerable: false,
@@ -1435,15 +1204,6 @@ export class SystemBuilder<
     const createKeyframes = ((frames: Record<string, KeyframeFrameMap>) =>
       keyframesImpl(frames)) as CreateKeyframesFactory<PropReg>;
 
-    // ── Registration window (vocabulary-registration): open from this
-    // build() until seal(), and LINEAR — each registerKeyframes returns a
-    // FRESH bundle carrying the accumulated state, and the superseded
-    // bundle rejects further use loudly. Object identity therefore carries
-    // exactly the state its type claims: an unchained second call on a
-    // stale bundle is a runtime error, never a silent divergence between
-    // the type axis and the sealed record. Inherited entries (sealed
-    // extended sources) seed the record in extension order; local
-    // registrations append after them, labeled by 1-based call index.
     const makeBundle = (
       entries: readonly VocabularyEntryState[],
       collisions: readonly VocabularyCollisionEntry[],
@@ -1451,7 +1211,6 @@ export class SystemBuilder<
     ): SystemBundle<PropReg, GroupReg, Conds, Sels, Vocab> => {
       let consumedBy: 'register' | 'seal' | undefined;
 
-      // One linear-window guard + merge for both registration kinds.
       const registerEntries = (
         label: string,
         incoming: VocabularyEntryInput[]
@@ -1525,9 +1284,8 @@ export class SystemBuilder<
             );
           }
           const blockValue = block as unknown as GlobalStyleBlock;
-          // Registration-time snapshot mirroring snapshotFrameData: the top
-          // two levels are copied and frozen (blind spot: deeper selector
-          // bodies stay aliased).
+          // Copied and frozen two levels deep; deeper selector bodies stay
+          // aliased.
           const styles = Object.freeze(
             Object.fromEntries(
               Object.entries(blockValue.styles).map(([selector, body]) => [
@@ -1579,8 +1337,8 @@ export class SystemBuilder<
             entries
               .filter((entry) => entry.kind === 'keyframes')
               .map((entry) =>
-                // frames were deep-copied and frozen at registration (or
-                // arrived frozen from a sealed source's record).
+                // Frames arrive deep-copied and frozen, from registration or
+                // from a sealed source's record.
                 Object.freeze({ name: entry.name, frames: entry.frames })
               )
           ),
@@ -1600,10 +1358,8 @@ export class SystemBuilder<
           ),
           legacyVerbs: Object.freeze(
             legacyVerbWitnessRecord
-              // A name that DID arrive (a separate `.extend()` of the same
-              // vocabulary) must not be claimed undelivered — narrow each
-              // entry to its genuinely refused names, dropping emptied
-              // entries (the false-witness guard).
+              // A name that DID arrive through a separate `.extend()` must
+              // not be claimed undelivered — keep only refused names.
               .map((entry) => ({
                 ...entry,
                 names: entry.names.filter(
@@ -1627,16 +1383,14 @@ export class SystemBuilder<
           Sels,
           Vocab
         >;
-        // Non-enumerable for the same reason as getRegistrySnapshot: the
-        // QuickJS capture script's discriminators walk enumerable keys only.
+        // Non-enumerable: the QuickJS capture script's discriminators walk
+        // enumerable keys only.
         Object.defineProperty(sealed, 'getVocabularyRecord', {
           value: (): VocabularyRecord => record,
           enumerable: false,
         });
-        // Runtime-only stub (absent from the sealed TYPE, so typed misuse
-        // stays a compile error): registration attempted on the sealed
-        // instance itself names the sealed state instead of a bare
-        // "not a function".
+        // Runtime-only stub, absent from the sealed TYPE: registering on a
+        // sealed instance names the sealed state, not "not a function".
         for (const member of ['registerKeyframes', 'registerGlobalStyles']) {
           Object.defineProperty(sealed, member, {
             value: (): never => {
@@ -1678,11 +1432,8 @@ export type SystemInstance<
 > = Animus<PropReg, GroupReg> & {
   toConfig(): SerializedConfig;
   /**
-   * Frozen registry state captured at `build()` (design D7) — what
-   * `extend()` merges from. Always present on instances built by this
-   * version; optional in the type so systems built by an older
-   * @animus-ui/system stay structurally acceptable to `from()` during the
-   * deprecation window.
+   * Frozen registry state captured at `build()` — what `extend()` merges
+   * from. Optional only for systems built by an older @animus-ui/system.
    */
   getRegistrySnapshot?(): RegistrySnapshot;
 } & RegistryBrand<Conds, Sels>;
@@ -1692,31 +1443,18 @@ export interface SerializedConfig {
   groupRegistry: string;
   transforms: Record<string, NamedTransform>;
   /**
-   * `{ transformName: sourceText }` for every registered transform that
-   * carries a captured `transformSource`. This is the ONLY channel by which
-   * transforms shipped inside a package (rather than declared via a
-   * `createTransform()` call the extractor can parse out of a project file)
-   * reach the build-time evaluator.
+   * `{ transformName: sourceText }` — the only channel by which transforms
+   * shipped inside a package reach the build-time evaluator.
    */
   transformSources: string;
   selectorAliases: string;
-  /**
-   * Condition alias map JSON (inc 03 — NEW field): `alias → { value, order,
-   * kind }`. `"{}"` when the system registers no conditions (built-ins are
-   * empty this increment). Distinct from `selectorAliases`, which stays
-   * byte-for-byte unchanged.
-   */
+  /** Condition alias map JSON: `alias → { value, order, kind }`. */
   conditionAliases: string;
 }
 
 /**
- * Freeze the builder's registries into the build-time snapshot (design D7):
- * containers, per-entry objects, and the mutable values nested inside a prop
- * (`properties` arrays, object/array scales) are copies, so neither the
- * builder's onward chaining nor post-build mutation of the instance's public
- * registry fields reaches serialized or merged output. Transform functions
- * are cached immutable forwarding wrappers: behavior survives without keeping
- * mutable serialization metadata live.
+ * Copies and freezes containers, entries, and the mutable values inside a
+ * prop, so later mutation reaches neither serialized nor merged output.
  */
 function createRegistrySnapshot(
   propRegistry: Record<string, Prop>,
@@ -1822,19 +1560,13 @@ function serializeInstance<
   const { selectors } = serializeSelectorMap(selectorRegistry);
   const conditions = serializeConditionMap(conditionRegistry);
 
-  // Transform SOURCES, separate from the live `transforms` map: extraction
-  // evaluates transforms in a sandbox that can only be seeded from source
-  // text. `propConfig` serializes `transform` as a bare name, and the only
-  // other seed the extractor has is `createTransform()` calls it finds by
-  // parsing project files — which never includes transforms shipped inside
-  // @animus-ui/system. Without this, every built-in transform is unresolvable
-  // at build time and its prop silently falls back to the raw value.
+  // Extraction evaluates transforms in a sandbox seeded only from source
+  // text; without these a packaged transform silently falls back to raw values.
   const transformSources: Record<string, string> = {};
   for (const [name, fn] of Object.entries(transforms)) {
     const source = fn.transformSource;
-    // Absent only for instances built by an older @animus-ui/system; skipping
-    // leaves the pre-existing raw-value fallback rather than registering a
-    // wrapper whose body is the generic forwarder.
+    // Absent only on instances built by an older @animus-ui/system; skipping
+    // leaves the raw-value fallback instead of the forwarder body.
     if (source !== undefined) transformSources[name] = source;
   }
 
@@ -1850,10 +1582,6 @@ function serializeInstance<
 
 export function createSystem(config?: CreateSystemConfig): SystemBuilder {
   const includes = config?.includes ?? [];
-  // Legacy-verb witness (vocabulary-registration): the deprecated
-  // `includes:` alias performs no registry merge, so a sealed source's
-  // registered vocabulary cannot reach this consumer — witnessed per
-  // source, carried on the eventual sealed record.
   const witnesses: VocabularyLegacyVerbEntry[] = [];
   includes.forEach((source, index) => {
     const witness = legacyVerbWitness(source, 'includes', index + 1);

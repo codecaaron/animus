@@ -1,17 +1,10 @@
 import { isUnitlessProperty } from '@animus-ui/properties';
 
-/**
- * Append `px` to bare numeric values in CSS declarations for properties
- * that expect length units. Unitless properties are preserved as-is.
- * Numbers inside CSS function calls (cubic-bezier, rgb, calc, etc.) are skipped.
- */
 export function applyUnitFallback(css: string): string {
   return css.replace(
     /([a-z-]+)\s*:\s*([^;{}]+);/g,
     (match, prop: string, value: string) => {
       if (isUnitlessProperty(prop)) return match;
-      // Strip function call contents to avoid mangling cubic-bezier(), rgb(), etc.
-      // Replace numbers only OUTSIDE parenthesized expressions.
       let depth = 0;
       let fixed = '';
       let i = 0;

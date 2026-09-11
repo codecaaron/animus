@@ -1,13 +1,3 @@
-/**
- * The world comparator shared by `simulate` and `diff`.
- *
- * A semantic diff is not a text diff of emitted CSS: it reports, per subject
- * and per context, *what the cascade decided differently* and why the decision
- * moved — a different winner, a re-activated rule, a token that resolved
- * elsewhere. That classification is the difference between "these bytes
- * changed" and "this component's padding changed in the dark, compact class".
- */
-
 import { subjectKey } from '../core/fact';
 import { canonicalJson } from '../core/identity';
 import { describeValue } from '../core/value';
@@ -58,13 +48,6 @@ import type {
 } from './cascade';
 import type { OracleRuntime } from './runtime';
 
-/**
- * The comparator's own vocabulary is DECLARED in `core/probe.ts`, beside the
- * `ProbeResult.semanticDiff` field it types, and re-exported here because this
- * module is its only producer (`toSemanticDiff`) and the name every consumer
- * already reaches for. One declaration, so the field and the producer cannot
- * describe different shapes.
- */
 export type {
   SemanticDiff,
   SemanticDiffEntry,
@@ -76,14 +59,6 @@ export interface ComparisonSide {
   ctx: CascadeContext;
 }
 
-/**
- * A `force-dimension` intervention is the one delta that moves the *point*
- * rather than the universe: "what if this were hovered / large / dark". Both
- * sides are therefore read at the same cell but under their own world's forced
- * bindings, which is what makes rule activation observable — enumerating
- * cells from the candidate's already-narrowed domain would compare a forced
- * world against itself.
- */
 const forcedBindings = (world: RenderWorld): ScenarioPoint => {
   const forced: Record<string, DimensionValue> = {};
   for (const delta of world.interventions) {
@@ -118,7 +93,6 @@ const activeIds = (analysis: CascadeAnalysis): ReadonlySet<string> =>
       .map((candidate) => candidate.rule.id)
   );
 
-/** Everything about one cell both worlds have already computed. */
 interface CellComparison {
   baseline: ComparisonSide;
   candidate: ComparisonSide;
@@ -130,21 +104,10 @@ interface CellComparison {
 
 interface Classified {
   kind: SemanticDiffKind;
-  /** Set when classification already had to resolve the values. */
   beforeValue?: string;
   afterValue?: string;
 }
 
-/**
- * Classify one property at one cell.
- *
- * The order of the tests is the classification policy: a changed winner is
- * attributed to *activation* whenever the new winner was inactive before (or
- * the old one is inactive now), because "this rule started applying" is the
- * cause an author can act on; only when both rules were active in both worlds
- * is it a plain precedence change. A same-rule change is a token change exactly
- * when the authored text is untouched and only the resolution moved.
- */
 const classify = (
   comparison: CellComparison,
   property: string,
@@ -203,7 +166,6 @@ const classify = (
   };
 };
 
-/** Every property either world decides for this target at this cell. */
 const propertiesOf = (
   baseline: CascadeAnalysis,
   candidate: CascadeAnalysis
@@ -226,7 +188,6 @@ const winnerFor = (
 
 export interface CellComparisonResult {
   entries: readonly SemanticDiffEntry[];
-  /** The baseline analysis, so callers can reuse it instead of re-analyzing. */
   before: CascadeAnalysis;
 }
 
@@ -297,12 +258,6 @@ const entryKey = (entry: SemanticDiffEntry): string =>
     entry.after ?? '',
   ].join('|');
 
-/**
- * Does this component own the rule a delta touched? Ownership decides how wide
- * the collateral sweep goes: the owner's own variant and state axes are
- * enumerated (a change can hide behind a variant nobody looked at), while every
- * other component is checked at the shared axes only.
- */
 export const ownsRule = (
   component: ComponentRecord,
   rule: StyleRuleRecord | undefined
@@ -340,27 +295,16 @@ export interface SweepResult {
   unaffectedContextClasses: number;
   subjects: readonly RenderSubject[];
   changedProperties: readonly string[];
-  /** Cells where the focal target changed / was evaluated at all. */
   focalCellsChanged: number;
   focalCellsEvaluated: number;
 }
 
-/**
- * Compare two worlds over the focal target and then over every component in the
- * system.
- *
- * The collateral half is the point: a repair that fixes the symptom under the
- * probed context but silently moves another component in another context class
- * is not a clean repair, and only an exhaustive sweep of the closed universe
- * can say so (DESIGN §12, step 3).
- */
 export const sweepWorlds = (request: SweepRequest): SweepResult => {
   const { rt, baseline, candidate, focal } = request;
   const entries = new Map<string, SemanticDiffEntry>();
   const subjects: RenderSubject[] = [];
   const changedProperties = new Set<string>();
   const declaredCuts = rt.host.scenarios.cuts();
-  // World-invariant: computed once, not per cell.
   const forced = {
     baseline: forcedBindings(baseline.world),
     candidate: forcedBindings(candidate.world),
@@ -393,11 +337,6 @@ export const sweepWorlds = (request: SweepRequest): SweepResult => {
         cell,
         forced
       );
-      // The grouping key is the baseline's active-rule set at the *raw* cell
-      // point. When the baseline world forces no bindings that is exactly the
-      // analysis `compareAtCell` just ran; only a forced baseline needs its
-      // own read. Joined ids partition identically to the hashed fingerprint
-      // `equivalence` publishes — this key is a Map-internal grouping only.
       const fingerprint =
         Object.keys(forced.baseline).length === 0
           ? activeRuleIds(compared.before).join('|')
@@ -489,23 +428,12 @@ export const toSemanticDiff = (sweep: SweepResult): SemanticDiff => ({
   unaffectedContextClasses: sweep.unaffectedContextClasses,
 });
 
-/** The focal half of a sweep: the cells the claim quantifies over. */
 export interface FocalPlan {
-  /** Absent exactly when the probe has no target. */
   focalCells?: readonly ScenarioCell[];
   scenarioCells: number;
   harvestTruncated: boolean;
 }
 
-/**
- * Plan the focal domain for a sweep — one home for the
- * `scopedDomain → harvestCuts → cellsOf` sequence simulate and diff share, so
- * the DESIGN §8 refusal rule below cannot drift between them.
- *
- * The domain is built over the *baseline* world, deliberately: a
- * `force-dimension` delta must still be compared against the values it
- * displaced.
- */
 export const planFocalSweep = (
   rt: OracleRuntime,
   ctx: CascadeContext,
@@ -535,11 +463,6 @@ export const planFocalSweep = (
   };
 };
 
-/**
- * The domain the answer quantifies over was not fully walked: with a target,
- * that is the focal domain; without one, the whole sweep IS the claim. A
- * partial walk supports no settled verdict (DESIGN §8).
- */
 export const isFocalIncomplete = (
   sweep: SweepResult,
   plan: FocalPlan
@@ -573,7 +496,6 @@ export const summarizeDiff = (sweep: SweepResult, label: string): string => {
   );
 };
 
-/** Interventions the candidate world carries that the baseline does not. */
 export const addedInterventions = (
   baseline: RenderWorld,
   candidate: RenderWorld
@@ -600,11 +522,6 @@ export const affectedRulesOf = (
   return Array.from(rules).sort();
 };
 
-/**
- * The candidate world's value for every property the sweep saw move on the
- * focal target — the load-bearing facts of a comparison, and the only ones
- * worth adding to the candidate world's graph.
- */
 export const focalFacts = (
   rt: OracleRuntime,
   candidate: ComparisonSide,
@@ -653,7 +570,6 @@ export const subjectsOfDeltas = (
 export interface DiffRequest {
   candidate: { world: RenderWorld } | { deltas: readonly WorldDelta[] };
   baseline?: RenderWorld;
-  /** Scopes the context-class count to one component; the sweep is total. */
   target?: string;
 }
 
@@ -667,15 +583,11 @@ export const runDiff = (
       ? request.candidate.world
       : applyDeltas(baselineWorld, request.candidate.deltas);
 
-  // Build both views eagerly so a malformed delta throws here rather than
-  // becoming an empty diff that reads like "nothing changed".
   const baselineView = rt.viewFor(baselineWorld);
   const candidateView = rt.viewFor(candidateWorld);
   const resolution =
     request.target === undefined ? undefined : rt.resolveTarget(request.target);
 
-  // Absent, not undefined: `probeStateId` hashes the descriptor, so an
-  // unscoped diff must not carry a target key at all.
   const probe: RenderProbe = {
     operation: 'diff',
     world: candidateWorld,

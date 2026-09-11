@@ -1,13 +1,5 @@
 import { createTheme } from '@animus-ui/system';
 
-/**
- * Reference theme for test-ds components.
- *
- * Documents the token vocabulary that test-ds components depend on.
- * Consumers must include these tokens (or equivalent) in their own theme.
- * This theme is NOT loaded by the consumer's plugin — it exists for
- * documentation, type reference, and future unpack() composition.
- */
 export const referenceTokens = createTheme()
   .addBreakpoints({ sm: 640, md: 768, lg: 1024, xl: 1280 })
   .addColors({

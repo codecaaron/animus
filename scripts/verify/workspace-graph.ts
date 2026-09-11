@@ -37,13 +37,6 @@ function expandWorkspacePattern(root: string, pattern: string): string[] {
     .map((entry) => `${parent}/${entry.name}`);
 }
 
-/**
- * A `package.json` entry-point field value as `JSON.parse` produced it.
- * `exports` is the one entry-point field `manifest-model.ts` leaves unmodelled
- * on purpose — a conditional-exports tree nests arbitrarily deep under
- * condition names nobody owns — so the harvest below decides node by node
- * instead of dereferencing an assumed shape.
- */
 type EntryPointValue =
   | null
   | boolean
@@ -52,9 +45,6 @@ type EntryPointValue =
   | EntryPointValue[]
   | { [condition: string]: EntryPointValue };
 
-// Decided by representation tag rather than by `typeof`. Arrays are taken by
-// the branch above this one, so `[object Object]` here means exactly a
-// conditional-exports block.
 function isEntryPointText(value: EntryPointValue): value is string {
   return Object.prototype.toString.call(value) === '[object String]';
 }
@@ -90,10 +80,8 @@ function distEntries(manifest: PackageManifest): string[] {
   collectStringLeaves(manifest.main, candidates);
   collectStringLeaves(manifest.module, candidates);
   collectStringLeaves(manifest.types, candidates);
-  // SAFETY: `manifest-model.readManifest` produces every manifest by
-  // `JSON.parse`, so `exports` — the field it declares as `unknown` because
-  // package.json fixes no shape for it — holds exactly what JSON.parse can
-  // produce, which is what `EntryPointValue` enumerates.
+  // SAFETY: `readManifest` produces every manifest by `JSON.parse`, so
+  // `exports`, declared `unknown`, holds only what `EntryPointValue` names.
   collectStringLeaves(manifest.exports as EntryPointValue, candidates);
   return [
     ...new Set(candidates.filter((entry) => /(^|\/)dist(\/|$)/.test(entry))),
@@ -104,9 +92,6 @@ export function discoverWorkspaceManifests(
   root: string
 ): Map<string, WorkspaceEntry> {
   const absoluteRoot = resolve(root);
-  // `RootManifest` adds one optional field to what `readManifest` returns, so
-  // the root's extra `workspaces` declaration is reachable without asserting
-  // anything about the bytes on disk.
   const rootManifest: RootManifest = readManifest(
     join(absoluteRoot, 'package.json')
   );
@@ -207,10 +192,8 @@ function main(args: readonly string[]): number {
     }
     return 0;
   } catch (error) {
-    // SAFETY: every throw reachable from this block is an Error — the six
-    // `new Error(...)` sites in this file (unsupported pattern, nameless or
-    // duplicate package, unknown owner, unknown dependency, dependency cycle),
-    // plus `readManifest`'s `node:fs` and `JSON.parse` failures.
+    // SAFETY: every throw reachable here is an Error — the explicit throws in
+    // this file plus `readManifest`'s `node:fs` and `JSON.parse` failures.
     console.error(`ERROR: ${(error as Error).message}`);
     return 1;
   }

@@ -1,10 +1,3 @@
-/**
- * Shared className resolution logic used by both createComponent (React)
- * and createClassResolver (framework-agnostic).
- *
- * Factored to ensure behavioral parity between .asElement() and .asClass() outputs.
- */
-
 interface VariantConfig {
   options: string[];
   default?: string;
@@ -31,9 +24,7 @@ export type DynamicPropConfig = Record<
   {
     varName: string;
     slotClass: string;
-    /** CSS property the slot class declares — the unit-fallback decision. */
     property?: string;
-    /** Member properties when the prop expands to several declarations. */
     properties?: readonly string[];
     transformName?: string;
     transform?: (value: string | number) => string | number;
@@ -47,15 +38,8 @@ import { IS_DEV } from './is-dev';
 import { recordWitness } from './witness';
 
 /**
- * Apply unit fallback to a value for the CSS properties the value lands on.
- * `isUnitlessProperty` owns the spelling question, so either convention works.
- *
- * A mixed property set resolves to unitless: an unsuffixed number on a length
- * property is dropped by the CSS parser, whereas `px` on a unitless property
- * renders and silently changes layout — prefer the drop.
- *
- * An empty property list keeps the unconditional `px` — configs emitted before
- * `property` was carried name no property at all.
+ * A mixed property set resolves to unitless: a bare number on a length
+ * property is dropped by the parser, `px` on a unitless one shifts layout.
  */
 export function applyUnitFallback(
   value: string | number,
@@ -71,8 +55,8 @@ export function applyUnitFallback(
 }
 
 /**
- * Serialize a system prop value to a lookup key matching the Rust
- * css_generator's serialize_value_key output format.
+ * The key format is fixed by the Rust css generator; a divergence here misses
+ * every static class lookup.
  */
 export function serializeValueKey(value: unknown): string {
   if (typeof value === 'number' || typeof value === 'string') {
@@ -87,11 +71,6 @@ export function serializeValueKey(value: unknown): string {
   return String(value);
 }
 
-/**
- * Validity predicate for transform results (design D5): only strings and
- * finite numbers may reach the stylesheet. The gate applies solely where a
- * configured transform ran — scale hits without a transform are exempt.
- */
 function isValidTransformResult(result: unknown): result is string | number {
   return (
     typeof result === 'string' ||
@@ -100,12 +79,8 @@ function isValidTransformResult(result: unknown): result is string | number {
 }
 
 /**
- * Shape descriptor for an invalid transform result, shared by the drop
- * warning and its tests. `null` and arrays are named before `typeof` would
- * fold them into `object`; non-finite numbers get their own name because
- * finite ones are valid. Precondition: callers pass only results that failed
- * `isValidTransformResult` — valid strings/finite numbers are out of domain
- * and would be mislabeled.
+ * The domain is results that failed `isValidTransformResult`; a valid string
+ * or finite number passed here is mislabeled.
  */
 export function describeResultShape(result: unknown): string {
   if (result === null) return 'null';
@@ -114,16 +89,10 @@ export function describeResultShape(result: unknown): string {
   return typeof result;
 }
 
-/** Failure from a single entry resolution: the offending result's shape. */
 interface InvalidResult {
   shape: string;
 }
 
-/**
- * Resolve one entry through scale lookup → transform → unit fallback,
- * validating the transform result in both the scale-resolved and raw arms.
- * An invalid result yields its shape descriptor instead of a string.
- */
 function resolveEntry(
   value: unknown,
   dc: Pick<
@@ -149,10 +118,6 @@ function resolveEntry(
     return { shape: describeResultShape(transformed) };
   }
   if (typeof transformed !== 'number') return String(transformed);
-  // The CSS properties the slot class declares: the member list when the prop
-  // expands to several declarations, otherwise the single property — mirroring
-  // the slot-class emitter. Built only for numbers, the sole values a unit
-  // fallback can move.
   const cssProperties =
     dc.properties && dc.properties.length > 0
       ? dc.properties
@@ -163,10 +128,8 @@ function resolveEntry(
 }
 
 /**
- * Resolve a dynamic prop value through scale lookup → transform → unit
- * fallback. Returns `null` when a configured transform produced an invalid
- * result (anything but a string or finite number); no-transform paths never
- * return `null`.
+ * `null` means a configured transform returned neither a string nor a finite
+ * number; paths without a transform never return `null`.
  */
 export function resolveValue(
   value: unknown,
@@ -205,10 +168,8 @@ function warnDroppedValue(
 }
 
 /**
- * Apply variant classes in declaration order, recording a static witness per
- * resolved variant. When a value comes from a defaultVariant fallback (prop not
- * passed), emit --{prop}-default instead of --{prop}-{value} so the compose
- * override rule cannot match, allowing inheritance from the parent to win.
+ * A value taken from a variant default emits `--{prop}-default`, not the
+ * value, so the compose override rule misses and the parent's value wins.
  */
 function applyVariantClasses(
   classes: string[],
@@ -229,10 +190,6 @@ function applyVariantClasses(
   }
 }
 
-/**
- * Apply compound classes: push each compound's className when every condition
- * matches (against the prop value or its variant default). No witness records.
- */
 function applyCompoundClasses(
   classes: string[],
   props: Record<string, any>,
@@ -258,10 +215,6 @@ function applyCompoundClasses(
   }
 }
 
-/**
- * Apply state classes and track active states for data-attribute passthrough,
- * recording a static witness per active state.
- */
 function applyStateClasses(
   classes: string[],
   baseClassName: string,
@@ -298,18 +251,8 @@ function warnInvalidTransformResult(
 }
 
 /**
- * Expand a resolved dynamic prop into slot classes and CSS-variable style
- * entries. Responsive objects expand per breakpoint: the `_` base breakpoint
- * uses the bare slotClass and varName; named breakpoints suffix both
- * (`${slotClass}-${bp}` and `${varName}-${bp}`). Scalar values push the bare
- * slotClass and set varName directly.
- *
- * Two-phase so the drop is atomic: every entry resolves into a staging list
- * before any mutation. One invalid transform result anywhere — the scalar, or
- * any single breakpoint — returns that failure (first offending shape) with
- * `classes` and `dynStyle` untouched. On success the staged entries apply in
- * the pre-existing push order and the function returns `null`; the caller
- * records the witness from the outcome.
+ * Resolution is staged so a drop is atomic: one invalid transform result
+ * anywhere leaves `classes` and `dynStyle` untouched.
  */
 function applyDynamicProp(
   classes: string[],
@@ -345,10 +288,6 @@ function applyDynamicProp(
   return null;
 }
 
-/**
- * Resolve className parts from props, using extracted configuration.
- * This is the shared logic between createComponent and createClassResolver.
- */
 export function resolveClasses(
   baseClassName: string,
   props: Record<string, any>,
@@ -359,17 +298,13 @@ export function resolveClasses(
   const classes = [baseClassName];
   let dynStyle: Record<string, string> | undefined;
 
-  // Apply variant classes
   applyVariantClasses(classes, baseClassName, props, config);
 
-  // Apply compound classes
   applyCompoundClasses(classes, props, config);
 
-  // Apply state classes and track active states for data-attribute passthrough
   const activeStates: string[] = [];
   applyStateClasses(classes, baseClassName, props, config, activeStates);
 
-  // Apply system prop utility classes from shared map
   const systemPropNames = config.systemPropNames || [];
   if (systemPropNames.length > 0) {
     const { customPropMap, customDynamicConfig } = config;
@@ -391,15 +326,8 @@ export function resolveClasses(
           customDynamicConfig?.[propName] ?? dynamicPropConfig?.[propName];
 
         if (dc) {
-          // Witness only after the whole value applied — a dropped value must
-          // witness as `drop`, never `dynamic`. The staging target is adopted
-          // as dynStyle only on success, so a FAILED first prop cannot leave
-          // an empty `{}` behind (a successful all-skipped responsive value
-          // still adopts `{}`, matching pre-gate behavior). When dynStyle
-          // already exists, `staged` aliases it — phase-1-only resolution in
-          // applyDynamicProp is what keeps a later prop's failure from
-          // touching an earlier prop's applied entries (pinned by the
-          // two-prop pair tests).
+          // Witness only once the whole value applies: a dropped value
+          // witnesses as `drop`, never `dynamic`. dynStyle adopts on success.
           const staged = dynStyle ?? {};
           const invalid = applyDynamicProp(classes, staged, propValue, dc);
           if (invalid === null) {

@@ -5,23 +5,6 @@ import type { DependencyProvider } from '../../providers/dependency';
 import type { AnimusTokens } from './tokens';
 import type { UniverseRule } from './universe';
 
-/**
- * The pinned dependency vocabulary.
- *
- * Five namespaces, each a total function of one artifact input:
- *
- * - `file:<path>` — the source file a rule was authored in.
- * - `component:<id>` — the `<file>::<binding>` whose chain produced it.
- * - `rule:<ruleId>` — one modeled rule (used by obligations that hang off a
- *   specific rule rather than off a source input).
- * - `token:<--variable>` — a custom property the rule reads, *transitively*.
- * - `manifest:<program hash>` — the extraction run itself.
- *
- * DESIGN §9.6: coarse edges cost recomputation, missing edges cost soundness.
- * The transitive token closure is the missing-edge risk here — a rule reading
- * `var(--color-danger)` also depends on `--color-red-500`, and evidence that
- * survived a change to the latter would be stale while looking valid.
- */
 export const fileDependency = (file: string): DependencyId =>
   asDependencyId(`file:${file}`);
 
@@ -44,7 +27,6 @@ export interface AnimusDependencyInput {
   programHash: string;
 }
 
-/** Every variable reachable from `seeds` through the token reference graph. */
 export const tokenClosure = (
   seeds: readonly string[],
   tokens: AnimusTokens | undefined
@@ -52,9 +34,6 @@ export const tokenClosure = (
   const seen = new Set<string>();
   const queue = [...seeds];
 
-  // Breadth-first over a queue that grows as it is walked: the cursor never
-  // passes `queue.length`, and references appended during the walk are visited
-  // in the same order a front-shifting queue visited them.
   for (let index = 0; index < queue.length; index += 1) {
     const variable = queue[index];
     if (seen.has(variable)) continue;

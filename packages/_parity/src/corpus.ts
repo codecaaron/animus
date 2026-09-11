@@ -1,14 +1,3 @@
-/**
- * Corpus enumeration. Three sources, all flowing into CorpusUnits:
- *  - extract:  packages/extract/tests/fixtures/*.tsx — one unit per file,
- *              plus one combined `extract-all` unit (multi-file aggregation
- *              exercises system_prop_map / utilities).
- *  - integration: packages/_integration/fixtures/components — one unit per
- *              .tsx file; the mdx-rendering dir is one multi-file unit with
- *              .mdx compiled via the pipeline's preprocessMdx.
- *  - parity:   packages/_parity/corpus — adversarial families; single .tsx
- *              files are one unit each, directories are one multi-file unit.
- */
 import { readFileSync, readdirSync, statSync, existsSync } from 'fs';
 import { join, basename } from 'path';
 
@@ -78,7 +67,6 @@ export async function enumerateUnits(): Promise<CorpusUnit[]> {
   assertCorpusDirectories();
   const units: CorpusUnit[] = [];
 
-  // extract corpus: per-file units + combined unit
   const extractFiles = tsxFiles(EXTRACT_FIXTURES);
   for (const f of extractFiles) {
     units.push({
@@ -95,23 +83,18 @@ export async function enumerateUnits(): Promise<CorpusUnit[]> {
     configSource: 'test-system',
   });
 
-  // integration corpus
   for (const entry of readdirSync(INTEGRATION_FIXTURES).sort()) {
     const full = join(INTEGRATION_FIXTURES, entry);
     if (statSync(full).isDirectory()) {
-      // `.ts` included (parity-branch parity): svelte-usage's definition.ts
-      // is a real `.asClass()` chain the native engine analyzes — dropping
-      // it left that unit empty. `.svelte` stays excluded by design (its
-      // adaptation is the TS ingestion pipeline's, proven by the dedicated
-      // real-engine integration tests).
+      // `.ts` counts: a unit's only analyzable chain may live in a definition
+      // file. `.svelte` is excluded — it is adapted before ingestion.
       const files = readdirSync(full)
         .filter(
           (f) => f.endsWith('.tsx') || f.endsWith('.ts') || f.endsWith('.mdx')
         )
         .sort();
-      // A directory that enumerates NOTHING (nested-only layouts) must not
-      // mint a unit: an empty unit is a permanently-green scoreboard row
-      // that asserts nothing while advertising coverage.
+      // A directory that enumerates nothing must not mint a unit: an empty
+      // unit is a permanently-green row that asserts nothing.
       if (files.length === 0) continue;
       units.push({
         id: `integration/${entry}`,
@@ -127,7 +110,6 @@ export async function enumerateUnits(): Promise<CorpusUnit[]> {
     }
   }
 
-  // parity adversarial corpus
   for (const entry of readdirSync(PARITY_CORPUS).sort()) {
     if (entry === 'families.json') continue;
     const full = join(PARITY_CORPUS, entry);
@@ -162,9 +144,6 @@ const REQUIRED_FAMILIES = [
   'compose-reassignment',
 ];
 
-/** Load families.json and enforce the rendered-usage-semantics contract:
- *  all five required families present, each with a declared verdict, and
- *  every referenced unit existing in the corpus. Throws on violation. */
 export function validateFamilies(
   families: FamilyDecl[],
   unitIds: Set<string>

@@ -1,6 +1,5 @@
-// Multi-component custom props: two components sharing and diverging on
-// .props() configs — witnesses total-sorted @layer custom slot-entry
-// ordering in the committed v2 surface (expected identical).
+// Two components sharing and diverging on `.props()` configs: custom-layer
+// slot entries emit in one total order, not per-component order.
 export const Wide = ds
   .props({ w: { property: 'width', scale: { half: '50%', full: '100%' } } })
   .asElement('div');

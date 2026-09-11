@@ -1,14 +1,3 @@
-/**
- * `@animus-ui/oracle` engines — the six operations of DESIGN §6 as
- * projections of one cascade-level fact substrate, plus the machinery they
- * are built from (cascade semantics, speculation views, the semantic-diff
- * comparator and render-equivalence partitioning).
- *
- * The package root wires `createOracle` into the public surface; everything
- * else here is exported because the CLI, the protocol layer and the host
- * adapters legitimately need the same primitives the engines use.
- */
-
 export { createOracle } from './oracle';
 export type { EquivalenceRequest, Oracle } from './oracle';
 

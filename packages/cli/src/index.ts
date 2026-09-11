@@ -1,19 +1,5 @@
-/**
- * `animus` — the standalone extraction CLI (openspec:
- * standalone-extraction-cli).
- *
- * Contract (design D5): stdout carries machine output ONLY (today: the
- * `--print-config` JSON projection); every human-facing line goes to
- * stderr. Exit taxonomy: 0 success · 1 extraction/strict failure · 2
- * config/usage error · 3 engine/environment failure · 4 the CLI install
- * itself could not be loaded (decided by bin/animus.mjs, never by `main`).
- *
- * UNSTABLE MODULE SURFACE: the package's programmatic exports (`main`,
- * `exitCodeFor`, the EXIT_* constants) exist for the repo's own lanes and
- * tests; the supported consumer surface is the `animus` binary. The module
- * API may change without semver ceremony until a consumer contract ships
- * (standalone-extraction-cli inc 07).
- */
+/** The supported consumer surface is the `animus` binary; the programmatic
+ *  exports may change without semver ceremony. */
 
 import { AnimusConfigError } from '@animus-ui/extract/pipeline';
 import { parseArgs } from 'node:util';
@@ -30,13 +16,8 @@ export const EXIT_OK = 0;
 export const EXIT_EXTRACTION = 1;
 export const EXIT_USAGE = 2;
 export const EXIT_ENVIRONMENT = 3;
-/**
- * The CLI package itself could not be loaded — a broken or partial install.
- * `main()` never returns it: only `bin/animus.mjs` runs when this module is
- * unloadable, and it carries the literal 4 with this constant as its
- * authority. A class of its own because the remedy is reinstalling the CLI,
- * not fixing a project's config (2), sources (1), or environment (3).
- */
+/** Nothing in this module returns it: `bin/animus.mjs` decides the install
+ *  failure class, since this module is the one that did not load. */
 export const EXIT_INSTALL = 4;
 
 const USAGE = `animus — standalone Animus extraction
@@ -83,23 +64,13 @@ interface ErrorMessageHolder {
 }
 
 function readThrownMessage<Thrown>(error: Thrown): ErrorMessageValue {
-  // SAFETY: This exposes only the optional property that these catch paths
-  // historically read directly. The runtime value stays untouched, so the
-  // read retains its primitive receiver, getter order, and native nullish
-  // TypeError behavior.
+  // SAFETY: exposes only the optional `message` property these catch paths
+  // already read; the runtime value is untouched, so its behavior stands.
   return (error as Thrown & ErrorMessageHolder).message;
 }
 
-/** Classify an error into the documented exit taxonomy. ExtractionFailure
- *  and unclassified errors deliberately share the extraction exit class —
- *  an unknown throw during a build IS a failed extraction to a supervisor.
- *
- *  `AnimusLockConflictError` (writer.ts) is a SUBCLASS of
- *  `AnimusConfigError` and is caught by the branch below on purpose: a busy
- *  output directory keeps exit 2 as it always had. The subclass exists so
- *  callers can tell "another writer owns the tree" from "your config is
- *  wrong" without the exit code being the only distinguisher; moving it to
- *  EXIT_ENVIRONMENT is an open owner decision, not an accident of typing. */
+/** Unclassified throws share the extraction class: an unknown throw during
+ *  a build is a failed extraction to a supervisor. */
 export function exitCodeFor<Thrown>(error: Thrown): number {
   if (error instanceof UsageFailure || error instanceof AnimusConfigError) {
     return EXIT_USAGE;
@@ -108,8 +79,6 @@ export function exitCodeFor<Thrown>(error: Thrown): number {
   return EXIT_EXTRACTION;
 }
 
-/** The one way a malformed invocation is reported: the reason, the usage
- *  text, and the config/usage exit class, in that order. */
 function reportUsageError(reason: string): void {
   console.error(`[animus] ${reason}`);
   console.error(USAGE);
@@ -153,10 +122,8 @@ export async function main(
   }
 
   const command = positionals[0];
-  // Command shape is decided from argv ALONE, before any filesystem work, so
-  // a malformed invocation is not reported as whatever config resolution
-  // failed on first. Narrowing here is also what makes the dispatch below
-  // total — its last branch is provably `watch`.
+  // Command shape is decided from argv alone, before any filesystem work,
+  // and the narrowing is what makes the dispatch below total.
   if (positionals.length > 1) {
     reportUsageError(
       `Unexpected argument '${positionals[1]}' — one command per invocation`
@@ -187,13 +154,11 @@ export async function main(
   const cwd = process.cwd();
   try {
     const config = await resolveCliConfig(flags, cwd);
-    // Reported once, for every command; nothing else tells the user that the
-    // root every relative input resolves against has moved.
     const rootNotice = inferredRootNotice(config, cwd);
     if (rootNotice !== null) err(rootNotice);
 
     if (command === 'print-config' || values['print-config']) {
-      // The ONLY stdout surface: a complete JSON document.
+      // The only stdout surface: one complete JSON document.
       console.log(JSON.stringify(projectResolvedConfig(config), null, 2));
       process.exitCode = EXIT_OK;
       return;
@@ -205,9 +170,6 @@ export async function main(
       return;
     }
 
-    // Long-lived: resolves only at shutdown, carrying the exit code
-    // (130 SIGINT / 143 SIGTERM / 3 fail-on-degraded). Startup failures
-    // throw into the shared taxonomy catch below.
     process.exitCode = await runWatch(config, {
       failOnDegraded: values['fail-on-degraded'] === true,
     });

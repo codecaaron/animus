@@ -3,16 +3,8 @@ import { resolve } from 'path';
 import type { PluginContext } from './context';
 
 /**
- * Evict every module node the dev server holds for each file — every
- * environment graph (client, ssr, and any custom environment), by-file node
- * sets (covers query-suffixed variants), plus the absolute-path id lookup.
- * Falls back to the mixed compat graph for hosts without environment
- * graphs. Returns the number of nodes invalidated.
- *
- * Completeness here is load-bearing: the file-plan diff is the ONLY
- * invalidation candidate source, so a node shape this enumeration misses
- * stays stale for the life of the server (openspec: dev-transform-coherence,
- * "Client and SSR nodes are both evicted").
+ * Completeness is load-bearing: the file-plan diff is the only invalidation
+ * candidate source, so a node shape missed here stays stale for the session.
  */
 export function invalidateFileModules(
   ctx: PluginContext,

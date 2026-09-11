@@ -1,28 +1,6 @@
 /**
- * Keyframes primitive — top-level factory for declaring named CSS animations
- * as a branded collection of typed per-key references.
- *
- * The returned collection is:
- *  - Branded (`__brand: 'Keyframes'`) — the registration shape check reads it
- *    (vocabulary-registration; collections are declared, never discovered).
- *  - Carries raw frame data on `__frames` as `{ [key]: { name, frames } }`,
- *    where `name` is the resolved keyframes identifier emitted into CSS.
- *  - Exposes one `KeyframeRef<Name>` per named key — each ref coerces to its
- *    resolved name via `toString()`/`valueOf()` for runtime-fallback paths.
- *
- * Naming: each keyframe's name is generated at authoring time via a
- * deterministic FNV-1a content hash over its frame body (`animus-kf-<hash>`).
- * Identical frame bodies dedupe into a single `@keyframes` emission naturally.
- * The Rust extractor substitutes `motion.ember`-style member-expression
- * references in component styles to the static name at emit time.
- *
- * Frame body vocabulary (narrower than component styles — factory is not
- * system-bound, so prop-config resolution is not available):
- *  - CSS property names (camelCase → kebab-case at emission)
- *  - Raw CSS values
- *  - `{scale.key}` token references (resolved via theme_resolver at emission)
- *  - Bare scale keys (e.g. `textShadow: 'glow-text'`) are NOT resolved —
- *    consumers must use `{scale.key}` form for theme-resolved values.
+ * Frame values take raw CSS or `{scale.key}` token references; a bare scale
+ * key is not resolved. The extractor substitutes refs with the hashed name.
  */
 
 export type KeyframeFrameMap = Record<string, Record<string, unknown>>;
@@ -46,7 +24,6 @@ export type Keyframes<Map extends Record<string, KeyframeFrameMap>> = {
   readonly [K in keyof Map & string]: KeyframeRef<K>;
 };
 
-// FNV-1a 32-bit — small, deterministic, sufficient for non-cryptographic identity.
 const fnv1a = (input: string): string => {
   let hash = 0x811c9dc5;
   for (let i = 0; i < input.length; i++) {

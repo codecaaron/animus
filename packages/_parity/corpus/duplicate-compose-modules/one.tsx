@@ -1,8 +1,5 @@
-// ANI-004 witness: two modules each define compose families whose local
-// slot recipe bindings share names (Root/Header). Slot resolution keys by
-// {file}::{binding}; each family's composed CSS must namespace under ITS
-// OWN module's Root class — per-file styles differ so cross-wiring would
-// move bytes.
+// A sibling module defines slots with the same binding names; resolution keys
+// by file and binding, so neither family may pick up the other's styles.
 import { compose } from '@animus-ui/system/compose';
 
 import { ds } from '../test-system';

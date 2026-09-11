@@ -1,14 +1,11 @@
-// The compose call names a Header slot with no local definition and no
-// import path — extraction must emit the compose-slot bail diagnostic and
-// drop the slot from composed CSS, NEVER guess a same-named component from
-// another module (other.tsx exists precisely to be the wrong candidate).
+// `Header` is unbound: extraction must emit the compose-slot bail diagnostic
+// and never resolve the same-named component defined in `other.tsx`.
 import { compose } from '@animus-ui/system/compose';
 
 import { Root } from './defs';
 
 export const Fam = compose(
-  // @ts-expect-error — Header is deliberately unbound; the scanner sees the
-  // identifier, the resolver must fail closed.
+  // @ts-expect-error — Header is unbound; the resolver must fail closed.
   { Root, Header },
   { name: 'BailFam', shared: { density: true } }
 );

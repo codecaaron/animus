@@ -105,10 +105,6 @@ const CodeSection = ds
   })
   .asElement('div');
 
-// ─── Custom prop transform demo ─────────────────────────────────────────────
-// Exercises inline transform capture: Rust extracts the function body from the
-// AST and emits it directly in the replacement JS.
-
 const Swatch = ds
   .styles({
     transition: '200ms ease all',
@@ -130,10 +126,6 @@ const Swatch = ds
     },
   })
   .asElement('div');
-
-// ─── Selector alias demo ────────────────────────────────────────────────────
-// Exercises _hover, _disabled, _before, _after, _focusVisible in style objects.
-// Extraction expands aliases → CSS pseudo selectors in the correct layer.
 
 const AliasCard = ds
   .styles({

@@ -1,10 +1,3 @@
-/**
- * CSS post-processing (spec: css-post-processing) — Lightning CSS
- * autoprefixing, syntax lowering, and optional minification against
- * browserslist targets. The single implementation consumed by both the
- * Vite plugin (virtual-module serve time) and the Next.js plugin
- * (ExtractionSession artifact emission).
- */
 import browserslist from 'browserslist';
 import {
   browserslistToTargets,
@@ -13,10 +6,6 @@ import {
 
 export type LightningTargets = ReturnType<typeof browserslistToTargets>;
 
-/**
- * Resolve browser targets for Lightning CSS.
- * Priority: explicit config → project browserslist → 'defaults' fallback.
- */
 export function resolveLightningTargets(
   explicitTargets: string | string[] | undefined,
   rootDir: string
@@ -27,14 +16,11 @@ export function resolveLightningTargets(
       ? explicitTargets
       : [explicitTargets];
   } else {
-    // Auto-detect from project's browserslist config
     const detected = browserslist(undefined, { path: rootDir });
-    // browserslist() with undefined query uses the project's config or defaults
     queries = detected.length > 0 ? detected : browserslist('defaults');
   }
-  // An unresolved QUERY ('last 2 versions', '> 0.5%') is spaced; a resolved
-  // browser id from the two branches above is passed through as-is. An empty
-  // list has no first query to classify and resolves nothing.
+  // A query ('last 2 versions') carries a space; an already-resolved browser
+  // id never does, so it passes through unresolved.
   const [firstQuery] = queries;
   return browserslistToTargets(
     firstQuery !== undefined && firstQuery.includes(' ')
@@ -43,10 +29,6 @@ export function resolveLightningTargets(
   );
 }
 
-/**
- * Post-process CSS with Lightning CSS: autoprefixing + optional minification.
- * On failure, returns the original CSS and logs a warning.
- */
 export function postProcessCss(
   css: string,
   opts: {
@@ -66,8 +48,6 @@ export function postProcessCss(
     return result.code.toString();
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
-    // Console is the pipeline's only warning sink when the caller wires no
-    // logger (same exemption as engine-adapter.ts).
     // eslint-disable-next-line no-console
     const warnFn = opts.warnFn ?? console.warn;
     warnFn(`[animus] Lightning CSS post-processing failed: ${msg}`);

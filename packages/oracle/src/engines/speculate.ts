@@ -1,17 +1,3 @@
-/**
- * Hypothetical worlds as a *view*, never a patch.
- *
- * `WorldDelta`s describe edits the oracle evaluates without touching source
- * (DESIGN §2). This module turns a delta list into a read-only style universe
- * and token provider that the cascade reads exactly as it reads the host's own
- * — so `simulate` and `diff` are the same engine over a different view, and
- * nothing in the substrate can write a speculation back.
- *
- * A delta naming a rule or property that does not exist is a *bad request*, not
- * a verdict: it throws `TypeError` rather than quietly evaluating to "no
- * change", which would let an agent believe it had tested something it had not.
- */
-
 import { ROOT_MODE } from '../providers/tokens';
 
 import type { RuleId } from '../core/identity';
@@ -31,7 +17,6 @@ import type {
 export interface SpeculationView {
   universe: StyleUniverse;
   tokens: TokenProvider | undefined;
-  /** `assume` deltas, verbatim — they are stated, never checked. */
   assumptions: readonly string[];
   affectedRules: readonly RuleId[];
   affectedProperties: readonly string[];
@@ -51,10 +36,8 @@ const parseValue = (raw: string): ParsedValue =>
     : { value: raw, important: false };
 
 /**
- * Build the hypothetical declaration for `raw`, carrying `!important` from an
- * inherited source declaration when one is given. The authored spelling is
- * never carried over — it belongs to the source declaration, and keeping it
- * would attribute a value nobody wrote.
+ * The authored spelling is never carried over: it belongs to the source
+ * declaration, and keeping it would attribute a value nobody wrote.
  */
 const declarationFrom = (
   property: string,
@@ -67,7 +50,6 @@ const declarationFrom = (
   return next;
 };
 
-/** Is `--x` the whole of `raw`, i.e. `var(--x)` or `var(--x, fallback)`? */
 const soleReference = (raw: string): string | undefined => {
   const match = /^\s*var\(\s*(--[A-Za-z0-9_-]+)\s*(?:,[\s\S]*)?\)\s*$/.exec(
     raw
@@ -75,14 +57,6 @@ const soleReference = (raw: string): string | undefined => {
   return match === null ? undefined : match[1];
 };
 
-/**
- * A token provider with some variables overridden.
- *
- * Resolution walks the reference chain itself so an override *inside* a chain
- * is honoured, and delegates to the base provider whenever the walked chain
- * touches no override — that keeps a host's richer resolution semantics
- * intact for every variable the speculation does not touch.
- */
 const overlayTokens = (
   base: TokenProvider,
   overrides: ReadonlyMap<string, string>
@@ -114,8 +88,6 @@ const overlayTokens = (
 
       const definition = base.token(current);
       if (definition === undefined) return undefined;
-      // The same fallback the providers use: a link declared only in `:root`
-      // (the usual home of aliases) must not break the walk.
       const raw =
         definition.valuesByMode[mode] ?? definition.valuesByMode[ROOT_MODE];
       if (raw === undefined) return undefined;
@@ -257,8 +229,6 @@ export const speculate = (
         break;
       case 'force-dimension':
       case 'pin-dimension-domain':
-        // Scenario-level deltas: `applyDeltas` has already narrowed the
-        // world's domain, and the universe is unchanged by them.
         break;
     }
   }

@@ -1,6 +1,5 @@
-// Review F1 witness: a one-arg .compound(cond) contributes NEITHER a
-// runtime compound config NOR CSS, and the positional --compound-N
-// index counts styled compounds only (v1 lib.rs 536-554).
+// A one-arg `.compound(cond)` contributes no runtime config and no CSS, and
+// the positional `--compound-N` index counts styled compounds only.
 export const Toggle = ds
   .variant({ prop: 'size', defaultVariant: 'sm', variants: { sm: {}, lg: {} } })
   .compound({ size: 'sm' })

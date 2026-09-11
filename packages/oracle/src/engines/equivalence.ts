@@ -1,14 +1,3 @@
-/**
- * Render-equivalence classes: the partition of a scenario domain into contexts
- * that are indistinguishable *for the question being asked*.
- *
- * At cascade level the answer is determined by which rules are active, so two
- * cells with the same active-rule set are one context class. The partition is
- * therefore query-relative by construction — it is cascade-equivalence, not
- * visual equivalence, and it is what lets `diff` report "3 of 12 context
- * classes affected" instead of a cell count nobody can act on.
- */
-
 import { stableHash } from '../core/identity';
 import { activeRuleIds, analyzeCascade } from './cascade';
 import { cellsOf, harvestCuts, scopedDomain } from './cells';
@@ -65,13 +54,6 @@ export const partitionCells = (
   return { classes: Array.from(classes.values()) };
 };
 
-/**
- * The seventh operation (facade: `equivalenceClasses`), on the same session
- * substrate as the other six: the runtime's cached speculation view, its
- * shared obligation registry (partitioning reads guards only today, but an
- * obligation raised here must not be dropped on the floor the day that
- * changes), and its configured cell budget rather than a private one.
- */
 export const renderEquivalenceClasses = (
   rt: OracleRuntime,
   target: string,

@@ -19,18 +19,6 @@ export const variantDimension = (owner: string, prop: string): string =>
 export const stateDimension = (owner: string, name: string): string =>
   `state:${owner}:${name}`;
 
-/**
- * The `<component>` segment of a scoped dimension name.
- *
- * The binding is the readable choice and the conventional one
- * (`core/scenario.ts`), but a design system may bind the same name twice —
- * this fixture has `src/Button.tsx::Button` *and* a test-ds `Button`. Sharing
- * one axis between them would let a point set `variant:Button:variant` and
- * silently move a component the caller never named, so a colliding binding
- * falls back to the full component id. Non-colliding bindings keep the short
- * form, which is why `crossFile.variantOptions` (binding-keyed, and therefore
- * already collided) can never be the source of these options.
- */
 export const dimensionOwners = (
   components: readonly ParsedComponent[]
 ): Map<string, string> => {
@@ -49,7 +37,6 @@ export const dimensionOwners = (
   return owners;
 };
 
-/** The variant/state axes each component owns, keyed by component id. */
 export const componentDimensions = (
   components: readonly ParsedComponent[],
   owners: ReadonlyMap<string, string>
@@ -84,7 +71,6 @@ export const componentDimensions = (
 export interface AnimusScenarioInput {
   componentDomains: ReadonlyMap<string, ScenarioDomain>;
   tokens?: AnimusTokens;
-  /** Thresholds harvested from the parsed universe (`conditions.ts`). */
   cuts: Readonly<Record<string, readonly number[]>>;
   viewportMin?: number;
   viewportMax?: number;
@@ -93,17 +79,6 @@ export interface AnimusScenarioInput {
 const clamp = (value: number, min: number, max: number): number =>
   Math.min(Math.max(value, min), max);
 
-/**
- * Provider 5 (DESIGN §9.5) over the emitted artifacts.
- *
- * What is *absent* from `dimensions()` is the load-bearing part. Container
- * queries, `@supports` and non-mode media features all produce guards in the
- * universe, and none of them is a declared axis: a container's inline size is
- * a layout result the model does not derive, and support/feature facts belong
- * to the environment profile. Under `evalPredicate` an unbound dimension reads
- * FALSE, so those rules are inactive until an engine states the assumption —
- * the conservative direction, and the one that keeps a "PROVED" honest.
- */
 export const createAnimusScenarios = (
   input: AnimusScenarioInput
 ): ScenarioProvider => {
@@ -111,10 +86,6 @@ export const createAnimusScenarios = (
   const viewportMax = input.viewportMax ?? DEFAULT_VIEWPORT_MAX;
   const modes = input.tokens?.modes() ?? [];
 
-  // Declaration order is the answer's reading order: the viewport axis first,
-  // then `mode` only when the stylesheet actually declared modes, then every
-  // component-scoped axis. A modeless host has no `mode` key at all, which is
-  // what makes an unbound mode guard read FALSE instead of bound-to-nothing.
   const dimensions: Record<string, DimensionDomain> = {};
   dimensions[VIEWPORT_DIMENSION] = {
     kind: 'interval',

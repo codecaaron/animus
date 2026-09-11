@@ -7,10 +7,6 @@ import { Shell } from './layout/Shell';
 const Home = lazy(() => import('./pages/Home'));
 const Examples = lazy(() => import('./pages/Examples'));
 
-// The MDX guides were deleted, not archived: the system-definition API is
-// still settling and every written page had drifted into teaching shapes
-// the current pipeline rejects. Examples stay — they are extracted, built,
-// and asserted on every verify run, so they cannot silently drift.
 function DocsPlaceholder() {
   return (
     <div style={{ padding: '4rem 2rem', textAlign: 'center' }}>

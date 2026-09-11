@@ -1,9 +1,5 @@
-/**
- * Exact-content drift register. Active entries classify committed-baseline
- * drift only for privileged refresh; they never license live differentials or
- * make an ordinary stale-baseline run pass. Unknown categories and stale
- * active entries fail.
- */
+/** Entries classify committed-baseline drift for a privileged refresh only;
+ *  they never make an ordinary stale-baseline run pass. */
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 

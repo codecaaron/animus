@@ -1,9 +1,6 @@
 import { createTransform } from './createTransform';
 
-/**
- * Convert a numeric coordinate to a CSS value.
- * Exported for non-extraction use — NOT referenced from the createTransform callback.
- */
+/** The transform below cannot reference this: it inlines its own copy. */
 export const percentageOrAbsolute = (coordinate: number) => {
   if (coordinate === 0) {
     return coordinate;
@@ -14,10 +11,7 @@ export const percentageOrAbsolute = (coordinate: number) => {
   return `${coordinate}px`;
 };
 
-/**
- * Self-contained transform: all logic inlined in the callback.
- * No external references — satisfies the extraction constraint.
- */
+/** All logic stays inline: the extractor cannot follow external references. */
 export const size = createTransform('size', (value) => {
   const toSize = (n: number) => {
     if (n === 0) return n;

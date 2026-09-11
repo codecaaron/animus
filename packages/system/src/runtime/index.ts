@@ -16,20 +16,16 @@ import {
 
 interface ComponentConfig extends ClassResolverConfig {}
 
-// Accept either an HTML tag string or a React component reference.
-// React.createElement handles both transparently.
 type ElementType = string | React.ComponentType<any>;
 
 type AnimusComponent = ReturnType<typeof forwardRef> & {
   extend: () => never;
-  /** Effective-default contract: variant axis → default option. */
   variantDefaults: Readonly<Record<string, string>>;
 };
 
 /**
- * Merge multiple refs (callback or object) into a single callback ref.
- * Creates a new callback on each call — no memoization possible in a
- * hook-free runtime (RSC compatibility). Matches @radix-ui/react-compose-refs.
+ * A new callback on every call: the runtime stays hook-free so components
+ * work in server components, which rules memoization out.
  */
 function composeRefs<T>(...refs: (Ref<T> | undefined)[]): RefCallback<T> {
   return (node) => {
@@ -41,16 +37,8 @@ function composeRefs<T>(...refs: (Ref<T> | undefined)[]): RefCallback<T> {
 }
 
 /**
- * Forward props to the underlying element, filtering out Animus-managed props.
- *
- * data-* and aria-* attributes always pass through to the DOM, even when used
- * as variant/state keys. This enables headless UI interop: the attribute is
- * consumed for styling AND forwarded to the element so external frameworks
- * (Radix, Ark-UI) see it.
- *
- * filterProps covers all Animus props, so unknown props pass through: for DOM
- * elements React handles any unknown-attribute warnings in dev mode, and for
- * component elements all non-filtered props are forwarded to the component.
+ * `data-*` and `aria-*` reach the DOM even when they key a variant or state,
+ * so headless libraries driving those attributes still see them.
  */
 function forwardProps(
   props: Record<string, any>,
@@ -66,13 +54,8 @@ function forwardProps(
 }
 
 /**
- * asChild render path: don't render our own element — merge the resolved
- * className/ref/style onto the single child element, plus the parent's own
- * forwardable props (event handlers, role, aria-*, data-*, id, tabIndex).
- *
- * Conflict rule is child-wins: the parent's props are spread UNDER the child's
- * own, so a handler or attribute declared on the child replaces the parent's
- * rather than chaining with it.
+ * The child wins every conflict: parent props spread under the child's own, so
+ * a handler declared on the child replaces the parent's instead of chaining.
  */
 function renderAsChild(
   className: string,
@@ -98,8 +81,6 @@ function renderAsChild(
     .filter(Boolean)
     .join(' ');
 
-  // Style merge: parent's props.style loses to child's style,
-  // dynamic CSS variables win last (different property names, no conflict).
   const mergedStyle =
     dynamicStyle || props.style || child.props.style
       ? {
@@ -109,10 +90,6 @@ function renderAsChild(
         }
       : undefined;
 
-  // Parent props destined for the child, filtered the same way the normal
-  // render path filters them. children is dropped (the child keeps its own);
-  // style and ref are dropped because the bespoke merges above own them.
-  // className never enters this set — forwardProps skips it.
   const parentProps: Record<string, any> = {};
   forwardProps(props, filterProps, parentProps);
   delete parentProps.children;
@@ -128,10 +105,6 @@ function renderAsChild(
   });
 }
 
-/**
- * Normal render path: render our own element (or the `as` override), forwarding
- * filtered props and applying any dynamic CSS-variable style.
- */
 function renderElement(
   element: ElementType,
   filterProps: Set<string>,
@@ -148,7 +121,6 @@ function renderElement(
   };
   forwardProps(props, filterProps, domProps);
 
-  // Apply dynamic style if any CSS variables were set
   if (dynamicStyle) {
     domProps.style = props.style
       ? { ...props.style, ...dynamicStyle }
@@ -158,21 +130,6 @@ function renderElement(
   return createElement(target as any, domProps);
 }
 
-/**
- * Create a lightweight component that applies extracted CSS class names.
- * Replaces Emotion's styled() for extracted components.
- *
- * The element parameter accepts either an HTML tag string (e.g. 'button') or
- * a React component reference (e.g. NextLink). When a component reference is
- * used, prop forwarding skips the HTML-attribute validity check — all
- * non-filtered props are forwarded to the component.
- *
- * The optional systemPropMap parameter provides the shared prop→value→className
- * lookup table, served as a virtual module by the Vite plugin.
- *
- * The optional dynamicPropConfig parameter provides CSS variable fallback
- * metadata for props with detected dynamic usage.
- */
 export function createComponent(
   element: ElementType,
   className: string,
@@ -193,7 +150,6 @@ export function createComponent(
 
   const Component = forwardRef(
     (props: Record<string, any>, ref: ForwardedRef<any>) => {
-      // Shared className resolution
       const { classes, dynamicStyle } = resolveClasses(
         className,
         props,
@@ -202,12 +158,10 @@ export function createComponent(
         dynamicPropConfig
       );
 
-      // Merge external className
       if (props.className) {
         classes.push(props.className);
       }
 
-      // Dispatch: asChild merges onto the child; otherwise render own element.
       return props.asChild
         ? renderAsChild(
             className,
@@ -230,9 +184,6 @@ export function createComponent(
 
   Component.displayName = className;
 
-  // Effective-default contract: axis → default option, readable by
-  // composeWithContext (context transport of omitted-Root defaults) and
-  // diagnostic tooling. Data only — no hooks, no render effect.
   const variantDefaults: Record<string, string> = {};
   if (config.variants) {
     for (const [prop, vc] of Object.entries(config.variants)) {

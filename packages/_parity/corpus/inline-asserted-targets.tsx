@@ -1,8 +1,5 @@
-// ANI-015 witness: inline type assertions on terminal targets extract
-// exactly like their bare forms — the walker unwraps as/satisfies/non-null
-// wrappers and the emitter compiles the unwrapped identifier or tag, never
-// a placeholder (`createComponent(unknown, …)` was a browser ReferenceError
-// before the chain_walk fix).
+// Inline `as`/`satisfies`/non-null wrappers on a chain target must extract
+// exactly like the bare form; a placeholder target throws in the browser.
 const Plain = (props: { className?: string }) => <span {...props} />;
 
 export const AssertedBox = ds

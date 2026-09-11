@@ -1,12 +1,3 @@
-/**
- * The positional argument tuple for the NAPI `analyzeProject` call.
- *
- * This is the single authoritative copy of the 17-slot contract consumed by
- * both extraction plugins (vite-plugin and next-plugin). The slot order is
- * mirrored by the Rust NAPI surface — changing it requires a coordinated
- * Rust-side update.
- */
-
 /** @internal */
 export type AnalyzeProjectArgs = [
   filesJson: string,
@@ -24,15 +15,8 @@ export type AnalyzeProjectArgs = [
   pathAliasesJson: string | null,
   keyframesJson: string | null,
   staticCssJson: string | null,
-  // Appended slot (modern-css-surface inc 03): condition alias map JSON.
-  // Appended (not inserted mid-tuple) so existing slot positions are stable.
   conditionAliasesJson: string | null,
-  // Appended slot (standardize-inheritance-and-assets inc 02): rootDir-
-  // relative external package dirs (JSON string array) for the
-  // external-token candidate walk.
   externalDirsJson: string | null,
-  // Appended slot: `{ transformName: sourceText }` JSON from the system
-  // evaluation — the only seed for transforms shipped inside a package.
   transformSourcesJson: string | null,
 ];
 
@@ -51,12 +35,8 @@ export interface AnalyzeProjectInputs {
   globalStyleBlocksJson: string | null;
   pathAliasesJson: string | null;
   keyframesJson: string | null;
-  /** Forced-emission declarations (spec: static-emission-overrides). */
   staticCssJson: string | null;
-  /** Condition alias map JSON (modern-css-surface inc 03), or null. */
   conditionAliasesJson: string | null;
-  /** rootDir-relative external package dirs (JSON string array) for the
-   *  external-token candidate walk, or null. */
   externalDirsJson: string | null;
   transformSourcesJson: string | null;
 }

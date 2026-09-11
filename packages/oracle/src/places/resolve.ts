@@ -3,15 +3,6 @@ import { posix } from 'node:path';
 import type { ManifestImportFact } from '../host/animus/manifest-types';
 import type { ComponentRecord } from '../providers/identity';
 
-/**
- * Attribute one JSX tag in one file to an extracted component (seam S4). A
- * bare binding that matches two components must never resolve to an
- * arbitrary winner (`IdentityProvider.resolveTarget`'s contract) — but a
- * relative import specifier names one file, so the path can decide what the
- * binding cannot. Anything still ambiguous is returned as such for the
- * analysis to surface, never silently dropped.
- */
-
 export type TagResolution =
   | { kind: 'resolved'; component: ComponentRecord }
   | {
@@ -21,7 +12,6 @@ export type TagResolution =
     }
   | { kind: 'unknown' };
 
-/** Does this component's file answer to the resolved relative specifier? */
 const fileAnswersTo = (componentFile: string, resolved: string): boolean =>
   componentFile === resolved ||
   componentFile.startsWith(`${resolved}.`) ||
@@ -58,8 +48,6 @@ export const resolveComponentTag = (
       return { kind: 'resolved', component: byPath[0] };
     }
   }
-  // No import specifier means no `specifier` key — the analysis reads its
-  // absence as "the binding was never imported", not "imported from nowhere".
   const ambiguous: Extract<TagResolution, { kind: 'ambiguous' }> = {
     kind: 'ambiguous',
     candidates,

@@ -1,9 +1,3 @@
-/**
- * The one help text. It is the CLI's contract surface, so it states the
- * grammar of every spec-shaped flag (`--at`, `--assert`, the deltas) rather
- * than pointing at prose elsewhere — an agent that can read `--help` should
- * never have to guess a syntax.
- */
 export const USAGE = `animus-oracle — the Animus render oracle (packages/oracle/DESIGN.md)
 
 Usage:

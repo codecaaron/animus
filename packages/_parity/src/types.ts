@@ -1,37 +1,25 @@
-/**
- * Comparison surface produced by one engine run over one corpus unit.
- *
- * A wire contract, so it is a `type` and not an `interface`: the surface is
- * `engine-run.ts` stdout and it is stored verbatim inside a committed baseline
- * envelope, so it has to compose with the JSON value domain the hasher and the
- * envelope writer speak. In-process contracts below (`Divergence`, …) stay
- * interfaces.
- */
+/** Comparison surface from one engine run over one corpus unit. A `type`, not
+ *  an `interface`, so it stays assignable to the JSON value domain. */
 export type UnitSurface = {
-  /** Complete emitted CSS (raw NAPI output, before TS post-processing). */
+  /** Raw NAPI-emitted CSS, before any TS post-processing. */
   css: string;
   /** Per-file transformed code, keyed by fixture-relative path. */
   code: Record<string, string>;
-  /** Per-file hasComponents flag. */
   hasComponents: Record<string, boolean>;
-  /** Diagnostics multiset entries: `${kind}|${component}|${message}` per file. */
+  /** Sorted `file|kind|component|message` entries, compared as a multiset. */
   diagnostics: string[];
-  /** Manifest-derived observables (manifest itself has no parity by design). */
   observables: {
     componentFragmentKeys: string[];
     reverseProvenanceEdges: string[];
-    /** Consumer-reaching virtual-module composition strings, post-JSON.parse
-     *  (JS canonicalizes integer-like keys; comparisons must be post-parse). */
+    /** Compared after `JSON.parse`: JS canonicalizes integer-like keys, so
+     *  comparing the emitted text would diverge on spelling alone. */
     systemPropMapJson: string;
     dynamicPropsJson: string;
-    /** Per-layer sheet contents + per-component fragment VALUES — both
-     *  consumer-visible (vite-plugin dev split delivery / fragment cache;
-     *  next-plugin sheets.global). Inc-02 review falsifier finding. */
+    /** Per-layer sheet contents and per-component fragment values; both reach
+     *  consumers through plugin dev-split delivery and the fragment cache. */
     sheetsJson: string;
     componentFragmentsJson: string;
   };
-  /** Parser invocation count reported by the engine, or null if the engine
-   *  does not report one. */
   parseCount: number | null;
 };
 
@@ -39,8 +27,6 @@ export type UnitSurface = {
 export interface CorpusUnit {
   id: string;
   files: Array<{ path: string; source: string }>;
-  /** Which serialized config feeds the engine (both corpora currently share
-   *  the canary test-system). */
   configSource: 'test-system';
 }
 
@@ -61,7 +47,6 @@ export interface Divergence {
   unit: string;
   artifact: ArtifactClass;
   detail: string;
-  /** Exact content identity for refresh licensing. */
   baselineSha256: string;
   candidateSha256: string;
   classification?: CssClassification;
@@ -88,7 +73,6 @@ export interface RegisterEntry {
 
 export interface FamilyDecl {
   family: string;
-  /** Corpus unit ids that realize this family. */
   units: string[];
   expectedVerdict: 'identical' | 'registered-divergence';
   registerCategory?: RegisterCategory;

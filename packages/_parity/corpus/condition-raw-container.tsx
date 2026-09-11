@@ -1,6 +1,3 @@
-// Corpus fixture (modern-css-surface inc 03) — blessed into the committed oracle.
-// Raw @container block key (named container + declarations). Resolves through
-// the test-system config; no condition-alias registration needed.
 import { ds } from '../test-system';
 
 export const ContainerCard = ds

@@ -1,14 +1,3 @@
-/**
- * The session the six operations share: one probe ledger, one obligation
- * registry, one evidence ledger, one fact graph per world.
- *
- * Sharing is what makes the operations projections of a single substrate rather
- * than six independent tools (DESIGN §6): an obligation raised while
- * explaining is the same one `prove` refuses to be PROVED alongside, and a fact
- * derived by `inspect` is already in the world's graph when `simulate` counts
- * what it learned.
- */
-
 import { EvidenceLedger } from '../core/evidence';
 import { FactGraph, subjectKey } from '../core/fact';
 import { ObligationRegistry } from '../core/obligation';
@@ -43,18 +32,8 @@ export const DEFAULT_ENVIRONMENT: EnvironmentProfile = Object.freeze({
   assumptions: {},
 });
 
-/**
- * The default quantification budget. It is a *refusal* threshold, not a
- * sampling threshold: past it, `prove` answers INCONCLUSIVE with the cell count
- * instead of silently checking a subset (DESIGN §8).
- */
 export const DEFAULT_MAX_CELLS = 512;
 
-/**
- * The two ways a caller can name a context: a literal point, or the name of a
- * scenario the host declared. Only the literal one is a reference value, which
- * is the whole discrimination — a boxed string is not a name.
- */
 const isPointLiteral = (at: ScenarioPoint | string): at is ScenarioPoint =>
   Object(at) === at;
 
@@ -103,9 +82,6 @@ export const createRuntime = (
   const graphs = new Map<WorldId, FactGraph>();
   const views = new Map<WorldId, SpeculationView>();
 
-  // Host-declared unknowns are registered up front so that every operation
-  // sees the same content-addressed ids the host meant, and so an answer can
-  // be CONDITIONAL on a gap nobody has queried yet.
   for (const declared of host.obligations?.() ?? []) {
     obligations.register(declared);
   }
@@ -217,12 +193,6 @@ export const createRuntime = (
 
     delta: (partial) => ({ ...emptyKnowledgeDelta(), ...partial }),
 
-    /**
-     * Fixpoint enforcement (DESIGN §5). A repeated probe never re-runs and
-     * never overwrites its own prior record — recording the FIXPOINT answer
-     * would make the *next* repetition a fixpoint of a fixpoint and lose the
-     * original result the caller is being pointed back at.
-     */
     run: (probe, build) => {
       const stateId = probeStateId(probe);
       const prior = ledger.seen(stateId);

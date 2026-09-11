@@ -1,17 +1,3 @@
-/**
- * The animus host adapter (DESIGN §11) — the real provider implementation over
- * an extraction run's emitted artifacts.
- *
- * Engine-free by design: `manifest.json` and the emitted stylesheet already
- * contain every rule that can exist, the condition under which it applies, and
- * the source construct that produced it. That closure is what the oracle's
- * whole value rests on (DESIGN §0), so the adapter's job is to read it
- * faithfully and to be loud about the places where it stops — unmodeled CSS
- * constructs throw `AnimusAdapterError`, and the modeled-but-underdetermined
- * ones (host-tree shape, container geometry, dynamic values, runtime writes)
- * leave the boundary as declared obligations rather than as guesses.
- */
-
 export {
   conditionFor,
   containerDimension,

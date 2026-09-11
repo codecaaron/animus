@@ -4,22 +4,10 @@ import { dirname, isAbsolute, join, resolve } from 'path';
 import type { PathAliasPair } from './path-aliases';
 
 /**
- * tsconfig `paths` → alias pairs for the Rust `pathAliasesJson` contract
- * (via `buildPathAliasesJson`). Used by drivers that cannot harvest aliases
- * from a live bundler config — Turbopack exposes none.
- *
- * Semantics (deliberately the TypeScript subset that matters for import
- * provenance): JSONC tolerated (comments + trailing commas); `extends`
- * chains followed (string or array; missing parents and cycles skipped);
- * the NEAREST config declaring `paths` wins wholesale (TS replaces the
- * object, never merges); targets resolve against the nearest `baseUrl`
- * (resolved from its declaring config's directory) or, absent one, the
- * directory of the config declaring `paths`; first target per pattern.
- * `x/*` patterns become prefix pairs, non-wildcard patterns exact pairs,
- * bare `*` catch-alls and mid-pattern wildcards are skipped.
+ * tsconfig `paths` → alias pairs, for drivers with no live bundler config.
+ * The nearest config declaring `paths` wins wholesale — TS never merges.
  */
 
-/** String-aware JSONC → JSON: strips // and block comments + trailing commas. */
 function stripJsonc(text: string): string {
   let out = '';
   let inString = false;
@@ -69,15 +57,12 @@ function stripJsonc(text: string): string {
     }
     out += ch;
   }
-  // Trailing commas before } or ]
   return out.replace(/,(\s*[}\]])/g, '$1');
 }
 
 /**
- * The value domain of a tsconfig's bytes — exactly what `JSON.parse` produces
- * for one. A tsconfig is CONSUMER-authored, so nothing about its contents is
- * guaranteed; every value below is decided by a guard before this reader acts
- * on it, and the decisions all happen in `readConfig`, at the file boundary.
+ * Exactly what `JSON.parse` produces for a consumer-authored tsconfig:
+ * nothing is guaranteed, so every value is guarded at the file boundary.
  */
 type JsonValue =
   | null
@@ -91,9 +76,8 @@ interface JsonBlock {
   readonly [key: string]: JsonValue;
 }
 
-/** A keyed JSON block, decided by identity rather than by a representation
- *  tag: `Object(value) === value` holds for exactly the blocks and lists
- *  `JSON.parse` produces, and the `[object Object]` tag separates the two. */
+/** `Object(value) === value` holds for exactly the blocks and lists
+ *  `JSON.parse` produces; the `[object Object]` tag separates the two. */
 function isJsonBlock(value: JsonValue | undefined): value is JsonBlock {
   return (
     Object(value) === value &&
@@ -101,18 +85,16 @@ function isJsonBlock(value: JsonValue | undefined): value is JsonBlock {
   );
 }
 
-/** A JSON value with keys to enumerate — a block or a list. `paths` need only
- *  be one of these for its config to OWN the setting, matching TypeScript's
- *  wholesale replacement: a declared `paths` blocks its parents' even when it
- *  contributes nothing usable. */
+/** A block or a list. A declared `paths` OWNS the setting and blocks its
+ *  parents' even when it contributes nothing usable. */
 function isJsonKeyed(
   value: JsonValue | undefined
 ): value is JsonBlock | readonly JsonValue[] {
   return Object(value) === value;
 }
 
-/** A JSON string, excluding the boxed `String` object (which JSON.parse never
- *  produces and which no path join would accept). */
+/** A JSON string, excluding the boxed `String` object, which no path join
+ *  accepts. */
 function isJsonString(value: JsonValue | undefined): value is string {
   return (
     Object(value) !== value &&
@@ -120,19 +102,12 @@ function isJsonString(value: JsonValue | undefined): value is string {
   );
 }
 
-/**
- * One config in the extends chain, decoded to the three facts this reader
- * consumes. The walkers below branch on these domain values only.
- */
 interface TsconfigNode {
   dir: string;
-  /** `compilerOptions.baseUrl` as written, or null when the config declares
-   *  none — or declares a non-string, which resolves against nothing. */
+  /** `compilerOptions.baseUrl` as written; null when absent or non-string. */
   baseUrl: string | null;
-  /** `compilerOptions.paths` reduced to pattern → FIRST target, or null when
-   *  the config declares no `paths` at all. An EMPTY map is deliberately
-   *  distinct from null: a config declaring an unusable `paths` still owns
-   *  the setting and must not let a parent's leak through. */
+  /** Pattern → FIRST target; null only when the config declares no `paths`.
+   *  An empty map still owns the setting and blocks a parent's. */
   paths: ReadonlyMap<string, string> | null;
   /** Every string `extends` specifier, in declaration order. */
   extends: readonly string[];
@@ -144,16 +119,16 @@ function decodePaths(
   if (!isJsonKeyed(value)) return null;
   const decoded = new Map<string, string>();
   for (const [pattern, targets] of Object.entries(value)) {
-    // First target per pattern (module header); a pattern whose targets are
-    // not a list of strings names nothing this reader can alias to.
+    // First target per pattern; a pattern whose targets are not a list of
+    // strings aliases nothing.
     const [first] = Array.isArray(targets) ? targets : [];
     if (isJsonString(first)) decoded.set(pattern, first);
   }
   return decoded;
 }
 
-/** TypeScript accepts one specifier or an array of them; a non-string member
- *  names no config, so it is dropped here rather than at the resolution site. */
+/** TypeScript accepts one specifier or an array; a non-string member names
+ *  no config and is dropped here. */
 function decodeExtends(value: JsonValue | undefined): readonly string[] {
   return (Array.isArray(value) ? value : [value]).filter(isJsonString);
 }
@@ -171,8 +146,6 @@ function readConfig(path: string): TsconfigNode | null {
   } catch {
     return null;
   }
-  // A tsconfig that is not a JSON object declares no compiler options — the
-  // same nothing the old property reads produced for it.
   const root: JsonBlock = isJsonBlock(parsed) ? parsed : {};
   const compilerOptions: JsonBlock = isJsonBlock(root.compilerOptions)
     ? root.compilerOptions
@@ -202,7 +175,6 @@ function resolveExtendsTarget(
     }
     return null;
   }
-  // Bare specifier (@tsconfig/... presets)
   try {
     return require.resolve(
       specifier.endsWith('.json') ? specifier : `${specifier}/tsconfig.json`,
@@ -226,7 +198,7 @@ function loadChain(entryPath: string): TsconfigNode[] {
   while (queue.length > 0) {
     const path = queue.shift()!;
     const key = resolve(path);
-    if (visited.has(key)) continue; // cycle guard
+    if (visited.has(key)) continue;
     visited.add(key);
 
     const node = readConfig(key);
@@ -242,15 +214,13 @@ function loadChain(entryPath: string): TsconfigNode[] {
 }
 
 /**
- * Read the project's tsconfig path aliases as pairs consumable by
- * `buildPathAliasesJson`. Returns an empty array when no readable tsconfig
- * (or no usable `paths`) exists.
+ * The project's tsconfig path aliases as `buildPathAliasesJson` pairs; empty
+ * when no readable tsconfig, or no usable `paths`, exists.
  */
 export function readTsconfigAliasPairs(rootDir: string): PathAliasPair[] {
   const chain = loadChain(join(rootDir, 'tsconfig.json'));
   if (chain.length === 0) return [];
 
-  // Nearest paths wins wholesale.
   const pathsOwner = chain.find((node) => node.paths !== null);
   const paths = pathsOwner?.paths ?? null;
   if (pathsOwner === undefined || paths === null) return [];

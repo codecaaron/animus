@@ -1,4 +1,3 @@
-// Stand-in for the system entry: the keyframes collection binding the
-// harness registry resolves (v1 Phase 2a requires the export to EXIST
-// for the binding-map hit; the VALUE is superseded by the registry).
+// Stand-in system entry: the export must exist for the keyframes binding to
+// resolve; the registry supersedes its value, hence the placeholder.
 export const motion = { ember: 'unresolved-placeholder' };

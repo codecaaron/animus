@@ -1,7 +1,5 @@
-// ANI-008 witness (child + grandchild): extensions that ADD compounds after
-// inheriting the parent's two. Child's new compound is emitted at flattened
-// ordinal 2; the grandchild inherits three and adds one at ordinal 3 —
-// pinning the renumbering at two extension depths.
+// Each extension adds a compound after the inherited ones: the child's lands
+// at flattened ordinal 2, the grandchild's at 3.
 import { Base } from './parent';
 
 export const IconButton = Base.extend()

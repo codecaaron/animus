@@ -1,7 +1,5 @@
-// ANI-009 witness: raw CSS color-property names resolve semantic tokens via
-// COLOR_FAMILY_PASS_THROUGH — the DS registers `bg`, not `backgroundColor`,
-// yet the longhand must reach the colors scale at top level and in
-// responsive slots, while non-token values pass through literally.
+// The system registers `bg`, not `backgroundColor`: unregistered color
+// longhands must still reach the colors scale, and non-tokens stay literal.
 export const PassThrough = ds
   .styles({
     backgroundColor: 'primary',

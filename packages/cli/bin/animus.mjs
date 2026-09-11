@@ -1,11 +1,6 @@
 #!/usr/bin/env node
-// Thin shebang shim; the built entry owns arg parsing, exit codes, and
-// stream discipline. The one decision that cannot live there is what a
-// failure to LOAD that entry means. Exit 4 is the install/load class —
-// EXIT_INSTALL in src/index.ts, repeated as a literal here because the
-// module that declares it is exactly the one that did not load — where the
-// default rejection exit of 1 is the extraction-failure class a supervisor
-// retries forever. stderr is written directly for the same reason.
+// The literal repeats EXIT_INSTALL (src/index.ts) because that module is the
+// one that did not load; the default rejection exit 1 reads as extraction.
 import('../dist/index.mjs').then(
   (mod) => mod.main(),
   (error) => {

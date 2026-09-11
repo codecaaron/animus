@@ -1,38 +1,27 @@
 import { join } from 'path';
 
 /**
- * Session-scoped artifact names, path derivations, and the analysis-status
- * shape (openspec: next-turbopack-served-transform-coherence, design D1–D3)
- * — shared by the session writer (extraction-session), the webpack
- * plugin/loader, and the Turbopack loader.
- *
- * Deliberately free of singleton/session imports: the Turbopack loader
- * executes in isolated worker processes and its module graph must stay
- * worker-local (guardrail G1) — this module is pure path/shape vocabulary.
+ * Session artifact names, path derivations, and artifact shapes. Imports no
+ * session or singleton module: the Turbopack loader graph stays worker-local.
  */
 
-/** Session-dir-relative name of the replacement-epoch disk witness
- *  (openspec: next-webpack-served-transform-coherence, design D2;
- *  session-scoped by next-turbopack-served-transform-coherence D2). */
+/** Session-dir-relative name of the replacement-epoch disk witness. */
 export const REPLACEMENT_EPOCH_ARTIFACT = 'replacements-epoch';
 
-/** Virtual module id of the emitted system-props module — session
- *  vocabulary shared by the orchestrator and the Turbopack config
- *  assembly (hoisted here so the session home stays framework-free). */
+/** Virtual module id of the emitted system-props module. */
 export const TURBOPACK_SYSTEM_PROPS_ID = 'virtual:animus/system-props';
 
-/** Session-dir-relative name of the analysis-commit transaction artifact
- *  (design D1). */
+/** Session-dir-relative name of the analysis-commit transaction artifact. */
 export const ANALYSIS_COMMIT_ARTIFACT = 'analysis-commit';
 
-/** Session-dir-relative name of the analysis-status artifact (design D3). */
+/** Session-dir-relative name of the analysis-status artifact. */
 export const ANALYSIS_STATUS_ARTIFACT = 'analysis-status.json';
 
 /** Session-dir-relative name of the manifest payload artifact. */
 export const MANIFEST_ARTIFACT = 'manifest.json';
 
-/** Session-dir-relative name of the analysis-inputs payload artifact
- *  (Turbopack loader-worker hydration corpus). */
+/** Session-dir-relative name of the analysis-inputs payload artifact — the
+ *  Turbopack loader-worker hydration corpus. */
 export const ANALYSIS_INPUTS_ARTIFACT = 'analysis-inputs.json';
 
 /** Session-dir-relative name of the emitted stylesheet artifact. */
@@ -44,100 +33,60 @@ export const SYSTEM_PROPS_ARTIFACT = 'system-props.js';
 /** Session-dir-relative directory holding copied asset() files. */
 export const SESSION_ASSETS_DIR = 'assets';
 
-/** The standalone CLI's published-set commit record, written into the flat
- *  `.animus/` tree (openspec: standalone-extraction-cli D3). Shared here so
- *  the CLI writer and the session's start hygiene agree on ONE name — the
- *  hygiene confinement gate keys on this record, and a renamed literal on
- *  either side would silently re-arm deletion of the CLI's published output. */
+/** The standalone CLI's published-set commit record in the flat `.animus/`
+ *  tree; the session's start hygiene keys on this name before deleting. */
 export const CLI_COMMIT_ARTIFACT = 'commit.json';
 
-/** The advisory claim record of whichever directory holds it: a pid plus a
- *  heartbeat naming the process that owns that directory right now. The
- *  standalone CLI writes it into the flat `.animus/` tree as its
- *  single-writer lock; a session writes the same record into its own session
- *  tree, which is what lets a sibling tell a live session from an abandoned
- *  one. One name and one shape (published-set.ts); the `CLI_` prefix is the
- *  published spelling, not a claim that only the CLI writes it. */
+/** Advisory claim record (pid plus heartbeat) of whichever directory holds
+ *  it; sessions write it into their own tree too, despite the `CLI_` name. */
 export const CLI_LOCK_ARTIFACT = 'lock.json';
 
-/** The project-relative artifact directory: the flat tree the standalone CLI
- *  publishes into (its default `--out-dir`) AND the parent of every
- *  session-scoped tree. One directory, one spelling — the session's start
- *  hygiene, the watcher's ignore list, and the CLI's default all key on it,
- *  and a drifted literal on any of them silently splits the tree in two. */
+/** Project-relative artifact directory: the CLI's default output tree and
+ *  the parent of every session tree. One spelling, or the tree splits. */
 export const ANIMUS_ARTIFACT_DIR = '.animus';
 
-/** Module id the Rust emitter injects for the extracted stylesheet — and the
- *  exact resolve-alias KEY both bundler arms register for it (webpack's
- *  `resolve.alias`, Turbopack's `resolveAlias`), which the adapter's alias
- *  harvesting must skip. It lives in this fs-free vocabulary module rather
- *  than the session home so the Turbopack config assembly and the loader
- *  policy can spell it from ONE authority; a per-arm re-declaration would
- *  let the emitted id and an alias key drift apart silently.
- *
- *  Deliberately a literal, not `${ANIMUS_ARTIFACT_DIR}/${STYLES_ARTIFACT}`:
- *  this is a published wire identifier baked into already-built consumer
- *  packages, so it must NOT follow a rename of the artifact directory. */
+/** Module id the Rust emitter injects, and the alias key both bundlers
+ *  register. A literal on purpose: a rename breaks built consumer packages. */
 export const ANIMUS_CSS_MODULE_ID = '.animus/styles.css';
 
-/** Root of every session-scoped artifact tree for a project. */
 export function sessionsRootDir(rootDir: string): string {
   return join(rootDir, ANIMUS_ARTIFACT_DIR, 'sessions');
 }
 
-/** One session's artifact directory (design D2: session-scoped trees,
- *  no global pointer). */
 export function sessionArtifactDir(rootDir: string, sessionId: string): string {
   return join(sessionsRootDir(rootDir), sessionId);
 }
 
-/** Absolute path of a session's replacement-epoch artifact — the single
- *  derivation shared by the session writer, the webpack plugin's
- *  watch-ignore entry, and both loaders' file dependencies. Takes the
- *  SESSION directory (not the project root) since the artifact was
- *  relocated into the session tree. */
 export function replacementEpochPath(sessionDir: string): string {
   return join(sessionDir, REPLACEMENT_EPOCH_ARTIFACT);
 }
 
-/** Absolute path of a session's analysis-commit artifact. */
 export function analysisCommitPath(sessionDir: string): string {
   return join(sessionDir, ANALYSIS_COMMIT_ARTIFACT);
 }
 
-/** Absolute path of a session's analysis-status artifact. */
 export function analysisStatusPath(sessionDir: string): string {
   return join(sessionDir, ANALYSIS_STATUS_ARTIFACT);
 }
 
-/** Absolute path of a session's manifest artifact. */
 export function manifestPath(sessionDir: string): string {
   return join(sessionDir, MANIFEST_ARTIFACT);
 }
 
-/** Absolute path of a session's analysis-inputs artifact. */
 export function analysisInputsPath(sessionDir: string): string {
   return join(sessionDir, ANALYSIS_INPUTS_ARTIFACT);
 }
 
-/** Absolute path of a session's stylesheet artifact. */
 export function stylesPath(sessionDir: string): string {
   return join(sessionDir, STYLES_ARTIFACT);
 }
 
-/** Absolute path of a session's system-props module artifact. */
 export function systemPropsPath(sessionDir: string): string {
   return join(sessionDir, SYSTEM_PROPS_ARTIFACT);
 }
 
-/** Session-scoped analysis-status shape (design D3). Successful loader
- *  invocations never depend on it; it exists so a loader observing a
- *  source/commit mismatch can decide — on evidence — whether to wait.
- *
- *  Schema 2 (openspec: standalone-extraction-cli, watch readiness) adds the
- *  additive `ready` field; every other field is unchanged, so schema-1
- *  readers keep working (no reader branches on the schema value — the bump
- *  records the shape revision for artifact archaeology). */
+/** Advisory: a loader reads it only after observing a source/commit
+ *  mismatch, to decide whether to wait. No reader branches on `schema`. */
 export interface AnalysisStatus {
   schema: 1 | 2;
   sessionId: string;
@@ -154,28 +103,18 @@ export interface AnalysisStatus {
   /** Epoch-ms deadline for the active attempt (debounce ceiling + 2s). */
   deadlineAt: number;
   diagnostic?: string;
-  /** Monotonic first-emission witness (additive, schema 2): absent or false
-   *  until the session's FIRST successful complete publication, true on
-   *  every status write after it — including 'failed' writes, which is what
-   *  makes readiness distinct from `state: 'idle'` (idle recurs per attempt;
-   *  ready never regresses within a session). */
+  /** False until the session's first complete publication, true on every
+   *  later write including failures; never regresses within a session. */
   ready?: boolean;
 }
 
-/** analysis-commit artifact shape (design D1: the transaction identity —
- *  hashes are of the DISK payload bytes, envelope included). `inputsHash`
- *  is present only when the hydration corpus is persisted (Turbopack
- *  orchestration); webpack-mode commits omit it (spec:
- *  next-turbopack-integration, "Webpack mode skips the hydration corpus"). */
+/** Transaction identity: every hash is of the DISK payload bytes, envelope
+ *  included. `inputsHash` is absent when no hydration corpus is persisted. */
 export interface AnalysisCommit {
   schema: 1;
   sessionId: string;
-  /** FORENSIC ordinal, not a validity witness: no reader — in this repo or
-   *  in a loader protocol — decides anything from it, and the commit's own
-   *  skip guard deliberately compares hashes and the epoch instead. It is
-   *  monotonic per session DIRECTORY only because publication ownership is
-   *  exclusive (ExtractionSession.runFullPipeline claims it). Do not
-   *  promote it to a coherence check without giving it a disk read. */
+  /** Forensic ordinal only: no reader decides anything from it, and it is
+   *  monotonic per session directory only because publication is exclusive. */
   generation: number;
   replacementEpoch: string;
   manifestHash: string;
@@ -183,9 +122,8 @@ export interface AnalysisCommit {
   stylesHash: string;
 }
 
-/** Envelope embedded in every payload artifact (design D2: sessionId in
- *  every artifact; payloadHash lets a same-session restart seed its write
- *  guards without byte-reconstructing the payload). */
+/** Embedded in every payload artifact; `payloadHash` lets a same-session
+ *  restart seed its write guards without rebuilding the payload bytes. */
 export interface SessionEnvelope {
   sessionId: string;
   generation: number;
@@ -193,12 +131,8 @@ export interface SessionEnvelope {
   payloadHash: string;
 }
 
-// ── Envelope encoding (single authority: writer, readers, and the protocol
-// reader tests' fabricators all consume these — the format is defined ONCE) ──
-
-/** Splice the session envelope into a JSON-object payload as a leading
- *  `__animusSession` field, byte-preserving the payload's own content
- *  (parse/re-stringify could reformat engine-emitted JSON). */
+/** Splices the envelope in as a leading `__animusSession` field without
+ *  re-serializing: parse/re-stringify would reformat engine-emitted JSON. */
 export function envelopeJsonArtifact(
   payload: string,
   envelopeJson: string
@@ -212,8 +146,8 @@ export function envelopeJsonArtifact(
   return `{"__animusSession":${envelopeJson},${trimmed.slice(1)}`;
 }
 
-/** Trailing-comment side-band for the CSS artifact (a leading comment
- *  would displace the @layer declaration consumers pin at offset 0). */
+/** Trailing-comment side-band: a leading comment would displace the `@layer`
+ *  declaration consumers pin at offset 0. */
 export function envelopeCssArtifact(
   payload: string,
   envelopeJson: string
@@ -221,29 +155,22 @@ export function envelopeCssArtifact(
   return `${payload}\n/* __animusSession ${envelopeJson} */\n`;
 }
 
-/** Matches the CSS artifact's envelope side-band. */
 export const ENVELOPE_CSS_COMMENT_RE = /\/\* __animusSession (\{.*\}) \*\//;
 
-/** Envelope of a JSON artifact's bytes, or undefined when the artifact
- *  carries none. THROWS on unparseable bytes — callers decide whether a
- *  torn artifact fails closed or degrades. */
+/** Envelope of a JSON artifact's bytes, or undefined when it carries none.
+ *  Throws on unparseable bytes; callers decide torn-artifact policy. */
 export function readJsonEnvelope(bytes: string): SessionEnvelope | undefined {
-  // SAFETY: `__animusSession` is spliced in by `envelopeJsonArtifact` above —
-  // the single writer of this side-band, in this module — so the key is either
-  // absent (undefined, the declared return) or the object that function was
-  // handed. Bytes that are not JSON at all throw out of `JSON.parse`, which is
-  // this reader's documented contract.
+  // SAFETY: `envelopeJsonArtifact` above is the only writer of this side-band,
+  // so the key is either absent or the object it spliced in.
   return (JSON.parse(bytes) as { __animusSession?: SessionEnvelope })
     .__animusSession;
 }
 
-/** Envelope of the CSS artifact's side-band comment, or undefined when the
- *  side-band is absent. THROWS on an unparseable envelope body. */
+/** Envelope of the CSS side-band comment, or undefined when it is absent.
+ *  Throws on an unparseable envelope body. */
 export function readCssEnvelope(bytes: string): SessionEnvelope | undefined {
   const match = bytes.match(ENVELOPE_CSS_COMMENT_RE);
-  // SAFETY: the captured group comes from `ENVELOPE_CSS_COMMENT_RE`, which
-  // matches only the side-band `envelopeCssArtifact` above writes — the single
-  // writer of this comment, in this module — so the body is that function's
-  // `envelopeJson`. An unparseable body throws, as the doc comment states.
+  // SAFETY: the capture comes from the regex above, which matches only the
+  // side-band `envelopeCssArtifact` writes; an unparseable body throws.
   return match ? (JSON.parse(match[1]) as SessionEnvelope) : undefined;
 }

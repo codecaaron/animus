@@ -9,25 +9,14 @@ import type {
 } from '../../providers/tokens';
 import type { ParsedDeclaration } from './css-parse';
 
-/*
- * `:root` is not a colour mode — it is the declaration layer every mode
- * overrides, and its values are frequently *aliases* (`--color-primary:
- * var(--color-blue-500)`) while the mode blocks are literals. Keeping it as a
- * distinct key (the contract-level `ROOT_MODE`) preserves the alias so
- * `references` and `replace-token` deltas see the real graph, instead of
- * flattening it into whichever mode happened to be default.
- */
 export { ROOT_MODE };
 
-/** The root mode-attribute compound — shared with the ancestor-guard
- * derivation in `selector.ts` so both read the same emitted dialect. */
 export const MODE_SELECTOR = /^\[data-color-mode=["']?([A-Za-z0-9_-]+)["']?\]$/;
 const SCHEME_AT_RULE =
   /^@media\s*\(\s*prefers-color-scheme\s*:\s*([A-Za-z0-9_-]+)\s*\)$/;
 const PURE_ALIAS = /^var\(\s*(--[A-Za-z0-9_-]+)\s*\)$/;
 const BREAKPOINT = /^--breakpoint-([A-Za-z0-9_-]+)$/;
 const PX = /^(-?\d+(?:\.\d+)?)px$/;
-/** Where the pretty token prelude ends and the minified layers begin. */
 const MINIFIED_LAYER = /^@layer\s+[\w-]+\{/m;
 
 export interface Breakpoint {
@@ -37,7 +26,6 @@ export interface Breakpoint {
 
 export interface AnimusTokens extends TokenProvider {
   breakpoints(): readonly Breakpoint[];
-  /** Honest notes about what the variable layer does and does not model. */
   notes(): readonly string[];
 }
 
@@ -47,10 +35,8 @@ interface RawBlock {
 }
 
 /**
- * Top-level `selector { … }` blocks of `text`, with nested bodies left raw.
- *
- * Brace-matching only — enough for the emitted variable prelude, which has no
- * braces inside strings, and deliberately not a second CSS parser.
+ * Brace-matching only: sound for the emitted variable prelude, which has no
+ * braces inside strings.
  */
 const eachBlock = (text: string): RawBlock[] => {
   const blocks: RawBlock[] = [];
@@ -92,9 +78,7 @@ const declarationsOf = (body: string, context: string): ParsedDeclaration[] =>
   });
 
 interface Collected {
-  /** variable → mode → raw value. */
   values: Map<string, Map<string, string>>;
-  /** mode → its `color-scheme` declaration, when it has one. */
   colorScheme: Map<string, string>;
   modes: string[];
   schemeFallbacks: string[];
@@ -121,17 +105,6 @@ const record = (
   }
 };
 
-/**
- * Build a `TokenProvider` from the emitted stylesheet's variable blocks.
- *
- * Three block shapes carry variables and only two of them are modes:
- * `:root` (the declaration layer, `ROOT_MODE`), `[data-color-mode="m"]` (the
- * modes), and `@media (prefers-color-scheme: X) { :root:not([data-color-mode])
- * { … } }` — the system fallback. The fallback is *not* a mode: it applies
- * exactly when no mode is pinned, so admitting it as one would let a probe
- * bind `mode` and the fallback simultaneously, which no document can be in.
- * Its existence is recorded as a note instead.
- */
 export const createAnimusTokens = (stylesheet: string): AnimusTokens => {
   const boundary = MINIFIED_LAYER.exec(stylesheet);
   const prelude =

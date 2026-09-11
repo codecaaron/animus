@@ -18,14 +18,8 @@ import type {
 } from './types/component';
 
 /**
- * Compose components into a sealed family with shared variant propagation
- * via React context. Use this when children may be rendered in portals
- * or other React subtrees that escape the DOM hierarchy (where CSS
- * descendant selectors cannot reach).
- *
- * This function uses `createContext` and `useContext` — it is client-only.
- * For CSS-only propagation (RSC-safe), use `compose` from the barrel or
- * `@animus-ui/system/compose`.
+ * Context transport for shared variants, for children rendered in portals,
+ * where the CSS descendant selectors `compose` relies on cannot reach.
  */
 export function composeWithContext<
   Slots extends { Root: AnyBrandedComponent } & Record<
@@ -48,10 +42,8 @@ export function composeWithContext<
     let Wrapper: ForwardRefExoticComponent<any>;
 
     if (name === 'Root') {
-      // Root wrapper: provide EFFECTIVE shared values via context — the
-      // explicit prop, else the Root component's default option, so
-      // portaled children match the CSS transport's `--default`-keyed
-      // inheritance rule. Axes with neither stay absent.
+      // Context carries effective values — the explicit prop, else the Root's
+      // default — so portaled children inherit what the CSS transport gives.
       const rootDefaults = (
         SourceComponent as {
           variantDefaults?: Readonly<Record<string, string>>;
@@ -60,9 +52,6 @@ export function composeWithContext<
       Wrapper = forwardRef<unknown, Record<string, unknown>>((props, ref) => {
         const shared: Record<string, unknown> = {};
         for (const key of sharedKeySet) {
-          // Mirror class assembly's effective-value resolution exactly
-          // (`props[prop] ?? vc.default`): explicit nullish falls through
-          // to the default; neither → absent.
           const value = props[key] ?? rootDefaults?.[key];
           if (value != null) shared[key] = value;
         }
@@ -77,11 +66,8 @@ export function composeWithContext<
         );
       });
     } else {
-      // Child wrapper: read context, merge under direct props. A nullish
-      // direct prop on a SHARED key yields to the inherited effective
-      // value (same `??` principle as the Root wrapper) — otherwise
-      // `prop={undefined}` would erase the default for a portaled child
-      // while a DOM-descendant child keeps it via the CSS transport.
+      // A nullish direct prop on a shared key yields to the inherited value:
+      // `prop={undefined}` must not erase what a DOM child keeps via CSS.
       Wrapper = forwardRef<unknown, Record<string, unknown>>((props, ref) => {
         const inherited = useContext(FamilyCtx);
         const merged: Record<string, unknown> = { ...inherited, ...props };
@@ -89,7 +75,7 @@ export function composeWithContext<
           if (props[key] == null && key in inherited)
             merged[key] = inherited[key];
         }
-        // oxlint-disable-next-line react/refs -- forwarding does not read the ref value
+        // oxlint-disable-next-line react/refs -- the ref is forwarded, not read
         return createElement(SourceComponent, { ...merged, ref });
       });
     }
@@ -102,19 +88,13 @@ export function composeWithContext<
 }
 
 /**
- * createComposedFamilyWithContext — extraction-time replacement for composeWithContext().
- *
- * The transform emitter replaces `composeWithContext({ Root, Body }, { shared, name })`
- * with `createComposedFamilyWithContext({ Root, Body }, { name, sharedKeys })`.
- *
- * Client-only: uses createContext and useContext. Files containing this function
- * receive a 'use client' directive from the transform emitter.
+ * The extraction emitter rewrites `composeWithContext()` calls to this form
+ * and adds the `'use client'` directive its context hooks require.
  */
 export function createComposedFamilyWithContext(
   slots: Record<string, ForwardRefExoticComponent<any>>,
   config: { name: string; sharedKeys: string[] }
 ): Record<string, ForwardRefExoticComponent<any>> {
-  // Same precondition as the source form — see assertRootSlot.
   assertRootSlot(slots, 'createComposedFamilyWithContext');
   const { name, sharedKeys } = config;
   const Ctx = createContext<Record<string, unknown>>({});
@@ -125,8 +105,6 @@ export function createComposedFamilyWithContext(
     let Wrapper: ForwardRefExoticComponent<any>;
 
     if (slotName === 'Root') {
-      // Effective shared values — see composeWithContext(); the extracted
-      // form must stay behaviorally identical to the source form.
       const rootDefaults = (
         SourceComponent as {
           variantDefaults?: Readonly<Record<string, string>>;
@@ -135,8 +113,6 @@ export function createComposedFamilyWithContext(
       Wrapper = forwardRef<unknown, Record<string, unknown>>((props, ref) => {
         const shared: Record<string, unknown> = {};
         for (const key of keySet) {
-          // Mirror class assembly's `props[prop] ?? default` resolution —
-          // see composeWithContext(); the forms stay identical.
           const value = props[key] ?? rootDefaults?.[key];
           if (value != null) shared[key] = value;
         }
@@ -151,7 +127,6 @@ export function createComposedFamilyWithContext(
         );
       });
     } else {
-      // Nullish shared props yield to inherited — see composeWithContext().
       Wrapper = forwardRef<unknown, Record<string, unknown>>((props, ref) => {
         const inherited = useContext(Ctx);
         const merged: Record<string, unknown> = { ...inherited, ...props };
@@ -159,7 +134,7 @@ export function createComposedFamilyWithContext(
           if (props[key] == null && key in inherited)
             merged[key] = inherited[key];
         }
-        // oxlint-disable-next-line react/refs -- forwarding does not read the ref value
+        // oxlint-disable-next-line react/refs -- the ref is forwarded, not read
         return createElement(SourceComponent, { ...merged, ref });
       });
     }

@@ -4,11 +4,6 @@ import { describePredicate, or } from './predicate';
 import type { ObligationId } from './identity';
 import type { Predicate } from './predicate';
 
-/**
- * The precision lattice (DESIGN §3). A fact's value is never forced into
- * known/unknown: it is as strong as the model can support and no stronger.
- * `unknown` is not a failure — it is an addressable proof obligation.
- */
 export type AbstractValue<T> =
   | { kind: 'exact'; value: T }
   | { kind: 'finite-set'; values: readonly T[] }
@@ -30,11 +25,6 @@ export const exact = <T>(v: T): AbstractValue<T> => ({
   value: v,
 });
 
-/**
- * A finite set of candidates. Duplicates are removed by canonical form, and a
- * one-element set is exactly an exact value — the normal form matters because
- * values participate in fact identity.
- */
 export const finiteSet = <T>(values: readonly T[]): AbstractValue<T> => {
   const seen = new Set<string>();
   const unique: T[] = [];
@@ -52,19 +42,11 @@ export const unknownValue = <T>(
   obligation: ObligationId
 ): AbstractValue<T> => ({ kind: 'unknown', obligation });
 
-/** Structural equality over the canonical form. */
 export const valueEquals = <T>(
   a: AbstractValue<T>,
   b: AbstractValue<T>
 ): boolean => canonicalJson(a) === canonicalJson(b);
 
-/**
- * A guarded case analysis. Adjacent cases carrying equal values are merged by
- * disjoining their guards (the partition is a presentation detail, the value
- * is the fact), and a single unconditional case is just that value. Merging is
- * restricted to *adjacent* cases so that case order — which engines use to
- * encode precedence — is never reshuffled.
- */
 export const piecewise = <T>(
   cases: readonly PiecewiseCase<T>[]
 ): AbstractValue<T> => {
@@ -94,12 +76,6 @@ export const piecewise = <T>(
   return { kind: 'piecewise', cases: merged };
 };
 
-/**
- * A leaf that is already text is its own description; everything else is
- * described by its canonical form. Boxed strings are deliberately excluded —
- * `canonicalJson` refuses them, and a description must never be the only place
- * an unencodable value slips through as if it were text.
- */
 const isTextLeaf = <T>(value: T): value is T & string => {
   if (Object(value) === value) return false;
   try {
@@ -139,13 +115,6 @@ export const describeValue = <T>(v: AbstractValue<T>): string => {
   }
 };
 
-/**
- * How *precise* a value is — nothing more. Precision is orthogonal to
- * authority (DESIGN §3): a proven interval can be a stronger claim than an
- * exact measured point, so this rank exists for display and tie-breaking in
- * presentation only. Nothing in the substrate may collapse two facts, drop the
- * less precise one, or derive confidence from this number.
- */
 export const precisionRank = <T>(v: AbstractValue<T>): number => {
   switch (v.kind) {
     case 'exact':

@@ -1,8 +1,5 @@
 import { CSSObject } from '../types/theme';
 
-/**
- * Returns an type of any object with { key: 'var(--key) }
- */
 export type KeyAsVariable<
   T extends Record<string, any>,
   Prefix extends string,

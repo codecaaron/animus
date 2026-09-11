@@ -1,17 +1,8 @@
 import { existsSync, readFileSync } from 'fs';
 import { join, relative, resolve } from 'path';
 
-/**
- * Resolve external DS package specifiers to rootDir-relative entry paths.
- * Node-generic (no webpack APIs): Pass 1 walks the consumer's workspaces for
- * matching package names; Pass 2 falls back to `require.resolve`. Specifiers
- * that resolve nowhere are simply omitted (spec: silent skip).
- */
-/**
- * Package specifier → rootDir-relative entry path. A specifier that resolved
- * nowhere has NO key at all (spec: silent skip) — an entry is never present
- * with an empty target.
- */
+/** Package specifier → rootDir-relative entry path. An unresolved specifier
+ *  has no key at all, never a key with an empty target. */
 export interface ResolvedPackageMap {
   [specifier: string]: string;
 }
@@ -26,12 +17,10 @@ export function resolvePackagesByName(
   const resolved = new Set<string>();
   const packageMap: ResolvedPackageMap = {};
 
-  // Pass 1: workspace resolution
   try {
     const rootPkg = JSON.parse(
       readFileSync(join(rootDir, 'package.json'), 'utf-8')
     );
-    // Both workspace forms: ["packages/*"] and { packages: ["packages/*"] }.
     const workspaces: string[] = Array.isArray(rootPkg.workspaces)
       ? rootPkg.workspaces
       : (rootPkg.workspaces?.packages ?? []);
@@ -54,26 +43,16 @@ export function resolvePackagesByName(
             resolved.add(name);
           }
         }
-      } catch {
-        // Benign existence probe: a workspace entry without a readable
-        // package.json simply contributes no package — skip it.
-      }
+      } catch {}
     }
-  } catch {
-    // Benign existence probe: no readable root package.json means no
-    // workspace resolution; Pass 2 (require.resolve) still runs.
-  }
+  } catch {}
 
-  // Pass 2: require.resolve fallback for non-workspace packages
   for (const name of nameSet) {
     if (resolved.has(name)) continue;
     try {
       const entryPath = require.resolve(name, { paths: [rootDir] });
       packageMap[name] = relative(rootDir, entryPath);
-    } catch {
-      // Benign resolution probe: require.resolve throws for an
-      // unresolvable specifier — that package just goes unmapped.
-    }
+    } catch {}
   }
 
   return packageMap;

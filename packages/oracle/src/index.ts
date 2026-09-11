@@ -1,13 +1,3 @@
-/**
- * `@animus-ui/oracle` — the canonical substrate (DESIGN.md §10).
- *
- * Everything here is host-independent: values and authorities, guards and
- * scenario partitions, worlds and deltas, the fact graph, obligations, the
- * probe envelope with its fixpoint ledger, the evidence ledger, and the six
- * provider interfaces a host implements. Engines and adapters build on this
- * surface; nothing in it reads a clock, a filesystem, or a random source.
- */
-
 export {
   asDependencyId,
   asEvidenceId,

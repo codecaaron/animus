@@ -35,12 +35,6 @@ import type {
 import type { Snapshot } from './snapshot';
 import type { SourceElement, SourceRead } from './source';
 
-/**
- * The many-place model (PLACES.md §2): invocations found in real source,
- * places built from their structural context, ancestor axes bound per place,
- * and outcomes carried across every place that matters.
- */
-
 export type {
   AxisBinding,
   InvocationRef,
@@ -68,7 +62,6 @@ export interface PlaceExplanation {
     value: string;
     reason: string;
   }[];
-  /** Bindings whose axis gates a competing declaration of this property. */
   requiredAncestors: readonly AxisBinding[];
   assumptions: readonly string[];
 }
@@ -86,40 +79,19 @@ export interface CarriedOutcome {
 
 export interface PlaceAnalysis {
   snapshot: Snapshot;
-  /** Every correspondence-checked invocation of one component. */
   invocationsOf(selector: string): readonly InvocationRef[];
-  /**
-   * Component-like tags in one file that cannot be attributed to a single
-   * component — surfaced with their candidates, never silently dropped.
-   */
   unresolved(file: string): readonly UnresolvedInvocation[];
-  /** The invocation whose element span contains this offset. */
   at(file: string, offset: number): InvocationRef | undefined;
   placeOf(invocation: InvocationRef): Place;
   explain(
     place: Place,
     question: { property: string; at?: ScenarioPoint }
   ): PlaceExplanation;
-  /**
-   * Carry a candidate change across every place of the component and
-   * partition the outcomes (PLACES.md §2): changed / stable / ambiguous /
-   * inaccessible, per materially different context.
-   */
   carry(
     deltas: readonly WorldDelta[],
     subject: { component: string; property: string }
   ): readonly CarriedOutcome[];
-  /**
-   * The observation-first entry (PLACES.md §5): which components produced
-   * these observed classes, at which replay-verified bindings, and which
-   * places could have rendered them — a narrowing, never a pick.
-   */
   locate(observation: Observation): LocateResult;
-  /**
-   * Apply an observation to a place: open axes discharge with observation
-   * evidence, refutation demands a complete chain, and a contradiction with
-   * static structure rejects the whole observation (PLACES.md §5).
-   */
   observe(place: Place, observation: Observation): ObserveResult;
 }
 
@@ -145,8 +117,6 @@ const bindAxis = (
 
   for (const ancestor of ancestorsOf(read, invocation.ordinal)) {
     if (ancestor.component) {
-      // The chain is hidden from here outward — nothing farther can be
-      // refuted, and nothing nearer established it.
       return {
         binding: {
           axis,
@@ -168,9 +138,6 @@ const bindAxis = (
         tag: ancestor.tag,
       };
       if (requirement.stateful) {
-        // The structure is present but the axis also demands interaction
-        // state (`.group:hover`) — statically at most refutable, never
-        // established.
         return {
           binding: { axis, state: 'open', reason: 'stateful-pseudo', witness },
         };
@@ -258,12 +225,6 @@ export const createPlaceAnalysis = (snapshot: Snapshot): PlaceAnalysis => {
     return refs;
   };
 
-  /**
-   * Component-like tags this analysis cannot attribute to one component —
-   * surfaced, never silently dropped. Tags outside the universe are not
-   * listed: a plain wrapper component is an opaque boundary, not a failed
-   * attribution.
-   */
   const unresolved = (file: string): UnresolvedInvocation[] => {
     const structure = snapshot.structureOf(file);
     if (!structure.ok) return [];
@@ -306,12 +267,10 @@ export const createPlaceAnalysis = (snapshot: Snapshot): PlaceAnalysis => {
     const candidates = invocationsIn(file).filter(
       (ref) => ref.span[0] <= offset && offset < ref.span[1]
     );
-    // Innermost containing invocation: the smallest span wins.
     candidates.sort((a, b) => a.span[1] - a.span[0] - (b.span[1] - b.span[0]));
     return candidates[0];
   };
 
-  /** Fold decided bindings into the pinned domain + point of a place. */
   const placeFrom = (
     invocation: InvocationRef,
     bindings: readonly AxisBinding[],
@@ -494,9 +453,6 @@ export const createPlaceAnalysis = (snapshot: Snapshot): PlaceAnalysis => {
     for (const invocation of invocationsOf(subject.component)) {
       const place = placeOf(invocation);
 
-      // An open axis only clouds the outcome when a rule that declares the
-      // queried property is gated on it — an open hover axis cannot make a
-      // color question ambiguous.
       const deciding = place.bindings.filter(
         (binding) =>
           binding.state === 'open' &&

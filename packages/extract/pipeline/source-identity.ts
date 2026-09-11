@@ -1,31 +1,18 @@
 import { realpathSync } from 'node:fs';
 import path from 'node:path';
 
-/** Platform path API (`path` / `path.win32` / `path.posix`). Structural
- *  local alias — the packed consumers' @types/node need not export
- *  `PlatformPath` from 'node:path' (older versions don't, which fails
- *  their declaration type-check against this file's emitted d.ts). */
+/** Structural alias, not `node:path`'s own `PlatformPath`: some @types/node
+ *  versions do not export that name and fail consumers' type-check. */
 type PlatformPath = typeof path.win32;
 
 /**
- * SourceId derivation authority + allowlist membership (openspec:
- * external-source-watch-ingestion, design D1/D2/D5).
- *
- * One shared derivation produces the canonical source identity consumed by
- * discovery, watch ingestion, ownership, deletion pruning, and diagnostics
- * — raw event paths are lookup INPUTS only, so event spelling (symlink
- * alias vs canonical, lexical vs realpath) can never fork identity.
- *
- * The containment and volume helpers are pure and path-API-injectable so
- * Windows semantics are unit-testable via `path.win32` on any host; runtime
- * callers use the ambient platform implementation.
+ * One derivation of source identity for discovery, watch ingestion, ownership
+ * and deletion: event paths are lookup INPUTS only and never fork identity.
  */
 
 /**
- * Structural containment: `target` is the root itself or a descendant of it,
- * decided by `relative()` shape — never by string prefixing, so `/ui` can
- * never claim `/ui-old`, and a cross-drive win32 target (whose relative()
- * result is absolute) is never contained.
+ * True when `target` is `root` or a descendant, decided by `relative()`
+ * shape: string prefixing would let `/ui` claim `/ui-old`.
  */
 export function isPathWithinRoot(
   root: string,
@@ -42,9 +29,8 @@ export function isPathWithinRoot(
 }
 
 /**
- * Cross-volume gate (design D5): two paths share a platform path root
- * (win32 drive letter or UNC share; always true on posix). Compared
- * case-insensitively — win32 drive letters are case-insensitive.
+ * True when two paths share a platform root (win32 drive letter or UNC
+ * share; always true on posix). Drive letters compare case-insensitively.
  */
 export function sharesVolumeRoot(
   a: string,
@@ -56,62 +42,46 @@ export function sharesVolumeRoot(
   return volumeOf(a) === volumeOf(b);
 }
 
-/** One resolved source identity. */
 export interface ResolvedSourceId {
   /**
-   * The rootDir-relative source key all persistent analysis state is
-   * indexed by — kit files keep their `..`-prefixed keys. Derived from
-   * CANONICAL paths (canonical suffix re-attached to the root's
-   * as-registered spelling) so it always matches the key discovery
-   * produced, whatever spelling the event carried.
+   * rootDir-relative key all persistent analysis state is indexed by; kit
+   * files keep `..`-prefixed keys. Canonical, so event spelling never forks it.
    */
   sourceKey: string;
-  /** Canonical form of the owning external root; null when the project
-   *  root itself owns the file. */
+  /** Canonical owning external root; null when the project root owns it. */
   owningRoot: string | null;
-  /** Canonical path of the file relative to its owning root (equals
-   *  `sourceKey` for project-root members) — the input for package-relative
-   *  exclusion filters. */
+  /** Path relative to the owning root (equals `sourceKey` for project-root
+   *  members) — the input for package-relative exclusion filters. */
   pathInRoot: string;
 }
 
 /**
- * The per-generation identity handle (design D2): canonical roots are
- * realpath'd once at registration, and every alias→SourceId association
- * observed while a file existed is recorded so DELETION resolves through
- * the cache — never through fresh canonicalization of a gone path.
+ * Per-generation identity handle: alias associations observed while a file
+ * existed are recorded, so deletion never canonicalizes a gone path.
  */
 export interface SourceIdentity {
   readonly rootDir: string;
   readonly canonicalRootDir: string;
   /**
-   * Register a discovery-resolved external source root. Both the
-   * as-registered (lexical) and canonical forms become membership
-   * witnesses; duplicate spellings of one canonical root collapse into the
-   * first registration. Returns the canonical form.
+   * Register an external source root; duplicate spellings of one canonical
+   * root collapse into the first registration. Returns the canonical form.
    */
   registerExternalRoot(root: string): string;
   /** Canonical forms of every registered external root (registration order). */
   externalRoots(): string[];
   /**
-   * Resolve an EXISTING path to its source identity: canonicalize, then
-   * re-authorize containment against the canonical form of the allowed
-   * trees (a nested symlink escaping every allowed tree is rejected).
-   * Records the observed spelling (and the canonical form) as deletion
-   * aliases. Returns null for non-members and paths that cannot be
-   * canonicalized (vanished between event and resolution).
+   * Resolve an EXISTING path: canonicalize, then re-authorize containment so
+   * a symlink escaping every allowed tree is rejected. Records the aliases.
    */
   resolveSourceId(inputPath: string): ResolvedSourceId | null;
   /**
-   * Resolve a DELETED path through the recorded alias associations only —
-   * a spelling never observed while the file existed resolves nothing.
+   * Resolve a DELETED path through recorded aliases only: a spelling never
+   * observed while the file existed resolves nothing.
    */
   resolveDeletedSourceId(inputPath: string): ResolvedSourceId | null;
   /**
-   * The canonical external root structurally containing `inputPath`
-   * (matched against both root forms; the path itself need not exist and
-   * no file identity is resolved) — the watch pass's dirty-root witness
-   * for directory-granularity reports. Null when no root contains it.
+   * The canonical external root containing `inputPath` — the path need not
+   * exist and no file identity is resolved. Null when no root contains it.
    */
   containingExternalRoot(inputPath: string): string | null;
 }
@@ -180,8 +150,7 @@ export function createSourceIdentity(rootDir: string): SourceIdentity {
           pathInRoot,
         };
       };
-      // A registered root nested INSIDE the project root can be more
-      // specific than the root itself (an out-of-root kit always is) —
+      // A root nested inside the project root outranks the project root;
       // otherwise project-root membership wins, then any remaining owner.
       const ownerIsMoreSpecific =
         owner !== null && owner.canonical.length > canonicalRootDir.length;
@@ -195,8 +164,8 @@ export function createSourceIdentity(rootDir: string): SourceIdentity {
       } else if (owner) {
         resolved = ownedBy(owner);
       } else {
-        // Canonical form escapes every allowed tree — the re-authorization
-        // after canonicalization that rejects nested symlink escapes.
+        // Canonical form escapes every allowed tree — the post-canonical
+        // re-authorization that rejects nested symlink escapes.
         return null;
       }
       aliases.set(lexical, resolved);
@@ -211,9 +180,8 @@ export function createSourceIdentity(rootDir: string): SourceIdentity {
     containingExternalRoot(inputPath: string): string | null {
       const lexical = path.normalize(inputPath);
       let owner: RootRecord | null = null;
-      // Lexical containment first — canonicalization (a realpath syscall)
-      // only runs when no lexical form matches, preserving the
-      // symlink-alias path as the fallback.
+      // Lexical containment first: the realpath syscall runs only when no
+      // lexical form matches.
       for (const record of roots) {
         const contained =
           isPathWithinRoot(record.canonical, lexical) ||

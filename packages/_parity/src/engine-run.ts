@@ -1,11 +1,5 @@
-/**
- * CHILD entry: one engine, whole corpus, one dev-mode — run in a FRESH
- * process per invocation (cross-process determinism is part of what the
- * harness measures; std HashMap ordering is per-process).
- *
- * stdout: canonical JSON  Record<unitId, UnitSurface>
- * argv:   --engine v2 [--dev]
- */
+/** Runs one engine over the whole corpus in a fresh process: cross-process
+ *  determinism is measured, and native map order is per-process. */
 import {
   isJsonNumber,
   isJsonObject,
@@ -33,8 +27,6 @@ import type {
 } from '@animus-ui/extract/pipeline';
 
 const ROOT = join(import.meta.dirname, '../../..');
-// Direct relative path — documented workaround for the bun>=1.3.12
-// createRequire "types"-condition bug (root AGENTS.md § Key Rules).
 const require_ = createRequire(import.meta.url);
 
 const engine = process.argv.includes('--engine')
@@ -42,21 +34,6 @@ const engine = process.argv.includes('--engine')
   : 'v2';
 const devMode = process.argv.includes('--dev');
 
-/**
- * The manifest slice this harness records.
- *
- * Field names and types are the PRODUCER's (`ProjectManifest` in
- * `@animus-ui/extract/pipeline`) — the harness keeps no second read model and
- * no second spelling. Its own observable names stay camelCase below; that
- * renaming happens where the surface is built, not by re-declaring the wire.
- *
- * `sheets` / `component_fragments` / `system_prop_map` / `dynamic_props` are
- * recorded as canonicalized bytes rather than interpreted, so this ingress
- * proves only that each is a JSON object. Their element contracts have a
- * runtime witness already — `packages/_integration/__tests__/
- * manifest-shape.test.ts` decodes a real manifest against `ProjectManifest` —
- * and re-checking them here would fork that witness, not strengthen it.
- */
 interface ParityManifest extends Pick<
   ProjectManifest,
   'css' | 'diagnostics' | 'reverse_provenance' | 'parseCount'
@@ -87,21 +64,13 @@ function parseNativeEngineModule(
   ) {
     throw new TypeError('v2 NAPI module is missing ExtractEngine');
   }
-  // SAFETY: This value comes from the repository-owned index-v2.js bridge;
-  // its generated declaration owns the constructor/instance contract, and the
-  // function-tag check fails loud before this adapter attempts construction.
+  // SAFETY: the value comes from the repository-owned index-v2.js bridge, and
+  // the function-tag check above fails loud before construction.
   return candidate as NativeEngineModule;
 }
 
 function loadEngine(name: string): EngineApi {
   if (name === 'v2') {
-    // The oracle drives the SAME adapter the production plugins do
-    // (packages/extract/pipeline/engine-adapter.ts): config inputs move from
-    // the positional analyzeProject tuple to the engine constructor options,
-    // and transformFile reads retained state instead of a manifest. Per-run
-    // state lives in closure variables (the vite-plugin's storage shape).
-    // Fail-loud surfaces (compose emission, resolved extension chains) throw
-    // through.
     const native = parseNativeEngineModule(
       require_(join(ROOT, 'packages/extract/index-v2.js'))
     );
@@ -131,9 +100,8 @@ function loadEngine(name: string): EngineApi {
   throw new Error(`unknown engine '${name}' — supported: v2`);
 }
 
-/** Harness-level global/keyframes inputs. The test system exports neither,
- *  so the harness supplies them to keep resolve_all_global_blocks and the
- *  keyframes registry from remaining green-by-vacuity. */
+/** The test system exports no global blocks or keyframes; supplying them here
+ *  keeps those resolution paths from passing vacuously. */
 const HARNESS_GLOBAL_BLOCKS = JSON.stringify({
   reset: { body: { margin: 0, fontFamily: '{fonts.base}' } },
 });
@@ -145,28 +113,16 @@ const HARNESS_KEYFRAMES = JSON.stringify({
     },
   },
 });
-/** Harness-supplied condition alias registry (modern-css-surface inc 03/06).
- *  The test system registers none, so — exactly like HARNESS_GLOBAL_BLOCKS /
- *  HARNESS_KEYFRAMES above — the harness supplies one so the condition corpus
- *  fixtures resolve instead of remaining green-by-vacuity. Shape mirrors the
- *  serialized `conditionAliases` manifest field: alias → {value,order,kind}.
- *
- *  `_motionReduce` (order 500) is the pre-existing inc-03 user-band entry that
- *  the blessed `condition-aliased` unit depends on — left BYTE-IDENTICAL so
- *  existing baselines do not move. Inc 06 ADDS the built-in-band entries the
- *  new `condition-builtin-*` staging fixtures reference (`_osDark`, `_print`)
- *  at their real built-in cascade orders (design D8, band 300–380). Additive
- *  only: existing units are keyed by alias name and never touch these keys. */
+/** The test system registers no condition aliases; supplying them here keeps
+ *  the condition corpus from resolving vacuously. */
 const HARNESS_CONDITION_ALIASES = JSON.stringify({
   _motionReduce: {
     value: '@media (prefers-reduced-motion: reduce)',
     order: 500,
     kind: 'media',
   },
-  // Built-in condition aliases (media-condition-aliases) at their reserved-band
-  // orders — the `condition-builtin-*` fixtures prove built-ins resolve with no
-  // user registration, and `condition-builtin-order` proves the built-in band
-  // (370) emits before the user band (500).
+  // The real built-in cascade orders: the built-in band must sort ahead of the
+  // user band for the ordering fixture to prove anything.
   _osDark: {
     value: '@media (prefers-color-scheme: dark)',
     order: 370,
@@ -227,16 +183,8 @@ function parseReverseProvenance(
   return provenance;
 }
 
-/**
- * Decode the engine manifest into the recorded slice.
- *
- * Every field is read at its ONE emitted spelling. `ProjectManifest` declares
- * them all as always-present (the Rust `AnalyzeResult` carries no `Option` and
- * no `skip_serializing_if` at the top level), so a missing field is a producer
- * change and must fail the harness rather than be defaulted into an empty
- * observable — a silently-empty observable compares equal to a baseline that
- * recorded nothing, which is how a real regression would hide.
- */
+/** A missing field throws instead of defaulting: an empty observable compares
+ *  equal to a baseline that recorded nothing, hiding a regression. */
 function parseManifest(manifestJson: string): ParityManifest {
   const candidate = parseJsonObject(manifestJson, 'ExtractEngine.analyze');
   const css = candidate.css;
@@ -269,12 +217,8 @@ function parseManifest(manifestJson: string): ParityManifest {
   };
 }
 
-/**
- * The engine's failure as an `Error`. The NAPI can reject with a plain JSON
- * value carrying a `stack` string instead of an `Error`; that is the one
- * shape decoded here. Every failure leaves this boundary as an `Error`, so
- * one classifier renders both entry points of this package.
- */
+/** The NAPI can reject with a plain JSON value carrying a `stack` string
+ *  instead of an `Error`; that is the one non-`Error` shape decoded here. */
 function toEngineError<Thrown>(thrown: Thrown): Error {
   if (thrown instanceof Error) return thrown;
   const error = new Error(String(thrown));
@@ -295,8 +239,8 @@ async function main() {
 
   const api = loadEngine(engine);
   const units = await enumerateUnits();
-  // Vacuity floor (gate-integrity review): a shrunken corpus must fail
-  // loud, not pass empty. 30 < the current 47-unit corpus; raise with it.
+  // A shrunken corpus must fail loud, not pass empty; raise the floor as the
+  // corpus grows.
   if (units.length < 30) {
     throw new Error(
       `corpus vacuity: only ${units.length} units enumerated (floor 30) — check fixture/corpus paths`
@@ -317,23 +261,18 @@ async function main() {
           groupRegistryJson: config.groupRegistry,
           packageResolutionJson: '{}',
           devMode,
-          // emitterConfigJson — the oracle compares raw engine output, so it
-          // declares no bundler emitter identity (runtime import / css module
-          // id / system-props module id all stay at the engine defaults).
+          // The oracle compares raw engine output, so it declares no bundler
+          // emitter identity; emitter ids stay at the engine defaults.
           emitterConfigJson: null,
           selectorAliasesJson: config.selectorAliases ?? null,
           globalStyleBlocksJson: HARNESS_GLOBAL_BLOCKS,
           pathAliasesJson: null,
           keyframesJson: HARNESS_KEYFRAMES,
-          // staticCssJson — current parity corpus has no forced-emission input.
           staticCssJson: null,
           conditionAliasesJson: HARNESS_CONDITION_ALIASES,
-          // externalDirsJson — the harness declares no external packages.
           externalDirsJson: null,
-          // Transform sources from the evaluated test system. Without this the
-          // oracle would record every package-shipped transform (`size`,
-          // `gridItem`, …) as unresolvable, blessing a raw-value fallback that
-          // real consumers do not get.
+          // Without transform sources the oracle records package-shipped
+          // transforms as unresolvable, blessing a fallback consumers lack.
           transformSourcesJson: config.transformSources ?? null,
         })
       );
@@ -368,9 +307,8 @@ async function main() {
               children.map((child) => `${parent}->${child}`)
             )
             .sort(),
-          // Key-sorted via the comparator's own canonical form — native maps
-          // can vary iteration order across fresh processes; the observable is
-          // sorted content, not incidental emission order.
+          // Native map iteration order varies across processes, so the
+          // observable is sorted content rather than emission order.
           systemPropMapJson: canonicalJson(manifest.system_prop_map),
           dynamicPropsJson: canonicalJson(manifest.dynamic_props),
           sheetsJson: canonicalJson(manifest.sheets),
@@ -379,8 +317,6 @@ async function main() {
         parseCount: manifest.parseCount,
       };
     } catch (thrown) {
-      // Normalized at the boundary that calls the engine, so the classifier
-      // below stays the one place an exit code and a print shape are decided.
       throw toEngineError(thrown);
     }
   }
@@ -388,11 +324,6 @@ async function main() {
   process.stdout.write(JSON.stringify(out, null, 1));
 }
 
-/** Codes and print shape come from `cli-messages`, the one authority `cli.ts`
- *  also reads: 2 refuses on a single line, 3 reports a break with its stack.
- *  This subprocess never emits a 1 — it reports engine facts on stdout and
- *  lets `cli.ts` decide whether the gate passed, so "ran and failed" is not a
- *  state this entry point can be in. */
 main().catch((error: Error) => {
   const failure = classifyCliFailure(error);
   process.stderr.write(failure.stderr);

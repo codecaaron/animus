@@ -1,15 +1,5 @@
 import { createHash } from 'node:crypto';
 
-/**
- * Branded identity strings.
- *
- * Every id in the oracle is content-addressed (see `stableHash`), so the brand
- * is the only thing separating a `FactId` from an `EvidenceId` at the type
- * level: two structurally different subjects can never share an id, but two
- * ids of different kinds are indistinguishable at runtime. The brands make the
- * substrate's plumbing (ledgers, graphs, probe state) type-checked without
- * paying for wrapper objects, which would break canonical hashing.
- */
 type IdentityBrand =
   | 'WorldId'
   | 'FactId'
@@ -162,8 +152,6 @@ const encode = <Value>(value: Value, path: string): string => {
           'or an obligation instead of approximating it'
       );
     }
-    // JSON.stringify is exact and round-trippable for finite doubles, and
-    // normalises -0 to 0 — two numerically equal values must hash equal.
     return JSON.stringify(value);
   }
   if (value === undefined) {
@@ -218,26 +206,9 @@ const encode = <Value>(value: Value, path: string): string => {
   return `{${entries.join(',')}}`;
 };
 
-/**
- * Deterministic serialisation: object keys sorted, arrays in order, `undefined`
- * properties omitted.
- *
- * Everything the oracle hashes flows through here, so the encoding refuses any
- * value it cannot represent exactly (NaN/Infinity, bigint, functions, symbols,
- * non-plain objects) with a loud `TypeError`. DESIGN §8 forbids silent
- * approximation: a value that cannot be canonically encoded must become an
- * explicit obligation upstream, never a hash of a lossy stand-in — otherwise
- * two different worlds could share an id and the caches would lie.
- */
 export const canonicalJson = <Value>(value: Value): string =>
   encode(value, '$');
 
-/**
- * Content address: the first 16 hex chars (64 bits) of sha256 over
- * `canonicalJson`. Ids are compared, never inverted, and 64 bits keeps
- * collisions out of reach for corpora many orders of magnitude larger than a
- * design system while staying short enough to read in a terminal.
- */
 export const stableHash = <Value>(value: Value): string =>
   createHash('sha256')
     .update(canonicalJson(value), 'utf8')

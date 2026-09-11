@@ -1,11 +1,8 @@
 import { applyPrefix } from './prefix';
 
 /**
- * The system-derived configuration bundle every extraction run needs —
- * the deserialized result of the NAPI `loadSystemModule()` call, with the
- * optional variable-prefix transformation already applied. Field names
- * mirror `AnalyzeProjectInputs` so the bundle feeds `runProjectAnalysis`
- * without renaming.
+ * The deserialized `loadSystemModule()` result, prefix transformation
+ * already applied. Field names are `AnalyzeProjectInputs`' own.
  */
 export interface SystemConfig {
   propConfigJson: string;
@@ -15,49 +12,28 @@ export interface SystemConfig {
   variableCss: string;
   contextualVarsJson: string | null;
   selectorAliasesJson: string | null;
-  /** Condition alias map JSON (modern-css-surface inc 03), mirroring
-   *  `selectorAliasesJson` — `null` when the system registers none.
-   *  Optional so the plugins' pre-load `emptySystemConfig()` default need not
-   *  restate it; `loadSystemConfig` always populates it after a real load. */
+  /** Condition alias map JSON; `null` when the system registers none.
+   *  Optional only so the pre-load empty default need not restate it. */
   conditionAliasesJson?: string | null;
-  /** `{ transformName: sourceText }` JSON captured during system evaluation.
-   *  The build-time evaluator can only be seeded from source text, and
-   *  `propConfigJson` names each prop's transform without carrying its body —
-   *  so this is the only channel by which transforms shipped inside a package
-   *  (rather than declared in a `createTransform()` call the extractor parses
-   *  out of a project file) become resolvable. Optional so the plugins'
-   *  pre-load `emptySystemConfig()` default need not restate it. */
+  /** `{ transformName: sourceText }` — the only channel by which transforms
+   *  shipped inside a package reach the build-time evaluator. */
   transformSourcesJson?: string | null;
   globalStyleBlocksJson: string | null;
   keyframesJson: string | null;
-  /** Vocabulary witness entries from the sealed system's registration
-   *  record — one JSON array of coded entries (collisions and legacy-verb
-   *  carriage refusals). The record — not the evaluation host's console,
-   *  which is shimmed to a no-op — is the witness channel; hosts surface
-   *  each entry via `vocabularyWitnessDiagnostics`. Optional so pre-load
-   *  `emptySystemConfig()` defaults need not restate it. */
+  /** Coded witness entries from the sealed system's registration record —
+   *  the witness channel, since the evaluation host's console is a no-op. */
   vocabularyWitnessesJson?: string | null;
-  /** Canonical absolute paths of every module the loader evaluated for this
-   *  system (sorted; entry included, runtime stubs excluded). Plugins use it
-   *  as the system-reload membership set. Optional so pre-load
-   *  `emptySystemConfig()` defaults need not restate it. */
+  /** Canonical absolute paths of every module the loader evaluated (sorted;
+   *  runtime stubs excluded) — the system-reload membership set. */
   dependencies?: string[];
-  /** Per-module built-theme token manifests captured during evaluation
-   *  (`{ modulePath: { exportName: [token paths] } }`) — the source-token
-   *  witness for the cross-source correlation diagnostic. Null when no
-   *  evaluated module exports a built theme. */
+  /** `{ modulePath: { exportName: [token paths] } }` — the source-token
+   *  witness for correlation. Null when no module exports a built theme. */
   sourceThemeManifestsJson?: string | null;
 }
 
 /**
- * Load a SystemInstance via the engine's `loadSystemModule` and normalize
- * it into a SystemConfig. When `prefix` is set, CSS variable names in the
- * variable map/css (and theme + contextual vars when affected) are
- * namespaced via the shared `applyPrefix`.
- *
- * Error handling stays at the call site — the Vite plugin warns (or throws
- * in strict mode) and keeps its previous config, the Next plugin lets the
- * failure propagate.
+ * Load and normalize a SystemInstance; `prefix` namespaces every CSS
+ * variable name. Error handling stays at the call site.
  */
 export function loadSystemConfig(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

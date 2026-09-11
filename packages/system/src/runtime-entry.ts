@@ -1,9 +1,4 @@
-/**
- * Hook-free runtime entry — safe for React Server Components.
- *
- * Extracted components import from this subpath instead of the barrel
- * so they don't pull in compose() (which uses createContext/useContext).
- */
+/** Hook-free entry: extracted components import it from server components. */
 export { createComponent } from './runtime';
 export {
   type ClassResolver,

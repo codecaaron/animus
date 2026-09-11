@@ -7,10 +7,8 @@ import { defineConfig } from 'vite';
 
 import { theme } from './src/ds';
 
-// Config-time only. The generator reads the built theme's declared mode names
-// and returns `{ code, cspHash }`; the plugin injects `code` at the head of the
-// document, before any stylesheet link. Nothing under `src/` may import this
-// module — the storage-access snippet is build tooling, never app code.
+// Config-time only: nothing under src/ may import this module, or the
+// storage-access snippet ships in the app bundle.
 const appearanceBootstrap = createAppearanceBootstrap(theme);
 
 export default defineConfig({

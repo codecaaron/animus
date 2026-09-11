@@ -1,38 +1,13 @@
 #!/usr/bin/env bun
-// scripts/verify/rust-policy.ts
-//
-// Pure fail-closed policy validator for authored Rust suppression surfaces
-// (design D5, guardrails G4/G5). Two CLI modes, both fail non-zero on a finding
-// so a broad suppression cannot silently absorb unrelated future failures while
-// `cargo clippy -D warnings` / `cargo machete` still report green.
-//
-//   source <path>...   Scan authored `.rs` files (dirs recursed, `target/`
-//                      skipped) for crate-wide / module-wide / cfg_attr-wrapped
-//                      `allow|expect(warnings)` and `allow|expect(clippy::all)`.
-//                      Narrow named-lint allows (e.g. clippy::too_many_arguments,
-//                      dead_code) are preserved so Clippy still evaluates them.
-//   metadata           Read `cargo metadata --no-deps --format-version 1` JSON
-//                      from stdin; reject any non-empty
-//                      `[package.metadata.cargo-machete].ignored` list.
-//   lints <manifest>...  Reject any `[lints.*]` entry that is not declared
-//                      identically across the given Cargo manifests. The
-//                      extraction crates are separate Cargo workspaces, so the
-//                      posture is duplicated by hand and would otherwise drift
-//                      silently while `clippy -D warnings` still reports green.
-//
-// The token scan operates on comment-stripped source only; it deliberately does
-// not interpret generated macro output (design trade-off: authored crate/module
-// attributes are the plausible bypass; the blind spot is explicit — G4).
 
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
-// The two blanket lint groups a suppression must never silence wholesale.
 export const BLANKET_LINTS = new Set(['warnings', 'clippy::all']);
 
 export interface SuppressionFinding {
   file: string;
-  attribute: string; // the offending `allow(...)`/`expect(...)` group, verbatim-ish
+  attribute: string; // the offending allow/expect group
   lint: string; // which blanket lint tripped it
 }
 
@@ -41,31 +16,20 @@ export interface IgnoredDepFinding {
   ignored: string[];
 }
 
-/** One lint whose declared level differs (or is absent) across the manifests. */
+/** One lint whose level differs or is absent across the manifests. */
 export interface LintDivergenceFinding {
   table: string; // e.g. 'lints.clippy'
   lint: string;
   values: Record<string, string | null>; // manifest path -> level, null = absent
 }
 
-/**
- * `{ 'lints.rust': { unused_lifetimes: 'warn' }, ... }` for one manifest.
- *
- * An interface, not a `Record` alias: this is an in-process domain value the
- * comparison below owns end to end, not a wire contract that has to compose
- * with an index signature elsewhere.
- */
+/** `{ 'lints.rust': { unused_lifetimes: 'warn' } }` for one manifest. */
 export interface LintTables {
   [table: string]: Record<string, string>;
 }
 
-// Extracts the `[lints.*]` tables from a Cargo manifest. Deliberately a line
-// scanner rather than a TOML parser: the tables this gate compares are flat
-// `lint = <level>` lists, and the right-hand side is captured VERBATIM (after
-// stripping a trailing `#` comment), so an inline table like
-// `{ level = "warn", priority = -1 }` still compares correctly for parity even
-// though it is never interpreted. Blind spots, explicit: multi-line values and
-// quoted keys are out of scope — neither appears in a lint table.
+// A line scanner, not a TOML parser: values are captured verbatim, so an inline
+// table still compares for parity. Multi-line values are out of scope.
 export function parseLintTables(source: string): LintTables {
   const tables: LintTables = {};
   let current: Record<string, string> | null = null;
@@ -74,8 +38,7 @@ export function parseLintTables(source: string): LintTables {
     if (line.startsWith('#') || line === '') continue;
     if (line.startsWith('[')) {
       const header = line.slice(1, line.indexOf(']')).trim();
-      // Only `[lints.rust]` / `[lints.clippy]` style tables; a bare `[lints]`
-      // (inheritance stanza) carries no per-lint entries to compare.
+      // A bare `[lints]` inheritance stanza carries no per-lint entries.
       current = header.startsWith('lints.') ? (tables[header] ??= {}) : null;
       continue;
     }
@@ -92,12 +55,6 @@ export function parseLintTables(source: string): LintTables {
   return tables;
 }
 
-// Compares the lint posture of two or more manifests and reports every lint
-// that is not declared identically in all of them. The crates are separate
-// Cargo workspaces by design (packages/extract/CLAUDE.md), so `[workspace.lints]`
-// inheritance is unavailable and the tables are duplicated by hand — this is the
-// gate that keeps the duplication honest. Findings are sorted (table, lint) so
-// the report is stable across runs.
 export function findLintTableDivergences(
   manifests: { file: string; source: string }[]
 ): LintDivergenceFinding[] {
@@ -130,19 +87,8 @@ export function findLintTableDivergences(
   return findings;
 }
 
-// Removes Rust line (`//`, `///`, `//!`) and block (`/* */`, `/** */`) comments
-// so a commented-out `#![allow(warnings)]` cannot trip the scan and, conversely,
-// so a real attribute trailing an inline comment still tokenizes. String-literal
-// contents are intentionally left in place: attribute macros do not live inside
-// string literals, and stripping strings correctly would require a full lexer
-// the fail-closed policy does not warrant. Named for its language on purpose:
-// the JS/TS stripper in `topology.ts` is deliberately a DIFFERENT function and
-// would be actively wrong here (Rust lifetimes — `&'a str`, `'static` — read
-// as an opening quote, and raw strings have no backslash escapes), so the two
-// must never be consolidated by name-matching.
-// Residual (fail-OPEN, accepted): a `//` inside a Rust string literal, e.g.
-// `let u = "https://x"; #[allow(warnings)]` on one line, drops the rest of the
-// line and hides a real attribute. Nested `/* /* */ */` is likewise unhandled.
+// String contents are left in place: a Rust lifetime (`&'a str`) would read as
+// an open quote. A `//` inside a string literal still hides the line's rest.
 export function stripRustComments(source: string): string {
   let out = '';
   let i = 0;
@@ -152,7 +98,7 @@ export function stripRustComments(source: string): string {
     if (two === '//') {
       const nl = source.indexOf('\n', i);
       if (nl === -1) break;
-      i = nl; // keep the newline so line numbers/whitespace boundaries survive
+      i = nl; // keep the newline so line boundaries survive
     } else if (two === '/*') {
       const end = source.indexOf('*/', i + 2);
       i = end === -1 ? n : end + 2;
@@ -165,19 +111,15 @@ export function stripRustComments(source: string): string {
   return out;
 }
 
-// Scans one comment-stripped source for blanket suppressions. Every
-// `allow(...)`/`expect(...)` group is inspected, including groups nested inside
-// `cfg_attr(<cond>, allow(...))` — the nested `allow(warnings)` substring is
-// matched directly, so no cfg_attr-specific parsing is required. A group trips
-// only when one of its comma-separated lint tokens is exactly a blanket lint.
+// Groups nested in `cfg_attr(<cond>, allow(...))` match directly, so no
+// cfg_attr parsing is needed. Macro-generated attributes are not scanned.
 export function findBlanketSuppressions(
   source: string,
   file: string
 ): SuppressionFinding[] {
   const stripped = stripRustComments(source);
   const findings: SuppressionFinding[] = [];
-  // `[^()]*` keeps each group to a single non-nested lint list. cfg_attr's outer
-  // parens are skipped over; its inner allow/expect group is matched on its own.
+  // `[^()]*` keeps each match to a single non-nested lint list.
   const groupRe = /\b(allow|expect)\s*\(\s*([^()]*?)\s*\)/g;
   let m: RegExpExecArray | null;
   while ((m = groupRe.exec(stripped)) !== null) {
@@ -229,10 +171,8 @@ export function scanSourcePaths(paths: string[]): SuppressionFinding[] {
 }
 
 /**
- * The `cargo metadata --no-deps --format-version 1` document as a value domain.
- * Only `packages[]` is a schema Cargo guarantees; everything under a package's
- * `metadata` key is arbitrary author-written TOML that Cargo re-emits verbatim,
- * so this gate cannot know its shape before reading it — it decides key by key.
+ * `cargo metadata` as a value domain: only `packages[]` has a schema Cargo
+ * guarantees, and a package's `metadata` is arbitrary author-written TOML.
  */
 type CargoMetadataValue =
   | null
@@ -246,9 +186,7 @@ interface CargoMetadataTable {
   [key: string]: CargoMetadataValue;
 }
 
-// Decided by representation tag rather than by `typeof`: `[object Object]` is
-// what separates a TOML table from an array in the re-emitted JSON, and the tag
-// also rejects everything `JSON.parse` cannot produce.
+// Tag-based, not `typeof`: `typeof` admits arrays and null as objects.
 function isTable(
   value: CargoMetadataValue | undefined
 ): value is CargoMetadataTable {
@@ -259,9 +197,7 @@ function isText(value: CargoMetadataValue | undefined): value is string {
   return Object.prototype.toString.call(value) === '[object String]';
 }
 
-// Reads parsed `cargo metadata` JSON and reports every package that declares a
-// non-empty cargo-machete ignore list. Absent `[package.metadata]` (null) or an
-// empty `ignored` array is compliant.
+// Absent `[package.metadata]` or an empty `ignored` array is compliant.
 export function findIgnoredDeps(
   metadata: CargoMetadataValue
 ): IgnoredDepFinding[] {
@@ -278,9 +214,6 @@ export function findIgnoredDeps(
     const ignored = machete.ignored;
     if (Array.isArray(ignored) && ignored.length > 0) {
       findings.push({
-        // A package Cargo emitted without a string `name` cannot be addressed
-        // in the fix instruction, so the finding says so rather than inventing
-        // an identifier.
         package: isText(pkg.name) ? pkg.name : '<unknown>',
         ignored: ignored.map((x) => String(x)),
       });
@@ -362,10 +295,8 @@ function runLints(paths: string[]): number {
     file,
     source: readFileSync(file, 'utf8'),
   }));
-  // Non-vacuity: a manifest with no [lints.*] tables at all makes the parity
-  // comparison meaningless — divergence detection cannot notice ABSENCE, and
-  // clippy -D warnings also reports green once there is nothing left to warn
-  // about. Fail loud instead of passing on an empty comparison.
+  // A manifest with no `[lints.*]` tables makes the comparison vacuous:
+  // divergence detection cannot notice absence. Fail rather than pass empty.
   const tableless = manifests.filter(
     (m) => Object.keys(parseLintTables(m.source)).length === 0
   );

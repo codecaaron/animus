@@ -16,30 +16,6 @@ import type {
 import type { AnimusManifest } from './manifest-types';
 import type { ParsedComponent } from './replacement';
 
-/**
- * The class list a target carries at one scenario point.
- *
- * This mirrors `packages/system/src/runtime/resolveClasses.ts` — the runtime
- * that actually renders these components — and the host tests pin it to the
- * fixture. Three details are the runtime's, not conveniences:
- *
- * 1. Order is base → variants in *config declaration order* → compounds →
- *    states. Cascade order comes from layers, but class order is what later
- *    waves hash, so it has to be reproducible.
- * 2. An unbound variant prop that has a declared default emits
- *    `--{prop}-default`, never `--{prop}-{default}`. The runtime does this so
- *    a compose override cannot match the default class and inheritance from a
- *    parent still wins; emitting the resolved value here would model a
- *    selector that is never in the document.
- * 3. Compound conditions match against the *resolved* value — the bound one,
- *    else the config default — which is the opposite convention from (2), and
- *    is again what the runtime does.
- *
- * System-prop utility and dynamic slot classes are absent: which of them a
- * call site carries depends on the prop values at that invocation, which is
- * invocation identity (DESIGN §9.2, Phase 2), not a scenario coordinate. The
- * universe lists that as an exclusion.
- */
 export const classesAtPoint = (
   component: ParsedComponent,
   owner: string,
@@ -97,7 +73,6 @@ export interface AnimusIdentityInput {
   components: readonly ParsedComponent[];
   owners: ReadonlyMap<string, string>;
   componentDomains: ReadonlyMap<string, ScenarioDomain>;
-  /** The unscoped axes (viewport, mode) every target's domain must carry. */
   shared: ScenarioDomain;
 }
 
@@ -108,10 +83,8 @@ const recordOf = (
   const chain = findChain(manifest, component);
   const span = chain?.descriptor.span;
 
-  // The optional fields are absent whenever the manifest carries null or
-  // nothing there: a record that reports `extendsFrom: undefined` would claim
-  // the adapter looked and found no parent, which is not the same fact as a
-  // component that has none recorded.
+  // Optional fields stay absent when the manifest carries null or nothing:
+  // an explicit `undefined` would claim the adapter looked and found none.
   const record: ComponentRecord = {
     id: component.id,
     file: component.record.file,
@@ -134,12 +107,6 @@ const recordOf = (
   return record;
 };
 
-/**
- * A component's public record and the parsed config it was derived from, kept
- * together so resolution never has to look the parse back up by id — the two
- * halves are produced from one `ParsedComponent` and cannot go missing
- * independently.
- */
 interface IdentifiedComponent {
   record: ComponentRecord;
   parsed: ParsedComponent;
@@ -179,9 +146,6 @@ export const createAnimusIdentity = (
       const exact = byId.get(selector);
       if (exact !== undefined) return resolutionFor(exact);
 
-      // A bare binding that matches two components resolves to nothing: an
-      // arbitrary winner would scope every later answer to a component the
-      // caller did not name, and the ambiguity would never surface.
       const named = identified.filter(
         (entry) => entry.record.binding === selector
       );

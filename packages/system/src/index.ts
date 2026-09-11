@@ -1,17 +1,10 @@
-// System builder — the primary API
-
-// Builder chain
 export { Animus, AnimusWithAll } from './Animus';
 export { AnimusExtended, AnimusExtendedWithAll } from './AnimusExtended';
-// Slot composition — compose() is RSC-safe (no hooks, no createContext).
-// For context-based propagation, import composeWithContext from
-// '@animus-ui/system/compose-with-context' (client-only, not re-exported here).
+// `composeWithContext` stays out of this barrel: it is client-only and ships
+// from '@animus-ui/system/compose-with-context'.
 export { compose } from './compose';
-// Keyframes primitive — types for annotating return values; factory is `createKeyframes` on build() return
 export type { KeyframeFrameMap, KeyframeRef, Keyframes } from './keyframes';
-// Package-asset references for font-face sources (global-styles-system)
 export { asset, ASSET_PLACEHOLDER_PREFIX, type AssetRef } from './asset.js';
-// Runtime shims (extracted component + class resolver + composed family factories)
 export { createComponent } from './runtime';
 export {
   type ClassResolver,
@@ -45,14 +38,12 @@ export type {
   VocabularyRecord,
 } from './SystemBuilder';
 export { createSystem, SystemBuilder } from './SystemBuilder';
-// Scales
 export {
   createScale,
   numericOrStringScale,
   numericScale,
   stringScale,
 } from './scales/createScale';
-// Condition aliases — runtime registry + augmentable authoring type surface
 export {
   type AtRuleValue,
   BUILT_IN_CONDITIONS,
@@ -70,7 +61,6 @@ export {
   type UnknownAtRule,
   type UnknownConditionAlias,
 } from './conditions.js';
-// Selector aliases
 export {
   BUILT_IN_SELECTORS,
   type SelectorAlias,
@@ -93,7 +83,6 @@ export type {
   PrivateThemeKeys,
   SanitizeKey,
 } from './theme';
-// Theme builder
 export {
   createTheme,
   type Flatten,
@@ -101,7 +90,6 @@ export {
   type ThemeBuilderStage,
 } from './theme';
 export { borderShorthand } from './transforms/border';
-// Transforms
 export {
   areTransformsEqual,
   createTransform,
@@ -110,7 +98,7 @@ export {
 } from './transforms/createTransform';
 export { gridItem, gridItemRatio } from './transforms/grid';
 export { percentageOrAbsolute, size } from './transforms/size';
-// Component types (needed for portable declaration emit — TS2742)
+// Re-exported so consumer declaration emit stays portable (TS2742).
 export type {
   AnimusComponent,
   AnimusWrappedComponent,
@@ -149,7 +137,6 @@ export type {
 } from './types/props';
 export type { ArrayScale, MapScale } from './types/scales';
 export type { CSSObject } from './types/shared';
-// Types
 export type {
   AbstractTheme,
   BaseTheme,

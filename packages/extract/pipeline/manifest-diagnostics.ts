@@ -5,42 +5,31 @@ export type ManifestDiagnostic = {
   component: string;
   kind: string;
   message: string;
-  /** Structured token path (`scale.key`) — present only on
-   *  `external-token-candidate` diagnostics (cross-source correlation). */
+  /** Structured token path (`scale.key`); present only on
+   *  `external-token-candidate` diagnostics. */
   token?: string;
-  /** Stable diagnostic code (`animus.<namespace>.<slug>`). */
   code?: string;
-  /** `"error"` fails strict builds at this policy point; `"warn"`/absent
-   *  never does. A property of the diagnostic's code, read from
-   *  `DIAGNOSTIC_SEVERITY` below rather than chosen per emission site. */
+  /** `"error"` fails strict builds; `"warn"`/absent never does. Read from
+   *  `DIAGNOSTIC_SEVERITY`, never chosen per emission site. */
   severity?: string;
 };
 
-/** Stable code for selector forms with no substitutable subject.
- *  Mirrors the Rust constant in `extract-v2/src/eval.rs`. */
+/** Stable code for selector forms with no substitutable subject; the
+ *  extraction engine mints the same string. */
 export const SELECTOR_UNSUPPORTED_SUBJECT =
   'animus.selector.unsupported-subject';
 
-/** Unresolved-parent chain-drop message (mirrors the Rust diagnostic in
- *  `extract-v2` — the ONE encoding of this message shape; consumers match
- *  through the helpers below, never their own regex copies). */
+/** The one matcher for the engine's unresolved-parent chain-drop message;
+ *  consumers match through the exported helpers, never their own copy. */
 const UNRESOLVED_PARENT_RE =
   /chain dropped: could not resolve parent component '([^']+)'/;
 
-/** The one field both matchers below read. Named as a slice of the owner
- *  record rather than a private shape so the message channel cannot drift
- *  from the diagnostics these are actually run over — every caller feeds
- *  them entries of a manifest's `diagnostics` array. */
 type DiagnosticMessage = Pick<ManifestDiagnostic, 'message'>;
 
-/** True when the diagnostic reports a chain dropped for an unresolved
- *  parent component. */
 export function isUnresolvedParentDrop(diagnostic: DiagnosticMessage): boolean {
   return UNRESOLVED_PARENT_RE.test(diagnostic.message);
 }
 
-/** The parent binding named by an unresolved-parent drop, or null when the
- *  diagnostic is not one. */
 export function unresolvedParentName(
   diagnostic: DiagnosticMessage
 ): string | null {
@@ -50,15 +39,11 @@ export function unresolvedParentName(
 export interface DiagnosticPolicy {
   /** When true, error-severity diagnostics throw instead of warning. */
   strict?: boolean;
-  /** System-level diagnostics (e.g. selector-alias validation) surfaced
-   *  ahead of the manifest's own, through the same policy. */
   prepend?: ManifestDiagnostic[];
 }
 
-/** True when the selector string carries at least one substitutable `&`
- *  subject outside quoted text (mirrors the Rust `selector_subject` walk —
- *  ancestor, leading, and repeated subjects all count; a `&` inside a
- *  quoted attribute value does not). */
+/** True when the selector carries at least one substitutable `&` subject
+ *  outside quoted text. */
 export function hasSelectorSubject(value: string): boolean {
   let quote: string | null = null;
   let escaped = false;
@@ -83,26 +68,15 @@ export function hasSelectorSubject(value: string): boolean {
 }
 
 /**
- * Synthesize coded diagnostics for registered selector-alias values that
- * look selector-shaped (`&` present) but carry no substitutable subject —
- * every `&` sits inside quoted text, so there is nothing to anchor the
- * class to. Ancestor-prefixed and repeated subjects are supported and pass
- * validation. The system-config boundary is where these must fail loud
- * (alias values never reach the evaluator's key guard).
+ * Coded diagnostics for selector-shaped alias values with no substitutable
+ * subject; alias values never reach the evaluator's own key guard.
  */
 export function collectSelectorAliasDiagnostics(
   selectorAliasesJson: string | null | undefined
 ): ManifestDiagnostic[] {
   if (!selectorAliasesJson) return [];
-  // Fail loud, as the header says: `selectorAliasesJson` is the system
-  // loader's own serialization, and an empty diagnostic list reads as "every
-  // registered alias validated" — the exact outcome this collector exists to
-  // deny.
-  //
-  // The registry's value type is the producer's, not a guess:
-  // `serializeSelectorMap` (@animus-ui/system) writes `alias name → selector
-  // string`, flattening each `SelectorAlias` to its `selector` field before
-  // `JSON.stringify`. There is no other writer of this wire.
+  // A parse failure throws: an empty diagnostic list reads as "every
+  // registered alias validated", the outcome this collector exists to deny.
   const aliases = parseInternalWire<Record<string, string>>(
     selectorAliasesJson,
     "selectorAliasesJson (the system loader's selector-alias registry)"
@@ -123,18 +97,11 @@ export function collectSelectorAliasDiagnostics(
   return diagnostics;
 }
 
-/** Stable code for a configured source file the collector could not read. */
 export const UNREADABLE_SOURCE_FILE = 'animus.ingestion.unreadable-source-file';
 
 /**
- * The diagnostic for a source file the project configured — one under a
- * package its `includes` graph named — that could not be read, so it never
- * joined the analysis corpus. A lost input: the emitted artifacts are
- * missing whatever that file declared, and nothing downstream can tell that
- * from a file that declared nothing. `error` reaches the same conclusion
- * `--strict` reaches for an unresolvable include. The thrown value comes
- * straight out of the collector's `catch`, so it is stringified, never
- * interpreted.
+ * A configured source file that could not be read is a LOST INPUT: the
+ * emitted artifacts silently lack whatever that file declared.
  */
 export function unreadableSourceDiagnostic<Thrown>(
   relPath: string,
@@ -150,28 +117,16 @@ export function unreadableSourceDiagnostic<Thrown>(
   };
 }
 
-/** Stable code for a vocabulary-record collision witness (mirrors the
- *  entry code minted by @animus-ui/system's merge). */
+/** The collision entry code minted by the system package's merge. */
 export const VOCABULARY_COLLISION = 'animus.vocabulary.collision';
 
-/** Stable code for a legacy-verb carriage refusal (a sealed kit with
- *  registered vocabulary consumed through `from()`/`includes:`). */
+/** Minted when a sealed kit with registered vocabulary is consumed through
+ *  the deprecated `from()`/`includes:` verbs. */
 export const VOCABULARY_LEGACY_VERB = 'animus.vocabulary.legacy-verb';
 
 /**
- * The severity every diagnostic code this host mints carries. One table, so
- * "which code is this" and "does it fail --strict" cannot be answered
- * differently at two emission sites; emission sites must not pick a severity
- * of their own.
- *
- * A code meaning a configured input was lost or unreadable — an include or
- * entry that does not resolve, a file that cannot be read — is `error`: the
- * artifacts are missing content the project asked for, which is what
- * `--strict` refuses. Degradation — a per-property skip, a name collision,
- * an unsupported-value fallback, a deprecated verb dropping what it cannot
- * carry while naming the migration — is `warn`: the input was read and the
- * output is complete, just less than the source hoped for; failing those
- * would contradict the engine's per-property degradation design.
+ * A lost or unreadable configured input is `error` — what `--strict`
+ * refuses; degradation that still emits complete output is `warn`.
  */
 type DiagnosticSeverity = 'error' | 'warn';
 
@@ -182,10 +137,8 @@ const DIAGNOSTIC_SEVERITY: ReadonlyMap<string, DiagnosticSeverity> = new Map([
   [VOCABULARY_LEGACY_VERB, 'warn'],
 ]);
 
-/** The severity of a diagnostic code. An unlisted code — a witness kind
- *  recorded by a newer @animus-ui/system than this host — is degradation,
- *  never a lost input: it must not fail the strict build of a host that
- *  predates its writer. */
+/** An unlisted code is `warn`: a witness kind from a newer system package
+ *  must not fail the strict build of a host that predates its writer. */
 function severityFor(code: string | undefined): DiagnosticSeverity {
   return (
     (code === undefined ? undefined : DIAGNOSTIC_SEVERITY.get(code)) ?? 'warn'
@@ -193,11 +146,8 @@ function severityFor(code: string | undefined): DiagnosticSeverity {
 }
 
 /**
- * Map the sealed system's vocabulary witness entries
- * (vocabulary-registration: collision + legacy-verb records, carried on the
- * registration record because the loader's evaluation host shims `console`
- * to a no-op) into coded diagnostics for the shared surfacing policy point.
- * ONE mapper for every host — the witness text must not fork per plugin.
+ * The one mapper of a sealed system's witness entries for every host: the
+ * loader's evaluation host shims `console`, so the record is the channel.
  */
 export function vocabularyWitnessDiagnostics(
   vocabularyWitnessesJson: string | null | undefined
@@ -238,9 +188,6 @@ export function vocabularyWitnessDiagnostics(
         severity: severityFor(entry.code),
       });
     } else {
-      // Fail closed (arch-fail-closed-diagnostics): a witness entry this
-      // host does not recognize still surfaces, carrying its own code — a
-      // newer @animus-ui/system's witness kind must never vanish silently.
       diagnostics.push({
         file: 'system',
         component: 'vocabulary',
@@ -255,14 +202,8 @@ export function vocabularyWitnessDiagnostics(
 }
 
 /**
- * Surface extraction-manifest diagnostics through a plugin's warn channel.
- *
- * Single authoritative copy for both extraction plugins — and the single
- * strict-escalation policy point: error-severity diagnostics throw one
- * Error naming every offender when `policy.strict`, and print as warnings
- * otherwise. Surfaces `bail` (component not extracted), `skip` (component
- * skipped), and `warn` kinds; unknown kinds stay silent. Printed lines
- * include the diagnostic code when the message doesn't already carry it.
+ * The single strict-escalation policy point for both extraction plugins:
+ * error-severity diagnostics throw together under `strict`, else warn.
  */
 export function surfaceManifestDiagnostics(
   manifest: { diagnostics?: ManifestDiagnostic[] },

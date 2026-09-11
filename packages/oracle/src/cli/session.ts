@@ -25,19 +25,6 @@ import type {
   UnresolvedInvocation,
 } from '../places';
 
-/**
- * Warm operation (PLACES.md §6): one loaded snapshot answering many
- * questions. The protocol is JSONL — one request object per line on stdin,
- * one response object per line on stdout — so an editor or agent holds a
- * conversation without paying the artifact parse per question.
- *
- * The warmth never outlives the truth. Source files are re-read and
- * correspondence-checked per question (`structureOf`), and the artifact set
- * is revalidated per request: a rebuilt `.animus` directory turns every
- * subsequent answer into an explicit `stale-snapshot` refusal telling the
- * client to restart, never a quiet answer from a dead generation.
- */
-
 export const SESSION_OPS = [
   'snapshot',
   'check',
@@ -517,7 +504,6 @@ export const createPlacesSession = (
   const snapshot = loadSnapshot(artifactsDir, snapshotOptions);
   const analysis = createPlaceAnalysis(snapshot);
 
-  /** File-scoped ops surface the correspondence refusal, never a bare null. */
   const readableInvocationAt = (request: {
     op: string;
     file: string;
@@ -614,8 +600,6 @@ export const createPlacesSession = (
       };
     }
 
-    // `snapshot` answers even when stale — it is how a client learns what it
-    // is talking to; every other op refuses on a dead generation.
     if (op !== 'snapshot') {
       const freshness = snapshot.revalidate();
       if (!freshness.fresh) {
@@ -694,7 +678,6 @@ export const createPlacesSession = (
   return { snapshot, analysis, handle, handleLine };
 };
 
-/** A correspondence refusal — an answer about generations, not an error. */
 class RefusalError extends Error {}
 
 export interface SessionStreams {
@@ -703,11 +686,6 @@ export interface SessionStreams {
   stderr: { write(text: string): void };
 }
 
-/**
- * The stream loop: JSONL in, JSONL out, human narration on stderr only.
- * Returns 0 on a clean shutdown or stdin EOF — a session that ends is not a
- * verdict.
- */
 export const runSession = async (
   artifactsDir: string,
   options: SessionOptions,

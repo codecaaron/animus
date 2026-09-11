@@ -7,25 +7,12 @@ import type { UnknownObligation } from './obligation';
 import type { ScenarioPoint } from './scenario';
 import type { RenderWorld } from './world';
 
-/**
- * How widely an answer is meant to hold: one callsite, every invocation of a
- * component, a declared equivalence class of contexts, or the definition
- * itself. Scope is part of the probe's identity because the same question at
- * two scopes is two different questions.
- */
 export type ProbeScope =
   | 'callsite'
   | 'all-invocations'
   | 'equivalence-class'
   | 'definition';
 
-/**
- * Which of the six operations is asking. Part of the probe's identity: two
- * operations can build byte-identical descriptors (diff and simulate over the
- * same target and deltas) yet produce different answers — diff makes no causal
- * claims, simulate does — so without this field the second one is handed the
- * first one's answer as a FIXPOINT.
- */
 export type ProbeOperation =
   | 'inspect'
   | 'explain'
@@ -34,13 +21,6 @@ export type ProbeOperation =
   | 'prove'
   | 'refine';
 
-/**
- * What a symptom names about its target. `engines/explain.ts` is the only
- * producer — it copies `OracleSymptom['detail']` in here — and both of that
- * union's variants carry exactly these fields; the shape is expressible in
- * core vocabulary alone, so nothing about it obliged the field to be an open
- * dictionary. `expected` belongs to the `unexpected-value` symptom only.
- */
 export type SymptomDetail = {
   property: string;
   expected?: string;
@@ -52,21 +32,11 @@ export type SymptomSpec = {
   detail?: SymptomDetail;
 };
 
-/**
- * One value an assertion pins. `engines/prove.ts` is the only producer (it
- * spreads an `OracleAssertion` with its selector `target` dropped), and every
- * variant of that union carries a name, a single expected string, or a list of
- * allowed ones — nothing here is an object, which is what lets `stableHash`
- * see the whole map in canonical form.
- */
 export type AssertionParam = string | readonly string[] | undefined;
 
 export type AssertionSpec = {
   kind: string;
   target: TargetId;
-  /** Read by nobody: the map exists to be hashed into the probe identity
-   *  (§5 — a differently-parameterized assertion is a different question) and
-   *  rendered, so the contract that matters is on the VALUES. */
   params?: Readonly<Record<string, AssertionParam>>;
 };
 
@@ -77,12 +47,6 @@ export type ProbeObjective =
   | { kind: 'assertion'; assertions: readonly AssertionSpec[] }
   | { kind: 'discharge'; obligation: ObligationId };
 
-/**
- * How hard a probe may try. Engines hash the *resolved* budget into the probe
- * identity (a strategy knob changes the answer, so it is part of the
- * question) — resolved, not raw, so `{}` and an explicit default remain the
- * same probe.
- */
 export interface ProbeBudget {
   maxCells?: number;
   maxBranchForks?: number;
@@ -116,7 +80,6 @@ export interface KnowledgeDelta {
   newObligations: number;
 }
 
-/** The one spelling of "nothing was learned" — owned by the type's module. */
 export const emptyKnowledgeDelta = (): KnowledgeDelta => ({
   newFacts: 0,
   precisionImprovements: 0,
@@ -130,11 +93,6 @@ export interface SuggestedOperation {
   expectedInformationGain: 'HIGH' | 'MEDIUM' | 'LOW';
 }
 
-/**
- * Causal language discipline (DESIGN §7): a finding states what was shown
- * under the tested domain, never "this is the bug". Repair choice needs
- * assertions and a change-cost policy, which live above this layer.
- */
 export interface CausalFinding {
   subject: string;
   status:
@@ -158,13 +116,6 @@ export interface CounterexampleWitness {
   boundary?: string;
 }
 
-/**
- * How a cascade decision moved between two worlds. `engines/diff.ts` is the
- * only producer and re-exports these names, but the declaration lives here,
- * beside the `ProbeResult` field it types: the shape is expressible in `core/`
- * vocabulary alone (`RenderSubject` plus primitives), so nothing about it
- * obliged the field to be `unknown`.
- */
 export type SemanticDiffKind =
   | 'value-changed'
   | 'winner-changed'
@@ -198,7 +149,7 @@ export interface ProbeResult {
   witnesses?: readonly CounterexampleWitness[];
   causalFindings?: readonly CausalFinding[];
   /** Present exactly when the operation compared two worlds (`diff`,
-   *  `simulate`); both fill it with `toSemanticDiff(sweep)`. */
+   *  `simulate`). */
   semanticDiff?: SemanticDiff;
   assumptions: readonly string[];
   unknowns: readonly UnknownObligation[];
@@ -208,18 +159,6 @@ export interface ProbeResult {
   previous?: ProbeStateId;
 }
 
-/**
- * The anti-loop identity (DESIGN §5).
- *
- * Everything that could make the same question produce a different answer is
- * hashed in: the asking operation, the world (itself a hash over program
- * revision, scenario domain, environment and interventions), the target, the
- * scope, the pinned scenario point, the objective, the budget, the model
- * version, and the evidence revision. Two probes sharing a state id therefore *cannot* yield new
- * information, which is what lets `ProbeLedger` answer FIXPOINT instead of
- * letting an agent mistake repetition for progress. Any future input that can
- * change an answer must be added here, or the fixpoint guarantee is void.
- */
 export const probeStateId = (probe: RenderProbe): ProbeStateId =>
   asProbeStateId(
     stableHash({
@@ -246,12 +185,6 @@ export class ProbeLedger {
     return this.#results.get(stateId);
   }
 
-  /**
-   * The no-progress answer: same state, no new knowledge. It keeps the prior
-   * facts and unknowns (they are still the strongest supported answer) but
-   * zeroes the knowledge delta and hands back the untried operations, so the
-   * only way forward is an operation that changes the state.
-   */
   fixpoint(
     prior: ProbeResult,
     untried: readonly SuggestedOperation[]

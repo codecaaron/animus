@@ -1,7 +1,5 @@
-// Multi-byte UTF-8 span-shift stress: oxc spans are BYTE offsets and all
-// v2 surgery is span- or ASCII-delimiter-based — any path that mixes
-// CHAR counts with BYTE spans corrupts every replacement AFTER this
-// preamble. 日本語 (3-byte), emoji (4-byte), combining marks (が = か+゙).
+// oxc spans are BYTE offsets: a path that mixes char counts with byte spans
+// corrupts every replacement after the multi-byte text below.
 const label = '日本語ラベル';
 const がんばって = '頑張って 🔥🔥';
 export const 見出し = ds

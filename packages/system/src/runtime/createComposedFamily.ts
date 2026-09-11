@@ -1,11 +1,6 @@
 /**
- * createComposedFamily — extraction-time replacement for compose().
- *
- * The transform emitter replaces `compose({ Root, Body }, { shared, name })`
- * with `createComposedFamily({ Root, Body }, { name })`.
- *
- * RSC-safe: uses only forwardRef and createElement — no createContext,
- * no useContext, no hooks.
+ * The extraction emitter rewrites `compose()` calls to this form. It stays
+ * hook- and context-free so composed families work in server components.
  */
 
 import {
@@ -25,7 +20,6 @@ export function createComposedFamily(
   slots: Record<string, ForwardRefExoticComponent<any>>,
   config: ComposedFamilyConfig
 ): Record<string, ForwardRefExoticComponent<any>> {
-  // Same precondition as the source form — see assertRootSlot.
   assertRootSlot(slots, 'createComposedFamily');
   const { name } = config;
   const result: Record<string, ForwardRefExoticComponent<any>> = {};

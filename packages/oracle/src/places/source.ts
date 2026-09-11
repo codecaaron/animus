@@ -8,42 +8,20 @@ import type {
   Span,
 } from 'oxc-parser';
 
-/**
- * Seam S5 (PLACES.md §1): the structural reader — the only new reader the
- * places layer adds, and deliberately the weakest authority. It reads JSX
- * *structure* from authored source: which elements exist, their spans, their
- * statically-knowable attributes, and which element contains which. It never
- * interprets a style, a token, or a class name; every styling conclusion
- * still flows through the extraction artifacts and the cascade.
- *
- * Spans are byte offsets into the file, matching the manifest's span
- * convention (`usageResidue`, `argSpan`).
- */
-
 export interface SourceAttribute {
   name: string;
   kind: 'static' | 'dynamic' | 'spread';
-  /** Present only for `static`. A bare JSX attribute reads as 'true'. */
   value?: string;
   span: readonly [number, number];
 }
 
 export interface SourceElement {
-  /** Index in source (pre-)order over every JSX element in the file. */
   ordinal: number;
-  /** `div`, `GroupItem`, `Root.Slot`. */
   tag: string;
-  /** Component-like tag — a boundary the structural reader cannot cross. */
   component: boolean;
   attributes: readonly SourceAttribute[];
   hasSpread: boolean;
   span: readonly [number, number];
-  /**
-   * Ordinal of the containing JSX element, or undefined at a structural
-   * root. JSX reached through an attribute value (a render prop) has no
-   * parent on purpose: it is not a DOM child of the element that carries it.
-   * Fragments and expression containers pass containment through.
-   */
   parent: number | undefined;
 }
 
@@ -52,11 +30,6 @@ export interface SourceRead {
   elements: readonly SourceElement[];
 }
 
-/**
- * ESTree collapses every literal onto one `type: 'Literal'`, so the kind is
- * not in the tag. It discriminates the two kinds JSON cannot carry with their
- * own fields (`bigint`, `regex`) — the seam this reader narrows on.
- */
 type LiteralExpression = Extract<Expression, { type: 'Literal' }>;
 
 const spanOf = (node: Span): readonly [number, number] => [
@@ -64,7 +37,6 @@ const spanOf = (node: Span): readonly [number, number] => [
   node.end,
 ];
 
-/** `<A.B.C>` → 'A.B.C'; identifiers pass through. */
 const tagNameOf = (name: JSXElementName): string => {
   if (name.type === 'JSXIdentifier') return name.name;
   if (name.type === 'JSXMemberExpression') {
@@ -76,11 +48,6 @@ const tagNameOf = (name: JSXElementName): string => {
 const isComponentTag = (tag: string): boolean =>
   tag.includes('.') || /^[A-Z]/.test(tag);
 
-/**
- * A `{...}` attribute value the reader can write down: string and number
- * literals only. A boolean, null, bigint or regexp literal is a value the
- * structural reader has no attribute text for, so it reads as dynamic.
- */
 const literalText = (literal: LiteralExpression): string | undefined => {
   if ('bigint' in literal || 'regex' in literal) return undefined;
   const { value } = literal;
@@ -126,11 +93,6 @@ const attributesOf = (
   return { attributes, hasSpread };
 };
 
-/**
- * Read one file's JSX structure. Throws only on unparseable source — an
- * unreadable file is not a degraded structure, it is a different program
- * than the one being asked about.
- */
 export const readSourceStructure = (file: string, text: string): SourceRead => {
   const parsed = parseSync(file, text);
   if (parsed.errors.length > 0) {
@@ -171,9 +133,8 @@ export const readSourceStructure = (file: string, text: string): SourceRead => {
       containment.push(ordinal);
     },
     'JSXElement:exit': restore,
-    // OXC reaches an attribute before this element's children, matching the
-    // reader's order — but containment is severed across it: a render prop's
-    // JSX is not a DOM child of the element that carries it.
+    // OXC reaches attributes before children, so containment is severed
+    // across them: a render prop's JSX is not a DOM child of its carrier.
     JSXAttribute: sever,
     'JSXAttribute:exit': restore,
     JSXSpreadAttribute: sever,
@@ -183,7 +144,6 @@ export const readSourceStructure = (file: string, text: string): SourceRead => {
   return { file, elements };
 };
 
-/** The ancestor chain of one element, innermost first. */
 export const ancestorsOf = (
   read: SourceRead,
   ordinal: number

@@ -1,20 +1,6 @@
 #!/usr/bin/env bun
-// scripts/hygiene/delete-unused.ts
-//
-// Consumes oxlint `--format=json` diagnostic output on stdin, deletes dead
-// declarations at the reported coordinates. Closes the intra-file gap
-// oxlint's `--fix-suggestions` does not cover — top-level `const` /
-// `function` / `let` / `class` / `type` / `interface` / `enum` /
-// `namespace`, plus destructured-field unused parameters.
-//
-// Usage:
-//   vp lint --format=json <files> | bun run scripts/hygiene/delete-unused.ts
-//   bun run scripts/hygiene/delete-unused.ts <oxlint-json-file>     (for tests)
-//
-// Exit:
-//   0 = success (mutations applied OR no mutations needed)
-//   1 = oxlint JSON parse error / missing `diagnostics` array
-//   2 = internal error
+// Deletes the dead top-level declarations and destructured parameters that
+// oxlint's `--fix-suggestions` leaves behind, reading its JSON diagnostics.
 
 import { readFileSync, writeFileSync } from 'node:fs';
 
@@ -42,12 +28,8 @@ import {
 
 const SOURCE = 'Layer C deleter (delete-unused.ts)';
 
-// Direct child nodes of `node`, in source order. Iterates own enumerable
-// values (arrays are flattened, `null` array holes skipped) using `_ast`'s
-// node discriminator. The `parent` link written by `assignParents` is
-// non-enumerable, so it is never revisited as a child — this is what keeps the
-// walk acyclic. Local to this pass: `reconcile-after-knip.ts` reaches its
-// nodes by field name and never needs structural child discovery.
+// Direct child nodes in source order. The `parent` link is non-enumerable, so
+// it is never revisited as a child and the walk stays acyclic.
 function childNodes(node: Node): Node[] {
   const out: Node[] = [];
   for (const value of Object.values<NodeField>(node)) {
@@ -60,8 +42,6 @@ function childNodes(node: Node): Node[] {
   return out;
 }
 
-// Wire a non-enumerable `parent` back-link onto every node in the tree so the
-// TS-style upward walks (`resolveTarget`, `findOverloadGroupStart`) work.
 function assignParents(root: Node): void {
   const stack: Node[] = [root];
   while (stack.length > 0) {
@@ -79,9 +59,7 @@ function assignParents(root: Node): void {
   }
 }
 
-// Statement containers in which a `VariableDeclaration` sits at statement
-// position (as opposed to a `for (…)` initializer). Mirrors the TS guard that
-// required the declaration list's parent to be a `VariableStatement`.
+// Where a `VariableDeclaration` is a statement, not a `for (…)` initializer.
 const STATEMENT_CONTAINERS = new Set([
   'Program',
   'BlockStatement',
@@ -89,10 +67,7 @@ const STATEMENT_CONTAINERS = new Set([
   'TSModuleBlock',
 ]);
 
-// If `node` is the `.declaration` of an export wrapper, return the wrapper so
-// the deletion range covers `export …` too; otherwise return `node` unchanged.
-// (Mirrors the TS rule: deleting an exported declaration must remove the
-// `export` keyword with it.)
+// Widens to the export wrapper so a deletion takes the `export` keyword too.
 function rangeNode(node: Node): Node {
   const parent = node.parent;
   if (
@@ -120,7 +95,7 @@ type NormalizedDiag = {
   code: string; // bare rule name, eslint() wrapper unwrapped
   message: string;
   path: string;
-  offset: number; // 0-indexed byte offset (oxlint's labels[0].span.offset)
+  offset: number; // 0-indexed byte offset
   line: number; // 1-indexed
   column: number; // 1-indexed
 };
@@ -128,7 +103,7 @@ type NormalizedDiag = {
 function findNodeAtOffset(root: Node, offset: number): Node {
   function recurse(node: Node): Node {
     for (const child of childNodes(node)) {
-      // Spans are trivia-exclusive, same as TS `getStart`/`getEnd`.
+      // Spans are trivia-exclusive.
       if (offset >= child.start && offset < child.end) {
         return recurse(child);
       }
@@ -141,10 +116,7 @@ function findNodeAtOffset(root: Node, offset: number): Node {
 function resolveTarget(node: Node): Target | undefined {
   let cur: Node | undefined = node;
   while (cur) {
-    // A binding element is any element sitting directly inside a destructuring
-    // pattern: an ObjectPattern `Property`/`RestElement`, or an ArrayPattern
-    // element. (In the TS AST this was a dedicated `BindingElement`; ESTree
-    // collapses it into the pattern's child.)
+    // A binding element is any element directly inside a destructuring pattern.
     const parent = cur.parent;
     if (
       parent &&
@@ -153,9 +125,7 @@ function resolveTarget(node: Node): Target | undefined {
       return { kind: 'binding-element', elem: cur, pattern: parent };
     }
     if (cur.type === 'VariableDeclarator') {
-      // ESTree collapses TS's VariableStatement→declarationList→declarations
-      // into VariableDeclaration→declarations, so the declarator's parent IS
-      // the statement-level declaration.
+      // In ESTree a declarator's parent is the statement-level declaration.
       const stmt = cur.parent;
       if (
         stmt &&
@@ -188,12 +158,9 @@ function expandToLineBounds(text: string, node: Node): TextRange {
   let start = node.start;
   let end = node.end;
 
-  // Consume trailing newline(s) so the deletion collapses the whole line
   if (text.charAt(end) === '\r' && text.charAt(end + 1) === '\n') end += 2;
   else if (text.charAt(end) === '\n') end += 1;
 
-  // Consume leading indentation on the start line (if line is otherwise blank
-  // before the node — i.e., this is a standalone statement line)
   const prevNl = text.lastIndexOf('\n', start - 1);
   const lineStart = prevNl + 1;
   if (text.substring(lineStart, start).trim() === '') {
@@ -209,26 +176,20 @@ function rangeForVarDeclOfMany(decl: Node, stmt: Node): TextRange {
   if (idx === -1) return { start: decl.start, end: decl.end };
 
   if (idx < decls.length - 1) {
-    // Not last: delete from this declarator's start to the next's start
-    // (consumes trailing comma + whitespace)
+    // Not last: sweep to the next declarator, taking the trailing comma.
     return {
       start: decl.start,
       end: decls[idx + 1].start,
     };
   }
-  // Last: delete from previous declarator's end to this declarator's end
-  // (consumes preceding comma)
+  // Last: sweep from the previous declarator, taking the preceding comma.
   const prev = decls[idx - 1];
   return { start: prev.end, end: decl.end };
 }
 
 function rangeForBindingElement(elem: Node, pattern: Node): TextRange {
-  // ObjectPattern holds `properties`; ArrayPattern holds `elements` (which may
-  // contain `null` holes — `const [a, , c] = arr`). The neighbor-based
-  // comma-slicing math carries over on spans either way, but only a REAL
-  // neighbor can supply a span: a hole has no offsets to slice against, so it
-  // is not a usable neighbor and the search falls through to the other side.
-  // (Reading a hole's `.start` was a crash, not a range.)
+  // ObjectPattern holds `properties`, ArrayPattern `elements` with holes.
+  // A hole has no span, so the neighbor search falls through to the other side.
   const elements: Array<Node | null> =
     pattern.type === 'ObjectPattern'
       ? childNodeList(pattern, 'properties')
@@ -243,18 +204,12 @@ function rangeForBindingElement(elem: Node, pattern: Node): TextRange {
   if (prev !== null) {
     return { start: prev.end, end: elem.end };
   }
-  // Only element (or holes on both sides): delete just the element (caller
-  // must decide about the pattern itself).
   return { start: elem.start, end: elem.end };
 }
 
 function findOverloadGroupStart(impl: Node): Node {
-  // Oxlint flags only the implementation of an overloaded function as
-  // unused; the signature-only overloads above it are not separately
-  // flagged but become orphans if only the implementation is deleted
-  // (TS2391). When `impl` has a body AND is preceded by same-named
-  // signature-only overloads (ESTree `TSDeclareFunction`), expand the range
-  // to the first signature so the whole group is removed atomically.
+  // Oxlint flags only an overload's implementation; deleting it alone orphans
+  // the signature-only overloads above it (TS2391), so the group goes together.
   const implName = identifierName(impl, 'id');
   if (childNode(impl, 'body') === undefined || implName === undefined) {
     return impl;
@@ -309,8 +264,6 @@ function kindForTarget(target: Target): string {
 function rangeForTarget(text: string, target: Target): TextRange {
   switch (target.kind) {
     case 'top-level': {
-      // Handle function overload groups: expand backwards to include all
-      // signature-only overloads preceding an implementation.
       if (target.node.type === 'FunctionDeclaration') {
         const groupStart = findOverloadGroupStart(target.node);
         if (groupStart !== target.node) {
@@ -330,8 +283,7 @@ function rangeForTarget(text: string, target: Target): TextRange {
   }
 }
 
-// The bare oxlint rule names Layer C acts on (codes arrive wrapped as
-// `eslint(<rule-name>)`; `unwrapCode` from `_tool-reports` strips the wrapper).
+// Bare rule names; incoming codes arrive wrapped as `eslint(<rule>)`.
 const TARGET_CODES = new Set(['no-unused-vars']);
 
 function normalizeDiagnostic(d: OxlintDiagnostic): NormalizedDiag | undefined {
@@ -368,18 +320,16 @@ export function applyDeletions(
 
     const klass = classifyUnusedVar(norm.message);
     if (klass === 'unknown') continue;
-    // Layer A handles unused imports via `vp lint --fix-suggestions`.
-    // Layer C must skip them so the layers do not collide.
+    // Unused imports are the linter's own fix; skipping them here keeps the
+    // two passes from colliding on the same span.
     if (klass === 'import') continue;
 
     const narrow = findNodeAtOffset(program, norm.offset);
     const target = resolveTarget(narrow);
     if (!target) continue;
 
-    // For `no-unused-vars` of class `param`: only delete destructured
-    // binding-elements. Positional parameter rename is the linter's job
-    // (arity-preserving). If a `param`-classified diagnostic resolves to
-    // anything other than a BindingElement, skip.
+    // Only destructured parameters are deleted: removing a positional one
+    // would change the function's arity, so the linter renames those instead.
     if (klass === 'param' && target.kind !== 'binding-element') {
       continue;
     }
@@ -394,9 +344,8 @@ export function applyDeletions(
 
   if (targets.length === 0) return source;
 
-  // Sort descending by start, drop overlapping ranges, emit receipt per
-  // actually-applied splice (overlapping drops do NOT emit — receipts
-  // record what happened, not what was attempted).
+  // Highest offset first so earlier ranges stay valid. A receipt is emitted per
+  // applied splice only: receipts record what happened, not what was attempted.
   targets.sort((a, b) => b.range.start - a.range.start);
   let lastStart = Infinity;
   let out = source;
@@ -411,10 +360,8 @@ export function applyDeletions(
   return out;
 }
 
-// Code-drift canary: collect raw distinct codes observed (pre-unwrap). If
-// oxlint reports diagnostics but ZERO match the unwrapped TARGET_CODES,
-// emit a sentinel receipt so the presenter can surface a WARN. Closes the
-// session-89 silent-no-op class of regression on linter version bumps.
+// Diagnostics that match no target code mean oxlint's rule names moved; the
+// receipt keeps a version bump from reading as a clean, empty run.
 function detectCodeDrift(diagnostics: OxlintDiagnostic[]): void {
   const codesSeen = new Set<string>();
   let anyMatch = false;
@@ -471,7 +418,6 @@ async function main(): Promise<void> {
 
 if (import.meta.main) {
   main().catch((e) => {
-    // Same policy as Layer A/D: see `_tool-reports.ts` § Failure policy.
     if (e instanceof ToolReportError) {
       console.error(e.message);
       process.exit(1);

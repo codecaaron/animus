@@ -13,11 +13,6 @@ import { compose } from '@animus-ui/system';
 
 import { ds } from '../../ds';
 
-// ─── Drawer Slot Definitions ──────────────────────────────────────
-//
-// Composed slide-out panel family. Shared `position` variant controls
-// slide direction (left/right) and seam edge placement.
-
 const DrawerOverlay = ds
   .styles({
     position: 'fixed',
@@ -131,8 +126,6 @@ export const DrawerSlots = compose(
   { shared: { position: true } }
 );
 
-// ─── Close Button ─────────────────────────────────────────────────
-
 const CloseButton = ds
   .styles({
     fontFamily: 'mono',
@@ -154,8 +147,6 @@ const CloseButton = ds
     },
   })
   .asElement('button');
-
-// ─── Focus Trap ───────────────────────────────────────────────────
 
 function useFocusTrap(
   panelRef: RefObject<HTMLElement | null>,
@@ -210,15 +201,11 @@ function useFocusTrap(
   }, [open, panelRef, onClose, triggerRef]);
 }
 
-// ─── Drawer Context ───────────────────────────────────────────────
-
 interface DrawerContextValue {
   close: () => void;
 }
 
 const DrawerContext = createContext<DrawerContextValue>({ close: () => {} });
-
-// ─── Behavioral Wrapper ──────────────────────────────────────────
 
 interface DrawerProps {
   open: boolean;

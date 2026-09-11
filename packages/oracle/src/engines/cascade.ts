@@ -1,16 +1,3 @@
-/**
- * Shared cascade semantics — the one place where the modeled CSS dialect
- * is decided.
- *
- * inspect / explain / simulate / diff / prove / refine are all projections of
- * this single analysis (DESIGN §6), so every candidacy, guard-activity,
- * precedence and value-resolution decision lives here and nowhere else. The
- * dialect is deliberately smaller than CSS: class selectors, pseudo-classes as
- * scenario dimensions, attribute counts, element selectors for inheritance,
- * declared layers, and `!important`. Anything outside it becomes an assumption
- * or an obligation rather than a silently-approximated answer (DESIGN §8).
- */
-
 import { subjectKey } from '../core/fact';
 import {
   and,
@@ -50,12 +37,6 @@ import type {
 } from '../providers/style-universe';
 import type { TokenProvider } from '../providers/tokens';
 
-/**
- * Properties this phase propagates from an element-selector rule when the
- * target itself declares nothing. Deliberately tiny: a full inherited-property
- * table without a render-tree provider would be a guess about the ancestor
- * chain, and DESIGN §8 forbids that.
- */
 export const INHERITABLE_PROPERTIES: readonly string[] = [
   'color',
   'font-family',
@@ -63,10 +44,8 @@ export const INHERITABLE_PROPERTIES: readonly string[] = [
   'line-height',
 ];
 
-/** The layer element-selector inheritance sources are read from. */
 export const GLOBAL_LAYER = 'anm-global';
 
-/** Custom properties whose value is written at runtime, never at build time. */
 const DYNAMIC_SLOT_PREFIX = '--animus-';
 
 const PSEUDO_ELEMENT_NAMES = new Set([
@@ -83,10 +62,6 @@ const PSEUDO_ELEMENT_NAMES = new Set([
 export interface CascadeContext {
   universe: StyleUniverse;
   tokens: TokenProvider | undefined;
-  /**
-   * The world's declared axes — what "unbound in this world" is measured
-   * against.
-   */
   scenario: ScenarioDomain;
   obligations: ObligationRegistry;
   dependencies: DependencyProvider;
@@ -99,16 +74,12 @@ export interface Specificity {
 
 export interface CascadeCandidate {
   rule: StyleRuleRecord;
-  /** `and(rule.condition, …pseudo-class conjuncts)`. */
   guard: Predicate;
   specificity: Specificity;
   layerIndex: number;
   active: boolean;
-  /** Guard dimensions the world's scenario domain does not declare at all. */
   unboundInWorld: readonly string[];
-  /** Guard dimensions declared by the world but left free by the point. */
   unboundAtPoint: readonly string[];
-  /** Inactive here, but satisfiable once an unbound dimension is fixed. */
   conditional: boolean;
 }
 
@@ -182,14 +153,6 @@ export const pointGuard = (point: ScenarioPoint): Predicate =>
       .map((dim) => eq(dim, point[dim]))
   );
 
-/**
- * Drop everything the point already decides.
- *
- * A leaf whose dimension the point binds is replaced by its truth value; the
- * rest survives, so the residual guard states exactly the conditions the point
- * left open. A fully-decided guard collapses to TRUE, which is what makes a
- * point-scoped fact read as unconditional *at that point*.
- */
 export const simplifyAtPoint = (
   p: Predicate,
   point: ScenarioPoint
@@ -229,15 +192,6 @@ const splitPseudo = (selector: SelectorModel): PseudoParts => {
   return { classes, elements };
 };
 
-/**
- * Element (type) selectors in the raw selector text.
- *
- * The modeled dialect has no ids, so specificity is the pair (b, c): b counts
- * classes, pseudo-classes and attribute selectors, c counts elements. Attribute
- * and pseudo fragments are stripped before the scan so `div[data-x]:hover`
- * counts one element, and `*` — which contributes nothing in CSS — is
- * ignored because it does not start with an identifier character.
- */
 const countElementSelectors = (raw: string): number => {
   const withoutAttributes = raw.replace(/\[[^\]]*\]/g, '');
   const withoutPseudo = withoutAttributes.replace(
@@ -261,22 +215,9 @@ export const specificityOf = (selector: SelectorModel): Specificity => {
   };
 };
 
-/**
- * The compound whose classes and pseudo-classes belong to the styled element
- * itself: the subject of a relational selector, the whole selector otherwise.
- */
 const subjectOf = (selector: SelectorModel): SelectorModel =>
   selector.subject ?? selector;
 
-/**
- * The guard a rule really applies under: its declared condition plus one
- * `pseudo:<name> = true` conjunct per *subject* pseudo-class. Modelling
- * pseudo-classes as scenario dimensions is what lets `prove` quantify over
- * `:hover` instead of ignoring it. An ancestor's pseudo-class never lands
- * here — it lives inside the rule's `ancestor:*` condition, because
- * attributing an ancestor's interaction state to the subject would let a
- * subject-hover scenario activate a rule the tree cannot match.
- */
 export const effectiveGuard = (rule: StyleRuleRecord): Predicate =>
   and(
     rule.condition,
@@ -288,14 +229,6 @@ export const effectiveGuard = (rule: StyleRuleRecord): Predicate =>
 export const pseudoElementOf = (rule: StyleRuleRecord): string | undefined =>
   splitPseudo(subjectOf(rule.selector)).elements[0];
 
-/**
- * Candidacy is purely structural: every class the *subject* compound names
- * must be on the target at this point — an ancestor's classes live on other
- * elements, so requiring them here made every `.group:hover .x` rule silently
- * vanish from the cascade. Element-selector rules (no classes) are not
- * candidates for the element's own cascade — they enter only through the
- * inheritance step.
- */
 export const isCandidateSelector = (
   rule: StyleRuleRecord,
   classes: ReadonlySet<string>
@@ -312,9 +245,6 @@ const orderKey = (declaration: DeclarationCandidate): readonly number[] => {
   const { candidate } = declaration;
   return [
     important ? 1 : 0,
-    // Non-important: a later layer wins. Important: the layer order reverses,
-    // so the *earlier* layer wins — expressed as the negated layer index so a
-    // single "largest key wins" comparison covers both halves of the cascade.
     important ? -candidate.layerIndex : candidate.layerIndex,
     candidate.specificity.b,
     candidate.specificity.c,
@@ -330,15 +260,6 @@ const compareKeys = (a: readonly number[], b: readonly number[]): number => {
   return 0;
 };
 
-/**
- * The CSS-correct total order for one property, largest key wins:
- *
- * 1. `!important` beats non-important.
- * 2. Non-important: later layer → higher specificity → later rule order →
- *    later declaration index.
- * 3. Important: the layer comparison is negated (earlier layer wins), the rest
- *    is unchanged.
- */
 export const winnerOf = (
   declarations: readonly DeclarationCandidate[]
 ): DeclarationCandidate | undefined => {
@@ -417,14 +338,6 @@ export const provenanceOf = (
   return refs;
 };
 
-/**
- * Replace every `var(--x[, fallback])` with the looked-up value.
- *
- * The declared fallback is deliberately *not* used when the lookup fails: an
- * unmodeled custom property might well be defined at runtime, so substituting
- * the fallback would be a guess. The caller turns `undefined` into an
- * obligation instead (DESIGN §4).
- */
 const substituteVariables = (
   value: string,
   lookup: (name: string) => string | undefined
@@ -468,28 +381,8 @@ const substituteVariables = (
 };
 
 /**
- * Per-registry memo for engine-raised obligations. The content is fully
- * determined by (rule, property, procedure, reason), but `register` pays a
- * content hash over the guard tree and dependency list every call — a cost
- * that otherwise repeats for the same unresolved declaration at every cell of
- * every sweep.
- *
- * WHY THE UNIVERSE IS NOT IN THE KEY (and this memo is still sound across
- * universes). One registry provably spans several: the runtime builds one
- * `ObligationRegistry` and `contextFor` hands that same instance to every
- * world while `universe` varies per world, so `carry` reading a base world
- * and a candidate world back-to-back shares this map. That is safe because
- * every field `raiseDynamicValueUncached` registers is universe-INVARIANT
- * for a fixed key: `origin`/`guard` derive only from `rule.source`,
- * `rule.condition`, `rule.selector`, and `speculate` rewrites ONLY a rule's
- * `declarations` while spreading the rest of the rule verbatim;
- * `dependencies` come from the runtime-fixed host. The one input that DOES
- * vary per universe — the declaration's value — is rendered into `reason`,
- * which is in the key. Note the contrast with `universeIndexes` further
- * down this file, which IS universe-keyed; the difference is exactly this
- * invariance premise, not an oversight. Adding any universe-varying field
- * to the registered obligation therefore requires adding the universe to
- * the key in the same edit.
+ * Memo for engine-raised obligations. The universe is not in the key because
+ * every registered field is universe-invariant; a varying one must be keyed.
  */
 const raisedObligations = new WeakMap<
   ObligationRegistry,
@@ -532,10 +425,6 @@ const raiseDynamicValueUncached = (
     origin: rule.source ?? { file: `rule:${rule.id}` },
     guard: declaration.candidate.guard,
     effectClass: 'dynamic-value',
-    // Property-precise on purpose: scoping an engine-raised unknown to the
-    // whole target would make every later answer about *any* property of that
-    // target CONDITIONAL, and would do so depending on which probe ran first.
-    // A host that means "this gap affects the whole component" says so itself.
     influenceScope: [
       declarationSubject(rule.id, declaration.declaration.property),
     ],
@@ -554,15 +443,6 @@ const raiseDynamicValueUncached = (
   });
 };
 
-/**
- * Turn a declaration's authored string into an abstract value.
- *
- * `var()` chains resolve through the token provider under the point's mode;
- * every other outcome is explicit — a runtime slot variable, an unmodeled
- * custom property and a malformed expression all become addressable unknowns,
- * and a missing token provider leaves the raw text in place under a stated
- * assumption. Nothing here ever invents a value.
- */
 export const resolveDeclarationValue = (
   ctx: CascadeContext,
   point: ScenarioPoint,
@@ -695,37 +575,23 @@ export const resolveDeclarationValue = (
   };
 };
 
-/** Everything about a rule that no scenario point can change. */
 interface RuleStatics {
   guard: Predicate;
   dims: readonly string[];
   specificity: Specificity;
   pseudoElement?: string;
   layerIndex: number;
-  /** Index in `universe.rules` — candidate enumeration order. */
   position: number;
 }
 
 interface UniverseIndex {
   statics: Map<RuleId, RuleStatics>;
-  /**
-   * Class-selector rules keyed by their FIRST class name. Candidacy requires
-   * every named class on the target, so a candidate is always discoverable
-   * through its first class alone — one bucket per rule, no dedupe needed.
-   */
   byFirstClass: Map<string, readonly StyleRuleRecord[]>;
-  /** Class-less rules in the global layer — the inheritance sources. */
   globalRules: readonly StyleRuleRecord[];
 }
 
 const universeIndexes = new WeakMap<StyleUniverse, UniverseIndex>();
 
-/**
- * Rule-invariant work (guard construction, selector specificity, layer
- * lookup) is paid once per universe here instead of once per rule per cell —
- * it dominated the per-cell cost of `analyzeCascade` otherwise. Universes are
- * immutable; speculation builds a fresh one, which simply gets its own index.
- */
 const indexOfUniverse = (universe: StyleUniverse): UniverseIndex => {
   const cached = universeIndexes.get(universe);
   if (cached !== undefined) return cached;
@@ -745,9 +611,6 @@ const indexOfUniverse = (universe: StyleUniverse): UniverseIndex => {
       position,
     });
 
-    // Keyed by the subject compound's first class — the same compound
-    // candidacy tests — so a relational rule is discoverable from the classes
-    // the target actually carries, not from an ancestor's class.
     const first = (rule.selector.subject ?? rule.selector).classNames[0];
     if (first !== undefined) {
       const bucket = byFirstClass.get(first) ?? [];
@@ -768,11 +631,8 @@ const staticsOf = (
   rule: StyleRuleRecord
 ): RuleStatics => {
   const index = indexOfUniverse(universe);
-  // SAFETY: `indexOfUniverse` populates `statics` for every rule of
-  // `universe.rules` in one pass, and every caller reaches a rule only through
-  // that same index (its `byFirstClass` buckets, its `globalRules`, or the
-  // universe's own rule list), so the entry exists for the universe it was
-  // indexed from.
+  // SAFETY: `indexOfUniverse` fills `statics` for every rule of the universe
+  // it indexed, and every caller reaches a rule through that same index.
   return index.statics.get(rule.id) as RuleStatics;
 };
 
@@ -803,10 +663,6 @@ const buildCandidate = (
   };
 };
 
-/**
- * Keyed collections are walked in key order so that outcomes, assumptions and
- * every narrative derived from them are a pure function of the inputs.
- */
 const byName = <Value>(
   entries: ReadonlyMap<string, Value>
 ): readonly (readonly [string, Value])[] =>
@@ -886,16 +742,6 @@ const inheritanceFor = (
   return inherited;
 };
 
-/**
- * The whole cascade at one point: which rules are candidates, which of them are
- * active, who wins each property and why the others lost.
- *
- * Everything that could not be decided is surfaced, never dropped: rules in a
- * layer the universe does not order are excluded with an assumption,
- * pseudo-element rules are split off into their own subject, and candidates
- * guarded by an axis this world never declared are reported as
- * conditionally-inactive rather than silently failing their guard.
- */
 export const analyzeCascade = (
   ctx: CascadeContext,
   resolution: TargetResolution,
@@ -909,9 +755,6 @@ export const analyzeCascade = (
   const pseudoElementRules: { rule: StyleRuleRecord; pseudoElement: string }[] =
     [];
 
-  // Candidates come off the first-class index instead of a full-universe
-  // scan, then re-sorted into universe order so every downstream sequence
-  // (defeats, facts, summaries) is unchanged.
   const index = indexOfUniverse(ctx.universe);
   const gathered: StyleRuleRecord[] = [];
   for (const className of classSet) {
@@ -990,12 +833,6 @@ export const analyzeCascade = (
   };
 };
 
-/**
- * The candidate rules at one point with their guards — the cheap slice of
- * `analyzeCascade` that cut harvesting needs. Same candidacy and the same
- * exclusions (unordered layers, pseudo-element subjects), but no outcomes,
- * no inheritance and no value resolution.
- */
 export const candidateGuardsAt = (
   ctx: CascadeContext,
   resolution: TargetResolution,
@@ -1037,16 +874,6 @@ export interface BuiltFact {
   resolved: ResolvedValue;
 }
 
-/**
- * The winning declaration as a fact.
- *
- * The guard is the winning rule's effective guard simplified at the point (so
- * it states only what the point left open) conjoined with `contextGuard`, which
- * is how a forked branch records the value it was pinned under. Derivation
- * carries the origin rule, the guard, the token chain and one `defeats` edge
- * per beaten declaration — that edge set is exactly what `explain` walks
- * backward.
- */
 export const buildWinnerFact = (
   ctx: CascadeContext,
   graph: FactGraph,
@@ -1134,12 +961,6 @@ export const buildInheritedFact = (
   return { fact, resolved };
 };
 
-/**
- * A declaration that is inactive here but would apply once an unbound axis is
- * fixed, recorded as a fact about the *declaration* rather than the target —
- * the target's value under that binding is a separate question `simulate` or a
- * fork answers.
- */
 export const buildConditionalFact = (
   ctx: CascadeContext,
   graph: FactGraph,
@@ -1198,7 +1019,6 @@ export const buildDefeatedFact = (
   });
 };
 
-/** The guard conjuncts a point makes false, in describe form. */
 export const failingConjuncts = (
   guard: Predicate,
   point: ScenarioPoint
@@ -1209,18 +1029,6 @@ export const failingConjuncts = (
     .map(describePredicate);
 };
 
-/**
- * The subjects one property's answer rests on — the target, and every rule
- * and declaration that competed for it. Narrowing the subject list is what
- * keeps an obligation about a *different* property from making an answer
- * CONDITIONAL.
- */
-/**
- * The subjects whose obligations can make this answer CONDITIONAL: the target
- * itself, then per candidate its rule and declaration subjects — every
- * declaration when no property is given, only the declarations of `property`
- * (and only rules that declare it) when one is.
- */
 export const subjectsOf = (
   analysis: CascadeAnalysis,
   property?: string

@@ -12,10 +12,6 @@ try {
     { config: configPath },
     { hideWarnings: true }
   );
-  // `unstable_readConfig` is the parser at this boundary: it reads and
-  // validates the Wrangler config file and publishes `name` as
-  // `string | undefined`, so the only question left is the domain one — did
-  // this config declare a usable Worker name?
   const name = config.name;
 
   if (name === undefined || name.trim().length === 0) {

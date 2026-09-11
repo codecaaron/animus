@@ -6,12 +6,6 @@ import type { DependencyId, ObligationId } from './identity';
 import type { Predicate } from './predicate';
 import type { AbstractValue } from './value';
 
-/**
- * What kind of missing knowledge an obligation represents. The class picks the
- * discharge machinery: "JavaScript is involved" is not an answer, "the
- * intrinsic inline size of this node is not derivable from the closed style
- * universe" is (DESIGN §4).
- */
 export type ObligationEffectClass =
   | 'tree-shape'
   | 'intrinsic-inline-size'
@@ -49,12 +43,6 @@ export interface UnknownObligation {
   dependencies: readonly DependencyId[];
 }
 
-/**
- * Obligations are content-addressed for the same reason facts are: the same
- * gap discovered twice (by two engines, or by the same engine over two
- * scenarios) is one obligation, so `refine` cannot be tricked into discharging
- * "another" copy of an unknown it has already resolved.
- */
 export class ObligationRegistry {
   #obligations = new Map<ObligationId, UnknownObligation>();
 

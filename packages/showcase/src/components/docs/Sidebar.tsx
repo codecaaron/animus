@@ -10,11 +10,6 @@ import {
 } from '../../constants/docsNav';
 import { ds } from '../../ds';
 
-// ─── Sidebar Slot Definitions ──────────────────────────────────────
-//
-// Two-level sidebar: L1 sections + L2 page items.
-// Shared `density` variant controls spacing across all slots.
-
 export const SidebarRoot = ds
   .styles({
     display: 'flex',
@@ -94,8 +89,6 @@ const Nav = compose(
   },
   { shared: { density: true } }
 );
-
-// ─── Sidebar Component ─────────────────────────────────────────────
 
 function SidebarLink({ entry, end }: { entry: NavEntry; end?: boolean }) {
   // asChild keeps a single <a>; NavLink appends its default `active` class

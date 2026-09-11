@@ -1,9 +1,3 @@
-/**
- * Rust-side timing phases as reported in `manifest.timing`, in waterfall
- * order, with their display labels. Mirrors the timing struct in the
- * extract-v2 crate — a renamed or added Rust phase is updated here once,
- * not per plugin.
- */
 export const RUST_TIMING_PHASES: ReadonlyArray<
   readonly [key: string, label: string]
 > = [
@@ -20,11 +14,6 @@ export const RUST_TIMING_PHASES: ReadonlyArray<
   ['manifestSerialization', 'serialize'],
 ];
 
-/**
- * Format the Rust timing waterfall as log lines. `indent` and `labelWidth`
- * let each plugin keep its established column layout; the phase table and
- * the `(N files, M cached)` suffix are shared.
- */
 export function formatRustTimingWaterfall(
   timing: Record<string, number>,
   opts: { indent: string; labelWidth: number }

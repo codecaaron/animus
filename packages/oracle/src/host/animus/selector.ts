@@ -7,17 +7,8 @@ import type {
 } from '../../providers/style-universe';
 
 /**
- * How much of a selector the closed model can decide from a scenario point
- * alone.
- *
- * - `class-simple` — one compound selector of classes (plus pseudo/attribute
- *   qualifiers). `TargetResolution.classes(point)` decides it outright.
- * - `element` — an element or universal selector (`body`, `*`, `:root`). It
- *   matches by tree position, not by the classes a target carries.
- * - `relational` — any combinator (descendant, `>`, `+`, `~`). The subject
- *   compound is still class-decidable; the ancestor prefix becomes a guard
- *   over the mode axis or an `ancestor:*` axis (PLACES.md §3) that only a
- *   place binding or an explicit scenario can decide.
+ * How much of a selector a point alone decides: `class-simple` outright,
+ * `element` by tree position, `relational` only once its ancestor axis binds.
  */
 export type SelectorClassification = 'class-simple' | 'element' | 'relational';
 
@@ -26,7 +17,6 @@ export interface AnalyzedSelector {
   classification: SelectorClassification;
 }
 
-/** Split `a, b` into one selector per record — cascade order is per selector. */
 export const splitSelectorList = (raw: string): string[] =>
   splitTopLevel(raw, ',')
     .map((part) => part.replace(/\s+/g, ' ').trim())
@@ -46,31 +36,17 @@ type Combinator = AncestorLink['combinator'];
 
 interface CompoundChainLink {
   compound: string;
-  /** Relation between this compound and the one before it. */
   combinatorBefore: Combinator | null;
 }
 
-/**
- * Split a (comma-free, whitespace-normalized) selector into its compound
- * chain at nesting depth 0. Scanning is quote- and bracket-aware so a space
- * inside `[data-x="a b"]` or `:is(a b)` is not mistaken for a descendant
- * combinator — the same discipline the flat scan used.
- */
 const splitCompoundChain = (selector: string): CompoundChainLink[] => {
   const links: CompoundChainLink[] = [];
   let depth = 0;
   let quote: string | null = null;
   let current = '';
-  /** Combinator that preceded the compound currently accumulating. */
   let before: Combinator | null = null;
-  /** Boundary seen after `current` but not yet owned by a next compound. */
   let boundary: Combinator | null = null;
 
-  // Any compound-content character closes an open boundary: the accumulated
-  // compound is pushed with the combinator that preceded IT, and the pending
-  // boundary becomes the next compound's `before`. Attribute and quote
-  // openers count as content too — `[a] [b]` is two compounds, and only the
-  // generic-char path flushing would silently merge them.
   const closeBoundary = (): void => {
     if (boundary === null) return;
     if (current !== '') {
@@ -95,8 +71,6 @@ const splitCompoundChain = (selector: string): CompoundChainLink[] => {
 
     if (depth === 0) {
       if (char === ' ') {
-        // A space only opens a boundary; an explicit combinator already seen
-        // for this boundary is never downgraded by its surrounding spaces.
         if (current !== '' && boundary === null) boundary = 'descendant';
         continue;
       }
@@ -139,7 +113,6 @@ interface CompoundAnalysis {
   hasTypeSelector: boolean;
 }
 
-/** One compound selector → its flat parts. No combinators reach here. */
 const analyzeCompound = (raw: string): CompoundAnalysis => {
   const classNames: string[] = [];
   const pseudo: string[] = [];
@@ -219,9 +192,6 @@ const analyzeCompound = (raw: string): CompoundAnalysis => {
     atCompoundStart = false;
   }
 
-  // `pseudo` and `attributes` are absent — not empty — when nothing was read,
-  // so a compound with no qualifiers hashes and serializes exactly as the
-  // core contract declares it.
   const model: SelectorModel = { raw, classNames };
   if (pseudo.length > 0) model.pseudo = pseudo;
   if (attributes.length > 0) model.attributes = attributes;
@@ -229,15 +199,6 @@ const analyzeCompound = (raw: string): CompoundAnalysis => {
   return { model, hasTypeSelector };
 };
 
-/**
- * Selector text → the core `SelectorModel` plus its classification.
- *
- * The flat fields (`classNames`, `pseudo`, `attributes`) aggregate every
- * compound in source order — specificity is a property of the whole selector.
- * A relational selector additionally carries `subject` (the trailing
- * compound) and `ancestry` (the compounds before it, outermost first), so
- * candidacy and guard construction never have to re-derive the split.
- */
 export const analyzeSelector = (raw: string): AnalyzedSelector => {
   const selector = raw.replace(/\s+/g, ' ').trim();
   const chain = splitCompoundChain(selector);
@@ -252,16 +213,11 @@ export const analyzeSelector = (raw: string): AnalyzedSelector => {
   const ancestry: AncestorLink[] = relational
     ? chain.slice(0, -1).map((link, index) => ({
         raw: link.compound,
-        // Link i's combinator is its relation toward compound i+1 — the
-        // chain records the relation *before* each compound instead.
         combinator: chain[index + 1].combinatorBefore ?? 'descendant',
         model: parts[index].model,
       }))
     : [];
 
-  // Same presence contract as `analyzeCompound`, plus the relational pair:
-  // `subject` and `ancestry` appear together or not at all, so a consumer that
-  // sees one never has to guard the other.
   const model: SelectorModel = { raw: selector, classNames };
   if (pseudo.length > 0) model.pseudo = pseudo;
   if (attributes.length > 0) model.attributes = attributes;
@@ -279,14 +235,6 @@ export const analyzeSelector = (raw: string): AnalyzedSelector => {
   return { model, classification };
 };
 
-/**
- * A guard the universe derives from a relational selector's ancestor prefix
- * (PLACES.md §3): the root mode attribute maps onto the mode axis; every
- * other prefix becomes one `ancestor:<prefix>` axis. One axis per prefix —
- * NOT one per compound — because a descendant chain constrains ancestor
- * *order*, and a per-compound conjunction would establish rules the real
- * tree cannot match.
- */
 export type AncestorGuard =
   | { kind: 'mode'; value: string }
   | { kind: 'axis'; dimension: string };
@@ -297,17 +245,9 @@ const COMBINATOR_GLYPH = {
   general: '~',
 } satisfies Record<Exclude<Combinator, 'descendant'>, string>;
 
-/**
- * Quoted attribute values canonicalize to their unquoted form when they are
- * ident-safe, so `[data-active="true"]` and `[data-active=true]` name the
- * same axis regardless of how the emitting sheet quoted them. Place bindings
- * build axis names through this same helper — one canonical form, or the
- * establishment never matches the guard.
- */
 export const canonicalCompound = (raw: string): string =>
   raw.replace(/=(["'])([A-Za-z0-9_-]+)\1\]/g, '=$2]');
 
-/** The axis a prefix of ancestor links guards on, combinators preserved. */
 export const ancestorAxisOf = (links: readonly AncestorLink[]): string => {
   let out = '';
   for (const link of links) {
@@ -329,10 +269,6 @@ export const ancestorGuardsOf = (
   const links = [...ancestry];
   const guards: AncestorGuard[] = [];
 
-  // The mode attribute is only the mode axis when it is the outermost
-  // compound and a plain descendant — exactly the emitted dialect
-  // (`[data-color-mode=m] .component`). Anything fancier stays a generic
-  // ancestor axis rather than a guessed mode guard.
   const first = links[0];
   const mode =
     first.combinator === 'descendant' ? MODE_SELECTOR.exec(first.raw) : null;

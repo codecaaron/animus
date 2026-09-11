@@ -4,9 +4,8 @@ import { SYSTEM_MODE, persistColorMode } from '@animus-ui/system/appearance';
 
 import { ds, theme } from '../../ds';
 
-// ─── Mode Preview Data ────────────────────────────────────────────
-// Hardcoded hex values from ds.ts color mode definitions.
-// bg = background._, primary = primary._, text = text._
+// Preview hexes duplicate the ds.ts modes: bg = background._, primary =
+// primary._, text = text._. A mode edit in ds.ts must land here too.
 
 const MODES = [
   { name: 'dark', bg: '#000000', primary: '#FF2800', text: '#E8E0D0' },
@@ -23,14 +22,8 @@ const MODES = [
 
 type ModePreview = (typeof MODES)[number];
 
-/** Declared mode names, in palette order. Consumed by the legacy migration. */
 export const MODE_NAMES: readonly string[] = MODES.map((m) => m.name);
 
-/**
- * The OS mapping, read from the BUILT theme rather than restated: ds.ts owns
- * `systemPreference`, and both the System swatch's preview halves and the
- * media-gated `osResolved` treatment follow it — a remap in ds.ts moves both.
- */
 const SYSTEM_PREFERENCE = requireSystemPreference();
 
 function requireSystemPreference() {
@@ -53,7 +46,6 @@ function previewModeOf(name: string): ModePreview {
   return mode;
 }
 
-/** What "follow the OS" resolves to: the mapped light half, then the dark. */
 const OS_PREVIEW = [
   previewModeOf(SYSTEM_PREFERENCE.light),
   previewModeOf(SYSTEM_PREFERENCE.dark),
@@ -61,19 +53,12 @@ const OS_PREVIEW = [
 
 type PaletteOption = { kind: 'system' } | { kind: 'mode'; mode: ModePreview };
 
-/**
- * Radio order, single source: System first, then the declared modes. One
- * option is checked in EVERY state — System when the attribute is absent, the
- * matching mode swatch otherwise — which is what lets the roving tab stop
- * simply follow the checked radio, and lets keyboard navigation index this
- * array with no offset arithmetic.
- */
+/** One option is checked in every state — System when no mode attribute is
+ *  present — so the roving tab stop can just follow the checked radio. */
 const OPTIONS: readonly PaletteOption[] = [
   { kind: 'system' },
   ...MODES.map((mode) => ({ kind: 'mode' as const, mode })),
 ];
-
-// ─── Swatch Component ─────────────────────────────────────────────
 
 const SwatchOuter = ds
   .styles({
@@ -98,26 +83,8 @@ const SwatchOuter = ds
   })
   .asElement('button');
 
-// The swatch card. Its border is EXTRACTED, not inline, for two reasons: the
-// OS-resolved treatment below is a media-gated rule that an inline `border`
-// would outrank, and the inactive border is a plain token lookup.
-//
-// `osResolved` implements the `color-mode-palette` requirement "when no
-// explicit mode is active … the swatch of the OS-resolved mode SHALL carry the
-// active treatment, applied through OS-preference media conditions rather than
-// script". React contributes only the fact that NO mode is explicit — state it
-// already tracks for `aria-checked`. WHICH swatch lights up is decided by the
-// `@media (prefers-color-scheme: …)` blocks alone, so an OS flip moves the
-// treatment with no listener, no matchMedia, and no re-render.
-//
-// `borderColor: 'primary'` is self-referential for free: with no attribute
-// present, the SAME media query that selects this rule has already rebound
-// `--color-primary` to the mapped mode's own primary (ds.ts emits
-// `@media (prefers-color-scheme: …) { :root:not([data-color-mode]) { … } }`).
-// So the dark swatch borders in dark's primary and the light swatch in
-// light's, with no hex duplicated here and no drift if the mapping changes.
-// `selected` — the System radio's checked ring — rides the same trick: with
-// the attribute absent, `primary` resolves to the OS-resolved mode's own.
+// The border is extracted, not inline: an inline `border` would outrank the
+// media-gated `osResolved` rule that alone lights the OS-resolved swatch.
 const SwatchCard = ds
   .styles({
     width: '48px',
@@ -140,10 +107,6 @@ const SwatchCard = ds
   })
   .asElement('div');
 
-/**
- * Which swatch carries the media-gated treatment: only in the state where no
- * explicit mode is active, and only the two modes `systemPreference` maps.
- */
 function osResolvedFor(
   hasActiveMode: boolean,
   name: string
@@ -154,12 +117,6 @@ function osResolvedFor(
   return 'none';
 }
 
-/**
- * The swatch preview interior — bg band (60%) / primary rule / bg band (40%),
- * optionally carrying the text mark. One implementation for both the mode
- * swatches and the System swatch's split halves, so the proportions and the
- * 2px rule cannot drift between the two.
- */
 function SwatchBands({
   preview,
   showText = false,
@@ -231,11 +188,9 @@ const PaletteHeading = ds
   })
   .asElement('div');
 
-// ─── ColorPalette Component ───────────────────────────────────────
-
 export function ColorPalette() {
-  // `null` = no explicit mode: the attribute is absent and the OS preference is
-  // driving the palette, so the System option is the active one.
+  // `null` is not a mode: the attribute is absent and the OS drives the
+  // palette, so the System option is the checked one.
   const [currentMode, setCurrentMode] = useState<string | null>(() =>
     document.documentElement.getAttribute('data-color-mode')
   );
@@ -249,10 +204,8 @@ export function ColorPalette() {
     persistColorMode(mode);
   }, []);
 
-  // Returning to the OS-driven state is the attribute's REMOVAL plus a
-  // persisted `system` — the record round-trips it, and the generated
-  // bootstrap restores absence on the next load. Without this option an
-  // explicit pick would be a one-way door.
+  // Persisting `system` alongside the attribute's REMOVAL is what makes the
+  // bootstrap restore absence on the next load.
   const selectSystem = useCallback(() => {
     setCurrentMode(null);
     document.documentElement.removeAttribute('data-color-mode');
@@ -267,7 +220,6 @@ export function ColorPalette() {
     [selectMode, selectSystem]
   );
 
-  // Arrow key navigation for radiogroup
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
       const forward = e.key === 'ArrowRight' || e.key === 'ArrowDown';
@@ -281,11 +233,8 @@ export function ColorPalette() {
         ) ?? []
       );
 
-      // Navigation origins at the FOCUSED swatch — not the selected one:
-      // deriving `from` from the selection while focus sits elsewhere would
-      // compute a move back onto the focused cell, eating the keystroke.
-      // Selection is the fallback, and one option is checked in every state
-      // (System when no mode is explicit), so the fallback always exists.
+      // Origin is the FOCUSED swatch, not the selected one: originating from
+      // the selection while focus sits elsewhere eats the keystroke.
       const focusedIdx = buttons.findIndex(
         (button) => button === document.activeElement
       );
@@ -304,13 +253,11 @@ export function ColorPalette() {
       const next = (origin + step) % OPTIONS.length;
 
       selectOption(OPTIONS[next]);
-      // Focus the newly selected swatch
       buttons[next]?.focus();
     },
     [currentMode, hasActiveMode, selectOption]
   );
 
-  // Sync with external changes (e.g., if the cycle toggle is still used elsewhere)
   useEffect(() => {
     const observer = new MutationObserver(() => {
       setCurrentMode(document.documentElement.getAttribute('data-color-mode'));
@@ -343,15 +290,11 @@ export function ColorPalette() {
               role="radio"
               aria-checked={isChecked}
               aria-label={label}
-              // Roving tabindex: exactly one radio is checked in every state,
-              // and the checked radio is the tab stop — the radiogroup never
-              // falls out of the tab order.
               tabIndex={isChecked ? 0 : -1}
               onClick={() => selectOption(option)}
             >
               {option.kind === 'system' ? (
                 <SwatchCard osResolved={isChecked ? 'selected' : 'none'}>
-                  {/* split preview: the two OS-mapped modes, side by side */}
                   <div style={{ flex: 1, display: 'flex' }}>
                     {OS_PREVIEW.map((half) => (
                       <SwatchBands key={half.name} preview={half} />
@@ -361,10 +304,8 @@ export function ColorPalette() {
               ) : (
                 <SwatchCard
                   osResolved={osResolvedFor(hasActiveMode, option.mode.name)}
-                  // Only the EXPLICIT active border is inline: it needs this
-                  // mode's own primary hex. In the OS-driven state no swatch is
-                  // explicitly active, so no inline border exists to outrank
-                  // the media-gated `osResolved` rule.
+                  // Inline only for the explicit active border, which needs
+                  // this mode's own hex; the media-gated rule owns the rest.
                   style={
                     isChecked
                       ? { border: `2px solid ${option.mode.primary}` }

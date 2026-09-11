@@ -1,21 +1,3 @@
-/**
- * `prove` — does this invariant hold across a declared domain.
- *
- * Quantification is exhaustive over the *cells* of the scenario domain, which
- * is a proof rather than a sample only under the cell invariant of
- * `core/scenario`: every threshold a candidate rule tests has to be a cut, so
- * the thresholds are harvested out of the rules themselves before enumeration
- * (`harvestCuts`).
- *
- * Three refusals are deliberate (DESIGN §8):
- * - past the cell budget the answer is INCONCLUSIVE with the count, never a
- *   subset check reported as a proof;
- * - an invariant that holds while an obligation or an unbound guard touches the
- *   property is CONDITIONAL, never PROVED;
- * - a violation is reported with a minimized witness — the failing cell with
- *   the fewest non-default coordinates — and the boundary it sits against.
- */
-
 import { canonicalJson } from '../core/identity';
 import { TRUE } from '../core/predicate';
 import { describeValue, exact } from '../core/value';
@@ -175,7 +157,6 @@ export const assertionLabel = (assertion: OracleAssertion): string => {
 interface EffectiveValue {
   declaration: DeclarationCandidate;
   value: string;
-  /** The lattice kind behind `value` — `unknown` values decide nothing. */
   kind: AbstractValue<unknown>['kind'];
   tokens: readonly string[];
   raised: readonly UnknownObligation[];
@@ -214,10 +195,8 @@ interface Evaluation {
   evaluated: number;
   failures: readonly Failure[];
   passing: readonly ScenarioCell[];
-  /** Cells whose effective value the model could not decide either way. */
   undecided: number;
   exceeded?: { count: number; limit: number };
-  /** Set when the evaluation checked nothing — PROVED would be a lie. */
   vacuous?: string;
   concerns: readonly string[];
   unknowns: readonly UnknownObligation[];
@@ -282,9 +261,6 @@ const checkCell = (
     };
   }
 
-  // An `unknown` value decides nothing: comparing its rendered form would
-  // report the obligation id as a counterexample the model never established.
-  // The cell is undecided; the raised obligation keeps the verdict honest.
   const undecidable =
     effective.kind === 'unknown' &&
     (assertion.kind === 'effective-value' ||
@@ -324,17 +300,10 @@ const checkCell = (
                 : ` (it resolves through ${listOf(effective.tokens)})`),
           };
     case 'mode-invariant':
-      // Decided across cells, not within one — see `checkModeInvariance`.
       return { effective };
   }
 };
 
-/**
- * Mode-invariance is a relation between cells, so it is checked per
- * configuration of the *other* axes: within each group the resolved values must
- * agree, and any cell disagreeing with its group's first value is the witness.
- */
-/** One cell's effective value, as observed by the main evaluation loop. */
 interface CellObservation {
   cell: ScenarioCell;
   effective?: EffectiveValue;
@@ -355,8 +324,6 @@ const checkModeInvariance = (
     bucket.push({
       cell,
       value: effective?.value ?? '(unset)',
-      // Two unknowns render to the same obligation string, which would read
-      // as agreement between values the model never resolved.
       decided: effective === undefined || effective.kind !== 'unknown',
       mode: String(cell.point[MODE]),
     });
@@ -403,7 +370,6 @@ const witnessScore = (
   return [nonDefault, numeric];
 };
 
-/** Fewest non-default finite coordinates, then the smallest viewport. */
 const minimize = (
   domain: ScenarioDomain,
   failures: readonly Failure[]
@@ -424,11 +390,6 @@ const minimize = (
   return best;
 };
 
-/**
- * Name the cut a counterexample sits against, when a passing cell differs from
- * it in exactly one interval coordinate. "It fails at 1024 but passes below
- * 768" is a repair-shaped fact; "it fails somewhere" is not.
- */
 const boundaryNote = (
   domain: ScenarioDomain,
   cuts: Readonly<Record<string, readonly number[]>>,
@@ -509,8 +470,6 @@ const evaluateAssertion = (
 
   const cells = cellsOf(domain, harvested.cuts);
 
-  // Zero cells means zero checks: every universally quantified claim would
-  // hold vacuously, so the evaluation refuses to stand in for a proof.
   if (cells.length === 0) {
     return {
       ...unevaluated,
@@ -554,10 +513,6 @@ const evaluateAssertion = (
         }
       }
     } else {
-      // Only `no-important` has no property. With nothing to scope by, every
-      // important declaration matters: one guarded by an axis this world
-      // never declared is inactive in every swept cell, and only a concern
-      // keeps that from reading as PROVED.
       for (const candidate of analysis.candidates) {
         if (candidate.active || candidate.unboundInWorld.length === 0) {
           continue;
@@ -872,8 +827,6 @@ export const runProve = (
       }
       operations.push(...dischargeOperations(unknowns));
 
-      // Declared domain size, not cells walked — `summarize` reports the
-      // walked count under a similar name; keep the two distinguishable.
       const declaredCells = evaluations.reduce(
         (sum, evaluation) => sum + evaluation.cells,
         0

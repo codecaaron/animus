@@ -1,17 +1,3 @@
-/**
- * `@animus-ui/extract/session` — the artifact-publishing extraction
- * session and its watcher orchestration, factored out of the Next plugin
- * (openspec: standalone-extraction-cli, D1). Every driver — the Next
- * plugin, the standalone CLI, the transform host — is a thin shell over
- * this one drive loop; none may fork it.
- *
- * UNSTABLE SURFACE: this subpath exists for Animus's own drivers; its
- * exports are the driver-consumed surface only (deliberately narrower than
- * the session modules — internal state mutators, envelope encoders, and
- * test seams stay off the published API) and may change without semver
- * ceremony until the standalone CLI ships its consumer contract
- * (standalone-extraction-cli inc 03/07).
- */
 export { ExtractionSession, pruneStaleAssets } from './extraction-session';
 export type { SessionOptions, WatchChanges } from './extraction-session';
 export {

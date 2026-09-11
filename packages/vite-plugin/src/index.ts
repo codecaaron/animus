@@ -18,126 +18,64 @@ import type { Plugin } from 'vite';
 export { discoverFiles } from '@animus-ui/extract/pipeline';
 
 export interface AnimusExtractOptions {
-  /**
-   * Path to a module exporting a SystemInstance from `@animus-ui/system`.
-   * The module is loaded via Rust NAPI (OXC + rquickjs) at build start.
-   * It provides prop config, group registry, theme tokens, selector aliases,
-   * and global styles — everything the extraction pipeline needs.
-   */
+  /** Path to a module exporting a SystemInstance from `@animus-ui/system`. */
   system: string;
   /**
-   * Module specifier injected for extracted runtime factories.
-   *
-   * The default preserves the full `@animus-ui/system` runtime. Override this
-   * only when the selected entry supplies every terminal present in the
-   * analyzed consumer (for example, the framework-neutral class-resolver
-   * entry for a consumer containing only `.asClass()` definitions).
-   *
-   * @default '@animus-ui/system'
+   * Module specifier for extracted runtime factories, default
+   * `@animus-ui/system`. An override must supply every terminal used.
    */
   runtimeImport?: string;
   /**
-   * Exclusion patterns (substrings, or globs when `*`/`?` present). When
-   * set, REPLACES the replaceable defaults (`dist`, `.test.`, `.spec.`);
-   * `node_modules`, `.next`, and `.animus` are always excluded.
+   * Substrings, or globs when `*`/`?` present. Replaces the defaults `dist`,
+   * `.test.`, `.spec.`; `node_modules`, `.next`, `.animus` always apply.
    */
   exclude?: string[];
   /**
-   * File extensions to scan for component definitions and JSX usages.
-   * Replaces the default list entirely (not additive). Include `.mdx` to
-   * extract components rendered from MDX files — `@mdx-js/mdx` must be
-   * installed as a peer for MDX files to be preprocessed; otherwise the
-   * plugin warns once at buildStart and skips them.
-   *
-   * @default ['.ts', '.tsx', '.js', '.jsx', '.mdx']
+   * Replaces the default extension list entirely. `.mdx` needs the
+   * `@mdx-js/mdx` peer, or those files warn once and are skipped.
    */
   extensions?: string[];
-  /** When true, extraction failures throw instead of warning. Use in CI to enforce full extraction. */
+  /** Extraction failures throw instead of warning. */
   strict?: boolean;
   /**
-   * When true, run structural self-verification at the end of `buildStart`:
-   * component CSS non-empty, assembled layer ordering correct, `:root` block
-   * present in variable CSS, no unresolved `__TRANSFORM__` placeholders. Prefix
-   * output with `[animus:verify]`. Failures throw when `strict: true`,
-   * otherwise warn.
+   * Run a structural self-check at the end of `buildStart`; failures throw
+   * under `strict`, otherwise warn.
    */
   verify?: boolean;
-  /** Enable verbose logging. Also activatable via ANIMUS_DEBUG=1 env var. */
+  /** Verbose logging; also enabled by `ANIMUS_DEBUG=1`. */
   verbose?: boolean;
   /**
-   * Browser targets for CSS autoprefixing and syntax lowering.
-   * Accepts a browserslist query string or array of queries.
-   * Falls back to project's browserslist config, then to `defaults`.
+   * Browserslist queries for autoprefixing and syntax lowering; falls back
+   * to the project's browserslist config, then to `defaults`.
    */
   targets?: string | string[];
-  /**
-   * Control CSS minification.
-   * - `true`: always minify (dev + prod)
-   * - `false`: never minify (autoprefixing still applies)
-   * - `undefined` (default): minify in prod only
-   */
+  /** Absent minifies in production only; `false` still autoprefixes. */
   minify?: boolean;
   /**
-   * Explicit dev/prod emission mode. Wins over the Vite command signal.
-   * When absent, the documented default applies: production when
-   * `config.command === 'build'`, development otherwise.
+   * Emission mode. Wins over the Vite command signal, which otherwise
+   * selects production for `build` and development elsewhere.
    */
   mode?: 'development' | 'production';
-  /**
-   * Namespace prefix for CSS variables and class names, applied to the
-   * variable map/css (and theme + contextual vars) at system load.
-   */
+  /** Namespace prefix for CSS variables and class names. */
   prefix?: string;
   /**
-   * Forced-emission declarations for usage the scanner cannot observe
-   * (CMS-driven variants, spread-hidden props, dynamically selected
-   * components). Declared variants/states/system-prop values and custom
-   * dynamic slots are emitted as if used; entries are labeled as forced
-   * in the extraction report. Empty/absent is a no-op.
+   * Forced-emission declarations for usage the scanner cannot observe;
+   * declared variants, states and prop values are emitted as if used.
    */
   staticCss?: StaticCssConfig;
   /**
-   * Full `@layer` declaration order. Must include all 7 Animus `anm-*` layers
-   * as a subsequence in their required order. Consumer layers may be
-   * interleaved around them. Names are emitted as-is.
-   *
-   * Example: `['reset', 'anm-global', 'anm-base', ..., 'anm-custom', 'overrides']`
+   * Full `@layer` declaration order; must contain every `anm-*` layer as a
+   * subsequence in its required order. Consumer layers may interleave.
    */
   layers?: string[];
   /**
-   * Extraction engine selection. `'v2'` is the only engine and the default.
-   * The v1 engine was retired (openspec: retire-extract-v1); configuring
-   * `engine: 'v1'` (or setting `ANIMUS_ENGINE=v1`) throws — the selection is
-   * never silently upgraded.
-   *
-   * @default 'v2'
+   * `'v2'` is the only engine. `engine: 'v1'` or `ANIMUS_ENGINE=v1` throws
+   * rather than being silently upgraded.
    */
   engine?: 'v2';
   /**
-   * Pre-generated appearance bootstrap artifact — DELIVERY ONLY.
-   *
-   * When set, the plugin injects `code` verbatim as an inline
-   * `<script data-animus-bootstrap>` at the start of `<head>` in built HTML
-   * (in dev, Vite's own client script precedes it); always ahead of every
-   * stylesheet reference. When absent — or when `code` is empty — no
-   * bootstrap script is emitted and the built HTML is unchanged.
-   *
-   * The plugin performs NO generation and interprets NO appearance semantics:
-   * produce the artifact in your Vite config with `createAppearanceBootstrap`
-   * from `@animus-ui/system/bootstrap` (a build-time-only subpath) and pass the
-   * result through. The shape is declared structurally here so the plugin never
-   * imports the generator.
-   *
-   * `cspHash` is carried for the application's own `script-src` policy — the
-   * plugin does not read it. Serve it single-quoted, exactly as returned.
-   *
-   * @example
-   * ```ts
-   * import { createAppearanceBootstrap } from '@animus-ui/system/bootstrap';
-   * import { theme } from './src/ds';
-   *
-   * animusExtract({ system: './src/ds.ts', appearanceBootstrap: createAppearanceBootstrap(theme) })
-   * ```
+   * Delivery only: `code` is injected verbatim as an inline
+   * `<script data-animus-bootstrap>`; `cspHash` is for the host's own policy.
    */
   appearanceBootstrap?: { code: string; cspHash: string };
 }
@@ -146,22 +84,11 @@ type AnimusExtractOptionRecord = {
   [Key in keyof AnimusExtractOptions]: AnimusExtractOptions[Key];
 };
 
-/**
- * Vite adapter for the extraction pipeline. State and pipeline operations
- * live in PluginContext; hook bodies live in their own modules — this
- * factory only validates options and wires Vite hooks to those functions.
- */
 export function animusExtract(options: AnimusExtractOptions): Plugin {
-  // v2 is the only engine (openspec: retire-extract-v1). Reject a retired v1
-  // selection loudly before any engine work — the option type no longer admits
-  // 'v1', but the raw runtime value still reaches the broader validator.
+  // The option type excludes 'v1', but a raw runtime value still reaches here.
   assertNoRetiredEngineSelection(options.engine);
-  // Unknown top-level keys WARN naming the key (never a throw at this
-  // published entry point — a consumer upgrade must not die while Vite is
-  // loading the config over a previously-inert extra key); `verify` and
-  // `appearanceBootstrap` are this driver's own top-level surface. `root`
-  // is named loudly rather than silently ignored — this driver's root is
-  // the resolved Vite root. Invalid `mode` VALUES still throw.
+  // Warn, never throw: an extra key must not kill Vite config loading during
+  // a consumer upgrade. Invalid `mode` values still throw.
   const optionRecord: AnimusExtractOptionRecord = options;
   assertKnownOptionKeys(
     optionRecord,
@@ -185,11 +112,7 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
     name: 'animus-extract',
     enforce: 'pre',
 
-    // Supply the define the system runtime gates its development-only
-    // diagnostics on — see @animus-ui/system's runtime/is-dev.ts for the
-    // define/fold story and the expression shape it depends on. The define
-    // is an emission decision: explicit `mode` wins over the command signal
-    // through the shared resolver.
+    // `__ANIMUS_DEV__` gates the system runtime's development-only diagnostics.
     config(_config, env) {
       const { mode } = resolveMode(options.mode, () =>
         env.command === 'build' ? 'production' : 'development'
@@ -199,9 +122,8 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
 
     configureServer(server) {
       ctx.devServer = server;
-      // System deps may have loaded before the server existed; register
-      // them with the watcher now (workspace paths outside the root get no
-      // events otherwise).
+      // System deps can load before the server exists; workspace paths
+      // outside the root get no watcher events unless registered here.
       ctx.registerSystemWatchPaths();
     },
 
@@ -244,10 +166,6 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
       },
     },
 
-    // One hook for every dev file event — update, create and delete alike.
-    // Vite calls it once per environment, so the hook body claims the
-    // analysis work for a single dispatch and invalidates modules in
-    // `this.environment`'s own graph (see hmr.ts).
     async hotUpdate(hmr) {
       return handleHotUpdate(ctx, this.environment, hmr);
     },

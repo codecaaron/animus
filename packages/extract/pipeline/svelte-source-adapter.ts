@@ -12,7 +12,7 @@ export interface SourceSpan {
 }
 
 export interface SourcePosition {
-  /** One-based line number, matching Svelte compiler locations. */
+  /** One-based, matching Svelte compiler locations. */
   line: number;
   /** Zero-based UTF-16 column, matching Svelte compiler locations. */
   column: number;
@@ -38,7 +38,7 @@ export interface SvelteOriginMapping {
 
 export interface SvelteVirtualEntry {
   scope: SvelteScriptScope;
-  /** Parser-only identity. Original source identity remains authoritative. */
+  /** Parser-only identity; the original source stays authoritative. */
   path: string;
   source: string;
   mappings: SvelteOriginMapping[];
@@ -60,7 +60,7 @@ export interface SvelteAdapterDiagnostic {
   originalPath: string;
   /** Present only when the parser supplied an exact original-source node. */
   span?: SourceSpan;
-  /** Structured original-source location for every exact diagnostic span. */
+  /** Present with every exact diagnostic span. */
   location?: SourceLocation;
 }
 
@@ -150,8 +150,8 @@ interface ScriptNode extends AstNode {
 interface SvelteAst {
   module?: ScriptNode | null;
   instance?: ScriptNode | null;
-  /** Template markup AST — scanned so resolver calls written in markup
-   *  fail closed instead of silently contributing no usage witness. */
+  /** Template markup AST; scanned so resolver calls written in markup fail
+   *  closed rather than contributing no usage witness. */
   fragment: SvelteCompilerRecord;
 }
 
@@ -293,8 +293,8 @@ function nodeName(node: AstNode | null): string | null {
     : null;
 }
 
-/** Adaptation touches one source at a time, so a last-value memo makes the
- *  all-ASCII check O(n) once per file instead of per span endpoint. */
+/** Adaptation touches one source at a time, so a last-value memo runs the
+ *  all-ASCII check once per file rather than per span endpoint. */
 let asciiMemoSource: string | null = null;
 let asciiMemoValue = false;
 function isAsciiOnly(source: string): boolean {
@@ -306,8 +306,7 @@ function isAsciiOnly(source: string): boolean {
 }
 
 function byteOffset(source: string, characterOffset: number): number {
-  // ASCII fast path: character offsets ARE byte offsets. The non-ASCII arm
-  // keeps the prefix copy — correct and rare enough not to earn a table.
+  // ASCII fast path: character offsets ARE byte offsets.
   if (isAsciiOnly(source)) return characterOffset;
   return Buffer.byteLength(source.slice(0, characterOffset));
 }
@@ -397,10 +396,8 @@ function walk(
 }
 
 /**
- * Fragment traversal: Svelte `Fragment` containers (the template root and
- * every block body) carry no `start`/`end`, so the script walker's isNode
- * gate would stop at each one. Descend through every plain object/array,
- * visit only span-carrying nodes, and guard against metadata back-references.
+ * Svelte `Fragment` containers carry no `start`/`end`, so the `isNode` gate
+ * would stop at each one: descend plain objects, visit span-carrying nodes.
  */
 function walkFragment(
   value: SvelteCompilerValue,
@@ -661,9 +658,8 @@ function isSupportedResolverAccess(access: ResolverImportAccess): boolean {
 
 interface ResolverCallSite {
   access: ResolverImportAccess;
-  /** `badge.attrs({...})` vs the callable string form `badge({...})` —
-   *  identical usage semantics (`ClassResolver` declares both), so both
-   *  must witness or fail closed; only the callee shape differs. */
+  /** `badge.attrs({…})` and the callable form `badge({…})` carry identical
+   *  usage semantics, so both must witness or fail closed. */
   form: 'attrs' | 'callable';
   computed: boolean;
   optional: boolean;
@@ -687,10 +683,8 @@ function resolverCallSite(
   }
   const callee = childNode(node.callee);
   if (!callee) return null;
-  // Direct callable (`badge({...})`) or namespace-member callable
-  // (`styles.badge({...})`): resolverImportAccess classifies both; the
-  // namespace form then fails closed through the shared access gate,
-  // exactly like its `.attrs` sibling.
+  // Direct and namespace-member callables both classify here; the namespace
+  // form then fails closed through the shared access gate.
   const access = resolverImportAccess(callee, bindings);
   if (!access) return null;
   return {
@@ -896,7 +890,7 @@ function renderImport(
 }
 
 /** Memoizes success only: a missing optional peer retries per file, so
- *  installing `svelte` mid-session recovers without a process restart. */
+ *  installing `svelte` mid-session recovers without a restart. */
 let compilerMemo: SvelteCompiler | null = null;
 async function loadCompiler(): Promise<SvelteCompiler | null> {
   if (compilerMemo) return compilerMemo;
@@ -904,8 +898,8 @@ async function loadCompiler(): Promise<SvelteCompiler | null> {
   return compilerMemo;
 }
 
-/** Module-script context an instance projection inherits: Svelte places
- *  `<script module>` bindings in scope for the instance script. */
+/** Svelte places `<script module>` bindings in scope for the instance
+ *  script, so an instance projection inherits them. */
 interface InheritedModuleScope {
   bindings: ReadonlyMap<string, ImportBinding>;
   importDeclarations: readonly AstNode[];
@@ -921,18 +915,16 @@ function projectScope(
   precomputedOwnBindings?: ReadonlyMap<string, ImportBinding>
 ): ScopeProjection {
   const ownBindings = precomputedOwnBindings ?? importBindings(script.content);
-  // Own imports shadow inherited module-script bindings, matching Svelte's
-  // scoping — a resolver imported in `<script module>` and called in the
-  // instance script is legal and must witness, not vanish.
+  // Own imports shadow inherited module-script bindings, matching Svelte
+  // scoping: a module-imported resolver called in the instance must witness.
   const bindings = inherited
     ? new Map([...inherited.bindings, ...ownBindings])
     : ownBindings;
   const witnesses: Witness[] = [];
   const diagnostics: SvelteAdapterDiagnostic[] = [];
 
-  // No candidate import binding can ever produce a call site, so the AST
-  // walk — the scan's dominant cost — is skipped for the common component
-  // that imports no `.asClass()` resolver.
+  // No import binding, no possible call site: the walk (the scan's dominant
+  // cost) is skipped for a component that imports no resolver.
   if (bindings.size > 0)
     walk(script.content, (node, nestedScopeDepth) => {
       const site = resolverCallSite(node, bindings);
@@ -1038,8 +1030,8 @@ function projectScope(
       for (const local of rendered.locals) pendingNames.delete(local);
     }
   };
-  // Own declarations first (they shadow), then inherited module-script
-  // declarations for witnessed names the instance did not import itself.
+  // Own declarations first (they shadow), then inherited ones for witnessed
+  // names the instance did not import itself.
   renderDeclarations(script.content.body);
   if (inherited) renderDeclarations(inherited.importDeclarations);
   for (const witness of witnesses) {
@@ -1072,15 +1064,8 @@ function projectScope(
 }
 
 /**
- * Project native Svelte script scopes into parser-only TSX witnesses.
- *
- * This adapter parses source, never compiler-generated runtime JavaScript.
- * Module and instance scripts project separately (module bindings are in
- * scope for the instance script, per Svelte semantics) and contribute only
- * witnessed named imports plus synthetic JSX attributes for direct resolver
- * `.attrs()` and callable-string calls. Caller-owned metadata attributes
- * candidate imports; unsupported call shapes — including resolver calls
- * written in the template fragment — fail the whole source closed.
+ * Project Svelte script scopes into parser-only TSX witnesses from SOURCE,
+ * never compiler output. Unsupported call shapes fail the whole source closed.
  */
 export async function adaptSvelteSource(
   source: string,
@@ -1119,9 +1104,6 @@ export async function adaptSvelteSource(
   const ast = parseSvelteAst(compilerAst);
 
   const projections: ScopeProjection[] = [];
-  // Each program's import bindings are computed ONCE here and threaded to
-  // every consumer (scope projections, fragment scan) — previously each
-  // recomputed its own copy per file per ingest cycle.
   const moduleBindings = ast.module
     ? importBindings(ast.module.content)
     : undefined;
@@ -1167,16 +1149,13 @@ export async function adaptSvelteSource(
     (projection) => projection.diagnostics
   );
 
-  // Template markup is not a projection surface: a resolver call written in
-  // the fragment (`{...badge.attrs({...})}`, `{@const a = badge(...)}`)
-  // would contribute no usage witness, and reconciliation could then prune
-  // the very variant it renders. Fail closed instead of failing silent.
+  // A resolver called in the template contributes no usage witness, so
+  // reconciliation could prune the very variant it renders. Fail closed.
   if (ast.fragment) {
     const scriptBindings = instanceBindings ?? new Map<string, ImportBinding>();
     const fragmentBindings = moduleScope
       ? new Map([...moduleScope.bindings, ...scriptBindings])
       : scriptBindings;
-    // Same gate as projectScope: no bindings, no possible call site.
     if (fragmentBindings.size > 0)
       walkFragment(ast.fragment, (node) => {
         const site = resolverCallSite(node, fragmentBindings);

@@ -1,13 +1,5 @@
-/**
- * Parity harness CLI after oracle inversion.
- *
- *   bun run src/cli.ts --both                  # committed baseline vs v2
- *   bun run src/cli.ts --self-check --both     # fresh v2 process identity
- *   bun run src/cli.ts --self-check --threads 1,8
- *   bun run src/cli.ts --refresh-baseline ID   # privileged, journaled write
- *
- * Ordinary and red runs never write packages/_parity/baselines/**.
- */
+/** Only `--refresh-baseline` writes under `baselines/`; an ordinary run and a
+ *  failing run never do. */
 import { spawnSync } from 'child_process';
 import { existsSync, readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
@@ -264,10 +256,8 @@ async function refreshBaselines(intent: string): Promise<void> {
     );
   }
 
-  /** One mode's refresh state: its green-ness checks, its drift against the
-   *  committed envelope (empty when there is none yet), and the envelope this
-   *  refresh would publish. Runs the engine, so the pair below is produced in
-   *  the declared order — production first, then development. */
+  /** Runs the engine, so the pair below is produced in the declared order:
+   *  production first, then development. */
   const refreshMode = async (devMode: boolean) => {
     const mode = modeOf(devMode);
     const first = runV2(devMode, { RAYON_NUM_THREADS: '1' });
@@ -377,8 +367,6 @@ async function main() {
         ? `PARITY GATE: FAIL (${snapName} NOT updated; details in last-failure.txt)`
         : baselineStaleFailureMessage()
     );
-    // THE GATE RAN AND FAILED. See the taxonomy note at the `.catch` below;
-    // this harness's codes are its own, not the CLI's.
     process.exit(EXIT_GATE_FAILED);
   }
   writeFileSync(join(HERE, snapName), full);
@@ -386,30 +374,6 @@ async function main() {
   console.log('PARITY GATE: PASS');
 }
 
-/**
- * This harness's exit taxonomy — three values, and deliberately NOT the
- * `packages/cli` taxonomy (`EXIT_USAGE`/`EXIT_ENVIRONMENT`). The codes and
- * the classification live in `cli-messages.ts`:
- *
- *   1 — the gate RAN and FAILED (a real parity regression; see above).
- *   2 — the harness REFUSED TO RUN: a `ParityRefusal`, covering every
- *       argument-safety and missing-input rejection. It prints its message as
- *       one line and nothing else, so the output does not vary with machine,
- *       runtime, or checkout path.
- *   3 — the harness BROKE: any other throw, printed with its stack because
- *       there the stack is the diagnosis. A failed engine subprocess lands
- *       here, so an environment-dependent hiccup can never be mistaken for a
- *       refusal or for a parity regression.
- *
- * Neither 2 nor 3 means "parity is broken", so a caller must not read either
- * as a regression. Nothing else in the repo branches on these values —
- * `scripts/verify/parity.sh` and its refresh sibling are `set -euo pipefail`
- * + `exec`, so any nonzero propagates identically.
- *
- * Do not unify with `packages/cli`'s codes: `_parity` has no dependency on
- * that package, and creating one for three integers would be boundary
- * laundering between two tools answering different questions.
- */
 main().catch((error: Error) => {
   const failure = classifyCliFailure(error);
   console.error(failure.stderr);

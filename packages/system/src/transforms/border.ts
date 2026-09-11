@@ -1,9 +1,6 @@
 import { createTransform } from './createTransform';
 
-/**
- * Self-contained transform: all logic inlined in the callback.
- * No external references — satisfies the extraction constraint.
- */
+/** All logic stays inline: the extractor cannot follow external references. */
 export const borderShorthand = createTransform('borderShorthand', (val) =>
   typeof val === 'number' ? `${val}px solid currentColor` : val
 );

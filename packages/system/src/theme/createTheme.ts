@@ -36,38 +36,30 @@ const COLOR_FUNCTION_PREFIXES = [
   'color-mix(',
 ];
 
-/** Validate that a value is a valid CSS <color>. */
 function isValidCSSColor(value: unknown): boolean {
   if (typeof value !== 'string') return false;
   const v = value.trim();
   if (v === '') return false;
 
-  // Special keywords
   if (v === 'transparent' || v === 'currentColor' || v === 'currentcolor')
     return true;
 
-  // Hex colors
   if (
     v.startsWith('#') &&
     /^#([0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test(v)
   )
     return true;
 
-  // CSS color functions
   for (const prefix of COLOR_FUNCTION_PREFIXES) {
     if (v.startsWith(prefix) && v.endsWith(')')) return true;
   }
 
-  // Bare strings (named CSS colors, etc.) — let the browser validate
+  // Named colors pass unvalidated — the browser is the authority.
   if (/^[a-zA-Z]+$/.test(v)) return true;
 
   return false;
 }
 
-/**
- * Validate that mode aliases reference existing color keys via dot-path traversal.
- * Aliases are dot-path strings like 'gray.50' that must resolve in the nested color structure.
- */
 function validateModeAliases(
   modeName: string,
   aliases: Record<string, unknown>,
@@ -78,7 +70,6 @@ function validateModeAliases(
   for (const [key, value] of Object.entries(aliases)) {
     const aliasPath = prefix ? `${prefix}.${key}` : key;
     if (key === '_') {
-      // Identity key — validate the value, not the key
       if (typeof value === 'string') {
         if (walkDotPath(nestedColors, value) === undefined) {
           throw new Error(
@@ -115,17 +106,14 @@ function validateModeAliases(
 }
 
 /**
- * Reserved mode name (D4). "System" is modeled as the ABSENCE of
- * `data-color-mode`, never as a mode: an attribute value `system` would defeat
- * the `:root:not([data-color-mode])` guard while matching no mode block.
+ * The system preference is the ABSENCE of `data-color-mode`; a mode named
+ * `system` would defeat the `:root:not([data-color-mode])` guard.
  */
 const RESERVED_MODE_NAME = 'system';
 
 /**
- * Theme keys owned by builder structure or the built-theme boundary. A scale
- * may not claim them: structural keys are skipped by `flattenTheme`, while
- * boundary keys are replaced by non-enumerable methods/metadata at build().
- * Keep this runtime set aligned with `ThemeStructuralKey`.
+ * `satisfies` proves each entry is a structural key, not that the list is
+ * complete: a new `ThemeStructuralKey` must be added here by hand.
  */
 const RESERVED_THEME_KEY_LIST = [
   'breakpoints',
@@ -145,21 +133,15 @@ const RESERVED_THEME_KEYS: ReadonlySet<string> = new Set(
 
 const COLOR_SCHEME_VALUES = new Set(['light', 'dark', 'normal']);
 
-/**
- * The axis → scheme pairs the mapping forces: the mode named for the OS light
- * preference must classify `light`, the dark one `dark`. Single source for
- * BOTH the default fill and the conflict check in
- * {@link resolveColorModeOptions} — one rule, one table.
- */
+/** OS-preference axis → the `color-scheme` a mode mapped to it must carry. */
 const MAPPING_FORCED_SCHEMES = [
   ['light', 'light'],
   ['dark', 'dark'],
 ] as const;
 
 /**
- * Merge an incoming option object over the one already on the theme, mirroring
- * `merge`'s per-key override. Returns `undefined` when neither side supplied
- * one, so an unconfigured theme never gains the key (byte parity, G4).
+ * `undefined` when neither side supplied one, so an unconfigured theme never
+ * gains the key.
  */
 function mergeOptionObject<T>(
   existing: unknown,
@@ -174,7 +156,6 @@ function mergeOptionObject<T>(
   } as unknown as T;
 }
 
-/** Reject the reserved mode name (D4) wherever a mode set is declared or merged. */
 function validateReservedModeNames(modeNames: string[]): void {
   for (const modeName of modeNames) {
     if (modeName === RESERVED_MODE_NAME) {
@@ -186,26 +167,8 @@ function validateReservedModeNames(modeNames: string[]): void {
 }
 
 /**
- * Normalize AND validate the optional system-participation options against the
- * declared modes, returning the normalized classification. One entry point on
- * purpose: the D3-amendment fill (mapping-named modes default to their forced
- * schemes) must always run before totality is checked, so exposing fill and
- * validation separately would make "validate an unfilled map" representable.
- * An explicit entry survives the fill's spread and is still conflict-checked,
- * so a wrong value errors rather than being silently corrected. `undefined`
- * passes through untouched — the classification stays opt-in, and a theme with
- * only `systemPreference` emits no `color-scheme` (byte parity, G4).
- *
- * ALWAYS called with MERGED state — `theme.modes` unions across `addColorModes`
- * calls and `from()` composition, so a per-call view both misses invalidation
- * (a later mode declaration un-totals a carried classification) and invents
- * false rejections (a mapping naming a mode declared by an earlier call).
- * Run at both gates: `addColorModes` (fail fast) and `build()` (authoritative —
- * `from()` composition never passes through `addColorModes`; only build()'s
- * resolved map feeds emission and the manifest).
- *
- * Error tone mirrors `validateModeAliases`: `addColorModes:` prefix plus the
- * available names.
+ * Fills mapping-named modes with their forced schemes, then validates. Takes
+ * the MERGED mode set: a later declaration can un-total a carried map.
  */
 function resolveColorModeOptions(
   modeNames: string[],
@@ -260,8 +223,8 @@ function resolveColorModeOptions(
     }
   }
 
-  // Totality — a partial map lets an explicit mode inherit the previous mode's
-  // browser-native scheme (D3).
+  // A partial map lets an explicit mode inherit the previous mode's
+  // browser-native scheme.
   for (const modeName of modeNames) {
     if (!(modeName in browserColorScheme)) {
       throw new Error(
@@ -286,12 +249,8 @@ function resolveColorModeOptions(
 }
 
 /**
- * Validate the D6 `basedOn` mode-base map against the MERGED mode set: every
- * key and every base must name a declared mode, self-bases are rejected, and
- * base chains must terminate (a cycle can never fill coverage). Runs at both
- * gates like the other mode options — `addColorModes` (fail fast) and
- * `build()` (authoritative: extend/from composition merges modes without
- * passing through `addColorModes`).
+ * Validates against the MERGED mode set: composition merges modes without
+ * passing through `addColorModes`, so `build()` runs this again.
  */
 function validateModeBases(
   modeNames: string[],
@@ -334,11 +293,9 @@ function validateModeBases(
   }
 }
 
-/** Validate all color entries, throwing on invalid values. */
 function validateColors(colors: Record<string, unknown>): void {
   for (const [key, value] of Object.entries(colors)) {
     if (isObject(value)) {
-      // Nested color objects — validate recursively
       validateColors(value as Record<string, unknown>);
     } else if (!isValidCSSColor(value)) {
       throw new Error(
@@ -349,24 +306,14 @@ function validateColors(colors: Record<string, unknown>): void {
   }
 }
 
-// Token ref validation types (ValidateScaleRef, ValidateScaleValues) removed
-// to prevent TS2589 depth explosion. Token refs are validated at runtime in
-// resolveReferences() during build(). Type-level validation can be restored
-// when the type-state chain depth is optimized.
-
-// ─── Type Helpers ───────────────────────────────────────────
-
-/** Flatten a type to prevent MergeTheme depth accumulation (TS2589). Exported for use in consumer themes. */
+/** Identity mapping that caches the type, preventing TS2589 depth growth. */
 export type Flatten<T> = { [K in keyof T]: T[K] };
 
-/** Right-biased object merge used where runtime composition is also right-biased. */
 type MergeRecord<Base, Incoming> = Omit<Base, keyof Incoming> & Incoming;
 
 /**
- * The union of contextual var NAMES declared across all scales in a
- * `declareContextualVars` config. Read only for the optional registration
- * parameter's key constraint — it derives FROM the already-inferred `Vars`, so
- * it can never feed back into `Vars` inference or perturb literal-key narrowing.
+ * Var NAMES across all scales. Derives from the already-inferred `Vars`, so it
+ * never feeds back into inference or perturbs literal-key narrowing.
  */
 type ContextualVarNames<Vars> = {
   [K in keyof Vars]: Vars[K] extends readonly (infer N extends string)[]
@@ -376,32 +323,21 @@ type ContextualVarNames<Vars> = {
 
 type ThemeScaleKeys<T> = Exclude<keyof T & string, ThemeStructuralKey>;
 
-/** The built theme: nested raw data + non-enumerable boundary methods */
+/** Theme data plus boundary members, non-enumerable at runtime. */
 type BuiltTheme<T, Emitted extends string> = {
   [K in keyof T]: T[K];
 } & {
-  /** Phantom — tuple wrapper prevents never-distribution. Non-enumerable at runtime. */
+  /** Tuple wrapper prevents never-distribution. Non-enumerable at runtime. */
   readonly __emitted: [Emitted];
   manifest: ThemeManifest;
   serialize(): SerializedTheme;
-  /** Resolve a dot-path token to its var() reference. Runtime-validated against the manifest. */
+  /** Dot-path token → `var()` ref, or the raw value if not emitted. */
   varRef(tokenPath: string): string | undefined;
 };
 
-// ─── ThemeBuilder: Progressive Disclosure ───────────────────
-//
-// Separate classes per phase, each with new TYPE INSTANTIATION.
-// This forces TS to cache the concrete type at each step, preventing
-// TS2589 depth accumulation on long chains. Same pattern as Animus.ts.
-
 /**
- * Manifest-v2 fields carried through `from()`'s explicit manifest read (the
- * manifest is non-enumerable, so the ordinary key-copy loop never sees it).
- * A read-only carrier for the D8 copy-on-write substrate: in this manifest
- * version `build()` still REGENERATES every fragment from the authored data
- * (zero-delta contract — carried fragments never become the source of
- * `variableCss` here); later increments consult it for per-section
- * pass-through.
+ * Manifest fields carried through the explicit manifest read — the manifest is
+ * non-enumerable. Read-only: `build()` regenerates every fragment.
  */
 interface CarriedManifestV2 {
   tokenDefinitions?: Record<string, TokenDefinition>;
@@ -413,54 +349,40 @@ interface CarriedManifestV2 {
   cssFragments?: ThemeCssFragment[];
 }
 
-/** Shared runtime state passed between builder phases. */
 interface BuilderState {
   theme: Record<string, unknown>;
   emittedScales: Set<string>;
   contextualVars: Map<string, string[]>;
   /**
-   * `@property` registration metadata keyed by contextual var NAME (not the
-   * `--` custom property). Opt-in — empty unless a declaration supplies it.
-   * Kept separate from `contextualVars` so the names-only registry the Rust
-   * extractor consumes (`contextualVarsJson`) never changes shape.
+   * Keyed by contextual var NAME, not the `--` custom property. Kept out of
+   * `contextualVars` so the extractor's names-only registry keeps its shape.
    */
   contextualVarRegistrations: Map<string, ContextualVarRegistration>;
-  /** See {@link CarriedManifestV2}. Present only after a v2-manifest from(). */
   carriedManifestV2?: CarriedManifestV2;
   /**
-   * Set when a `from()` source carried a manifest WITHOUT the v2 discriminant.
-   * The authored graph behind that data is unknowable, so `build()` suppresses
-   * ALL v2 manifest fields rather than fabricating them from resolved values
-   * (D8) — the composed theme stays v1-shaped and increment 03's targeted
-   * `createThemeVariants` rejection keys off exactly that absence.
+   * A source manifest without the v2 discriminant: the authored graph is
+   * unknowable, so `build()` suppresses all v2 fields instead of fabricating.
    */
   hasLegacyManifestSource: boolean;
   /**
-   * Per-leaf-path provenance of `extend()` sources: flattened dot-path →
-   * 1-based index of the extend call that first defined it (D3/G4 — sibling
-   * conflicts error naming both sources positionally; positional labels are
-   * the accepted form until DEF-4's provenance artifact).
+   * Flattened leaf path → 1-based index of the `extend()` call that first
+   * defined it; sibling conflicts name both sources by that index.
    */
   extendProvenance: Map<string, number>;
-  /** Number of `extend()` calls made so far — the next source's label index. */
   extendCount: number;
   /**
-   * Mode names carried in by `extend()` sources (D6). Inherited modes are
-   * EXEMPT from the coverage gate — a kit's own alias asymmetry is
-   * pre-existing behavior, not consumer breakage, and must round-trip.
+   * Mode names carried in by `extend()`. Exempt from the coverage gate — a
+   * kit's own alias asymmetry must round-trip unchanged.
    */
   inheritedModes: Set<string>;
   /**
-   * Alias dot-paths declared by any extended source's modes (D6). A
-   * consumer-declared mode leaving any of these uncovered needs a `basedOn`
-   * entry or the build fails listing the uncovered set.
+   * Alias dot-paths from extended sources: a consumer-declared mode must cover
+   * them or name a base.
    */
   inheritedModeAliases: Set<string>;
   /**
-   * Token paths dropped by an explicit `addScale({ replace: true })` →
-   * replaced scale name (D5). Consulted at `build()`: a reference whose
-   * target is absent from the merged map AND present here is a hard error;
-   * a later re-add simply makes the target known again.
+   * Token path dropped by `addScale({ replace: true })` → the replaced scale.
+   * A reference to one that is never re-added fails `build()`.
    */
   droppedTokenPaths: Map<string, string>;
 }
@@ -489,8 +411,7 @@ function copyState(
     emittedScales: new Set(state.emittedScales),
     contextualVars: new Map(),
     contextualVarRegistrations: new Map(state.contextualVarRegistrations),
-    // Read-only carrier: shallow-copy the wrapper and share the inner records,
-    // exactly as contextualVarRegistrations shares its entry objects above.
+    // Sharing the inner records is safe: carried manifest data is read-only.
     ...(state.carriedManifestV2
       ? { carriedManifestV2: { ...state.carriedManifestV2 } }
       : {}),
@@ -508,12 +429,8 @@ function copyState(
 }
 
 /**
- * Exact leaf-path flatten for extend() provenance: like `flattenToDotPaths`
- * but WITHOUT the `_` identity-key collapse, so a leaf and a branch can
- * never share a path spelling. A prefix relation between two tracked paths
- * is then a GENUINE structural divergence (one sibling authored a leaf
- * value where the other authored a nested branch) — the review-F1 case that
- * per-leaf value comparison alone cannot see.
+ * Leaf-path flatten WITHOUT the `_` identity collapse, so a leaf and a branch
+ * can never share a spelling and a prefix relation is a real divergence.
  */
 function flattenLeafPathsExact(
   object: Record<string, unknown>,
@@ -536,12 +453,8 @@ function flattenLeafPathsExact(
 }
 
 /**
- * Deep copy of plain theme data (records, arrays, primitives). `merge`
- * adopts and MUTATES nested source objects in place, so EVERY builder step
- * copies before folding: a consumed kit's built theme must never be
- * corrupted by composition, and prior builder state must never be shared by
- * reference — a one-level copy lets branching a builder cross-contaminate
- * both branches and lets build() outputs mutate after the fact.
+ * `merge` adopts and MUTATES nested source objects, so every builder step deep
+ * copies first: a consumed kit's theme and prior state must survive intact.
  */
 function deepCopyPlain<Value>(value: Value): Value {
   if (Array.isArray(value)) {
@@ -558,7 +471,6 @@ function deepCopyPlain<Value>(value: Value): Value {
   return value;
 }
 
-/** Structural equality over plain theme data (records, arrays, primitives). */
 function plainDataEqual(a: unknown, b: unknown): boolean {
   if (Object.is(a, b)) return true;
   if (Array.isArray(a) && Array.isArray(b)) {
@@ -583,13 +495,6 @@ function plainDataEqual(a: unknown, b: unknown): boolean {
   return false;
 }
 
-/**
- * What `from()` actually inherits from its argument: a library bundle
- * contributes its theme half — `theme ?? tokens` (D9 naming; `tokens`
- * accepted until DEF-8 resolves) — anything else is treated as a built
- * theme and contributes itself. Mirrors the runtime bundle detection inside
- * `from()`.
- */
 type ThemeSourceOf<Source> = Source extends {
   system: { toConfig(...args: never[]): unknown };
   theme?: infer ThemeHalf;
@@ -604,7 +509,6 @@ type ThemeSourceOf<Source> = Source extends {
 
 type ThemeBoundaryKey = '__emitted' | 'manifest' | 'serialize' | 'varRef';
 
-/** Runtime composition copies enumerable data and deliberately skips methods. */
 type ThemeDataOf<Source> = {
   [
     Key in keyof Source as Key extends ThemeBoundaryKey
@@ -619,20 +523,12 @@ type MergeThemeData<Base, Source> = Flatten<
   MergeRecord<Base, ThemeDataOf<Source>>
 >;
 
-/** Preserve the built source's exact emitted-scale phantom without exposing it as data. */
 type EmittedThemeScalesOf<Source> = Source extends {
   readonly __emitted: [infer Emitted extends string];
 }
   ? Emitted
   : never;
 
-/**
- * What `extend()` inherits from its argument: a library bundle contributes
- * its THEME half — `theme ?? tokens` (D9 naming; `tokens` accepted until
- * DEF-8 resolves) — anything else is treated as a built theme and
- * contributes itself. Mirrors the runtime bundle-half resolution inside
- * `extend()`.
- */
 type ExtendedThemeSourceOf<Source> = Source extends {
   system: { toConfig(...args: never[]): unknown };
   theme?: infer ThemeHalf;
@@ -648,21 +544,14 @@ type ExtendedThemeSourceOf<Source> = Source extends {
 declare const THEME_STAGE_BRAND: unique symbol;
 
 /**
- * Builder type-state for the inherit-first rule (D2), mirroring the system
- * builder's `SystemBuilderStage`: `extend()` is only callable while the
- * builder is in the `'inherit'` stage; every augmentation method advances to
- * `'extend'`, making "inherit first, then extend" a compile error rather
- * than a lint. `from()` is deliberately NOT stage-gated — its call-anywhere
- * semantics are frozen for the deprecation window, so it passes the stage
- * through unchanged. Phantom — never present at runtime.
+ * Phantom builder stage: `extend()` is callable only while `'inherit'`, and
+ * every augmentation method advances to `'extend'`. `from()` is not gated.
  */
 export type ThemeBuilderStage = 'inherit' | 'extend';
 
 /**
- * Re-seed builder state from a source theme's manifest. This is `from()`'s
- * manifest read, factored out verbatim so `extend()` inherits the SAME
- * emitted-scale/contextual-var/manifest-v2 carry semantics: the manifest is
- * non-enumerable, so the ordinary key-copy loop never sees it (D6/D8).
+ * Re-seeds emitted scales, contextual vars and the manifest-v2 carry from a
+ * source manifest — non-enumerable, so key-copy loops never see it.
  */
 function reseedStateFromManifest(
   state: BuilderState,
@@ -674,8 +563,7 @@ function reseedStateFromManifest(
       state.emittedScales.add(scale);
     }
   } else if (manifest?.variableMap) {
-    // A v2 manifest distinguishes authored token definitions from synthetic
-    // color-mode aliases. Treating an alias path as emission evidence would
+    // Treating a synthetic color-mode alias path as emission evidence would
     // flip a non-emitted colors scale to emitted during a no-op extension.
     const emittedPaths =
       manifest.manifestVersion === 2 && manifest.tokenDefinitions
@@ -710,9 +598,8 @@ function reseedStateFromManifest(
         contractHash: manifest.contractHash,
         cssFragments: manifest.cssFragments,
       };
-      // Re-seed the registration metadata the CLOSED DROP note on `from()`
-      // records: carried registrations become live builder state again, so
-      // an unmutated rebuild re-emits identical @property rules.
+      // Carried registrations become live state again, so an unmutated
+      // rebuild re-emits identical @property rules.
       if (manifest.registrations) {
         for (const [name, registration] of Object.entries(
           manifest.registrations
@@ -734,25 +621,19 @@ function reseedStateFromManifest(
         }
       }
     } else {
-      // v1 manifest: authored structure unknowable — fail closed (D8).
+      // v1 manifest: the authored structure is unknowable — fail closed.
       state.hasLegacyManifestSource = true;
     }
   }
 }
 
-/**
- * ThemeScales — the final phase. Has addScale, extendScale, declareContextualVars, build.
- * Also allows addColors and addColorModes for augmentation.
- */
 export class ThemeBuilder<
   T extends Record<string, unknown> = Record<string, unknown>,
   Emitted extends string = never,
   Stage extends ThemeBuilderStage = 'inherit',
 > {
-  // Structural anchor for the phantom Stage parameter — without a member
-  // referencing it, 'inherit' and 'extend' builders would be mutually
-  // assignable and the `this`-typed `extend()` gate would never fire (see
-  // the system builder's identical comment).
+  // Without a member referencing Stage, 'inherit' and 'extend' builders are
+  // mutually assignable and the `this`-typed `extend()` gate never fires.
   declare readonly [THEME_STAGE_BRAND]?: Stage;
 
   /** @internal */ _state: BuilderState;
@@ -770,8 +651,8 @@ export class ThemeBuilder<
       }
     }
     const nextTheme = merge(deepCopyPlain(this._state.theme), { breakpoints });
-    // Omit<T, 'breakpoints'> replaces the Record<string, number> from EmptyTheme
-    // with literal keys, preventing index signature from widening keyof breakpoints to string
+    // Omit replaces EmptyTheme's Record<string, number> with literal keys; the
+    // index signature would otherwise widen keyof breakpoints to string.
     type Merged = Omit<T, 'breakpoints'> &
       Record<'breakpoints', { [K in keyof BP]: BP[K] }>;
     type Next = { [K in keyof Merged]: Merged[K] };
@@ -780,38 +661,15 @@ export class ThemeBuilder<
     );
   }
 
-  // CLOSED DROP (was DEF-6, openspec change modern-css-surface; closed by
-  // multi-theme-support increment 01 under D9): @property registration
-  // metadata now SURVIVES from() — manifest v2 carries `registrations`, and
-  // the explicit manifest read below re-seeds `contextualVarRegistrations`
-  // from them. Residual, by design (D8): a source carrying only a v1
-  // (names-only) manifest still composes without registration metadata —
-  // v1 round-trips unchanged and gains no fabricated v2 fields.
-  // `Source extends object` (not `Record<string, unknown>`): interface-typed
-  // values — e.g. a kit export annotated as the public `LibraryBundle` — have
-  // no implicit index signature and must still be accepted; the runtime only
-  // ever copies enumerable non-function keys.
-  //
+  // `Source extends object`, not `Record<string, unknown>`: interface-typed
+  // values have no index signature and must still be accepted.
   /**
-   * FROZEN for the deprecation window (D1/G6): source-WINS precedence over
-   * prior builder state, callable at ANY stage — the phantom Stage passes
-   * through unchanged. Do not add a stage gate; do not flip the merge
-   * direction. Those semantics ship under the new verb only.
-   *
-   * @deprecated Use `extend(source)` — the single extension verb on both
-   * builders: the extended source seeds the base and later local calls win.
-   * `from()` keeps these frozen source-wins semantics for at least one minor
-   * release after `extend()` ships.
+   * Source-WINS precedence over prior builder state, callable at any stage.
+   * @deprecated Use `extend(source)` — the source seeds the base, local wins.
    */
   from<Source extends object>(builtTheme: Source) {
-    // Library-bundle acceptance: a `{ system, theme }` bundle groups one
-    // export for both builders — this builder consumes the theme half
-    // (`theme ?? tokens`, the same D9 resolution as `extend()`) exactly as
-    // if the built theme had been passed directly and ignores the rest. The
-    // shared guard keys on `system.toConfig` being callable (theme token
-    // values are strings/numbers/records, never objects carrying
-    // functions), so a theme that happens to define a scale named `system`
-    // cannot match.
+    // The bundle guard keys on `system.toConfig` being callable, so a theme
+    // with a scale named `system` cannot match.
     const source: Record<string, unknown> = isLibraryBundle(builtTheme)
       ? (((builtTheme as { theme?: unknown }).theme ??
           (builtTheme as { tokens?: unknown }).tokens ??
@@ -835,8 +693,6 @@ export class ThemeBuilder<
       Stage
     >(copyState(this._state, nextTheme));
 
-    // Manifest v2 carry (D6/D8) — through THIS explicit read only: the
-    // manifest is non-enumerable, so the key-copy loop above never sees it.
     reseedStateFromManifest(
       next._state,
       (source as { manifest?: ThemeManifest }).manifest
@@ -845,19 +701,8 @@ export class ThemeBuilder<
   }
 
   /**
-   * Extend this theme from a consumed library (D1/D2): the source's complete
-   * configuration — tokens, modes, preferences, registrations, emitted-scale
-   * set — seeds the builder as the BASE, and local calls made after
-   * `extend()` win on conflict (the mirror of `from()`'s source-wins).
-   * Chainable and repeatable, but only before augmentation methods ("inherit
-   * first, then extend" — enforced by the phantom builder stage). Accepts a
-   * built theme or a library bundle, consuming the bundle's theme half
-   * (`theme ?? tokens`, D9) and ignoring the rest.
-   *
-   * Sibling conflicts fail loud (D3/G4): a leaf path defined divergently by
-   * two extended sources throws naming the path and both sources
-   * positionally; equal values coalesce silently, and the consumer's own
-   * post-extend `add*` calls override silently (NS-4).
+   * Inherits a built theme or library bundle as the BASE; local calls after
+   * `extend()` win, and leaves that two sources define divergently throw.
    */
   extend<Source extends object>(
     this: ThemeBuilder<T, Emitted, 'inherit'>,
@@ -867,8 +712,6 @@ export class ThemeBuilder<
     Emitted | EmittedThemeScalesOf<ExtendedThemeSourceOf<Source>>,
     'inherit'
   > {
-    // Bundle-half resolution: the theme half under the D9 name, falling back
-    // to the pre-D9 `tokens` spelling; a built theme contributes itself.
     const themeHalf: Record<string, unknown> = isLibraryBundle(source)
       ? (((source as { theme?: unknown }).theme ??
           (source as { tokens?: unknown }).tokens ??
@@ -883,25 +726,14 @@ export class ThemeBuilder<
       }
     }
 
-    // ── Sibling-conflict detection (D3/G4) ────────────────────
-    // Inherit-first guarantees the current state is exactly the fold of the
-    // prior extends (plus the empty seed), so a provenance hit means another
-    // extended source owns the leaf: equal → coalesce; divergent → loud.
-    // Paths use the EXACT flatten (no `_` collapse — see
-    // {@link flattenLeafPathsExact}) so branch-vs-leaf structural divergence
-    // between siblings (review F1: one kit authors `colors.primary` as a
-    // leaf, another as a nested object) is a prefix relation between
-    // tracked paths and errors loudly instead of letting `merge` pick an
-    // order-dependent winner. Consumer-authored branches after extends stay
-    // silent-override (NS-4) — only kit-vs-kit collisions error.
+    // Inherit-first guarantees the current state is the fold of prior extends,
+    // so a provenance hit means another extended source owns the leaf.
     const sourceIndex = this._state.extendCount + 1;
     const provenance = new Map(this._state.extendProvenance);
     const existingLeaves = flattenLeafPathsExact(this._state.theme);
     const incomingLeaves = flattenLeafPathsExact(raw);
-    // Strict-prefix index of already-tracked leaves: every strict dot-prefix
-    // of a tracked path → that leaf's source index. Built BEFORE this
-    // source's paths are admitted, so one source's own leaf set (which can
-    // never self-prefix) is exempt.
+    // Strict dot-prefixes of tracked leaves → that leaf's source index. Built
+    // before this source's paths are admitted, so its own leaves are exempt.
     const trackedPrefixes = new Map<string, number>();
     for (const [trackedPath, index] of provenance) {
       for (
@@ -917,10 +749,8 @@ export class ThemeBuilder<
       const priorIndex = provenance.get(path);
       if (priorIndex !== undefined) {
         const existing = existingLeaves[path];
-        // Structural, not reference, equality: flattenLeafPathsExact
-        // classifies ARRAYS as leaves, and builder state stores deep copies
-        // — under `!==` no array-valued token could ever coalesce, not even
-        // extend(kit).extend(kit) of one cached kit instance.
+        // Structural, not reference, equality: arrays are leaves and state
+        // holds deep copies, so `!==` would never coalesce an array token.
         if (!plainDataEqual(existing, value)) {
           throw new Error(
             `extend: path '${path}' is defined divergently by extended theme #${priorIndex} (${JSON.stringify(existing)}) and extended theme #${sourceIndex} (${JSON.stringify(value)}). Sibling themes must agree — override intentionally with an add* call after extend().`
@@ -928,15 +758,12 @@ export class ThemeBuilder<
         }
         continue;
       }
-      // Incoming LEAF where a prior source authored a BRANCH beneath it.
       const branchIndex = trackedPrefixes.get(path);
       if (branchIndex !== undefined) {
         throw new Error(
           `extend: path '${path}' is defined divergently by extended theme #${branchIndex} (a nested branch) and extended theme #${sourceIndex} (a leaf value). Sibling themes must agree — override intentionally with an add* call after extend().`
         );
       }
-      // Incoming BRANCH (this leaf sits beneath it) where a prior source
-      // authored a LEAF at one of its ancestors.
       for (
         let dot = path.lastIndexOf('.');
         dot !== -1;
@@ -953,10 +780,8 @@ export class ThemeBuilder<
       provenance.set(path, sourceIndex);
     }
 
-    // Base-then-local-wins: the DEEP-COPIED source raw config is the merge
-    // target (so `merge` never mutates the consumed kit's built theme) and
-    // prior builder state folds over it — itself deep-copied, so adopted
-    // subtrees are never shared with the parent builder either.
+    // Base-then-local-wins: the source is the merge target and prior builder
+    // state folds over it.
     const nextTheme = merge(
       deepCopyPlain(raw),
       deepCopyPlain(this._state.theme)
@@ -969,9 +794,6 @@ export class ThemeBuilder<
     next._state.extendProvenance = provenance;
     next._state.extendCount = sourceIndex;
 
-    // D6 bookkeeping: inherited modes are exempt from the coverage gate;
-    // inherited alias paths are what a NEW consumer mode must cover (or
-    // declare a base for).
     if (isObject(raw.modes)) {
       for (const [modeName, modeAliases] of Object.entries(
         raw.modes as Record<string, unknown>
@@ -986,8 +808,6 @@ export class ThemeBuilder<
       }
     }
 
-    // Manifest re-seed — shared verbatim with `from()` (emitted scales,
-    // contextual vars, manifest-v2 carry, v1 fail-closed taint).
     reseedStateFromManifest(
       next._state,
       (themeHalf as { manifest?: ThemeManifest }).manifest,
@@ -1001,14 +821,12 @@ export class ThemeBuilder<
       string,
       CSSColorValue | Record<string, CSSColorValue>
     >,
-    // Generic default forces TS to resolve LiteralPaths ONCE and bind the result.
-    // Downstream methods see NextColors (a flat Record) — no re-derivation.
+    // The generic default resolves LiteralPaths ONCE and binds the result;
+    // downstream methods see a flat Record instead of re-deriving it.
     NextColors extends LiteralPaths<Colors, '.'> = LiteralPaths<Colors, '.'>,
   >(colors: Colors) {
     validateColors(colors as Record<string, unknown>);
     const nextTheme = merge(deepCopyPlain(this._state.theme), { colors });
-    // NextColors is RESOLVED — a flat Record<'gray.50', '#fafafa'>.
-    // The flatten pattern commits the intersection to a concrete shape.
     type ExistingColors = T extends { colors: infer Existing } ? Existing : {};
     type Next = Flatten<
       Omit<T, 'colors'> &
@@ -1023,8 +841,8 @@ export class ThemeBuilder<
 
   addColorModes<
     Config extends Record<string, Record<string, unknown>>,
-    // Generic default forces ONE eval of mode alias paths (union across all modes).
-    // The '_' base param collapses identity keys: { _: 'x', hover: 'y' } → 'primary' | 'primary.hover'
+    // One eval of the alias paths; the '_' base param collapses identity keys:
+    // { _: 'x', hover: 'y' } → 'primary' | 'primary.hover'.
     AliasKeys extends LiteralPaths<Config[keyof Config], '.', '_'> =
       LiteralPaths<Config[keyof Config], '.', '_'>,
   >(
@@ -1038,15 +856,13 @@ export class ThemeBuilder<
     >;
     const flatColors = flattenToDotPaths(nestedColors);
     const flatColorKeys = Object.keys(flatColors);
-    // MERGED mode set — `merge` unions `theme.modes` across calls, so modes
-    // declared by an earlier `addColorModes` or carried by `from()` are legal
-    // targets for this call's options.
+    // MERGED mode set: modes declared by an earlier call or carried in by
+    // composition are legal targets for this call's options.
     const existingModes = isObject(this._state.theme.modes)
       ? (this._state.theme.modes as Record<string, unknown>)
       : {};
     const modeNames = Object.keys({ ...existingModes, ...modeConfig });
 
-    // Reserved-name check runs with OR without options (D4).
     validateReservedModeNames(modeNames);
 
     for (const [modeName, modeAliases] of Object.entries(modeConfig)) {
@@ -1059,12 +875,8 @@ export class ThemeBuilder<
       );
     }
 
-    // Merge this call's options over any carried by `from()` / an earlier call
-    // exactly the way `merge` will, then resolve (fill + validate) the RESULT.
-    // Only the fail-fast claim is wanted here: what gets STORED is the raw
-    // merged map, so builder state keeps recording what the caller wrote and a
-    // later `systemPreference` remap can't inherit stale synthesized entries.
-    // build() resolves again and its total map is what feeds the manifest.
+    // Fail-fast only: what gets STORED is the raw merged map, so a later
+    // `systemPreference` remap cannot inherit synthesized entries.
     const systemPreference = mergeOptionObject<SystemPreferenceConfig>(
       this._state.theme.systemPreference,
       options?.systemPreference
@@ -1074,8 +886,6 @@ export class ThemeBuilder<
       options?.browserColorScheme
     );
     resolveColorModeOptions(modeNames, systemPreference, browserColorScheme);
-    // D6 mode bases follow the same discipline: merged over carried state,
-    // validated fail-fast here and authoritatively at build().
     const modeBases = mergeOptionObject<Record<string, string>>(
       this._state.theme.modeBases,
       options?.basedOn
@@ -1085,15 +895,12 @@ export class ThemeBuilder<
     const nextTheme = merge(deepCopyPlain(this._state.theme), {
       modes: modeConfig,
       mode: initialMode,
-      // Only stored when supplied — an unconfigured theme keeps exactly its
-      // current enumerable key set (byte-parity precondition, G4).
+      // Only stored when supplied — an unconfigured theme gains no new keys.
       ...(systemPreference ? { systemPreference } : {}),
       ...(browserColorScheme ? { browserColorScheme } : {}),
       ...(modeBases ? { modeBases } : {}),
     });
 
-    // Colors type = existing palette keys + mode alias keys (superset)
-    // AliasKeys is RESOLVED — a flat Record of alias dot-paths.
     type ColorsWithModes = (T extends { colors: infer C } ? C : unknown) &
       AliasKeys;
     type Merged = Omit<T, 'colors'> & Record<'colors', ColorsWithModes>;
@@ -1111,7 +918,6 @@ export class ThemeBuilder<
     >,
     Emit extends boolean = false,
     Replace extends boolean = false,
-    // Generic default forces TS to resolve LiteralPaths ONCE and bind the result.
     NewScale extends LiteralPaths<Values, '.'> = LiteralPaths<Values, '.'>,
   >(config: {
     name: Key & (Key extends ThemeStructuralKey ? never : unknown);
@@ -1128,9 +934,8 @@ export class ThemeBuilder<
     const prior = this._state.theme[name];
     let nextTheme: Record<string, unknown>;
     if (replace) {
-      // Explicit wholesale replacement (D5): the scale becomes EXACTLY the
-      // supplied values. Implicit deletion stays impossible — the default
-      // form below merges by key.
+      // Wholesale replacement: the scale becomes EXACTLY these values. The
+      // default form merges by key, so implicit deletion stays impossible.
       nextTheme = deepCopyPlain(this._state.theme);
       nextTheme[name] = values;
     } else {
@@ -1138,7 +943,6 @@ export class ThemeBuilder<
         [name]: values,
       });
     }
-    // NewScale is RESOLVED — a flat Record. Downstream sees concrete keys.
     type NextEmitted = Emit extends true ? Emitted | Key : Emitted;
     type ExistingScale = Key extends keyof T ? T[Key] : {};
     type NextScale = Replace extends true
@@ -1150,9 +954,6 @@ export class ThemeBuilder<
     );
     if (emit) next._state.emittedScales.add(name);
     if (replace && isObject(prior)) {
-      // Track keys the replacement DROPPED: a reference whose target is
-      // among them fails build() unconditionally (D5) — unless a later call
-      // re-adds the key, which makes the target known again.
       const kept = new Set(
         Object.keys(flattenToDotPaths(values as Record<string, unknown>))
       );
@@ -1173,10 +974,8 @@ export class ThemeBuilder<
     }>,
   >(
     vars: Vars & Record<Exclude<keyof Vars, ThemeScaleKeys<T>>, never>,
-    // Optional `@property` registration metadata keyed by declared var name.
-    // A SEPARATE parameter (not folded into `vars`) so the literal-key
-    // narrowing of `Vars` above is byte-identical whether or not it is passed —
-    // the phantom typing of the declared var names is untouched by metadata.
+    // A SEPARATE parameter, not folded into `vars`, so the literal-key
+    // narrowing of `Vars` is identical whether or not it is passed.
     registrations?: Partial<
       Record<ContextualVarNames<Vars>, ContextualVarRegistration>
     >
@@ -1189,7 +988,7 @@ export class ThemeBuilder<
       }
     }
 
-    // Phantom type merge — keys exist in the type but not in the runtime theme object.
+    // Phantom keys: present in the type, never in the runtime theme object.
     type WithPhantoms = {
       [K in keyof T]: K extends keyof Vars
         ? Vars[K] extends readonly string[]
@@ -1235,24 +1034,15 @@ export class ThemeBuilder<
     );
   }
 
-  /**
-   * Finalize the theme build.
-   * Flattens nested data at the boundary — produces manifest and serialize().
-   */
   build(): BuiltTheme<T, Emitted> {
-    // A full snapshot, not a one-level copy: the built theme must never
-    // change when the builder (or a branch of it) keeps being augmented.
+    // A full snapshot: the built theme must never change when the builder
+    // (or a branch of it) keeps being augmented.
     const theme = deepCopyPlain(this._state.theme) as Record<string, unknown>;
     const emittedScales = this._state.emittedScales;
     const contextualVars = this._state.contextualVars;
 
-    // ── Merged-state option resolution ─────────────────────
-    // Authoritative gate: `from()` composition merges modes AND options without
-    // passing through `addColorModes`, and a later mode declaration can
-    // invalidate a previously-valid pair (an un-totalled classification). Both
-    // option objects survive `from()` as ordinary enumerable theme keys. The
-    // RESOLVED (mapping-filled) classification produced here is what feeds
-    // emission and the manifest — builder state keeps the raw authored map.
+    // Authoritative gate: composition merges modes and options without passing
+    // through `addColorModes`. The map resolved here feeds emission.
     const systemPreference = isObject(theme.systemPreference)
       ? (theme.systemPreference as unknown as SystemPreferenceConfig)
       : undefined;
@@ -1272,12 +1062,8 @@ export class ThemeBuilder<
       : undefined;
     validateModeBases(mergedModeNames, modeBases);
 
-    // ── Build-time mode-alias re-validation (D6) ───────────
-    // `addColorModes` validates eagerly against the colors present at call
-    // time; extend()/from() composition merges modes and colors without
-    // passing through it, and an explicit colors replacement can drop alias
-    // targets — only the merged map here is final, so re-validate every
-    // mode against it.
+    // Composition and an explicit colors replacement can invalidate aliases
+    // `addColorModes` accepted; only the merged map here is final.
     if (isObject(theme.modes) && isObject(theme.colors)) {
       const nestedColors = theme.colors as Record<string, unknown>;
       const flatColorKeys = Object.keys(flattenToDotPaths(nestedColors));
@@ -1295,7 +1081,6 @@ export class ThemeBuilder<
       }
     }
 
-    // ── D6 coverage: authored aliases + base-chain fills ───
     const modeAliasDefinitions = collectAuthoredModeAliases(theme);
     const { effectiveModes, coverageFills } = resolveModeCoverage(
       modeAliasDefinitions,
@@ -1304,14 +1089,13 @@ export class ThemeBuilder<
       this._state.inheritedModeAliases
     );
     for (const fill of coverageFills) {
-      // ONE aggregated diagnostic per mode (D6) — never per-token spam.
+      // One aggregated diagnostic per mode — never per-token spam.
       // oxlint-disable-next-line no-console -- intentional runtime diagnostic
       console.info(
         `[animus] Mode '${fill.mode}': ${fill.count} alias(es) inherit from '${fill.base}'`
       );
     }
 
-    // ── Build-time flatten pass ────────────────────────────
     const {
       tokenMap: flatTokenMap,
       variableMap,
@@ -1319,7 +1103,6 @@ export class ThemeBuilder<
       tokenDefinitions,
     } = flattenTheme(theme, emittedScales, effectiveModes);
 
-    // ── D5: replacement-dropped reference targets fail loud ─
     assertNoDroppedReferences(
       tokenDefinitions,
       flatTokenMap,
@@ -1327,24 +1110,14 @@ export class ThemeBuilder<
       this._state.extendProvenance
     );
 
-    // Late-binding reference resolution over the COMPLETE flattened maps
-    // (D4, first-class-extension): deterministic DAG traversal replaces the
-    // old single-pass rewrite — references inside emitted scales resolve
-    // into the variable declarations instead of leaking into CSS, and both
-    // returned maps are in sorted token-path order so declaration order is
-    // never observable in the serialized wire.
+    // Late-binding resolution over the COMPLETE maps: references inside
+    // emitted scales resolve into declarations, and both maps come back sorted.
     const { tokenMap, variables } = resolveReferences(
       flatTokenMap,
       variableMap,
       flatVariables
     );
 
-    // ── Mode value maps THROUGH the resolver (G2 closure) ──
-    // Mode-override declarations previously carried RAW flattened color
-    // values verbatim, so a reference-valued color leaked a literal `{…}`
-    // into every [data-color-mode] block. Values now come from the resolved
-    // maps; modes and lines are sorted so declaration order is never
-    // observable (G3).
     const { modeVariables, modeTokens } = resolveModeValueMaps(
       effectiveModes,
       variableMap,
@@ -1352,8 +1125,7 @@ export class ThemeBuilder<
       tokenMap
     );
 
-    // Serialize breakpoints — sorted by property name so reversed
-    // declarations emit byte-identically (G3).
+    // Sorted by property name so reversed declarations emit byte-identically.
     const bpVariables: Record<string, string> = {};
     if (theme.breakpoints && isObject(theme.breakpoints)) {
       const breakpointEntries = Object.entries(
@@ -1366,7 +1138,6 @@ export class ThemeBuilder<
       }
     }
 
-    // Contextual vars
     let contextualVarsSerialized: Record<string, string[]> | undefined;
     if (contextualVars.size > 0) {
       contextualVarsSerialized = {};
@@ -1375,22 +1146,13 @@ export class ThemeBuilder<
       }
     }
 
-    // ── Assemble manifest ──────────────────────────────────
-    // `@property` registration rules ride at the head of the variables part —
-    // they are custom-property-owned and unlayered, so they land before the
-    // `@layer` declaration via the existing pre-`@layer` variable emission with
-    // no assembly change. Opt-in: absent metadata ⇒ empty string ⇒ the variable
-    // CSS is byte-identical to a theme that never registered anything.
+    // `@property` rules are unlayered and ride at the head of the variables
+    // part, landing before the `@layer` declaration. No metadata ⇒ ''.
     const propertyCss = buildPropertyRegistrationCss(
       contextualVars,
       this._state.contextualVarRegistrations
     );
-    // ── G2: emitted CSS never carries an unresolved `{…}` ──
-    // A declaration whose resolved value still contains a reference (target
-    // never defined anywhere — the supported warn-and-literal kit pattern)
-    // is OMITTED from the emitted CSS with ONE aggregated warning: a literal
-    // `{…}` in shipped CSS is worse than an absent declaration. The token
-    // map keeps the literal (the manifest surface is unchanged).
+    // The token map keeps the unresolved literal; only the CSS omits it.
     const { emittableVariables, emittableModeVariables, omitted } =
       omitUnresolvedDeclarations(variables, modeVariables);
     if (omitted.length > 0) {
@@ -1415,13 +1177,8 @@ export class ThemeBuilder<
         : propertyCss
       : baseVariableCss;
 
-    // ── Manifest v2 fields (D6) ────────────────────────────
-    // Metadata only. `cssFragments` RECORDS the strings composed above —
-    // `variableCss` is still composed exactly as before (zero-delta, G1); the
-    // fragment→variableCss projection becomes load-bearing with the CSS wire
-    // plan (a later increment). Suppressed ENTIRELY when a from() source
-    // carried a legacy v1 manifest: its authored graph is unknowable, and v2
-    // fields must never be fabricated from resolved values (D8).
+    // Metadata only: `cssFragments` RECORDS the strings composed above and is
+    // never the source of `variableCss`.
     let manifestV2Fields: Partial<ThemeManifest> = {};
     if (!this._state.hasLegacyManifestSource) {
       const registrations = Object.fromEntries(
@@ -1457,22 +1214,21 @@ export class ThemeBuilder<
           registrations,
           systemPreference,
           browserColorScheme,
-          // D6: mode bases change emitted coverage — part of the authored
-          // contract. `undefined` is dropped by JSON.stringify, so themes
-          // without bases keep their pre-increment hashes.
+          // Mode bases change emitted coverage, so they belong in the digest.
+          // `undefined` drops from JSON, so bases-free themes keep their hash.
           modeBases,
         }),
         cssFragments,
       };
     }
 
-    // Sorted-key wire maps (G3): `variableMapJson` and the breakpoint tail
-    // of `scalesJson` must be byte-identical under reversed declarations.
+    // `variableMapJson` and the breakpoint tail of `scalesJson` must be
+    // byte-identical under reversed declarations.
     const sortedVariableMap = sortRecordByKey(variableMap);
     const manifest: ThemeManifest = {
       tokenMap: {
         ...tokenMap,
-        // Include breakpoints in tokenMap for Rust crate compatibility
+        // The Rust crate reads breakpoints out of tokenMap.
         ...sortRecordByKey(
           Object.fromEntries(
             Object.entries(theme.breakpoints || {}).map(([k, v]) => [
@@ -1488,16 +1244,11 @@ export class ThemeBuilder<
       ...(contextualVarsSerialized
         ? { contextualVars: contextualVarsSerialized }
         : {}),
-      // Additive optional fields (D7) — the serialize() wire is unchanged.
       ...(systemPreference ? { systemPreference } : {}),
       ...(browserColorScheme ? { browserColorScheme } : {}),
-      // Manifest v2 (D6) — additive, absent on legacy-composed builds; the
-      // serialize() wire stays EXACTLY four keys (the plan key is a later
-      // increment's change).
       ...manifestV2Fields,
     };
 
-    // ── Attach non-enumerable methods ──────────────────────
     Object.defineProperty(theme, 'manifest', {
       value: manifest,
       enumerable: false,
@@ -1521,7 +1272,6 @@ export class ThemeBuilder<
       value: (tokenPath: string): string | undefined => {
         const varName = variableMap[tokenPath];
         if (varName) return `var(${varName})`;
-        // Non-emitted scale: return raw value from nested theme
         const dotIdx = tokenPath.indexOf('.');
         if (dotIdx === -1) return undefined;
         const scale = tokenPath.slice(0, dotIdx);
@@ -1546,17 +1296,12 @@ export function createTheme() {
   return new ThemeBuilder<EmptyTheme>(createState());
 }
 
-// ─── Build-Time Flatten Pass ──────────────────────────────
-
-/** Token ref pattern: {scale.key} or {scale.key.sub} */
+/** Authored token reference: `{scale.key}` or `{scale.key/opacity}`. */
 const TOKEN_REF_RE = /\{([^}]+)\}/g;
 
 /**
- * Flatten the nested theme into dot-path keyed token map and CSS variable declarations.
- * This is the ONLY place where flattening happens. Mode VALUE maps are no
- * longer computed here — they resolve AFTER `resolveReferences` (see
- * {@link resolveModeValueMaps}), closing the G2 gap where mode-override
- * declarations bypassed the resolver.
+ * The only flatten pass: nested theme → dot-path token map and variable
+ * declarations. Mode value maps resolve later, after `resolveReferences`.
  */
 function flattenTheme(
   theme: Record<string, unknown>,
@@ -1571,12 +1316,10 @@ function flattenTheme(
   const tokenMap: Record<string, string> = {};
   const variableMap: Record<string, string> = {};
   const variables: Record<string, string> = {};
-  // Manifest v2 (D6): the authored graph, captured HERE — before
-  // resolveReferences rewrites the values. Inference from resolved CSS is
-  // unsound (D8).
+  // The authored graph, captured BEFORE `resolveReferences` rewrites values:
+  // it cannot be inferred back from resolved CSS.
   const tokenDefinitions: Record<string, TokenDefinition> = {};
 
-  // Flatten scales and colors
   for (const [scaleName, scaleValue] of Object.entries(theme)) {
     if (scaleName.startsWith('_')) continue;
     if (
@@ -1601,7 +1344,6 @@ function flattenTheme(
       const dashKey = dotToDash(dotKey);
       const varName = `--${scaleName === 'colors' ? 'color' : scaleName}-${dashKey}`;
 
-      // Authored form (literal vs {scale.key} reference) — from the RAW value.
       tokenDefinitions[tokenPath] = parseTokenDefinition(String(rawValue));
 
       if (isEmitted) {
@@ -1614,9 +1356,8 @@ function flattenTheme(
     }
   }
 
-  // Merge the initial mode's semantic aliases into the main variables and
-  // tokenMap. The EFFECTIVE alias set (authored + D6 base-chain fills) is
-  // used, so a partially covered initial mode still declares every alias.
+  // The EFFECTIVE alias set (authored + base-chain fills) is used, so a
+  // partially covered initial mode still declares every alias.
   const initialMode = theme.mode as string;
   const initialAliases =
     typeof initialMode === 'string' ? effectiveModes[initialMode] : undefined;
@@ -1624,11 +1365,10 @@ function flattenTheme(
     for (const [aliasDotKey, colorRef] of Object.entries(initialAliases)) {
       const dashAlias = dotToDash(aliasDotKey);
       const varName = `--color-${dashAlias}`;
-      // Semantic aliases point to the palette var, not the raw value
       const paletteVarName = variableMap[`colors.${colorRef}`];
       if (paletteVarName) {
-        // A semantic alias may intentionally have the same path as its
-        // palette target. Never replace that declaration with a self-reference.
+        // An alias may share its palette target's path; a self-referencing
+        // declaration would replace the real one.
         if (paletteVarName !== varName) {
           variables[varName] = `var(${paletteVarName})`;
         }
@@ -1637,7 +1377,6 @@ function flattenTheme(
         const literal = tokenMap[`colors.${colorRef}`];
         if (literal !== undefined) variables[varName] = literal;
       }
-      // Add semantic aliases to tokenMap and variableMap
       tokenMap[`colors.${aliasDotKey}`] = `var(${varName})`;
       variableMap[`colors.${aliasDotKey}`] = varName;
     }
@@ -1646,7 +1385,7 @@ function flattenTheme(
   return { tokenMap, variableMap, variables, tokenDefinitions };
 }
 
-/** Rebuild a record with lexicographically sorted keys (wire determinism, G3). */
+/** Sorted-key rebuild — the serialized wire must not expose insertion order. */
 function sortRecordByKey<Value>(
   record: Record<string, Value>
 ): Record<string, Value> {
@@ -1658,10 +1397,8 @@ function sortRecordByKey<Value>(
 }
 
 /**
- * Collect the AUTHORED mode alias graph: mode name → alias dot-path → the
- * authored color dot-path (manifest v2, D6 — never a resolved value).
- * Empty when the theme has no modes or no colors, mirroring the original
- * flatten-pass guard.
+ * The AUTHORED alias graph: mode → alias dot-path → authored color dot-path,
+ * never a resolved value.
  */
 function collectAuthoredModeAliases(
   theme: Record<string, unknown>
@@ -1691,13 +1428,8 @@ interface ModeCoverageFill {
 }
 
 /**
- * D6 coverage over the merged mode set: a CONSUMER-declared mode leaving
- * inherited aliases uncovered must name a base (`basedOn`) whose chain
- * covers them — otherwise the build fails listing the uncovered set.
- * Inherited modes are exempt (a kit's own asymmetry is pre-existing
- * behavior and must round-trip byte-identically). Returns the effective
- * alias map per mode (base-chain fills + authored, authored winning) and
- * one aggregated fill report per mode for the build diagnostic.
+ * A CONSUMER-declared mode leaving inherited aliases uncovered must name a
+ * base whose chain covers them; inherited modes are exempt.
  */
 function resolveModeCoverage(
   authoredModeAliases: ModeAliasDefinition,
@@ -1756,12 +1488,8 @@ function resolveModeCoverage(
 }
 
 /**
- * Resolve the per-mode value maps AFTER reference resolution: every mode
- * declaration carries the RESOLVED value of its target color (emitted →
- * the resolved declaration value; inlined → the resolved literal), never
- * the raw flattened string — the G2 closure for `[data-color-mode]` blocks.
- * Modes iterate in sorted name order and lines in sorted property-name
- * order, so mode declaration/insertion order is never observable (G3).
+ * Per-mode declarations carry the RESOLVED value of their target color, never
+ * the raw flattened string. Modes and lines sort, hiding authoring order.
  */
 function resolveModeValueMaps(
   effectiveModes: ModeAliasDefinition,
@@ -1783,8 +1511,8 @@ function resolveModeValueMaps(
     } else if (tokenMap[path] !== undefined) {
       return tokenMap[path];
     }
-    // Unknown target: keep the authored ref string (legacy fallback; the
-    // build-time alias validation rejects this for object-mode themes).
+    // Unknown target: keep the authored ref string. Build-time alias
+    // validation rejects this for object-mode themes.
     return String(colorRef);
   };
   for (const modeName of Object.keys(effectiveModes).sort()) {
@@ -1809,12 +1537,8 @@ function resolveModeValueMaps(
 }
 
 /**
- * D5 enforcement: a reference whose target is absent from the merged map
- * AND was dropped by an explicit `addScale({ replace: true })` fails the
- * build — unconditional on usage — naming the referencing token (with its
- * positional origin), the replacement call's scale, and the dropped keys.
- * Targets never defined ANYWHERE stay warn-and-literal (supported kit
- * pattern); a re-added key is simply known again and passes.
+ * A reference to a target dropped by `addScale({ replace: true })` fails the
+ * build. Targets never defined anywhere stay warn-and-literal.
  */
 function assertNoDroppedReferences(
   tokenDefinitions: Record<string, TokenDefinition>,
@@ -1852,10 +1576,9 @@ function assertNoDroppedReferences(
   }
 }
 
-/** A resolved value still carrying a `{…}` reference — never shippable (G2). */
+/** A resolved value still carrying a `{…}` reference — never shippable. */
 const UNRESOLVED_REF_RE = /\{[^}]+\}/;
 
-/** Custom-property names referenced through `var(--name)` in a value. */
 const VAR_REF_NAME_RE = /var\(\s*(--[\w-]+)/g;
 
 function varRefNames(value: string): string[] {
@@ -1867,18 +1590,8 @@ function varRefNames(value: string): string[] {
 }
 
 /**
- * Split root and mode variable maps into shippable declarations and omitted
- * var names (G2): any value still containing `{…}` after resolution — a
- * direct or TRANSITIVE never-defined target — is withheld from emitted CSS.
- *
- * Withholding must follow `var()` indirection too: flattenTheme synthesizes
- * the initial mode's aliases as `var(--target)` BEFORE resolution, so a
- * withheld target would otherwise leave an emitted alias pointing at a
- * declaration that exists nowhere. A declaration is dangling when a var()
- * target of its value was DECLARED in this build but withheld everywhere
- * the declaration can see (:root for root declarations; the same mode
- * block or :root for mode declarations); chains drop to a fixpoint. Var
- * names never declared here (breakpoints, contextual vars) are exempt.
+ * Withholds any declaration whose value still contains `{…}`, then — to a
+ * fixpoint — any whose `var()` target was withheld everywhere it can see.
  */
 function omitUnresolvedDeclarations(
   variables: Record<string, string>,
@@ -1950,11 +1663,8 @@ function omitUnresolvedDeclarations(
 }
 
 /**
- * Classify a RAW token value into its authored form (manifest v2, D6). MUST
- * run before `resolveReferences` — resolution rewrites the string, and the
- * authored graph cannot be reconstructed from resolved CSS (D8). Uses
- * `matchAll` so the shared global {@link TOKEN_REF_RE} never carries a stale
- * `lastIndex` between callers.
+ * Classifies a RAW token value into its authored form. `matchAll` keeps the
+ * shared global {@link TOKEN_REF_RE} from carrying a stale `lastIndex`.
  */
 function parseTokenDefinition(rawValue: string): TokenDefinition {
   const references: TokenReference[] = [];
@@ -1971,20 +1681,15 @@ function parseTokenDefinition(rawValue: string): TokenDefinition {
   return { kind: 'reference', value: rawValue, references };
 }
 
-// ─── Manifest v2: emitter version + contract hash (D6) ──────
-
 /**
  * Version of the CSS emitter that composed a manifest's fragments. Bump when
- * ANY emitted byte changes for the same authored input — composition (D8)
- * regenerates dirty sections "under the pinned emitter version", and this is
- * that pin.
+ * any emitted byte changes for the same authored input.
  */
 const EMITTER_VERSION = 1;
 
 /**
- * Sorted-key canonical form for hashing: object keys are emitted in sorted
- * order at every depth so the digest is independent of insertion order;
- * arrays keep authored order (reference order is contractual).
+ * Keys sort at every depth so the digest ignores insertion order; arrays keep
+ * authored order, which is contractual.
  */
 function canonicalize(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(canonicalize);
@@ -1999,20 +1704,15 @@ function canonicalize(value: unknown): unknown {
   return value;
 }
 
-/** The structural slice of `node:crypto` the contract hash needs. */
+/** The slice of `node:crypto` the hash needs, without importing it. */
 interface MinimalHash {
   update(data: string): MinimalHash;
   digest(encoding: 'hex'): string;
 }
 
 /**
- * sha256 hex digest. Primary path is `node:crypto` `createHash('sha256')`,
- * reached via `process.getBuiltinModule` so this module gains NO static
- * `node:crypto` import edge: built themes execute inside client bundles today
- * (e2e fixtures inline `createTheme(…).build()` at module init), and a static
- * builtin import is exactly what `./bootstrap` documents as forbidden in app
- * bundles. Non-Node runtimes use the pure fallback below, which produces
- * identical hex for identical input — determinism holds across environments.
+ * Reached through `process.getBuiltinModule` so this module gains no static
+ * `node:crypto` import edge — built themes run inside client bundles.
  */
 function sha256Hex(input: string): string {
   const proc = (
@@ -2047,11 +1747,8 @@ function rotr(x: number, n: number): number {
 }
 
 /**
- * UTF-8 bytes of `input` without WHATWG `TextEncoder`: the Rust system-loader
- * evaluates the system bundle in QuickJS, which provides ES built-ins only —
- * no Node globals and no WHATWG APIs. Iterating by code point handles
- * surrogate pairs; lone surrogates cannot reach this path because the input
- * is well-formed `JSON.stringify` output (ES2019 escapes them as `\uXXXX`).
+ * UTF-8 bytes without `TextEncoder`: the Rust system-loader evaluates this
+ * bundle in QuickJS, which provides ES built-ins only.
  */
 function utf8Bytes(input: string): Uint8Array {
   const bytes: number[] = [];
@@ -2080,9 +1777,8 @@ function utf8Bytes(input: string): Uint8Array {
 }
 
 /**
- * Pure SHA-256 (FIPS 180-4) over the UTF-8 bytes of `input` — the non-Node
- * fallback for {@link sha256Hex}. Not a security surface: the contract hash
- * is a content digest for composition-identity comparison only.
+ * Pure SHA-256 (FIPS 180-4), the non-Node fallback for {@link sha256Hex}. Not
+ * a security surface — the contract hash is a content digest only.
  */
 function sha256HexFallback(input: string): string {
   const bytes = utf8Bytes(input);
@@ -2150,7 +1846,6 @@ function sha256HexFallback(input: string): string {
   return hex;
 }
 
-/** The canonical authored inputs the contract hash digests (D6). */
 interface ContractHashInput {
   tokenDefinitions: Record<string, TokenDefinition>;
   emittedScales: string[];
@@ -2159,25 +1854,17 @@ interface ContractHashInput {
   registrations: Record<string, ContextualVarRegistration>;
   systemPreference: SystemPreferenceConfig | undefined;
   browserColorScheme: BrowserColorSchemeConfig | undefined;
-  /** D6 mode bases — absent (dropped by JSON) for themes without them. */
   modeBases: Record<string, string> | undefined;
 }
 
-/**
- * Stable digest over the canonical authored inputs. Identical authored input
- * ⇒ identical hash, across processes: keys sort at every depth and
- * `JSON.stringify` drops `undefined`-valued members deterministically.
- */
+/** Identical authored input ⇒ identical hash, across processes. */
 function computeContractHash(input: ContractHashInput): string {
   return sha256Hex(JSON.stringify(canonicalize(input)));
 }
 
 /**
- * Build `@property` registration rules for registered contextual vars.
- * The emitted custom property is `--${name}` — the same name the Rust resolver
- * maps a bare contextual var value to. Rules emit in declaration order and only
- * for names that are genuinely declared contextual vars. Returns `''` when no
- * registration metadata was supplied (opt-in / byte-identical guarantee).
+ * `@property` rules for registered contextual vars, emitted as `--${name}` —
+ * the name the Rust resolver maps a bare contextual var to. `''` when none.
  */
 function buildPropertyRegistrationCss(
   contextualVars: Map<string, string[]>,
@@ -2205,18 +1892,12 @@ function buildPropertyRegistrationCss(
   return blocks.join('\n');
 }
 
-/**
- * Optional system-participation inputs for the emitter. Absent (or fully
- * undefined) reproduces the pre-increment emission byte-for-byte (G4).
- */
 interface SystemEmissionConfig {
-  /** The theme's initial mode — sources `:root`'s `color-scheme` value. */
   initialMode?: string;
   systemPreference?: SystemPreferenceConfig;
   browserColorScheme?: BrowserColorSchemeConfig;
 }
 
-/** Build CSS variable blocks from flattened data. */
 function buildVariableCss(
   rootVariables: Record<string, string>,
   breakpointVariables: Record<string, string>,
@@ -2226,7 +1907,6 @@ function buildVariableCss(
   const { initialMode, systemPreference, browserColorScheme } = systemEmission;
   const parts: string[] = [];
 
-  // :root block
   const rootLines: string[] = [];
   for (const [varName, value] of Object.entries(rootVariables)) {
     rootLines.push(`  ${varName}: ${value};`);
@@ -2242,11 +1922,8 @@ function buildVariableCss(
     parts.push(`:root {\n${rootLines.join('\n')}\n}`);
   }
 
-  // Guarded OS-preference blocks (D2). They follow `:root` so they override the
-  // initial mode's root assignments, and the `:root:not([data-color-mode])`
-  // guard makes an explicit attribute win purely in CSS — the media rule simply
-  // stops matching. Declarations are the mapped mode's RAW values, identical to
-  // its attribute block.
+  // These follow `:root` so they override the initial mode, and the
+  // `:not([data-color-mode])` guard lets an explicit attribute win in CSS.
   if (systemPreference) {
     for (const scheme of ['light', 'dark'] as const) {
       const modeName = systemPreference[scheme];
@@ -2266,7 +1943,6 @@ function buildVariableCss(
     }
   }
 
-  // [data-color-mode] blocks
   for (const [modeName, modeVars] of Object.entries(modeVariables)) {
     const modeLines: string[] = [];
     for (const [varName, value] of Object.entries(modeVars)) {

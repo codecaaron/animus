@@ -8,12 +8,8 @@ import { PageToc } from '../components/docs/PageToc';
 import { Sidebar } from '../components/docs/Sidebar';
 import { ds } from '../ds';
 
-// ─── Layout Slots ──────────────────────────────────────────────────
-//
-// Three-column docs layout composed via shared `collapse` variant.
-// Single tree — responsive display values inside the `full` variant
-// hide sidebar/toc at breakpoints. Can't use two trees because
-// <Outlet /> would render twice, duplicating content in the DOM.
+// One tree only: a second tree would render <Outlet /> twice and duplicate
+// the page content in the DOM.
 
 const LayoutRoot = ds
   .styles({
@@ -117,8 +113,6 @@ const Layout = compose(
   },
   { shared: { collapse: true } }
 );
-
-// ─── Page Component ────────────────────────────────────────────────
 
 export function DocsLayout() {
   return (

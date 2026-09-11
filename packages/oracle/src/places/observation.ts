@@ -7,44 +7,27 @@ import type { ComponentRecord, TargetResolution } from '../providers/identity';
 import type { AxisRequirement, MatchVerdict } from './axes';
 import type { AxisBinding, ObservationSource, Place } from './model';
 
-/**
- * Observations as evidence (PLACES.md §5): what was actually seen for one
- * rendered element. Observations narrow possibilities or discharge particular
- * unknowns; they never manufacture certainty, and one that contradicts the
- * model is surfaced, not averaged in.
- */
-
 export interface ObservedElement {
   tag?: string;
-  /** The complete class list of the element, when it was observed. */
   classes?: readonly string[];
-  /** The complete attribute map of the element, when it was observed. */
   attributes?: Readonly<Record<string, string>>;
 }
 
 export interface Observation {
   source: ObservationSource;
-  /** The observed element itself — its class list is `locate`'s entry key. */
   subject?: ObservedElement;
-  /** Observed ancestor chain, innermost first. */
   ancestors?: readonly ObservedElement[];
-  /** True when the chain reaches the document root — required to refute. */
   completeToRoot?: boolean;
 }
 
 export interface LocateCandidate {
   place: Place;
-  /**
-   * `conditional` = possible only if a scoped refutation's beyond-file-root
-   * assumption fails; the note names the scope.
-   */
   verdict: 'consistent' | 'conditional' | 'contradicted';
   notes: readonly string[];
 }
 
 export interface LocateMatch {
   component: ComponentRecord;
-  /** Replay-verified bindings + the observed mode, never a guess. */
   impliedPoint: ScenarioPoint;
   conflicts: readonly string[];
   candidates: readonly LocateCandidate[];
@@ -52,20 +35,15 @@ export interface LocateMatch {
 
 export interface LocateResult {
   matches: readonly LocateMatch[];
-  /** Observed subject classes that mean nothing in this snapshot. */
   unmatchedClasses: readonly string[];
 }
 
 export interface ObserveResult {
   place: Place;
-  /** Bindings whose state this observation decided. */
   discharged: readonly AxisBinding[];
-  /** Non-empty means the observation was rejected and nothing discharged. */
   contradictions: readonly string[];
 }
 
-/** Like the structural matcher, but over a rendered element: an absent
- *  `classes`/`attributes` field is unobserved knowledge, never emptiness. */
 const observedSatisfies = (
   element: ObservedElement,
   requirement: AxisRequirement
@@ -103,11 +81,6 @@ type ChainVerdict =
   | { state: 'refuted' }
   | { state: 'open' };
 
-/**
- * What the observed chain says about one axis requirement. Refutation
- * demands a complete-to-root chain with no unknowns — an unseen or partial
- * element could still satisfy the requirement.
- */
 const chainVerdict = (
   observation: Observation,
   requirement: AxisRequirement
@@ -140,12 +113,6 @@ export interface DischargeResult {
   assumptions: readonly string[];
 }
 
-/**
- * Apply one observation to a place's bindings. A contradiction with static
- * structure rejects the whole observation — a chain that cannot be a render
- * of this place must not partially rewrite it (the observation-generation
- * analogue of the correspondence guard).
- */
 export const dischargeObservation = (
   bindings: readonly AxisBinding[],
   observation: Observation
@@ -209,11 +176,8 @@ export const dischargeObservation = (
       continue;
     }
 
-    // binding.state === 'open'
     if (verdict.state === 'established') {
       if (requirement.stateful) {
-        // The structural half is witnessed, but a snapshot observation
-        // cannot see interaction state — the axis stays open.
         next.push({
           axis: binding.axis,
           state: 'open',
@@ -269,7 +233,6 @@ export interface CandidateScore {
   notes: readonly string[];
 }
 
-/** Could this observation be a render of this place? */
 export const scorePlace = (
   place: Place,
   observation: Observation
@@ -315,10 +278,6 @@ export interface ModeImplication {
   conflicts: readonly string[];
 }
 
-/**
- * The mode an observed chain implies, validated against the snapshot's
- * declared modes — an undeclared value is a conflict, never a coordinate.
- */
 export const impliedModeOf = (
   observation: Observation,
   modeDomain: DimensionDomain | undefined
@@ -359,16 +318,9 @@ export const impliedModeOf = (
 export interface ClassInversion {
   point: ScenarioPoint;
   conflicts: readonly string[];
-  /** The observed classes this component's replay accounts for. */
   matched: readonly string[];
 }
 
-/**
- * Invert the observed class list through the resolution replay: bindings are
- * *proposed* from replay deltas and *verified* by replaying the combined
- * point. A family of classes that fails replay yields conflicts, never a
- * partially-trusted point.
- */
 export const invertObservedClasses = (
   resolution: TargetResolution,
   observed: readonly string[]

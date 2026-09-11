@@ -10,9 +10,8 @@ import type { ProjectManifest } from './manifest-schema';
 import type { SystemConfig } from './system-config';
 
 /**
- * Per-bundler emitter identity: where the runtime import comes from and
- * which module ids the Rust emitter injects into transformed sources.
- * Vite uses virtual module ids; Next uses on-disk `.animus/` paths.
+ * Per-bundler emitter identity: the module ids the engine injects into
+ * transformed sources (Vite virtual ids; Next on-disk `.animus/` paths).
  */
 export interface EmitterConfig {
   runtimeImport: string;
@@ -21,19 +20,13 @@ export interface EmitterConfig {
 }
 
 export interface ProjectAnalysisResult {
-  /** The parsed engine manifest, typed by the producing package's own wire
-   *  declaration (`manifest-schema.ts`) — consumers read it instead of
-   *  re-deriving a private model per reader. */
   manifest: ProjectManifest;
   manifestJson: string;
-  /** `manifest.sheets.global` — Rust-resolved global CSS. */
   globalCss: string;
-  /** `manifest.css` with the shared unit fallback applied. */
   componentCss: string;
-  /** The exact analyze-time inputs (already-serialized filesJson included) —
-   *  reusable for persistence without re-serializing the source corpus. */
+  /** The exact analyze-time inputs (serialized `filesJson` included) —
+   *  persistable without re-serializing the source corpus. */
   inputs: AnalyzeProjectInputs;
-  /** Sub-phase durations (ms) for verbose timing displays. */
   timings: { serializeMs: number; extractMs: number; parseMs: number };
 }
 
@@ -43,30 +36,19 @@ export interface AnalysisOptions {
   system: SystemConfig;
   emitter: EmitterConfig;
   pathAliasesJson: string | null;
-  /** Serialized staticCss forced-emission declarations, or null. */
+  /** Serialized `staticCss` forced-emission declarations. */
   staticCssJson?: string | null;
   /** rootDir-relative external package dirs (external-token candidates). */
   externalDirs?: string[];
   devMode: boolean;
-  /** System-level diagnostics gathered outside analysis (e.g. external
-   *  keyframes discovery) — surfaced through the single shared policy
-   *  point alongside the manifest's own. */
+  /** Diagnostics gathered outside analysis, surfaced through the same
+   *  policy point as the manifest's own. */
   extraDiagnostics?: import('./manifest-diagnostics').ManifestDiagnostic[];
 }
 
 /**
- * Build the named `analyzeProject` input set from analysis options. Also
- * the persistence shape for `.animus/analysis-inputs.json` — an isolated
- * process can replay the analysis from exactly this object
- * (spec: next-turbopack-integration).
- */
-/**
- * `emitterConfigJson`'s wire shape: the snake_case spelling the Rust emitter
- * deserializes, distinct from the camelCase `EmitterConfig` above that names
- * the same identity on this side. Declaration order IS the serialized field
- * order, and an ABSENT `system_props_module_id` means this driver injects no
- * system-props module — the engine keeps its own default rather than emitting
- * an import of the empty string.
+ * The snake_case wire the engine deserializes; declaration order IS field
+ * order. An absent `system_props_module_id` leaves the engine's default.
  */
 type EmitterConfigWire = {
   runtime_import: string;
@@ -74,6 +56,8 @@ type EmitterConfigWire = {
   system_props_module_id?: string;
 };
 
+/** The named `analyzeProject` input set, and the persistence shape an
+ *  isolated process replays the analysis from. */
 export function buildAnalysisInputs(
   opts: AnalysisOptions
 ): AnalyzeProjectInputs {
@@ -101,11 +85,8 @@ export function buildAnalysisInputs(
     staticCssJson: opts.staticCssJson ?? null,
     conditionAliasesJson: opts.system.conditionAliasesJson ?? null,
     transformSourcesJson: opts.system.transformSourcesJson ?? null,
-    // The external-token candidate walk exists solely to feed the TS-side
-    // correlation join, and that join can only report a candidate whose
-    // token a SOURCE theme manifest defines. With no captured manifests
-    // every candidate would be computed, serialized, and dropped — so the
-    // dirs are withheld and the engine skips the walk entirely.
+    // Without captured source manifests the correlation join can report
+    // nothing, so the dirs are withheld and the engine skips the walk.
     externalDirsJson:
       opts.externalDirs?.length && hasSourceThemeManifests(opts.system)
         ? JSON.stringify(opts.externalDirs)
@@ -113,20 +94,15 @@ export function buildAnalysisInputs(
   };
 }
 
-/** Whether the loader captured at least one source built-theme manifest. */
 function hasSourceThemeManifests(system: SystemConfig): boolean {
-  // Absent, null, empty, and the empty object all mean the same thing: the
-  // loader evaluated no module exporting a built theme.
+  // Absent, empty, and `{}` all mean: no module exported a built theme.
   const json = system.sourceThemeManifestsJson ?? '';
   return json.length > 0 && json !== '{}';
 }
 
 /**
- * The one analysis invocation both plugins share: build the emitter
- * config, serialize inputs, call the NAPI `analyzeProject`, parse the
- * manifest, surface its diagnostics, and resolve the CSS outputs.
- *
- * Error handling stays at the call site (strict-mode throw vs warn).
+ * The one analysis invocation both plugins share. Error handling stays at
+ * the call site (strict-mode throw vs warn).
  */
 export function runProjectAnalysis(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -146,11 +122,8 @@ export function runProjectAnalysis(
   const extractMs = Math.round(performance.now() - t);
 
   t = performance.now();
-  // SAFETY: `manifestJson` is this call's own `analyzeProject` return value —
-  // serde output from the Rust `AnalyzeResult` that `manifest-schema.ts`
-  // mirrors. A parse failure throws here (the engine emitting unparseable
-  // JSON is an engine bug, not a recoverable input); a Rust-side field rename
-  // is caught by the manifest tether test in `packages/_integration`.
+  // SAFETY: `manifestJson` is this call's own `analyzeProject` return value,
+  // the serde output `ProjectManifest` mirrors. Unparseable JSON throws.
   const manifest = JSON.parse(manifestJson) as ProjectManifest;
   surfaceManifestDiagnostics(manifest, opts.warn, {
     strict: opts.strict,
@@ -172,9 +145,8 @@ export function runProjectAnalysis(
 }
 
 /**
- * Clear the engine's per-file analysis cache so stale results from a prior
- * build never bleed into a fresh run. Tolerates engines without the
- * capability (older builds) — the probe is benign.
+ * Clear the engine's per-file analysis cache so stale results never bleed
+ * into a fresh run. Engines without the capability are tolerated.
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function clearEngineCache(engineApi: () => any): void {
@@ -182,7 +154,6 @@ export function clearEngineCache(engineApi: () => any): void {
     const { clearAnalysisCache } = engineApi();
     clearAnalysisCache();
   } catch {
-    // Benign optional-capability probe: nothing to clear on engines that
-    // predate clearAnalysisCache.
+    // Nothing to clear on an engine without the capability.
   }
 }

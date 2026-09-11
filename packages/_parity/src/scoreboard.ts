@@ -1,11 +1,5 @@
-/**
- * Scoreboard: totals + percentages + sorted failing list + classification —
- * a committed, diffable text artifact (oxc conformance-snapshot style).
- */
 import type { Divergence, FamilyDecl } from './types';
 
-/** Everything one scoreboard render reads. Exported because it is the shape a
- *  caller — the CLI, and the render's own tests — has to build. */
 export interface ScoreboardInput {
   mode: string;
   engines: [string, string];
@@ -16,7 +10,6 @@ export interface ScoreboardInput {
   familyVerdictErrors: string[];
 }
 
-/** Header plus the pass/divergence totals, always emitted. */
 function summarySection(
   input: ScoreboardInput,
   divergentUnits: string[]
@@ -35,7 +28,6 @@ function summarySection(
   ];
 }
 
-/** One failing-unit row: `  <unit> · <artifact>[cls](reg)[hashes] — detail`. */
 function divergenceRow(unit: string, d: Divergence): string {
   const cls = d.classification ? ` [${d.classification}]` : '';
   const reg = d.registered
@@ -45,10 +37,8 @@ function divergenceRow(unit: string, d: Divergence): string {
   return `  ${unit} · ${d.artifact}${cls}${reg}${hashes} — ${d.detail}`;
 }
 
-/** Row order within one unit: artifact, then detail. Code-unit comparison,
- *  not `localeCompare`, so the bytes do not depend on the host's collation;
- *  without it an upstream change to discovery order rewrites this artifact
- *  for identical results. */
+/** Code-unit comparison, not `localeCompare`, so the committed bytes do not
+ *  depend on the host's collation. */
 function compareRows(a: Divergence, b: Divergence): number {
   const left = `${a.artifact} ${a.detail}`;
   const right = `${b.artifact} ${b.detail}`;
@@ -56,7 +46,6 @@ function compareRows(a: Divergence, b: Divergence): number {
   return left > right ? 1 : 0;
 }
 
-/** Sorted failing-unit block, or nothing at all when the run is clean. */
 function failingSection(
   divergences: Divergence[],
   divergentUnits: string[]
@@ -74,7 +63,6 @@ function failingSection(
   ];
 }
 
-/** A family holds when its observed verdict matches the one it declared. */
 function familyHolds(
   f: FamilyDecl,
   divergences: Divergence[],
@@ -89,7 +77,6 @@ function familyHolds(
   );
 }
 
-/** Usage-case family verdicts, then any externally supplied violations. */
 function familySection(
   input: ScoreboardInput,
   divergentUnits: string[]
@@ -122,7 +109,6 @@ export function renderScoreboard(input: ScoreboardInput): string {
   ].join('\n');
 }
 
-/** Family verdict violations (spec: each family produces its declared verdict). */
 export function familyViolations(
   families: FamilyDecl[],
   divergences: Divergence[]

@@ -7,12 +7,6 @@ import {
 
 import type { DimensionValue, ScenarioDomain, ScenarioPoint } from './scenario';
 
-/**
- * Guards over scenario dimensions: the condition language shared by rules,
- * facts, obligations and evidence. It is deliberately decidable and free of
- * arithmetic — every leaf is a membership or a threshold test on one
- * dimension, which is exactly what makes `enumerateCells` a proof procedure.
- */
 export type Predicate =
   | { kind: 'true' }
   | { kind: 'false' }
@@ -30,7 +24,6 @@ export type Predicate =
   | { kind: 'or'; operands: readonly Predicate[] }
   | { kind: 'not'; operand: Predicate };
 
-/** The one threshold node, named so builders and readers share its contract. */
 type RangePredicate = Extract<Predicate, { kind: 'range' }>;
 
 export interface RangeOptions {
@@ -52,11 +45,6 @@ export const eq = (dim: string, value: DimensionValue): Predicate => ({
   value,
 });
 
-/**
- * Membership. Values are deduplicated and ordered by their canonical key so
- * that two logically identical predicates hash identically — predicates are
- * part of fact identity, so their normal form has to be canonical.
- */
 export const inSet = (
   dim: string,
   values: readonly DimensionValue[]
@@ -72,11 +60,6 @@ export const inSet = (
   return { kind: 'in', dim, values: unique };
 };
 
-/**
- * Threshold test. Inclusivity defaults to inclusive on whichever bound is
- * present and is always written explicitly into the node, so evaluation never
- * depends on a reader remembering the default.
- */
 export const range = (dim: string, opts: RangeOptions): Predicate => {
   const node: RangePredicate = { kind: 'range', dim };
 
@@ -172,18 +155,6 @@ const inRange = (value: number, p: RangePredicate): boolean => {
   return true;
 };
 
-/**
- * Evaluate a guard at one scenario point.
- *
- * A leaf naming a dimension that the point does not bind evaluates to FALSE:
- * the condition is *not active* in this world. This is the scoping rule from
- * DESIGN §8 — proofs are relative to the declared scenario domain, so a rule
- * conditioned on an axis the world never declared cannot silently apply.
- * The cost is that "unbound" and "bound but non-matching" look alike here, so
- * engines are responsible for surfacing `referencedDimensions` that the world
- * does not declare as explicit assumptions in the probe result rather than
- * letting them vanish into a false.
- */
 export const evalPredicate = (p: Predicate, point: ScenarioPoint): boolean => {
   switch (p.kind) {
     case 'true':
@@ -234,16 +205,6 @@ export const referencedDimensions = (p: Predicate): string[] => {
   return Array.from(dims).sort();
 };
 
-/**
- * The numeric thresholds a guard is sensitive to, per dimension.
- *
- * `range` bounds are thresholds by construction; numeric `eq`/`in` values are
- * collected unconditionally because a numeric literal on an interval dimension
- * is a threshold too (it splits the axis into a singleton). Callers filter out
- * the dimensions that turn out to be finite — over-collecting only ever refines
- * the partition, which is always sound, whereas under-collecting breaks the
- * cell invariant.
- */
 export const collectCuts = (p: Predicate): Record<string, number[]> => {
   const collected = new Map<string, Set<number>>();
   const push = (dim: string, value: number): void => {
@@ -282,11 +243,8 @@ export const collectCuts = (p: Predicate): Record<string, number[]> => {
 };
 
 /**
- * Is the guard satisfiable anywhere in the domain?
- *
- * Sound exactly under the cell invariant of `enumerateCells`: if every
- * threshold the guard mentions is in `cuts`, the guard is constant on each
- * cell, so "no representative satisfies it" means "no point satisfies it".
+ * Sound only when every threshold the guard mentions is in `cuts`: the guard
+ * is then constant on each cell, so no representative means no point.
  */
 export const satisfiableOverDomain = (
   p: Predicate,

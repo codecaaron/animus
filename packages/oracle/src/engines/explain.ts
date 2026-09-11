@@ -1,14 +1,3 @@
-/**
- * `explain` — why this value, or why nothing at all.
- *
- * Traversal of the derivation graph backward from the effective fact: the
- * winner, each declaration it defeated and the reason, the token chain that
- * produced the value, and the authored source span behind each one. Causal
- * language follows DESIGN §7 — the winner is reported as a *model-relative
- * intervention witness*, never as "the bug"; which declaration should change is
- * a repair question that needs assertions and a change-cost policy.
- */
-
 import { describeValue } from '../core/value';
 import {
   analyzeCascade,
@@ -61,12 +50,6 @@ export interface ExplainRequest {
 
 export const SYMPTOM_KINDS = ['unexpected-value', 'missing-declaration'];
 
-/**
- * The declared type says `property` is a string; this is the runtime half of
- * that claim, for callers that reached `explain` through the JSON surface
- * rather than the typed API. Intrinsic text only — a boxed String would carry
- * no usable property name into the cascade.
- */
 const isDeclaredText = <Value>(value: Value): value is Value & string => {
   if (Object(value) === value) return false;
   try {
@@ -94,7 +77,6 @@ const validate = (symptom: OracleSymptom): string => {
   return property;
 };
 
-/** Candidates that declare the property but cannot apply at this point. */
 const conditionalFor = (
   analysis: CascadeAnalysis,
   property: string
@@ -228,9 +210,6 @@ const explainUnexpectedValue = (
   const winner = outcome?.winner;
 
   if (outcome === undefined || winner === undefined) {
-    // Falling through to the missing-declaration narrative is the honest
-    // answer: an "unexpected value" for a property nothing sets is really the
-    // question of why nothing sets it.
     return explainMissingDeclaration(ctx, rt, world, analysis, property);
   }
 
@@ -365,10 +344,6 @@ export const runExplain = (
           ? request.symptom.detail.expected
           : undefined;
 
-      // One entry point for both symptoms: `explainUnexpectedValue` already
-      // answers a set property with the winner narrative and falls through to
-      // the missing-declaration narrative when nothing wins — which is also
-      // the honest answer when a missing-declaration premise turns out false.
       const explanation = explainUnexpectedValue(
         ctx,
         rt,

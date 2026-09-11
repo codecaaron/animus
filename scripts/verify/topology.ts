@@ -1,50 +1,7 @@
 #!/usr/bin/env bun
-// scripts/verify/topology.ts
-//
-// Pure executable checker for the One-Way Dependency Rule (AGENTS.md §
-// Workspace Topology). Dependencies flow top-down only:
-//
-//   packages/*  MUST NOT import  e2e/*   or  legacy/*
-//   e2e/*       MUST NOT import  legacy/*
-//   e2e/*       MAY     import  packages/*   (permitted consumer direction)
-//
-// legacy/* has no package.json anywhere in the tree, so it is unreachable by a
-// live workspace name; but its historically-published names (@animus-ui/core,
-// theming, runtime, ui) still resolve on the public registry, so a bare import
-// of one is a real vector into archived code. The rule is enforced across three
-// real vectors:
-//
-//   1. source imports  — import/export-from/require/dynamic-import specifiers
-//                        in packages/* and e2e/* sources that resolve across a
-//                        forbidden boundary (relative paths escaping the tree, a
-//                        bare specifier naming an e2e workspace package, or a
-//                        bare specifier naming an archived legacy package).
-//   2. tsconfig paths  — compilerOptions.paths targets (own or inherited via the
-//                        `extends` chain) that resolve across a forbidden
-//                        boundary, keyed by the owning tsconfig's tree.
-//   3. package deps    — a packages/* manifest declaring an e2e workspace
-//                        package in any dependency map.
-//
-// REVISION 2026-07-20 (review-driven): specifier extraction is now an oxc-parser
-// AST walk for the TS/JS family, replacing the archived change's design note D4
-// ("regex, not AST", zero-dependency). Two review findings forced the change: a
-// code-looking string literal (`const s = "require('../legacy/core')"`) was
-// flagged as a false positive, and the comment-stripping blind spots were
-// fragile. oxc gives us genuine syntactic specifiers (ImportDeclaration /
-// ExportNamedDeclaration / ExportAllDeclaration `.source`, ImportExpression
-// string args, and `require(...)` / `import x = require(...)` calls) with no
-// string/comment ambiguity. Parse failures FAIL LOUD — a file the checker
-// cannot parse is a file it cannot clear. The regex fallback survives only for
-// .mdx, whose top-level ESM import lines oxc does not parse. The archived design
-// record stays as-is; this comment is the dated correction of record.
 
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
-// oxc-parser is the repo's pinned in-process AST surface (same devDep and
-// TS-ESTree `parseSync` → `{ program, errors, comments }` contract used by
-// scripts/hygiene/delete-unused.ts). See langForParser() for the dialect pin.
-// `Visitor` declares the syntax this checker reads instead of reflecting over
-// node dictionaries (the same conversion `oracle/src/places/source.ts` made).
 import { Visitor, parseSync } from 'oxc-parser';
 
 import type { Argument, StringLiteral } from 'oxc-parser';
@@ -64,14 +21,6 @@ export interface Violation {
   detail: string;
 }
 
-// Directories that never hold authored, boundary-relevant source: build
-// outputs, vendored code, and generated staging trees. Pruned during the walk.
-//
-// NOT the same list as `ignoredDirectories` in scripts/verify/owner-graph.test
-// .ts, and deliberately not merged with it: that one answers "not a current
-// contributor/executable surface" and so holds `.receipts` and `tmp` (outputs
-// of the graph, and scratch) while omitting `.git`/`.turbo`/`coverage`, which
-// are irrelevant to its question but must be pruned from this walk.
 const PRUNE_DIRS = new Set([
   '.animus',
   '.git',
@@ -88,29 +37,17 @@ const PRUNE_DIRS = new Set([
   'target',
 ]);
 
-// Excluded wholesale (dir prefixes) or by exact path (files). Preserved with
-// prefix semantics: `rel === entry` matches a single file, `rel.startsWith(entry
-// + sep)` matches a subtree.
-//   - packages/_parity/corpus: byte-precise adversarial extraction/formatting
-//     fixtures, not code subject to the topology rule.
-//   - the extract-v2 napi loader + its typings are authored by `napi build`, not
-//     by hand; excluded on the same rationale as the vite.config.ts fmt
-//     ignorePatterns precedent (a generated file is not a topology source).
-// (Build outputs — dist/build/target/node_modules/.staging — are pruned by
-// PRUNE_DIRS during the walk, so they need no entry here.)
+// Excluded by exact path or directory prefix: adversarial corpus fixtures, and
+// the extract-v2 napi loader and typings, which `napi build` generates.
 const EXCLUDE_PREFIXES = [
   'packages/_parity/corpus',
   'packages/extract/crates/extract-v2/index.js',
   'packages/extract/crates/extract-v2/index.d.ts',
 ];
 
-// Authored source across the whole ESM-import surface: TS family (ts/tsx/mts/
-// cts), JS family (js/jsx/mjs/cjs — packages/extract/index-v2.js is hand-written
-// and MDX carries ESM imports), and MDX. .d.ts is included (it ends in .ts) so
-// generated typings must be excluded by path above, not by extension.
+// `.d.ts` matches (it ends in .ts), so generated typings need a path exclusion.
 const SOURCE_EXT = /\.(?:tsx?|mts|cts|jsx?|mjs|cjs|mdx)$/;
 const TSCONFIG_NAME = /^tsconfig.*\.json$/;
-// Bound on `extends` chain traversal — cycle/pathological-depth guard.
 const MAX_EXTENDS_DEPTH = 32;
 const DEPENDENCY_MAPS = [
   'dependencies',
@@ -119,18 +56,12 @@ const DEPENDENCY_MAPS = [
   'optionalDependencies',
 ] as const;
 
-// The forbidden edges of the one-way rule. Every other edge — notably
-// e2e -> packages, and anything from/to 'other' (repo root, tooling) — is
-// permitted.
 export function isForbidden(from: Tree, to: Tree): boolean {
   if (from === 'packages') return to === 'e2e' || to === 'legacy';
   if (from === 'e2e') return to === 'legacy';
   return false;
 }
 
-// Classifies an absolute path by its top-level segment relative to the repo
-// root. Paths outside the repo (or at its root) are 'other' and cannot
-// participate in a forbidden edge.
 export function classifyTree(repoRoot: string, absPath: string): Tree {
   const rel = relative(repoRoot, absPath);
   if (rel === '' || rel.startsWith('..')) return 'other';
@@ -141,12 +72,8 @@ export function classifyTree(repoRoot: string, absPath: string): Tree {
   return 'other';
 }
 
-// Removes JS/TS line and block comments while preserving string-literal
-// contents (import specifiers live inside strings). String scanning honours
-// backslash escapes so a quote inside a string cannot terminate it early.
-// Named for its language on purpose: `rust-policy.ts` owns a deliberately
-// different stripper, and this literal-aware scan would be catastrophic there
-// (a Rust lifetime `'a` opens a string that runs to the next apostrophe).
+// Preserves string-literal contents, honouring escapes: import specifiers live
+// inside strings.
 export function stripTsComments(source: string): string {
   let out = '';
   let i = 0;
@@ -195,8 +122,7 @@ export interface Specifier {
   value: string;
 }
 
-// Thrown when oxc cannot parse an in-scope source file. FAIL LOUD: a file the
-// checker cannot parse is a file it cannot clear (it may hide a real edge).
+// An unparseable file cannot be cleared: it may hide a forbidden edge.
 export class TopologyParseError extends Error {
   constructor(filename: string, detail: string) {
     super(`topology: failed to parse ${filename}: ${detail}`);
@@ -204,12 +130,8 @@ export class TopologyParseError extends Error {
   }
 }
 
-// oxc deduces the dialect from the filename, but fixtures and the broadened
-// scan hand it non-canonical names, so we pin `lang` (mirrors delete-unused.ts's
-// langFor). Deviation from that precedent: authored `.js` in this React design
-// system can carry JSX, and oxc's `js` dialect rejects JSX — so the whole JS
-// family parses as `jsx` (a superset that also accepts plain JS/CJS) to avoid a
-// fail-loud false positive on a legitimate JSX-bearing `.js`.
+// oxc infers the dialect from the filename, so it is pinned here. The whole JS
+// family parses as `jsx`: oxc's `js` dialect rejects JSX in an authored `.js`.
 function langForParser(filename: string): 'ts' | 'tsx' | 'jsx' {
   if (filename.endsWith('.tsx')) return 'tsx';
   if (
@@ -223,21 +145,14 @@ function langForParser(filename: string): 'ts' | 'tsx' | 'jsx' {
   return 'ts';
 }
 
-// oxc's ESTree flavor collapses every literal kind onto `type: 'Literal'`, so
-// the string kind is not in the tag. `String(value) === value` holds for a
-// primitive string and for nothing else the parser can emit (a number, boolean,
-// null, bigint or regexp literal all fail the identity), which is exactly the
-// discrimination a module-specifier position needs. Same predicate the
-// vite-plugin's appearance-bootstrap isolation reader uses.
+// oxc tags every literal kind as `Literal`, so the string kind is not in the
+// tag; `String(value) === value` holds for a primitive string and nothing else.
 function isStringLiteral(node: Argument): node is StringLiteral {
   return node.type === 'Literal' && String(node.value) === node.value;
 }
 
-// MDX is not JS — oxc does not parse it — so its top-level ESM import/export
-// lines are matched with a narrow regex. Only column-0 statements outside fenced
-// code blocks count: real MDX imports (rendered components) live at the module
-// top level, while `import`/`export` lines inside ``` / ~~~ fences are
-// illustrative examples, not this document's dependencies.
+// oxc does not parse MDX, so top-level ESM lines are matched by regex. Imports
+// inside ``` or ~~~ fences are examples, not this document's dependencies.
 function extractMdxSpecifiers(source: string): Specifier[] {
   const out: Specifier[] = [];
   let inFence = false;
@@ -263,10 +178,7 @@ function extractMdxSpecifiers(source: string): Specifier[] {
   return out;
 }
 
-// Extracts every module specifier from a source file. `filename` selects the
-// extraction strategy and pins the oxc dialect; it defaults to a TS dialect so
-// callers holding only a source string (e.g. unit tests) parse as TypeScript.
-// FAIL LOUD on a parse error for the AST family; MDX stays regex.
+// `filename` selects the extraction strategy and pins the oxc dialect.
 export function extractSpecifiers(
   source: string,
   filename = 'inline.ts'
@@ -279,43 +191,29 @@ export function extractSpecifiers(
     throw new TopologyParseError(filename, errors[0].message);
   }
 
-  // Only real specifier positions count — a code-looking string or template
-  // literal never does, because it is a Literal/TemplateLiteral, and no visitor
-  // below is registered for one. The set of visited node types IS the closed
-  // list of syntax that can name a module.
+  // These visitors are the closed list of syntax that can name a module.
   const out: Specifier[] = [];
   new Visitor({
-    // Covers `import x from 'y'` and side-effect `import 'y'` alike.
     ImportDeclaration(node) {
       out.push({ kind: 'import', value: node.source.value });
     },
-    // `export … from 'y'`; a bare `export { … }` has no source.
     ExportNamedDeclaration(node) {
       if (node.source) out.push({ kind: 'export', value: node.source.value });
     },
-    // `export * from 'y'` / `export * as ns from 'y'` — source is mandatory.
     ExportAllDeclaration(node) {
       out.push({ kind: 'export', value: node.source.value });
     },
-    // `import('y')` — only a static string arg is a resolvable specifier;
-    // `import(expr)` / `import(`…`)` cannot be, and are skipped.
     ImportExpression(node) {
       if (isStringLiteral(node.source)) {
         out.push({ kind: 'dynamic-import', value: node.source.value });
       }
     },
-    // `import x = require('y')` — CJS via a TS external module reference. The
-    // other two module references (`import x = A.B`, `import x = A`) name a
-    // namespace, not a module path.
     TSImportEqualsDeclaration(node) {
       const reference = node.moduleReference;
       if (reference.type === 'TSExternalModuleReference') {
         out.push({ kind: 'require', value: reference.expression.value });
       }
     },
-    // `require('y')` — a call to the bare `require` identifier. A member call
-    // (`obj.require(…)`) or an immediately-invoked shadow is a different callee
-    // node and is not reached.
     CallExpression(node) {
       const [first] = node.arguments;
       if (
@@ -331,17 +229,13 @@ export function extractSpecifiers(
   return out;
 }
 
-// Resolves a specifier to the tree it targets, or null when it is an external
-// dependency the rule does not track. Relative specifiers resolve against the
-// importing file; a bare specifier matters when it names an e2e workspace
-// package (resolves to e2e) or an archived legacy package (resolves to legacy).
+// Resolves a specifier to the tree it targets, or null for an external
+// dependency the rule does not track.
 export function resolveSpecifierTree(
   repoRoot: string,
   fileAbs: string,
   spec: string,
   e2eNames: readonly string[],
-  // Archived legacy package names (see deriveArchivedNames). Defaults empty so
-  // callers that predate the archived-name vector keep their old behavior.
   legacyNames: readonly string[] = []
 ): Tree | null {
   if (spec.startsWith('.')) {
@@ -356,19 +250,8 @@ export function resolveSpecifierTree(
   return null;
 }
 
-// Derives the archived-package name set from the legacy/* directory layout.
-//
-// Rationale (registry resolution, not workspace resolution): legacy/* has no
-// package.json, so these names are unreachable as *workspace* packages — but
-// @animus-ui/core, @animus-ui/theming, @animus-ui/runtime, and @animus-ui/ui
-// were historically published and still resolve on the public registry. A bare
-// import of one pulls archived code back into the active graph, which the
-// One-Way Rule forbids ("the active graph must not depend on archived code").
-// The set is derived dynamically from the on-disk legacy/* directory names
-// (prefixed @animus-ui/) rather than hardcoded: the arch-workspace-topology spec
-// does not literally enumerate the archived packages, so the directory layout is
-// the authoritative source. legacy/** itself is never scanned as a source (the
-// walk roots are packages/* and e2e/* only), so it cannot self-trigger.
+// legacy/* has no package.json, but the @animus-ui/* names were published and
+// still resolve on the registry, so a bare import reaches archived code.
 export function deriveArchivedNames(repoRoot: string): string[] {
   const base = join(repoRoot, 'legacy');
   if (!existsSync(base)) return [];
@@ -422,18 +305,8 @@ function topLevelDirs(repoRoot: string, tree: 'packages' | 'e2e'): string[] {
     .map((entry) => join(base, entry.name));
 }
 
-// The JSON value domain for the two declarative manifests this checker reads —
-// an arbitrary `package.json` and an arbitrary tsconfig found by the walk.
-// Neither is this repo's own document, so nothing about their shape is known
-// before they are read; a reader that reaches an unmodeled key gets a value it
-// can decide about rather than one it dereferences on faith.
-//
-// `@animus-ui/assertions` owns the identical vocabulary for test code, and this
-// is deliberately NOT that import: `verify:lint` runs `bun scripts/verify/
-// topology.ts` with no `build:ts` precondition (see vite.config.ts `run.tasks`),
-// so the workspace package's built dist is not reachable from here. Every other
-// file in scripts/verify holds the same line — node builtins and the runner
-// only.
+// Not the shared `@animus-ui/assertions` vocabulary: this script runs under bun
+// with no build step, so no workspace package's dist is reachable.
 type JsonValue =
   | null
   | boolean
@@ -446,9 +319,7 @@ interface JsonObject {
   [key: string]: JsonValue;
 }
 
-// Decided by representation tag, not by `typeof`: `[object Object]` is what
-// separates a keyed block from a list, and the tag also rejects everything
-// `JSON.parse` cannot produce.
+// Tag-based, not `typeof`: `typeof` admits arrays and null as objects.
 function isJsonObject(value: JsonValue | undefined): value is JsonObject {
   return Object.prototype.toString.call(value) === '[object Object]';
 }
@@ -465,8 +336,8 @@ function readJson(path: string): JsonValue | undefined {
   }
 }
 
-// tsconfig files are JSONC: comment-strip, then drop trailing commas before
-// JSON.parse. Good enough to reach compilerOptions.paths without a full parser.
+// tsconfig is JSONC: strip comments and trailing commas. Enough to reach
+// compilerOptions.paths without a full parser.
 function readJsonc(path: string): JsonValue | undefined {
   try {
     const stripped = stripTsComments(readFileSync(path, 'utf8')).replace(
@@ -479,14 +350,11 @@ function readJsonc(path: string): JsonValue | undefined {
   }
 }
 
-// Reads the workspace package name of every e2e/* member that has a manifest.
 export function readE2ePackageNames(repoRoot: string): string[] {
-  // Projection of e2eMembersByName so one place owns e2e manifest reading.
   return [...e2eMembersByName(repoRoot).keys()].sort();
 }
 
-// The e2e member (fixture directory name) owning an absolute path, or
-// undefined when the path is not under e2e/.
+// The e2e fixture directory name owning an absolute path.
 export function e2eMember(
   repoRoot: string,
   absPath: string
@@ -497,9 +365,7 @@ export function e2eMember(
   return parts[0] === 'e2e' && parts.length > 1 ? parts[1] : undefined;
 }
 
-// Workspace package name -> owning e2e member directory. Mirrors
-// readE2ePackageNames but keeps the directory each name was declared in, so a
-// bare workspace specifier can be attributed to a member.
+// Workspace package name -> owning e2e fixture directory.
 export function e2eMembersByName(repoRoot: string): Map<string, string> {
   const byName = new Map<string, string>();
   for (const dir of topLevelDirs(repoRoot, 'e2e')) {
@@ -514,14 +380,8 @@ export function e2eMembersByName(repoRoot: string): Map<string, string> {
   return byName;
 }
 
-// Vector 4 — fixture-sibling imports. e2e fixtures must stay self-contained
-// (e2e-workspace-convention › "New framework fixtures remain self-contained":
-// each fixture builds from only its own source plus active packages/*
-// dependencies). The Tree-level rule cannot express this edge — sibling and
-// self are both e2e -> e2e — so it is scanned per-member here. This is a
-// static-specifier PROXY for the spec's build-level claim, with the same
-// accepted blind spot (dynamic/runtime resolution) as the rest of the
-// one-way rule.
+// Each e2e fixture stays self-contained. Sibling and self are both e2e -> e2e,
+// so the tree rule cannot express this edge and members are compared here.
 export function scanFixtureSiblingImports(repoRoot: string): Violation[] {
   const membersByName = e2eMembersByName(repoRoot);
   const files: string[] = [];
@@ -564,7 +424,6 @@ export function scanFixtureSiblingImports(repoRoot: string): Violation[] {
   return violations;
 }
 
-// Vector 1 — source imports across a forbidden boundary.
 export function scanSourceImports(repoRoot: string): Violation[] {
   const e2eNames = readE2ePackageNames(repoRoot);
   const legacyNames = deriveArchivedNames(repoRoot);
@@ -581,8 +440,6 @@ export function scanSourceImports(repoRoot: string): Violation[] {
   for (const file of files) {
     const from = classifyTree(repoRoot, file);
     if (from !== 'packages' && from !== 'e2e') continue;
-    // extractSpecifiers FAILs LOUD on an unparseable AST-family file; the throw
-    // propagates so the checker cannot silently clear a file it cannot read.
     for (const spec of extractSpecifiers(readFileSync(file, 'utf8'), file)) {
       const to = resolveSpecifierTree(
         repoRoot,
@@ -608,10 +465,8 @@ export function scanSourceImports(repoRoot: string): Violation[] {
   return violations;
 }
 
-// Normalizes an `extends` target (or a walk-found tsconfig path) to a concrete
-// file, applying tsc's resolution shortcuts: an exact file, a `.json`-appended
-// file, or a directory's `tsconfig.json`. Returns undefined when nothing exists
-// (a missing parent is skipped silently, as this checker treats it).
+// Applies tsc's resolution shortcuts: an exact file, a `.json`-appended file,
+// or a directory's tsconfig.json. A missing target is skipped.
 function resolveTsconfigFile(p: string): string | undefined {
   if (existsSync(p)) {
     if (statSync(p).isFile()) return p;
@@ -624,10 +479,8 @@ function resolveTsconfigFile(p: string): string | undefined {
   return existsSync(withJson) ? withJson : undefined;
 }
 
-// Resolves one `extends` specifier to a concrete config file. Relative
-// specifiers resolve against the extending config's directory; package-style
-// specifiers resolve node_modules upward from that directory, bounded at
-// repoRoot so resolution never escapes the repo. Missing → undefined (skipped).
+// Relative specifiers resolve against the extending config's directory;
+// package-style ones walk node_modules upward, bounded at repoRoot.
 function resolveExtendsSpecifier(
   spec: string,
   fromDir: string,
@@ -648,26 +501,14 @@ function resolveExtendsSpecifier(
   return undefined;
 }
 
-// The subset of effective compilerOptions the topology rule needs, resolved
-// down an `extends` chain with exact TypeScript semantics.
 interface EffectivePaths {
-  // The winning `paths` map and the directory it was declared in (its anchor
-  // when no baseUrl overrides it).
+  // The winning `paths` map and the directory it was declared in.
   targets?: { map: JsonObject; dir: string };
-  // The directory an explicit `baseUrl` resolves to, if any config set one.
   baseUrlDir?: string;
 }
 
-// Computes effective `paths`/`baseUrl` for a config file, following `extends`
-// with TypeScript override semantics:
-//   - extends is applied first (arrays left-to-right, later entries override
-//     earlier), then the config's own options override the inherited result;
-//   - `paths` REPLACES wholesale (a config declaring its own `paths` discards
-//     the inherited map entirely — there is no per-alias merge);
-//   - `baseUrl` is tracked independently, so a `paths` inherited from one config
-//     and a `baseUrl` set in another compose the way tsc resolves them.
-// Missing parents are skipped silently; depth and a per-branch visited set guard
-// against cycles and pathological chains.
+// Follows tsc override semantics: `extends` applies first (arrays left to
+// right), own options win, and `paths` replaces wholesale rather than merging.
 function computeEffectivePaths(
   file: string,
   repoRoot: string,
@@ -678,15 +519,11 @@ function computeEffectivePaths(
   if (!resolved || seen.has(resolved) || depth > MAX_EXTENDS_DEPTH) return {};
   seen.add(resolved);
 
-  // A tsconfig is a keyed block. Anything else on disk under a tsconfig*.json
-  // name declares no `extends` and no `compilerOptions`, so it contributes
-  // nothing to the effective result either way.
   const config = readJsonc(resolved);
   if (!isJsonObject(config)) return {};
 
   const eff: EffectivePaths = {};
 
-  // 1. Inherit from extends (arrays: later overrides earlier).
   const ext = config.extends;
   const parents = Array.isArray(ext) ? ext : isJsonString(ext) ? [ext] : [];
   for (const parent of parents) {
@@ -696,7 +533,7 @@ function computeEffectivePaths(
       dirname(resolved),
       repoRoot
     );
-    if (!parentFile) continue; // missing parent skipped silently
+    if (!parentFile) continue;
     const inherited = computeEffectivePaths(
       parentFile,
       repoRoot,
@@ -707,9 +544,6 @@ function computeEffectivePaths(
     if (inherited.baseUrlDir) eff.baseUrlDir = inherited.baseUrlDir;
   }
 
-  // 2. Own options override inherited. `compilerOptions` and `paths` are both
-  // keyed blocks in the tsconfig schema — `paths` in particular maps alias to
-  // target list, so a non-keyed value there declares no alias to resolve.
   const options = config.compilerOptions;
   if (isJsonObject(options)) {
     const { baseUrl, paths } = options;
@@ -724,10 +558,6 @@ function computeEffectivePaths(
   return eff;
 }
 
-// Vector 2 — tsconfig compilerOptions.paths aliases across a forbidden boundary.
-// Effective paths include those inherited via the `extends` chain, not just the
-// physically-present ones (TypeScript override semantics — see
-// computeEffectivePaths).
 export function scanTsconfigPaths(repoRoot: string): Violation[] {
   const files: string[] = [];
   for (const tree of ['packages', 'e2e'] as const) {
@@ -743,8 +573,6 @@ export function scanTsconfigPaths(repoRoot: string): Violation[] {
     if (owner !== 'packages' && owner !== 'e2e') continue;
     const eff = computeEffectivePaths(file, repoRoot, new Set(), 0);
     if (!eff.targets) continue;
-    // Path targets resolve against baseUrl when any config in the chain set one,
-    // otherwise against the directory of the config that declared `paths`.
     const baseDir = eff.baseUrlDir ?? eff.targets.dir;
 
     for (const [alias, targets] of Object.entries(eff.targets.map)) {
@@ -767,10 +595,6 @@ export function scanTsconfigPaths(repoRoot: string): Violation[] {
   return violations;
 }
 
-// Vector 3 — an active-tree manifest declaring a dependency across a
-// forbidden boundary: packages/* on an e2e workspace name or an archived
-// legacy name, e2e/* on an archived legacy name. e2e -> packages remains the
-// permitted consumer direction (isForbidden encodes the full rule).
 export function scanPackageDependencies(repoRoot: string): Violation[] {
   const e2eNames = new Set(readE2ePackageNames(repoRoot));
   const legacyNames = new Set(deriveArchivedNames(repoRoot));
@@ -779,9 +603,6 @@ export function scanPackageDependencies(repoRoot: string): Violation[] {
     for (const dir of topLevelDirs(repoRoot, tree)) {
       const manifest = join(dir, 'package.json');
       if (!existsSync(manifest)) continue;
-      // A manifest is a keyed block, and each dependency map inside it is a
-      // keyed block of name -> range. Anything else declares no dependency
-      // name, so there is nothing to check against the forbidden trees.
       const parsed = readJson(manifest);
       if (!isJsonObject(parsed)) continue;
       for (const mapName of DEPENDENCY_MAPS) {

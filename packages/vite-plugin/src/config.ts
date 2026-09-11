@@ -5,11 +5,6 @@ import { resolveLightningTargets } from './css';
 import type { PluginContext } from './context';
 import type { ResolvedConfig } from 'vite';
 
-/**
- * configResolved: capture build mode, root, and logger; resolve Lightning
- * CSS targets; harvest resolve.alias into the Rust `pathAliasesJson`
- * contract via the shared encoder.
- */
 export function applyResolvedConfig(
   ctx: PluginContext,
   config: ResolvedConfig
@@ -18,8 +13,7 @@ export function applyResolvedConfig(
   // the host command, never on the explicit `mode` option.
   ctx.isProd = config.command === 'build';
   // Emission signal: explicit `mode` wins over the command signal for the
-  // decisions that change emitted bytes — engine devMode and the minify
-  // default (shared-driver-config: mode selects EMISSION, not lifecycle).
+  // decisions that change emitted bytes — engine devMode and minify default.
   ctx.emissionProd =
     resolveMode(ctx.options.mode, () =>
       config.command === 'build' ? 'production' : 'development'
@@ -30,14 +24,11 @@ export function applyResolvedConfig(
   // own asset pipeline, which applies base itself).
   ctx.base = config.base ?? '/';
 
-  // Resolve Lightning CSS browser targets once
   ctx.lcssTargets = resolveLightningTargets(ctx.options.targets, ctx.rootDir);
   ctx.log(
     `Lightning CSS targets resolved (${Object.keys(ctx.lcssTargets).length} browsers)`
   );
 
-  // Extract path aliases from Vite's resolved config.
-  // This includes aliases from vite-tsconfig-paths, manual resolve.alias, etc.
   const pairs: Parameters<typeof buildPathAliasesJson>[0] = [];
   for (const entry of config.resolve.alias) {
     if (entry.find instanceof RegExp) continue;

@@ -1,27 +1,16 @@
 /**
- * Structural assertions for emitted HTML documents
- * (openspec: system-color-scheme, "No-flash restoration").
- *
- * The no-flash promise is a TIMING promise, and the only part of it a build
- * artifact can carry is ORDER: the restoration snippet must be parsed and run
- * before the browser has any stylesheet to apply. Everything here is order over
- * character offsets in the emitted document — a marker that is merely PRESENT
- * proves nothing, which is the whole reason these live in a package instead of
- * a `grep`.
- *
- * Pure over the HTML string; no I/O.
+ * Structural assertions over emitted HTML: the no-flash promise is an ORDER
+ * promise, so everything here compares character offsets, not mere presence.
  */
 import { createHash } from 'node:crypto';
 
 import { AssertionError } from './assert-css';
 
-/** Attribute the injected/placed bootstrap script is marked with. */
 const DEFAULT_MARKER = 'data-animus-bootstrap';
 
 /**
- * Anything that makes the browser apply CSS: a stylesheet link, a preload that
- * warms one (`as="style"` — Next emits this AHEAD of the link), or any inline
- * `<style>` element (the Vite plugin's own `@layer` declaration tag is one).
+ * Anything that makes the browser apply CSS. The preload counts: Next emits
+ * `as="style"` ahead of the link it warms.
  */
 const STYLESHEET_REFERENCES: readonly RegExp[] = [
   /<link\b[^>]*\brel\s*=\s*["']?stylesheet\b/i,
@@ -29,19 +18,11 @@ const STYLESHEET_REFERENCES: readonly RegExp[] = [
   /<style\b/i,
 ];
 
-/**
- * A document slice plus where it starts, so an offset found inside `html` can
- * be converted back to a DOCUMENT offset — which is the unit both the ordering
- * and the byte-budget contracts are actually written in.
- */
 interface HeadSlice {
-  /** The sliced markup. */
   html: string;
-  /** Offset of `html[0]` in the original document. */
   offset: number;
 }
 
-/** The `<head>…</head>` slice, or the whole document when there is no head. */
 function headOf(html: string): HeadSlice {
   const open = html.search(/<head\b[^>]*>/i);
   if (open === -1) return { html, offset: 0 };
@@ -62,27 +43,18 @@ function scriptRe(marker: string): RegExp {
 }
 
 export interface BootstrapScriptConfig {
-  /** Marker attribute. Defaults to `data-animus-bootstrap`. */
   marker?: string;
-  /** Artifact `code`; compared byte-for-byte against the emitted script text. */
   code?: string;
   /**
-   * Artifact `cspHash` (`sha256-…`). Recomputed from the EMITTED script text,
-   * which is what a browser hashes — so a delivery path that re-encodes or
-   * re-indents the snippet fails here rather than as a blocked script and a
-   * flash of the wrong mode in production.
+   * Artifact `cspHash`, recomputed from the EMITTED text a browser hashes: a
+   * re-encoding delivery path fails here instead of as a blocked script.
    */
   cspHash?: string;
 }
 
 /**
- * Assert the bootstrap script is present in `<head>` and precedes every
- * stylesheet reference in the document.
- *
- * Deliberately NOT vacuous-friendly: a document with no stylesheet reference at
- * all throws, because "the script came first" is meaningless when nothing
- * follows it — that shape means the build stopped emitting CSS, not that the
- * ordering contract held.
+ * The bootstrap script is in `<head>` and precedes every stylesheet reference.
+ * A document with no stylesheet reference throws instead of passing vacuously.
  */
 export function assertBootstrapScriptFirst(
   html: string,
@@ -140,23 +112,14 @@ export function assertBootstrapScriptFirst(
 }
 
 /**
- * The HTML spec's hard limit: an encoding declaration must be serialized
- * completely within the first 1024 BYTES of the document or browsers ignore it
- * and sniff. Spec-fixed, so deliberately not configurable.
+ * HTML's hard limit: an encoding declaration must be serialized completely
+ * within the first 1024 bytes or browsers ignore it and sniff.
  */
 const CHARSET_BYTE_BUDGET = 1024;
 
 /**
- * Assert the document's character-encoding declaration lives in `<head>` and
- * is serialized completely within the first {@link CHARSET_BYTE_BUDGET} bytes
- * of the document.
- *
- * Head-prepend injection (the appearance bootstrap plus the `@layer`
- * declaration tag) pushes the app's own `<meta charset>` toward that cliff, and
- * overflowing it is perfectly silent — no build error, no console warning, just
- * a sniffed encoding. This gate makes the overflow loud while there is still
- * headroom to spend; failure details carry `endByte` and `headroom` (negative =
- * bytes over budget).
+ * The encoding declaration lives in `<head>` and ends within the byte budget.
+ * Head-prepend injection pushes it toward that cliff, and overflow is silent.
  */
 export function assertCharsetWithinByteBudget(html: string): void {
   const head = headOf(html);
@@ -169,9 +132,8 @@ export function assertCharsetWithinByteBudget(html: string): void {
       { budget: CHARSET_BYTE_BUDGET }
     );
   }
-  // Byte offset measured from the DOCUMENT start (what the browser counts),
-  // even though the search is scoped to <head> (the only place a declaration
-  // is honored).
+  // Measured from the DOCUMENT start, what the browser counts, even though the
+  // search is scoped to `<head>`, the only place a declaration is honored.
   const end = head.offset + match.index + match[0].length;
   const endByte = new TextEncoder().encode(html.slice(0, end)).length;
   if (endByte > CHARSET_BYTE_BUDGET) {
@@ -188,12 +150,8 @@ export function assertCharsetWithinByteBudget(html: string): void {
 }
 
 /**
- * The head-injection contract in one call: a document that had a bootstrap
- * prepended into `<head>` must (a) keep it ahead of every stylesheet reference
- * and (b) still land its charset declaration inside the byte budget the
- * injection spends. Armed together so the budget gate travels with the hazard —
- * a lane that injects but only asserts ordering is exactly how the overflow
- * ships silently. The individual assertions stay exported for special needs.
+ * Ordering and charset budget armed together: a lane that injects into
+ * `<head>` and asserts ordering alone ships the overflow silently.
  */
 export function assertHeadInjectionContract(
   html: string,
@@ -204,11 +162,8 @@ export function assertHeadInjectionContract(
 }
 
 /**
- * Assert the document carries no bootstrap script.
- *
- * The live negative witness for "the Next.js plugin SHALL NOT inject the
- * bootstrap script": a route whose document the application never touched must
- * come out clean even in a build where another route places one.
+ * The negative witness: a route the application never touched carries no
+ * bootstrap script, even in a build where another route places one.
  */
 export function assertNoBootstrapScript(
   html: string,

@@ -7,7 +7,6 @@ import type {
   ScenarioDomain,
 } from './scenario';
 
-/** The oracle's own semantics version — part of every cache key and state id. */
 export const MODEL_VERSION = 'oracle-0.1';
 
 export interface ProgramRevision {
@@ -21,11 +20,6 @@ export interface EnvironmentProfile {
   assumptions: Readonly<Record<string, string>>;
 }
 
-/**
- * A hypothetical edit, applied to a world without touching source. Deltas are
- * data, not patches: `simulate` and `diff` evaluate them, and nothing in the
- * substrate can write them back.
- */
 export type WorldDelta =
   | { kind: 'remove-declaration'; rule: RuleId; property: string }
   | {
@@ -55,16 +49,6 @@ export interface RenderWorld {
 
 const worldIds = new WeakMap<RenderWorld, WorldId>();
 
-/**
- * The world's content address. Every component that can change an answer is in
- * it (program revision, model version, scenario domain, environment
- * assumptions, interventions, evidence revision), which is what makes caching,
- * cross-world comparison and fixpoint detection sound (DESIGN §2).
- *
- * Memoized per object: worlds are immutable by construction (`applyDeltas`
- * always returns a fresh one), and every engine hashes its worlds several
- * times per probe.
- */
 export const worldId = (world: RenderWorld): WorldId => {
   const cached = worldIds.get(world);
   if (cached !== undefined) return cached;
@@ -73,17 +57,6 @@ export const worldId = (world: RenderWorld): WorldId => {
   return id;
 };
 
-/**
- * Apply interventions, purely.
- *
- * Every delta is appended to `interventions` so the world's provenance stays
- * complete. Two kinds additionally have a *scenario* meaning the substrate can
- * discharge on its own — `force-dimension` narrows an axis to a single value,
- * `pin-dimension-domain` replaces one outright. The remaining kinds are style
- * universe edits whose interpretation belongs to the engines; recording them
- * here (rather than half-applying them) keeps this function total and keeps
- * the world hash honest about what was requested.
- */
 export const applyDeltas = (
   world: RenderWorld,
   deltas: readonly WorldDelta[]

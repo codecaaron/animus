@@ -152,18 +152,7 @@ export const Button = ds
   .system({ space: true })
   .asElement('button');
 
-// ─── Extension: ButtonLink ──────────────────────────────────────────
-//
-// Inherits all styles, variants, states, and system config from Button.
-// Only the terminal changes: <a> instead of <button>.
-// Provenance-tracked: parent and child emit to the same @layer, source-ordered.
-
 export const ButtonLink = Button.extend().asElement('a');
-
-// ─── Extension: ButtonDisplay ───────────────────────────────────────
-//
-// Adds display-oriented styles on top of Button's existing chain.
-// Demonstrates that .extend() can layer new styles, not just swap elements.
 
 export const ButtonDisplay = Button.extend()
   .styles({

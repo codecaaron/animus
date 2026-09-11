@@ -1,12 +1,3 @@
-/**
- * Dev-mode reachability witness: records every class-resolution outcome into a
- * bounded in-page ring buffer at globalThis.__ANIMUS_WITNESS__. Development
- * only — a production build records nothing and never creates the handle
- * (IS_DEV is false). See is-dev.ts for the define/fold story and which hosts
- * eliminate this code rather than merely gate it off. The handle name is the
- * greppable exclusion token.
- */
-
 import { IS_DEV } from './is-dev';
 
 export type WitnessOutcome = 'static' | 'dynamic' | 'drop';

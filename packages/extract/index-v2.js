@@ -1,12 +1,3 @@
-/**
- * v2 engine loader — the package's only engine and its root entry
- * (retire-extract-v1; the transitional `./engine-v2` alias was removed
- * once no consumers remained).
- *
- * Fail-loud contract: a missing binary must produce an actionable
- * error, never a silent fallback
- * (extraction-diagnostics §V2 boundary error reporting).
- */
 const { existsSync } = require('fs');
 const { join } = require('path');
 

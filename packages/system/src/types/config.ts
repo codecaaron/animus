@@ -22,7 +22,10 @@ export interface Prop extends BaseProperty {
   scale?: string | MapScale | ArrayScale;
   variable?: string;
   negative?: boolean;
-  /** When false, scale-bound props accept arbitrary strings alongside scale keys via (string & {}). Default: true (strict). */
+  /**
+   * When false, scale-bound props accept arbitrary strings alongside scale
+   * keys. Defaults to true.
+   */
   strict?: boolean;
   currentVar?: string;
   transform?: (
@@ -32,25 +35,6 @@ export interface Prop extends BaseProperty {
   ) => string | number | CSSObject;
 }
 
-// `transform` return type includes `| CSSObject` at the type level to satisfy
-// consumer `.props({ ... transform: size })` calls where the imported transform's
-// inferred signature demands the wider union — narrowing it here would break
-// every `createTransform` consumer on a patch release, so the union stays wide
-// for now.
-//
-// The CSSObject branch is DEPRECATED and REJECTED on both resolution paths; it
-// is no longer a silent no-op. Build-time evaluation hard-errors on an object
-// return (no declaration is emitted; extraction records an error diagnostic and
-// the bundler plugins fail the build, naming the transform
-// and the file), and the browser runtime drops the whole prop value with a
-// dev-mode warning (production drops quietly). A transform must return a
-// `string` or a finite `number`. Rule-level styling ships as declaration
-// scales (`composite-style-scales`) — that is the sanctioned path.
-//
-// Narrowing this union to `string | number` is scheduled for the next breaking
-// release. Until then the corresponding type-test guard is intentionally
-// disabled — see packages/system/__tests__/types.test-d.tsx under
-// "Custom Prop Transform Return Type Guard".
 export interface CustomPropConfig extends Prop {
   transform?: (
     val: string | number,
@@ -67,20 +51,10 @@ export interface AbstractParser {
 
 type IsEmpty<T> = [] extends T ? true : false | {} extends T ? true : false;
 
-/**
- * When `strict: false`, always include globals ((string & {}) | 0) for typeahead
- * with escape hatch, regardless of whether the scale has values.
- * When strict is omitted or true, fall back to IsEmpty (current behavior).
- */
 type StrictOrEmpty<Config extends Prop, ScaleT> = Config['strict'] extends false
   ? true
   : IsEmpty<ScaleT>;
 
-/**
- * Negate numeric literal types.
- * `NegateKeys<4 | 8 | 16>` → `-4 | -8 | -16`
- * Excludes 0 (negative zero is meaningless).
- */
 type NegateKeys<T> = T extends number
   ? T extends 0
     ? never
@@ -99,15 +73,6 @@ export type PropertyValues<
   IncludeGlobals extends true ? never : object | any[]
 >;
 
-/**
- * Resolve scale values from T directly. No CompatTheme fallback.
- *
- * Resolution order:
- * 1. If scale is a key of T's token scales → keyof T[scale]
- * 2. If scale is an inline MapScale → keyof scale
- * 3. If scale is an inline ArrayScale → scale[number]
- * 4. Otherwise → raw CSS property values
- */
 type NegativeOf<Config extends Prop, Keys> = Config['negative'] extends true
   ? NegateKeys<Extract<Keys, number>>
   : never;
@@ -164,12 +129,6 @@ export type SystemProps<
   [K in keyof SafeProps]: SafeProps[K];
 };
 
-/**
- * Theme-fixed scale value — uses the augmentable Theme interface
- * instead of a generic T. This enables type-safe CSS object constraints
- * without threading T through the entire class hierarchy.
- */
-/** Colors-only: accept `{colors.key/number}` opacity syntax in component styles. */
 type ColorOpacityRef<Config extends Prop> = Config['scale'] extends 'colors'
   ? 'colors' extends keyof TokenScales<Theme>
     ? `{colors.${keyof TokenScales<Theme>[Config['scale'] & keyof TokenScales<Theme>] & string}/${number}}`
@@ -177,16 +136,8 @@ type ColorOpacityRef<Config extends Prop> = Config['scale'] extends 'colors'
   : never;
 
 /**
- * Container-relative length units (container-query-support): the six
- * container-query units,
- * admitted verbatim as string values on strict scale-typed props. The resolver
- * already accepts and emits these opaquely (container units transit the
- * scale-lookup/transform/pass-through paths with no special awareness); this
- * union closes the type-side gap so `gap: '2cqi'` typechecks WITHOUT widening a
- * strict scale prop to arbitrary strings (`'2vw'` stays rejected — admission is
- * these six suffixes only). Shallow, flat union — no cross-products (the repo's
- * TS2589 zone is string-embedded unions). The `${number}` prefix is
- * load-bearing: a bare `'cqi'` (no numeric part) is not assignable.
+ * The six container-query units, admitted on strict scale props ('2vw' stays
+ * rejected). The union stays flat — cross-products hit TS2589.
  */
 export type ContainerUnitValue =
   | `${number}cqw`
@@ -223,89 +174,30 @@ export type ThemedScale<Config extends Prop> = ResponsiveProp<
   ThemedScaleValue<Config>
 >;
 
-/** Raw nested-selector block keys. The subject `&` may sit anywhere in the
- *  key — leading (`'&:hover'`, `'& > *'`), ancestor-prefixed
- *  (`'[aria-sort="ascending"] &'`, `'.group:hover &:hover'`), or repeated
- *  (`'& + &'`); resolution substitutes the composed class at every unquoted
- *  subject position. */
 type RawSelectorKey = `${string}&${string}`;
 
-/**
- * Published alias keys: registered condition aliases + registered
- * custom selector aliases, drawn from the augmentable `Conditions`/`Selectors`
- * interfaces. `never` until a consumer augments.
- *
- * JOINT NAMESPACE: conditions and selectors share the single `_`
- * block-key namespace, so this gate reads BOTH interfaces. Publishing EITHER
- * `Conditions` OR `Selectors` makes this non-`never`, which flips
- * `KnownUnderscoreKey` (below) from permissive to validating for the WHOLE `_`
- * namespace — not just the published side. This joint gate is documented here
- * and at the `Conditions` interface declaration (`conditions.ts`); the
- * `Selectors` interface (`selectors.ts`) feeds the same `keyof … | keyof …`
- * union.
- */
 type PublishedAliasKeys = Extract<
   keyof Conditions | keyof Selectors,
   `_${string}`
 >;
 
-/**
- * The `_`-prefixed keys accepted as recursing block keys.
- *
- * Graceful degradation (mirrors the empty-`Theme` fallback and
- * `MediaQueryMap`'s `string extends BreakpointKeys` branch): when no condition
- * or selector aliases are published, ALL `_${string}` keys stay permissive —
- * a system that registered aliases via `.addConditions()` but did not augment
- * `Conditions` (e.g. the vite-app fixture) still authors its aliased blocks
- * without error. Once a publication exists, built-in selector aliases AND
- * built-in condition aliases plus the published keys recurse; every other `_`
- * key falls to the branded `UnknownConditionAlias` arm.
- *
- * Built-ins (`BuiltInSelectorAlias | BuiltInConditionAlias`) are STATIC unions
- * in the validating branch, never members of the augmentable interfaces (design
- * D8; see `BUILT_IN_CONDITIONS` in `conditions.ts`) — so `_motionReduce`,
- * `_osDark`, … type as valid block keys with ZERO condition registrations, yet
- * an empty publication keeps the whole namespace permissive (graceful
- * degradation preserved).
- */
 type KnownUnderscoreKey = [PublishedAliasKeys] extends [never]
   ? `_${string}`
   : BuiltInSelectorAlias | BuiltInConditionAlias | PublishedAliasKeys;
 
-/** Pass-through CSS property value (plus `animationName` widening). */
 type PassThroughProp<K extends keyof PropertyTypes> = K extends 'animationName'
   ? ResponsiveProp<KeyframeRef<string> | PropertyTypes[K]>
   : ResponsiveProp<PropertyTypes[K]>;
 
-/**
- * The `_`-prefixed MEMBERS of a recursing block body. Optional members over a
- * closed set (built-ins + published) reject unknown `_` keys at depth as excess
- * properties; when nothing is published the set opens to `` `_${string}` `` —
- * a pattern index signature — keeping non-augmenting systems permissive.
- */
 type UnderscoreBlockMembers<Config extends Record<string, Prop>> = {
   [K in KnownUnderscoreKey]?: ThemedBlockBody<Config>;
 };
 
 /**
- * The recursive body of a selector/condition block (full recursion — the
- * resolver is fully recursive, so the type advertises exactly what the
- * build emits). Deliberately a FIXED type (no reference to the outer inferred
- * `Props`): a `ThemedCSSProps<Props[K], …>` arm would be reverse-mapped-inferred
- * away at the `.styles()` call boundary and silently stop CHECKING nested values
- * (booleans/off-scale keys would pass). Structuring the body as a fixed
- * intersection restores structural checking at every depth — scale-typed props
- * inside a nested block retain their scale-key validation. Raw `'&…'`/at-rule
- * keys and `_`-aliases recurse; every other nested key is a pass-through CSS
- * prop or an excess property.
+ * Must stay a FIXED type: an arm referencing the outer inferred `Props` is
+ * reverse-mapped away at `.styles()` and stops checking nested values.
  */
 type ThemedBlockBody<Config extends Record<string, Prop>> = {
-  // Pass-through members carry the SAME D10 responsive wrapper (+
-  // `animationName` KeyframeRef widening) as the top-level arm — the
-  // resolver resolves responsive maps and keyframe refs at every depth,
-  // so the type must too (inc-11 full-pass F-1.2: bare `Omit<PropertyTypes>`
-  // members rejected `outlineWidth: { _, sm }` and `animationName: ref`
-  // inside nested blocks while the build emitted them).
   [K in Exclude<keyof PropertyTypes, keyof Config>]?: PassThroughProp<K>;
 } & {
   [P in keyof Config]?: ThemedScale<Config[P]>;
@@ -313,28 +205,6 @@ type ThemedBlockBody<Config extends Record<string, Prop>> = {
   [K in RawSelectorKey | RawAtRuleKey]?: ThemedBlockBody<Config>;
 } & UnderscoreBlockMembers<Config>;
 
-/**
- * Theme-aware CSS props — uses the augmentable Theme interface to constrain
- * values per-key, plus kind-dispatched arms for block keys.
- * No generic T and no `Conditions`/`Selectors` generic thread through the
- * `Animus` class family — the arms read the augmentable interfaces directly,
- * the same publication mechanism as the augmented `Theme`.
- *
- * Arm dispatch per key `K`:
- *  1. registered system prop (`keyof Config`) → `ThemedScale` (scale-narrowed).
- *  2. block keys — raw `'&…'` selectors, valid raw `'@media|@container|
- *     @supports …'` at-rules, and known/permissive `_`-aliases — recurse into
- *     `ThemedBlockBody` (the complete, checked, themed surface).
- *  3. pass-through CSS property (`keyof PropertyTypes`) → `ResponsiveProp<…>`
- *     so breakpoint value maps work on every themed prop, not only
- *     propConfig-registered ones. `animationName` keeps its `KeyframeRef`
- *     widening (`animationName: motion.ember`).
- *  4. unknown `_`-prefixed key (publication present) → branded
- *     `UnknownConditionAlias<K>` naming the key + remedy.
- *  5. unknown `@`-prefixed key (malformed at-rule) → branded `UnknownAtRule<K>`.
- *  6. anything else → the legacy accept-object (non-`_`/`@` junk keys are out
- *     of D9's scope; unchanged behavior).
- */
 export type ThemedCSSProps<Props, Config extends Record<string, Prop>> = {
   [K in keyof Props]?: K extends keyof Config
     ? ThemedScale<Config[K]>
@@ -383,10 +253,6 @@ export type CSSProps<Props, System> = {
       : Omit<PropertyTypes, keyof System> & Omit<System, 'theme'>;
 };
 
-/**
- * Built-in selector alias keys.
- * Each maps to one or more CSS selectors (e.g. `_hover` → `&:hover`).
- */
 export type BuiltInSelectorAlias =
   | '_link'
   | '_visited'
@@ -414,21 +280,6 @@ export type BuiltInSelectorAlias =
   | '_odd'
   | '_empty';
 
-/**
- * Built-in condition alias keys (media-condition-aliases). The Panda-compatible
- * media-feature set — motion, print, orientation, contrast, OS color-scheme.
- * Each maps to a `@media` feature query (see `BUILT_IN_CONDITIONS` in
- * `conditions.ts`, the runtime mirror this must stay in sync with — the
- * `types.test-d.tsx` positives are the drift guard).
- *
- * This is a STATIC union folded into `KnownUnderscoreKey`'s validating branch,
- * exactly like `BuiltInSelectorAlias` — NOT default members of the augmentable
- * `Conditions` interface. Interface members would make publication permanently
- * non-empty and break inc-04's graceful-degradation contract (a non-augmenting
- * consumer with custom aliases would flip from permissive to branded-rejection
- * the day built-ins shipped). Color-mode aliases (`_dark` / `_light`) are OUT —
- * they are selector-kind surface owned by the `system-color-scheme` change.
- */
 export type BuiltInConditionAlias =
   | '_motionReduce'
   | '_motionSafe'
@@ -440,17 +291,6 @@ export type BuiltInConditionAlias =
   | '_osDark'
   | '_osLight';
 
-/**
- * Selector alias props for component callsite.
- * Each alias key accepts the same prop interface as the component's
- * system groups, wrapped in Partial<>.
- *
- * Built-in selector aliases come from the static `BuiltInSelectorAlias` union;
- * registered CUSTOM selector aliases fold in from the augmentable `Selectors`
- * interface, making the `selector-alias-callsite` custom-alias
- * promise true. Condition aliases are deliberately NOT included — conditions
- * are block-position only (media-condition-aliases spec), never callsite props.
- */
 export type SelectorAliasProps<GroupPropValues> = {
   [
     K in BuiltInSelectorAlias | Extract<keyof Selectors, `_${string}`>

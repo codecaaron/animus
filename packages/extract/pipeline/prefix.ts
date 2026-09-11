@@ -1,16 +1,3 @@
-/**
- * Apply namespace prefix to a variable map, CSS variable declarations, and theme JSON.
- *
- * Variable map: `{ "colors.ember": "--color-ember" }` -> `{ "colors.ember": "--prefix-color-ember" }`
- * Variable CSS: `--color-ember: #FF2800` -> `--prefix-color-ember: #FF2800`
- *               `var(--color-ember)` -> `var(--prefix-color-ember)`
- * Theme JSON:   `{ "colors.ember": "var(--color-ember)" }` -> `{ "colors.ember": "var(--prefix-color-ember)" }`
- */
-/**
- * The prefixed slice of a system's serialized artifacts. `themeJson` and
- * `contextualVarsJson` are absent exactly when the caller supplied none —
- * `applyPrefix` never invents an input it was not given.
- */
 export interface PrefixedSystemArtifacts {
   variableMapJson: string;
   variableCss: string;

@@ -2,12 +2,6 @@ import { compose } from '@animus-ui/system';
 
 import { ds } from '../../ds';
 
-// ─── NavBar Slot Definitions ──────────────────────────────────────
-//
-// Single tree, always rendered. Responsive display values inside the
-// `inline` variant toggle Links/MobileTrigger visibility at md.
-// No wrapper div needed — NavBarRoot stays sticky.
-
 const NavBarRoot = ds
   .styles({
     position: 'sticky',
@@ -140,8 +134,6 @@ export const NavBar = compose(
   { shared: { mode: true } }
 );
 
-// ─── NavItem ──────────────────────────────────────────────────────
-
 export const NavItem = ds
   .styles({
     fontFamily: 'mono',
@@ -155,8 +147,6 @@ export const NavItem = ds
     '&.active': { color: 'primary' },
   })
   .asElement('a');
-
-// ─── NavDivider ───────────────────────────────────────────────────
 
 export const NavDivider = ds
   .styles({

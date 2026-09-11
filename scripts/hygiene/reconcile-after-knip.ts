@@ -1,25 +1,10 @@
 #!/usr/bin/env bun
-// scripts/hygiene/reconcile-after-knip.ts
-//
-// Post-knip coordination pass. Knip 6.6.2's fixer is a single-pass text splice
-// with no post-state reasoning (verified against knip's IssueFixer source).
-// This script handles two coordination gaps:
-//
-//   1. 0-byte files. Knip strips all content but may not delete the file if
-//      something still imports it. TS then reports TS2306 "not a module" on
-//      consumers. Fix: write `export {};` so the file is a valid empty module.
-//
-//   2. Stale barrel re-exports. Knip removes a source export without rewriting
-//      barrels that re-export it — TS2305 ("has no exported member") and
-//      TS2459 ("declared locally but not exported") at the barrel's call sites.
-//      Fix: parse each barrel, check target file's actual exports, strip named
-//      re-exports for bindings no longer present.
+// Knip's fixer is a single-pass text splice with no post-state reasoning, so it
+// leaves 0-byte modules (TS2306) and stale barrel re-exports (TS2305).
 
 import { readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
-// This pass walks only top-level statements and export specifiers, so it uses
-// the shared node view without wiring parent back-links.
 import {
   type Node,
   type TextRange,
@@ -32,9 +17,6 @@ import {
 } from './_ast';
 import { emitReceipt } from './_receipts';
 
-// Build a 0-indexed array of line-start offsets from `text`, used to recover a
-// 1-indexed line number for a byte offset (replaces TS
-// `getLineAndCharacterOfPosition`). Computed once per file.
 function computeLineStarts(text: string): number[] {
   const starts = [0];
   for (let i = 0; i < text.length; i++) {
@@ -78,8 +60,6 @@ function walk(dir: string, out: string[] = []): string[] {
   return out;
 }
 
-// --- Pass 1: rewrite 0-byte files as valid empty modules ---------------------
-
 export function fixEmptyModules(files: string[]): string[] {
   const fixed: string[] = [];
   for (const f of files) {
@@ -98,24 +78,15 @@ export function fixEmptyModules(files: string[]): string[] {
   return fixed;
 }
 
-// --- Pass 2: strip stale barrel re-exports -----------------------------------
-
-// Walk a BindingName (Identifier | ObjectBindingPattern | ArrayBindingPattern)
-// and collect every local-binding name it introduces. Used by
-// getExportsOfFile so destructured exports like
-//   export const { system: ds, theme } = createSystem();
-//   export const [first, , third] = tuple;
-// register `ds`, `theme`, `first`, `third` as exports rather than slipping
-// through as silent zero-export. This is the bug that caused D1 to delete
-// `export { ds } from './system'` re-exports as "all-stale" (2026-04-26).
+// Collects every local name a binding pattern introduces. A destructured export
+// that registers none reads as zero-export and loses its re-exports.
 function collectBindingNames(name: Node, out: Set<string>): void {
   if (name.type === 'Identifier') {
     const local = stringField(name, 'name');
     if (local !== undefined) out.add(local);
     return;
   }
-  // Default-valued bindings (`{ a = 1 }`, `[a = 1]`) wrap the binding in an
-  // AssignmentPattern; the introduced local is on the left.
+  // `{ a = 1 }` and `[a = 1]` wrap the binding in an AssignmentPattern.
   if (name.type === 'AssignmentPattern') {
     const left = childNode(name, 'left');
     if (left !== undefined) collectBindingNames(left, out);
@@ -123,7 +94,7 @@ function collectBindingNames(name: Node, out: Set<string>): void {
   }
   if (name.type === 'ObjectPattern') {
     for (const prop of childNodeList(name, 'properties')) {
-      // `{ ...rest }` → RestElement; `{ key: local }` / `{ shorthand }` → Property
+      // `{ ...rest }` → RestElement; `{ key: local }` → Property.
       const bound =
         prop.type === 'RestElement'
           ? childNode(prop, 'argument')
@@ -146,10 +117,7 @@ function collectBindingNames(name: Node, out: Set<string>): void {
   }
 }
 
-// The declaration forms that introduce a single named binding we can register
-// as an export directly (`export function/class/interface/type/enum X`).
-// VariableDeclaration is handled separately (it may bind many names via
-// destructuring — see collectBindingNames).
+// VariableDeclaration is absent: it may bind many names via destructuring.
 const NAMED_DECLARATION_TYPES = new Set([
   'FunctionDeclaration',
   'ClassDeclaration',
@@ -165,9 +133,6 @@ export function getExportsOfFile(filePath: string): Set<string> {
 
   const visit = (node: Node): void => {
     if (node.type === 'ExportNamedDeclaration') {
-      // `export { a, b as c }` and `export { a } from './x'` — both carry
-      // specifiers; register the exported-side names either way (matches the
-      // former `NamedExports.elements[].name.text`).
       const specifiers = childNodeList(node, 'specifiers');
       if (specifiers.length > 0) {
         for (const spec of specifiers) {
@@ -176,7 +141,6 @@ export function getExportsOfFile(filePath: string): Set<string> {
         }
         return;
       }
-      // `export const/function/class/... ` — the declaration is wrapped.
       const decl = childNode(node, 'declaration');
       if (decl === undefined) return;
       if (decl.type === 'VariableDeclaration') {
@@ -190,8 +154,7 @@ export function getExportsOfFile(filePath: string): Set<string> {
       }
       return;
     }
-    // `export default …` and TS `export = …` both surface as the `default`
-    // export symbol.
+    // TS `export = …` and `export default` both surface as `default`.
     if (
       node.type === 'ExportDefaultDeclaration' ||
       node.type === 'TSExportAssignment'
@@ -199,8 +162,7 @@ export function getExportsOfFile(filePath: string): Set<string> {
       exports.add('default');
       return;
     }
-    // `export * from './x'` (ExportAllDeclaration) contributes no named
-    // exports of this file — left untouched, as before.
+    // `export * from './x'` contributes no named exports of this file.
   };
 
   for (const stmt of childNodeList(program, 'body')) visit(stmt);
@@ -219,9 +181,8 @@ function resolveRelativeModule(
     base, // explicit extension in specifier
     `${base}.ts`,
     `${base}.tsx`,
-    // Declaration files are live targets too: an unresolvable target is
-    // treated as deleted by the caller, so omitting .d.ts strips live
-    // re-exports as `target-deleted`.
+    // Declaration files are live targets: an unresolvable target counts as
+    // deleted, so omitting `.d.ts` would strip live re-exports.
     `${base}.d.ts`,
     `${base}/index.ts`,
     `${base}/index.tsx`,
@@ -238,7 +199,7 @@ function resolveRelativeModule(
 }
 
 function lineOf(lineStarts: number[], pos: number): number {
-  // 1-indexed line for byte offset `pos` (binary search over line starts).
+  // 1-indexed line for byte offset `pos`.
   let lo = 0;
   let hi = lineStarts.length - 1;
   while (lo < hi) {
@@ -262,19 +223,8 @@ function fullNodeRange(text: string, node: Node): TextRange {
   return { start, end };
 }
 
-// Computes deletion ranges for stale specifiers within a named-exports clause
-// (`export { … }`), preserving every retained element's leading trivia (JSDoc,
-// suppression directives, per-element `type` modifiers). Consecutive stale
-// elements are grouped into one range to avoid overlapping deletions when the
-// reverse-offset splice loop runs.
-//
-// Algorithm: walk left→right, group runs of consecutive stale elements:
-//   - Run with a kept element AFTER it: delete [first-stale.start, next-kept.start)
-//     — sweeps the run + its trailing comma + whitespace
-//   - Run extending to the end of the clause: delete [prev-kept.end, last-stale.end)
-//     — sweeps the leading comma + whitespace + the run
-//
-// "All-stale" cannot happen here (caller routes that to wholeRemovals).
+// Groups consecutive stale elements into one range so retained elements keep
+// their leading trivia and the splice ranges never overlap. Never all-stale.
 export function computeStaleElementRanges(
   specifiers: Node[],
   staleNames: Set<string>
@@ -307,7 +257,6 @@ export function computeStaleElementRanges(
     } else {
       const lastStale = elements[runEnd];
       if (runStart === 0) {
-        // Defensive: caller should have routed all-stale to wholeRemovals.
         ranges.push({
           start: lastStale.start,
           end: lastStale.end,
@@ -333,7 +282,6 @@ export function fixStaleBarrelReExports(files: string[]): string[] {
     } catch {
       continue;
     }
-    // Cheap pre-filter: must contain both `export` and `from`
     if (!source.includes('export') || !source.includes('from')) continue;
 
     const program = parseProgram(file, source);
@@ -345,18 +293,12 @@ export function fixStaleBarrelReExports(files: string[]): string[] {
     }[] = [];
 
     for (const stmt of childNodeList(program, 'body')) {
-      // Re-exports with a module specifier: `export { … } from '…'`
-      // (ExportNamedDeclaration with a `source`) and `export * from '…'`
-      // (ExportAllDeclaration). Everything else — including local re-exports
-      // like `export { X }` with no source — is skipped.
       const sourceNode = childNode(stmt, 'source');
       const isNamedFrom =
         stmt.type === 'ExportNamedDeclaration' && sourceNode !== undefined;
       const isStarFrom = stmt.type === 'ExportAllDeclaration';
       if (!isNamedFrom && !isStarFrom) continue;
 
-      // Every `… from '…'` form carries a string-literal module specifier;
-      // without one there is no target to reconcile against.
       const spec =
         sourceNode === undefined ? undefined : stringField(sourceNode, 'value');
       if (spec === undefined) continue;
@@ -367,7 +309,6 @@ export function fixStaleBarrelReExports(files: string[]): string[] {
       const stmtLine = lineOf(lineStarts, stmt.start);
 
       if (!target) {
-        // Relative target deleted — whole declaration is dead
         wholeRemovals.push(fullNodeRange(source, stmt));
         emitReceipt('D1', 'delete', `${file}:${stmtLine}`, 'export-clause', {
           reason: 'target-deleted',
@@ -384,8 +325,8 @@ export function fixStaleBarrelReExports(files: string[]): string[] {
       }
 
       if (targetSize === 0) {
-        // Pass 1 will write `export {};` here on the same run. `export *`
-        // against an empty module is a no-op (legal TS). Leave it alone.
+        // Pass 1 writes `export {};` here on the same run, and `export *`
+        // against an empty module is legal, so the statement stays.
         continue;
       }
 
@@ -396,7 +337,6 @@ export function fixStaleBarrelReExports(files: string[]): string[] {
         continue;
       }
 
-      // `export * from './bar'` — only strip if target has zero exports
       if (isStarFrom) {
         if (targetExports.size === 0) {
           wholeRemovals.push(fullNodeRange(source, stmt));
@@ -412,12 +352,8 @@ export function fixStaleBarrelReExports(files: string[]): string[] {
       const specifiers = childNodeList(stmt, 'specifiers');
       const stale = new Set<string>();
       for (const el of specifiers) {
-        // `.local` is the source-side name to check against the target's
-        // exports; `.exported` is how it appears in this barrel's clause. A
-        // specifier whose either side is an arbitrary string module-export
-        // name (`export { "a" as b } from …`, ES2022) has no binding name on
-        // that side, so this pass cannot decide staleness for it and leaves
-        // the element in place.
+        // `local` is the target-side name to check; `exported` is the name
+        // this barrel publishes. A string name has neither, so it stays.
         const exportedName = identifierName(el, 'exported');
         const originalName = identifierName(el, 'local');
         if (exportedName === undefined || originalName === undefined) continue;
@@ -451,12 +387,8 @@ export function fixStaleBarrelReExports(files: string[]): string[] {
     if (wholeRemovals.length === 0 && partialRemovals.length === 0) continue;
 
     let updated = source;
-    // Span-preserving deletion strategy: every edit is a delete-range against
-    // the ORIGINAL source. wholeRemovals contributes its full statement range;
-    // partialRemovals contribute one range per consecutive run of stale
-    // elements, computed so retained elements' leading trivia (JSDoc,
-    // suppression directives, per-element type modifiers) survives intact.
-    // Reverse-offset application keeps later ranges' indices stable.
+    // Every edit is a range against the original source, so they are applied
+    // from the highest offset down to keep the remaining offsets valid.
     const edits: TextRange[] = [];
     for (const w of wholeRemovals) {
       edits.push({ start: w.start, end: w.end });
@@ -495,10 +427,8 @@ function main(): void {
   const files = collectSourceFiles(root);
 
   const empty = fixEmptyModules(files);
-  // After writing `export {};` to empty files, barrel pass sees them as
-  // zero-export modules — which is the correct cue to skip `export * from`
-  // them (the `export *` is harmless). `export { X } from` them WOULD strip
-  // X since the target now has zero named exports.
+  // Order matters: once `export {};` is written, the barrel pass sees a
+  // zero-export module and strips named re-exports of it.
   const barrels = fixStaleBarrelReExports(files);
 
   console.log(

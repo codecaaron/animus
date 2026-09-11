@@ -13,16 +13,13 @@ import type { PluginContext } from './context';
 import type { ProjectManifest } from '@animus-ui/extract/pipeline';
 
 interface UnresolvedParentDrop {
-  /** rootDir-relative consumer file the diagnostic names. */
   file: string;
-  /** The dropped child component binding. */
   component: string;
-  /** The parent binding as written in the consumer. */
+  /** The parent binding as written in the consumer, not a resolved path. */
   parent: string;
 }
 
-/** The current manifest's unresolved-parent drops, parsed from diagnostics
- *  (shared Rust-mirror matcher — the regex lives in manifest-diagnostics). */
+/** The current manifest's unresolved-parent drops, parsed from diagnostics. */
 export function unresolvedParentDrops(
   ctx: PluginContext
 ): UnresolvedParentDrop[] {
@@ -40,13 +37,10 @@ export function unresolvedParentDrops(
 
 const EMPTY_DROP_FILES: ReadonlySet<string> = new Set();
 
-// Per-manifest memo for the hot-path membership checks below — transform's
-// raw-serve check and stabilize's trigger run per served file, and a full
-// diagnostics scan per call is wasted work when the manifest hasn't moved.
+// Per-manifest memo: the membership check below runs once per served file.
 const dropFilesByManifest = new WeakMap<ProjectManifest, ReadonlySet<string>>();
 
-/** Files carrying an unresolved-parent drop in the CURRENT manifest —
- *  derived once per manifest publication, then a set lookup. */
+/** Files carrying an unresolved-parent drop in the current manifest. */
 export function unresolvedDropFiles(ctx: PluginContext): ReadonlySet<string> {
   const manifest = ctx.storedManifest;
   if (!manifest) return EMPTY_DROP_FILES;
@@ -63,22 +57,8 @@ export function unresolvedDropFiles(ctx: PluginContext): ReadonlySet<string> {
 }
 
 /**
- * Reconcile the discoverable on-disk source corpus before an
- * unresolved-parent result is acted on (openspec: dev-transform-coherence,
- * "Source-corpus reconciliation precedes unresolved-parent fallbacks").
- *
- * Drop-triggered: runs only when the current manifest reports `chain
- * dropped: could not resolve parent component`. One discovery walk (the
- * same walk and policy the server start uses) folds every eligible on-disk
- * file the cache does not know, then one re-analysis resolves the whole
- * extension graph — dependency depth never requires iteration depth, so the
- * loop re-enters only when a re-analysis leaves NEW drops and the previous
- * walk actually folded something (a changed discovery domain). The
- * iteration cap is containment, not semantics.
- *
- * Returns whether any re-analysis ran (callers diff plans across the WHOLE
- * transaction, so a fold-and-reanalyze is invisible to them beyond the
- * final manifest).
+ * Folds undiscovered on-disk files when the manifest reports an unresolved
+ * parent, then re-analyzes; the iteration cap is containment, not semantics.
  */
 export async function reconcileSourceCorpus(
   ctx: PluginContext
@@ -87,8 +67,6 @@ export async function reconcileSourceCorpus(
 
   let reanalyzed = false;
   for (let iteration = 0; iteration < 3; iteration++) {
-    // Cheap trigger first (per-manifest set); full drop details only parsed
-    // on the drop path.
     if (unresolvedDropFiles(ctx).size === 0) {
       // Drops resolved — future occurrences of the same conditions warn anew.
       warnedVerdicts.get(ctx)?.clear();
@@ -96,13 +74,8 @@ export async function reconcileSourceCorpus(
     }
     const drops = unresolvedParentDrops(ctx);
 
-    // Barren-walk memo (approved log/walk-frequency change): a walk over an
-    // UNCHANGED drop tuple-set with no cache movement since the last barren
-    // walk cannot fold anything new — skip it (its verdicts already warned
-    // once). "No movement" is the cache's mutation generation, never its size:
-    // a delete plus an unrelated create restores the size while the contents
-    // differ, and skipping there strands the lost-event file as a raw fallback
-    // for the session.
+    // A walk over an unchanged drop set with no cache movement cannot fold
+    // anything new. Movement is the mutation generation, never the size.
     const dropKey = drops
       .map((d) => `${d.file}\0${d.component}\0${d.parent}`)
       .sort()
@@ -118,10 +91,8 @@ export async function reconcileSourceCorpus(
 
     const folded = foldUndiscoveredFiles(ctx);
     if (folded.length === 0) {
-      // The walk is complete and the parents are still unresolvable —
-      // genuinely absent, or resolvable-but-inadmissible. Teach the reason
-      // where resolution succeeds on disk; the documented runtime fallback
-      // stands.
+      // The walk is complete and the parents are still unresolvable; teach
+      // the reason where resolution succeeds on disk.
       barrenWalkMemos.set(ctx, {
         dropKey,
         cacheGeneration: ctx.fileCacheGeneration,
@@ -135,14 +106,8 @@ export async function reconcileSourceCorpus(
       `rediscovery: folded ${folded.length} on-disk file(s) after unresolved-parent drop`
     );
     reanalyzed = true;
-    // Roll the fold back unless the analysis PUBLISHED. Keeping the entries
-    // looked harmless — they are real on-disk sources — but it strands the
-    // retry: the next call folds 0, reads that as a barren walk, memoizes it,
-    // and short-circuits every later call, so stabilize never runs again.
-    // `runAnalysis` also throws in every mode on error diagnostics (the
-    // escalation sits outside its non-strict catch), and strict-mode
-    // ingestion diagnostics throw from the corpus's `prepare` — hence
-    // `finally`.
+    // Roll the fold back unless the analysis published: kept entries make the
+    // next walk barren, memoize that, and short-circuit every later call.
     let published = false;
     try {
       published = (await ctx.analyzeIngested()).ok;
@@ -168,15 +133,8 @@ export async function reconcileSourceCorpus(
   return reanalyzed;
 }
 
-/**
- * One discovery walk over the project root with the server-start policy;
- * folds every eligible file `fileCache` does not hold. Returns the fold
- * count.
- */
-/** Returns the cache keys this fold ADDED, so a failed analysis can roll
- *  them back — `runAnalysis` requires callers that advanced the file cache to
- *  restore it, or the content-hash gate suppresses the equal-content retry
- *  forever. */
+/** Returns the cache keys this fold added: a failed analysis must restore
+ *  the cache, or the content-hash gate suppresses the retry forever. */
 function foldUndiscoveredFiles(ctx: PluginContext): string[] {
   const excludeMatcher = ctx.excludeMatcher;
   const filePaths = discoverFiles(
@@ -188,10 +146,8 @@ function foldUndiscoveredFiles(ctx: PluginContext): string[] {
   const folded: string[] = [];
   const pending: Array<[string, { hash: string; source: string }]> = [];
   for (const filePath of filePaths) {
-    // `.mdx` sources are not folded here (they ingest on their first
-    // watcher edit): with the optional MDX peer absent, a folded `.mdx`
-    // would be re-quarantined on every stabilize pass — wasted walks and
-    // repeated warns for a file that can never resolve a parent anyway.
+    // `.mdx` ingests on its first watcher edit instead: without the optional
+    // MDX peer a folded `.mdx` is re-quarantined on every pass.
     if (extname(filePath) === '.mdx') continue;
     const relPath = relative(ctx.rootDir, filePath);
     if (ctx.fileCache.has(relPath)) continue;
@@ -214,9 +170,8 @@ function foldUndiscoveredFiles(ctx: PluginContext): string[] {
   return folded;
 }
 
-/** Barren-walk memo per context: the drop tuple-set and the cache's mutation
- *  generation at the last walk that folded nothing (see
- *  reconcileSourceCorpus). */
+/** Per context: the drop tuple-set and the cache mutation generation at the
+ *  last walk that folded nothing. */
 const barrenWalkMemos = new WeakMap<
   object,
   { dropKey: string; cacheGeneration: number }
@@ -226,8 +181,6 @@ const barrenWalkMemos = new WeakMap<
  *  condition warns once; cleared when the drops disappear. */
 const warnedVerdicts = new WeakMap<object, Set<string>>();
 
-/** The narrow probe set is deliberate — NOT ctx.extensionsSet (conscious
- *  no-behavior-change choice: the teaching probe resolves what it always did). */
 const PARENT_PROBE_EXTENSIONS: ReadonlySet<string> = new Set([
   '.tsx',
   '.ts',
@@ -236,12 +189,8 @@ const PARENT_PROBE_EXTENSIONS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * The teaching half for parents that RESOLVE on disk but cannot be admitted
- * (excluded by configuration, unsupported source type, outside the root).
- * Resolution is a best-effort scan of the consumer's own import statements
- * for the parent binding — enough for the relative-specifier case a
- * developer actually hits; a parent this scan cannot resolve keeps the
- * engine's own diagnostic.
+ * Warns for parents that resolve on disk but cannot be admitted. Resolution
+ * is a best-effort scan of the consumer's own relative import specifiers.
  */
 function warnInadmissibleParents(
   ctx: PluginContext,
@@ -273,7 +222,6 @@ function warnInadmissibleParents(
     const relPath = relative(ctx.rootDir, resolved);
 
     const excludedBy = excludeMatcher.explain(resolved, relPath);
-    // One message template; the reason clause is the only variable part.
     const reason = excludedBy
       ? `which is excluded by pattern '${excludedBy}'. Include that ` +
         `file in the extraction sources or remove this extension.`
@@ -294,7 +242,6 @@ function warnInadmissibleParents(
   }
 }
 
-/** The module specifier a named import binds `binding` from, if scannable. */
 function importSpecifierFor(source: string, binding: string): string | null {
   const importRe = /import\s+([^;]+?)\s+from\s+['"]([^'"]+)['"]/g;
   let match: RegExpExecArray | null;

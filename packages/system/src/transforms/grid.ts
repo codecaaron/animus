@@ -1,9 +1,6 @@
 import { createTransform } from './createTransform';
 
-/**
- * Self-contained transform: all logic inlined in the callback.
- * No external references — satisfies the extraction constraint.
- */
+/** All logic stays inline: the extractor cannot follow external references. */
 export const gridItem = createTransform('gridItem', (item) => {
   const map: Record<string, string> = {
     max: 'max-content',
@@ -16,15 +13,7 @@ export const gridItem = createTransform('gridItem', (item) => {
   return `minmax(0, ${template})`;
 });
 
-/**
- * Convert a grid item value to a CSS template string.
- * Exported for non-extraction use — NOT referenced from createTransform callbacks.
- */
-
-/**
- * Self-contained transform: all logic inlined in the callback.
- * Duplicates grid-item-to-template logic to avoid cross-transform reference.
- */
+/** Template logic is duplicated rather than shared: no external references. */
 export const gridItemRatio = createTransform('gridItemRatio', (val) => {
   const toTemplate = (item: string): string => {
     const map: Record<string, string> = {

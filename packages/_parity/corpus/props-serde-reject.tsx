@@ -1,8 +1,5 @@
-// Review F4 witness: a props() config that evaluates statically but
-// fails PropConfigMap deserialization (property must be a string) is
-// SILENTLY dropped from the manifest — the chain stays live in source
-// and its runtime import must SURVIVE (v1 967-969 + manifest-membership
-// import gating).
+// `property` must be a string, so this config is dropped from the manifest
+// silently; the chain stays live and its runtime import must survive.
 export const Broken = ds
   .props({ w: { property: 123 } })
   .asElement('div');

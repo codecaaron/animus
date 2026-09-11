@@ -1,11 +1,3 @@
-/**
- * Presentation helpers shared by every engine.
- *
- * Nothing here decides semantics — these functions only turn substrate values
- * into the concrete numbers and phrases the probe envelope's `summary`,
- * `assumptions` and diff `context` fields are required to carry.
- */
-
 import type { ScenarioCell, ScenarioPoint } from '../core/scenario';
 
 export const describePoint = (point: ScenarioPoint): string => {

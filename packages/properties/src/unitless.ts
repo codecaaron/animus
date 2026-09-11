@@ -1,16 +1,6 @@
-/**
- * CSS properties that accept unitless numeric values.
- * Bare numerics on properties NOT in this set receive automatic `px` suffix.
- *
- * Entries use **kebab-case** (CSS declaration convention) because consumers
- * check against CSS property names in post-processed output.
- * See shorthands.ts for camelCase convention rationale.
- */
 export const UNITLESS_PROPERTIES = new Set([
-  // `animation-name` is always an identifier (keyframe name) or `none`;
-  // bare-number unit fallback must skip it — otherwise a hash-based keyframe
-  // name whose tail looks numeric (e.g. `animus-kf-1w7pb41`) gets mangled
-  // into `animus-kf-1w7pb41px`.
+  // Keyframe names ending in digits (`animus-kf-1w7pb41`) would otherwise take
+  // a `px` suffix; `animation-name` never carries a number.
   'animation-name',
   'animation-iteration-count',
   'aspect-ratio',
@@ -58,14 +48,6 @@ export const UNITLESS_PROPERTIES = new Set([
   'zoom',
 ]);
 
-/**
- * Both spellings of every unitless property, precomputed at module load.
- *
- * Callers arrive from two directions — CSS declaration text (kebab-case) and
- * prop configs (camelCase) — and the lookup sits on the runtime's dynamic-prop
- * hot path, so the conversion happens once here rather than per call.
- * Single-word entries convert to themselves and collapse into one member.
- */
 const UNITLESS_PROPERTY_SPELLINGS = new Set<string>();
 for (const property of UNITLESS_PROPERTIES) {
   UNITLESS_PROPERTY_SPELLINGS.add(property);
@@ -74,12 +56,7 @@ for (const property of UNITLESS_PROPERTIES) {
   );
 }
 
-/**
- * Whether bare numeric values on this CSS property render without a unit.
- * Accepts either spelling (`line-height` or `lineHeight`) — the single home
- * for the unitless decision, so no caller has to pair a case conversion with
- * a set lookup of its own.
- */
+/** Accepts either spelling: `line-height` or `lineHeight`. */
 export function isUnitlessProperty(property: string): boolean {
   return UNITLESS_PROPERTY_SPELLINGS.has(property);
 }

@@ -1,14 +1,3 @@
-/**
- * Content identity for the parity oracle.
- *
- * Every value hashed here is a JSON document — a recorded baseline envelope, a
- * seam result, or a slice of one engine's surface — so `JsonValue` (the shared
- * verification vocabulary) is the domain these functions canonicalize over. A
- * keyed block is decided by `isJsonObject`'s representation tag rather than by
- * `typeof`, which also means the things `JSON.parse` cannot produce (callables,
- * boxed primitives, `Date`/`Map`) are outside the contract instead of being
- * silently key-copied.
- */
 import { isJsonObject } from '@animus-ui/assertions';
 import { createHash } from 'crypto';
 

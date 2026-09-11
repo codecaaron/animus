@@ -1,11 +1,3 @@
-/**
- * CLI config resolution — the third driver over the shared option core
- * (shared-driver-config): documented precedence flags > config file >
- * defaults, one root authority, explicit emission mode (the CLI never
- * sniffs NODE_ENV), and a fully inspectable resolved projection for
- * `--print-config`.
- */
-
 import {
   AnimusConfigError,
   assertKnownOptionKeys,
@@ -26,7 +18,6 @@ import type {
   StaticCssConfig,
 } from '@animus-ui/extract/pipeline';
 
-/** Config filenames probed in order under the config-search root. */
 export const CONFIG_FILENAMES = [
   'animus.config.json',
   'animus.config.mjs',
@@ -34,7 +25,6 @@ export const CONFIG_FILENAMES = [
   'animus.config.ts',
 ] as const;
 
-/** The `cli:` driver namespace of the shared config schema. */
 export interface CliNamespaceOptions {
   /** Artifact output directory, relative to the root. @default '.animus' */
   outDir?: string;
@@ -52,28 +42,17 @@ export interface CliFlags {
   exclude?: string[];
 }
 
-/**
- * How the effective root was decided. Kept on the resolved config because one
- * of the four is invisible to the user: `config-dir` moves every relative
- * input to a directory they never named (see `inferredRootNotice`). Not a
- * term in the shared `provenance` map, which has no term for "inferred from
- * the config file's directory" and is shared by drivers with no such rule.
- */
 export type CliRootSource = 'flag' | 'config-file' | 'config-dir' | 'cwd';
 
 export interface ResolvedCliConfig {
   driver: 'cli';
   /** Absolute root every relative input resolves against. */
   root: string;
-  /** Which authority decided `root`. */
   rootSource: CliRootSource;
-  /** Absolute path of the config file consulted, or null. */
   configFile: string | null;
-  /** The effective core options handed to the session. */
   options: AnimusCoreOptions;
   /** Absolute artifact output directory. */
   outDir: string;
-  /** Effective merged exclusion pattern list (defaults ∪ user). */
   excludePatterns: readonly string[];
   mode: AnimusMode;
   provenance: Record<string, OptionProvenance>;
@@ -215,17 +194,13 @@ function configStaticCss(value: ConfigValue): StaticCssConfig | undefined {
 }
 
 function parseLoadedCliConfig(raw: ConfigRecord): LoadedCliConfig {
-  // v2 is the only engine (openspec: retire-extract-v1) — reject a stale v1
-  // selection loudly before any engine work, matching the plugin drivers.
-  // `engine` is a CORE key, so the key validator vouches for it and this
-  // projection then drops the value: without this gate the CLI is the one
-  // driver that silently runs v2 for a config (or ANIMUS_ENGINE override)
-  // that asked for v1.
+  // This projection drops `engine`, so without this gate a config asking
+  // for the retired v1 engine would silently run v2.
   assertNoRetiredEngineSelection(
     isConfigString(raw.engine) ? raw.engine : undefined
   );
-  // Preserve the shared validator's key and primitive error precedence before
-  // projecting the external record into the CLI-owned typed contract.
+  // Runs before the projection, so the shared validator's key and
+  // primitive error precedence is what the user sees.
   assertKnownOptionKeys(raw);
   const cliValue = raw.cli;
   const cli = isConfigRecord(cliValue) ? cliValue : {};
@@ -238,8 +213,6 @@ function parseLoadedCliConfig(raw: ConfigRecord): LoadedCliConfig {
   return {
     core: {
       system: isConfigString(raw.system) ? raw.system : undefined,
-      // `root` intentionally retains its historical soft shape: a non-string
-      // value is ignored and config-directory authority wins.
       root: isConfigString(raw.root) ? raw.root : undefined,
       exclude: isConfigStringArray(raw.exclude) ? raw.exclude : undefined,
       extensions: isConfigStringArray(raw.extensions)
@@ -304,18 +277,10 @@ async function loadConfigFile(path: string): Promise<ConfigRecord> {
   }
 }
 
-/**
- * Resolve the effective CLI configuration. Precedence: flags > config file
- * > documented defaults. Scalar flags override; `--exclude` values merge
- * (exclusion semantics are merge-only by contract).
- */
 export async function resolveCliConfig(
   flags: CliFlags,
   cwd: string
 ): Promise<ResolvedCliConfig> {
-  // Root authority, stated ONCE: --root wins; else the config file's
-  // `root` (resolved against the file's directory); else the config
-  // file's directory; else cwd. A --config path is honored from anywhere.
   const flagRoot = flags.root ? resolve(cwd, flags.root) : null;
 
   let configFile: string | null = null;
@@ -382,11 +347,8 @@ export async function resolveCliConfig(
     );
   }
 
-  // `exclude: []` is a STATEMENT ("exclude nothing"), not an absence, and
-  // only the config file can express it: `--exclude` is repeatable, so an
-  // absent flag arrives as `undefined` and a present one always carries a
-  // value. An empty list that decays to `undefined` downstream reinstates
-  // REPLACEABLE_DEFAULT_EXCLUDE.
+  // `exclude: []` states "exclude nothing" and only the config file can
+  // express it; decaying it to undefined restores the replaceable defaults.
   const fileExclude = raw.exclude;
   const flagExclude = flags.exclude;
   const excludeIsExplicit =
@@ -406,7 +368,7 @@ export async function resolveCliConfig(
   }
   const resolvedMode = resolveMode(
     flags.mode ?? raw.mode,
-    // The CLI's documented default: production emission. Never NODE_ENV.
+    // Production by default; the CLI never sniffs NODE_ENV.
     () => 'production'
   );
   provenance['mode'] = resolvedMode.provenance;
@@ -450,14 +412,8 @@ export async function resolveCliConfig(
   };
 }
 
-/**
- * The line that tells a user their root moved, emitted only for the one root
- * authority the invocation does not state: a `--config` path outside the
- * working directory makes the config file's directory the root every relative
- * input resolves against. `--root` and a config-file `root` key are the
- * user's own words and are never announced. Null when there is nothing to
- * report.
- */
+/** Announced only for the root authority the invocation does not state:
+ *  `--root` and a config-file `root` are the user's own words. */
 export function inferredRootNotice(
   config: ResolvedCliConfig,
   cwd: string
@@ -470,7 +426,6 @@ export function inferredRootNotice(
   );
 }
 
-/** The `--print-config` projection: everything effective, nothing hidden. */
 export function projectResolvedConfig(config: ResolvedCliConfig) {
   return {
     driver: config.driver,

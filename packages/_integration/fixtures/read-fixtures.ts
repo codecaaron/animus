@@ -6,10 +6,6 @@ interface FileEntry {
   source: string;
 }
 
-/**
- * Read .tsx fixture files from a directory and return FileEntry[]
- * in the format analyzeProject() expects.
- */
 export function readFixtureFiles(dir: string): FileEntry[] {
   const entries: FileEntry[] = [];
   for (const name of readdirSync(dir)) {
@@ -23,9 +19,6 @@ export function readFixtureFiles(dir: string): FileEntry[] {
   return entries;
 }
 
-/**
- * Read specific fixture files by name.
- */
 export function readFixtureFile(dir: string, filename: string): FileEntry {
   const fullPath = join(dir, filename);
   return {

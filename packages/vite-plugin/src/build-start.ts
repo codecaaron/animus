@@ -18,12 +18,8 @@ import { basename, relative } from 'path';
 import type { PluginContext } from './context';
 
 /**
- * buildStart: load the system, discover and ingest sources (local +
- * external packages), run whole-project analysis, and log the report.
- * `resolveSpecifier` is the bundler seam — Vite's `this.resolve` mapped to
- * an absolute id. `emitAsset` (build mode only) is Rollup's `this.emitFile`
- * for `asset()` placeholder substitution; absent in dev, where resolved
- * files are served via base + `/@fs/` instead.
+ * `resolveSpecifier` maps a specifier to an absolute id. `emitAsset` is
+ * present in build only, where `asset()` files become Rollup assets.
  */
 export async function runBuildStart(
   ctx: PluginContext,
@@ -34,19 +30,15 @@ export async function runBuildStart(
   // server lifecycle never bleed into a fresh build/dev start.
   clearEngineCache(ctx.engineApi);
 
-  // Reset the asset() pass BEFORE step 6's runAnalysis: its substitution
-  // pass consults this state, and Rollup reference ids are scoped to one
-  // build — a second buildStart on the same context (another environment,
-  // a --watch rebuild) must not splice build #1's ids into build #2's CSS.
+  // Reset before the analysis below, which consults this state: Rollup
+  // reference ids are scoped to one build and must not cross into the next.
   ctx.assetPassComplete = false;
   ctx.assetUrlBySpecifier.clear();
   ctx.assetResolutionFailures.clear();
 
-  // 1. Load system: config, theme, transforms, global styles
   let t0 = performance.now();
   ctx.loadSystem();
 
-  // Validate layer ordering
   if (ctx.options.layers) {
     validateLayerOrder(ctx.options.layers);
     ctx.log(`Custom layers: [${ctx.options.layers.join(', ')}]`);
@@ -62,11 +54,8 @@ export async function runBuildStart(
     );
   }
 
-  // 3. Discover source files via recursive directory walk
   t0 = performance.now();
-  // Refresh the hoisted `extensionsSet` and `excludeMatcher` in case
-  // `options` was mutated between server lifecycles. Sources of truth stay
-  // `options.extensions ?? DEFAULT_EXTENSIONS` / `options.exclude`.
+  // Refresh in case `options` was mutated between server lifecycles.
   ctx.excludeMatcher = createExcludeMatcher(ctx.options.exclude);
   const excludePatterns = ctx.excludeMatcher;
   ctx.extensionsSet = new Set(ctx.options.extensions ?? DEFAULT_EXTENSIONS);
@@ -77,8 +66,8 @@ export async function runBuildStart(
     ctx.extensionsSet
   );
 
-  // 4. Read raw original sources. Adaptation happens once after local and
-  // external discovery establish the complete resolver index.
+  // Adaptation happens once, after local and external discovery establish
+  // the complete resolver index.
   const rawEntries: Array<{
     path: string;
     source: string;
@@ -95,15 +84,12 @@ export async function runBuildStart(
     }
   }
 
-  // 5. Discover external packages from system entry file imports and resolve them
   const localFileCount = rawEntries.length;
   const packageSpecifiers = extractSystemFilePackages(ctx.resolvedSystemPath!);
 
   ctx.externalSourceEntries.clear();
 
-  // Shared traversal/ingest (spec: external-package-file-discovery);
-  // only specifier resolution, MDX handling, and the hash/cache policy
-  // below stay bundler-specific.
+  // Shared traversal; resolution and hash policy stay bundler-specific.
   const collected = await collectExternalPackageSources({
     specifiers: packageSpecifiers,
     resolveSpecifier,
@@ -128,8 +114,7 @@ export async function runBuildStart(
   }
 
   ctx.externalPackageDirs = collected.packageDirs;
-  // Both prior registration points run before this assignment
-  // (configureServer precedes buildStart; loadSystem precedes discovery), so
+  // The earlier registration points both run before this assignment, so
   // external dirs must register here or they are never watched.
   ctx.registerSystemWatchPaths();
 
@@ -138,16 +123,11 @@ export async function runBuildStart(
     `Discovered ${rawEntries.length} files (${packageFileCount} from packages) (${Math.round(performance.now() - t0)}ms)`
   );
 
-  // 6. Run project-wide analysis to produce the manifest. The cross-source
-  // token-contract gate (extraction-diagnostics) runs inside runAnalysis —
-  // on this pass and on every HMR re-analysis alike.
   t0 = performance.now();
   await ctx.analyzeIngested({
     rawEntries,
-    // Seed the dev cache from the accepted corpus BEFORE the analysis gate:
-    // a failed non-strict buildStart analysis must leave HMR the full source
-    // corpus to re-analyze, not a one-file corpus assembled from the first
-    // edit.
+    // Seed before the analysis gate: a failed non-strict buildStart must
+    // leave HMR the full corpus, not one assembled from the first edit.
     beforeAnalysis: (accepted) => {
       if (!ctx.isProd) {
         ctx.mutateFileCache((cache) => {
@@ -160,16 +140,8 @@ export async function runBuildStart(
     },
   });
 
-  // 6c. asset() placeholder resolution (global-styles-system): resolve each
-  // referenced specifier through the bundler. Dev serves the resolved file
-  // via base + /@fs/. Build emits it as a Rollup asset and substitutes
-  // Vite's own `__VITE_ASSET__<referenceId>__` marker: Vite's CSS pipeline
-  // resolves the marker to the hashed file name (with base / relative-base
-  // handling) BEFORE the stylesheet asset is itself hashed and emitted, so
-  // the CSS `[hash]` reflects the final URL — and markers landing in JS
-  // chunks (inlined/code-split CSS) are resolved by the same machinery. An
-  // unsubstitutable specifier warns and emits literally in non-strict mode,
-  // fails the build under strict.
+  // Vite's CSS pipeline resolves `__VITE_ASSET__` markers to hashed names
+  // before the stylesheet is hashed, so the CSS hash reflects the final URL.
   const assetSpecifiers = findAssetSpecifiers(ctx.globalCss);
   for (const specifier of assetSpecifiers) {
     const resolvedPath = await resolveSpecifier(specifier);
@@ -208,7 +180,6 @@ export async function runBuildStart(
   // From here on, runAnalysis owns late-appearing specifiers (dev resets).
   ctx.assetPassComplete = true;
 
-  // 7. Surface diagnostics from the manifest
   if (ctx.storedManifest) {
     const report = ctx.storedManifest.report;
     ctx.log(
@@ -219,7 +190,6 @@ export async function runBuildStart(
       `Reconciliation: ${report.components_extracted} kept, ${report.variants_eliminated} variants pruned, ${report.states_eliminated} states pruned`
     );
 
-    // Always-on elimination warnings (not gated by verbose)
     for (const d of report.eliminated_details) {
       if (d.kind === 'component') {
         ctx.warn(`⚠ ${d.component} eliminated: ${d.reason}`);
@@ -254,7 +224,6 @@ export async function runBuildStart(
     }
   }
 
-  // Compute @layer declaration for HTML injection (config-time, static).
   const { declaration } = assembleStylesheet({
     layers: ctx.options.layers,
     variableCss: '',

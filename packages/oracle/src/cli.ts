@@ -1,11 +1,7 @@
 #!/usr/bin/env bun
 /**
- * `animus-oracle` — the binary entry point.
- *
- * Everything testable lives in `./cli/run`; this file owns only the two things
- * a process boundary owns: the real streams and the exit code. `process.exit`
- * is deliberately not called — setting `exitCode` lets stdout and stderr flush
- * before the runtime leaves.
+ * `process.exit` truncates stdout and stderr; setting `exitCode` lets both
+ * flush before the runtime leaves.
  */
 
 import { runCli } from './cli/run';

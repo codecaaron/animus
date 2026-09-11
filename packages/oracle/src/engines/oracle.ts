@@ -1,14 +1,3 @@
-/**
- * The facade: six operations over one substrate.
- *
- * `createOracle` owns the session — probe ledger, obligation registry,
- * evidence ledger and one fact graph per world — so the operations compose
- * the way
- * DESIGN §6 promises: an obligation raised while explaining is the same one
- * `prove` refuses to be PROVED alongside, and repeating any question against an
- * unchanged state returns FIXPOINT instead of a second copy of the answer.
- */
-
 import { runDiff } from './diff';
 import { renderEquivalenceClasses } from './equivalence';
 import { runExplain } from './explain';
@@ -37,7 +26,6 @@ export interface EquivalenceRequest {
 }
 
 export interface Oracle {
-  /** The world every operation defaults to: host program, declared domain. */
   baselineWorld(): RenderWorld;
   inspect(request: InspectRequest): ProbeResult;
   explain(request: ExplainRequest): ProbeResult;
@@ -46,7 +34,6 @@ export interface Oracle {
   prove(request: ProveRequest): ProbeResult;
   refine(request: RefineRequest): ProbeResult;
   equivalenceClasses(request: EquivalenceRequest): RenderEquivalence;
-  /** Every obligation registered so far — host-declared and engine-raised. */
   obligations(): readonly UnknownObligation[];
 }
 

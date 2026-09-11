@@ -1,23 +1,4 @@
 #!/usr/bin/env bun
-// scripts/hygiene/presenter.ts
-//
-// Pure analyzer of .hygiene/receipts.jsonl. Computes the cascade verdict
-// (converged / cap-hit-clean / cap-hit-divergent), Layer D volume signal,
-// and Layer C code-drift WARN — all derived from the receipt stream
-// rather than scattered orchestrator counters.
-//
-// Outputs:
-//   - prints summaryLines to stdout (one per line)
-//   - writes .hygiene/verdict.json with the structured Verdict
-//
-// run.sh reads verdict.json for the suggestedExitCode and exits accordingly.
-// Process exit here is 0 on a successful analyze; non-zero only on internal
-// error (presenter does NOT propagate the cascade's verdict via its own exit).
-//
-// Usage:
-//   bun run scripts/hygiene/presenter.ts [--cap=<N>]
-//
-// Cap is read from env (HYGIENE_ITERATIONS) or --cap= flag; defaults to 5.
 
 import {
   isJsonNumber,
@@ -42,10 +23,6 @@ export interface Verdict {
   iterationCap: number;
   finalIterationDeletes: number;
   layerDVolume: LayerDVolume;
-  // Fail-closed whole-file deletion signal (design D5, guardrail G7): true when
-  // Layer D removed ≥1 whole file and the run recorded no behavior-build proof.
-  // Forces suggestedExitCode=1 so a risky deletion cannot finish green on the
-  // compile+lint safety envelope alone.
   riskyDeletion: boolean;
   codeDrift?: string[];
   suggestedExitCode: 0 | 1;
@@ -58,12 +35,6 @@ const DEFAULT_RECEIPTS_PATH = '.hygiene/receipts.jsonl';
 const DEFAULT_VERDICT_PATH = '.hygiene/verdict.json';
 const DEFAULT_CAP = 5;
 
-// Validates a decoded JSONL record against the v1 Receipt schema. Every
-// required field is present and correctly typed; malformed or wrong-version
-// records are rejected so downstream analysis only sees well-formed receipts.
-// The decision is made on the JSON document the line actually is — the shared
-// vocabulary from `@animus-ui/assertions` — rather than on a representation
-// the reader has assumed.
 function isReceipt(rec: JsonValue): rec is JsonObject & Receipt {
   return (
     isJsonObject(rec) &&
@@ -85,9 +56,7 @@ export function parseReceipts(jsonl: string): Receipt[] {
     try {
       const rec: JsonValue = JSON.parse(trimmed);
       if (isReceipt(rec)) out.push(rec);
-    } catch {
-      // Tolerate partial trailing line (e.g., SIGINT mid-write); skip silently.
-    }
+    } catch {}
   }
   return out;
 }
@@ -135,12 +104,6 @@ function layerDVolume(records: Receipt[]): LayerDVolume {
   return { files, exports: exports_ };
 }
 
-// A behavior-build proof attests that every whole-file deletion in the run was
-// validated against its behavior consumers (not just compile+lint). No cascade
-// layer emits one today — that automatic build selection is DEF-3 / lazy row 04
-// — so this is currently always false and any whole-file deletion is risky. The
-// seam is explicit (an `extras.behaviorBuildProof` marker) so row 04 can attach
-// proof later without reshaping the verdict.
 function hasBehaviorBuildProof(records: Receipt[]): boolean {
   return records.some((r) => r.extras?.behaviorBuildProof === true);
 }
@@ -159,26 +122,18 @@ function codeDrift(records: Receipt[]): string[] | undefined {
   return seen.size > 0 ? [...seen].sort() : undefined;
 }
 
-// Maps the final-iteration signal to the three-way cascade verdict. Kept
-// separate from analyze so the branch ladder reads as one decision.
 function classifyConvergence(
   finalIterationDeletes: number,
   finalIteration: number,
   cap: number
 ): Convergence {
   if (finalIterationDeletes > 0) {
-    // Divergent regardless of whether cap was actually hit — the spec frames
-    // both as "cap-hit-divergent" because the user-facing semantics are the
-    // same: cascade did not settle, manual review needed.
     return 'cap-hit-divergent';
   }
   if (finalIteration < cap) return 'converged';
   return 'cap-hit-clean';
 }
 
-// Renders the human-facing summary lines from the already-computed verdict
-// dimensions (convergence, Layer D volume, code-drift). Pure string assembly:
-// one convergence line, then optional volume NOTE and drift WARN.
 function buildSummaryLines(
   convergence: Convergence,
   finalIteration: number,
@@ -206,17 +161,12 @@ function buildSummaryLines(
     );
   }
 
-  // Whole-file deletion is fail-closed (design D5, G7): it now BLOCKS with a
-  // manual-review message (exit non-zero) rather than the prior informational
-  // NOTE, because compile+lint cannot see build-time-only consumers.
   if (riskyDeletion) {
     summaryLines.push(
       `MANUAL REVIEW REQUIRED: Layer D deleted ${volume.files} whole file(s) without behavior-build proof. Build-time consumers (vite virtual modules, MDX, Rust extractor) are invisible to knip — run \`vp run verify:full\`, confirm nothing broke, then re-run before committing.`
     );
   }
 
-  // Export-volume cleanup stays an informational nudge (does not change the
-  // exit code); retained from the prior NOTE.
   if (volume.exports >= LAYER_D_EXPORT_THRESHOLD) {
     summaryLines.push(
       `NOTE: Layer D removed ${volume.exports} exports. Build-time consumers (vite virtual modules, MDX, custom plugins) are invisible to knip — run \`vp run verify:full\` before committing.`
@@ -240,11 +190,6 @@ export function analyze(
   const byIter = partitionByIter(records);
   const iters = [...byIter.keys()].sort((a, b) => a - b);
   const lastReceiptIter = iters.length > 0 ? iters[iters.length - 1] : 0;
-  // The cascade may have run iterations beyond the last one that produced any
-  // receipts (e.g., a clean iteration 2 with zero diagnostics emits no
-  // records). Trust the orchestrator-supplied ranIters when it exceeds the
-  // receipt-derived final iter — those silent iterations are convergence
-  // evidence, not absence of evidence.
   const finalIteration =
     ranIters !== undefined && ranIters > lastReceiptIter
       ? ranIters

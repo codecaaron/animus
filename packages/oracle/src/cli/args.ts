@@ -1,21 +1,9 @@
-/**
- * The text grammar of a probe request: scenario points, assertions and world
- * deltas as flags.
- *
- * Every parser here fails loudly with the alternatives spelled out. A CLI for
- * agents is a machine surface, and a malformed request that silently degrades
- * into a weaker question (an unbound point, a dropped assertion) would produce
- * an answer to a question nobody asked — the one failure mode DESIGN §8 exists
- * to prevent.
- */
-
 import { asRuleId } from '../core/identity';
 
 import type { DimensionValue, ScenarioPoint } from '../core/scenario';
 import type { WorldDelta } from '../core/world';
 import type { OracleAssertion } from '../engines/prove';
 
-/** A malformed invocation — mapped to exit 2 by `runCli`. */
 export class UsageError extends Error {
   constructor(message: string) {
     super(message);
@@ -25,13 +13,6 @@ export class UsageError extends Error {
 
 const NUMERIC = /^-?\d+(?:\.\d+)?$/;
 
-/**
- * Scenario values are typed (`state:X:disabled` is boolean, `viewport.inline`
- * is numeric), and the shell only ever hands over strings. Coercion is
- * deliberately literal — `true`, `false` and a plain number — so a variant
- * option spelled `true` stays reachable as a string nowhere and no option name
- * is silently retyped.
- */
 export const coerce = (raw: string): DimensionValue => {
   const text = raw.trim();
   if (text === 'true') return true;
@@ -169,7 +150,6 @@ export const parseAssertion = (
   }
 };
 
-/** `--force <dimension>=<value>` */
 export const parseForce = (spec: string): WorldDelta => {
   const parts = splitFirst(spec, '=');
   if (parts === undefined || parts[0].length === 0) {
@@ -184,15 +164,6 @@ export const parseForce = (spec: string): WorldDelta => {
   };
 };
 
-/**
- * `--replace-token=<--var>=<value>`.
- *
- * The bare name (`color-danger=#000`) is accepted too, because `parseArgs`
- * refuses a dash-leading value in the space-separated form — a token is always
- * a custom property, so prefixing an unprefixed name invents nothing. A single
- * leading dash is still an error rather than a guess about which spelling was
- * meant.
- */
 export const parseTokenReplacement = (spec: string): WorldDelta => {
   const parts = splitFirst(spec, '=');
   const name = parts === undefined ? '' : parts[0].trim();
@@ -213,7 +184,6 @@ export const parseTokenReplacement = (spec: string): WorldDelta => {
   return { kind: 'replace-token', token, value: parts[1] };
 };
 
-/** `--remove-rule <ruleId>:<property>` — the exact, target-free form. */
 export const parseRuleRemoval = (spec: string): WorldDelta => {
   const parts = splitLast(spec, ':');
   if (parts === undefined || parts[0].length === 0 || parts[1].length === 0) {
@@ -234,7 +204,6 @@ export interface PropertyReplacement {
   value: string;
 }
 
-/** `--replace <property>=<value>` — the rule is resolved by the caller. */
 export const parsePropertyReplacement = (spec: string): PropertyReplacement => {
   const parts = splitFirst(spec, '=');
   if (parts === undefined || parts[0].length === 0) {

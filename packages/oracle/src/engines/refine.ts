@@ -1,19 +1,3 @@
-/**
- * `refine` — discharge one unknown as cheaply and narrowly as possible.
- *
- * An unknown is never a dead end (DESIGN §4). When the obligation's guard
- * turns on a finite axis this world declares, the branch split is executed
- * here and now: the world is forked per value, the influenced targets are
- * re-read under each pinned binding, and the per-branch facts carry that
- * binding in their guard — a partition of the domain, which is a *stronger*
- * answer than any single point measurement.
- *
- * Otherwise the answer is honest about being CONDITIONAL: it names the cheapest
- * sound procedure and why this phase cannot run it (context capsules are
- * declared, not implemented), and lists the discharge options in cost order so
- * the next operation is a decision rather than a search.
- */
-
 import { asObligationId } from '../core/identity';
 import { eq, referencedDimensions } from '../core/predicate';
 import { applyDeltas, worldId } from '../core/world';
@@ -31,7 +15,6 @@ import type { RenderWorld } from '../core/world';
 import type { OracleRuntime } from './runtime';
 
 export interface RefinePolicy {
-  /** Refuse the automated fork even when it is available. */
   allowBranchSplit?: boolean;
   maxBranches?: number;
 }
@@ -47,12 +30,6 @@ interface Forkable {
   values: readonly DimensionValue[];
 }
 
-/**
- * The axis to split on: a dimension the obligation's guard tests that this
- * world declares as a finite set. An axis the world never declared cannot be
- * forked — no fork can invent values — and an interval axis is not a finite
- * case analysis, so both fall through to the CONDITIONAL answer.
- */
 const forkableAxis = (
   obligation: UnknownObligation,
   world: RenderWorld,
@@ -68,16 +45,6 @@ const forkableAxis = (
   return undefined;
 };
 
-/**
- * Which targets a branch split would actually re-read.
- *
- * An influence scope naming only a rule or a declaration still points at
- * components — the ones carrying that rule's classes — so a
- * property-precise obligation is forkable without the host restating the
- * target. That
- * matters because engine-raised obligations are deliberately scoped to the
- * declaration (see `cascade.raiseDynamicValue`).
- */
 const influencedTargets = (
   rt: OracleRuntime,
   obligation: UnknownObligation
@@ -140,8 +107,6 @@ export const runRefine = (
       world,
       scope: 'definition',
       objective: { kind: 'discharge', obligation: obligation.id },
-      // The resolved strategy, the same way prove resolves its cell budget:
-      // the policy changes the answer, so it must reach the probe identity.
       budget: {
         ...rt.budget,
         maxBranchForks: maxBranches,

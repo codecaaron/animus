@@ -1,12 +1,5 @@
 import { ds } from '../../ds';
 
-// ─── DocsBreadcrumb ──────────────────────────────────────────────
-//
-// Mobile-only sticky breadcrumb bar. Pure structure — no hooks,
-// no client deps. Section/page resolved by caller from DOCS_NAV.
-// RSC-safe: onClick is the only interactive prop, isolated to the
-// client boundary that renders this component.
-
 const BreadcrumbBar = ds
   .styles({
     position: 'sticky',

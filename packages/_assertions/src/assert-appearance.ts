@@ -1,29 +1,13 @@
 /**
- * Structural assertions for the system color-scheme surface
- * (openspec: system-color-scheme).
- *
- * These run over BUILT CSS — after Lightning CSS (Vite) or Next's own
- * minifier — so every matcher here tolerates the transformations a minifier is
- * allowed to make and pins only what the spec actually promises:
- *
- * - attribute selectors lose their quotes (`[data-color-mode="dark"]` ships as
- *   `[data-color-mode=dark]`), so mode matching is quote-insensitive;
- * - Lightning CSS injects `--lightningcss-light` / `--lightningcss-dark` pairs
- *   into every rule that declares `color-scheme`. It injects them into the
- *   guarded media block AND the attribute block alike, which is why
- *   declaration-list equality between the two still holds and is worth pinning.
- *
- * Everything is pure over the CSS string; no I/O.
+ * Runs over BUILT CSS: minifiers drop attribute-value quotes and Lightning CSS
+ * injects `--lightningcss-*` pairs into any rule declaring `color-scheme`.
  */
 import { AssertionError, compact } from './assert-css';
 
-/** The two OS color-scheme preferences a theme can map a mode onto. */
 export type OsScheme = 'light' | 'dark';
 
-/** The guard the emitter writes so an explicit mode wins purely in CSS. */
 const DEFAULT_GUARD = ':root:not([data-color-mode])';
 
-/** Whitespace-normalized, order-preserving declaration list of a rule body. */
 function declarationList(body: string): string[] {
   return body
     .split(';')
@@ -31,7 +15,6 @@ function declarationList(body: string): string[] {
     .filter((declaration) => declaration !== '');
 }
 
-/** Index of the `}` closing the `{` at `openIndex`, or -1 when unbalanced. */
 function matchBrace(css: string, openIndex: number): number {
   let depth = 0;
   for (let cursor = openIndex; cursor < css.length; cursor += 1) {
@@ -45,18 +28,14 @@ function matchBrace(css: string, openIndex: number): number {
 }
 
 interface Rule {
-  /** Prelude as authored/minified — the selector, or an at-rule prelude. */
   prelude: string;
-  /** Declarations between the braces, excluding any nested block. */
   body: string;
-  /** Offset of the prelude in the ORIGINAL css string. */
   index: number;
 }
 
 /**
- * Every style rule inside `css`, at any nesting depth, with offsets relative to
- * the original string. At-rules are descended into rather than returned, so an
- * `@media` wrapper never masks the rules it guards.
+ * Every style rule at any depth, with offsets into the original string.
+ * At-rules are descended into rather than returned.
  */
 function styleRules(css: string, offset = 0): Rule[] {
   const rules: Rule[] = [];
@@ -95,13 +74,10 @@ function styleRules(css: string, offset = 0): Rule[] {
 
 interface SchemeBlock {
   scheme: OsScheme;
-  /** Offset of the `@media` at-rule in `css`. */
   index: number;
-  /** Style rules directly guarded by this media block. */
   rules: Rule[];
 }
 
-/** Every `@media (prefers-color-scheme: light|dark)` block and its rules. */
 function schemeBlocks(css: string): SchemeBlock[] {
   const blocks: SchemeBlock[] = [];
   const openRe = /@media[^{]*prefers-color-scheme\s*:\s*(light|dark)[^{]*\{/g;
@@ -111,9 +87,8 @@ function schemeBlocks(css: string): SchemeBlock[] {
     const close = matchBrace(css, open);
     if (close === -1) continue;
     blocks.push({
-      // SAFETY: `openRe` captures group 1 from the literal alternation
-      // `(light|dark)`, and the group is not optional — a match therefore
-      // carries exactly one of the two `OsScheme` spellings.
+      // SAFETY: group 1 of `openRe` is a non-optional `(light|dark)`
+      // alternation, so a match carries one of the two `OsScheme` spellings.
       scheme: match[1] as OsScheme,
       index: match.index,
       rules: styleRules(css.slice(open + 1, close), open + 1),
@@ -123,15 +98,8 @@ function schemeBlocks(css: string): SchemeBlock[] {
 }
 
 /**
- * True when any comma-part of `selector` targets the document root via
- * `:root` — the ONLY root spelling the theme emitter writes.
- *
- * Deliberately NOT matching bare `html`: an application may legitimately author
- * `html { _osDark: { … } }` in its global styles, which emits an unguarded
- * `@media (prefers-color-scheme: dark) { html { … } }` block that is the app's
- * own business — the guard contract governs the emitter's fallback blocks, and
- * those are always `:root`-based. Widening this to `html` turned that
- * legitimate authoring shape into a false positive.
+ * True when a comma-part of `selector` targets `:root`, the only root spelling
+ * the theme emitter writes; a bare `html` rule is the application's own.
  */
 function targetsRoot(selector: string): boolean {
   return selector
@@ -139,7 +107,6 @@ function targetsRoot(selector: string): boolean {
     .some((part) => /(^|[\s>+~]):root\b/.test(part.trim()));
 }
 
-/** Locate the `[data-color-mode=<mode>]` rule, quoted or minified-bare. */
 function modeRule(css: string, mode: string): Rule | undefined {
   const re = new RegExp(
     `\\[data-color-mode\\s*=\\s*["']?${mode.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}["']?\\]`
@@ -148,54 +115,18 @@ function modeRule(css: string, mode: string): Rule | undefined {
 }
 
 /**
- * Character spans of the theme's VARIABLE-LEVEL system fallback blocks —
- * `@media (prefers-color-scheme: …) { :root:not([data-color-mode]) { … } }`.
- *
- * These sit in the unlayered variables part of the sheet, alongside `:root` and
- * the `[data-color-mode]` blocks, because that is what the emission contract
- * requires: the fallback must follow `:root` and be overridable by an explicit
- * mode block at the same (unlayered) cascade level. Wrapping them in a
- * `@layer` would move variable resolution into the layer order and break both.
- *
- * That puts them in direct tension with the modern-css-surface gate
- * `assertConditionsInsideLayers`, which requires every condition at-rule to
- * nest inside a named layer — a rule written for COMPONENT condition at-rules,
- * before variable-level media blocks existed. Pass these spans as
- * `exemptSpans` to reconcile the two gates.
- *
- * The exemption is EARNED, not asserted. A `prefers-color-scheme` block joins
- * this list only when all three hold (arch-css-structural-gates: "unlayered
- * ahead of the first `@layer` block… no nested at-rule"):
- *
- * 1. **Position** — it begins before the first `@layer <name> { … }` block
- *    opening in the sheet, i.e. it really is in the variables part. The
- *    `@layer a, b, c;` ordering STATEMENT is not a block and does not count.
- *    Without this, an exempt-looking block could sit anywhere, including past
- *    the point where the containment gate is the only thing still watching.
- * 2. **Every rule is the root guard** — one non-guard selector forfeits the
- *    whole block. An application's own `_osDark` component block, the exact
- *    shape the layer gate exists to catch, is never exempt.
- * 3. **No nested at-rule** — the span suppresses the containment gate over its
- *    whole character range, so anything nested inside would ride along
- *    unchecked. A block containing `@supports`, `@container`, a nested
- *    `@media`, or any other at-rule forfeits rather than granting cover.
- *
- * Forfeiting is always the safe direction: a block that loses its exemption is
- * simply handed back to `assertConditionsInsideLayers`, which trips.
+ * Spans of the theme's unlayered `prefers-color-scheme` fallback blocks, which
+ * sit beside `:root` so variable resolution stays out of the layer order.
  */
 export function systemSchemeVariableSpans(css: string): [number, number][] {
-  // First LAYER BLOCK opening. `@layer a, b, c;` is a declaration statement,
-  // not a block, and the trailing `,`/`;` keeps it from matching here.
   const firstLayerBlock = css.match(/@layer\s+[\w-]+\s*\{/)?.index ?? -1;
 
   const spans: [number, number][] = [];
   for (const block of schemeBlocks(css)) {
     if (block.rules.length === 0) continue;
 
-    // (1) position: must precede the layered part of the sheet.
     if (firstLayerBlock !== -1 && block.index > firstLayerBlock) continue;
 
-    // (2) every rule is the root guard.
     const allGuarded = block.rules.every(
       (rule) => compact(rule.prelude) === compact(DEFAULT_GUARD)
     );
@@ -205,8 +136,8 @@ export function systemSchemeVariableSpans(css: string): [number, number][] {
     const close = matchBrace(css, open);
     if (open === -1 || close === -1) continue;
 
-    // (3) no nested at-rule anywhere in the body — the span would otherwise
-    // grant it blanket cover from the containment gate.
+    // A nested at-rule forfeits the exemption: the span would otherwise grant
+    // it blanket cover from the containment gate.
     if (/@[a-zA-Z-]/.test(css.slice(open + 1, close))) continue;
 
     spans.push([block.index, close]);
@@ -216,30 +147,16 @@ export function systemSchemeVariableSpans(css: string): [number, number][] {
 
 export interface SystemSchemeGuardConfig {
   /**
-   * OS schemes that MUST appear as guarded root blocks carrying at least one
-   * custom property. Omit to arm the check without requiring presence (an
-   * unconfigured app stays green); pass both to make it non-vacuous.
+   * OS schemes that must appear as guarded root blocks assigning at least one
+   * custom property. Omitting it leaves the presence check unarmed.
    */
   expectSchemes?: readonly OsScheme[];
-  /** Guard selector the emitter writes. Defaults to the spec's. */
   guard?: string;
 }
 
 /**
- * The system fallback never fights an explicit mode.
- *
- * Spec contract ("Guarded system fallback emission"): the mapped modes'
- * variable assignments apply under the OS preference *only while the document
- * root carries no `data-color-mode` attribute*. So the thing that must carry
- * the guard is every ROOT-TARGETING rule inside a `prefers-color-scheme` media
- * block — not every `prefers-color-scheme` at-rule in the sheet.
- *
- * That distinction is load-bearing, not a loophole. An application may author
- * its own OS-preference condition (`_osDark` on a component), which emits an
- * unguarded `@media (prefers-color-scheme: dark) { .animus-… { … } }` block
- * that is entirely correct and must not trip this gate. `e2e/vite-app` ships
- * exactly such a block in the same stylesheet as the theme's guarded blocks,
- * which is what keeps this assertion honest in both directions.
+ * Every ROOT-targeting rule inside a `prefers-color-scheme` block carries the
+ * guard, so the fallback never fights an explicit mode; other rules are free.
  */
 export function assertSystemSchemeGuard(
   css: string,
@@ -295,20 +212,14 @@ export function assertSystemSchemeGuard(
 }
 
 export interface ColorSchemeEmissionConfig {
-  /** `color-scheme` expected on the `:root` variables block (initial mode). */
   root: string;
-  /** Declared mode name → `color-scheme` expected on its attribute block. */
   modes: Readonly<Record<string, string>>;
-  /** OS scheme → `color-scheme` expected inside that scheme's guarded block. */
   system?: Readonly<Partial<Record<OsScheme, string>>>;
 }
 
 /**
- * Spec contract "Browser color-scheme classification": a supplied
- * classification puts `color-scheme` on `:root`, on every declared mode's
- * attribute block, and inside each guarded media block — so native surfaces
- * (form controls, scrollbars, the canvas) track whichever mode is active,
- * including the OS-driven one.
+ * `color-scheme` is emitted on `:root`, on every declared mode's attribute
+ * block, and inside each guarded media block, so native surfaces track it.
  */
 export function assertColorSchemeEmission(
   css: string,
@@ -331,8 +242,6 @@ export function assertColorSchemeEmission(
   if (rootScheme !== config.root) {
     throw new AssertionError(
       `assertColorSchemeEmission: :root expected 'color-scheme: ${config.root}', found ${rootScheme ?? 'none'}`,
-      // `null` is the serializable spelling of "the rule declares no
-      // color-scheme at all" — an absent key would read as a lost detail.
       { expected: config.root, found: rootScheme ?? null }
     );
   }
@@ -374,19 +283,12 @@ export function assertColorSchemeEmission(
 }
 
 export interface SystemFallbackParityConfig {
-  /** OS scheme → the declared mode name the theme maps it onto. */
   mapping: Readonly<Partial<Record<OsScheme, string>>>;
 }
 
 /**
- * Spec contract: the guarded media block's declarations are the mapped mode's
- * RAW values — "identical to its attribute block". Pinning byte-equality of the
- * two declaration lists is what makes the OS path and the explicit path
- * provably the same rendering, rather than two hand-kept-in-sync copies.
- *
- * Also pins "Fallback blocks follow the root block": `:root` must precede every
- * guarded block, because a fallback emitted ahead of `:root` would lose to the
- * initial mode's own root assignments at equal specificity.
+ * A guarded fallback block's declarations equal its mapped mode's attribute
+ * block, and follow `:root` — ahead of it they lose at equal specificity.
  */
 export function assertSystemFallbackParity(
   css: string,

@@ -1,10 +1,5 @@
 import { ds } from '../../setup';
 
-// Pattern G — close mirror of CopyButton's authoring. Full chain:
-// .styles({ ..., _hover: {...}, _focusVisible: {...token ref...} })
-// .variant({...}).states({...}).asElement('button').
-// Observed in showcase dist: base + _hover + variants + states all extract,
-// but :focus-visible drops. This isolates the chain-richness interaction.
 export const PatternG = ds
   .styles({
     color: 'text',

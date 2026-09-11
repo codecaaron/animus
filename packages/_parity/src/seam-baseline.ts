@@ -8,13 +8,8 @@ import { canonicalPrettyJson } from './content-hash';
 
 import type { JsonObject, JsonValue } from '@animus-ui/assertions';
 
-/**
- * One recorded seam case. A wire contract — it is the value stored under a
- * case id in `tools/seam-baseline.json` — so it is a `type`, and its
- * `diagnostics` stay an uninterpreted JSON value: the battery records what the
- * engine reported and compares it by canonical form, and nothing here decides
- * what a diagnostic means.
- */
+/** One recorded seam case, stored under a case id in `seam-baseline.json`.
+ *  `diagnostics` stays uninterpreted: recorded and compared, never read. */
 export type SeamCaseResult = {
   css: string;
   diagnostics: JsonValue;
@@ -32,15 +27,6 @@ const DEFAULT_FILE_OPS: AtomicFileOps = {
   rmSync: removeFileSync,
 };
 
-/**
- * Compare a recorded seam document against a fresh one, case id by case id.
- *
- * Both sides are JSON documents keyed by case id — the baseline is bytes read
- * back off disk — and this comparator deliberately does not interpret a case's
- * value: it decides presence, and then identity under the writer's canonical
- * form. Anything that reads a FIELD of a case is `SeamCaseResult`'s business,
- * not this function's.
- */
 export function compareSeamResults(
   baseline: JsonObject,
   candidate: JsonObject
@@ -55,9 +41,8 @@ export function compareSeamResults(
     } else if (!Object.hasOwn(candidate, id)) {
       failures.push(`${id}: missing from candidate`);
     } else if (
-      // Same canonical form the writer publishes: recorded baselines are
-      // key-sorted, fresh engine output is not — raw JSON.stringify would
-      // flag any non-empty object on key order alone.
+      // Recorded baselines are key-sorted and fresh engine output is not, so
+      // a raw `JSON.stringify` compare would flag key order alone.
       canonicalPrettyJson(baseline[id]) !== canonicalPrettyJson(candidate[id])
     ) {
       failures.push(`${id}: output differs`);

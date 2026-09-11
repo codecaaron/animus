@@ -1,32 +1,3 @@
-// scripts/verify/packed-graph.ts
-//
-// Validator for the packed-release package graph, consumed by packed.sh in
-// three modes:
-//
-//   resolve   — no args selects local mode, where the caller packs every
-//               PUBLISHABLE_PACKAGE_NAMES entry itself; the only other accepted form
-//               is exactly `--tarballs-dir <path>`. It fails loud on any other
-//               argument, on an unreadable directory, and on zero or multiple
-//               `animus-ui-<name>[-<version>].tgz` matches for a publishable
-//               package — exactly one tarball per publishable package is what
-//               makes an immutable release bundle verifiable.
-//   manifests — reads package/package.json out of each supplied tarball and
-//               reports every internal @animus-ui/* edge across dependencies,
-//               optionalDependencies, and peerDependencies whose declared
-//               version differs from the tarball under test, plus any edge with
-//               no tarball in the set. The expected-version map fans
-//               @animus-ui/extract's optionalDependencies platform packages out
-//               to extract's own version.
-//   installed — recursively walks a consumer's node_modules for @animus-ui/*
-//               packages at any depth and flags workspace symlinks, unreadable
-//               manifests, and version mismatches, naming the offending
-//               absolute path. The walk is recursive because npm silently
-//               produces nested copies that a top-level-only check misses.
-//
-// A recreated regression suite should drive these three behaviors from
-// in-memory manifest maps and a temporary node_modules tree; the production
-// gate is packed.sh lines 18, 68, and 122.
-
 import { spawnSync } from 'node:child_process';
 import { lstatSync, readFileSync, readdirSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
@@ -44,14 +15,6 @@ export const PUBLISHABLE_PACKAGE_NAMES = [
 const INTERNAL_PREFIX = '@animus-ui/';
 const EXTRACT_PLATFORM_PREFIX = '@animus-ui/extract-';
 
-// DISTINCT from `./manifest-model.ts`'s `PackageManifest`, deliberately.
-// That type models an arbitrary package.json found on disk, so every field is
-// optional. This one models a manifest extracted from a BUILT TARBALL, where
-// `name` and `version` are guaranteed present by the publish contract — every
-// read site below keys maps by `manifest.name` and compares `manifest.version`
-// against the expected graph. Same file format, different question: routing
-// this through the on-disk model would force a presence check for an invariant
-// `bun pm pack` already establishes.
 export type PackageManifest = {
   name: string;
   version: string;
@@ -78,10 +41,6 @@ export type TarballInputs =
   | { mode: 'local'; tarballs: Map<string, string> }
   | { mode: 'supplied'; tarballs: Map<string, string>; tarballsDir: string };
 
-// Membership lookup over the same names. The tuple above is the ORDERED
-// publish list (packed.sh packs in that order); this asks a different question
-// of it — "is this arbitrary dependency name one of ours?" — and asking it of a
-// set keeps an unrelated name from having to pose as a member of the tuple.
 const PUBLISHABLE_PACKAGE_NAME_SET = new Set<string>(PUBLISHABLE_PACKAGE_NAMES);
 
 function isInternalPackage(name: string): boolean {
@@ -151,6 +110,8 @@ export function validateInternalManifestEdges(
   return diagnostics;
 }
 
+// The walk recurses because npm materializes nested copies of an @animus-ui
+// package that a top-level-only check never sees.
 function findInstalledInternalPackages(root: string): string[] {
   const packages: string[] = [];
 
@@ -172,9 +133,7 @@ function findInstalledInternalPackages(root: string): string[] {
             packages.push(join(scopeDirectory, entry.name));
           }
         }
-      } catch {
-        // This node_modules tree has no installed @animus-ui packages.
-      }
+      } catch {}
     }
 
     for (const entry of entries) {
@@ -207,12 +166,8 @@ export function validateInstalledInternalGraph(
 
     let manifest: PackageManifest;
     try {
-      // SAFETY: `packagePath` is an installed (non-symlink, checked above)
-      // package directory the installer materialized from a published tarball,
-      // and a publish is impossible without `name` and `version` — the same
-      // publish contract this type is declared against. An unreadable or
-      // unparseable manifest is caught below and reported as a diagnostic
-      // rather than reaching the read sites.
+      // SAFETY: an installed package directory comes from a published tarball,
+      // so name and version are present; a parse failure is caught below.
       manifest = JSON.parse(
         readFileSync(join(packagePath, 'package.json'), 'utf8')
       ) as PackageManifest;
@@ -294,11 +249,8 @@ function manifestFromTarball(path: string): PackageManifest {
       `cannot read package/package.json from ${path}: ${result.stderr.trim()}`
     );
   }
-  // SAFETY: `tar` exited 0, so `package/package.json` was extracted from a
-  // tarball `bun pm pack` built out of a workspace manifest. `name` and
-  // `version` are the two fields the pack step itself requires — that is the
-  // publish contract `PackageManifest` is declared against above — so no read
-  // site below has to check for them.
+  // SAFETY: tar exited 0, so this is a package.json `bun pm pack` built, and
+  // the pack step itself requires the name and version fields read below.
   return JSON.parse(result.stdout) as PackageManifest;
 }
 
@@ -372,9 +324,8 @@ function main(args: readonly string[]): number {
     printInstalledDiagnostics(diagnostics);
     return diagnostics.length === 0 ? 0 : 1;
   } catch (error) {
-    // SAFETY: every throw reachable from this block is an Error — the
-    // `new Error(...)` sites in `resolveTarballInputs`, `manifestFromTarball`,
-    // and the root check just above, plus `node:fs` and `JSON.parse` failures.
+    // SAFETY: every throw reachable here is an Error — the explicit throws in
+    // this file plus `node:fs` and `JSON.parse` failures.
     console.error(`ERROR: ${(error as Error).message}`);
     return 1;
   }

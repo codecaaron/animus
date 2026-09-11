@@ -30,12 +30,6 @@ export interface InMemoryHostConfig {
   ruleDependencies?: Readonly<Record<string, readonly string[]>>;
 }
 
-/**
- * The animus class-emission convention: the component class, then one class
- * per bound variant, then one per active state. Ordering is by dimension name
- * so a point always yields the same class list — class order is part of what
- * later waves hash.
- */
 const defaultClassesFor = (
   component: ComponentRecord,
   point: ScenarioPoint
@@ -61,12 +55,6 @@ const defaultClassesFor = (
   return [component.className, ...variants, ...states];
 };
 
-/**
- * The scenario axes that can affect one component: every unscoped axis
- * (viewport, mode, …) plus the scoped axes that name this component. A scoped
- * axis belonging to another component cannot change this target's classes, so
- * including it would only inflate the cell count.
- */
 const dimensionsForComponent = (
   component: ComponentRecord,
   dimensions: ScenarioDomain
@@ -85,11 +73,6 @@ const dimensionsForComponent = (
   return scoped;
 };
 
-/**
- * A host built from literal records — the substrate's test double and the
- * shape every real adapter has to produce. It is pure data: no clock, no
- * filesystem, no ordering that depends on anything but the config.
- */
 export const createInMemoryHost = (config: InMemoryHostConfig): OracleHost => {
   const layerOrder = config.layerOrder ?? ANIMUS_LAYER_ORDER;
 

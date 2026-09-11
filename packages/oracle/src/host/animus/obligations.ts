@@ -1,11 +1,5 @@
 import { TRUE } from '../../core/predicate';
 import { componentDependency, manifestDependency } from './dependency';
-// The manifest doubles as an obligation ORIGIN: where an obligation points
-// when the artifact has no source span for it — a system-layer slot class or
-// a theme-level dynamic prop is declared by the build, not written at one
-// call site. Naming the manifest is honest; naming an arbitrary component
-// file would not be. That is a role for the loader's filename, not a second
-// authority over how the file is spelled.
 import { MANIFEST_FILE } from './loader';
 
 import type { RenderSubject, SourceRef } from '../../core/fact';
@@ -72,26 +66,6 @@ const scopeOfRule = (rule: UniverseRule): RenderSubject[] => {
   return scope;
 };
 
-/**
- * The unknowns the adapter already knows about, as declared host obligations
- * (DESIGN §4).
- *
- * Each family exists because the closed style universe genuinely stops short,
- * not because parsing was hard:
- *
- * - `tree-shape` — a relational selector's applicability is a fact about the
- *   rendered tree, and the render-tree provider is Phase 2.
- * - `geometry` — a container query tests a layout *result*; deriving it needs
- *   the layout IR this spike types but does not evaluate (DESIGN §10).
- * - `dynamic-value` — a dynamic system prop's value arrives at the call site,
- *   so the rule is known exactly and its `var()` binding is not.
- * - `runtime-style-write` — residue the extractor could not resolve
- *   statically; the value reaches the DOM outside the stylesheet entirely.
- *
- * Registering them here is what makes a later answer able to say `OUTSIDE_
- * MODEL` with a named residual instead of quietly answering as if the model
- * were complete.
- */
 export const buildObligations = (
   input: AnimusObligationInput
 ): HostObligation[] => {

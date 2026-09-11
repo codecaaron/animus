@@ -1,12 +1,3 @@
-/**
- * createClassResolver — framework-agnostic className resolution.
- *
- * Produced by .asClass() terminal. Same resolution logic as createComponent
- * (variants, states, compounds, system props). The resolver remains callable
- * as a className string function and also exposes framework-neutral attributes
- * for renderers that need dynamic CSS-variable styles.
- */
-
 import {
   type ClassResolverConfig,
   type DynamicPropConfig,

@@ -1,14 +1,3 @@
-/**
- * The human report (DESIGN §9.1-shaped): fixed, uppercase section headers, one
- * fact per line, and everything a fact rests on indented beneath it.
- *
- * No colour codes and no box drawing: the report is read as often by `grep`
- * and by an agent tailing stderr as by a person, so a section is found by its
- * header and a fact by its property name. Sections with nothing to say are
- * omitted rather than printed empty — except VERDICT and COVERAGE, whose
- * absence would itself be information.
- */
-
 import { originEdge } from '../core/fact';
 import { describeValue } from '../core/value';
 import { describePoint } from '../engines/format';
@@ -22,7 +11,6 @@ import type { RenderEquivalence } from '../engines/equivalence';
 
 export interface RenderContext {
   command: string;
-  /** The resolved component id, when the command had a target. */
   target?: string;
   binding?: string;
   classes?: readonly string[];
@@ -166,8 +154,6 @@ export const renderProbe = (
     }
   }
 
-  // A sweep (e.g. simulate's collateral pass) can evaluate more cells than
-  // the focal domain holds; "133 of 6" would read as a defect.
   lines.push(
     'COVERAGE',
     result.coverage.cellsEvaluated > result.coverage.scenarioCells

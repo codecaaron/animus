@@ -6,8 +6,6 @@ import { Highlight, type PrismTheme } from 'prism-react-renderer';
 import { ds, theme } from '../../ds';
 import { CopyButton } from '../docs/CopyButton';
 
-// ─── Styled Elements ─────────────────────────────────────────────
-
 const SyntaxContainer = ds
   .styles({
     display: 'flex',
@@ -234,8 +232,6 @@ const LineNumberSpan = ds
   })
   .asElement('span');
 
-// ─── Syntax Theme ────────────────────────────────────────────────
-
 const animusTheme: PrismTheme = {
   plain: {
     color: theme.varRef('colors.text'),
@@ -284,12 +280,8 @@ const animusTheme: PrismTheme = {
   ],
 };
 
-// ─── Helpers ─────────────────────────────────────────────────────
-
-/** The languages the highlighter accepts. The highlighter owns this
- *  vocabulary — consumers that forward a `language` through to
- *  `SyntaxBlock` (e.g. `docs/BeforeAfter`) import this type rather than
- *  re-declaring a narrower copy, so adding a language reaches them. */
+/** The languages the highlighter accepts. Consumers that forward a
+ *  `language` import this type rather than re-declaring a narrower copy. */
 export type Language =
   | 'tsx'
   | 'css'
@@ -328,8 +320,6 @@ function detectLanguage(code: string): Language {
     return 'tsx';
   return 'tsx';
 }
-
-// ─── Component ───────────────────────────────────────────────────
 
 export function SyntaxBlock({
   children,

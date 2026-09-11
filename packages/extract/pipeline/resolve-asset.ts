@@ -1,12 +1,6 @@
 /**
- * Node-side asset specifier resolution shared by the host plugins (the
- * asset() contract, global-styles-system): host path aliases apply FIRST —
- * an alias such as `@fonts` works in application modules, so
- * `asset('@fonts/inter.woff2')` must resolve identically — then direct Node
- * resolution, then the package-root fallback (exports maps rarely list
- * asset subpaths). Bundler-native resolution (Vite's `this.resolve`) is
- * still preferred where available; this resolver covers the paths that have
- * no bundler hook (Next's session, Vite's dev re-analysis).
+ * Asset resolution for hosts with no bundler hook. Host path aliases apply
+ * FIRST, so `asset('@fonts/x')` resolves as the alias does in app modules.
  */
 import { existsSync } from 'fs';
 import { createRequire } from 'module';
@@ -16,9 +10,8 @@ import { parseInternalWire } from './internal-wire';
 
 import type { PathAliasEntry } from './path-aliases';
 
-// One resolution context per root — `createRequire` builds a module system
-// anchor with its own cache, so reconstructing it per call throws that
-// cache away.
+// One require anchor per root: `createRequire` carries its own resolution
+// cache, which rebuilding per call would throw away.
 const requireByRoot = new Map<string, ReturnType<typeof createRequire>>();
 
 function requireAnchoredAt(rootDir: string): ReturnType<typeof createRequire> {
@@ -40,20 +33,13 @@ function packageRootFromEntry(entry: string): string | null {
   }
 }
 
-// Module-level memo, keyed by the alias JSON itself and never cleared: the
-// table is a stable string per config lifecycle and resolution runs once per
-// specifier, so each distinct table is parsed once for the process. Keying on
-// the payload is what makes an unbounded cache safe — a new config mints a new
-// key rather than reading a stale one.
+// Keyed by the alias JSON itself and never cleared: keying on the payload is
+// what makes the unbounded cache safe — a new config mints a new key.
 const aliasTableCache = new Map<string, PathAliasEntry[]>();
 
 /**
- * `pathAliasesJson` has exactly one encoder — `buildPathAliasesJson`, "the
- * single authoritative encoder of the wire format" — and every host assignment
- * routes through it. A parse failure is therefore a broken encoder, so it
- * throws: an empty table would disable ALL alias-based `asset()` resolution and
- * ship dangling `url()`s as a successful build. Only successful parses enter
- * the memo, so a failure can never harden into process-lifetime policy.
+ * A parse failure throws: an empty table would disable every alias-based
+ * `asset()` and ship dangling `url()`s as a successful build.
  */
 function parseAliasTable(pathAliasesJson: string): PathAliasEntry[] {
   const cached = aliasTableCache.get(pathAliasesJson);
@@ -68,10 +54,8 @@ function parseAliasTable(pathAliasesJson: string): PathAliasEntry[] {
 }
 
 /**
- * Map a specifier through the harvested host alias table (the same
- * `pathAliasesJson` wire the engine consumes — entries pre-sorted longest
- * pattern first by `buildPathAliasesJson`). Returns an absolute path to an
- * EXISTING file, or null when no alias claims the specifier.
+ * Map a specifier through the host alias table, whose entries arrive sorted
+ * longest-pattern-first. Returns an absolute path to an EXISTING file.
  */
 export function resolveThroughPathAliases(
   specifier: string,
@@ -95,9 +79,8 @@ export function resolveThroughPathAliases(
 }
 
 /**
- * Resolve an asset specifier to an absolute file: host aliases, then direct
- * Node resolution anchored at `rootDir`, then the package-root fallback.
- * Returns null when nothing matches — strict gating stays at the caller.
+ * Resolve an asset specifier: host aliases, then Node resolution anchored at
+ * `rootDir`, then the package root. Strict gating stays at the caller.
  */
 export function resolveAssetFile(
   specifier: string,
@@ -115,8 +98,7 @@ export function resolveAssetFile(
   try {
     return requireFromRoot.resolve(specifier);
   } catch {
-    // Asset subpaths are rarely listed in exports maps — fall through to
-    // package-root resolution.
+    // Asset subpaths are rarely listed in exports maps.
   }
 
   const segments = specifier.split('/');
@@ -126,9 +108,8 @@ export function resolveAssetFile(
   const subpath = specifier.slice(packageName.length + 1);
   if (!subpath) return null;
 
-  // Locate the physical package directory through Node's module search
-  // paths before asking for an exported entry. This also supports packages
-  // that intentionally expose only subpaths and have no `"."` export.
+  // Search Node's module paths for the package directory first: a package
+  // may expose only subpaths and have no `"."` export.
   for (const modulesDir of requireFromRoot.resolve.paths(packageName) ?? []) {
     const packageRoot = join(modulesDir, packageName);
     if (!existsSync(join(packageRoot, 'package.json'))) continue;
@@ -137,8 +118,8 @@ export function resolveAssetFile(
   }
 
   try {
-    // Resolve an actually exported entry, then walk to its package root.
-    // `package.json` itself is commonly hidden by an exports map.
+    // Walk to the package root from an exported entry: `package.json` itself
+    // is commonly hidden by an exports map.
     const packageEntry = requireFromRoot.resolve(packageName);
     const packageRoot = packageRootFromEntry(packageEntry);
     if (!packageRoot) return null;

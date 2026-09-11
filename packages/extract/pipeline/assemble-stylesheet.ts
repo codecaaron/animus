@@ -1,7 +1,3 @@
-/**
- * The 7 Animus cascade layers. Always prefixed with `anm-` to avoid
- * collision with other frameworks' layer names (e.g., Tailwind's `base`).
- */
 export const ANIMUS_LAYERS = [
   'anm-global',
   'anm-base',
@@ -12,13 +8,6 @@ export const ANIMUS_LAYERS = [
   'anm-custom',
 ] as const;
 
-/**
- * Build the `@layer` declaration line.
- *
- * When `isCustom` is false (default layers), uses ANIMUS_LAYERS directly.
- * When `isCustom` is true, passes names through as-is — the consumer already
- * wrote the final names including the `anm-` prefixed entries.
- */
 function buildLayerDeclaration(
   layers: readonly string[],
   isCustom?: boolean
@@ -27,12 +16,6 @@ function buildLayerDeclaration(
   return `@layer ${names.join(', ')};\n`;
 }
 
-/**
- * Validate that a consumer `layers` array contains all 7 Animus layers
- * in the correct relative order. Consumer layers may be interleaved.
- *
- * @throws Error with descriptive message on violation
- */
 export function validateLayerOrder(layers: string[]): void {
   const expected = [...ANIMUS_LAYERS];
 
@@ -62,13 +45,7 @@ export function validateLayerOrder(layers: string[]): void {
   }
 }
 
-/**
- * Strip a leading `@layer ...;` declaration line from CSS if present.
- * The Rust crate embeds this in prod-mode output; we strip it so the
- * shared assembler controls placement.
- */
 export function stripLeadingLayerDeclaration(css: string): string {
-  // Match only `@layer name, name;` declarations (no `{` before the `;`)
   return css.replace(/^@layer\s+[^;{]+;\s*\n?/, '');
 }
 
@@ -79,33 +56,13 @@ export interface AssembleStylesheetParts {
 }
 
 export interface AssembleStylesheetOptions {
-  /**
-   * Custom layer order. Must contain all 7 Animus `anm-*` layers as a subsequence.
-   * Example: `['reset', 'anm-global', 'anm-base', ..., 'anm-custom', 'overrides']`
-   * Names are emitted as-is — this is the actual `@layer` declaration.
-   */
   layers?: string[];
-  /** Variable CSS: `:root { --color-*: ... }` + color mode selectors */
   variableCss?: string;
-  /** Global CSS: `@layer anm-global { reset + global styles }` */
   globalCss?: string;
-  /** Component CSS from the Rust crate (may contain embedded @layer declaration) */
   componentCss?: string;
-  /** When true, return structured `{ declaration, variables, body }` instead of a single string. */
   split?: boolean;
 }
 
-/**
- * Assemble the final stylesheet in canonical order:
- *
- * 1. `@layer` declaration (cascade ordering)
- * 2. Emitted variables (`:root`, color mode selectors)
- * 3. `@layer anm-global { ... }` (reset + global styles)
- * 4. `@layer anm-base/variants/compounds/states/system/custom { ... }` (components)
- *
- * This is the single source of truth for stylesheet assembly.
- * Both Vite and Next.js plugins must use this function.
- */
 export function assembleStylesheet(
   options: AssembleStylesheetOptions & { split: true }
 ): AssembleStylesheetParts;

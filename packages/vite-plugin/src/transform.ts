@@ -15,12 +15,8 @@ import { reconcileSourceCorpus, unresolvedDropFiles } from './rediscovery';
 import type { PluginContext } from './context';
 
 /**
- * The dev-mode bridge prepend, shared with the hot-update gate so both
- * compute byte-identical served output. The import goes AFTER the directive
- * prologue the engine hoists to byte 0 — prepending above it would demote
- * 'use client'/'use strict' to an ordinary expression statement, silently
- * un-marking client modules on exactly the RSC-capable hosts this delivery
- * path serves.
+ * The import goes after the directive prologue: above it, 'use client'
+ * becomes an ordinary expression and the module loses its client marking.
  */
 export function applyDevBridgeImport(code: string): string {
   const prologue = /^(?:(['"])use [a-z -]+\1;?\r?\n)*/.exec(code)?.[0] ?? '';
@@ -29,11 +25,6 @@ export function applyDevBridgeImport(code: string): string {
   );
 }
 
-/**
- * Live raw-fallback files reachable from `relPath`'s components through
- * extension provenance — the transitive closure, so a grandparent's serve is
- * withheld exactly like a direct parent's.
- */
 function rawFallbackDescendants(ctx: PluginContext, relPath: string): string[] {
   const manifest = ctx.storedManifest;
   const conflicted = new Set<string>();
@@ -45,9 +36,8 @@ function rawFallbackDescendants(ctx: PluginContext, relPath: string): string[] {
       if (seen.has(childId)) continue;
       seen.add(childId);
       queue.push(childId);
-      // The manifest is the file authority — no id-string parsing. The
-      // optional index result is a genuine miss (a provenance child the
-      // manifest carries no descriptor for), not a shape guard.
+      // The manifest is the file authority — no id-string parsing. A missing
+      // descriptor is a genuine miss, not a shape guard.
       const childFile = manifest?.components[childId]?.file;
       if (
         childFile &&
@@ -61,37 +51,19 @@ function rawFallbackDescendants(ctx: PluginContext, relPath: string): string[] {
   return [...conflicted].sort();
 }
 
-/**
- * transform: replace builder chains with `createComponent()` calls using
- * the pre-built manifest; detect files created after buildStart and fold
- * them into the analysis.
- *
- * The HMR bridge is NOT injected here — `transformIndexHtml` delivers it as a
- * `<script type="module">` per served document (openspec:
- * dev-stylesheet-management, "HMR bridge auto-injected in dev mode"; "Transform
- * emitter unchanged" forbids the emitter importing it).
- */
 export async function transformSource(
   ctx: PluginContext,
   code: string,
   id: string
 ): Promise<{ code: string; map: null } | null> {
-  // Transform runs in both dev and prod when a manifest is available
   if (!ctx.storedManifest) return null;
 
-  // The plugin's OWN virtual modules come back through `transform` and are not
-  // source files. The components and bridge ids both satisfy the `.js`
-  // extension gate on their raw text, so without this guard they reach
-  // new-file detection: a `\0`-keyed `fileCache` entry no watcher event can
-  // ever name (so `pruneFileCache` can never remove it) plus one full spurious
-  // re-analysis each, on the very first dev page load. Both id shapes are
-  // covered — `resolveVirtualId` accepts the unprefixed specifier and answers
-  // with the `\0` form.
+  // Virtual module ids pass the `.js` extension gate, so without this guard
+  // each reaches new-file detection as a cache entry no event can remove.
   if (id.startsWith('\0') || id.startsWith(VIRTUAL_PREFIX)) return null;
 
-  // External DS packages bypass extension + node_modules filters —
-  // published packages ship .mjs dist files with preserved builder chains.
-  // Boundary-safe membership via the shared containment predicate.
+  // External DS packages bypass the extension and node_modules filters:
+  // published dists ship .mjs files with builder chains intact.
   const isExternalPkg = ctx.externalPackageDirs.some((dir) =>
     isPathWithinRoot(dir, id)
   );
@@ -99,38 +71,25 @@ export async function transformSource(
   const relativePath = relative(ctx.rootDir, id);
 
   if (!isExternalPkg) {
-    // File class (local files only) — the ONE owner set, never a local
-    // spelling: a driver-private regex silently skips a whole file class on
-    // one bundler family (this one used to drop local `.mjs`, which the
-    // Turbopack glob admits and the engine parses).
+    // The shared extension predicate is the one owner: a driver-private
+    // regex drops a whole file class on one bundler family and not others.
     if (!isEngineTransformExtension(id)) return null;
     if (id.includes('node_modules')) return null;
-    // A dependency resolved through a workspace symlink arrives REALPATHED —
-    // no `node_modules` segment for the filter above to catch. Discovery
-    // never walks beyond the root, so an out-of-root id that is not a
-    // declared external package cannot be a project file (shared containment
-    // predicate — covers Windows cross-drive ids too).
+    // A workspace symlink dependency arrives realpathed, with no
+    // `node_modules` segment for the filter above to catch.
     if (!isPathWithinRoot(ctx.rootDir, id)) return null;
   }
 
-  // Only process files we know about in the manifest
   if (!ctx.storedManifest.files[relativePath]?.length) {
-    // New file detection: if this file isn't in the cache, it was created
-    // after buildStart. Register it and re-run analysis to pick it up.
-    // Exclusive: Vite transforms modules concurrently, and two detections
-    // interleaving across the ingest awaits would publish generations built
-    // from different cache snapshots — the loser's file drops out of the
-    // published corpus with its detection guard permanently satisfied.
+    // Exclusive: Vite transforms concurrently, and two interleaved
+    // detections publish from different cache snapshots — the loser drops.
     if (!ctx.isProd && !ctx.fileCache.has(relativePath)) {
       await runExclusiveAnalysis(ctx, async () => {
         // Re-check under the lock: a queued transaction may have registered
-        // this file while we waited.
+        // this file meanwhile.
         if (ctx.fileCache.has(relativePath)) return;
-        // A newly created EXTERNAL package file needs its ownership recorded
-        // before re-analysis: the token-contract correlation joins on
-        // `fileOwners[diagnostic.file]`, and an unowned file's diagnostics
-        // would silently drop until the next server restart. Gated on the
-        // boundary-safe membership already computed above.
+        // Record ownership before re-analysis: the token-contract
+        // correlation joins on the owner map, or diagnostics drop silently.
         if (isExternalPkg) {
           const owner = Object.entries(ctx.externalDirOwners).find(([dir]) =>
             isPathWithinRoot(dir, id)
@@ -146,27 +105,20 @@ export async function transformSource(
         try {
           analysisOk = (await ctx.analyzeIngested()).ok;
         } finally {
-          // A failed analysis leaves the file UNDETECTED so the next
-          // transform retries — a registered-but-unanalyzed entry would be
-          // permanently hash-suppressed (openspec: dev-transform-coherence,
-          // "Failed analyses do not suppress equal-content retries").
+          // A failed analysis leaves the file undetected so the next
+          // transform retries; a registered entry is hash-suppressed forever.
           if (!analysisOk) {
             ctx.mutateFileCache((cache) => cache.delete(relativePath));
           }
         }
 
         if (analysisOk) {
-          // Burst creation: the detected file can itself extend a file the
-          // walk has not seen (openspec: dev-transform-coherence,
-          // "Source-corpus reconciliation precedes unresolved-parent
-          // fallbacks") — reconcile before this result is served.
+          // The detected file can itself extend a file the walk has not
+          // seen, so reconcile before this result is served.
           await reconcileSourceCorpus(ctx);
 
-          // A detection re-analysis can change OTHER served files' plans —
-          // most importantly resurrecting consumers whose chains were
-          // dropped while this file was undiscovered. Re-deliver them
-          // before the recovery reload; the detected file itself is
-          // excluded (its in-flight transform IS the current serve).
+          // A detection re-analysis can change other served files' plans;
+          // the detected file's own in-flight transform is the current serve.
           invalidateFileModules(
             ctx,
             diffFilePlans(prevPlans, snapshotFilePlans(ctx.storedManifest), {
@@ -176,28 +128,19 @@ export async function transformSource(
 
           const compCount =
             ctx.storedManifest?.files[relativePath]?.length ?? 0;
-          // Standard level, not verbose-only (openspec:
-          // hmr-new-file-detection, "New file detection logging").
           ctx.info(
             `New file detected: ${relativePath} — ${compCount ? `${compCount} components extracted` : 'no components'}`
           );
 
-          // Unconditional (openspec: hmr-new-file-detection, "CSS
-          // invalidation after new file analysis") — the argument is on
-          // `invalidateExtractedModules` in context.ts. A usage-only file
-          // (zero components of its own) still moves the system-prop map
-          // and dynamic config, and a non-invalidated module is served from
-          // cache for the life of the server.
+          // Unconditional: a usage-only file still moves the system-prop
+          // map, and a stale module is served for the life of the server.
           ctx.invalidateExtractedModules();
         }
       });
     }
-    // Re-check after potential analysis
     if (!ctx.storedManifest.files[relativePath]?.length) {
-      // A raw serve caused by an unresolved extension parent is recorded —
-      // the barrier below withholds that parent's extracted serve while
-      // this fallback is live. A raw serve of a file the analysis knows
-      // nothing about is not a fallback and clears the record.
+      // Recording a raw serve caused by an unresolved extension parent
+      // makes the barrier below withhold that parent's extracted serve.
       ctx.recordFallbackState(
         relativePath,
         unresolvedDropFiles(ctx).has(relativePath)
@@ -206,27 +149,15 @@ export async function transformSource(
     }
   }
 
-  // Compatibility publication barrier (openspec: dev-transform-coherence,
-  // "Runtime-incompatible publications are withheld"): never successfully
-  // serve an extracted extension ancestor while a descendant's live serve is
-  // an unresolved-extension runtime fallback — the raw descendant would
-  // execute `.extend()` against this extracted module and hit the runtime
-  // guard. The conflicted descendants are re-delivered and the recovery
-  // reload is scheduled BEFORE the withhold, so the failed response
-  // self-clears on the next request. Deliberately OUTSIDE the try below:
-  // the non-strict catch must not swallow a withheld publication.
+  // Never serve an extracted extension ancestor while a descendant serves
+  // the raw fallback: the child `.extend()`s it and hits the runtime guard.
   if (!ctx.isProd && ctx.rawExtensionFallbacks.size > 0) {
     const conflicted = rawFallbackDescendants(ctx, relativePath);
     if (conflicted.length > 0) {
       invalidateFileModules(ctx, conflicted);
       ctx.invalidateExtractedModules();
-      // One-shot: the invalidation just killed the conflicting cached raw
-      // transforms and this response is withheld, so the fatal pair never
-      // reaches any page. Clearing here makes the trip self-limiting — a
-      // consumer the reloaded page never re-imports must not withhold its
-      // ancestor forever. Deliberately NOT `recordFallbackState`: those
-      // files' serves are unchanged — this retires a withhold, it does not
-      // observe a serve.
+      // One-shot, so a consumer the reloaded page never re-imports cannot
+      // withhold its ancestor forever. This retires a withhold, not a serve.
       for (const file of conflicted) ctx.rawExtensionFallbacks.delete(file);
       throw new Error(
         `ANIMUS_COMPOSITION_RECOVERING: '${relativePath}' extracted while ` +
@@ -242,10 +173,8 @@ export async function transformSource(
     const result = transformFile(code, relativePath, ctx.storedManifestJson);
 
     if (!result.hasComponents) {
-      // The manifest listed components for this file (checked above) and the
-      // engine found none — the source is served raw while every extension
-      // ancestor publishes extracted. Same fatal pair as the catch below,
-      // so the barrier must see it.
+      // The manifest lists components and the engine found none: the raw
+      // serve is the same fatal pair the barrier above exists to catch.
       ctx.recordFallbackState(relativePath, true);
       return null;
     }
@@ -255,22 +184,15 @@ export async function transformSource(
       ctx.log(`transform ${relativePath}: ${compCount} components`);
     }
 
-    // Dev delivery rides the module graph as well as the document: every
-    // component-bearing module imports the bridge, unconditionally — a
-    // re-transform re-adds it, so no transform-cache invalidation can strand
-    // a client, and document-rendering SSR hosts (Remix, React Router) that
-    // never invoke transformIndexHtml still adopt component CSS on hydration.
-    // The bridge dedupes per document behind a globalThis key and no-ops on
-    // the server. Production output is exactly the engine's.
+    // Every component-bearing dev module imports the bridge, so SSR hosts
+    // that never invoke transformIndexHtml still adopt CSS on hydration.
     let outputCode = result.code;
     if (!ctx.isProd) {
       outputCode = applyDevBridgeImport(result.code);
-      // Presentation-only gate witness: the hash of exactly what this module
-      // serves. The hot-update hook compares a post-edit re-transform against
-      // it to decide whether a js-update would carry any new bytes at all.
+      // The hot-update gate re-transforms after an edit and compares against
+      // exactly these bytes to decide whether an update carries anything new.
       ctx.recordTransformOutput(relativePath, outputCode);
     }
-    // An extracted serve is never a runtime fallback.
     ctx.recordFallbackState(relativePath, false);
 
     return { code: outputCode, map: null };
@@ -281,9 +203,8 @@ export async function transformSource(
       });
     }
     console.warn(`[animus-extract] Failed to transform ${id}:`, e);
-    // Non-strict means the raw source is served — for a file the manifest
-    // says is extracted, that is the runtime fallback the barrier exists to
-    // catch. Recorded BEFORE returning, or the withheld pair publishes.
+    // Non-strict serves the raw source, which for an extracted file is the
+    // fallback the barrier catches — recorded before returning.
     ctx.recordFallbackState(relativePath, true);
     return null;
   }

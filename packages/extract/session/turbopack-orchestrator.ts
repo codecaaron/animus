@@ -9,20 +9,6 @@ import {
 
 import type { ExtractionSession } from './extraction-session';
 
-/**
- * Out-of-band pipeline orchestration for Turbopack (spec:
- * next-turbopack-integration). Turbopack exposes no compiler hooks, so the
- * pipeline runs during next.config resolution and, in dev, from a
- * filesystem watcher — the bundler only ever sees the `.animus/` disk
- * artifacts.
- */
-
-/** Run the full pipeline with the Turbopack emitter identity: the virtual
- *  system-props id (Turbopack rejects the webpack path's absolute-path
- *  imports). Turbopack orchestration persists the analysis-inputs
- *  hydration corpus — its isolated loader workers replay it (spec:
- *  next-turbopack-integration, "Manifest disk artifact"; webpack mode
- *  skips the corpus). */
 export async function runSessionPipeline(
   session: ExtractionSession
 ): Promise<void> {
@@ -39,8 +25,8 @@ const IGNORED_SEGMENTS = new Set([
   'node_modules',
 ]);
 
-/** Watcher-registration failures that mean "the OS is out of watch capacity"
- *  (design D7): descriptor and inotify limits surface under all of these. */
+/** Registration failures meaning the OS is out of watch capacity: descriptor
+ *  and inotify limits surface under all of these. */
 const CAPACITY_CODES: ReadonlySet<string> = new Set([
   'EMFILE',
   'ENFILE',
@@ -48,15 +34,6 @@ const CAPACITY_CODES: ReadonlySet<string> = new Set([
   'EPERM',
 ]);
 
-/**
- * The errno `code` a thrown value carries, or null when it carries none.
- *
- * A thrown value is universally quantified — `fs.watch` rejects with an
- * `Error`, but nothing in the language guarantees that — so this decides what
- * it is instead of asserting it into `NodeJS.ErrnoException`. A `code` that is
- * not a string names no errno and reads as "no code", which is the same answer
- * the reason table gives for a plain `Error`.
- */
 function errnoCode<Thrown>(error: Thrown): string | null {
   if (!(error instanceof Object) || !('code' in error)) return null;
   const { code } = error;
@@ -64,9 +41,7 @@ function errnoCode<Thrown>(error: Thrown): string | null {
 }
 
 /** A primitive string, decided by the intrinsic tag. `Object(value) !== value`
- *  rejects the boxed `String` — which no errno carries and which would fail
- *  every code comparison below anyway — and makes the test immune to a
- *  `Symbol.toStringTag` an arbitrary thrown object may carry. */
+ *  rejects boxed strings and a forged `Symbol.toStringTag`. */
 function isIntrinsicString<Value>(value: Value): value is Value & string {
   return (
     Object(value) !== value &&
@@ -74,42 +49,14 @@ function isIntrinsicString<Value>(value: Value): value is Value & string {
   );
 }
 
-/** How one project-watch registration differs from the defaults. */
 export interface TurbopackWatcherOptions {
-  /** Debounce window before observed paths become one update batch. Also the
-   *  ceiling the session's status deadlines derive from (design D3). */
   debounceMs?: number;
-  /** Test seam: fs builtins are not interceptable by the runner's module
-   *  mocker, so registration/error-path tests inject a fake here. */
   watchFn?: typeof watch;
-  /** Accumulate observed paths and schedule nothing until
-   *  `handle.deliverHeldEvents()` — for an owner that registers before its
-   *  first analysis. */
+  /** Accumulate observed paths until `deliverHeldEvents()`: a cycle scheduled
+   *  before the first analysis joins the running pipeline and does nothing. */
   holdEvents?: boolean;
 }
 
-/**
- * Start the dev watcher: fs.watch per eligible top-level directory (plus a
- * non-recursive watch on the root itself), debounced into
- * existence-partitioned modified/removed sets feeding
- * `session.handleWatchUpdate` (serialized — updates never overlap).
- * Generated and vendored trees (`.animus`, `.next`, node_modules) are never
- * registered with the OS — recursive registration of those trees exhausts
- * inotify/kqueue descriptors (EMFILE/ENOSPC) on large projects.
- * Idempotent per project root; unref'd so it never holds the process open.
- * Asynchronous FSWatcher errors degrade to no-watch with a warning instead
- * of crashing the dev server. Returns the claim's OUTCOME — a started
- * watcher, a duplicate claim on an already-watched root, or an unavailable
- * platform watcher (recursive fs.watch missing on Linux before Node 20, or
- * registration failure — degrades to no-watch with a warning).
- *
- * `holdEvents` serves an owner that registers before its first analysis:
- * observed paths accumulate and no cycle is scheduled until
- * `handle.deliverHeldEvents()`, which delivers them as one ordinary batch.
- * Without it a cycle scheduled during that window enters a running pipeline,
- * where the session's transaction slot absorbs it — it joins and returns
- * having analyzed nothing.
- */
 export function startTurbopackWatcher(
   session: ExtractionSession,
   rootDir: string,
@@ -123,12 +70,8 @@ export function startTurbopackWatcher(
   if (activeWatcherRoots.has(rootDir)) return { kind: 'already-watched' };
   activeWatcherRoots.add(rootDir);
 
-  // The watcher's debounce is the ceiling the session's status deadlines
-  // (and thereby the loader's catch-up waits) are derived from (design D3).
-  // Announced unconditionally: `debounceCeilingMs` is a declared field of
-  // every `ExtractionSession`, and the ceiling has to be published BEFORE the
-  // first deadline is computed whether or not the session reports debounce
-  // observations back.
+  // The ceiling must be published BEFORE the first deadline is computed, so
+  // it is announced unconditionally.
   session.debounceCeilingMs = debounceMs;
 
   const pendingPaths = new Set<string>();
@@ -137,21 +80,8 @@ export function startTurbopackWatcher(
   let updateChain: Promise<void> = Promise.resolve();
   let closed = false;
   let died = false;
-  // While held, observation continues and scheduling does not: paths join
-  // `pendingPaths` but arm no debounce timer and publish no debounce status
-  // evidence — there is no analysis for a loader to wait on yet, and the
-  // owner's first pipeline is writing that status file.
   let holdingEvents = holdEvents;
 
-  // ── External workspace-source watchers (openspec:
-  // external-source-watch-ingestion, design D4/D7) ──────────────────────
-  // One recursive watcher per admitted external root (the narrowest
-  // closure-complete discovery roots the session resolved). Reset
-  // reconciliation is generation-fenced: the session announces each
-  // re-resolved root BEFORE walking it (watcher opens into the pending
-  // set, events buffer), publishes, then commits the admitted set (promote
-  // pending → replay captured → close removed); an uncommitted attempt is
-  // rolled back after its transaction settles.
   const externalWatchers = new Map<string, ReturnType<typeof watch>>();
   let pendingOpened = new Map<string, ReturnType<typeof watch>>();
   let capturedDuringSnapshot: string[] = [];
@@ -159,9 +89,6 @@ export function startTurbopackWatcher(
   const externalDiagnosticKey = (root: string): string =>
     `external-watch:${root}`;
 
-  // Capacity exhaustion is recognized generally (design D7) — descriptor
-  // and inotify limits surface under several codes, plus message-only
-  // spellings on some platforms.
   const failureReason = <Thrown>(err: Thrown): string => {
     const code = errnoCode(err);
     if (code !== null && CAPACITY_CODES.has(code)) return `capacity(${code})`;
@@ -192,27 +119,15 @@ export function startTurbopackWatcher(
     pendingPaths.clear();
 
     updateChain = updateChain.then(() => {
-      // close() owns cycle suppression, not the caller: clearing the
-      // debounce timer does not retract a thunk already chained behind an
-      // in-flight cycle, and that thunk would otherwise enter the session
-      // after teardown (a driver removing the session tree at shutdown
-      // would race the transaction writing into it).
+      // Clearing the debounce timer does not retract a thunk already chained
+      // behind an in-flight cycle; entering the session after teardown races.
       if (closed) return;
       return session
         .handleWatchUpdate({ modifiedFiles, removedFiles })
         .catch((err) => {
-          // Driver-neutral on purpose: this watcher is consumed by the CLI
-          // `watch` verb as well as the Turbopack arm, so a cycle failure
-          // here is not evidence of a Turbopack run. (The two "dev watcher
-          // failed" lines below keep their Turbopack wording only because
-          // next-plugin tests pin those exact strings.)
           console.warn(`[animus-extract] watch update failed: ${String(err)}`);
         })
         .then(() => {
-          // The transaction settled without committing a new root set —
-          // roll back the open-new phase (design D4: rollback closes
-          // newly opened handles on failure; captured events die with
-          // their uncommitted generation).
           if (pendingOpened.size > 0 || capturedDuringSnapshot.length > 0) {
             rollbackPendingExternal();
           }
@@ -247,12 +162,8 @@ export function startTurbopackWatcher(
     activeWatcherRoots.delete(rootDir);
   };
 
-  // FSWatcher errors arrive asynchronously (e.g. EMFILE/ENOSPC when the OS
-  // runs out of watch descriptors) and are fatal to the process when
-  // unhandled — free the root and degrade to no-watch instead. Death is
-  // OBSERVABLE on the handle (`died` + `onDied`): a process owner that
-  // holds a live handle to a dead watcher (the CLI watch) must be able to
-  // report the degradation instead of hanging silently forever.
+  // Async FSWatcher errors are fatal to the process when unhandled, so the
+  // root is freed and the death is published on the handle for its owner.
   const onWatcherError = <Thrown>(err: Thrown): void => {
     died = true;
     closeAll();
@@ -265,10 +176,6 @@ export function startTurbopackWatcher(
   const enqueuePath = (abs: string): void => {
     pendingPaths.add(abs);
     if (holdingEvents) return;
-    // Debounce-window evidence (design D3): record the observation in the
-    // session's status file so a loader running ahead of the analysis can
-    // wait on positive evidence instead of failing NOT_SCHEDULED. Optional
-    // call — orchestration tests drive minimal session fakes.
     try {
       session.noteDebouncedWatchEvents?.([abs]);
     } catch (err) {
@@ -285,31 +192,20 @@ export function startTurbopackWatcher(
   const onEvent = (baseDir: string, filename: string | Buffer | null): void => {
     if (closed || !filename) return;
     const rel = filename.toString();
-    // Never react to generated or vendored trees — .animus writes would
-    // otherwise feed back into the watcher. Segment match so the directory
-    // entry itself (a bare `.animus` event) is ignored too, and so nested
-    // node_modules inside watched top-level directories stay excluded.
+    // `.animus` writes would otherwise feed back into the watcher. Segment
+    // match so bare directory events and nested node_modules are excluded.
     if (rel.split(/[\\/]/).some((segment) => IGNORED_SEGMENTS.has(segment))) {
       return;
     }
     const abs = join(baseDir, rel);
-    // A top-level directory created mid-session needs its own recursive
-    // watcher — the root watcher is non-recursive and would miss its contents.
     if (baseDir === rootDir && !watchers.has(abs)) {
       try {
         if (statSync(abs).isDirectory()) addWatcher(abs, true);
-      } catch {
-        // raced away or unwatchable — the event still reaches the pending set
-      }
+      } catch {}
     }
     enqueuePath(abs);
   };
 
-  /** External-root event path: fenced by watcher identity ({watcherRootId,
-   *  generation} — a handle that is neither current nor pending belongs to
-   *  a retired generation and its events are rejected), `filename == null`
-   *  marks the ROOT dirty for rediscovery, and events observed while the
-   *  root's generation is still snapshotting are buffered for replay. */
   const onExternalEvent = (
     root: string,
     self: () => ReturnType<typeof watch> | undefined,
@@ -339,10 +235,6 @@ export function startTurbopackWatcher(
     enqueuePath(abs);
   };
 
-  /** Open one external-root watcher into `into` (the committed set at
-   *  startup, the pending set during reset reconciliation). Failures
-   *  degrade ONLY this root (design D7); node_modules-resident roots are
-   *  documented unwatchable and never registered (guardrail G2). */
   const openExternalWatcher = (
     root: string,
     into: Map<string, ReturnType<typeof watch>>
@@ -378,9 +270,8 @@ export function startTurbopackWatcher(
       addWatcher(join(rootDir, entry.name), true);
     }
   } catch (err) {
-    // Recursive fs.watch is unavailable on Linux before Node 20 — degrade
-    // to no-watch (edits need a dev-server restart) instead of rejecting
-    // the config promise and killing the dev server.
+    // Recursive fs.watch is unavailable on Linux before Node 20: degrade to
+    // no-watch instead of rejecting the config promise and killing the server.
     closeAll();
     console.warn(
       `[animus-extract] Turbopack dev watcher unavailable (${String(err)}); source edits require a dev-server restart`
@@ -388,17 +279,10 @@ export function startTurbopackWatcher(
     return { kind: 'unavailable' };
   }
 
-  // Cold start: the pipeline already resolved the admitted external roots —
-  // register their watchers directly into the committed set (per-root
-  // failures degrade individually, never the project watch).
   for (const root of session.externalWatchRoots ?? []) {
     openExternalWatcher(root, externalWatchers);
   }
 
-  // Reset reconciliation seams (design D4): the session announces each
-  // re-resolved root BEFORE walking it, and commits the admitted set after
-  // publication. An announced-but-never-committed generation is rolled
-  // back after its transaction settles (see flush).
   session.onExternalRootResolved = (root: string): void => {
     if (closed) return;
     if (externalWatchers.has(root) || pendingOpened.has(root)) return;
@@ -417,7 +301,6 @@ export function startTurbopackWatcher(
         externalWatchers.delete(root);
       }
     }
-    // Replay events captured while the generation was snapshotting.
     for (const abs of capturedDuringSnapshot.splice(0)) {
       enqueuePath(abs);
     }
@@ -429,49 +312,23 @@ export function startTurbopackWatcher(
       return died;
     },
     onDied: null,
-    // Ends the hold and delivers what it collected through the same flush
-    // the debounce timer uses; there is no second change-detection path.
-    // Returns the update chain including that batch, so an owner can await
-    // the delivery before announcing readiness.
     deliverHeldEvents: () => {
       holdingEvents = false;
       if (pendingPaths.size > 0) flush();
       return updateChain;
     },
-    // The serialized update chain AT CALL TIME: after close() no new cycle
-    // can be scheduled (the debounce timer is cleared and events stop), so
-    // awaiting this drains any in-flight `handleWatchUpdate` — a shutdown
-    // that removes the session tree must first let the transaction writing
-    // into it finish.
+    // After close() no new cycle can be scheduled, so awaiting this drains the
+    // in-flight update — a shutdown must not remove the tree under it.
     settle: () => updateChain,
   };
   return { kind: 'started', handle };
 }
 
-/**
- * What a project-watch claim produced. The three cases are NOT
- * interchangeable diagnoses:
- * - `started` — this call owns the root's watcher.
- * - `already-watched` — a registry collision: another watcher in THIS
- *   process already claims the root, so this caller's session is left
- *   unwired (no debounce ceiling, no external-root seams). Restarting
- *   collides identically, so it must never be reported as a platform loss.
- * - `unavailable` — the platform could not register the watcher (the
- *   orchestrator has already warned); a restart is the real remediation.
- */
 export type TurbopackWatchOutcome =
   | { kind: 'started'; handle: TurbopackWatcherHandle }
   | { kind: 'already-watched' }
   | { kind: 'unavailable' };
 
-/** The project-watch handle `startTurbopackWatcher` returns. `close()` is
- *  caller-initiated teardown; `died` flips only on an ASYNC watcher error
- *  (EMFILE/ENOSPC after registration) with `onDied` invoked once so the
- *  process owner can surface the degradation; `settle()` resolves when the
- *  in-flight update chain has drained; `deliverHeldEvents()` ends a
- *  `holdEvents` registration's hold and resolves once the events it
- *  collected have been analyzed (a no-op for an unheld registration, and
- *  for a held one that observed nothing). */
 export interface TurbopackWatcherHandle {
   close(): void;
   readonly died: boolean;
