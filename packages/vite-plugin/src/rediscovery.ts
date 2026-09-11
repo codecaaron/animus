@@ -63,9 +63,9 @@ export function unresolvedDropFiles(ctx: PluginContext): ReadonlySet<string> {
 }
 
 /**
- * Reconcile the discoverable on-disk source universe before an
+ * Reconcile the discoverable on-disk source corpus before an
  * unresolved-parent result is acted on (openspec: dev-transform-coherence,
- * "Source-universe reconciliation precedes unresolved-parent fallbacks").
+ * "Source-corpus reconciliation precedes unresolved-parent fallbacks").
  *
  * Drop-triggered: runs only when the current manifest reports `chain
  * dropped: could not resolve parent component`. One discovery walk (the
@@ -80,7 +80,7 @@ export function unresolvedDropFiles(ctx: PluginContext): ReadonlySet<string> {
  * transaction, so a fold-and-reanalyze is invisible to them beyond the
  * final manifest).
  */
-export async function stabilizeSourceUniverse(
+export async function reconcileSourceCorpus(
   ctx: PluginContext
 ): Promise<boolean> {
   if (ctx.isProd) return false;
@@ -141,7 +141,7 @@ export async function stabilizeSourceUniverse(
     // and short-circuits every later call, so stabilize never runs again.
     // `runAnalysis` also throws in every mode on error diagnostics (the
     // escalation sits outside its non-strict catch), and strict-mode
-    // ingestion diagnostics throw from `surfaceSourceDiagnostics` — hence
+    // ingestion diagnostics throw from the corpus's `prepare` — hence
     // `finally`.
     let published = false;
     try {
@@ -162,7 +162,7 @@ export async function stabilizeSourceUniverse(
 
   if (unresolvedDropFiles(ctx).size > 0) {
     ctx.warn(
-      'source-universe rediscovery did not stabilize after bounded retries'
+      'source-corpus rediscovery did not stabilize after bounded retries'
     );
   }
   return reanalyzed;
@@ -216,7 +216,7 @@ function foldUndiscoveredFiles(ctx: PluginContext): string[] {
 
 /** Barren-walk memo per context: the drop tuple-set and the cache's mutation
  *  generation at the last walk that folded nothing (see
- *  stabilizeSourceUniverse). */
+ *  reconcileSourceCorpus). */
 const barrenWalkMemos = new WeakMap<
   object,
   { dropKey: string; cacheGeneration: number }
@@ -276,7 +276,7 @@ function warnInadmissibleParents(
     // One message template; the reason clause is the only variable part.
     const reason = excludedBy
       ? `which is excluded by pattern '${excludedBy}'. Include that ` +
-        `file in the extraction universe or remove this extension.`
+        `file in the extraction sources or remove this extension.`
       : !isPathWithinRoot(ctx.rootDir, resolved)
         ? `outside the extraction root. Declare its package in the ` +
           `system includes or move it under the project root.`

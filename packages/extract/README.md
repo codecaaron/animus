@@ -31,6 +31,23 @@ const manifest = engine.analyze(fileEntriesJson);
 const { code, hasComponents } = JSON.parse(engine.transformFile(path));
 ```
 
+### Source corpus
+
+Every driver (the Vite plugin, the extraction session behind the Next
+plugin, the CLI, and unplugin) analyzes one source corpus, owned by
+`createSourceCorpus` in `@animus-ui/extract/pipeline` (`prepare` →
+analyze → `publish`; `published` is the parser-ready projection of the last
+successful pass — see the module's own doc comments for the contract).
+
+The Vite plugin and the extraction session are two drivers, not one driver
+holding a copy of the other: the session publishes artifacts to disk for
+cross-process readers, the Vite context answers virtual modules from memory.
+The raw file cache stays with each driver: the Vite context mutates its
+cache incrementally under its analysis lock, the session rebinds its cache
+wholesale on publish. The ingestion policy point (`createSourceIngestor`) is
+not exported from the pipeline barrel; its one production call site is
+inside the corpus, asserted by `tests/source-corpus.test.ts`.
+
 ## License
 
 MIT

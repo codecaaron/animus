@@ -60,10 +60,12 @@ const watchers: FakeWatcher[] = [];
 // `watchFn(dir, { recursive }, listener)` and consumes only the FSWatcher
 // members implemented above — see addWatcher/openExternalWatcher in
 // packages/extract/session/turbopack-orchestrator.ts.
+// The listener is typed over both filename encodings to stay comparable with
+// the buffer overload; the fake only ever delivers string filenames.
 const fakeWatch = ((
   dir: string,
   opts?: WatchOptions | null,
-  listener?: WatchListener<string>
+  listener?: WatchListener<string | Buffer>
 ): FakeWatcher => {
   const watcher = new FakeWatcher(dir, listener ?? null);
   calls.push({ dir, recursive: Boolean(opts?.recursive) });

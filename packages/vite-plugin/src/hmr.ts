@@ -14,7 +14,7 @@ import {
   systemPropsModuleSource,
 } from './context';
 import { invalidateFileModules } from './module-invalidation';
-import { stabilizeSourceUniverse } from './rediscovery';
+import { reconcileSourceCorpus } from './rediscovery';
 import { applyDevBridgeImport } from './transform';
 
 import type { PluginContext } from './context';
@@ -307,9 +307,8 @@ async function analyzeChangedFile(
   const prevPlans = snapshotFilePlans(ctx.storedManifest);
 
   // Identify directly affected component_ids from the changed file
-  const previousAnalysisPaths = ctx.sourceOwnership[relPath]?.analysisPaths ?? [
-    relPath,
-  ];
+  const previousAnalysisPaths = ctx.corpus.published.ownership[relPath]
+    ?.analysisPaths ?? [relPath];
   const directComponentIds: string[] = previousAnalysisPaths.flatMap(
     (analysisPath) => ctx.storedManifest?.files[analysisPath] ?? []
   );
@@ -358,11 +357,11 @@ async function analyzeChangedFile(
     restoreEntry();
     return { kind: 'ignored' };
   }
-  // Reconcile the on-disk universe BEFORE this result is acted on: an
+  // Reconcile the on-disk sources BEFORE this result is acted on: an
   // unresolved-parent drop whose parent exists on disk (a created file whose
   // watcher event was lost) folds in and re-analyzes here, so the consumer's
   // re-serve is extracted rather than the runtime fallback (openspec:
-  // dev-transform-coherence, "Source-universe reconciliation precedes
+  // dev-transform-coherence, "Source-corpus reconciliation precedes
   // unresolved-parent fallbacks"). The plan diff below spans the WHOLE
   // transaction, so a stabilization re-analysis needs no extra bookkeeping;
   // the single system-props compare below spans it for the same reason.
@@ -372,7 +371,7 @@ async function analyzeChangedFile(
   // the cache advanced to this content — so re-saving the corrected file
   // byte-identically would hit the unchanged-hash gate and never re-analyze.
   try {
-    await stabilizeSourceUniverse(ctx);
+    await reconcileSourceCorpus(ctx);
   } catch (e) {
     restoreEntry();
     throw e;
@@ -390,9 +389,7 @@ async function analyzeChangedFile(
     snapshotFilePlans(ctx.storedManifest)
   ).filter((defFile) => resolve(ctx.rootDir, defFile) !== absFile);
 
-  // The publish above rebuilt analysisEntryCache from the accepted corpus —
-  // an O(1) read where scanning the entry array was O(corpus) per HMR event.
-  const nativeEntry = ctx.analysisEntryCache.get(relPath);
+  const nativeEntry = ctx.corpus.published.analysisEntries.get(relPath);
   const presentationOnly = nativeEntry
     ? isPresentationOnlyEdit(ctx, relPath, nativeEntry.source)
     : false;

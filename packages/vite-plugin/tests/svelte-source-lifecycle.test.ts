@@ -295,7 +295,7 @@ afterEach(() => {
 });
 
 describe('opted-in Svelte source ownership in the Vite lifecycle', () => {
-  test('keeps legacy EngineApi objects source-compatible and fails loud at ingestion', async () => {
+  test('the context wires its corpus with the vite prefix and fails loud without extractFacts', async () => {
     const legacyEngine = {
       loadSystemModule: () => ({}),
       analyzeProject: () => '{}',
@@ -304,87 +304,8 @@ describe('opted-in Svelte source ownership in the Vite lifecycle', () => {
     } satisfies EngineApi;
     const ctx = new PluginContext({ system: 'src/ds.ts' }, () => legacyEngine);
 
-    await expect(ctx.ingestRawSources([])).rejects.toThrow(
+    await expect(ctx.corpus.prepare([])).rejects.toThrow(
       '[animus-extract] native engine does not expose extractFacts required for source adaptation'
-    );
-  });
-
-  test('source diagnostics use one strict/warn policy and name the original path', () => {
-    const diagnostic = {
-      code: 'SOURCE_SVELTE_DEPENDENCY_MISSING' as const,
-      originalPath: 'src/Usage.svelte',
-      message: 'install svelte to project opted-in source',
-    };
-    const warnings: string[] = [];
-    const warnContext = new PluginContext({ system: 'src/ds.ts' });
-    warnContext.logger = warningLogger(warnings);
-
-    expect(warnContext.surfaceSourceDiagnostics([diagnostic])).toEqual(
-      new Set(['src/Usage.svelte'])
-    );
-    expect(warnings).toEqual([
-      expect.stringContaining(
-        'SOURCE_SVELTE_DEPENDENCY_MISSING src/Usage.svelte'
-      ),
-    ]);
-
-    const strictContext = new PluginContext({
-      system: 'src/ds.ts',
-      strict: true,
-    });
-    expect(() => strictContext.surfaceSourceDiagnostics([diagnostic])).toThrow(
-      /SOURCE_SVELTE_DEPENDENCY_MISSING src\/Usage\.svelte/
-    );
-
-    // Identical repeat warnings dedupe per original path; a new message on
-    // the same path still surfaces.
-    warnContext.surfaceSourceDiagnostics([diagnostic]);
-    expect(warnings).toHaveLength(1);
-    warnContext.surfaceSourceDiagnostics([
-      { ...diagnostic, message: 'a different failure on the same file' },
-    ]);
-    expect(warnings).toHaveLength(2);
-  });
-
-  test('recovered native parse diagnostics are advisory: warn-only, never strict-fatal, never quarantined', () => {
-    // OXC reports recovered diagnostics for sources the consumer's own
-    // toolchain accepts (JSX in a `.js` file) — extraction must not be
-    // stricter than the host bundler, so these warn and the file stays
-    // analyzed in BOTH modes.
-    const advisory = {
-      code: 'SOURCE_NATIVE_PARSE_ERROR' as const,
-      originalPath: 'src/app.js',
-      analysisPath: 'src/app.js',
-      message: 'Unexpected JSX expression',
-    };
-    const warnings: string[] = [];
-    const strictContext = new PluginContext({
-      system: 'src/ds.ts',
-      strict: true,
-    });
-    strictContext.logger = warningLogger(warnings);
-
-    expect(strictContext.surfaceSourceDiagnostics([advisory])).toEqual(
-      new Set()
-    );
-    expect(warnings).toEqual([
-      expect.stringContaining('SOURCE_NATIVE_PARSE_ERROR src/app.js'),
-    ]);
-
-    // Mixed batch under strict: the fatal line throws and names ONLY the
-    // fatal diagnostic; the advisory never joins the quarantine set.
-    const fatal = {
-      code: 'SOURCE_SVELTE_DEPENDENCY_MISSING' as const,
-      originalPath: 'src/Usage.svelte',
-      message: 'install svelte to project opted-in source',
-    };
-    expect(() =>
-      strictContext.surfaceSourceDiagnostics([advisory, fatal])
-    ).toThrow(/SOURCE_SVELTE_DEPENDENCY_MISSING/);
-    const lax = new PluginContext({ system: 'src/ds.ts' });
-    lax.logger = strictContext.logger;
-    expect(lax.surfaceSourceDiagnostics([advisory, fatal])).toEqual(
-      new Set(['src/Usage.svelte'])
     );
   });
 
@@ -414,7 +335,7 @@ describe('opted-in Svelte source ownership in the Vite lifecycle', () => {
     expect(
       probe.analyses.at(-1)?.some((entry) => entry.path.endsWith('.svelte'))
     ).toBe(false);
-    expect(ctx.sourceOwnership[externalPath].analysisPaths).toEqual([
+    expect(ctx.corpus.published.ownership[externalPath].analysisPaths).toEqual([
       `${externalPath}.instance.tsx`,
     ]);
 
@@ -479,7 +400,7 @@ describe('opted-in Svelte source ownership in the Vite lifecycle', () => {
     const createdSource = `<script>\nimport { badge } from './definition';\nconst attrs = badge.attrs();\n</script>\n`;
     writeFileSync(createdFile, createdSource);
     await dispatch(ctx, 'create', createdFile, 4, createdSource);
-    expect(ctx.sourceOwnership[createdPath].analysisPaths).toEqual([
+    expect(ctx.corpus.published.ownership[createdPath].analysisPaths).toEqual([
       `${createdPath}.instance.tsx`,
     ]);
     expect(
@@ -491,7 +412,7 @@ describe('opted-in Svelte source ownership in the Vite lifecycle', () => {
     unlinkSync(createdFile);
     await dispatch(ctx, 'delete', createdFile, 5);
     expect(ctx.fileCache.has(createdPath)).toBe(false);
-    expect(ctx.sourceOwnership[createdPath]).toBeUndefined();
+    expect(ctx.corpus.published.ownership[createdPath]).toBeUndefined();
     expect(
       probe.analyses.at(-1)?.some((entry) => entry.path.includes(createdPath))
     ).toBe(false);
@@ -564,7 +485,7 @@ describe('opted-in Svelte source ownership in the Vite lifecycle', () => {
       // Quarantine, not abort: the invalid original is excluded from the
       // published generation while the rest of the corpus analyzed —
       // the engine cache cleared once and the re-analysis re-seeded it.
-      quarantinedOwnership: ctx.sourceOwnership[usagePath],
+      quarantinedOwnership: ctx.corpus.published.ownership[usagePath],
       engineActive: probe.isActive(),
     }).toEqual({
       clears: clearsBeforeReset + 1,
@@ -602,7 +523,7 @@ describe('opted-in Svelte source ownership in the Vite lifecycle', () => {
     expect(warnings).toEqual([
       expect.stringContaining(`SVELTE_PARSE_ERROR ${badPath}`),
     ]);
-    expect(ctx.sourceOwnership[badPath]).toBeUndefined();
+    expect(ctx.corpus.published.ownership[badPath]).toBeUndefined();
 
     // An unrelated edit analyzes and publishes — the sibling diagnostic
     // must not roll the edit out of the cache or skip the re-analysis.
@@ -621,7 +542,7 @@ describe('opted-in Svelte source ownership in the Vite lifecycle', () => {
     // diagnostic does not warn twice.
     await dispatch(ctx, 'update', badFile, 22, badSource);
     expect(ctx.fileCache.get(badPath)?.source).toBe(badSource);
-    expect(ctx.sourceOwnership[badPath]).toBeUndefined();
+    expect(ctx.corpus.published.ownership[badPath]).toBeUndefined();
     expect(warnings).toHaveLength(1);
 
     // Deleting a file while the sibling stays diagnosable still prunes it —

@@ -1,20 +1,17 @@
 import {
-  contentHash,
   createExcludeMatcher,
-  projectExternalFileOwners,
-  withoutInvalidOriginals,
+  createSourceCorpus,
 } from '@animus-ui/extract/pipeline';
 import { resolve } from 'path';
 
-import { buildRawEntriesFromCache, PluginContext } from '../src/context';
+import {
+  makeHost,
+  scriptedSourceIngestor,
+} from '../../extract/tests/source-ingestion-fixtures';
+import { PluginContext } from '../src/context';
 import { makeManifest } from './manifest-fixture';
 
-import type {
-  RawSourceEntry,
-  SourceEntryOwnership,
-  SourceIngestionDiagnostic,
-  SourceIngestionResult,
-} from '@animus-ui/extract/pipeline';
+import type { RawSourceEntry } from '@animus-ui/extract/pipeline';
 import type { DevEnvironment } from 'vite';
 
 /**
@@ -98,8 +95,11 @@ export function makeContextProbe<Overrides extends ContextProbeOverrides>(
   const fileCache: ReadonlyMap<string, { hash: string; source: string }> =
     new Map();
   const externalFileOwners: Record<string, string> = {};
-  const sourceOwnership: Record<string, SourceEntryOwnership> = {};
   const reverseProvenance: Record<string, string[]> = {};
+  // Only the native adaptation is stood in for: the REAL corpus runs over
+  // this ingestor, so hooks exercise production assembly, fold, and publish.
+  const host = makeHost();
+  const corpus = createSourceCorpus(host, scriptedSourceIngestor(host));
   const ctx = {
     isProd: false,
     verbose: false,
@@ -107,6 +107,9 @@ export function makeContextProbe<Overrides extends ContextProbeOverrides>(
     options: {},
     externalPackageDirs,
     externalFileOwners,
+    // The token-contract gate runs on every publish; with no source theme
+    // manifests it indexes nothing, so an empty map exercises it end to end.
+    externalDirOwners: {},
     // The context's memoized matcher (PluginContext builds it in its
     // constructor) — hook code reads this, never a per-call construction.
     excludeMatcher: createExcludeMatcher(undefined),
@@ -119,9 +122,7 @@ export function makeContextProbe<Overrides extends ContextProbeOverrides>(
     // `recordFallbackState`): it touches only `fileCache` and
     // `fileCacheGeneration`, both modeled here.
     mutateFileCache: PluginContext.prototype.mutateFileCache,
-    analysisEntryCache: new Map<string, { hash: string; source: string }>(),
-    sourceOwnership,
-    analysisOwnerByPath: new Map<string, string>(),
+    corpus,
     rawExtensionFallbacks: new Set<string>(),
     reverseProvenance,
     storedManifest: makeManifest(),
@@ -130,7 +131,7 @@ export function makeContextProbe<Overrides extends ContextProbeOverrides>(
     storedSystemPropMapJson: '{}',
     storedDynamicPropsJson: '{}',
     storedTransformsSource: '{}',
-    system: { groupRegistryJson: '{}' },
+    system: { groupRegistryJson: '{}', sourceThemeManifestsJson: null },
     // Presentation-only gate state (mirrors PluginContext): tests that
     // don't exercise the gate leave the map empty, which fails the gate
     // open (updates deliver normally).
@@ -146,74 +147,14 @@ export function makeContextProbe<Overrides extends ContextProbeOverrides>(
       probe.analyses++;
       return undefined;
     },
-    async ingestRawSources(
-      entries: readonly RawSourceEntry[]
-    ): Promise<SourceIngestionResult> {
-      const originalEntries = entries.map((entry) => ({
-        ...entry,
-        hash: entry.hash ?? contentHash(entry.source),
-      }));
-      return {
-        originalEntries,
-        analysisEntries: originalEntries,
-        ownership: Object.fromEntries(
-          originalEntries.map((entry) => [
-            entry.path,
-            {
-              originalPath: entry.path,
-              originalHash: entry.hash,
-              analysisPaths: [entry.path],
-            },
-          ])
-        ),
-        diagnostics: [],
-      };
-    },
-    surfaceSourceDiagnostics(
-      _diagnostics: readonly SourceIngestionDiagnostic[]
-    ) {
-      return new Set<string>();
-    },
-    // Mirrors PluginContext.analyzeIngested exactly — same step order, same
-    // publish-on-success rule — over the probe's own overridable parts, so
-    // a hook body driven through the probe exercises the real transaction.
-    async analyzeIngested(options?: {
-      rawEntries?: readonly RawSourceEntry[];
-      beforeAnalysis?: (accepted: SourceIngestionResult) => void;
-    }) {
-      const ingested = await this.ingestRawSources(
-        options?.rawEntries ?? buildRawEntriesFromCache(this.fileCache)
-      );
-      const accepted = withoutInvalidOriginals(
-        ingested,
-        this.surfaceSourceDiagnostics(ingested.diagnostics)
-      );
-      options?.beforeAnalysis?.(accepted);
-      const ok = this.runAnalysis(accepted.analysisEntries) !== false;
-      if (ok) this.publishSourceIngestion(accepted);
-      return { ok, accepted };
-    },
-    publishSourceIngestion(result: SourceIngestionResult) {
-      this.analysisEntryCache = new Map(
-        result.analysisEntries.map((entry) => [
-          entry.path,
-          { hash: entry.hash, source: entry.source },
-        ])
-      );
-      this.sourceOwnership = result.ownership;
-      this.analysisOwnerByPath = new Map(
-        Object.values(result.ownership).flatMap((owner) =>
-          owner.analysisPaths.map((path) => [path, owner.originalPath])
-        )
-      );
-      // The SHARED projection production publishes through, not a mirror of
-      // it: a hook driven here observes the same owner map — generated
-      // children included, retired originals excluded — that the plugin does.
-      this.externalFileOwners = projectExternalFileOwners(
-        result,
-        this.externalFileOwners
-      );
-    },
+    // The PRODUCTION transaction, publish, and token gate, borrowed rather
+    // than mirrored. They touch `corpus`, `fileCache`, `externalFileOwners`,
+    // `externalDirOwners`, `system`, `options`, `storedManifest`,
+    // `runAnalysis`, and `warn`, all modeled above.
+    analyzeIngested: PluginContext.prototype.analyzeIngested,
+    publishSourceIngestion: PluginContext.prototype.publishSourceIngestion,
+    enforceExternalTokenContracts:
+      PluginContext.prototype.enforceExternalTokenContracts,
     invalidateExtractedModules() {
       probe.extractedInvalidations++;
     },

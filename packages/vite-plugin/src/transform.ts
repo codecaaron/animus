@@ -10,7 +10,7 @@ import { relative } from 'path';
 import { VIRTUAL_BRIDGE_ID, VIRTUAL_PREFIX } from './constants';
 import { runExclusiveAnalysis } from './context';
 import { invalidateFileModules } from './module-invalidation';
-import { stabilizeSourceUniverse, unresolvedDropFiles } from './rediscovery';
+import { reconcileSourceCorpus, unresolvedDropFiles } from './rediscovery';
 
 import type { PluginContext } from './context';
 
@@ -120,7 +120,7 @@ export async function transformSource(
     // Exclusive: Vite transforms modules concurrently, and two detections
     // interleaving across the ingest awaits would publish generations built
     // from different cache snapshots — the loser's file drops out of the
-    // published universe with its detection guard permanently satisfied.
+    // published corpus with its detection guard permanently satisfied.
     if (!ctx.isProd && !ctx.fileCache.has(relativePath)) {
       await runExclusiveAnalysis(ctx, async () => {
         // Re-check under the lock: a queued transaction may have registered
@@ -158,9 +158,9 @@ export async function transformSource(
         if (analysisOk) {
           // Burst creation: the detected file can itself extend a file the
           // walk has not seen (openspec: dev-transform-coherence,
-          // "Source-universe reconciliation precedes unresolved-parent
+          // "Source-corpus reconciliation precedes unresolved-parent
           // fallbacks") — reconcile before this result is served.
-          await stabilizeSourceUniverse(ctx);
+          await reconcileSourceCorpus(ctx);
 
           // A detection re-analysis can change OTHER served files' plans —
           // most importantly resurrecting consumers whose chains were

@@ -78,7 +78,7 @@ export async function runBuildStart(
   );
 
   // 4. Read raw original sources. Adaptation happens once after local and
-  // external discovery establish the complete resolver-index universe.
+  // external discovery establish the complete resolver index.
   const rawEntries: Array<{
     path: string;
     source: string;
@@ -146,7 +146,7 @@ export async function runBuildStart(
     rawEntries,
     // Seed the dev cache from the accepted corpus BEFORE the analysis gate:
     // a failed non-strict buildStart analysis must leave HMR the full source
-    // universe to re-analyze, not a one-file corpus assembled from the first
+    // corpus to re-analyze, not a one-file corpus assembled from the first
     // edit.
     beforeAnalysis: (accepted) => {
       if (!ctx.isProd) {

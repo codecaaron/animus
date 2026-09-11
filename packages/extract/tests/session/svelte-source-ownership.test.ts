@@ -72,7 +72,7 @@ function readFileEntries(filesJson: string): EngineFileEntry[] {
 }
 
 /** The engine's manifest for these workspaces — a COMPLETE `ProjectManifest`
- *  at its empty-universe values (the shared pipeline reads
+ *  at its empty values (the shared pipeline reads
  *  `manifest.sheets.global` and `manifest.css` as typed fields, not guarded
  *  ones). This suite asserts on source ownership, not on emitted CSS, so
  *  every field stays at its empty value. */
@@ -187,7 +187,7 @@ function makeSession(app: string, strict = false): ExtractionSession {
 function sources(session: ExtractionSession) {
   return {
     fileCache: session['fileCache'],
-    sourceOwnership: session.sourceOwnership,
+    sourceOwnership: session.corpus.published.ownership,
   };
 }
 

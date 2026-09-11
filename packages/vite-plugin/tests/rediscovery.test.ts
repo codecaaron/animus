@@ -4,7 +4,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { stabilizeSourceUniverse } from '../src/rediscovery';
+import { reconcileSourceCorpus } from '../src/rediscovery';
 import { makeContextProbe } from './context-probe';
 import { makeComponent, makeManifest } from './manifest-fixture';
 
@@ -12,10 +12,10 @@ import type { ContextProbe } from './context-probe';
 import type { ManifestDiagnostic } from '@animus-ui/extract/pipeline';
 
 /**
- * Source-universe reconciliation before unresolved-parent fallbacks
+ * Source-corpus reconciliation before unresolved-parent fallbacks
  * (openspec: dev-transform-coherence): when an analysis reports `chain
  * dropped: could not resolve parent component`, the discoverable on-disk
- * universe is re-walked and re-analyzed before that result is acted on — a
+ * corpus is re-walked and re-analyzed before that result is acted on — a
  * parent that exists on disk is folded in instead of publishing the runtime
  * fallback.
  */
@@ -48,7 +48,7 @@ function dropDiagnostic(
   };
 }
 
-describe('stabilizeSourceUniverse', () => {
+describe('reconcileSourceCorpus', () => {
   let root: string;
 
   beforeEach(() => {
@@ -84,7 +84,7 @@ describe('stabilizeSourceUniverse', () => {
       return true;
     };
 
-    const reanalyzed = await stabilizeSourceUniverse(probe.ctx);
+    const reanalyzed = await reconcileSourceCorpus(probe.ctx);
 
     expect(reanalyzed).toBe(true);
     expect(probe.analyses).toBe(1);
@@ -98,7 +98,7 @@ describe('stabilizeSourceUniverse', () => {
     const probe = makeProbe(root);
     probe.ctx.storedManifest = makeManifest();
 
-    expect(await stabilizeSourceUniverse(probe.ctx)).toBe(false);
+    expect(await reconcileSourceCorpus(probe.ctx)).toBe(false);
     expect(probe.analyses).toBe(0);
     // The un-dropped New.tsx is NOT folded — rediscovery is drop-triggered.
     expect(probe.ctx.fileCache.has('New.tsx')).toBe(false);
@@ -110,7 +110,7 @@ describe('stabilizeSourceUniverse', () => {
       diagnostics: [dropDiagnostic('Consumer.tsx', 'Fancy', 'Ghost')],
     });
 
-    expect(await stabilizeSourceUniverse(probe.ctx)).toBe(false);
+    expect(await reconcileSourceCorpus(probe.ctx)).toBe(false);
     expect(probe.analyses).toBe(0);
   });
 
@@ -152,7 +152,7 @@ describe('stabilizeSourceUniverse', () => {
       });
       fail(ctx);
 
-      const first = stabilizeSourceUniverse(probe.ctx);
+      const first = reconcileSourceCorpus(probe.ctx);
       if (label === 'throws') await expect(first).rejects.toThrow();
       else await first;
 
@@ -168,7 +168,7 @@ describe('stabilizeSourceUniverse', () => {
         ctx.storedManifest = makeManifest();
         return true;
       };
-      await stabilizeSourceUniverse(probe.ctx);
+      await reconcileSourceCorpus(probe.ctx);
       expect(retried, 'stabilize must remain retryable').toBe(true);
       expect(ctx.fileCache.has('Parent.tsx')).toBe(true);
     });
@@ -202,7 +202,7 @@ describe('stabilizeSourceUniverse', () => {
 
     // The parent is genuinely absent: the walk folds nothing and memoizes
     // that verdict.
-    await stabilizeSourceUniverse(probe.ctx);
+    await reconcileSourceCorpus(probe.ctx);
     expect(probe.analyses).toBe(0);
 
     // An unrelated file is deleted (the delete path prunes without walking),
@@ -225,7 +225,7 @@ describe('stabilizeSourceUniverse', () => {
       return true;
     };
 
-    await stabilizeSourceUniverse(probe.ctx);
+    await reconcileSourceCorpus(probe.ctx);
 
     expect(ctx.fileCache.has('Parent.tsx')).toBe(true);
     expect(probe.analyses).toBe(1);
@@ -257,7 +257,7 @@ describe('stabilizeSourceUniverse', () => {
       diagnostics: [dropDiagnostic('Consumer.tsx', 'Fancy', 'Parent')],
     });
 
-    await stabilizeSourceUniverse(probe.ctx);
+    await reconcileSourceCorpus(probe.ctx);
 
     expect(probe.analyses).toBe(0);
     const joined = probe.warns.join('\n');

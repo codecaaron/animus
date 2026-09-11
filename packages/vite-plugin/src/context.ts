@@ -8,7 +8,7 @@ import {
   clearEngineCache,
   diffFilePlans,
   enforceExternalTokenContracts,
-  createSourceIngestor,
+  createSourceCorpus,
   findAssetSpecifiers,
   formatRustTimingWaterfall,
   loadSystemConfig,
@@ -24,7 +24,6 @@ import {
   toWatchKeys,
   unresolvableIncludesMessage,
   runStructuralSelfCheck,
-  withoutInvalidOriginals,
 } from '@animus-ui/extract/pipeline';
 import { relative, resolve } from 'path';
 
@@ -48,10 +47,8 @@ import type {
   ProjectAnalysisResult,
   ProjectManifest,
   RawSourceEntry,
-  SourceEntryOwnership,
-  SourceIngestionDiagnostic,
+  SourceCorpus,
   SourceIngestionResult,
-  SourceIngestor,
   SystemConfig,
   V2ExtractEngine,
 } from '@animus-ui/extract/pipeline';
@@ -70,17 +67,6 @@ function emptySystemConfig(): SystemConfig {
     globalStyleBlocksJson: null,
     keyframesJson: null,
   };
-}
-
-/** Full raw originals for one adaptation attempt. */
-export function buildRawEntriesFromCache(
-  cache: ReadonlyMap<string, { hash: string; source: string }>
-): Array<{ path: string; source: string; hash: string }> {
-  return [...cache].map(([path, { hash, source }]) => ({
-    path,
-    source,
-    hash,
-  }));
 }
 
 // Serializes analysis transactions per context. Vite invokes transform
@@ -163,8 +149,8 @@ export function systemPropsModuleSource(ctx: PluginContext): string {
 
 /**
  * Drop a deleted (or renamed-away) raw original from the dev file cache.
- * Generated MDX/Svelte children live in `analysisEntryCache` and disappear
- * atomically when the next source-ingestion result publishes. External
+ * Generated MDX/Svelte children live in the published source corpus and
+ * disappear atomically when the next accepted corpus publishes. External
  * package entries are rootDir-relative too (with leading `..` segments).
  */
 export function pruneFileCache(
@@ -186,47 +172,8 @@ export function pruneFileCache(
  * the state it touches, and the engine store (per-instance, never
  * module-level) is explicit.
  *
- * ── Relationship to `ExtractionSession` (the honest map) ──────────────────
- * This is the repo's SECOND session spine, and the split is deliberate but
- * only half a duplication. The Vite plugin never constructs an
- * `ExtractionSession` — zero references in this package; sessions are built
- * only by the unplugin host, the two Next arms, and the CLI. So these are
- * two spines for two DRIVERS, not one driver holding two.
- *
- * The contract distinction: `ExtractionSession` is an ARTIFACT-PUBLISHING
- * session (disk artifacts behind a commit transaction, module-level
- * singleton engine, cross-process readers); `PluginContext` is an IN-MEMORY
- * SERVE spine (virtual modules answered synchronously out of retained
- * state, per-instance engine, nothing published for another process).
- *
- * Of this class's ~50 fields, roughly 26 duplicate an `ExtractionSession`
- * authority field-for-field — `options`, `verbose`, `staticCssJson`,
- * `rootDir`, `system`, `lcssTargets`, `pathAliasesJson`, `extensionsSet`,
- * `excludeMatcher`, `systemVocabularyDiagnostics`, `fileCache`,
- * `analysisEntryCache`, `sourceOwnership`, `packageMap`, the asset-pass
- * trio, the five `external*` ownership maps, `externalPackageOutcomes`,
- * `resolvedSystemPath`, the two `systemDependency*` sets, and
- * `sourceIngestor` (whose twin the session's own comment already labels
- * "vite-plugin parity BY CODE"). The other ~24 are genuinely Vite-only:
- * `isProd`/`emissionProd`, `logger`, the `stored*` serve payloads,
- * `globalCss`/`resolvedComponentCss`/`storedSheets`, `layerDeclaration`,
- * `transformOutputHashes`, `reverseProvenance`, `analysisOwnerByPath`,
- * `rawExtensionFallbacks`, `hotUpdateEvents`, `pendingReloadTimer`, `base`,
- * `devServer`, the per-instance engine quartet, and `resetCoalescer`.
- *
- * RECORDED SMALLEST STEP (not implemented — do not implement it piecemeal):
- * extract a driver-neutral `SourceUniverse` read model into
- * `@animus-ui/extract` owning exactly the ingestion read model
- * (`sourceIngestor`, `analysisEntryCache`, `sourceOwnership`, and one
- * shared `publishSourceIngestion`), leaving `fileCache` ownership with each
- * driver — that divergence is real (this class mutates it incrementally
- * under `runExclusiveAnalysis`; the session rebinds it wholesale) and must
- * not be laundered away. Logged as C-018 in `docs/anti-slop-curiosities.md`.
- *
- * This class is also the uncaught case named by guardrail G1's own blind
- * spot ("does not catch a duplicated loop under a different class name",
- * `openspec/changes/standalone-extraction-cli/design.md`): G1 counts
- * `class ExtractionSession` definitions, so no gate sees this spine.
+ * `fileCache` ownership stays here rather than moving into the shared source
+ * corpus: this class mutates it incrementally, `ExtractionSession` rebinds it.
  */
 export class PluginContext {
   readonly options: AnimusExtractOptions;
@@ -346,11 +293,14 @@ export class PluginContext {
     return result;
   }
 
-  // Last published parser-ready projection. Generated MDX/Svelte paths never
-  // enter `fileCache`; they are replaced as one set with `sourceOwnership`.
-  analysisEntryCache = new Map<string, { hash: string; source: string }>();
-  sourceOwnership: Record<string, SourceEntryOwnership> = {};
-  analysisOwnerByPath = new Map<string, string>();
+  /** Generated MDX/Svelte paths never enter `fileCache` — they live only in
+   *  this corpus's published projection. */
+  readonly corpus: SourceCorpus = createSourceCorpus({
+    engineApi: () => this.engineApi(),
+    prefix: '[animus-extract]',
+    strict: () => !!this.options.strict,
+    warn: (message: string) => this.warn(message),
+  });
 
   // rootDir-relative files whose LIVE SERVE is the raw source while the
   // analysis believes them extractable — an unresolved-parent drop named
@@ -484,17 +434,17 @@ export class PluginContext {
       isV2: () => true,
       loadNativeEngine: () => require(engineModuleId),
       // Defensive rehydration: every current caller sends full raw sources
-      // (buildRawEntriesFromCache), but the adapter contract still admits
+      // (the prepared corpus), but the adapter contract still admits
       // cache-aware callers sending EMPTY sources for unchanged files, and
       // v2 has NO Rust-side cache (arch-extract-v2-spine) — refill from the
-      // analysis-entry cache before analyze.
+      // published corpus before analyze.
       rehydrateFilesJson: (filesJsonRaw) => {
         if (!filesJsonRaw.includes('"source":""')) return filesJsonRaw;
         const entries = parseFilesJson(filesJsonRaw, 'animus-extract');
+        const analysisEntries = this.corpus.published.analysisEntries;
         for (const entry of entries) {
           if (entry.source === '') {
-            entry.source =
-              this.analysisEntryCache.get(entry.path)?.source ?? '';
+            entry.source = analysisEntries.get(entry.path)?.source ?? '';
           }
         }
         return JSON.stringify(entries);
@@ -708,29 +658,6 @@ export class PluginContext {
     );
   }
 
-  /** The shared ingestion policy point — capability guard, facts memo, and
-   *  warn-dedupe lifecycle all live in the pipeline, not per host. */
-  private sourceIngestor: SourceIngestor = createSourceIngestor({
-    engineApi: () => this.engineApi(),
-    prefix: '[animus-extract]',
-    strict: () => !!this.options.strict,
-    warn: (message: string) => this.warn(message),
-  });
-
-  /** Prepare one raw-source corpus through the shared adaptation boundary. */
-  async ingestRawSources(
-    fileEntries: readonly RawSourceEntry[]
-  ): Promise<SourceIngestionResult> {
-    return this.sourceIngestor.ingest(fileEntries);
-  }
-
-  /** Surface adapter diagnostics under the shared strict/warn policy. */
-  surfaceSourceDiagnostics(
-    diagnostics: readonly SourceIngestionDiagnostic[]
-  ): Set<string> {
-    return this.sourceIngestor.surfaceDiagnostics(diagnostics);
-  }
-
   /**
    * The one ingest → quarantine → analyze → publish transaction, shared by
    * buildStart and every incremental path. Per-file quarantine: one invalid
@@ -748,12 +675,11 @@ export class PluginContext {
     rawEntries?: readonly RawSourceEntry[];
     beforeAnalysis?: (accepted: SourceIngestionResult) => void;
   }): Promise<{ ok: boolean; accepted: SourceIngestionResult }> {
-    const ingested = await this.ingestRawSources(
-      options?.rawEntries ?? buildRawEntriesFromCache(this.fileCache)
-    );
-    const accepted = withoutInvalidOriginals(
-      ingested,
-      this.surfaceSourceDiagnostics(ingested.diagnostics)
+    const accepted = await this.corpus.prepare(
+      options?.rawEntries ?? {
+        fileCache: this.fileCache,
+        externalFileOwners: this.externalFileOwners,
+      }
     );
     options?.beforeAnalysis?.(accepted);
     const ok = this.runAnalysis(accepted.analysisEntries) !== false;
@@ -761,26 +687,12 @@ export class PluginContext {
     return { ok, accepted };
   }
 
-  /** Publish every parser child and ownership edge atomically after analysis. */
+  /** Publish the accepted corpus and every ownership edge atomically after
+   *  analysis. */
   publishSourceIngestion(result: SourceIngestionResult): void {
-    this.sourceIngestor.markPublished(result);
-    this.analysisEntryCache = new Map(
-      result.analysisEntries.map((entry) => [
-        entry.path,
-        { hash: entry.hash, source: entry.source },
-      ])
-    );
-    this.sourceOwnership = result.ownership;
-    this.analysisOwnerByPath = new Map();
-    for (const owner of Object.values(result.ownership)) {
-      for (const analysisPath of owner.analysisPaths) {
-        this.analysisOwnerByPath.set(analysisPath, owner.originalPath);
-      }
-    }
-    // The owner projection is the shared one (the session runs it at the same
-    // point in its own transaction), so a generated child correlates to the
-    // same package in both hosts — the token-contract diagnostic joins through
-    // this map and must not depend on which driver is running.
+    this.corpus.publish(result);
+    // The owner projection is shared with the session so a generated child
+    // correlates to the same package whichever driver is running.
     this.externalFileOwners = projectExternalFileOwners(
       result,
       this.externalFileOwners

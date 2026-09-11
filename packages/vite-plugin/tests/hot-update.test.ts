@@ -451,12 +451,10 @@ describe('hotUpdate delete re-delivers consumers whose plan changed', () => {
 });
 
 /**
- * ANI-035's exact ordering: an imported extension parent exists on disk
- * (created mid-session; its create event was lost), and a consumer edit
- * analyzes to `chain dropped: could not resolve parent component`. The
- * source universe is reconciled BEFORE that result is acted on (openspec:
- * dev-transform-coherence, "Source-universe reconciliation precedes
- * unresolved-parent fallbacks") — the consumer's first re-serve is
+ * An imported extension parent exists on disk (created mid-session; its
+ * create event was lost), and a consumer edit analyzes to `chain dropped:
+ * could not resolve parent component`. The source corpus is reconciled
+ * BEFORE that result is acted on, so the consumer's first re-serve is
  * extracted, never the runtime fallback.
  */
 describe('hotUpdate recovers a new imported parent found on disk', () => {
@@ -487,7 +485,7 @@ describe('hotUpdate recovers a new imported parent found on disk', () => {
     ctx.runAnalysis = () => {
       probe.analyses++;
       if (probe.analyses === 1) {
-        // The parent is not in the analyzed universe yet: chains drop.
+        // The parent is not in the analyzed corpus yet: chains drop.
         ctx.storedManifest = makeManifest({
           diagnostics: [
             {
@@ -591,7 +589,7 @@ describe('hotUpdate failed analysis reopens the hash gate', () => {
   });
 
   /**
-   * The FIRST analysis publishes, then source-universe stabilization
+   * The FIRST analysis publishes, then source-corpus reconciliation
    * re-analyzes — and `runAnalysis` throws in every mode on error
    * diagnostics, since that escalation sits outside its non-strict catch.
    * That throw escaped past the rollback, leaving the cache advanced to the

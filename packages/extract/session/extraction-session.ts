@@ -18,9 +18,9 @@ import {
   buildSystemPropsModule,
   clearEngineCache,
   collectExternalPackageSources,
-  compareDiscoveryOrder,
   contentHash,
   createExcludeMatcher,
+  createSourceCorpus,
   createSourceIdentity,
   DEFAULT_EXTENSIONS,
   discoverFiles,
@@ -30,7 +30,6 @@ import {
   findAssetSpecifiers,
   findPackageRoot,
   firstOwners,
-  createSourceIngestor,
   hashReplacementPlans,
   isExcludedPackageRelativePath,
   isPathWithinRoot,
@@ -51,7 +50,6 @@ import {
   unreadableSourceDiagnostic,
   unresolvableIncludesMessage,
   walkPackageSources,
-  withoutInvalidOriginals,
 } from '../pipeline/index';
 import {
   checkLockLiveness,
@@ -118,12 +116,9 @@ import type { ExcludeMatcher } from '../pipeline/index';
 import type {
   LightningTargets,
   ManifestDiagnostic,
-  RawSourceEntry,
-  SourceEntryOwnership,
+  SourceCorpus,
   SourceIdentity,
-  SourceIngestionDiagnostic,
   SourceIngestionResult,
-  SourceIngestor,
   SystemConfig,
 } from '../pipeline/index';
 import type {
@@ -340,10 +335,15 @@ export class ExtractionSession {
 
   // File tracking for HMR
   // Raw/original paths and hashes only. Generated MDX/Svelte parser entries
-  // live in the separate analysis projection below.
+  // live in the published source corpus.
   private fileCache = new Map<string, { hash: string; source: string }>();
-  analysisEntryCache = new Map<string, { hash: string; source: string }>();
-  sourceOwnership: Record<string, SourceEntryOwnership> = {};
+
+  readonly corpus: SourceCorpus = createSourceCorpus({
+    engineApi: () => engineApi(),
+    prefix: '[animus-next]',
+    strict: () => !!this.options.strict,
+    warn: (message: string) => this.warn(message),
+  });
 
   // Membership keys (lexical + canonical) for the system's evaluated
   // module-file set — the system-reload classification set. Refreshed on
@@ -871,7 +871,10 @@ export class ExtractionSession {
         // waiting loaders raised the misleading
         // ANIMUS_ANALYSIS_NOT_SCHEDULED. Strict mode still throws into the
         // catch below, which writes 'failed'.
-        ingested = await this.ingestAccepted();
+        ingested = await this.corpus.prepare({
+          fileCache: this.fileCache,
+          externalFileOwners: this.externalFileOwners,
+        });
         this.externalFileOwners = projectExternalFileOwners(
           ingested,
           this.externalFileOwners
@@ -923,63 +926,14 @@ export class ExtractionSession {
     }
   }
 
-  /** The shared ingestion policy point (vite-plugin parity BY CODE): the
-   *  capability guard, facts memo, and warn-dedupe lifecycle live in the
-   *  pipeline; this host holds only its prefix, strict flag, and warn sink. */
-  private sourceIngestor: SourceIngestor = createSourceIngestor({
-    engineApi: () => engineApi(),
-    prefix: '[animus-next]',
-    strict: () => !!this.options.strict,
-    warn: (message: string) => this.warn(message),
-  });
-
-  /** Prepare one raw-source corpus through the shared adaptation boundary. */
-  private async ingestRawSources(
-    entries: readonly RawSourceEntry[]
-  ): Promise<SourceIngestionResult> {
-    return this.sourceIngestor.ingest(entries);
-  }
-
-  /** Ingest and apply the shared per-file quarantine: one invalid original
-   *  (an `.mdx` with the optional peer absent, an unsupported `.svelte`
-   *  shape) warns and drops; the rest of the corpus still analyzes. Strict
-   *  mode throws from the shared policy — callers route that into their own
-   *  status/rollback handling. */
-  private async ingestAccepted(
-    entries?: readonly RawSourceEntry[]
-  ): Promise<SourceIngestionResult> {
-    const ingested = await this.ingestRawSources(
-      entries ?? this.buildRawEntriesFromCache()
-    );
-    return withoutInvalidOriginals(
-      ingested,
-      this.surfaceSourceDiagnostics(ingested.diagnostics)
-    );
-  }
-
-  /** Surface parser diagnostics under the shared strict/warn policy. */
-  private surfaceSourceDiagnostics(
-    diagnostics: readonly SourceIngestionDiagnostic[]
-  ): Set<string> {
-    return this.sourceIngestor.surfaceDiagnostics(diagnostics);
-  }
-
-  /** Publish the raw cache and complete parser projection atomically. */
   private publishSourceIngestion(result: SourceIngestionResult): void {
-    this.sourceIngestor.markPublished(result);
     this.fileCache = new Map(
       result.originalEntries.map((entry) => [
         entry.path,
         { hash: entry.hash, source: entry.source },
       ])
     );
-    this.analysisEntryCache = new Map(
-      result.analysisEntries.map((entry) => [
-        entry.path,
-        { hash: entry.hash, source: entry.source },
-      ])
-    );
-    this.sourceOwnership = result.ownership;
+    this.corpus.publish(result);
   }
 
   /**
@@ -1115,7 +1069,7 @@ export class ExtractionSession {
     bt.fileDiscovery = this.elapsed(t);
 
     // Step 3: read raw originals. Local and external discovery establish one
-    // complete resolver-index universe before shared adaptation runs.
+    // complete resolver index before shared adaptation runs.
     t = this.now();
     const rawEntries: FileEntry[] = [];
     for (const filePath of files) {
@@ -1305,7 +1259,7 @@ export class ExtractionSession {
       this.beginStatusAttempt();
       let accepted: SourceIngestionResult;
       try {
-        accepted = await this.ingestAccepted(rawEntries);
+        accepted = await this.corpus.prepare(rawEntries);
       } catch (err) {
         this.debouncePending.clear();
         this.writeAnalysisStatus('failed', pending, String(err));
@@ -1582,29 +1536,6 @@ export class ExtractionSession {
       return null;
     }
     return { key: resolved.sourceKey, owningRoot: resolved.owningRoot };
-  }
-
-  /**
-   * Build full raw originals for one shared adaptation attempt.
-   *
-   * Ordered as the full pipeline assembles its corpus — project files in
-   * `discoverFiles` walk order, then external-package entries — so both
-   * paths satisfy the same identical-inputs → byte-identical-artifacts
-   * contract. Insertion order alone does not give that: a file created
-   * mid-watch is appended to the cache, landing after the external block a
-   * fresh walk would put it before. External entries keep their collection
-   * order, which the cache cannot reconstruct.
-   */
-  private buildRawEntriesFromCache(): RawSourceEntry[] {
-    const project: RawSourceEntry[] = [];
-    const external: RawSourceEntry[] = [];
-    for (const [path, { hash, source }] of this.fileCache) {
-      const target =
-        this.externalFileOwners[path] === undefined ? project : external;
-      target.push({ path, source, hash });
-    }
-    project.sort((a, b) => compareDiscoveryOrder(a.path, b.path));
-    return [...project, ...external];
   }
 
   /**

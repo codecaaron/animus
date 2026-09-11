@@ -104,14 +104,18 @@ export type {
   SourceParserDiagnostic,
 } from './source-ingestion';
 export {
-  createSourceIngestor,
   ingestSourceEntries,
   isAdvisorySourceDiagnostic,
   parseFilesJson,
   projectExternalFileOwners,
-  withoutInvalidOriginals,
 } from './source-ingestion';
 export type { SourceIngestor, SourceIngestorHost } from './source-ingestion';
+export { createSourceCorpus } from './source-corpus';
+export type {
+  PublishedSourceCorpus,
+  SourceCorpus,
+  SourceCorpusCache,
+} from './source-corpus';
 export {
   findAssetSpecifiers,
   substituteAssetPlaceholders,
