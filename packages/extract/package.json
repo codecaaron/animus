@@ -50,7 +50,7 @@
   "scripts": {
     "build": "bun run build:v2 && bun run build:ts",
     "build:ts": "tsdown && tsc -p tsconfig.build.json",
-    "compile": "tsc -p tsconfig.build.json --noEmit",
+    "compile": "tsc -p tsconfig.build.json --noEmit && tsc -p tsconfig.json",
     "build:v2": "cd crates/extract-v2 && bunx napi build --platform --release",
     "build:v2:debug": "cd crates/extract-v2 && bunx napi build --platform"
   },

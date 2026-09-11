@@ -1,18 +1,48 @@
 import {
+  contentHash,
   createExcludeMatcher,
   createSourceCorpus,
 } from '@animus-ui/extract/pipeline';
 import { resolve } from 'path';
 
-import {
-  makeHost,
-  scriptedSourceIngestor,
-} from '../../extract/tests/source-ingestion-fixtures';
 import { PluginContext } from '../src/context';
 import { makeManifest } from './manifest-fixture';
 
-import type { RawSourceEntry } from '@animus-ui/extract/pipeline';
+import type {
+  RawSourceEntry,
+  SourceIngestor,
+} from '@animus-ui/extract/pipeline';
 import type { DevEnvironment } from 'vite';
+
+/** Every original is its own analysis entry; nothing is diagnosed, so the
+ *  strict/warn policy never engages and publish bookkeeping is a no-op. */
+function identityIngestor(): SourceIngestor {
+  return {
+    async ingest(entries) {
+      const originalEntries = entries.map((entry) => ({
+        ...entry,
+        hash: entry.hash ?? contentHash(entry.source),
+      }));
+      return {
+        originalEntries,
+        analysisEntries: originalEntries,
+        ownership: Object.fromEntries(
+          originalEntries.map((entry) => [
+            entry.path,
+            {
+              originalPath: entry.path,
+              originalHash: entry.hash,
+              analysisPaths: [entry.path],
+            },
+          ])
+        ),
+        diagnostics: [],
+      };
+    },
+    surfaceDiagnostics: () => new Set<string>(),
+    markPublished() {},
+  };
+}
 
 /**
  * The stand-in `PluginContext` that behavioral tests drive hook bodies with.
@@ -98,8 +128,15 @@ export function makeContextProbe<Overrides extends ContextProbeOverrides>(
   const reverseProvenance: Record<string, string[]> = {};
   // Only the native adaptation is stood in for: the REAL corpus runs over
   // this ingestor, so hooks exercise production assembly, fold, and publish.
-  const host = makeHost();
-  const corpus = createSourceCorpus(host, scriptedSourceIngestor(host));
+  const corpus = createSourceCorpus(
+    {
+      engineApi: () => ({}),
+      prefix: '[animus-probe]',
+      strict: () => false,
+      warn() {},
+    },
+    identityIngestor()
+  );
   const ctx = {
     isProd: false,
     verbose: false,
