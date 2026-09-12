@@ -115,10 +115,6 @@ function ruleBody(css: string, selector: string): string | undefined {
 }
 
 function emitLaneReceipt(): void {
-  // Engine identity comes from writeLaneReceipt's retirement guard over the
-  // fixture config (openspec: retire-extract-v1) — never spelled here.
-  //
-  // hostVersion from the fixture's installed host, not the manifest range.
   const receipt = writeLaneReceipt(
     resolve(APP_ROOT, '.receipts', 'verify-assert-svelte.json'),
     {

@@ -40,28 +40,13 @@ function parameterName(parameter: Parameter, sourceText: string): string {
 }
 
 /**
- * A type guard's whole job is to turn `unknown` into a named domain type, so
- * `unknown` is the only parameter type it can correctly declare — flagging it
- * would demand the caller do the very decoding the guard exists to perform.
- * Detection idiom is the sibling rule's (`no-runtime-typeof`'s
- * `isInsideTypeGuard`): a `TSTypePredicate` return annotation.
- *
- * Unconditional, unlike `no-runtime-typeof`'s `allowInTypeGuards` option: a
- * `typeof` inside a guard is a defensible style choice either way, but there
- * is no configuration in which "a guard must not accept unknown" is the
- * correct policy — the rule's own message ("decode unknown input at its I/O
- * boundary") is exactly what a guard does.
- *
- * NOT covered: a VALIDATING NARROW — `(value: unknown): T` that throws — is
- * the shape this rule most wants and is not a `TSTypePredicate`, so it is
- * still reported. That is an open owner decision (ledger C-023(d)), not an
- * oversight of this exemption.
+ * Guards are exempt: decoding `unknown` into a named type is their job, so
+ * `unknown` is the only parameter type they can correctly declare.
  */
 function returnsTypePredicate(node: ParameterOwner): boolean {
   return node.returnType?.typeAnnotation.type === "TSTypePredicate";
 }
 
-/** Disallow unknown inputs except explicitly named error-cause enrichment. */
 export const noUnknownParametersRule = defineRule({
   meta: {
     type: "problem",

@@ -16,15 +16,11 @@ import routerManifest from 'react-router/package.json' with { type: 'json' };
 
 const APP_ROOT = resolve(import.meta.dirname, '..');
 const BUILD = resolve(APP_ROOT, 'build');
-// Wrangler serves build/client; semantic CSS must be proven there independently
-// from build/server (canary delta: React Router served-client CSS proof).
+// Wrangler serves build/client, so CSS must be proven there rather than
+// anywhere under build/server.
 const CLIENT_ROOT = resolve(BUILD, 'client');
 
 function emitLaneReceipt(): void {
-  // Engine identity comes from writeLaneReceipt's retirement guard over the
-  // fixture config (openspec: retire-extract-v1) — never spelled here.
-  //
-  // hostVersion from the fixture's installed host, not the manifest range.
   const receipt = writeLaneReceipt(
     resolve(APP_ROOT, '.receipts', 'verify-assert-react-router.json'),
     {
@@ -56,7 +52,6 @@ async function main(): Promise<void> {
   assertNoPlaceholders(css);
   assertClassNameFormat(css, { prefix: 'animus-' });
 
-  // JS/hydration discovery keeps its own scope over the whole build root.
   const jsFiles = await findJsFiles(BUILD);
   const js = await readAllConcat(jsFiles);
   if (!js.includes('React Router v8 SSR canary'))

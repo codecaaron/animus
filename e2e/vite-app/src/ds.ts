@@ -9,15 +9,6 @@ export const theme = createTheme()
     red: { 500: '#ef4444', 700: '#b91c1c' },
     green: { 500: '#22c55e' },
   })
-  // System participation (openspec: system-color-scheme). App-LOCAL theme,
-  // shared with nothing — the parity harness builds
-  // `packages/extract/tests/test-system.ts`, not this module.
-  //
-  // This lane is the VITE delivery witness: the guarded media blocks emitted
-  // here travel the same build as an UNGUARDED author-written `_osDark`
-  // condition block (src/components/Card.tsx), which is exactly what keeps the
-  // G2 guard assertion honest — it must accept the author block and still
-  // require the guard on every root-targeting rule.
   .addColorModes(
     'dark',
     {
@@ -42,12 +33,8 @@ export const theme = createTheme()
     },
     {
       systemPreference: { light: 'light', dark: 'dark' },
-      // Empty on purpose — this lane is the end-to-end witness for the D3
-      // amendment: both modes are mapping-named, so their classifications
-      // default to light/dark and the emission must be identical to spelling
-      // them out (the assert lane pins color-scheme on :root, both mode
-      // blocks, and both guarded blocks). next-app keeps explicit entries, so
-      // both spellings stay covered.
+      // Empty on purpose: both modes are mapping-named, so classifications
+      // default to light/dark and emission matches spelling them out.
       browserColorScheme: {},
     }
   )
@@ -83,10 +70,8 @@ declare module '@animus-ui/system' {
 
 const bundle = createSystem()
   .extend(testDs)
-  // Condition alias registry (modern-css-surface inc 03). The kit already
-  // carries `_motionReduce`; this local registration re-asserts it with an
-  // identical value (post-extend app calls override silently, NS-4) so the
-  // manifest `conditionAliases` plugin glue keeps a local witness here.
+  // The kit already carries `_motionReduce`; re-asserting it with an
+  // identical value keeps a local witness (post-extend calls override).
   .addConditions({
     _motionReduce: '@media (prefers-reduced-motion: reduce)',
   })
@@ -95,23 +80,8 @@ const bundle = createSystem()
 export const {
   createGlobalStyles,
   createKeyframes,
-  // extend()-form witness (openspec: first-class-extension, D1/NS-1): this
-  // lane consumes test-ds through the single extension verb — a REAL registry
-  // merge. EVERY group here (space, layout, text, surface, positioning) and
-  // the kit's condition aliases arrive through `.extend(testDs)` alone; the
-  // app deliberately re-registers nothing, so the merged config IS the kit's
-  // registry surface plus the local `_motionReduce` re-assertion below.
-  // (Re-spreading kit groups locally would coalesce under D12 transform
-  // equality — name + captured source — but pure extension is the
-  // recommended consumption shape: the merge already provides them.)
-  //
-  // Box.tsx opts into the kit's `positioning` group and App.tsx uses
-  // `top`/`zIndex`, making the emitted CSS the end-to-end witness that a
-  // kit-registered prop flows through the MERGED config into extraction
-  // output (rust-system-loader › "Merged configuration is the extraction
-  // authority"). The legacy lanes stay deliberate elsewhere: next-app keeps
-  // the deprecated `includes:` alias, react-router-app keeps the deprecated
-  // `from()` chain (G6).
+  // Every group the components use arrives through `.extend(testDs)`; this
+  // app registers no groups of its own.
 } = bundle;
 
 export const globalStyles = createGlobalStyles(
@@ -125,9 +95,6 @@ export const globalStyles = createGlobalStyles(
     },
   },
   {
-    // asset() witness (standardize-inheritance-and-assets): a package-owned
-    // font resolves through the host bundler — the assert lane pins the
-    // hashed URL in the delivered CSS and the emitted file in dist/.
     fontFaces: [
       {
         family: 'AnimusTestFont',
@@ -154,9 +121,6 @@ export const animations = createKeyframes({
   },
 });
 
-// Sealed system (vocabulary-registration): `animations` registers under its
-// export name; the kit's `kitMotion` arrives through the sealed test-ds
-// record via `.extend()` — no local step, and no export scan anywhere.
 export const ds = bundle
   .registerKeyframes({ animations })
   .registerGlobalStyles({ globalStyles })

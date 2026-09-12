@@ -1,7 +1,5 @@
-// The watch scenario's edit target: assert-watch.mjs rewrites this file's
-// backgroundColor (republication witness) and temporarily adds a `glow`
-// usage (error-diagnostic keep-last-good witness). Keep the shape in sync
-// with scripts/assert-watch.mjs `widgetSource`.
+// The watch check rewrites this file mid-run: keep its shape in sync with
+// `widgetSource` in scripts/assert-watch.mjs.
 import { ds } from './ds';
 
 export const Widget = ds

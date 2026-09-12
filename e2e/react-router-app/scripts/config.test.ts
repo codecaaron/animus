@@ -10,14 +10,9 @@ function source(path: string): string {
   return readFileSync(absolute, 'utf8');
 }
 
-// Fixture self-containment (no cross-fixture imports) is enforced for all
-// e2e/* members by the fixture-sibling vector in scripts/verify/topology.ts
-// (runs in verify:lint).
 describe('React Router Worker canary structure', () => {
   it('delegates the Worker to the generated server build', () => {
-    // The two anchors carry the invariant: the Worker still exercises React
-    // Router SSR rather than degenerating into a stub that would build and
-    // dry-run green.
+    // Without these anchors a stub Worker would still build and dry-run green.
     const worker = source('workers/app.ts');
     expect(worker).toContain('createRequestHandler');
     expect(worker).toContain('virtual:react-router/server-build');

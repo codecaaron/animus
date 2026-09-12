@@ -32,11 +32,8 @@ async function assertDir(path: string, label: string): Promise<void> {
 }
 
 function emitLaneReceipt(): void {
-  // Engine identity comes from writeLaneReceipt's retirement guard over the
-  // fixture config (openspec: retire-extract-v1) — never spelled here, and
-  // never inferred from plugin source (guardrail G3).
-  //
-  // hostVersion from the fixture's installed host, not the manifest range.
+  // Engine identity is derived by writeLaneReceipt from the fixture config,
+  // never spelled here; hostVersion is the installed host, not a range.
   const receipt = writeLaneReceipt(
     resolve(APP_ROOT, '.receipts', 'verify-assert-next16.json'),
     {
@@ -62,14 +59,8 @@ async function main(): Promise<void> {
   }
   const css = await readAllConcat(cssFiles);
 
-  // Cascade order (relaxed) — same contract as vite-app and showcase. See
-  // `e2e/vite-app/scripts/assert-build.ts` for the TODO on re-enabling the
-  // stricter :root-before-@layer order post `fix-lightningcss-cascade`.
-  //
-  // §11.8 carry-forward from sessions 75/76: the previous shell script
-  // grepped for `@layer base` / `@layer variants`, but Animus actually emits
-  // `@layer anm-base` / `@layer anm-variants`. The layerBlock() helper uses
-  // the correct `anm-` prefix so that gap closes here.
+  // Lightning CSS emits `:root` after the layer blocks, so the stricter
+  // :root-first order is not asserted here.
   assertLayerOrder(css, {
     layers: [layerBlock('anm-base'), layerBlock('anm-variants')],
   });
@@ -82,19 +73,13 @@ async function main(): Promise<void> {
 
   assertNoPlaceholders(css);
 
-  // Keyframes extracted through the Turbopack orchestration path — the
-  // fixture declares `animations = keyframes({ fadeIn, pulse })` in
-  // src/ds.ts; the assertion proves both blocks land in @layer anm-global,
-  // both animation-name refs resolve to a matching block, and neither got
-  // px-mangled by unit-fallback.
   assertKeyframesExtracted(css, {
     insideLayer: 'anm-global',
     minBlocks: 2,
     minReferences: 2,
   });
 
-  // Class-name assertion runs on the full build output (JS + HTML emitted by
-  // Next may include the class names, not just the CSS).
+  // Next can emit class names into JS as well as CSS, so both are scanned.
   const jsFiles = await findJsFiles(STATIC_JS);
   const jsContent = await readAllConcat(jsFiles);
   assertClassNameFormat(`${css}\n${jsContent}`, { prefix: 'animus-' });
@@ -104,9 +89,7 @@ async function main(): Promise<void> {
     assertNoEmotionImports(js);
   }
 
-  // Router coverage — app router only (Turbopack build mode evidence; the
-  // pages router on Next 16 is deferred, openspec change
-  // next16-fixture-peer-range DEF-2).
+  // App Router only: this lane's fixture ships no Pages Router.
   await assertDir(resolve(NEXT_DIR, 'server', 'app'), 'App Router output');
 
   console.log(

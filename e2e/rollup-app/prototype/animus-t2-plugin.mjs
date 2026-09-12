@@ -1,10 +1,5 @@
-// DEF-1 prototype arm T2 — ARTIFACT-FED host: `animus build` runs FIRST
-// (separate process); this plugin consumes the published set at .animus/,
-// verifies the commit record before transforming (coherence gate,
-// fail-loud — never a silent passthrough), and pays T2's real per-process
-// cost: the engine transform needs retained state, so hydration re-runs
-// the full analysis in the consumer's process. The Turbopack loader
-// generalized — including its honestly-measured cost.
+// Prototype measurement arm, not the product path: `animus build` publishes
+// first and this plugin verifies that set before transforming.
 import { contentHash } from '@animus-ui/extract/pipeline';
 import {
   engineApi,
@@ -26,14 +21,11 @@ export function animusT2({ root, system, outDir }) {
   let stylesCss = '';
   let systemPropsJs = '';
   let sessionDir = null;
-  /** Wall-clock of the in-process hydration (the T2 cost under measure). */
   let hydrationMs = 0;
 
   return {
     name: 'animus-t2',
     async buildStart() {
-      // Coherence gate: the published set must verify against its commit
-      // record byte-for-byte, or the consumer build FAILS (no passthrough).
       let commit;
       try {
         commit = JSON.parse(
@@ -57,12 +49,10 @@ export function animusT2({ root, system, outDir }) {
       stylesCss = payloads['styles.css'];
       systemPropsJs = payloads['system-props.js'];
 
-      // T2's hydration cost, measured honestly: the engine transform needs
-      // retained in-process state, so the consumer process replays the
-      // full analysis (the artifact manifest cannot drive transforms).
+      // The engine transform needs retained in-process state, so the consumer
+      // process replays the full analysis; the artifacts cannot drive it.
       const t0 = performance.now();
-      // Emission inputs PINNED (parity discipline): the host and the CLI
-      // must agree on mode or their payloads legally differ.
+      // Mode is pinned: host and CLI payloads legally differ otherwise.
       const session = new ExtractionSession({
         system,
         strict: true,

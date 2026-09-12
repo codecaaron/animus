@@ -8,9 +8,6 @@ const INTENTS = ['primary', 'secondary', 'danger'] as const;
 const RUNTIME_ROTATION = Date.now() % INTENTS.length;
 
 export function App() {
-  // Runtime-selected variant: the variant prop value is not statically
-  // resolvable at the call site, so class resolution happens at runtime
-  // against the extracted variant classes.
   return (
     <Stack p={32} gap={24}>
       <Stack gap={8}>

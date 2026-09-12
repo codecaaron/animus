@@ -58,12 +58,6 @@ declare module '@animus-ui/system' {
   interface Theme extends VinextTheme {}
 }
 
-// extend()-form lane (openspec: first-class-extension, D1): test-ds's
-// registries MERGE into this system — every group the components use
-// (space, layout, plus the kit's text/surface/positioning) arrives through
-// `.extend(testDs)` alone. Nothing is re-registered locally — re-spreading
-// kit groups would coalesce under D12 transform equality (name + captured
-// source), but pure extension is the recommended consumption shape.
 const bundle = createSystem().extend(testDs).build();
 
 export const { createGlobalStyles } = bundle;
@@ -78,6 +72,4 @@ export const globalStyles = createGlobalStyles({
   },
 });
 
-// Sealed system (vocabulary-registration): no local collections; the kit's
-// `kitMotion` arrives through the sealed test-ds record via `.extend()`.
 export const ds = bundle.registerGlobalStyles({ globalStyles }).seal();

@@ -1,7 +1,5 @@
-// Present in the fixture from the start. The parity check ADDS a sibling
-// (`Alpha.tsx`) mid-watch: a fresh discovery walk sorts that sibling BEFORE
-// this file, so the two paths only agree if the incremental pass orders its
-// entries the way discovery does.
+// The parity check adds an `Alpha.tsx` sibling mid-watch, which sorts before
+// this file: the incremental pass must order entries the way discovery does.
 import { ds } from './ds';
 
 export const Widget = ds

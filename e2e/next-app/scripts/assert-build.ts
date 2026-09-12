@@ -43,11 +43,8 @@ async function assertDir(path: string, label: string): Promise<void> {
 }
 
 function emitLaneReceipt(): void {
-  // Engine identity comes from writeLaneReceipt's retirement guard over the
-  // fixture config (openspec: retire-extract-v1) — never spelled here, and
-  // never inferred from plugin source (guardrail G3).
-  //
-  // hostVersion from the fixture's installed host, not the manifest range.
+  // Engine identity is derived by writeLaneReceipt from the fixture config,
+  // never spelled here; hostVersion is the installed host, not a range.
   const receipt = writeLaneReceipt(
     resolve(APP_ROOT, '.receipts', 'verify-assert-next.json'),
     {
@@ -73,14 +70,8 @@ async function main(): Promise<void> {
   }
   const css = await readAllConcat(cssFiles);
 
-  // Cascade order (relaxed) — same contract as vite-app and showcase. See
-  // `e2e/vite-app/scripts/assert-build.ts` for the TODO on re-enabling the
-  // stricter :root-before-@layer order post `fix-lightningcss-cascade`.
-  //
-  // §11.8 carry-forward from sessions 75/76: the previous shell script
-  // grepped for `@layer base` / `@layer variants`, but Animus actually emits
-  // `@layer anm-base` / `@layer anm-variants`. The layerBlock() helper uses
-  // the correct `anm-` prefix so that gap closes here.
+  // Lightning CSS emits `:root` after the layer blocks, so the stricter
+  // :root-first order is not asserted here.
   assertLayerOrder(css, {
     layers: [layerBlock('anm-base'), layerBlock('anm-variants')],
   });
@@ -93,53 +84,31 @@ async function main(): Promise<void> {
 
   assertNoPlaceholders(css);
 
-  // arch-css-structural-gates › "Condition at-rules gated inside layer blocks":
-  // condition at-rules must nest inside a named @layer block. Non-vacuous
-  // here — the imported test-ds Card emits raw @container / @media /
-  // @supports rules into this build's CSS.
-  //
-  // Exempt: the theme's variable-level system fallback blocks (openspec:
-  // system-color-scheme), which live in the UNLAYERED variables part beside
-  // `:root`. The exemption is earned per block — see
-  // `systemSchemeVariableSpans`.
+  // The theme's system-fallback blocks stay unlayered beside `:root` so an
+  // explicit mode can override the OS fallback at the same cascade level.
   assertConditionsInsideLayers(css, {
     exemptSpans: systemSchemeVariableSpans(css),
   });
 
-  // Keyframes extracted through the webpack adapter — the fixture declares
-  // `animations = keyframes({ fadeIn, pulse })` in src/ds.ts; the assertion
-  // proves both blocks land in @layer anm-global, both animation-name refs
-  // resolve to a matching block, and neither got px-mangled by unit-fallback.
   assertKeyframesExtracted(css, {
     insideLayer: 'anm-global',
     minBlocks: 2,
     minReferences: 2,
   });
 
-  // ── System color scheme (openspec: system-color-scheme) ─────────────────
-  //
-  // Every root-targeting rule inside a prefers-color-scheme
-  // block carries the `:root:not([data-color-mode])` guard, and both guarded
-  // blocks actually exist with custom properties (non-vacuous).
   assertSystemSchemeGuard(css, { expectSchemes: ['light', 'dark'] });
 
-  // Classification reaches `:root` (initial mode `dark`), each explicit mode
-  // block, and each guarded block, so native surfaces follow the active mode
-  // including the OS-driven one.
   assertColorSchemeEmission(css, {
     root: 'dark',
     modes: { dark: 'dark', light: 'light' },
     system: { light: 'light', dark: 'dark' },
   });
 
-  // OS path and explicit path are the same rendering: the guarded block's
-  // declarations equal the mapped mode block's, and `:root` precedes both.
   assertSystemFallbackParity(css, {
     mapping: { light: 'light', dark: 'dark' },
   });
 
-  // Class-name assertion runs on the full build output (JS + HTML emitted by
-  // Next may include the class names, not just the CSS).
+  // Next can emit class names into JS as well as CSS, so both are scanned.
   const jsFiles = await findJsFiles(STATIC_JS);
   const jsContent = await readAllConcat(jsFiles);
   assertClassNameFormat(`${css}\n${jsContent}`, { prefix: 'animus-' });
@@ -148,10 +117,6 @@ async function main(): Promise<void> {
     const js = await readFile(jsFile, 'utf8');
     assertNoEmotionImports(js);
 
-    // Bootstrap entry-point isolation: `_document.tsx` is server-only, so
-    // neither the generator nor the storage key it embeds may appear in a
-    // CLIENT chunk under .next/static. The snippet reaches the browser as HTML
-    // text and nothing else.
     for (const identifier of [
       'createAppearanceBootstrap',
       'animus:appearance',
@@ -165,12 +130,9 @@ async function main(): Promise<void> {
       }
     }
 
-    // Production diagnostic elimination — the Next plugin's DefinePlugin entry
-    // is the fold's input here; see is-dev.ts for the define/fold story.
     assertNoDevDiagnostics(js);
   }
 
-  // Router coverage — same checks as the prior shell script.
   await assertDir(resolve(NEXT_DIR, 'server', 'app'), 'App Router output');
 
   const pagesDir = resolve(NEXT_DIR, 'server', 'pages');
@@ -188,25 +150,8 @@ async function main(): Promise<void> {
     );
   }
 
-  // ── No-flash delivery, application-owned (D6) ───────────────────────────
-  //
-  // The Animus Next plugin injects nothing. `pages/_document.tsx` places the
-  // artifact itself, so this lane witnesses BOTH halves of that contract in a
-  // single build:
-  //
-  //  • Pages Router — the script is present in <head> and precedes the first
-  //    stylesheet reference (Next emits `<link as="style">` before the
-  //    stylesheet link, so the preload is the real bar to clear). Comparing the
-  //    emitted text to `appearanceBootstrap.code` and re-hashing it proves the
-  //    delivery path did not re-encode the snippet: a CSP assembled from
-  //    `cspHash` authorizes exactly these bytes.
-  //
-  //  • App Router — `app/layout.tsx` deliberately places nothing, so its
-  //    prerendered documents must come out with no bootstrap marker at all.
-  //    That is the live negative witness for "no automatic injection"; without
-  //    it, a plugin that started injecting would still pass every check above.
-  // The composite also gates the charset byte budget: application-placed
-  // injection spends it exactly like plugin injection does.
+  // The plugin injects nothing: `_document.tsx` places the artifact, and the
+  // App Router places none, so its documents must stay marker-free.
   const legacyHtml = await readFile(resolve(pagesDir, 'legacy.html'), 'utf8');
   assertHeadInjectionContract(legacyHtml, {
     code: appearanceBootstrap.code,

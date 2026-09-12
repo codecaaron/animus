@@ -1,8 +1,7 @@
 import { defineConfig, type UserConfig } from 'tsdown';
 
-// ANIMUS_BUILD_SOURCEMAP=1 is set only by scripts/verify/coverage-e2e.sh so
-// V8 coverage collected from consumer builds can remap dist/ back to src/;
-// published artifacts are always built without it.
+// Sourcemaps stay opt-in: published artifacts ship without them, and only
+// the e2e coverage lane needs dist/-to-src/ remapping.
 export const createConfig = (overrides?: Partial<UserConfig>) =>
   defineConfig({
     entry: ['./src/index.ts'],

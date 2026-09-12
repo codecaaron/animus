@@ -1,9 +1,5 @@
-// Lane bundle entry: renders a KIT component beside the local Button —
-// the kit-specifier redirect witness (the host must resolve
-// '@animus-ui/test-ds' to the exact entry extraction analyzed, or Badge
-// renders unstyled). The stylesheet import resolves through the host's
-// in-process stub; the sheet itself arrives as the emitted animus.css
-// asset, which the assert lane reads.
+// `.animus/styles.css` is a virtual specifier the host resolves; the kit
+// Badge must keep rendering to hold the cross-package specifier redirect.
 import '.animus/styles.css';
 import { Badge } from '@animus-ui/test-ds';
 

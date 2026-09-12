@@ -3,8 +3,7 @@ import { defineConfig } from 'vite-plus';
 import type { OxlintOverride } from 'oxlint';
 
 const typescriptTestTargets = [
-  // Owned-root discovery (design decision D8): the whole system package root so
-  // colocated src/ tests cannot be silently omitted from the tier.
+  // The whole package root, so tests colocated in src/ are collected too.
   'packages/system',
   'packages/vite-plugin/tests',
   'packages/next-plugin/tests',
@@ -14,13 +13,6 @@ const typescriptTestTargets = [
   'packages/_assertions/__tests__',
   'packages/_parity/__tests__',
   'packages/oracle/__tests__',
-  // Every engine-free extractor test, enumerated — the tests/ dir is NOT
-  // globbed wholesale because two of its files require a fresh NAPI binary
-  // (canary.test.ts and static-css-overrides.test.ts) and run via `bun test`
-  // in verify:canary instead; this tier's only prerequisite is `bun install`.
-  // A new extract test goes HERE unless it loads the native engine.
-  // `tests/session/` holds the driver-shared session-engine suites; none of
-  // them loads the native engine, so the directory is one target.
   'packages/extract/tests/session',
   'packages/extract/tests/asset-placeholders.test.ts',
   'packages/extract/tests/collect-external-packages.test.ts',
@@ -63,11 +55,6 @@ const typescriptCoverageExclusionArguments = typescriptCoverageExclusions
   .map((pattern) => `--coverage.exclude='${pattern}'`)
   .join(' ');
 
-// Agent scratch trees. One question — "this is an agent's working directory,
-// no repo tool reads, rewrites, or collects from it" — so one list, spread into
-// every tool surface that has to answer it (lint, fmt, test). Adding a new
-// agent directory here admits it to all three at once; the non-agent entries in
-// each surface below diverge deliberately and stay local to that surface.
 const agentScratchDirectories = [
   '.agent/**',
   '.agents/**',
@@ -84,9 +71,8 @@ const agentScratchDirectories = [
   '.windsurf/**',
 ] as const;
 
-// TEMPORARY: campaign-close protected-core freeze. Remove each exact file as
-// it is independently migrated; do not replace this list with a system glob,
-// so unaffected and newly added system files remain under anti-slop enforcement.
+// Exact files, never a glob: unaffected and new system files stay under
+// anti-slop enforcement. An entry leaves the list as its file is migrated.
 const temporaryProtectedCoreAntiSlopOverride = {
   files: [
     'packages/system/__tests__/types.test-d.tsx',
@@ -195,25 +181,13 @@ export default defineConfig({
       'e2e/next-app/next-env.d.ts',
       'e2e/next16-app/next-env.d.ts',
       'e2e/vinext-app/next-env.d.ts',
-      // OpenSpec CHANGE artifacts (journals, evidence tools) are
-      // change-governed; schema executable scripts stay linted via the
-      // override below.
+      // Change artifacts are governed by their own process, not by lint.
       'openspec/changes/**',
-      // Parity corpus fixtures are byte-precise adversarial extraction/
-      // formatting fixtures, not code subject to the rule — the same
-      // rationale scripts/verify/topology.ts states for its own
-      // `packages/_parity/corpus` EXCLUDE_PREFIXES entry, and the same
-      // reason the fmt ignorePatterns below excludes them. Their bytes are
-      // hashed into the parity baselines (`corpusSha256`), so editing one to
-      // satisfy a lint rule would invalidate the oracle. Scoped to the corpus
-      // only: `packages/_parity/src`, `tools`, and `__tests__` stay linted.
+      // Corpus bytes are hashed into the parity baselines (`corpusSha256`), so
+      // editing a fixture to satisfy a lint rule invalidates the oracle.
       'packages/_parity/corpus/**',
-      // Same pinned-bytes rationale, one file each: these two fixtures carry
-      // transform functions whose SOURCE TEXT the emitter copies verbatim
-      // into generated code, and those exact bytes are recorded in
-      // packages/_parity/baselines under `corpusSha256`. Rewriting their
-      // one flagged `typeof` each would break verify:parity until a baseline
-      // refresh — an owner decision, not a lint fix.
+      // The emitter copies these two fixtures' transform source text verbatim
+      // into generated code, and those bytes are hashed into the baselines.
       'packages/extract/tests/fixtures/custom-props.tsx',
       'packages/_integration/fixtures/components/transforms.tsx',
       'tools/oxlint/anti-slop/**',
@@ -243,7 +217,7 @@ export default defineConfig({
         },
       },
       {
-        // Schema-shipped CLI tooling: console IS the interface.
+        // Schema scripts are CLIs; console is their output surface.
         files: ['openspec/schemas/**'],
         rules: {
           'no-console': 'off',
@@ -251,8 +225,7 @@ export default defineConfig({
         },
       },
       {
-        // Parity harness is a CLI (scoreboard output) — console is its UI,
-        // matching the scripts/** precedent below.
+        // The parity harness is a CLI; console is its output surface.
         files: [
           'packages/_parity/src/**',
           'packages/_parity/tools/**',
@@ -261,7 +234,7 @@ export default defineConfig({
         rules: {
           'no-console': 'off',
           'no-unused-vars': 'off',
-          // corpus fixtures deliberately exercise shadowing (usage-semantics family)
+          // Corpus fixtures exercise shadowing as part of what they test.
           'no-shadow': 'off',
         },
       },
@@ -271,9 +244,6 @@ export default defineConfig({
           'scripts/**/*.mjs',
           'e2e/*/scripts/**/*.ts',
           'e2e/*/scripts/**/*.mjs',
-          // The rollup-app DEF-1 prototype record (retained per inc 05):
-          // measure.mjs is a measurement CLI — console is its UI, same
-          // rationale as scripts/** above.
           'e2e/rollup-app/prototype/**/*.mjs',
         ],
         rules: {
@@ -281,8 +251,6 @@ export default defineConfig({
         },
       },
       {
-        // The oracle CLI: console IS the interface (human report on stderr,
-        // machine JSON on stdout), matching the cli/** precedent below.
         files: ['packages/oracle/src/cli.ts', 'packages/oracle/src/cli/**'],
         rules: {
           'no-console': 'off',
@@ -292,17 +260,8 @@ export default defineConfig({
         files: [
           'packages/next-plugin/src/**/*.ts',
           'packages/vite-plugin/src/**/*.ts',
-          // The extraction session moved here from next-plugin/src
-          // (openspec: standalone-extraction-cli D1); its console logging is
-          // the plugin-host interface. The CLI's stream-discipline work
-          // routes its own output explicitly.
           'packages/extract/session/**/*.ts',
-          // The CLI: console IS the interface (stderr for humans, stdout
-          // only for --print-config JSON — spec'd stream discipline).
           'packages/cli/src/**/*.ts',
-          // The unplugin transform host is a plugin host too: its loud-skip
-          // warning surface (e.g. an esbuild build with no write target for
-          // the stylesheet asset) is console, same as the plugins above.
           'packages/unplugin/src/**/*.ts',
         ],
         rules: {
@@ -349,46 +308,32 @@ export default defineConfig({
       '**/dist/**',
       '**/build/**',
       '**/target/**',
-      // OpenSpec artifacts are schema-governed (brainstorm.md is immutable
-      // once design.md exists); keep the repo formatter out of them.
+      // Schema-governed artifacts; some are immutable once written.
       'openspec/**',
       '**/tmp/**',
       'legacy/**',
-      // Next regenerates this on every build; keep the formatter out so the
-      // fixture doesn't re-drift after each `next build` (same rationale as
-      // the lint ignore for e2e/next-app/next-env.d.ts).
+      // Next regenerates this on every build, so formatting it re-drifts.
       'e2e/next16-app/next-env.d.ts',
-      // vinext's typegen rewrites this on every build with double-quoted
-      // imports and compares byte-for-byte before writing; the tracked copy
-      // is kept in that form so a build is a no-op, and the formatter stays
-      // out so verify:lint does not reject the generated file.
+      // vinext typegen rewrites this each build with double-quoted imports
+      // and compares bytes before writing; the tracked copy stays in that form.
       'e2e/vinext-app/next-env.d.ts',
-      // v2 NAPI loader surface is generated by napi build (same rationale
-      // as the v1 pair above).
+      // Generated by napi build.
       'packages/extract/crates/extract-v2/index.js',
       'packages/extract/crates/extract-v2/index.d.ts',
-      // Parity corpus fixtures are byte-precise adversarial inputs (e.g.
-      // no-eof-newline.tsx); formatting would destroy their properties.
+      // Byte-precise fixtures; formatting destroys the properties they test.
       'packages/_parity/corpus/**',
-      // Oracle fixtures are byte-pristine snapshots of emitted .animus
-      // artifacts; formatting would diverge them from what animus emits.
+      // Snapshots of emitted .animus output; formatting diverges them from it.
       'packages/oracle/__tests__/fixtures/**',
       'openspec/changes/archive/**/*.md',
-      // repowise update rewrites this file with its extension recommendation
-      // in its own formatting on every run; keep the formatter out of the
-      // tug-of-war.
+      // repowise rewrites this file in its own formatting on every run.
       '.vscode/extensions.json',
       'tools/oxlint/anti-slop/**',
     ],
   },
   test: {
     environment: 'happy-dom',
-    // This list is the WHOLE collection boundary for a bare `bunx vp test run`
-    // (root `package.json` "test" passes no targets). verify:unit:ts and
-    // verify:coverage:ts are safe by construction — both enumerate
-    // typescriptTestTargets above — so a gap here shows up only in the
-    // untargeted command, which is why the agent block and `**/build/**` were
-    // missing until now.
+    // The whole collection boundary for an untargeted `bunx vp test run`;
+    // verify:unit:ts and verify:coverage:ts enumerate targets instead.
     exclude: [
       ...agentScratchDirectories,
       '**/node_modules/**',
@@ -467,14 +412,8 @@ export default defineConfig({
         cache: false,
       },
       'build:extract': {
-        // The NAPI half routes through build:extract-v2 — i.e. through
-        // scripts/cloudflare/build-extract-v2.sh, which asserts `rustc
-        // --version` equals the rust-toolchain.toml channel BEFORE building and
-        // calls that channel the single source of truth. Calling the extract
-        // package's own `build` here instead would reach `napi build --release`
-        // with no channel check, leaving a second, ungated path to the shipped
-        // .node. `build:v2:debug` stays ungated on purpose: a developer-profile
-        // binary, not the shipped artifact.
+        // Routes through build:extract-v2, which gates the rustc channel on
+        // rust-toolchain.toml; the package's own build reaches napi ungated.
         command:
           "vp run build:extract-v2 && bun run --filter '@animus-ui/extract' build:ts",
         cache: false,
@@ -496,15 +435,8 @@ export default defineConfig({
         cache: false,
       },
       'build:all': {
-        // Ordered, not a dependency set: `dependsOn` has no ordering field, so
-        // `['build:extract', 'build:ts']` let two writers into
-        // packages/extract/dist at once (build:extract carries extract's
-        // build:ts, and build:ts fans out over every package including
-        // extract). Naming the NAPI-only gate task here instead of
-        // build:extract also drops that duplicate write entirely: the fan-out
-        // is the one build:ts writer for every package. Same phase order the
-        // spec requires (Rust NAPI first, then TS in dependency order) and the
-        // same ordered-chain mechanism verify:full uses.
+        // Ordered on purpose: `dependsOn` has no ordering field, and naming
+        // build:extract here would put two writers into extract's dist.
         command: 'vp run build:extract-v2 && vp run build:ts',
         cache: false,
       },
@@ -529,15 +461,8 @@ export default defineConfig({
         cache: false,
       },
       'verify:full': {
-        // Deliberately NOT `dependsOn`, and not foldable into `verify` above.
-        // `verify` is a fan-out gate: an unordered set of independent checks,
-        // which is exactly what `dependsOn` models. This is an ordered pipeline
-        // — artifacts must exist before the checks that read them — and
-        // `dependsOn` has no ordering field. Its middle step is also a
-        // package-filtered fan-out (`-F './e2e/*' …`), which has no task
-        // identity and therefore no `dependsOn` spelling at all. The two lists
-        // drift independently by design; that is the cost of the split, not a
-        // bug to consolidate away.
+        // Ordered pipeline, not a `dependsOn` set: artifacts must exist before
+        // the checks that read them, and the e2e fan-out has no task identity.
         command:
           "vp run build:extract-v2 && vp run build:ts && vp run verify && vp run --fail-if-no-match -F './e2e/*' -F '!animus-packed-app' -F './packages/showcase' verify && vp run verify:parity && vp run verify:integration && vp run verify:hygiene:rust && vp run verify:packed",
         cache: false,

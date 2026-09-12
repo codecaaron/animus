@@ -1,8 +1,5 @@
-// DEF-1 prototype arm T0 — IN-PROCESS host: the ONE ExtractionSession runs
-// at buildStart inside the consumer's rollup process (no artifacts, no
-// second process); per-file transforms come from the retained engine state
-// via the singleton engine API. The Vite plugin generalized, not the
-// Turbopack loader generalized.
+// Prototype measurement arm, not the product path: one ExtractionSession runs
+// in-process at buildStart and transforms read the retained engine state.
 import {
   engineApi,
   ExtractionSession,
@@ -26,8 +23,7 @@ export function animusT0({ root, system }) {
   return {
     name: 'animus-t0',
     async buildStart() {
-      // Emission inputs PINNED (parity discipline): the host and the CLI
-      // must agree on mode or their payloads legally differ.
+      // Mode is pinned: host and CLI payloads legally differ otherwise.
       const session = new ExtractionSession({
         system,
         strict: true,

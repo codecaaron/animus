@@ -1,16 +1,3 @@
-// Standing asserts for the transform host (openspec:
-// standalone-extraction-cli inc 05, specs/bundler-transform-host):
-//
-//   1. Correctness gate (graduated from prototype/measure.mjs): rendered
-//      class attributes ⊆ emitted stylesheet selectors, no empty base
-//      class, and the WIDENED dev-marker set absent from the production
-//      bundle (inc 04 rider F5 — '[animus:drop]' plus the reachability
-//      witness handle).
-//   2. Kit coverage: the component imported from the admitted external
-//      package renders with classes the emitted sheet contains (the
-//      kit-specifier redirect witness).
-//   3. CLI-vs-host payload parity over pinned inputs (D6/D10): the host's
-//      emitted animus.css byte-equals the CLI's published styles.css.
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -74,7 +61,6 @@ const assertRendered = (label, html, { minClasses = 1 } = {}) => {
   return classes;
 };
 
-// ── 1. Correctness gate over the full app tree ───────────────────────
 const appHtml = renderToStaticMarkup(createElement(mod.App));
 const appClasses = assertRendered('app', appHtml, { minClasses: 2 });
 check(
@@ -85,8 +71,6 @@ check(
     )
 );
 
-// Widened dev-marker set (rider F5): the drop diagnostic AND the
-// reachability-witness handle must be compiled out of a production build.
 for (const marker of ['[animus:drop]', '__ANIMUS_WITNESS__']) {
   check(
     `production bundle excludes dev marker '${marker}'`,
@@ -94,7 +78,6 @@ for (const marker of ['[animus:drop]', '__ANIMUS_WITNESS__']) {
   );
 }
 
-// ── 2. Kit coverage (the kit-specifier redirect, finally exercised) ──
 const kitHtml = renderToStaticMarkup(
   createElement(mod.Badge, { color: 'danger' }, 'kit')
 );
@@ -107,16 +90,12 @@ check(
     )
 );
 
-// ── 3. CLI-vs-host payload parity (pinned mode: production) ──────────
 const cliSheet = readFileSync(cliSheetPath, 'utf-8');
 check(
   'payload parity: host animus.css byte-equals CLI styles.css',
   sheet === cliSheet
 );
 
-// ── 4. Asset reachability: the host published the files its sheet
-// references (vacuity-guarded — the lane's ds.ts carries an asset() font
-// witness, so zero matches means the scrape broke). ─────────────────────
 const hostAssetUrls = [...sheet.matchAll(/url\(\.\/assets\/([^)'"]+)\)/g)].map(
   (match) => match[1]
 );

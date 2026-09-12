@@ -1,27 +1,3 @@
-// e2e watch scenario (openspec: standalone-extraction-cli inc 06 — the
-// "Watch signals readiness and degradation loudly" requirement's scenario
-// instrument, plus D5's keep-last-good and D3's same-writer/lock clauses):
-//
-//   1. Spawn `animus watch` over a scratch copy of fixtures/watch-root,
-//      await the structured `watch ready` stderr line, and assert the
-//      published set self-verifies and the session status artifact carries
-//      the monotonic `ready: true` (schema 2).
-//   2. Edit a source file; await republication; assert the new payload
-//      content landed and the commit record verifies.
-//   3. Make a failing edit (error-kind diagnostic); await the per-cycle
-//      failure report; assert last-good artifacts are untouched, the
-//      process stays alive, and the status artifact still says ready.
-//   4. Recover; await republication of the recovered content.
-//   5. SIGINT; assert exit 130, advisory lock released, session tree
-//      removed, and that stdout stayed machine-only (empty).
-//
-// The spawn, the condition waits, the edit-retry loop and the published-set
-// readers are the lane's shared harness (watch-harness.mjs).
-//
-// The platform-degraded negative (recursive fs.watch unavailable /
-// descriptor exhaustion) is NOT portably simulable here; its automated
-// equivalent is the `watch degradation reporting` unit suite in
-// packages/cli/tests/cli-unit.test.ts.
 import {
   cpSync,
   existsSync,
@@ -64,11 +40,9 @@ export const App = () => <Widget>watch me</Widget>;
 
 const cleanup = () => rmSync(scratch, { recursive: true, force: true });
 
-// ── Scratch project ────────────────────────────────────────────────────
 cleanup();
 cpSync(join(lane, 'fixtures', 'watch-root'), scratch, { recursive: true });
 
-// ── Spawned watch + condition waits ────────────────────────────────────
 const run = spawnAnimus([
   'watch',
   '--root',
@@ -77,7 +51,6 @@ const run = spawnAnimus([
   './src/ds.ts',
 ]);
 
-/** Rewrite the widget with `content` and wait for `probe`. */
 const editUntil = (content, probe, label) =>
   mutateUntil(() => writeFileSync(widgetPath, content), probe, label);
 
@@ -91,13 +64,8 @@ const readStatus = () => {
 };
 
 try {
-  // ── 1. Readiness is explicit, after a complete first publication ─────
-  // Readiness also covers the events the watcher HELD during the first
-  // analysis, but that drained window is not asserted here: whether an edit
-  // lands inside it depends on macOS FSEvents delivery latency against the
-  // duration of the first analysis. Its deterministic pin is the
-  // `startTurbopackWatcher held delivery` suite in
-  // packages/extract/tests/session/turbopack-watcher-registration.test.ts.
+  // The held-events window is not asserted here: whether an edit lands inside
+  // the first analysis depends on FSEvents delivery latency.
   const ready = await until(
     () => run.stderr.match(/watch ready components=(\d+) files=(\d+)/),
     'the ready line'
@@ -116,7 +84,6 @@ try {
     existsSync(join(outDir, 'sessions'))
   );
 
-  // ── 2. Edit → republication with commit-record consistency ───────────
   const commitAtReady = readCommit();
   await editUntil(
     widgetSource('#bada55'),
@@ -135,7 +102,6 @@ try {
     /watch republished components=\d+ files=\d+/.test(run.stderr)
   );
 
-  // ── 3. Failing edit keeps last-good and reports per-cycle ────────────
   const commitLastGood = readCommit();
   const stylesLastGood = readFileSync(join(outDir, 'styles.css'), 'utf-8');
   await editUntil(
@@ -165,7 +131,6 @@ try {
     failedStatus.ready === true
   );
 
-  // ── 4. Recovery republishes ──────────────────────────────────────────
   await editUntil(
     widgetSource('#c0ffee'),
     () =>
@@ -175,15 +140,8 @@ try {
   );
   check('recovered publication self-verifies', selfVerifies(outDir));
 
-  // ── 5. SIGINT, then SIGINT again during the drain ────────────────────
-  // The claim-release assertions below have to hold on the abandoned-drain
-  // path too: a second Ctrl-C handed to the kernel default would kill the
-  // process with `lock.json` still on disk, and the next run refuses (exit 2)
-  // rather than steals such a lock. An in-flight cycle is what makes the
-  // drain long enough to interrupt, so the edit is started first and the
-  // shutdown waits for the acknowledgement line; the wait for a running
-  // analysis is tolerant on purpose — missing it costs coverage of the
-  // escalation, never a false failure.
+  // These assertions must hold on the abandoned-drain path: a second SIGINT
+  // that killed the process would strand `lock.json` and block the next run.
   writeFileSync(widgetPath, widgetSource('#0ff0ff'));
   try {
     await until(

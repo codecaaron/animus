@@ -2,15 +2,11 @@ import { createSystem, createTheme, createTransform } from '@animus-ui/system';
 import { shadows } from '@animus-ui/system/groups';
 import { system as testDs } from '@animus-ui/test-ds/definition';
 
-// ─── Transforms ─────────────────────────────────────────────
-
 export const size = createTransform('size', (value) => {
   const num = Number(value);
   if (!Number.isNaN(num) && num !== 0) return `${num}px`;
   return String(value);
 });
-
-// ─── Tokens ─────────────────────────────────────────────────
 
 export const theme = createTheme()
   .addBreakpoints({ sm: 640, md: 768, lg: 1024, xl: 1280 })
@@ -161,22 +157,11 @@ declare module '@animus-ui/system' {
   interface Theme extends TestTheme {}
 }
 
-// ─── System ─────────────────────────────────────────────────
-
-// extend()-form lane (openspec: first-class-extension, D1): test-ds's
-// registries MERGE into this system — the kit alone provides the space/
-// layout/text/surface/positioning groups the components use. The only
-// LOCAL registration is the additive, transform-free `shadows` prop set
-// (boxShadow/shadow/textShadow — the kit does not register them, and the
-// Card/Button styles resolve their `shadows`-scale values through the
-// registry). Re-spreading kit groups would coalesce under D12 transform
-// equality (name + captured source); this lane stays pure-extend + additive
-// as the recommended consumption shape.
+// The kit supplies every other group; `shadows` is registered locally
+// because test-ds does not carry it.
 const bundle = createSystem().extend(testDs).addProps(shadows).build();
 
 export const { createGlobalStyles, createKeyframes } = bundle;
-
-// ─── Keyframes ──────────────────────────────────────────────
 
 export const animations = createKeyframes({
   fadeIn: {
@@ -188,8 +173,6 @@ export const animations = createKeyframes({
     '50%': { transform: 'scale(1.05)' },
   },
 });
-
-// ─── Global Styles ──────────────────────────────────────────
 
 export const globalStyles = createGlobalStyles({
   '*, *::before, *::after': { boxSizing: 'border-box' },
@@ -205,9 +188,6 @@ export const globalStyles = createGlobalStyles({
   'code, kbd': { fontFamily: 'ui-monospace, monospace', fontSize: 14 },
 });
 
-// Sealed system (vocabulary-registration): `animations` registers under its
-// export name; the kit's `kitMotion` arrives through the sealed test-ds
-// record via `.extend()`.
 export const ds = bundle
   .registerKeyframes({ animations })
   .registerGlobalStyles({ globalStyles })

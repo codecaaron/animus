@@ -1,14 +1,6 @@
-// Named import: the dual-format host ships CJS for both conditions (attw
-// node16 shape), and a Node-ESM default import of CJS binds the exports
-// OBJECT — the named export is the sanctioned ESM-config spelling
-// (`require('@animus-ui/unplugin/rollup').default` covers CJS configs).
+// Named import: the host ships CJS for both conditions, so a Node-ESM default
+// import would bind the exports object instead of the plugin.
 import { animusRollup as animus } from '@animus-ui/unplugin/rollup';
-// The lane's REAL consumer build: rollup through the published transform
-// host (openspec: standalone-extraction-cli inc 05 — the prototype/ dir is
-// retained as the DEF-1 measurement record; THIS config is the product
-// path). The host supplies the __ANIMUS_DEV__ define, the stylesheet and
-// system-props resolution, the kit-specifier redirects, and emits the
-// stylesheet as a real asset (dist/animus.css).
 import commonjs from '@rollup/plugin-commonjs';
 import { nodeResolve } from '@rollup/plugin-node-resolve';
 import { dirname, resolve } from 'node:path';
@@ -21,15 +13,14 @@ export default {
   input: resolve(lane, 'src/entry.tsx'),
   external: ['react', 'react-dom', 'react/jsx-runtime'],
   plugins: [
-    // The host FIRST: its transform must see raw TSX (the engine parses
-    // source; rollup has no enforce ordering — config order is the law).
+    // The host runs first: its transform must see raw TSX, and rollup has no
+    // enforce ordering — plugin order in this array is the order.
     animus({
       root: lane,
       system: './src/ds.ts',
       strict: true,
-      // Emission inputs PINNED (D6/D10, the inc 04 parity lesson): the
-      // CLI-vs-host payload-parity assert compares bytes, so the host and
-      // the `animus build` step must agree on mode and exclusions.
+      // Byte parity with `animus build`: mode and exclusions must match the
+      // CLI step's.
       mode: 'production',
       exclude: ['fixtures/**'],
     }),

@@ -1,19 +1,5 @@
-// Watch/build parity check for the standalone CLI: whether a settled watch
-// publishes exactly what a fresh build of the same source publishes.
-//
-// Both runs go over ONE scratch copy of fixtures/parity-root, so they see
-// byte-identical source at the same absolute paths. The two `commit.json`
-// records name every published payload (styles.css, system-props.js,
-// manifest.json, and every `assets/<name>`) with its content hash, so
-// comparing the two maps decides both questions at once — a superseded asset
-// copy a watch cycle never pruned shows up as an extra `assets/` payload, and
-// an entry order that differs from a discovery walk shows up as a differing
-// styles.css / manifest.json hash. Each set is verified against its own bytes
-// first, so an equal-hash comparison can never pass over a set whose files
-// are missing.
-//
-// The spawn, the condition waits, the mutate-retry loop and the
-// published-set readers are the lane's shared harness (watch-harness.mjs).
+// Both runs go over one scratch copy of the fixture, so a hash difference
+// between the two commit records is a divergence, not a source difference.
 import { spawnSync } from 'node:child_process';
 import { cpSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -32,9 +18,8 @@ import {
 } from './watch-harness.mjs';
 
 const scratch = join(lane, 'fixtures', `.parity-scratch-${process.pid}`);
-// Outside the root on purpose: the build phase must not discover it, and
-// `animus build` would otherwise prune the watch's asset set as it
-// republishes over the same directory.
+// Outside the root on purpose: the build phase must not discover it, and a
+// build over the same directory would prune the watch's asset set.
 const watchTree = join(lane, 'fixtures', `.parity-watch-tree-${process.pid}`);
 const outDir = join(scratch, '.animus');
 const assetPath = join(scratch, 'assets', 'brand.woff2');
@@ -68,7 +53,6 @@ const assetNames = (payloads) =>
 cleanup();
 cpSync(join(lane, 'fixtures', 'parity-root'), scratch, { recursive: true });
 
-// ── 1. Watch: settle over the mutated source ─────────────────────────────
 const run = spawnAnimus([
   'watch',
   '--root',
@@ -101,7 +85,8 @@ try {
     'republication after the asset revision'
   );
 
-  // A file discovery would sort FIRST, added last.
+  // Alpha sorts first in a discovery walk but is added last, so an ordering
+  // difference would show up as a differing hash.
   await mutateUntil(
     () => writeFileSync(alphaPath, ALPHA_SOURCE),
     () => readStyles(outDir).includes(ALPHA_COLOR),
@@ -114,7 +99,6 @@ try {
   check('the watch tree self-verifies', selfVerifies(outDir));
   cpSync(outDir, watchTree, { recursive: true });
 
-  // ── 2. Build: same source, clean artifact directory ────────────────────
   rmSync(outDir, { recursive: true, force: true });
   const built = spawnSync(
     bin,
@@ -130,7 +114,6 @@ try {
   }
   check('the build tree self-verifies', selfVerifies(outDir));
 
-  // ── 3. The comparison is only meaningful over a populated set ──────────
   const buildSet = publishedSet(outDir);
   const watchSet = publishedSet(watchTree);
   const buildStyles = readStyles(outDir);
@@ -153,7 +136,6 @@ try {
     (run.stderr.match(/watch republished /g) ?? []).length >= 2
   );
 
-  // ── 4. Watch-vs-build parity ───────────────────────────────────────────
   const names = [
     ...new Set([...Object.keys(buildSet), ...Object.keys(watchSet)]),
   ].sort();

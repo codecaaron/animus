@@ -1,9 +1,3 @@
-// DEF-1 decider (increment 04): build both prototype arms, gate each on
-// CORRECTNESS (rendered classes ⊆ stylesheet selectors, no empty base
-// class, dev diagnostics compiled out), then measure cold wall-clock —
-// T0 = one in-process rollup build; T2 = `animus build` precondition +
-// rollup build whose hydration replays analysis in-process. Three runs
-// each, medians reported.
 import { execFileSync, spawnSync } from 'node:child_process';
 import { rmSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
@@ -23,8 +17,8 @@ function timed(fn) {
 }
 
 function rollupBuild(config) {
-  // spawnSync so the T2 shim's stderr hydration report is CAPTURED, not
-  // discarded (inc 04 entropy audit F1).
+  // spawnSync so the T2 shim's stderr hydration report is captured rather
+  // than discarded.
   const res = spawnSync(rollupBin, ['-c', join(lane, 'prototype', config)], {
     cwd: lane,
     encoding: 'utf-8',
@@ -83,7 +77,6 @@ async function correctnessGate(bundlePath, label) {
   return true;
 }
 
-// ── T0: in-process ───────────────────────────────────────────────────
 const t0Times = [];
 for (let i = 0; i < RUNS; i++) {
   t0Times.push(timed(() => rollupBuild('rollup.t0.config.mjs')));
@@ -93,7 +86,6 @@ const t0Ok = await correctnessGate(
   'T0 (in-process)'
 );
 
-// ── T2: artifact-fed (CLI precondition + consumer build) ─────────────
 const cliTimes = [];
 const t2Times = [];
 const hydrationTimes = [];
@@ -113,10 +105,6 @@ const t2Ok = await correctnessGate(
   'T2 (artifact-fed)'
 );
 
-// Payload parity, CLI vs in-process host (same fixture, same session
-// composition — the pinned frame inc 03's [~] deferred to): the T0
-// bundle's stylesheet must byte-equal the CLI's published styles.css.
-// (The vite-plugin leg of parity lands with inc 05's emitter decision.)
 const { readFileSync } = await import('node:fs');
 const t0Mod = await import(
   join(lane, 'prototype', 'out', 't0-bundle.mjs') + `?p=${Math.random()}`

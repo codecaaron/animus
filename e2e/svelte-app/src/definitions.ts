@@ -1,10 +1,5 @@
-// Extraction-only system binding (openspec: svelte-extraction-binding).
-// The configured system is evaluated by the extraction loader alone; the
-// application module graph sees only its type. Successful strict extraction
-// replaces every chain below before TypeScript erasure removes the type-only
-// import and this declaration — which is why this pattern REQUIRES
-// `strict: true`: a withheld replacement would otherwise serve raw code
-// whose `ds` binding no longer exists at runtime.
+// `ds` here is type-only and has no runtime binding: extraction must replace
+// every chain below, so this pattern requires `strict: true`.
 import type { ds as configuredSystem } from './ds';
 
 declare const ds: typeof configuredSystem;

@@ -9,11 +9,8 @@ import {
 } from '@animus-ui/system/groups';
 import { system as testDs } from '@animus-ui/test-ds/definition';
 
-// DELIBERATE legacy lane (openspec: first-class-extension, Migration Plan
-// step 2 / G6): this fixture keeps the deprecated `tokens` export name — it
-// witnesses the loader's accepted fallback (rust-system-loader › "tokens
-// fallback accepted"). Do not rename to `theme` while the deprecation window
-// is open; every non-legacy fixture already uses `theme`.
+// `tokens` is the deprecated fallback export name the loader still accepts;
+// this lane is its coverage, so the spelling stays.
 export const tokens = createTheme()
   .addColors({
     blue: { 100: '#dbeafe', 500: '#3b82f6', 700: '#1d4ed8' },
@@ -71,14 +68,8 @@ declare module '@animus-ui/system' {
   interface Theme extends ReactRouterTheme {}
 }
 
-// DELIBERATE legacy lane (openspec: first-class-extension, Migration Plan
-// step 2 / G6): this fixture is the `from()` deprecation-window witness — the
-// chain keeps from()'s frozen semantics (type admission + discovery anchor,
-// NO runtime registry merge), so every group the components need is still
-// registered locally. next-app covers the `includes:` constructor alias;
-// vite-app/next16-app/vinext-app use `.extend()` (showcase remains on
-// `includes:` pending its deferred migration — registry row 13; see its
-// ds.ts). Do not migrate this lane until removal is specced.
+// `from()` admits types and anchors discovery but merges no registry, so
+// every group the components use is registered locally here on purpose.
 const bundle = createSystem()
   .from(testDs)
   .addGroup('space', space)
@@ -99,8 +90,4 @@ export const globalStyles = createGlobalStyles({
   },
 });
 
-// Sealed system (vocabulary-registration): the `from()` verb above cannot
-// carry the kit's registered `kitMotion` — this lane is the from()-side
-// legacy-verb witness (`animus.vocabulary.legacy-verb` on the sealed
-// record, surfaced by the host as a warning).
 export const ds = bundle.registerGlobalStyles({ globalStyles }).seal();

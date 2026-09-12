@@ -16,17 +16,13 @@ import { resolve } from 'node:path';
 
 const APP_ROOT = resolve(import.meta.dirname, '..');
 const DIST = resolve(APP_ROOT, 'dist');
-// Wrangler serves dist/client; semantic CSS must be proven there independently
-// from dist/server (canary delta: Vinext served-client CSS proof).
+// Wrangler serves dist/client, so the CSS proof must run there rather than
+// over dist/server.
 const CLIENT_ROOT = resolve(DIST, 'client');
 
 function emitLaneReceipt(): void {
-  // Engine identity comes from writeLaneReceipt's retirement guard over the
-  // fixture config (openspec: retire-extract-v1) — never spelled here.
-  //
-  // hostVersion from the fixture's installed host, not the manifest range;
-  // `vinext` hides its own package.json behind its export map, so the receipt
-  // reads the install tree.
+  // Engine identity is derived by writeLaneReceipt from the fixture config;
+  // `vinext` hides its package.json, so the version comes from the install.
   const receipt = writeLaneReceipt(
     resolve(APP_ROOT, '.receipts', 'verify-assert-vinext.json'),
     {

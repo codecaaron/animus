@@ -90,10 +90,8 @@ function assertGlobalBaseline(css: string): void {
 }
 
 function emitLaneReceipt(): void {
-  // Engine identity comes from writeLaneReceipt's retirement guard over the
-  // fixture config (openspec: retire-extract-v1) — never spelled here.
-  //
-  // hostVersion from the fixture's installed host, not the manifest range.
+  // Engine identity is derived by writeLaneReceipt from the fixture config,
+  // never spelled here; hostVersion is the installed host, not a range.
   const receipt = writeLaneReceipt(
     resolve(APP_ROOT, '.receipts', 'verify-assert-vite.json'),
     {
@@ -117,14 +115,8 @@ async function main(): Promise<void> {
   }
   const css = await readAllConcat(cssFiles);
 
-  // Cascade order — check the @layer BLOCKS present in the output in their
-  // cascade-declared order. anm-global / anm-compounds / anm-custom are
-  // currently declaration-only (empty blocks elided by the minifier) so they
-  // are excluded here.
-  //
-  // TODO(fix-lightningcss-cascade): re-enable the stricter default order that
-  // requires `:root` to precede the first @layer block. Today `:root` trails
-  // the layer blocks due to the open Lightning CSS cascade bug.
+  // The minifier elides the empty anm-global/compounds/custom blocks, and
+  // Lightning CSS emits `:root` after the layers, so neither is asserted.
   assertLayerOrder(css, {
     layers: [
       layerBlock('anm-base'),
@@ -144,12 +136,6 @@ async function main(): Promise<void> {
   assertClassNameFormat(css, { prefix: 'animus-' });
   assertGlobalBaseline(css);
 
-  // asset() delivery witness (standardize-inheritance-and-assets): the
-  // package-owned test font declared via
-  // `asset('@animus-ui/test-ds/assets/test-font.woff2')` in src/ds.ts must
-  // arrive as the bundler-resolved (hashed, base-prefixed) URL inside the
-  // @font-face block, with the emitted file present in dist. (Placeholder
-  // survival is covered by assertNoPlaceholders above, for every lane.)
   const fontFaceBlock = css.match(/@font-face[^}]*AnimusTestFont[^}]*\}/)?.[0];
   if (!fontFaceBlock) {
     throw new AssertionError(
@@ -170,28 +156,14 @@ async function main(): Promise<void> {
     );
   });
 
-  // arch-css-structural-gates › "Condition at-rules gated inside layer blocks":
-  // every @container / @supports / non-breakpoint @media condition at-rule must
-  // nest inside a named @layer block. Runs NON-VACUOUSLY here — the test-ds
-  // Card (raw @container/@media/@supports) and the app Card (registered
-  // `_motionReduce` alias) both emit condition rules into this dist.
-  //
-  // The one exemption is the theme's variable-level system fallback blocks
-  // (openspec: system-color-scheme): they belong to the UNLAYERED variables
-  // part, beside `:root` and the `[data-color-mode]` blocks, so that an
+  // The theme's system-fallback blocks stay unlayered beside `:root` so an
   // explicit mode can override the OS fallback at the same cascade level.
-  // `systemSchemeVariableSpans` grants the exemption only to blocks whose every
-  // rule is the root guard — a component condition at-rule outside a layer
-  // still trips this gate.
   assertConditionsInsideLayers(css, {
     exemptSpans: systemSchemeVariableSpans(css),
   });
 
-  // Container-unit emission pin (container-query-support › "Container-relative
-  // units on scale-typed properties"): the test-ds Card authors `gap: '2cqi'`
-  // on a strict space-scale prop inside a nested @container block — the unit
-  // string must ship verbatim (the resolver emits it; minifiers may reformat
-  // the prelude but not the declaration value).
+  // A container unit on a strict scale prop must ship verbatim; the minifier
+  // may reformat the prelude but not the declaration value.
   if (!css.includes('gap:2cqi') && !css.includes('gap: 2cqi')) {
     throw new AssertionError(
       'container-unit emission pin: expected `gap:2cqi` (verbatim container unit on a strict scale prop) in the dist CSS',
@@ -199,14 +171,8 @@ async function main(): Promise<void> {
     );
   }
 
-  // Merged-config extraction witness (rust-system-loader › "Merged
-  // configuration is the extraction authority"): App.tsx uses `top={12}` and
-  // `zIndex={10}` on Box, and the `positioning` group that registers both
-  // props comes ONLY from `.extend(testDs)` — src/ds.ts deliberately does not
-  // re-register it. These declarations can reach the dist CSS only through
-  // the MERGED configuration, and `top:12px`
-  // additionally pins the kit's `size` transform surviving the registry
-  // snapshot merge (no serialized round-trip).
+  // `positioning` reaches this app only through `.extend(testDs)` — ds.ts
+  // does not re-register it — so these declarations prove the merged config.
   for (const probe of [
     ['top:12px', 'top: 12px'],
     ['z-index:10', 'z-index: 10'],
@@ -219,9 +185,6 @@ async function main(): Promise<void> {
     }
   }
 
-  // Built-in condition composite witness: the app Card authors
-  // `_osDark` WITHOUT registering it — it must resolve through the DEFAULT
-  // built-in set across the full registry → manifest → plugin → engine wire.
   if (
     !css.includes('prefers-color-scheme:dark') &&
     !css.includes('prefers-color-scheme: dark')
@@ -232,44 +195,18 @@ async function main(): Promise<void> {
     );
   }
 
-  // ── System color scheme (openspec: system-color-scheme) ─────────────────
-  //
-  // This lane is the VITE delivery witness: the theme opts in via
-  // `systemPreference` + `browserColorScheme` (src/ds.ts) and the plugin
-  // injects the bootstrap via the `appearanceBootstrap` option (vite.config.ts).
-  //
-  // The layer gate above runs non-vacuously in BOTH directions here:
-  // `expectSchemes` demands the two guarded theme blocks exist and assign
-  // custom properties, while the app Card's unregistered `_osDark` condition
-  // puts an UNGUARDED
-  // `@media (prefers-color-scheme: dark) { .animus-Card-… { … } }` block in the
-  // same sheet — which must not trip the gate. Only ROOT-targeting rules owe
-  // the guard.
   assertSystemSchemeGuard(css, { expectSchemes: ['light', 'dark'] });
 
-  // Classification reaches every surface a native control can read: `:root`
-  // (initial mode `dark`), each explicit mode block, and each guarded block.
   assertColorSchemeEmission(css, {
     root: 'dark',
     modes: { dark: 'dark', light: 'light' },
     system: { light: 'light', dark: 'dark' },
   });
 
-  // The OS path and the explicit path are the SAME rendering, not two copies
-  // kept in sync by hand — declaration lists compare byte-for-byte through
-  // Lightning CSS (which injects its `--lightningcss-*` pair into both blocks
-  // alike). Also pins `:root` ahead of both fallbacks.
   assertSystemFallbackParity(css, {
     mapping: { light: 'light', dark: 'dark' },
   });
 
-  // No-flash delivery. Regenerating the artifact from the SAME built theme and
-  // byte-comparing it against the shipped script proves three things at once:
-  // the plugin embedded the code verbatim, generation is deterministic
-  // (identical inputs → identical bytes), and a CSP assembled from `cspHash`
-  // would authorize exactly this script. Ordering is the actual no-flash
-  // contract — the script must precede the plugin's own `@layer` style tag AND
-  // the stylesheet link.
   const artifact = createAppearanceBootstrap(theme);
   const indexHtml = await readFile(resolve(DIST, 'index.html'), 'utf8');
   assertHeadInjectionContract(indexHtml, {
@@ -277,40 +214,23 @@ async function main(): Promise<void> {
     cspHash: artifact.cspHash,
   });
 
-  // Keyframes extracted through the rollup (Vite) adapter — fixture declares
-  // `animations = keyframes({ fadeIn, pulse })` in src/ds.ts, and KitPulse
-  // consumes `kitMotion.pulse` from the test-ds package ENTRY; the assertion
-  // proves all three blocks land in @layer anm-global, all three
-  // animation-name refs resolve to a matching block, and none got px-mangled
-  // by unit-fallback.
+  // Three blocks: the fixture's `fadeIn` and `pulse` plus the kit's `pulse`,
+  // reached through the test-ds package entry.
   assertKeyframesExtracted(css, {
     insideLayer: 'anm-global',
     minBlocks: 3,
     minReferences: 3,
   });
 
-  // Exactly one @keyframes block per unique frame body: the kit collection
-  // must emit ONCE — the sealed record delivers it a single time regardless
-  // of how many consumers reference it — and no app body may collide.
   assertKeyframesUniqueBodies(css);
 
-  // Binding-backed vs inline parity (semantic-const-resolution): KitSized
-  // consumes the kit's `as const` variant map through a named import;
-  // InlineSized authors the identical map inline. Base + every option class
-  // must carry byte-equal declaration lists — a mismatch here is STOP
-  // evidence, never paper over it.
   assertVariantDeclarationParity(css, {
     components: ['KitSized', 'InlineSized'],
     optionSuffixes: ['size-sm', 'size-md', 'size-lg'],
   });
 
-  // Ancestor/repeated/alias subject witnesses (nested-selector-resolution):
-  // the composed class must sit at the SUBJECT position with the ancestor
-  // prefix preserved. Two `[data-active]`
-  // producers exist (app ActiveItem + kit GroupItem); the alias patterns pin
-  // the kit's registered `_groupHover` / `_dark` ancestor aliases arriving
-  // through the `.extend(testDs)` registry merge. Patterns tolerate the
-  // minifier stripping attribute-value quotes.
+  // Two matches: the app ActiveItem and the kit GroupItem each emit a
+  // `[data-active]` ancestor subject.
   assertSelectorEmitted(css, {
     pattern: /\[data-active="?true"?\]\s*\.animus-[\w-]+/,
     label: 'raw ancestor subject ([data-active="true"] &)',
@@ -330,7 +250,6 @@ async function main(): Promise<void> {
     label: 'registered ancestor alias (_dark: [data-color-mode="dark"] &)',
   });
 
-  // Zero literal `&` in produced CSS.
   assertNoLiteralAmpersand(css);
 
   const jsFiles = await findJsFiles(DIST);
@@ -340,10 +259,6 @@ async function main(): Promise<void> {
     jsSources.push(js);
     assertNoEmotionImports(js);
 
-    // Bootstrap entry-point isolation: the generator lives behind the
-    // `@animus-ui/system/bootstrap` subpath and is reached ONLY from
-    // vite.config.ts. Neither it nor its storage keys may reach the client
-    // bundle — the snippet ships as HTML text, never as application code.
     for (const identifier of [
       'createAppearanceBootstrap',
       'animus:appearance',
@@ -357,18 +272,11 @@ async function main(): Promise<void> {
       }
     }
 
-    // Production diagnostic elimination — see is-dev.ts for the define/fold
-    // story.
     assertNoDevDiagnostics(js);
   }
 
-  // Root-import transform witness (extraction-dx remediation): App.tsx
-  // imports the test-ds Card at the PACKAGE ROOT (`from '@animus-ui/test-ds'`)
-  // while ds.ts declares the kit at a subpath — the root import must ride the
-  // same src redirect. An untransformed dist chain still renders (with
-  // className "") while its CSS sits unreferenced in the sheet, so CSS
-  // presence alone stays green: every emitted Card class must also be
-  // REFERENCED from a JS bundle, and both Cards (app + test-ds) must emit.
+  // A missed transform still emits CSS while the component renders with an
+  // empty className, so every emitted class must be referenced from a bundle.
   const cardClasses = new Set(css.match(/animus-Card-[0-9a-f]+/g) ?? []);
   if (cardClasses.size < 2) {
     throw new AssertionError(

@@ -11,20 +11,14 @@ import {
 } from '@animus-ui/system/groups';
 import { system as testDs } from '@animus-ui/test-ds/definition';
 
-// ─── Transforms ─────────────────────────────────────────────
-
 export const size = createTransform('size', (value) => {
   const num = Number(value);
   if (!Number.isNaN(num) && num !== 0) return `${num}px`;
   return String(value);
 });
 
-// ─── Tokens ─────────────────────────────────────────────────
-
-// DELIBERATE legacy lane (openspec: first-class-extension, Migration Plan
-// step 2 / G6): this fixture keeps the deprecated `tokens` export name — the
-// loader accepts it as the fallback spelling while `theme` is the documented
-// name. Do not rename during the deprecation window.
+// `tokens` is the deprecated fallback export name the loader still accepts;
+// this lane is its coverage, so the spelling stays.
 export const tokens = createTheme()
   .addBreakpoints({ sm: 640, md: 768, lg: 1024, xl: 1280 })
   .addColors({
@@ -74,16 +68,6 @@ export const tokens = createTheme()
       900: '#78350f',
     },
   })
-  // System participation (openspec: system-color-scheme). App-LOCAL theme —
-  // nothing else in the workspace consumes it, so opting in here cannot move a
-  // shared parity baseline (the parity harness builds
-  // `packages/extract/tests/test-system.ts`).
-  //
-  // `systemPreference` emits the two guarded
-  // `@media (prefers-color-scheme: …) { :root:not([data-color-mode]) { … } }`
-  // blocks; `browserColorScheme` is total over the declared modes (a missing
-  // entry is a compile error) and sources the `color-scheme` declarations on
-  // `:root`, on each `[data-color-mode]` block, and inside each media block.
   .addColorModes(
     'dark',
     {
@@ -191,17 +175,8 @@ declare module '@animus-ui/system' {
   interface Theme extends TestTheme {}
 }
 
-// ─── System ─────────────────────────────────────────────────
-
-// DELIBERATE legacy lane (openspec: first-class-extension, Migration Plan
-// step 2 / G6): this fixture is the `createSystem({ includes: [...] })`
-// deprecation-window witness — the alias keeps its frozen semantics (type
-// admission + discovery anchor, NO runtime registry merge), so every group
-// the components need is still registered locally. react-router-app covers
-// the `from()` chain; vite-app/next16-app/vinext-app use `.extend()`
-// (showcase remains on `includes:` pending its deferred migration —
-// registry row 13; see its ds.ts). Do not migrate this lane until removal
-// is specced.
+// `includes:` admits types and anchors discovery but merges no registry, so
+// every group the components use is registered locally here on purpose.
 const bundle = createSystem({
   includes: [testDs],
 })
@@ -214,8 +189,6 @@ const bundle = createSystem({
 
 export const { createGlobalStyles, createKeyframes } = bundle;
 
-// ─── Keyframes ──────────────────────────────────────────────
-
 export const animations = createKeyframes({
   fadeIn: {
     '0%': { opacity: 0, bg: 'background' },
@@ -226,8 +199,6 @@ export const animations = createKeyframes({
     '50%': { transform: 'scale(1.05)' },
   },
 });
-
-// ─── Global Styles ──────────────────────────────────────────
 
 export const globalStyles = createGlobalStyles({
   '*, *::before, *::after': { boxSizing: 'border-box' },
@@ -243,11 +214,6 @@ export const globalStyles = createGlobalStyles({
   'code, kbd': { fontFamily: 'ui-monospace, monospace', fontSize: 14 },
 });
 
-// Sealed system (vocabulary-registration): `animations` registers under its
-// export name. The `includes:` alias above deliberately CANNOT carry the
-// kit's registered `kitMotion` — this lane is the legacy-verb witness: the
-// sealed record carries the coded `animus.vocabulary.legacy-verb` entry the
-// hosts surface as a warning.
 export const ds = bundle
   .registerKeyframes({ animations })
   .registerGlobalStyles({ globalStyles })

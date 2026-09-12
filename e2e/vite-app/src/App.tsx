@@ -59,16 +59,8 @@ export function App() {
         </Box>
       </Family.Root>
 
-      {/*
-        Merged-config extraction witness (rust-system-loader › "Merged
-        configuration is the extraction
-        authority"): `top` and `zIndex` belong to the `positioning` group,
-        which ONLY test-ds registers — src/ds.ts deliberately does not
-        re-register it, so these usages emit CSS solely because
-        `.extend(testDs)` merges the kit's registries into the extracting
-        config. `top` additionally proves the kit's `size` transform survives
-        the snapshot merge (12 → 12px). Pinned by scripts/assert-build.ts.
-      */}
+      {/* `top` and `zIndex` resolve only through the positioning group that
+          test-ds registers and src/ds.ts does not. */}
       <Box p={16} gap={8} top={12} zIndex={10}>
         <TestDsCard>Cross-package test-ds Card</TestDsCard>
       </Box>
@@ -76,21 +68,13 @@ export function App() {
       <Stack direction="row" gap={8}>
         <Pulse>Pulse</Pulse>
         <Fade>Fade In</Fade>
-        {/*
-          External keyframe-collection witness: KitPulse
-          animates with `kitMotion.pulse` from the test-ds package ENTRY —
-          rendered beside the app-local Pulse/Fade siblings so usage
-          reconciliation keeps all three animation references.
-        */}
+        {/* KitPulse renders beside the app-local Pulse and Fade so usage
+            reconciliation keeps all three animation references. */}
         <KitPulse>Kit Pulse</KitPulse>
       </Stack>
 
-      {/*
-        Binding-backed vs inline variant-map siblings: every option of BOTH
-        components renders so usage reconciliation keeps
-        the full option set on each — assertVariantDeclarationParity compares
-        the two per class.
-      */}
+      {/* Every option of both components must render, or usage reconciliation
+          prunes it before assertVariantDeclarationParity compares them. */}
       <Stack direction="row" gap={8}>
         <KitSized size="sm">Kit sm</KitSized>
         <KitSized size="md">Kit md</KitSized>
@@ -100,14 +84,8 @@ export function App() {
         <InlineSized size="lg">Inline lg</InlineSized>
       </Stack>
 
-      {/*
-        Ancestor-subject witnesses: the wrapper carries
-        BOTH ancestor contexts — `data-active="true"` for the raw ancestor
-        keys (app ActiveItem + adjacent-sibling `& + &` pair) and the `group`
-        class for the kit GroupItem's registered `_groupHover` alias
-        (`.group:hover &`). GroupItem's `_dark` alias matches the
-        `[data-color-mode]` attribute the appearance bootstrap sets on :root.
-      */}
+      {/* The wrapper supplies both ancestor contexts: `data-active` for
+          ActiveItem and the `group` class for GroupItem's `_groupHover`. */}
       <div className="group" data-active="true">
         <ActiveItem>Active A</ActiveItem>
         <ActiveItem>Active B</ActiveItem>

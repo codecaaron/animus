@@ -19,11 +19,8 @@ import { fileURLToPath } from 'node:url';
 
 import type { LaneHost } from '@animus-ui/assertions';
 
-// Positional assertions over the PACKED consumer's build outputs. Runs in
-// workspace context (assertions are a private workspace package, reached by
-// root hoisting — `e2e/packed-app` deliberately declares no workspace
-// dependency because its manifest is copied into the isolated npm install);
-// the builds themselves ran inside that staging install.
+// The manifest is copied into the isolated staging install, so no workspace
+// dependency is declared here; `@animus-ui/assertions` resolves by hoisting.
 const STAGING = resolve(
   dirname(fileURLToPath(import.meta.url)),
   '..',
@@ -33,10 +30,8 @@ const VITE_DIST = resolve(STAGING, 'dist');
 const NEXT_DIR = resolve(STAGING, '.next');
 
 /**
- * The PUBLISHED plugin carries the v1 retirement guard. The guard call is
- * imported from the externalized extract pipeline, so runtime bundles carry the
- * identifier; inlined bundles would carry the message (which names the change).
- * Either marker proves the guard shipped.
+ * Either marker proves the guard shipped: an externalized bundle carries the
+ * call identifier, an inlined one carries the message text.
  */
 function assertRetirementGuard(pluginDir: string): void {
   const dir = resolve(STAGING, pluginDir);
@@ -56,14 +51,6 @@ function assertRetirementGuard(pluginDir: string): void {
   );
 }
 
-/**
- * Receipts for the packed dimension (openspec: dual-engine-build — "the packed
- * consumer lane SHALL prove the v2 engine loads"). Engine facts are STRUCTURAL
- * GUARDS over the staged artifacts, never inferred from plugin source
- * (guardrail G3): `writeLaneReceipt` proves the staged consumer config selects
- * no engine, and `assertRetirementGuard` proves the installed plugin still
- * refuses one.
- */
 function emitLaneReceipts(): void {
   assertRetirementGuard('node_modules/@animus-ui/vite-plugin/dist');
   assertRetirementGuard('node_modules/@animus-ui/next-plugin/dist');
@@ -124,8 +111,8 @@ async function assertViteOutput(): Promise<void> {
   }
   const css = await readAllConcat(cssFiles);
 
-  // Same relaxed cascade contract as e2e/vite-app (see its assert-build.ts
-  // for the `fix-lightningcss-cascade` TODO).
+  // Lightning CSS emits `:root` after the layer blocks, so the stricter
+  // :root-first order is not asserted here.
   assertLayerOrder(css, {
     layers: [
       layerBlock('anm-base'),
