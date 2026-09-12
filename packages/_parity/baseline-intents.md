@@ -212,3 +212,9 @@ committed production/development pair. Ordinary parity runs never write it.
       modes); every pre-existing unit stays byte-identical in the same run
       (65/66 with only the new unit's four unregistered surfaces, corpus
       digest moves accordingly).
+- [x] `comment-purge-corpus-digest-20260912` — refresh after the rederivable-
+      comment purge (commits d67e642e through cca33fd3) rewrote comment text
+      in fixture sources under `packages/_parity/corpus/` and the integration
+      fixtures. Only the corpus digest moves: every unit stays byte-identical
+      in both modes (66/66, zero divergences, empty register), so the refresh
+      re-seals the same output surfaces under the new source digest.
