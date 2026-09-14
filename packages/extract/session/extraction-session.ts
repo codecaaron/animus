@@ -429,7 +429,9 @@ export class ExtractionSession {
     }
 
     // Non-owning instance: each compiler child watches its own files, so a
-    // batch only this one observes is forwarded, never dropped.
+    // batch only this one observes is forwarded, never dropped. Keep this
+    // check AFTER the join above, or a non-owning session proceeds against a
+    // stale generation; an empty or absent batch stays a no-op.
     if (!this.system) {
       const owner = getOwningWatchSession();
       const hasBatch =
@@ -525,7 +527,9 @@ export class ExtractionSession {
         await promise;
       } catch (err) {
         // A failed reset re-run is a failed cycle, not a fallback: swallowing
-        // it would republish against the stale system.
+        // it would republish against the stale system. The status write is not
+        // redundant: the system load throws before the analyze-and-emit status
+        // wrapper opens, so nothing else records this failure for the host.
         try {
           this.beginStatusAttempt();
           this.writeAnalysisStatus(
@@ -1685,6 +1689,10 @@ export class ExtractionSession {
    *  pruned sibling DIRECTORY moves it; agreeing siblings stay listed. */
   private siblingListing: { mtimeMs: number; entries: string[] } | null = null;
 
+  /** Restored-module snapshots point at the epoch artifact of the session
+   *  that built them, so a moved epoch deletes every DISAGREEING sibling
+   *  artifact to invalidate them. Agreeing siblings stay byte-untouched so
+   *  warm restores keep working; a sibling with a live owner is exempt. */
   private reconcileSiblingEpochs(epoch: string): void {
     const rootPath = sessionsRootDir(this.rootDir!);
     let entries: string[];
@@ -1739,7 +1747,9 @@ export class ExtractionSession {
   }
 
   /** The pid of `siblingDir`'s live owner, or null when nothing proves one.
-   *  Our own pid is never one — publication is process-exclusive. */
+   *  Our own pid is never one — publication is process-exclusive. A missing,
+   *  undecodable or unreadable claim all mean no owner: the opposite default
+   *  from the CLI lock check on purpose, so do not unify the two. */
   private liveSiblingOwnerPid(siblingDir: string): number | null {
     let claim: ReturnType<typeof readCliLockRecord>;
     try {

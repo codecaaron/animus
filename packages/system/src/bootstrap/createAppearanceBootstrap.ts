@@ -25,6 +25,12 @@ export interface AppearanceBootstrapArtifact {
   cspHash: string;
 }
 
+/**
+ * Renders a JS string literal safe inside an inline `<script>`: `<` cannot open
+ * a closing tag, and U+2028/U+2029 survive nesting in string contexts. The loop
+ * compares code points rather than matching literal separators, so no invisible
+ * character has to appear in this source — keep it that way.
+ */
 function inlineLiteral(value: string): string {
   let out = '';
   for (const char of JSON.stringify(value)) {

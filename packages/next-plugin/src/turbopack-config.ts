@@ -26,6 +26,10 @@ export interface TurbopackConfigFragment {
   resolveAlias: Record<string, string>;
 }
 
+/** The one glob the loader registers under, derived from the shared engine
+ *  extension set so the bundler families cannot drift. `.mjs` belongs in that
+ *  set: an external package with no src/ is ingested through its dist entry
+ *  and must still reach the loader, so do not trim it. */
 export const ANIMUS_TURBOPACK_RULE_GLOB = `*.{${ENGINE_TRANSFORM_EXTENSIONS.join(',')}}`;
 
 export { TURBOPACK_SYSTEM_PROPS_ID };

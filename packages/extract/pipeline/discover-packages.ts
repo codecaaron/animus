@@ -466,6 +466,10 @@ export function extractSystemFilePackages(systemFilePath: string): string[] {
     }
   };
 
+  // Primary form: createSystem(...).extend(a); `.from(a)` is its deprecated
+  // spelling. Chains are followed only from a createSystem anchor, so
+  // `createTheme().extend()` grants no membership, and a kit reached through a
+  // local rebinding rather than its import name loses its CSS.
   const consumeChainLinks = (from: number): number => {
     let pos = from;
     for (;;) {

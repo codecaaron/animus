@@ -237,6 +237,10 @@ async function analyzeChangedFile(
     restoreEntry();
     return { kind: 'ignored' };
   }
+  // Reconcile on-disk sources before acting on the result: a parent whose
+  // create event was lost folds in here, so the consumer re-serves extracted.
+  // Keep the catch — reconciliation re-analyzes and throws on error
+  // diagnostics, and a throw past the restore strands the entry at the edit.
   try {
     await reconcileSourceCorpus(ctx);
   } catch (e) {

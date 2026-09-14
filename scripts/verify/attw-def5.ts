@@ -11,6 +11,10 @@ interface Def5Baseline {
   [packageName: string]: Def5Tuple[];
 }
 
+// @animus-ui/properties and @animus-ui/system emit extensionless relative
+// specifiers under bundler resolution, which fail node16-ESM resolution.
+// The fix is an explicit .js on each declaration import, so this list is meant
+// to shrink to empty: trim any entry that starts resolving.
 export const DEF5_BASELINE: Def5Baseline = {
   '@animus-ui/properties': [
     { file: 'dist/index.d.ts', specifier: './shorthands' },

@@ -1065,6 +1065,10 @@ ds.styles({ display: 'flex' }).states({
   loading: { _motionReduce: { transition: 'none' } },
 });
 
+// test-system.ts augments the alias interfaces globally, so this file compiles
+// in validating mode: unknown `_` and `@` keys resolve to the rejection arms.
+// The permissive counterpart cannot live here — augmentation is global to the
+// compilation — so the vite-app fixture build covers that mode instead.
 // @ts-expect-error — _motionReduc is not a registered condition/selector alias
 ds.styles({ _motionReduc: { transition: 'none' } });
 // @ts-expect-error — _bogusAlias is unregistered (UnknownConditionAlias)

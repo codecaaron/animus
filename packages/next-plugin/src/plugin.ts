@@ -362,6 +362,10 @@ export class AnimusWebpackPlugin {
 
   private warnedRootDivergence = false;
 
+  /** Adopts `compiler.context` only when no config-time root exists: every
+   *  frozen derivation came from that root, so an overwrite re-keys it.
+   *  Stub path, css alias, virtual system-props target and watch-ignore are
+   *  all frozen from it, so a disagreement is warned, never reconciled. */
   private adoptCompilerContext(compiler: Compiler): void {
     const context = compiler.context;
     if (!this.session.rootDir) {

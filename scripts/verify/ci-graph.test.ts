@@ -416,8 +416,10 @@ describe('parsed CI graph', () => {
 
     expect(packIndex).toBeLessThan(verifyIndex);
     expect(verifyIndex).toBeLessThan(publishIndex);
-    // The release packs with the packer the verify:packed lane proves on
-    // every push; npm pack and bun pm pack diverge in release-only ways.
+    // The release packs with the packer `verify:packed` proves on every push;
+    // npm pack and bun pm pack diverge in release-only ways. The `cd` is
+    // load-bearing: a bare `packages/$pkg` passed as a packer argument reads
+    // as a GitHub owner/repo shorthand, not a directory.
     expect(pack.run).toContain(
       '(cd "packages/$pkg" && bun pm pack --destination "$RELEASE_BUNDLE")'
     );

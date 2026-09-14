@@ -48,6 +48,8 @@ export function buildSourceTokenIndex(opts: {
 
     // Ownership is keyed by src/ dirs while the loader's module paths live
     // under dist/, so join at the nearest root a `package.json` witnesses.
+    // That witness is the real exit condition: a dir with none above it walks
+    // to the filesystem root, and admitting it claims every evaluated module.
     let packageRoot = real;
     while (
       packageRoot !== dirname(packageRoot) &&

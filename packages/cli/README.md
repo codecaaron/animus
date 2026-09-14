@@ -58,13 +58,13 @@ warnings and the build exits 0.
 
 ## Exit codes
 
-| Code | Meaning                                                                                                             |
-| ---- | ------------------------------------------------------------------------------------------------------------------- |
-| 0    | Success — artifact set published and self-consistent                                                                |
-| 1    | Extraction failure (error diagnostics, `--strict` escalation, zero files, structural emptiness)                     |
-| 2    | Config/usage error (unknown key or command, unresolvable system path, `--out-dir` equal to the root, lock conflict) |
-| 3    | Engine/environment failure (native engine load, consistency-check failure)                                          |
-| 4    | The `@animus-ui/cli` install could not be loaded (broken or partial install — reinstall)                            |
+| Code | Meaning                                                                                                                                                             |
+| ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 0    | Success — artifact set published and self-consistent                                                                                                                |
+| 1    | Extraction failure (error diagnostics, `--strict` escalation, zero files, structural emptiness), or a system module that throws while loading (fatal in every mode) |
+| 2    | Config/usage error (unknown key or command, unresolvable system path, `--out-dir` equal to the root, lock conflict)                                                 |
+| 3    | Engine/environment failure (native engine load, consistency-check failure)                                                                                          |
+| 4    | The `@animus-ui/cli` install could not be loaded (broken or partial install — reinstall)                                                                            |
 
 Both `animus build` and `animus watch` exit 130 on SIGINT and 143 on
 SIGTERM, releasing the advisory lock and keeping last-good artifacts;

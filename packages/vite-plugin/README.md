@@ -101,6 +101,7 @@ Router examples live in the
 - Do **not** add React resolve aliases to `vite.config.ts` — they break the extraction transform pipeline
 - After system config changes, restart the dev server (the subprocess runs at `buildStart`)
 - Run `bun run clean:light` if styles seem stale (clears `.vite` cache)
+- The virtual module ids are published contract, and Vite gives the first `resolveId`/`load` answer for an id to the whole config, so two plugin instances in one Vite config share one bridge and one stylesheet — the second instance's modules resolve to the first's. The per-instance key only separates independently built bundles that share a document.
 
 ## License
 

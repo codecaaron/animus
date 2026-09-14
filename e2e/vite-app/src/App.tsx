@@ -60,7 +60,9 @@ export function App() {
       </Family.Root>
 
       {/* `top` and `zIndex` resolve only through the positioning group that
-          test-ds registers and src/ds.ts does not. */}
+          test-ds registers and src/ds.ts does not. `top={12}` also proves the
+          group's `size` transform survives the merge by emitting 12px, so the
+          number is load-bearing. */}
       <Box p={16} gap={8} top={12} zIndex={10}>
         <TestDsCard>Cross-package test-ds Card</TestDsCard>
       </Box>

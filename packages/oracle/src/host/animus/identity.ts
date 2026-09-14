@@ -16,6 +16,10 @@ import type {
 import type { AnimusManifest } from './manifest-types';
 import type { ParsedComponent } from './replacement';
 
+// Mirrors the runtime's class order: base, variants in config order, compounds,
+// states. An unbound variant with a declared default emits `--{prop}-default`,
+// while a compound matches the RESOLVED value — opposite conventions on
+// purpose; normalizing them breaks class matching.
 export const classesAtPoint = (
   component: ParsedComponent,
   owner: string,

@@ -151,6 +151,8 @@ export async function transformSource(
 
   // Never serve an extracted extension ancestor while a descendant serves
   // the raw fallback: the child `.extend()`s it and hits the runtime guard.
+  // Keep this block OUTSIDE the try below — the non-strict catch would swallow
+  // the withhold — and invalidate the conflicted descendants before throwing.
   if (!ctx.isProd && ctx.rawExtensionFallbacks.size > 0) {
     const conflicted = rawFallbackDescendants(ctx, relativePath);
     if (conflicted.length > 0) {

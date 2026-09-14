@@ -41,7 +41,9 @@ function parameterName(parameter: Parameter, sourceText: string): string {
 
 /**
  * Guards are exempt: decoding `unknown` into a named type is their job, so
- * `unknown` is the only parameter type they can correctly declare.
+ * `unknown` is the only parameter type they can correctly declare. The check
+ * keys on the predicate return, so a throwing validator — `(v: unknown): T` —
+ * stays reported; exempting that shape is an open call for this rule's owner.
  */
 function returnsTypePredicate(node: ParameterOwner): boolean {
   return node.returnType?.typeAnnotation.type === "TSTypePredicate";

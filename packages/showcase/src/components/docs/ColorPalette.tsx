@@ -85,6 +85,8 @@ const SwatchOuter = ds
 
 // The border is extracted, not inline: an inline `border` would outrank the
 // media-gated `osResolved` rule that alone lights the OS-resolved swatch.
+// `borderColor: 'primary'` is self-referential on purpose — the same media
+// query already rebound it — so a literal hex pins the ring to one mode.
 const SwatchCard = ds
   .styles({
     width: '48px',

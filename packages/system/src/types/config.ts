@@ -35,6 +35,10 @@ export interface Prop extends BaseProperty {
   ) => string | number | CSSObject;
 }
 
+// The `CSSObject` return branch is rejected on both paths: build-time
+// evaluation errors and the runtime drops the value; return a string or number.
+// The arm stays in the union only so imported transforms keep compiling at
+// `.props({ transform })` callsites — narrowing it is a breaking change.
 export interface CustomPropConfig extends Prop {
   transform?: (
     val: string | number,
@@ -280,6 +284,12 @@ export type BuiltInSelectorAlias =
   | '_odd'
   | '_empty';
 
+/**
+ * Built-in media-condition aliases. A static union, never members of the
+ * augmentable `Conditions`: membership would make the `_` namespace validating
+ * for every consumer. Every alias needs a matching entry in
+ * `BUILT_IN_CONDITIONS` in conditions.ts, and only type tests catch that drift.
+ */
 export type BuiltInConditionAlias =
   | '_motionReduce'
   | '_motionSafe'

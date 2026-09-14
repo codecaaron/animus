@@ -55,7 +55,9 @@ function currentSurfaceFiles(): string[] {
   // inputs, not current executable or contributor surfaces.
   const excludedTrees = ['docs/superpowers', 'legacy', 'openspec/changes'];
   // Entry criterion: the directory holds no current contributor or
-  // executable surface.
+  // executable surface. PRUNE_DIRS in scripts/verify/topology.ts answers a
+  // different question — no authored source for an import walk — so the two
+  // lists differ on purpose; merging them changes what this gate scans.
   const ignoredDirectories = new Set([
     '.animus',
     '.next',

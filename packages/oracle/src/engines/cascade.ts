@@ -381,8 +381,10 @@ const substituteVariables = (
 };
 
 /**
- * Memo for engine-raised obligations. The universe is not in the key because
- * every registered field is universe-invariant; a varying one must be keyed.
+ * Memo for engine-raised obligations. One registry is shared across universes,
+ * so leaving the universe out of the key is sound only because every registered
+ * field is universe-invariant: the declaration value reaches the key through
+ * `reason`, which is keyed. A varying field must key the universe.
  */
 const raisedObligations = new WeakMap<
   ObligationRegistry,

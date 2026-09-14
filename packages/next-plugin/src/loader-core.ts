@@ -14,6 +14,10 @@ export interface LoaderContextBase<
   addDependency?: (file: string) => void;
 }
 
+/** Matches every already-emitted stylesheet import — arbitrary relative
+ *  prefixes and the Vite emitter's virtual id — not this bundler's id.
+ *  Never derive it from the shared module-id constant: this reads foreign
+ *  output, and deriving it silently stops matching the other forms. */
 const CSS_IMPORT_RE =
   /import\s+['"](?:[^'"]*\.animus\/styles\.css|virtual:animus\/styles\.css)['"];\n?/g;
 

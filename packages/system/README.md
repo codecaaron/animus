@@ -276,7 +276,15 @@ migrateLegacyModeKey('my-app-color-mode', ['midnight', 'paper']);
 
 It refuses to downgrade a record written by a newer version, and refuses to
 migrate the shared `color-mode` key (that one may belong to another app on your
-origin; the bootstrap already reads it, read-only).
+origin; the bootstrap already reads it, read-only). A failed write is swallowed
+rather than thrown, so a caller that has already applied `data-color-mode` keeps
+the user's choice for that session even when storage rejects the write.
+
+Call `migrateLegacyModeKey` post-paint, from the app entry: it returns the
+migrated mode name to apply for that one visit, or `null` when nothing was
+migrated. The visit it migrates on paints in the OS-resolved mode before
+correcting itself — one accepted flash, once — and every later load restores the
+mode pre-paint through the generated bootstrap.
 
 To restore it before first paint, generate an inline snippet from the **built**
 theme:
@@ -301,7 +309,8 @@ is never written.
 `cspHash` authorizes that exact script. Derive the header from the artifact at
 build time and **single-quote** the value — `script-src 'sha256-…'`. Unquoted it
 parses as a host source and silently blocks the script; hand-copied, it goes
-stale the moment a mode is renamed.
+stale the moment a declared mode name or the storage key changes, and a stale
+hash is a blocked script and a flash of the wrong mode.
 
 This subpath is build tooling. It is never imported by the component or runtime
 entries, so it cannot reach an extracted application bundle — generate the
@@ -309,6 +318,36 @@ artifact in your bundler config and hand it to the plugin
 ([`@animus-ui/vite-plugin`](https://github.com/codecaaron/animus/tree/main/packages/vite-plugin)
 accepts `appearanceBootstrap`; in Next.js the application places `code` itself,
 so it can control CSP nonce and ordering).
+
+## Integration contract
+
+**Publishing custom aliases.** Augment both registries from the built system:
+
+```ts
+import type { ConditionsOf, SelectorsOf } from '@animus-ui/system';
+
+declare module '@animus-ui/system' {
+  interface Selectors extends Record<SelectorsOf<typeof ds>, true> {}
+  interface Conditions extends Record<ConditionsOf<typeof ds>, true> {}
+}
+```
+
+While both interfaces are empty, `_`-prefixed block keys stay permissive.
+Augmenting either one makes the whole `_` namespace validating, so the other
+registry's aliases are rejected until it is augmented too. Registered selector
+aliases also type as component callsite props (`<Box _hoverChild={{ p: 8 }} />`);
+condition aliases are style-block keys only.
+
+**Keyframe bodies.** Frames accept CSS property names (camelCase, converted to
+kebab-case at emission), raw CSS values, and `{scale.key}` token references such
+as `{shadows.glow-text}`, which the theme resolver substitutes. A bare scale key
+with no braces is emitted verbatim, so always write the delimited form.
+
+**`className` ordering.** On the normal render path a consumer-supplied
+`className` merges after the generated classes, and prop forwarding skips
+`className` because that merge owns it. That is what lets `className="group"`
+survive on the rendered element, so ancestor patterns such as `.group:hover &`
+work.
 
 ## Exports
 

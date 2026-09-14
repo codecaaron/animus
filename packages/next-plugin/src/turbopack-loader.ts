@@ -33,6 +33,10 @@ interface AnalysisInputsArtifact extends AnalyzeProjectInputs {
   analyzedHashes?: Record<string, string>;
 }
 
+/** Turbopack runs loaders in isolated worker processes, so globalThis-keyed
+ *  session state answers about another process: identity arrives through
+ *  these options. The session barrel may be imported here for its pure path
+ *  builders and JSON readers only, never for its singleton accessors. */
 export interface TurbopackLoaderOptions extends LoaderPolicyOptions {
   rootDir?: string;
   sessionId?: string;
@@ -228,6 +232,10 @@ const hasReadableDeadline = (status: AnalysisStatus): boolean =>
 const CATCHUP_POLL_INITIAL_MS = 10;
 const CATCHUP_POLL_MAX_MS = 25;
 const CATCHUP_WAIT_MARGIN_MS = 50;
+/** Bounds the one wait carrying no deadline — a status whose `deadlineAt` is
+ *  not numeric. The session-published deadline bounds every other wait.
+ *  Equal to the session's status watchdog by coincidence only: never unify
+ *  them, and never re-derive a deadline from the watcher debounce. */
 const CATCHUP_NO_DEADLINE_CAP_MS = 2000;
 
 function sleep(ms: number): Promise<void> {
@@ -284,6 +292,10 @@ async function runLoader(ctx: LoaderContext, source: string): Promise<string> {
   }
 
   const filename = relative(rootDir, ctx.resourcePath);
+  /** Registers commit and status as dependencies before throwing: the runner
+   *  sends dependency IPC ahead of the error, so a landing commit re-fires.
+   *  Failure paths only — successful paths register neither, so this must not
+   *  be hoisted out of the failure helper. */
   const coverageFailure = (message: string): Error => {
     ctx.addDependency?.(commitPath);
     ctx.addDependency?.(statusPath);

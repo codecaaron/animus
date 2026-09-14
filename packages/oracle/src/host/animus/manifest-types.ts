@@ -1,3 +1,8 @@
+// The slices of `manifest.json` the adapter reads. Mixed snake_case and
+// camelCase is the manifest's own spelling, not a transcription slip. Not
+// imported from the extractor on purpose — that couples this package to its
+// build output; check a field against extract's pipeline/manifest-schema.ts.
+
 import { AnimusAdapterError } from './errors';
 
 export type ManifestJsonValue =

@@ -84,6 +84,10 @@ fn eval_object_expr_scoped(
                 }
 
                 let key = eval_property_key(&prop.key)?;
+                // Eligibility is inherited by nested blocks, so only positions under
+                // `animationName`/`animation` mint the unregistered-reference code.
+                // `animation` is in because the shorthand can embed a keyframe name;
+                // the kebab spellings sit outside the typed keyframe surface.
                 let eligible = keyframes_eligible
                     || matches!(key.as_str(), "animationName" | "animation");
 

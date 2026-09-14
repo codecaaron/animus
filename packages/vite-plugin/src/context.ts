@@ -222,7 +222,9 @@ export class PluginContext {
   rawExtensionFallbacks = new Set<string>();
 
   /** The one mutator of a file's fallback state — every raw-serve exit of the
-   *  transform hook reports here. Production keeps the set empty. */
+   *  transform hook reports here. Production keeps the set empty. The
+   *  barrier's one-shot withhold release must not route through here: it
+   *  retires other files' records, no claim about their current serve. */
   recordFallbackState(relativePath: string, isFallback: boolean): void {
     if (this.isProd) return;
     if (isFallback) this.rawExtensionFallbacks.add(relativePath);
@@ -642,7 +644,9 @@ export class PluginContext {
   }
 
   /** Invalidate the component CSS and system-props modules, then reload. The
-   *  reload alone rescues nothing: Vite keeps serving its cached transform. */
+   *  reload alone rescues nothing: Vite keeps serving its cached transform.
+   *  `devServer.moduleGraph` is the mixed back-compat graph on purpose — it
+   *  reaches client and ssr at once; per-environment graphs do not. */
   invalidateExtractedModules(): void {
     const server = this.devServer;
     if (!server) return;

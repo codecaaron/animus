@@ -392,6 +392,8 @@ function snapshotTransform(source: TransformFn): TransformFn {
   Object.defineProperty(wrapper, 'name', { value: source.name });
   // The forwarder body is byte-identical for every transform, so the wrapper
   // presents `source.toString()` — else anonymous transforms compare equal.
+  // It must be the ORIGINAL function's `toString`: only then does
+  // re-snapshotting an already-wrapped transform across `extend()` stay stable.
   const sourceText = source.toString();
   Object.defineProperty(wrapper, 'toString', {
     value: () => sourceText,
@@ -429,6 +431,8 @@ export interface LibraryBundle<Vocab extends string = never> {
 /**
  * A built system also carries a `.system()` chain method, so only
  * `system.toConfig` being callable discriminates a bundle from an instance.
+ * The QuickJS capture script in the Rust system-loader reimplements the same
+ * discriminator — it cannot import this file, so change both together.
  */
 export function isLibraryBundle(value: unknown): value is LibraryBundle {
   const system = (value as { system?: { toConfig?: unknown } } | null)?.system;

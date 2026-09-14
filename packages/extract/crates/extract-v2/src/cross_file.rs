@@ -1,5 +1,7 @@
 //! Cross-file fact algebra: per-file facts in, project-level facts out,
 //! with no AST access anywhere.
+//! Alias augmentation is per file and one hop: re-exports are deliberately
+//! not followed, so a barrel's renamed export is not a rendered name.
 
 use std::collections::{BTreeMap, BTreeSet};
 

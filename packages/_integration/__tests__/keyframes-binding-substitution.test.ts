@@ -1,7 +1,3 @@
-/**
- * The engine keys the keyframes registry by export name and resolves
- * `binding.key` against whatever local name binds that collection.
- */
 import { describe, expect, test } from 'vitest';
 
 import { analyzeProject, clearAnalysisCache } from './run-pipeline';

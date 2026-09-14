@@ -121,6 +121,26 @@ console.log(probe.verdict, probe.facts, probe.unknowns);
 `.equivalenceClasses` take request objects of the same shape; deltas
 (`WorldDelta`) and assertions (`OracleAssertion`) are plain data.
 
+## Host contract
+
+- Scenario dimension names follow a fixed convention: `mode`, `viewport.inline`,
+  `variant:<component>:<prop>` and `state:<component>:<name>`. The cascade
+  engine reads `mode` under that exact name, and `<component>` is the
+  component's binding name — its id when two components share a binding — so a
+  dimension is attributable without a lookup table. `viewport.inline` is an
+  interval domain cut at the theme's breakpoints.
+- `order` on a rule record is that rule's emission index **within its own
+  layer**, not a global index across the stylesheet. Declarations are compared
+  by `!important` first, then layer, then specificity, then this index —
+  `!important` is read per declaration and is never folded into the rule's own
+  ordering.
+- A host built without `stylesheetText` is degraded, not broken: `host.tokens`
+  is undefined, the `mode` dimension drops out of the scenario domain, and every
+  `var()` in a declaration stays an unresolved reference. Rules, component
+  identity and obligations still come from the manifest, so those channels keep
+  answering; what loses reach is token resolution and the token closure behind
+  `dependencies`.
+
 ## Trust model
 
 Verdicts are **scoped**, never absolute. `PROVED` means proved under this

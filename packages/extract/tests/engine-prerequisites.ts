@@ -1,3 +1,7 @@
+/** Mirrors `loadNative()` in index-v2.js: the same host-native resolution, so
+ *  a foreign-target artifact never counts as present. The candidate and
+ *  required-dist lists are owned here — a restated copy in a consuming suite
+ *  skips green instead of failing when a target triple moves. */
 import { existsSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';

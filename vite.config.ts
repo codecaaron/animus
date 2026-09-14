@@ -436,7 +436,9 @@ export default defineConfig({
       },
       'build:all': {
         // Ordered on purpose: `dependsOn` has no ordering field, and naming
-        // build:extract here would put two writers into extract's dist.
+        // build:extract here would put two writers into extract's dist:
+        // build:extract carries extract's own build:ts, and build:ts already
+        // fans out over every package. build:extract-v2 is the NAPI half only.
         command: 'vp run build:extract-v2 && vp run build:ts',
         cache: false,
       },
@@ -463,6 +465,8 @@ export default defineConfig({
       'verify:full': {
         // Ordered pipeline, not a `dependsOn` set: artifacts must exist before
         // the checks that read them, and the e2e fan-out has no task identity.
+        // `verify` is the unordered fan-out gate `dependsOn` does model; the
+        // two drift independently by design, so neither folds into the other.
         command:
           "vp run build:extract-v2 && vp run build:ts && vp run verify && vp run --fail-if-no-match -F './e2e/*' -F '!animus-packed-app' -F './packages/showcase' verify && vp run verify:parity && vp run verify:integration && vp run verify:hygiene:rust && vp run verify:packed",
         cache: false,

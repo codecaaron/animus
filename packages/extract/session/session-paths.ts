@@ -46,7 +46,9 @@ export const CLI_LOCK_ARTIFACT = 'lock.json';
 export const ANIMUS_ARTIFACT_DIR = '.animus';
 
 /** Module id the Rust emitter injects, and the alias key both bundlers
- *  register. A literal on purpose: a rename breaks built consumer packages. */
+ *  register. A literal on purpose: a rename breaks built consumer packages.
+ *  The Next plugin's webpack alias harvest skips this exact key, so a change
+ *  here is a change in the emitter, both bundler arms and that harvest. */
 export const ANIMUS_CSS_MODULE_ID = '.animus/styles.css';
 
 export function sessionsRootDir(rootDir: string): string {

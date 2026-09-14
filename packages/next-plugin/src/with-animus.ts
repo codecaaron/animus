@@ -123,6 +123,10 @@ export function withAnimus(
     );
   }
 
+  // Unknown top-level keys warn rather than throw, so a consumer upgrade
+  // cannot die at config load; invalid `mode` values still throw. `root` is
+  // refused rather than honored: each arm derives its own dir below, and a
+  // consumer root can only contradict it.
   assertKnownOptionKeys(
     { ...options },
     ['cssImportTarget', 'turbopack', 'unstable_turbopack', 'loaderPath'],
@@ -321,6 +325,10 @@ async function wireTurbopack<Config extends NextOwnedConfig>(
   nextConfig: NextConfigInput<Config>,
   options: AnimusNextOptions
 ): Promise<TurbopackNextConfig<Config>> {
+  // `next dev <subdir>` under Turbopack is a known gap: no dir reaches a
+  // config module, so cwd is the only root signal. Next 16's `turbopack.root`
+  // is the workspace root, broader than the app dir, so adopting it widens
+  // the scan instead of closing the gap.
   const rootDir = process.cwd();
 
   const session = new ExtractionSession(options);

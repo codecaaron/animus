@@ -871,6 +871,10 @@ pub type CompoundConfig = (CompoundConditions, String);
 
 pub type CompoundConditionMap<'a> = FxHashMap<&'a str, &'a [CompoundConfig]>;
 
+/// `compound_conditions` aligns positionally with `ComponentCss::compounds`.
+/// Returns compounds-layer content with no layer wrapper; flat rules precede.
+/// A child's runtime writes classes for its own props only, so the shared half
+/// of a compound must chain on the root class or the rule never activates.
 pub fn generate_composed_compound_css(
     families: &[ComposeFamilyRef],
     components: &[ComponentCss],

@@ -73,7 +73,9 @@ export function classifyTree(repoRoot: string, absPath: string): Tree {
 }
 
 // Preserves string-literal contents, honouring escapes: import specifiers live
-// inside strings.
+// inside strings. Never route Rust through it and never merge it with the Rust
+// stripper in rust-policy.ts — a lifetime like `&'a str` reads as an opening
+// quote and swallows the rest of the file.
 export function stripTsComments(source: string): string {
   let out = '';
   let i = 0;

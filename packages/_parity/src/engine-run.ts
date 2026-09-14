@@ -114,7 +114,9 @@ const HARNESS_KEYFRAMES = JSON.stringify({
   },
 });
 /** The test system registers no condition aliases; supplying them here keeps
- *  the condition corpus from resolving vacuously. */
+ *  the condition corpus from resolving vacuously. Every value and order below
+ *  is a baseline input: editing one rewrites the recorded CSS this run is
+ *  compared against. */
 const HARNESS_CONDITION_ALIASES = JSON.stringify({
   _motionReduce: {
     value: '@media (prefers-reduced-motion: reduce)',

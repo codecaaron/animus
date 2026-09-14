@@ -300,6 +300,8 @@ fn stub_key(specifier: &str) -> String {
 
 /// Escape for a SINGLE-quoted JS literal. Every registry write and lookup
 /// must use it, or an apostrophe in a path kills the whole bundle.
+/// Backslash is replaced first; the reverse order would re-escape the
+/// backslashes this function just added.
 fn js_quoted(value: &str) -> String {
     value.replace('\\', "\\\\").replace('\'', "\\'")
 }
