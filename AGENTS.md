@@ -188,9 +188,16 @@ End-of-work mutating cleanup at `scripts/hygiene/`. Never CI-invoked. See [`scri
 
 ## Agent skills
 
+Read `~/.agents/project-configuration.md` before using Matt's engineering
+skills, and `~/.agents/openspec.md` before OpenSpec work. Use the shared skills
+in `~/.agents/skills/`. Resolve every `openspec/specs/`, `openspec/changes/`,
+and `openspec/schemas/` reference from the root reported by
+`openspec list --json`; implementation paths refer to this checkout.
+
 ### Issue tracker
 
-Issues live as local markdown under `.scratch/<feature-slug>/` in this repo. See `docs/agents/issue-tracker.md`.
+Issues use the shared Markdown tracker configured in `docs/agents/issue-tracker.md`.
+The checkout's `.scratch` link exposes that tracker at existing ticket paths.
 
 ### Triage labels
 

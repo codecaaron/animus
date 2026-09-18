@@ -181,8 +181,6 @@ export default defineConfig({
       'e2e/next-app/next-env.d.ts',
       'e2e/next16-app/next-env.d.ts',
       'e2e/vinext-app/next-env.d.ts',
-      // Change artifacts are governed by their own process, not by lint.
-      'openspec/changes/**',
       // Corpus bytes are hashed into the parity baselines (`corpusSha256`), so
       // editing a fixture to satisfy a lint rule invalidates the oracle.
       'packages/_parity/corpus/**',
@@ -214,14 +212,6 @@ export default defineConfig({
           'no-unused-vars': 'off',
           'jsx-a11y/anchor-has-content': 'off',
           'react-hooks/exhaustive-deps': 'off',
-        },
-      },
-      {
-        // Schema scripts are CLIs; console is their output surface.
-        files: ['openspec/schemas/**'],
-        rules: {
-          'no-console': 'off',
-          'no-shadow': 'off',
         },
       },
       {
@@ -308,8 +298,6 @@ export default defineConfig({
       '**/dist/**',
       '**/build/**',
       '**/target/**',
-      // Schema-governed artifacts; some are immutable once written.
-      'openspec/**',
       '**/tmp/**',
       'legacy/**',
       // Next regenerates this on every build, so formatting it re-drifts.
@@ -324,7 +312,6 @@ export default defineConfig({
       'packages/_parity/corpus/**',
       // Snapshots of emitted .animus output; formatting diverges them from it.
       'packages/oracle/__tests__/fixtures/**',
-      'openspec/changes/archive/**/*.md',
       // repowise rewrites this file in its own formatting on every run.
       '.vscode/extensions.json',
       'tools/oxlint/anti-slop/**',
