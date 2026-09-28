@@ -7,8 +7,11 @@ use std::fmt::Write as _;
 use rustc_hash::{FxHashMap, FxHashSet};
 use serde_json::Value;
 
-use crate::chain_merge::{topological_sort, ProvenanceNode, TopoResult};
-use crate::chain_walk::TerminalKind;
+use crate::chain_merge::{
+    effective_variant_configs, inherit_variant_stages, topological_sort, ProvenanceNode,
+    TopoResult, VariantConfigs,
+};
+use crate::chain_walk::{MemberParentExtension, TerminalKind};
 use crate::css::{
     build_variable_slot_entries, camel_to_kebab, generate_composed_compound_css,
     generate_composed_variant_css, generate_css_sheets_ordered, generate_custom_prop_css,
@@ -397,22 +400,21 @@ fn classify_parent(
     }
 }
 
-/// A parent bails only when its landing file is in the analyzed set AND
-/// declares the name locally; barrels and outside files stay standalone.
-fn resolve_extension_parent(
+/// Where a name visible in `file_path` is declared: the landing file, the
+/// declarator binding there, and whether that file declares it itself.
+/// None when the name's import source is outside the analyzed set.
+fn resolve_declaration(
     file_path: &str,
     ff: &FileFacts,
-    extends_binding: &str,
+    name: &str,
     files: &BTreeMap<String, FileFacts>,
     inputs: &CssInputs,
-) -> Result<String, String> {
-    let Some(imp) = ff.imports.iter().find(|i| i.local == extends_binding) else {
-        return classify_parent(files, file_path, extends_binding, extends_binding);
+) -> Option<(String, String, bool)> {
+    let Some(imp) = ff.imports.iter().find(|i| i.local == name) else {
+        return Some((file_path.to_string(), name.to_string(), true));
     };
 
-    let Some(f) = resolve_import_source(file_path, &imp.source, files, inputs) else {
-        return Err(parent_unresolvable_reason(extends_binding));
-    };
+    let f = resolve_import_source(file_path, &imp.source, files, inputs)?;
     let (pf, pn) = follow_reexports(f, imp.imported.clone(), files, inputs);
     let landing = files.get(&pf);
 
@@ -433,12 +435,133 @@ fn resolve_extension_parent(
             && (local_export.is_some()
                 || pff.chains.iter().any(|c| c.descriptor.binding == binding))
     });
+    Some((pf, binding, locally_defined))
+}
 
-    if !locally_defined {
+/// A parent bails only when its landing file is in the analyzed set AND
+/// declares the name locally; barrels and outside files stay standalone.
+fn resolve_extension_parent(
+    file_path: &str,
+    ff: &FileFacts,
+    extends_binding: &str,
+    files: &BTreeMap<String, FileFacts>,
+    inputs: &CssInputs,
+) -> Result<String, String> {
+    match resolve_declaration(file_path, ff, extends_binding, files, inputs) {
+        None => Err(parent_unresolvable_reason(extends_binding)),
         // Nothing proven about the parent: keep the standalone fallback.
-        return Ok(format!("{}::{}", pf, binding));
+        Some((file, binding, false)) => Ok(format!("{}::{}", file, binding)),
+        Some((file, binding, true)) => classify_parent(files, &file, &binding, extends_binding),
     }
-    classify_parent(files, &pf, &binding, extends_binding)
+}
+
+fn is_animus_system_specifier(spec: &str) -> bool {
+    spec == "@animus-ui/system" || spec.starts_with("@animus-ui/system/")
+}
+
+/// Whether `name` in `file` is built from an `@animus-ui/system` import,
+/// traced through analyzed imports, re-exports and `const` initializers.
+/// Chain method names prove nothing: another library's builder has them too.
+fn has_animus_origin(
+    file: &str,
+    name: &str,
+    files: &BTreeMap<String, FileFacts>,
+    inputs: &CssInputs,
+    seen: &mut FxHashSet<(String, String)>,
+) -> bool {
+    if !seen.insert((file.to_string(), name.to_string())) {
+        return false;
+    }
+    let Some(ff) = files.get(file) else {
+        return false;
+    };
+    if ff
+        .imports
+        .iter()
+        .any(|i| i.local == name && is_animus_system_specifier(&i.source))
+    {
+        return true;
+    }
+    let Some((declaring_file, binding, true)) = resolve_declaration(file, ff, name, files, inputs)
+    else {
+        return false;
+    };
+    let root = files
+        .get(&declaring_file)
+        .and_then(|dff| dff.declaration_roots.get(&binding))
+        .cloned();
+    root.is_some_and(|root| has_animus_origin(&declaring_file, &root, files, inputs, seen))
+}
+
+/// The component an `Object.member` extension parent names — `(file,
+/// binding)` — when `Object` is an exported object literal whose member is a
+/// chain of Animus origin. None when that provenance is not established.
+fn member_parent_component(
+    file_path: &str,
+    ff: &FileFacts,
+    extension: &MemberParentExtension,
+    files: &BTreeMap<String, FileFacts>,
+    inputs: &CssInputs,
+) -> Option<(String, String)> {
+    let Some((object_file, object_binding, true)) =
+        resolve_declaration(file_path, ff, &extension.object, files, inputs)
+    else {
+        return None;
+    };
+    let object_ff = files.get(&object_file)?;
+    let exported = object_ff
+        .exports
+        .iter()
+        .any(|e| e.source.is_none() && e.local.as_deref() == Some(object_binding.as_str()));
+    if !exported {
+        return None;
+    }
+    let value = object_ff
+        .object_members
+        .get(&object_binding)?
+        .get(&extension.member)?;
+    let Some((component_file, component, true)) =
+        resolve_declaration(&object_file, object_ff, value, files, inputs)
+    else {
+        return None;
+    };
+    let is_chain = files
+        .get(&component_file)?
+        .chains
+        .iter()
+        .any(|c| c.descriptor.binding == component);
+    let animus = is_chain
+        && has_animus_origin(
+            &component_file,
+            &component,
+            files,
+            inputs,
+            &mut FxHashSet::default(),
+        );
+    animus.then_some((component_file, component))
+}
+
+fn unsupported_member_parent_bail(
+    file: &str,
+    extension: &MemberParentExtension,
+    (component_file, component): (String, String),
+) -> CssDiagnostic {
+    CssDiagnostic {
+        token: None,
+        file: file.to_string(),
+        component: extension.binding.clone(),
+        kind: "bail".to_string(),
+        message: format!(
+            "chain dropped: parent '{object}.{member}' is a member of exported object \
+             '{object}', and member-parent extension is not supported; the declaration \
+             in {file} is left untransformed — extend '{component}' from \
+             {component_file} directly",
+            object = extension.object,
+            member = extension.member,
+        ),
+        code: Some("animus.extension.unsupported-member-parent".to_string()),
+        severity: None,
+    }
 }
 
 /// Brace spans surviving resolution are unresolved token aliases: the resolver
@@ -1553,6 +1676,12 @@ fn run_with_system_floor(
                 }
             }
         }
+        for extension in &ff.member_parent_extensions {
+            if let Some(component) = member_parent_component(file_path, ff, extension, files, inputs)
+            {
+                diagnostics.push(unsupported_member_parent_bail(file_path, extension, component));
+            }
+        }
     }
 
     let sorted_ids = sorted_resolvable_component_ids(files, &parent_map, &unresolvable_extensions);
@@ -1586,6 +1715,7 @@ fn run_with_system_floor(
         scale_name_by_css_property(&inputs.config)
     };
     let mut inherited_active_props: FxHashMap<String, FxHashSet<String>> = FxHashMap::default();
+    let mut inherited_variant_configs: FxHashMap<String, VariantConfigs> = FxHashMap::default();
 
     for component_id in &sorted_ids {
         let Some((file_path, chain_idx)) = chain_lookup.get(component_id.as_str()) else {
@@ -1607,7 +1737,16 @@ fn run_with_system_floor(
             );
             continue;
         }
-        let result = process_chain_facts(chain, &resolve_ctx, &inputs.group_registry);
+        let parent_variant_configs = parent_map
+            .get(component_id)
+            .and_then(|parent_id| inherited_variant_configs.get(parent_id))
+            .map_or(&[][..], Vec::as_slice);
+        let merged_chain = inherit_variant_stages(chain, parent_variant_configs);
+        let result = process_chain_facts(
+            merged_chain.as_ref().unwrap_or(chain),
+            &resolve_ctx,
+            &inputs.group_registry,
+        );
         // Drained before the match so failures recorded before a later bail
         // still report; topo order keeps emission deterministic.
         drain_transform_failures(
@@ -1661,6 +1800,11 @@ fn run_with_system_floor(
                     &chain.descriptor.binding,
                     &mut diagnostics,
                 );
+
+                let variant_configs = effective_variant_configs(chain, parent_variant_configs);
+                if !variant_configs.is_empty() {
+                    inherited_variant_configs.insert(component_id.clone(), variant_configs);
+                }
 
                 let mut compound_configs: Vec<(BTreeMap<String, Value>, String)> = Vec::new();
                 {

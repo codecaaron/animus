@@ -1,7 +1,9 @@
+import { applyUnitFallback } from '@animus-ui/extract/pipeline';
 import { join } from 'node:path';
 import { beforeAll, describe, expect, test } from 'vitest';
 
 import { readFixtureFile, readFixtureFiles } from '../fixtures/read-fixtures';
+import { config } from '../fixtures/setup';
 import { assertNoUnresolvedTokens } from './assert-no-unresolved-tokens';
 import {
   analyzeProject,
@@ -118,6 +120,71 @@ describe('transform resolution', () => {
     const entry = readFixtureFile(COMPONENTS, 'transforms.tsx');
     const { css } = runPipeline([entry]);
     assertNoUnresolvedTokens(css);
+  });
+});
+
+describe('configured size transform', () => {
+  // Inline rather than under fixtures/components, which is also the parity corpus.
+  const entry = {
+    path: 'fixtures/sizes.tsx',
+    source: `import { ds } from './setup';
+export const Expressions = ds.styles({
+  maxHeight: 'min(320px, 50vh)',
+  minWidth: 'max(10rem, 25%)',
+  width: 'clamp(16rem, 50vw, 40rem)',
+  maxWidth: 'min(max(200px, 20vw), 640px)',
+  height: 'var(--size-12, 480px)',
+  minHeight: 'var(--space-2)',
+}).asElement('div');
+export const Scalars = ds.styles({
+  width: 0.5,
+  height: 24,
+  minHeight: '10',
+  maxWidth: '1.5rem',
+  minWidth: 'auto',
+  top: '+10',
+  left: '+.5',
+  maxHeight: '1.',
+}).asElement('span');
+export const App = () => (
+  <>
+    <Expressions />
+    <Scalars />
+  </>
+);
+`,
+  };
+
+  const css = applyUnitFallback(
+    JSON.parse(
+      analyzeProject(JSON.stringify([entry]), {
+        transformSourcesJson: config.transformSources,
+      })
+    ).css ?? ''
+  );
+
+  test.each([
+    'max-height: min(320px, 50vh);',
+    'min-width: max(10rem, 25%);',
+    'width: clamp(16rem, 50vw, 40rem);',
+    'max-width: min(max(200px, 20vw), 640px);',
+    'height: var(--size-12, 480px);',
+    'min-height: var(--space-2);',
+  ])('emits the complete expression: %s', (declaration) => {
+    expect(css).toContain(declaration);
+  });
+
+  test.each([
+    'width: 50%;',
+    'height: 24px;',
+    'min-height: 10px;',
+    'max-width: 1.5rem;',
+    'min-width: auto;',
+    'top: 10px;',
+    'left: 50%;',
+    'max-height: 100%;',
+  ])('keeps scalar conversion: %s', (declaration) => {
+    expect(css).toContain(declaration);
   });
 });
 

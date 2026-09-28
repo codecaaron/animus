@@ -199,6 +199,13 @@ and `openspec/schemas/` reference from the root reported by
 Issues use the shared Markdown tracker configured in `docs/agents/issue-tracker.md`.
 The checkout's `.scratch` link exposes that tracker at existing ticket paths.
 
+### Animus consumer exercises
+
+For work designated as an Animus consumer exercise, read the shared
+[reporting protocol](/Users/sugarat/.agents/projects/animus/docs/agents/exercise-reporting.md)
+at task start. Carry its exercise ID and report path into delegations and
+handoffs; the coordinator collects the retained report before closing the exercise.
+
 ### Triage labels
 
 Five canonical triage roles, mapped to this repo's label strings in `docs/agents/triage-labels.md`.

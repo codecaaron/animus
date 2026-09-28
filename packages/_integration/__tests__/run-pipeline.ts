@@ -85,6 +85,11 @@ export function analyzeProject(
   );
 }
 
+/** Transforms one file of the most recent analysis. */
+export function transformFile(path: string, source: string) {
+  return engineApi().transformFile(source, path, '');
+}
+
 export function clearAnalysisCache(): void {
   engineApi().clearAnalysisCache();
 }

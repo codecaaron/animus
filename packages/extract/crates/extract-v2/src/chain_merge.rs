@@ -2,14 +2,16 @@
 //! graph, and parent→child config merging.
 
 #[cfg(test)]
-use serde_json::{Map, Value};
+use serde_json::Map;
+use serde_json::Value;
 use std::collections::VecDeque;
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
-/// Deep merge with lodash `merge()` semantics: objects merge key-by-key,
-/// any other combination replaces the parent wholesale.
-#[cfg(test)]
+use crate::facts::ChainFacts;
+
+/// Deep merge matching the runtime builder's `deepMerge`: objects merge key
+/// by key, and arrays and scalars replace the parent value.
 pub fn deep_merge(parent: &Value, child: &Value) -> Value {
     match (parent, child) {
         (Value::Object(parent_map), Value::Object(child_map)) => {
@@ -25,6 +27,71 @@ pub fn deep_merge(parent: &Value, child: &Value) -> Value {
         }
         (_, child) => child.clone(),
     }
+}
+
+/// Raw variant stage configs keyed by variant prop, in declaration order.
+pub type VariantConfigs = Vec<(String, Value)>;
+
+fn variant_prop(config: &Value) -> &str {
+    config["prop"].as_str().unwrap_or("variant")
+}
+
+/// Stage facts write an omitted `defaultVariant` or `base` as null; an
+/// omitted key must not replace the inherited value.
+fn merge_variant_config(inherited: &Value, config: &Value) -> Value {
+    let mut authored = config.clone();
+    if let Value::Object(fields) = &mut authored {
+        fields.retain(|_, field| !field.is_null());
+    }
+    deep_merge(inherited, &authored)
+}
+
+/// The chain with each variant axis it redeclares deep-merged over the
+/// inherited config, as the runtime builder merges `variants`; `None` when
+/// no stage redeclares an inherited axis.
+pub fn inherit_variant_stages(
+    chain: &ChainFacts,
+    inherited: &[(String, Value)],
+) -> Option<ChainFacts> {
+    let mut merged_chain: Option<ChainFacts> = None;
+    let mut merged_props: FxHashSet<&str> = FxHashSet::default();
+    for (idx, stage) in chain.stages.iter().enumerate() {
+        let Some(value) = stage.value.as_ref().filter(|_| stage.method == "variant") else {
+            continue;
+        };
+        let prop = variant_prop(value);
+        // A later same-prop stage keeps its own-chain handling; the parent
+        // merges into the first declaration only.
+        if !merged_props.insert(prop) {
+            continue;
+        }
+        let Some((_, parent_config)) = inherited.iter().find(|(p, _)| p == prop) else {
+            continue;
+        };
+        merged_chain.get_or_insert_with(|| chain.clone()).stages[idx].value =
+            Some(merge_variant_config(parent_config, value));
+    }
+    merged_chain
+}
+
+/// The variant configs a child hands its own extensions: the inherited
+/// configs with each of the chain's variant stages merged in order.
+pub fn effective_variant_configs(
+    chain: &ChainFacts,
+    inherited: &[(String, Value)],
+) -> VariantConfigs {
+    let mut configs = inherited.to_vec();
+    for stage in &chain.stages {
+        let Some(value) = stage.value.as_ref().filter(|_| stage.method == "variant") else {
+            continue;
+        };
+        let prop = variant_prop(value);
+        match configs.iter_mut().find(|(p, _)| p == prop) {
+            Some((_, config)) => *config = merge_variant_config(config, value),
+            None => configs.push((prop.to_string(), value.clone())),
+        }
+    }
+    configs
 }
 
 #[derive(Debug, Clone)]

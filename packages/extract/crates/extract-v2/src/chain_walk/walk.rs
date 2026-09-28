@@ -8,40 +8,56 @@ use oxc::ast::ast::{
 
 use super::expr::match_static_member;
 use super::terminal::{extract_terminal_arg, first_arg_span, second_arg_span_fn, TerminalArg};
-use super::{ChainDescriptor, ChainStage, TerminalKind};
+use super::{ChainDescriptor, ChainStage, MemberParentExtension, TerminalKind};
 
 const BAIL_METHODS: &[&str] = &[];
 const CHAIN_METHODS: &[&str] = &["styles", "variant", "compound", "states", "system", "props"];
 
+/// A walked declarator: an extractable-shaped chain, or an extension whose
+/// parent is an `Object.member` path the extractor does not support.
+enum WalkedChain {
+    Chain(ChainDescriptor),
+    MemberParent(MemberParentExtension),
+}
+
+enum ChainRoot {
+    Identifier(String),
+    Member { object: String, member: String },
+}
+
 pub fn walk_program(program: &Program<'_>) -> Vec<ChainDescriptor> {
+    walk_program_with_member_parents(program).0
+}
+
+pub fn walk_program_with_member_parents(
+    program: &Program<'_>,
+) -> (Vec<ChainDescriptor>, Vec<MemberParentExtension>) {
     let mut chains = Vec::new();
+    let mut member_parents = Vec::new();
+    let mut record = |declarator: &VariableDeclarator<'_>| match try_extract_chain(declarator) {
+        Some(WalkedChain::Chain(chain)) => chains.push(chain),
+        Some(WalkedChain::MemberParent(extension)) => member_parents.push(extension),
+        None => {}
+    };
     for stmt in &program.body {
         match stmt {
             Statement::VariableDeclaration(decl) => {
-                for declarator in &decl.declarations {
-                    if let Some(chain) = try_extract_chain(declarator) {
-                        chains.push(chain);
-                    }
-                }
+                decl.declarations.iter().for_each(&mut record);
             }
             // Chains bound by export default are not extracted.
             Statement::ExportDefaultDeclaration(_) => {}
             Statement::ExportNamedDeclaration(export) => {
                 if let Some(Declaration::VariableDeclaration(decl)) = &export.declaration {
-                    for declarator in &decl.declarations {
-                        if let Some(chain) = try_extract_chain(declarator) {
-                            chains.push(chain);
-                        }
-                    }
+                    decl.declarations.iter().for_each(&mut record);
                 }
             }
             _ => {}
         }
     }
-    chains
+    (chains, member_parents)
 }
 
-fn try_extract_chain(declarator: &VariableDeclarator<'_>) -> Option<ChainDescriptor> {
+fn try_extract_chain(declarator: &VariableDeclarator<'_>) -> Option<WalkedChain> {
     let init = declarator.init.as_ref()?;
     let binding = match &declarator.id {
         BindingPattern::BindingIdentifier(id) => id.name.to_string(),
@@ -54,7 +70,7 @@ fn try_extract_chain(declarator: &VariableDeclarator<'_>) -> Option<ChainDescrip
     try_walk_chain(call, binding)
 }
 
-fn try_walk_chain(call: &CallExpression<'_>, binding: String) -> Option<ChainDescriptor> {
+fn try_walk_chain(call: &CallExpression<'_>, binding: String) -> Option<WalkedChain> {
     let (object, method_name) = match_static_member(&call.callee)?;
 
     let terminal = match method_name {
@@ -79,13 +95,25 @@ fn try_walk_chain(call: &CallExpression<'_>, binding: String) -> Option<ChainDes
     let mut has_extend_marker = false;
     let chain_end = call.span;
 
-    let (chain_start, root_identifier) = walk_chain_backwards(
+    let (chain_start, root) = walk_chain_backwards(
         object,
         &mut stages,
         &mut extractable,
         &mut bail_reason,
         &mut has_extend_marker,
     )?;
+
+    let root_identifier = match root {
+        ChainRoot::Identifier(name) => name,
+        ChainRoot::Member { object, member } if has_extend_marker => {
+            return Some(WalkedChain::MemberParent(MemberParentExtension {
+                binding,
+                object,
+                member,
+            }));
+        }
+        ChainRoot::Member { .. } => return None,
+    };
 
     stages.reverse();
 
@@ -99,7 +127,7 @@ fn try_walk_chain(call: &CallExpression<'_>, binding: String) -> Option<ChainDes
         return None;
     };
 
-    Some(ChainDescriptor {
+    Some(WalkedChain::Chain(ChainDescriptor {
         binding,
         terminal,
         tag,
@@ -108,7 +136,7 @@ fn try_walk_chain(call: &CallExpression<'_>, binding: String) -> Option<ChainDes
         bail_reason,
         span: (chain_start, chain_end.end),
         extends_from,
-    })
+    }))
 }
 
 fn walk_chain_backwards(
@@ -117,9 +145,21 @@ fn walk_chain_backwards(
     extractable: &mut bool,
     bail_reason: &mut Option<String>,
     has_extend_marker: &mut bool,
-) -> Option<(u32, String)> {
+) -> Option<(u32, ChainRoot)> {
     match expr {
-        Expression::Identifier(id) => Some((id.span.start, id.name.to_string())),
+        Expression::Identifier(id) => {
+            Some((id.span.start, ChainRoot::Identifier(id.name.to_string())))
+        }
+        Expression::StaticMemberExpression(member) => match &member.object {
+            Expression::Identifier(object) => Some((
+                member.span.start,
+                ChainRoot::Member {
+                    object: object.name.to_string(),
+                    member: member.property.name.to_string(),
+                },
+            )),
+            _ => None,
+        },
         Expression::CallExpression(call) => {
             let (object, method_name) = match_static_member(&call.callee)?;
 

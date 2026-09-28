@@ -81,7 +81,7 @@ describe('size transform', () => {
       }
     );
 
-    it('passes through any string merely CONTAINING "calc" (substring match)', () => {
+    it('passes through a non-scalar word containing "calc"', () => {
       expect(size('calculate-this')).toBe('calculate-this');
     });
   });
@@ -120,6 +120,34 @@ describe('size transform', () => {
 
   describe('non-numeric strings (no regex match -> passthrough)', () => {
     it.each(['auto', 'inherit', ''])('returns unchanged: %p', (input) => {
+      expect(size(input)).toBe(input);
+    });
+  });
+
+  describe('explicit plus signs and trailing decimal points keep scalar conversion', () => {
+    it.each([
+      ['+10', '10px'],
+      ['+.5', '50%'],
+      ['1.', '100%'],
+      ['+10px', '10px'],
+      ['+1.5rem', '1.5rem'],
+    ] as const)('%s -> %s', (input, expected) => {
+      expect(size(input)).toBe(expected);
+    });
+  });
+
+  describe('complete CSS expressions are returned whole', () => {
+    it.each([
+      'min(320px, 50vh)',
+      'max(10rem, 25%)',
+      'clamp(1rem, 2.5vw, 3rem)',
+      'min(max(200px, 20vw), 640px)',
+      'min(calc(100% - 2rem), 40rem)',
+      'calc(min(100%, 600px) - 2 * 1rem)',
+      'var(--space-2)',
+      'var(--size-12, 480px)',
+      'min(var(--max-w-3), 90vw)',
+    ])('%s', (input) => {
       expect(size(input)).toBe(input);
     });
   });

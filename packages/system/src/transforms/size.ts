@@ -25,11 +25,9 @@ export const size = createTransform('size', (value) => {
 
   const strValue = value as string;
 
-  if (strValue.includes('calc')) {
-    return strValue;
-  }
-
-  const [match, number, unit] = /(-?\d*\.?\d+)(%|\w*)/.exec(strValue) || [];
+  // Only a lone scalar converts; any other string is preserved as authored.
+  const [match, number, unit] =
+    /^\s*([+-]?\d*\.?\d+)(?:\.|(%|\w*))\s*$/.exec(strValue) || [];
 
   if (match === undefined) {
     return strValue;

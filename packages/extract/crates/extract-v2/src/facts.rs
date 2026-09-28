@@ -228,6 +228,19 @@ pub struct FileFacts {
     /// and `const` only.
     #[serde(skip)]
     pub aliases: BTreeMap<String, String>,
+    /// Top-level `const` declarations → the identifier their initializer is
+    /// built from (`const ds = bundle.seal()` → `bundle`), assertion-peeled.
+    #[serde(skip)]
+    pub declaration_roots: BTreeMap<String, String>,
+    /// Top-level `const X = { key: Ident }` objects: static key → identifier,
+    /// only for keys no later spread, computed key, other property, or
+    /// top-level statement write in this file (`X.key =`, `X[k] =`,
+    /// `Object.assign(X, …)`) can replace.
+    #[serde(skip)]
+    pub object_members: BTreeMap<String, BTreeMap<String, String>>,
+    /// Extensions of an `Object.member` parent, which are never chains.
+    #[serde(skip)]
+    pub member_parent_extensions: Vec<chain_walk::MemberParentExtension>,
     /// Named-import specifiers (alias augmentation inputs).
     pub imports: Vec<ImportFact>,
     /// Named-export facts (re-export following for provenance/statics).
@@ -360,25 +373,77 @@ fn index_identifiers<'a>(expr: &Expression<'a>, index: &mut BTreeMap<(u32, u32),
     }
 }
 
-/// Top-level `const X = Y;` aliases whose init peels to a bare identifier.
+/// The identifier an expression is built from, through calls, static
+/// members and assertions: `createSystem().build()` → `createSystem`.
+fn expression_root(expr: &Expression<'_>) -> Option<String> {
+    match crate::chain_walk::unwrap_type_assertions(expr) {
+        Expression::Identifier(id) => Some(id.name.to_string()),
+        Expression::CallExpression(call) => expression_root(&call.callee),
+        Expression::StaticMemberExpression(member) => expression_root(&member.object),
+        _ => None,
+    }
+}
+
+#[derive(Default)]
+struct ConstInitializerFacts {
+    aliases: BTreeMap<String, String>,
+    roots: BTreeMap<String, String>,
+    objects: BTreeMap<String, BTreeMap<String, String>>,
+}
+
+/// Top-level `const` initializer facts: bare-identifier aliases, each
+/// declaration's root identifier, and object literals' identifier members.
 /// `let`/`var` are excluded: a mutable binding carries no static guarantee.
-fn collect_local_aliases(program: &Program<'_>) -> BTreeMap<String, String> {
-    use oxc::ast::ast::{Declaration, Statement, VariableDeclarationKind};
-    let mut aliases = BTreeMap::new();
+fn collect_const_initializers(program: &Program<'_>) -> ConstInitializerFacts {
+    use oxc::ast::ast::{
+        Declaration, ObjectPropertyKind, PropertyKind, Statement, VariableDeclarationKind,
+    };
+    let mut facts = ConstInitializerFacts::default();
     let mut record = |decl: &oxc::ast::ast::VariableDeclaration<'_>| {
         if decl.kind != VariableDeclarationKind::Const {
             return;
         }
         for d in &decl.declarations {
-            let Some(name) = d.id.get_identifier_name() else {
+            let (Some(name), Some(init)) = (d.id.get_identifier_name(), &d.init) else {
                 continue;
             };
-            let Some(init) = &d.init else { continue };
             if let Expression::Identifier(target) =
                 crate::chain_walk::unwrap_type_assertions(init)
             {
-                aliases.insert(name.to_string(), target.name.to_string());
+                facts.aliases.insert(name.to_string(), target.name.to_string());
             }
+            if let Some(root) = expression_root(init) {
+                facts.roots.insert(name.to_string(), root);
+            }
+            let Expression::ObjectExpression(object) =
+                crate::chain_walk::unwrap_type_assertions(init)
+            else {
+                continue;
+            };
+            // Source order: a later spread, computed key or non-identifier
+            // write may replace an earlier member, which then proves nothing.
+            let mut members: BTreeMap<String, String> = BTreeMap::new();
+            for property in &object.properties {
+                let ObjectPropertyKind::ObjectProperty(p) = property else {
+                    members.clear();
+                    continue;
+                };
+                let Some(key) = p.key.static_name().filter(|_| !p.computed) else {
+                    members.clear();
+                    continue;
+                };
+                match crate::chain_walk::unwrap_type_assertions(&p.value) {
+                    Expression::Identifier(value)
+                        if p.kind == PropertyKind::Init && !p.method =>
+                    {
+                        members.insert(key.to_string(), value.name.to_string());
+                    }
+                    _ => {
+                        members.remove(key.as_ref());
+                    }
+                }
+            }
+            facts.objects.insert(name.to_string(), members);
         }
     };
     for stmt in &program.body {
@@ -392,7 +457,65 @@ fn collect_local_aliases(program: &Program<'_>) -> BTreeMap<String, String> {
             _ => {}
         }
     }
-    aliases
+    invalidate_top_level_writes(program, &mut facts.objects);
+    facts
+}
+
+fn is_object_assign(callee: &Expression<'_>) -> bool {
+    matches!(
+        callee,
+        Expression::StaticMemberExpression(member)
+            if member.property.name == "assign"
+                && matches!(&member.object, Expression::Identifier(id) if id.name == "Object")
+    )
+}
+
+/// The recorded members of the object an expression names, if any.
+fn written_object<'m>(
+    objects: &'m mut BTreeMap<String, BTreeMap<String, String>>,
+    expr: &Expression<'_>,
+) -> Option<&'m mut BTreeMap<String, String>> {
+    match crate::chain_walk::unwrap_type_assertions(expr) {
+        Expression::Identifier(id) => objects.get_mut(id.name.as_str()),
+        _ => None,
+    }
+}
+
+/// Top-level statement writes to recorded objects: `X.key = …` removes that
+/// key; `X[expr] = …` and `Object.assign(X, …)` clear X. Writes in nested
+/// scopes, through aliases or from other modules are not seen.
+fn invalidate_top_level_writes(
+    program: &Program<'_>,
+    objects: &mut BTreeMap<String, BTreeMap<String, String>>,
+) {
+    use oxc::ast::ast::{AssignmentTarget, Statement};
+    for stmt in &program.body {
+        let Statement::ExpressionStatement(statement) = stmt else {
+            continue;
+        };
+        match crate::chain_walk::unwrap_type_assertions(&statement.expression) {
+            Expression::AssignmentExpression(assignment) => match &assignment.left {
+                AssignmentTarget::StaticMemberExpression(member) => {
+                    if let Some(members) = written_object(objects, &member.object) {
+                        members.remove(member.property.name.as_str());
+                    }
+                }
+                AssignmentTarget::ComputedMemberExpression(member) => {
+                    if let Some(members) = written_object(objects, &member.object) {
+                        members.clear();
+                    }
+                }
+                _ => {}
+            },
+            Expression::CallExpression(call) if is_object_assign(&call.callee) => {
+                let target = call.arguments.first().and_then(|arg| arg.as_expression());
+                if let Some(members) = target.and_then(|t| written_object(objects, t)) {
+                    members.clear();
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 fn build_identifier_index<'a>(program: &Program<'a>) -> BTreeMap<(u32, u32), String> {
@@ -520,7 +643,10 @@ pub(crate) fn extract_file_facts_from_static_maps(
 
     let identifier_index = build_identifier_index(program);
 
-    let chains = chain_walk::walk_program(program)
+    let (walked_chains, member_parent_extensions) =
+        chain_walk::walk_program_with_member_parents(program);
+    let const_initializers = collect_const_initializers(program);
+    let chains = walked_chains
         .into_iter()
         .map(|descriptor| {
             let mut stages: Vec<StageFacts> = Vec::new();
@@ -676,7 +802,10 @@ pub(crate) fn extract_file_facts_from_static_maps(
         usage,
         usage_enriched,
         compose: scan_compose_calls(program),
-        aliases: collect_local_aliases(program),
+        aliases: const_initializers.aliases,
+        declaration_roots: const_initializers.roots,
+        object_members: const_initializers.objects,
+        member_parent_extensions,
         imports,
         exports: crate::usage_facts::collect_export_facts(program),
         transforms,

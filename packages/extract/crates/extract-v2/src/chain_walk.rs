@@ -8,7 +8,7 @@ mod terminal;
 mod walk;
 
 pub(crate) use expr::unwrap_type_assertions;
-pub use walk::walk_program;
+pub use walk::{walk_program, walk_program_with_member_parents};
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -37,6 +37,15 @@ pub struct ChainDescriptor {
     pub bail_reason: Option<String>,
     pub span: (u32, u32),
     pub extends_from: Option<String>,
+}
+
+/// `const X = Object.member.extend()…` — an extension whose parent is a
+/// static member path, which the extractor does not resolve.
+#[derive(Debug, Clone)]
+pub struct MemberParentExtension {
+    pub binding: String,
+    pub object: String,
+    pub member: String,
 }
 
 #[cfg(test)]
