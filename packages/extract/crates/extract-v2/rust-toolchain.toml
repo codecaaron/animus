@@ -1,5 +1,5 @@
-# Directory-scoped toolchain: oxc 0.139 requires rustc >= 1.95. v1 and the
-# shared loader are pinned separately because Cargo resolves toolchains from
-# the invocation directory rather than dependency directories.
+# OXC 0.139 requires Rust >= 1.95; Rust 1.98 adds the Mach-O LINKEDIT alignment
+# fix for stripped NAPI binaries on macOS 27. Cargo selects toolchains by
+# invocation directory, so keep the shared loader's directory pin aligned.
 [toolchain]
-channel = "1.97.0"
+channel = "1.98.1"

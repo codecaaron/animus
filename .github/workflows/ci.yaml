@@ -79,7 +79,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: dtolnay/rust-toolchain@1.97.0
+      - uses: dtolnay/rust-toolchain@1.98.1
         with:
           components: clippy
 
@@ -162,7 +162,7 @@ jobs:
         working-directory: packages/extract/crates/extract-v2
         run: |
           unset RUSTUP_TOOLCHAIN
-          bunx @napi-rs/cli build --platform --release --target ${{ matrix.target }}
+          bunx @napi-rs/cli build --platform --no-js --release --target ${{ matrix.target }}
 
       - name: Upload v2 binary
         uses: actions/upload-artifact@v7

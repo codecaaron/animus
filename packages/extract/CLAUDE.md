@@ -4,8 +4,10 @@ Static CSS extraction pipeline. Parses TS/TSX via OXC, walks builder chains, eva
 
 ## Crate Structure
 
-Two independent Rust crates (no Cargo workspace; each has its own
-`rust-toolchain.toml`, both pinned to the OXC 0.139 toolchain):
+Two independent Rust crates (no Cargo workspace). Cargo selects toolchains by
+invocation directory, so each has its own aligned `rust-toolchain.toml`.
+OXC 0.139 requires Rust >= 1.95; the current release pin also includes the
+Mach-O stripping fix needed on macOS 27.
 
 ```
 crates/
@@ -29,6 +31,8 @@ has its own `.cargo`. Do not delete it.
 
 Loaded via the hand-written `index-v2.js` loader (fail-loud on missing binary).
 `index-v2.js` is the package root entry (the transitional `./engine-v2` alias was removed with the receipt-union cleanup).
+Builds use `--no-js`: generate native declarations without an unused JavaScript
+wrapper or its loader-only metadata exports.
 
 ### `class ExtractEngine`
 
@@ -75,7 +79,7 @@ vp run build:extract-v2       # v2 NAPI only — asserts rustc == rust-toolchain
                               # channel BEFORE building; aborts on mismatch
 
 # From this directory
-bun run build:v2              # release NAPI (cd crates/extract-v2 && napi build --release)
+bun run build:v2              # release NAPI
 bun run build:v2:debug        # debug NAPI
 ```
 
