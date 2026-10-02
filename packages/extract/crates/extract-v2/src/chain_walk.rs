@@ -8,7 +8,8 @@ mod terminal;
 mod walk;
 
 pub(crate) use expr::unwrap_type_assertions;
-pub use walk::{walk_program, walk_program_with_member_parents};
+pub use walk::{walk_program, walk_program_facts, WalkedProgram};
+pub(crate) use walk::CHAIN_METHODS;
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -43,6 +44,15 @@ pub struct ChainDescriptor {
 /// static member path, which the extractor does not resolve.
 #[derive(Debug, Clone)]
 pub struct MemberParentExtension {
+    pub binding: String,
+    pub object: String,
+    pub member: String,
+}
+
+/// `const X = ns.member.styles()…terminal` — a chain rooted in a static
+/// member path, which chain collection does not extract.
+#[derive(Debug, Clone)]
+pub struct MemberRootedChain {
     pub binding: String,
     pub object: String,
     pub member: String,

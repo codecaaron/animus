@@ -71,16 +71,23 @@ export const tokens = createTheme(
  * The system module. `marker` only changes a comment, so each touch is a
  * distinct on-disk revision with the same meaning.
  */
-export function systemSource(marker: string): string {
+export function systemSource(
+  marker: string,
+  extraGroups: string[] = []
+): string {
+  const groups = ['color', ...extraGroups, 'space'].sort().join(', ');
+  const added = extraGroups
+    .map((group) => `\n  .addGroup('${group}', ${group})`)
+    .join('');
   return `import { createSystem } from '@animus-ui/system';
-import { color, space } from '@animus-ui/system/groups';
+import { ${groups} } from '@animus-ui/system/groups';
 
 export { tokens } from './theme';
 
 // ${marker}
 export const ds = createSystem()
   .addGroup('space', space)
-  .addGroup('surface', color)
+  .addGroup('surface', color)${added}
   .build()
   .seal();
 `;

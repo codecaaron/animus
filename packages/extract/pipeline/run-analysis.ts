@@ -85,6 +85,7 @@ export function buildAnalysisInputs(
     staticCssJson: opts.staticCssJson ?? null,
     conditionAliasesJson: opts.system.conditionAliasesJson ?? null,
     transformSourcesJson: opts.system.transformSourcesJson ?? null,
+    transformProvenanceJson: opts.system.transformProvenanceJson ?? null,
     // Without captured source manifests the correlation join can report
     // nothing, so the dirs are withheld and the engine skips the walk.
     externalDirsJson:

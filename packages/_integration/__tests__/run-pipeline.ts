@@ -96,11 +96,12 @@ export function clearAnalysisCache(): void {
 
 export function runPipeline(
   fileEntries: Array<{ path: string; source: string }>,
-  options: { devMode?: boolean } = {}
+  options: { devMode?: boolean; inputs?: Partial<AnalyzeProjectInputs> } = {}
 ) {
   const manifestJson = analyzeProject(JSON.stringify(fileEntries), {
     devMode: options.devMode ?? false,
     selectorAliasesJson: config.selectorAliases,
+    ...options.inputs,
   });
 
   const manifest = JSON.parse(manifestJson);

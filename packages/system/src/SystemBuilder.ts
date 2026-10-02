@@ -24,6 +24,7 @@ import {
 } from './selectors';
 import {
   areTransformsEqual,
+  linkAuthoredCallable,
   NamedTransform,
   TransformFn,
 } from './transforms/createTransform';
@@ -39,9 +40,15 @@ interface SerializedPropEntry {
   property: string;
   properties?: string[];
   scale?: string | Record<string, string | number> | (string | number)[];
+  /** The transform's readable name, for diagnostics only. */
   transform?: string;
+  /** The definition this prop is bound to; see `transformDefinitionId`. */
+  transformId?: string;
   currentVar?: string;
   negative?: boolean;
+  /** Present only when values are limited to the scale; an older reader
+   *  ignores it and keeps raw values. */
+  strict?: true;
 }
 
 export type GlobalStyleMap = Record<string, Record<string, any>>;
@@ -382,18 +389,23 @@ export interface SystemBundle<
 export type LibraryBundleFor<S> = LibraryBundle<VocabularyOf<S>>;
 
 const snapshotTransformBySource = new WeakMap<TransformFn, TransformFn>();
+const snapshotTransforms = new WeakSet<TransformFn>();
 
+/**
+ * A snapshot is already frozen, so re-snapshotting it across `extend()`
+ * returns it: the callable keeps one identity however often it is inherited.
+ */
 function snapshotTransform(source: TransformFn): TransformFn {
+  if (snapshotTransforms.has(source)) return source;
   const cached = snapshotTransformBySource.get(source);
   if (cached) return cached;
 
   const wrapper: TransformFn = (value, property, props) =>
     source(value, property, props);
   Object.defineProperty(wrapper, 'name', { value: source.name });
+  linkAuthoredCallable(wrapper, source);
   // The forwarder body is byte-identical for every transform, so the wrapper
   // presents `source.toString()` — else anonymous transforms compare equal.
-  // It must be the ORIGINAL function's `toString`: only then does
-  // re-snapshotting an already-wrapped transform across `extend()` stay stable.
   const sourceText = source.toString();
   Object.defineProperty(wrapper, 'toString', {
     value: () => sourceText,
@@ -413,6 +425,7 @@ function snapshotTransform(source: TransformFn): TransformFn {
   }
   Object.freeze(wrapper);
   snapshotTransformBySource.set(source, wrapper);
+  snapshotTransforms.add(wrapper);
   return wrapper;
 }
 
@@ -1445,9 +1458,10 @@ export type SystemInstance<
 export interface SerializedConfig {
   propConfig: string;
   groupRegistry: string;
+  /** Bound callables by definition id. */
   transforms: Record<string, NamedTransform>;
   /**
-   * `{ transformName: sourceText }` — the only channel by which transforms
+   * `{ definitionId: sourceText }` — the only channel by which transforms
    * shipped inside a package reach the build-time evaluator.
    */
   transformSources: string;
@@ -1504,6 +1518,17 @@ function createRegistrySnapshot(
   });
 }
 
+/**
+ * A configured definition's identity: its system provenance is the first of
+ * its bound props in sorted order, so registration order, unrelated props and
+ * callback edits leave it unchanged. The readable name is carried for
+ * legibility; the prop alone keeps two same-named definitions apart.
+ */
+function transformDefinitionId(name: string, props: readonly string[]): string {
+  const [owner] = [...props].sort();
+  return `${name}@system.${owner}`;
+}
+
 function serializeInstance<
   PropReg extends Record<string, any>,
   GroupReg extends Record<string, readonly string[]>,
@@ -1514,8 +1539,9 @@ function serializeInstance<
   conditionRegistry: ConditionAliasMap
 ): SerializedConfig {
   const serialized: Record<string, SerializedPropEntry> = {};
-  const transforms: Record<string, NamedTransform> = {};
-  const transformOwners: Record<string, string> = {};
+  // Keyed by callable identity: equal names or equal source text never make
+  // two callables one definition.
+  const definitions = new Map<TransformFn, { name: string; props: string[] }>();
 
   for (const [propName, entry] of Object.entries(propRegistry)) {
     const s: SerializedPropEntry = { property: (entry as any).property };
@@ -1535,22 +1561,18 @@ function serializeInstance<
       s.negative = true;
     }
 
+    if (s.scale !== undefined && (entry as any).strict !== false) {
+      s.strict = true;
+    }
+
     if ((entry as any).transform) {
-      const fn = (entry as any).transform;
-      const name = fn.transformName ?? fn.name;
+      const fn: TransformFn = (entry as any).transform;
+      const name = (fn as Partial<NamedTransform>).transformName ?? fn.name;
       if (name) {
-        const existing = transforms[name];
-        if (existing && !areTransformsEqual(existing, fn)) {
-          throw new Error(
-            `Transform name "${name}" is registered by both props ` +
-              `"${transformOwners[name]}" and "${propName}" with different ` +
-              `function instances. Share one cached transform instance or ` +
-              `give the transforms distinct names.`
-          );
-        }
         s.transform = name;
-        transforms[name] = fn;
-        transformOwners[name] = propName;
+        const definition = definitions.get(fn);
+        if (definition) definition.props.push(propName);
+        else definitions.set(fn, { name, props: [propName] });
       }
     }
 
@@ -1564,14 +1586,18 @@ function serializeInstance<
   const { selectors } = serializeSelectorMap(selectorRegistry);
   const conditions = serializeConditionMap(conditionRegistry);
 
+  const transforms: Record<string, NamedTransform> = {};
   // Extraction evaluates transforms in a sandbox seeded only from source
   // text; without these a packaged transform silently falls back to raw values.
   const transformSources: Record<string, string> = {};
-  for (const [name, fn] of Object.entries(transforms)) {
-    const source = fn.transformSource;
+  for (const [fn, { name, props }] of definitions) {
+    const id = transformDefinitionId(name, props);
+    for (const propName of props) serialized[propName].transformId = id;
+    transforms[id] = fn as NamedTransform;
+    const source = (fn as Partial<NamedTransform>).transformSource;
     // Absent only on instances built by an older @animus-ui/system; skipping
     // leaves the raw-value fallback instead of the forwarder body.
-    if (source !== undefined) transformSources[name] = source;
+    if (source !== undefined) transformSources[id] = source;
   }
 
   return {

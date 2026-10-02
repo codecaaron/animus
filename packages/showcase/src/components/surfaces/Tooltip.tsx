@@ -35,8 +35,8 @@ const TooltipContent = ds
   .variant({
     prop: 'size',
     variants: {
-      sm: { px: 8, py: 4, fontSize: 11 },
-      lg: { px: 16, py: 8, fontSize: 14 },
+      sm: { px: 'compact-x', py: 'compact-y', fontSize: 11 },
+      lg: { px: 'comfortable-x', py: 'comfortable-y', fontSize: 14 },
     },
     defaultVariant: 'sm',
   })

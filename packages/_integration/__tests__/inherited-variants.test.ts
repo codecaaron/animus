@@ -15,7 +15,7 @@ export const Parent = ds.styles({ display: 'flex' }).variant({
       opacity: 0.5,
       paddingTop: '3px',
       paddingBottom: { _: '2px', md: '6px' },
-      '&:hover': { color: 'red', outlineWidth: '1px' },
+      '&:hover': { color: 'primary', outlineWidth: '1px' },
     },
     loud: { opacity: 1, fontWeight: 700 },
   },
@@ -32,7 +32,7 @@ export const Child = Parent.extend().variant({
     soft: {
       opacity: 0.8,
       paddingBottom: { md: '9px' },
-      '&:hover': { color: 'blue' },
+      '&:hover': { color: 'secondary' },
     },
   },
 }).asElement('div');
@@ -48,7 +48,7 @@ export const Grandchild = Child.extend()
     defaultVariant: 'loud',
     variants: { loud: { fontWeight: 800 }, quiet: { opacity: 0.2 } },
   })
-  .variant({ prop: 'size', variants: { sm: { fontSize: '12px' } } })
+  .variant({ prop: 'size', variants: { sm: { fontSize: 14 } } })
   .asElement('div');
 `,
 };
@@ -146,7 +146,7 @@ describe('overriding one option on an inherited variant axis (development)', () 
   test('nested selector and condition declarations merge recursively', () => {
     const rules = variantRules(manifest, childId);
     expect(rules[`.${child}--tone-soft:hover`]).toEqual([
-      'color: blue',
+      'color: var(--color-secondary)',
       'outline-width: 1px',
     ]);
     expect(rules[`@media (min-width: 1024px) .${child}--tone-soft`]).toEqual([
@@ -167,7 +167,7 @@ describe('overriding one option on an inherited variant axis (development)', () 
       'padding-top: 3px',
     ]);
     expect(rules[`.${parent}--tone-soft:hover`]).toEqual([
-      'color: red',
+      'color: var(--color-primary)',
       'outline-width: 1px',
     ]);
     expect(rules[`@media (min-width: 1024px) .${parent}--tone-soft`]).toEqual([
@@ -194,7 +194,7 @@ describe('overriding one option on an inherited variant axis (development)', () 
         'padding-top: 3px',
       ]);
       expect(rules[`.${grandchild}--tone-soft:hover`]).toEqual([
-        'color: blue',
+        'color: var(--color-secondary)',
         'outline-width: 1px',
       ]);
       expect(
@@ -213,7 +213,7 @@ describe('overriding one option on an inherited variant axis (development)', () 
         'opacity: 1',
       ]);
       expect(rules[`.${grandchild}--tone-quiet`]).toEqual(['opacity: 0.2']);
-      expect(rules[`.${grandchild}--size-sm`]).toEqual(['font-size: 12px']);
+      expect(rules[`.${grandchild}--size-sm`]).toEqual(['font-size: 0.875rem']);
     });
 
     test('leaves the child configuration unchanged', () => {

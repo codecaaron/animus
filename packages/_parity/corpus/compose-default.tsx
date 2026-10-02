@@ -17,7 +17,7 @@ export const FamStep = ds
   .styles({ p: 4 })
   .variant({
     prop: 'pace',
-    variants: { steady: { m: 4 }, brisk: { m: 1 } },
+    variants: { steady: { m: 4 }, brisk: { margin: 1 } },
   })
   .asElement('span');
 

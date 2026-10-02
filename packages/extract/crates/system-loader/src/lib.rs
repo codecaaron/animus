@@ -29,9 +29,15 @@ pub struct SystemConfig {
     /// Condition alias map JSON: alias → `{ value, order, kind }`.
     /// `None` when the system registers no condition aliases.
     pub condition_aliases: Option<String>,
-    /// Transform source texts (`{ transformName: sourceText }` JSON): the
-    /// only channel for package-shipped transforms; `None` for an older build.
+    /// Transform source texts by definition key (`{ transformId: sourceText }`
+    /// JSON): the only channel for configured transforms; `None` for an older build.
     pub transform_sources: Option<String>,
+    /// Host-binding evidence by the same keys (`{ transformId: { hostGlobals:
+    /// [names] } | { rejection: reason } }` JSON): which of `btoa`/`atob`
+    /// each configured callable reads as the host function, proven from the
+    /// authored callable's own function in its module. A reason completes
+    /// "its callable …". `None` without sources.
+    pub transform_provenance: Option<String>,
     pub global_style_blocks: Option<String>,
     /// Keyframe collections from the sealed registration record, shaped
     /// `{ exportName: { keyName: { name, frames } } }`; nothing is scanned.
@@ -915,6 +921,8 @@ time: noop, timeEnd: noop, timeLog: noop };\n\
 struct BundleLayout {
     module_starts: Vec<(usize, String)>,
     stub_specifiers: Vec<String>,
+    /// Byte range of each real module's rewritten text in the bundle.
+    module_spans: Vec<(usize, usize, String)>,
 }
 
 impl BundleLayout {
@@ -998,6 +1006,7 @@ fn build_bundle(
     }
 
     let order = topological_sort(specifier_map, source_map, entry_path)?;
+    let mut module_spans = Vec::with_capacity(order.len());
 
     for module_path in &order {
         let source = source_map
@@ -1009,7 +1018,9 @@ fn build_bundle(
         marker_offsets.push((bundle.len(), module_path.clone()));
         let _ = writeln!(bundle, "{}{}", MODULE_MARKER_PREFIX, module_path);
         bundle.push_str("(function(){ const __exports = {};\n");
+        let start = bundle.len();
         bundle.push_str(&rewritten);
+        module_spans.push((start, bundle.len(), module_path.clone()));
         bundle.push('\n');
         let _ = writeln!(
             bundle,
@@ -1025,6 +1036,7 @@ fn build_bundle(
         BundleLayout {
             module_starts,
             stub_specifiers,
+            module_spans,
         },
     ))
 }
@@ -1032,8 +1044,8 @@ fn build_bundle(
 /// Line of the innermost bundle frame: rquickjs names the script
 /// `eval_script`, so frames read `at <eval> (eval_script:42[:col])`.
 fn bundle_line_from_stack(stack: &str) -> Option<usize> {
-    const MARKER: &str = "eval_script:";
-    let start = stack.find(MARKER)? + MARKER.len();
+    let marker = format!("{BUNDLE_SCRIPT}:");
+    let start = stack.find(&marker)? + marker.len();
     let digits: String = stack[start..]
         .chars()
         .take_while(char::is_ascii_digit)
@@ -1091,6 +1103,10 @@ fn execute_bundle(
         Context::full(&runtime).map_err(|e| format!("rquickjs Context::full failed: {}", e))?;
 
     context.with(|ctx| {
+        // Compiled before any module runs, so its getters are the pristine ones.
+        let authored_probe: Function = ctx
+            .eval(AUTHORED_CALLABLE_PROBE.as_bytes())
+            .map_err(|e| format!("authored-callable probe failed to compile: {}", e))?;
         ctx.eval::<(), _>(bundle_script.as_bytes())
             .map_err(|e| describe_eval_failure(&ctx, layout, &e))?;
 
@@ -1101,7 +1117,9 @@ fn execute_bundle(
             .eval(access_script.as_bytes())
             .map_err(|e| format!("failed to access entry module exports: {}", e))?;
 
-        let mut config = extract_system_config(&ctx, &namespace, export_name)?;
+        let mut config = extract_system_config(&ctx, &namespace, export_name, |config, sources| {
+            transform_provenance(config, &authored_probe, sources, bundle_script, layout)
+        })?;
         config.source_theme_manifests = extract_source_theme_manifests(&ctx);
         Ok(config)
     })
@@ -1165,6 +1183,7 @@ fn extract_system_config<'js>(
     ctx: &rquickjs::Ctx<'js>,
     namespace: &Object<'js>,
     export_name: Option<&str>,
+    provenance: impl FnOnce(&Object<'js>, &str) -> Result<String, String>,
 ) -> Result<SystemConfig, String> {
     // Two distinct `.toConfig()` exports fail the load: an enumeration-order
     // first-pick could silently load a system with no registrations.
@@ -1230,6 +1249,10 @@ fn extract_system_config<'js>(
     let selector_order: Option<String> = config_obj.get("selectorOrder").ok();
     let condition_aliases: Option<String> = config_obj.get("conditionAliases").ok();
     let transform_sources: Option<String> = config_obj.get("transformSources").ok();
+    let transform_provenance = transform_sources
+        .as_deref()
+        .map(|sources| provenance(&config_obj, sources))
+        .transpose()?;
 
     // `theme` and `tokens` may both be exported only when they are the SAME
     // object; identity is reference equality, never serialized output.
@@ -1343,6 +1366,7 @@ fn extract_system_config<'js>(
         selector_order,
         condition_aliases,
         transform_sources,
+        transform_provenance,
         global_style_blocks,
         keyframes_blocks,
         vocabulary_witnesses,
@@ -1353,6 +1377,191 @@ fn extract_system_config<'js>(
         // walk needs the live rquickjs context, not the namespace alone).
         source_theme_manifests: None,
     })
+}
+
+/// Reads, for each configured transform, the authored callable an Animus
+/// forwarder links under a registry symbol: its position and text, through
+/// getters captured before any module ran. Nothing is called.
+const AUTHORED_CALLABLE_PROBE: &str = r#"(() => {
+  const link = Symbol.for('animus.transform.authored');
+  const proto = Function.prototype;
+  const get = (key) => Object.getOwnPropertyDescriptor(proto, key).get;
+  const fileName = get('fileName');
+  const lineNumber = get('lineNumber');
+  const columnNumber = get('columnNumber');
+  const toText = proto.toString;
+  const call = proto.call.bind(proto.call);
+  const own = Object.getOwnPropertyDescriptor;
+  const stringify = JSON.stringify;
+  return (transforms, ids) => {
+    const out = {};
+    for (const id of ids) {
+      const forwarder = transforms == null ? undefined : own(transforms, id)?.value;
+      // The link is an own data property of every Animus forwarder.
+      const authored = typeof forwarder === 'function' ? own(forwarder, link)?.value : undefined;
+      out[id] = typeof authored === 'function'
+        ? {
+            file: call(fileName, authored),
+            line: call(lineNumber, authored),
+            column: call(columnNumber, authored),
+            text: call(toText, authored),
+          }
+        : null;
+    }
+    return stringify(out);
+  };
+})()"#;
+
+/// Host functions outside ECMA-262 that admission allows by name, when a
+/// configured callable reads them as the host's; the extraction engine's
+/// evaluator admits the same list.
+pub const SHARED_HOST_NAMES: [&str; 2] = ["atob", "btoa"];
+
+/// The script name rquickjs gives the bundle in positions and backtraces.
+const BUNDLE_SCRIPT: &str = "eval_script";
+
+/// Where the authored callable's function starts in the bundle.
+#[derive(serde::Deserialize)]
+struct AuthoredPosition {
+    file: Option<String>,
+    line: Option<usize>,
+    column: Option<usize>,
+    text: String,
+}
+
+/// Per-definition host-binding evidence for `transformSources`: each
+/// definition whose source reads `btoa` or `atob` is located through its own
+/// authored callable; the others need none.
+fn transform_provenance<'js>(
+    config: &Object<'js>,
+    authored_probe: &Function<'js>,
+    transform_sources: &str,
+    bundle: &str,
+    layout: &BundleLayout,
+) -> Result<String, String> {
+    let sources: std::collections::BTreeMap<String, String> = serde_json::from_str(transform_sources)
+        .map_err(|e| format!("transformSources is not a JSON object of source texts: {}", e))?;
+    let candidates: Vec<&String> = sources
+        .iter()
+        .filter(|(_, source)| SHARED_HOST_NAMES.iter().any(|name| source.contains(name)) || source.contains("\\u"))
+        .map(|(id, _)| id)
+        .collect();
+    // Only a source that may read a host name needs its callable located.
+    let positions = if candidates.is_empty() {
+        Ok(std::collections::BTreeMap::new())
+    } else {
+        authored_positions(config, authored_probe, &candidates)
+    };
+    let line_starts: Vec<usize> = if candidates.is_empty() {
+        Vec::new()
+    } else {
+        std::iter::once(0).chain(bundle.match_indices('\n').map(|(i, _)| i + 1)).collect()
+    };
+    let mut out = serde_json::Map::new();
+    for (id, source) in &sources {
+        let evidence = if !candidates.contains(&id) {
+            Ok(Vec::new())
+        } else {
+            match &positions {
+                Err(error) => Err(format!("could not be located ({error})")),
+                Ok(positions) => match positions.get(id).and_then(Option::as_ref) {
+                    Some(position) => host_binding_evidence(position, source, bundle, &line_starts, layout),
+                    None => Err("was built by an @animus-ui/system older than this extractor".to_string()),
+                },
+            }
+        };
+        out.insert(
+            id.clone(),
+            match evidence {
+                Ok(globals) => serde_json::json!({ "hostGlobals": globals }),
+                Err(reason) => serde_json::json!({ "rejection": reason }),
+            },
+        );
+    }
+    Ok(serde_json::Value::Object(out).to_string())
+}
+
+/// The probe's view of each candidate's authored callable, `None` when its
+/// forwarder carries no link.
+fn authored_positions<'js>(
+    config: &Object<'js>,
+    authored_probe: &Function<'js>,
+    candidates: &[&String],
+) -> Result<std::collections::BTreeMap<String, Option<AuthoredPosition>>, String> {
+    let transforms: rquickjs::Value =
+        config.get("transforms").map_err(|e| format!("toConfig().transforms is unreadable: {}", e))?;
+    let positions: String = authored_probe
+        .call((transforms, candidates.to_vec()))
+        .map_err(|e| format!("authored-callable probe failed: {}", e))?;
+    serde_json::from_str(&positions).map_err(|e| format!("authored-callable probe returned malformed JSON: {}", e))
+}
+
+/// The shared host names the authored function reads as the host's, or why
+/// that cannot be shown: the position must start exactly that function of a
+/// bundled module, its text must be the configured source, and every `btoa`
+/// or `atob` it reads must be unbound in a module without direct eval.
+fn host_binding_evidence(
+    position: &AuthoredPosition,
+    source: &str,
+    bundle: &str,
+    line_starts: &[usize],
+    layout: &BundleLayout,
+) -> Result<Vec<&'static str>, String> {
+    use oxc::ast::AstKind;
+    if position.text != source {
+        return Err("has text that differs from its configured source".to_string());
+    }
+    // QuickJS columns count UTF-8 bytes from 1; lines break only at `\n`.
+    let offset = match (position.file.as_deref(), position.line, position.column) {
+        (Some(file), Some(line), Some(column)) if file == BUNDLE_SCRIPT && line >= 1 && column >= 1 => {
+            line_starts.get(line - 1).map(|start| start + column - 1)
+        }
+        _ => None,
+    }
+    .ok_or("has no position in the loaded system's modules")?;
+    let (start, end, module) = layout
+        .module_spans
+        .iter()
+        .find(|(start, end, _)| (*start..*end).contains(&offset))
+        .ok_or("is not defined in a module of the loaded system")?;
+    let text = &bundle[*start..*end];
+    let local = offset - start;
+    let allocator = Allocator::default();
+    let parsed = Parser::new(&allocator, text, SourceType::mjs()).parse();
+    if parsed.panicked || !parsed.diagnostics.is_empty() {
+        return Err(format!("is defined in {module}, which does not parse as module code"));
+    }
+    let semantic = SemanticBuilder::new().with_build_nodes(true).build(&parsed.program).semantic;
+    let function = semantic.nodes().iter().find_map(|node| match node.kind() {
+        AstKind::ArrowFunctionExpression(function) if function.span.start as usize == local => Some(function.span),
+        AstKind::Function(function) if function.span.start as usize == local => Some(function.span),
+        _ => None,
+    });
+    let span = function
+        .filter(|span| text.get(span.start as usize..span.end as usize) == Some(source))
+        .ok_or_else(|| format!("matches no function of {module} at its position"))?;
+    let scoping = semantic.scoping();
+    let direct_eval = scoping.root_unresolved_references().contains_key("eval");
+    let mut globals = Vec::new();
+    for node in semantic.nodes().iter() {
+        let AstKind::IdentifierReference(reference) = node.kind() else { continue };
+        let Some(name) = SHARED_HOST_NAMES.iter().find(|name| reference.name == **name) else { continue };
+        if !span.contains_inclusive(reference.span) {
+            continue;
+        }
+        let symbol = reference.reference_id.get().and_then(|id| scoping.get_reference(id).symbol_id());
+        match symbol {
+            Some(symbol) if span.contains_inclusive(scoping.symbol_span(symbol)) => {}
+            Some(_) => return Err(format!("reads '{name}' declared in {module} outside the callback")),
+            None if direct_eval => {
+                return Err(format!("reads '{name}' in {module}, which calls eval directly"));
+            }
+            None if !globals.contains(name) => globals.push(*name),
+            None => {}
+        }
+    }
+    globals.sort_unstable();
+    Ok(globals)
 }
 
 fn find_exports_with_method<'js>(
@@ -1872,6 +2081,63 @@ export const ds = tokens;
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).expect("create scratch dir");
         dir
+    }
+
+    /// Host-binding evidence follows each definition's own authored callable,
+    /// located by its position: equal text in another module, a module or
+    /// factory binding, direct eval, a missing link or a runtime-built
+    /// function each decide only their own definition.
+    #[test]
+    fn transform_provenance_follows_each_authored_callable() {
+        let dir = scratch_dir("transform-provenance");
+        write_fixture(&dir.join("local.js"), "const btoa = (s) => s;\nexport const local = (v) => btoa(String(v));\n");
+        write_fixture(
+            &dir.join("global.js"),
+            "export const global = (v) => btoa(String(v));\n\
+             export function decl(v) { return atob(String(v)); }\n\
+             export const own = (v) => { const btoa = (s) => s; return btoa(String(v)); };\n",
+        );
+        write_fixture(&dir.join("factory.js"), "export const made = ((btoa) => (v) => btoa(String(v)))((s) => s);\n");
+        write_fixture(&dir.join("direct.js"), "eval('');\nexport const viaEval = (v) => btoa(String(v));\n");
+        write_fixture(
+            &dir.join("ds.js"),
+            &format!(
+                "import {{ local }} from './local.js';\n\
+                 import {{ global, decl, own }} from './global.js';\n\
+                 import {{ made }} from './factory.js';\n\
+                 import {{ viaEval }} from './direct.js';\n\
+                 const link = Symbol.for('animus.transform.authored');\n\
+                 const forward = (fn) => {{ const w = (v) => fn(v); Object.defineProperty(w, link, {{ value: fn }}); return w; }};\n\
+                 const built = new Function('v', 'return btoa(String(v))');\n\
+                 const linked = {{ local, global, decl, own, made, viaEval, built }};\n\
+                 const transforms = Object.fromEntries(Object.entries(linked).map(([id, fn]) => [id, forward(fn)]));\n\
+                 transforms.unlinked = (v) => btoa(String(v));\n\
+                 transforms.renamed = forward(global);\n\
+                 const sources = Object.fromEntries(Object.entries(linked).map(([id, fn]) => [id, fn.toString()]));\n\
+                 sources.unlinked = transforms.unlinked.toString();\n\
+                 sources.renamed = '(v) => btoa(String(v)) ';\n\
+                 export const ds = {{\n\
+                   toConfig: () => ({{ propConfig: '{{}}', groupRegistry: '{{}}', transforms, transformSources: JSON.stringify(sources) }}),\n\
+                   getVocabularyRecord: () => ({{ version: 1, keyframes: [], globalStyles: [], collisions: [], legacyVerbs: [] }}),\n\
+                 }};\n\
+                 {FIXTURE_THEME}"
+            ),
+        );
+        let config = load_system_module(&dir.join("ds.js").to_string_lossy(), &dir.to_string_lossy(), None)
+            .expect("fixture system loads");
+        let provenance: serde_json::Value =
+            serde_json::from_str(config.transform_provenance.as_deref().expect("provenance")).unwrap();
+        let reason = |id: &str| provenance[id]["rejection"].as_str().unwrap_or_default().to_string();
+        assert_eq!(provenance["global"], serde_json::json!({ "hostGlobals": ["btoa"] }));
+        assert_eq!(provenance["decl"], serde_json::json!({ "hostGlobals": ["atob"] }));
+        assert_eq!(provenance["own"], serde_json::json!({ "hostGlobals": [] }));
+        assert!(reason("local").contains("reads 'btoa' declared in") && reason("local").ends_with("local.js outside the callback"));
+        assert!(reason("made").contains("factory.js outside the callback"), "{}", reason("made"));
+        assert!(reason("viaEval").contains("calls eval directly"), "{}", reason("viaEval"));
+        assert!(reason("built").contains("has no position"), "{}", reason("built"));
+        assert!(reason("unlinked").contains("older than this extractor"), "{}", reason("unlinked"));
+        assert!(reason("renamed").contains("differs from its configured source"), "{}", reason("renamed"));
+        let _ = fs::remove_dir_all(&dir);
     }
 
     fn write_fixture(path: &Path, contents: &str) {

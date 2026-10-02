@@ -95,7 +95,7 @@ function generateSystemPropsModule(ctx: PluginContext): string {
     systemPropMapJson: ctx.storedSystemPropMapJson,
     groupRegistryJson: ctx.system.groupRegistryJson,
     dynamicProps: JSON.parse(ctx.storedDynamicPropsJson),
-    transformsSource: ctx.storedTransformsSource,
+    admittedTransforms: JSON.parse(ctx.storedAdmittedTransformsJson),
   });
 }
 
@@ -112,7 +112,7 @@ function systemPropsModuleKey(ctx: PluginContext): string {
     ctx.storedSystemPropMapJson,
     ctx.system.groupRegistryJson,
     ctx.storedDynamicPropsJson,
-    ctx.storedTransformsSource,
+    ctx.storedAdmittedTransformsJson,
   ].join('\u0000');
 }
 
@@ -185,7 +185,7 @@ export class PluginContext {
 
   storedSystemPropMapJson = '{}';
   storedDynamicPropsJson = '{}';
-  storedTransformsSource = '{}';
+  storedAdmittedTransformsJson = '{}';
 
   readonly fileCache: ReadonlyMap<string, { hash: string; source: string }> =
     new Map();
@@ -221,8 +221,20 @@ export class PluginContext {
 
   rawExtensionFallbacks = new Set<string>();
 
+  /** Original path → hash of bytes whose parse aborted in a rejected attempt;
+   *  non-empty while that rejection holds publication. Those bytes are served
+   *  raw so the host reports its own syntax error instead of receiving the
+   *  previous module from the retained engine. */
+  readonly abortedParseHashes = new Map<string, string>();
+
+  /** A system reload is pending: the next analysis attempt loads the latest
+   *  system. A parse hold keeps it pending and the published system served;
+   *  new dependency watch keys stay registered meanwhile. */
+  systemReloadOwed = false;
+
   /** The one mutator of a file's fallback state — every raw-serve exit of the
-   *  transform hook reports here. Production keeps the set empty. The
+   *  transform hook reports here, except aborted bytes, which never execute.
+   *  Production keeps the set empty. The
    *  barrier's one-shot withhold release must not route through here: it
    *  retires other files' records, no claim about their current serve. */
   recordFallbackState(relativePath: string, isFallback: boolean): void {
@@ -444,6 +456,9 @@ export class PluginContext {
       result.manifest.system_prop_map
     );
     this.storedDynamicPropsJson = JSON.stringify(result.manifest.dynamic_props);
+    this.storedAdmittedTransformsJson = JSON.stringify(
+      result.manifest.admitted_transforms
+    );
 
     this.reverseProvenance = result.manifest.reverse_provenance;
 
@@ -485,21 +500,105 @@ export class PluginContext {
   }
 
   /** The one ingest → quarantine → analyze → publish transaction. The corpus
-   *  publishes only on success; `beforeAnalysis` runs after quarantine. */
+   *  publishes only on success. `afterIngestion` runs after quarantine even
+   *  when an aborted parse rejects the attempt; `beforeAnalysis` runs only
+   *  once the attempt will analyze. A rejection names its aborted originals
+   *  and holds publication: development callers keep their cache's latest
+   *  sources, valid edits included, for the repair to publish together. In
+   *  every strictness mode it fails a production build, which has no
+   *  generation to keep, and only warns in development: the host reports the
+   *  syntax error itself, and a throw would leave its client on the failed
+   *  module. The publication that ends a hold invalidates the modules of
+   *  every original whose admitted bytes changed meanwhile and returns them
+   *  as `redeliver`, for a hot update to push to the client. An owed system
+   *  reload loads the latest system for the attempt: a hold restores the
+   *  published one and keeps the reload owed, any other outcome completes
+   *  the reload's invalidation. */
   async analyzeIngested(options?: {
     rawEntries?: readonly RawSourceEntry[];
+    afterIngestion?: (ingested: SourceIngestionResult) => void;
     beforeAnalysis?: (accepted: SourceIngestionResult) => void;
-  }): Promise<{ ok: boolean; accepted: SourceIngestionResult }> {
-    const accepted = await this.corpus.prepare(
-      options?.rawEntries ?? {
-        fileCache: this.fileCache,
-        externalFileOwners: this.externalFileOwners,
+  }): Promise<{
+    ok: boolean;
+    accepted: SourceIngestionResult;
+    /** Original path → hash of the bytes whose parse aborted. */
+    abortedOriginals?: ReadonlyMap<string, string>;
+    endedHold: boolean;
+    redeliver: string[];
+  }> {
+    const holding = this.abortedParseHashes.size > 0;
+    const previous = this.corpus.published.ownership;
+    const reloadingSystem = this.systemReloadOwed;
+    const prevPlans = reloadingSystem
+      ? snapshotFilePlans(this.storedManifest)
+      : null;
+    const publishedSystem = this.system;
+    const publishedVocabulary = this.systemVocabularyDiagnostics;
+    let published = false;
+    try {
+      if (reloadingSystem) this.loadSystem();
+      const accepted = await this.corpus.prepare(
+        options?.rawEntries ?? {
+          fileCache: this.fileCache,
+          externalFileOwners: this.externalFileOwners,
+        }
+      );
+      options?.afterIngestion?.(accepted);
+      const rejection = this.corpus.rejection(accepted);
+      if (rejection) {
+        for (const [path, hash] of rejection.originals) {
+          this.abortedParseHashes.set(path, hash);
+        }
+        if (this.isProd) throw new Error(rejection.message);
+        this.warn(rejection.message);
+        return {
+          ok: false,
+          accepted,
+          abortedOriginals: rejection.originals,
+          endedHold: false,
+          redeliver: [],
+        };
       }
-    );
-    options?.beforeAnalysis?.(accepted);
-    const ok = this.runAnalysis(accepted.analysisEntries) !== false;
-    if (ok) this.publishSourceIngestion(accepted);
-    return { ok, accepted };
+      // Strict ingestion diagnostics throw before the cache is cleared, so a
+      // rejected reset leaves the last-good transform engine usable.
+      if (reloadingSystem) clearEngineCache(this.engineApi);
+      options?.beforeAnalysis?.(accepted);
+      const ok = this.runAnalysis(accepted.analysisEntries) !== false;
+      if (!ok) return { ok, accepted, endedHold: false, redeliver: [] };
+      this.publishSourceIngestion(accepted);
+      published = true;
+      this.abortedParseHashes.clear();
+      if (!holding) return { ok, accepted, endedHold: false, redeliver: [] };
+      const redeliver = Object.values(accepted.ownership)
+        .filter(
+          (owner) =>
+            previous[owner.originalPath]?.originalHash !== owner.originalHash
+        )
+        .map((owner) => owner.originalPath);
+      invalidateFileModules(this, redeliver);
+      return { ok, accepted, endedHold: true, redeliver };
+    } finally {
+      // Only a publication ends a hold.
+      const systemHeld = reloadingSystem && this.abortedParseHashes.size > 0;
+      if (systemHeld) {
+        this.system = publishedSystem;
+        this.systemVocabularyDiagnostics = publishedVocabulary;
+      } else if (reloadingSystem) {
+        this.systemReloadOwed = false;
+        // A type-only definition module has no import edge, so importer
+        // propagation cannot deliver its new bytes — evict changed plans.
+        // A system reload has no caller-side plan diff of its own.
+        if (published && prevPlans) {
+          invalidateFileModules(
+            this,
+            diffFilePlans(prevPlans, snapshotFilePlans(this.storedManifest))
+          );
+        }
+      }
+      // A held reload re-serves the published system's unchanged bytes, so
+      // only a completed one reloads the client.
+      if (reloadingSystem) this.invalidateSystemReloadModules(!systemHeld);
+    }
   }
 
   publishSourceIngestion(result: SourceIngestionResult): void {
@@ -586,31 +685,15 @@ export class PluginContext {
 
   private async performSystemReloadExclusive(): Promise<void> {
     const resetStart = performance.now();
-    const prevPlans = snapshotFilePlans(this.storedManifest);
-    try {
-      this.loadSystem();
-
-      // Strict ingestion diagnostics throw before the cache is cleared, so a
-      // rejected reset leaves the last-good transform engine usable.
-      const { ok } = await this.analyzeIngested({
-        beforeAnalysis: () => clearEngineCache(this.engineApi),
-      });
-      if (!ok) return;
-      // A type-only definition module has no import edge, so importer
-      // propagation cannot deliver its new bytes — evict changed plans.
-      invalidateFileModules(
-        this,
-        diffFilePlans(prevPlans, snapshotFilePlans(this.storedManifest))
-      );
-      this.log(
-        `HMR system reload complete: ${Math.round(performance.now() - resetStart)}ms`
-      );
-    } finally {
-      this.invalidateSystemReloadModules();
-    }
+    this.systemReloadOwed = true;
+    const { ok } = await this.analyzeIngested();
+    if (!ok) return;
+    this.log(
+      `HMR system reload complete: ${Math.round(performance.now() - resetStart)}ms`
+    );
   }
 
-  private invalidateSystemReloadModules(): void {
+  private invalidateSystemReloadModules(reloadClient: boolean): void {
     const server = this.devServer;
     if (!server) return;
     for (const moduleId of [
@@ -621,7 +704,7 @@ export class PluginContext {
       const mod = server.moduleGraph.getModuleById(moduleId);
       if (mod) server.moduleGraph.invalidateModule(mod);
     }
-    server.hot?.send({ type: 'full-reload' });
+    if (reloadClient) server.hot?.send({ type: 'full-reload' });
   }
 
   isSystemDependency(absFile: string): boolean {

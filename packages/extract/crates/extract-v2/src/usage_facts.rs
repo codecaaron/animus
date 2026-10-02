@@ -5,13 +5,16 @@ use oxc::ast::ast::{
     Argument, CallExpression, Expression, IdentifierReference, ImportDeclarationSpecifier,
     JSXAttributeItem, JSXAttributeName, JSXElementName, JSXOpeningElement, Program, Statement,
 };
+use oxc::ast::AstKind;
 use oxc::ast_visit::Visit;
-use oxc::semantic::{Scoping, SemanticBuilder};
+use oxc::semantic::{Scoping, SemanticBuilder, SymbolId};
 use rustc_hash::{FxHashMap, FxHashSet};
 use serde::Serialize;
 use serde_json::Value;
+use std::collections::BTreeSet;
 use std::marker::PhantomData;
 
+use crate::chain_walk::{ChainDescriptor, TerminalKind};
 use crate::jsx_scan::{
     classify_jsx_attribute_as_variant_value, eval_jsx_attribute_value,
     is_component_like_identifier, ComponentUsageConfig, CustomPropScanResult,
@@ -65,6 +68,9 @@ pub enum UsageFact {
     Element {
         tag: TagFact,
         attrs: Vec<AttrFact>,
+        /// A `{...props}` attribute can deliver any prop at runtime.
+        #[serde(skip)]
+        spread: bool,
     },
     /// createElement(X, ...) / React.createElement(X, ...): the first
     /// argument as a raw name or dotted key (None = unattributable form).
@@ -82,6 +88,32 @@ pub struct ImportFact {
     pub local: String,
     pub imported: String,
     pub source: String,
+    /// Byte span of the whole import declaration.
+    #[serde(skip)]
+    pub(crate) declaration: (u32, u32),
+}
+
+/// The `@animus-ui/system` package or one of its subpaths.
+pub(crate) fn is_animus_system_specifier(spec: &str) -> bool {
+    spec == "@animus-ui/system" || spec.starts_with("@animus-ui/system/")
+}
+
+/// Namespace imports (`import * as ns from 'x'`) from top-level
+/// statements: local name → specifier. Kept apart from `ImportFact`, whose
+/// consumers resolve `local` as a named binding.
+pub fn collect_namespace_imports(program: &Program<'_>) -> std::collections::BTreeMap<String, String> {
+    let mut namespaces = std::collections::BTreeMap::new();
+    for stmt in &program.body {
+        let Statement::ImportDeclaration(import) = stmt else {
+            continue;
+        };
+        for spec in import.specifiers.iter().flatten() {
+            if let ImportDeclarationSpecifier::ImportNamespaceSpecifier(ns) = spec {
+                namespaces.insert(ns.local.name.to_string(), import.source.value.to_string());
+            }
+        }
+    }
+    namespaces
 }
 
 /// Collect import facts from top-level statements.
@@ -89,6 +121,8 @@ pub fn collect_import_facts(program: &Program<'_>) -> Vec<ImportFact> {
     let mut out = Vec::new();
     for stmt in &program.body {
         if let Statement::ImportDeclaration(import) = stmt {
+            let source = import.source.value.to_string();
+            let declaration = (import.span.start, import.span.end);
             if let Some(specifiers) = &import.specifiers {
                 for spec in specifiers {
                     match spec {
@@ -96,7 +130,8 @@ pub fn collect_import_facts(program: &Program<'_>) -> Vec<ImportFact> {
                             out.push(ImportFact {
                                 local: named.local.name.to_string(),
                                 imported: named.imported.name().to_string(),
-                                source: import.source.value.to_string(),
+                                source: source.clone(),
+                                declaration,
                             });
                         }
                         // `imported` is "default" for a default import, so
@@ -105,7 +140,8 @@ pub fn collect_import_facts(program: &Program<'_>) -> Vec<ImportFact> {
                             out.push(ImportFact {
                                 local: def.local.name.to_string(),
                                 imported: "default".to_string(),
-                                source: import.source.value.to_string(),
+                                source: source.clone(),
+                                declaration,
                             });
                         }
                         ImportDeclarationSpecifier::ImportNamespaceSpecifier(_) => {}
@@ -174,6 +210,143 @@ pub fn collect_export_facts(program: &Program<'_>) -> Vec<ExportFact> {
     out
 }
 
+/// Usage facts enriched with same-file and imported statics, and the bindings
+/// of extracted component chains no other module can name and this module
+/// renders only in place (see `ConfinementScan`), from one semantic analysis:
+/// a second analysis would renumber the references the first one reads.
+pub(crate) fn collect_enriched_usage(
+    program: &Program<'_>,
+    static_values: &FxHashMap<String, Value>,
+    chains: &[&ChainDescriptor],
+    exports: &[ExportFact],
+) -> (Vec<UsageFact>, BTreeSet<String>) {
+    let exported: FxHashSet<&str> = exports.iter().filter_map(|e| e.local.as_deref()).collect();
+    let candidates: Vec<&str> = chains
+        .iter()
+        .filter(|chain| {
+            chain.extractable
+                && chain.terminal != TerminalKind::AsClass
+                && !exported.contains(chain.binding.as_str())
+        })
+        .map(|chain| chain.binding.as_str())
+        .collect();
+    let scoping = (!static_values.is_empty() || !candidates.is_empty())
+        .then(|| SemanticBuilder::new().build(program).semantic.into_scoping());
+    let mut collector = FactCollector {
+        facts: Vec::new(),
+        static_values,
+        scoping: scoping.as_ref().filter(|_| !static_values.is_empty()),
+        enrich: true,
+        _phantom: PhantomData,
+    };
+    collector.visit_program(program);
+    let confined = match &scoping {
+        // Direct eval can read any binding by name.
+        Some(scoping) if !scoping.root_unresolved_references().contains_key("eval") => {
+            let mut scan = ConfinementScan {
+                scoping,
+                chains,
+                candidates: candidates
+                    .into_iter()
+                    .filter_map(|binding| Some((scoping.get_root_binding(binding.into())?, binding)))
+                    .collect(),
+                escaped: FxHashSet::default(),
+                ancestors: Vec::new(),
+            };
+            scan.visit_program(program);
+            scan.candidates
+                .into_iter()
+                .filter(|(symbol, _)| !scan.escaped.contains(symbol))
+                .map(|(_, binding)| binding.to_string())
+                .collect()
+        }
+        _ => BTreeSet::new(),
+    };
+    (collector.facts, confined)
+}
+
+/// Visits every value reference to a candidate component binding. The
+/// binding stays confined only while each is the name of a JSX element
+/// rendered in place, a closing name, or the base of an extracted `.extend()`
+/// chain of this module; type positions are erased.
+struct ConfinementScan<'a, 's> {
+    scoping: &'s Scoping,
+    chains: &'s [&'s ChainDescriptor],
+    candidates: FxHashMap<SymbolId, &'s str>,
+    escaped: FxHashSet<SymbolId>,
+    ancestors: Vec<AstKind<'a>>,
+}
+
+impl<'a> Visit<'a> for ConfinementScan<'a, '_> {
+    fn enter_node(&mut self, kind: AstKind<'a>) {
+        self.ancestors.push(kind);
+    }
+
+    fn leave_node(&mut self, _kind: AstKind<'a>) {
+        self.ancestors.pop();
+    }
+
+    fn visit_identifier_reference(&mut self, ident: &IdentifierReference<'a>) {
+        let Some(reference) = ident.reference_id.get().map(|id| self.scoping.get_reference(id)) else {
+            return;
+        };
+        let Some(symbol) = reference.symbol_id() else { return };
+        let Some(binding) = self.candidates.get(&symbol) else { return };
+        if !reference.is_value() {
+            return;
+        }
+        // Not walked further, so the innermost ancestor is the parent.
+        let mut ancestors = self.ancestors.iter().rev();
+        let confined = match ancestors.next() {
+            Some(AstKind::JSXOpeningElement(_)) => rendered_in_place(ancestors.skip(1)),
+            Some(AstKind::JSXClosingElement(_)) => true,
+            Some(AstKind::StaticMemberExpression(member)) => {
+                member.property.name == "extend"
+                    && self.chains.iter().any(|chain| {
+                        chain.extractable
+                            && chain.extends_from.as_deref() == Some(*binding)
+                            && chain.span.0 <= member.span.start
+                            && member.span.end <= chain.span.1
+                    })
+            }
+            _ => false,
+        };
+        if !confined {
+            self.escaped.insert(symbol);
+        }
+    }
+}
+
+/// Whether an element, given its ancestors from the innermost out, reaches
+/// React through a host element or a fragment: no component receives it as
+/// children, a prop or a callback result, where it could clone props into it.
+/// Anything inside another element's attributes goes to that element's
+/// receiver, whatever encloses it there.
+fn rendered_in_place<'b, 'a: 'b>(
+    mut ancestors: impl Iterator<Item = &'b AstKind<'a>> + Clone,
+) -> bool {
+    if ancestors.clone().any(|kind| matches!(kind, AstKind::JSXOpeningElement(_))) {
+        return false;
+    }
+    let enclosing = ancestors.find(|kind| {
+        !matches!(
+            kind,
+            AstKind::JSXExpressionContainer(_)
+                | AstKind::ParenthesizedExpression(_)
+                | AstKind::ConditionalExpression(_)
+                | AstKind::LogicalExpression(_)
+        )
+    });
+    match enclosing {
+        Some(AstKind::JSXFragment(_)) => true,
+        Some(AstKind::JSXElement(host)) => matches!(
+            host.opening_element.name,
+            JSXElementName::Identifier(_) | JSXElementName::NamespacedName(_)
+        ),
+        _ => false,
+    }
+}
+
 struct FactCollector<'a, 's> {
     facts: Vec<UsageFact>,
     static_values: &'s FxHashMap<String, Value>,
@@ -200,6 +373,10 @@ impl<'a, 's> Visit<'a> for FactCollector<'a, 's> {
             _ => return,
         };
         let mut attrs = Vec::new();
+        let spread = elem
+            .attributes
+            .iter()
+            .any(|item| matches!(item, JSXAttributeItem::SpreadAttribute(_)));
         for attr_item in &elem.attributes {
             if let JSXAttributeItem::Attribute(attr) = attr_item {
                 let JSXAttributeName::Identifier(id) = &attr.name else {
@@ -284,7 +461,7 @@ impl<'a, 's> Visit<'a> for FactCollector<'a, 's> {
                 });
             }
         }
-        self.facts.push(UsageFact::Element { tag, attrs });
+        self.facts.push(UsageFact::Element { tag, attrs, spread });
     }
 
     fn visit_call_expression(&mut self, call: &CallExpression<'a>) {
@@ -346,21 +523,7 @@ pub fn collect_usage_facts_with_statics(
     program: &Program<'_>,
     static_values: &FxHashMap<String, Value>,
 ) -> Vec<UsageFact> {
-    let scoping = (!static_values.is_empty()).then(|| {
-        SemanticBuilder::new()
-            .build(program)
-            .semantic
-            .into_scoping()
-    });
-    let mut c = FactCollector {
-        facts: Vec::new(),
-        static_values,
-        scoping: scoping.as_ref(),
-        enrich: true,
-        _phantom: PhantomData,
-    };
-    c.visit_program(program);
-    c.facts
+    collect_enriched_usage(program, static_values, &[], &[]).0
 }
 
 fn attribute_expression<'a, 'b>(
@@ -461,7 +624,7 @@ pub fn filter_custom_prop_scan(
     let mut dynamic_results = Vec::new();
 
     for fact in facts {
-        let UsageFact::Element { tag, attrs } = fact else {
+        let UsageFact::Element { tag, attrs, .. } = fact else {
             continue;
         };
         let Some((tag_name, resolved_binding)) = resolve_tag(tag, member_expr_bindings) else {
@@ -481,8 +644,11 @@ pub fn filter_custom_prop_scan(
                 .iter()
                 .chain(attr.enumerable_values.iter())
             {
+                // Per binding: equally named custom props of two components
+                // resolve through different configs.
                 let dedup_key = format!(
-                    "{}:{}",
+                    "{}:{}:{}",
+                    binding,
                     attr.name,
                     serde_json::to_string(value).unwrap_or_else(|_| "null".to_string())
                 );
@@ -512,10 +678,45 @@ pub fn filter_custom_prop_scan(
     }
 }
 
+/// Renders that can deliver any custom prop at runtime — a `{...props}`
+/// spread or a `createElement` call — as one dynamic usage per custom prop.
+pub fn uncertain_custom_renders(
+    facts: &[UsageFact],
+    component_props: &FxHashMap<String, FxHashSet<String>>,
+    member_expr_bindings: &FxHashMap<String, String>,
+) -> Vec<DynamicPropUsage> {
+    let mut seen = FxHashSet::default();
+    let mut usages = Vec::new();
+    for fact in facts {
+        let binding = match fact {
+            UsageFact::Element { tag, spread: true, .. } => match resolve_tag(tag, member_expr_bindings) {
+                Some((binding, _)) => binding,
+                None => continue,
+            },
+            UsageFact::CreateElement { ident: Some(name), .. } => name.as_str(),
+            UsageFact::CreateElement { member: Some(key), .. } => match member_expr_bindings.get(key) {
+                Some(binding) => binding.as_str(),
+                None => continue,
+            },
+            _ => continue,
+        };
+        for prop in component_props.get(binding).into_iter().flatten() {
+            if seen.insert((binding, prop)) {
+                usages.push(DynamicPropUsage {
+                    prop_name: prop.clone(),
+                    binding: binding.to_string(),
+                });
+            }
+        }
+    }
+    usages
+}
+
 /// Variant/state/system-prop usage scan over collected facts.
 pub fn filter_usage_scan(
     facts: &[UsageFact],
     component_props: &FxHashMap<String, FxHashSet<String>>,
+    custom_props: &FxHashMap<String, FxHashSet<String>>,
     component_configs: &FxHashMap<String, ComponentUsageConfig>,
     member_expr_bindings: &FxHashMap<String, String>,
 ) -> UsageScanResult {
@@ -524,7 +725,7 @@ pub fn filter_usage_scan(
 
     for fact in facts {
         match fact {
-            UsageFact::Element { tag, attrs } => {
+            UsageFact::Element { tag, attrs, .. } => {
                 let Some((tag_name, resolved_binding)) = resolve_tag(tag, member_expr_bindings)
                 else {
                     result.identity_uncertain = true;
@@ -542,15 +743,21 @@ pub fn filter_usage_scan(
                 result.rendered_components.insert(binding.clone());
 
                 let active_props = component_props.get(tag_name);
+                let custom = custom_props.get(tag_name);
                 let mut seen_variant_props: FxHashSet<String> = FxHashSet::default();
 
                 for attr in attrs {
                     if let Some(props) = active_props {
                         if props.contains(&attr.name) {
+                            // A custom prop's static values belong to the custom
+                            // scan; decided before de-duplication so its usage
+                            // never takes a system usage's slot.
+                            let custom_owned = custom.is_some_and(|c| c.contains(&attr.name));
                             for value in attr
                                 .static_value
                                 .iter()
                                 .chain(attr.enumerable_values.iter())
+                                .filter(|_| !custom_owned)
                             {
                                 let dedup_key = format!(
                                     "{}:{}",
@@ -737,6 +944,7 @@ mod tests {
         let filtered = filter_usage_scan(
             &facts,
             component_props,
+            &FxHashMap::default(),
             component_configs,
             member_expr_bindings,
         );
@@ -784,6 +992,7 @@ mod tests {
         filter_usage_scan(
             &facts,
             &props(&[("Box", &["p", "display", "mt"])]),
+            &FxHashMap::default(),
             &configs(&[]),
             &FxHashMap::default(),
         )
@@ -1034,6 +1243,7 @@ mod tests {
                 &FxHashMap::default(),
                 &FxHashMap::default(),
                 &FxHashMap::default(),
+                &FxHashMap::default(),
             );
             let direct = scan_jsx_usage(
                 ast.program(),
@@ -1064,6 +1274,7 @@ mod tests {
         for (label, facts) in [("raw", raw), ("enriched", enriched)] {
             let filtered = filter_usage_scan(
                 &facts,
+                &FxHashMap::default(),
                 &FxHashMap::default(),
                 &FxHashMap::default(),
                 &FxHashMap::default(),

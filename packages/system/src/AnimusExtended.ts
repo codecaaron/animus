@@ -25,6 +25,15 @@ import type {
   AnimusWrappedComponent,
 } from './types/component';
 
+/**
+ * The inherited custom props without those `Own` redeclares, then `Own`.
+ * Key remapping keeps the known keys beside the extension's index signature,
+ * which `Omit` would collapse.
+ */
+type Redeclared<Inherited, Own> = {
+  [K in keyof Inherited as K extends keyof Own ? never : K]: Inherited[K];
+} & Own;
+
 export class AnimusExtendedWithAll<
   PropRegistry extends Record<string, Prop>,
   GroupRegistry extends Record<string, (keyof PropRegistry)[]>,
@@ -184,7 +193,7 @@ class AnimusExtendedWithSystem<
       Variants,
       States,
       ActiveGroups,
-      NewCustomProps
+      Redeclared<CustomProps, NewCustomProps>
     >(
       this.propRegistry,
       this.groupRegistry,
@@ -192,7 +201,7 @@ class AnimusExtendedWithSystem<
       this.variants,
       this.statesConfig,
       this.activeGroups,
-      deepMerge({} as any, config),
+      { ...this.custom, ...config },
       this.compounds
     );
   }

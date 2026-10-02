@@ -37,7 +37,8 @@ Options:
                       an explicit exclude: [] in the config file means none)
   --mode <m>          'development' | 'production' (default: production)
   --targets <query>   Browserslist query for CSS lowering
-  --strict            Fail on inputs that could not be read or resolved
+  --strict            Fail on inputs that could not be read or resolved,
+                      and on classified unsupported Animus declarations
   --fail-on-degraded  watch only: exit 3 instead of running with unwatched
                       roots (degradation is otherwise reported and tolerated)
   --verbose           Verbose logging (stderr)

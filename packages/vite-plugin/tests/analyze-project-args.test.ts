@@ -2,7 +2,7 @@ import { buildAnalyzeProjectArgs } from '@animus-ui/extract/pipeline';
 import { describe, expect, test } from 'vitest';
 
 describe('Vite analyzeProject argument construction', () => {
-  test('pins all 18 production NAPI slots', () => {
+  test('pins all 19 production NAPI slots', () => {
     expect(
       buildAnalyzeProjectArgs({
         filesJson: 'vite-production-files',
@@ -22,6 +22,7 @@ describe('Vite analyzeProject argument construction', () => {
         conditionAliasesJson: 'vite-production-condition-aliases',
         externalDirsJson: 'vite-production-external-dirs',
         transformSourcesJson: 'vite-production-transform-sources',
+        transformProvenanceJson: 'vite-production-transform-provenance',
       })
     ).toEqual([
       'vite-production-files',
@@ -42,10 +43,11 @@ describe('Vite analyzeProject argument construction', () => {
       'vite-production-condition-aliases',
       'vite-production-external-dirs',
       'vite-production-transform-sources',
+      'vite-production-transform-provenance',
     ]);
   });
 
-  test('pins all 18 dev NAPI slots', () => {
+  test('pins all 19 dev NAPI slots', () => {
     expect(
       buildAnalyzeProjectArgs({
         filesJson: 'vite-dev-files',
@@ -81,6 +83,7 @@ describe('Vite analyzeProject argument construction', () => {
       'vite-dev-global-styles',
       'vite-dev-path-aliases',
       'vite-dev-keyframes',
+      null,
       null,
       null,
       null,

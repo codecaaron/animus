@@ -12,7 +12,7 @@ export const Base = ds
     prop: 'size',
     variants: { sm: { p: 4 }, lg: { p: 12 } },
   })
-  .compound({ tone: 'bold', size: 'lg' }, { m: 10 })
+  .compound({ tone: 'bold', size: 'lg' }, { margin: 10 })
   .compound({ tone: 'muted', size: 'sm' }, { m: 2 })
   .asElement('button');
 

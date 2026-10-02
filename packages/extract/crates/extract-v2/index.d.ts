@@ -26,6 +26,7 @@ export interface EngineOptions {
   configJson?: string
   groupRegistryJson?: string
   transformSourcesJson?: string
+  transformProvenanceJson?: string
   selectorAliasesJson?: string
   conditionAliasesJson?: string
   globalStyleBlocksJson?: string
@@ -63,10 +64,17 @@ export interface NapiSystemConfig {
    */
   conditionAliases?: string
   /**
-   * Transform source texts (`{ transformName: sourceText }` JSON): the
-   * only channel by which transforms shipped in a package reach evaluation.
+   * Transform source texts by definition key (`{ transformId: sourceText }`
+   * JSON): the only channel by which configured transforms reach evaluation.
    */
   transformSources?: string
+  /**
+   * Host-binding evidence by the same keys (`{ transformId: { hostGlobals:
+   * [names] } | { rejection: reason } }` JSON), from each configured
+   * transform's authored callable; pass it as `transformProvenanceJson`.
+   * A reason completes "its callable …".
+   */
+  transformProvenance?: string
   globalStyleBlocks?: string
   keyframesBlocks?: string
   /**

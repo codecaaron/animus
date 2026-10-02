@@ -300,12 +300,14 @@ describe('serializeInstance contract', () => {
         property: 'margin',
         scale: 'space',
         transform: 'px',
+        transformId: expect.any(String),
       },
       size: {
         currentVar: '--size',
         properties: ['width', 'height'],
         property: 'width',
         scale: { sm: '4px', lg: '8px' },
+        strict: true,
       },
       ratio: { property: 'aspectRatio' },
     });
@@ -322,10 +324,11 @@ describe('serializeInstance contract', () => {
   it('registers named transforms as live, callable functions', () => {
     const config = buildFeatureSystem();
 
-    expect(Object.keys(config.transforms)).toEqual(['px']);
-    expect(config.transforms.px).toEqual(expect.any(Function));
-    expect(config.transforms.px(4)).toBe('4px');
-    expect(config.transforms.px('auto')).toBe('auto');
+    const { transformId } = JSON.parse(config.propConfig).m;
+    expect(Object.keys(config.transforms)).toEqual([transformId]);
+    expect(config.transforms[transformId]).toEqual(expect.any(Function));
+    expect(config.transforms[transformId](4)).toBe('4px');
+    expect(config.transforms[transformId]('auto')).toBe('auto');
   });
 
   it('serializes the full built-in selector alias map', () => {
@@ -358,8 +361,8 @@ describe('serializeInstance contract', () => {
 
     expect(normalized).toEqual({
       propConfig: {
-        m: { property: 'margin', scale: 'space' },
-        p: { property: 'padding', scale: 'space' },
+        m: { property: 'margin', scale: 'space', strict: true },
+        p: { property: 'padding', scale: 'space', strict: true },
       },
       groupRegistry: {
         space: ['m', 'p'],

@@ -22,6 +22,7 @@ import {
   resetAnimusGlobals,
   SYSTEM_CONFIG,
 } from '../../extract/tests/session/session-fixtures';
+import { parserStoppingAt } from '../../extract/tests/source-ingestion-fixtures';
 import { ANIMUS_TURBOPACK_RULE_GLOB } from '../src/turbopack-config';
 import { bindTurbopackWatchDeathReport, withAnimus } from '../src/with-animus';
 
@@ -37,6 +38,7 @@ import type {
 } from 'next/dist/server/config-shared';
 
 const mocks = vi.hoisted(() => ({
+  extractFacts: vi.fn<(filesJson: string) => string>(),
   loadSystemModule: vi.fn(),
   analyzeProject: vi.fn(),
   clearAnalysisCache: vi.fn(),
@@ -45,7 +47,7 @@ const mocks = vi.hoisted(() => ({
 import { setEngineApiOverride } from '../../extract/session/singleton';
 
 setEngineApiOverride(() => ({
-  extractFacts: () => '{"files":{},"parseCount":0}',
+  extractFacts: mocks.extractFacts,
   loadSystemModule: mocks.loadSystemModule,
   analyzeProject: mocks.analyzeProject,
   clearAnalysisCache: mocks.clearAnalysisCache,
@@ -149,6 +151,9 @@ function animusLoaderOptions(
 beforeEach(() => {
   restoreGlobals = resetAnimusGlobals();
   savedCwd = process.cwd();
+  mocks.extractFacts
+    .mockReset()
+    .mockImplementation(() => '{"files":{},"parseCount":0}');
   mocks.loadSystemModule.mockReset().mockReturnValue({ ...SYSTEM_CONFIG });
   mocks.analyzeProject.mockReset().mockReturnValue(MANIFEST);
   mocks.clearAnalysisCache.mockReset();
@@ -281,6 +286,30 @@ describe('withAnimus Turbopack wiring', () => {
         },
       })
     ).rejects.toThrow('already configured');
+  });
+
+  test('an aborted parse rejects the config; a fresh invocation after repair resolves', async () => {
+    const root = createProject();
+    process.chdir(root);
+    const button = join(root, 'src', 'Button.tsx');
+    writeFileSync(button, BUTTON_SOURCE.replace('.styles(', '.styles(('));
+    mocks.extractFacts.mockImplementation(parserStoppingAt('(('));
+    const options = {
+      system: './src/system.ts',
+      unstable_turbopack: { mode: 'on' as const },
+    };
+
+    // Config is returned only after a complete extraction, so a startup
+    // rejection needs the source repaired and Next started again.
+    await expect(withAnimus(options)({})).rejects.toThrow(
+      /analysis not published: .*src\/Button\.tsx/
+    );
+
+    writeFileSync(button, BUTTON_SOURCE);
+    const config = await withAnimus(options)({});
+    expect(
+      turbopackOptions(config).rules?.[ANIMUS_TURBOPACK_RULE_GLOB]
+    ).toBeDefined();
   });
 });
 

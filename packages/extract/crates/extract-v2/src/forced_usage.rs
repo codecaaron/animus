@@ -13,7 +13,7 @@ use crate::jsx_scan::{
 use crate::reconcile::{EliminatedDetail, UsageLedger};
 
 /// Pseudo-file attributed to staticCss diagnostics.
-const STATIC_CSS_SOURCE: &str = "staticCss";
+pub(crate) const STATIC_CSS_SOURCE: &str = "staticCss";
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase", default)]

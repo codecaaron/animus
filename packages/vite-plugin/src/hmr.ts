@@ -15,7 +15,7 @@ import {
 } from './context';
 import { invalidateFileModules } from './module-invalidation';
 import { reconcileSourceCorpus } from './rediscovery';
-import { applyDevBridgeImport } from './transform';
+import { applyDevBridgeImport, extendingFiles } from './transform';
 
 import type { PluginContext } from './context';
 import type { HotUpdateResult } from './hot-update-events';
@@ -198,42 +198,24 @@ async function analyzeChangedFile(
 
   const prevPlans = snapshotFilePlans(ctx.storedManifest);
 
-  const previousAnalysisPaths = ctx.corpus.published.ownership[relPath]
-    ?.analysisPaths ?? [relPath];
-  const directComponentIds: string[] = previousAnalysisPaths.flatMap(
-    (analysisPath) => ctx.storedManifest?.files[analysisPath] ?? []
-  );
-  const invalidatedIds = new Set(directComponentIds);
-  const queue = [...directComponentIds];
-  while (queue.length > 0) {
-    const parentId = queue.shift()!;
-    const children = ctx.reverseProvenance[parentId];
-    if (children) {
-      for (const childId of children) {
-        if (!invalidatedIds.has(childId)) {
-          invalidatedIds.add(childId);
-          queue.push(childId);
-        }
-      }
-    }
-  }
-
-  if (ctx.verbose && invalidatedIds.size > directComponentIds.length) {
-    ctx.log(
-      `HMR: ${directComponentIds.length} direct + ${invalidatedIds.size - directComponentIds.length} transitive components invalidated`
-    );
-  }
-
   const analysisStart = performance.now();
   const systemPropsBefore = systemPropsModuleSource(ctx);
-  let analysisOk: boolean;
+  let analysis: Awaited<ReturnType<PluginContext['analyzeIngested']>>;
   try {
-    analysisOk = (await ctx.analyzeIngested()).ok;
+    analysis = await ctx.analyzeIngested();
   } catch (e) {
     restoreEntry();
     throw e;
   }
-  if (!analysisOk) {
+  if (!analysis.ok) {
+    // An aborted parse holds publication and keeps this edit for the repair
+    // to publish. Only broken bytes reach Vite, which reports them; a held
+    // valid edit delivers nothing until the repair re-delivers it.
+    if (analysis.abortedOriginals) {
+      return analysis.abortedOriginals.has(relPath)
+        ? { kind: 'ignored' }
+        : { kind: 'unchanged' };
+    }
     restoreEntry();
     return { kind: 'ignored' };
   }
@@ -250,17 +232,32 @@ async function analyzeChangedFile(
   const systemPropsChanged = systemPropsModuleSource(ctx) !== systemPropsBefore;
   const analysisMs = Math.round(performance.now() - analysisStart);
 
+  // Ending a hold re-delivers the edited module too: the client may hold a
+  // failed request for it, or none after a reload during the failure.
+  const nativeEntry = ctx.corpus.published.analysisEntries.get(relPath);
+  const presentationOnly =
+    nativeEntry && !analysis.endedHold
+      ? isPresentationOnlyEdit(ctx, relPath, nativeEntry.source)
+      : false;
+
+  // An extension reads the callbacks it inherits from its parent's module as
+  // it runs, so every module re-delivered here re-delivers its extensions.
+  const redelivered = presentationOnly ? [] : [relPath, ...analysis.redeliver];
   // Filtered by resolved path, not cache key — MDX plans carry the
   // `.tsx`-suffixed key, and the changed file is already in the module list.
-  const staleDefinitionFiles = diffFilePlans(
-    prevPlans,
-    snapshotFilePlans(ctx.storedManifest)
-  ).filter((defFile) => resolve(ctx.rootDir, defFile) !== absFile);
-
-  const nativeEntry = ctx.corpus.published.analysisEntries.get(relPath);
-  const presentationOnly = nativeEntry
-    ? isPresentationOnlyEdit(ctx, relPath, nativeEntry.source)
-    : false;
+  const staleDefinitionFiles = [
+    ...new Set([
+      ...diffFilePlans(prevPlans, snapshotFilePlans(ctx.storedManifest)),
+      ...analysis.redeliver,
+      ...extendingFiles(
+        ctx,
+        redelivered.flatMap(
+          (path) =>
+            ctx.corpus.published.ownership[path]?.analysisPaths ?? [path]
+        )
+      ),
+    ]),
+  ].filter((defFile) => resolve(ctx.rootDir, defFile) !== absFile);
 
   const hmrMs = Math.round(performance.now() - hmrStart);
   ctx.log(
@@ -357,7 +354,7 @@ function invalidateStaleModules(
       graph.getModuleById(absDefPath) ??
       graph.getModulesByFile(absDefPath)?.values().next().value;
     if (defModule) {
-      ctx.log(`HMR invalidate: ${defFile} (replacement changed)`);
+      ctx.log(`HMR invalidate: ${defFile} (re-delivered)`);
       graph.invalidateModule(defModule);
       modulesToUpdate.push(defModule);
     }

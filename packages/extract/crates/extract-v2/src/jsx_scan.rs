@@ -309,9 +309,12 @@ mod tests {
             component_props,
         );
         assert_eq!(
-            usages.len(),
-            1,
-            "same (prop, value) deduped across components"
+            usages
+                .iter()
+                .map(|usage| usage.binding.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Box", "Text"],
+            "same (prop, value) kept per component, deduped within one"
         );
     }
 

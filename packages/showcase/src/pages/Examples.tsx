@@ -11,7 +11,7 @@ import { Heading } from '../components/docs/Heading';
 import { Card } from '../components/surfaces/Card';
 import { SyntaxBlock } from '../components/surfaces/SyntaxBlock';
 import { Tooltip } from '../components/surfaces/Tooltip';
-import { ds } from '../ds';
+import { ds, specimenMotion } from '../ds';
 
 const PageWrapper = ds
   .styles({
@@ -81,6 +81,32 @@ const SizeRow = ds
     display: 'flex',
     gap: 12,
     alignItems: 'center',
+  })
+  .asElement('div');
+
+const TooltipSpecimen = ds
+  .styles({
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'flex-start',
+    gap: 12,
+    p: 16,
+    border: 1,
+    borderColor: 'border',
+    _wideViewport: {
+      flexDirection: 'row',
+      alignItems: 'center',
+    },
+    _emphasized: {
+      borderColor: 'primary',
+      animationName: specimenMotion.specimenGlow,
+      animationDuration: '2.4s',
+      animationTimingFunction: 'ease-in-out',
+      animationIterationCount: 'infinite',
+      _motionReduce: {
+        animationName: 'none',
+      },
+    },
   })
   .asElement('div');
 
@@ -238,19 +264,72 @@ const Card = compose(
   <Card.Footer><Button>Action</Button></Card.Footer>
 </Card.Root>`;
 
-const TOOLTIP_CODE = `// context: true — shared variants cross portal boundaries
-const Tooltip = compose(
+const TOOLTIP_CODE = `import { composeWithContext } from '@animus-ui/system/compose-with-context';
+
+// Same slots and shared config as compose(); React context
+// carries the shared \`size\` to slots outside Root's DOM subtree.
+const Tooltip = composeWithContext(
   { Root: TooltipRoot, Content: TooltipContent },
-  { shared: { size: true }, context: true }
+  { shared: { size: true }, name: 'Tooltip' }
 );
 
 // Content renders via createPortal into document.body.
-// CSS descendant selectors can't reach it, but React
-// context carries the shared \`size\` prop through.
+// No size prop on Content — it reads the value set on Root.
 <Tooltip.Root size="lg">
   <span>hover target</span>
   {createPortal(<Tooltip.Content>portaled</Tooltip.Content>, document.body)}
 </Tooltip.Root>`;
+
+const SPECIMEN_CODE = `// ds.ts — named spacing, custom aliases, one registered resource
+const theme = createTheme()
+  .addScale({ name: 'space', values: {
+    /* …numeric keys… */
+    'compact-x': '0.5rem', 'compact-y': '0.25rem',
+    'comfortable-x': '1rem', 'comfortable-y': '0.5rem',
+  } })
+  .build();
+const bundle = createSystem()
+  /* …groups… */
+  .addSelectors({ _emphasized: '&[data-emphasis]' })
+  .addConditions({ _wideViewport: '@media (min-width: 768px)' })
+  .build();
+export const specimenMotion = bundle.createKeyframes({ specimenGlow: { /* … */ } });
+export const ds = bundle
+  .registerKeyframes({ animations, specimenMotion })
+  /* …global styles… */
+  .seal();
+
+declare module '@animus-ui/system' {
+  interface Theme extends ShowcaseTheme {}
+  interface Selectors extends Record<SelectorsOf<typeof bundle.system>, true> {}
+  interface Conditions extends Record<ConditionsOf<typeof bundle.system>, true> {}
+}
+
+// Consumers author against the published vocabulary:
+// 'compct-x' or _emphasised is a type error.
+const TooltipContent = ds.styles({ /* … */ }).variant({
+  prop: 'size',
+  variants: {
+    sm: { px: 'compact-x', py: 'compact-y', fontSize: 11 },
+    lg: { px: 'comfortable-x', py: 'comfortable-y', fontSize: 14 },
+  },
+}).asElement('div');
+
+const TooltipSpecimen = ds.styles({
+  flexDirection: 'column',
+  _wideViewport: { flexDirection: 'row' },
+  _emphasized: {
+    borderColor: 'primary',
+    animationName: specimenMotion.specimenGlow,
+    animationDuration: '2.4s',
+    animationTimingFunction: 'ease-in-out',
+    animationIterationCount: 'infinite',
+    _motionReduce: { animationName: 'none' },
+  },
+}).asElement('div');
+
+const emphasis = true;
+<TooltipSpecimen data-emphasis={emphasis || undefined}>…</TooltipSpecimen>`;
 
 const AS_CHILD_CODE = `// asChild — type-safe polymorphism via child delegation
 const Button = ds.styles({ ... }).variant({
@@ -481,6 +560,90 @@ function ComposeSection() {
 
       <CodeSection>
         <SyntaxBlock language="tsx">{COMPOSE_CODE}</SyntaxBlock>
+      </CodeSection>
+    </Section>
+  );
+}
+
+const TOOLTIP_SIZES = ['sm', 'lg'] as const;
+
+function PortalSection() {
+  const [size, setSize] = useState<(typeof TOOLTIP_SIZES)[number]>('lg');
+  const [emphasis, setEmphasis] = useState(false);
+
+  return (
+    <Section>
+      <Heading as="h2" id="portal-composition">
+        Portal Composition
+      </Heading>
+      <Intro>
+        When a composed slot renders through a portal (outside Root&apos;s DOM
+        subtree), CSS descendant selectors can&apos;t reach it.{' '}
+        <code>composeWithContext()</code> from{' '}
+        <code>@animus-ui/system/compose-with-context</code> takes the same slots
+        and shared config as <code>compose()</code> and carries shared variant
+        values through React context, across the portal boundary. Pick a size:
+        the value set on Root styles the portaled Content. Context carries
+        variant values only — Content inherits theme variables from the
+        document, not from the trigger. The extraction pipeline still emits CSS
+        rules for in-DOM children and automatically injects{' '}
+        <code>&apos;use client&apos;</code> when needed.
+      </Intro>
+      <Intro>
+        The specimen is configured through the system. Named theme spacing (
+        <code>compact-*</code>, <code>comfortable-*</code>) drives both sizes.
+        The <code>_emphasized</code> selector alias answers to a real{' '}
+        <code>data-emphasis</code> attribute, and the <code>_wideViewport</code>{' '}
+        condition alias lays the triggers out in a row from 768px up. The glow
+        is a keyframes resource registered once with the system. The published
+        Theme and alias registries turn misspelled aliases and misspelled
+        spacing or color tokens into type errors; props that also accept raw CSS
+        values, such as the border family, are not constrained.
+      </Intro>
+
+      <TabBar>
+        {TOOLTIP_SIZES.map((option) => (
+          <Button
+            key={option}
+            color="primary"
+            kind={size === option ? 'subtle' : 'ghost'}
+            size="sm"
+            aria-pressed={size === option}
+            onClick={() => setSize(option)}
+          >
+            {option}
+          </Button>
+        ))}
+      </TabBar>
+
+      <TabBar>
+        <Button
+          color="primary"
+          kind={emphasis ? 'subtle' : 'ghost'}
+          size="sm"
+          aria-pressed={emphasis}
+          onClick={() => setEmphasis((on) => !on)}
+        >
+          emphasis
+        </Button>
+      </TabBar>
+
+      <TooltipSpecimen data-emphasis={emphasis || undefined}>
+        <Tooltip content="Default — no size prop, sm styling">
+          <Button color="secondary" kind="subtle" size="sm">
+            Hover (default)
+          </Button>
+        </Tooltip>
+        <Tooltip content={`Selected size — ${size}`} size={size}>
+          <Button color="primary" kind="outline" size="sm">
+            Hover ({size})
+          </Button>
+        </Tooltip>
+      </TooltipSpecimen>
+
+      <CodeSection>
+        <SyntaxBlock language="tsx">{TOOLTIP_CODE}</SyntaxBlock>
+        <SyntaxBlock language="tsx">{SPECIMEN_CODE}</SyntaxBlock>
       </CodeSection>
     </Section>
   );
@@ -781,47 +944,7 @@ export default function Examples() {
 
       <ComposeSection />
 
-      <Section>
-        <Heading as="h2" id="portal-composition">
-          Portal Composition
-        </Heading>
-        <Intro>
-          When a composed slot renders through a portal (outside Root&apos;s DOM
-          subtree), CSS descendant selectors can&apos;t reach it. Pass{' '}
-          <code>context: true</code> to compose() — shared variant props
-          propagate via React context, crossing the portal boundary. The
-          extraction pipeline still emits CSS rules for in-DOM children and
-          automatically injects <code>&apos;use client&apos;</code> when needed.
-        </Intro>
-
-        <SizeRow>
-          <Tooltip content="Small tooltip — sm size" size="sm">
-            <Button color="primary" kind="outline" size="sm">
-              Hover (sm)
-            </Button>
-          </Tooltip>
-          <Tooltip
-            content="Large tooltip — lg size with more padding"
-            size="lg"
-          >
-            <Button color="primary" kind="outline" size="sm">
-              Hover (lg)
-            </Button>
-          </Tooltip>
-          <Tooltip
-            content="Size inherited via context through portal"
-            size="lg"
-          >
-            <Button color="secondary" kind="subtle" size="sm">
-              Portal proof
-            </Button>
-          </Tooltip>
-        </SizeRow>
-
-        <CodeSection>
-          <SyntaxBlock language="tsx">{TOOLTIP_CODE}</SyntaxBlock>
-        </CodeSection>
-      </Section>
+      <PortalSection />
 
       <Section>
         <Heading as="h2" id="as-child-polymorphism">

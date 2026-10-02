@@ -42,9 +42,15 @@ pub struct ReplacementPayload {
     /// prop → value key → utility class.
     pub custom_prop_class_map: Option<HashMap<String, HashMap<String, String>>>,
     pub custom_dynamic_config: Option<HashMap<String, DynamicPropMeta>>,
+    /// Sorted callback props whose `custom_prop_class_map` keys are typed
+    /// value keys.
+    pub typed_custom_props: Vec<String>,
     /// Post-merge chain config for extension children, folding in the
     /// parent's variant/state/compound config. None for non-extensions.
     pub merged_config: Option<MergedChainConfig>,
+    /// The extension inherits callbacks from its parent but delivers none,
+    /// so its replacement no longer names the parent.
+    pub drops_parent_reference: bool,
 }
 
 #[derive(Debug, Clone, Default)]

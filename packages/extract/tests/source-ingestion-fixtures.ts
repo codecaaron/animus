@@ -1,11 +1,72 @@
 import { contentHash } from '../pipeline/content-hash';
 import {
   createSourceIngestor,
+  parseFilesJson,
+  type ExtractFactsResult,
   type RawSourceEntry,
   type SourceIngestionDiagnostic,
   type SourceIngestor,
+  type SourceIngestionOptions,
   type SourceIngestorHost,
 } from '../pipeline/source-ingestion';
+
+export type FactFile = ExtractFactsResult['files'][string];
+
+export function emptyFacts(path: string): FactFile {
+  return {
+    path,
+    chains: [],
+    imports: [],
+    exports: [],
+    parseDiagnostics: [],
+  };
+}
+
+/** Facts for a file the parser stopped in before its end. */
+export function abortedFacts(path: string): FactFile {
+  return {
+    ...emptyFacts(path),
+    parseDiagnostics: ['Unexpected token'],
+    parsePanicked: true,
+  };
+}
+
+/** A native parser that stops wherever `marker` appears in a source. */
+export function parserStoppingAt(
+  marker: string
+): (filesJson: string) => string {
+  return (filesJson) => {
+    const entries = parseFilesJson(filesJson, 'parserStoppingAt test double');
+    return JSON.stringify({
+      files: Object.fromEntries(
+        entries.map(({ path, source }) => [
+          path,
+          source.includes(marker) ? abortedFacts(path) : emptyFacts(path),
+        ])
+      ),
+      parseCount: entries.length,
+    } satisfies ExtractFactsResult);
+  };
+}
+
+export function factsExtractor(
+  overrides: Record<string, FactFile>,
+  calls: Array<Array<{ path: string; source: string; hash?: string }>> = []
+): SourceIngestionOptions['extractFacts'] {
+  return (filesJson) => {
+    const entries = parseFilesJson(filesJson, 'extractFacts test double');
+    calls.push(entries);
+    return JSON.stringify({
+      files: Object.fromEntries(
+        entries.map((entry) => [
+          entry.path,
+          overrides[entry.path] ?? emptyFacts(entry.path),
+        ])
+      ),
+      parseCount: entries.length,
+    } satisfies ExtractFactsResult);
+  };
+}
 
 export function makeHost(
   options: {

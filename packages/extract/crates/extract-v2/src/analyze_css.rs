@@ -8,15 +8,16 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use serde_json::Value;
 
 use crate::chain_merge::{
-    effective_variant_configs, inherit_variant_stages, topological_sort, ProvenanceNode,
+    authors_variant_entry, effective_variant_configs, inherit_custom_configs,
+    inherit_variant_stages, topological_sort, ProvenanceNode,
     TopoResult, VariantConfigs,
 };
 use crate::chain_walk::{MemberParentExtension, TerminalKind};
 use crate::css::{
     build_variable_slot_entries, camel_to_kebab, generate_composed_compound_css,
-    generate_composed_variant_css, generate_css_sheets_ordered, generate_custom_prop_css,
-    generate_utility_css, layer_name, wrap_layer, BreakpointMap, ComponentCss, ComposeFamilyRef,
-    CompoundConditionMap, CssFragmentStore, CssSheets, UtilityInput, VariantCss,
+    generate_composed_variant_css, generate_css_sheets_ordered, layer_name,
+    resolve_custom_prop_classes, resolve_utility_classes, wrap_layer, BreakpointMap, ComponentCss, ComposeFamilyRef, CompoundConditionMap,
+    CssFragmentStore, CssSheets, UtilityInput, VariantCss,
 };
 use crate::dynamic_meta::DynamicPropMeta;
 use crate::evaluator::{EvalError, TransformEvaluator};
@@ -28,9 +29,11 @@ use crate::pipeline::process_chain_facts;
 use crate::reconcile::{build_ledger, identify_prospective_eliminations, reconcile, VariantConfigMap};
 use crate::theme::{
     ConditionAliasesMap, ContextualVarsMap, CssDeclaration, FlatTheme, PropConfigMap,
-    ResolveContext, ResolvedStyles, SelectorAliasesMap, TransformFailureSink, VariableMap,
+    ResolveContext, ResolvedStyles, SelectorAliasesMap, StrictTokenMiss, StrictTokenMissSink,
+    TransformFailure, TransformFailureSink, VariableMap, extracts_callback_value, strict_token_miss_of,
 };
-use crate::usage_facts::UsageResidueRecord;
+use crate::transforms::CallbackDefinition;
+use crate::usage_facts::{is_animus_system_specifier, TagFact, UsageFact, UsageResidueRecord};
 
 type ComponentPropSetMap = FxHashMap<String, FxHashSet<String>>;
 
@@ -86,9 +89,12 @@ pub struct CssInputs {
     pub static_css: Option<crate::forced_usage::StaticCssConfig>,
     /// Directory prefixes, relative to rootDir, of external packages.
     pub external_dirs: Vec<String>,
-    /// `{ transformName: sourceText }` for package-shipped transforms the
-    /// parser cannot see; project-file `createTransform()` wins on collision.
+    /// `{ definitionKey: sourceText }` for the loaded system's configured
+    /// transforms, keyed as its props' `transformId` (or, for a system that
+    /// predates identities, their name).
     pub transform_sources: FxHashMap<String, String>,
+    /// The loader's host-binding evidence for those sources.
+    pub transform_provenance: crate::transforms::TransformProvenance,
     pub dev_mode: bool,
 }
 
@@ -156,11 +162,13 @@ impl CssInputs {
                 }
             }
         };
+        let mut config = parse("configJson", config_json)?;
+        crate::theme::key_unidentified_transforms(&mut config);
         Ok(CssInputs {
             theme: parse("themeJson", theme_json)?,
             variable_map: parse("variableMapJson", variable_map_json)?,
             contextual_vars: parse("contextualVarsJson", contextual_vars_json)?,
-            config: parse("configJson", config_json)?,
+            config,
             group_registry: parse("groupRegistryJson", group_registry_json)?,
             selector_aliases: parse("selectorAliasesJson", selector_aliases_json)?,
             condition_aliases: parse("conditionAliasesJson", condition_aliases_json)?,
@@ -173,6 +181,7 @@ impl CssInputs {
             path_aliases,
             static_css,
             transform_sources: FxHashMap::default(),
+            transform_provenance: Default::default(),
             external_dirs: parse("externalDirsJson", external_dirs_json)?,
             dev_mode,
         })
@@ -230,11 +239,64 @@ pub(crate) fn diagnostic_code_from_message(message: &str) -> Option<String> {
         .then(|| code.to_string())
 }
 
+const COMPOSE_UNRESOLVABLE_SLOT: &str = "animus.compose.unresolvable-slot";
+
+/// Source-proven unsupported Animus declarations. Each code is `error`
+/// severity: a warning by default, fatal only under explicit strictness.
+const UNSUPPORTED_MEMBER_PARENT: &str = "animus.extension.unsupported-member-parent";
+const UNSUPPORTED_EXTEND_ARGUMENTS: &str = "animus.extension.unsupported-arguments";
+const UNSUPPORTED_VARIANT_CONFIG_REFERENCE: &str = "animus.variant.unsupported-config-reference";
+const STAGE_EVALUATION_FAILED: &str = "animus.chain.stage-evaluation-failed";
+const UNSUPPORTED_CHAIN_METHOD: &str = "animus.chain.unsupported-method";
+const UNSUPPORTED_TERMINAL_TARGET: &str = "animus.chain.unsupported-terminal-target";
+const UNSUPPORTED_TRANSFORM_REFERENCE: &str = "animus.props.unsupported-transform-reference";
+const UNSUPPORTED_PROPS_CONFIG: &str = "animus.props.unsupported-config";
+const UNSUPPORTED_DEFAULT_EXPORT: &str = "animus.chain.unsupported-default-export";
+const UNSUPPORTED_NAMESPACE_ROOT: &str = "animus.chain.unsupported-namespace-root";
+/// A configured transform rejected before registration loses its meaning
+/// the same way, so it shares the optional-strict policy.
+const CONFIGURED_TRANSFORM_REJECTED: &str = "animus.transform.configured-rejected";
+/// A value missing from a strict, populated scale is omitted rather than
+/// applied raw; the author meant a token the scale does not have.
+const STRICT_TOKEN_MISS: &str = "animus.props.strict-token-miss";
+
 pub(crate) fn diagnostic_severity_for_code(code: &str) -> &'static str {
-    if code == crate::eval::SELECTOR_UNSUPPORTED_SUBJECT {
-        "error"
-    } else {
-        "warn"
+    match code {
+        crate::eval::SELECTOR_UNSUPPORTED_SUBJECT
+        | COMPOSE_UNRESOLVABLE_SLOT
+        | UNSUPPORTED_MEMBER_PARENT
+        | UNSUPPORTED_EXTEND_ARGUMENTS
+        | UNSUPPORTED_VARIANT_CONFIG_REFERENCE
+        | STAGE_EVALUATION_FAILED
+        | UNSUPPORTED_CHAIN_METHOD
+        | UNSUPPORTED_TERMINAL_TARGET
+        | UNSUPPORTED_TRANSFORM_REFERENCE
+        | UNSUPPORTED_PROPS_CONFIG
+        | UNSUPPORTED_DEFAULT_EXPORT
+        | UNSUPPORTED_NAMESPACE_ROOT
+        | CONFIGURED_TRANSFORM_REJECTED
+        | STRICT_TOKEN_MISS => "error",
+        _ => "warn",
+    }
+}
+
+/// A diagnostic whose severity is the one its `code` owns; uncoded
+/// diagnostics carry none.
+fn diagnostic(
+    file: &str,
+    component: &str,
+    kind: &str,
+    message: String,
+    code: Option<&str>,
+) -> CssDiagnostic {
+    CssDiagnostic {
+        token: None,
+        file: file.to_string(),
+        component: component.to_string(),
+        kind: kind.to_string(),
+        message,
+        code: code.map(str::to_string),
+        severity: code.map(|c| diagnostic_severity_for_code(c).to_string()),
     }
 }
 
@@ -256,6 +318,10 @@ pub struct CssOutput {
     /// file path → the component ids defined there.
     pub files_map: BTreeMap<String, Vec<String>>,
     pub usage_residue: Vec<UsageResidueRecord>,
+    /// The loaded system's configured transform sources that passed
+    /// admission and registered, by definition key: the runtime registry's
+    /// only input.
+    pub admitted_transforms: BTreeMap<String, String>,
 }
 
 pub fn extract_breakpoints(theme: &FlatTheme) -> BreakpointMap {
@@ -413,9 +479,20 @@ fn resolve_declaration(
     let Some(imp) = ff.imports.iter().find(|i| i.local == name) else {
         return Some((file_path.to_string(), name.to_string(), true));
     };
+    resolve_export(file_path, &imp.source, &imp.imported, files, inputs)
+}
 
-    let f = resolve_import_source(file_path, &imp.source, files, inputs)?;
-    let (pf, pn) = follow_reexports(f, imp.imported.clone(), files, inputs);
+/// The declaration `imported` from `specifier` lands on, through analyzed
+/// re-exports, and whether that file declares it locally.
+fn resolve_export(
+    file_path: &str,
+    specifier: &str,
+    imported: &str,
+    files: &BTreeMap<String, FileFacts>,
+    inputs: &CssInputs,
+) -> Option<(String, String, bool)> {
+    let f = resolve_import_source(file_path, specifier, files, inputs)?;
+    let (pf, pn) = follow_reexports(f, imported.to_string(), files, inputs);
     let landing = files.get(&pf);
 
     // Component ids key on the DECLARATOR, not the exported name, so an
@@ -453,10 +530,6 @@ fn resolve_extension_parent(
         Some((file, binding, false)) => Ok(format!("{}::{}", file, binding)),
         Some((file, binding, true)) => classify_parent(files, &file, &binding, extends_binding),
     }
-}
-
-fn is_animus_system_specifier(spec: &str) -> bool {
-    spec == "@animus-ui/system" || spec.starts_with("@animus-ui/system/")
 }
 
 /// Whether `name` in `file` is built from an `@animus-ui/system` import,
@@ -546,12 +619,11 @@ fn unsupported_member_parent_bail(
     extension: &MemberParentExtension,
     (component_file, component): (String, String),
 ) -> CssDiagnostic {
-    CssDiagnostic {
-        token: None,
-        file: file.to_string(),
-        component: extension.binding.clone(),
-        kind: "bail".to_string(),
-        message: format!(
+    diagnostic(
+        file,
+        &extension.binding,
+        "bail",
+        format!(
             "chain dropped: parent '{object}.{member}' is a member of exported object \
              '{object}', and member-parent extension is not supported; the declaration \
              in {file} is left untransformed — extend '{component}' from \
@@ -559,9 +631,228 @@ fn unsupported_member_parent_bail(
             object = extension.object,
             member = extension.member,
         ),
-        code: Some("animus.extension.unsupported-member-parent".to_string()),
-        severity: None,
+        Some(UNSUPPORTED_MEMBER_PARENT),
+    )
+}
+
+/// The bail for a chain the walker could not extract. A chain of proven
+/// Animus origin whose reason is a known unsupported form is classified;
+/// any other keeps the walker's plain bail.
+fn unextractable_chain_bail(file: &str, binding: &str, reason: &str, animus: bool) -> CssDiagnostic {
+    let left = format!("the declaration in {file} is left untransformed");
+    let classified = if !animus {
+        None
+    } else if let Some(method) = reason.strip_prefix("unknown chain method: ") {
+        Some((
+            format!(
+                "chain dropped: unknown chain method '{method}'; {left} — use only the \
+                 supported builder methods ({}, extend) before the terminal",
+                crate::chain_walk::CHAIN_METHODS.join(", ")
+            ),
+            UNSUPPORTED_CHAIN_METHOD,
+        ))
+    } else if reason.starts_with("asComponent: ") {
+        Some((
+            format!(
+                "chain dropped: {reason}; {left} — pass the target as an identifier or \
+                 static member path"
+            ),
+            UNSUPPORTED_TERMINAL_TARGET,
+        ))
+    } else if reason == "extend with arguments is not supported" {
+        Some((
+            format!(
+                "chain dropped: .extend() was called with arguments; {left} — call \
+                 .extend() with no arguments and add styles in the stages that follow it"
+            ),
+            UNSUPPORTED_EXTEND_ARGUMENTS,
+        ))
+    } else {
+        None
+    };
+    match classified {
+        Some((message, code)) => diagnostic(file, binding, "bail", message, Some(code)),
+        None => diagnostic(file, binding, "bail", reason.to_string(), None),
     }
+}
+
+/// A `.props()` custom prop of a proven Animus chain whose `transform`
+/// callback extraction dropped.
+fn unsupported_transform_reference(
+    file: &str,
+    binding: &str,
+    (prop, reason): &(String, String),
+) -> CssDiagnostic {
+    diagnostic(
+        file,
+        binding,
+        "warn",
+        format!(
+            "custom prop '{prop}' in {file} lost its transform callback ({reason}), so \
+             '{prop}' values would apply as raw CSS values — write the transform inside the \
+             .props() object literal, inline as `transform: (value) => …` or as a reference \
+             to a const function, a never-reassigned function declaration or a const created \
+             by createTransform imported from @animus-ui/system, declared in this module or \
+             imported, through named re-exports too, from an analyzed source module"
+        ),
+        Some(UNSUPPORTED_TRANSFORM_REFERENCE),
+    )
+}
+
+/// A warning, never escalated by build strictness: the prop keeps its raw
+/// value on both paths, as an untransformed prop does.
+fn unbound_transform_name(
+    file: &str,
+    binding: &str,
+    unbound: &crate::pipeline::UnboundTransform,
+) -> CssDiagnostic {
+    let crate::pipeline::UnboundTransform { prop, name, candidates } = unbound;
+    let (carriers, advice) = match candidates {
+        0 => (
+            "no configured transform carries".to_string(),
+            "bind a configured transform with that name",
+        ),
+        n => (
+            format!("{n} configured transforms carry"),
+            "give the configured transforms distinct names",
+        ),
+    };
+    diagnostic(
+        file,
+        binding,
+        "warn",
+        format!(
+            "custom prop '{prop}' in {file} names transform '{name}', which {carriers}, \
+             so it binds no transform and '{prop}' values apply as raw CSS values — \
+             {advice} or write the transform inline inside the .props() object literal"
+        ),
+        None,
+    )
+}
+
+/// Keeps the authored value so the omission can be traced to its source.
+fn strict_token_miss(file: &str, component: &str, miss: &StrictTokenMiss) -> CssDiagnostic {
+    let authored = serde_json::to_string(&miss.value).unwrap_or_default();
+    let listed: Vec<String> = miss
+        .rejected
+        .iter()
+        .filter_map(|(breakpoint, entry)| breakpoint.as_deref().map(|bp| format!("{entry} at {bp}")))
+        .collect();
+    let entries = if listed.is_empty() {
+        String::new()
+    } else {
+        format!(" ({})", listed.join(", "))
+    };
+    diagnostic(
+        file,
+        component,
+        "warn",
+        format!(
+            "prop '{}' value {authored} is not a token of its strict scale{entries}; its \
+             styling is omitted — use a scale key, or declare the prop strict: false to \
+             accept raw values",
+            miss.prop
+        ),
+        Some(STRICT_TOKEN_MISS),
+    )
+}
+
+fn drain_strict_token_misses(
+    sink: &StrictTokenMissSink,
+    file: &str,
+    component: &str,
+    diagnostics: &mut Vec<CssDiagnostic>,
+) {
+    for miss in sink.borrow_mut().drain(..) {
+        diagnostics.push(strict_token_miss(file, component, &miss));
+    }
+}
+
+/// A `.props()` custom prop of a proven Animus chain whose whole config
+/// the evaluator skipped, so it is no styling prop at all.
+fn unsupported_props_config(
+    file: &str,
+    binding: &str,
+    (prop, reason): &(String, String),
+) -> CssDiagnostic {
+    diagnostic(
+        file,
+        binding,
+        "warn",
+        format!(
+            "custom prop '{prop}' in {file} was dropped ({reason}), so it is not extracted \
+             as a styling prop — write its config as an object literal of static values \
+             inside .props(), without spreads, calls or unresolved references"
+        ),
+        Some(UNSUPPORTED_PROPS_CONFIG),
+    )
+}
+
+/// The chain a module default-exports, when its root has proven Animus
+/// origin; the walker never makes it a chain.
+fn unsupported_default_export(
+    file: &str,
+    ff: &FileFacts,
+    files: &BTreeMap<String, FileFacts>,
+    inputs: &CssInputs,
+) -> Option<CssDiagnostic> {
+    let export = ff.default_export_chain.as_ref()?;
+    let root = export.root.as_deref()?;
+    has_animus_origin(file, root, files, inputs, &mut FxHashSet::default()).then(|| {
+        diagnostic(
+            file,
+            "default",
+            "bail",
+            format!(
+                "chain dropped: the default-exported chain at {file}:{}:{} is not \
+                 extracted, since extraction collects only top-level const declarations; \
+                 it is left untransformed — declare it as `export const Name = …` and \
+                 `export default Name`",
+                export.line, export.column
+            ),
+            Some(UNSUPPORTED_DEFAULT_EXPORT),
+        )
+    })
+}
+
+/// A chain rooted in `ns.member` where `ns` is a namespace import of an
+/// analyzed module whose `member` has proven Animus origin.
+fn unsupported_namespace_root(
+    file: &str,
+    ff: &FileFacts,
+    chain: &crate::chain_walk::MemberRootedChain,
+    files: &BTreeMap<String, FileFacts>,
+    inputs: &CssInputs,
+) -> Option<CssDiagnostic> {
+    let specifier = ff.namespace_imports.get(&chain.object)?;
+    let Some((defining_file, defining_name, true)) =
+        resolve_export(file, specifier, &chain.member, files, inputs)
+    else {
+        return None;
+    };
+    has_animus_origin(
+        &defining_file,
+        &defining_name,
+        files,
+        inputs,
+        &mut FxHashSet::default(),
+    )
+    .then(|| {
+        diagnostic(
+            file,
+            &chain.binding,
+            "bail",
+            format!(
+                "chain dropped: its root '{object}.{member}' reads '{member}' through \
+                 namespace import '{object}'; the declaration in {file} is left \
+                 untransformed — use a named import (import {{ {member} }} from \
+                 '{specifier}') and build from '{member}'",
+                object = chain.object,
+                member = chain.member,
+            ),
+            Some(UNSUPPORTED_NAMESPACE_ROOT),
+        )
+    })
 }
 
 /// Brace spans surviving resolution are unresolved token aliases: the resolver
@@ -923,25 +1214,59 @@ fn shed_unresolved_aliases_in_styles(
     }
 }
 
+/// Why a chain was dropped at a stage: its argument could not be evaluated,
+/// or it evaluated to a config of the wrong shape.
+enum DropCause<'a> {
+    Unevaluable { config_identifier: Option<&'a str> },
+    /// Carries the offending custom prop when one config alone fails.
+    InvalidShape { offending: Option<String> },
+}
+
+/// `animus` classifies the drop; a chain of unproven origin keeps the plain
+/// bail, since only Animus provenance makes the loss an Animus failure.
 fn emit_eval_drop_bail(
     diagnostics: &mut Vec<CssDiagnostic>,
     file: &str,
     binding: &str,
     stage: &str,
+    cause: DropCause<'_>,
     detail: &str,
+    animus: bool,
 ) {
-    diagnostics.push(CssDiagnostic {
-        token: None,
-        file: file.to_string(),
-        component: binding.to_string(),
-        kind: "bail".to_string(),
-        message: format!(
-            "chain dropped: stage '{}' evaluation failed — {}",
-            stage, detail
+    let left = format!("the declaration in {file} is left untransformed");
+    let (message, code) = match (cause, animus) {
+        (_, false) => (
+            format!("chain dropped: stage '{stage}' evaluation failed — {detail}"),
+            None,
         ),
-        code: None,
-        severity: None,
-    });
+        (DropCause::InvalidShape { offending }, true) => (
+            format!(
+                "chain dropped: stage '{stage}' config is invalid — {}; {left} — \
+                 write each custom prop in the documented .props() shape, \
+                 {{ property: '<css property>' }} with optional properties, scale, \
+                 negative and transform",
+                offending.as_deref().unwrap_or(detail)
+            ),
+            Some(STAGE_EVALUATION_FAILED),
+        ),
+        (DropCause::Unevaluable { config_identifier: Some(identifier) }, true) => (
+            format!(
+                "chain dropped: .variant({identifier}) passes the whole variant config \
+                 through identifier '{identifier}', which extraction cannot evaluate; \
+                 {left} — write the config inline as .variant({{ prop: '…', variants: … }}); \
+                 its options table may stay a shared identifier (variants: TABLE)"
+            ),
+            Some(UNSUPPORTED_VARIANT_CONFIG_REFERENCE),
+        ),
+        (DropCause::Unevaluable { config_identifier: None }, true) => (
+            format!(
+                "chain dropped: stage '{stage}' evaluation failed — {detail}; {left} — \
+                 pass an object literal, or a module-level const object of static values"
+            ),
+            Some(STAGE_EVALUATION_FAILED),
+        ),
+    };
+    diagnostics.push(diagnostic(file, binding, "bail", message, code));
 }
 
 /// Slot bindings are local identifiers, resolved in the composing file.
@@ -976,19 +1301,17 @@ fn emit_compose_slot_bail(
     slot_name: &str,
     binding: &str,
 ) {
-    diagnostics.push(CssDiagnostic {
-        token: None,
-        file: file.to_string(),
-        component: family_name.to_string(),
-        kind: "bail".to_string(),
-        message: format!(
+    diagnostics.push(diagnostic(
+        file,
+        family_name,
+        "bail",
+        format!(
             "compose slot '{}' names binding '{}', which resolves to no extracted \
              component in this file or through its imports — composed variant CSS dropped",
             slot_name, binding
         ),
-        code: Some("animus.compose.unresolvable-slot".to_string()),
-        severity: Some("error".to_string()),
-    });
+        Some(COMPOSE_UNRESOLVABLE_SLOT),
+    ));
 }
 
 /// Runs before the extension merge, so parent contributions are already shed
@@ -1207,6 +1530,71 @@ impl UsageLookupMaps {
             self.configs.insert(key.to_string(), config);
         }
     }
+}
+
+/// The props a confined component receives, read from the raw attribute
+/// syntax of its JSX elements, the only places it is rendered. Unlike the
+/// usage scans, a value only statics resolve (possibly a mutable object or an
+/// import) or an element-valued attribute counts as a runtime value here.
+#[derive(Default)]
+struct ConfinedUse {
+    /// A spread attribute can deliver any prop.
+    spread: bool,
+    /// Props with an attribute value that is not a literal.
+    runtime_props: FxHashSet<String>,
+    static_values: FxHashMap<String, Vec<Value>>,
+}
+
+impl ConfinedUse {
+    /// Every value `prop` can receive is a literal for which `has_class` holds.
+    fn covers(&self, prop: &str, has_class: impl Fn(&Value) -> bool) -> bool {
+        !self.spread
+            && !self.runtime_props.contains(prop)
+            && self.static_values.get(prop).is_none_or(|values| values.iter().all(has_class))
+    }
+}
+
+/// The evaluated components whose module confines them, keyed by id.
+fn confined_uses(
+    files: &BTreeMap<String, FileFacts>,
+    chain_lookup: &FxHashMap<&str, (&str, usize)>,
+    evaluated_ids: &FxHashSet<String>,
+) -> FxHashMap<String, ConfinedUse> {
+    let mut uses = FxHashMap::default();
+    for component_id in evaluated_ids {
+        let Some((file, chain_idx)) = chain_lookup.get(component_id.as_str()) else {
+            continue;
+        };
+        let ff = &files[*file];
+        let binding = &ff.chains[*chain_idx].descriptor.binding;
+        if !ff.confined_components.contains(binding) {
+            continue;
+        }
+        let mut confined = ConfinedUse::default();
+        for fact in &ff.usage {
+            let UsageFact::Element { tag: TagFact::Ident(tag), attrs, spread } = fact else {
+                continue;
+            };
+            if tag != binding {
+                continue;
+            }
+            confined.spread |= *spread;
+            for attr in attrs {
+                match (&attr.static_value, attr.dynamic) {
+                    (Some(value), false) => confined
+                        .static_values
+                        .entry(attr.name.clone())
+                        .or_default()
+                        .push(value.clone()),
+                    _ => {
+                        confined.runtime_props.insert(attr.name.clone());
+                    }
+                }
+            }
+        }
+        uses.insert(component_id.clone(), confined);
+    }
+    uses
 }
 
 #[derive(Default)]
@@ -1447,7 +1835,17 @@ struct DeferredComponentError {
     /// `(variant prop, option name)`; `None` = a failure outside any variant
     /// option, which survives as long as its component does.
     variant_origin: Option<(String, String)>,
+    /// Reported once among the entries carrying the same diagnostic, as an
+    /// inherited callback's failure surfaced through several extensions is.
+    once: bool,
     diagnostic: CssDiagnostic,
+}
+
+/// What makes two reports of one failure the same report.
+type ReportKey = (String, String, String);
+
+fn report_key(diagnostic: &CssDiagnostic) -> ReportKey {
+    (diagnostic.file.clone(), diagnostic.component.clone(), diagnostic.message.clone())
 }
 
 fn resolve_deferred_component_errors(
@@ -1459,6 +1857,7 @@ fn resolve_deferred_component_errors(
         .iter()
         .map(|(id, css)| (id.as_str(), css))
         .collect();
+    let mut reported_once: FxHashSet<ReportKey> = FxHashSet::default();
     for entry in deferred.drain(..) {
         let Some(component) = by_id.get(entry.component_id.as_str()) else {
             // Component eliminated wholesale — none of its CSS ships.
@@ -1476,8 +1875,54 @@ fn resolve_deferred_component_errors(
                 continue;
             }
         }
+        let diagnostic = &entry.diagnostic;
+        if entry.once && !reported_once.insert(report_key(diagnostic)) {
+            continue;
+        }
         diagnostics.push(entry.diagnostic);
     }
+}
+
+/// The readable name and sorted bound props of each configured definition,
+/// by registry key.
+fn configured_definitions(config: &PropConfigMap) -> FxHashMap<&str, (&str, Vec<&str>)> {
+    let mut definitions: FxHashMap<&str, (&str, Vec<&str>)> = FxHashMap::default();
+    for (prop, entry) in config {
+        if let Some((key, name)) = entry.bound_definition() {
+            definitions.entry(key).or_insert((name, Vec::new())).1.push(prop);
+        }
+    }
+    for (_, props) in definitions.values_mut() {
+        props.sort_unstable();
+    }
+    definitions
+}
+
+/// ` bound to prop 'a'` or ` bound to props 'a', 'b'`; empty without props.
+fn bound_props_clause(props: &[&str]) -> String {
+    let quoted: Vec<String> = props.iter().map(|prop| format!("'{prop}'")).collect();
+    match quoted.as_slice() {
+        [] => String::new(),
+        [prop] => format!(" bound to prop {prop}"),
+        props => format!(" bound to props {}", props.join(", ")),
+    }
+}
+
+/// Whether `definition` is registered for evaluation, admitting it on first
+/// use; a callback that cannot be isolated keeps only its runtime delivery,
+/// which is no authoring failure.
+fn admit_callback(
+    definition: &CallbackDefinition,
+    evaluator: &TransformEvaluator,
+    attempted: &mut FxHashSet<String>,
+) -> bool {
+    if attempted.insert(definition.key.clone()) {
+        if let Some(source) = definition.isolated_source() {
+            // A source the engine cannot compile stays unregistered.
+            let _ = evaluator.register_isolated(&definition.key, &source);
+        }
+    }
+    evaluator.is_registered(&definition.key)
 }
 
 fn drain_transform_failures(
@@ -1485,25 +1930,19 @@ fn drain_transform_failures(
     file: &str,
     component: Option<&str>,
     component_id: Option<&str>,
-    transform_files: &FxHashMap<String, String>,
     diagnostics: &mut Vec<CssDiagnostic>,
     deferred: &mut Vec<DeferredComponentError>,
 ) {
     for failure in sink.borrow_mut().drain(..) {
-        // Falls back to the transform's own registration file, or the `system`
-        // sentinel for config-carried transforms with no in-universe source.
-        let file = if file.is_empty() {
-            transform_files
-                .get(&failure.transform_name)
-                .map(String::as_str)
-                .unwrap_or("system")
-        } else {
-            file
-        };
+        // A failure outside a component is a configured transform's: the
+        // `system` sentinel, since the configuration carries no location.
+        let file = if file.is_empty() { "system" } else { file };
         let component = component
             .map(str::to_string)
             .unwrap_or_else(|| format!("transform '{}'", failure.transform_name));
         let diagnostic = match &failure.failure {
+            // Never recorded: the value stays on its runtime path.
+            EvalError::Unevaluable => continue,
             EvalError::InvalidResultShape { shape } => CssDiagnostic {
                 token: None,
                 file: file.to_string(),
@@ -1538,6 +1977,7 @@ fn drain_transform_failures(
                 deferred.push(DeferredComponentError {
                     component_id: id.to_string(),
                     variant_origin: failure.variant_origin.clone(),
+                    once: false,
                     diagnostic,
                 });
             }
@@ -1557,54 +1997,82 @@ fn run_with_system_floor(
     let bp_keys: FxHashSet<String> = breakpoints.breakpoints.keys().cloned().collect();
     let evaluator = TransformEvaluator::new();
     let transform_failures = TransformFailureSink::default();
+    let token_misses = StrictTokenMissSink::default();
     let mut diagnostics: Vec<CssDiagnostic> = Vec::new();
     let mut deferred_errors: Vec<DeferredComponentError> = Vec::new();
 
-    // Sorted: FxHashMap iteration order is unspecified and is observable
-    // through collision resolution, where the last registration wins.
+    // Configured definitions register by identity, so a same-named project
+    // declaration never reaches a configured binding; a project declaration
+    // registers only as an admitted component callback's definition, under
+    // its own identity. Sorted for deterministic diagnostics.
+    let definitions = configured_definitions(&inputs.config);
     let mut seeded: Vec<(&String, &String)> = inputs.transform_sources.iter().collect();
     seeded.sort_by(|a, b| a.0.cmp(b.0));
-    for (name, source) in seeded {
-        if let Err(err) = evaluator.register(name, source) {
-            diagnostics.push(CssDiagnostic {
-                token: None,
-                file: String::new(),
-                component: format!("createTransform('{}')", name),
-                kind: "warn".to_string(),
-                message: format!("Failed to register transform in evaluator: {}", err),
-                code: None,
-                severity: None,
-            });
-        }
-    }
-
-    // Input order, so a cross-file collision keeps last-registration-wins;
-    // `transform_files` follows the same order for drain-site attribution.
-    let mut transform_files: FxHashMap<String, String> = FxHashMap::default();
-    for path in order {
-        let Some(ff) = files.get(path) else { continue };
-        for t in &ff.transforms {
-            if t.valid {
-                transform_files.insert(t.name.clone(), t.file.clone());
-                if let Err(err) = evaluator.register(&t.name, &t.source) {
-                    diagnostics.push(CssDiagnostic {
-                        token: None,
-                        file: t.file.clone(),
-                        component: format!("createTransform('{}')", t.name),
-                        kind: "warn".to_string(),
-                        message: format!("Failed to register transform in evaluator: {}", err),
-                        code: None,
-                        severity: None,
-                    });
-                }
+    let mut admitted_transforms: BTreeMap<String, String> = BTreeMap::new();
+    for (key, source) in seeded {
+        let (name, props) = definitions
+            .get(key.as_str())
+            .map_or((key.as_str(), &[][..]), |(name, props)| (*name, props.as_slice()));
+        let bound = bound_props_clause(props);
+        let component = format!("createTransform('{}')", name);
+        // The system configuration carries no source location for its transforms.
+        let rejected_with = |reason: String, advice: &str| {
+            diagnostic(
+                "system",
+                &component,
+                "warn",
+                format!(
+                    "configured transform '{name}'{bound} on the loaded system was rejected before \
+                     registration ({reason}), so it is not delivered to the runtime and its \
+                     values fall back to the raw value — {advice}"
+                ),
+                Some(CONFIGURED_TRANSFORM_REJECTED),
+            )
+        };
+        let rejected = |reason: String| {
+            rejected_with(
+                reason,
+                "make it a single self-contained function that uses only its parameters, \
+                 standard globals, btoa and atob",
+            )
+        };
+        let hosts = match crate::transforms::admit_configured_host_reads(name, source) {
+            Ok(hosts) => hosts,
+            Err(rejections) => {
+                diagnostics.extend(rejections.into_iter().map(rejected));
+                continue;
             }
+        };
+        // Its text alone cannot show which `btoa` or `atob` it captured.
+        if let Some(reason) = inputs.transform_provenance.host_rejection(key, name, &hosts) {
+            diagnostics.push(rejected_with(
+                reason,
+                "read the host btoa or atob, not a binding of its module or an enclosing \
+                 function, and upgrade @animus-ui/system together with the extractor",
+            ));
+            continue;
+        }
+        match evaluator.register(key, source) {
+            Ok(()) => {
+                admitted_transforms.insert(key.clone(), source.clone());
+            }
+            Err(err) => diagnostics.push(rejected(format!(
+                "failed to register transform in evaluator: {err}"
+            ))),
         }
     }
 
+    // A reference may capture a declaration of another module.
+    let captured: FxHashSet<(&str, &str)> = files
+        .values()
+        .flat_map(|ff| ff.captured_transform_bindings.iter())
+        .map(|(file, binding)| (file.as_str(), binding.as_str()))
+        .collect();
     for path in order {
         let Some(ff) = files.get(path) else { continue };
         for t in &ff.transforms {
-            if !t.valid {
+            let reached = |binding: &String| captured.contains(&(t.file.as_str(), binding.as_str()));
+            if !t.valid && !t.binding.as_ref().is_some_and(reached) {
                 for diag in &t.diagnostics {
                     diagnostics.push(CssDiagnostic {
                         token: None,
@@ -1630,6 +2098,7 @@ fn run_with_system_floor(
         condition_aliases: &inputs.condition_aliases,
         transform_evaluator: Some(&evaluator),
         transform_failures: Some(&transform_failures),
+        token_misses: Some(&token_misses),
     };
 
     let mut parent_map: FxHashMap<String, String> = FxHashMap::default();
@@ -1639,15 +2108,14 @@ fn run_with_system_floor(
             let d = &chain.descriptor;
             if !d.extractable {
                 if let Some(reason) = &d.bail_reason {
-                    diagnostics.push(CssDiagnostic {
-                        token: None,
-                        file: file_path.clone(),
-                        component: d.binding.clone(),
-                        kind: "bail".to_string(),
-                        message: reason.clone(),
-                        code: None,
-                        severity: None,
-                    });
+                    let animus = has_animus_origin(
+                        file_path,
+                        &d.binding,
+                        files,
+                        inputs,
+                        &mut FxHashSet::default(),
+                    );
+                    diagnostics.push(unextractable_chain_bail(file_path, &d.binding, reason, animus));
                 }
                 continue;
             }
@@ -1682,6 +2150,10 @@ fn run_with_system_floor(
                 diagnostics.push(unsupported_member_parent_bail(file_path, extension, component));
             }
         }
+        for chain in &ff.member_rooted_chains {
+            diagnostics.extend(unsupported_namespace_root(file_path, ff, chain, files, inputs));
+        }
+        diagnostics.extend(unsupported_default_export(file_path, ff, files, inputs));
     }
 
     let sorted_ids = sorted_resolvable_component_ids(files, &parent_map, &unresolvable_extensions);
@@ -1715,6 +2187,8 @@ fn run_with_system_floor(
         scale_name_by_css_property(&inputs.config)
     };
     let mut inherited_active_props: FxHashMap<String, FxHashSet<String>> = FxHashMap::default();
+    // An extension's callback props it reads from its parent's component.
+    let mut parent_callbacks: FxHashMap<String, FxHashSet<String>> = FxHashMap::default();
     let mut inherited_variant_configs: FxHashMap<String, VariantConfigs> = FxHashMap::default();
 
     for component_id in &sorted_ids {
@@ -1722,18 +2196,31 @@ fn run_with_system_floor(
             continue;
         };
         let chain = &files[*file_path].chains[*chain_idx];
+        // Traced at most once, and only when a failure needs classifying.
+        let origin = std::cell::OnceCell::new();
+        let animus = || {
+            *origin.get_or_init(|| {
+                has_animus_origin(
+                    file_path,
+                    &chain.descriptor.binding,
+                    files,
+                    inputs,
+                    &mut FxHashSet::default(),
+                )
+            })
+        };
         if let Some(fatal) = &chain.fatal_error {
-            let stage = chain
-                .stages
-                .iter()
-                .find(|s| s.eval_error.is_some())
-                .map_or("<unknown>", |s| s.method.as_str());
+            let failed = chain.stages.iter().find(|s| s.eval_error.is_some());
             emit_eval_drop_bail(
                 &mut diagnostics,
                 file_path,
                 &chain.descriptor.binding,
-                stage,
+                failed.map_or("<unknown>", |s| s.method.as_str()),
+                DropCause::Unevaluable {
+                    config_identifier: failed.and_then(|s| s.config_identifier.as_deref()),
+                },
                 fatal,
+                animus(),
             );
             continue;
         }
@@ -1754,17 +2241,97 @@ fn run_with_system_floor(
             file_path,
             Some(&chain.descriptor.binding),
             Some(component_id.as_str()),
-            &transform_files,
             &mut diagnostics,
             &mut deferred_errors,
+        );
+        if merged_chain.is_some() {
+            // A parent option merged into this chain was reported at the
+            // parent's declaration; only this chain's own declarations remain.
+            token_misses.borrow_mut().retain_mut(|miss| {
+                let Some((axis, option)) = &miss.variant_origin else {
+                    return true;
+                };
+                miss.rejected.retain(|(breakpoint, entry)| {
+                    authors_variant_entry(
+                        chain,
+                        axis,
+                        option.as_deref(),
+                        &miss.prop,
+                        breakpoint.as_deref(),
+                        entry,
+                    )
+                });
+                !miss.rejected.is_empty()
+            });
+        }
+        drain_strict_token_misses(
+            &token_misses,
+            file_path,
+            &chain.descriptor.binding,
+            &mut diagnostics,
         );
         match result {
             Ok(out) => {
                 let mut component_css = out.component_css;
                 let active_props = out.active_prop_names;
                 let active_group_names = out.active_group_names;
-                let custom_configs = out.custom_prop_configs;
+                let custom_configs =
+                    match (parent_map.get(component_id), &chain.descriptor.extends_from) {
+                        (Some(parent_id), Some(parent_binding)) => {
+                            let (configs, read_from_parent) = inherit_custom_configs(
+                                evaluated.get(parent_id).and_then(
+                                    |(_, _, _, _, _, parent_custom, _)| parent_custom.as_ref(),
+                                ),
+                                out.custom_prop_configs,
+                                parent_binding,
+                            );
+                            if !read_from_parent.is_empty() {
+                                parent_callbacks.insert(component_id.clone(), read_from_parent);
+                            }
+                            configs
+                        }
+                        _ => out.custom_prop_configs,
+                    };
+                let dropped: Vec<&(String, String)> = chain
+                    .stages
+                    .iter()
+                    .flat_map(|s| &s.dropped_transforms)
+                    .collect();
+                let dropped_configs: Vec<&(String, String)> = chain
+                    .stages
+                    .iter()
+                    .flat_map(|s| &s.dropped_configs)
+                    .collect();
+                let classify_drops =
+                    !(dropped.is_empty() && dropped_configs.is_empty()) && animus();
+                // A classified drop replaces its generic skip line; a
+                // const-config drop never had one.
+                let mut replaced: Vec<String> = if classify_drops {
+                    let binding = &chain.descriptor.binding;
+                    dropped
+                        .iter()
+                        .map(|(_, reason)| crate::pipeline::skip_warning(binding, "transform", reason))
+                        .chain(
+                            dropped_configs
+                                .iter()
+                                .map(|(prop, reason)| crate::pipeline::skip_warning(binding, prop, reason)),
+                        )
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+                for unbound in &out.unbound_transforms {
+                    diagnostics.push(unbound_transform_name(
+                        file_path,
+                        &chain.descriptor.binding,
+                        unbound,
+                    ));
+                }
                 for warning in &out.skip_warnings {
+                    if let Some(index) = replaced.iter().position(|line| line == warning) {
+                        replaced.swap_remove(index);
+                        continue;
+                    }
                     let code = diagnostic_code_from_message(warning);
                     let severity = code
                         .as_deref()
@@ -1778,6 +2345,22 @@ fn run_with_system_floor(
                         code,
                         severity,
                     });
+                }
+                if classify_drops {
+                    for dropped in dropped {
+                        diagnostics.push(unsupported_transform_reference(
+                            file_path,
+                            &chain.descriptor.binding,
+                            dropped,
+                        ));
+                    }
+                    for dropped in dropped_configs {
+                        diagnostics.push(unsupported_props_config(
+                            file_path,
+                            &chain.descriptor.binding,
+                            dropped,
+                        ));
+                    }
                 }
 
                 if is_external_file(file_path, &inputs.external_dirs) {
@@ -1974,7 +2557,16 @@ fn run_with_system_floor(
                     file_path,
                     &chain.descriptor.binding,
                     &stage,
+                    DropCause::InvalidShape {
+                        offending: chain
+                            .stages
+                            .iter()
+                            .find(|s| s.method == "props")
+                            .and_then(|s| s.value.as_ref())
+                            .and_then(crate::pipeline::invalid_custom_prop),
+                    },
                     &detail,
+                    animus(),
                 );
             }
         }
@@ -2095,8 +2687,41 @@ fn run_with_system_floor(
         }
     }
 
+    // Each component's own custom configuration: equally named custom props
+    // of different components are distinct props.
+    let custom_configs_by_id: FxHashMap<&str, &PropConfigMap> = sorted_ids
+        .iter()
+        .filter_map(|component_id| match evaluated.get(component_id) {
+            Some((_, _, _, _, _, Some(custom_configs), _)) => {
+                Some((component_id.as_str(), custom_configs))
+            }
+            _ => None,
+        })
+        .collect();
+    // A literal that misses a strict scale gets no class; it is reported at
+    // its usage, which the shared utility stream no longer knows.
+    let admitted_input = |config: &PropConfigMap,
+                          file: &str,
+                          component: &str,
+                          prop_name: &str,
+                          value: &Value,
+                          diagnostics: &mut Vec<CssDiagnostic>| {
+        let miss = config.get(prop_name).and_then(|prop_config| {
+            strict_token_miss_of(prop_name, prop_config, value, &resolve_ctx)
+        });
+        if let Some(miss) = miss {
+            diagnostics.push(strict_token_miss(file, component, &miss));
+            return None;
+        }
+        Some(UtilityInput {
+            prop_name: prop_name.to_string(),
+            value: value.clone(),
+        })
+    };
+
     let mut all_utility_inputs: Vec<UtilityInput> = Vec::new();
-    let mut all_custom_inputs: Vec<UtilityInput> = Vec::new();
+    let mut all_custom_inputs: Vec<(String, UtilityInput)> = Vec::new();
+    let mut attempted_callbacks: FxHashSet<String> = FxHashSet::default();
     let mut all_custom_dynamic_usages: Vec<DynamicPropUsage> = Vec::new();
     let mut all_usage_results: Vec<UsageScanResult> = Vec::new();
     let mut usage_residue: Vec<UsageResidueRecord> = Vec::new();
@@ -2148,6 +2773,7 @@ fn run_with_system_floor(
         let mut usage_result = crate::usage_facts::filter_usage_scan(
             ff.usage_for_analysis(),
             &lookup.props,
+            &lookup.custom_props,
             &lookup.configs,
             &member_expr_bindings,
         );
@@ -2166,15 +2792,16 @@ fn run_with_system_floor(
                 }),
         );
 
-        all_utility_inputs.extend(
-            usage_result
-                .system_prop_usages
-                .iter()
-                .map(|u| UtilityInput {
-                    prop_name: u.prop_name.clone(),
-                    value: u.value.clone(),
-                }),
-        );
+        for usage in &usage_result.system_prop_usages {
+            all_utility_inputs.extend(admitted_input(
+                &inputs.config,
+                path,
+                binding_of(&usage.binding),
+                &usage.prop_name,
+                &usage.value,
+                &mut diagnostics,
+            ));
+        }
 
         if !lookup.custom_props.is_empty() {
             let mut custom_scan = crate::usage_facts::filter_custom_prop_scan(
@@ -2182,14 +2809,47 @@ fn run_with_system_floor(
                 &lookup.custom_props,
                 &member_expr_bindings,
             );
-            identity_policy
-                .attribute_system_usages(&mut custom_scan.static_usages, &lookup.attribution);
+            custom_scan
+                .dynamic_usages
+                .extend(crate::usage_facts::uncertain_custom_renders(
+                    ff.usage_for_analysis(),
+                    &lookup.custom_props,
+                    &member_expr_bindings,
+                ));
             identity_policy
                 .attribute_dynamic_usages(&mut custom_scan.dynamic_usages, &lookup.attribution);
-            all_custom_inputs.extend(custom_scan.static_usages.iter().map(|u| UtilityInput {
-                prop_name: u.prop_name.clone(),
-                value: u.value.clone(),
-            }));
+            for usage in &custom_scan.static_usages {
+                // An ambiguous binding names every component it may render.
+                for owner in identity_policy.resolve_all(&usage.binding, &lookup.attribution) {
+                    let Some(config) = custom_configs_by_id.get(owner.as_str()) else {
+                        continue;
+                    };
+                    let Some(prop_config) = config.get(&usage.prop_name) else {
+                        continue;
+                    };
+                    let input = admitted_input(
+                        config,
+                        path,
+                        binding_of(&owner),
+                        &usage.prop_name,
+                        &usage.value,
+                        &mut diagnostics,
+                    );
+                    // A callback that cannot evaluate this value applies it at runtime.
+                    let extracted = match &prop_config.callback {
+                        _ if prop_config.transform_fn_source.is_none() => true,
+                        Some(callback) => {
+                            let definition = &callback.definition;
+                            admit_callback(definition, &evaluator, &mut attempted_callbacks)
+                                && extracts_callback_value(prop_config, definition, &usage.value, &resolve_ctx)
+                        }
+                        None => false,
+                    };
+                    if extracted {
+                        all_custom_inputs.extend(input.map(|input| (owner.clone(), input)));
+                    }
+                }
+            }
             all_custom_dynamic_usages.extend(custom_scan.dynamic_usages.iter().cloned());
         }
 
@@ -2271,12 +2931,16 @@ fn run_with_system_floor(
                 identity_policy.include(component_id.clone());
             }
         }
-        all_utility_inputs.extend(injection.utility_values.iter().map(
-            |(prop_name, value)| UtilityInput {
-                prop_name: prop_name.clone(),
-                value: value.clone(),
-            },
-        ));
+        for (prop_name, value) in &injection.utility_values {
+            all_utility_inputs.extend(admitted_input(
+                &inputs.config,
+                crate::forced_usage::STATIC_CSS_SOURCE,
+                crate::forced_usage::STATIC_CSS_SOURCE,
+                prop_name,
+                value,
+                &mut diagnostics,
+            ));
+        }
         for usage in &injection.custom_dynamic {
             for component_id in ids_by_binding.get(&usage.binding).into_iter().flatten() {
                 all_custom_dynamic_usages.push(DynamicPropUsage {
@@ -2327,36 +2991,44 @@ fn run_with_system_floor(
         &reachable_ids,
         identity_policy.uncertain,
     );
-    let dynamic_prop_names = if total_system_floor {
-        active_system_prop_names
-    } else {
-        detected_dynamic_prop_names
-    };
+    let confined_uses = confined_uses(files, &chain_lookup, &evaluated_ids);
+    let utility_classes = resolve_utility_classes(&all_utility_inputs, &resolve_ctx, class_prefix);
+    // A system prop keeps its slot while any component it is active on can
+    // receive a value without a utility class; a same-named custom prop takes
+    // that component's values instead.
+    let (proven_static_props, dynamic_prop_names): (FxHashSet<String>, FxHashSet<String>) =
+        if total_system_floor {
+            let mut uncovered: FxHashSet<&String> = FxHashSet::default();
+            for (component_id, (_, _, _, active_props, _, custom_configs, _)) in &evaluated {
+                let confined = confined_uses.get(component_id);
+                for prop in active_props.iter().flatten() {
+                    let custom = custom_configs.as_ref().is_some_and(|configs| configs.contains_key(prop));
+                    let covered = confined.is_some_and(|confined| {
+                        confined.covers(prop, |value| utility_classes.has_class(prop, value))
+                    });
+                    if !custom && !covered {
+                        uncovered.insert(prop);
+                    }
+                }
+            }
+            active_system_prop_names.into_iter().partition(|prop| !uncovered.contains(prop))
+        } else {
+            (FxHashSet::default(), detected_dynamic_prop_names)
+        };
 
     let mut dynamic_props: HashMap<String, DynamicPropMeta> = HashMap::new();
     for prop_name in &dynamic_prop_names {
         if let Some(prop_config) = inputs.config.get(prop_name.as_str()) {
             let kebab = camel_to_kebab(prop_name);
-            let mut scale_values: BTreeMap<String, String> = BTreeMap::new();
-            if let Some(Value::String(scale_name)) = &prop_config.scale {
-                let prefix = format!("{}.", scale_name);
-                for (theme_key, css_value) in &inputs.theme {
-                    if let Some(scale_key) = theme_key.strip_prefix(&prefix) {
-                        scale_values.insert(scale_key.to_string(), css_value.clone());
-                    }
-                }
-            }
             dynamic_props.insert(
                 prop_name.clone(),
-                DynamicPropMeta {
-                    var_name: format!("--{}-{}", class_prefix, kebab),
-                    slot_class: format!("{}-dyn-{}", class_prefix, kebab),
-                    property: prop_config.property.clone(),
-                    properties: prop_config.properties.clone(),
-                    transform_name: prop_config.transform.clone(),
-                    transform_fn_source: prop_config.transform_fn_source.clone(),
-                    scale_values,
-                },
+                DynamicPropMeta::new(
+                    format!("--{}-{}", class_prefix, kebab),
+                    format!("{}-dyn-{}", class_prefix, kebab),
+                    prop_config,
+                    &inputs.theme,
+                    &inputs.contextual_vars,
+                ),
             );
         }
     }
@@ -2366,36 +3038,13 @@ fn run_with_system_floor(
         None
     };
 
-    let mut global_custom_config: PropConfigMap = PropConfigMap::default();
-    for component_id in &sorted_ids {
-        if let Some((_, _, _, _, _, Some(custom_configs), _)) = evaluated.get(component_id) {
-            global_custom_config.extend(custom_configs.clone());
-        }
-    }
-    let inline_transform_props: FxHashSet<String> = global_custom_config
-        .iter()
-        .filter(|(_, config)| config.transform_fn_source.is_some())
-        .map(|(name, _)| name.clone())
-        .collect();
-    if !inline_transform_props.is_empty() {
-        all_custom_inputs.retain(|input| !inline_transform_props.contains(&input.prop_name));
-        all_utility_inputs.retain(|input| !inline_transform_props.contains(&input.prop_name));
-    }
-
     let utility_output = if !all_utility_inputs.is_empty() || slot_entries.is_some() {
-        let out = Some(generate_utility_css(
-            &all_utility_inputs,
-            &resolve_ctx,
-            &breakpoints,
-            slot_entries,
-            class_prefix,
-        ));
+        let out = Some(utility_classes.render(&breakpoints, slot_entries));
         drain_transform_failures(
             &transform_failures,
             "",
             None,
             None,
-            &transform_files,
             &mut diagnostics,
             &mut deferred_errors,
         );
@@ -2404,6 +3053,42 @@ fn run_with_system_floor(
         None
     };
 
+    // A component callback's failure belongs to the component whose
+    // `.props()` declares the prop, reported once however many extensions
+    // surface it, and kept while the rendering owner survives. A
+    // configured transform's failure stays the system's.
+    let mut reported: FxHashSet<ReportKey> = FxHashSet::default();
+    let attribute_callback_failures = |owner: &str, failures: Vec<TransformFailure>| {
+        for failure in failures {
+            let declarer = custom_configs_by_id
+                .get(owner)
+                .and_then(|configs| configs.get(&failure.prop)?.callback.as_ref())
+                .and_then(|callback| chain_lookup.get(callback.declarer.as_str()));
+            let Some((file, chain_idx)) = declarer else {
+                transform_failures.borrow_mut().push(failure);
+                continue;
+            };
+            let (mut attributed, mut deferred) = (Vec::new(), Vec::new());
+            drain_transform_failures(
+                &TransformFailureSink::new(vec![failure]),
+                file,
+                Some(&files[*file].chains[*chain_idx].descriptor.binding),
+                Some(owner),
+                &mut attributed,
+                &mut deferred,
+            );
+            diagnostics.extend(attributed.into_iter().filter(|d| reported.insert(report_key(d))));
+            deferred_errors.extend(deferred.into_iter().map(|entry| DeferredComponentError { once: true, ..entry }));
+        }
+    };
+    let custom_classes = resolve_custom_prop_classes(
+        &all_custom_inputs,
+        &custom_configs_by_id,
+        &resolve_ctx,
+        class_prefix,
+        attribute_callback_failures,
+    );
+
     let mut custom_dynamic_by_id: FxHashMap<String, FxHashSet<String>> = FxHashMap::default();
     for dyn_usage in &all_custom_dynamic_usages {
         custom_dynamic_by_id
@@ -2411,18 +3096,62 @@ fn run_with_system_floor(
             .or_default()
             .insert(dyn_usage.prop_name.clone());
     }
-    if !inline_transform_props.is_empty() {
-        for component_id in &sorted_ids {
-            if let Some((_, _, _, _, _, Some(custom_configs), _)) = evaluated.get(component_id) {
-                for prop_name in custom_configs.keys() {
-                    if inline_transform_props.contains(prop_name) {
-                        custom_dynamic_by_id
-                            .entry(component_id.clone())
-                            .or_default()
-                            .insert(prop_name.clone());
-                    }
-                }
+    // A callback is delivered unless its component is confined and every
+    // value the prop receives there has an extracted class. Inline text that
+    // reads more than its parameters and admitted globals stays delivered:
+    // dropping it would drop the imports it reads. Admission checks names
+    // alone, so a free name its module imports (an import named `Math`)
+    // still reads that import.
+    let reads_import = |callback: &crate::transforms::CallbackBinding| {
+        let Some((file, _)) = chain_lookup.get(callback.declarer.as_str()) else {
+            return true;
+        };
+        let ff = &files[*file];
+        callback.definition.free_names().is_none_or(|names| {
+            names.iter().any(|name| {
+                ff.imports.iter().any(|import| &import.local == name) || ff.namespace_imports.contains_key(name)
+            })
+        })
+    };
+    for (component_id, custom_configs) in &custom_configs_by_id {
+        let confined = confined_uses.get(*component_id);
+        for (prop_name, config) in custom_configs.iter() {
+            let Some(delivery) = config.transform_fn_source.as_deref() else {
+                continue;
+            };
+            let covered = confined.is_some_and(|confined| {
+                confined.covers(prop_name, |value| custom_classes.has_class(component_id, prop_name, value))
+            }) && config.callback.as_ref().is_none_or(|callback| {
+                delivery != callback.definition.source
+                    || (admit_callback(&callback.definition, &evaluator, &mut attempted_callbacks)
+                        && !reads_import(callback))
+            });
+            if !covered {
+                custom_dynamic_by_id
+                    .entry(component_id.to_string())
+                    .or_default()
+                    .insert(prop_name.clone());
             }
+        }
+    }
+    // An extension reads an inherited callback from its parent's runtime
+    // component, so a parent delivers each callback a delivering extension
+    // inherits from it; children precede parents in reverse order.
+    for component_id in sorted_ids.iter().rev() {
+        let (Some(parent_id), Some(read_from_parent)) =
+            (parent_map.get(component_id), parent_callbacks.get(component_id))
+        else {
+            continue;
+        };
+        let read: Vec<String> = custom_dynamic_by_id
+            .get(component_id)
+            .into_iter()
+            .flatten()
+            .filter(|prop| read_from_parent.contains(*prop))
+            .cloned()
+            .collect();
+        if !read.is_empty() {
+            custom_dynamic_by_id.entry(parent_id.clone()).or_default().extend(read);
         }
     }
 
@@ -2448,42 +3177,15 @@ fn run_with_system_floor(
         for prop_name in dynamic_props_for_binding {
             if let Some(prop_config) = cc.get(prop_name) {
                 let kebab = camel_to_kebab(prop_name);
-                let mut scale_values: BTreeMap<String, String> = BTreeMap::new();
-                match &prop_config.scale {
-                    Some(Value::String(scale_name)) => {
-                        let prefix = format!("{}.", scale_name);
-                        for (theme_key, css_value) in &inputs.theme {
-                            if let Some(scale_key) = theme_key.strip_prefix(&prefix) {
-                                scale_values.insert(scale_key.to_string(), css_value.clone());
-                            }
-                        }
-                    }
-                    Some(Value::Object(inline_scale)) => {
-                        let css_prop = camel_to_kebab(&prop_config.property);
-                        for (key, val) in inline_scale {
-                            let resolved = if let Some(s) = val.as_str() {
-                                s.to_string()
-                            } else if let Some(n) = val.as_f64() {
-                                crate::css::apply_unit_fallback_for_property(n, &css_prop)
-                            } else {
-                                val.to_string()
-                            };
-                            scale_values.insert(key.clone(), resolved);
-                        }
-                    }
-                    _ => {}
-                }
                 component_dynamic.insert(
                     prop_name.clone(),
-                    DynamicPropMeta {
-                        var_name: format!("--{}-{}", class_prefix, kebab),
-                        slot_class: format!("{}-dyn-{}-{}", class_prefix, hash8, kebab),
-                        property: prop_config.property.clone(),
-                        properties: prop_config.properties.clone(),
-                        transform_name: prop_config.transform.clone(),
-                        transform_fn_source: prop_config.transform_fn_source.clone(),
-                        scale_values,
-                    },
+                    DynamicPropMeta::new(
+                        format!("--{}-{}", class_prefix, kebab),
+                        format!("{}-dyn-{}-{}", class_prefix, hash8, kebab),
+                        prop_config,
+                        &inputs.theme,
+                        &inputs.contextual_vars,
+                    ),
                 );
             }
         }
@@ -2502,20 +3204,12 @@ fn run_with_system_floor(
     };
 
     let custom_output = if !all_custom_inputs.is_empty() || custom_slot_entries.is_some() {
-        let out = Some(generate_custom_prop_css(
-            &all_custom_inputs,
-            &global_custom_config,
-            &resolve_ctx,
-            &breakpoints,
-            custom_slot_entries,
-            class_prefix,
-        ));
+        let out = Some(custom_classes.render(&breakpoints, custom_slot_entries));
         drain_transform_failures(
             &transform_failures,
             "",
             None,
             None,
-            &transform_files,
             &mut diagnostics,
             &mut deferred_errors,
         );
@@ -2523,6 +3217,22 @@ fn run_with_system_floor(
     } else {
         None
     };
+
+    // A definition only proven-static props bind leaves the runtime registry
+    // unless a delivered binding still reads it.
+    let delivered_ids: FxHashSet<&String> = dynamic_props
+        .values()
+        .chain(per_component_custom_dynamic.values().flat_map(|metas| metas.values()))
+        .filter(|meta| meta.transform_fn_source.is_none())
+        .filter_map(|meta| meta.transform_id.as_ref())
+        .collect();
+    let unread_ids = proven_static_props
+        .iter()
+        .filter_map(|prop| inputs.config.get(prop)?.transform_id.as_ref())
+        .filter(|id| !delivered_ids.contains(id));
+    for id in unread_ids {
+        admitted_transforms.remove(id);
+    }
 
     let mut replacement_configs: FxHashMap<String, crate::assemble::ReplacementPayload> =
         FxHashMap::default();
@@ -2542,23 +3252,25 @@ fn run_with_system_floor(
         all_prop_names.sort();
         all_prop_names.dedup();
 
-        let mut custom_prop_class_map: Option<HashMap<String, HashMap<String, String>>> = None;
-        if let Some(cc) = custom_configs {
-            if !cc.is_empty() {
-                if let Some(ref custom_out) = custom_output {
-                    let mut component_class_map: HashMap<String, HashMap<String, String>> =
-                        HashMap::new();
-                    for prop_name in cc.keys() {
-                        if let Some(val_map) = custom_out.class_map.get(prop_name) {
-                            component_class_map.insert(prop_name.clone(), val_map.clone());
-                        }
-                    }
-                    if !component_class_map.is_empty() {
-                        custom_prop_class_map = Some(component_class_map);
-                    }
-                }
-            }
-        }
+        // Every declared custom prop is listed, with no classes when none were
+        // extracted, so the runtime never resolves it through the system map.
+        let custom_prop_class_map = custom_configs.as_ref().filter(|cc| !cc.is_empty()).map(|cc| {
+            let own = custom_output
+                .as_ref()
+                .and_then(|custom_out| custom_out.class_map.get(component_id));
+            cc.keys()
+                .map(|prop_name| {
+                    let classes = own.and_then(|map| map.get(prop_name)).cloned().unwrap_or_default();
+                    (prop_name.clone(), classes)
+                })
+                .collect::<HashMap<String, HashMap<String, String>>>()
+        });
+        // Only a callback prop with extracted classes needs typed lookups.
+        let typed_custom_props: Vec<String> = custom_output
+            .as_ref()
+            .and_then(|custom_out| custom_out.typed.get(component_id))
+            .map(|props| props.iter().cloned().collect())
+            .unwrap_or_default();
 
         let has_system_dynamic_props = active_props
             .as_ref()
@@ -2601,7 +3313,13 @@ fn run_with_system_floor(
                 has_dynamic_props,
                 custom_prop_class_map,
                 custom_dynamic_config: per_component_custom_dynamic.get(component_id).cloned(),
+                typed_custom_props,
                 merged_config,
+                drops_parent_reference: parent_callbacks.get(component_id).is_some_and(|inherited| {
+                    !inherited.iter().any(|prop| {
+                        custom_dynamic_by_id.get(component_id).is_some_and(|delivered| delivered.contains(prop))
+                    })
+                }),
             },
         );
     }
@@ -2873,10 +3591,10 @@ fn run_with_system_floor(
             "",
             None,
             None,
-            &transform_files,
             &mut diagnostics,
             &mut deferred_errors,
         );
+        drain_strict_token_misses(&token_misses, "system", "system", &mut diagnostics);
         css
     } else {
         String::new()
@@ -2888,10 +3606,10 @@ fn run_with_system_floor(
             "",
             None,
             None,
-            &transform_files,
             &mut diagnostics,
             &mut deferred_errors,
         );
+        drain_strict_token_misses(&token_misses, "system", "system", &mut diagnostics);
         css
     } else {
         String::new()
@@ -3025,6 +3743,7 @@ fn run_with_system_floor(
         components,
         files_map,
         usage_residue,
+        admitted_transforms,
     }
 }
 
@@ -4148,6 +4867,187 @@ mod tests {
     }
 
     #[test]
+    fn known_values_through_isolatable_callbacks_extract_beside_their_runtime_path() {
+        let source = r#"import { createTransform as ct } from '@animus-ui/system';
+const double = (v: number) => v * 2;
+function half(v) { return `${v / 2}px`; }
+const named = ct('triple', (v) => `${v * 3}px`);
+const factor = 4;
+const closed = (v) => `${v * factor}px`;
+export const Box = ds
+  .props({
+    inl: { property: 'minWidth', transform: (v) => v * 2 },
+    loc: { property: 'minHeight', transform: double },
+    fn: { property: 'maxWidth', transform: half },
+    ct: { property: 'marginLeft', transform: named },
+    shut: { property: 'marginTop', transform: closed },
+  })
+  .asElement('div');
+export const App = ({ n }) => (
+  <Box inl={10} loc={10} fn={10} ct={10} shut={10} {...n} />
+);
+"#;
+        let out = analyze(&[("a.tsx", source)], &test_inputs());
+        let custom = &out.sheets.custom;
+        for declaration in [
+            "min-width: 20;",
+            "min-height: 20;",
+            "max-width: 5px;",
+            "margin-left: 30px;",
+        ] {
+            assert!(custom.contains(declaration), "{declaration} missing:\n{custom}");
+        }
+        // The closure cannot be isolated: its value stays on the runtime path.
+        assert!(!custom.contains("margin-top: 10"), "{custom}");
+        assert!(!custom.contains("margin-top: 40px"), "{custom}");
+
+        let payload = &out.replacement_configs["a.tsx::Box"];
+        let classes = payload.custom_prop_class_map.as_ref().unwrap();
+        for prop in ["inl", "loc", "fn", "ct"] {
+            assert!(classes[prop].contains_key("10"), "{prop}: {classes:?}");
+        }
+        assert!(classes["shut"].is_empty(), "{classes:?}");
+        // Every callback keeps its delivery for values the build cannot know.
+        let dynamic = payload.custom_dynamic_config.as_ref().unwrap();
+        for prop in ["inl", "loc", "fn", "ct", "shut"] {
+            assert!(dynamic[prop].transform_fn_source.is_some(), "{prop}");
+        }
+        assert_eq!(
+            out.diagnostics.iter().filter(|d| d.component == "Box").count(),
+            0,
+            "{:?}",
+            out.diagnostics
+        );
+    }
+
+    fn custom_classes<'a>(out: &'a CssOutput, id: &str, prop: &str) -> &'a HashMap<String, String> {
+        &out.replacement_configs[id].custom_prop_class_map.as_ref().unwrap()[prop]
+    }
+
+    #[test]
+    fn component_callback_lookups_keep_the_authored_value_type() {
+        let source = r#"export const Box = ds
+  .props({
+    tp: { property: 'width', transform: (v) => (typeof v === 'number' ? `${v}px` : `${v}%`) },
+    plain: { property: 'height' },
+  })
+  .asElement('div');
+export const App = () => (
+  <><Box tp={100} plain={5} /><Box tp="100" /><Box tp={{ _: 100, sm: '100' }} /></>
+);
+"#;
+        let out = analyze(&[("a.tsx", source)], &test_inputs());
+        let classes = custom_classes(&out, "a.tsx::Box", "tp");
+        let mut keys: Vec<&String> = classes.keys().collect();
+        keys.sort();
+        assert_eq!(keys, ["\"100\"", "100", "{\"_\":100,\"sm\":\"100\"}"]);
+        assert_ne!(classes["100"], classes["\"100\""]);
+        assert!(out.sheets.custom.contains("width: 100px;"), "{}", out.sheets.custom);
+        assert!(out.sheets.custom.contains("width: 100%;"), "{}", out.sheets.custom);
+        // A prop without a callback keeps the shared value keys.
+        assert_eq!(custom_classes(&out, "a.tsx::Box", "plain").keys().collect::<Vec<_>>(), ["5"]);
+        assert_eq!(out.replacement_configs["a.tsx::Box"].typed_custom_props, ["tp"]);
+    }
+
+    #[test]
+    fn unbounded_host_sensitive_or_mutating_callbacks_keep_their_runtime_path() {
+        let declare = |props: &str, renders: &str| {
+            format!(
+                "export const Box = ds.props({{ {props} }}).asElement('div');\nexport const S = ds.styles({{ w: 2.6 }}).asElement('span');\nexport const App = () => <><S />{renders}</>;\n"
+            )
+        };
+        let spin = "spin: { property: 'minWidth', transform: (v) => { while (v > 0) { v = v + 1; } return v; } }";
+        let host = "host: { property: 'minHeight', transform: (v) => (typeof globalThis.window === 'undefined' ? `${v}px` : `${v * 2}px`) }";
+        let fin = "fin: { property: 'maxWidth', transform: (v) => v * 2 }";
+        let mutate = "ma: { property: 'paddingTop', transform: (v) => { Math.round = () => 7; return `${v}px`; } }";
+        let reads = "mb: { property: 'paddingLeft', transform: (v) => `${Math.round(v)}px` }";
+        let mut inputs = test_inputs();
+        inputs.config.insert(
+            "w".into(),
+            serde_json::from_str(r#"{"property": "width", "transform": "round", "transformId": "round@system.w"}"#)
+                .unwrap(),
+        );
+        inputs
+            .set_transform_sources(Some(r#"{"round@system.w": "(v) => `${Math.round(v)}px`"}"#))
+            .unwrap();
+        for (props, renders) in [
+            (
+                [spin, host, fin, mutate, reads].join(", "),
+                "<Box spin={1} host={3} fin={10} ma={1} mb={2.4} />",
+            ),
+            (
+                [reads, mutate, fin, host, spin].join(", "),
+                "<Box mb={2.4} ma={1} fin={10} host={3} spin={1} />",
+            ),
+        ] {
+            let started = std::time::Instant::now();
+            let out = analyze(&[("a.tsx", &declare(&props, renders))], &inputs);
+            assert!(started.elapsed() < std::time::Duration::from_secs(10));
+            let custom = &out.sheets.custom;
+            assert!(custom_classes(&out, "a.tsx::Box", "spin").is_empty(), "{custom}");
+            assert!(custom_classes(&out, "a.tsx::Box", "host").is_empty(), "{custom}");
+            assert!(custom.contains("max-width: 20;"), "{custom}");
+            assert!(custom.contains("padding-left: 2px;"), "{custom}");
+            assert!(out.css.contains("width: 3px;"), "{}", out.css);
+            let dynamic = out.replacement_configs["a.tsx::Box"].custom_dynamic_config.as_ref().unwrap();
+            assert!(dynamic.contains_key("spin") && dynamic.contains_key("host"));
+            assert!(out.diagnostics.iter().all(|d| d.component != "Box"), "{:?}", out.diagnostics);
+        }
+    }
+
+    #[test]
+    fn component_callback_failures_name_the_declaring_component() {
+        let parents = r#"export const Parent = ds
+  .props({
+    w: { property: 'width', transform: (v) => { if (v === 7) throw new Error('seven'); return `${v}px`; } },
+    o: { property: 'height', transform: (v) => ({ v }) },
+  })
+  .asElement('div');
+"#;
+        let children = r#"import { Parent } from './parents';
+export const Child = Parent.extend().styles({ display: 'grid' }).asElement('div');
+export const Grand = Child.extend().styles({ display: 'flex' }).asElement('div');
+export const Override = Parent.extend()
+  .props({ w: { property: 'width', transform: (v) => { if (v === 7) throw new Error('mine'); return v; } } })
+  .asElement('div');
+export const App = () => <><Child w={7} o={3} /><Grand w={7} o={3} /><Override w={7} /></>;
+"#;
+        let out = analyze(&[("parents.tsx", parents), ("children.tsx", children)], &test_inputs());
+        let of = |kind: &str| -> Vec<(&str, &str)> {
+            out.diagnostics
+                .iter()
+                .filter(|d| d.kind == kind && d.message.contains("transform 'inline'"))
+                .map(|d| (d.file.as_str(), d.component.as_str()))
+                .collect()
+        };
+        assert_eq!(of("warn"), [("parents.tsx", "Parent"), ("children.tsx", "Override")], "{:?}", out.diagnostics);
+        assert_eq!(of("error"), [("parents.tsx", "Parent")], "{:?}", out.diagnostics);
+    }
+
+    #[test]
+    fn callback_strings_post_processing_would_reinterpret_stay_runtime() {
+        let source = r#"export const Box = ds
+  .props({
+    nstr: { property: 'minWidth', transform: (v) => `${v * 2}` },
+    num: { property: 'minHeight', transform: (v) => v * 2 },
+    tok: { property: 'maxWidth', transform: (v) => `{space.${v}}` },
+    fnv: { property: 'maxHeight', transform: (v) => `var(--k, ${v}px)` },
+    mix: { property: 'paddingTop', transform: (v) => (v > 5 ? `${v}` : `${v}px`) },
+  })
+  .asElement('div');
+export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm: 10 }} />;
+"#;
+        let out = analyze(&[("a.tsx", source)], &test_inputs());
+        for prop in ["nstr", "tok", "mix"] {
+            assert!(custom_classes(&out, "a.tsx::Box", prop).is_empty(), "{prop}: {}", out.sheets.custom);
+        }
+        for prop in ["num", "fnv"] {
+            assert_eq!(custom_classes(&out, "a.tsx::Box", prop).len(), 1, "{prop}: {}", out.sheets.custom);
+        }
+        assert!(out.sheets.custom.contains("max-height: var(--k, 3px);"), "{}", out.sheets.custom);
+    }
+
+    #[test]
     fn identifier_variant_map_resolves_through_statics() {
         let out = analyze(
             &[(
@@ -4769,25 +5669,8 @@ mod tests {
     }
 
     #[test]
-    fn named_transform_registers_and_applies() {
-        let mut inputs = test_inputs();
-        inputs.config.insert(
-            "w".into(),
-            serde_json::from_str(r#"{"property": "width", "transform": "battle"}"#).unwrap(),
-        );
-        let out = analyze(
-            &[
-                (
-                    "t.tsx",
-                    "import { createTransform } from '@animus-ui/system';\nexport const t1 = createTransform('battle', (v) => `${v}px`);\n",
-                ),
-                (
-                    "a.tsx",
-                    "export const C = ds.styles({ w: 3 }).asElement('div');\nexport const App = () => <C />;\n",
-                ),
-            ],
-            &inputs,
-        );
+    fn configured_transform_registers_and_applies() {
+        let out = analyze_with_battle_transform("(v) => `${v}px`");
         assert!(
             out.sheets.base.contains("width: 3px"),
             "{}",
@@ -4799,19 +5682,21 @@ mod tests {
         let mut inputs = test_inputs();
         inputs.config.insert(
             "w".into(),
-            serde_json::from_str(r#"{"property": "width", "transform": "battle"}"#).unwrap(),
+            serde_json::from_str(
+                r#"{"property": "width", "transform": "battle", "transformId": "battle@system.w"}"#,
+            )
+            .unwrap(),
         );
-        let transform_file = format!(
-            "import {{ createTransform }} from '@animus-ui/system';\nexport const t1 = createTransform('battle', {transform_source});\n"
-        );
+        inputs
+            .set_transform_sources(Some(
+                &serde_json::json!({ "battle@system.w": transform_source }).to_string(),
+            ))
+            .unwrap();
         analyze(
-            &[
-                ("t.tsx", transform_file.as_str()),
-                (
-                    "a.tsx",
-                    "export const C = ds.styles({ w: 3 }).asElement('div');\nexport const App = () => <C />;\n",
-                ),
-            ],
+            &[(
+                "a.tsx",
+                "export const C = ds.styles({ w: 3 }).asElement('div');\nexport const App = () => <C />;\n",
+            )],
             &inputs,
         )
     }
@@ -5378,13 +6263,14 @@ mod tests {
         );
     }
 
-    fn failing_transform_variant_inputs(dev_mode: bool) -> CssInputs {
+    /// Inputs with one `layout` group over `config` and its configured sources.
+    fn configured_inputs(config: &str, props: &str, sources: Option<&str>, dev_mode: bool) -> CssInputs {
         let mut inputs = CssInputs::from_json(
             None,
             None,
             None,
-            Some(r#"{"w": {"property": "width", "transform": "boom"}}"#),
-            Some(r#"{"layout": ["w"]}"#),
+            Some(config),
+            Some(&format!(r#"{{"layout": {props}}}"#)),
             None,
             None,
             None,
@@ -5396,10 +6282,357 @@ mod tests {
             dev_mode,
         )
         .unwrap();
+        inputs.set_transform_sources(sources).unwrap();
         inputs
-            .set_transform_sources(Some(r#"{"boom": "(v) => ({ bad: v })"}"#))
+    }
+
+    /// A configured source reading a free `btoa`/`atob` is admitted only when
+    /// the loader's evidence for its own definition shows the host function;
+    /// absent, malformed, missing or rejecting evidence leaves the raw value.
+    #[test]
+    fn host_reading_configured_sources_need_their_own_host_binding_evidence() {
+        let config = r#"{"a": {"property": "width", "transform": "enc", "transformId": "enc@a"}, "b": {"property": "height", "transform": "enc", "transformId": "enc@b"}, "c": {"property": "top", "transform": "plain", "transformId": "plain@c"}}"#;
+        let sources = r#"{"enc@a": "(v) => btoa(String(v))", "enc@b": "(v) => btoa(String(v))", "plain@c": "(v) => String(v)"}"#;
+        let usage = "export const Box = ds.styles({ a: 'x', b: 'x', c: 'x' }).asElement('div');\nexport const App = () => <Box />;\n";
+        for (provenance, admitted, reason) in [
+            (Some(r#"{"enc@a": {"hostGlobals": ["btoa"]}, "enc@b": {"rejection": "reads 'btoa' declared in /m.ts outside the callback"}, "plain@c": {"hostGlobals": []}}"#),
+                vec!["enc@a", "plain@c"], "its callable reads 'btoa' declared in /m.ts outside the callback"),
+            (Some(r#"{"enc@a": {"hostGlobals": ["btoa"]}, "plain@c": {"hostGlobals": []}}"#), vec!["enc@a", "plain@c"], "supplied no host-binding provenance for it"),
+            (Some(r#"{"enc@a": {"hostGlobals": []}, "enc@b": {"hostGlobals": ["atob"]}}"#), vec!["plain@c"], "is not shown to read the host 'btoa'"),
+            (Some("{not json"), vec!["plain@c"], "host-binding provenance is malformed"),
+            (None, vec!["plain@c"], "no host-binding provenance was supplied"),
+        ] {
+            let mut inputs = configured_inputs(config, r#"["a", "b", "c"]"#, Some(sources), false);
+            inputs.transform_provenance = crate::transforms::TransformProvenance::from_json(provenance);
+            let out = analyze(&[("use.tsx", usage)], &inputs);
+            let keys: Vec<&str> = out.admitted_transforms.keys().map(String::as_str).collect();
+            assert_eq!(keys, admitted, "{provenance:?}");
+            let rejected: Vec<&String> = out.diagnostics.iter()
+                .filter(|d| d.code.as_deref() == Some(CONFIGURED_TRANSFORM_REJECTED)).map(|d| &d.message).collect();
+            assert!(rejected.iter().any(|m| m.contains("configured source reads 'btoa', but") && m.contains(reason)), "{provenance:?}: {rejected:#?}");
+            assert!(rejected.iter().all(|m| !m.contains("'plain'")), "{rejected:#?}");
+        }
+    }
+
+    fn failing_transform_variant_inputs(dev_mode: bool) -> CssInputs {
+        configured_inputs(
+            r#"{"w": {"property": "width", "transform": "boom"}}"#,
+            r#"["w"]"#,
+            Some(r#"{"boom": "(v) => ({ bad: v })"}"#),
+            dev_mode,
+        )
+    }
+
+    /// `wide` and `tall` share one configured callable; `inset` and `lift`
+    /// bind two different callables that share the readable name `unit`;
+    /// `count` binds a callable whose readable name is a standard global.
+    fn binding_inputs() -> CssInputs {
+        configured_inputs(
+            r#"{
+                "wide": {"property": "width", "transform": "double", "transformId": "double@system.tall"},
+                "tall": {"property": "height", "transform": "double", "transformId": "double@system.tall"},
+                "inset": {"property": "left", "transform": "unit", "transformId": "unit@system.inset"},
+                "lift": {"property": "top", "transform": "unit", "transformId": "unit@system.lift"},
+                "count": {"property": "zIndex", "transform": "Map", "transformId": "Map@system.count"},
+                "keyed": {"property": "order", "transform": "keyed", "transformId": "keyed@system.keyed"}
+            }"#,
+            r#"["wide", "tall", "inset", "lift", "count", "keyed"]"#,
+            Some(
+                r#"{
+                    "double@system.tall": "(v) => `${v * 2}px`",
+                    "unit@system.inset": "(v) => `${v}px`",
+                    "unit@system.lift": "(v) => `${v}rem`",
+                    "Map@system.count": "(v) => v + 1",
+                    "keyed@system.keyed": "(v) => new Map([[1, String(v * 3)]]).get(1)"
+                }"#,
+            ),
+            false,
+        )
+    }
+
+    const BINDING_USE: (&str, &str) = (
+        "use.tsx",
+        "export const Box = ds.styles({ wide: 10, tall: 12, inset: 3, lift: 3, count: 4, keyed: 2 }).asElement('div');\nexport const App = () => <Box />;\n",
+    );
+    const SAME_NAMED_A: (&str, &str) = (
+        "decl-a.tsx",
+        "import { createTransform } from '@animus-ui/system';\nexport const a = createTransform('unit', (v) => 'HIJACK-A');\nexport const d = createTransform('double', (v) => 'HIJACK-D');\n",
+    );
+    const SAME_NAMED_B: (&str, &str) = (
+        "decl-b.tsx",
+        "import { createTransform } from '@animus-ui/system';\nexport const b = createTransform('unit', (v) => 'HIJACK-B');\nexport const m = createTransform('Map', (v) => 'HIJACK-M');\n",
+    );
+
+    #[test]
+    fn configured_bindings_own_their_props_in_either_analysis_order() {
+        let inputs = binding_inputs();
+        let forward = analyze(&[SAME_NAMED_A, SAME_NAMED_B, BINDING_USE], &inputs);
+        let reversed = analyze(&[BINDING_USE, SAME_NAMED_B, SAME_NAMED_A], &inputs);
+        for out in [&forward, &reversed] {
+            for declaration in [
+                "width: 20px",
+                "height: 24px",
+                "left: 3px",
+                "top: 3rem",
+                "z-index: 5",
+                "order: 6",
+            ] {
+                assert!(out.css.contains(declaration), "{declaration}: {}", out.css);
+            }
+            assert!(!out.css.contains("HIJACK"), "{}", out.css);
+            assert_eq!(
+                out.admitted_transforms.keys().collect::<Vec<_>>(),
+                vec![
+                    "Map@system.count",
+                    "double@system.tall",
+                    "keyed@system.keyed",
+                    "unit@system.inset",
+                    "unit@system.lift",
+                ]
+            );
+        }
+        assert_eq!(forward.css, reversed.css);
+    }
+
+    #[test]
+    fn dynamic_metadata_names_the_bound_definition_and_keeps_the_readable_name() {
+        let out = analyze(
+            &[(
+                "use.tsx",
+                "export const Box = ds.styles({}).system({ layout: true }).asElement('div');\nexport const App = ({ v }) => <Box inset={v} lift={v} wide={v} tall={v} />;\n",
+            )],
+            &binding_inputs(),
+        );
+        let meta = |prop: &str| {
+            let meta = &out.dynamic_props[prop];
+            (meta.transform_name.as_deref(), meta.transform_id.as_deref())
+        };
+        assert_eq!(meta("inset"), (Some("unit"), Some("unit@system.inset")));
+        assert_eq!(meta("lift"), (Some("unit"), Some("unit@system.lift")));
+        assert_eq!(meta("wide"), meta("tall"));
+        assert_eq!(meta("wide"), (Some("double"), Some("double@system.tall")));
+    }
+
+    fn name_keyed_size_inputs(sources: Option<&str>) -> CssInputs {
+        configured_inputs(
+            r#"{"w": {"property": "width", "transform": "size"}}"#,
+            r#"["w"]"#,
+            sources,
+            false,
+        )
+    }
+
+    const SIZE_HIJACK: (&str, &str) = (
+        "hijack.tsx",
+        "import { createTransform } from '@animus-ui/system';\nexport const size = createTransform('size', (v) => 'HIJACK');\n",
+    );
+    const SIZE_USE: (&str, &str) = (
+        "use.tsx",
+        "export const Box = ds.styles({ w: 4 }).asElement('div');\nexport const App = () => <Box />;\n",
+    );
+
+    #[test]
+    fn a_project_declaration_cannot_replace_a_name_keyed_configured_source() {
+        let inputs = name_keyed_size_inputs(Some(r#"{"size": "(v) => `${v}px`"}"#));
+        for entries in [[SIZE_HIJACK, SIZE_USE], [SIZE_USE, SIZE_HIJACK]] {
+            let out = analyze(&entries, &inputs);
+            assert!(out.css.contains("width: 4px"), "{}", out.css);
+            assert!(!out.css.contains("HIJACK"), "{}", out.css);
+        }
+    }
+
+    #[test]
+    fn a_project_declaration_does_not_supply_a_missing_configured_source() {
+        let out = analyze(&[SIZE_HIJACK, SIZE_USE], &name_keyed_size_inputs(None));
+        assert!(!out.css.contains("HIJACK"), "{}", out.css);
+        assert!(out.css.contains("width: 4;"), "raw fallback: {}", out.css);
+        assert!(out.admitted_transforms.is_empty());
+    }
+
+    const NAMED_PROPS: &str = "export const C = ds.props({ shared: { property: 'left', transform: 'double' }, ambiguous: { property: 'top', transform: 'unit' }, unknown: { property: 'right', transform: 'nope' } }).asElement('div');\n";
+
+    fn unbound_warnings(out: &CssOutput) -> Vec<(String, String, String)> {
+        let mut found: Vec<_> = diagnostics_of(out, "warn")
+            .into_iter()
+            .filter(|d| d.message.contains("names transform"))
+            .map(|d| (d.file.clone(), d.component.clone(), d.message.clone()))
+            .collect();
+        found.sort();
+        found
+    }
+
+    fn assert_one_warning_per_unbound_name(out: &CssOutput, file: &str, component: &str) {
+        let found = unbound_warnings(out);
+        assert_eq!(found.len(), 2, "{:#?}", out.diagnostics);
+        assert!(found.iter().all(|(f, c, _)| f == file && c == component), "{found:#?}");
+        assert!(found.iter().any(|(_, _, m)| m.contains("'ambiguous'") && m.contains("'unit'") && m.contains("2 configured transforms")), "{found:#?}");
+        assert!(found.iter().any(|(_, _, m)| m.contains("'unknown'") && m.contains("'nope'") && m.contains("no configured transform")), "{found:#?}");
+        assert!(
+            !out.diagnostics.iter().any(|d| d.message.contains("'double'") || d.message.contains("not bound")),
+            "{:#?}",
+            out.diagnostics
+        );
+    }
+
+    #[test]
+    fn a_component_transform_name_binds_only_one_configured_definition() {
+        let out = analyze(
+            &[
+                SAME_NAMED_A,
+                ("use.tsx", &format!("{NAMED_PROPS}export const App = () => <C shared={{3}} ambiguous={{3}} unknown={{3}} />;\n")),
+            ],
+            &binding_inputs(),
+        );
+        assert!(out.css.contains("left: 6px"), "{}", out.css);
+        assert!(out.css.contains("top: 3;"), "{}", out.css);
+        assert!(out.css.contains("right: 3;"), "{}", out.css);
+        assert!(!out.css.contains("HIJACK"), "{}", out.css);
+        assert_one_warning_per_unbound_name(&out, "use.tsx", "C");
+    }
+
+    #[test]
+    fn an_unbound_component_transform_name_warns_without_static_usage() {
+        let out = analyze(
+            &[(
+                "use.tsx",
+                &format!("{NAMED_PROPS}export const App = ({{ v }}) => <C shared={{v}} ambiguous={{v}} unknown={{v}} />;\n"),
+            )],
+            &binding_inputs(),
+        );
+        assert_one_warning_per_unbound_name(&out, "use.tsx", "C");
+    }
+
+    #[test]
+    fn independent_declarations_warn_separately_and_extensions_do_not_repeat() {
+        let declaration = |name: &str| {
+            format!("export const {name} = ds.props({{ unknown: {{ property: 'right', transform: 'nope' }} }}).asElement('div');\n")
+        };
+        let out = analyze(
+            &[
+                ("a.tsx", &format!("{}export const AppA = () => <A unknown={{1}} />;\n", declaration("A"))),
+                (
+                    "b.tsx",
+                    &format!(
+                        "{}export const Child = B.extend().styles({{ display: 'block' }}).asElement('div');\nexport const AppB = ({{ v }}) => <><B unknown={{v}} /><Child unknown={{2}} /></>;\n",
+                        declaration("B")
+                    ),
+                ),
+            ],
+            &binding_inputs(),
+        );
+        let found = unbound_warnings(&out);
+        let sites: Vec<(&str, &str)> = found.iter().map(|(f, c, _)| (f.as_str(), c.as_str())).collect();
+        assert_eq!(sites, vec![("a.tsx", "A"), ("b.tsx", "B")], "{:#?}", out.diagnostics);
+    }
+
+    #[test]
+    fn rejected_same_named_definitions_name_their_bound_props() {
+        let closed = "(v) => `${v / BASE}px`";
+        let out = analyze(
+            &[(
+                "use.tsx",
+                "export const Box = ds.styles({ inset: 2, lift: 2, wide: 2 }).asElement('div');\nexport const App = () => <Box />;\n",
+            )],
+            &configured_inputs(
+                r#"{
+                    "inset": {"property": "left", "transform": "unit", "transformId": "unit@system.inset"},
+                    "lift": {"property": "top", "transform": "unit", "transformId": "unit@system.lift"},
+                    "wide": {"property": "width", "transform": "double", "transformId": "double@system.tall"},
+                    "tall": {"property": "height", "transform": "double", "transformId": "double@system.tall"}
+                }"#,
+                r#"["inset", "lift", "wide", "tall"]"#,
+                Some(
+                    &serde_json::json!({
+                        "unit@system.inset": closed,
+                        "unit@system.lift": closed,
+                        "double@system.tall": closed,
+                    })
+                    .to_string(),
+                ),
+                false,
+            ),
+        );
+        let rejected = |name: &str| -> Vec<String> {
+            out.diagnostics
+                .iter()
+                .filter(|d| d.code.as_deref() == Some(CONFIGURED_TRANSFORM_REJECTED))
+                .filter(|d| d.component == format!("createTransform('{name}')"))
+                .map(|d| {
+                    assert_eq!((d.file.as_str(), d.kind.as_str()), ("system", "warn"));
+                    d.message.clone()
+                })
+                .collect()
+        };
+        let unit = rejected("unit");
+        assert_eq!(unit.len(), 2, "{:#?}", out.diagnostics);
+        assert_ne!(unit[0], unit[1]);
+        assert!(unit.iter().any(|m| m.contains("bound to prop 'inset'")), "{unit:#?}");
+        assert!(unit.iter().any(|m| m.contains("bound to prop 'lift'")), "{unit:#?}");
+        let double = rejected("double");
+        assert_eq!(double.len(), 1, "{:#?}", out.diagnostics);
+        assert!(double[0].contains("bound to props 'tall', 'wide'"), "{}", double[0]);
+    }
+
+    #[test]
+    fn configured_source_failing_admission_is_neither_registered_nor_admitted() {
+        let mut inputs = CssInputs::from_json(
+            None,
+            None,
+            None,
+            Some(
+                r#"{"w": {"property": "width", "transform": "closed"}, "g": {"property": "height", "transform": "open"}}"#,
+            ),
+            Some(r#"{"layout": ["w", "g"]}"#),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            false,
+        )
+        .unwrap();
+        inputs
+            .set_transform_sources(Some(
+                r#"{"closed": "(v) => `${v / BASE}rem`", "open": "(v) => `${v / 4}rem`"}"#,
+            ))
             .unwrap();
-        inputs
+        let out = analyze(
+            &[(
+                "one.tsx",
+                "export const Box = ds.styles({ w: 8, g: 8 }).asElement('div');\nexport const App = () => <Box />;\n",
+            )],
+            &inputs,
+        );
+
+        assert_eq!(
+            out.admitted_transforms.keys().collect::<Vec<_>>(),
+            vec!["open"],
+            "only the self-contained configured source is admitted"
+        );
+        assert!(out.css.contains("height: 2rem"), "{}", out.css);
+        assert!(out.css.contains("width: 8"), "raw fallback: {}", out.css);
+        let admission: Vec<_> = out
+            .diagnostics
+            .iter()
+            .filter(|d| d.kind == "warn" && d.component == "createTransform('closed')")
+            .map(|d| d.message.as_str())
+            .collect();
+        assert!(
+            admission
+                .iter()
+                .any(|m| m.contains("external symbol 'BASE'")),
+            "{admission:?}"
+        );
+        assert!(
+            !out.diagnostics
+                .iter()
+                .any(|d| d.message.contains("BASE is not defined")),
+            "a rejected source must never be evaluated: {:#?}",
+            out.diagnostics
+        );
     }
 
     /// Both options hit the invalid-result-shape gate, but reconciliation
@@ -5667,6 +6900,221 @@ mod tests {
             "unused option prunes through the local rename: {}",
             out.sheets.variants
         );
+    }
+
+    fn runtime_custom_props(out: &CssOutput, id: &str) -> Vec<String> {
+        let mut props: Vec<String> = out.replacement_configs[id]
+            .custom_dynamic_config
+            .iter()
+            .flat_map(|config| config.keys().cloned())
+            .collect();
+        props.sort();
+        props
+    }
+
+    const CONFINED_CARD: &str = "const Card = ds\n  .props({\n    inl: { property: 'minWidth', transform: (v) => `${v * 2}px` },\n    idle: { property: 'minHeight', transform: (v) => `${v * 3}px` },\n  })\n  .asElement('div');\n";
+
+    #[test]
+    fn a_confined_component_delivers_only_callbacks_a_value_without_a_class_needs() {
+        let source = r#"import { helper } from './fx';
+import Math from './m';
+import Set from './s';
+import Map from './unread';
+const factor = 3;
+const Card = ds
+  .props({
+    inl: { property: 'minWidth', transform: (v) => `${v * 2}px` },
+    idle: { property: 'minHeight', transform: (v) => `${v * 3}px` },
+    shut: { property: 'maxWidth', transform: (v) => `${v * factor}px` },
+    tone: { property: 'maxHeight', scale: { sm: 4 }, transform: (v) => `${v}px` },
+    reads: { property: 'top', transform: (v) => helper(v) },
+    rounds: { property: 'left', transform: (v) => `${Math.round(v)}px` },
+    sets: { property: 'right', transform: (v) => `${new Set([v]).size}px` },
+    plain: { property: 'bottom', transform: (v) => `${Number.parseFloat(v)}px` },
+    param: { property: 'width', transform: (Map) => `${Map}px` },
+  })
+  .asElement('div');
+type CardProps = React.ComponentProps<typeof Card>;
+export const App = () => <main><Card inl={10} shut={10} tone="lg">text</Card></main>;
+"#;
+        let out = analyze(&[("a.tsx", source)], &test_inputs());
+        // The closure declines evaluation, `lg` misses the strict scale, and
+        // the never-passed `reads`, `rounds` and `sets` are text that reads an
+        // import, even one named like a standard global.
+        assert_eq!(runtime_custom_props(&out, "a.tsx::Card"), ["reads", "rounds", "sets", "shut", "tone"]);
+        assert!(out.sheets.custom.contains("min-width: 20px"), "{}", out.sheets.custom);
+        let payload = &out.replacement_configs["a.tsx::Card"];
+        let classes = payload.custom_prop_class_map.as_ref().unwrap();
+        assert!(classes["inl"].contains_key("10"), "{classes:?}");
+        assert!(classes["idle"].is_empty(), "{classes:?}");
+        assert_eq!(payload.typed_custom_props, ["inl"]);
+        let replacement = &out.components["a.tsx::Card"].replacement;
+        assert!(!replacement.contains("v * 2") && !replacement.contains("v * 3"), "{replacement}");
+        assert!(replacement.contains("v * factor"), "{replacement}");
+        assert!(replacement.contains("\"inl\"") && replacement.contains("\"idle\""), "{replacement}");
+    }
+
+    #[test]
+    fn uses_outside_the_proof_keep_callback_delivery() {
+        let both: &[&str] = &["idle", "inl"];
+        let inl: &[&str] = &["inl"];
+        let none: &[&str] = &[];
+        let cases: [(&str, &str, &[&str]); 27] = [
+            ("export ", "export const App = () => <><Card inl={10} /></>;\n", both),
+            ("", "export { Card };\nexport const App = () => <><Card inl={10} /></>;\n", both),
+            ("", "export default Card;\n", both),
+            ("", "export const App = () => <><Card inl={10} /></>;\nexport const Alias = Card;\n", both),
+            ("", "export const App = () => createElement(Card, { inl: 10 });\n", both),
+            ("", "export const App = () => <><Card inl={10} /></>;\nexport const peek = () => eval('Card');\n", both),
+            ("", "export const App = () => <Card inl={10} />;\n", both),
+            ("", "export const App = () => <Layout><Card inl={10} /></Layout>;\n", both),
+            ("", "export const App = () => <ul>{[1].map((n) => <Card key={n} inl={10} />)}</ul>;\n", both),
+            ("", "export const App = () => <div title={<Card inl={10} />} />;\n", both),
+            ("", "export const App = (p) => <><Card inl={10} {...p} /></>;\n", both),
+            ("", "export const App = () => <><Card inl={-10} /></>;\nexport const Box = Card.extend().asElement('span');\n", both),
+            ("", "export const App = (p) => <><Card inl={p.n} /></>;\n", inl),
+            ("", "export const App = ({ on }) => <section>{on ? <Card inl={10} /> : (<Card inl={10}><span><Card inl={10} /></span></Card>)}</section>;\nexport const Loose = ({ n }) => <><Card inl={n} /></>;\n", inl),
+            ("", "export const App = () => <><Card inl={1e21} /></>;\n", inl),
+            ("", "export const App = () => <><Card inl=<b /> /></>;\n", inl),
+            // An element inside another element's attributes reaches whatever receives it.
+            ("", "export const App = () => <Frame header={<div><Card inl={10} /></div>} />;\n", both),
+            ("", "export const App = () => <List render={(i) => <li><Card inl={10} /></li>} />;\n", both),
+            ("", "export const App = () => <Frame {...{ header: <div><Card inl={10} /></div> }} />;\n", both),
+            ("", "export const App = ({ n }) => <Frame><div><Card inl={n} /></div></Frame>;\n", inl),
+            // Literal keys must be the runtime's: digits JavaScript prints the same way.
+            ("", "export const App = () => <><Card inl={0.000005} /></>;\n", inl),
+            ("", "export const App = () => <><Card inl={0.000001} /></>;\n", inl),
+            ("", "export const App = () => <><Card inl={-0.000005} /></>;\n", inl),
+            ("", "export const App = () => <><Card inl={0.00001} /></>;\n", none),
+            ("", "export const App = () => <><Card inl={-0.00001} /></>;\n", none),
+            ("", "export const App = () => <><Card inl={{ _: 10, sm: { a: 1 } }} /></>;\n", inl),
+            ("", "export const App = () => <><Card inl={{ _: 10, sm: 20 }} /></>;\n", none),
+        ];
+        for (prefix, rest, retained) in cases {
+            let source = format!("{prefix}{CONFINED_CARD}{rest}");
+            let out = analyze(&[("a.tsx", source.as_str())], &test_inputs());
+            assert_eq!(runtime_custom_props(&out, "a.tsx::Card"), retained, "{prefix}{rest}");
+            let replacement = &out.components["a.tsx::Card"].replacement;
+            assert_eq!(replacement.contains("v * 2"), retained.contains(&"inl"), "{rest}: {replacement}");
+        }
+    }
+
+    #[test]
+    fn a_confined_parent_delivers_the_callbacks_its_runtime_descendants_read() {
+        let source = r#"import { Kit } from './kit';
+const Parent = ds
+  .props({ inl: { property: 'minWidth', transform: (v) => `${v * 2}px` } })
+  .asElement('div');
+const Child = Parent.extend().asElement('section');
+export const Grand = Child.extend().asElement('article');
+const Quiet = Parent.extend().asElement('aside');
+const Base = ds
+  .props({ k: { property: 'minHeight', transform: (v) => `${v * 3}px` } })
+  .asElement('div');
+export const Over = Base.extend()
+  .props({ k: { property: 'minHeight', transform: (v) => `${v * 7}px` } })
+  .asElement('span');
+const Kid = Kit.extend().asElement('i');
+export const App = () => <><Quiet inl={10} /><Base k={10} /><Kid lift={10} /></>;
+"#;
+        let kit = "export const Kit = ds.props({ lift: { property: 'top', transform: (v) => `${v}px` } }).asElement('div');\n";
+        let out = analyze(&[("kit.tsx", kit), ("a.tsx", source)], &test_inputs());
+        // A pruned extension of an imported parent no longer names it, which
+        // the transform answers by keeping the parent's module imported.
+        assert!(runtime_custom_props(&out, "a.tsx::Kid").is_empty());
+        assert!(out.replacement_configs["a.tsx::Kid"].drops_parent_reference);
+        assert!(!out.replacement_configs["a.tsx::Child"].drops_parent_reference);
+        for id in ["a.tsx::Parent", "a.tsx::Child", "a.tsx::Grand"] {
+            assert_eq!(runtime_custom_props(&out, id), ["inl"], "{id}");
+        }
+        assert!(out.components["a.tsx::Parent"].replacement.contains("v * 2"));
+        assert!(out.components["a.tsx::Child"].replacement.contains("Parent.customTransforms"));
+        assert!(out.components["a.tsx::Grand"].replacement.contains("Child.customTransforms"));
+        assert!(runtime_custom_props(&out, "a.tsx::Quiet").is_empty());
+        assert!(runtime_custom_props(&out, "a.tsx::Base").is_empty());
+        assert_eq!(runtime_custom_props(&out, "a.tsx::Over"), ["k"]);
+        assert!(out.components["a.tsx::Over"].replacement.contains("v * 7"));
+        assert!(!out.components["a.tsx::Base"].replacement.contains("v * 3"));
+    }
+
+    /// `wide` and `tall` share one configured callable, in different groups;
+    /// `inset` binds a callable no other prop shares.
+    fn split_group_inputs() -> CssInputs {
+        let mut inputs = CssInputs::from_json(
+            None,
+            None,
+            None,
+            Some(
+                r#"{
+                    "wide": {"property": "width", "transform": "double", "transformId": "double@system.wide"},
+                    "tall": {"property": "height", "transform": "double", "transformId": "double@system.wide"},
+                    "inset": {"property": "left", "transform": "unit", "transformId": "unit@system.inset"}
+                }"#,
+            ),
+            Some(r#"{"frame": ["wide", "inset"], "layout": ["tall"]}"#),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            false,
+        )
+        .unwrap();
+        inputs
+            .set_transform_sources(Some(
+                r#"{"double@system.wide": "(v) => `${v * 2}px`", "unit@system.inset": "(v) => `${v}px`"}"#,
+            ))
+            .unwrap();
+        for (name, px) in [("sm", "480"), ("sm2", "560"), ("md", "768")] {
+            inputs.theme.insert(format!("breakpoints.{name}"), px.into());
+        }
+        inputs
+    }
+
+    #[test]
+    fn system_props_active_only_on_confined_static_uses_ship_no_slot_or_callback() {
+        let render = "export const App = ({ n }) => <><Frame wide={4} inset={3} /><Panel tall={n} /></>;\n";
+        let declare = |frame: &str, render: &str| {
+            format!("{frame}const Frame = ds.system({{ frame: true }}).asElement('div');\nexport const Panel = ds.system({{ layout: true }}).asElement('section');\n{render}")
+        };
+        let out = analyze(&[("a.tsx", declare("", render).as_str())], &split_group_inputs());
+        assert_eq!(out.dynamic_props.keys().collect::<Vec<_>>(), ["tall"]);
+        assert_eq!(out.admitted_transforms.keys().collect::<Vec<_>>(), ["double@system.wide"]);
+        for declaration in ["width: 8px", "left: 3px"] {
+            assert!(out.css.contains(declaration), "{declaration}: {}", out.css);
+        }
+        assert!(!out.css.contains("-dyn-wide") && !out.css.contains("-dyn-inset"), "{}", out.css);
+        assert!(!out.components["a.tsx::Frame"].replacement.contains("dynamicPropConfig"));
+
+        let exported = analyze(
+            &[("a.tsx", declare("export { Frame };\n", render).as_str())],
+            &split_group_inputs(),
+        );
+        assert_eq!(exported.dynamic_props.keys().collect::<Vec<_>>(), ["inset", "tall", "wide"]);
+        assert_eq!(exported.admitted_transforms.len(), 2);
+
+        let dynamic = analyze(
+            &[("a.tsx", declare("", "export const App = ({ n }) => <><Frame wide={n} inset={3} /></>;\n").as_str())],
+            &split_group_inputs(),
+        );
+        assert_eq!(dynamic.dynamic_props.keys().collect::<Vec<_>>(), ["wide"]);
+        assert_eq!(dynamic.admitted_transforms.keys().collect::<Vec<_>>(), ["double@system.wide"]);
+
+        // Inside an attribute nothing is proven (and the unresolved `Layout`
+        // widens the floor); `wide` keeps its slot for a value whose runtime
+        // key differs from the build's while `inset` keys agree.
+        let cases: [(&str, &[&str]); 3] = [
+            ("export const App = () => <Layout header={<div><Frame wide={4} inset={3} /></div>} />;\n", &["inset", "tall", "wide"]),
+            ("export const App = () => <><Frame wide={0.000005} inset={3} /></>;\n", &["wide"]),
+            ("export const App = () => <><Frame wide={{ sm: 4, sm2: 6 }} inset={{ sm: 3, md: 5 }} /></>;\n", &["wide"]),
+        ];
+        for (render, want) in cases {
+            let out = analyze(&[("a.tsx", declare("", render).as_str())], &split_group_inputs());
+            assert_eq!(out.dynamic_props.keys().collect::<Vec<_>>(), want, "{render}");
+        }
     }
 }
 

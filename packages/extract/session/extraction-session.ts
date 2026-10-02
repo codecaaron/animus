@@ -170,6 +170,9 @@ function isDiskString<Value>(value: Value): value is Value & string {
   );
 }
 
+/** Rejection of an attempt whose corpus holds an aborted parse. */
+class AbortedParseRejection extends Error {}
+
 function isDiskNumber<Value>(value: Value): value is Value & number {
   return (
     Object(value) !== value &&
@@ -307,6 +310,14 @@ export class ExtractionSession {
   onArtifactWrite: ((name: string, content: string) => void) | null = null;
   private statusAttemptId = 0;
   private statusAttemptOpen = false;
+  /** Message of the aborted-parse rejection holding publication. While set,
+   *  the cache keeps every observed source so the repair publishes them in
+   *  one generation; a successful publication clears it. */
+  private heldRejection: string | null = null;
+  /** A system reload an aborted parse rejected. Its dependency hashes already
+   *  advanced, so the first batch that passes the parse check publishes
+   *  through the full pipeline, which loads the latest system. */
+  private systemReloadOwed = false;
   /** Monotonic readiness witness: flips true on the first complete
    *  publication and never regresses; every later status write carries it. */
   private firstEmissionComplete = false;
@@ -525,7 +536,9 @@ export class ExtractionSession {
         const promise = this.runFullPipeline(this.pendingFromBatch(changes));
         setAnalysisStartedPromise(promise);
         await promise;
+        this.systemReloadOwed = false;
       } catch (err) {
+        if (err instanceof AbortedParseRejection) this.systemReloadOwed = true;
         // A failed reset re-run is a failed cycle, not a fallback: swallowing
         // it would republish against the stale system. The status write is not
         // redundant: the system load throws before the analyze-and-emit status
@@ -684,6 +697,21 @@ export class ExtractionSession {
         this.fileCache.get(rel)!.hash,
       ]);
 
+      const commitObservedBatch = () => {
+        for (const update of inventoryUpdates) {
+          let inventory = this.externalInventory.get(update.root);
+          if (!inventory) {
+            inventory = new Map();
+            this.externalInventory.set(update.root, inventory);
+          }
+          if (update.hash === null) inventory.delete(update.key);
+          else
+            inventory.set(update.key, { hash: update.hash, abs: update.abs });
+        }
+        for (const key of ownerRemovals) {
+          delete this.externalFileOwners[key];
+        }
+      };
       let ingested: SourceIngestionResult;
       try {
         this.beginStatusAttempt();
@@ -693,6 +721,16 @@ export class ExtractionSession {
           fileCache: this.fileCache,
           externalFileOwners: this.externalFileOwners,
         });
+        this.throwOnAbortedParse(ingested);
+        if (this.systemReloadOwed) {
+          this.log(
+            'system reload: publishing the reload a parse hold deferred'
+          );
+          this.resetForHmr();
+          await this.runFullPipeline(pending);
+          this.systemReloadOwed = false;
+          return;
+        }
         this.externalFileOwners = projectExternalFileOwners(
           ingested,
           this.externalFileOwners
@@ -706,13 +744,19 @@ export class ExtractionSession {
         setAnalysisStartedPromise(promise);
         await promise;
       } catch (err) {
-        // Roll the cache back: the failed attempt published nothing, so the
-        // same content must analyze again on the next observation.
-        for (const [key, prior] of priorCacheEntries) {
-          if (prior === null) this.fileCache.delete(key);
-          else this.fileCache.set(key, prior);
+        if (err instanceof AbortedParseRejection) {
+          // An aborted parse holds publication: keep every observed source,
+          // valid edits included, for the repair to publish together.
+          commitObservedBatch();
+        } else {
+          // Roll the cache back: the failed attempt published nothing, so
+          // the same content must analyze again on the next observation.
+          for (const [key, prior] of priorCacheEntries) {
+            if (prior === null) this.fileCache.delete(key);
+            else this.fileCache.set(key, prior);
+          }
+          this.externalFileOwners = priorExternalFileOwners;
         }
-        this.externalFileOwners = priorExternalFileOwners;
         if (this.statusAttemptOpen) {
           this.debouncePending.clear();
           this.writeAnalysisStatus('failed', pending, String(err));
@@ -720,27 +764,29 @@ export class ExtractionSession {
         throw err;
       }
       this.publishSourceIngestion(ingested);
-      for (const update of inventoryUpdates) {
-        let inventory = this.externalInventory.get(update.root);
-        if (!inventory) {
-          inventory = new Map();
-          this.externalInventory.set(update.root, inventory);
-        }
-        if (update.hash === null) inventory.delete(update.key);
-        else inventory.set(update.key, { hash: update.hash, abs: update.abs });
-      }
-      for (const key of ownerRemovals) {
-        delete this.externalFileOwners[key];
-      }
+      commitObservedBatch();
     } else if (this.statusAttemptOpen) {
       // A debounced burst produced nothing analyzable — close the attempt so
-      // no loader waits on a status that never commits.
+      // no loader waits on a status that never commits. A held rejection
+      // still describes the corpus, so it closes as failed.
       this.debouncePending.clear();
-      this.writeAnalysisStatus('idle', []);
+      if (this.heldRejection === null) this.writeAnalysisStatus('idle', []);
+      else this.writeAnalysisStatus('failed', [], this.heldRejection);
     }
   }
 
+  /** An aborted parse fails the attempt in every mode with a terminal
+   *  `failed` status, so the last commit stays current, and holds publication
+   *  until an attempt without one publishes. */
+  private throwOnAbortedParse(prepared: SourceIngestionResult): void {
+    const rejection = this.corpus.rejection(prepared);
+    if (!rejection) return;
+    this.heldRejection = rejection.message;
+    throw new AbortedParseRejection(rejection.message);
+  }
+
   private publishSourceIngestion(result: SourceIngestionResult): void {
+    this.heldRejection = null;
     this.fileCache = new Map(
       result.originalEntries.map((entry) => [
         entry.path,
@@ -1009,6 +1055,7 @@ export class ExtractionSession {
       let accepted: SourceIngestionResult;
       try {
         accepted = await this.corpus.prepare(rawEntries);
+        this.throwOnAbortedParse(accepted);
       } catch (err) {
         this.debouncePending.clear();
         this.writeAnalysisStatus('failed', pending, String(err));
@@ -1414,6 +1461,7 @@ export class ExtractionSession {
       systemPropMapJson: JSON.stringify(manifest?.system_prop_map ?? {}),
       groupRegistryJson: system.groupRegistryJson,
       dynamicProps: manifest?.dynamic_props ?? {},
+      admittedTransforms: manifest?.admitted_transforms ?? {},
     });
 
     setSharedSystemProps(systemPropsContent);

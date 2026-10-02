@@ -3,7 +3,7 @@
 
 use oxc::ast::ast::{
     ArrayExpressionElement, Declaration, Expression, ObjectExpression, ObjectPropertyKind,
-    Program, PropertyKey, PropertyKind, Statement, VariableDeclarationKind,
+    Program, PropertyKey, PropertyKind, Statement, UnaryOperator, VariableDeclarationKind,
 };
 use oxc::span::Span;
 use rustc_hash::FxHashMap;
@@ -26,6 +26,9 @@ impl BailError {
 pub struct SkippedProperty {
     pub key: String,
     pub reason: String,
+    /// Key path of the nested object holding `key`, relative to the
+    /// evaluated object; `None` at its top level.
+    pub parent: Option<String>,
 }
 
 pub const SELECTOR_UNSUPPORTED_SUBJECT: &str = "animus.selector.unsupported-subject";
@@ -42,6 +45,7 @@ fn unsupported_selector_skip(key: &str) -> SkippedProperty {
         reason: format!(
             "selector '{key}' has no substitutable '&' subject outside quoted text ({SELECTOR_UNSUPPORTED_SUBJECT})"
         ),
+        parent: None,
     }
 }
 
@@ -98,8 +102,9 @@ fn eval_object_expr_scoped(
                     continue;
                 }
 
+                let value = crate::chain_walk::unwrap_type_assertions(&prop.value);
                 if key == "transform" {
-                    match &prop.value {
+                    match value {
                         Expression::ArrowFunctionExpression(arrow) => {
                             captured.push(CapturedTransform {
                                 key: key.clone(),
@@ -118,10 +123,16 @@ fn eval_object_expr_scoped(
                     }
                 }
 
-                if let Expression::ObjectExpression(inner_obj) = &prop.value {
+                if let Expression::ObjectExpression(inner_obj) = value {
                     match eval_object_expr_scoped(inner_obj, static_values, eligible) {
                         Ok((value, inner_skips, inner_captured)) => {
-                            skipped.extend(inner_skips);
+                            skipped.extend(inner_skips.into_iter().map(|mut skip| {
+                                skip.parent = Some(match skip.parent {
+                                    Some(parent) => format!("{}.{}", key, parent),
+                                    None => key.clone(),
+                                });
+                                skip
+                            }));
                             for mut cap in inner_captured {
                                 cap.key = format!("{}.{}", key, cap.key);
                                 captured.push(cap);
@@ -132,6 +143,7 @@ fn eval_object_expr_scoped(
                             skipped.push(SkippedProperty {
                                 key,
                                 reason: bail.reason,
+                                parent: None,
                             });
                         }
                     }
@@ -151,6 +163,7 @@ fn eval_object_expr_scoped(
                         skipped.push(SkippedProperty {
                             key,
                             reason: bail.reason,
+                            parent: None,
                         });
                     }
                 }
@@ -281,7 +294,10 @@ fn eval_expression_scoped(
             if let Some(sv) = static_values {
                 if let Expression::Identifier(ident) = &member.object {
                     if let Some(Value::Object(map)) = sv.get(ident.name.as_str()) {
-                        if let Some(val) = map.get(member.property.name.as_str()) {
+                        if let Some(val) = map
+                            .get(member.property.name.as_str())
+                            .filter(|val| lost_value_reason(val).is_none())
+                        {
                             return Ok(val.clone());
                         }
                     }
@@ -393,6 +409,7 @@ pub fn parse_variant_arg(
     let skip = |key: &str, reason: &str| SkippedProperty {
         key: key.to_string(),
         reason: reason.to_string(),
+        parent: None,
     };
 
     for prop_kind in &obj.properties {
@@ -524,6 +541,7 @@ fn collect_static_values_impl(
     require_complete: bool,
 ) -> FxHashMap<String, Value> {
     let mut values = FxHashMap::default();
+    let undefined_bound = !require_complete && module_binds(program, "undefined");
 
     for stmt in &program.body {
         let decl = match stmt {
@@ -557,8 +575,16 @@ fn collect_static_values_impl(
                 let mut dummy_skips = Vec::new();
                 match init {
                     Expression::ObjectExpression(obj) => {
-                        if let Ok((val, skips, captures)) = eval_object_expr(obj) {
-                            if !require_complete || (skips.is_empty() && captures.is_empty()) {
+                        if let Ok((mut val, skips, captures)) = eval_object_expr(obj) {
+                            if !require_complete {
+                                let lost = LostValueSource {
+                                    obj,
+                                    name: &name,
+                                    undefined_bound,
+                                };
+                                mark_lost_values(&mut val, &lost, &skips, &captures);
+                                values.insert(name, val);
+                            } else if skips.is_empty() && captures.is_empty() {
                                 values.insert(name, val);
                             }
                         }
@@ -576,6 +602,190 @@ fn collect_static_values_impl(
     }
 
     values
+}
+
+/// Marks a value a const object cannot carry statically — a skipped key or
+/// a captured `transform` callback — so a `.props()` stage reached through
+/// the const can report what it lost. Readers take or strip markers before
+/// a stage value is used, and a member read of a marked key is a miss.
+const LOST_VALUE: &str = "$animus.lost";
+
+struct LostValueSource<'s, 'a> {
+    obj: &'s ObjectExpression<'a>,
+    name: &'s str,
+    undefined_bound: bool,
+}
+
+fn mark_lost_values(
+    value: &mut Value,
+    source: &LostValueSource<'_, '_>,
+    skips: &[SkippedProperty],
+    captures: &[CapturedTransform],
+) {
+    for capture in captures {
+        let parent = capture.key.strip_suffix(".transform");
+        mark_lost_value(
+            value,
+            parent,
+            "transform",
+            format!("an inline function in const '{}'", source.name),
+        );
+    }
+    for skip in skips {
+        let absent = skip.key == "transform"
+            && transform_value_at(source.obj, skip.parent.as_deref())
+                .is_some_and(|expr| is_absent_value(expr, source.undefined_bound));
+        if !absent {
+            mark_lost_value(
+                value,
+                skip.parent.as_deref(),
+                &skip.key,
+                format!("{} in const '{}'", skip.reason, source.name),
+            );
+        }
+    }
+}
+
+fn mark_lost_value(value: &mut Value, parent: Option<&str>, key: &str, reason: String) {
+    let mut current = value;
+    for segment in parent.into_iter().flat_map(|path| path.split('.')) {
+        match current.get_mut(segment) {
+            Some(next) => current = next,
+            None => return,
+        }
+    }
+    if let Some(object) = current.as_object_mut() {
+        let mut marker = Map::new();
+        marker.insert(LOST_VALUE.to_string(), Value::String(reason));
+        object.insert(key.to_string(), Value::Object(marker));
+    }
+}
+
+fn lost_value_reason(value: &Value) -> Option<&str> {
+    value.as_object()?.get(LOST_VALUE)?.as_str()
+}
+
+/// What a `.props()` value lost through const configs, as `(prop, reason)`.
+#[derive(Default)]
+pub(crate) struct LostCustomProps {
+    pub transforms: Vec<(String, String)>,
+    pub configs: Vec<(String, String)>,
+}
+
+/// Takes the markers on top-level custom prop configs and their `transform`
+/// from a `.props()` value, then strips every other marker.
+pub(crate) fn take_lost_custom_props(value: &mut Value) -> LostCustomProps {
+    let mut lost = LostCustomProps::default();
+    if let Some(configs) = value.as_object_mut() {
+        configs.retain(|prop, config| match lost_value_reason(config) {
+            Some(reason) => {
+                lost.configs.push((prop.clone(), reason.to_string()));
+                false
+            }
+            None => true,
+        });
+        for (prop, config) in configs.iter_mut() {
+            let Some(config) = config.as_object_mut() else {
+                continue;
+            };
+            let reason = config
+                .get("transform")
+                .and_then(lost_value_reason)
+                .map(str::to_string);
+            if let Some(reason) = reason {
+                config.remove("transform");
+                lost.transforms.push((prop.clone(), reason));
+            }
+        }
+    }
+    strip_lost_values(value);
+    lost
+}
+
+/// Removes every marker; the evaluator drops those values silently.
+pub(crate) fn strip_lost_values(value: &mut Value) {
+    match value {
+        Value::Object(map) => {
+            map.retain(|_, v| lost_value_reason(v).is_none());
+            map.values_mut().for_each(strip_lost_values);
+        }
+        Value::Array(items) => items.iter_mut().for_each(strip_lost_values),
+        _ => {}
+    }
+}
+
+/// Whether a module-scope declaration or import binds `name`; chain and
+/// const initializers are top-level, so only module scope can shadow there.
+pub(crate) fn module_binds(program: &Program<'_>, name: &str) -> bool {
+    let declares = |decl: &Declaration<'_>| match decl {
+        Declaration::VariableDeclaration(var) => var
+            .declarations
+            .iter()
+            .any(|d| d.id.get_binding_identifiers().iter().any(|id| id.name == name)),
+        Declaration::FunctionDeclaration(func) => func.id.as_ref().is_some_and(|id| id.name == name),
+        Declaration::ClassDeclaration(class) => class.id.as_ref().is_some_and(|id| id.name == name),
+        Declaration::TSEnumDeclaration(decl) => decl.id.name == name,
+        Declaration::TSImportEqualsDeclaration(decl) => decl.id.name == name,
+        Declaration::TSModuleDeclaration(decl) => decl.id.name() == name,
+        _ => false,
+    };
+    program.body.iter().any(|stmt| match stmt {
+        Statement::ImportDeclaration(import) => import
+            .specifiers
+            .iter()
+            .flatten()
+            .any(|spec| spec.local().name == name),
+        Statement::ExportNamedDeclaration(export) => export.declaration.as_ref().is_some_and(declares),
+        Statement::ExportDefaultDeclaration(export) => match &export.declaration {
+            oxc::ast::ast::ExportDefaultDeclarationKind::FunctionDeclaration(func) => {
+                func.id.as_ref().is_some_and(|id| id.name == name)
+            }
+            oxc::ast::ast::ExportDefaultDeclarationKind::ClassDeclaration(class) => {
+                class.id.as_ref().is_some_and(|id| id.name == name)
+            }
+            _ => false,
+        },
+        other => other.as_declaration().is_some_and(declares),
+    })
+}
+
+/// An explicitly absent transform: unshadowed `undefined` or `void 0`.
+pub(crate) fn is_absent_value(expr: &Expression<'_>, undefined_bound: bool) -> bool {
+    match crate::chain_walk::unwrap_type_assertions(expr) {
+        Expression::Identifier(id) => id.name == "undefined" && !undefined_bound,
+        Expression::UnaryExpression(unary) => {
+            unary.operator == UnaryOperator::Void
+                && matches!(unary.argument, Expression::NumericLiteral(_))
+        }
+        _ => false,
+    }
+}
+
+/// The `transform` value the evaluator read in the object at `parent`
+/// (a skip's key path), following its nested-object descent.
+pub(crate) fn transform_value_at<'s, 'a>(
+    obj: &'s ObjectExpression<'a>,
+    parent: Option<&str>,
+) -> Option<&'s Expression<'a>> {
+    let mut current = obj;
+    for segment in parent.into_iter().flat_map(|path| path.split('.')) {
+        match crate::chain_walk::unwrap_type_assertions(last_property(current, segment)?) {
+            Expression::ObjectExpression(inner) => current = inner,
+            _ => return None,
+        }
+    }
+    last_property(current, "transform")
+}
+
+fn last_property<'s, 'a>(obj: &'s ObjectExpression<'a>, key: &str) -> Option<&'s Expression<'a>> {
+    obj.properties.iter().rev().find_map(|prop| match prop {
+        ObjectPropertyKind::ObjectProperty(prop)
+            if !prop.computed && eval_property_key(&prop.key).is_ok_and(|k| k == key) =>
+        {
+            Some(&prop.value)
+        }
+        _ => None,
+    })
 }
 
 pub fn collect_static_exports(

@@ -107,12 +107,16 @@ export async function reconcileSourceCorpus(
     );
     reanalyzed = true;
     // Roll the fold back unless the analysis published: kept entries make the
-    // next walk barren, memoize that, and short-circuit every later call.
+    // next walk barren, memoize that, and short-circuit every later call. An
+    // aborted-parse rejection holds the fold for the repair to publish.
     let published = false;
+    let held = false;
     try {
-      published = (await ctx.analyzeIngested()).ok;
+      const analysis = await ctx.analyzeIngested();
+      published = analysis.ok;
+      held = analysis.abortedOriginals !== undefined;
     } finally {
-      if (!published) {
+      if (!published && !held) {
         ctx.mutateFileCache((cache) => {
           for (const key of folded) cache.delete(key);
         });

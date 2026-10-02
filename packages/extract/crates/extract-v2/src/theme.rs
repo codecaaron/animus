@@ -78,14 +78,59 @@ pub struct PropConfig {
     pub property: String,
     #[serde(default)]
     pub properties: Vec<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub negative: bool,
     #[serde(default)]
     pub scale: Option<Value>,
+    /// The bound transform's readable name, for diagnostics.
     #[serde(default)]
     pub transform: Option<String>,
+    /// The registry key of the bound definition; `None` binds nothing.
+    #[serde(default, rename = "transformId", skip_serializing_if = "Option::is_none")]
+    pub transform_id: Option<String>,
     #[serde(default, rename = "currentVar")]
     pub current_var: Option<String>,
+    /// The callback as an expression of the declaring chain's module: the
+    /// captured inline function or reference, or for an inherited callback
+    /// a read from the extended parent's runtime component.
     #[serde(default, rename = "transformFnSource")]
     pub transform_fn_source: Option<String>,
+    /// The component callback the prop binds. Once its definition passes
+    /// admission, extraction evaluates known values through it, while
+    /// `transform_fn_source` still delivers the callback for the rest.
+    #[serde(skip)]
+    pub callback: Option<crate::transforms::CallbackBinding>,
+    /// `Some(true)` limits values to the scale. Custom props default to it;
+    /// a system config that predates the field keeps raw values.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub strict: Option<bool>,
+}
+
+impl PropConfig {
+    /// The CSS properties the prop sets: its `properties`, or else its
+    /// `property`.
+    pub fn css_properties(&self) -> &[String] {
+        if self.properties.is_empty() {
+            std::slice::from_ref(&self.property)
+        } else {
+            &self.properties
+        }
+    }
+
+    /// The bound definition's registry key and readable name.
+    pub fn bound_definition(&self) -> Option<(&str, &str)> {
+        Some((self.transform_id.as_deref()?, self.transform.as_deref()?))
+    }
+}
+
+/// A configuration that predates identities keys each definition by its
+/// readable name; bind its props to those keys.
+pub fn key_unidentified_transforms(config: &mut PropConfigMap) {
+    for prop in config.values_mut() {
+        if prop.transform_id.is_none() && prop.transform_fn_source.is_none() {
+            prop.transform_id = prop.transform.clone();
+        }
+    }
 }
 
 pub type PropConfigMap = FxHashMap<String, PropConfig>;
@@ -139,6 +184,21 @@ pub struct TransformFailure {
 
 pub type TransformFailureSink = RefCell<Vec<TransformFailure>>;
 
+/// An authored value whose entries name nothing on a strict, populated scale;
+/// the whole prop is omitted.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StrictTokenMiss {
+    pub prop: String,
+    pub value: Value,
+    /// Each rejected entry, with its breakpoint key when the value is responsive.
+    pub rejected: Vec<(Option<String>, Value)>,
+    /// The variant axis and option (`None` for its base) the value was
+    /// resolved under, so an inherited declaration can be told apart.
+    pub variant_origin: Option<(String, Option<String>)>,
+}
+
+pub type StrictTokenMissSink = RefCell<Vec<StrictTokenMiss>>;
+
 pub struct ResolveContext<'a> {
     pub config: &'a PropConfigMap,
     pub theme: &'a FlatTheme,
@@ -149,6 +209,7 @@ pub struct ResolveContext<'a> {
     pub condition_aliases: &'a ConditionAliasesMap,
     pub transform_evaluator: Option<&'a crate::evaluator::TransformEvaluator>,
     pub transform_failures: Option<&'a TransformFailureSink>,
+    pub token_misses: Option<&'a StrictTokenMissSink>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -380,6 +441,10 @@ pub fn resolve_styles(
             continue;
         }
 
+        if omit_strict_token_miss(key, value, ctx) {
+            continue;
+        }
+
         if is_responsive_value(value, ctx.breakpoint_keys) {
             resolve_responsive_prop(
                 key,
@@ -469,6 +534,10 @@ fn resolve_block_entries(
                     );
                 }
             }
+            continue;
+        }
+
+        if omit_strict_token_miss(key, value, ctx) {
             continue;
         }
 
@@ -607,32 +676,26 @@ fn resolve_responsive_prop(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn resolve_flat_styles(
-    obj: &Map<String, Value>,
-    config: &PropConfigMap,
-    theme: &FlatTheme,
-    variable_map: &VariableMap,
-    contextual_vars: &ContextualVarsMap,
-    evaluator: Option<&TransformEvaluator>,
-    failures: Option<&TransformFailureSink>,
-) -> Vec<CssDeclaration> {
+fn resolve_flat_styles(obj: &Map<String, Value>, ctx: &ResolveContext) -> Vec<CssDeclaration> {
     let mut entries: Vec<(&String, &Value)> = obj.iter().collect();
     entries.sort_by(|(a, _), (b, _)| {
-        prop_cascade_tier(a, config).cmp(&prop_cascade_tier(b, config))
+        prop_cascade_tier(a, ctx.config).cmp(&prop_cascade_tier(b, ctx.config))
     });
 
     let mut declarations = Vec::new();
     for (key, value) in entries {
+        if omit_strict_token_miss(key, value, ctx) {
+            continue;
+        }
         declarations.extend(resolve_single_prop(
             key,
             value,
-            config,
-            theme,
-            variable_map,
-            contextual_vars,
-            evaluator,
-            failures,
+            ctx.config,
+            ctx.theme,
+            ctx.variable_map,
+            ctx.contextual_vars,
+            ctx.transform_evaluator,
+            ctx.transform_failures,
         ));
     }
     declarations
@@ -701,45 +764,16 @@ fn resolve_single_prop(
         }
     };
 
-    let resolved_value = {
-        let rv = resolve_value(prop_name, value, prop_config, theme, evaluator, failures);
-        match rv {
-            Some(v) => {
-                let aliased = resolve_token_aliases(&v, theme, variable_map, contextual_vars);
-                if let Value::String(val_str) = value {
-                    if aliased == *val_str {
-                        if let Some(Value::String(scale_name)) = &prop_config.scale {
-                            if let Some(ctx) =
-                                resolve_contextual_var(scale_name, val_str, contextual_vars)
-                            {
-                                ctx
-                            } else {
-                                aliased
-                            }
-                        } else {
-                            aliased
-                        }
-                    } else {
-                        aliased
-                    }
-                } else {
-                    aliased
-                }
-            }
-            None => return vec![],
-        }
+    let Some(resolved) = resolve_value(prop_name, value, prop_config, theme, evaluator, failures) else {
+        return vec![];
     };
+    let resolved_value = finish_value(&resolved, value, prop_config, theme, variable_map, contextual_vars);
 
-    let properties = if prop_config.properties.is_empty() {
-        vec![prop_config.property.clone()]
-    } else {
-        prop_config.properties.clone()
-    };
-
-    let mut declarations: Vec<CssDeclaration> = properties
-        .into_iter()
+    let mut declarations: Vec<CssDeclaration> = prop_config
+        .css_properties()
+        .iter()
         .map(|css_prop| CssDeclaration {
-            property: camel_to_kebab(&css_prop),
+            property: camel_to_kebab(css_prop),
             value: resolved_value.clone(),
         })
         .collect();
@@ -757,6 +791,26 @@ fn resolve_single_prop(
     declarations
 }
 
+/// The CSS a resolved value becomes: token aliases resolve, and a result
+/// equal to the authored value may name a contextual variable of the prop's
+/// scale.
+fn finish_value(
+    resolved: &str,
+    authored: &Value,
+    config: &PropConfig,
+    theme: &FlatTheme,
+    variable_map: &VariableMap,
+    contextual_vars: &ContextualVarsMap,
+) -> String {
+    let aliased = resolve_token_aliases(resolved, theme, variable_map, contextual_vars);
+    match (authored, &config.scale) {
+        (Value::String(text), Some(Value::String(scale))) if aliased == *text => {
+            resolve_contextual_var(scale, text, contextual_vars).unwrap_or(aliased)
+        }
+        _ => aliased,
+    }
+}
+
 fn resolve_contextual_var(
     scale_name: &str,
     value: &str,
@@ -764,10 +818,15 @@ fn resolve_contextual_var(
 ) -> Option<String> {
     if let Some(var_names) = contextual_vars.get(scale_name) {
         if var_names.iter().any(|n| n == value) {
-            return Some(format!("var(--{})", value));
+            return Some(contextual_var_reference(value));
         }
     }
     None
+}
+
+/// The CSS a contextual variable token resolves to.
+pub(crate) fn contextual_var_reference(name: &str) -> String {
+    format!("var(--{})", name)
 }
 
 fn resolve_value(
@@ -778,80 +837,20 @@ fn resolve_value(
     evaluator: Option<&TransformEvaluator>,
     failures: Option<&TransformFailureSink>,
 ) -> Option<String> {
-    // Look up the absolute value; integer form avoids an "8.0" vs "8" miss.
-    let (is_negative, lookup_value) = match value {
-        Value::Number(n) => {
-            if let Some(i) = n.as_i64() {
-                if i < 0 {
-                    (true, Value::Number(serde_json::Number::from(i.unsigned_abs())))
-                } else {
-                    (false, value.clone())
-                }
-            } else if let Some(f) = n.as_f64() {
-                if f < 0.0 {
-                    let abs = serde_json::Number::from_f64(f.abs())
-                        .unwrap_or_else(|| serde_json::Number::from_f64(0.0).unwrap());
-                    (true, Value::Number(abs))
-                } else {
-                    (false, value.clone())
-                }
-            } else {
-                (false, value.clone())
-            }
-        }
-        _ => (false, value.clone()),
-    };
+    let (resolved, is_negative) = lookup_scale_token(value, config, theme)
+        .map_or((None, false), |(token, negated)| (Some(token), negated));
+    let final_value = resolved.as_ref().unwrap_or(value);
 
-    let mut resolved = None;
-    if let Some(scale_value) = &config.scale {
-        let key = match &lookup_value {
-            Value::String(s) => s.clone(),
-            Value::Number(n) => n.to_string(),
-            _ => String::new(),
-        };
-        if !key.is_empty() {
-            match scale_value {
-                Value::String(scale_name) => {
-                    let lookup_key = format!("{}.{}", scale_name, key);
-                    if let Some(theme_value) = theme.get(&lookup_key) {
-                        resolved = Some(Value::String(theme_value.clone()));
-                    }
-                }
-                Value::Object(inline_map) => {
-                    if let Some(map_value) = inline_map.get(&key) {
-                        if let Some(s) = map_value.as_str() {
-                            resolved = Some(Value::String(s.to_string()));
-                        } else {
-                            resolved = Some(map_value.clone());
-                        }
-                    }
-                }
-                Value::Array(arr)
-                    if !arr.is_empty() => {
-                        let found = arr.iter().any(|item| {
-                            match (item, &lookup_value) {
-                                (Value::String(a), Value::String(b)) => a == b,
-                                (Value::Number(a), Value::Number(b)) => a.as_f64() == b.as_f64(),
-                                _ => false,
-                            }
-                        });
-                        if found {
-                            resolved = Some(lookup_value.clone());
-                        }
-                    }
-                _ => {}
-            }
-        }
-    }
-
-    let final_value = resolved.as_ref().unwrap_or(&lookup_value);
-
-    if let Some(transform_name) = &config.transform {
-        let scale_is_empty_array = matches!(&config.scale, Some(Value::Array(a)) if a.is_empty());
-        let use_transform = resolved.is_some() || config.scale.is_none() || scale_is_empty_array;
-        if use_transform {
+    // A name bound to no definition was reported at its declaration; a
+    // component callback binds its definition once admitted.
+    let binding = config.bound_definition().or_else(|| {
+        let definition = &config.callback.as_ref()?.definition;
+        evaluator?.is_registered(&definition.key).then_some((definition.key.as_str(), definition.name.as_str()))
+    });
+    if let Some((transform_key, transform_name)) = binding {
+        if transform_applies(config, resolved.is_some()) {
             if let Some(eval) = evaluator {
-                match eval.evaluate(transform_name, final_value) {
+                match eval.evaluate(transform_key, transform_name, final_value) {
                     Ok(css) => {
                         return Some(if is_negative {
                             negate_css_value(&css)
@@ -859,10 +858,12 @@ fn resolve_value(
                             css
                         });
                     }
+                    // The usage gate keeps such a value off the static path.
+                    Err(EvalError::Unevaluable) => return None,
                     Err(err) => {
                         if let Some(sink) = failures {
                             sink.borrow_mut().push(TransformFailure {
-                                transform_name: transform_name.clone(),
+                                transform_name: transform_name.to_string(),
                                 prop: prop_name.to_string(),
                                 failure: err.clone(),
                                 variant_origin: None,
@@ -892,11 +893,288 @@ fn resolve_value(
     }
 }
 
+/// Authored keys win; only an admitted negative falls back to its positive
+/// counterpart, returned with `true` so the caller negates it.
+fn lookup_scale_token(value: &Value, config: &PropConfig, theme: &FlatTheme) -> Option<(Value, bool)> {
+    if let Some(token) = lookup_scale_value(value, config, theme) {
+        return Some((token, false));
+    }
+    if !config.negative {
+        return None;
+    }
+    let number = value.as_f64().filter(|number| *number < 0.0)?;
+    let absolute = value.as_i64().map_or_else(
+        || serde_json::json!(-number),
+        |integer| serde_json::json!(integer.unsigned_abs()),
+    );
+    lookup_scale_value(&absolute, config, theme).map(|token| (token, true))
+}
+
+/// Whether the bound transform applies to a value: one the scale resolves,
+/// or any value of a prop without a populated scale. Otherwise the value
+/// applies raw.
+fn transform_applies(config: &PropConfig, scale_resolved: bool) -> bool {
+    match &config.scale {
+        None => true,
+        Some(Value::Array(scale)) if scale.is_empty() => true,
+        Some(_) => scale_resolved,
+    }
+}
+
+/// Whether extraction can resolve every entry of `value` through the prop's
+/// admitted callback with the meaning the runtime gives it; otherwise the
+/// whole value stays on the runtime path. The runtime passes an entry that
+/// misses a populated scale through the callback, where extraction would
+/// apply it raw; an isolated evaluation can exhaust its budget or read the
+/// host; and extraction or its CSS post-processing can rewrite a string
+/// result the runtime applies verbatim, such as a bare number or token
+/// syntax. A throw or an invalid result keeps its build-time policy.
+pub(crate) fn extracts_callback_value(
+    config: &PropConfig,
+    definition: &crate::transforms::CallbackDefinition,
+    value: &Value,
+    ctx: &ResolveContext,
+) -> bool {
+    let Some(evaluator) = ctx.transform_evaluator else {
+        return false;
+    };
+    let rewritten = |entry: &Value, css: &str| {
+        finish_value(css, entry, config, ctx.theme, ctx.variable_map, ctx.contextual_vars) != css
+            || config
+                .css_properties()
+                .iter()
+                .any(|property| crate::css::unit_fallback_rewrites(css, &camel_to_kebab(property)))
+    };
+    let evaluated = |entry: &Value| {
+        if !(entry.is_string() || entry.is_number()) {
+            return false;
+        }
+        let token = lookup_scale_token(entry, config, ctx.theme);
+        if !transform_applies(config, token.is_some()) {
+            return false;
+        }
+        let input = token.as_ref().map_or(entry, |(token, _)| token);
+        match evaluator.evaluate_callback(&definition.key, &definition.name, input) {
+            Ok(scalar) => scalar.numeric || !rewritten(entry, &scalar.css),
+            Err(EvalError::Unevaluable) => false,
+            Err(_) => true,
+        }
+    };
+    match value.as_object() {
+        Some(entries) if is_responsive_value(value, ctx.breakpoint_keys) => {
+            entries.values().all(evaluated)
+        }
+        _ => evaluated(value),
+    }
+}
+
+/// Records a strict-scale miss; a miss omits every entry of the prop, so no
+/// breakpoint keeps a partial contribution.
+fn omit_strict_token_miss(prop_name: &str, value: &Value, ctx: &ResolveContext) -> bool {
+    let Some(miss) = ctx
+        .config
+        .get(prop_name)
+        .and_then(|config| strict_token_miss_of(prop_name, config, value, ctx))
+    else {
+        return false;
+    };
+    if let Some(sink) = ctx.token_misses {
+        sink.borrow_mut().push(miss);
+    }
+    true
+}
+
+/// The miss `value` makes on `prop_name`'s strict, populated scale, if any.
+pub(crate) fn strict_token_miss_of(
+    prop_name: &str,
+    config: &PropConfig,
+    value: &Value,
+    ctx: &ResolveContext,
+) -> Option<StrictTokenMiss> {
+    let rejected = strict_token_misses(config, value, ctx);
+    (!rejected.is_empty()).then(|| StrictTokenMiss {
+        prop: prop_name.to_string(),
+        value: value.clone(),
+        rejected,
+        variant_origin: None,
+    })
+}
+
+/// The runtime rejects a value only where extraction would omit it.
+pub fn is_strict_scale(config: &PropConfig, theme: &FlatTheme) -> bool {
+    config.strict == Some(true) && scale_is_populated(config, theme)
+}
+
+/// The entries of `value` that a strict, populated scale rejects; empty when
+/// the prop admits the whole value or keeps raw values.
+fn strict_token_misses(
+    config: &PropConfig,
+    value: &Value,
+    ctx: &ResolveContext,
+) -> Vec<(Option<String>, Value)> {
+    if config.strict != Some(true) {
+        return vec![];
+    }
+    let miss = |entry: &Value| is_strict_token_miss(entry, config, ctx.theme, ctx.contextual_vars);
+    let rejected: Vec<(Option<String>, Value)> = match value.as_object() {
+        Some(entries) if is_responsive_value(value, ctx.breakpoint_keys) => entries
+            .iter()
+            .filter(|(_, entry)| miss(entry))
+            .map(|(breakpoint, entry)| (Some(breakpoint.clone()), entry.clone()))
+            .collect(),
+        _ if miss(value) => vec![(None, value.clone())],
+        _ => vec![],
+    };
+    if rejected.is_empty() || !scale_is_populated(config, ctx.theme) {
+        return vec![];
+    }
+    rejected
+}
+
+/// An empty or absent scale admits raw values whatever its strictness.
+fn scale_is_populated(config: &PropConfig, theme: &FlatTheme) -> bool {
+    match &config.scale {
+        Some(Value::String(name)) => {
+            let prefix = format!("{name}.");
+            theme.keys().any(|key| key.starts_with(&prefix))
+        }
+        Some(Value::Object(values)) => !values.is_empty(),
+        Some(Value::Array(values)) => !values.is_empty(),
+        _ => false,
+    }
+}
+
+fn is_strict_token_miss(
+    value: &Value,
+    config: &PropConfig,
+    theme: &FlatTheme,
+    contextual_vars: &ContextualVarsMap,
+) -> bool {
+    lookup_scale_token(value, config, theme).is_none()
+        && !is_contextual_token(value, config, contextual_vars)
+        && !admitted_without_token(value, config)
+}
+
+/// A contextual variable declared on the prop's named scale is one of its tokens.
+fn is_contextual_token(value: &Value, config: &PropConfig, contextual_vars: &ContextualVarsMap) -> bool {
+    match (value, &config.scale) {
+        (Value::String(name), Some(Value::String(scale))) => {
+            resolve_contextual_var(scale, name, contextual_vars).is_some()
+        }
+        _ => false,
+    }
+}
+
+const CONTAINER_UNITS: &[&str] = &["cqw", "cqi", "cqh", "cqb", "cqmin", "cqmax"];
+const SIZE_UNITS: &[&str] = &["px", "rem", "vh", "vw", "vmax", "vmin", "%"];
+
+/// Values a strict prop's public type admits beside its tokens: zero, the
+/// CSS-wide and per-property keywords of `css_keywords.json`, container units,
+/// token references, and the lengths size properties take. Must stay in step
+/// with the runtime resolver's rule.
+fn admitted_without_token(value: &Value, config: &PropConfig) -> bool {
+    match value {
+        Value::Number(number) => number.as_f64() == Some(0.0),
+        Value::String(text) => {
+            text == "0"
+                || css_keywords(&config.property).any(|keyword| keyword == text)
+                || text.contains('{')
+                || is_number_with_unit(text, CONTAINER_UNITS)
+                || (is_size_property(&config.property)
+                    && (is_number_with_unit(text, SIZE_UNITS) || text.starts_with("calc(")))
+        }
+        _ => true,
+    }
+}
+
+#[derive(Deserialize)]
+struct CssKeywords {
+    globals: Vec<String>,
+    properties: FxHashMap<String, Vec<String>>,
+}
+
+/// Generated from the public strict types and checked against
+/// those types by `packages/extract/scripts/css-keywords.ts`.
+fn css_keyword_table() -> &'static CssKeywords {
+    static TABLE: std::sync::OnceLock<CssKeywords> = std::sync::OnceLock::new();
+    TABLE.get_or_init(|| {
+        serde_json::from_str(include_str!("css_keywords.json"))
+            .expect("css_keywords.json is generated valid JSON")
+    })
+}
+
+/// The CSS-wide keywords followed by `property`'s own keywords.
+pub fn css_keywords(property: &str) -> impl Iterator<Item = &'static str> {
+    let table = css_keyword_table();
+    table
+        .globals
+        .iter()
+        .chain(table.properties.get(property).into_iter().flatten())
+        .map(String::as_str)
+}
+
+/// A CSS `<number>`, exponent included, followed by one of `units`.
+fn is_number_with_unit(text: &str, units: &[&str]) -> bool {
+    units
+        .iter()
+        .any(|unit| text.strip_suffix(unit).is_some_and(is_css_number))
+}
+
+fn is_css_number(text: &str) -> bool {
+    let unsigned = text.strip_prefix(['-', '+']).unwrap_or(text);
+    let (mantissa, exponent) = match unsigned.find(['e', 'E']) {
+        Some(at) => (&unsigned[..at], Some(&unsigned[at + 1..])),
+        None => (unsigned, None),
+    };
+    let digits = |part: &str| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit());
+    let mantissa_ok = match mantissa.split_once('.') {
+        Some((whole, fraction)) => (whole.is_empty() || digits(whole)) && digits(fraction),
+        None => digits(mantissa),
+    };
+    mantissa_ok
+        && exponent.is_none_or(|exponent| digits(exponent.strip_prefix(['-', '+']).unwrap_or(exponent)))
+}
+
+fn is_size_property(property: &str) -> bool {
+    matches!(property, "left" | "right" | "top" | "bottom" | "inset" | "width" | "height")
+        || ["Width", "Height", "-width", "-height"]
+            .iter()
+            .any(|suffix| property.ends_with(suffix))
+}
+
+fn lookup_scale_value(value: &Value, config: &PropConfig, theme: &FlatTheme) -> Option<Value> {
+    let scale = config.scale.as_ref()?;
+    let key = match value {
+        Value::String(s) => s.clone(),
+        Value::Number(n) => n.to_string(),
+        _ => return None,
+    };
+    if key.is_empty() {
+        return None;
+    }
+    match scale {
+        Value::String(name) => theme.get(&format!("{name}.{key}")).cloned().map(Value::String),
+        Value::Object(values) => values.get(&key).cloned(),
+        // Keyed as the runtime keys an array scale's entries, so `"8"` and `8`
+        // agree on both paths.
+        Value::Array(values) => values.iter().find(|candidate| match candidate {
+            Value::String(entry) => *entry == key,
+            Value::Number(entry) => entry.to_string() == key,
+            _ => false,
+        }).cloned(),
+        _ => None,
+    }
+}
+
 fn negate_css_value(val: &str) -> String {
-    if let Some(stripped) = val.strip_prefix('-') {
+    if val.contains('(') {
+        format!("calc({val} * -1)")
+    } else if val == "0" || val == "-0" {
+        "0".to_string()
+    } else if let Some(stripped) = val.strip_prefix('-') {
         stripped.to_string()
     } else {
-        format!("-{}", val)
+        format!("-{}", val.strip_prefix('+').unwrap_or(val))
     }
 }
 
@@ -1139,15 +1417,7 @@ pub fn resolve_global_block(
                     Some(o) => o,
                     None => continue,
                 };
-                let decls = resolve_flat_styles(
-                    frame_obj,
-                    ctx.config,
-                    ctx.theme,
-                    ctx.variable_map,
-                    ctx.contextual_vars,
-                    ctx.transform_evaluator,
-                    ctx.transform_failures,
-                );
+                let decls = resolve_flat_styles(frame_obj, ctx);
                 if !decls.is_empty() {
                     let decl_str: String = decls
                         .iter()
@@ -1167,15 +1437,7 @@ pub fn resolve_global_block(
             Some(o) => o,
             None => continue,
         };
-        let decls = resolve_flat_styles(
-            style_map,
-            ctx.config,
-            ctx.theme,
-            ctx.variable_map,
-            ctx.contextual_vars,
-            ctx.transform_evaluator,
-            ctx.transform_failures,
-        );
+        let decls = resolve_flat_styles(style_map, ctx);
         if !decls.is_empty() {
             let decl_str: String = decls
                 .iter()
@@ -1311,15 +1573,7 @@ pub fn resolve_keyframes_block(block: &Value, ctx: &ResolveContext) -> String {
             Some(o) => o,
             None => continue,
         };
-        let decls = resolve_flat_styles(
-            frame_obj,
-            ctx.config,
-            ctx.theme,
-            ctx.variable_map,
-            ctx.contextual_vars,
-            ctx.transform_evaluator,
-            ctx.transform_failures,
-        );
+        let decls = resolve_flat_styles(frame_obj, ctx);
         if !decls.is_empty() {
             let decl_str: String = decls
                 .iter()
@@ -1391,10 +1645,14 @@ mod tests {
             PropConfig {
                 property: "padding".to_string(),
                 properties: vec![],
+                negative: false,
                 scale: Some(Value::String("space".to_string())),
                 transform: None,
+                transform_id: None,
                 current_var: None,
                 transform_fn_source: None,
+                callback: None,
+                strict: None,
             },
         );
         config.insert(
@@ -1402,10 +1660,14 @@ mod tests {
             PropConfig {
                 property: "padding".to_string(),
                 properties: vec!["paddingLeft".to_string(), "paddingRight".to_string()],
+                negative: false,
                 scale: Some(Value::String("space".to_string())),
                 transform: None,
+                transform_id: None,
                 current_var: None,
                 transform_fn_source: None,
+                callback: None,
+                strict: None,
             },
         );
         config.insert(
@@ -1413,10 +1675,14 @@ mod tests {
             PropConfig {
                 property: "padding".to_string(),
                 properties: vec!["paddingTop".to_string(), "paddingBottom".to_string()],
+                negative: false,
                 scale: Some(Value::String("space".to_string())),
                 transform: None,
+                transform_id: None,
                 current_var: None,
                 transform_fn_source: None,
+                callback: None,
+                strict: None,
             },
         );
         config.insert(
@@ -1424,10 +1690,14 @@ mod tests {
             PropConfig {
                 property: "paddingLeft".to_string(),
                 properties: vec![],
+                negative: false,
                 scale: Some(Value::String("space".to_string())),
                 transform: None,
+                transform_id: None,
                 current_var: None,
                 transform_fn_source: None,
+                callback: None,
+                strict: None,
             },
         );
         config.insert(
@@ -1435,10 +1705,14 @@ mod tests {
             PropConfig {
                 property: "width".to_string(),
                 properties: vec![],
+                negative: false,
                 scale: None,
                 transform: Some("size".to_string()),
+                transform_id: Some("size".to_string()),
                 current_var: None,
                 transform_fn_source: None,
+                callback: None,
+                strict: None,
             },
         );
         config.insert(
@@ -1446,10 +1720,14 @@ mod tests {
             PropConfig {
                 property: "color".to_string(),
                 properties: vec![],
+                negative: false,
                 scale: Some(Value::String("colors".to_string())),
                 transform: None,
+                transform_id: None,
                 current_var: None,
                 transform_fn_source: None,
+                callback: None,
+                strict: None,
             },
         );
         config.insert(
@@ -1457,10 +1735,14 @@ mod tests {
             PropConfig {
                 property: "display".to_string(),
                 properties: vec![],
+                negative: false,
                 scale: None,
                 transform: None,
+                transform_id: None,
                 current_var: None,
                 transform_fn_source: None,
+                callback: None,
+                strict: None,
             },
         );
         config.insert(
@@ -1468,10 +1750,14 @@ mod tests {
             PropConfig {
                 property: "borderRadius".to_string(),
                 properties: vec![],
+                negative: false,
                 scale: Some(Value::String("radii".to_string())),
                 transform: Some("size".to_string()),
+                transform_id: Some("size".to_string()),
                 current_var: None,
                 transform_fn_source: None,
+                callback: None,
+                strict: None,
             },
         );
         config
@@ -1548,6 +1834,7 @@ mod tests {
                 condition_aliases: &self.condition_aliases,
                 transform_evaluator: None,
                 transform_failures: None,
+                token_misses: None,
             }
         }
     }
@@ -1743,6 +2030,81 @@ mod tests {
             }
             other => panic!("expected Throw, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn strict_scale_admission_matches_the_runtime_rule() {
+        let mut owner = TestCtxOwner::new();
+        let p = owner.config.get_mut("p").unwrap();
+        p.strict = Some(true);
+        p.negative = true;
+        owner.contextual_vars.insert("space".to_string(), vec!["gutter".to_string()]);
+        let property = |name: &str| PropConfig { property: name.to_string(), ..owner.config["p"].clone() };
+        let ctx = owner.ctx();
+        let miss = |config: &PropConfig, value: Value| !strict_token_misses(config, &value, &ctx).is_empty();
+        let p = &owner.config["p"];
+        for admitted in [
+            json!(8), json!(-8), json!("8"), json!(0), json!("0"), json!("inherit"),
+            json!("-moz-initial"), json!("revert-layer"), json!("gutter"), json!("2cqi"),
+            json!("-1.5cqmin"), json!("1e2cqi"), json!("{space.8}"), json!({ "_": 8, "sm": -16 }),
+        ] {
+            assert!(!miss(p, admitted.clone()), "{admitted} should be admitted");
+        }
+        for rejected in [
+            json!(13), json!(-13), json!("2.5rem"), json!("var(--x)"), json!("#fff"),
+            json!("-17"), json!("10px"), json!("lg"), json!("auto"), json!("1e2"),
+            json!({ "_": 8, "sm": 13 }), json!({ "_": 8, "sm": "lg" }),
+        ] {
+            assert!(miss(p, rejected.clone()), "{rejected} should miss");
+        }
+        assert!(!miss(&property("margin"), json!("auto")));
+        assert!(!miss(&property("color"), json!("currentColor")));
+        assert!(miss(&property("color"), json!("currentcolor")));
+        assert!(miss(&property("color"), json!("banana")));
+        let width = property("maxWidth");
+        for admitted in ["10px", "1e2px", ".5E-1rem", "calc(1px + 2px)", "fit-content"] {
+            assert!(!miss(&width, json!(admitted)), "{admitted} should be admitted");
+        }
+        for rejected in ["min(1px, 2px)", "1.px", "0x10px", "1e2.5px", "stretch"] {
+            assert!(miss(&width, json!(rejected)), "{rejected} should miss");
+        }
+        assert!(miss(&width, json!(12)));
+        assert!(miss(&PropConfig { negative: false, ..p.clone() }, json!(-8)));
+        assert!(!miss(&PropConfig { strict: Some(false), ..p.clone() }, json!(13)));
+        assert!(!miss(&PropConfig { strict: None, ..p.clone() }, json!(13)));
+        let empty = PropConfig { scale: Some(Value::String("sizes".to_string())), ..p.clone() };
+        assert!(!miss(&empty, json!(13)));
+        let array = PropConfig { scale: Some(json!([8, "auto-fit"])), negative: false, ..p.clone() };
+        assert!(!miss(&array, json!("8")));
+        assert!(!miss(&array, json!(8)));
+        assert!(miss(&array, json!(16)));
+    }
+
+    #[test]
+    fn strict_scale_miss_omits_every_entry_of_the_prop() {
+        let mut owner = TestCtxOwner::new();
+        owner.config.get_mut("p").unwrap().strict = Some(true);
+        let sink = StrictTokenMissSink::default();
+        let mut ctx = owner.ctx();
+        ctx.token_misses = Some(&sink);
+        let styles = json!({ "p": { "_": 8, "sm": 13 }, "px": 8, "&:hover": { "p": 13 } });
+        let resolved = resolve_styles(&styles, &ctx, false);
+        let all: Vec<&CssDeclaration> = resolved
+            .declarations
+            .iter()
+            .chain(resolved.conditioned.iter().flat_map(|g| &g.declarations))
+            .chain(resolved.pseudo_selectors.iter().flat_map(|(_, d)| d))
+            .collect();
+        assert!(all.iter().all(|d| d.property != "padding"), "{all:?}");
+        assert!(all.iter().any(|d| d.property == "padding-left"), "{all:?}");
+        let misses = sink.borrow();
+        assert_eq!(
+            misses.iter().map(|m| (m.prop.as_str(), m.rejected.clone())).collect::<Vec<_>>(),
+            vec![
+                ("p", vec![(Some("sm".to_string()), json!(13))]),
+                ("p", vec![(None, json!(13))]),
+            ]
+        );
     }
 
     fn test_variable_map() -> VariableMap {

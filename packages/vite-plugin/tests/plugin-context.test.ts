@@ -223,6 +223,32 @@ describe('systemPropsModuleSource: keyed on the inputs it generates from', () =>
     );
   });
 
+  it('tracks the transforms the latest analysis admitted', () => {
+    const ctx = new PluginContext({ system: './ds.ts' });
+
+    ctx.storedAdmittedTransformsJson = '{"fraction":"(v) => v * 2"}';
+    const first = systemPropsModuleSource(ctx);
+    ctx.storedAdmittedTransformsJson = '{"fraction":"(v) => v * 3"}';
+
+    expect(first).toContain('"fraction": ((v) => v * 2)');
+    expect(systemPropsModuleSource(ctx)).toContain(
+      '"fraction": ((v) => v * 3)'
+    );
+  });
+
+  it('delivers no configured source analysis has not admitted', () => {
+    const ctx = new PluginContext({ system: './ds.ts' });
+
+    ctx.system = {
+      ...ctx.system,
+      transformSourcesJson: '{"fraction":"(v) => v * 2"}',
+    };
+
+    expect(systemPropsModuleSource(ctx)).toContain(
+      'export const transforms = {};'
+    );
+  });
+
   it('serves identical bytes while the inputs stand still', () => {
     const ctx = new PluginContext({ system: './ds.ts' });
 

@@ -16,7 +16,7 @@ export const Header = ds
   .styles({ fontSize: 18 })
   .variant({
     prop: 'density',
-    variants: { compact: { m: 1 }, loose: { m: 6 } },
+    variants: { compact: { margin: 1 }, loose: { margin: 6 } },
   })
   .asElement('header');
 

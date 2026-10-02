@@ -34,6 +34,7 @@ struct AnalyzeResult<'a> {
     system_prop_map:
         &'a std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>,
     dynamic_props: &'a std::collections::BTreeMap<String, crate::dynamic_meta::DynamicPropMeta>,
+    admitted_transforms: &'a std::collections::BTreeMap<String, String>,
     component_fragments: &'a std::collections::BTreeMap<String, crate::css::PerComponentSheets>,
     reverse_provenance: &'a std::collections::BTreeMap<String, Vec<String>>,
     components: &'a std::collections::BTreeMap<String, analyze_css::ComponentDescriptor>,
@@ -54,6 +55,7 @@ pub struct EngineOptions {
     pub config_json: Option<String>,
     pub group_registry_json: Option<String>,
     pub transform_sources_json: Option<String>,
+    pub transform_provenance_json: Option<String>,
     pub selector_aliases_json: Option<String>,
     pub condition_aliases_json: Option<String>,
     pub global_style_blocks_json: Option<String>,
@@ -81,6 +83,10 @@ struct ReplacementImportNeeds {
     system_prop_groups: bool,
     dynamic_prop_config: bool,
     transforms: bool,
+    /// Import declarations, by span, whose imported callback a replacement no
+    /// longer references because its delivery was pruned: with that last use
+    /// gone, TypeScript elides the declaration and its module's effects.
+    effect_imports: std::collections::BTreeMap<(u32, u32), String>,
 }
 
 fn replacement_import_needs(
@@ -114,9 +120,33 @@ fn replacement_import_needs(
                 .as_ref()
                 .is_some_and(|config| {
                     config.values().any(|meta| {
-                        meta.transform_fn_source.is_none() && meta.transform_name.is_some()
+                        meta.transform_id.is_some()
                     })
                 });
+
+        // A chain-stage reference or extended parent resolves at module
+        // scope, where an import and a local cannot share a name.
+        let import_of = |local: &str| file_facts.imports.iter().find(|import| import.local == local);
+        if payload.drops_parent_reference {
+            let parent = chain.descriptor.extends_from.as_deref().and_then(import_of);
+            needs.effect_imports.extend(parent.map(|import| (import.declaration, import.source.clone())));
+        }
+        let delivered = |prop: &str| {
+            payload
+                .custom_dynamic_config
+                .as_ref()
+                .is_some_and(|config| config.contains_key(prop))
+        };
+        let captures = chain
+            .stages
+            .iter()
+            .filter(|stage| stage.method == "props")
+            .flat_map(|stage| &stage.captured)
+            .filter(|capture| !delivered(capture.key.split('.').next().unwrap_or_default()));
+        for capture in captures {
+            let import = import_of(&capture.source);
+            needs.effect_imports.extend(import.map(|import| (import.declaration, import.source.clone())));
+        }
     }
 
     needs
@@ -163,6 +193,8 @@ impl ExtractEngine {
         css_inputs
             .set_transform_sources(o.transform_sources_json.as_deref())
             .map_err(napi::Error::from_reason)?;
+        css_inputs.transform_provenance =
+            crate::transforms::TransformProvenance::from_json(o.transform_provenance_json.as_deref());
         Ok(ExtractEngine {
             opts: ResolvedOptions {
                 prefix: o.prefix.unwrap_or_else(|| "animus".to_string()),
@@ -372,6 +404,12 @@ impl ExtractEngine {
             }
         }
 
+        let mut references = crate::transforms::TransformReferences::new(&self.opts.css_inputs);
+        for ast in store.iter() {
+            let (imports, exports) = &imports_by_file[&ast.path];
+            references.add(&ast.path, ast.program(), imports, exports);
+        }
+
         let empty = rustc_hash::FxHashMap::default();
         for ast in store.iter() {
             self.order.push(ast.path.clone());
@@ -392,12 +430,15 @@ impl ExtractEngine {
                     local_usage_statics,
                     extra,
                     usage_extra,
+                    &references,
                 ),
             );
             self.sources
                 .insert(ast.path.clone(), ast.source().to_string());
         }
 
+        // Facts own every resolved reference; release the modules' scopings.
+        drop(references);
         let cross = cross_file::resolve_cross_file(&self.facts);
         let css = analyze_css::run(
             &self.facts,
@@ -416,6 +457,7 @@ impl ExtractEngine {
             report: &css.reconciliation,
             system_prop_map: &css.system_prop_map,
             dynamic_props: &css.dynamic_props,
+            admitted_transforms: &css.admitted_transforms,
             component_fragments: &css.component_fragments,
             reverse_provenance: &css.reverse_provenance,
             components: &css.components,
@@ -558,6 +600,14 @@ impl ExtractEngine {
             system_imports.join(", "),
             self.opts.runtime_import
         );
+        // The module stays imported where its declaration was, so it still
+        // evaluates in authored order.
+        for (&(start, end), module) in &import_needs.effect_imports {
+            let declaration = &source[start as usize..end as usize];
+            let separator = if declaration.ends_with(';') { "" } else { ";" };
+            let specifier = crate::evaluator::js_string_literal(module);
+            replacements.push((start, end, format!("{declaration}{separator}import {specifier};")));
+        }
         let compose_ctx_import_str = if has_compose_context_replacements {
             format!(
                 "import {{ createComposedFamilyWithContext }} from '{}';\n",
@@ -573,7 +623,7 @@ impl ExtractEngine {
                 self.opts.system_props_module_id
             );
             let binding_loop = if import_needs.dynamic_prop_config {
-                "for (const [k, v] of Object.entries(dynamicPropConfig)) { if (v.transformName) v.transform = transforms[v.transformName]; }\n"
+                "for (const [k, v] of Object.entries(dynamicPropConfig)) { if (v.transformId) v.transform = transforms[v.transformId]; }\n"
             } else {
                 ""
             };
@@ -682,14 +732,19 @@ mod tests {
 
     fn dynamic_meta(
         transform_name: Option<&str>,
+        transform_id: Option<&str>,
         transform_fn_source: Option<&str>,
     ) -> crate::dynamic_meta::DynamicPropMeta {
         crate::dynamic_meta::DynamicPropMeta {
             var_name: "--tone".into(),
             slot_class: "tone-slot".into(),
             property: "color".into(),
+            negative: false,
+            strict: false,
+            keywords: vec![],
             properties: Vec::new(),
             transform_name: transform_name.map(str::to_string),
+            transform_id: transform_id.map(str::to_string),
             transform_fn_source: transform_fn_source.map(str::to_string),
             scale_values: BTreeMap::new(),
         }
@@ -1117,13 +1172,16 @@ export const App = () => <Box tone="red" />;
             .transforms
         };
 
-        assert!(needs_transforms(dynamic_meta(Some("tone"), None)));
+        assert!(needs_transforms(dynamic_meta(Some("tone"), Some("tone@system.tone"), None)));
+        assert!(!needs_transforms(dynamic_meta(Some("tone"), None, None)));
         assert!(!needs_transforms(dynamic_meta(
+            None,
             None,
             Some("(value) => value")
         )));
         assert!(!needs_transforms(dynamic_meta(
             Some("ignored-name"),
+            None,
             Some("(value) => value")
         )));
     }
@@ -1488,5 +1546,33 @@ export const App = () => <Box tone="red" />;
         engine.clear_cache();
         assert!(engine.facts.is_empty());
         assert_eq!(engine.parse_count, 0);
+    }
+
+    #[test]
+    fn a_pruned_imported_callback_keeps_its_module_imported_in_place() {
+        let mut engine = ExtractEngine::new(None).unwrap();
+        engine
+            .analyze(
+                serde_json::json!([
+                    { "path": "poly.ts", "source": "globalThis.ready = true;\n" },
+                    { "path": "cb.ts", "source": "export const shift = (v) => `${v}px`;\n" },
+                    { "path": "kept.ts", "source": "export const kept = (v) => `${v}px`;\n" },
+                    { "path": "kit.tsx", "source": "export const Kit = ds.props({ lift: { property: 'top', transform: (v) => `${v}px` } }).asElement('div');\n" },
+                    {
+                        "path": "a.tsx",
+                        "source": "import './poly';\nimport { shift } from './cb'\nimport { kept } from './kept';\nimport { Kit } from './kit';\nconst Card = ds.props({ s: { property: 'minWidth', transform: shift } }).asElement('div');\nconst Kid = Kit.extend().asElement('i');\nexport const Live = ds.props({ k: { property: 'minHeight', transform: kept } }).asElement('div');\nexport const App = () => <><Card s={10} /><Kid lift={10} /></>;\n",
+                    },
+                ])
+                .to_string(),
+            )
+            .unwrap();
+        let out: serde_json::Value =
+            serde_json::from_str(&engine.transform_file("a.tsx".to_string()).unwrap()).unwrap();
+        let code = out["code"].as_str().unwrap();
+        // Each kept module stays where it was declared, so evaluation order holds.
+        assert_eq!(code.matches("import \"./cb\";").count(), 1, "{code}");
+        assert!(code.contains("import './poly';\nimport { shift } from './cb';import \"./cb\";\n"), "{code}");
+        assert!(code.contains("import { Kit } from './kit';import \"./kit\";\n"), "{code}");
+        assert!(!code.contains("import \"./kept\";"), "{code}");
     }
 }

@@ -8,7 +8,9 @@ use std::collections::VecDeque;
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
+use crate::evaluator::js_string_literal;
 use crate::facts::ChainFacts;
+use crate::theme::PropConfigMap;
 
 /// Deep merge matching the runtime builder's `deepMerge`: objects merge key
 /// by key, and arrays and scalars replace the parent value.
@@ -74,6 +76,40 @@ pub fn inherit_variant_stages(
     merged_chain
 }
 
+/// Whether the chain's own variant stages author `entry` for `prop` under the
+/// axis option (`None` for its base) — the whole value, or the value at
+/// `breakpoint` — rather than inheriting it from a merged-in parent.
+pub fn authors_variant_entry(
+    chain: &ChainFacts,
+    axis: &str,
+    option: Option<&str>,
+    prop: &str,
+    breakpoint: Option<&str>,
+    entry: &Value,
+) -> bool {
+    chain
+        .stages
+        .iter()
+        .filter_map(|stage| stage.value.as_ref().filter(|_| stage.method == "variant"))
+        .filter(|config| variant_prop(config) == axis)
+        .filter_map(|config| match option {
+            Some(option) => config["variants"].get(option),
+            None => config.get("base"),
+        })
+        .any(|styles| declares(styles, prop, breakpoint, entry))
+}
+
+fn declares(styles: &Value, prop: &str, breakpoint: Option<&str>, entry: &Value) -> bool {
+    styles.as_object().is_some_and(|entries| {
+        let authored = entries.get(prop).map(|value| match breakpoint {
+            Some(breakpoint) => value.get(breakpoint),
+            None => Some(value),
+        });
+        authored.flatten() == Some(entry)
+            || entries.values().any(|nested| declares(nested, prop, breakpoint, entry))
+    })
+}
+
 /// The variant configs a child hands its own extensions: the inherited
 /// configs with each of the chain's variant stages merged in order.
 pub fn effective_variant_configs(
@@ -92,6 +128,46 @@ pub fn effective_variant_configs(
         }
     }
     configs
+}
+
+/// The property of an extracted component holding the custom-prop callables
+/// it delivers; the runtime's `createComponent` writes it.
+const DELIVERED_TRANSFORMS: &str = "customTransforms";
+
+/// The custom props a child hands its own extensions: every inherited
+/// declaration, each replaced whole by one the chain declares itself. An
+/// inherited callback is read from the extended parent as the child's module
+/// names it (`parent_binding`), so its source and scope stay in the module
+/// that declares it; the second result names those props, whose callables
+/// the parent keeps delivering while the child does.
+pub fn inherit_custom_configs(
+    inherited: Option<&PropConfigMap>,
+    own: Option<PropConfigMap>,
+    parent_binding: &str,
+) -> (Option<PropConfigMap>, FxHashSet<String>) {
+    let Some(inherited) = inherited.filter(|configs| !configs.is_empty()) else {
+        return (own, FxHashSet::default());
+    };
+    let own = own.unwrap_or_default();
+    let mut read_from_parent = FxHashSet::default();
+    let mut configs: PropConfigMap = inherited
+        .iter()
+        .map(|(prop, config)| {
+            let mut config = config.clone();
+            if config.transform_fn_source.is_some() {
+                config.transform_fn_source = Some(format!(
+                    "{parent_binding}.{DELIVERED_TRANSFORMS}[{}]",
+                    js_string_literal(prop)
+                ));
+                if !own.contains_key(prop) {
+                    read_from_parent.insert(prop.clone());
+                }
+            }
+            (prop.clone(), config)
+        })
+        .collect();
+    configs.extend(own);
+    (Some(configs), read_from_parent)
 }
 
 #[derive(Debug, Clone)]

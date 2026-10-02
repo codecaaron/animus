@@ -16,7 +16,7 @@
     "diagnostics": []
   },
   "inline-transform-multiply": {
-    "css": "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer composed {\n  }\n}\n\n@layer anm-custom {\n  .animus-dyn-157693e2-w {\n    width: var(--animus-w);\n  }\n  @media (min-width: 480px) {\n    .animus-dyn-157693e2-w-xs {\n      width: var(--animus-w-xs);\n    }\n  }\n  @media (min-width: 768px) {\n    .animus-dyn-157693e2-w-sm {\n      width: var(--animus-w-sm);\n    }\n  }\n  @media (min-width: 1024px) {\n    .animus-dyn-157693e2-w-md {\n      width: var(--animus-w-md);\n    }\n  }\n  @media (min-width: 1200px) {\n    .animus-dyn-157693e2-w-lg {\n      width: var(--animus-w-lg);\n    }\n  }\n  @media (min-width: 1440px) {\n    .animus-dyn-157693e2-w-xl {\n      width: var(--animus-w-xl);\n    }\n  }\n}\n\n",
+    "css": "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer composed {\n  }\n}\n\n@layer anm-custom {\n  .animus-dyn-157693e2-w {\n    width: var(--animus-w);\n  }\n  .animus-u-541450bd {\n    width: 16;\n  }\n  @media (min-width: 480px) {\n    .animus-dyn-157693e2-w-xs {\n      width: var(--animus-w-xs);\n    }\n  }\n  @media (min-width: 768px) {\n    .animus-dyn-157693e2-w-sm {\n      width: var(--animus-w-sm);\n    }\n  }\n  @media (min-width: 1024px) {\n    .animus-dyn-157693e2-w-md {\n      width: var(--animus-w-md);\n    }\n  }\n  @media (min-width: 1200px) {\n    .animus-dyn-157693e2-w-lg {\n      width: var(--animus-w-lg);\n    }\n  }\n  @media (min-width: 1440px) {\n    .animus-dyn-157693e2-w-xl {\n      width: var(--animus-w-xl);\n    }\n  }\n}\n\n",
     "diagnostics": []
   },
   "integer-no-transform": {
@@ -24,7 +24,11 @@
     "diagnostics": []
   },
   "named-transform-cross-file-collision": {
-    "css": "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer composed {\n  }\n}\n\n@layer anm-system {\n  .animus-u-682e3698 {\n    q: 3;\n  }\n}\n\n@layer anm-custom {\n  .animus-u-3508a504 {\n    left: 3;\n  }\n}\n\n",
+    "css": "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-base {\n  .animus-S-2fda136a {\n    top: 3em;\n  }\n}\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer composed {\n  }\n}\n\n@layer anm-custom {\n  .animus-u-55267b6e {\n    left: 3em;\n  }\n}\n\n",
+    "diagnostics": []
+  },
+  "named-transform-cross-file-collision-reversed": {
+    "css": "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-base {\n  .animus-S-2fda136a {\n    top: 3em;\n  }\n}\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer composed {\n  }\n}\n\n@layer anm-custom {\n  .animus-u-55267b6e {\n    left: 3em;\n  }\n}\n\n",
     "diagnostics": []
   },
   "negative-scale": {
@@ -95,9 +99,17 @@
       }
     ]
   },
-  "reject-inline-object-dynamic-path": {
+  "reject-inline-object": {
     "css": "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer composed {\n  }\n}\n\n@layer anm-custom {\n  .animus-dyn-157693e2-zap {\n    width: var(--animus-zap);\n  }\n  @media (min-width: 480px) {\n    .animus-dyn-157693e2-zap-xs {\n      width: var(--animus-zap-xs);\n    }\n  }\n  @media (min-width: 768px) {\n    .animus-dyn-157693e2-zap-sm {\n      width: var(--animus-zap-sm);\n    }\n  }\n  @media (min-width: 1024px) {\n    .animus-dyn-157693e2-zap-md {\n      width: var(--animus-zap-md);\n    }\n  }\n  @media (min-width: 1200px) {\n    .animus-dyn-157693e2-zap-lg {\n      width: var(--animus-zap-lg);\n    }\n  }\n  @media (min-width: 1440px) {\n    .animus-dyn-157693e2-zap-xl {\n      width: var(--animus-zap-xl);\n    }\n  }\n}\n\n",
-    "diagnostics": []
+    "diagnostics": [
+      {
+        "component": "C",
+        "file": "a.tsx",
+        "kind": "error",
+        "message": "transform 'inline' returned object for prop 'zap' — transforms must return a string or finite number; rule-level styling ships as declaration scales (see composite-style-scales)",
+        "severity": "error"
+      }
+    ]
   },
   "reject-nan": {
     "css": "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer composed {\n  }\n}\n\n",
@@ -196,8 +208,17 @@
     ]
   },
   "scale-key-float-string": {
-    "css": "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-base {\n  .animus-C-157693e2 {\n    padding: 8.0;\n  }\n}\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer composed {\n  }\n}\n\n",
-    "diagnostics": []
+    "css": "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer composed {\n  }\n}\n\n",
+    "diagnostics": [
+      {
+        "code": "animus.props.strict-token-miss",
+        "component": "C",
+        "file": "a.tsx",
+        "kind": "warn",
+        "message": "prop 'p' value \"8.0\" is not a token of its strict scale; its styling is omitted — use a scale key, or declare the prop strict: false to accept raw values",
+        "severity": "error"
+      }
+    ]
   },
   "scale-key-number": {
     "css": "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-base {\n  .animus-C-157693e2 {\n    padding: 0.5rem;\n  }\n}\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer composed {\n  }\n}\n\n",
@@ -208,11 +229,27 @@
     "diagnostics": []
   },
   "string-passthrough": {
-    "css": "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-base {\n  .animus-C-157693e2 {\n    font-size: 2em;\n  }\n}\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer composed {\n  }\n}\n\n",
-    "diagnostics": []
+    "css": "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer composed {\n  }\n}\n\n",
+    "diagnostics": [
+      {
+        "code": "animus.props.strict-token-miss",
+        "component": "C",
+        "file": "a.tsx",
+        "kind": "warn",
+        "message": "prop 'fontSize' value \"2em\" is not a token of its strict scale; its styling is omitted — use a scale key, or declare the prop strict: false to accept raw values",
+        "severity": "error"
+      }
+    ]
   },
   "throwing-transform": {
-    "css": "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer composed {\n  }\n}\n\n@layer anm-custom {\n  .animus-dyn-157693e2-w {\n    width: var(--animus-w);\n  }\n  @media (min-width: 480px) {\n    .animus-dyn-157693e2-w-xs {\n      width: var(--animus-w-xs);\n    }\n  }\n  @media (min-width: 768px) {\n    .animus-dyn-157693e2-w-sm {\n      width: var(--animus-w-sm);\n    }\n  }\n  @media (min-width: 1024px) {\n    .animus-dyn-157693e2-w-md {\n      width: var(--animus-w-md);\n    }\n  }\n  @media (min-width: 1200px) {\n    .animus-dyn-157693e2-w-lg {\n      width: var(--animus-w-lg);\n    }\n  }\n  @media (min-width: 1440px) {\n    .animus-dyn-157693e2-w-xl {\n      width: var(--animus-w-xl);\n    }\n  }\n}\n\n",
-    "diagnostics": []
+    "css": "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer composed {\n  }\n}\n\n@layer anm-custom {\n  .animus-dyn-157693e2-w {\n    width: var(--animus-w);\n  }\n  .animus-u-01558b3e {\n    width: 4;\n  }\n  @media (min-width: 480px) {\n    .animus-dyn-157693e2-w-xs {\n      width: var(--animus-w-xs);\n    }\n  }\n  @media (min-width: 768px) {\n    .animus-dyn-157693e2-w-sm {\n      width: var(--animus-w-sm);\n    }\n  }\n  @media (min-width: 1024px) {\n    .animus-dyn-157693e2-w-md {\n      width: var(--animus-w-md);\n    }\n  }\n  @media (min-width: 1200px) {\n    .animus-dyn-157693e2-w-lg {\n      width: var(--animus-w-lg);\n    }\n  }\n  @media (min-width: 1440px) {\n    .animus-dyn-157693e2-w-xl {\n      width: var(--animus-w-xl);\n    }\n  }\n}\n\n",
+    "diagnostics": [
+      {
+        "component": "C",
+        "file": "a.tsx",
+        "kind": "warn",
+        "message": "transform 'inline' threw for prop 'w' in a.tsx; raw value applied as fallback (transform 'inline' eval failed: boom)"
+      }
+    ]
   }
 }

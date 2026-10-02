@@ -25,10 +25,15 @@ export function applyDevBridgeImport(code: string): string {
   );
 }
 
-function rawFallbackDescendants(ctx: PluginContext, relPath: string): string[] {
+/** The files defining a transitive extension of a component the given
+ *  analysis paths define, from the published provenance. */
+export function extendingFiles(
+  ctx: PluginContext,
+  analysisPaths: readonly string[]
+): Set<string> {
   const manifest = ctx.storedManifest;
-  const conflicted = new Set<string>();
-  const queue = [...(manifest?.files[relPath] ?? [])];
+  const files = new Set<string>();
+  const queue = analysisPaths.flatMap((path) => manifest?.files[path] ?? []);
   const seen = new Set(queue);
   while (queue.length > 0) {
     const id = queue.shift()!;
@@ -39,16 +44,16 @@ function rawFallbackDescendants(ctx: PluginContext, relPath: string): string[] {
       // The manifest is the file authority — no id-string parsing. A missing
       // descriptor is a genuine miss, not a shape guard.
       const childFile = manifest?.components[childId]?.file;
-      if (
-        childFile &&
-        childFile !== relPath &&
-        ctx.rawExtensionFallbacks.has(childFile)
-      ) {
-        conflicted.add(childFile);
-      }
+      if (childFile) files.add(childFile);
     }
   }
-  return [...conflicted].sort();
+  return files;
+}
+
+function rawFallbackDescendants(ctx: PluginContext, relPath: string): string[] {
+  return [...extendingFiles(ctx, [relPath])]
+    .filter((file) => file !== relPath && ctx.rawExtensionFallbacks.has(file))
+    .sort();
 }
 
 export async function transformSource(
@@ -80,6 +85,13 @@ export async function transformSource(
     if (!isPathWithinRoot(ctx.rootDir, id)) return null;
   }
 
+  // Aborted bytes go to the host's own parser: the retained engine would
+  // serve the previous module and hide the syntax error.
+  const abortedHash = ctx.abortedParseHashes.get(relativePath);
+  if (abortedHash !== undefined && abortedHash === contentHash(code)) {
+    return null;
+  }
+
   if (!ctx.storedManifest.files[relativePath]?.length) {
     // Exclusive: Vite transforms concurrently, and two interleaved
     // detections publish from different cache snapshots — the loser drops.
@@ -102,12 +114,17 @@ export async function transformSource(
         );
         const prevPlans = snapshotFilePlans(ctx.storedManifest);
         let analysisOk = false;
+        let held = false;
         try {
-          analysisOk = (await ctx.analyzeIngested()).ok;
+          const analysis = await ctx.analyzeIngested();
+          analysisOk = analysis.ok;
+          held = analysis.abortedOriginals !== undefined;
         } finally {
           // A failed analysis leaves the file undetected so the next
           // transform retries; a registered entry is hash-suppressed forever.
-          if (!analysisOk) {
+          // An aborted-parse rejection holds it instead, for the repair to
+          // publish and re-deliver.
+          if (!analysisOk && !held) {
             ctx.mutateFileCache((cache) => cache.delete(relativePath));
           }
         }

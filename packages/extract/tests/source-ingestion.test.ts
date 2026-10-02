@@ -2,25 +2,13 @@ import { describe, expect, test } from 'vitest';
 
 import { contentHash } from '../pipeline/content-hash';
 import { preprocessMdx } from '../pipeline/mdx-preprocessor';
-import {
-  ingestSourceEntries,
-  parseFilesJson,
-  type ExtractFactsResult,
-  type SourceIngestionOptions,
-} from '../pipeline/source-ingestion';
+import { ingestSourceEntries } from '../pipeline/source-ingestion';
 import { adaptSvelteSource } from '../pipeline/svelte-source-adapter';
-
-type FactFile = ExtractFactsResult['files'][string];
-
-function emptyFacts(path: string): FactFile {
-  return {
-    path,
-    chains: [],
-    imports: [],
-    exports: [],
-    parseDiagnostics: [],
-  };
-}
+import {
+  emptyFacts,
+  factsExtractor,
+  type FactFile,
+} from './source-ingestion-fixtures';
 
 function resolverFacts(
   path: string,
@@ -36,25 +24,6 @@ function resolverFacts(
       },
     ],
     exports: [{ exported, local: binding, source: null, original: null }],
-  };
-}
-
-function factsExtractor(
-  overrides: Record<string, FactFile>,
-  calls: Array<Array<{ path: string; source: string; hash?: string }>> = []
-): SourceIngestionOptions['extractFacts'] {
-  return (filesJson) => {
-    const entries = parseFilesJson(filesJson, 'extractFacts test double');
-    calls.push(entries);
-    return JSON.stringify({
-      files: Object.fromEntries(
-        entries.map((entry) => [
-          entry.path,
-          overrides[entry.path] ?? emptyFacts(entry.path),
-        ])
-      ),
-      parseCount: entries.length,
-    } satisfies ExtractFactsResult);
   };
 }
 

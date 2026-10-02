@@ -106,7 +106,11 @@ export type ManifestDynamicProp = {
   property?: string | null;
   properties?: readonly string[] | null;
   transformName?: string | null;
-  scaleValues?: Readonly<Record<string, string>> | null;
+  transformId?: string | null;
+  scaleValues?: Readonly<Record<string, string | number>> | null;
+  negative?: boolean;
+  strict?: boolean;
+  keywords?: readonly string[];
 };
 
 export type ManifestUsageResidue = {

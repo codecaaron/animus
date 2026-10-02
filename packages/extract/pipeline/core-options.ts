@@ -38,7 +38,9 @@ export interface AnimusCoreOptions {
   exclude?: string[];
   /** File extensions to scan; replaces the default list entirely. */
   extensions?: string[];
-  /** When true, extraction failures throw instead of warning. */
+  /** When true, error-severity diagnostics — lost configured inputs and
+   *  classified unsupported Animus declarations — fail the build instead of
+   *  warning. Omitted or `false` warns. */
   strict?: boolean;
   verbose?: boolean;
   /** Namespace prefix for CSS variables and class names. */

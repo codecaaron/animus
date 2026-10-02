@@ -32,6 +32,12 @@ resolves, a watcher re-analyzes on source changes in dev, and per-file
 transforms run in a stateless loader fed by generated `.animus/` artifacts.
 tsconfig `paths` aliases are honored.
 
+Because `next.config` resolves only after that first extraction, a source the
+parser cannot finish at startup rejects the config before any watcher exists:
+fix the syntax error and start Next again. Once the watcher runs, a later
+syntax error keeps the last published artifacts and holds further edits until
+the file parses, then publishes them together.
+
 Control it explicitly with the `turbopack` option:
 
 ```tsx

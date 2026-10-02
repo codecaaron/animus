@@ -1,4 +1,10 @@
-import { createSystem, createTheme, createTransform } from '@animus-ui/system';
+import {
+  type ConditionsOf,
+  createSystem,
+  createTheme,
+  createTransform,
+  type SelectorsOf,
+} from '@animus-ui/system';
 import {
   background,
   border,
@@ -538,6 +544,10 @@ export const theme = createTheme()
       128: '8rem',
       160: '10rem',
       192: '12rem',
+      'compact-x': '0.5rem',
+      'compact-y': '0.25rem',
+      'comfortable-x': '1rem',
+      'comfortable-y': '0.5rem',
     },
   })
   .addScale({
@@ -659,11 +669,6 @@ export const theme = createTheme()
 
 export type ShowcaseTheme = typeof theme;
 
-declare module '@animus-ui/system' {
-  // eslint-disable-next-line @typescript-eslint/no-empty-interface
-  interface Theme extends ShowcaseTheme {}
-}
-
 const bundle = createSystem({
   includes: [testDs],
 })
@@ -687,7 +692,23 @@ const bundle = createSystem({
   .addGroup('motion', { ...transitions })
   .addGroup('space', space)
   .addGroup('positioning', positioning)
+  .addSelectors({ _emphasized: '&[data-emphasis]' })
+  // Same threshold as the theme's `sm` breakpoint.
+  .addConditions({ _wideViewport: '@media (min-width: 768px)' })
   .build();
+
+// Aliases come from `bundle.system`, before registration: the sealed `ds`
+// would make alias inference depend on globals typed by those aliases.
+type ShowcaseSystem = typeof bundle.system;
+
+declare module '@animus-ui/system' {
+  // eslint-disable-next-line @typescript-eslint/no-empty-interface
+  interface Theme extends ShowcaseTheme {}
+  // eslint-disable-next-line @typescript-eslint/no-empty-interface
+  interface Selectors extends Record<SelectorsOf<ShowcaseSystem>, true> {}
+  // eslint-disable-next-line @typescript-eslint/no-empty-interface
+  interface Conditions extends Record<ConditionsOf<ShowcaseSystem>, true> {}
+}
 
 export const { createGlobalStyles, createKeyframes } = bundle;
 
@@ -703,6 +724,14 @@ export const animations = createKeyframes({
   tallyPulse: {
     '0%, 100%': { transform: 'scale(1)' },
     '50%': { transform: 'scale(1.02)' },
+  },
+});
+
+// Referenced only by the Examples tooltip specimen's emphasized state.
+export const specimenMotion = createKeyframes({
+  specimenGlow: {
+    '0%, 100%': { boxShadow: '{shadows.glow-edge}' },
+    '50%': { boxShadow: '{shadows.glow-fire}' },
   },
 });
 
@@ -769,6 +798,6 @@ export const globalStyles = createGlobalStyles({
 });
 
 export const ds = bundle
-  .registerKeyframes({ animations })
+  .registerKeyframes({ animations, specimenMotion })
   .registerGlobalStyles({ globalStyles })
   .seal();

@@ -413,3 +413,464 @@ describe('invalid transform result gate', () => {
     expect(describeInvalidTransformResult(Infinity)).toBe('non-finite-number');
   });
 });
+
+describe('runtime transform exception boundary', () => {
+  const witnesses = () => witnessRuntimeGlobal.__ANIMUS_WITNESS__;
+
+  const explode = (v: string | number) => {
+    if (v === 13) throw new RangeError('13 is unlucky');
+    return Number(v) * 2;
+  };
+
+  const dyn = (
+    overrides: Partial<DynamicPropConfig[string]> = {}
+  ): DynamicPropConfig => ({
+    p: {
+      varName: '--animus-p',
+      slotClass: 'animus-dyn-p',
+      transform: explode,
+      ...overrides,
+    },
+  });
+
+  beforeEach(() => {
+    delete witnessRuntimeGlobal.__ANIMUS_WITNESS__;
+  });
+
+  test('a throwing named transform drops the prop and warns with its attribution', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const res = resolveClasses(
+      'animus-T-named1',
+      { p: 13 },
+      config(),
+      undefined,
+      dyn({ transformName: 'explode' })
+    );
+    expect(res.classes).toEqual(['animus-T-named1']);
+    expect(res.dynamicStyle).toBeUndefined();
+    expect(witnesses()).toEqual([
+      { component: 'animus-T-named1', prop: 'p', value: '13', outcome: 'drop' },
+    ]);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0][0])).toBe(
+      "[animus:drop] animus-T-named1: transform 'explode' for prop 'p' threw for value 13 (RangeError: 13 is unlucky); prop styling dropped"
+    );
+    const stack = String(warn.mock.calls[0][1]);
+    expect(stack).toContain('RangeError: 13 is unlucky');
+    expect(stack).toContain('drop-diagnostic.test.ts');
+  });
+
+  test('a throwing inline transform is attributed as inline', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const res = resolveClasses(
+      'animus-T-inline1',
+      { p: 13 },
+      config(),
+      undefined,
+      dyn()
+    );
+    expect(res.classes).toEqual(['animus-T-inline1']);
+    expect(String(warn.mock.calls[0][0])).toBe(
+      "[animus:drop] animus-T-inline1: inline transform for prop 'p' threw for value 13 (RangeError: 13 is unlucky); prop styling dropped"
+    );
+  });
+
+  test('a throw at one breakpoint drops every entry of that prop and spares its siblings', () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const res = resolveClasses(
+      'animus-T-resp1',
+      { p: { _: 4, sm: 13 }, m: 6, gap: 2 },
+      config({ systemPropNames: ['p', 'm', 'gap'] }),
+      { gap: { '2': 'animus-u-gap2' } },
+      {
+        ...dyn(),
+        m: { varName: '--animus-m', slotClass: 'animus-dyn-m' },
+      }
+    );
+    expect(res.classes).toEqual([
+      'animus-T-resp1',
+      'animus-dyn-m',
+      'animus-u-gap2',
+    ]);
+    expect(res.dynamicStyle).toEqual({ '--animus-m': '6px' });
+    expect(witnesses()?.map(({ prop, outcome }) => [prop, outcome])).toEqual([
+      ['p', 'drop'],
+      ['m', 'dynamic'],
+      ['gap', 'static'],
+    ]);
+  });
+
+  test('valid, throwing and valid again resolve independently', () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const render = (p: number) =>
+      resolveClasses('animus-T-recover1', { p }, config(), undefined, dyn());
+    expect(render(4).dynamicStyle).toEqual({ '--animus-p': '8px' });
+    const thrown = render(13);
+    expect(thrown.classes).toEqual(['animus-T-recover1']);
+    expect(thrown.dynamicStyle).toBeUndefined();
+    const recovered = render(5);
+    expect(recovered.classes).toEqual(['animus-T-recover1', 'animus-dyn-p']);
+    expect(recovered.dynamicStyle).toEqual({ '--animus-p': '10px' });
+  });
+
+  test('warns once per rejected value across repeated renders', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const dc = dyn({
+      transform: (v) => {
+        // oxlint-disable-next-line no-throw-literal -- a non-Error throw keeps its reason
+        throw `no ${v}`;
+      },
+    });
+    resolveClasses('animus-T-dedupe1', { p: 1 }, config(), undefined, dc);
+    resolveClasses('animus-T-dedupe1', { p: 1 }, config(), undefined, dc);
+    expect(warn).toHaveBeenCalledTimes(1);
+    resolveClasses('animus-T-dedupe1', { p: 2 }, config(), undefined, dc);
+    expect(warn).toHaveBeenCalledTimes(2);
+    expect(String(warn.mock.calls[1][0])).toContain('value 2 (no 2)');
+    expect(warn.mock.calls[1]).toHaveLength(1);
+  });
+
+  test('an unprintable thrown value or stack still drops and warns safely', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const noStack = new Error('boom');
+    Object.defineProperty(noStack, 'stack', {
+      get() {
+        throw new Error('stack unavailable');
+      },
+    });
+    let stackReads = 0;
+    const shiftingStack = new Error('shifting');
+    Object.defineProperty(shiftingStack, 'stack', {
+      get() {
+        stackReads += 1;
+        return stackReads === 1
+          ? 'Error: shifting\n    at callback'
+          : { marker: 'not a stack string' };
+      },
+    });
+    for (const [base, thrown] of [
+      ['animus-T-hostile1', Object.create(null)],
+      ['animus-T-hostile2', noStack],
+      ['animus-T-hostile3', shiftingStack],
+    ] as const) {
+      const res = resolveClasses(
+        base,
+        { p: { _: 4, sm: 3 } },
+        config(),
+        undefined,
+        dyn({
+          transform: (v) => {
+            if (v === 3) throw thrown;
+            return v;
+          },
+        })
+      );
+      expect(res.classes).toEqual([base]);
+      expect(res.dynamicStyle).toBeUndefined();
+    }
+    expect(warn.mock.calls.map((call) => call.length)).toEqual([1, 1, 2]);
+    expect(String(warn.mock.calls[0][0])).toContain(
+      '(unprintable thrown value)'
+    );
+    expect(String(warn.mock.calls[1][0])).toContain('(Error: boom)');
+    expect(stackReads).toBe(1);
+    expect(warn.mock.calls[2][1]).toBe('Error: shifting\n    at callback');
+  });
+
+  test('resolveValue reports a throw as an unresolvable value', () => {
+    expect(
+      classResolutionRuntime.resolveValue(13, {
+        varName: '--animus-p',
+        transform: explode,
+      })
+    ).toBeNull();
+  });
+
+  test('production drops a throw silently', async () => {
+    const prod = await loadUnderNodeEnv('production');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const res = prod.resolveClasses(
+      'animus-T-prod1',
+      { p: 13 },
+      config(),
+      undefined,
+      dyn({ transformName: 'explode' })
+    );
+    expect(res.classes).toEqual(['animus-T-prod1']);
+    expect(res.dynamicStyle).toBeUndefined();
+    expect(warn).not.toHaveBeenCalled();
+  });
+});
+
+describe('strict scale miss', () => {
+  const witnesses = () => witnessRuntimeGlobal.__ANIMUS_WITNESS__;
+
+  const globals = [
+    '-moz-initial',
+    'inherit',
+    'initial',
+    'revert',
+    'revert-layer',
+    'unset',
+  ];
+
+  const space = {
+    varName: '--animus-p',
+    slotClass: 'animus-dyn-p',
+    property: 'padding',
+    strict: true,
+    keywords: globals,
+    negative: true,
+    scaleValues: { 0: '0', 4: '1rem', 40: 'var(--space-40)', '-4': '2rem' },
+  } satisfies DynamicPropConfig[string];
+
+  const dyn = (
+    overrides: Partial<DynamicPropConfig[string]> = {}
+  ): DynamicPropConfig => ({ p: { ...space, ...overrides } });
+
+  beforeEach(() => {
+    delete witnessRuntimeGlobal.__ANIMUS_WITNESS__;
+  });
+
+  test.each([13, -13])(
+    'unknown token %s drops the prop and warns with the authored value',
+    (value) => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const base = `animus-S-miss${value}`;
+      const res = resolveClasses(
+        base,
+        { p: value },
+        config(),
+        undefined,
+        dyn()
+      );
+      expect(res.classes).toEqual([base]);
+      expect(res.dynamicStyle).toBeUndefined();
+      expect(witnesses()).toEqual([
+        { component: base, prop: 'p', value: String(value), outcome: 'drop' },
+      ]);
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(String(warn.mock.calls[0][0])).toBe(
+        `[animus:drop] ${base}: value ${value} on prop 'p' is not a token of its strict scale; prop styling dropped`
+      );
+    }
+  );
+
+  test('known, exact and admitted negative tokens still resolve', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const style = (p: number) =>
+      resolveClasses('animus-S-known1', { p }, config(), undefined, dyn())
+        .dynamicStyle;
+    expect(style(4)).toEqual({ '--animus-p': '1rem' });
+    expect(style(-40)).toEqual({ '--animus-p': 'calc(var(--space-40) * -1)' });
+    expect(style(-4)).toEqual({ '--animus-p': '2rem' });
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  test('a negative counterpart without negative admission is a miss', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const res = resolveClasses(
+      'animus-S-unadmitted1',
+      { p: -40 },
+      config(),
+      undefined,
+      dyn({ negative: false })
+    );
+    expect(res.classes).toEqual(['animus-S-unadmitted1']);
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  test('a miss at one breakpoint drops every entry of that prop and spares its siblings', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const res = resolveClasses(
+      'animus-S-resp1',
+      { p: { _: 4, sm: 13 }, m: 6, gap: 2 },
+      config({ systemPropNames: ['p', 'm', 'gap'] }),
+      { gap: { '2': 'animus-u-gap2' } },
+      {
+        ...dyn(),
+        m: { varName: '--animus-m', slotClass: 'animus-dyn-m' },
+      }
+    );
+    expect(res.classes).toEqual([
+      'animus-S-resp1',
+      'animus-dyn-m',
+      'animus-u-gap2',
+    ]);
+    expect(res.dynamicStyle).toEqual({ '--animus-m': '6px' });
+    expect(witnesses()?.map(({ prop, outcome }) => [prop, outcome])).toEqual([
+      ['p', 'drop'],
+      ['m', 'dynamic'],
+      ['gap', 'static'],
+    ]);
+    expect(String(warn.mock.calls[0][0])).toBe(
+      "[animus:drop] animus-S-resp1: value _:4|sm:13 on prop 'p' is not a token of its strict scale (13 at sm); prop styling dropped"
+    );
+  });
+
+  test('valid, missing and valid again resolve independently', () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const render = (p: number) =>
+      resolveClasses('animus-S-recover1', { p }, config(), undefined, dyn());
+    expect(render(4).dynamicStyle).toEqual({ '--animus-p': '1rem' });
+    const missed = render(13);
+    expect(missed.classes).toEqual(['animus-S-recover1']);
+    expect(missed.dynamicStyle).toBeUndefined();
+    expect(render(0).dynamicStyle).toEqual({ '--animus-p': '0' });
+  });
+
+  test('warns once per rejected value across repeated renders', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    for (const p of [13, 13, 13]) {
+      resolveClasses('animus-S-dedupe1', { p }, config(), undefined, dyn());
+    }
+    expect(warn).toHaveBeenCalledTimes(1);
+    resolveClasses('animus-S-dedupe1', { p: 17 }, config(), undefined, dyn());
+    expect(warn).toHaveBeenCalledTimes(2);
+  });
+
+  test('values the strict type admits beside its tokens are not misses', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const value = (p: string | number, overrides = {}) =>
+      resolveClasses(
+        'animus-S-admit1',
+        { p },
+        config(),
+        undefined,
+        dyn(overrides)
+      ).dynamicStyle?.['--animus-p'];
+    expect(value(0, { scaleValues: { 4: '1rem' } })).toBe('0px');
+    expect(value('inherit')).toBe('inherit');
+    expect(value('revert-layer')).toBe('revert-layer');
+    expect(
+      value('auto', { property: 'margin', keywords: [...globals, 'auto'] })
+    ).toBe('auto');
+    expect(value('2cqi')).toBe('2cqi');
+    expect(value('-1.5cqmin')).toBe('-1.5cqmin');
+    expect(value('1e2cqi')).toBe('1e2cqi');
+    expect(value('10px', { property: 'maxWidth' })).toBe('10px');
+    expect(value('1e2px', { property: 'width' })).toBe('1e2px');
+    expect(value('.5E-1rem', { property: 'height' })).toBe('.5E-1rem');
+    expect(value('calc(1px + 2px)', { property: 'height' })).toBe(
+      'calc(1px + 2px)'
+    );
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    ['2.5rem', 'padding'],
+    ['var(--x)', 'padding'],
+    ['#fff', 'color'],
+    ['-17', 'padding'],
+    ['min(1px, 2px)', 'width'],
+    [12, 'width'],
+    ['lg', 'padding'],
+    ['auto', 'padding'],
+    ['banana', 'color'],
+    ['currentcolor', 'color'],
+    ['1.px', 'width'],
+    ['0x10px', 'width'],
+    ['1e2', 'padding'],
+  ])('%s on a strict %s scale is a miss', (p, property) => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const res = resolveClasses(
+      'animus-S-reject1',
+      { p },
+      config(),
+      undefined,
+      dyn({ property })
+    );
+    expect(res.classes).toEqual(['animus-S-reject1']);
+    expect(res.dynamicStyle).toBeUndefined();
+  });
+
+  test('loose and empty scales keep raw values', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const style = (overrides: Partial<DynamicPropConfig[string]>) =>
+      resolveClasses(
+        'animus-S-loose1',
+        { p: '2.5rem' },
+        config(),
+        undefined,
+        dyn(overrides)
+      ).dynamicStyle;
+    expect(style({ strict: undefined })).toEqual({ '--animus-p': '2.5rem' });
+    expect(style({ scaleValues: undefined })).toEqual({
+      '--animus-p': '2.5rem',
+    });
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  test('a miss is decided before the transform runs', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const transform = vi.fn((v: string | number) => {
+      if (v === 13) throw new RangeError('13 is unlucky');
+      return v;
+    });
+    const res = resolveClasses(
+      'animus-S-transform1',
+      { p: 13 },
+      config(),
+      undefined,
+      dyn({ transform, transformName: 'explode' })
+    );
+    expect(res.classes).toEqual(['animus-S-transform1']);
+    expect(transform).not.toHaveBeenCalled();
+    expect(String(warn.mock.calls[0][0])).toContain(
+      'is not a token of its strict scale'
+    );
+  });
+
+  test('a custom prop never resolves through a same-named system class or slot', () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const res = resolveClasses(
+      'animus-S-custom1',
+      { inset: 4 },
+      {
+        systemPropNames: ['inset'],
+        customDynamicConfig: {
+          inset: { ...space, scaleValues: { sm: '0.5rem' } },
+        },
+      },
+      { inset: { '4': 'animus-u-system-inset' } },
+      { inset: { varName: '--animus-inset', slotClass: 'animus-dyn-inset' } }
+    );
+    expect(res.classes).toEqual(['animus-S-custom1']);
+    expect(res.dynamicStyle).toBeUndefined();
+  });
+
+  test('a custom prop with no extracted class is still custom-owned', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const res = resolveClasses(
+      'animus-S-owned1',
+      { p: 8 },
+      { systemPropNames: ['p'], customPropMap: { p: {} } },
+      { p: { '8': 'animus-u-system-p' } },
+      { p: { varName: '--animus-p', slotClass: 'animus-dyn-p' } }
+    );
+    expect(res.classes).toEqual(['animus-S-owned1']);
+    expect(res.dynamicStyle).toBeUndefined();
+    expect(String(warn.mock.calls[0][0])).toBe(
+      "[animus:drop] animus-S-owned1: value 8 on custom prop 'p' is none of its extracted values and the prop has no runtime slot — it will not render. A literal missing from the prop's strict scale is reported by the build as animus.props.strict-token-miss; a value passed through an untraced alias is not."
+    );
+  });
+
+  test('resolveValue reports a miss as an unresolvable value', () => {
+    expect(classResolutionRuntime.resolveValue(13, space)).toBeNull();
+  });
+
+  test('production drops a miss silently', async () => {
+    const prod = await loadUnderNodeEnv('production');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const res = prod.resolveClasses(
+      'animus-S-prod1',
+      { p: { _: 4, sm: -13 } },
+      config(),
+      undefined,
+      dyn()
+    );
+    expect(res.classes).toEqual(['animus-S-prod1']);
+    expect(res.dynamicStyle).toBeUndefined();
+    expect(warn).not.toHaveBeenCalled();
+  });
+});

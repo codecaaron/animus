@@ -1,14 +1,16 @@
 //! Per-component pipeline over facts: consumes already-evaluated stage
 //! values — no source, no spans, no re-parse — and assembles component CSS.
 
+use std::collections::BTreeSet;
+
 use rustc_hash::{FxHashMap, FxHashSet};
 use serde_json::Value;
 
 use crate::css::{ComponentCss, VariantCss};
 use crate::facts::{ChainFacts, StageFacts};
 use crate::theme::{
-    merge_pseudo_selectors, resolve_styles, ConditionEmitOrder, CssDeclaration, PropConfigMap,
-    ResolveContext, ResolvedStyles,
+    merge_pseudo_selectors, resolve_styles, ConditionEmitOrder, CssDeclaration, PropConfig,
+    PropConfigMap, ResolveContext, ResolvedStyles,
 };
 
 /// Per-component pipeline output; the cross-file phases fill in the
@@ -20,6 +22,17 @@ pub struct ComponentPipelineOutput {
     pub active_group_names: Vec<String>,
     pub custom_prop_configs: Option<PropConfigMap>,
     pub skip_warnings: Vec<String>,
+    /// Custom props whose string-named transform binds no definition.
+    pub unbound_transforms: Vec<UnboundTransform>,
+}
+
+/// A custom prop naming a transform by string that binds no configured
+/// definition: `candidates` configured definitions carry the name.
+#[derive(Debug, Clone, PartialEq)]
+pub struct UnboundTransform {
+    pub prop: String,
+    pub name: String,
+    pub candidates: usize,
 }
 
 #[derive(Default)]
@@ -32,6 +45,7 @@ struct PipelineState {
     active_group_names: Vec<String>,
     custom_prop_configs: Option<PropConfigMap>,
     skip_warnings: Vec<String>,
+    unbound_transforms: Vec<UnboundTransform>,
 }
 
 impl PipelineState {
@@ -48,6 +62,7 @@ impl PipelineState {
             active_group_names: self.active_group_names,
             custom_prop_configs: self.custom_prop_configs,
             skip_warnings: self.skip_warnings,
+            unbound_transforms: self.unbound_transforms,
         }
     }
 }
@@ -69,6 +84,11 @@ pub fn process_chain_facts(
     Ok(state.finish(chain.class_name.clone()))
 }
 
+/// The one rendering of a per-property skip as a diagnostic message.
+pub(crate) fn skip_warning(binding: &str, key: &str, reason: &str) -> String {
+    format!("[skip] {}: property '{}' — {}", binding, key, reason)
+}
+
 fn process_stage(
     state: &mut PipelineState,
     stage: &StageFacts,
@@ -79,11 +99,12 @@ fn process_stage(
     if let Some(err) = &stage.eval_error {
         return Err((stage.method.clone(), err.clone()));
     }
-    state
-        .skip_warnings
-        .extend(stage.skipped.iter().map(|(key, reason)| {
-            format!("[skip] {}: property '{}' — {}", binding, key, reason)
-        }));
+    state.skip_warnings.extend(
+        stage
+            .skipped
+            .iter()
+            .map(|(key, reason)| skip_warning(binding, key, reason)),
+    );
     let Some(value) = &stage.value else {
         return Ok(());
     };
@@ -101,7 +122,9 @@ fn process_stage(
         "states" => state.state_css_list.extend(resolve_state_stage(value, ctx)),
         "system" => apply_system_stage(state, value, ctx, group_registry),
         "props" => {
-            if let Some(config) = resolve_props_stage(stage, value)? {
+            let (config, unbound) = resolve_props_stage(stage, value, ctx.config)?;
+            state.unbound_transforms.extend(unbound);
+            if let Some(config) = config {
                 state.custom_prop_configs = Some(config);
             }
         }
@@ -111,11 +134,23 @@ fn process_stage(
 }
 
 fn resolve_variant_stage(value: &Value, ctx: &ResolveContext) -> VariantCss {
+    let variant_prop = value["prop"].as_str().unwrap_or("variant").to_string();
+    // Stamp the axis and option onto this resolution's misses, so a child
+    // re-resolving an inherited option can tell whose declaration missed.
+    let stamp_misses = |option: Option<&String>, resolve: &dyn Fn() -> ResolvedStyles| {
+        let before = ctx.token_misses.map_or(0, |sink| sink.borrow().len());
+        let resolved = resolve();
+        if let Some(sink) = ctx.token_misses {
+            for miss in sink.borrow_mut().iter_mut().skip(before) {
+                miss.variant_origin = Some((variant_prop.clone(), option.cloned()));
+            }
+        }
+        resolved
+    };
     let base = value
         .get("base")
         .filter(|candidate| !candidate.is_null())
-        .map(|candidate| resolve_styles(candidate, ctx, false));
-    let variant_prop = value["prop"].as_str().unwrap_or("variant").to_string();
+        .map(|candidate| stamp_misses(None, &|| resolve_styles(candidate, ctx, false)));
     let options = value["variants"]
         .as_object()
         .into_iter()
@@ -127,7 +162,7 @@ fn resolve_variant_stage(value: &Value, ctx: &ResolveContext) -> VariantCss {
                 .transform_failures
                 .map(|sink| sink.borrow().len())
                 .unwrap_or(0);
-            let resolved = resolve_styles(styles, ctx, false);
+            let resolved = stamp_misses(Some(name), &|| resolve_styles(styles, ctx, false));
             if let Some(sink) = ctx.transform_failures {
                 for failure in sink.borrow_mut().iter_mut().skip(before) {
                     failure.variant_origin =
@@ -241,7 +276,8 @@ fn apply_system_stage(
 fn resolve_props_stage(
     stage: &StageFacts,
     value: &Value,
-) -> Result<Option<PropConfigMap>, (String, String)> {
+    configured: &PropConfigMap,
+) -> Result<(Option<PropConfigMap>, Vec<UnboundTransform>), (String, String)> {
     let mut parsed: PropConfigMap = serde_json::from_value(value.clone()).map_err(|error| {
         (
             stage.method.clone(),
@@ -256,8 +292,55 @@ fn resolve_props_stage(
             continue;
         };
         config.transform_fn_source = Some(capture.source.clone());
+        config.callback = capture.callback.clone();
     }
-    Ok((!parsed.is_empty()).then_some(parsed))
+    // An authored custom prop is strict unless it says otherwise, as its type is.
+    let mut unbound = Vec::new();
+    for (prop, config) in parsed.iter_mut() {
+        config.strict.get_or_insert(true);
+        if let Some(candidates) = bind_named_custom_transform(config, configured) {
+            unbound.push(UnboundTransform {
+                prop: prop.clone(),
+                name: config.transform.clone().unwrap_or_default(),
+                candidates,
+            });
+        }
+    }
+    unbound.sort_by(|a, b| a.prop.cmp(&b.prop));
+    Ok(((!parsed.is_empty()).then_some(parsed), unbound))
+}
+
+/// A custom prop naming a transform by string binds the one configured
+/// definition with that readable name. Several same-named definitions bind
+/// none, and project declarations are never candidates; an authored
+/// `transformId` is never a binding. Returns the number of configured
+/// definitions carrying the name when it binds none.
+fn bind_named_custom_transform(config: &mut PropConfig, configured: &PropConfigMap) -> Option<usize> {
+    config.transform_id = None;
+    let name = config.transform.as_deref().filter(|_| config.transform_fn_source.is_none())?;
+    let keys: BTreeSet<&str> = configured
+        .values()
+        .filter_map(PropConfig::bound_definition)
+        .filter(|(_, configured_name)| *configured_name == name)
+        .map(|(key, _)| key)
+        .collect();
+    match keys.len() {
+        1 => {
+            config.transform_id = keys.first().map(|key| key.to_string());
+            None
+        }
+        candidates => Some(candidates),
+    }
+}
+
+/// The first custom prop of a `.props()` value whose config fails the
+/// documented shape, with the reason.
+pub(crate) fn invalid_custom_prop(value: &Value) -> Option<String> {
+    value.as_object()?.iter().find_map(|(prop, config)| {
+        serde_json::from_value::<crate::theme::PropConfig>(config.clone())
+            .err()
+            .map(|error| format!("custom prop '{}': {}", prop, error))
+    })
 }
 
 pub fn value_is_object(v: &Value) -> bool {
@@ -303,6 +386,7 @@ mod tests {
             condition_aliases: &conditions,
             transform_evaluator: None,
             transform_failures: None,
+            token_misses: None,
         };
         let registry: FxHashMap<String, Vec<String>> = FxHashMap::default();
         process_chain_facts(&facts.chains[0], &ctx, &registry).unwrap()
@@ -439,6 +523,7 @@ mod tests {
             condition_aliases: &conditions,
             transform_evaluator: None,
             transform_failures: None,
+            token_misses: None,
         };
         let mut registry: FxHashMap<String, Vec<String>> = FxHashMap::default();
         registry.insert("space".into(), vec!["p".into(), "m".into()]);

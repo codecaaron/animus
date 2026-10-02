@@ -15,9 +15,14 @@ export interface SystemConfig {
   /** Condition alias map JSON; `null` when the system registers none.
    *  Optional only so the pre-load empty default need not restate it. */
   conditionAliasesJson?: string | null;
-  /** `{ transformName: sourceText }` — the only channel by which transforms
-   *  shipped inside a package reach the build-time evaluator. */
+  /** `{ definitionId: sourceText }` — the only channel by which transforms
+   *  shipped inside a package reach the build-time evaluator. Sources that
+   *  pass admission there become the manifest's `admitted_transforms`. */
   transformSourcesJson?: string | null;
+  /** `{ definitionId: { hostGlobals } | { rejection } }` — which `btoa` /
+   *  `atob` each configured callable reads as the host function, located
+   *  from the callable itself; without it such a source is not admitted. */
+  transformProvenanceJson?: string | null;
   globalStyleBlocksJson: string | null;
   keyframesJson: string | null;
   /** Coded witness entries from the sealed system's registration record —
@@ -74,6 +79,7 @@ export function loadSystemConfig(
     selectorAliasesJson: config.selectorAliases || null,
     conditionAliasesJson: config.conditionAliases || null,
     transformSourcesJson: config.transformSources || null,
+    transformProvenanceJson: config.transformProvenance || null,
     globalStyleBlocksJson: config.globalStyleBlocks || null,
     keyframesJson: config.keyframesBlocks || null,
     vocabularyWitnessesJson: config.vocabularyWitnesses || null,

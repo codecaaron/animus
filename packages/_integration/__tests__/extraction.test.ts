@@ -1,4 +1,9 @@
-import { applyUnitFallback } from '@animus-ui/extract/pipeline';
+import {
+  applyUnitFallback,
+  buildSystemPropsModule,
+} from '@animus-ui/extract/pipeline';
+import { createSystem, createTransform } from '@animus-ui/system';
+import { layout } from '@animus-ui/system/groups';
 import { join } from 'node:path';
 import { beforeAll, describe, expect, test } from 'vitest';
 
@@ -105,9 +110,26 @@ describe('compound resolution', () => {
 });
 
 describe('transform resolution', () => {
-  test('evaluates extracted named transforms in Rust', () => {
+  test('evaluates the callback of a configured transform in Rust', () => {
     const entry = readFixtureFile(COMPONENTS, 'transforms.tsx');
-    const manifestJson = analyzeProject(JSON.stringify([entry]));
+    const doubling = createSystem()
+      .addProps({
+        width: {
+          property: 'width',
+          transform: createTransform(
+            'size',
+            (value) => `${Number(value) * 2}px`
+          ),
+        },
+      })
+      .build()
+      .seal()
+      .toConfig();
+    const manifestJson = analyzeProject(JSON.stringify([entry]), {
+      propConfigJson: doubling.propConfig,
+      groupRegistryJson: doubling.groupRegistry,
+      transformSourcesJson: doubling.transformSources,
+    });
 
     const manifest = JSON.parse(manifestJson);
     const rawCss: string = manifest.css || '';
@@ -116,10 +138,16 @@ describe('transform resolution', () => {
     expect(rawCss).not.toContain('__TRANSFORM__');
   });
 
-  test('no raw unresolved tokens after transform resolution', () => {
+  test('a same-named project declaration does not replace the configured transform', () => {
     const entry = readFixtureFile(COMPONENTS, 'transforms.tsx');
-    const { css } = runPipeline([entry]);
-    assertNoUnresolvedTokens(css);
+    const manifest = JSON.parse(
+      analyzeProject(JSON.stringify([entry]), {
+        transformSourcesJson: config.transformSources,
+      })
+    );
+
+    expect(manifest.css).toContain('width: 4px');
+    expect(manifest.css).not.toContain('width: 8px');
   });
 });
 
@@ -185,6 +213,267 @@ export const App = () => (
     'max-height: 100%;',
   ])('keeps scalar conversion: %s', (declaration) => {
     expect(css).toContain(declaration);
+  });
+});
+
+describe('configured transform admission', () => {
+  const BASE = 4;
+  const localRem = createTransform(
+    'localRem',
+    (value) => `${Number(value) / BASE}rem`
+  );
+  function identRemFn(value: string | number) {
+    return `${Number(value) / BASE}rem`;
+  }
+  const identRem = createTransform('identRem', identRemFn);
+  // Parses as sloppy script only; the runtime module is strict.
+  const sloppy = createTransform(
+    'sloppy',
+    // SAFETY: the constructed function takes one value and returns a string;
+    // only its source text matters here, and admission must reject it.
+    Function('value', 'var interface = 1; return value + 010;') as (
+      value: string | number
+    ) => string
+  );
+  const quarter = createTransform(
+    'quarter',
+    (value) => `${Number(value) / 4}rem`
+  );
+  const SCALE = new Map([['sm', '4px']]);
+  const WIDE = '20rem';
+  const nestRem = createTransform('nestRem', (value) => {
+    const toRem = (n: number) => `${n / BASE}rem`;
+    return toRem(Number(value));
+  });
+  const lookup = createTransform(
+    'lookup',
+    (value) => SCALE?.get(String(value)) ?? value
+  );
+  const switchT = createTransform('switchT', (value) => {
+    switch (value) {
+      case 'wide':
+        return WIDE;
+      default:
+        return value;
+    }
+  });
+  const svgUrl = createTransform(
+    'svgUrl',
+    (value) => `url("data:image/svg+xml,${encodeURIComponent(String(value))}")`
+  );
+  const tokens = createTransform('tokens', (value) =>
+    [...new Set(String(value).split(' '))].join(' ')
+  );
+  const u8 = createTransform(
+    'u8',
+    (v) => `${new Uint8Array([Number(v)])[0] + 1}px`
+  );
+  const prox = createTransform(
+    'prox',
+    (v) => new Proxy({}, { get: () => `${Number(v) + 2}px` }).x
+  );
+  const errName = createTransform(
+    'errName',
+    (v) => `${new SyntaxError(String(v)).name}-${v}`
+  );
+  const esc = createTransform('esc', (v) => escape(String(v)));
+  const admissionConfig = createSystem()
+    .addGroup('probe', {
+      width: layout.width,
+      localW: { property: 'height', transform: localRem },
+      identW: { property: 'minHeight', transform: identRem },
+      sloppyW: { property: 'minWidth', transform: sloppy },
+      quarterW: { property: 'maxWidth', transform: quarter },
+      nestW: { property: 'paddingTop', transform: nestRem },
+      lookupW: { property: 'paddingLeft', transform: lookup },
+      switchW: { property: 'paddingRight', transform: switchT },
+      bgImg: { property: 'backgroundImage', transform: svgUrl },
+      gta: { property: 'gridTemplateAreas', transform: tokens },
+      u8W: { property: 'rowGap', transform: u8 },
+      proxW: { property: 'columnGap', transform: prox },
+      errA: { property: 'gridArea', transform: errName },
+      escF: { property: 'fontFamily', transform: esc },
+    })
+    .build()
+    .seal()
+    .toConfig();
+  const manifest = JSON.parse(
+    analyzeProject(
+      JSON.stringify([
+        {
+          path: 'fixtures/admission.tsx',
+          source: `import { ds } from './setup';
+export const Box = ds.styles({ width: 0.5, localW: 8, identW: 8, sloppyW: 8, quarterW: 8, nestW: 8, lookupW: 'sm', switchW: 'wide', bgImg: '<svg/>', gta: 'a a b', u8W: 8, proxW: 8, errA: 'a', escF: 'a b' }).asElement('div');
+export const App = () => <Box />;
+`,
+        },
+      ]),
+      {
+        propConfigJson: admissionConfig.propConfig,
+        groupRegistryJson: admissionConfig.groupRegistry,
+        transformSourcesJson: admissionConfig.transformSources,
+      }
+    )
+  );
+  const css = applyUnitFallback(manifest.css);
+  const admissionProps: Record<
+    string,
+    { transform?: string; transformId?: string }
+  > = JSON.parse(admissionConfig.propConfig);
+  const readableName: Record<string, string> = Object.fromEntries(
+    Object.values(admissionProps).flatMap(({ transform, transformId }) =>
+      transform && transformId ? [[transformId, transform]] : []
+    )
+  );
+
+  test('admits only self-contained strict-mode configured sources', () => {
+    expect(
+      Object.keys(manifest.admitted_transforms)
+        .map((id) => readableName[id])
+        .sort()
+    ).toEqual([
+      'errName',
+      'esc',
+      'prox',
+      'quarter',
+      'size',
+      'svgUrl',
+      'tokens',
+      'u8',
+    ]);
+  });
+
+  test.each([
+    ['localRem', "external symbol 'BASE'"],
+    ['identRem', "external symbol 'BASE'"],
+    ['sloppy', 'strict-mode'],
+    ['nestRem', "external symbol 'BASE'"],
+    ['lookup', "external symbol 'SCALE'"],
+    ['switchT', "external symbol 'WIDE'"],
+  ])('rejects %s with a diagnostic naming it', (name, reason) => {
+    const messages = manifest.diagnostics
+      .filter(
+        (d: { component: string; kind: string }) =>
+          d.kind === 'warn' && d.component === `createTransform('${name}')`
+      )
+      .map((d: { message: string }) => d.message);
+    expect(messages.join('\n')).toContain(`Transform '${name}'`);
+    expect(messages.join('\n')).toContain(reason);
+  });
+
+  test('rejected sources are never evaluated and fall back to the raw value', () => {
+    expect(JSON.stringify(manifest.diagnostics)).not.toContain(
+      'BASE is not defined'
+    );
+    expect(css).toMatch(/[^-]height:\s*8px;/);
+    expect(css).toMatch(/min-height:\s*8px;/);
+    expect(css).toMatch(/min-width:\s*8px;/);
+    expect(css).toMatch(/max-width:\s*2rem;/);
+    expect(css).toMatch(/[^-]width:\s*50%;/);
+    expect(css).toMatch(/padding-top:\s*8px;/);
+    expect(css).toMatch(/padding-left:\s*sm;/);
+    expect(css).toMatch(/padding-right:\s*wide;/);
+  });
+
+  test('standard intrinsics evaluate in static CSS', () => {
+    expect(css).toContain(
+      'background-image: url("data:image/svg+xml,%3Csvg%2F%3E");'
+    );
+    expect(css).toContain('grid-template-areas: a b;');
+    expect(css).toMatch(/row-gap:\s*9px;/);
+    expect(css).toMatch(/column-gap:\s*10px;/);
+    expect(css).toMatch(/grid-area:\s*SyntaxError-a;/);
+    expect(css).toMatch(/font-family:\s*a%20b;/);
+  });
+
+  test('the runtime registry holds exactly the admitted callables', async () => {
+    const source = buildSystemPropsModule({
+      systemPropMapJson: '{}',
+      groupRegistryJson: '{}',
+      dynamicProps: {},
+      admittedTransforms: manifest.admitted_transforms,
+    });
+    const registry: Record<string, (value: string | number) => string> = (
+      await import(`data:text/javascript,${encodeURIComponent(source)}`)
+    ).transforms;
+    const transforms = Object.fromEntries(
+      Object.entries(registry).map(([id, fn]) => [readableName[id], fn])
+    );
+
+    expect(Object.keys(transforms).sort()).toEqual([
+      'errName',
+      'esc',
+      'prox',
+      'quarter',
+      'size',
+      'svgUrl',
+      'tokens',
+      'u8',
+    ]);
+    expect(transforms.u8(3)).toBe('4px');
+    expect(transforms.prox(3)).toBe('5px');
+    expect(transforms.errName('b')).toBe('SyntaxError-b');
+    expect(transforms.esc('c d')).toBe('c%20d');
+    expect(transforms.quarter(8)).toBe('2rem');
+    expect(transforms.svgUrl('<b/>')).toBe(
+      'url("data:image/svg+xml,%3Cb%2F%3E")'
+    );
+    expect(transforms.tokens('x x y')).toBe('x y');
+    expect(transforms.size(0.375)).toBe('37.5%');
+  });
+});
+
+describe('a callable inherited and rebound through extend()', () => {
+  const triple = createTransform('size', (v) => `${Number(v) * 3}px`);
+  const parent = createSystem()
+    .addProps({ width: { property: 'width', transform: triple } })
+    .build()
+    .seal();
+  const child = createSystem()
+    .extend(parent)
+    .addProps({ height: { property: 'height', transform: triple } })
+    .build()
+    .seal()
+    .toConfig();
+  const manifest = JSON.parse(
+    analyzeProject(
+      JSON.stringify([
+        {
+          path: 'fixtures/rebound.tsx',
+          source: `import { ds } from './setup';
+export const Box = ds.styles({ width: 2, height: 4 }).asElement('div');
+export const Tag = ds.props({ inset: { property: 'left', transform: 'size' } }).asElement('span');
+export const App = () => <><Box /><Tag inset={5} /></>;
+`,
+        },
+      ]),
+      {
+        propConfigJson: child.propConfig,
+        groupRegistryJson: child.groupRegistry,
+        transformSourcesJson: child.transformSources,
+      }
+    )
+  );
+
+  test('both props and a component naming it share one definition', async () => {
+    expect(Object.keys(manifest.admitted_transforms)).toHaveLength(1);
+    expect(manifest.css).toContain('width: 6px');
+    expect(manifest.css).toContain('height: 12px');
+    expect(manifest.css).toContain('left: 15px');
+    expect(manifest.diagnostics).toEqual([]);
+
+    const source = buildSystemPropsModule({
+      systemPropMapJson: '{}',
+      groupRegistryJson: '{}',
+      dynamicProps: {},
+      admittedTransforms: manifest.admitted_transforms,
+    });
+    const registry: Record<string, (value: number) => string> = (
+      await import(`data:text/javascript,${encodeURIComponent(source)}`)
+    ).transforms;
+    const callables = Object.values(registry);
+    expect(callables).toHaveLength(1);
+    expect(callables[0](7)).toBe('21px');
   });
 });
 

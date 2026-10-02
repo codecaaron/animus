@@ -61,6 +61,7 @@ Obligations a driver or host carries that no exported type expresses.
 ### Ingestion
 
 - A payload that is not a corpus throws, naming the refusing reader, because an empty corpus is indistinguishable from "no files" and would publish an empty stylesheet. Callers with their own documented failure channel translate the throw into it; none may swallow it.
+- A prepared corpus is rejected when an admitted original's parse aborted: `rejection` returns a message naming the file, and the attempt must neither analyze nor publish, because analyzing it publishes a generation without that file. Each host routes the rejection through its own failure channel, keeps its last successful generation, and holds the latest observed source of every file, valid edits included, until an attempt without an aborted parse publishes them together. Other analysis failures keep their rollback. Parse diagnostics the parser recovered from only warn.
 - Keyframes collections are keyed by export name, and a `name.property` reference resolves against whatever local name binds that collection. The binding may arrive either through a cross-file import or through an export in the same file.
 
 ### Options
@@ -74,7 +75,7 @@ Obligations a driver or host carries that no exported type expresses.
 
 ### Engine
 
-- `transformSourcesJson` is the only channel for transforms that ship inside an installed package: `configJson` names each prop's transform but cannot carry its body, and the extractor's other seed is `createTransform()` calls parsed out of project files. Without it, props using a package-shipped transform emit the raw value.
+- `transformSourcesJson` is the only channel by which configured transforms reach the evaluator: `configJson` binds each prop to a definition (`transformId`) but cannot carry its body, and `createTransform()` declarations parsed out of project files are never registered as configured definitions. Without it, props bound to a configured transform emit the raw value. A `.props()` callback is evaluated from the analyzed source instead, for known values only, when its definition passes the same admission; otherwise it runs only at runtime. A configured source that reads `btoa` or `atob` additionally needs `transformProvenanceJson`, the loader's per-definition evidence (`loadSystemModule().transformProvenance`) that its own callable reads the host function; without it the source is rejected.
 - In dev mode the manifest reports what reconciliation would have eliminated instead of eliminating it, as `report.eliminated_details` entries carrying `kind: "prospective_component"`. That turns a JSX-scanner blind spot into an authoring-time diagnostic rather than missing CSS in a production build.
 - `build:extract-v2` checks rustc against `rust-toolchain.toml` before building the shipped binary; `build:v2:debug` skips the check on purpose because it builds a developer-profile binary.
 

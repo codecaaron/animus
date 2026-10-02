@@ -17,6 +17,7 @@ const typescriptTestTargets = [
   'packages/extract/tests/asset-placeholders.test.ts',
   'packages/extract/tests/collect-external-packages.test.ts',
   'packages/extract/tests/core-options.test.ts',
+  'packages/extract/tests/css-keywords.test.ts',
   'packages/extract/tests/correlate-external-tokens.test.ts',
   'packages/extract/tests/discover-packages.test.ts',
   'packages/extract/tests/dynamic-prop-config.test.ts',

@@ -35,7 +35,11 @@ export interface AnimusExtractOptions {
    * `@mdx-js/mdx` peer, or those files warn once and are skipped.
    */
   extensions?: string[];
-  /** Extraction failures throw instead of warning. */
+  /**
+   * Error-severity diagnostics — lost configured inputs and classified
+   * unsupported Animus declarations — fail the build instead of warning.
+   * Omitted or `false` warns.
+   */
   strict?: boolean;
   /**
    * Run a structural self-check at the end of `buildStart`; failures throw

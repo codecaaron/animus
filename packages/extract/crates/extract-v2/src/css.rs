@@ -1,7 +1,7 @@
 //! `@layer`-structured CSS generation with deterministic ordering: sorted
 //! component ids, sorted declarations, topological cascade ranks.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt::Write;
 
 use rustc_hash::FxHashMap;
@@ -9,7 +9,7 @@ use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::theme::{ConditionedGroup, CssDeclaration, PropConfigMap, ResolveContext, ResolvedStyles, first_top_level_branch, resolve_styles, split_top_level_commas};
+use crate::theme::{ConditionedGroup, CssDeclaration, PropConfigMap, ResolveContext, ResolvedStyles, TransformFailure, TransformFailureSink, first_top_level_branch, resolve_styles, split_top_level_commas};
 
 pub fn camel_to_kebab(s: &str) -> String {
     let mut result = String::with_capacity(s.len() + 4);
@@ -1073,6 +1073,51 @@ pub fn serialize_value_key(value: &Value) -> String {
     }
 }
 
+/// A component callback's static key, which keeps the authored type: a
+/// string is its JSON literal, a number its decimal text, and a responsive
+/// value `{…}` holds its `"breakpoint":key` entries in key order, so no two
+/// values share a key. Must stay in step with the runtime's `typedValueKey`.
+pub fn typed_value_key(value: &Value) -> String {
+    let quote = |text: &str| serde_json::to_string(text).unwrap_or_default();
+    match value {
+        Value::String(text) => quote(text),
+        Value::Object(entries) => {
+            let mut keys: Vec<&String> = entries.keys().collect();
+            keys.sort();
+            let pairs: Vec<String> = keys
+                .into_iter()
+                .map(|key| format!("{}:{}", quote(key), typed_value_key(&entries[key])))
+                .collect();
+            format!("{{{}}}", pairs.join(","))
+        }
+        other => serialize_value_key(other),
+    }
+}
+
+/// Whether the runtime derives the build's lookup key from this literal:
+/// a string free of escapes and entities, a boolean, a number both print
+/// with the same digits (the build switches to exponents below 1e-5), or a
+/// responsive object of those. The untyped key joins `key:value` pairs
+/// sorted as text, which orders a key before its extension (`sm2` before
+/// `sm`) unlike the runtime's key sort, so it admits no such pair.
+fn runtime_derives_key(value: &Value, typed: bool) -> bool {
+    let scalar = |value: &Value| match value {
+        Value::Bool(_) => true,
+        Value::String(text) => !text.contains(['&', '\\']),
+        Value::Number(number) => number
+            .as_f64()
+            .is_some_and(|n| n == 0.0 || (1e-5..9_007_199_254_740_992.0).contains(&n.abs())),
+        _ => false,
+    };
+    match value {
+        Value::Object(entries) => {
+            let extends = |key: &String| entries.keys().any(|other| other != key && other.starts_with(key.as_str()));
+            entries.values().all(scalar) && (typed || !entries.keys().any(extends))
+        }
+        value => scalar(value),
+    }
+}
+
 fn canonical_css_for_hash(styles: &ResolvedStyles) -> String {
     let mut out = String::new();
 
@@ -1180,53 +1225,58 @@ fn write_utility_rule(
     write_condition_blocks(layer_body, &[format!(".{}", class_name)], styles, breakpoints);
 }
 
-fn generate_utility_css_impl(
-    usages: &[UtilityInput],
+type UtilityClassMap = HashMap<String, HashMap<String, String>>;
+
+/// One utility class per distinct canonical CSS; the class map records
+/// which class a `(prop, value)` usage resolved to.
+fn add_utility_class(
+    usage: &UtilityInput,
     ctx: &ResolveContext,
+    seen: &mut FxHashMap<String, (String, ResolvedStyles)>,
+    class_map: &mut UtilityClassMap,
+    class_prefix: &str,
+    value_key: fn(&Value) -> String,
+) {
+    let style_obj = serde_json::json!({ &usage.prop_name: usage.value.clone() });
+    let resolved = resolve_styles(&style_obj, ctx, true);
+
+    debug_assert!(
+        resolved
+            .conditioned
+            .iter()
+            .all(|group| group.selector.is_none()),
+        "utility input for '{}' resolved a selector-bearing conditioned group — \
+         utility class hashes would become selector-join-sensitive",
+        usage.prop_name
+    );
+
+    let canonical = canonical_css_for_hash(&resolved);
+    if canonical.is_empty() {
+        return;
+    }
+
+    let class_name = seen
+        .entry(canonical.clone())
+        .or_insert_with(|| {
+            let hash = content_hash(&canonical);
+            let name = format!("{}-u-{}", class_prefix, hash);
+            (name, resolved.clone())
+        })
+        .0
+        .clone();
+
+    class_map
+        .entry(usage.prop_name.clone())
+        .or_default()
+        .insert(value_key(&usage.value), class_name);
+}
+
+fn render_utility_layer(
+    mut seen: FxHashMap<String, (String, ResolvedStyles)>,
     breakpoints: &BreakpointMap,
     layer_name: &str,
     slot_entries: Option<Vec<(String, ResolvedStyles, String)>>,
-    class_prefix: &str,
-) -> UtilityOutput {
-    let mut class_map: HashMap<String, HashMap<String, String>> = HashMap::new();
-    let mut seen: FxHashMap<String, (String, ResolvedStyles)> = FxHashMap::default();
-
-    for usage in usages {
-        let style_obj = serde_json::json!({ &usage.prop_name: usage.value.clone() });
-        let resolved = resolve_styles(&style_obj, ctx, true);
-
-        debug_assert!(
-            resolved
-                .conditioned
-                .iter()
-                .all(|group| group.selector.is_none()),
-            "utility input for '{}' resolved a selector-bearing conditioned group — \
-             utility class hashes would become selector-join-sensitive",
-            usage.prop_name
-        );
-
-        let canonical = canonical_css_for_hash(&resolved);
-        if canonical.is_empty() {
-            continue;
-        }
-
-        let class_name = seen
-            .entry(canonical.clone())
-            .or_insert_with(|| {
-                let hash = content_hash(&canonical);
-                let name = format!("{}-u-{}", class_prefix, hash);
-                (name, resolved.clone())
-            })
-            .0
-            .clone();
-
-        let value_key = serialize_value_key(&usage.value);
-        class_map
-            .entry(usage.prop_name.clone())
-            .or_default()
-            .insert(value_key, class_name);
-    }
-
+) -> String {
     if let Some(slots) = slot_entries {
         for (slot_class, slot_styles, _slot_css_prop) in slots {
             let canonical_key = format!("__slot__:{}", slot_class);
@@ -1274,42 +1324,124 @@ fn generate_utility_css_impl(
         }
         writeln!(css, "}}").unwrap();
     }
-
-    UtilityOutput { css, class_map }
+    css
 }
 
-pub fn generate_utility_css(
-    usages: &[UtilityInput],
-    ctx: &ResolveContext,
-    breakpoints: &BreakpointMap,
-    slot_entries: Option<Vec<(String, ResolvedStyles, String)>>,
-    class_prefix: &str,
-) -> UtilityOutput {
-    let layer_name = layer_name("system");
-    generate_utility_css_impl(usages, ctx, breakpoints, &layer_name, slot_entries, class_prefix)
+/// The resolved system utility classes; their layer renders once the variable
+/// slots joining it are decided, which can depend on the class map.
+pub struct ResolvedUtilities {
+    seen: FxHashMap<String, (String, ResolvedStyles)>,
+    class_map: UtilityClassMap,
 }
 
-pub fn generate_custom_prop_css(
+impl ResolvedUtilities {
+    /// Whether `value` of `prop` has a class the runtime finds under its key.
+    pub fn has_class(&self, prop: &str, value: &Value) -> bool {
+        runtime_derives_key(value, false)
+            && self
+                .class_map
+                .get(prop)
+                .is_some_and(|classes| classes.contains_key(&serialize_value_key(value)))
+    }
+
+    pub fn render(
+        self,
+        breakpoints: &BreakpointMap,
+        slot_entries: Option<Vec<(String, ResolvedStyles, String)>>,
+    ) -> UtilityOutput {
+        let css = render_utility_layer(self.seen, breakpoints, &layer_name("system"), slot_entries);
+        UtilityOutput { css, class_map: self.class_map }
+    }
+}
+
+pub fn resolve_utility_classes(
     usages: &[UtilityInput],
-    custom_config: &PropConfigMap,
     ctx: &ResolveContext,
-    breakpoints: &BreakpointMap,
-    slot_entries: Option<Vec<(String, ResolvedStyles, String)>>,
     class_prefix: &str,
-) -> UtilityOutput {
-    let custom_ctx = ResolveContext {
-        config: custom_config,
-        theme: ctx.theme,
-        variable_map: ctx.variable_map,
-        contextual_vars: ctx.contextual_vars,
-        breakpoint_keys: ctx.breakpoint_keys,
-        selector_aliases: ctx.selector_aliases,
-        condition_aliases: ctx.condition_aliases,
-        transform_evaluator: ctx.transform_evaluator,
-        transform_failures: ctx.transform_failures,
-    };
-    let layer_name = layer_name("custom");
-    generate_utility_css_impl(usages, &custom_ctx, breakpoints, &layer_name, slot_entries, class_prefix)
+) -> ResolvedUtilities {
+    let mut class_map = UtilityClassMap::new();
+    let mut seen = FxHashMap::default();
+    for usage in usages {
+        add_utility_class(usage, ctx, &mut seen, &mut class_map, class_prefix, serialize_value_key);
+    }
+    ResolvedUtilities { seen, class_map }
+}
+
+/// Custom utility CSS, each usage resolved through its owning component's own
+/// custom configuration; the class maps are keyed by that component.
+pub struct CustomUtilityOutput {
+    pub css: String,
+    pub class_map: HashMap<String, UtilityClassMap>,
+    /// Per component, the callback props whose class map keys are typed.
+    pub typed: HashMap<String, BTreeSet<String>>,
+}
+
+/// The resolved custom utility classes, rendered like `ResolvedUtilities`.
+pub struct ResolvedCustomUtilities {
+    seen: FxHashMap<String, (String, ResolvedStyles)>,
+    class_map: HashMap<String, UtilityClassMap>,
+    typed: HashMap<String, BTreeSet<String>>,
+}
+
+impl ResolvedCustomUtilities {
+    /// Whether `value` of `owner`'s `prop` has a class the runtime finds under
+    /// its key, typed for a callback prop.
+    pub fn has_class(&self, owner: &str, prop: &str, value: &Value) -> bool {
+        let typed = self.typed.get(owner).is_some_and(|props| props.contains(prop));
+        runtime_derives_key(value, typed)
+            && self.class_map.get(owner).and_then(|classes| classes.get(prop)).is_some_and(|classes| {
+                classes.contains_key(&if typed { typed_value_key(value) } else { serialize_value_key(value) })
+            })
+    }
+
+    pub fn render(
+        self,
+        breakpoints: &BreakpointMap,
+        slot_entries: Option<Vec<(String, ResolvedStyles, String)>>,
+    ) -> CustomUtilityOutput {
+        let css = render_utility_layer(self.seen, breakpoints, &layer_name("custom"), slot_entries);
+        CustomUtilityOutput { css, class_map: self.class_map, typed: self.typed }
+    }
+}
+
+pub fn resolve_custom_prop_classes(
+    usages: &[(String, UtilityInput)],
+    configs: &FxHashMap<&str, &PropConfigMap>,
+    ctx: &ResolveContext,
+    class_prefix: &str,
+    mut resolved: impl FnMut(&str, Vec<TransformFailure>),
+) -> ResolvedCustomUtilities {
+    let mut class_map: HashMap<String, UtilityClassMap> = HashMap::new();
+    let mut typed: HashMap<String, BTreeSet<String>> = HashMap::new();
+    let mut seen = FxHashMap::default();
+    for (owner, usage) in usages {
+        let Some(config) = configs.get(owner.as_str()) else {
+            continue;
+        };
+        // Each usage's failures reach `resolved` with its owner.
+        let failures = TransformFailureSink::default();
+        let owner_ctx = ResolveContext {
+            config,
+            transform_failures: ctx.transform_failures.map(|_| &failures),
+            ..*ctx
+        };
+        // A callback can tell `100` from `"100"`, so its lookups keep the type.
+        let callback = config.get(&usage.prop_name).is_some_and(|c| c.transform_fn_source.is_some());
+        let classes = class_map.entry(owner.clone()).or_default();
+        add_utility_class(
+            usage,
+            &owner_ctx,
+            &mut seen,
+            classes,
+            class_prefix,
+            if callback { typed_value_key } else { serialize_value_key },
+        );
+        if callback && classes.contains_key(&usage.prop_name) {
+            typed.entry(owner.clone()).or_default().insert(usage.prop_name.clone());
+        }
+        resolved(owner, failures.into_inner());
+    }
+    ResolvedCustomUtilities { seen, class_map, typed }
 }
 
 /// Must stay in step with the runtime's unitless property set.
@@ -1326,6 +1458,45 @@ const UNITLESS_CSS_PROPERTIES: &[&str] = &[
     "stroke-dasharray", "stroke-dashoffset", "stroke-miterlimit",
     "stroke-opacity", "stroke-width",
 ];
+
+/// Whether CSS post-processing would append `px` to `value` on
+/// `css_property`, as the pipeline's unit fallback does to a bare number
+/// outside parentheses. This list is a subset of the post-processor's
+/// unitless set, so a miss here only predicts a rewrite that will not happen.
+pub(crate) fn unit_fallback_rewrites(value: &str, css_property: &str) -> bool {
+    if UNITLESS_CSS_PROPERTIES.contains(&css_property) {
+        return false;
+    }
+    let bytes = value.as_bytes();
+    let mut depth = 0;
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'(' => depth += 1,
+            b')' => depth -= 1,
+            _ if depth > 0 => {}
+            _ => {
+                // `-?\d+\.?\d*`, kept as authored only before a letter or `%`.
+                let sign = usize::from(bytes[i] == b'-');
+                let digits = |from: usize| bytes[from..].iter().take_while(|b| b.is_ascii_digit()).count();
+                let whole = digits(i + sign);
+                if whole > 0 {
+                    let mut end = i + sign + whole;
+                    if bytes.get(end) == Some(&b'.') {
+                        end += 1 + digits(end + 1);
+                    }
+                    if !bytes.get(end).is_some_and(|b| b.is_ascii_alphabetic() || *b == b'%') {
+                        return true;
+                    }
+                    i = end;
+                    continue;
+                }
+            }
+        }
+        i += 1;
+    }
+    false
+}
 
 pub fn apply_unit_fallback_for_property(value: f64, css_property: &str) -> String {
     if UNITLESS_CSS_PROPERTIES.contains(&css_property) {
@@ -1472,6 +1643,7 @@ mod tests {
                 condition_aliases: &self.conditions,
                 transform_evaluator: None,
                 transform_failures: None,
+                token_misses: None,
             }
         }
     }
@@ -1786,10 +1958,14 @@ mod tests {
             PropConfig {
                 property: "padding".to_string(),
                 properties: vec![],
+                negative: false,
                 scale: Some(serde_json::Value::String("space".to_string())),
                 transform: None,
+                transform_id: None,
                 current_var: None,
                 transform_fn_source: None,
+                callback: None,
+                strict: None,
             },
         );
         config.insert(
@@ -1797,10 +1973,14 @@ mod tests {
             PropConfig {
                 property: "marginTop".to_string(),
                 properties: vec![],
+                negative: false,
                 scale: Some(serde_json::Value::String("space".to_string())),
                 transform: None,
+                transform_id: None,
                 current_var: None,
                 transform_fn_source: None,
+                callback: None,
+                strict: None,
             },
         );
         config.insert(
@@ -1808,10 +1988,14 @@ mod tests {
             PropConfig {
                 property: "display".to_string(),
                 properties: vec![],
+                negative: false,
                 scale: None,
                 transform: None,
+                transform_id: None,
                 current_var: None,
                 transform_fn_source: None,
+                callback: None,
+                strict: None,
             },
         );
         config
@@ -1832,7 +2016,7 @@ mod tests {
             prop_name: "p".to_string(),
             value: json!(8),
         }];
-        let out = generate_utility_css(&usages, &tc.ctx(), &bp, None, "animus");
+        let out = resolve_utility_classes(&usages, &tc.ctx(), "animus").render(&bp, None);
         assert!(out.css.contains("@layer anm-system {"));
         assert!(out.css.contains("padding: 0.5rem;"));
         assert!(out.css.contains(".animus-u-"));
@@ -1846,7 +2030,7 @@ mod tests {
             prop_name: "mt".to_string(),
             value: json!({ "_": 8, "sm": 16 }),
         }];
-        let out = generate_utility_css(&usages, &tc.ctx(), &bp, None, "animus");
+        let out = resolve_utility_classes(&usages, &tc.ctx(), "animus").render(&bp, None);
         assert!(out.css.contains("margin-top: 0.5rem;"));
         assert!(out.css.contains("@media (min-width: 768px)"));
         assert!(out.css.contains("margin-top: 1rem;"));
@@ -1860,8 +2044,8 @@ mod tests {
             prop_name: "p".to_string(),
             value: json!(8),
         }];
-        let out1 = generate_utility_css(&usages, &tc.ctx(), &bp, None, "animus");
-        let out2 = generate_utility_css(&usages, &tc.ctx(), &bp, None, "animus");
+        let out1 = resolve_utility_classes(&usages, &tc.ctx(), "animus").render(&bp, None);
+        let out2 = resolve_utility_classes(&usages, &tc.ctx(), "animus").render(&bp, None);
         assert_eq!(out1.css, out2.css);
         let map1 = &out1.class_map["p"]["8"];
         let map2 = &out2.class_map["p"]["8"];
@@ -1882,7 +2066,7 @@ mod tests {
                 value: json!(16),
             },
         ];
-        let out = generate_utility_css(&usages, &tc.ctx(), &bp, None, "animus");
+        let out = resolve_utility_classes(&usages, &tc.ctx(), "animus").render(&bp, None);
         let class_8 = &out.class_map["p"]["8"];
         let class_16 = &out.class_map["p"]["16"];
         assert_ne!(class_8, class_16);
@@ -1909,11 +2093,17 @@ mod tests {
     fn custom_prop_uses_custom_layer() {
         let bp = test_breakpoints();
         let tc = TestUtilCtx::new(utility_config(), utility_theme(), &bp);
-        let usages = vec![UtilityInput {
-            prop_name: "p".to_string(),
-            value: json!(8),
-        }];
-        let out = generate_custom_prop_css(&usages, &tc.config, &tc.ctx(), &bp, None, "animus");
+        let usages = vec![(
+            "a.tsx::A".to_string(),
+            UtilityInput {
+                prop_name: "p".to_string(),
+                value: json!(8),
+            },
+        )];
+        let configs: FxHashMap<&str, &PropConfigMap> =
+            [("a.tsx::A", &tc.config)].into_iter().collect();
+        let out = resolve_custom_prop_classes(&usages, &configs, &tc.ctx(), "animus", |_, _| {}).render(&bp, None);
+        assert!(out.class_map["a.tsx::A"]["p"].contains_key("8"));
         assert!(out.css.contains("@layer anm-custom {"));
         assert!(!out.css.contains("@layer anm-system {"));
     }
@@ -1926,7 +2116,7 @@ mod tests {
             prop_name: "p".to_string(),
             value: json!(8),
         }];
-        let out = generate_utility_css(&usages, &tc.ctx(), &bp, None, "animus");
+        let out = resolve_utility_classes(&usages, &tc.ctx(), "animus").render(&bp, None);
         assert!(out.class_map.contains_key("p"));
         let p_map = &out.class_map["p"];
         assert!(p_map.contains_key("8"));
@@ -1945,7 +2135,11 @@ mod tests {
                 slot_class: "animus-dyn-p".to_string(),
                 property: "padding".to_string(),
                 properties: vec![],
+                negative: false,
+                strict: false,
+                keywords: vec![],
                 transform_name: None,
+                transform_id: None,
                 transform_fn_source: None,
                 scale_values: std::collections::BTreeMap::new(),
             },
@@ -1980,7 +2174,11 @@ mod tests {
                 slot_class: "animus-dyn-px".to_string(),
                 property: "padding".to_string(),
                 properties: vec!["padding-left".to_string(), "padding-right".to_string()],
+                negative: false,
+                strict: false,
+                keywords: vec![],
                 transform_name: None,
+                transform_id: None,
                 transform_fn_source: None,
                 scale_values: std::collections::BTreeMap::new(),
             },
@@ -2015,7 +2213,11 @@ mod tests {
                 slot_class: "animus-dyn-p".to_string(),
                 property: "padding".to_string(),
                 properties: vec![],
+                negative: false,
+                strict: false,
+                keywords: vec![],
                 transform_name: None,
+                transform_id: None,
                 transform_fn_source: None,
                 scale_values: std::collections::BTreeMap::new(),
             },
@@ -2024,7 +2226,7 @@ mod tests {
         let tc = TestUtilCtx::new(utility_config(), utility_theme(), &bp);
         let slots = build_variable_slot_entries(&dynamic_props, &bp);
         let usages = vec![UtilityInput { prop_name: "p".to_string(), value: json!(8) }];
-        let out = generate_utility_css(&usages, &tc.ctx(), &bp, Some(slots), "animus");
+        let out = resolve_utility_classes(&usages, &tc.ctx(), "animus").render(&bp, Some(slots));
         assert!(out.css.contains("animus-dyn-p"));
         assert!(out.css.contains("animus-u-"));
         assert_eq!(out.css.matches("@layer anm-system {").count(), 1);

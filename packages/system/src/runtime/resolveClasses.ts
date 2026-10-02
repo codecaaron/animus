@@ -15,6 +15,8 @@ export interface ClassResolverConfig {
   systemPropNames?: string[];
   customPropMap?: Record<string, Record<string, string>>;
   customDynamicConfig?: DynamicPropConfig;
+  /** Callback props whose `customPropMap` keys are `typedValueKey`s. */
+  typedCustomProps?: readonly string[];
 }
 
 export type SystemPropMap = Record<string, Record<string, string>>;
@@ -26,9 +28,17 @@ export type DynamicPropConfig = Record<
     slotClass: string;
     property?: string;
     properties?: readonly string[];
+    /** The bound transform's readable name, for diagnostics. */
     transformName?: string;
+    /** The bound definition's key in the generated `transforms` registry. */
+    transformId?: string;
     transform?: (value: string | number) => string | number;
-    scaleValues?: Record<string, string>;
+    scaleValues?: Record<string, string | number>;
+    negative?: boolean;
+    /** Values outside `scaleValues` are dropped, not applied raw. */
+    strict?: boolean;
+    /** The keywords a strict prop admits beside its tokens. */
+    keywords?: readonly string[];
   }
 >;
 
@@ -71,6 +81,24 @@ export function serializeValueKey(value: unknown): string {
   return String(value);
 }
 
+/**
+ * A callback can tell `100` from `"100"`, so its static classes are keyed by
+ * type: a string is its JSON literal, a number its decimal text, a
+ * responsive value `{…}` its `"breakpoint":key` entries in key order. Must
+ * stay in step with the Rust css generator.
+ */
+function typedValueKey(value: unknown): string {
+  if (typeof value === 'string') return JSON.stringify(value);
+  if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
+    const entries = value as Record<string, unknown>;
+    const pairs = Object.keys(entries)
+      .sort()
+      .map((k) => `${JSON.stringify(k)}:${typedValueKey(entries[k])}`);
+    return `{${pairs.join(',')}}`;
+  }
+  return String(value);
+}
+
 function isValidTransformResult(result: unknown): result is string | number {
   return (
     typeof result === 'string' ||
@@ -93,50 +121,126 @@ interface InvalidResult {
   shape: string;
 }
 
+interface TransformThrow {
+  cause: unknown;
+}
+
+interface StrictScaleMiss {
+  entry: unknown;
+  breakpoint?: string;
+}
+
+type EntryFailure = InvalidResult | TransformThrow | StrictScaleMiss;
+
+type DynamicEntryConfig = Pick<
+  DynamicPropConfig[string],
+  | 'varName'
+  | 'property'
+  | 'properties'
+  | 'transform'
+  | 'scaleValues'
+  | 'negative'
+  | 'strict'
+  | 'keywords'
+>;
+
+function negateCssValue(css: string): string {
+  if (css.includes('(')) return `calc(${css} * -1)`;
+  if (css === '0' || css === '-0') return '0';
+  if (css.startsWith('-')) return css.slice(1);
+  return `-${css.startsWith('+') ? css.slice(1) : css}`;
+}
+
+/** A CSS `<number>`, exponent included. */
+const CSS_NUMBER = String.raw`[+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?`;
+const CONTAINER_UNIT = new RegExp(
+  `^${CSS_NUMBER}(?:cqw|cqi|cqh|cqb|cqmin|cqmax)$`
+);
+const SIZE_LENGTH = new RegExp(`^${CSS_NUMBER}(?:px|rem|vh|vw|vmax|vmin|%)$`);
+const SIZE_PROPERTY =
+  /^(?:left|right|top|bottom|inset|width|height)$|(?:Width|Height|-width|-height)$/;
+
+/**
+ * Values a strict prop's public type admits beside its tokens: zero, the
+ * keywords extraction lists for its property, container units, token
+ * references, and the lengths size properties take. Must stay in step with
+ * the extractor's rule.
+ */
+function isAdmittedWithoutToken(
+  value: unknown,
+  dc: Pick<DynamicEntryConfig, 'property' | 'keywords'>
+): boolean {
+  if (typeof value === 'number') return value === 0;
+  if (typeof value !== 'string') return true;
+  return (
+    value === '0' ||
+    dc.keywords?.includes(value) === true ||
+    value.includes('{') ||
+    CONTAINER_UNIT.test(value) ||
+    (dc.property !== undefined &&
+      SIZE_PROPERTY.test(dc.property) &&
+      (SIZE_LENGTH.test(value) || value.startsWith('calc(')))
+  );
+}
+
 function resolveEntry(
   value: unknown,
-  dc: Pick<
-    DynamicPropConfig[string],
-    'varName' | 'property' | 'properties' | 'transform' | 'scaleValues'
-  >
-): string | InvalidResult {
+  dc: DynamicEntryConfig
+): string | EntryFailure {
   const key = String(value);
-  const scaleResolved = dc.scaleValues?.[key];
-  if (scaleResolved != null) {
-    const transformed = dc.transform
-      ? dc.transform(scaleResolved)
-      : scaleResolved;
-    if (dc.transform && !isValidTransformResult(transformed)) {
+  let scaleResolved = dc.scaleValues?.[key];
+  let negate = false;
+  if (
+    scaleResolved == null &&
+    dc.negative &&
+    typeof value === 'number' &&
+    value < 0
+  ) {
+    scaleResolved = dc.scaleValues?.[String(-value)];
+    negate = scaleResolved != null;
+  }
+  if (
+    scaleResolved == null &&
+    dc.strict &&
+    dc.scaleValues &&
+    !isAdmittedWithoutToken(value, dc)
+  ) {
+    return { entry: value };
+  }
+  const input = scaleResolved ?? value;
+  let transformed: unknown = input;
+  if (dc.transform) {
+    try {
+      transformed = dc.transform(input as string | number);
+    } catch (cause) {
+      return { cause };
+    }
+    if (!isValidTransformResult(transformed)) {
       return { shape: describeResultShape(transformed) };
     }
-    return String(transformed);
   }
-  const transformed = dc.transform
-    ? dc.transform(value as string | number)
-    : value;
-  if (dc.transform && !isValidTransformResult(transformed)) {
-    return { shape: describeResultShape(transformed) };
+  let css: string;
+  if (typeof transformed === 'number') {
+    const cssProperties =
+      dc.properties && dc.properties.length > 0
+        ? dc.properties
+        : dc.property
+          ? [dc.property]
+          : [];
+    css = applyUnitFallback(transformed, cssProperties);
+  } else {
+    css = String(transformed);
   }
-  if (typeof transformed !== 'number') return String(transformed);
-  const cssProperties =
-    dc.properties && dc.properties.length > 0
-      ? dc.properties
-      : dc.property
-        ? [dc.property]
-        : [];
-  return applyUnitFallback(transformed, cssProperties);
+  return negate ? negateCssValue(css) : css;
 }
 
 /**
- * `null` means a configured transform returned neither a string nor a finite
- * number; paths without a transform never return `null`.
+ * `null` means the value missed a strict scale, or a configured transform
+ * threw or returned neither a string nor a finite number.
  */
 export function resolveValue(
   value: unknown,
-  dc: Pick<
-    DynamicPropConfig[string],
-    'varName' | 'property' | 'properties' | 'transform' | 'scaleValues'
-  >
+  dc: DynamicEntryConfig
 ): string | null {
   const resolved = resolveEntry(value, dc);
   return typeof resolved === 'string' ? resolved : null;
@@ -153,16 +257,24 @@ const warnedDrops = new Set<string>();
 function warnDroppedValue(
   baseClassName: string,
   propName: string,
-  serializedValue: string
+  serializedValue: string,
+  customOwned: boolean
 ): void {
   if (IS_DEV) {
     const dedupeKey = `${baseClassName}|${propName}`;
     if (warnedDrops.has(dedupeKey)) return;
     warnedDrops.add(dedupeKey);
+    // Extraction gives a custom prop a runtime slot for its observed dynamic
+    // values, spreads, forwarding wrappers and createElement renders; a
+    // value without one is a literal the build saw, or arrived through an
+    // alias it could not trace. Either way it drops without system rescue.
     // oxlint-disable-next-line no-console -- intentional runtime diagnostic
     console.warn(
-      `[animus:drop] ${baseClassName}: value ${serializedValue} on prop '${propName}' matched no static class and no dynamic slot — it will not render. ` +
-        `If this prop should accept runtime values, ensure its dynamic config is emitted.`
+      customOwned
+        ? `[animus:drop] ${baseClassName}: value ${serializedValue} on custom prop '${propName}' is none of its extracted values and the prop has no runtime slot — it will not render. ` +
+            `A literal missing from the prop's strict scale is reported by the build as animus.props.strict-token-miss; a value passed through an untraced alias is not.`
+        : `[animus:drop] ${baseClassName}: value ${serializedValue} on prop '${propName}' matched no static class and no dynamic slot — it will not render. ` +
+            `If this prop should accept runtime values, ensure its dynamic config is emitted.`
     );
   }
 }
@@ -250,16 +362,91 @@ function warnInvalidTransformResult(
   }
 }
 
+const warnedThrows = new Set<string>();
+const warnedStrictMisses = new Set<string>();
+
+/** Keyed by value, like a throw: each rejected input is reported once. */
+function warnStrictScaleMiss(
+  baseClassName: string,
+  propName: string,
+  serializedValue: string,
+  miss: StrictScaleMiss
+): void {
+  if (IS_DEV) {
+    const dedupeKey = `${baseClassName}|${propName}|${serializedValue}`;
+    if (warnedStrictMisses.has(dedupeKey)) return;
+    warnedStrictMisses.add(dedupeKey);
+    const entry =
+      miss.breakpoint === undefined
+        ? ''
+        : ` (${String(miss.entry)} at ${miss.breakpoint})`;
+    // oxlint-disable-next-line no-console -- intentional runtime diagnostic
+    console.warn(
+      `[animus:drop] ${baseClassName}: value ${serializedValue} on prop '${propName}' is not a token of its strict scale${entry}; prop styling dropped`
+    );
+  }
+}
+
+function describeThrown(cause: unknown): string {
+  try {
+    return String(cause);
+  } catch {
+    return 'unprintable thrown value';
+  }
+}
+
 /**
- * Resolution is staged so a drop is atomic: one invalid transform result
- * anywhere leaves `classes` and `dynStyle` untouched.
+ * Read as a string so the console never inspects the thrown value itself; a
+ * hostile object could rethrow from an inspecting formatter.
+ */
+function thrownStack(cause: unknown): string | undefined {
+  try {
+    if (!(cause instanceof Error)) return undefined;
+    const stack: unknown = cause.stack;
+    return typeof stack === 'string' ? stack : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Keyed by value as well as prop: each distinct rejected input is reported
+ * once, so the warning never names a stale value.
+ */
+function warnTransformThrow(
+  baseClassName: string,
+  propName: string,
+  transformName: string | undefined,
+  serializedValue: string,
+  cause: unknown
+): void {
+  if (IS_DEV) {
+    const dedupeKey = `${baseClassName}|${propName}|${serializedValue}`;
+    if (warnedThrows.has(dedupeKey)) return;
+    warnedThrows.add(dedupeKey);
+    const transform = transformName
+      ? `transform '${transformName}'`
+      : 'inline transform';
+    const stack = thrownStack(cause);
+    // oxlint-disable-next-line no-console -- intentional runtime diagnostic
+    console.warn(
+      `[animus:drop] ${baseClassName}: ${transform} for prop '${propName}' threw for value ${serializedValue} (${describeThrown(cause)}); prop styling dropped`,
+      ...(stack ? [stack] : [])
+    );
+  }
+}
+
+/**
+ * Resolution is staged so a drop is atomic: one entry that misses a strict
+ * scale, or one transform that throws or returns an invalid result, leaves
+ * `classes` and `dynStyle` untouched.
  */
 function applyDynamicProp(
   classes: string[],
   dynStyle: Record<string, string>,
   propValue: unknown,
   dc: DynamicPropConfig[string]
-): InvalidResult | null {
+): EntryFailure | null {
   const staged: [slotClass: string, varName: string, resolved: string][] = [];
   if (
     typeof propValue === 'object' &&
@@ -269,7 +456,9 @@ function applyDynamicProp(
     for (const [bp, bpVal] of Object.entries(propValue)) {
       if (bpVal == null) continue;
       const resolved = resolveEntry(bpVal, dc);
-      if (typeof resolved !== 'string') return resolved;
+      if (typeof resolved !== 'string') {
+        return 'entry' in resolved ? { ...resolved, breakpoint: bp } : resolved;
+      }
       staged.push(
         bp === '_'
           ? [dc.slotClass, dc.varName, resolved]
@@ -315,30 +504,57 @@ export function resolveClasses(
       if (propValue == null) continue;
 
       const key = serializeValueKey(propValue);
-      const cls =
-        customPropMap?.[propName]?.[key] ?? systemPropMap?.[propName]?.[key];
+      // A custom prop resolves only through its own config, so a same-named
+      // system class or slot cannot apply a value that config rejects.
+      const customOwned =
+        customPropMap?.[propName] !== undefined ||
+        customDynamicConfig?.[propName] !== undefined;
+      const cls = customOwned
+        ? customPropMap?.[propName]?.[
+            config.typedCustomProps?.includes(propName)
+              ? typedValueKey(propValue)
+              : key
+          ]
+        : systemPropMap?.[propName]?.[key];
 
       if (cls) {
         classes.push(cls);
         recordWitness(baseClassName, propName, key, 'static');
       } else {
-        const dc =
-          customDynamicConfig?.[propName] ?? dynamicPropConfig?.[propName];
+        const dc = customOwned
+          ? customDynamicConfig?.[propName]
+          : dynamicPropConfig?.[propName];
 
         if (dc) {
           // Witness only once the whole value applies: a dropped value
           // witnesses as `drop`, never `dynamic`. dynStyle adopts on success.
           const staged = dynStyle ?? {};
-          const invalid = applyDynamicProp(classes, staged, propValue, dc);
-          if (invalid === null) {
+          const failure = applyDynamicProp(classes, staged, propValue, dc);
+          if (failure === null) {
             dynStyle = staged;
             recordWitness(baseClassName, propName, key, 'dynamic');
           } else {
-            warnInvalidTransformResult(baseClassName, propName, invalid.shape);
+            if ('shape' in failure) {
+              warnInvalidTransformResult(
+                baseClassName,
+                propName,
+                failure.shape
+              );
+            } else if ('entry' in failure) {
+              warnStrictScaleMiss(baseClassName, propName, key, failure);
+            } else {
+              warnTransformThrow(
+                baseClassName,
+                propName,
+                dc.transformName,
+                key,
+                failure.cause
+              );
+            }
             recordWitness(baseClassName, propName, key, 'drop');
           }
         } else {
-          warnDroppedValue(baseClassName, propName, key);
+          warnDroppedValue(baseClassName, propName, key, customOwned);
           recordWitness(baseClassName, propName, key, 'drop');
         }
       }

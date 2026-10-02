@@ -58,6 +58,8 @@ import {
   disposeTempRoots,
   expectedEpoch,
   lockRecord,
+  makeManifest,
+  makeSession,
   PLAN_A,
   PLAN_B,
   resetAnimusGlobals,
@@ -419,6 +421,37 @@ describe('session directory + transaction write order (design D1/D2)', () => {
     expect(names).not.toContain(REPLACEMENT_EPOCH_ARTIFACT);
     expect(names).toContain(ANALYSIS_COMMIT_ARTIFACT);
     expect(names[names.length - 1]).toBe(ANALYSIS_COMMIT_ARTIFACT);
+  });
+});
+
+describe('system-props artifact', () => {
+  test('delivers only the configured transforms analysis admitted', async () => {
+    mocks.loadSystemModule.mockReturnValue({
+      ...SYSTEM_CONFIG,
+      transformSources: JSON.stringify({
+        fraction: '(v) => `${v * 50}%`',
+        closed: '(v) => v / BASE',
+      }),
+    });
+    // The loaded system configures both; analysis admitted only one.
+    mocks.analyzeProject.mockImplementation(() =>
+      JSON.stringify(
+        makeManifest({
+          components: PLAN_A,
+          admitted_transforms: { fraction: '(v) => `${v * 50}%`' },
+        })
+      )
+    );
+    const session = makeSession(createProject());
+    await session.runFullPipeline();
+
+    const source = readSessionArtifact(session, 'system-props.js');
+    const { transforms } = await import(
+      `data:text/javascript,${encodeURIComponent(source)}`
+    );
+
+    expect(Object.keys(transforms)).toEqual(['fraction']);
+    expect(transforms.fraction(0.5)).toBe('25%');
   });
 });
 

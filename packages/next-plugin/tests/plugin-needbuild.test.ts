@@ -3,15 +3,19 @@ import { join } from 'path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
+  extractFacts: vi.fn<(filesJson: string) => string>(),
   loadSystemModule: vi.fn(),
   analyzeProject: vi.fn(),
   clearAnalysisCache: vi.fn(),
 }));
 
-import { setEngineApiOverride } from '../../extract/session/singleton';
+import {
+  getReplacementEpoch,
+  setEngineApiOverride,
+} from '../../extract/session/singleton';
 
 setEngineApiOverride(() => ({
-  extractFacts: () => '{"files":{},"parseCount":0}',
+  extractFacts: mocks.extractFacts,
   loadSystemModule: mocks.loadSystemModule,
   analyzeProject: mocks.analyzeProject,
   clearAnalysisCache: mocks.clearAnalysisCache,
@@ -31,6 +35,7 @@ import {
   resetAnimusGlobals,
   SYSTEM_CONFIG,
 } from '../../extract/tests/session/session-fixtures';
+import { parserStoppingAt } from '../../extract/tests/source-ingestion-fixtures';
 import { AnimusWebpackPlugin } from '../src/plugin';
 
 import type { AnimusNextOptions } from '../src/types';
@@ -247,6 +252,9 @@ function requireWatchIgnoreMatcher(compiler: TestCompiler): WatchIgnoreMatcher {
 
 beforeEach(() => {
   restoreGlobals = resetAnimusGlobals();
+  mocks.extractFacts
+    .mockReset()
+    .mockImplementation(() => '{"files":{},"parseCount":0}');
   mocks.loadSystemModule.mockReset().mockReturnValue({ ...SYSTEM_CONFIG });
   mocks.analyzeProject
     .mockReset()
@@ -452,5 +460,33 @@ describe('needBuild fan-out after a replacements-epoch move (design D1)', () => 
         animusModule(root)
       )
     ).toEqual({ err: null, forced: true });
+  });
+});
+
+describe('watchRun startup after a rejected first analysis', () => {
+  test('a later watchRun analyzes the repaired source instead of the rejected startup', async () => {
+    const root = createProject();
+    const button = join(root, 'src', 'Button.tsx');
+    writeFileSync(
+      button,
+      "export const Button = animus.styles(({ margin: 8 }).asElement('button');\n"
+    );
+    mocks.extractFacts.mockImplementation(parserStoppingAt('(('));
+    const harness = createCompiler(root);
+    applyPlugin(new AnimusWebpackPlugin(OPTIONS), harness.compiler);
+
+    await expect(harness.watchRunHandlers[0](harness.compiler)).rejects.toThrow(
+      /analysis not published: .*src\/Button\.tsx/
+    );
+    expect(mocks.analyzeProject).not.toHaveBeenCalled();
+
+    writeFileSync(button, BUTTON_STYLE_EDIT);
+    await harness.watchRunHandlers[0]({
+      ...harness.compiler,
+      modifiedFiles: new Set([button]),
+      removedFiles: new Set<string>(),
+    });
+    expect(mocks.analyzeProject).toHaveBeenCalledTimes(1);
+    expect(getReplacementEpoch()).not.toBeNull();
   });
 });

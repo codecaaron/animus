@@ -127,11 +127,12 @@ export function makeContextProbe<Overrides extends ContextProbeOverrides>(
     mutateFileCache: PluginContext.prototype.mutateFileCache,
     corpus,
     rawExtensionFallbacks: new Set<string>(),
+    abortedParseHashes: new Map<string, string>(),
     reverseProvenance,
     storedManifest: makeManifest(),
     storedSystemPropMapJson: '{}',
     storedDynamicPropsJson: '{}',
-    storedTransformsSource: '{}',
+    storedAdmittedTransformsJson: '{}',
     system: { groupRegistryJson: '{}', sourceThemeManifestsJson: null },
     transformOutputHashes: new Map<string, string>(),
     recordTransformOutput(relativePath: string, code: string) {

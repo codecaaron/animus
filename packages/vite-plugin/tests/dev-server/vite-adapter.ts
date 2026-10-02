@@ -5,6 +5,7 @@ import { createServer } from 'vite-plus';
 
 import { animusExtract } from '../../src/index';
 
+import type { AnimusExtractOptions } from '../../src/index';
 import type { DevArtifacts, DevServerAdapter } from './scenario';
 import type { AddressInfo } from 'net';
 import type { Logger, ViteDevServer } from 'vite-plus';
@@ -65,7 +66,12 @@ function reserveHmrPort(): Promise<number> {
   });
 }
 
-export function createViteDevAdapter(): DevServerAdapter {
+/** Plugin options a dev server varies; omitted fields keep the plugin defaults. */
+export type ViteDevPluginOptions = Pick<AnimusExtractOptions, 'strict'>;
+
+export function createViteDevAdapter(
+  pluginOptions: ViteDevPluginOptions = {}
+): DevServerAdapter {
   let server: ViteDevServer | null = null;
   let projectRoot = '';
 
@@ -95,6 +101,8 @@ export function createViteDevAdapter(): DevServerAdapter {
   // A js-update for a module proves the browser would re-execute it, so these
   // payloads are the suppression gate's direct observable.
   const sentUpdatePaths: string[] = [];
+  // An error payload is what the browser overlay would show.
+  const sentErrors: string[] = [];
 
   const readModule = async (id: string, decode: (code: string) => string) => {
     const environment = startedServer().environments.client;
@@ -129,7 +137,13 @@ export function createViteDevAdapter(): DevServerAdapter {
         },
         // verbose routes the plugin's HMR decision log into the capturing
         // logger, so a barrier timeout names the layer that dropped an event.
-        plugins: [animusExtract({ system: './src/ds.ts', verbose: true })],
+        plugins: [
+          animusExtract({
+            system: './src/ds.ts',
+            verbose: true,
+            ...pluginOptions,
+          }),
+        ],
       });
       server.watcher.on('all', (event, path) =>
         record(`watcher ${event} ${path}`)
@@ -156,6 +170,10 @@ export function createViteDevAdapter(): DevServerAdapter {
         } else if (payload && payload.type === 'full-reload') {
           sentUpdatePaths.push('full-reload');
           record('hot full-reload');
+        } else if (payload && payload.type === 'error') {
+          const message = String(payload.err?.message ?? '');
+          sentErrors.push(message);
+          record(`hot error ${message}`);
         }
         return originalSend(...args);
       };
@@ -167,6 +185,10 @@ export function createViteDevAdapter(): DevServerAdapter {
 
     hotUpdatePaths(): string[] {
       return [...sentUpdatePaths];
+    },
+
+    hotErrors(): string[] {
+      return [...sentErrors];
     },
 
     isModuleWarm(projectRelativePath: string): boolean {

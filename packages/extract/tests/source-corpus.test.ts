@@ -2,8 +2,12 @@ import { readdirSync, readFileSync } from 'fs';
 import { join, relative, resolve } from 'path';
 import { describe, expect, test } from 'vitest';
 
+import { contentHash } from '../pipeline/content-hash';
 import { createSourceCorpus } from '../pipeline/source-corpus';
 import {
+  abortedFacts,
+  emptyFacts,
+  factsExtractor,
   FATAL_DIAGNOSTIC,
   makeHost,
   scriptedSourceIngestor,
@@ -136,6 +140,39 @@ describe('ingestion policy has one owner', () => {
     }
     return out;
   }
+
+  test('an aborted parse rejects the attempt; a recovered diagnostic does not', async () => {
+    const broken = 'export const Box = ds(.styles({});';
+    const corpus = createSourceCorpus(
+      makeHost({
+        extractFacts: factsExtractor({
+          'src/Broken.tsx': abortedFacts('src/Broken.tsx'),
+          'src/recovered.js': {
+            ...emptyFacts('src/recovered.js'),
+            parseDiagnostics: [
+              'A return statement can only be used within a function body.',
+            ],
+          },
+        }),
+      })
+    );
+    const recovered = { path: 'src/recovered.js', source: 'return 1;' };
+
+    const rejection = corpus.rejection(
+      await corpus.prepare([
+        { path: 'src/Broken.tsx', source: broken },
+        recovered,
+      ])
+    );
+    expect(rejection?.originals).toEqual(
+      new Map([['src/Broken.tsx', contentHash(broken)]])
+    );
+    expect(rejection?.message).toBe(
+      "[animus-test] analysis not published: the parser stopped before the end of src/Broken.tsx (Unexpected token); fix the syntax error to publish this file's changes"
+    );
+
+    expect(corpus.rejection(await corpus.prepare([recovered]))).toBeNull();
+  });
 
   test('createSourceIngestor is called only inside the source corpus', () => {
     const files = sourceFiles(EXTRACT);

@@ -33,7 +33,8 @@ Each component is in its own file (1 named export per file). This structure exer
 
 - `createSystem().addGroup().build()` returns the bundle (`{ system, createGlobalStyles, createKeyframes, registerKeyframes, seal }`); `ds` is the SEALED instance from `bundle.seal()` (vocabulary-registration)
 - `createGlobalStyles()` is a factory returned from `.build()`, used to define global/reset styles
-- Tokens built separately via `createTheme()` and exported as `tokens`. Theme type augmented via `declare module`.
+- Tokens built separately via `createTheme()` and exported as `theme`. `Theme`, `Selectors` and `Conditions` are augmented via `declare module` (aliases derived from `bundle.system`). An unregistered `_` alias key is then a type error, and so is a misspelled token on a strict scale-backed prop (the default, e.g. space and color props). Props declared `strict: false` still admit raw strings, so `border: 'thn'` compiles; in the stock groups these are the border family (`border*`, `rounded`, radii), `zIndex`, `opacity`, `boxShadow`/`shadow`/`textShadow`, `fontWeight`, `lineHeight` and `letterSpacing`. Raw `&…` selector keys and `@media`/`@container`/`@supports …` keys remain accepted escapes.
+- Custom aliases: `_emphasized` (`&[data-emphasis]`) and `_wideViewport` (`@media (min-width: 768px)`, the `sm` breakpoint). testDs aliases are not in this registry: `includes` gives discovery only.
 - Custom transforms: `fluid` (clamp-based responsive), `ratio` (aspect-ratio)
 - Global styles: reset (box-sizing, normalize) + global (bg/color on html/body, scrollbar, selection)
 - Color modes: dark (default) + 9 additional modes via `[data-color-mode]`, with
@@ -73,7 +74,7 @@ export default defineConfig({
 });
 ```
 
-The showcase additionally passes `appearanceBootstrap: createAppearanceBootstrap(tokens)`
+The showcase additionally passes `appearanceBootstrap: createAppearanceBootstrap(theme)`
 (from `@animus-ui/system/bootstrap`), which the plugin injects as the first tag in
 `<head>`. That generator is build tooling: importing it from anything under `src/`
 would ship storage-access code into the app bundle. `index.html` carries no

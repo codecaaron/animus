@@ -20,10 +20,32 @@ export type NamedTransform = TransformFn & {
   transformSource?: string;
 };
 
+/**
+ * Internal: the callable an Animus forwarder ultimately calls, under a
+ * registry symbol the extraction loader reads to locate the authored
+ * function without calling it. Not part of the public API.
+ */
+const AUTHORED_CALLABLE: unique symbol = Symbol.for(
+  'animus.transform.authored'
+);
+
+type LinkedCallable = TransformFn & { [AUTHORED_CALLABLE]?: TransformFn };
+
+/** Links `wrapper` to the authored callable behind `source`. */
+export function linkAuthoredCallable(
+  wrapper: TransformFn,
+  source: TransformFn
+): void {
+  Object.defineProperty(wrapper, AUTHORED_CALLABLE, {
+    value: (source as LinkedCallable)[AUTHORED_CALLABLE] ?? source,
+  });
+}
+
 export function createTransform(name: string, fn: TransformFn): NamedTransform {
   const wrapper: TransformFn = (value, property, props) =>
     fn(value, property, props);
   Object.defineProperty(wrapper, 'name', { value: name });
+  linkAuthoredCallable(wrapper, fn);
   // A `fn` that is itself a wrapper stringifies to the generic forwarder; its
   // captured source must be inherited or unrelated transforms compare equal.
   const inherited = (fn as Partial<NamedTransform>).transformSource;

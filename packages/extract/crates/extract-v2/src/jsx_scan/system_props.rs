@@ -87,7 +87,8 @@ impl<'a, 'b> Visit<'a> for SystemPropScanner<'a, 'b> {
                     match eval_jsx_attribute_value(&attr.value) {
                         PropValueResult::Static(value) => {
                             let dedup_key = format!(
-                                "{}:{}",
+                                "{}:{}:{}",
+                                binding,
                                 prop_name,
                                 serde_json::to_string(&value)
                                     .unwrap_or_else(|_| "null".to_string())

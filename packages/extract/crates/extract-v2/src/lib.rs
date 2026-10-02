@@ -66,9 +66,14 @@ pub struct NapiSystemConfig {
     /// Condition alias map JSON (the `conditionAliases` manifest field):
     /// alias → `{ value, order, kind }`. Absent when none are registered.
     pub condition_aliases: Option<String>,
-    /// Transform source texts (`{ transformName: sourceText }` JSON): the
-    /// only channel by which transforms shipped in a package reach evaluation.
+    /// Transform source texts by definition key (`{ transformId: sourceText }`
+    /// JSON): the only channel by which configured transforms reach evaluation.
     pub transform_sources: Option<String>,
+    /// Host-binding evidence by the same keys (`{ transformId: { hostGlobals:
+    /// [names] } | { rejection: reason } }` JSON), from each configured
+    /// transform's authored callable; pass it as `transformProvenanceJson`.
+    /// A reason completes "its callable …".
+    pub transform_provenance: Option<String>,
     pub global_style_blocks: Option<String>,
     pub keyframes_blocks: Option<String>,
     /// Vocabulary witnesses as a JSON array of coded entries; hosts surface
@@ -106,6 +111,7 @@ pub fn load_system_module(
         selector_order: config.selector_order,
         condition_aliases: config.condition_aliases,
         transform_sources: config.transform_sources,
+        transform_provenance: config.transform_provenance,
         global_style_blocks: config.global_style_blocks,
         keyframes_blocks: config.keyframes_blocks,
         vocabulary_witnesses: config.vocabulary_witnesses,

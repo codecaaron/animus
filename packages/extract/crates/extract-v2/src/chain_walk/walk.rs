@@ -8,16 +8,27 @@ use oxc::ast::ast::{
 
 use super::expr::match_static_member;
 use super::terminal::{extract_terminal_arg, first_arg_span, second_arg_span_fn, TerminalArg};
-use super::{ChainDescriptor, ChainStage, MemberParentExtension, TerminalKind};
+use super::{ChainDescriptor, ChainStage, MemberParentExtension, MemberRootedChain, TerminalKind};
 
 const BAIL_METHODS: &[&str] = &[];
-const CHAIN_METHODS: &[&str] = &["styles", "variant", "compound", "states", "system", "props"];
+pub(crate) const CHAIN_METHODS: &[&str] = &["styles", "variant", "compound", "states", "system", "props"];
 
-/// A walked declarator: an extractable-shaped chain, or an extension whose
-/// parent is an `Object.member` path the extractor does not support.
+/// A walked declarator: an extractable-shaped chain, or a chain shape whose
+/// `Object.member` root the extractor does not support.
 enum WalkedChain {
     Chain(ChainDescriptor),
     MemberParent(MemberParentExtension),
+    MemberRooted(MemberRootedChain),
+}
+
+/// Top-level chain facts, including the unsupported shapes chain
+/// collection drops.
+pub struct WalkedProgram {
+    pub chains: Vec<ChainDescriptor>,
+    pub member_parents: Vec<MemberParentExtension>,
+    pub member_rooted: Vec<MemberRootedChain>,
+    /// Start offset of a terminal chain bound by `export default`.
+    pub default_export: Option<u32>,
 }
 
 enum ChainRoot {
@@ -26,17 +37,18 @@ enum ChainRoot {
 }
 
 pub fn walk_program(program: &Program<'_>) -> Vec<ChainDescriptor> {
-    walk_program_with_member_parents(program).0
+    walk_program_facts(program).chains
 }
 
-pub fn walk_program_with_member_parents(
-    program: &Program<'_>,
-) -> (Vec<ChainDescriptor>, Vec<MemberParentExtension>) {
+pub fn walk_program_facts(program: &Program<'_>) -> WalkedProgram {
     let mut chains = Vec::new();
     let mut member_parents = Vec::new();
+    let mut member_rooted = Vec::new();
+    let mut default_export = None;
     let mut record = |declarator: &VariableDeclarator<'_>| match try_extract_chain(declarator) {
         Some(WalkedChain::Chain(chain)) => chains.push(chain),
         Some(WalkedChain::MemberParent(extension)) => member_parents.push(extension),
+        Some(WalkedChain::MemberRooted(chain)) => member_rooted.push(chain),
         None => {}
     };
     for stmt in &program.body {
@@ -44,8 +56,15 @@ pub fn walk_program_with_member_parents(
             Statement::VariableDeclaration(decl) => {
                 decl.declarations.iter().for_each(&mut record);
             }
-            // Chains bound by export default are not extracted.
-            Statement::ExportDefaultDeclaration(_) => {}
+            // Chains bound by export default are not extracted; only their
+            // presence is recorded.
+            Statement::ExportDefaultDeclaration(export) => {
+                if let Some(Expression::CallExpression(call)) = export.declaration.as_expression() {
+                    if let Some(WalkedChain::Chain(_)) = try_walk_chain(call, "default".to_string()) {
+                        default_export = Some(call.span.start);
+                    }
+                }
+            }
             Statement::ExportNamedDeclaration(export) => {
                 if let Some(Declaration::VariableDeclaration(decl)) = &export.declaration {
                     decl.declarations.iter().for_each(&mut record);
@@ -54,7 +73,12 @@ pub fn walk_program_with_member_parents(
             _ => {}
         }
     }
-    (chains, member_parents)
+    WalkedProgram {
+        chains,
+        member_parents,
+        member_rooted,
+        default_export,
+    }
 }
 
 fn try_extract_chain(declarator: &VariableDeclarator<'_>) -> Option<WalkedChain> {
@@ -107,6 +131,13 @@ fn try_walk_chain(call: &CallExpression<'_>, binding: String) -> Option<WalkedCh
         ChainRoot::Identifier(name) => name,
         ChainRoot::Member { object, member } if has_extend_marker => {
             return Some(WalkedChain::MemberParent(MemberParentExtension {
+                binding,
+                object,
+                member,
+            }));
+        }
+        ChainRoot::Member { object, member } if !stages.is_empty() => {
+            return Some(WalkedChain::MemberRooted(MemberRootedChain {
                 binding,
                 object,
                 member,

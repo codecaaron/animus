@@ -191,6 +191,37 @@ ds.styles()    → @layer anm-base
 
 The type system prevents calling methods out of order.
 
+### Extending a component
+
+`.extend()` on a component starts a chain that inherits everything the
+component declares, custom props and their callbacks included. Its methods
+can be called in any order; a custom prop redeclared in `.props()` replaces
+the inherited one for this extension and its own extensions only.
+
+```tsx
+const Card = ds
+  .props({
+    inset: { property: 'padding', transform: (v) => `${Number(v) * 4}px` },
+  })
+  .asElement('div');
+
+export const Panel = Card.extend()
+  .styles({ display: 'grid' })
+  .asElement('section');
+
+<Panel inset={3} />; // padding: 12px, computed by Card's callback
+```
+
+The extension reads inherited callbacks from the parent component when its
+module runs, just as the authored `Card.extend()` does. Two consequences:
+
+- The parent's module must finish initializing before the extension's
+  module: an extension cannot be declared across an import cycle that
+  evaluates the extending module first.
+- A parent with custom-prop callbacks that is defined in a client module
+  (`'use client'`) cannot be extended from a server module; declare the
+  extension in a client module.
+
 ## Color Modes
 
 `addColorModes(initialMode, modeConfig)` emits a `[data-color-mode="…"]` block

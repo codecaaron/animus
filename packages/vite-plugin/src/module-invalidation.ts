@@ -3,8 +3,9 @@ import { resolve } from 'path';
 import type { PluginContext } from './context';
 
 /**
- * Completeness is load-bearing: the file-plan diff is the only invalidation
- * candidate source, so a node shape missed here stays stale for the session.
+ * Completeness is load-bearing: the file-plan diff and the sources re-delivered
+ * when a held publication ends are the only invalidation candidate sources, so
+ * a node shape missed here stays stale for the session.
  */
 export function invalidateFileModules(
   ctx: PluginContext,

@@ -26,10 +26,22 @@ export interface PublishedSourceCorpus {
   readonly ownership: Readonly<Record<string, SourceEntryOwnership>>;
 }
 
+export interface AbortedParseRejection {
+  /** Original path → hash of the bytes whose parse aborted. */
+  originals: ReadonlyMap<string, string>;
+  message: string;
+}
+
 export interface SourceCorpus {
   prepare(
     input: readonly RawSourceEntry[] | SourceCorpusCache
   ): Promise<SourceIngestionResult>;
+  /** Non-null when an admitted original's parse aborted: the parser yielded
+   *  no chains, imports or exports for it, so analyzing it would publish a
+   *  generation without the styles its served module still uses. The attempt
+   *  must not analyze or publish; hosts check this between `prepare` and
+   *  analysis. */
+  rejection(prepared: SourceIngestionResult): AbortedParseRejection | null;
   publish(accepted: SourceIngestionResult): void;
   readonly published: PublishedSourceCorpus;
 }
@@ -65,6 +77,25 @@ export function createSourceCorpus(
         ingested,
         ingestor.surfaceDiagnostics(ingested.diagnostics)
       );
+    },
+    rejection(prepared) {
+      const aborted = (prepared.abortedParses ?? []).filter(
+        ({ originalPath }) => prepared.ownership[originalPath] !== undefined
+      );
+      if (aborted.length === 0) return null;
+      const files = aborted
+        .map(
+          ({ originalPath, messages }) =>
+            `${originalPath} (${messages.join('; ')})`
+        )
+        .join(', ');
+      const owners = aborted.length === 1 ? "this file's" : "these files'";
+      return {
+        originals: new Map(
+          aborted.map(({ originalPath, hash }) => [originalPath, hash])
+        ),
+        message: `${host.prefix} analysis not published: the parser stopped before the end of ${files}; fix the syntax error to publish ${owners} changes`,
+      };
     },
     publish(accepted) {
       ingestor.markPublished(accepted);

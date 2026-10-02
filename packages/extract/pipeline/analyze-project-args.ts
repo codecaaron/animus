@@ -18,6 +18,7 @@ export type AnalyzeProjectArgs = [
   conditionAliasesJson: string | null,
   externalDirsJson: string | null,
   transformSourcesJson: string | null,
+  transformProvenanceJson: string | null,
 ];
 
 /** @internal */
@@ -39,6 +40,9 @@ export interface AnalyzeProjectInputs {
   conditionAliasesJson: string | null;
   externalDirsJson: string | null;
   transformSourcesJson: string | null;
+  /** Absent in inputs persisted before it existed: no host-binding
+   *  evidence, so configured sources reading `btoa`/`atob` are rejected. */
+  transformProvenanceJson?: string | null;
 }
 
 /** @internal */
@@ -64,5 +68,6 @@ export function buildAnalyzeProjectArgs(
     inputs.conditionAliasesJson,
     inputs.externalDirsJson,
     inputs.transformSourcesJson,
+    inputs.transformProvenanceJson ?? null,
   ];
 }

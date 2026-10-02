@@ -1,7 +1,7 @@
 //! Per-file fact extraction: chain discovery, stage evaluation and statics
 //! over one stored AST, producing owned facts and adding no parse.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use oxc::ast::ast::{CommentKind, Expression, ObjectExpression, Program};
 use serde::Serialize;
@@ -11,6 +11,7 @@ use crate::chain_walk::{self, ChainDescriptor};
 use crate::eval;
 use crate::jsx_scan::{scan_compose_calls, ComposeFamilyInfo};
 use crate::owned_ast::OwnedAst;
+use crate::transforms::{CallbackBinding, CallbackDefinition, TransformReferences};
 use crate::usage_facts::{collect_import_facts, ImportFact, UsageFact};
 
 #[derive(Debug, Clone, Serialize)]
@@ -20,11 +21,15 @@ pub struct CapturedTransformFact {
     pub key: String,
     /// User-authored function source text, copied from the input file.
     pub source: String,
+    /// The callback the prop binds, with its declaring component; `None`
+    /// until an inline callback is keyed to its component.
+    #[serde(skip)]
+    pub callback: Option<CallbackBinding>,
 }
 
 type EvaluatedStageObject = (
     Option<Value>,
-    Vec<(String, String)>,
+    Vec<eval::SkippedProperty>,
     Vec<CapturedTransformFact>,
     Option<String>,
 );
@@ -41,6 +46,17 @@ pub struct StageFacts {
     pub captured: Vec<CapturedTransformFact>,
     /// Whole-object evaluation bail for this stage, if any.
     pub eval_error: Option<String>,
+    /// The identifier a `.variant(IDENT)` stage passed as its whole config.
+    #[serde(skip)]
+    pub config_identifier: Option<String>,
+    /// `.props()` custom props whose `transform` callback extraction lost:
+    /// `(prop, reason)`, from the evaluator's skips or a const config.
+    #[serde(skip)]
+    pub dropped_transforms: Vec<(String, String)>,
+    /// `.props()` custom props whose whole config the evaluator skipped,
+    /// directly (also present in `skipped`) or in a const config.
+    #[serde(skip)]
+    pub dropped_configs: Vec<(String, String)>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -241,14 +257,46 @@ pub struct FileFacts {
     /// Extensions of an `Object.member` parent, which are never chains.
     #[serde(skip)]
     pub member_parent_extensions: Vec<chain_walk::MemberParentExtension>,
+    /// Chains rooted in an `Object.member` path, which are never chains.
+    #[serde(skip)]
+    pub member_rooted_chains: Vec<chain_walk::MemberRootedChain>,
+    /// Namespace imports (`import * as ns from 'x'`): local → specifier.
+    #[serde(skip)]
+    pub namespace_imports: BTreeMap<String, String>,
+    /// A terminal chain bound by `export default`, which is never a chain.
+    #[serde(skip)]
+    pub default_export_chain: Option<DefaultExportChain>,
     /// Named-import specifiers (alias augmentation inputs).
     pub imports: Vec<ImportFact>,
     /// Named-export facts (re-export following for provenance/statics).
     pub exports: Vec<crate::usage_facts::ExportFact>,
-    /// Extracted createTransform() declarations, registered with the
-    /// evaluator.
+    /// Bindings of extracted components whose every use is a JSX element of
+    /// this module (see `confined_component_bindings`).
+    #[serde(skip)]
+    pub(crate) confined_components: BTreeSet<String>,
+    /// Extracted createTransform() declarations: serialized with the facts
+    /// for probes, and the source of their bail diagnostics. They are never
+    /// registered with the evaluator.
     pub transforms: Vec<crate::transforms::ExtractedTransform>,
+    /// `(file, binding)` of the `createTransform` declarations that
+    /// supported `.props()` references here deliver in place, in this or an
+    /// imported module; their isolated-evaluation bails do not apply.
+    #[serde(skip)]
+    pub(crate) captured_transform_bindings: BTreeSet<(String, String)>,
     pub parse_diagnostics: Vec<String>,
+    /// The parser stopped at an unrecoverable error and yielded no chains,
+    /// imports or exports: these facts describe nothing of the file.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub parse_panicked: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct DefaultExportChain {
+    /// The chain's root identifier, when it has one.
+    pub root: Option<String>,
+    /// 1-based source position of the chain expression.
+    pub line: usize,
+    pub column: usize,
 }
 
 impl FileFacts {
@@ -553,18 +601,33 @@ fn eval_stage_object(
     match eval::eval_object_expr_with_statics(obj, Some(statics)) {
         Ok((value, skipped, captured)) => (
             Some(value),
-            skipped.into_iter().map(|s| (s.key, s.reason)).collect(),
+            skipped,
             captured
                 .into_iter()
                 .map(|c| CapturedTransformFact {
                     key: c.key,
                     source: source[c.span.start as usize..c.span.end as usize].to_string(),
+                    callback: None,
                 })
                 .collect(),
             None,
         ),
         Err(bail) => (None, Vec::new(), Vec::new(), Some(bail.reason)),
     }
+}
+
+fn default_export_chain(program: &Program<'_>, source: &str, start: u32) -> DefaultExportChain {
+    use oxc::ast::ast::Statement;
+    let root = program.body.iter().find_map(|stmt| match stmt {
+        Statement::ExportDefaultDeclaration(export) => {
+            export.declaration.as_expression().and_then(expression_root)
+        }
+        _ => None,
+    });
+    let before = &source[..(start as usize).min(source.len())];
+    let line = before.matches('\n').count() + 1;
+    let column = before.rsplit('\n').next().map_or(0, |l| l.chars().count()) + 1;
+    DefaultExportChain { root, line, column }
 }
 
 pub fn extract_file_facts(ast: &OwnedAst) -> FileFacts {
@@ -599,6 +662,12 @@ pub fn extract_file_facts_enriched_with_usage_statics(
     let program = ast.program();
     let local_statics = eval::collect_static_values(program);
     let local_usage_statics = eval::collect_complete_static_values(program);
+    let imports = collect_import_facts(program);
+    let exports = crate::usage_facts::collect_export_facts(program);
+    let inputs = crate::analyze_css::CssInputs::default();
+    // Alone, a module resolves only its own bindings.
+    let mut references = TransformReferences::new(&inputs);
+    references.add(&ast.path, program, &imports, &exports);
     extract_file_facts_from_static_maps(
         ast,
         prefix,
@@ -606,6 +675,7 @@ pub fn extract_file_facts_enriched_with_usage_statics(
         &local_usage_statics,
         extra_statics,
         extra_usage_statics,
+        &references,
     )
 }
 
@@ -616,6 +686,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
     local_usage_statics: &rustc_hash::FxHashMap<String, Value>,
     extra_statics: &rustc_hash::FxHashMap<String, Value>,
     extra_usage_statics: &rustc_hash::FxHashMap<String, Value>,
+    references: &TransformReferences<'_>,
 ) -> FileFacts {
     let program = ast.program();
     let source = ast.source();
@@ -640,15 +711,25 @@ pub(crate) fn extract_file_facts_from_static_maps(
         usage_statics_fx.insert(k.clone(), v.clone());
     }
     let object_index = build_object_index(program);
+    let undefined_bound = eval::module_binds(program, "undefined");
 
     let identifier_index = build_identifier_index(program);
 
-    let (walked_chains, member_parent_extensions) =
-        chain_walk::walk_program_with_member_parents(program);
+    let walked = chain_walk::walk_program_facts(program);
+    let member_parent_extensions = walked.member_parents;
+    let walked_chains = walked.chains;
     let const_initializers = collect_const_initializers(program);
-    let chains = walked_chains
+    let imports = collect_import_facts(program);
+    let create_transform_locals: rustc_hash::FxHashSet<String> = imports
+        .iter()
+        .filter(|imp| imp.imported == "createTransform")
+        .map(|imp| imp.local.clone())
+        .collect();
+    let mut captured_transform_bindings = BTreeSet::new();
+    let chains: Vec<ChainFacts> = walked_chains
         .into_iter()
         .map(|descriptor| {
+            let declarer = format!("{}::{}", ast.path, descriptor.binding);
             let mut stages: Vec<StageFacts> = Vec::new();
             let mut fatal_error: Option<String> = None;
             for stage in &descriptor.stages {
@@ -662,18 +743,23 @@ pub(crate) fn extract_file_facts_from_static_maps(
                     skipped: Vec::new(),
                     captured: Vec::new(),
                     eval_error: None,
+                    config_identifier: None,
+                    dropped_transforms: Vec::new(),
+                    dropped_configs: Vec::new(),
                 };
                 let key = &stage.arg_span;
                 if stage.method == "variant" {
                     match object_index.get(key) {
                         Some(obj) => match eval::parse_variant_arg(obj, Some(&statics_fx)) {
                             Ok((cfg, skips)) => {
-                                facts.value = Some(serde_json::json!({
+                                let mut value = serde_json::json!({
                                     "prop": cfg.prop,
                                     "defaultVariant": cfg.default_variant,
                                     "base": cfg.base,
                                     "variants": Value::Object(cfg.variants),
-                                }));
+                                });
+                                eval::strip_lost_values(&mut value);
+                                facts.value = Some(value);
                                 facts.skipped =
                                     skips.into_iter().map(|s| (s.key, s.reason)).collect();
                             }
@@ -683,6 +769,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
                             }
                         },
                         None => {
+                            facts.config_identifier = identifier_index.get(key).cloned();
                             facts.eval_error = Some(
                                 "variant eval failed: failed to parse variant config".to_string(),
                             );
@@ -711,9 +798,75 @@ pub(crate) fn extract_file_facts_from_static_maps(
                     };
                     match evaluated {
                         Ok((value, skipped, captured)) => {
-                            facts.value = value;
-                            facts.skipped = skipped;
+                            let props = stage.method == "props";
                             facts.captured = captured;
+                            if props {
+                                // An inline callback is its own definition.
+                                let module_host_bindings = references.host_bindings(&ast.path);
+                                for capture in &mut facts.captured {
+                                    let prop = capture.key.split('.').next().unwrap_or_default();
+                                    capture.callback = Some(CallbackBinding {
+                                        declarer: declarer.clone(),
+                                        definition: CallbackDefinition {
+                                            key: format!("{}#{}.{prop}", ast.path, descriptor.binding),
+                                            name: "inline".to_string(),
+                                            source: capture.source.clone(),
+                                            module_host_bindings: module_host_bindings.clone(),
+                                        },
+                                    });
+                                }
+                            }
+                            for mut skip in skipped {
+                                if props {
+                                    match skip.parent.as_deref() {
+                                        None => facts
+                                            .dropped_configs
+                                            .push((skip.key.clone(), skip.reason.clone())),
+                                        Some(prop) if skip.key == "transform" && !prop.contains('.') => {
+                                            let transform = object_index
+                                                .get(key)
+                                                .and_then(|obj| eval::transform_value_at(obj, Some(prop)));
+                                            // An explicitly absent transform is no skip and no loss.
+                                            if transform.is_some_and(|expr| eval::is_absent_value(expr, undefined_bound)) {
+                                                continue;
+                                            }
+                                            if let Some(Expression::Identifier(reference)) =
+                                                transform.map(Expression::get_inner_expression)
+                                            {
+                                                match references.resolve(&ast.path, &reference.name) {
+                                                    Ok(resolved) => {
+                                                        captured_transform_bindings.extend(resolved.created);
+                                                        facts.captured.push(CapturedTransformFact {
+                                                            key: format!("{prop}.transform"),
+                                                            source: reference.name.to_string(),
+                                                            callback: resolved.definition.map(|definition| {
+                                                                CallbackBinding { declarer: declarer.clone(), definition }
+                                                            }),
+                                                        });
+                                                        continue;
+                                                    }
+                                                    Err(reason) => skip.reason = reason,
+                                                }
+                                            }
+                                            facts
+                                                .dropped_transforms
+                                                .push((prop.to_string(), skip.reason.clone()));
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                                facts.skipped.push((skip.key, skip.reason));
+                            }
+                            facts.value = value;
+                            if let Some(value) = facts.value.as_mut() {
+                                if props {
+                                    let lost = eval::take_lost_custom_props(value);
+                                    facts.dropped_transforms.extend(lost.transforms);
+                                    facts.dropped_configs.extend(lost.configs);
+                                } else {
+                                    eval::strip_lost_values(value);
+                                }
+                            }
                         }
                         Err(e) => {
                             let label = if stage.method == "compound" {
@@ -738,7 +891,8 @@ pub(crate) fn extract_file_facts_from_static_maps(
                                     obj,
                                     Some(&statics_fx),
                                 ) {
-                                    Ok((v, skips, _captures)) => {
+                                    Ok((mut v, skips, _captures)) => {
+                                        eval::strip_lost_values(&mut v);
                                         facts.second_value = Some(v);
                                         facts
                                             .skipped
@@ -779,37 +933,49 @@ pub(crate) fn extract_file_facts_from_static_maps(
         })
         .collect();
 
-    let imports = collect_import_facts(program);
-    // Alias bindings only: the literal `createTransform` name always matches.
-    let ct_bindings: rustc_hash::FxHashSet<String> = imports
-        .iter()
-        .filter(|imp| imp.imported == "createTransform" && imp.local != "createTransform")
-        .map(|imp| imp.local.clone())
-        .collect();
     let transforms =
-        crate::transforms::extract_transforms(program, source, &ast.path, &ct_bindings);
+        crate::transforms::extract_transforms(program, source, &ast.path, &create_transform_locals);
+    let exports = crate::usage_facts::collect_export_facts(program);
+    let descriptors: Vec<&ChainDescriptor> = chains.iter().map(|chain| &chain.descriptor).collect();
     let usage = crate::usage_facts::collect_usage_facts(program);
-    let usage_enriched = Some(crate::usage_facts::collect_usage_facts_with_statics(
+    let (usage_enriched, confined_components) = crate::usage_facts::collect_enriched_usage(
         program,
         &usage_statics_fx,
-    ));
+        &descriptors,
+        &exports,
+    );
 
     FileFacts {
         path: ast.path.clone(),
         directive_prologue,
         chains,
-        statics: statics_fx.into_iter().collect(),
+        // Serialized facts carry no lost-value markers.
+        statics: statics_fx
+            .into_iter()
+            .map(|(name, mut value)| {
+                eval::strip_lost_values(&mut value);
+                (name, value)
+            })
+            .collect(),
         usage,
-        usage_enriched,
+        usage_enriched: Some(usage_enriched),
         compose: scan_compose_calls(program),
         aliases: const_initializers.aliases,
         declaration_roots: const_initializers.roots,
         object_members: const_initializers.objects,
         member_parent_extensions,
+        member_rooted_chains: walked.member_rooted,
+        namespace_imports: crate::usage_facts::collect_namespace_imports(program),
+        default_export_chain: walked
+            .default_export
+            .map(|start| default_export_chain(program, source, start)),
         imports,
-        exports: crate::usage_facts::collect_export_facts(program),
+        exports,
         transforms,
+        captured_transform_bindings,
+        confined_components,
         parse_diagnostics: ast.diagnostics.clone(),
+        parse_panicked: ast.panicked,
     }
 }
 
@@ -1026,5 +1192,138 @@ mod tests {
         assert_eq!(stage.captured.len(), 1);
         assert_eq!(stage.captured[0].key, "w.transform");
         assert!(stage.captured[0].source.contains("v * 4"));
+    }
+
+    /// An inline callback reading a `btoa` its module declares is never
+    /// isolated; the same callback reading the host function is.
+    #[test]
+    fn inline_callback_reading_a_module_bound_host_function_is_not_isolated() {
+        for (preamble, isolated) in [("function btoa(s) { return s; }", false), ("", true)] {
+            let facts = facts_for(&format!(
+                "{preamble}\nexport const Box = ds.props({{ w: {{ property: 'width', transform: (v) => btoa(String(v)) }} }}).asElement('div');"
+            ));
+            let callback = facts.chains[0].stages[0].captured[0].callback.as_ref().unwrap();
+            assert_eq!(callback.definition.isolated_source().is_some(), isolated, "{preamble:?}");
+        }
+    }
+
+    fn captured_pairs(stage: &StageFacts) -> Vec<(&str, &str)> {
+        stage
+            .captured
+            .iter()
+            .map(|c| (c.key.as_str(), c.source.as_str()))
+            .collect()
+    }
+
+    #[test]
+    fn local_transform_references_keep_their_authored_reference() {
+        let facts = facts_for(
+            r#"
+            import { createTransform as ct } from '@animus-ui/system';
+            const double = (v) => v * 2;
+            function half(v) { return v / 2; }
+            const twice = double;
+            const again = twice;
+            const named = ct('double', (v) => `${v}px`);
+            const viaExpression = (function (v) { return v; }) satisfies object;
+            export const Box = ds
+              .props({
+                a: { property: 'width', transform: double },
+                b: { property: 'height', transform: again as never },
+                c: { property: 'minWidth', transform: half },
+                d: { property: 'maxWidth', transform: named },
+                e: { property: 'top', transform: viaExpression },
+                f: { property: 'left', transform: (v) => v },
+              })
+              .asElement('div');
+            export const Other = ds.props({ g: { property: 'width', transform: double } }).asElement('p');
+            "#,
+        );
+        let stage = &facts.chains[0].stages[0];
+        let mut captured = captured_pairs(stage);
+        captured.sort();
+        assert_eq!(
+            captured,
+            [
+                ("a.transform", "double"),
+                ("b.transform", "again"),
+                ("c.transform", "half"),
+                ("d.transform", "named"),
+                ("e.transform", "viaExpression"),
+                ("f.transform", "(v) => v"),
+            ]
+        );
+        assert!(stage.skipped.is_empty(), "{:?}", stage.skipped);
+        assert!(stage.dropped_transforms.is_empty(), "{:?}", stage.dropped_transforms);
+        assert_eq!(
+            captured_pairs(&facts.chains[1].stages[0]),
+            [("g.transform", "double")]
+        );
+    }
+
+    #[test]
+    fn unsupported_transform_references_replace_their_generic_skip() {
+        let facts = facts_for(
+            r#"
+            let shift = (v) => v;
+            export const Box = ds
+              .props({
+                mut: { property: 'height', transform: shift },
+                und: { property: 'inset', transform: nowhere },
+              })
+              .asElement('div');
+            "#,
+        );
+        let stage = &facts.chains[0].stages[0];
+        assert!(stage.captured.is_empty(), "{:?}", stage.captured);
+        assert_eq!(
+            stage.dropped_transforms,
+            [
+                ("mut".to_string(), "transform reference 'shift' is a mutable `let` binding".to_string()),
+                ("und".to_string(), "transform reference 'nowhere' is not declared in this module".to_string()),
+            ]
+        );
+        // The classified diagnostic replaces exactly the generic skip line.
+        for (_, reason) in &stage.dropped_transforms {
+            assert!(stage.skipped.contains(&("transform".to_string(), reason.clone())));
+        }
+    }
+
+    #[test]
+    fn css_transform_identifiers_outside_props_stay_skipped() {
+        let facts = facts_for(
+            r#"
+            const rotate = (v) => v;
+            export const Box = ds
+              .styles({ transform: rotate })
+              .props({ w: { property: 'width', transform: rotate, scale: rotate } })
+              .asElement('div');
+            "#,
+        );
+        let styles = &facts.chains[0].stages[0];
+        assert!(styles.captured.is_empty());
+        assert_eq!(styles.skipped.len(), 1);
+        assert_eq!(styles.skipped[0].0, "transform");
+        let props = &facts.chains[0].stages[1];
+        assert_eq!(captured_pairs(props), [("w.transform", "rotate")]);
+        assert_eq!(props.skipped.len(), 1, "{:?}", props.skipped);
+        assert_eq!(props.skipped[0].0, "scale");
+    }
+
+    #[test]
+    fn serialized_facts_tell_an_aborted_parse_from_a_recovered_one() {
+        let chain = "export const Box = ds.styles({ display: 'block' }).asElement('div');\n";
+
+        let aborted = facts_for(&chain.replace("= ds.", "= ds(."));
+        assert!(aborted.chains.is_empty());
+        assert!(!aborted.parse_diagnostics.is_empty());
+        let wire = serde_json::to_value(&aborted).unwrap();
+        assert_eq!(wire["parsePanicked"], true);
+
+        let recovered = facts_for(&format!("{chain}return 1;\n"));
+        assert_eq!(recovered.chains.len(), 1);
+        assert!(!recovered.parse_diagnostics.is_empty());
+        let wire = serde_json::to_value(&recovered).unwrap();
+        assert!(wire.get("parsePanicked").is_none(), "{wire}");
     }
 }

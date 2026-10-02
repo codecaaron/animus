@@ -188,6 +188,15 @@ pub(super) fn build_config(
         }
     }
 
+    if !p.typed_custom_props.is_empty() {
+        let typed = serde_json::to_string(&p.typed_custom_props).unwrap_or_else(|_| "[]".to_string());
+        result = if result == "{}" {
+            format!("{{\"typedCustomProps\":{}}}", typed)
+        } else {
+            format!("{},\"typedCustomProps\":{}}}", &result[..result.len() - 1], typed)
+        };
+    }
+
     if let Some(ref cdc) = p.custom_dynamic_config {
         let mut entries: Vec<String> = Vec::new();
         let mut sorted_keys: Vec<&String> = cdc.keys().collect();
@@ -203,16 +212,29 @@ pub(super) fn build_config(
                     serde_json::to_string(&meta.properties).unwrap_or_else(|_| "[]".to_string());
                 fields.push(format!("\"properties\":{}", props_json));
             }
+            if meta.negative {
+                fields.push("\"negative\":true".to_string());
+            }
+            if meta.strict {
+                fields.push("\"strict\":true".to_string());
+            }
+            if !meta.keywords.is_empty() {
+                let keywords_json =
+                    serde_json::to_string(&meta.keywords).unwrap_or_else(|_| "[]".to_string());
+                fields.push(format!("\"keywords\":{}", keywords_json));
+            }
             if let Some(ref fn_src) = meta.transform_fn_source {
                 fields.push(format!("\"transform\":{}", fn_src));
             } else if let Some(ref tn) = meta.transform_name {
-                fields.push(format!("\"transformName\":\"{}\"", tn));
-                fields.push(format!("\"transform\":transforms.{}", tn));
+                let literal = crate::evaluator::js_string_literal;
+                fields.push(format!("\"transformName\":{}", literal(tn)));
+                if let Some(ref id) = meta.transform_id {
+                    fields.push(format!("\"transform\":transforms[{}]", literal(id)));
+                }
             }
             if !meta.scale_values.is_empty() {
-                let sorted_sv: BTreeMap<&String, &String> = meta.scale_values.iter().collect();
                 let sv_json =
-                    serde_json::to_string(&sorted_sv).unwrap_or_else(|_| "{}".to_string());
+                    serde_json::to_string(&meta.scale_values).unwrap_or_else(|_| "{}".to_string());
                 fields.push(format!("\"scaleValues\":{}", sv_json));
             }
             entries.push(format!("\"{}\":{{{}}}", prop_name, fields.join(",")));

@@ -1,4 +1,5 @@
 import { assertNoErrorDiagnostics } from '@animus-ui/extract/pipeline';
+import { createSystem, createTransform } from '@animus-ui/system';
 import { join } from 'node:path';
 /**
  * Both bundler plugins escalate error diagnostics through the one shared
@@ -7,19 +8,36 @@ import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
 
 import { readFixtureFile } from '../fixtures/read-fixtures';
+import { config } from '../fixtures/setup';
 import { runPipeline } from './run-pipeline';
 
 import type { CssDiagnosticLike } from '@animus-ui/extract/pipeline';
 
 const COMPONENTS = join(__dirname, '..', 'fixtures', 'components');
 
-const invalidTransformFile = {
-  path: 'fixtures/invalid-transform.tsx',
-  source: `import { createTransform } from '@animus-ui/system';\nimport { ds } from './setup';\n\nexport const objectSize = createTransform('size', (value) => ({ width: value }));\n\nexport const Broken = ds.styles({ width: 4 }).asElement('div');\n\nexport function BrokenExample() {\n  return <Broken />;\n}\n`,
+/** The configured `width` binding returns an object for every value. */
+const objectSystem = createSystem()
+  .addProps({
+    width: {
+      property: 'width',
+      transform: createTransform('size', (value) => ({ width: value })),
+    },
+  })
+  .build()
+  .seal()
+  .toConfig();
+const objectInputs = {
+  propConfigJson: objectSystem.propConfig,
+  groupRegistryJson: objectSystem.groupRegistry,
+  transformSourcesJson: objectSystem.transformSources,
 };
 
-/** Consumes `width` without registering a transform of its own: registration
- *  is project-wide, so the invalid transform reaches this file too. */
+const invalidTransformFile = {
+  path: 'fixtures/invalid-transform.tsx',
+  source: `import { ds } from './setup';\n\nexport const Broken = ds.styles({ width: 4 }).asElement('div');\n\nexport function BrokenExample() {\n  return <Broken />;\n}\n`,
+};
+
+/** A second consumer of the same configured binding. */
 const secondConsumerFile = {
   path: 'fixtures/also-broken.tsx',
   source: `import { ds } from './setup';\n\nexport const AlsoBroken = ds.styles({ width: 8 }).asElement('span');\n\nexport function AlsoBrokenExample() {\n  return <AlsoBroken />;\n}\n`,
@@ -33,7 +51,9 @@ const D8_MESSAGE =
 type ManifestDiagnostic = CssDiagnosticLike & { severity?: string };
 
 describe('invalid transform result — static escalation', () => {
-  const { manifest, css } = runPipeline([invalidTransformFile]);
+  const { manifest, css } = runPipeline([invalidTransformFile], {
+    inputs: objectInputs,
+  });
   const diagnostics: ManifestDiagnostic[] = manifest.diagnostics ?? [];
   const errors = diagnostics.filter((d) => d.kind === 'error');
 
@@ -63,10 +83,10 @@ describe('invalid transform result — static escalation', () => {
 
 describe('multiple invalid results — aggregated escalation', () => {
   test('build failure lists every error entry across files', () => {
-    const { manifest } = runPipeline([
-      invalidTransformFile,
-      secondConsumerFile,
-    ]);
+    const { manifest } = runPipeline(
+      [invalidTransformFile, secondConsumerFile],
+      { inputs: objectInputs }
+    );
     let thrown: Error | null = null;
     try {
       assertNoErrorDiagnostics(manifest.diagnostics);
@@ -88,8 +108,11 @@ describe('multiple invalid results — aggregated escalation', () => {
 describe('valid transform results stay unaffected', () => {
   test('analyses without error diagnostics pass the gate and keep their CSS', () => {
     const entry = readFixtureFile(COMPONENTS, 'transforms.tsx');
-    const { manifest, css } = runPipeline([entry]);
+    const { manifest } = runPipeline([entry], {
+      inputs: { transformSourcesJson: config.transformSources },
+    });
     expect(() => assertNoErrorDiagnostics(manifest.diagnostics)).not.toThrow();
-    expect(css).toContain('width: 8px');
+    // Before unit fallback, which would also turn a raw `4` into `4px`.
+    expect(manifest.css).toContain('width: 4px');
   });
 });

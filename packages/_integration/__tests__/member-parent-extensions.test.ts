@@ -130,7 +130,7 @@ describe('extending a member of an exported Animus namespace object', () => {
     );
   });
 
-  function delivered(strict: boolean): string[] {
+  function delivered(strict: boolean | undefined): string[] {
     const lines: string[] = [];
     surfaceManifestDiagnostics(manifest, (line) => lines.push(line), {
       strict,
@@ -138,14 +138,23 @@ describe('extending a member of an exported Animus namespace object', () => {
     return lines;
   }
 
-  test('the native analysis reports one ordinary bail for the child', () => {
+  function strictFailure(): string {
+    try {
+      delivered(true);
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error);
+    }
+    throw new Error('explicit strictness did not fail');
+  }
+
+  test('the native analysis reports one classified bail for the child', () => {
     expect(childDiagnostics).toHaveLength(1);
     expect(childDiagnostics[0]).toMatchObject({
       file: 'fixtures/member-child.tsx',
       kind: 'bail',
       code: 'animus.extension.unsupported-member-parent',
+      severity: 'error',
     });
-    expect(childDiagnostics[0].severity).toBeUndefined();
   });
 
   test('the bail is not an unresolved-parent rediscovery request', () => {
@@ -155,13 +164,20 @@ describe('extending a member of an exported Animus namespace object', () => {
     );
   });
 
-  test('shared delivery warns once, identically in ordinary and strict modes', () => {
-    for (const strict of [false, true]) {
+  test('shared delivery warns once with omitted or false build strictness', () => {
+    for (const strict of [undefined, false]) {
       const lines = delivered(strict).filter((line) =>
         line.includes('ShortSelectContent')
       );
       expect(lines).toEqual([MEMBER_PARENT_WARNING]);
     }
+  });
+
+  test('explicit build strictness fails through the shared policy with the same attribution', () => {
+    expect(strictFailure()).toContain(
+      'animus.extension.unsupported-member-parent — ShortSelectContent: ' +
+        "chain dropped: parent 'Select.Content'"
+    );
   });
 
   test('the child declaration is preserved with no fabricated output', () => {
@@ -185,8 +201,9 @@ describe('extending a member of an exported Animus namespace object', () => {
   test('a lookalike builder gets no Animus warning or transformation', () => {
     expect(diagnostics.filter((d) => d.component === 'WidePanel')).toEqual([]);
     expect(
-      delivered(true).filter((line) => line.includes('WidePanel'))
+      delivered(false).filter((line) => line.includes('WidePanel'))
     ).toEqual([]);
+    expect(strictFailure()).not.toContain('WidePanel');
     expect(manifest.components).not.toHaveProperty(
       'fixtures/lookalike-child.tsx::WidePanel'
     );

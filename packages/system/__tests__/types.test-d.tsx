@@ -4,6 +4,12 @@ import { Component, forwardRef, useRef } from 'react';
 import { compose, createSystem, createTheme, createTransform } from '../src';
 import { composeWithContext } from '../src/composeWithContext';
 import { createGlobalStyles, createKeyframes, ds, tokens } from './test-system';
+import sharedQuarter, {
+  sharedBoolean,
+  sharedDouble as importedDouble,
+  sharedHalf,
+  sharedNamed,
+} from './transform-callbacks';
 
 import type { LibraryBundle, VocabularyOf } from '../src';
 import type {
@@ -11,7 +17,11 @@ import type {
   SharedConfig,
   VariantPropsOf,
 } from '../src/types/component';
-import type { Prop, ThemedCSSProps } from '../src/types/config';
+import type {
+  CustomPropConfig,
+  Prop,
+  ThemedCSSProps,
+} from '../src/types/config';
 import type {
   EmittedScales,
   EmittedTokenPaths,
@@ -331,6 +341,41 @@ function TypeTests() {
 
   // @ts-expect-error — strict scale: '2.5rem' is not a scale key
   <StrictLooseBox p="2.5rem" />;
+
+  // @ts-expect-error — strict scale: 13 is not a scale key
+  <StrictLooseBox p={13} />;
+  <StrictLooseBox p="inherit" />;
+  <SpaceOnly m="auto" />;
+
+  // A custom prop's named scale types precisely only when the scale is a
+  // literal; the extracted config is strict either way, so a widened scale
+  // admits values the build and runtime omit.
+  const SatisfiesScale = ds
+    .props({
+      size: { property: 'width', scale: 'space' } satisfies CustomPropConfig,
+    })
+    .asElement('div');
+  const PropertyConstScale = ds
+    .props({ size: { property: 'width', scale: 'space' as const } })
+    .asElement('div');
+  const ConstScale = ds
+    .props({ size: { property: 'width', scale: 'space' } } as const)
+    .asElement('div');
+  const LooseScale = ds
+    .props({
+      size: { property: 'width', scale: 'space', strict: false },
+    } as const)
+    .asElement('div');
+
+  <SatisfiesScale size={13} />;
+  <PropertyConstScale size={4} />;
+  // @ts-expect-error — a literal scale keeps the strict token type
+  <PropertyConstScale size={13} />;
+  <ConstScale size={4} />;
+  // @ts-expect-error — a literal scale keeps the strict token type
+  <ConstScale size={13} />;
+  <LooseScale size={13} />;
+  <LooseScale size="2.5rem" />;
 
   <StrictLooseBox gap={4} />;
   <StrictLooseBox gap={16} />;
@@ -1004,6 +1049,108 @@ ds.styles({}).props({
     transform: (val: string | number) => ({ width: `${val}px` }),
   },
 });
+
+// Module-local callback references bind like inline callbacks, keeping each
+// custom prop's own input constraints.
+const localDouble = (val: string | number) => `${Number(val) * 2}px`;
+const localTwice = localDouble;
+function localHalf(val: string | number) {
+  return `${Number(val) / 2}px`;
+}
+const localNamed = createTransform('double', (val) => `${Number(val) * 3}px`);
+const LocalRefs = ds
+  .styles({})
+  .props({
+    wide: { property: 'width', transform: localDouble },
+    tall: { property: 'height', transform: localTwice },
+    thin: { property: 'maxWidth', transform: localHalf },
+    ring: { property: 'marginLeft', transform: localNamed },
+    tone: {
+      property: 'minWidth',
+      scale: { sm: '1px' },
+      transform: localDouble,
+    },
+  })
+  .asElement('div');
+void (<LocalRefs wide={13} tall="2rem" thin={{ _: 4 }} ring="4px" tone="sm" />);
+// @ts-expect-error — a boolean is not a width value
+void (<LocalRefs wide={true} />);
+// @ts-expect-error — a strict scale keeps its token type through a reference
+void (<LocalRefs tone="banana" />);
+// @ts-expect-error — referencing callbacks adds no arbitrary component keys
+void (<LocalRefs widee={13} />);
+const localBoolean = (val: boolean) => String(val);
+ds.styles({}).props({
+  // @ts-expect-error — a referenced callback must accept the transform input
+  bad: { property: 'width', transform: localBoolean },
+});
+
+// Imported callback references bind like local ones, aliases included.
+const ImportedRefs = ds
+  .styles({})
+  .props({
+    wide: { property: 'width', transform: importedDouble },
+    thin: { property: 'maxWidth', transform: sharedHalf },
+    fourth: { property: 'marginRight', transform: sharedQuarter },
+    ring: { property: 'marginLeft', transform: sharedNamed },
+    tone: {
+      property: 'minWidth',
+      scale: { sm: '1px' },
+      transform: importedDouble,
+    },
+  })
+  .asElement('div');
+void (
+  <ImportedRefs wide={13} thin={{ _: 4 }} fourth="1rem" ring="4px" tone="sm" />
+);
+// @ts-expect-error — a boolean is not a width value
+void (<ImportedRefs wide={true} />);
+// @ts-expect-error — a strict scale keeps its token type through an import
+void (<ImportedRefs tone="banana" />);
+// @ts-expect-error — importing callbacks adds no arbitrary component keys
+void (<ImportedRefs widee={13} />);
+ds.styles({}).props({
+  // @ts-expect-error — an imported callback must accept the transform input
+  bad: { property: 'width', transform: sharedBoolean },
+});
+
+// Extensions keep inherited custom props; a redeclared prop replaces the
+// inherited declaration whole, and the parent keeps its own.
+const InheritBase = ds
+  .styles({})
+  .props({
+    wide: { property: 'width', transform: localDouble },
+    tone: { property: 'minWidth', scale: { sm: '1px' } },
+  })
+  .asElement('div');
+const InheritChild = InheritBase.extend()
+  .styles({ display: 'block' })
+  .asElement('div');
+const InheritGrand = InheritChild.extend().asElement('section');
+const InheritOverride = InheritBase.extend()
+  .props({
+    tone: { property: 'minWidth', scale: { lg: '2px' } },
+    extra: { property: 'height', transform: importedDouble },
+  })
+  .asElement('div');
+const InheritOverrideChild = InheritOverride.extend().asElement('div');
+void (<InheritChild wide={13} tone="sm" />);
+void (<InheritGrand wide={{ _: 4 }} tone="sm" />);
+void (<InheritOverride wide={13} tone="lg" extra={2} />);
+void (<InheritOverrideChild wide="2rem" tone="lg" extra={{ _: 1 }} />);
+void (<InheritBase tone="sm" />);
+// @ts-expect-error — an inherited strict scale keeps its token type
+void (<InheritChild tone="banana" />);
+// @ts-expect-error — an inherited callback keeps its input type
+void (<InheritGrand wide={true} />);
+// @ts-expect-error — inheriting adds no arbitrary component keys
+void (<InheritChild widee={13} />);
+// @ts-expect-error — the override replaced the inherited scale
+void (<InheritOverride tone="sm" />);
+// @ts-expect-error — a grandchild inherits the override, not the original
+void (<InheritOverrideChild tone="sm" />);
+// @ts-expect-error — an extension's added prop never reaches its parent
+void (<InheritBase extra={2} />);
 
 const AliasBox = ds
   .styles({ display: 'flex' })

@@ -1,13 +1,19 @@
 //! Self-containment validation for `createTransform` callbacks: every
 //! runtime identifier must resolve inside the callback or to a global.
 
+use std::collections::BTreeSet;
+
 use rustc_hash::FxHashSet;
 
 use oxc::ast::ast::{
     Argument, ArrayExpressionElement, Expression, IdentifierReference, Statement,
 };
-use oxc::semantic::Scoping;
+use oxc::ast::AstKind;
+use oxc::semantic::{Scoping, Semantic};
 use oxc::span::Span;
+use oxc::syntax::scope::ScopeId;
+
+use crate::evaluator::{evaluator_shared_host_globals, evaluator_standard_globals};
 
 const ALLOWED_GLOBALS: &[&str] = &[
     "String",
@@ -35,28 +41,21 @@ const ALLOWED_GLOBALS: &[&str] = &[
 
 /// True when the callback references nothing declared outside itself.
 pub(super) fn validate_self_contained(
-    arg: &Argument<'_>,
+    callback: &Expression<'_>,
     transform_name: &str,
     diagnostics: &mut Vec<String>,
     scoping: &Scoping,
 ) -> bool {
-    match arg {
-        Argument::ArrowFunctionExpression(arrow) => {
-            let invalid =
-                collect_invalid_references_from_body(&arrow.body.statements, arrow.span, scoping);
-            return report_invalid_references(&invalid, transform_name, diagnostics);
-        }
-        Argument::FunctionExpression(func) => {
-            if let Some(body) = &func.body {
-                let invalid =
-                    collect_invalid_references_from_body(&body.statements, func.span, scoping);
-                return report_invalid_references(&invalid, transform_name, diagnostics);
-            }
-        }
-        _ => {}
-    }
-
-    true
+    let (statements, callback_span) = match callback {
+        Expression::ArrowFunctionExpression(arrow) => (&arrow.body.statements, arrow.span),
+        Expression::FunctionExpression(func) => match &func.body {
+            Some(body) => (&body.statements, func.span),
+            None => return true,
+        },
+        _ => return true,
+    };
+    let invalid = collect_invalid_references_from_body(statements, callback_span, scoping);
+    report_invalid_references(&invalid, transform_name, diagnostics)
 }
 
 struct ReferenceValidation<'s> {
@@ -81,7 +80,11 @@ impl ReferenceValidation<'_> {
                 return;
             }
             Some(_) => {}
-            None if ALLOWED_GLOBALS.contains(&ident.name.as_str()) => return,
+            None if ALLOWED_GLOBALS.contains(&ident.name.as_str())
+                || evaluator_shared_host_globals().contains(&ident.name.as_str()) =>
+            {
+                return;
+            }
             None => {}
         }
 
@@ -271,14 +274,90 @@ fn report_invalid_references(
     let mut valid = true;
 
     for name in invalid_names {
-        diagnostics.push(format!(
-            "[bail] Transform '{}': callback references external symbol '{}'. \
-             Transform callbacks must be self-contained (no imports or external references). \
-             Hint: if '{}' is defined in the same file, move it inside the callback body.",
-            transform_name, name, name
-        ));
+        diagnostics.push(external_symbol_diagnostic(transform_name, name));
         valid = false;
     }
 
     valid
+}
+
+fn external_symbol_diagnostic(transform_name: &str, symbol: &str) -> String {
+    format!(
+        "[bail] Transform '{}': callback references external symbol '{}'. \
+         Transform callbacks must be self-contained (no imports or external references). \
+         Hint: if '{}' is defined in the same file, move it inside the callback body.",
+        transform_name, symbol, symbol
+    )
+}
+
+/// The self-containment rule for a configured source, over the complete
+/// semantic model of its standalone wrapper program: unresolved references
+/// are globals and must be in the project list, or a standard global or
+/// shared host function the evaluator supplies (both the build-time
+/// evaluator and the runtime ES module must be able to resolve them);
+/// resolved ones must bind to a symbol declared in `callback_scope` or
+/// below, which excludes the wrapper's own binding. `this` and `arguments`
+/// bind to the nearest non-arrow function: `arguments` may bind to the
+/// callback or a function inside it, `this` only to a function strictly
+/// inside it, because the evaluator calls the callback with `globalThis` as
+/// `this` and the runtime with the slot config.
+pub(super) fn configured_reference_rejections(
+    semantic: &Semantic<'_>,
+    callback_scope: ScopeId,
+    transform_name: &str,
+) -> BTreeSet<String> {
+    let scoping = semantic.scoping();
+    let inside = |scope| {
+        scope == callback_scope || scoping.scope_is_descendant_of(scope, callback_scope)
+    };
+    let binder = |scope| {
+        scoping.scope_ancestors(scope).find(|&s| {
+            let flags = scoping.scope_flags(s);
+            flags.is_function() && !flags.is_arrow()
+        })
+    };
+
+    let mut rejections = BTreeSet::new();
+    for (reference_name, reference_ids) in scoping.root_unresolved_references() {
+        let reference_name = reference_name.as_str();
+        for &reference_id in reference_ids {
+            let scope = scoping.get_reference(reference_id).scope_id();
+            if reference_name == "arguments" {
+                if !binder(scope).is_some_and(inside) {
+                    rejections.insert(format!(
+                        "[bail] Transform '{transform_name}': configured source captures an \
+                         outer 'arguments'"
+                    ));
+                }
+            } else if !ALLOWED_GLOBALS.contains(&reference_name)
+                && !evaluator_standard_globals().contains(&reference_name)
+                && !evaluator_shared_host_globals().contains(&reference_name)
+            {
+                rejections.insert(external_symbol_diagnostic(transform_name, reference_name));
+            }
+        }
+    }
+    for symbol_id in scoping.symbol_ids() {
+        if !inside(scoping.symbol_scope_id(symbol_id))
+            && !scoping.get_resolved_reference_ids(symbol_id).is_empty()
+        {
+            rejections.insert(external_symbol_diagnostic(
+                transform_name,
+                scoping.symbol_name(symbol_id),
+            ));
+        }
+    }
+    for node in semantic.nodes().iter() {
+        if matches!(node.kind(), AstKind::ThisExpression(_))
+            && !binder(node.scope_id())
+                .is_some_and(|s| scoping.scope_is_descendant_of(s, callback_scope))
+        {
+            rejections.insert(format!(
+                "[bail] Transform '{transform_name}': configured source reads 'this' of the \
+                 callback or its surroundings, which the evaluator and the runtime bind \
+                 differently"
+            ));
+        }
+    }
+    rejections
 }

@@ -18,9 +18,12 @@ interface ComponentConfig extends ClassResolverConfig {}
 
 type ElementType = string | React.ComponentType<any>;
 
+type Transform = NonNullable<DynamicPropConfig[string]['transform']>;
+
 type AnimusComponent = ReturnType<typeof forwardRef> & {
   extend: () => never;
   variantDefaults: Readonly<Record<string, string>>;
+  customTransforms: Readonly<Record<string, Transform>>;
 };
 
 /**
@@ -191,10 +194,18 @@ export function createComponent(
     }
   }
 
+  // An extension's extracted config reads the callables it inherits from
+  // here, so they keep the scope of the module that declares them.
+  const customTransforms: Record<string, Transform> = {};
+  for (const [prop, dc] of Object.entries(config.customDynamicConfig ?? {})) {
+    if (dc.transform) customTransforms[prop] = dc.transform;
+  }
+
   return Object.assign(Component, {
     variantDefaults: Object.freeze(variantDefaults) as Readonly<
       Record<string, string>
     >,
+    customTransforms: Object.freeze(customTransforms),
     extend: (): never => {
       throw new Error(
         `Cannot extend extracted component "${className}" at runtime. ` +

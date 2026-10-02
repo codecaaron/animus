@@ -236,7 +236,7 @@ describe('SystemBuilder extend()', () => {
       .build();
 
     expect(JSON.parse(system.toConfig().propConfig)).toEqual({
-      m: { property: 'margin', scale: 'space' },
+      m: { property: 'margin', scale: 'space', strict: true },
     });
   });
 
@@ -436,8 +436,9 @@ describe('SystemBuilder extend()', () => {
       .extend(buildUnitKit('rem'))
       .build();
     const config = system.toConfig();
-    expect(JSON.parse(config.propConfig).size.transform).toBe('unit');
-    expect(config.transforms.unit(4)).toBe('4px');
+    const size = JSON.parse(config.propConfig).size;
+    expect(size.transform).toBe('unit');
+    expect(config.transforms[size.transformId](4)).toBe('4px');
   });
 
   it('coalesces structurally equal inline object and array scales', () => {
@@ -455,18 +456,21 @@ describe('SystemBuilder extend()', () => {
     ).not.toThrow();
   });
 
-  it('rejects two props that serialize different transforms under one name', () => {
+  it('keeps two props with different transforms under one name as separate bindings', () => {
     const first = createTransform('shared', (value) => `A:${value}`);
     const second = createTransform('shared', (value) => `B:${value}`);
-    expect(() =>
-      createSystem()
-        .addProps({
-          first: prop({ transform: first }),
-          second: prop({ transform: second }),
-        })
-        .build()
-        .system.toConfig()
-    ).toThrow(/Transform name "shared".*"first".*"second"/);
+    const config = createSystem()
+      .addProps({
+        first: prop({ transform: first }),
+        second: prop({ transform: second }),
+      })
+      .build()
+      .system.toConfig();
+    const props = JSON.parse(config.propConfig);
+    expect(props.first.transform).toBe('shared');
+    expect(props.second.transform).toBe('shared');
+    expect(config.transforms[props.first.transformId](1)).toBe('A:1');
+    expect(config.transforms[props.second.transformId](1)).toBe('B:1');
   });
 
   it('carries an anonymous transform through extension and applies it identically', () => {
@@ -520,7 +524,7 @@ describe('SystemBuilder extend()', () => {
 
     const consumer = createSystem().extend(system).build().system.toConfig();
     expect(JSON.parse(consumer.propConfig)).toEqual({
-      m: { property: 'margin', scale: 'space' },
+      m: { property: 'margin', scale: 'space', strict: true },
     });
     expect(JSON.parse(consumer.groupRegistry)).toEqual({ space: ['m'] });
   });

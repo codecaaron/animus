@@ -49,6 +49,7 @@ export function makeManifest(
     },
     system_prop_map: {},
     dynamic_props: {},
+    admitted_transforms: {},
     component_fragments: {},
     reverse_provenance: {},
     components: {},

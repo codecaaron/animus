@@ -116,6 +116,7 @@ export function makeManifest(
     },
     system_prop_map: {},
     dynamic_props: {},
+    admitted_transforms: {},
     component_fragments: {},
     reverse_provenance: {},
     components: {},
@@ -296,6 +297,7 @@ const SYSTEM_PROPS_WITNESS = buildSystemPropsModule({
   systemPropMapJson: '{}',
   groupRegistryJson: SYSTEM_CONFIG.groupRegistry,
   dynamicProps: {},
+  admittedTransforms: {},
 });
 
 export function expectedEpoch(

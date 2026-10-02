@@ -1,6 +1,9 @@
+import { createSystem, createTransform } from '@animus-ui/system';
+import { layout } from '@animus-ui/system/groups';
 import { describe, expect, test } from 'vitest';
 
 import { buildDynamicPropConfig } from '../pipeline/dynamic-prop-config';
+import { buildSystemPropsModule } from '../pipeline/system-props-module';
 
 import type { DynamicPropMeta } from '../pipeline/dynamic-prop-config';
 
@@ -31,14 +34,19 @@ describe('buildDynamicPropConfig', () => {
             property: 'margin',
             properties: ['marginLeft', 'marginRight'],
             transformName: 'toSpace',
+            transformId: 'toSpace@system.mx',
             scaleValues: { sm: '4px' },
+            negative: true,
+            strict: true,
+            keywords: ['auto', 'inherit'],
           },
         })
       )
     ).toBe(
       '{"mx":{"varName":"--animus-mx","slotClass":"animus-dyn-mx","property":"margin",' +
         '"properties":["marginLeft","marginRight"],"transformName":"toSpace",' +
-        '"scaleValues":{"sm":"4px"}}}'
+        '"transformId":"toSpace@system.mx","scaleValues":{"sm":"4px"},"negative":true,"strict":true,' +
+        '"keywords":["auto","inherit"]}}'
     );
   });
 
@@ -105,5 +113,81 @@ describe('buildDynamicPropConfig on an engine-shaped manifest block', () => {
         property: 'lineHeight',
       },
     });
+  });
+});
+
+async function evaluateTransforms(
+  admittedTransforms: Record<string, string>
+): Promise<Record<string, (value: string | number) => string | number>> {
+  const source = buildSystemPropsModule({
+    systemPropMapJson: '{}',
+    groupRegistryJson: '{}',
+    dynamicProps: {},
+    admittedTransforms,
+  });
+  const { transforms } = await import(
+    `data:text/javascript,${encodeURIComponent(source)}`
+  );
+  return transforms;
+}
+
+describe('buildSystemPropsModule transforms: the registry the runtime binds by transformId', () => {
+  test('admitted configured transforms arrive as callables', async () => {
+    const fraction = createTransform(
+      'fraction',
+      (value) => `${Number(value) * 50}%`
+    );
+    const config = createSystem()
+      .addGroup('layout', {
+        width: layout.width,
+        gauge: { property: 'width', transform: fraction },
+      })
+      .build()
+      .seal()
+      .toConfig();
+
+    const transforms = await evaluateTransforms(
+      JSON.parse(config.transformSources)
+    );
+    const props = JSON.parse(config.propConfig);
+    const width = transforms[props.width.transformId];
+    const gauge = transforms[props.gauge.transformId];
+
+    expect(width(0.375)).toBe('37.5%');
+    expect(width('3rem')).toBe('3rem');
+    expect(gauge(0.5)).toBe('25%');
+  });
+
+  test('a configured transform named size reaches runtime unchanged', async () => {
+    const size = createTransform('size', (value) => `${Number(value) * 16}rem`);
+    const config = createSystem()
+      .addGroup('layout', { width: { property: 'width', transform: size } })
+      .build()
+      .seal()
+      .toConfig();
+
+    const transforms = await evaluateTransforms(
+      JSON.parse(config.transformSources)
+    );
+    const { transformId } = JSON.parse(config.propConfig).width;
+
+    expect(transforms[transformId](0.375)).toBe('6rem');
+  });
+
+  test('an entry that is not strict-mode module code is omitted, not fatal', async () => {
+    const transforms = await evaluateTransforms({
+      kept: '(v) => v',
+      method: 'method(v) { return v; }',
+      spliced: '(v) => v), (x',
+      comment: '(v) => v // trailing',
+      sloppy:
+        'function anonymous(value\n) {\nvar interface = 1; return value + 010;\n}',
+    });
+
+    expect(Object.keys(transforms)).toEqual(['kept']);
+  });
+
+  test('no admitted transforms exports an empty registry', async () => {
+    expect(await evaluateTransforms({})).toEqual({});
   });
 });

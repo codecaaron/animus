@@ -59,6 +59,8 @@ export interface DevServerAdapter {
    * (`'full-reload'` for a full reload). Optional.
    */
   hotUpdatePaths?(): string[];
+  /** Messages of the error payloads sent to the client, oldest first. */
+  hotErrors?(): string[];
   /**
    * Whether every module node for the given project file holds a transform
    * result, i.e. none is sitting invalidated. Optional.

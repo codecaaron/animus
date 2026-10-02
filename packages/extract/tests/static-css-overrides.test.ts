@@ -89,7 +89,7 @@ const FORCED = JSON.stringify({
     Button: { variants: { variant: ['ghost'] }, states: '*' },
     Spacer: {},
   },
-  systemProps: { p: ['7px'] },
+  systemProps: { p: ['120'] },
 });
 
 describe('static-emission-overrides (real engine)', () => {
@@ -116,7 +116,7 @@ describe('static-emission-overrides (real engine)', () => {
         (d) => d.component === 'Spacer' && d.kind === 'component'
       )
     ).toBe(false);
-    expect(manifest.css).toMatch(/padding:\s*7px/);
+    expect(manifest.css).toMatch(/padding:\s*7\.5rem/);
 
     expect(manifest.report.components_forced).toBe(1);
     expect(manifest.report.variants_forced).toBe(1);

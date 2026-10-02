@@ -21,9 +21,10 @@ const theme = tokens.serialize();
 interface Case {
   id: string;
   files: Array<{ path: string; source: string }>;
-  /** Extra propConfig entries merged over the test-system config. Config
-   *  transform sources win, so a case must use a name the config lacks. */
+  /** Extra propConfig entries merged over the test-system config. */
   configOverride?: JsonObject;
+  /** Configured sources for the override's definitions, by `transformId`. */
+  transformSources?: Record<string, string>;
 }
 
 const chain = (body: string) =>
@@ -78,26 +79,36 @@ const CASES: Case[] = [
       },
     ],
   },
-  {
-    id: 'named-transform-cross-file-collision',
-    files: [
-      {
-        path: 'one.tsx',
-        source:
-          "import { createTransform } from '@animus-ui/system';\nexport const t1 = createTransform('battle', (v) => `${v}px`);\n",
+  // Two project declarations share the readable name of a configured
+  // binding; in either file order, the configured callback alone owns the
+  // system prop and the component prop that names it.
+  ...(
+    [
+      ['named-transform-cross-file-collision', ['one', 'two', 'use']],
+      ['named-transform-cross-file-collision-reversed', ['use', 'two', 'one']],
+    ] as const
+  ).map(([id, order]): Case => {
+    const sources = {
+      one: "import { createTransform } from '@animus-ui/system';\nexport const t1 = createTransform('battle', (v) => `${v}px`);\n",
+      two: "import { createTransform } from '@animus-ui/system';\nexport const t2 = createTransform('battle', (v) => `${v}rem`);\n",
+      use: "import { ds } from '../test-system';\nexport const C = ds.props({ q: { property: 'left', transform: 'battle' } }).asElement('div');\nexport const S = ds.styles({ zq: 3 }).asElement('span');\nexport const App = () => <><C q={3} /><S /></>;\n",
+    };
+    return {
+      id,
+      configOverride: {
+        zq: {
+          property: 'top',
+          transform: 'battle',
+          transformId: 'battle@system.zq',
+        },
       },
-      {
-        path: 'two.tsx',
-        source:
-          "import { createTransform } from '@animus-ui/system';\nexport const t2 = createTransform('battle', (v) => `${v}rem`);\n",
-      },
-      {
-        path: 'use.tsx',
-        source:
-          "import { ds } from '../test-system';\nexport const C = ds.props({ q: { property: 'left', transformName: 'battle' } }).asElement('div');\nexport const App = () => <C q={3} />;\n",
-      },
-    ],
-  },
+      transformSources: { 'battle@system.zq': '(v) => `${v}em`' },
+      files: order.map((name) => ({
+        path: `${name}.tsx`,
+        source: sources[name],
+      })),
+    };
+  }),
   {
     id: 'throwing-transform',
     files: [
@@ -128,14 +139,14 @@ const CASES: Case[] = [
     ] as const
   ).map(([id, body]): Case => {
     const name = `bad_${id.replace(/-/g, '_')}`;
+    const transformId = `${name}@system.zap`;
     return {
       id,
-      configOverride: { zap: { property: 'width', transform: name } },
+      configOverride: {
+        zap: { property: 'width', transform: name, transformId },
+      },
+      transformSources: { [transformId]: body },
       files: [
-        {
-          path: 'reject.tsx',
-          source: `import { createTransform } from '@animus-ui/system';\nexport const bad = createTransform('${name}', ${body});\n`,
-        },
         {
           path: 'a.tsx',
           source: `import { ds } from '../test-system';\nexport const C = ds.styles({ zap: 4 }).asElement('div');\nexport const App = () => <C />;\n`,
@@ -143,10 +154,10 @@ const CASES: Case[] = [
       ],
     };
   }),
-  // Inline transforms ride the dynamic path, so the build-time result gate
-  // never fires; this case pins that.
+  // A known value evaluates through an admitted inline callback, so the
+  // build-time result gate fires as it does for a configured transform.
   {
-    id: 'reject-inline-object-dynamic-path',
+    id: 'reject-inline-object',
     files: [
       {
         path: 'a.tsx',
@@ -171,6 +182,9 @@ function runV2(c: Case): SeamCaseResult {
     configJson,
     groupRegistryJson: config.groupRegistry,
     selectorAliasesJson: config.selectorAliases ?? undefined,
+    transformSourcesJson: c.transformSources
+      ? JSON.stringify(c.transformSources)
+      : undefined,
   });
   const m = JSON.parse(engine.analyze(JSON.stringify(c.files)));
   return { css: m.css ?? '', diagnostics: m.diagnostics ?? [] };

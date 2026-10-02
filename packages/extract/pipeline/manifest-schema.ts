@@ -116,6 +116,10 @@ export interface ProjectManifest {
   /** prop name → value → utility class name. */
   system_prop_map: Record<string, Record<string, string>>;
   dynamic_props: Record<string, DynamicPropMeta>;
+  /** definition key (a prop's `transformId`) → source: the loaded system's
+   *  configured transforms that passed self-containment admission and
+   *  registered for static evaluation. */
+  admitted_transforms: Record<string, string>;
   component_fragments: Record<string, ManifestComponentSheets>;
   /** parent component id → child component ids. */
   reverse_provenance: Record<string, string[]>;

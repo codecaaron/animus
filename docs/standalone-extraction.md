@@ -265,10 +265,30 @@ stderr.
 input could not be read or resolved — an include or entry that does not
 resolve, a configured file that cannot be read, a configured package or
 path that cannot be found, registered vocabulary that never reaches the
-build. Genuine degradation (per-property skips, name collisions,
-unsupported-value fallbacks) stays a warning in every mode. Without
-`--strict` those input failures print as warnings and the build still
-exits 0.
+build. It also fails on **a classified unsupported Animus declaration**:
+a declaration extraction proves comes from `@animus-ui/system` but cannot
+extract, such as `.variant(AXIS)` passing a whole config through an
+identifier, a member-parent `.extend()`, a default-exported chain, or a
+`.props()` custom prop that loses its `transform` callback (a mutable
+reference, an import from a module outside the analyzed sources or through
+`export *`, or any callback reaching `.props()` through a const config), and
+on a system-configured transform rejected before registration. Inside the
+`.props()` object literal, an inline function and a reference to a const
+arrow or function expression, a never-reassigned function declaration, a
+const alias of one of these, or a const created by `createTransform`
+imported from `@animus-ui/system` are supported, declared in the same module
+or imported, through aliases and named re-exports, from an analyzed source
+module, as is a named transform string such as `transform: 'size'`. It also fails on a value that
+names no token on a strict, populated scale (`animus.props.strict-token-miss`);
+that prop's styling is omitted in every mode, and the warning keeps the
+authored value. Each classified diagnostic carries
+a stable `animus.*` code, its file and binding, the reason and a supported
+rewrite. Genuine degradation stays a warning in every mode (per-property
+skips, name collisions, unsupported-value fallbacks, pruning, valid dynamic
+values, raw values on unscaled or `strict: false` props), and so does a declaration whose
+Animus origin cannot be proven. Without `--strict` (or with `strict: false`
+in the config file) all of these print as warnings and the
+build still exits 0.
 
 ### `animus watch`
 

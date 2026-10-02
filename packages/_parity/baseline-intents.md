@@ -218,3 +218,118 @@ committed production/development pair. Ordinary parity runs never write it.
       fixtures. Only the corpus digest moves: every unit stays byte-identical
       in both modes (66/66, zero divergences, empty register), so the refresh
       re-seals the same output surfaces under the new source digest.
+- [x] `negative-token-runtime-admission-20260930` — refresh the two modes
+      after carrying configured `negative: true` into runtime metadata for
+      `m`, `mb`, `ml`, `mr`, `mt`, `mx`, and `my`. The only changed surface is
+      `observables.dynamicPropsJson` in `extract-all`,
+      `extract/custom-props.tsx`, `extract/negative-margin.tsx`,
+      `extract/system-props.tsx`, and `integration/system-props.tsx`.
+      Removing those seven added booleans reproduces every previous unit
+      byte-for-byte in both modes; CSS, generated code, diagnostics and all
+      other metadata remain identical. Native/runtime negative tokens were
+      separately exercised with emitted and inline scales, and browser
+      root-size changes preserve their token relationships. This records
+      metadata delivery, not approval of the pending independent review.
+- [x] `strict-token-miss-omission-20260930` — refresh the two modes and the
+      seam battery after strict, populated scales began omitting values that
+      name no token. Runtime metadata gains `strict: true` for strict scaled
+      props (105 additions per mode in `observables`). Two units author raw
+      colors on the strict `borderTopColor` (`rgb(1 2 3)` in
+      `parity/color-family-pass-through.tsx`, `var(--current-bg)` in
+      `parity/contextual-var-consumer.tsx`); each loses only that declaration
+      and gains one attributable `animus.props.strict-token-miss` warning. The
+      pinned `compose-default`, `duplicate-compose-modules` and
+      `extension-compounds` families authored off-scale `m`/`p` numbers; their
+      sources now spell the literal `margin`/`padding` property, so their
+      recorded output stays byte-identical and only the corpus digest moves.
+      The seam cases `string-passthrough` (`fontSize: '2em'`) and
+      `scale-key-float-string` (`p: '8.0'`, formerly the invalid
+      `padding: 8.0`) record the same omission. A component's custom prop no
+      longer also enters the system utility stream, where it produced invalid
+      rules (`density: compact`, `indent: 2`, `pull: -8`, `width: full`,
+      `height: full`) and system-map entries that could stand in for the
+      custom prop at runtime. `extract-all`, `extract/custom-props.tsx` and
+      `parity/multi-custom.tsx` lose exactly those system rules and their
+      `systemPropMapJson` keys; the seam case
+      `named-transform-cross-file-collision` loses only its stray `q: 3` system
+      rule, and its custom-layer collision result is unchanged. Removing the
+      added `strict` booleans, the omitted declarations, the stray system rules
+      and the new warnings reproduces every previous unit in both modes.
+- [x] `strict-token-miss-repair1-20260930` — refresh the two modes after
+      the strict-scale repair. Strict props now admit only the CSS-wide and
+      per-property keywords their public type admits, so dynamic metadata
+      gains a `keywords` list for strict props (26 in `extract-all`) and
+      identifiers that name no token are omitted with one
+      `animus.props.strict-token-miss` warning each: `color: blue`
+      (`extract/bail.tsx`), `color: dynamic` (`extract/per-property-bail.tsx`),
+      `color: red` (`parity/string-transforms-literal.tsx`) and the
+      undeclared `current-bg` on `borderTopColor` and `bg`
+      (`extract/contextual-vars.tsx`, whose theme declares
+      `background-current`). The previous oracle recorded each as raw,
+      meaningless CSS. A component's custom props now resolve through its own
+      configuration: `parity/multi-custom.tsx` emits per-component
+      `customPropMap` entries instead of a shared union, and every declared
+      custom prop is listed (`"sizing":{}`, `"gap":{}`) so the runtime never
+      resolves it through the system map. `parity/color-family-pass-through.tsx`
+      and `parity/contextual-var-consumer.tsx` restore their literal-color and
+      contextual-variable reads through the unregistered `outlineColor` and
+      `borderBlockStartColor` longhands; their omission warnings disappear.
+      The pinned `string-transforms-literal` family was flipped to
+      `registered-divergence` for this refresh only, following the
+      `register-package-transform-sources-20260809` precedent, and `families.json`
+      is byte-identical to its committed state afterwards.
+- [x] `configured-transform-binding-identity-20261001` — refresh the two
+      modes after configured transforms became bound by definition identity
+      rather than by readable name. Dynamic metadata gains a `transformId`
+      beside `transformName` on the 13 dynamic `size` props of `extract-all`,
+      `extract/system-props.tsx` and `integration/system-props.tsx`, and the
+      generated registry loop reads `v.transformId` instead of
+      `v.transformName` in every unit that binds the registry (`extract-all`,
+      `extract/custom-props.tsx`, `extract/negative-margin.tsx`,
+      `extract/system-props.tsx`, `integration/system-props.tsx`). In
+      `integration/transforms.tsx` the project declaration
+      `createTransform('size', …)` no longer replaces the configured `size`
+      binding: `Card`'s `width: 4` resolves through the configured callback
+      to `4px` instead of the hijacked `8px` in its CSS, sheets and
+      component fragments. That unit still requires a real callback
+      evaluation (the raw value is `width: 4`); the callback-specific `8px`
+      proof now binds the doubling callback through a configured system in
+      the integration suite. The seam battery's 13 `reject-*` cases supply
+      their callback through the configured channel instead of a project
+      declaration and record byte-identical output.
+      `named-transform-cross-file-collision` named its transform through the
+      unrecognized `transformName` field and recorded an untransformed
+      `left: 3`; it now binds `battle` as a configured definition beside two
+      same-named project declarations and records the configured result for
+      the system prop (`top: 3em`) and the component prop that names it
+      (`left: 3em`). The new `-reversed` case records the same output with
+      the files in reverse order. Removing the `transformId` fields and
+      restoring the loop field reproduces every other unit; no diagnostic
+      changes.
+- [x] `static-custom-callback-evaluation-20261001` — record the seam battery
+      after admitted component callbacks began evaluating known values during
+      extraction. In the seam battery only the three inline-callback cases
+      move, and every other case stays byte-identical. `inline-transform-multiply`
+      gains a custom-layer utility rule `width: 16` for its literal `4`
+      beside its unchanged runtime slot. `throwing-transform` takes the
+      existing build-time throw policy: one warning naming the inline
+      transform and prop, and the raw value `width: 4` as fallback.
+      `reject-inline-object-dynamic-path` is renamed `reject-inline-object`:
+      its literal now reaches the build-time result gate, so it records the
+      existing `error` diagnostic for an `object` result and no declaration
+      for that value, while the slot rules stay. The two oracle modes move in
+      `extract/custom-props.tsx` and `extract-all` only: `Card`'s literal
+      `sizing={100}` now evaluates through its TypeScript-annotated inline
+      callback, adding one custom-layer rule `flex-basis: 100px` and the
+      matching `"100"` entry in `Card`'s `customPropMap`; the runtime
+      callback and slot for `sizing={dynamicSize}` are unchanged. Removing
+      that rule and map entry reproduces both previous units.
+- [x] `typed-callback-lookup-repair-20261001` — refresh the two modes after
+      component-callback static lookups became keyed by the authored value's
+      type. Only the transformed code of `extract/custom-props.tsx` and
+      `extract-all` moves, in both modes: `Card`'s replacement gains
+      `"typedCustomProps":["sizing"]`, because `sizing` is the one callback
+      prop with an extracted class; its `"100"` key is unchanged, since a
+      number's typed key is its decimal text. CSS, sheets, observables and
+      every seam case stay byte-identical. Removing the field reproduces both
+      previous units.

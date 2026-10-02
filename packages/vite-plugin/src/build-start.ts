@@ -126,9 +126,10 @@ export async function runBuildStart(
   t0 = performance.now();
   await ctx.analyzeIngested({
     rawEntries,
-    // Seed before the analysis gate: a failed non-strict buildStart must
-    // leave HMR the full corpus, not one assembled from the first edit.
-    beforeAnalysis: (accepted) => {
+    // Seed before the parse and analysis gates: a failed non-strict
+    // buildStart must leave HMR the full corpus, not one assembled from the
+    // first edit.
+    afterIngestion: (accepted) => {
       if (!ctx.isProd) {
         ctx.mutateFileCache((cache) => {
           cache.clear();

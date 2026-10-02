@@ -114,6 +114,9 @@ export interface ExtractFileFacts {
   imports: ExtractImportFact[];
   exports: ExtractExportFact[];
   parseDiagnostics: string[];
+  /** The parser stopped at an unrecoverable error and yielded no chains,
+   *  imports or exports. Absent when the parse completed. */
+  parsePanicked?: boolean;
 }
 
 export interface ExtractFactsResult {
@@ -177,6 +180,16 @@ export interface SourceIngestionResult {
   /** Ownership per original, including originals with zero analysis paths. */
   ownership: Record<string, SourceEntryOwnership>;
   diagnostics: SourceIngestionDiagnostic[];
+  /** Originals owning an analysis entry whose parse aborted; see
+   *  `SourceCorpus.rejection`. Absent when every parse completed. */
+  abortedParses?: AbortedParse[];
+}
+
+export interface AbortedParse {
+  originalPath: string;
+  /** Hash of the original bytes whose parse aborted. */
+  hash: string;
+  messages: string[];
 }
 
 export interface CachedFileFacts {
@@ -507,6 +520,7 @@ export async function ingestSourceEntries(
   }
 
   const facts = collectFileFacts(analysisEntries, options);
+  const abortedParses: AbortedParse[] = [];
   for (const [analysisPath, file] of Object.entries(facts.files)) {
     const originalPath = analysisOwner.get(analysisPath) ?? analysisPath;
     for (const message of file.parseDiagnostics) {
@@ -515,6 +529,13 @@ export async function ingestSourceEntries(
         message,
         originalPath,
         analysisPath,
+      });
+    }
+    if (file.parsePanicked) {
+      abortedParses.push({
+        originalPath,
+        hash: ownership[originalPath].originalHash,
+        messages: file.parseDiagnostics,
       });
     }
   }
@@ -562,7 +583,14 @@ export async function ingestSourceEntries(
     addAdaptedEntries(original.path, result.entries);
   }
 
-  return { originalEntries, analysisEntries, ownership, diagnostics };
+  const result: SourceIngestionResult = {
+    originalEntries,
+    analysisEntries,
+    ownership,
+    diagnostics,
+  };
+  if (abortedParses.length > 0) result.abortedParses = abortedParses;
+  return result;
 }
 
 /**

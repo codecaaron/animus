@@ -11,6 +11,7 @@ import {
   getSharedExternalDirs,
   getSharedExternalEntries,
   replacementEpochPath,
+  resetAnalysisStartedPromise,
   sessionArtifactDir,
   setAnalysisStartedPromise,
   setSharedEngine,
@@ -318,13 +319,20 @@ export class AnimusWebpackPlugin {
         this.extractAliases(_compiler);
 
         if (!this.initialized) {
-          const existing = getAnalysisStartedPromise();
-          if (existing) {
-            await existing;
-          } else {
-            const promise = this.session.runFullPipeline();
-            setAnalysisStartedPromise(promise);
-            await promise;
+          let startup = getAnalysisStartedPromise();
+          if (!startup) {
+            startup = this.session.runFullPipeline();
+            setAnalysisStartedPromise(startup);
+          }
+          try {
+            await startup;
+          } catch (err) {
+            // A rejected startup must not answer every later watchRun: the
+            // next one re-runs it against the repaired sources.
+            if (getAnalysisStartedPromise() === startup) {
+              resetAnalysisStartedPromise();
+            }
+            throw err;
           }
           this.initialized = true;
           this.lastBuiltEpoch = getReplacementEpoch();

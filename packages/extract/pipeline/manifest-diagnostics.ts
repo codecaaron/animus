@@ -9,8 +9,10 @@ export type ManifestDiagnostic = {
    *  `external-token-candidate` diagnostics. */
   token?: string;
   code?: string;
-  /** `"error"` fails strict builds; `"warn"`/absent never does. Read from
-   *  `DIAGNOSTIC_SEVERITY`, never chosen per emission site. */
+  /** `"error"` fails strict builds; `"warn"`/absent never does. A property
+   *  of the code, never chosen per emission site: `DIAGNOSTIC_SEVERITY` for
+   *  codes minted here, the engine's `diagnostic_severity_for_code` for its
+   *  own. */
   severity?: string;
 };
 
@@ -125,8 +127,9 @@ export const VOCABULARY_COLLISION = 'animus.vocabulary.collision';
 export const VOCABULARY_LEGACY_VERB = 'animus.vocabulary.legacy-verb';
 
 /**
- * A lost or unreadable configured input is `error` — what `--strict`
- * refuses; degradation that still emits complete output is `warn`.
+ * A lost or unreadable configured input, or a classified unsupported Animus
+ * declaration, is `error` — what `--strict` refuses; degradation that still
+ * emits complete output is `warn`.
  */
 type DiagnosticSeverity = 'error' | 'warn';
 

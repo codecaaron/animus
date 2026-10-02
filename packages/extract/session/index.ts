@@ -62,6 +62,7 @@ export {
   getSharedExternalDirs,
   getSharedExternalEntries,
   getSharedSystemProps,
+  resetAnalysisStartedPromise,
   setAnalysisStartedPromise,
   setSharedEngine,
 } from './singleton';

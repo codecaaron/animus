@@ -4,12 +4,12 @@ import { Base } from './parent';
 
 export const IconButton = Base.extend()
   .styles({ borderRadius: 4 })
-  .compound({ tone: 'bold', size: 'sm' }, { p: 6 })
+  .compound({ tone: 'bold', size: 'sm' }, { padding: 6 })
   .asElement('button');
 
 export const FabButton = IconButton.extend()
   .styles({ position: 'fixed' })
-  .compound({ tone: 'muted', size: 'lg' }, { p: 14 })
+  .compound({ tone: 'muted', size: 'lg' }, { padding: 14 })
   .asElement('button');
 
 export const ChildApp = () => (
