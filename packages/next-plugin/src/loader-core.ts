@@ -1,4 +1,7 @@
+import { contentHash } from '@animus-ui/extract/pipeline';
 import { ANIMUS_CSS_MODULE_ID } from '@animus-ui/extract/session';
+
+import type { ProjectManifest } from '@animus-ui/extract/pipeline';
 
 export interface LoaderPolicyOptions {
   strict?: boolean;
@@ -38,6 +41,68 @@ function isCssImportTarget(
     return normalized === normalizePath(cssImportTarget);
   }
   return ROOT_ENTRY_RE.test(normalized);
+}
+
+type ExtensionProvenance = Pick<ProjectManifest, 'components' | 'files'>;
+
+/** Each file's transitive cross-file ancestors, built once per published
+ *  manifest: loaders ask for every module. */
+let ancestry: { json: string; byFile: Map<string, string[]> } | null = null;
+
+function indexAncestry(manifestJson: string): Map<string, string[]> {
+  // SAFETY: the engine's own manifest; only `components` and `files` are
+  // read, and a missing entry below is a genuine miss.
+  const { components = {}, files = {} } = JSON.parse(
+    manifestJson
+  ) as Partial<ExtensionProvenance>;
+  const byFile = new Map<string, string[]>();
+  for (const [filename, ids] of Object.entries(files)) {
+    const ancestors = new Set<string>();
+    const queue = [...ids];
+    const seen = new Set(queue);
+    for (let i = 0; i < queue.length; i++) {
+      const parentId = components[queue[i]]?.extends_from;
+      if (!parentId || seen.has(parentId)) continue;
+      seen.add(parentId);
+      queue.push(parentId);
+      const parentFile = components[parentId]?.file;
+      if (parentFile && parentFile !== filename) ancestors.add(parentFile);
+    }
+    if (ancestors.size > 0) byFile.set(filename, [...ancestors].sort());
+  }
+  return byFile;
+}
+
+/**
+ * The other files declaring a component that one of `filename`'s components
+ * extends, transitively. An extension captures its parent's callables when
+ * its module evaluates, so it must re-evaluate whenever one of these does.
+ */
+export function extendedFiles(
+  manifestJson: string,
+  filename: string
+): readonly string[] {
+  if (ancestry?.json !== manifestJson) {
+    ancestry = { json: manifestJson, byFile: indexAncestry(manifestJson) };
+  }
+  return ancestry.byFile.get(filename) ?? [];
+}
+
+/**
+ * Emitted code that changes whenever an extended file's analyzed source does,
+ * so a host re-delivers the extension in the same update as its parent.
+ * Hosts keep an unchanged module out of a hot update, and Turbopack ignores
+ * comment-only differences, so this must be a statement.
+ */
+export function extensionLineage(
+  files: readonly string[],
+  analyzedHashes: ReadonlyMap<string, string> | null | undefined
+): string {
+  if (files.length === 0) return '';
+  const lineage = files
+    .map((file) => `${file}\0${analyzedHashes?.get(file) ?? ''}`)
+    .join('\0');
+  return `\nvoid "animus-lineage:${contentHash(lineage)}";\n`;
 }
 
 export function transformWithManifest(args: {

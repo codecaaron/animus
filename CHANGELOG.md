@@ -226,8 +226,9 @@ the parent component the extension names, so they keep the parent module's
 closures and private bindings. Calling `.props()` on an extension now adds to
 the inherited props instead of replacing them all; redeclaring a prop
 replaces that one prop, for the extension and its own extensions only. In
-Vite development, editing the parent module, including state private to it,
-updates every module that extends it. As with the authored `.extend()` call,
+Vite and in Next.js webpack and Turbopack development, editing the parent
+module, including state private to it, updates every module that extends
+it. As with the authored `.extend()` call,
 the parent module must initialize before the extending one, and a client
 module's parent with callbacks cannot be extended from a server module.
 
@@ -311,6 +312,9 @@ edits together without a restart. A Vite production build, `animus build`
 and the first analysis of a Next config fail naming the file — under
 Turbopack, fix the file and start Next again — while `animus watch` and a
 running Next watcher keep their last-good artifacts and report the failure.
+Under Next webpack the failure, at startup or later, is an error of that
+compilation and the watch continues, so the repair publishes without a
+restart; previously a failure there stopped webpack from watching.
 This applies with `strict` omitted, `false` or `true`. Parse diagnostics the
 parser recovers from still only warn, and MDX or Svelte preprocessing
 failures keep their existing quarantine.

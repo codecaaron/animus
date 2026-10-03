@@ -596,3 +596,244 @@ describe('style-only end-to-end through the real session writer', () => {
     expect(second.code).toContain('/* via ');
   });
 });
+
+describe('extensions re-deliver with the generation of the file they extend', () => {
+  const CHILD = 'src/Child.tsx';
+  const PARENT = 'src/Parent.tsx';
+  const CHILD_SOURCE =
+    "import { Parent } from './Parent';\nexport const Child = Parent.extend().asElement('div');\n";
+  const parentSource = (step: number) =>
+    `const STEP = ${step};\nexport const Parent = animus.props({ w: { property: 'width', transform: (v) => v * STEP } }).asElement('div');\n`;
+
+  /** Each replayed generation is distinct, and Child extends Parent. */
+  function lineageManifest(filesJson: string): string {
+    return JSON.stringify(
+      makeManifest({
+        css: `/* replayed ${contentHash(filesJson)} */`,
+        components: {
+          [`${PARENT}::Parent`]: makeComponent(PARENT),
+          [`${CHILD}::Child`]: {
+            ...makeComponent(CHILD),
+            extends_from: `${PARENT}::Parent`,
+          },
+        },
+        files: {
+          [PARENT]: [`${PARENT}::Parent`],
+          [CHILD]: [`${CHILD}::Child`],
+        },
+      })
+    );
+  }
+
+  function generationFiles(step: number) {
+    return [
+      { path: PARENT, source: parentSource(step) },
+      { path: CHILD, source: CHILD_SOURCE },
+    ];
+  }
+
+  /** Generation 1 holds STEP 3 while the parent on disk already reads 4. */
+  function seedEditedParent() {
+    const root = makeTempRoot('animus-turbo-lineage-');
+    const { sessionDir } = writeGeneration(root, {
+      generation: 1,
+      files: generationFiles(3),
+    });
+    mkdirSync(join(root, 'src'), { recursive: true });
+    writeFileSync(join(root, PARENT), parentSource(4));
+    return { root, sessionDir };
+  }
+
+  beforeEach(() => {
+    vi.stubEnv('NODE_ENV', 'development');
+    mocks.analyzeProject.mockImplementation(lineageManifest);
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  test('an unchanged extension waits for the commit covering its edited parent and depends on the parent file', async () => {
+    const { root, sessionDir } = seedEditedParent();
+    writeStatus(sessionDir, {
+      state: 'analyzing',
+      pending: [[PARENT, contentHash(parentSource(4))]],
+    });
+
+    const pending = runLoader({ root, relPath: CHILD, source: CHILD_SOURCE });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    writeGeneration(root, { generation: 2, files: generationFiles(4) });
+    writeStatus(sessionDir, { state: 'idle', pending: [] });
+    const { code, dependencies } = await pending;
+
+    const covering = buildInputs(generationFiles(4)).filesJson;
+    expect(code).toContain(lineageManifest(covering));
+    expect(dependencies).toContain(join(root, PARENT));
+  });
+
+  test('with no attempt observing the edited parent, the last commit serves and the next commit re-fires the extension', async () => {
+    const { root, sessionDir } = seedEditedParent();
+    writeStatus(sessionDir, { state: 'idle', pending: [] });
+
+    const { code, dependencies } = await runLoader({
+      root,
+      relPath: CHILD,
+      source: CHILD_SOURCE,
+    });
+
+    expect(code).toContain(
+      lineageManifest(buildInputs(generationFiles(3)).filesJson)
+    );
+    expect(dependencies).toEqual(
+      expect.arrayContaining([
+        join(root, PARENT),
+        analysisCommitPath(sessionDir),
+        analysisStatusPath(sessionDir),
+      ])
+    );
+  });
+
+  const BASE = 'src/Base.tsx';
+  const UNRELATED = 'src/Unrelated.tsx';
+  const BASE_SOURCE =
+    "export const Base = animus.props({ h: { property: 'height' } }).asElement('div');\n";
+  const PARENT_ON_BASE = `import { Base } from './Base';\nconst STEP = 4;\nexport const Parent = Base.extend().props({ w: { property: 'width', transform: (v) => v * STEP } }).asElement('div');\n`;
+  const unrelatedSource = (n: number) => `export const u = ${n};\n`;
+
+  /** One manifest for every generation: only analyzed content can move the
+   *  extension's output. Parent extends Base once its source says so. */
+  function fixedManifest(filesJson: string): string {
+    const onBase = filesJson.includes('Base.extend()');
+    return JSON.stringify(
+      makeManifest({
+        components: {
+          [`${BASE}::Base`]: makeComponent(BASE),
+          [`${PARENT}::Parent`]: {
+            ...makeComponent(PARENT),
+            extends_from: onBase ? `${BASE}::Base` : null,
+          },
+          [`${CHILD}::Child`]: {
+            ...makeComponent(CHILD),
+            extends_from: `${PARENT}::Parent`,
+          },
+        },
+        files: {
+          [BASE]: [`${BASE}::Base`],
+          [PARENT]: [`${PARENT}::Parent`],
+          [CHILD]: [`${CHILD}::Child`],
+        },
+      })
+    );
+  }
+
+  function fixedGeneration(parent: string, unrelated: number) {
+    return [
+      { path: BASE, source: BASE_SOURCE },
+      { path: PARENT, source: parent },
+      { path: CHILD, source: CHILD_SOURCE },
+      { path: UNRELATED, source: unrelatedSource(unrelated) },
+    ];
+  }
+
+  /** Commits `files` as `generation` with their sources on disk. */
+  function commit(
+    root: string,
+    generation: number,
+    files: ReturnType<typeof fixedGeneration>
+  ) {
+    mkdirSync(join(root, 'src'), { recursive: true });
+    for (const file of files) writeFileSync(join(root, file.path), file.source);
+    return writeGeneration(root, { generation, files });
+  }
+
+  const childAt = (root: string) =>
+    runLoader({ root, relPath: CHILD, source: CHILD_SOURCE });
+
+  test("with a byte-identical manifest, the extension module changes with its parent's analyzed content and not with an unrelated file's", async () => {
+    mocks.analyzeProject.mockImplementation(fixedManifest);
+    const root = makeTempRoot('animus-turbo-lineage-');
+    commit(root, 1, fixedGeneration(parentSource(3), 1));
+    const first = await childAt(root);
+    commit(root, 2, fixedGeneration(parentSource(4), 1));
+    const parentEdited = await childAt(root);
+    commit(root, 3, fixedGeneration(parentSource(4), 2));
+    const unrelatedEdited = await childAt(root);
+
+    const manifests = new Set(
+      mocks.analyzeProject.mock.results.map((result) => result.value)
+    );
+    expect(manifests.size).toBe(1);
+    expect(parentEdited.code).not.toBe(first.code);
+    expect(unrelatedEdited.code).toBe(parentEdited.code);
+  });
+
+  test("an extension that waited emits the adopted generation's lineage, not the one it started from", async () => {
+    mocks.analyzeProject.mockImplementation(fixedManifest);
+    const fresh = makeTempRoot('animus-turbo-lineage-');
+    commit(fresh, 1, fixedGeneration(parentSource(3), 1));
+    const before = await childAt(fresh);
+    commit(fresh, 2, fixedGeneration(parentSource(4), 1));
+    const after = await childAt(fresh);
+
+    const root = makeTempRoot('animus-turbo-lineage-');
+    const { sessionDir } = commit(root, 1, fixedGeneration(parentSource(3), 1));
+    writeFileSync(join(root, PARENT), parentSource(4));
+    writeStatus(sessionDir, {
+      state: 'analyzing',
+      pending: [[PARENT, contentHash(parentSource(4))]],
+    });
+    const waited = childAt(root);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    commit(root, 2, fixedGeneration(parentSource(4), 1));
+    writeStatus(sessionDir, { state: 'idle', pending: [] });
+
+    const { code } = await waited;
+    expect(after.code).not.toBe(before.code);
+    expect(code).toBe(after.code);
+  });
+
+  test('an ancestor first named by the adopted generation becomes a dependency', async () => {
+    mocks.analyzeProject.mockImplementation(fixedManifest);
+    const root = makeTempRoot('animus-turbo-lineage-');
+    const { sessionDir } = commit(root, 1, fixedGeneration(parentSource(3), 1));
+    writeFileSync(join(root, PARENT), PARENT_ON_BASE);
+    writeStatus(sessionDir, {
+      state: 'analyzing',
+      pending: [[PARENT, contentHash(PARENT_ON_BASE)]],
+    });
+    const waited = childAt(root);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    commit(root, 2, fixedGeneration(PARENT_ON_BASE, 1));
+    writeStatus(sessionDir, { state: 'idle', pending: [] });
+
+    const { dependencies } = await waited;
+    expect(dependencies).toEqual(
+      expect.arrayContaining([join(root, PARENT), join(root, BASE)])
+    );
+  });
+
+  test.each(['test', undefined, 'production', 'staging'])(
+    'outside development (NODE_ENV=%s) the extension neither waits, depends on its parent nor carries lineage',
+    async (value) => {
+      mocks.analyzeProject.mockImplementation(fixedManifest);
+      const root = makeTempRoot('animus-turbo-lineage-');
+      const { sessionDir } = commit(
+        root,
+        1,
+        fixedGeneration(parentSource(3), 1)
+      );
+      writeFileSync(join(root, PARENT), parentSource(4));
+      writeStatus(sessionDir, {
+        state: 'analyzing',
+        pending: [[PARENT, contentHash(parentSource(4))]],
+      });
+      vi.stubEnv('NODE_ENV', value);
+
+      const { code, dependencies } = await childAt(root);
+      const plain = `${CHILD_SOURCE}/* via ${fixedManifest(
+        buildInputs(fixedGeneration(parentSource(3), 1)).filesJson
+      )} */`;
+      expect(code).toBe(plain);
+      expect(dependencies).not.toContain(join(root, PARENT));
+    }
+  );
+});

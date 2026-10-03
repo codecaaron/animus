@@ -463,19 +463,33 @@ describe('needBuild fan-out after a replacements-epoch move (design D1)', () => 
   });
 });
 
-describe('watchRun startup after a rejected first analysis', () => {
-  test('a later watchRun analyzes the repaired source instead of the rejected startup', async () => {
+/** A compilation whose errors fail its build. */
+interface ReportingCompilation {
+  errors: Error[];
+}
+
+/** Runs the plugin's own-compilation handlers on a fresh compilation. */
+function startCompilation(harness: ReturnType<typeof createCompiler>) {
+  const compilation: ReportingCompilation = { errors: [] };
+  harness.thisCompilationHandlers.forEach((fn) => fn(compilation));
+  return compilation;
+}
+
+describe('watchRun after a rejected analysis', () => {
+  const BROKEN =
+    "export const Button = animus.styles(({ margin: 8 }).asElement('button');\n";
+
+  test('a rejected startup fails that compilation instead of the watch, and a later watchRun analyzes the repair and rebuilds every animus module', async () => {
     const root = createProject();
     const button = join(root, 'src', 'Button.tsx');
-    writeFileSync(
-      button,
-      "export const Button = animus.styles(({ margin: 8 }).asElement('button');\n"
-    );
+    writeFileSync(button, BROKEN);
     mocks.extractFacts.mockImplementation(parserStoppingAt('(('));
     const harness = createCompiler(root);
     applyPlugin(new AnimusWebpackPlugin(OPTIONS), harness.compiler);
 
-    await expect(harness.watchRunHandlers[0](harness.compiler)).rejects.toThrow(
+    await harness.watchRunHandlers[0](harness.compiler);
+    const failed = startCompilation(harness);
+    expect(failed.errors.map((error) => error.message).join('\n')).toMatch(
       /analysis not published: .*src\/Button\.tsx/
     );
     expect(mocks.analyzeProject).not.toHaveBeenCalled();
@@ -488,5 +502,26 @@ describe('watchRun startup after a rejected first analysis', () => {
     });
     expect(mocks.analyzeProject).toHaveBeenCalledTimes(1);
     expect(getReplacementEpoch()).not.toBeNull();
+    const recovered = startCompilation(harness);
+    expect(recovered.errors).toEqual([]);
+    // Modules built while no generation existed passed through untransformed.
+    expect(
+      needBuildVerdict(
+        harness.normalModule.tapsFor(recovered)[0],
+        animusModule(root)
+      )
+    ).toEqual({ err: null, forced: true });
+  });
+
+  test('a production run still rejects', async () => {
+    const root = createProject();
+    writeFileSync(join(root, 'src', 'Button.tsx'), BROKEN);
+    mocks.extractFacts.mockImplementation(parserStoppingAt('(('));
+    const harness = createCompiler(root);
+    applyPlugin(new AnimusWebpackPlugin(OPTIONS), harness.compiler);
+
+    await expect(harness.runHandlers[0](harness.compiler)).rejects.toThrow(
+      /analysis not published: .*src\/Button\.tsx/
+    );
   });
 });

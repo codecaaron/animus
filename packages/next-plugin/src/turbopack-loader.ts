@@ -14,9 +14,13 @@ import {
   sessionArtifactDir,
 } from '@animus-ui/extract/session';
 import * as nodeFs from 'fs';
-import { relative } from 'path';
+import { join, relative } from 'path';
 
-import { transformWithManifest } from './loader-core';
+import {
+  extendedFiles,
+  extensionLineage,
+  transformWithManifest,
+} from './loader-core';
 
 import type { LoaderContextBase, LoaderPolicyOptions } from './loader-core';
 import type {
@@ -242,6 +246,14 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/** Whether the attempt has seen `file` at `hash` (its current content). */
+const observedPending = (
+  status: AnalysisStatus,
+  file: string,
+  hash: string
+): boolean =>
+  (status.pending ?? []).some(([key, seen]) => key === file && seen === hash);
+
 const ACTIVE_STATES: ReadonlySet<AnalysisStatus['state']> = new Set([
   'starting',
   'debouncing',
@@ -292,13 +304,16 @@ async function runLoader(ctx: LoaderContext, source: string): Promise<string> {
   }
 
   const filename = relative(rootDir, ctx.resourcePath);
-  /** Registers commit and status as dependencies before throwing: the runner
-   *  sends dependency IPC ahead of the error, so a landing commit re-fires.
-   *  Failure paths only — successful paths register neither, so this must not
-   *  be hoisted out of the failure helper. */
-  const coverageFailure = (message: string): Error => {
+  /** Makes a landing commit re-fire this module. Only paths still waiting
+   *  on an analysis register it: one that delivered never re-fires. */
+  const awaitNextCommit = (): void => {
     ctx.addDependency?.(commitPath);
     ctx.addDependency?.(statusPath);
+  };
+  /** Registers before throwing: the runner sends dependency IPC ahead of the
+   *  error. */
+  const coverageFailure = (message: string): Error => {
+    awaitNextCommit();
     return new Error(message);
   };
 
@@ -310,6 +325,31 @@ async function runLoader(ctx: LoaderContext, source: string): Promise<string> {
       engineApi: engineApiImpl,
       opts,
     });
+
+  const deliver = async (covering: Hydration): Promise<string> => {
+    if (process.env.NODE_ENV === 'production') {
+      return transform(covering.manifestJson);
+    }
+    const extended = extendedFiles(covering.manifestJson, filename);
+    for (const file of extended) ctx.addDependency?.(join(rootDir, file));
+    const generation = await coverExtendedFiles({
+      covering,
+      extended,
+      filename,
+      rootDir,
+      sessionDir,
+      sessionId,
+      awaitNextCommit,
+    });
+    const lineage =
+      generation === covering
+        ? extended
+        : extendedFiles(generation.manifestJson, filename);
+    return (
+      transform(generation.manifestJson) +
+      extensionLineage(lineage, generation.fileHashes)
+    );
+  };
 
   const outcome = hydrateSession(sessionDir, sessionId);
   if (outcome.kind === 'foreign') {
@@ -326,11 +366,11 @@ async function runLoader(ctx: LoaderContext, source: string): Promise<string> {
   if (outcome.kind === 'ok') {
     const analyzedHash = outcome.hydration.fileHashes.get(filename);
     if (analyzedHash === undefined) {
-      return transform(outcome.hydration.manifestJson);
+      return deliver(outcome.hydration);
     }
     sourceHash = contentHash(source);
     if (analyzedHash === sourceHash) {
-      return transform(outcome.hydration.manifestJson);
+      return deliver(outcome.hydration);
     }
   }
 
@@ -341,7 +381,7 @@ async function runLoader(ctx: LoaderContext, source: string): Promise<string> {
     sessionId,
     sessionDir,
     coverageFailure,
-    transform,
+    deliver,
   });
 }
 
@@ -352,7 +392,7 @@ async function awaitCoverage(args: {
   sessionId: string;
   sessionDir: string;
   coverageFailure: (message: string) => Error;
-  transform: (manifestJson: string) => string;
+  deliver: (covering: Hydration) => Promise<string>;
 }): Promise<string> {
   const {
     source,
@@ -361,7 +401,7 @@ async function awaitCoverage(args: {
     sessionId,
     sessionDir,
     coverageFailure,
-    transform,
+    deliver,
   } = args;
   const noDeadlineCap =
     Date.now() + CATCHUP_NO_DEADLINE_CAP_MS + CATCHUP_WAIT_MARGIN_MS;
@@ -377,7 +417,7 @@ async function awaitCoverage(args: {
     if (outcome.kind === 'ok') {
       const analyzedHash = outcome.hydration.fileHashes.get(filename);
       if (analyzedHash !== undefined && analyzedHash === sourceHash) {
-        return transform(outcome.hydration.manifestJson);
+        return deliver(outcome.hydration);
       }
     }
     const commitPresent = outcome.kind === 'ok';
@@ -407,10 +447,7 @@ async function awaitCoverage(args: {
       );
     }
     if (commitPresent) {
-      const observed = (status.pending ?? []).some(
-        ([key, hash]) => key === filename && hash === sourceHash
-      );
-      if (!observed) {
+      if (!observedPending(status, filename, sourceHash)) {
         throw coverageFailure(
           `ANIMUS_ANALYSIS_NOT_SCHEDULED: the active analysis attempt (${status.attemptId}) has not observed ${filename} at its current content`
         );
@@ -427,6 +464,64 @@ async function awaitCoverage(args: {
       throw coverageFailure(
         `ANIMUS_ANALYSIS_CATCHING_UP: ${filename} changed after the committed analysis; timed out waiting for the commit to advance — retrying on the next invalidation`
       );
+    }
+    await sleep(poll);
+    poll = CATCHUP_POLL_MAX_MS;
+  }
+}
+
+/**
+ * A commit covering the extended files' current content, so an extension and
+ * the parent it captures come from one generation. Waits only while an active
+ * attempt has observed that content; otherwise keeps `covering` and re-fires
+ * on the next commit. Never throws: an extended file's failure is reported by
+ * its own module.
+ */
+async function coverExtendedFiles(args: {
+  covering: Hydration;
+  extended: readonly string[];
+  filename: string;
+  rootDir: string;
+  sessionDir: string;
+  sessionId: string;
+  awaitNextCommit: () => void;
+}): Promise<Hydration> {
+  const { covering, extended, filename, rootDir, sessionDir, sessionId } = args;
+  const current: Array<[string, string]> = [];
+  for (const file of extended) {
+    const text = readFileOrNull(join(rootDir, file));
+    if (text !== null) current.push([file, contentHash(text)]);
+  }
+  const ownHash = covering.fileHashes.get(filename);
+  const covers = (hydration: Hydration): boolean =>
+    hydration.fileHashes.get(filename) === ownHash &&
+    current.every(([file, hash]) => hydration.fileHashes.get(file) === hash);
+  if (covers(covering)) return covering;
+
+  const noDeadlineCap =
+    Date.now() + CATCHUP_NO_DEADLINE_CAP_MS + CATCHUP_WAIT_MARGIN_MS;
+  let poll = CATCHUP_POLL_INITIAL_MS;
+  for (;;) {
+    const outcome = hydrateSession(sessionDir, sessionId);
+    const latest = outcome.kind === 'ok' ? outcome.hydration : covering;
+    if (covers(latest)) return latest;
+    const status = readStatus(sessionDir);
+    const now = Date.now();
+    const waiting =
+      status !== null &&
+      status.sessionId === sessionId &&
+      ACTIVE_STATES.has(status.state) &&
+      current.every(
+        ([file, hash]) =>
+          latest.fileHashes.get(file) === hash ||
+          observedPending(status, file, hash)
+      ) &&
+      (hasReadableDeadline(status)
+        ? now <= status.deadlineAt
+        : now <= noDeadlineCap);
+    if (!waiting) {
+      args.awaitNextCommit();
+      return covering;
     }
     await sleep(poll);
     poll = CATCHUP_POLL_MAX_MS;

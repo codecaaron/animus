@@ -7,9 +7,13 @@ import {
   replacementEpochPath,
 } from '@animus-ui/extract/session';
 import { existsSync } from 'fs';
-import { relative } from 'path';
+import { join, relative } from 'path';
 
-import { transformWithManifest } from './loader-core';
+import {
+  extendedFiles,
+  extensionLineage,
+  transformWithManifest,
+} from './loader-core';
 
 import type { LoaderContextBase } from './loader-core';
 
@@ -23,7 +27,8 @@ export default function animusLoader(
   this: LoaderContext,
   source: string
 ): string {
-  if (this.mode !== 'production' && this.addDependency !== undefined) {
+  const watching = this.mode !== 'production';
+  if (watching && this.addDependency !== undefined) {
     const sessionDir = getSessionArtifactDir();
     if (sessionDir) {
       const epochPath = replacementEpochPath(sessionDir);
@@ -53,11 +58,20 @@ export default function animusLoader(
     }
   }
 
-  return transformWithManifest({
+  const code = transformWithManifest({
     source,
     filename,
     manifestJson,
     engineApi,
     opts: this.getOptions?.() ?? {},
   });
+  if (!watching || this.addDependency === undefined) return code;
+
+  // watchRun analyzed the edited files before this compilation, so these
+  // hashes are the same generation as the manifest.
+  const extended = extendedFiles(manifestJson, filename);
+  for (const file of extended) {
+    this.addDependency(join(this.rootContext, file));
+  }
+  return code + extensionLineage(extended, getAnalyzedHashes());
 }

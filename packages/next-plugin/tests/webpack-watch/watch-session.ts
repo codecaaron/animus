@@ -95,7 +95,10 @@ interface HarnessWebpackConfig {
   mode?: 'development';
 }
 
-type FixtureWebpack = (config: HarnessWebpackConfig) => HarnessCompiler;
+type FixtureWebpack = ((config: HarnessWebpackConfig) => HarnessCompiler) & {
+  /** Both Next fixture bundles expose it on the factory. */
+  HotModuleReplacementPlugin: new () => object;
+};
 
 interface FixtureWebpackModuleCandidate {
   init?: object | null;

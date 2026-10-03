@@ -69,6 +69,7 @@ const agentScratchDirectories = [
   '.playwright-mcp/**',
   '.repowise/**',
   '.roo/**',
+  '.scratch/**',
   '.windsurf/**',
 ] as const;
 
