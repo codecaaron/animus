@@ -5,6 +5,7 @@ import { createRoot } from 'react-dom/client';
 import { renderToString } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
 
+import { childRefOf } from '../src/runtime';
 import { ds } from './test-system';
 
 const Box = ds
@@ -241,5 +242,24 @@ describe('asChild', () => {
     } finally {
       errors.mockRestore();
     }
+  });
+});
+
+describe('asChild child ref read', () => {
+  it("reads a React 18 element's ref without touching the props.ref warning getter", () => {
+    const elementRef = createRef<HTMLElement>();
+    let getterReads = 0;
+    const props = Object.defineProperty({}, 'ref', {
+      get() {
+        getterReads += 1;
+        return undefined;
+      },
+      configurable: true,
+    });
+
+    const ref = childRefOf({ type: 'span', key: null, props, ref: elementRef });
+
+    expect(ref).toBe(elementRef);
+    expect(getterReads).toBe(0);
   });
 });
