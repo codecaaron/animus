@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# ─── Fixed-version release for all publishable packages ───────────
+# ─── Tag-only release for all publishable packages ────────────────
+#
+# Tags HEAD with the next version and pushes main and the tag. CI's
+# publish job sets every package version from the tag, so no
+# package.json is edited here.
 #
 # Usage:
 #   bun release <bump> [--channel <name>] [--dry-run]
@@ -19,7 +23,7 @@ set -euo pipefail
 #   bun release graduate         → 0.2.0-next.3 → 0.2.0
 #   bun release premajor --channel beta  → 0.1.0 → 1.0.0-beta.0
 
-PACKAGES=(properties system extract vite-plugin next-plugin cli unplugin)
+REMOTE="origin"
 DEFAULT_CHANNEL="next"
 
 # ─── Arg parsing ──────────────────────────────────────────────────
@@ -143,30 +147,34 @@ esac
 echo "Next version:    $NEXT"
 echo ""
 
+TAG="v$NEXT"
+
+if git rev-parse --quiet --verify "refs/tags/$TAG" >/dev/null; then
+  echo "Error: tag $TAG already exists locally"
+  exit 1
+fi
+
+if ! REMOTE_TAGS=$(git ls-remote --tags "$REMOTE" "refs/tags/$TAG"); then
+  echo "Error: could not list tags on $REMOTE"
+  exit 1
+fi
+if [[ -n "$REMOTE_TAGS" ]]; then
+  echo "Error: tag $TAG already exists on $REMOTE"
+  exit 1
+fi
+
 if $DRY_RUN; then
-  echo "[dry-run] Would update ${#PACKAGES[@]} packages and tag v$NEXT"
+  echo "[dry-run] Would tag $(git rev-parse --short HEAD) as $TAG and push main and $TAG to $REMOTE"
   exit 0
 fi
 
-# ─── Update package.json versions ─────────────────────────────────
-for pkg in "${PACKAGES[@]}"; do
-  PKG_JSON="packages/$pkg/package.json"
-  if [[ ! -f "$PKG_JSON" ]]; then
-    echo "Warning: $PKG_JSON not found, skipping"
-    continue
-  fi
-
-  # Use jq to update version field only — workspace:* deps stay as-is
-  # (CI resolves workspace:* to concrete versions at publish time)
-  jq --arg v "$NEXT" '.version = $v' "$PKG_JSON" > tmp.json && mv tmp.json "$PKG_JSON"
-  echo "  $pkg → $NEXT"
-done
-
-# ─── Commit, tag, push ───────────────────────────────────────────
-git add packages/*/package.json
-git commit -m "release: v$NEXT"
-git tag "v$NEXT"
-git push && git push --tags
+# ─── Tag, push ────────────────────────────────────────────────────
+git tag "$TAG"
+if ! git push --atomic "$REMOTE" main "$TAG"; then
+  git tag -d "$TAG" >/dev/null
+  echo "Error: push failed — removed the local $TAG tag"
+  exit 1
+fi
 
 echo ""
-echo "Released v$NEXT — CI will publish to npm"
+echo "Released $TAG — CI will set package versions and publish to npm"
