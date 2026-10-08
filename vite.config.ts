@@ -179,6 +179,8 @@ export default defineConfig({
       '**/target/**',
       '**/tmp/**',
       'legacy/**',
+      // vinext typegen rewrites the root copy with double-quoted imports.
+      'next-env.d.ts',
       'e2e/next-app/next-env.d.ts',
       'e2e/next16-app/next-env.d.ts',
       'e2e/vinext-app/next-env.d.ts',
@@ -301,6 +303,8 @@ export default defineConfig({
       '**/target/**',
       '**/tmp/**',
       'legacy/**',
+      // vinext typegen rewrites the root copy with double-quoted imports.
+      'next-env.d.ts',
       // Next regenerates this on every build, so formatting it re-drifts.
       'e2e/next16-app/next-env.d.ts',
       // vinext typegen rewrites this each build with double-quoted imports
