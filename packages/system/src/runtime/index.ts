@@ -61,7 +61,7 @@ function forwardProps(
  * keeps it on the element and guards `props.ref` with a warning getter.
  * Reading the descriptor never invokes either getter.
  */
-export function childRefOf(
+function childRefOf(
   child: ReactElement<Record<string, any>> & { ref?: Ref<unknown> }
 ): Ref<unknown> | undefined {
   const propRef = Object.getOwnPropertyDescriptor(child.props, 'ref');
