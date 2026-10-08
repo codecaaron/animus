@@ -277,6 +277,10 @@ const STRICT_TOKEN_MISS: &str = "animus.props.strict-token-miss";
 /// host where no runtime slot exists (style blocks, variants, states,
 /// global styles): its declaration falls back to the raw value.
 const STATIC_EVALUATION_UNAVAILABLE: &str = "animus.transform.static-evaluation-unavailable";
+/// A warning, never escalated by build strictness: system props on a tag
+/// whose import resolves to no extracted component still reach the browser
+/// through the dynamic-slot fallback, without their static utility classes.
+const UNATTRIBUTED_SYSTEM_PROPS: &str = "animus.usage.unattributed-system-props";
 
 pub(crate) fn diagnostic_severity_for_code(code: &str) -> &'static str {
     match code {
@@ -1529,6 +1533,125 @@ fn resolve_usage_identity(
             .unwrap_or_default();
     }
     ids_by_binding.get(local).cloned().unwrap_or_default()
+}
+
+/// One warning per tag and prop set for a capitalised tag that `file` imports
+/// from an analyzed module and that resolves to no extracted component,
+/// naming only the configured system props that declaration really loses
+/// (`LostThrough`). An import outside the analysis never warns.
+fn unattributed_system_props(
+    file: &str,
+    ff: &FileFacts,
+    unattributed_imports: &[&str],
+    files: &BTreeMap<String, FileFacts>,
+    inputs: &CssInputs,
+    extracted: &dyn Fn(&str, &str) -> bool,
+) -> Vec<CssDiagnostic> {
+    let mut reported: FxHashSet<(&str, Vec<&str>)> = FxHashSet::default();
+    let mut warnings = Vec::new();
+    for usage in ff.usage_for_analysis() {
+        let UsageFact::Element { tag: TagFact::Ident(tag), attrs, .. } = usage else {
+            continue;
+        };
+        if !tag.starts_with(|c: char| c.is_ascii_uppercase())
+            || !unattributed_imports.contains(&tag.as_str())
+        {
+            continue;
+        }
+        let Some(import) = ff.imports.iter().find(|import| import.local == *tag) else {
+            continue;
+        };
+        let Some(module) = resolve_import_source(file, &import.source, files, inputs) else {
+            continue;
+        };
+        let (declaration_file, declaration) =
+            follow_reexports(module, import.imported.clone(), files, inputs);
+        let Some(lost) = LostThrough::of(&declaration_file, &declaration, files, extracted) else {
+            continue;
+        };
+        let mut props: Vec<&str> = attrs
+            .iter()
+            .filter(|attr| !attr.skip && inputs.config.contains_key(&attr.name))
+            .map(|attr| attr.name.as_str())
+            .filter(|prop| lost.loses(prop))
+            .collect();
+        props.sort_unstable();
+        props.dedup();
+        if props.is_empty() {
+            continue;
+        }
+        let listed = props.join(", ");
+        if !reported.insert((tag.as_str(), props)) {
+            continue;
+        }
+        let how = match lost {
+            LostThrough::Alias(target) => format!(
+                "an alias of the extracted component {target} that usage tracking does not follow"
+            ),
+            LostThrough::Spread { target, .. } => format!(
+                "a function component that forwards them by spread to the extracted component {target}"
+            ),
+        };
+        warnings.push(diagnostic(
+            file,
+            tag,
+            "warn",
+            format!(
+                "<{tag}> in {file} passes system props {listed}, but it resolves to \
+                 {declaration} in {declaration_file}, {how}, so those props get no static \
+                 utility classes and fall back to dynamic slots — render the extracted \
+                 component itself, or list the values under staticCss.systemProps"
+            ),
+            Some(UNATTRIBUTED_SYSTEM_PROPS),
+        ));
+    }
+    warnings
+}
+
+/// How a declaration that usage identity misses still reaches an extracted
+/// component. Any other declaration (a function component that names its
+/// props, renders nothing extracted, or is not a component) loses nothing
+/// the extractor can see.
+enum LostThrough<'f> {
+    /// `const X = Recipe` or `Object.assign(Recipe, …)`: no function
+    /// boundary, so every prop reaches the recipe.
+    Alias(&'f str),
+    /// A function component spreading its props, or a rest element of them,
+    /// into the recipe; props it destructures by name never reach it.
+    Spread { target: &'f str, named: &'f [String] },
+}
+
+impl<'f> LostThrough<'f> {
+    fn of(
+        file: &str,
+        name: &str,
+        files: &'f BTreeMap<String, FileFacts>,
+        extracted: &dyn Fn(&str, &str) -> bool,
+    ) -> Option<Self> {
+        let ff = files.get(file)?;
+        let local = ff
+            .exports
+            .iter()
+            .find(|e| e.exported == name && e.source.is_none())
+            .and_then(|e| e.local.as_deref())
+            .unwrap_or(name);
+        if let Some(target) = ff.aliases.get(local).or_else(|| ff.assigned_aliases.get(local)) {
+            return extracted(file, target).then_some(Self::Alias(target));
+        }
+        let forwarding = ff.props_forwarding.get(local)?;
+        let target = forwarding.targets.iter().find(|target| extracted(file, target))?;
+        Some(Self::Spread {
+            target,
+            named: &forwarding.named,
+        })
+    }
+
+    fn loses(&self, prop: &str) -> bool {
+        match self {
+            Self::Alias(_) => true,
+            Self::Spread { named, .. } => !named.iter().any(|name| name == prop),
+        }
+    }
 }
 
 /// The maps the per-file JSX filter consults. All four share one lookup-key
@@ -2863,10 +2986,14 @@ fn run_with_system_floor(
                     .filter(|c| c.descriptor.extractable)
                     .map(|c| (c.descriptor.binding.as_str(), false)),
             );
+        let mut unattributed_imports: Vec<&str> = Vec::new();
         for (name, from_import) in bound_names {
             let ids =
                 resolve_usage_identity(path, name, files, inputs, &evaluated_ids, &ids_by_binding);
             if ids.is_empty() {
+                if from_import {
+                    unattributed_imports.push(name);
+                }
                 // Dropping only the attribution entry keeps the tag readable
                 // as a component while nothing may be attributed to it.
                 if from_import && global_lookup.attribution.contains_key(name) {
@@ -2884,6 +3011,18 @@ fn run_with_system_floor(
                 .get_or_insert_with(|| global_lookup.clone())
                 .publish(name, &ids, &usage_sources);
         }
+        let extracted = |file: &str, name: &str| {
+            !resolve_usage_identity(file, name, files, inputs, &evaluated_ids, &ids_by_binding)
+                .is_empty()
+        };
+        diagnostics.extend(unattributed_system_props(
+            path,
+            ff,
+            &unattributed_imports,
+            files,
+            inputs,
+            &extracted,
+        ));
         let lookup = file_lookup.as_ref().unwrap_or(&global_lookup);
 
         let mut usage_result = crate::usage_facts::filter_usage_scan(
@@ -6023,6 +6162,174 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         }
     }
 
+    fn analyze_with_logical_space(entries: &[(&str, &str)]) -> CssOutput {
+        let mut inputs = CssInputs::from_json(
+            None,
+            None,
+            None,
+            Some(
+                r#"{"marginInlineStart": {"property": "marginInlineStart", "scale": "space"},
+                    "size": {"property": "width"}, "position": {"property": "position"}}"#,
+            ),
+            Some(r#"{"space": ["marginInlineStart"]}"#),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            false,
+        )
+        .unwrap();
+        inputs.theme.insert("space.8".into(), "0.5rem".into());
+        analyze(entries, &inputs)
+    }
+
+    fn unattributed(out: &CssOutput) -> Vec<&CssDiagnostic> {
+        out.diagnostics
+            .iter()
+            .filter(|d| d.code.as_deref() == Some(UNATTRIBUTED_SYSTEM_PROPS))
+            .collect()
+    }
+
+    #[test]
+    fn system_props_on_a_tag_that_resolves_to_no_component_warn_once() {
+        let recipe = "export const ButtonRecipe = ds.styles({}).system({ space: true }).asElement('button');\n";
+        let out = analyze_with_logical_space(&[
+            ("recipe.tsx", recipe),
+            (
+                "wrapper.tsx",
+                "import { ButtonRecipe } from './recipe';\n\
+                 export const Button = (props) => <ButtonRecipe {...props} />;\n",
+            ),
+            ("index.ts", "export { Button } from './wrapper';\n"),
+            (
+                "app.tsx",
+                "import { Button } from './index';\n\
+                 export const App = () => <><Button marginInlineStart={8} /><Button marginInlineStart={8} /></>;\n",
+            ),
+        ]);
+        let warnings = unattributed(&out);
+        assert_eq!(warnings.len(), 1, "{:?}", out.diagnostics);
+        let warning = warnings[0];
+        assert_eq!(warning.severity.as_deref(), Some("warn"));
+        assert_eq!(warning.file, "app.tsx");
+        for named in ["app.tsx", "<Button>", "Button in wrapper.tsx", "marginInlineStart"] {
+            assert!(warning.message.contains(named), "missing {named}: {}", warning.message);
+        }
+    }
+
+    #[test]
+    fn renamed_and_assigned_recipes_warn_but_resolved_and_outside_tags_do_not() {
+        let recipe = "const ButtonRecipe = ds.styles({}).system({ space: true }).asElement('button');\n";
+        for declaration in [
+            "export const Button = ButtonRecipe;",
+            "export const Button = Object.assign(ButtonRecipe, { Icon: ButtonRecipe });",
+        ] {
+            let source = format!("{recipe}{declaration}\n");
+            let out = analyze_with_logical_space(&[
+                ("recipe.tsx", source.as_str()),
+                ("app.tsx", "import { Button } from './recipe';\nexport const App = () => <Button marginInlineStart={8} />;\n"),
+            ]);
+            assert_eq!(unattributed(&out).len(), 1, "{declaration}: {:?}", out.diagnostics);
+        }
+        let recipe = "export const ButtonRecipe = ds.styles({}).system({ space: true }).asElement('button');\n";
+        for app in [
+            "import { ButtonRecipe as Button } from './recipe';\nexport const App = () => <Button marginInlineStart={8} />;\n",
+            "import { Dialog } from '@ark-ui/react';\nexport const App = () => <Dialog marginInlineStart={8} />;\n",
+            "import { Button } from './wrapper';\nexport const App = () => <Button onClick={go} />;\n",
+        ] {
+            let out = analyze_with_logical_space(&[
+                ("recipe.tsx", recipe),
+                ("wrapper.tsx", "export const Button = (props) => <button {...props} />;\n"),
+                ("app.tsx", app),
+            ]);
+            assert!(unattributed(&out).is_empty(), "{app}: {:?}", out.diagnostics);
+        }
+    }
+
+    #[test]
+    fn wrappers_that_spread_their_props_warn_only_for_props_they_do_not_name() {
+        let recipe = "export const ButtonRecipe = ds.styles({}).system({ space: true }).asElement('button');\n";
+        for (wrapper, usage, warns) in [
+            (
+                "export const Button = ({ tone, ...rest }) => <ButtonRecipe {...rest} />;",
+                "<Button tone=\"loud\" marginInlineStart={8} />",
+                true,
+            ),
+            (
+                "export const Button = forwardRef((props, ref) => <ButtonRecipe ref={ref} {...props} />);",
+                "<Button marginInlineStart={8} />",
+                true,
+            ),
+            (
+                "export const Button = ({ marginInlineStart, ...rest }) => <ButtonRecipe {...rest} />;",
+                "<Button marginInlineStart={8} />",
+                false,
+            ),
+            (
+                "export const Button = (props) => <ButtonRecipe title={props.title} />;",
+                "<Button marginInlineStart={8} />",
+                false,
+            ),
+        ] {
+            let source = format!("import {{ ButtonRecipe }} from './recipe';\n{wrapper}\n");
+            let app = format!("import {{ Button }} from './wrapper';\nexport const App = () => {usage};\n");
+            let out = analyze_with_logical_space(&[
+                ("recipe.tsx", recipe),
+                ("wrapper.tsx", source.as_str()),
+                ("app.tsx", app.as_str()),
+            ]);
+            assert_eq!(unattributed(&out).len(), usize::from(warns), "{wrapper}: {:?}", out.diagnostics);
+        }
+    }
+
+    /// The showcase's CopyButton, Drawer and Tooltip: function components
+    /// that name the passed prop and spread nothing into what they render.
+    #[test]
+    fn components_that_name_their_props_never_warn() {
+        let out = analyze_with_logical_space(&[
+            (
+                "copy-button.tsx",
+                "const CopyButtonBase = ds.styles({}).variant({ prop: 'size', variants: { sm: {}, md: {} } }).asElement('button');\n\
+                 export function CopyButton({ text, size = 'sm' }) {\n\
+                   return <CopyButtonBase type=\"button\" size={size}>{text}</CopyButtonBase>;\n\
+                 }\n",
+            ),
+            (
+                "drawer.tsx",
+                "const DrawerPanel = ds.styles({}).variant({ prop: 'position', variants: { left: {}, right: {} } }).asElement('div');\n\
+                 export const DrawerSlots = compose({ Root: DrawerPanel }, { shared: { position: true } });\n\
+                 export function Drawer({ open, position = 'left', children }) {\n\
+                   if (!open) return null;\n\
+                   return createPortal(createElement(DrawerSlots.Root, { position }, children), document.body);\n\
+                 }\n",
+            ),
+            (
+                "tooltip.tsx",
+                "const TooltipRoot = ds.styles({}).variant({ prop: 'size', variants: { sm: {}, lg: {} } }).asElement('span');\n\
+                 const TooltipFamily = composeWithContext({ Root: TooltipRoot }, { shared: { size: true }, name: 'Tooltip' });\n\
+                 export const Tooltip = forwardRef(({ children, content, size = 'sm' }, ref) => (\n\
+                   <TooltipFamily.Root ref={ref} size={size}>{children}</TooltipFamily.Root>\n\
+                 ));\n",
+            ),
+            (
+                "app.tsx",
+                "import { CopyButton } from './copy-button';\n\
+                 import { Drawer } from './drawer';\n\
+                 import { Tooltip } from './tooltip';\n\
+                 export const App = () => <>\n\
+                   <CopyButton text=\"x\" size=\"md\" />\n\
+                   <Drawer open position=\"right\" />\n\
+                   <Tooltip content=\"x\" size=\"lg\" />\n\
+                 </>;\n",
+            ),
+        ]);
+        assert!(unattributed(&out).is_empty(), "{:?}", out.diagnostics);
+    }
+
     /// `a.tsx` and `b.tsx` each export a `Card` family (and `b.tsx` a
     /// `Panel` one), but only `a.tsx`'s Body takes space props: every way of
     /// reaching `a.tsx`'s family must give `p={8}` its utility class,
@@ -7493,5 +7800,4 @@ export const App = () => <><Quiet inl={10} /><Base k={10} /><Kid lift={10} /></>
             assert!(out.css.contains("column-gap: 5;"), "{}", out.css);
         }
     }
-
 }

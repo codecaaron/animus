@@ -122,6 +122,178 @@ pub fn collect_namespace_imports(program: &Program<'_>) -> std::collections::BTr
     namespaces
 }
 
+/// A top-level function component that forwards its props by spread:
+/// `(props) => <Recipe {...props} />` or `({ a, ...rest }) => <Recipe {...rest} />`.
+#[derive(Debug, Clone, Default)]
+pub struct PropsForwarding {
+    /// Props the parameter destructures by name, which the spread never
+    /// carries.
+    pub named: Vec<String>,
+    /// The tags that receive the spread, as written (`Recipe`, `Ns.Item`).
+    pub targets: Vec<String>,
+}
+
+/// Top-level function components, plain or inside `forwardRef`/`memo`,
+/// keyed by binding (`default` for a default export), that spread their
+/// props parameter or its rest element into a JSX tag.
+pub fn collect_props_forwarding(
+    program: &Program<'_>,
+) -> std::collections::BTreeMap<String, PropsForwarding> {
+    use oxc::ast::ast::ExportDefaultDeclarationKind;
+    let mut components: Vec<(&str, Option<ComponentFunction<'_, '_>>)> = Vec::new();
+    for stmt in &program.body {
+        match stmt {
+            Statement::ExportNamedDeclaration(export) => {
+                if let Some(declaration) = &export.declaration {
+                    components.extend(declared_components(declaration));
+                }
+            }
+            Statement::ExportDefaultDeclaration(export) => match &export.declaration {
+                ExportDefaultDeclarationKind::FunctionDeclaration(function) => {
+                    components.push(("default", ComponentFunction::of_function(function)));
+                }
+                kind => {
+                    if let Some(expr) = kind.as_expression() {
+                        components.push(("default", ComponentFunction::of_expression(expr)));
+                    }
+                }
+            },
+            stmt => {
+                if let Some(declaration) = stmt.as_declaration() {
+                    components.extend(declared_components(declaration));
+                }
+            }
+        }
+    }
+    components
+        .into_iter()
+        .filter_map(|(name, function)| Some((name.to_string(), props_forwarding(function?)?)))
+        .collect()
+}
+
+/// The bindings a top-level declaration gives, each with its component
+/// function when it is one.
+fn declared_components<'b, 'a>(
+    declaration: &'b oxc::ast::ast::Declaration<'a>,
+) -> Vec<(&'b str, Option<ComponentFunction<'b, 'a>>)> {
+    use oxc::ast::ast::Declaration;
+    match declaration {
+        Declaration::FunctionDeclaration(function) => function
+            .id
+            .as_ref()
+            .map(|id| (id.name.as_str(), ComponentFunction::of_function(function)))
+            .into_iter()
+            .collect(),
+        Declaration::VariableDeclaration(variables) => variables
+            .declarations
+            .iter()
+            .filter_map(|declarator| {
+                let name = declarator.id.get_identifier_name()?;
+                Some((name.as_str(), ComponentFunction::of_expression(declarator.init.as_ref()?)))
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// A component function's first parameter and body.
+struct ComponentFunction<'b, 'a> {
+    props: Option<&'b oxc::ast::ast::FormalParameter<'a>>,
+    body: &'b oxc::ast::ast::FunctionBody<'a>,
+}
+
+impl<'b, 'a> ComponentFunction<'b, 'a> {
+    fn of_function(function: &'b oxc::ast::ast::Function<'a>) -> Option<Self> {
+        Some(Self {
+            props: function.params.items.first(),
+            body: function.body.as_deref()?,
+        })
+    }
+
+    /// An arrow or function expression, or one passed to `forwardRef` or
+    /// `memo` (as `React.forwardRef` too), through type-only wrappers.
+    fn of_expression(expr: &'b Expression<'a>) -> Option<Self> {
+        match crate::chain_walk::unwrap_type_assertions(expr) {
+            Expression::ArrowFunctionExpression(arrow) => Some(Self {
+                props: arrow.params.items.first(),
+                body: &arrow.body,
+            }),
+            Expression::FunctionExpression(function) => Self::of_function(function),
+            Expression::CallExpression(call) => {
+                let wrapper = match &call.callee {
+                    Expression::Identifier(id) => id.name.as_str(),
+                    Expression::StaticMemberExpression(member) => member.property.name.as_str(),
+                    _ => return None,
+                };
+                if !matches!(wrapper, "forwardRef" | "memo") {
+                    return None;
+                }
+                Self::of_expression(call.arguments.first()?.as_expression()?)
+            }
+            _ => None,
+        }
+    }
+}
+
+fn props_forwarding(function: ComponentFunction<'_, '_>) -> Option<PropsForwarding> {
+    use oxc::ast::ast::BindingPattern;
+    let mut pattern = &function.props?.pattern;
+    while let BindingPattern::AssignmentPattern(assignment) = pattern {
+        pattern = &assignment.left;
+    }
+    let (named, spread) = match pattern {
+        BindingPattern::BindingIdentifier(id) => (Vec::new(), id.name.to_string()),
+        BindingPattern::ObjectPattern(object) => {
+            let rest = object.rest.as_ref()?;
+            let BindingPattern::BindingIdentifier(rest) = &rest.argument else {
+                return None;
+            };
+            let named = object
+                .properties
+                .iter()
+                .filter_map(|property| property.key.static_name().map(|key| key.to_string()))
+                .collect();
+            (named, rest.name.to_string())
+        }
+        _ => return None,
+    };
+    let mut scan = SpreadTargets {
+        spread: &spread,
+        targets: Vec::new(),
+    };
+    scan.visit_function_body(function.body);
+    (!scan.targets.is_empty()).then_some(PropsForwarding {
+        named,
+        targets: scan.targets,
+    })
+}
+
+struct SpreadTargets<'s> {
+    spread: &'s str,
+    targets: Vec<String>,
+}
+
+impl<'a> Visit<'a> for SpreadTargets<'_> {
+    fn visit_jsx_opening_element(&mut self, elem: &JSXOpeningElement<'a>) {
+        let spreads = elem.attributes.iter().any(|attr| {
+            matches!(attr, JSXAttributeItem::SpreadAttribute(spread)
+                if matches!(crate::chain_walk::unwrap_type_assertions(&spread.argument),
+                    Expression::Identifier(id) if id.name == self.spread))
+        });
+        let tag = match &elem.name {
+            JSXElementName::IdentifierReference(id) => Some(id.name.to_string()),
+            JSXElementName::MemberExpression(member) => jsx_member_path(member),
+            _ => None,
+        };
+        if let (true, Some(tag)) = (spreads, tag) {
+            if !self.targets.contains(&tag) {
+                self.targets.push(tag);
+            }
+        }
+        oxc::ast_visit::walk::walk_jsx_opening_element(self, elem);
+    }
+}
+
 /// Collect import facts from top-level statements.
 pub fn collect_import_facts(program: &Program<'_>) -> Vec<ImportFact> {
     let mut out = Vec::new();

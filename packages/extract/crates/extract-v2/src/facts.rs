@@ -248,6 +248,13 @@ pub struct FileFacts {
     /// and `const` only.
     #[serde(skip)]
     pub aliases: BTreeMap<String, String>,
+    /// Top-level `const X = Object.assign(Y, …)` declarations: X → Y. Usage
+    /// identity does not follow them.
+    #[serde(skip)]
+    pub assigned_aliases: BTreeMap<String, String>,
+    /// Top-level function components that spread their props into a tag.
+    #[serde(skip)]
+    pub props_forwarding: BTreeMap<String, crate::usage_facts::PropsForwarding>,
     /// Top-level `const` declarations → the identifier their initializer is
     /// built from (`const ds = bundle.seal()` → `bundle`), assertion-peeled.
     #[serde(skip)]
@@ -439,8 +446,26 @@ fn expression_root(expr: &Expression<'_>) -> Option<String> {
 #[derive(Default)]
 struct ConstInitializerFacts {
     aliases: BTreeMap<String, String>,
+    assigned: BTreeMap<String, String>,
     roots: BTreeMap<String, String>,
     objects: BTreeMap<String, BTreeMap<String, String>>,
+}
+
+/// `Y` in `Object.assign(Y, …)`.
+fn object_assign_target<'a>(init: &'a Expression<'_>) -> Option<&'a str> {
+    let Expression::CallExpression(call) = crate::chain_walk::unwrap_type_assertions(init) else {
+        return None;
+    };
+    let Expression::StaticMemberExpression(callee) = &call.callee else {
+        return None;
+    };
+    if !callee.object.is_specific_id("Object") || callee.property.name != "assign" {
+        return None;
+    }
+    match crate::chain_walk::unwrap_type_assertions(call.arguments.first()?.as_expression()?) {
+        Expression::Identifier(target) => Some(target.name.as_str()),
+        _ => None,
+    }
 }
 
 /// Top-level `const` initializer facts: bare-identifier aliases, each
@@ -463,6 +488,9 @@ fn collect_const_initializers(program: &Program<'_>) -> ConstInitializerFacts {
                 crate::chain_walk::unwrap_type_assertions(init)
             {
                 facts.aliases.insert(name.to_string(), target.name.to_string());
+            }
+            if let Some(target) = object_assign_target(init) {
+                facts.assigned.insert(name.to_string(), target.to_string());
             }
             if let Some(root) = expression_root(init) {
                 facts.roots.insert(name.to_string(), root);
@@ -972,6 +1000,8 @@ pub(crate) fn extract_file_facts_from_static_maps(
         compose,
         compose_callees_in_use,
         aliases: const_initializers.aliases,
+        assigned_aliases: const_initializers.assigned,
+        props_forwarding: crate::usage_facts::collect_props_forwarding(program),
         declaration_roots: const_initializers.roots,
         object_members: const_initializers.objects,
         member_parent_extensions,

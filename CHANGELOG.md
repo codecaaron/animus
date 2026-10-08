@@ -68,6 +68,17 @@ changes shape to match. It now maps each consuming file to the member tags
 written there and the component each one renders, for example
 `{ "app.tsx": { "Panel.Body": "card.tsx::Body" } }`.
 
+**System props that lose their component are reported.** When a tag such
+as `<Button marginInlineStart={8} />` is imported from an analyzed module
+but resolves to no extracted component, for example a function-component
+wrapper, `export const Button = ButtonRecipe` or
+`Object.assign(ButtonRecipe, …)`, its system props get no static utility
+classes and fall back to dynamic slots. The build now warns with
+`animus.usage.unattributed-system-props`, naming the file, the tag, the
+declaration it resolved to and the props. It is a warning, so `strict`
+builds still pass. Tags imported from packages outside the analysis, such
+as a UI library's components, never trigger it.
+
 **Finite declaration scales style several properties through one prop.**
 `createTheme().addDeclarationScale({ name, values })` registers named keys
 whose values are complete, flat records of CSS declarations. Bind a scale
