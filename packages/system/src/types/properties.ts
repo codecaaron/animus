@@ -1,5 +1,6 @@
 import {
   Globals,
+  ObsoleteProperties,
   StandardProperties,
   SvgProperties,
   VendorProperties,
@@ -8,6 +9,8 @@ import {
 type AnimusCSSProperties<Overrides = (string & {}) | 0> =
   StandardProperties<Overrides> &
     VendorProperties<Overrides> &
+    // Required by legacy line clamping despite csstype classifying it as obsolete.
+    Pick<ObsoleteProperties<Overrides>, 'WebkitBoxOrient'> &
     Omit<SvgProperties<Overrides>, keyof StandardProperties>;
 
 type ColorProperties = 'color' | `${string}Color` | 'fill' | 'stroke';

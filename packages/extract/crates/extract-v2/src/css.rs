@@ -3,13 +3,15 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt::Write;
+use std::sync::Arc;
 
 use rustc_hash::FxHashMap;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::theme::{ConditionedGroup, CssDeclaration, PropConfigMap, ResolveContext, ResolvedStyles, TransformFailure, TransformFailureSink, first_top_level_branch, resolve_styles, split_top_level_commas};
+use crate::declarations::{breakpoint_of, record_key, DeclarationBinding, DeclarationNames};
+use crate::theme::{ConditionedGroup, CssDeclaration, PropConfigMap, ResolveContext, ResolvedStyles, TransformFailure, TransformFailureSink, first_top_level_branch, is_responsive_value, resolve_styles, split_top_level_commas};
 
 pub fn camel_to_kebab(s: &str) -> String {
     let mut result = String::with_capacity(s.len() + 4);
@@ -1073,7 +1075,7 @@ pub fn serialize_value_key(value: &Value) -> String {
     }
 }
 
-/// A component callback's static key, which keeps the authored type: a
+/// A callback-bound prop's static key, which keeps the authored type: a
 /// string is its JSON literal, a number its decimal text, and a responsive
 /// value `{…}` holds its `"breakpoint":key` entries in key order, so no two
 /// values share a key. Must stay in step with the runtime's `typedValueKey`.
@@ -1227,14 +1229,21 @@ fn write_utility_rule(
 
 type UtilityClassMap = HashMap<String, HashMap<String, String>>;
 
-/// One utility class per distinct canonical CSS; the class map records
-/// which class a `(prop, value)` usage resolved to.
+/// Utility class namespaces, one per cascade layer: a class defined in both
+/// layers would carry custom-layer precedence onto every system consumer.
+/// Both sort after `dcl`/`dyn`, so the layer's name tie-break is unchanged.
+const SYSTEM_UTILITY_NAMESPACE: &str = "u";
+const CUSTOM_UTILITY_NAMESPACE: &str = "uc";
+
+/// One utility class per distinct canonical CSS within a layer; the class
+/// map records which class a `(prop, value)` usage resolved to.
 fn add_utility_class(
     usage: &UtilityInput,
     ctx: &ResolveContext,
     seen: &mut FxHashMap<String, (String, ResolvedStyles)>,
     class_map: &mut UtilityClassMap,
     class_prefix: &str,
+    namespace: &str,
     value_key: fn(&Value) -> String,
 ) {
     let style_obj = serde_json::json!({ &usage.prop_name: usage.value.clone() });
@@ -1259,7 +1268,7 @@ fn add_utility_class(
         .entry(canonical.clone())
         .or_insert_with(|| {
             let hash = content_hash(&canonical);
-            let name = format!("{}-u-{}", class_prefix, hash);
+            let name = format!("{class_prefix}-{namespace}-{hash}");
             (name, resolved.clone())
         })
         .0
@@ -1271,58 +1280,132 @@ fn add_utility_class(
         .insert(value_key(&usage.value), class_name);
 }
 
+/// Rule kinds within one condition of a layer: declaration consuming rules
+/// precede atomic rules, so a same-condition atomic outranks a declaration.
+const DECLARATION_RULE: u8 = 0;
+const ATOMIC_RULE: u8 = 1;
+
 fn render_utility_layer(
-    mut seen: FxHashMap<String, (String, ResolvedStyles)>,
+    seen: FxHashMap<String, (String, ResolvedStyles)>,
     breakpoints: &BreakpointMap,
     layer_name: &str,
     slot_entries: Option<Vec<(String, ResolvedStyles, String)>>,
+    declarations: &DeclarationUsage,
+    class_prefix: &str,
 ) -> String {
-    if let Some(slots) = slot_entries {
-        for (slot_class, slot_styles, _slot_css_prop) in slots {
-            let canonical_key = format!("__slot__:{}", slot_class);
-            seen.insert(canonical_key, (slot_class, slot_styles));
-        }
+    let mut entries: Vec<(u8, String, ResolvedStyles)> =
+        seen.into_values().map(|(name, styles)| (ATOMIC_RULE, name, styles)).collect();
+    for (slot_class, slot_styles, _slot_css_prop) in slot_entries.into_iter().flatten() {
+        entries.push((ATOMIC_RULE, slot_class, slot_styles));
     }
+    entries.extend(declaration_consuming_rules(declarations, breakpoints, class_prefix));
+    let binding_classes = render_binding_classes(declarations, class_prefix);
 
     let mut css = String::new();
-    if !seen.is_empty() {
-        writeln!(css, "@layer {} {{", layer_name).unwrap();
-        let mut entries: Vec<(&String, &(String, ResolvedStyles))> =
-            seen.iter().collect();
-        entries.sort_by(|(_, (name_a, styles_a)), (_, (name_b, styles_b))| {
-            let prop_from = |s: &ResolvedStyles| -> String {
-                if let Some(d) = s.declarations.first() {
-                    return d.property.clone();
-                }
-                if let Some((_, decls)) = s.breakpoint_groups().next() {
-                    if let Some(d) = decls.first() {
-                        return d.property.clone();
-                    }
-                }
-                String::new()
-            };
-            let bp_order = |s: &ResolvedStyles| -> u32 {
-                if !s.declarations.is_empty() { return 0; }
-                if let Some((bp_name, _)) = s.breakpoint_groups().next() {
-                    return *breakpoints.breakpoints.get(bp_name.as_str()).unwrap_or(&0);
-                }
-                0
-            };
-
-            let css_prop_a = prop_from(styles_a);
-            let css_prop_b = prop_from(styles_b);
-            let key_a = css_property_cascade_key(&css_prop_a);
-            let key_b = css_property_cascade_key(&css_prop_b);
-            key_a
-                .cmp(&key_b)
-                .then_with(|| css_prop_a.cmp(&css_prop_b))
-                .then_with(|| bp_order(styles_a).cmp(&bp_order(styles_b)))
-                .then_with(|| name_a.cmp(name_b))
-        });
-        for (_, (class_name, styles)) in entries {
-            write_utility_rule(&mut css, class_name, styles, breakpoints);
+    if entries.is_empty() && binding_classes.is_empty() {
+        return css;
+    }
+    writeln!(css, "@layer {} {{", layer_name).unwrap();
+    // Binding classes declare only variables, so their position is inert.
+    css.push_str(&binding_classes);
+    let prop_from = |s: &ResolvedStyles| -> String {
+        if let Some(d) = s.declarations.first() {
+            return d.property.clone();
         }
-        writeln!(css, "}}").unwrap();
+        if let Some((_, decls)) = s.breakpoint_groups().next() {
+            if let Some(d) = decls.first() {
+                return d.property.clone();
+            }
+        }
+        String::new()
+    };
+    let bp_order = |s: &ResolvedStyles| -> u32 {
+        if !s.declarations.is_empty() { return 0; }
+        if let Some((bp_name, _)) = s.breakpoint_groups().next() {
+            return *breakpoints.breakpoints.get(bp_name.as_str()).unwrap_or(&0);
+        }
+        0
+    };
+    // Existing canonical order, with the rule kind after the condition: a
+    // breakpoint declaration still follows a base atomic rule.
+    entries.sort_by(|(kind_a, name_a, styles_a), (kind_b, name_b, styles_b)| {
+        let css_prop_a = prop_from(styles_a);
+        let css_prop_b = prop_from(styles_b);
+        css_property_cascade_key(&css_prop_a)
+            .cmp(&css_property_cascade_key(&css_prop_b))
+            .then_with(|| css_prop_a.cmp(&css_prop_b))
+            .then_with(|| bp_order(styles_a).cmp(&bp_order(styles_b)))
+            .then_with(|| kind_a.cmp(kind_b))
+            .then_with(|| name_a.cmp(name_b))
+    });
+    for (_, class_name, styles) in &entries {
+        write_utility_rule(&mut css, class_name, styles, breakpoints);
+    }
+    writeln!(css, "}}").unwrap();
+    css
+}
+
+/// One consuming rule per member and condition: the base rule, and per
+/// breakpoint a rule its media query gates. An unset variable reads as
+/// `revert-layer`, so a value without a base key adopts an ancestor's shared
+/// members or else leaves lower layers in force.
+fn declaration_consuming_rules(
+    declarations: &DeclarationUsage,
+    breakpoints: &BreakpointMap,
+    class_prefix: &str,
+) -> Vec<(u8, String, ResolvedStyles)> {
+    let mut sorted_bps: Vec<(&String, &u32)> = breakpoints.breakpoints.iter().collect();
+    sorted_bps.sort_by_key(|(name, px)| (**px, (*name).clone()));
+    let mut rules = Vec::new();
+    for (consuming, used) in &declarations.props {
+        let names = DeclarationNames::of(class_prefix, &used.prop, &used.binding);
+        for member in &used.binding.members {
+            let read = |suffix: &str| CssDeclaration {
+                property: member.css_property.clone(),
+                value: format!("var({}{suffix}, revert-layer)", names.member_var(member)),
+            };
+            rules.push((
+                DECLARATION_RULE,
+                consuming.clone(),
+                ResolvedStyles { declarations: vec![read("")], pseudo_selectors: vec![], conditioned: vec![] },
+            ));
+            for (bp, _) in &sorted_bps {
+                rules.push((
+                    DECLARATION_RULE,
+                    format!("{consuming}-{bp}"),
+                    ResolvedStyles {
+                        declarations: vec![],
+                        pseudo_selectors: vec![],
+                        conditioned: vec![ConditionedGroup::breakpoint(bp.to_string(), vec![read(&format!("-{bp}"))])],
+                    },
+                ));
+            }
+        }
+    }
+    rules
+}
+
+/// The classes declaring member variables for the keys literal usages
+/// select. A breakpoint's binding class needs no media wrapper: only that
+/// breakpoint's consuming rule reads its variables.
+fn render_binding_classes(declarations: &DeclarationUsage, class_prefix: &str) -> String {
+    let mut css = String::new();
+    for used in declarations.props.values() {
+        let names = DeclarationNames::of(class_prefix, &used.prop, &used.binding);
+        for (key, breakpoint) in &used.keys {
+            let suffix = breakpoint.as_deref().map(|bp| format!("-{bp}")).unwrap_or_default();
+            let record = &used.binding.records[key];
+            let declarations: Vec<CssDeclaration> = used
+                .binding
+                .members
+                .iter()
+                .map(|member| CssDeclaration {
+                    property: format!("{}{suffix}", names.member_var(member)),
+                    value: record[&member.name].clone(),
+                })
+                .collect();
+            write_declarations(&mut css, &format!(".{}", names.binding_class(key, breakpoint.as_deref())), &declarations);
+        }
     }
     css
 }
@@ -1332,26 +1415,132 @@ fn render_utility_layer(
 pub struct ResolvedUtilities {
     seen: FxHashMap<String, (String, ResolvedStyles)>,
     class_map: UtilityClassMap,
+    typed: BTreeSet<String>,
+    declarations: DeclarationUsage,
+    class_prefix: String,
+}
+
+/// The declaration props a layer renders consuming rules for, keyed by
+/// consuming class, which carries the prop and its declaring identity.
+#[derive(Default)]
+pub struct DeclarationUsage {
+    pub props: BTreeMap<String, DeclarationUse>,
+}
+
+pub struct DeclarationUse {
+    pub prop: String,
+    pub binding: Arc<DeclarationBinding>,
+    /// The `(key, breakpoint)` binding classes literal usages apply.
+    pub keys: BoundKeys,
+}
+
+/// `(key, breakpoint)` pairs; `None` is the base.
+pub type BoundKeys = BTreeSet<(String, Option<String>)>;
+
+impl DeclarationUsage {
+    fn entry(&mut self, class_prefix: &str, prop: &str, binding: &Arc<DeclarationBinding>) -> &mut DeclarationUse {
+        let consuming = DeclarationNames::of(class_prefix, prop, binding).consuming_class();
+        self.props.entry(consuming).or_insert_with(|| DeclarationUse {
+            prop: prop.to_string(),
+            binding: Arc::clone(binding),
+            keys: BTreeSet::new(),
+        })
+    }
+
+    /// Adds a runtime slot's consuming rules, which bind no key statically.
+    pub fn consume(&mut self, class_prefix: &str, prop: &str, binding: &Arc<DeclarationBinding>) {
+        self.entry(class_prefix, prop, binding);
+    }
+}
+
+/// The value key function for a prop whose keys are typed or not.
+fn value_key(typed: bool) -> fn(&Value) -> String {
+    if typed { typed_value_key } else { serialize_value_key }
 }
 
 impl ResolvedUtilities {
     /// Whether `value` of `prop` has a class the runtime finds under its key.
     pub fn has_class(&self, prop: &str, value: &Value) -> bool {
-        runtime_derives_key(value, false)
-            && self
-                .class_map
-                .get(prop)
-                .is_some_and(|classes| classes.contains_key(&serialize_value_key(value)))
+        let typed = self.typed.contains(prop);
+        runtime_derives_key(value, typed)
+            && self.class_map.get(prop).is_some_and(|classes| classes.contains_key(&value_key(typed)(value)))
     }
 
+    /// The system props whose keys are typed, which the runtime reads as one
+    /// list to key its lookups.
+    pub fn typed_props(&self) -> &BTreeSet<String> {
+        &self.typed
+    }
+
+    pub fn has_declarations(&self) -> bool {
+        !self.declarations.props.is_empty()
+    }
+
+    /// `runtime_declarations` are the declaration props with a runtime slot,
+    /// whose consuming rules render whether or not a literal binds a key.
     pub fn render(
-        self,
+        mut self,
         breakpoints: &BreakpointMap,
         slot_entries: Option<Vec<(String, ResolvedStyles, String)>>,
+        runtime_declarations: &[(String, Arc<DeclarationBinding>)],
     ) -> UtilityOutput {
-        let css = render_utility_layer(self.seen, breakpoints, &layer_name("system"), slot_entries);
+        for (prop, binding) in runtime_declarations {
+            self.declarations.consume(&self.class_prefix, prop, binding);
+        }
+        let css = render_utility_layer(
+            self.seen,
+            breakpoints,
+            &layer_name("system"),
+            slot_entries,
+            &self.declarations,
+            &self.class_prefix,
+        );
         UtilityOutput { css, class_map: self.class_map }
     }
+}
+
+/// A literal declaration value's classes: the consuming classes it activates
+/// and one binding class per entry. A key outside the scale gets no class.
+fn add_declaration_class(
+    usage: &UtilityInput,
+    binding: &Arc<DeclarationBinding>,
+    ctx: &ResolveContext,
+    class_map: &mut UtilityClassMap,
+    usage_record: &mut DeclarationUsage,
+    class_prefix: &str,
+) {
+    let names = DeclarationNames::of(class_prefix, &usage.prop_name, binding);
+    let entries: Vec<(Option<&str>, &Value)> = match usage.value.as_object() {
+        Some(entries) if is_responsive_value(&usage.value, ctx.breakpoint_keys) => entries
+            .iter()
+            .filter(|(_, entry)| !entry.is_null())
+            .map(|(key, entry)| (breakpoint_of(key), entry))
+            .collect(),
+        _ => vec![(None, &usage.value)],
+    };
+    let mut keys = Vec::with_capacity(entries.len());
+    for (breakpoint, entry) in entries {
+        let Some(key) = record_key(entry).filter(|key| binding.records.contains_key(key)) else {
+            return;
+        };
+        keys.push((key, breakpoint.map(str::to_string)));
+    }
+    if keys.is_empty() {
+        return;
+    }
+    let consuming = names.consuming_class();
+    let mut classes = vec![consuming.clone()];
+    for (key, breakpoint) in &keys {
+        if let Some(bp) = breakpoint {
+            classes.push(format!("{consuming}-{bp}"));
+        }
+        classes.push(names.binding_class(key, breakpoint.as_deref()));
+    }
+    class_map
+        .entry(usage.prop_name.clone())
+        .or_default()
+        .insert(serialize_value_key(&usage.value), classes.join(" "));
+    usage_record.entry(class_prefix, &usage.prop_name, binding).keys.extend(keys);
 }
 
 pub fn resolve_utility_classes(
@@ -1361,10 +1550,26 @@ pub fn resolve_utility_classes(
 ) -> ResolvedUtilities {
     let mut class_map = UtilityClassMap::new();
     let mut seen = FxHashMap::default();
+    let mut declarations = DeclarationUsage::default();
+    let typed: BTreeSet<String> =
+        ctx.config.iter().filter(|(_, prop)| prop.keys_typed()).map(|(name, _)| name.clone()).collect();
     for usage in usages {
-        add_utility_class(usage, ctx, &mut seen, &mut class_map, class_prefix, serialize_value_key);
+        let binding = ctx.config.get(&usage.prop_name).and_then(|prop| prop.declaration.binding.as_ref());
+        if let Some(binding) = binding {
+            add_declaration_class(usage, binding, ctx, &mut class_map, &mut declarations, class_prefix);
+            continue;
+        }
+        add_utility_class(
+            usage,
+            ctx,
+            &mut seen,
+            &mut class_map,
+            class_prefix,
+            SYSTEM_UTILITY_NAMESPACE,
+            value_key(typed.contains(&usage.prop_name)),
+        );
     }
-    ResolvedUtilities { seen, class_map }
+    ResolvedUtilities { seen, class_map, typed, declarations, class_prefix: class_prefix.to_string() }
 }
 
 /// Custom utility CSS, each usage resolved through its owning component's own
@@ -1381,6 +1586,8 @@ pub struct ResolvedCustomUtilities {
     seen: FxHashMap<String, (String, ResolvedStyles)>,
     class_map: HashMap<String, UtilityClassMap>,
     typed: HashMap<String, BTreeSet<String>>,
+    declarations: DeclarationUsage,
+    class_prefix: String,
 }
 
 impl ResolvedCustomUtilities {
@@ -1389,17 +1596,34 @@ impl ResolvedCustomUtilities {
     pub fn has_class(&self, owner: &str, prop: &str, value: &Value) -> bool {
         let typed = self.typed.get(owner).is_some_and(|props| props.contains(prop));
         runtime_derives_key(value, typed)
-            && self.class_map.get(owner).and_then(|classes| classes.get(prop)).is_some_and(|classes| {
-                classes.contains_key(&if typed { typed_value_key(value) } else { serialize_value_key(value) })
-            })
+            && self
+                .class_map
+                .get(owner)
+                .and_then(|classes| classes.get(prop))
+                .is_some_and(|classes| classes.contains_key(&value_key(typed)(value)))
+    }
+
+    pub fn has_declarations(&self) -> bool {
+        !self.declarations.props.is_empty()
     }
 
     pub fn render(
-        self,
+        mut self,
         breakpoints: &BreakpointMap,
         slot_entries: Option<Vec<(String, ResolvedStyles, String)>>,
+        runtime_declarations: &[(String, Arc<DeclarationBinding>)],
     ) -> CustomUtilityOutput {
-        let css = render_utility_layer(self.seen, breakpoints, &layer_name("custom"), slot_entries);
+        for (prop, binding) in runtime_declarations {
+            self.declarations.consume(&self.class_prefix, prop, binding);
+        }
+        let css = render_utility_layer(
+            self.seen,
+            breakpoints,
+            &layer_name("custom"),
+            slot_entries,
+            &self.declarations,
+            &self.class_prefix,
+        );
         CustomUtilityOutput { css, class_map: self.class_map, typed: self.typed }
     }
 }
@@ -1414,6 +1638,7 @@ pub fn resolve_custom_prop_classes(
     let mut class_map: HashMap<String, UtilityClassMap> = HashMap::new();
     let mut typed: HashMap<String, BTreeSet<String>> = HashMap::new();
     let mut seen = FxHashMap::default();
+    let mut declarations = DeclarationUsage::default();
     for (owner, usage) in usages {
         let Some(config) = configs.get(owner.as_str()) else {
             continue;
@@ -1425,23 +1650,21 @@ pub fn resolve_custom_prop_classes(
             transform_failures: ctx.transform_failures.map(|_| &failures),
             ..*ctx
         };
-        // A callback can tell `100` from `"100"`, so its lookups keep the type.
-        let callback = config.get(&usage.prop_name).is_some_and(|c| c.transform_fn_source.is_some());
         let classes = class_map.entry(owner.clone()).or_default();
-        add_utility_class(
-            usage,
-            &owner_ctx,
-            &mut seen,
-            classes,
-            class_prefix,
-            if callback { typed_value_key } else { serialize_value_key },
-        );
-        if callback && classes.contains_key(&usage.prop_name) {
+        let binding = config.get(&usage.prop_name).and_then(|prop| prop.declaration.binding.as_ref());
+        if let Some(binding) = binding {
+            add_declaration_class(usage, binding, &owner_ctx, classes, &mut declarations, class_prefix);
+            resolved(owner, failures.into_inner());
+            continue;
+        }
+        let typed_keys = config.get(&usage.prop_name).is_some_and(|c| c.keys_typed());
+        add_utility_class(usage, &owner_ctx, &mut seen, classes, class_prefix, CUSTOM_UTILITY_NAMESPACE, value_key(typed_keys));
+        if typed_keys && classes.contains_key(&usage.prop_name) {
             typed.entry(owner.clone()).or_default().insert(usage.prop_name.clone());
         }
         resolved(owner, failures.into_inner());
     }
-    ResolvedCustomUtilities { seen, class_map, typed }
+    ResolvedCustomUtilities { seen, class_map, typed, declarations, class_prefix: class_prefix.to_string() }
 }
 
 /// Must stay in step with the runtime's unitless property set.
@@ -1458,6 +1681,13 @@ const UNITLESS_CSS_PROPERTIES: &[&str] = &[
     "stroke-dasharray", "stroke-dashoffset", "stroke-miterlimit",
     "stroke-opacity", "stroke-width",
 ];
+
+/// The post-processor's whole unitless set: the predicted list plus the
+/// properties it leaves unitless for other reasons.
+pub(crate) fn is_unitless_css_property(css_property: &str) -> bool {
+    UNITLESS_CSS_PROPERTIES.contains(&css_property)
+        || matches!(css_property, "animation-name" | "aspect-ratio" | "scale")
+}
 
 /// Whether CSS post-processing would append `px` to `value` on
 /// `css_property`, as the pipeline's unit fallback does to a bare number
@@ -1525,7 +1755,8 @@ pub fn build_variable_slot_entries(
     let mut sorted_bps: Vec<(&String, &u32)> = breakpoints.breakpoints.iter().collect();
     sorted_bps.sort_by_key(|(_, px)| *px);
 
-    for meta in dynamic_props.values() {
+    // A declaration prop's consuming rules render in the declaration band.
+    for meta in dynamic_props.values().filter_map(DynamicPropMeta::value) {
         let css_property = camel_to_kebab(&meta.property);
 
         let base_declarations = if meta.properties.is_empty() {
@@ -1966,6 +2197,7 @@ mod tests {
                 transform_fn_source: None,
                 callback: None,
                 strict: None,
+                declaration: Default::default(),
             },
         );
         config.insert(
@@ -1981,6 +2213,7 @@ mod tests {
                 transform_fn_source: None,
                 callback: None,
                 strict: None,
+                declaration: Default::default(),
             },
         );
         config.insert(
@@ -1996,6 +2229,7 @@ mod tests {
                 transform_fn_source: None,
                 callback: None,
                 strict: None,
+                declaration: Default::default(),
             },
         );
         config
@@ -2016,7 +2250,7 @@ mod tests {
             prop_name: "p".to_string(),
             value: json!(8),
         }];
-        let out = resolve_utility_classes(&usages, &tc.ctx(), "animus").render(&bp, None);
+        let out = resolve_utility_classes(&usages, &tc.ctx(), "animus").render(&bp, None, &[]);
         assert!(out.css.contains("@layer anm-system {"));
         assert!(out.css.contains("padding: 0.5rem;"));
         assert!(out.css.contains(".animus-u-"));
@@ -2030,7 +2264,7 @@ mod tests {
             prop_name: "mt".to_string(),
             value: json!({ "_": 8, "sm": 16 }),
         }];
-        let out = resolve_utility_classes(&usages, &tc.ctx(), "animus").render(&bp, None);
+        let out = resolve_utility_classes(&usages, &tc.ctx(), "animus").render(&bp, None, &[]);
         assert!(out.css.contains("margin-top: 0.5rem;"));
         assert!(out.css.contains("@media (min-width: 768px)"));
         assert!(out.css.contains("margin-top: 1rem;"));
@@ -2044,8 +2278,8 @@ mod tests {
             prop_name: "p".to_string(),
             value: json!(8),
         }];
-        let out1 = resolve_utility_classes(&usages, &tc.ctx(), "animus").render(&bp, None);
-        let out2 = resolve_utility_classes(&usages, &tc.ctx(), "animus").render(&bp, None);
+        let out1 = resolve_utility_classes(&usages, &tc.ctx(), "animus").render(&bp, None, &[]);
+        let out2 = resolve_utility_classes(&usages, &tc.ctx(), "animus").render(&bp, None, &[]);
         assert_eq!(out1.css, out2.css);
         let map1 = &out1.class_map["p"]["8"];
         let map2 = &out2.class_map["p"]["8"];
@@ -2066,7 +2300,7 @@ mod tests {
                 value: json!(16),
             },
         ];
-        let out = resolve_utility_classes(&usages, &tc.ctx(), "animus").render(&bp, None);
+        let out = resolve_utility_classes(&usages, &tc.ctx(), "animus").render(&bp, None, &[]);
         let class_8 = &out.class_map["p"]["8"];
         let class_16 = &out.class_map["p"]["16"];
         assert_ne!(class_8, class_16);
@@ -2102,7 +2336,7 @@ mod tests {
         )];
         let configs: FxHashMap<&str, &PropConfigMap> =
             [("a.tsx::A", &tc.config)].into_iter().collect();
-        let out = resolve_custom_prop_classes(&usages, &configs, &tc.ctx(), "animus", |_, _| {}).render(&bp, None);
+        let out = resolve_custom_prop_classes(&usages, &configs, &tc.ctx(), "animus", |_, _| {}).render(&bp, None, &[]);
         assert!(out.class_map["a.tsx::A"]["p"].contains_key("8"));
         assert!(out.css.contains("@layer anm-custom {"));
         assert!(!out.css.contains("@layer anm-system {"));
@@ -2116,7 +2350,7 @@ mod tests {
             prop_name: "p".to_string(),
             value: json!(8),
         }];
-        let out = resolve_utility_classes(&usages, &tc.ctx(), "animus").render(&bp, None);
+        let out = resolve_utility_classes(&usages, &tc.ctx(), "animus").render(&bp, None, &[]);
         assert!(out.class_map.contains_key("p"));
         let p_map = &out.class_map["p"];
         assert!(p_map.contains_key("8"));
@@ -2130,7 +2364,7 @@ mod tests {
         let mut dynamic_props = HashMap::new();
         dynamic_props.insert(
             "p".to_string(),
-            DynamicPropMeta {
+            DynamicPropMeta::Value(crate::dynamic_meta::ValuePropMeta {
                 var_name: "--animus-p".to_string(),
                 slot_class: "animus-dyn-p".to_string(),
                 property: "padding".to_string(),
@@ -2142,7 +2376,7 @@ mod tests {
                 transform_id: None,
                 transform_fn_source: None,
                 scale_values: std::collections::BTreeMap::new(),
-            },
+            }),
         );
         let bp = test_breakpoints();
         let entries = build_variable_slot_entries(&dynamic_props, &bp);
@@ -2169,7 +2403,7 @@ mod tests {
         let mut dynamic_props = HashMap::new();
         dynamic_props.insert(
             "px".to_string(),
-            DynamicPropMeta {
+            DynamicPropMeta::Value(crate::dynamic_meta::ValuePropMeta {
                 var_name: "--animus-px".to_string(),
                 slot_class: "animus-dyn-px".to_string(),
                 property: "padding".to_string(),
@@ -2181,7 +2415,7 @@ mod tests {
                 transform_id: None,
                 transform_fn_source: None,
                 scale_values: std::collections::BTreeMap::new(),
-            },
+            }),
         );
         let bp = test_breakpoints();
         let entries = build_variable_slot_entries(&dynamic_props, &bp);
@@ -2208,7 +2442,7 @@ mod tests {
         let mut dynamic_props = HashMap::new();
         dynamic_props.insert(
             "p".to_string(),
-            DynamicPropMeta {
+            DynamicPropMeta::Value(crate::dynamic_meta::ValuePropMeta {
                 var_name: "--animus-p".to_string(),
                 slot_class: "animus-dyn-p".to_string(),
                 property: "padding".to_string(),
@@ -2220,13 +2454,13 @@ mod tests {
                 transform_id: None,
                 transform_fn_source: None,
                 scale_values: std::collections::BTreeMap::new(),
-            },
+            }),
         );
         let bp = test_breakpoints();
         let tc = TestUtilCtx::new(utility_config(), utility_theme(), &bp);
         let slots = build_variable_slot_entries(&dynamic_props, &bp);
         let usages = vec![UtilityInput { prop_name: "p".to_string(), value: json!(8) }];
-        let out = resolve_utility_classes(&usages, &tc.ctx(), "animus").render(&bp, Some(slots));
+        let out = resolve_utility_classes(&usages, &tc.ctx(), "animus").render(&bp, Some(slots), &[]);
         assert!(out.css.contains("animus-dyn-p"));
         assert!(out.css.contains("animus-u-"));
         assert_eq!(out.css.matches("@layer anm-system {").count(), 1);

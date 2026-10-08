@@ -11,7 +11,8 @@ import {
   CSSPropMap,
   CSSProps,
   CustomPropConfig,
-  Prop,
+  DeclarationProp,
+  SystemProp,
   SystemProps,
   ThemedCSSPropMap,
   ThemedCSSProps,
@@ -35,13 +36,13 @@ type Redeclared<Inherited, Own> = {
 } & Own;
 
 export class AnimusExtendedWithAll<
-  PropRegistry extends Record<string, Prop>,
+  PropRegistry extends Record<string, SystemProp>,
   GroupRegistry extends Record<string, (keyof PropRegistry)[]>,
   BaseStyles extends CSSProps<AbstractProps, SystemProps<AbstractParser>>,
   Variants extends Record<string, VariantConfig>,
   States extends CSSPropMap<AbstractProps, SystemProps<AbstractParser>>,
   ActiveGroups extends Record<string, true>,
-  CustomProps extends Record<string, Prop>,
+  CustomProps extends Record<string, SystemProp>,
 > {
   propRegistry = {} as PropRegistry;
   groupRegistry = {} as GroupRegistry;
@@ -167,13 +168,13 @@ export class AnimusExtendedWithAll<
 }
 
 class AnimusExtendedWithSystem<
-  PropRegistry extends Record<string, Prop>,
+  PropRegistry extends Record<string, SystemProp>,
   GroupRegistry extends Record<string, (keyof PropRegistry)[]>,
   BaseStyles extends CSSProps<AbstractProps, SystemProps<AbstractParser>>,
   Variants extends Record<string, VariantConfig>,
   States extends CSSPropMap<AbstractProps, SystemProps<AbstractParser>>,
   ActiveGroups extends Record<string, true>,
-  CustomProps extends Record<string, Prop>,
+  CustomProps extends Record<string, SystemProp>,
 > extends AnimusExtendedWithAll<
   PropRegistry,
   GroupRegistry,
@@ -183,9 +184,9 @@ class AnimusExtendedWithSystem<
   ActiveGroups,
   CustomProps
 > {
-  props<NewCustomProps extends Record<string, CustomPropConfig>>(
-    config: NewCustomProps
-  ) {
+  props<
+    NewCustomProps extends Record<string, CustomPropConfig | DeclarationProp>,
+  >(config: NewCustomProps) {
     return new AnimusExtendedWithAll<
       PropRegistry,
       GroupRegistry,
@@ -208,13 +209,13 @@ class AnimusExtendedWithSystem<
 }
 
 class AnimusExtendedWithStates<
-  PropRegistry extends Record<string, Prop>,
+  PropRegistry extends Record<string, SystemProp>,
   GroupRegistry extends Record<string, (keyof PropRegistry)[]>,
   BaseStyles extends CSSProps<AbstractProps, SystemProps<AbstractParser>>,
   Variants extends Record<string, VariantConfig>,
   States extends CSSPropMap<AbstractProps, SystemProps<AbstractParser>>,
   ActiveGroups extends Record<string, true>,
-  CustomProps extends Record<string, Prop>,
+  CustomProps extends Record<string, SystemProp>,
 > extends AnimusExtendedWithSystem<
   PropRegistry,
   GroupRegistry,
@@ -251,13 +252,13 @@ class AnimusExtendedWithStates<
 }
 
 class AnimusExtendedWithCompounds<
-  PropRegistry extends Record<string, Prop>,
+  PropRegistry extends Record<string, SystemProp>,
   GroupRegistry extends Record<string, (keyof PropRegistry)[]>,
   BaseStyles extends CSSProps<AbstractProps, SystemProps<AbstractParser>>,
   Variants extends Record<string, VariantConfig>,
   States extends CSSPropMap<AbstractProps, SystemProps<AbstractParser>>,
   ActiveGroups extends Record<string, true>,
-  CustomProps extends Record<string, Prop>,
+  CustomProps extends Record<string, SystemProp>,
 > extends AnimusExtendedWithStates<
   PropRegistry,
   GroupRegistry,
@@ -326,13 +327,13 @@ class AnimusExtendedWithCompounds<
 }
 
 class AnimusExtendedWithVariants<
-  PropRegistry extends Record<string, Prop>,
+  PropRegistry extends Record<string, SystemProp>,
   GroupRegistry extends Record<string, (keyof PropRegistry)[]>,
   BaseStyles extends CSSProps<AbstractProps, SystemProps<AbstractParser>>,
   Variants extends Record<string, VariantConfig>,
   States extends CSSPropMap<AbstractProps, SystemProps<AbstractParser>>,
   ActiveGroups extends Record<string, true>,
-  CustomProps extends Record<string, Prop>,
+  CustomProps extends Record<string, SystemProp>,
 > extends AnimusExtendedWithCompounds<
   PropRegistry,
   GroupRegistry,
@@ -411,13 +412,13 @@ class AnimusExtendedWithVariants<
 }
 
 class AnimusExtendedWithBase<
-  PropRegistry extends Record<string, Prop>,
+  PropRegistry extends Record<string, SystemProp>,
   GroupRegistry extends Record<string, (keyof PropRegistry)[]>,
   BaseStyles extends CSSProps<AbstractProps, SystemProps<AbstractParser>>,
   Variants extends Record<string, VariantConfig>,
   States extends CSSPropMap<AbstractProps, SystemProps<AbstractParser>>,
   ActiveGroups extends Record<string, true>,
-  CustomProps extends Record<string, Prop>,
+  CustomProps extends Record<string, SystemProp>,
 > extends AnimusExtendedWithVariants<
   PropRegistry,
   GroupRegistry,
@@ -462,13 +463,13 @@ class AnimusExtendedWithBase<
 }
 
 export class AnimusExtended<
-  PropRegistry extends Record<string, Prop>,
+  PropRegistry extends Record<string, SystemProp>,
   GroupRegistry extends Record<string, (keyof PropRegistry)[]>,
   BaseStyles extends CSSProps<AbstractProps, SystemProps<AbstractParser>>,
   Variants extends Record<string, VariantConfig>,
   States extends CSSPropMap<AbstractProps, SystemProps<AbstractParser>>,
   ActiveGroups extends Record<string, true>,
-  CustomProps extends Record<string, Prop>,
+  CustomProps extends Record<string, SystemProp>,
 > extends AnimusExtendedWithBase<
   PropRegistry,
   GroupRegistry,

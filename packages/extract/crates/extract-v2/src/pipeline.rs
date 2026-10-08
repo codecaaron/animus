@@ -284,6 +284,21 @@ fn resolve_props_stage(
             format!("props config parse failed: {}", error),
         )
     })?;
+    let mut names: Vec<&String> = parsed.keys().collect();
+    names.sort();
+    for prop in names {
+        let config = &parsed[prop];
+        // A declaration prop binds once its component identity is known.
+        if config.declaration.kind.is_some() {
+            continue;
+        }
+        if config.property.is_empty() {
+            return Err((
+                stage.method.clone(),
+                format!("props config parse failed: missing field `property` in prop '{prop}'"),
+            ));
+        }
+    }
     for capture in &stage.captured {
         let Some(prop_name) = capture.key.split('.').next() else {
             continue;

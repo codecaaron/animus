@@ -45,6 +45,9 @@ pub struct ReplacementPayload {
     /// Sorted callback props whose `custom_prop_class_map` keys are typed
     /// value keys.
     pub typed_custom_props: Vec<String>,
+    /// The component has an active system prop bound to a configured
+    /// transform, so its config reads the shared `typedSystemProps` list.
+    pub reads_typed_system_props: bool,
     /// Post-merge chain config for extension children, folding in the
     /// parent's variant/state/compound config. None for non-extensions.
     pub merged_config: Option<MergedChainConfig>,

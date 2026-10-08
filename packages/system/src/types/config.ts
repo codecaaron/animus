@@ -19,6 +19,8 @@ export interface BaseProperty {
 }
 
 export interface Prop extends BaseProperty {
+  /** Only a declaration prop has a kind. */
+  kind?: never;
   scale?: string | MapScale | ArrayScale;
   variable?: string;
   negative?: boolean;
@@ -34,6 +36,47 @@ export interface Prop extends BaseProperty {
     props?: AbstractProps
   ) => string | number | CSSObject;
 }
+
+/**
+ * Binds a system prop to a declaration scale registered with
+ * `addDeclarationScale`: each key applies its complete record of `members`.
+ * It has no primary property, transform, negative form or raw-value fallback.
+ */
+export interface DeclarationProp {
+  kind: 'declarations';
+  scale: DeclarationScaleName;
+  members: readonly (keyof PropertyTypes)[];
+  property?: never;
+  properties?: never;
+  transform?: never;
+  negative?: never;
+  strict?: never;
+  variable?: never;
+  currentVar?: never;
+}
+
+/** Any system prop definition: a value prop or a declaration prop. */
+export type SystemProp = Prop | DeclarationProp;
+
+type DeclarationScalesOf<T> = T extends {
+  __declarationScales: infer Scales;
+}
+  ? Scales
+  : {};
+
+/**
+ * The theme's declaration scale names, plus any string: the literal members
+ * keep an authored name literal, so its keys can be read back.
+ */
+type DeclarationScaleName =
+  | Extract<keyof DeclarationScalesOf<Theme>, string>
+  | (string & {});
+
+/** The keys of a declaration prop's scale; any key while the theme is unknown. */
+export type DeclarationKey<Config extends DeclarationProp> =
+  Config['scale'] extends keyof DeclarationScalesOf<Theme>
+    ? keyof DeclarationScalesOf<Theme>[Config['scale']]
+    : string | number;
 
 // The `CSSObject` return branch is rejected on both paths: build-time
 // evaluation errors and the runtime drops the value; return a string or number.
@@ -55,9 +98,10 @@ export interface AbstractParser {
 
 type IsEmpty<T> = [] extends T ? true : false | {} extends T ? true : false;
 
-type StrictOrEmpty<Config extends Prop, ScaleT> = Config['strict'] extends false
-  ? true
-  : IsEmpty<ScaleT>;
+type StrictOrEmpty<
+  Config extends SystemProp,
+  ScaleT,
+> = Config['strict'] extends false ? true : IsEmpty<ScaleT>;
 
 type NegateKeys<T> = T extends number
   ? T extends 0
@@ -67,22 +111,25 @@ type NegateKeys<T> = T extends number
       : never
   : never;
 
+// `& string` drops a declaration prop's absent property; intersecting with
+// `keyof PropertyTypes` instead expands the key union against itself.
 export type PropertyValues<
-  Property extends Prop,
+  Property extends SystemProp,
   IncludeGlobals = false,
 > = Exclude<
   PropertyTypes<
     IncludeGlobals extends true ? (string & {}) | 0 : never
-  >[Property['property']],
+  >[Property['property'] & string],
   IncludeGlobals extends true ? never : object | any[]
 >;
 
-type NegativeOf<Config extends Prop, Keys> = Config['negative'] extends true
-  ? NegateKeys<Extract<Keys, number>>
-  : never;
+type NegativeOf<
+  Config extends SystemProp,
+  Keys,
+> = Config['negative'] extends true ? NegateKeys<Extract<Keys, number>> : never;
 
 export type ScaleValue<
-  Config extends Prop,
+  Config extends SystemProp,
   T extends BaseTheme,
 > = Config['scale'] extends keyof TokenScales<T>
   ?
@@ -103,12 +150,14 @@ export type ScaleValue<
           | PropertyValues<Config, StrictOrEmpty<Config, Config['scale']>>
       : PropertyValues<Config, true>;
 
-export type Scale<Config extends Prop, T extends BaseTheme> = ResponsiveProp<
-  ScaleValue<Config, T>
->;
+export type Scale<Config extends SystemProp, T extends BaseTheme> = [
+  Config,
+] extends [DeclarationProp]
+  ? ResponsiveProp<DeclarationKey<Extract<Config, DeclarationProp>>>
+  : ResponsiveProp<ScaleValue<Config, T>>;
 
 export type ParserProps<
-  Config extends Record<string, Prop>,
+  Config extends Record<string, SystemProp>,
   T extends BaseTheme,
 > = ThemeProps<
   {
@@ -118,7 +167,7 @@ export type ParserProps<
 >;
 
 export interface Parser<
-  Config extends Record<string, Prop>,
+  Config extends Record<string, SystemProp>,
   T extends BaseTheme,
 > {
   (props: ParserProps<Config, T>, orderProps?: boolean): CSSObject;
@@ -133,11 +182,12 @@ export type SystemProps<
   [K in keyof SafeProps]: SafeProps[K];
 };
 
-type ColorOpacityRef<Config extends Prop> = Config['scale'] extends 'colors'
-  ? 'colors' extends keyof TokenScales<Theme>
-    ? `{colors.${keyof TokenScales<Theme>[Config['scale'] & keyof TokenScales<Theme>] & string}/${number}}`
-    : never
-  : never;
+type ColorOpacityRef<Config extends SystemProp> =
+  Config['scale'] extends 'colors'
+    ? 'colors' extends keyof TokenScales<Theme>
+      ? `{colors.${keyof TokenScales<Theme>[Config['scale'] & keyof TokenScales<Theme>] & string}/${number}}`
+      : never
+    : never;
 
 /**
  * The six container-query units, admitted on strict scale props ('2vw' stays
@@ -151,7 +201,7 @@ export type ContainerUnitValue =
   | `${number}cqmin`
   | `${number}cqmax`;
 
-export type ThemedScaleValue<Config extends Prop> =
+export type ThemedScaleValue<Config extends SystemProp> =
   Config['scale'] extends keyof TokenScales<Theme>
     ?
         | keyof TokenScales<Theme>[Config['scale']]
@@ -174,9 +224,11 @@ export type ThemedScaleValue<Config extends Prop> =
             | PropertyValues<Config, StrictOrEmpty<Config, Config['scale']>>
         : PropertyValues<Config, true>;
 
-export type ThemedScale<Config extends Prop> = ResponsiveProp<
-  ThemedScaleValue<Config>
->;
+export type ThemedScale<Config extends SystemProp> = [Config] extends [
+  DeclarationProp,
+]
+  ? ResponsiveProp<DeclarationKey<Extract<Config, DeclarationProp>>>
+  : ResponsiveProp<ThemedScaleValue<Config>>;
 
 type RawSelectorKey = `${string}&${string}`;
 
@@ -193,7 +245,7 @@ type PassThroughProp<K extends keyof PropertyTypes> = K extends 'animationName'
   ? ResponsiveProp<KeyframeRef<string> | PropertyTypes[K]>
   : ResponsiveProp<PropertyTypes[K]>;
 
-type UnderscoreBlockMembers<Config extends Record<string, Prop>> = {
+type UnderscoreBlockMembers<Config extends Record<string, SystemProp>> = {
   [K in KnownUnderscoreKey]?: ThemedBlockBody<Config>;
 };
 
@@ -201,7 +253,7 @@ type UnderscoreBlockMembers<Config extends Record<string, Prop>> = {
  * Must stay a FIXED type: an arm referencing the outer inferred `Props` is
  * reverse-mapped away at `.styles()` and stops checking nested values.
  */
-type ThemedBlockBody<Config extends Record<string, Prop>> = {
+type ThemedBlockBody<Config extends Record<string, SystemProp>> = {
   [K in Exclude<keyof PropertyTypes, keyof Config>]?: PassThroughProp<K>;
 } & {
   [P in keyof Config]?: ThemedScale<Config[P]>;
@@ -209,7 +261,7 @@ type ThemedBlockBody<Config extends Record<string, Prop>> = {
   [K in RawSelectorKey | RawAtRuleKey]?: ThemedBlockBody<Config>;
 } & UnderscoreBlockMembers<Config>;
 
-export type ThemedCSSProps<Props, Config extends Record<string, Prop>> = {
+export type ThemedCSSProps<Props, Config extends Record<string, SystemProp>> = {
   [K in keyof Props]?: K extends keyof Config
     ? ThemedScale<Config[K]>
     : K extends RawSelectorKey
@@ -229,7 +281,10 @@ export type ThemedCSSProps<Props, Config extends Record<string, Prop>> = {
                   };
 };
 
-export type ThemedCSSPropMap<Props, Config extends Record<string, Prop>> = {
+export type ThemedCSSPropMap<
+  Props,
+  Config extends Record<string, SystemProp>,
+> = {
   [K in keyof Props]?: ThemedCSSProps<Props[K], Config>;
 };
 

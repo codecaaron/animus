@@ -34,12 +34,17 @@ export function buildSystemPropsModule(opts: {
   groupRegistryJson: string;
   dynamicProps: Record<string, DynamicPropMeta>;
   admittedTransforms: ProjectManifest['admitted_transforms'];
+  typedSystemProps: ProjectManifest['typed_system_props'];
 }): string {
   const dynamicPropConfig = buildDynamicPropConfig(opts.dynamicProps);
   return (
     `export const systemPropMap = ${opts.systemPropMapJson};\n` +
     `export const systemPropGroups = ${opts.groupRegistryJson};\n` +
     `export const dynamicPropConfig = ${JSON.stringify(dynamicPropConfig)};\n` +
-    `export const transforms = ${transformsSource(opts.admittedTransforms)};\n`
+    `export const transforms = ${transformsSource(opts.admittedTransforms)};\n` +
+    // Only a component reading a typed system prop imports the list.
+    (opts.typedSystemProps.length > 0
+      ? `export const typedSystemProps = ${JSON.stringify(opts.typedSystemProps)};\n`
+      : '')
   );
 }

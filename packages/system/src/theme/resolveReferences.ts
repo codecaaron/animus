@@ -33,6 +33,43 @@ function parseReferences(value: string): ParsedReference[] {
   return references;
 }
 
+function applyOpacity(base: string, opacity: string | undefined): string {
+  if (opacity === undefined) return base;
+  const alpha = Number.parseInt(opacity, 10);
+  // Empty or non-numeric modifiers ('{path/}', '{path/abc}') degrade to the
+  // unmodified base — never a NaN% color-mix.
+  if (Number.isNaN(alpha)) return base;
+  if (alpha === 0) return 'transparent';
+  if (alpha !== 100) {
+    return `color-mix(in srgb, ${base} ${alpha}%, transparent)`;
+  }
+  return base;
+}
+
+/**
+ * Substitutes `{path}` references in one value from a resolved token map,
+ * whose emitted paths already read `var(--…)`. An unknown path warns and
+ * keeps its literal, as a token's own reference does.
+ */
+export function resolveValueReferences(
+  value: string,
+  tokenMap: Record<string, string>
+): string {
+  if (!value.includes('{')) return value;
+  return value.replace(TOKEN_REF_RE, (match) => {
+    const [reference] = parseReferences(match);
+    const target = tokenMap[reference.path];
+    if (target === undefined) {
+      // oxlint-disable-next-line no-console -- intentional runtime diagnostic
+      console.warn(
+        `[animus] Token ref {${reference.text}} — path '${reference.path}' not found in token map`
+      );
+      return match;
+    }
+    return applyOpacity(target, reference.opacity);
+  });
+}
+
 export interface ResolvedReferences {
   /**
    * Emitted paths keep their `var()` indirection, every other path its
@@ -101,17 +138,7 @@ export function resolveReferences(
         : // Unresolvedness propagates through emitted targets: a declaration
           // must never survive pointing at a variable that was never written.
           targetValue;
-    if (reference.opacity !== undefined) {
-      const alpha = Number.parseInt(reference.opacity, 10);
-      // Empty or non-numeric modifiers ('{path/}', '{path/abc}') degrade to
-      // the unmodified base — never a NaN% color-mix.
-      if (Number.isNaN(alpha)) return base;
-      if (alpha === 0) return 'transparent';
-      if (alpha !== 100) {
-        return `color-mix(in srgb, ${base} ${alpha}%, transparent)`;
-      }
-    }
-    return base;
+    return applyOpacity(base, reference.opacity);
   };
 
   const resolvePath = (path: string): void => {

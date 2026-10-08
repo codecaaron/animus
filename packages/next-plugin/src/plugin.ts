@@ -79,6 +79,10 @@ type NeedBuildContext = Record<never, never>;
 
 type CompilationIdentity = Record<never, never>;
 
+/** The compilation `thisCompilation` hands over: its identity keys the
+ *  NormalModule hooks, and its errors fail that build. */
+type OwnCompilation = CompilationIdentity & { errors: Error[] };
+
 type NormalModuleCompilationHooks = {
   needBuild?: {
     tapAsync: (
@@ -104,10 +108,7 @@ type Compiler = {
       tap: (name: string, fn: (compilation: Compilation) => void) => void;
     };
     thisCompilation: {
-      tap: (
-        name: string,
-        fn: (compilation: CompilationIdentity) => void
-      ) => void;
+      tap: (name: string, fn: (compilation: OwnCompilation) => void) => void;
     };
   };
   context: string;
@@ -155,6 +156,9 @@ export class AnimusWebpackPlugin {
   private readonly animusLoaderPaths: Set<string>;
   private lastBuiltEpoch: string | null = null;
   private epochMovedForNextCompilation = false;
+  /** This turn's rejected analysis. A rejection must fail the compilation,
+   *  never `watchRun`: webpack stops watching after a failed `watchRun`. */
+  private watchFailure: Error | null = null;
 
   constructor(options: AnimusNextOptions) {
     this.options = options;
@@ -242,6 +246,7 @@ export class AnimusWebpackPlugin {
     compiler.hooks.thisCompilation.tap(PLUGIN_NAME, (compilation) => {
       const epochMoved = this.epochMovedForNextCompilation;
       this.epochMovedForNextCompilation = false;
+      if (this.watchFailure) compilation.errors.push(this.watchFailure);
       const needBuild =
         NormalModule.getCompilationHooks!(compilation).needBuild;
       if (needBuild === undefined) {
@@ -317,43 +322,57 @@ export class AnimusWebpackPlugin {
       async (_compiler: Compiler) => {
         this.adoptCompilerContext(_compiler);
         this.extractAliases(_compiler);
-
-        if (!this.initialized) {
-          let startup = getAnalysisStartedPromise();
-          if (!startup) {
-            startup = this.session.runFullPipeline();
-            setAnalysisStartedPromise(startup);
-          }
-          try {
-            await startup;
-          } catch (err) {
-            // A rejected startup must not answer every later watchRun: the
-            // next one re-runs it against the repaired sources.
-            if (getAnalysisStartedPromise() === startup) {
-              resetAnalysisStartedPromise();
-            }
-            throw err;
-          }
-          this.initialized = true;
-          this.lastBuiltEpoch = getReplacementEpoch();
-          return;
-        }
-
-        await this.session.handleWatchUpdate({
-          modifiedFiles: _compiler.modifiedFiles,
-          removedFiles: _compiler.removedFiles,
-        });
-
-        const epoch = getReplacementEpoch();
-        this.epochMovedForNextCompilation =
-          this.lastBuiltEpoch !== null &&
-          epoch !== null &&
-          epoch !== this.lastBuiltEpoch;
-        if (epoch !== null) {
-          this.lastBuiltEpoch = epoch;
+        try {
+          await this.analyzeWatchTurn(_compiler);
+          this.watchFailure = null;
+        } catch (err) {
+          this.watchFailure =
+            err instanceof Error ? err : new Error(String(err));
         }
       }
     );
+  }
+
+  /** Rejects with the analysis error; the published generation stays the
+   *  last successful one. */
+  private async analyzeWatchTurn(compiler: Compiler): Promise<void> {
+    if (!this.initialized) {
+      let startup = getAnalysisStartedPromise();
+      if (!startup) {
+        startup = this.session.runFullPipeline();
+        setAnalysisStartedPromise(startup);
+      }
+      try {
+        await startup;
+      } catch (err) {
+        // A rejected startup must not answer every later watchRun: the
+        // next one re-runs it against the repaired sources.
+        if (getAnalysisStartedPromise() === startup) {
+          resetAnalysisStartedPromise();
+        }
+        throw err;
+      }
+      this.initialized = true;
+      this.lastBuiltEpoch = getReplacementEpoch();
+      // A failed startup's compilation passed every module through
+      // untransformed: rebuild them all.
+      this.epochMovedForNextCompilation = this.watchFailure !== null;
+      return;
+    }
+
+    await this.session.handleWatchUpdate({
+      modifiedFiles: compiler.modifiedFiles,
+      removedFiles: compiler.removedFiles,
+    });
+
+    const epoch = getReplacementEpoch();
+    this.epochMovedForNextCompilation =
+      this.lastBuiltEpoch !== null &&
+      epoch !== null &&
+      epoch !== this.lastBuiltEpoch;
+    if (epoch !== null) {
+      this.lastBuiltEpoch = epoch;
+    }
   }
 
   resetForHmr(): void {

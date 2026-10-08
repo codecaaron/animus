@@ -19,6 +19,7 @@ export type AnalyzeProjectArgs = [
   externalDirsJson: string | null,
   transformSourcesJson: string | null,
   transformProvenanceJson: string | null,
+  declarationScalesJson?: string,
 ];
 
 /** @internal */
@@ -43,13 +44,15 @@ export interface AnalyzeProjectInputs {
   /** Absent in inputs persisted before it existed: no host-binding
    *  evidence, so configured sources reading `btoa`/`atob` are rejected. */
   transformProvenanceJson?: string | null;
+  /** Present only for a theme with declaration scales; absence means none. */
+  declarationScalesJson?: string;
 }
 
 /** @internal */
 export function buildAnalyzeProjectArgs(
   inputs: AnalyzeProjectInputs
 ): AnalyzeProjectArgs {
-  return [
+  const args: AnalyzeProjectArgs = [
     inputs.filesJson,
     inputs.scalesJson,
     inputs.variableMapJson,
@@ -70,4 +73,7 @@ export function buildAnalyzeProjectArgs(
     inputs.transformSourcesJson,
     inputs.transformProvenanceJson ?? null,
   ];
+  // Sent only when present, so a scalar system's slots are unchanged.
+  if (inputs.declarationScalesJson) args.push(inputs.declarationScalesJson);
+  return args;
 }

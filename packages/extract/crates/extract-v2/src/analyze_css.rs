@@ -3,6 +3,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write as _;
+use std::sync::Arc;
 
 use rustc_hash::{FxHashMap, FxHashSet};
 use serde_json::Value;
@@ -19,6 +20,7 @@ use crate::css::{
     resolve_custom_prop_classes, resolve_utility_classes, wrap_layer, BreakpointMap, ComponentCss, ComposeFamilyRef, CompoundConditionMap,
     CssFragmentStore, CssSheets, UtilityInput, VariantCss,
 };
+use crate::declarations::{bind_component_declarations, check_surface_overlap, DeclarationBinding, DeclarationScales};
 use crate::dynamic_meta::DynamicPropMeta;
 use crate::evaluator::{EvalError, TransformEvaluator};
 use crate::facts::FileFacts;
@@ -30,7 +32,7 @@ use crate::reconcile::{build_ledger, identify_prospective_eliminations, reconcil
 use crate::theme::{
     ConditionAliasesMap, ContextualVarsMap, CssDeclaration, FlatTheme, PropConfigMap,
     ResolveContext, ResolvedStyles, SelectorAliasesMap, StrictTokenMiss, StrictTokenMissSink,
-    TransformFailure, TransformFailureSink, VariableMap, extracts_callback_value, strict_token_miss_of,
+    TransformFailure, TransformFailureSink, VariableMap, extracts_callback_value, extracts_configured_value, strict_token_miss_of,
 };
 use crate::transforms::CallbackDefinition;
 use crate::usage_facts::{is_animus_system_specifier, TagFact, UsageFact, UsageResidueRecord};
@@ -95,6 +97,9 @@ pub struct CssInputs {
     pub transform_sources: FxHashMap<String, String>,
     /// The loader's host-binding evidence for those sources.
     pub transform_provenance: crate::transforms::TransformProvenance,
+    /// The theme's declaration scales, lowered once for system and
+    /// component props alike.
+    pub declaration_scales: DeclarationScales,
     pub dev_mode: bool,
 }
 
@@ -182,9 +187,18 @@ impl CssInputs {
             static_css,
             transform_sources: FxHashMap::default(),
             transform_provenance: Default::default(),
+            declaration_scales: DeclarationScales::default(),
             external_dirs: parse("externalDirsJson", external_dirs_json)?,
             dev_mode,
         })
+    }
+
+    /// Binds the configuration's declaration props to the theme's declaration
+    /// scales; a registration that cannot bind fails the whole analysis.
+    pub fn bind_declarations(&mut self, json: Option<&str>) -> Result<(), String> {
+        self.declaration_scales =
+            crate::declarations::bind_declaration_props(&mut self.config, json, &self.theme)?;
+        Ok(())
     }
 
     pub fn set_transform_sources(&mut self, json: Option<&str>) -> Result<(), String> {
@@ -259,6 +273,10 @@ const CONFIGURED_TRANSFORM_REJECTED: &str = "animus.transform.configured-rejecte
 /// A value missing from a strict, populated scale is omitted rather than
 /// applied raw; the author meant a token the scale does not have.
 const STRICT_TOKEN_MISS: &str = "animus.props.strict-token-miss";
+/// A configured transform that exhausts its evaluation budget or reads the
+/// host where no runtime slot exists (style blocks, variants, states,
+/// global styles): its declaration falls back to the raw value.
+const STATIC_EVALUATION_UNAVAILABLE: &str = "animus.transform.static-evaluation-unavailable";
 
 pub(crate) fn diagnostic_severity_for_code(code: &str) -> &'static str {
     match code {
@@ -275,6 +293,7 @@ pub(crate) fn diagnostic_severity_for_code(code: &str) -> &'static str {
         | UNSUPPORTED_DEFAULT_EXPORT
         | UNSUPPORTED_NAMESPACE_ROOT
         | CONFIGURED_TRANSFORM_REJECTED
+        | STATIC_EVALUATION_UNAVAILABLE
         | STRICT_TOKEN_MISS => "error",
         _ => "warn",
     }
@@ -322,6 +341,9 @@ pub struct CssOutput {
     /// admission and registered, by definition key: the runtime registry's
     /// only input.
     pub admitted_transforms: BTreeMap<String, String>,
+    /// Sorted system props bound to a configured transform, whose static
+    /// map keys are typed value keys.
+    pub typed_system_props: Vec<String>,
 }
 
 pub fn extract_breakpoints(theme: &FlatTheme) -> BreakpointMap {
@@ -1222,6 +1244,16 @@ enum DropCause<'a> {
     InvalidShape { offending: Option<String> },
 }
 
+/// The declaration props among `props` with a runtime slot.
+fn runtime_declarations_of<'a>(
+    props: impl Iterator<Item = &'a String>,
+    config: &PropConfigMap,
+) -> Vec<(String, Arc<DeclarationBinding>)> {
+    props
+        .filter_map(|prop| Some((prop.clone(), Arc::clone(config.get(prop)?.declaration.binding.as_ref()?))))
+        .collect()
+}
+
 /// `animus` classifies the drop; a chain of unproven origin keeps the plain
 /// bail, since only Animus provenance makes the loss an Animus failure.
 fn emit_eval_drop_bail(
@@ -1919,7 +1951,7 @@ fn admit_callback(
     if attempted.insert(definition.key.clone()) {
         if let Some(source) = definition.isolated_source() {
             // A source the engine cannot compile stays unregistered.
-            let _ = evaluator.register_isolated(&definition.key, &source);
+            let _ = evaluator.register(&definition.key, &source);
         }
     }
     evaluator.is_registered(&definition.key)
@@ -1941,8 +1973,19 @@ fn drain_transform_failures(
             .map(str::to_string)
             .unwrap_or_else(|| format!("transform '{}'", failure.transform_name));
         let diagnostic = match &failure.failure {
-            // Never recorded: the value stays on its runtime path.
-            EvalError::Unevaluable => continue,
+            EvalError::Unevaluable => diagnostic(
+                file,
+                &component,
+                "warn",
+                format!(
+                    "transform '{}' could not be evaluated during extraction for prop '{}' in {} \
+                     (it exhausted its evaluation budget or read the host environment), and this \
+                     position has no runtime fallback; raw value applied — keep the callback to its \
+                     argument and standard globals, or pass the value as a JSX prop",
+                    failure.transform_name, failure.prop, file
+                ),
+                Some(STATIC_EVALUATION_UNAVAILABLE),
+            ),
             EvalError::InvalidResultShape { shape } => CssDiagnostic {
                 token: None,
                 file: file.to_string(),
@@ -2001,8 +2044,9 @@ fn run_with_system_floor(
     let mut diagnostics: Vec<CssDiagnostic> = Vec::new();
     let mut deferred_errors: Vec<DeferredComponentError> = Vec::new();
 
-    // Configured definitions register by identity, so a same-named project
-    // declaration never reaches a configured binding; a project declaration
+    // Configured definitions register by identity as isolated definitions,
+    // so a same-named project declaration never reaches a configured binding
+    // and no evaluation reaches another's realm; a project declaration
     // registers only as an admitted component callback's definition, under
     // its own identity. Sorted for deterministic diagnostics.
     let definitions = configured_definitions(&inputs.config);
@@ -2043,6 +2087,17 @@ fn run_with_system_floor(
                 continue;
             }
         };
+        // Equal text cannot show which binding of a standard-global name a
+        // callable closes over; the loader's evidence for its own function can.
+        if let Some(reason) = inputs.transform_provenance.captured_rejection(key, name).filter(|_| hosts.is_empty()) {
+            diagnostics.push(rejected_with(
+                reason,
+                "declare what it reads inside the callback or read the standard global itself; \
+                 a configured source is evaluated and delivered as its own text, so it cannot \
+                 carry its module's bindings",
+            ));
+            continue;
+        }
         // Its text alone cannot show which `btoa` or `atob` it captured.
         if let Some(reason) = inputs.transform_provenance.host_rejection(key, name, &hosts) {
             diagnostics.push(rejected_with(
@@ -2229,11 +2284,20 @@ fn run_with_system_floor(
             .and_then(|parent_id| inherited_variant_configs.get(parent_id))
             .map_or(&[][..], Vec::as_slice);
         let merged_chain = inherit_variant_stages(chain, parent_variant_configs);
+        // A component's own declaration props bind under its identity; an
+        // inherited one keeps the identity of the component that declared it.
         let result = process_chain_facts(
             merged_chain.as_ref().unwrap_or(chain),
             &resolve_ctx,
             &inputs.group_registry,
-        );
+        )
+        .and_then(|mut out| {
+            if let Some(own) = out.custom_prop_configs.as_mut() {
+                bind_component_declarations(own, &inputs.declaration_scales, &inputs.theme, component_id)
+                    .map_err(|detail| ("props".to_string(), detail))?;
+            }
+            Ok(out)
+        });
         // Drained before the match so failures recorded before a later bail
         // still report; topo order keeps emission deterministic.
         drain_transform_failures(
@@ -2292,6 +2356,20 @@ fn run_with_system_floor(
                         }
                         _ => out.custom_prop_configs,
                     };
+                // An extension's own declaration props share its surface with
+                // the ones it inherits.
+                if let Some(Err(detail)) = custom_configs.as_ref().map(check_surface_overlap) {
+                    emit_eval_drop_bail(
+                        &mut diagnostics,
+                        file_path,
+                        &chain.descriptor.binding,
+                        "props",
+                        DropCause::InvalidShape { offending: None },
+                        &detail,
+                        animus(),
+                    );
+                    continue;
+                }
                 let dropped: Vec<&(String, String)> = chain
                     .stages
                     .iter()
@@ -2699,18 +2777,24 @@ fn run_with_system_floor(
         })
         .collect();
     // A literal that misses a strict scale gets no class; it is reported at
-    // its usage, which the shared utility stream no longer knows.
+    // its usage, which the shared utility stream no longer knows. A value
+    // whose configured transform the runtime would resolve differently gets
+    // no class either: the runtime finds no key and computes it.
     let admitted_input = |config: &PropConfigMap,
                           file: &str,
                           component: &str,
                           prop_name: &str,
                           value: &Value,
                           diagnostics: &mut Vec<CssDiagnostic>| {
-        let miss = config.get(prop_name).and_then(|prop_config| {
+        let prop_config = config.get(prop_name);
+        let miss = prop_config.and_then(|prop_config| {
             strict_token_miss_of(prop_name, prop_config, value, &resolve_ctx)
         });
         if let Some(miss) = miss {
             diagnostics.push(strict_token_miss(file, component, &miss));
+            return None;
+        }
+        if prop_config.is_some_and(|prop_config| !extracts_configured_value(prop_config, value, &resolve_ctx)) {
             return None;
         }
         Some(UtilityInput {
@@ -2841,7 +2925,13 @@ fn run_with_system_floor(
                         Some(callback) => {
                             let definition = &callback.definition;
                             admit_callback(definition, &evaluator, &mut attempted_callbacks)
-                                && extracts_callback_value(prop_config, definition, &usage.value, &resolve_ctx)
+                                && extracts_callback_value(
+                                    prop_config,
+                                    &definition.key,
+                                    &definition.name,
+                                    &usage.value,
+                                    &resolve_ctx,
+                                )
                         }
                         None => false,
                     };
@@ -3016,9 +3106,17 @@ fn run_with_system_floor(
             (FxHashSet::default(), detected_dynamic_prop_names)
         };
 
+    let typed_system_props = utility_classes.typed_props().clone();
     let mut dynamic_props: HashMap<String, DynamicPropMeta> = HashMap::new();
     for prop_name in &dynamic_prop_names {
         if let Some(prop_config) = inputs.config.get(prop_name.as_str()) {
+            if let Some(binding) = prop_config.declaration_binding() {
+                dynamic_props.insert(
+                    prop_name.clone(),
+                    DynamicPropMeta::declarations(class_prefix, prop_name, binding),
+                );
+                continue;
+            }
             let kebab = camel_to_kebab(prop_name);
             dynamic_props.insert(
                 prop_name.clone(),
@@ -3038,8 +3136,15 @@ fn run_with_system_floor(
         None
     };
 
-    let utility_output = if !all_utility_inputs.is_empty() || slot_entries.is_some() {
-        let out = Some(utility_classes.render(&breakpoints, slot_entries));
+    // Consuming rules serve literal and runtime-selected keys alike.
+    let runtime_declarations = runtime_declarations_of(dynamic_props.keys(), &inputs.config);
+
+    let utility_output = if !all_utility_inputs.is_empty()
+        || slot_entries.is_some()
+        || utility_classes.has_declarations()
+        || !runtime_declarations.is_empty()
+    {
+        let out = Some(utility_classes.render(&breakpoints, slot_entries, &runtime_declarations));
         drain_transform_failures(
             &transform_failures,
             "",
@@ -3096,8 +3201,11 @@ fn run_with_system_floor(
             .or_default()
             .insert(dyn_usage.prop_name.clone());
     }
-    // A callback is delivered unless its component is confined and every
-    // value the prop receives there has an extracted class. Inline text that
+    // A callback prop, inline or naming a configured definition, keeps its
+    // slot (and an inline callback its delivery) unless its component is
+    // confined and every value the prop receives there has an extracted
+    // class: a literal the runtime resolves differently gets no class and
+    // needs the slot. Inline text that
     // reads more than its parameters and admitted globals stays delivered:
     // dropping it would drop the imports it reads. Admission checks names
     // alone, so a free name its module imports (an import named `Math`)
@@ -3116,13 +3224,15 @@ fn run_with_system_floor(
     for (component_id, custom_configs) in &custom_configs_by_id {
         let confined = confined_uses.get(*component_id);
         for (prop_name, config) in custom_configs.iter() {
-            let Some(delivery) = config.transform_fn_source.as_deref() else {
+            // The callback-bound props are the ones whose keys are typed.
+            if !config.keys_typed() {
                 continue;
-            };
+            }
+            let delivery = config.transform_fn_source.as_deref();
             let covered = confined.is_some_and(|confined| {
                 confined.covers(prop_name, |value| custom_classes.has_class(component_id, prop_name, value))
             }) && config.callback.as_ref().is_none_or(|callback| {
-                delivery != callback.definition.source
+                delivery != Some(callback.definition.source.as_str())
                     || (admit_callback(&callback.definition, &evaluator, &mut attempted_callbacks)
                         && !reads_import(callback))
             });
@@ -3157,6 +3267,7 @@ fn run_with_system_floor(
 
     let mut per_component_custom_dynamic: FxHashMap<String, HashMap<String, DynamicPropMeta>> =
         FxHashMap::default();
+    let mut runtime_custom_declarations: Vec<(String, Arc<DeclarationBinding>)> = Vec::new();
     let mut all_custom_slot_entries: Vec<(String, ResolvedStyles, String)> = Vec::new();
     for component_id in &sorted_ids {
         let Some((component_css, _, _, _, _, custom_configs, _)) = evaluated.get(component_id)
@@ -3168,6 +3279,7 @@ fn run_with_system_floor(
             continue;
         };
         let mut component_dynamic: HashMap<String, DynamicPropMeta> = HashMap::new();
+        runtime_custom_declarations.extend(runtime_declarations_of(dynamic_props_for_binding.iter(), cc));
         let class_hash = component_css
             .class_name
             .rsplit('-')
@@ -3176,6 +3288,13 @@ fn run_with_system_floor(
         let hash8 = &class_hash[..class_hash.len().min(8)];
         for prop_name in dynamic_props_for_binding {
             if let Some(prop_config) = cc.get(prop_name) {
+                if let Some(binding) = prop_config.declaration_binding() {
+                    component_dynamic.insert(
+                        prop_name.clone(),
+                        DynamicPropMeta::declarations(class_prefix, prop_name, binding),
+                    );
+                    continue;
+                }
                 let kebab = camel_to_kebab(prop_name);
                 component_dynamic.insert(
                     prop_name.clone(),
@@ -3203,8 +3322,12 @@ fn run_with_system_floor(
         None
     };
 
-    let custom_output = if !all_custom_inputs.is_empty() || custom_slot_entries.is_some() {
-        let out = Some(custom_classes.render(&breakpoints, custom_slot_entries));
+    let custom_output = if !all_custom_inputs.is_empty()
+        || custom_slot_entries.is_some()
+        || custom_classes.has_declarations()
+        || !runtime_custom_declarations.is_empty()
+    {
+        let out = Some(custom_classes.render(&breakpoints, custom_slot_entries, &runtime_custom_declarations));
         drain_transform_failures(
             &transform_failures,
             "",
@@ -3223,6 +3346,7 @@ fn run_with_system_floor(
     let delivered_ids: FxHashSet<&String> = dynamic_props
         .values()
         .chain(per_component_custom_dynamic.values().flat_map(|metas| metas.values()))
+        .filter_map(DynamicPropMeta::value)
         .filter(|meta| meta.transform_fn_source.is_none())
         .filter_map(|meta| meta.transform_id.as_ref())
         .collect();
@@ -3275,6 +3399,9 @@ fn run_with_system_floor(
         let has_system_dynamic_props = active_props
             .as_ref()
             .is_some_and(|props| props.iter().any(|name| dynamic_prop_names.contains(name)));
+        let reads_typed_system_props = active_props
+            .as_ref()
+            .is_some_and(|props| props.iter().any(|name| typed_system_props.contains(name)));
         let has_custom_dynamic_props = per_component_custom_dynamic
             .get(component_id)
             .is_some_and(|config| !config.is_empty());
@@ -3314,6 +3441,7 @@ fn run_with_system_floor(
                 custom_prop_class_map,
                 custom_dynamic_config: per_component_custom_dynamic.get(component_id).cloned(),
                 typed_custom_props,
+                reads_typed_system_props,
                 merged_config,
                 drops_parent_reference: parent_callbacks.get(component_id).is_some_and(|inherited| {
                     !inherited.iter().any(|prop| {
@@ -3744,6 +3872,7 @@ fn run_with_system_floor(
         files_map,
         usage_residue,
         admitted_transforms,
+        typed_system_props: typed_system_props.into_iter().collect(),
     }
 }
 
@@ -3946,6 +4075,7 @@ mod tests {
             None
         );
     }
+
 
     #[test]
     fn base_css_flows_through_sheets_and_layers() {
@@ -4910,7 +5040,7 @@ export const App = ({ n }) => (
         // Every callback keeps its delivery for values the build cannot know.
         let dynamic = payload.custom_dynamic_config.as_ref().unwrap();
         for prop in ["inl", "loc", "fn", "ct", "shut"] {
-            assert!(dynamic[prop].transform_fn_source.is_some(), "{prop}");
+            assert!(dynamic[prop].value().unwrap().transform_fn_source.is_some(), "{prop}");
         }
         assert_eq!(
             out.diagnostics.iter().filter(|d| d.component == "Box").count(),
@@ -6289,6 +6419,7 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
     /// A configured source reading a free `btoa`/`atob` is admitted only when
     /// the loader's evidence for its own definition shows the host function;
     /// absent, malformed, missing or rejecting evidence leaves the raw value.
+    /// Any other source is rejected only by evidence of a captured binding.
     #[test]
     fn host_reading_configured_sources_need_their_own_host_binding_evidence() {
         let config = r#"{"a": {"property": "width", "transform": "enc", "transformId": "enc@a"}, "b": {"property": "height", "transform": "enc", "transformId": "enc@b"}, "c": {"property": "top", "transform": "plain", "transformId": "plain@c"}}"#;
@@ -6312,6 +6443,16 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             assert!(rejected.iter().any(|m| m.contains("configured source reads 'btoa', but") && m.contains(reason)), "{provenance:?}: {rejected:#?}");
             assert!(rejected.iter().all(|m| !m.contains("'plain'")), "{rejected:#?}");
         }
+        // A source reading neither name is rejected only when the evidence
+        // shows its callable reading a binding outside itself.
+        let mut inputs = configured_inputs(config, r#"["a", "b", "c"]"#, Some(sources), false);
+        inputs.transform_provenance = crate::transforms::TransformProvenance::from_json(Some(
+            r#"{"enc@a": {"hostGlobals": ["btoa"]}, "enc@b": {"hostGlobals": ["btoa"]}, "plain@c": {"rejection": "reads 'String' declared in /m.ts outside the callback"}}"#,
+        ));
+        let out = analyze(&[("use.tsx", usage)], &inputs);
+        assert_eq!(out.admitted_transforms.keys().collect::<Vec<_>>(), ["enc@a", "enc@b"]);
+        assert!(out.diagnostics.iter().any(|d| d.code.as_deref() == Some(CONFIGURED_TRANSFORM_REJECTED)
+            && d.message.contains("'plain'") && d.message.contains("its callable reads 'String' declared in /m.ts outside the callback")));
     }
 
     fn failing_transform_variant_inputs(dev_mode: bool) -> CssInputs {
@@ -6404,7 +6545,7 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             &binding_inputs(),
         );
         let meta = |prop: &str| {
-            let meta = &out.dynamic_props[prop];
+            let meta = out.dynamic_props[prop].value().unwrap();
             (meta.transform_name.as_deref(), meta.transform_id.as_deref())
         };
         assert_eq!(meta("inset"), (Some("unit"), Some("unit@system.inset")));
@@ -7105,16 +7246,115 @@ export const App = () => <><Quiet inl={10} /><Base k={10} /><Kid lift={10} /></>
 
         // Inside an attribute nothing is proven (and the unresolved `Layout`
         // widens the floor); `wide` keeps its slot for a value whose runtime
-        // key differs from the build's while `inset` keys agree.
+        // key differs from the build's. A configured transform's keys are
+        // typed, which order `sm2` after `sm` as the runtime does.
         let cases: [(&str, &[&str]); 3] = [
             ("export const App = () => <Layout header={<div><Frame wide={4} inset={3} /></div>} />;\n", &["inset", "tall", "wide"]),
             ("export const App = () => <><Frame wide={0.000005} inset={3} /></>;\n", &["wide"]),
-            ("export const App = () => <><Frame wide={{ sm: 4, sm2: 6 }} inset={{ sm: 3, md: 5 }} /></>;\n", &["wide"]),
+            ("export const App = () => <><Frame wide={{ sm: 4, sm2: 6 }} inset={{ sm: 3, md: 5 }} /></>;\n", &[]),
         ];
         for (render, want) in cases {
             let out = analyze(&[("a.tsx", declare("", render).as_str())], &split_group_inputs());
             assert_eq!(out.dynamic_props.keys().collect::<Vec<_>>(), want, "{render}");
         }
+        // An untransformed prop's untyped key orders `sm2` before `sm`, unlike
+        // the runtime, so such a value keeps its slot.
+        let mut untyped = split_group_inputs();
+        let inset = untyped.config.get_mut("inset").unwrap();
+        inset.transform = None;
+        inset.transform_id = None;
+        let render = "export const App = () => <><Frame wide={4} inset={{ sm: 3, sm2: 5 }} /></>;\n";
+        let out = analyze(&[("a.tsx", declare("", render).as_str())], &untyped);
+        assert_eq!(out.dynamic_props.keys().collect::<Vec<_>>(), ["inset"]);
+    }
+
+    /// A custom prop naming a configured transform keeps its runtime slot when
+    /// a literal declines static extraction, as a callback prop does: unless
+    /// its component is confined and every literal has a class.
+    #[test]
+    fn named_configured_custom_literals_that_decline_keep_their_slot() {
+        let inputs = configured_inputs(
+            r#"{
+                "hw": {"property": "columnGap", "transform": "host", "transformId": "host@system.hw"},
+                "ns": {"property": "marginTop", "transform": "nstr", "transformId": "nstr@system.ns"},
+                "un": {"property": "marginLeft", "transform": "unit", "transformId": "unit@system.un"}
+            }"#,
+            r#"["hw", "ns", "un"]"#,
+            Some(
+                &serde_json::json!({
+                    "host@system.hw": "(v) => `${new Date(0).getUTCFullYear() - 1970 + Number(v)}px`",
+                    "nstr@system.ns": "(v) => String(Number(v) * 2)",
+                    "unit@system.un": "(v) => `${v}px`",
+                })
+                .to_string(),
+            ),
+            false,
+        );
+        let props = "{ e: { property: 'left', transform: 'host' }, n: { property: 'top', transform: 'nstr' }, u: { property: 'right', transform: 'unit' } }";
+        let source = format!(
+            "export const Card = ds.props({props}).asElement('div');\nconst Conf = ds.props({props}).asElement('div');\n\
+             export const Kid = Card.extend().asElement('div');\n\
+             export const App = () => <><Card e={{3}} n={{2}} u={{4}} /><Conf e={{3}} n={{2}} u={{4}} /><Kid e={{3}} n={{2}} u={{4}} /></>;\n"
+        );
+        let out = analyze(&[("a.tsx", source.as_str())], &inputs);
+        assert_eq!(runtime_custom_props(&out, "a.tsx::Card"), ["e", "n", "u"]);
+        assert_eq!(runtime_custom_props(&out, "a.tsx::Conf"), ["e", "n"]);
+        assert_eq!(runtime_custom_props(&out, "a.tsx::Kid"), ["e", "n", "u"]);
+        assert!(out.components["a.tsx::Conf"].replacement.contains("transforms[\"host@system.hw\"]"));
+    }
+
+    #[test]
+    fn configured_transforms_evaluate_in_isolation_with_typed_keys_and_runtime_results() {
+        let inputs = configured_inputs(
+            r#"{
+                "tw": {"property": "outlineOffset", "transform": "typed", "transformId": "typed@system.tw"},
+                "mm": {"property": "marginRight", "transform": "mutate", "transformId": "mutate@system.mm"},
+                "mr": {"property": "marginBottom", "transform": "reads", "transformId": "reads@system.mr"},
+                "hw": {"property": "columnGap", "transform": "host", "transformId": "host@system.hw"},
+                "ns": {"property": "marginTop", "transform": "nstr", "transformId": "nstr@system.ns"}
+            }"#,
+            r#"["tw", "mm", "mr", "hw", "ns"]"#,
+            Some(
+                &serde_json::json!({
+                    "typed@system.tw": "(v) => typeof v === 'number' ? `${v}px` : `${v}em`",
+                    "mutate@system.mm": "(v) => { Math.round = () => 7; return `${v}px`; }",
+                    "reads@system.mr": "(v) => `${Math.round(Number(v))}px`",
+                    "host@system.hw": "(v) => typeof globalThis.window === 'undefined' ? `${v}px` : `${v * 2}px`",
+                    "nstr@system.ns": "(v) => String(Number(v) * 2)",
+                })
+                .to_string(),
+            ),
+            false,
+        );
+        let declare = |render: &str| {
+            format!("export const Box = ds.system({{ layout: true }}).asElement('div');\nexport const S = ds.styles({{ hw: 5 }}).asElement('p');\n{render}")
+        };
+        for render in [
+            "export const App = () => <><Box mm={1} /><Box mr={4.4} tw={100} /><Box tw=\"100\" hw={5} ns={10} /><S /></>;\n",
+            "export const App = () => <><S /><Box ns={10} hw={5} tw=\"100\" /><Box tw={100} mr={4.4} /><Box mm={1} /></>;\n",
+        ] {
+            let out = analyze(&[("a.tsx", declare(render).as_str())], &inputs);
+            let rule = |prop: &str, key: &str| {
+                let class = &out.system_prop_map[prop][key];
+                out.css.split(&format!(".{class}")).nth(1).and_then(|r| r.split('}').next()).unwrap_or_default().to_string()
+            };
+            // A callback tells `100` from `"100"`, so each keeps its own class.
+            assert!(rule("tw", "100").contains("100px"), "{render}\n{}", out.css);
+            assert!(rule("tw", "\"100\"").contains("100em"), "{render}\n{}", out.css);
+            // Each evaluation has its own realm, whatever the order.
+            assert!(rule("mr", "4.4").contains("4px"), "{render}\n{}", out.css);
+            // A host read and a numeric-string result stay on the runtime path.
+            assert!(!out.system_prop_map.contains_key("hw") && !out.system_prop_map.contains_key("ns"), "{render}");
+            assert_eq!(out.typed_system_props, ["hw", "mm", "mr", "ns", "tw"]);
+            // Only the style block, with no runtime path, reports the decline.
+            let declined: Vec<_> = out
+                .diagnostics
+                .iter()
+                .filter(|d| d.code.as_deref() == Some(STATIC_EVALUATION_UNAVAILABLE))
+                .collect();
+            assert_eq!(declined.len(), 1, "{:?}", out.diagnostics);
+            assert_eq!(declined[0].severity.as_deref(), Some("error"));
+            assert!(out.css.contains("column-gap: 5;"), "{}", out.css);
+        }
     }
 }
-

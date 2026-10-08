@@ -68,7 +68,7 @@ export function buildAnalysisInputs(
   if (opts.emitter.systemPropsModuleId) {
     emitterConfig.system_props_module_id = opts.emitter.systemPropsModuleId;
   }
-  return {
+  const inputs: AnalyzeProjectInputs = {
     filesJson: JSON.stringify(opts.fileEntries),
     scalesJson: opts.system.scalesJson,
     variableMapJson: opts.system.variableMapJson,
@@ -93,6 +93,12 @@ export function buildAnalysisInputs(
         ? JSON.stringify(opts.externalDirs)
         : null,
   };
+  // Present only for a theme with declaration scales, so a scalar system's
+  // persisted inputs are unchanged.
+  if (opts.system.declarationScalesJson) {
+    inputs.declarationScalesJson = opts.system.declarationScalesJson;
+  }
+  return inputs;
 }
 
 function hasSourceThemeManifests(system: SystemConfig): boolean {

@@ -6,7 +6,7 @@ use std::fmt;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, OnceLock};
 
-use rquickjs::{Context, Function, Persistent, Runtime};
+use rquickjs::{Context, Function, Runtime};
 use rustc_hash::FxHashMap;
 use serde_json::Value;
 
@@ -37,9 +37,8 @@ pub enum EvalError {
     InvalidResultShape { shape: String },
     /// Transform threw, or the engine failed to evaluate the script.
     Throw { message: String },
-    /// An isolated definition exhausted its budget or reached the host
-    /// environment, so its result for this value is not known before
-    /// runtime.
+    /// The evaluation exhausted its budget or reached the host environment,
+    /// so its result for this value is not known before runtime.
     Unevaluable,
 }
 
@@ -59,49 +58,31 @@ impl fmt::Display for EvalError {
 
 /// In-process JavaScript transform evaluator powered by rquickjs.
 ///
-/// Registered callables live in a Rust-side registry keyed by definition
-/// identity, so no registration writes a property of the realm's global
+/// Registered definitions live in a Rust-side registry keyed by definition
+/// identity, so no registration writes a property of a realm's global
 /// object: a transform named `Map` cannot replace another callback's `Map`.
+#[derive(Default)]
 pub struct TransformEvaluator {
-    // Persistent handles must drop before the runtime that owns them.
     registry: RefCell<FxHashMap<String, Definition>>,
-    harness: Persistent<Function<'static>>,
-    context: Context,
-    /// Interrupt polls left to the running isolated evaluation; `UNBOUNDED`
-    /// outside one.
-    budget: Arc<AtomicU32>,
-    runtime: Runtime,
 }
 
-enum Definition {
-    /// Compiled once in the shared realm.
-    Shared(Persistent<Function<'static>>),
-    /// Compiled afresh for each evaluation, in its own strict realm under a
-    /// budget, so nothing it does reaches another evaluation; its result
-    /// depends only on the argument, so each argument is evaluated once.
-    Isolated {
-        source: String,
-        results: RefCell<FxHashMap<String, Result<Scalar, EvalError>>>,
-    },
+/// Compiled afresh for each evaluation, in its own strict realm under a
+/// budget, so nothing it does reaches another evaluation; its result depends
+/// only on the argument, so each argument is evaluated once.
+struct Definition {
+    source: String,
+    results: RefCell<FxHashMap<String, Result<Scalar, EvalError>>>,
 }
 
 /// QuickJS polls the interrupt handler about every ten thousand operations,
-/// so an isolated evaluation stops near a million operations on every
-/// machine.
-const ISOLATED_BUDGET: u32 = 100;
-const UNBOUNDED: u32 = u32::MAX;
+/// so an evaluation stops near a million operations on every machine.
+const BUDGET: u32 = 100;
 
 /// A valid scalar result: its CSS text and whether it was a number.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Scalar {
     pub css: String,
     pub numeric: bool,
-}
-
-impl Default for TransformEvaluator {
-    fn default() -> Self {
-        Self::new()
-    }
 }
 
 /// The standard global-object properties of ECMA-262 (2027 draft):
@@ -225,9 +206,10 @@ pub fn evaluator_shared_host_globals() -> &'static [&'static str] {
 }
 
 /// Calls a registered callable and validates its result. Built in each
-/// realm before any registration, so it closes over pristine intrinsics.
-/// `number` is the JS expression returned for a finite number `r`.
-fn harness_source(number: &str) -> String {
+/// realm before the callable compiles, so it closes over pristine
+/// intrinsics. A finite number comes back wrapped as `['' + r]`, so its type
+/// survives.
+fn harness_source() -> String {
     format!(
         "(() => {{\n\
            const isArray = Array.isArray;\n\
@@ -236,7 +218,7 @@ fn harness_source(number: &str) -> String {
              if (typeof r === 'string') return r;\n\
              // Finite check without a global: NaN fails self-equality and\n\
              // `1/0` yields Infinity.\n\
-             if (typeof r === 'number' && r === r && r !== 1/0 && r !== -1/0) return {number};\n\
+             if (typeof r === 'number' && r === r && r !== 1/0 && r !== -1/0) return ['' + r];\n\
              const d = r === null ? 'null'\n\
                : typeof r === 'number' ? 'non-finite-number'\n\
                : (typeof r === 'object' && isArray(r)) ? 'array'\n\
@@ -251,58 +233,15 @@ fn harness_source(number: &str) -> String {
 
 impl TransformEvaluator {
     pub fn new() -> Self {
-        let (runtime, context) = new_realm();
-        let harness = context.with(|ctx| {
-            let harness: Function = ctx
-                .eval(harness_source("'' + r").as_bytes())
-                .expect("the transform harness must compile in a pristine realm");
-            Persistent::save(&ctx, harness)
-        });
-        let budget = Arc::new(AtomicU32::new(UNBOUNDED));
-        let polls = Arc::clone(&budget);
-        runtime.set_interrupt_handler(Some(Box::new(move || {
-            match polls.load(Ordering::Relaxed) {
-                UNBOUNDED => false,
-                0 => true,
-                left => {
-                    polls.store(left - 1, Ordering::Relaxed);
-                    false
-                }
-            }
-        })));
-        Self {
-            registry: RefCell::new(FxHashMap::default()),
-            harness,
-            context,
-            budget,
-            runtime,
-        }
+        Self::default()
     }
 
-    /// Register a JS function expression as the definition `key`. The key is
-    /// only a registry entry: nothing is installed on the global object.
+    /// Register a JS function expression as the definition `key`: each
+    /// evaluation compiles it in a fresh strict-mode realm under a budget, so
+    /// its effects on intrinsics or the global object reach no other
+    /// evaluation. The key is only a registry entry.
     pub fn register(&self, key: &str, source: &str) -> Result<(), String> {
-        let script = format!("({})", source);
-        self.context.with(|ctx| {
-            let callable = ctx
-                .eval::<rquickjs::Value, _>(script.as_bytes())
-                .map_err(|e| format!("failed to register transform '{}': {}", key, e))?;
-            let callable = callable.into_function().ok_or_else(|| {
-                format!("failed to register transform '{}': source is not a function", key)
-            })?;
-            self.registry
-                .borrow_mut()
-                .insert(key.to_string(), Definition::Shared(Persistent::save(&ctx, callable)));
-            Ok(())
-        })
-    }
-
-    /// Register a JS function expression as the isolated definition `key`:
-    /// each evaluation compiles it in a fresh strict-mode realm under a
-    /// budget, so its effects on intrinsics or the global object reach no
-    /// other evaluation.
-    pub fn register_isolated(&self, key: &str, source: &str) -> Result<(), String> {
-        let context = Context::full(&self.runtime).map_err(|e| e.to_string())?;
+        let (_runtime, context) = new_realm();
         context.with(|ctx| {
             let callable = ctx
                 .eval::<rquickjs::Value, _>(isolated_script(source).as_bytes())
@@ -312,10 +251,9 @@ impl TransformEvaluator {
             }
             Ok(())
         })?;
-        self.registry.borrow_mut().insert(
-            key.to_string(),
-            Definition::Isolated { source: source.to_string(), results: RefCell::default() },
-        );
+        self.registry
+            .borrow_mut()
+            .insert(key.to_string(), Definition { source: source.to_string(), results: RefCell::default() });
         Ok(())
     }
 
@@ -330,67 +268,62 @@ impl TransformEvaluator {
     /// Accepts a string or finite number; any other shape is an
     /// `InvalidResultShape`.
     pub fn evaluate(&self, key: &str, name: &str, value: &Value) -> Result<String, EvalError> {
-        let js_arg = argument(name, value)?;
-        let callable = match self.registry.borrow().get(key).ok_or_else(|| unbound(name))? {
-            Definition::Shared(callable) => callable.clone(),
-            Definition::Isolated { .. } => return self.evaluate_callback(key, name, value).map(|scalar| scalar.css),
-        };
-        self.context.with(|ctx| {
-            let run = || -> rquickjs::Result<String> {
-                let callable = callable.restore(&ctx)?;
-                let harness = self.harness.clone().restore(&ctx)?;
-                let argument: rquickjs::Value = ctx.eval(format!("({js_arg})").as_bytes())?;
-                harness.call((callable, argument))
-            };
-            run().map_err(|e| classify_eval_error(&ctx, name, &e))
-        })
+        self.evaluate_callback(key, name, value).map(|scalar| scalar.css)
     }
 
-    /// Evaluate the isolated definition `key` for `value`, keeping whether
+    /// Evaluate the definition `key` for `value`, keeping whether
     /// the result was a number.
     pub fn evaluate_callback(&self, key: &str, name: &str, value: &Value) -> Result<Scalar, EvalError> {
         let js_arg = argument(name, value)?;
         let registry = self.registry.borrow();
-        let Some(Definition::Isolated { source, results }) = registry.get(key) else {
+        let Some(Definition { source, results }) = registry.get(key) else {
             return Err(unbound(name));
         };
         if let Some(result) = results.borrow().get(&js_arg) {
             return result.clone();
         }
-        let result = self.evaluate_isolated(source, name, &js_arg);
+        let result = evaluate_in_fresh_realm(source, name, &js_arg);
         results.borrow_mut().insert(js_arg, result.clone());
         result
     }
+}
 
-    fn evaluate_isolated(&self, source: &str, name: &str, js_arg: &str) -> Result<Scalar, EvalError> {
-        let context = Context::full(&self.runtime).map_err(|e| EvalError::Throw {
-            message: format!("transform '{}' eval failed: {}", name, e),
-        })?;
-        let mut touched_host = false;
-        self.budget.store(ISOLATED_BUDGET, Ordering::Relaxed);
-        let outcome = context.with(|ctx| {
-            let fail = |e: rquickjs::Error| classify_eval_error(&ctx, name, &e);
-            // A number comes back wrapped, so its type survives.
-            let harness: Function = ctx.eval(harness_source("['' + r]").as_bytes()).map_err(fail)?;
-            let touched: Function = ctx.eval(HOST_GUARD.as_bytes()).map_err(fail)?;
-            let callable: Function = ctx.eval(isolated_script(source).as_bytes()).map_err(fail)?;
-            let argument: rquickjs::Value = ctx.eval(format!("({js_arg})").as_bytes()).map_err(fail)?;
-            let result = harness.call::<_, rquickjs::Value>((callable, argument)).map_err(fail);
-            // Read after the callback's own exception is taken.
-            touched_host = touched.call(()).unwrap_or(true);
-            let result = result?;
-            let scalar = match result.as_array() {
-                Some(number) => number.get(0).map(|css| Scalar { css, numeric: true }),
-                None => result.get().map(|css| Scalar { css, numeric: false }),
-            };
-            scalar.map_err(fail)
-        });
-        let exhausted = self.budget.swap(UNBOUNDED, Ordering::Relaxed) == 0;
-        match outcome {
-            _ if touched_host => Err(EvalError::Unevaluable),
-            Err(_) if exhausted => Err(EvalError::Unevaluable),
-            outcome => outcome,
+/// Evaluate `source` for `js_arg` in a realm of its own.
+fn evaluate_in_fresh_realm(source: &str, name: &str, js_arg: &str) -> Result<Scalar, EvalError> {
+    // A runtime of its own: a second context of one runtime gives host
+    // errors such as btoa's `InvalidCharacterError` a null prototype.
+    let (runtime, context) = new_realm();
+    let budget = Arc::new(AtomicU32::new(BUDGET));
+    let polls = Arc::clone(&budget);
+    runtime.set_interrupt_handler(Some(Box::new(move || match polls.load(Ordering::Relaxed) {
+        0 => true,
+        left => {
+            polls.store(left - 1, Ordering::Relaxed);
+            false
         }
+    })));
+    let mut touched_host = false;
+    let outcome = context.with(|ctx| {
+        let fail = |e: rquickjs::Error| classify_eval_error(&ctx, name, &e);
+        let harness: Function = ctx.eval(harness_source().as_bytes()).map_err(fail)?;
+        let touched: Function = ctx.eval(HOST_GUARD.as_bytes()).map_err(fail)?;
+        let callable: Function = ctx.eval(isolated_script(source).as_bytes()).map_err(fail)?;
+        let argument: rquickjs::Value = ctx.eval(format!("({js_arg})").as_bytes()).map_err(fail)?;
+        let result = harness.call::<_, rquickjs::Value>((callable, argument)).map_err(fail);
+        // Read after the callback's own exception is taken.
+        touched_host = touched.call(()).unwrap_or(true);
+        let result = result?;
+        let scalar = match result.as_array() {
+            Some(number) => number.get(0).map(|css| Scalar { css, numeric: true }),
+            None => result.get().map(|css| Scalar { css, numeric: false }),
+        };
+        scalar.map_err(fail)
+    });
+    let exhausted = budget.load(Ordering::Relaxed) == 0;
+    match outcome {
+        _ if touched_host => Err(EvalError::Unevaluable),
+        Err(_) if exhausted => Err(EvalError::Unevaluable),
+        outcome => outcome,
     }
 }
 
@@ -506,17 +439,29 @@ mod tests {
     }
 
     /// String arguments reach the callback with every character intact, a
-    /// carriage return included, in the shared and the isolated realm.
+    /// carriage return included.
     #[test]
     fn string_arguments_keep_line_terminators_quotes_and_backslashes() {
         let eval = TransformEvaluator::new();
         eval.register("b64", "(v) => btoa(v)").unwrap();
-        eval.register_isolated("b64@isolated", "(v) => btoa(v)").unwrap();
         for (value, expected) in [("a\rb", "YQ1i"), ("a\r\nb", "YQ0KYg=="), ("q\"\\\n\u{e9}", "cSJcCuk=")] {
-            for key in ["b64", "b64@isolated"] {
-                assert_eq!(eval.evaluate(key, "b64", &Value::String(value.into())).unwrap(), expected, "{value:?}");
-            }
+            assert_eq!(eval.evaluate("b64", "b64", &Value::String(value.into())).unwrap(), expected, "{value:?}");
         }
+    }
+
+    /// A host function's exception keeps its name and message: each
+    /// evaluation has a runtime of its own.
+    #[test]
+    fn host_function_exceptions_keep_their_message() {
+        let eval = TransformEvaluator::new();
+        eval.register("b64", "(v) => btoa(v)").unwrap();
+        eval.register("caught", "(v) => { try { return btoa(v); } catch (e) { return e.name; } }").unwrap();
+        let euro = Value::String("\u{20ac}".into());
+        assert_eq!(
+            eval.evaluate("b64", "b64", &euro),
+            Err(EvalError::Throw { message: "transform 'b64' eval failed: InvalidCharacterError: String contains an invalid character".into() })
+        );
+        assert_eq!(eval.evaluate("caught", "caught", &euro).unwrap(), "InvalidCharacterError");
     }
 
     #[test]
@@ -714,8 +659,7 @@ mod tests {
         eval.register("Map", "(v) => v + 1").unwrap();
         eval.register("size", r#"(v) => v + "px""#).unwrap();
         eval.register("keyed", "(v) => new Map([[1, String(v * 3)]]).get(1)").unwrap();
-        eval.register("globals", "(v) => typeof globalThis.size + typeof globalThis.keyed")
-            .unwrap();
+        eval.register("globals", "(v) => typeof size + typeof keyed").unwrap();
 
         assert_eq!(eval.evaluate("keyed", "keyed", &Value::Number(2.into())).unwrap(), "6");
         assert_eq!(eval.evaluate("Map", "Map", &Value::Number(4.into())).unwrap(), "5");

@@ -43,13 +43,17 @@ compose(
 - Root receives shared props and distributes via context
 - Children can override shared values via direct props
 
+## Declaration Props
+
+A declaration scale (`ThemeBuilder.addDeclarationScale`) maps finite keys to complete records of CSS declarations. A prop binds one with `{ kind: 'declarations', scale, members }` — through `addProps`/`addGroup` for a system prop, or `.props()` for a component prop. Extraction emits key-independent consuming rules (`var(--member, revert-layer)`) and variable-only binding classes; runtime-selected keys write the same member variables inline. Component member variables carry the declaring component's identity hash, inherited through `.extend()` until redeclaration. Within a layer and condition, declaration rules precede atomic rules; the custom layer still outranks the system layer.
+
 ## Serialization Contract
 
 Two serialize methods produce the inputs the extraction pipeline needs:
 
 **`ds.serialize()`** returns `SerializedConfig`:
 
-- `propConfig` — JSON map of prop name → `{ property, scale, transform, strict }`
+- `propConfig` — JSON map of prop name → `{ property, scale, transform, strict }`, or `{ kind: 'declarations', scale, members }` for a declaration prop
 - `groupRegistry` — JSON map of group name → prop name array
 - `transforms` — live JS transform functions (not serializable, used by subprocess)
 
@@ -59,6 +63,7 @@ Two serialize methods produce the inputs the extraction pipeline needs:
 - `variableMapJson` — token path → CSS variable name: `"colors.primary" → "--color-primary"`
 - `variableCss` — `:root { --color-primary: ... }` declarations
 - `contextualVarsJson` — per-scale contextual variable names
+- `declarationScalesJson` — present only when the theme has declaration scales (`addDeclarationScale`): `{ scale: { kind: 'declarations', members, values: { key: record } } }` with token references resolved. Declaration records never enter `scalesJson`.
 
 ## Type System
 

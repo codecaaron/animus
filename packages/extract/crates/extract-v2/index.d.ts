@@ -23,6 +23,11 @@ export interface EngineOptions {
   themeJson?: string
   variableMapJson?: string
   contextualVarsJson?: string
+  /**
+   * Declaration scales, `{ scale: { kind, members, values } }`; absent
+   * means none.
+   */
+  declarationScalesJson?: string
   configJson?: string
   groupRegistryJson?: string
   transformSourcesJson?: string
@@ -56,6 +61,11 @@ export interface NapiSystemConfig {
   variableMapJson: string
   variableCss: string
   contextualVarsJson: string
+  /**
+   * Declaration scales JSON (`{ scale: { kind, members, values } }`);
+   * pass it as `declarationScalesJson`. Absent when the theme has none.
+   */
+  declarationScalesJson?: string
   selectorAliases?: string
   selectorOrder?: string
   /**

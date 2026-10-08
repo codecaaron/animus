@@ -181,20 +181,18 @@ pub(super) fn build_config(
         let sorted_cpm: BTreeMap<&String, BTreeMap<&String, &String>> =
             cpm.iter().map(|(k, v)| (k, v.iter().collect())).collect();
         let cpm_json = serde_json::to_string(&sorted_cpm).unwrap_or_else(|_| "{}".to_string());
-        if result == "{}" {
-            result = format!("{{\"customPropMap\":{}}}", cpm_json);
-        } else {
-            result = format!("{},\"customPropMap\":{}}}", &result[..result.len() - 1], cpm_json);
-        }
+        append_field(&mut result, "customPropMap", &cpm_json);
     }
 
     if !p.typed_custom_props.is_empty() {
         let typed = serde_json::to_string(&p.typed_custom_props).unwrap_or_else(|_| "[]".to_string());
-        result = if result == "{}" {
-            format!("{{\"typedCustomProps\":{}}}", typed)
-        } else {
-            format!("{},\"typedCustomProps\":{}}}", &result[..result.len() - 1], typed)
-        };
+        append_field(&mut result, "typedCustomProps", &typed);
+    }
+
+    // One generated list, shared by every component, names the system props
+    // whose static keys are typed.
+    if p.reads_typed_system_props {
+        append_field(&mut result, "typedSystemProps", "typedSystemProps");
     }
 
     if let Some(ref cdc) = p.custom_dynamic_config {
@@ -202,7 +200,14 @@ pub(super) fn build_config(
         let mut sorted_keys: Vec<&String> = cdc.keys().collect();
         sorted_keys.sort();
         for prop_name in sorted_keys {
-            let meta = &cdc[prop_name];
+            let meta = match &cdc[prop_name] {
+                crate::dynamic_meta::DynamicPropMeta::Value(meta) => meta,
+                crate::dynamic_meta::DynamicPropMeta::Declarations(meta) => {
+                    let json = serde_json::to_string(meta).unwrap_or_else(|_| "{}".to_string());
+                    entries.push(format!("\"{}\":{}", prop_name, json));
+                    continue;
+                }
+            };
             let mut fields: Vec<String> = Vec::new();
             fields.push(format!("\"varName\":\"{}\"", meta.var_name));
             fields.push(format!("\"slotClass\":\"{}\"", meta.slot_class));
@@ -240,16 +245,19 @@ pub(super) fn build_config(
             entries.push(format!("\"{}\":{{{}}}", prop_name, fields.join(",")));
         }
         let cdc_str = format!("{{{}}}", entries.join(","));
-        if result == "{}" {
-            result = format!("{{\"customDynamicConfig\":{}}}", cdc_str);
-        } else {
-            result = format!(
-                "{},\"customDynamicConfig\":{}}}",
-                &result[..result.len() - 1],
-                cdc_str
-            );
-        }
+        append_field(&mut result, "customDynamicConfig", &cdc_str);
     }
 
     Ok(result)
+}
+
+/// Appends `"key":value` to the config object literal `config`, whose value
+/// is JavaScript text.
+fn append_field(config: &mut String, key: &str, value: &str) {
+    let field = format!("\"{key}\":{value}");
+    *config = if config == "{}" {
+        format!("{{{field}}}")
+    } else {
+        format!("{},{field}}}", &config[..config.len() - 1])
+    };
 }

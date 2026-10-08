@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 import * as classResolutionRuntime from '../src/runtime/resolveClasses';
+
+type ValuePropConfig = Extract<DynamicPropConfig[string], { varName: string }>;
 import { loadUnderNodeEnv } from './load-under-node-env';
 
 import type { DynamicPropConfig } from '../src/runtime/resolveClasses';
@@ -124,7 +126,7 @@ describe('drop diagnostic', () => {
 });
 
 describe('invalid transform result gate', () => {
-  type DynamicPropFixture = DynamicPropConfig[string];
+  type DynamicPropFixture = ValuePropConfig;
   type RejectedTransformFixtureResult = object | boolean | undefined;
 
   const witnesses = () => witnessRuntimeGlobal.__ANIMUS_WITNESS__;
@@ -423,7 +425,7 @@ describe('runtime transform exception boundary', () => {
   };
 
   const dyn = (
-    overrides: Partial<DynamicPropConfig[string]> = {}
+    overrides: Partial<ValuePropConfig> = {}
   ): DynamicPropConfig => ({
     p: {
       varName: '--animus-p',
@@ -622,10 +624,10 @@ describe('strict scale miss', () => {
     keywords: globals,
     negative: true,
     scaleValues: { 0: '0', 4: '1rem', 40: 'var(--space-40)', '-4': '2rem' },
-  } satisfies DynamicPropConfig[string];
+  } satisfies ValuePropConfig;
 
   const dyn = (
-    overrides: Partial<DynamicPropConfig[string]> = {}
+    overrides: Partial<ValuePropConfig> = {}
   ): DynamicPropConfig => ({ p: { ...space, ...overrides } });
 
   beforeEach(() => {
@@ -786,7 +788,7 @@ describe('strict scale miss', () => {
 
   test('loose and empty scales keep raw values', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const style = (overrides: Partial<DynamicPropConfig[string]>) =>
+    const style = (overrides: Partial<ValuePropConfig>) =>
       resolveClasses(
         'animus-S-loose1',
         { p: '2.5rem' },

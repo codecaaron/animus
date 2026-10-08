@@ -275,8 +275,10 @@ fn try_extract_transform(
 }
 
 /// The loader's per-definition evidence of which shared host functions a
-/// configured callable reads as the host's. Without it, a configured source
-/// reading one is not admitted.
+/// configured callable reads as the host's, or that it reads a binding
+/// outside itself. Without it, a configured source reading a host function is
+/// not admitted; any other source keeps its text admission, which proves
+/// nothing about the bindings its callable closes over.
 #[derive(Debug, Default)]
 pub enum TransformProvenance {
     /// None was supplied: an older loader or host.
@@ -302,6 +304,15 @@ impl TransformProvenance {
             Some(json) => serde_json::from_str(json)
                 .map_or_else(|e: serde_json::Error| Self::Malformed(e.to_string()), Self::Supplied),
         }
+    }
+
+    /// Why definition `key`, whose admitted configured source reads no shared
+    /// host function, may not be admitted: the loader showed its callable
+    /// reading a binding outside itself.
+    pub(crate) fn captured_rejection(&self, key: &str, name: &str) -> Option<String> {
+        let Self::Supplied(entries) = self else { return None };
+        let rejection = entries.get(key)?.rejection.as_deref()?;
+        Some(format!("[bail] Transform '{name}': its callable {rejection}"))
     }
 
     /// Why definition `key`, whose admitted configured source reads the
@@ -665,9 +676,14 @@ mod tests {
             assert_eq!(admit_configured_source(name, source), Ok(()), "{name}");
             eval.register(name, source).unwrap_or_else(|e| panic!("{name}: {e}"));
         }
+        // A guarded global is admitted but declines static evaluation.
         for (name, _) in STANDARD_GLOBAL_PROOFS {
-            eval.evaluate(name, name, &serde_json::json!(7))
-                .unwrap_or_else(|e| panic!("{name} must run in the evaluator: {e}"));
+            let result = eval.evaluate(name, name, &serde_json::json!(7));
+            if ["globalThis", "eval", "Function", "Date"].contains(name) {
+                assert_eq!(result, Err(crate::evaluator::EvalError::Unevaluable), "{name}");
+            } else {
+                result.unwrap_or_else(|e| panic!("{name} must run in the evaluator: {e}"));
+            }
         }
     }
 
@@ -710,8 +726,8 @@ mod tests {
     }
 
     /// btoa and atob are admitted by name, in configured sources and project
-    /// declarations, and run in the registered and the isolated realm; both
-    /// map Latin-1 one byte per code unit.
+    /// declarations, and run in the evaluator; both map Latin-1 one byte per
+    /// code unit.
     #[test]
     fn shared_host_globals_are_admitted_and_run() {
         let eval = crate::evaluator::TransformEvaluator::new();
@@ -724,9 +740,6 @@ mod tests {
             let value = serde_json::json!(value);
             eval.register(key, source).unwrap();
             assert_eq!(eval.evaluate(key, key, &value).unwrap(), expected, "{key}");
-            let isolated = format!("{key}@isolated");
-            eval.register_isolated(&isolated, source).unwrap();
-            assert_eq!(eval.evaluate(&isolated, key, &value).unwrap(), expected, "{key}");
         }
     }
 

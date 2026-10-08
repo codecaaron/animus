@@ -11,6 +11,7 @@ import {
   type ReservedBySelectorRegistry,
   serializeConditionMap,
 } from './conditions';
+import { isDeclarationProp, validateDeclarationProp } from './declarations';
 import {
   type KeyframeFrameMap,
   type Keyframes,
@@ -32,11 +33,22 @@ import {
   type BuiltInConditionAlias,
   type BuiltInSelectorAlias,
   Prop,
+  SystemProp,
   ThemedCSSProps,
 } from './types/config';
 import { AbstractProps } from './types/props';
 
-interface SerializedPropEntry {
+type SerializedPropEntry =
+  | SerializedValuePropEntry
+  | SerializedDeclarationPropEntry;
+
+interface SerializedDeclarationPropEntry {
+  kind: 'declarations';
+  scale: string;
+  members: string[];
+}
+
+interface SerializedValuePropEntry {
   property: string;
   properties?: string[];
   scale?: string | Record<string, string | number> | (string | number)[];
@@ -85,7 +97,7 @@ export interface GlobalStyleBlock {
 }
 
 export type GlobalStylesFactory<
-  PropReg extends Record<string, Prop> = Record<string, Prop>,
+  PropReg extends Record<string, SystemProp> = Record<string, SystemProp>,
 > = <Map extends Record<string, AbstractProps>>(
   styles: {
     readonly [K in keyof Map]: ThemedCSSProps<Map[K], PropReg>;
@@ -94,7 +106,7 @@ export type GlobalStylesFactory<
 ) => GlobalStyleBlock;
 
 export type CreateKeyframesFactory<
-  PropReg extends Record<string, Prop> = Record<string, Prop>,
+  PropReg extends Record<string, SystemProp> = Record<string, SystemProp>,
 > = <Frames extends Record<string, Record<string, AbstractProps>>>(frames: {
   readonly [N in keyof Frames]: {
     readonly [S in keyof Frames[N]]: ThemedCSSProps<Frames[N][S], PropReg>;
@@ -117,7 +129,7 @@ type IncludableSystem = {
  * it, so post-build mutation of the public registries reaches neither.
  */
 export interface RegistrySnapshot {
-  props: Record<string, Prop>;
+  props: Record<string, SystemProp>;
   groups: Record<string, readonly string[]>;
   selectors: SelectorAliasMap;
   conditions: ConditionAliasMap;
@@ -329,7 +341,7 @@ declare const VOCABULARY_BRAND: unique symbol;
  * `.extend()` can make a collision a compile error in a consumer's chain.
  */
 export type SealedSystemInstance<
-  PropReg extends Record<string, Prop>,
+  PropReg extends Record<string, SystemProp>,
   GroupReg extends Record<string, (keyof PropReg)[]>,
   Conds extends string = never,
   Sels extends string = never,
@@ -350,7 +362,7 @@ export type VocabularyOf<S> = S extends {
  * one `seal()` per bundle, and later registering or re-sealing throws.
  */
 export interface SystemBundle<
-  PropReg extends Record<string, Prop>,
+  PropReg extends Record<string, SystemProp>,
   GroupReg extends Record<string, (keyof PropReg)[]>,
   Conds extends string = never,
   Sels extends string = never,
@@ -513,10 +525,18 @@ function scalesEqual(
 }
 
 function arePropDefinitionsEqual(
-  existing: Prop,
-  incoming: Prop,
+  existing: SystemProp,
+  incoming: SystemProp,
   structuralScale = false
 ): boolean {
+  if (isDeclarationProp(existing) || isDeclarationProp(incoming)) {
+    return (
+      isDeclarationProp(existing) &&
+      isDeclarationProp(incoming) &&
+      existing.scale === incoming.scale &&
+      orderedMembersEqual(existing.members, incoming.members)
+    );
+  }
   return (
     existing.property === incoming.property &&
     orderedPropertiesEqual(existing.properties, incoming.properties) &&
@@ -541,22 +561,41 @@ function orderedMembersEqual(
   );
 }
 
+function describePropDefinition(entry: SystemProp): string {
+  return isDeclarationProp(entry)
+    ? `kind="declarations", scale="${entry.scale}", members="${entry.members.join(',')}"`
+    : `property="${entry.property}", scale="${String(entry.scale)}"`;
+}
+
 function divergentPropError(
   key: string,
-  existing: Prop,
-  incoming: Prop,
+  existing: SystemProp,
+  incoming: SystemProp,
   existingOrigin: string,
   incomingOrigin: string
 ): Error {
   return new Error(
     `Prop "${key}" already registered with a different definition. ` +
-      `Existing (${existingOrigin}): property="${existing.property}", scale="${String(existing.scale)}". ` +
-      `Incoming (${incomingOrigin}): property="${incoming.property}", scale="${String(incoming.scale)}".`
+      `Existing (${existingOrigin}): ${describePropDefinition(existing)}. ` +
+      `Incoming (${incomingOrigin}): ${describePropDefinition(incoming)}.`
   );
 }
 
+/** Declaration props with canonical members; value props unchanged. */
+function normalizePropConfig<Conf extends Record<string, SystemProp>>(
+  config: Conf
+): Conf {
+  const normalized: Record<string, SystemProp> = {};
+  for (const [key, entry] of Object.entries(config)) {
+    normalized[key] = isDeclarationProp(entry)
+      ? validateDeclarationProp(key, entry)
+      : entry;
+  }
+  return normalized as Conf;
+}
+
 export class SystemBuilder<
-  PropReg extends Record<string, Prop> = {},
+  PropReg extends Record<string, SystemProp> = {},
   GroupReg extends Record<string, (keyof PropReg)[]> = {},
   Conds extends string = never,
   Sels extends string = never,
@@ -618,7 +657,7 @@ export class SystemBuilder<
    * `from()` admits types and discovery membership only — no merge.
    */
   from<
-    SrcProps extends Record<string, Prop>,
+    SrcProps extends Record<string, SystemProp>,
     SrcGroups extends Record<string, (keyof SrcProps)[]>,
     SrcConds extends string = never,
     SrcSels extends string = never,
@@ -679,7 +718,7 @@ export class SystemBuilder<
    * identical entries coalesce, divergent ones throw naming both origins.
    */
   extend<
-    SrcProps extends Record<string, Prop>,
+    SrcProps extends Record<string, SystemProp>,
     SrcGroups extends Record<string, (keyof SrcProps)[]>,
     SrcConds extends string = never,
     SrcSels extends string = never,
@@ -733,7 +772,7 @@ export class SystemBuilder<
     const incomingOrigin = `extended source #${sourceIndex}`;
     const provenance = new Map(this.#extendProvenance);
 
-    const nextProps: Record<string, Prop> = { ...this.#propRegistry };
+    const nextProps: Record<string, SystemProp> = { ...this.#propRegistry };
     for (const [name, incoming] of Object.entries(snapshot.props)) {
       if (name in this.#groupRegistry) {
         throw new Error(
@@ -1018,9 +1057,9 @@ export class SystemBuilder<
     );
   }
 
-  addGroup<Name extends string, Conf extends Record<string, Prop>>(
+  addGroup<Name extends string, Conf extends Record<string, SystemProp>>(
     name: Name extends keyof PropReg ? never : Name,
-    config: Conf
+    authored: Conf
   ): SystemBuilder<
     PropReg & Conf,
     GroupReg & Record<Name, (keyof Conf)[]>,
@@ -1035,10 +1074,13 @@ export class SystemBuilder<
           `Group names and prop names must be disjoint.`
       );
     }
+    const config = normalizePropConfig(authored);
 
     for (const key of Object.keys(config)) {
       if (key in this.#propRegistry) {
-        const existing = (this.#propRegistry as Record<string, Prop>)[key];
+        const existing = (this.#propRegistry as Record<string, SystemProp>)[
+          key
+        ];
         const incoming = config[key];
         // Extended entries carry a frozen COPY of their scale, so identity
         // comparison would false-conflict a byte-identical re-registration.
@@ -1055,8 +1097,8 @@ export class SystemBuilder<
           }
           throw new Error(
             `Prop "${key}" already registered with a different definition. ` +
-              `Existing: property="${existing.property}", scale="${String(existing.scale)}". ` +
-              `Incoming: property="${incoming.property}", scale="${String(incoming.scale)}".`
+              `Existing: ${describePropDefinition(existing)}. ` +
+              `Incoming: ${describePropDefinition(incoming)}.`
           );
         }
       }
@@ -1090,12 +1132,12 @@ export class SystemBuilder<
   }
 
   addProps<
-    Conf extends Record<string, Prop> &
+    Conf extends Record<string, SystemProp> &
       Partial<Record<Extract<keyof GroupReg, string>, never>>,
   >(
-    config: Conf
+    authored: Conf
   ): SystemBuilder<PropReg & Conf, GroupReg, Conds, Sels, 'extend', Vocab> {
-    for (const key of Object.keys(config)) {
+    for (const key of Object.keys(authored)) {
       if (key in this.#groupRegistry) {
         throw new Error(
           `Prop name "${key}" collides with an existing group name. ` +
@@ -1103,11 +1145,14 @@ export class SystemBuilder<
         );
       }
     }
+    const config = normalizePropConfig(authored);
 
     for (const key of Object.keys(config)) {
       if (key in this.#propRegistry) {
-        const existing = (this.#propRegistry as Record<string, Prop>)[key];
-        const incoming = (config as Record<string, Prop>)[key];
+        const existing = (this.#propRegistry as Record<string, SystemProp>)[
+          key
+        ];
+        const incoming = (config as Record<string, SystemProp>)[key];
         const viaExtend = this.#extendProvenance.has(`prop:${key}`);
         if (!arePropDefinitionsEqual(existing, incoming, viaExtend)) {
           if (this.#extendProvenance.has(`prop:${key}`)) {
@@ -1442,7 +1487,7 @@ export class SystemBuilder<
 }
 
 export type SystemInstance<
-  PropReg extends Record<string, Prop>,
+  PropReg extends Record<string, SystemProp>,
   GroupReg extends Record<string, (keyof PropReg)[]>,
   Conds extends string = never,
   Sels extends string = never,
@@ -1475,13 +1520,20 @@ export interface SerializedConfig {
  * prop, so later mutation reaches neither serialized nor merged output.
  */
 function createRegistrySnapshot(
-  propRegistry: Record<string, Prop>,
+  propRegistry: Record<string, SystemProp>,
   groupRegistry: Record<string, readonly string[]>,
   selectorRegistry: SelectorAliasMap,
   conditionRegistry: ConditionAliasMap
 ): RegistrySnapshot {
-  const props: Record<string, Prop> = {};
+  const props: Record<string, SystemProp> = {};
   for (const [name, entry] of Object.entries(propRegistry)) {
+    if (isDeclarationProp(entry)) {
+      props[name] = Object.freeze({
+        ...entry,
+        members: Object.freeze([...entry.members]),
+      });
+      continue;
+    }
     const copy: Prop = { ...entry };
     if (copy.properties) {
       copy.properties = Object.freeze([
@@ -1544,7 +1596,15 @@ function serializeInstance<
   const definitions = new Map<TransformFn, { name: string; props: string[] }>();
 
   for (const [propName, entry] of Object.entries(propRegistry)) {
-    const s: SerializedPropEntry = { property: (entry as any).property };
+    if (isDeclarationProp(entry)) {
+      serialized[propName] = {
+        kind: 'declarations',
+        scale: entry.scale,
+        members: [...entry.members],
+      };
+      continue;
+    }
+    const s: SerializedValuePropEntry = { property: (entry as any).property };
 
     if ((entry as any).properties && (entry as any).properties.length > 0) {
       s.properties = [...(entry as any).properties];
@@ -1592,7 +1652,9 @@ function serializeInstance<
   const transformSources: Record<string, string> = {};
   for (const [fn, { name, props }] of definitions) {
     const id = transformDefinitionId(name, props);
-    for (const propName of props) serialized[propName].transformId = id;
+    for (const propName of props) {
+      (serialized[propName] as SerializedValuePropEntry).transformId = id;
+    }
     transforms[id] = fn as NamedTransform;
     const source = (fn as Partial<NamedTransform>).transformSource;
     // Absent only on instances built by an older @animus-ui/system; skipping

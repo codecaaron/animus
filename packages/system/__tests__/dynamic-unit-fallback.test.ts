@@ -6,6 +6,8 @@ import {
   resolveValue,
 } from '../src/runtime/resolveClasses';
 
+type ValuePropConfig = Extract<DynamicPropConfig[string], { varName: string }>;
+
 const config = { systemPropNames: ['lineHeight', 'width', 'mx'] };
 
 /** A dynamic prop value as authored on a component: one scalar, or a
@@ -19,9 +21,7 @@ const styleFor = (
   resolveClasses('animus-U', props, config, undefined, dynamicPropConfig)
     .dynamicStyle;
 
-const entry = (
-  overrides: Partial<DynamicPropConfig[string]>
-): DynamicPropConfig[string] => ({
+const entry = (overrides: Partial<ValuePropConfig>): ValuePropConfig => ({
   varName: '--animus-x',
   slotClass: 'animus-dyn-x',
   ...overrides,

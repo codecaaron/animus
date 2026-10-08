@@ -22,5 +22,16 @@ A styling input declared by a component, with its own mapping to CSS properties 
 **Prop styling**:
 The styling contributions of one authored prop, including its responsive entries.
 
+**Declaration scale**:
+A finite theme vocabulary whose keys each name one complete record of CSS declarations; every record sets the same members.
+_Avoid_: Composite token, for a scale whose values are single CSS values.
+
+**Declaration prop**:
+A system or component prop bound to a declaration scale. A key applies every member of its record, whether the key is written literally or selected at runtime.
+_Avoid_: Multi-property prop, for a value prop with several `properties`.
+
+**Declaring identity**:
+The component whose `.props()` declares a component declaration prop. Its member variables belong to that identity: an extension inherits them until it redeclares the prop, and unrelated components never read them. System declaration props share one namespace.
+
 **Atomic drop**:
 Removal of all styling contributions of an affected prop while preserving contributions of other props.

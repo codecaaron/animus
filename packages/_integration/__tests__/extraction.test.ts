@@ -392,6 +392,7 @@ export const App = () => <Box />;
       groupRegistryJson: '{}',
       dynamicProps: {},
       admittedTransforms: manifest.admitted_transforms,
+      typedSystemProps: manifest.typed_system_props,
     });
     const registry: Record<string, (value: string | number) => string> = (
       await import(`data:text/javascript,${encodeURIComponent(source)}`)
@@ -467,6 +468,7 @@ export const App = () => <><Box /><Tag inset={5} /></>;
       groupRegistryJson: '{}',
       dynamicProps: {},
       admittedTransforms: manifest.admitted_transforms,
+      typedSystemProps: manifest.typed_system_props,
     });
     const registry: Record<string, (value: number) => string> = (
       await import(`data:text/javascript,${encodeURIComponent(source)}`)

@@ -418,8 +418,8 @@ export class ExtractionSession {
     return this.scanConfigMemo;
   }
 
-  /** One single-flight analysis transaction per event batch: concurrent
-   *  entries join the in-flight promise; each settled entry reports outcome. */
+  /** Concurrent entries wait for publication, then ingest their own batch;
+   *  content hashes coalesce observations the prior analysis covered. */
   async handleWatchUpdate(changes: WatchChanges): Promise<void> {
     try {
       await this.routeWatchUpdate(changes);
@@ -433,38 +433,32 @@ export class ExtractionSession {
   }
 
   private async routeWatchUpdate(changes: WatchChanges): Promise<void> {
+    const hasBatch =
+      (changes.modifiedFiles?.size ?? 0) > 0 ||
+      (changes.removedFiles?.size ?? 0) > 0;
     const inflight = getWatchTransaction();
     if (inflight) {
       await inflight;
-      return;
+      if (!hasBatch) return;
     }
 
     // Non-owning instance: each compiler child watches its own files, so a
     // batch only this one observes is forwarded, never dropped. Keep this
-    // check AFTER the join above, or a non-owning session proceeds against a
-    // stale generation; an empty or absent batch stays a no-op.
+    // check AFTER the join above: an initial full pipeline registers its
+    // owner on publication. An empty or absent follower batch stays a no-op.
     if (!this.system) {
       const owner = getOwningWatchSession();
-      const hasBatch =
-        (changes.modifiedFiles?.size ?? 0) > 0 ||
-        (changes.removedFiles?.size ?? 0) > 0;
       if (owner && owner !== this && hasBatch) {
         await owner.ingestForwardedBatch(changes);
       }
       return;
     }
 
-    const transaction = this.processWatchUpdate(changes);
-    setWatchTransaction(transaction);
-    try {
-      await transaction;
-    } finally {
-      setWatchTransaction(null);
-    }
+    await this.ingestForwardedBatch(changes);
   }
 
-  /** Owner-side entry for a batch a non-owning compiler observed. Serializes
-   *  behind any in-flight transaction — it has no other delivery. */
+  /** The shared owner gate for local and forwarded batches. Every waiter
+   *  rechecks the slot so distinct batches publish in arrival order. */
   async ingestForwardedBatch(changes: WatchChanges): Promise<void> {
     if (!this.system) return;
     for (;;) {
@@ -472,7 +466,11 @@ export class ExtractionSession {
       if (!inflight) break;
       await inflight;
     }
-    const transaction = this.processWatchUpdate(changes);
+    // Register before processing: a nested full system reload must inherit
+    // this gate rather than clear it while the enclosing batch is active.
+    const transaction = Promise.resolve().then(() =>
+      this.processWatchUpdate(changes)
+    );
     setWatchTransaction(transaction);
     try {
       await transaction;
@@ -1462,6 +1460,7 @@ export class ExtractionSession {
       groupRegistryJson: system.groupRegistryJson,
       dynamicProps: manifest?.dynamic_props ?? {},
       admittedTransforms: manifest?.admitted_transforms ?? {},
+      typedSystemProps: manifest?.typed_system_props ?? [],
     });
 
     setSharedSystemProps(systemPropsContent);

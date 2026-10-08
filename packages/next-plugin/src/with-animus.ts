@@ -23,6 +23,7 @@ import { ANIMUS_CSS_MODULE_ID, AnimusWebpackPlugin } from './plugin';
 import {
   ANIMUS_TURBOPACK_RULE_GLOB,
   buildTurbopackConfig,
+  isTurbopackDevelopment,
   resolveTurbopackLoaderPath,
   resolveTurbopackMode,
 } from './turbopack-config';
@@ -342,7 +343,7 @@ async function wireTurbopack<Config extends NextOwnedConfig>(
   }
   await runSessionPipeline(session);
 
-  if (process.env.NODE_ENV === 'development') {
+  if (isTurbopackDevelopment()) {
     bindTurbopackWatchDeathReport(
       startTurbopackWatcher(session, rootDir),
       rootDir

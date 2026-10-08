@@ -1,4 +1,4 @@
-import { applyPrefix } from './prefix';
+import { applyPrefix, prefixVariableReferences } from './prefix';
 
 /**
  * The deserialized `loadSystemModule()` result, prefix transformation
@@ -11,6 +11,8 @@ export interface SystemConfig {
   variableMapJson: string;
   variableCss: string;
   contextualVarsJson: string | null;
+  /** The theme's declaration scales; absent when it declares none. */
+  declarationScalesJson?: string | null;
   selectorAliasesJson: string | null;
   /** Condition alias map JSON; `null` when the system registers none.
    *  Optional only so the pre-load empty default need not restate it. */
@@ -52,6 +54,8 @@ export function loadSystemConfig(
   let variableMapJson: string = config.variableMapJson;
   let variableCss: string = config.variableCss;
   let contextualVarsJson: string | null = config.contextualVarsJson || null;
+  let declarationScalesJson: string | null =
+    config.declarationScalesJson || null;
 
   if (opts.prefix) {
     const prefixed = applyPrefix(
@@ -67,9 +71,16 @@ export function loadSystemConfig(
     if (prefixed.contextualVarsJson) {
       contextualVarsJson = prefixed.contextualVarsJson;
     }
+    // Records hold resolved `var()` references, rewritten like scale values.
+    if (declarationScalesJson) {
+      declarationScalesJson = prefixVariableReferences(
+        opts.prefix,
+        declarationScalesJson
+      );
+    }
   }
 
-  return {
+  const system: SystemConfig = {
     propConfigJson: config.propConfig,
     groupRegistryJson: config.groupRegistry,
     scalesJson,
@@ -86,4 +97,7 @@ export function loadSystemConfig(
     dependencies: config.dependencies ?? [],
     sourceThemeManifestsJson: config.sourceThemeManifests || null,
   };
+  if (declarationScalesJson)
+    system.declarationScalesJson = declarationScalesJson;
+  return system;
 }

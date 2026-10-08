@@ -5,6 +5,39 @@ See [Conventional Commits](https://conventionalcommits.org) for commit guideline
 
 ## Unreleased
 
+**Finite declaration scales style several properties through one prop.**
+`createTheme().addDeclarationScale({ name, values })` registers named keys
+whose values are complete, flat records of CSS declarations. Bind a scale
+with `{ kind: 'declarations', scale, members }` in a system prop or a
+component's `.props()` config. Literal and runtime-selected keys use the
+same records, including responsive values. Token references and each
+member's units are resolved before delivery. Declaration records stay
+separate from scalar scales and executable transforms.
+
+System declaration props share member variables, so a nested consumer
+without a base binding can adopt its ancestor's values. Component member
+variables belong to the declaring component; extensions inherit that
+identity until redeclaration. Unknown keys drop the whole prop value.
+Within one layer, a same-condition atomic rule wins over a declaration;
+a responsive declaration can win over a base atomic rule. The custom layer
+outranks the system layer. Hot updates remove obsolete member variables
+from mounted resolver-driven nodes.
+
+**Custom atomic utilities have their own class namespace.** Generated
+custom utility names change from `animus-u-<hash>` to
+`animus-uc-<hash>`; system utility names remain `animus-u-<hash>`.
+Identical CSS can now be reused within each layer without giving system
+consumers custom-layer precedence. Consumers that match generated class
+names must update those selectors. Rule order is unchanged.
+
+**Watch updates preserve distinct concurrent batches.** A caller waiting
+for another analysis now ingests its own changed or removed files before
+acknowledging completion. Empty joins remain no-ops.
+
+**Variable prefixes also rename `@property` registrations.** A configured
+prefix now applies consistently to registration names, declarations and
+`var()` references, preserving registered inheritance and initial values.
+
 **Invalid transform results are now rejected instead of silently
 stringified (headline behavior change).** A prop `transform` must return a
 `string` or a finite `number`. Every other shape — object, array, function,
@@ -296,6 +329,80 @@ host names, such as `window`, `document`, `fetch`, `TextEncoder`,
 `performance` or `queueMicrotask`, are still rejected even where the build
 or the browser defines them. Nothing is polyfilled, and CSP or isolation
 settings are unchanged.
+
+**Configured transforms are evaluated the way `.props()` callbacks are.**
+A system's `createTransform` callbacks now evaluate known values in
+isolation, under the same rules as component callbacks:
+
+- **Number and string literals stay apart.** `<Box w={100} />` and
+  `<Box w="100" />` used to share one static class, so a callback that tells
+  them apart rendered one of them with the other's result, and a runtime
+  `"40"` could pick up the class built for `40`. Props bound to a configured
+  transform now get typed static keys, both directly and through a `.props()`
+  prop that names the transform. Untransformed props are unchanged. Upgrade
+  `@animus-ui/system` together with `@animus-ui/extract` and the extraction
+  plugin or CLI that consumes it: an older system runtime ignores the
+  generated `typedSystemProps` list, so it can apply a number's class to a
+  string or miss a string's class.
+- **One callback cannot change another's result.** Each literal is evaluated
+  in its own fresh realm under a fixed budget. A callback that reassigns
+  `Math.round` no longer changes what another callback extracts, whatever
+  the file, element or attribute order.
+- **A callback that loops in JavaScript no longer hangs the build.** A
+  literal whose evaluation keeps running JavaScript stops at a fixed budget
+  of interpreter steps and is treated as not evaluable. The budget counts
+  JavaScript execution only: it does not limit memory, or the time spent
+  inside a single built-in call such as a very large `String.prototype.repeat`,
+  which still runs to completion.
+- **Known host-environment reads are not baked in.** A literal whose
+  evaluation reads one of `globalThis`, `eval`, `Function`, `Date`,
+  `Math.random`, `console` or the locale methods used to be baked from the
+  build's engine.
+
+  In JSX, and in `staticCss.systemProps` values, such a literal now gets no
+  static class. The configured callback computes it in the browser, with no
+  warning in any strictness mode. In a style block, variant, state or global
+  style there is no runtime path, so the build applies the raw value and
+  warns with `animus.transform.static-evaluation-unavailable`. Explicit
+  strictness fails the build on it.
+
+- **JSX follows the runtime's result.** The runtime applies a callback's
+  string result verbatim and passes a value that misses a populated scale
+  through the callback. Extraction used to add units to a numeric-string
+  result, resolve token syntax such as `{space.4}` in a result, and apply a
+  `strict: false` scale miss raw.
+
+  Such JSX literals now get no static class and render what the runtime
+  computes. A `.props()` prop that names a configured transform keeps its
+  runtime slot for them, as a `.props()` callback does, unless its component
+  is confined to its module and every literal it receives has a class.
+  **This changes literal-only uses that relied on extraction's
+  normalization.** For example, the built-in `borderShorthand` returns string
+  input unchanged, so `<Box border="2px solid {colors.primary}" />` or
+  `border="1"` is now applied verbatim and is invalid CSS. That is what the
+  same string always did as a runtime value. Write a number, a full CSS
+  value or a `var(...)` reference instead.
+
+  Style blocks, variants, states and global styles keep extraction's
+  post-processing. Numbers, scale hits, unitless properties and full
+  `var()`/`calc()` strings extract as before.
+
+**Configured transforms that close over their module are rejected.** A
+system's transform callback is evaluated and delivered to the browser as its
+own source text, so it cannot keep the bindings it closes over. A callback
+reading a module-level `Math`, an imported `Set` or a `JSON` from an
+enclosing function used to run against the standard globals instead, on both
+paths. Extraction now locates every configured callback in its module. A
+callback shown reading any binding declared outside itself is rejected with
+`animus.transform.configured-rejected`: its values apply raw and it is not
+delivered.
+
+Callback-local declarations and the standard globals themselves are
+unaffected. When the callback cannot be located — a system built by an older
+`@animus-ui/system`, a callback built at runtime or bound, or a module that
+calls `eval` directly — a callback that reads neither `btoa` nor `atob`
+keeps its earlier admission. That admission does not prove the callback
+closes over nothing. `btoa`/`atob` callbacks still require their evidence.
 
 **A source the native parser cannot finish no longer publishes a partial
 extraction.** A syntax error the parser stops at, such as an unclosed call

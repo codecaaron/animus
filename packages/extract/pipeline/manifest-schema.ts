@@ -120,6 +120,9 @@ export interface ProjectManifest {
    *  configured transforms that passed self-containment admission and
    *  registered for static evaluation. */
   admitted_transforms: Record<string, string>;
+  /** Sorted system props bound to a configured transform: their
+   *  `system_prop_map` keys keep the authored value's type. */
+  typed_system_props: string[];
   component_fragments: Record<string, ManifestComponentSheets>;
   /** parent component id → child component ids. */
   reverse_provenance: Record<string, string[]>;

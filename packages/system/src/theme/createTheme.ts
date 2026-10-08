@@ -1,3 +1,8 @@
+import {
+  assertUniformMembers,
+  type DeclarationScaleValues,
+  validateDeclarationRecords,
+} from '../declarations';
 import { isLibraryBundle } from '../SystemBuilder';
 import {
   BrowserColorSchemeConfig,
@@ -14,7 +19,7 @@ import {
   TokenReference,
 } from '../types/theme';
 import { LiteralPaths } from './flattenScale';
-import { resolveReferences } from './resolveReferences';
+import { resolveReferences, resolveValueReferences } from './resolveReferences';
 import {
   dotToDash,
   flattenToDotPaths,
@@ -123,6 +128,7 @@ const RESERVED_THEME_KEY_LIST = [
   'browserColorScheme',
   'modeBases',
   '__emitted',
+  '__declarationScales',
   'manifest',
   'serialize',
   'varRef',
@@ -385,6 +391,13 @@ interface BuilderState {
    * A reference to one that is never re-added fails `build()`.
    */
   droppedTokenPaths: Map<string, string>;
+  /**
+   * Declaration scales by name, kept out of `theme` so the scalar flatten
+   * never sees their records. Records are replaced whole, never merged.
+   */
+  declarationScales: Record<string, DeclarationScaleValues>;
+  /** `scale.key` → the 1-based `extend()` call that first defined it. */
+  declarationProvenance: Map<string, number>;
 }
 
 function createState(theme?: Record<string, unknown>): BuilderState {
@@ -399,6 +412,8 @@ function createState(theme?: Record<string, unknown>): BuilderState {
     inheritedModes: new Set(),
     inheritedModeAliases: new Set(),
     droppedTokenPaths: new Map(),
+    declarationScales: {},
+    declarationProvenance: new Map(),
   };
 }
 
@@ -421,6 +436,9 @@ function copyState(
     inheritedModes: new Set(state.inheritedModes),
     inheritedModeAliases: new Set(state.inheritedModeAliases),
     droppedTokenPaths: new Map(state.droppedTokenPaths),
+    // Builder steps replace scale maps; private records are immutable.
+    declarationScales: { ...state.declarationScales },
+    declarationProvenance: new Map(state.declarationProvenance),
   };
   for (const [scale, vars] of state.contextualVars) {
     next.contextualVars.set(scale, [...vars]);
@@ -494,6 +512,54 @@ function plainDataEqual(a: unknown, b: unknown): boolean {
   }
   return false;
 }
+
+/** The declaration scales a built theme carries for composition. */
+function declarationScalesOf(
+  source: unknown
+): Record<string, DeclarationScaleValues> {
+  const carried = (source as { __declarationScales?: unknown } | null)
+    ?.__declarationScales;
+  return isObject(carried)
+    ? (carried as Record<string, DeclarationScaleValues>)
+    : {};
+}
+
+/** Key-level fold: an overlay record replaces the base record whole. */
+function overlayDeclarationScales(
+  base: Record<string, DeclarationScaleValues>,
+  overlay: Record<string, DeclarationScaleValues>
+): Record<string, DeclarationScaleValues> {
+  const result = deepCopyPlain(base);
+  for (const [scale, values] of Object.entries(overlay)) {
+    result[scale] = { ...result[scale], ...deepCopyPlain(values) };
+  }
+  return result;
+}
+
+type DeclarationScalesOfTheme<T> = T extends {
+  __declarationScales: infer Scales;
+}
+  ? Scales
+  : {};
+
+/** Per-scale key union; `Over` records win, as runtime composition does. */
+type MergeDeclarationScales<Base, Over> = Flatten<{
+  [Scale in keyof Base | keyof Over]: Scale extends keyof Over
+    ? Scale extends keyof Base
+      ? Flatten<MergeRecord<Base[Scale], Over[Scale]>>
+      : Over[Scale]
+    : Scale extends keyof Base
+      ? Base[Scale]
+      : never;
+}>;
+
+/** A theme without declaration scales keeps its type unchanged. */
+type WithDeclarationScales<Merged, Scales> = [keyof Scales] extends [never]
+  ? Merged
+  : Flatten<
+      Omit<Merged, '__declarationScales'> &
+        Record<'__declarationScales', Scales>
+    >;
 
 type ThemeSourceOf<Source> = Source extends {
   system: { toConfig(...args: never[]): unknown };
@@ -688,10 +754,20 @@ export class ThemeBuilder<
       deepCopyPlain(raw)
     );
     const next = new ThemeBuilder<
-      MergeThemeData<T, ThemeSourceOf<Source>>,
+      WithDeclarationScales<
+        MergeThemeData<T, ThemeSourceOf<Source>>,
+        MergeDeclarationScales<
+          DeclarationScalesOfTheme<T>,
+          DeclarationScalesOfTheme<ThemeSourceOf<Source>>
+        >
+      >,
       Emitted | EmittedThemeScalesOf<ThemeSourceOf<Source>>,
       Stage
     >(copyState(this._state, nextTheme));
+    next._state.declarationScales = overlayDeclarationScales(
+      this._state.declarationScales,
+      declarationScalesOf(source)
+    );
 
     reseedStateFromManifest(
       next._state,
@@ -708,7 +784,13 @@ export class ThemeBuilder<
     this: ThemeBuilder<T, Emitted, 'inherit'>,
     source: Source
   ): ThemeBuilder<
-    MergeThemeData<T, ExtendedThemeSourceOf<Source>>,
+    WithDeclarationScales<
+      MergeThemeData<T, ExtendedThemeSourceOf<Source>>,
+      MergeDeclarationScales<
+        DeclarationScalesOfTheme<ExtendedThemeSourceOf<Source>>,
+        DeclarationScalesOfTheme<T>
+      >
+    >,
     Emitted | EmittedThemeScalesOf<ExtendedThemeSourceOf<Source>>,
     'inherit'
   > {
@@ -787,12 +869,41 @@ export class ThemeBuilder<
       deepCopyPlain(this._state.theme)
     );
     const next = new ThemeBuilder<
-      MergeThemeData<T, ExtendedThemeSourceOf<Source>>,
+      WithDeclarationScales<
+        MergeThemeData<T, ExtendedThemeSourceOf<Source>>,
+        MergeDeclarationScales<
+          DeclarationScalesOfTheme<ExtendedThemeSourceOf<Source>>,
+          DeclarationScalesOfTheme<T>
+        >
+      >,
       Emitted | EmittedThemeScalesOf<ExtendedThemeSourceOf<Source>>,
       'inherit'
     >(copyState(this._state, nextTheme));
     next._state.extendProvenance = provenance;
     next._state.extendCount = sourceIndex;
+
+    const incomingDeclarations = declarationScalesOf(themeHalf);
+    const declarationProvenance = new Map(this._state.declarationProvenance);
+    for (const [scale, values] of Object.entries(incomingDeclarations)) {
+      for (const [key, record] of Object.entries(values)) {
+        const path = `${scale}.${key}`;
+        const priorIndex = declarationProvenance.get(path);
+        if (priorIndex === undefined) {
+          declarationProvenance.set(path, sourceIndex);
+        } else if (
+          !plainDataEqual(this._state.declarationScales[scale]?.[key], record)
+        ) {
+          throw new Error(
+            `extend: declaration scale '${scale}' key '${key}' is defined divergently by extended theme #${priorIndex} and extended theme #${sourceIndex}. Sibling themes must agree — override intentionally with addDeclarationScale after extend().`
+          );
+        }
+      }
+    }
+    next._state.declarationScales = overlayDeclarationScales(
+      incomingDeclarations,
+      this._state.declarationScales
+    );
+    next._state.declarationProvenance = declarationProvenance;
 
     if (isObject(raw.modes)) {
       for (const [modeName, modeAliases] of Object.entries(
@@ -931,6 +1042,11 @@ export class ThemeBuilder<
         `addScale: '${name}' is a reserved theme key owned by the builder or built-theme boundary, so a scale by this name cannot survive build(). Choose another scale name.`
       );
     }
+    if (name in this._state.declarationScales) {
+      throw new Error(
+        `addScale: '${name}' is already a declaration scale — a scale is either scalar or declaration-valued.`
+      );
+    }
     const prior = this._state.theme[name];
     let nextTheme: Record<string, unknown>;
     if (replace) {
@@ -965,6 +1081,58 @@ export class ThemeBuilder<
         }
       }
     }
+    return next;
+  }
+
+  /**
+   * Registers a finite declaration scale: each key maps to a flat record of
+   * CSS declarations, and every record sets the same members. Bind it with a
+   * `{ kind: 'declarations', scale, members }` system or component prop. Keys merge by
+   * record; `replace` makes the scale exactly these keys.
+   */
+  addDeclarationScale<
+    Key extends string,
+    Values extends Record<string | number, Record<string, string | number>>,
+    Replace extends boolean = false,
+  >(config: {
+    name: Key & (Key extends ThemeStructuralKey ? never : unknown);
+    values: Values;
+    replace?: Replace;
+  }) {
+    const { name, values, replace } = config;
+    const label = 'addDeclarationScale';
+    if (RESERVED_THEME_KEYS.has(name)) {
+      throw new Error(
+        `${label}: '${name}' is a reserved theme key owned by the builder or built-theme boundary. Choose another scale name.`
+      );
+    }
+    if (name in this._state.theme) {
+      throw new Error(
+        `${label}: '${name}' is already a scalar scale — a scale is either scalar or declaration-valued.`
+      );
+    }
+    const records = validateDeclarationRecords(label, name, values);
+    type ExistingScales = DeclarationScalesOfTheme<T>;
+    type ExistingValues = Key extends keyof ExistingScales
+      ? ExistingScales[Key]
+      : {};
+    type NextValues = Replace extends true
+      ? { [K in keyof Values]: Values[K] }
+      : Flatten<MergeRecord<ExistingValues, Values>>;
+    type NextScales = Flatten<
+      Omit<ExistingScales, Key> & Record<Key, NextValues>
+    >;
+    type Next = Flatten<
+      Omit<T, '__declarationScales'> & Record<'__declarationScales', NextScales>
+    >;
+    const next = new ThemeBuilder<Next, Emitted, 'extend'>(
+      copyState(this._state, this._state.theme)
+    );
+    const merged = replace
+      ? records
+      : { ...next._state.declarationScales[name], ...records };
+    assertUniformMembers(label, name, merged);
+    next._state.declarationScales[name] = merged;
     return next;
   }
 
@@ -1118,6 +1286,13 @@ export class ThemeBuilder<
       flatVariables
     );
 
+    const declarationScales = this._state.declarationScales;
+    const resolvedDeclarationScales = resolveDeclarationScales(
+      declarationScales,
+      theme,
+      tokenMap
+    );
+
     const { modeVariables, modeTokens } = resolveModeValueMaps(
       effectiveModes,
       variableMap,
@@ -1256,12 +1431,23 @@ export class ThemeBuilder<
       writable: false,
     });
 
+    Object.defineProperty(theme, '__declarationScales', {
+      value: deepCopyPlain(declarationScales),
+      enumerable: false,
+      configurable: false,
+      writable: false,
+    });
+
+    const declarationScalesJson = resolvedDeclarationScales
+      ? JSON.stringify(resolvedDeclarationScales)
+      : undefined;
     Object.defineProperty(theme, 'serialize', {
       value: (): SerializedTheme => ({
         scalesJson: JSON.stringify(manifest.tokenMap),
         variableMapJson: JSON.stringify(manifest.variableMap),
         variableCss: manifest.variableCss,
         contextualVarsJson: JSON.stringify(manifest.contextualVars ?? {}),
+        ...(declarationScalesJson ? { declarationScalesJson } : {}),
       }),
       enumerable: false,
       configurable: false,
@@ -1294,6 +1480,57 @@ type EmptyTheme = { breakpoints: Record<string, number> };
 
 export function createTheme() {
   return new ThemeBuilder<EmptyTheme>(createState());
+}
+
+interface SerializedDeclarationScale {
+  kind: 'declarations';
+  members: string[];
+  values: DeclarationScaleValues;
+}
+
+/**
+ * The effective declaration scales in serialized order, token references
+ * resolved against the final token map; `undefined` when there are none.
+ */
+function resolveDeclarationScales(
+  declarationScales: Record<string, DeclarationScaleValues>,
+  theme: Record<string, unknown>,
+  tokenMap: Record<string, string>
+): Record<string, SerializedDeclarationScale> | undefined {
+  const names = Object.keys(declarationScales).sort();
+  if (names.length === 0) return undefined;
+  const serialized: Record<string, SerializedDeclarationScale> = {};
+  for (const name of names) {
+    // Composition can bring a scalar and a declaration scale to one name.
+    if (name in theme) {
+      throw new Error(
+        `build: '${name}' is both a scalar scale and a declaration scale — a scale is either scalar or declaration-valued.`
+      );
+    }
+    const values = declarationScales[name];
+    assertUniformMembers('build', name, values);
+    const resolved: DeclarationScaleValues = {};
+    for (const key of Object.keys(values).sort()) {
+      const record = values[key];
+      resolved[key] = sortRecordByKey(
+        Object.fromEntries(
+          Object.entries(record).map(([member, value]) => [
+            member,
+            typeof value === 'string'
+              ? resolveValueReferences(value, tokenMap)
+              : value,
+          ])
+        )
+      );
+    }
+    const [firstKey] = Object.keys(resolved);
+    serialized[name] = {
+      kind: 'declarations',
+      members: Object.keys(resolved[firstKey]),
+      values: resolved,
+    };
+  }
+  return serialized;
 }
 
 /** Authored token reference: `{scale.key}` or `{scale.key/opacity}`. */

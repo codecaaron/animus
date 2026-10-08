@@ -12,7 +12,7 @@ import type {
   AbstractParser,
   CSSPropMap,
   CSSProps,
-  Prop,
+  SystemProp,
   SelectorAliasProps,
   SystemProps,
   ThemedScale,
@@ -37,7 +37,7 @@ export type AnyBrandedComponent = ForwardRefExoticComponent<any> & {
 };
 
 type ExtendFn<
-  PR extends Record<string, Prop>,
+  PR extends Record<string, SystemProp>,
   GR extends Record<string, (keyof PR)[]>,
   BS,
   V,
@@ -52,12 +52,12 @@ type ExtendFn<
     V & Record<string, VariantConfig>,
     S & CSSPropMap<AbstractProps, SystemProps<AbstractParser>>,
     AG & Record<string, true>,
-    CP & Record<string, Prop>
+    CP & Record<string, SystemProp>
   >;
 };
 
 type ActiveGroupPropNames<
-  PR extends Record<string, Prop>,
+  PR extends Record<string, SystemProp>,
   GR extends Record<string, (keyof PR)[]>,
   AG,
 > =
@@ -65,7 +65,7 @@ type ActiveGroupPropNames<
   | Extract<keyof StripIndex<AG>, keyof PR>;
 
 type GroupProps<
-  PR extends Record<string, Prop>,
+  PR extends Record<string, SystemProp>,
   GR extends Record<string, (keyof PR)[]>,
   AG,
 > = {
@@ -74,7 +74,7 @@ type GroupProps<
   ]?: ThemedScale<PR[K & keyof PR]>;
 };
 
-type CustomPropValues<CP extends Record<string, Prop>> = {
+type CustomPropValues<CP extends Record<string, SystemProp>> = {
   [K in keyof StripIndex<CP>]?: ThemedScale<
     StripIndex<CP>[K & keyof StripIndex<CP>]
   >;
@@ -99,12 +99,12 @@ type StateProps<S> = { [K in keyof StripIndex<S>]?: boolean };
  * Unioned per source — `keyof` of the intersection hits TS2590 on emit.
  */
 type AnimusManagedKeys<
-  PR extends Record<string, Prop>,
+  PR extends Record<string, SystemProp>,
   GR extends Record<string, (keyof PR)[]>,
   V,
   S,
   AG,
-  CP extends Record<string, Prop>,
+  CP extends Record<string, SystemProp>,
 > =
   | ActiveGroupPropNames<PR, GR, AG>
   | keyof VariantProps<V>
@@ -120,19 +120,19 @@ type AnimusManagedKeys<
  * inlining it re-derives the type instead of hitting the structural cache.
  */
 type ResolvedGroupProps<
-  PR extends Record<string, Prop>,
+  PR extends Record<string, SystemProp>,
   GR extends Record<string, (keyof PR)[]>,
   AG,
 > = GroupProps<PR, GR, AG>;
 
 type AnimusConsumerProps<
   El extends keyof JSX.IntrinsicElements,
-  PR extends Record<string, Prop>,
+  PR extends Record<string, SystemProp>,
   GR extends Record<string, (keyof PR)[]>,
   V,
   S,
   AG,
-  CP extends Record<string, Prop>,
+  CP extends Record<string, SystemProp>,
 > = Omit<ComponentPropsWithRef<El>, AnimusManagedKeys<PR, GR, V, S, AG, CP>> &
   ResolvedGroupProps<PR, GR, AG> &
   VariantProps<V> &
@@ -147,13 +147,13 @@ type AnimusConsumerProps<
 
 export type AnimusComponent<
   El extends keyof JSX.IntrinsicElements,
-  PR extends Record<string, Prop>,
+  PR extends Record<string, SystemProp>,
   GR extends Record<string, (keyof PR)[]>,
   BS,
   V,
   S,
   AG,
-  CP extends Record<string, Prop>,
+  CP extends Record<string, SystemProp>,
 > = ForwardRefExoticComponent<AnimusConsumerProps<El, PR, GR, V, S, AG, CP>> &
   ExtendFn<PR, GR, BS, V, S, AG, CP> & {
     readonly [ConsumerProps]: AnimusConsumerProps<El, PR, GR, V, S, AG, CP>;
@@ -167,11 +167,11 @@ export type AnimusComponent<
  */
 type AnimusWrappedConsumerProps<
   C extends ComponentType<any>,
-  PR extends Record<string, Prop>,
+  PR extends Record<string, SystemProp>,
   GR extends Record<string, (keyof PR)[]>,
   V,
   S,
-  CP extends Record<string, Prop>,
+  CP extends Record<string, SystemProp>,
 > = Omit<ComponentProps<C>, AnimusManagedKeys<PR, GR, V, S, {}, CP>> &
   Record<string, any> &
   GroupProps<PR, GR, {}> &
@@ -186,13 +186,13 @@ type AnimusWrappedConsumerProps<
 
 export type AnimusWrappedComponent<
   C extends ComponentType<any>,
-  PR extends Record<string, Prop>,
+  PR extends Record<string, SystemProp>,
   GR extends Record<string, (keyof PR)[]>,
   BS,
   V,
   S,
   AG,
-  CP extends Record<string, Prop>,
+  CP extends Record<string, SystemProp>,
 > = ForwardRefExoticComponent<AnimusWrappedConsumerProps<C, PR, GR, V, S, CP>> &
   ExtendFn<PR, GR, BS, V, S, AG, CP> & {
     readonly [ConsumerProps]: AnimusWrappedConsumerProps<C, PR, GR, V, S, CP>;

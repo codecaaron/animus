@@ -5,6 +5,15 @@ export interface PrefixedSystemArtifacts {
   contextualVarsJson?: string;
 }
 
+/** Prefix variable references without changing their matching rules. */
+export function prefixVariableReferences(
+  prefix: string,
+  value: string
+): string {
+  if (!prefix) return value;
+  return value.replace(/var\(--([a-zA-Z][\w-]*)\)/g, `var(--${prefix}-$1)`);
+}
+
 export function applyPrefix(
   prefix: string,
   variableMapJson: string,
@@ -14,8 +23,6 @@ export function applyPrefix(
 ): PrefixedSystemArtifacts {
   if (!prefix)
     return { variableMapJson, variableCss, themeJson, contextualVarsJson };
-
-  const varRefRe = /var\(--([a-zA-Z][\w-]*)\)/g;
 
   const map: Record<string, string> = JSON.parse(variableMapJson);
   const prefixed: Record<string, string> = {};
@@ -27,7 +34,11 @@ export function applyPrefix(
 
   let css = variableCss;
   css = css.replace(/--([a-zA-Z][\w-]*)\s*:/g, `--${prefix}-$1:`);
-  css = css.replace(varRefRe, `var(--${prefix}-$1)`);
+  css = prefixVariableReferences(prefix, css);
+  css = css.replace(
+    /@property(\s+)--([a-zA-Z][\w-]*)/g,
+    `@property$1--${prefix}-$2`
+  );
 
   const result: PrefixedSystemArtifacts = {
     variableMapJson: JSON.stringify(prefixed),
@@ -35,7 +46,7 @@ export function applyPrefix(
   };
 
   if (themeJson) {
-    result.themeJson = themeJson.replace(varRefRe, `var(--${prefix}-$1)`);
+    result.themeJson = prefixVariableReferences(prefix, themeJson);
   }
 
   if (contextualVarsJson) {

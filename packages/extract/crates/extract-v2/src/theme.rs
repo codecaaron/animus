@@ -75,6 +75,8 @@ fn prop_cascade_tier(prop_name: &str, config: &PropConfigMap) -> (usize, usize) 
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct PropConfig {
+    /// Empty for a declaration prop, whose records name its properties.
+    #[serde(default)]
     pub property: String,
     #[serde(default)]
     pub properties: Vec<String>,
@@ -104,9 +106,16 @@ pub struct PropConfig {
     /// a system config that predates the field keeps raw values.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub strict: Option<bool>,
+    #[serde(flatten)]
+    pub declaration: crate::declarations::DeclarationFields,
 }
 
 impl PropConfig {
+    /// The bound records of a declaration prop; `None` for a value prop.
+    pub fn declaration_binding(&self) -> Option<&crate::declarations::DeclarationBinding> {
+        self.declaration.binding.as_deref()
+    }
+
     /// The CSS properties the prop sets: its `properties`, or else its
     /// `property`.
     pub fn css_properties(&self) -> &[String] {
@@ -120,6 +129,12 @@ impl PropConfig {
     /// The bound definition's registry key and readable name.
     pub fn bound_definition(&self) -> Option<(&str, &str)> {
         Some((self.transform_id.as_deref()?, self.transform.as_deref()?))
+    }
+
+    /// Whether its static lookup keys keep the authored value's type: a
+    /// callback, inline or configured, can tell `100` from `"100"`.
+    pub fn keys_typed(&self) -> bool {
+        self.transform_fn_source.is_some() || self.bound_definition().is_some()
     }
 }
 
@@ -637,7 +652,7 @@ pub fn merge_pseudo_selectors(
     }
 }
 
-fn is_responsive_value(value: &Value, breakpoint_keys: &FxHashSet<String>) -> bool {
+pub(crate) fn is_responsive_value(value: &Value, breakpoint_keys: &FxHashSet<String>) -> bool {
     if let Some(obj) = value.as_object() {
         !obj.is_empty()
             && obj
@@ -764,6 +779,22 @@ fn resolve_single_prop(
         }
     };
 
+    if let Some(binding) = prop_config.declaration_binding() {
+        return binding
+            .record(value)
+            .map(|record| {
+                binding
+                    .members
+                    .iter()
+                    .map(|member| CssDeclaration {
+                        property: member.css_property.clone(),
+                        value: record[&member.name].clone(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+    }
+
     let Some(resolved) = resolve_value(prop_name, value, prop_config, theme, evaluator, failures) else {
         return vec![];
     };
@@ -858,8 +889,9 @@ fn resolve_value(
                             css
                         });
                     }
-                    // The usage gate keeps such a value off the static path.
-                    Err(EvalError::Unevaluable) => return None,
+                    // A throw, or a decline where no runtime slot exists (the
+                    // usage gate keeps JSX declines away), is reported and
+                    // applies the raw value.
                     Err(err) => {
                         if let Some(sink) = failures {
                             sink.borrow_mut().push(TransformFailure {
@@ -931,7 +963,8 @@ fn transform_applies(config: &PropConfig, scale_resolved: bool) -> bool {
 /// syntax. A throw or an invalid result keeps its build-time policy.
 pub(crate) fn extracts_callback_value(
     config: &PropConfig,
-    definition: &crate::transforms::CallbackDefinition,
+    key: &str,
+    name: &str,
     value: &Value,
     ctx: &ResolveContext,
 ) -> bool {
@@ -954,7 +987,7 @@ pub(crate) fn extracts_callback_value(
             return false;
         }
         let input = token.as_ref().map_or(entry, |(token, _)| token);
-        match evaluator.evaluate_callback(&definition.key, &definition.name, input) {
+        match evaluator.evaluate_callback(key, name, input) {
             Ok(scalar) => scalar.numeric || !rewritten(entry, &scalar.css),
             Err(EvalError::Unevaluable) => false,
             Err(_) => true,
@@ -965,6 +998,18 @@ pub(crate) fn extracts_callback_value(
             entries.values().all(evaluated)
         }
         _ => evaluated(value),
+    }
+}
+
+/// [`extracts_callback_value`] for a value whose lookup the runtime makes:
+/// a prop bound to an admitted configured definition follows the runtime's
+/// result; any other value extracts as before.
+pub(crate) fn extracts_configured_value(config: &PropConfig, value: &Value, ctx: &ResolveContext) -> bool {
+    match (config.bound_definition(), ctx.transform_evaluator) {
+        (Some((key, name)), Some(evaluator)) if evaluator.is_registered(key) => {
+            extracts_callback_value(config, key, name, value, ctx)
+        }
+        _ => true,
     }
 }
 
@@ -1012,6 +1057,18 @@ fn strict_token_misses(
     value: &Value,
     ctx: &ResolveContext,
 ) -> Vec<(Option<String>, Value)> {
+    // A declaration prop is strict by nature: only its scale's keys apply.
+    if let Some(binding) = config.declaration_binding() {
+        return match value.as_object() {
+            Some(entries) if is_responsive_value(value, ctx.breakpoint_keys) => entries
+                .iter()
+                .filter(|(_, entry)| !entry.is_null() && binding.record(entry).is_none())
+                .map(|(breakpoint, entry)| (Some(breakpoint.clone()), entry.clone()))
+                .collect(),
+            _ if binding.record(value).is_none() => vec![(None, value.clone())],
+            _ => vec![],
+        };
+    }
     if config.strict != Some(true) {
         return vec![];
     }
@@ -1286,7 +1343,7 @@ fn value_to_css_string(value: &Value) -> Option<String> {
     }
 }
 
-fn camel_to_kebab(s: &str) -> String {
+pub(crate) fn camel_to_kebab(s: &str) -> String {
     if let Some(rest) = s.strip_prefix("Webkit") {
         return format!("-webkit-{}", camel_to_kebab_inner(rest));
     }
@@ -1653,6 +1710,7 @@ mod tests {
                 transform_fn_source: None,
                 callback: None,
                 strict: None,
+                declaration: Default::default(),
             },
         );
         config.insert(
@@ -1668,6 +1726,7 @@ mod tests {
                 transform_fn_source: None,
                 callback: None,
                 strict: None,
+                declaration: Default::default(),
             },
         );
         config.insert(
@@ -1683,6 +1742,7 @@ mod tests {
                 transform_fn_source: None,
                 callback: None,
                 strict: None,
+                declaration: Default::default(),
             },
         );
         config.insert(
@@ -1698,6 +1758,7 @@ mod tests {
                 transform_fn_source: None,
                 callback: None,
                 strict: None,
+                declaration: Default::default(),
             },
         );
         config.insert(
@@ -1713,6 +1774,7 @@ mod tests {
                 transform_fn_source: None,
                 callback: None,
                 strict: None,
+                declaration: Default::default(),
             },
         );
         config.insert(
@@ -1728,6 +1790,7 @@ mod tests {
                 transform_fn_source: None,
                 callback: None,
                 strict: None,
+                declaration: Default::default(),
             },
         );
         config.insert(
@@ -1743,6 +1806,7 @@ mod tests {
                 transform_fn_source: None,
                 callback: None,
                 strict: None,
+                declaration: Default::default(),
             },
         );
         config.insert(
@@ -1758,6 +1822,7 @@ mod tests {
                 transform_fn_source: None,
                 callback: None,
                 strict: None,
+                declaration: Default::default(),
             },
         );
         config

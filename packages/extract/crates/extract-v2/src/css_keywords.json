@@ -1612,6 +1612,7 @@
     "WebkitBorderBeforeWidth": ["medium", "thick", "thin"],
     "WebkitBorderImage": ["none", "repeat", "round", "space", "stretch"],
     "WebkitBoxDecorationBreak": ["clone", "slice"],
+    "WebkitBoxOrient": ["block-axis", "horizontal", "inline-axis", "vertical"],
     "WebkitBoxReflect": ["above", "below", "left", "right"],
     "WebkitBoxShadow": ["none"],
     "WebkitBoxSizing": ["border-box", "content-box"],

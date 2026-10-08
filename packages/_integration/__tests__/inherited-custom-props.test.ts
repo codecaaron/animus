@@ -149,6 +149,7 @@ describe('custom props inherited through extend()', () => {
           groupRegistryJson: '{}',
           dynamicProps: {},
           admittedTransforms: manifest.admitted_transforms,
+          typedSystemProps: manifest.typed_system_props,
         })
       )}`
     );

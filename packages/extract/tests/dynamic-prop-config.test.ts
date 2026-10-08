@@ -124,6 +124,7 @@ async function evaluateTransforms(
     groupRegistryJson: '{}',
     dynamicProps: {},
     admittedTransforms,
+    typedSystemProps: [],
   });
   const { transforms } = await import(
     `data:text/javascript,${encodeURIComponent(source)}`

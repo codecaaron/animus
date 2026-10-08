@@ -17,6 +17,7 @@ export type ThemeStructuralKey =
   | 'browserColorScheme'
   | 'modeBases'
   | '__emitted'
+  | '__declarationScales'
   | 'manifest'
   | 'serialize'
   | 'varRef';
@@ -108,6 +109,12 @@ export interface SerializedTheme {
   variableMapJson: string;
   variableCss: string;
   contextualVarsJson: string;
+  /**
+   * `{ scale: { kind: 'declarations', members, values: { key: record } } }`,
+   * token references resolved. Absent when the theme has no declaration
+   * scales, so a scalar theme serializes as before.
+   */
+  declarationScalesJson?: string;
 }
 
 export interface TokenReference {

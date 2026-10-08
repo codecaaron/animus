@@ -24,6 +24,9 @@ pub struct SystemConfig {
     pub variable_map_json: String,
     pub variable_css: String,
     pub contextual_vars_json: String,
+    /// Declaration scales from the built theme's `serialize()`, tagged
+    /// `{ scale: { kind, members, values } }`; `None` when it has none.
+    pub declaration_scales_json: Option<String>,
     pub selector_aliases: Option<String>,
     pub selector_order: Option<String>,
     /// Condition alias map JSON: alias → `{ value, order, kind }`.
@@ -32,11 +35,14 @@ pub struct SystemConfig {
     /// Transform source texts by definition key (`{ transformId: sourceText }`
     /// JSON): the only channel for configured transforms; `None` for an older build.
     pub transform_sources: Option<String>,
-    /// Host-binding evidence by the same keys (`{ transformId: { hostGlobals:
-    /// [names] } | { rejection: reason } }` JSON): which of `btoa`/`atob`
-    /// each configured callable reads as the host function, proven from the
-    /// authored callable's own function in its module. A reason completes
-    /// "its callable …". `None` without sources.
+    /// Binding evidence by the same keys (`{ transformId: { hostGlobals:
+    /// [names] } | { rejection: reason } }` JSON), from the authored
+    /// callable's own function in its module: which of `btoa`/`atob` it reads
+    /// as the host function, or a rejection. A source reading neither name is
+    /// rejected only when a reference is shown bound outside the callable;
+    /// inconclusive evidence leaves it `{ hostGlobals: [] }`, which is not
+    /// proof that it reads no outer binding. A reason completes "its callable
+    /// …". `None` without sources.
     pub transform_provenance: Option<String>,
     pub global_style_blocks: Option<String>,
     /// Keyframe collections from the sealed registration record, shaped
@@ -1337,6 +1343,7 @@ fn extract_system_config<'js>(
     let contextual_vars_json: String = serialized
         .get("contextualVarsJson")
         .map_err(|e| format!("contextualVarsJson not found: {}", e))?;
+    let declaration_scales_json: Option<String> = serialized.get("declarationScalesJson").ok();
 
     // The registration record is the only source for keyframe and global-style
     // collections; an exported-but-unregistered value does not carry.
@@ -1362,6 +1369,7 @@ fn extract_system_config<'js>(
         variable_map_json,
         variable_css,
         contextual_vars_json,
+        declaration_scales_json,
         selector_aliases,
         selector_order,
         condition_aliases,
@@ -1429,9 +1437,18 @@ struct AuthoredPosition {
     text: String,
 }
 
-/// Per-definition host-binding evidence for `transformSources`: each
-/// definition whose source reads `btoa` or `atob` is located through its own
-/// authored callable; the others need none.
+/// Why an authored callable's bindings cannot be admitted.
+enum BindingFailure {
+    /// A reference inside the callable resolves to a binding outside it.
+    Captured(String),
+    /// The callable's function or a host read could not be established.
+    Inconclusive(String),
+}
+
+/// Per-definition binding evidence for `transformSources`, each definition
+/// located through its own authored callable. A definition that may read
+/// `btoa` or `atob` is rejected on any failure; any other is rejected only
+/// for a binding shown captured, and otherwise keeps its text admission.
 fn transform_provenance<'js>(
     config: &Object<'js>,
     authored_probe: &Function<'js>,
@@ -1441,44 +1458,50 @@ fn transform_provenance<'js>(
 ) -> Result<String, String> {
     let sources: std::collections::BTreeMap<String, String> = serde_json::from_str(transform_sources)
         .map_err(|e| format!("transformSources is not a JSON object of source texts: {}", e))?;
-    let candidates: Vec<&String> = sources
-        .iter()
-        .filter(|(_, source)| SHARED_HOST_NAMES.iter().any(|name| source.contains(name)) || source.contains("\\u"))
-        .map(|(id, _)| id)
-        .collect();
-    // Only a source that may read a host name needs its callable located.
-    let positions = if candidates.is_empty() {
+    let positions = if sources.is_empty() {
         Ok(std::collections::BTreeMap::new())
     } else {
-        authored_positions(config, authored_probe, &candidates)
+        authored_positions(config, authored_probe, &sources.keys().collect::<Vec<_>>())
     };
-    let line_starts: Vec<usize> = if candidates.is_empty() {
-        Vec::new()
-    } else {
-        std::iter::once(0).chain(bundle.match_indices('\n').map(|(i, _)| i + 1)).collect()
-    };
+    let line_starts: Vec<usize> = std::iter::once(0).chain(bundle.match_indices('\n').map(|(i, _)| i + 1)).collect();
     let mut out = serde_json::Map::new();
     for (id, source) in &sources {
-        let evidence = if !candidates.contains(&id) {
-            Ok(Vec::new())
-        } else {
-            match &positions {
-                Err(error) => Err(format!("could not be located ({error})")),
-                Ok(positions) => match positions.get(id).and_then(Option::as_ref) {
-                    Some(position) => host_binding_evidence(position, source, bundle, &line_starts, layout),
-                    None => Err("was built by an @animus-ui/system older than this extractor".to_string()),
-                },
-            }
+        let evidence = match &positions {
+            Err(error) => Err(BindingFailure::Inconclusive(format!("could not be located ({error})"))),
+            Ok(positions) => match positions.get(id).and_then(Option::as_ref) {
+                Some(position) => host_binding_evidence(position, source, bundle, &line_starts, layout),
+                None => Err(BindingFailure::Inconclusive(
+                    "was built by an @animus-ui/system older than this extractor".to_string(),
+                )),
+            },
         };
         out.insert(
             id.clone(),
             match evidence {
                 Ok(globals) => serde_json::json!({ "hostGlobals": globals }),
-                Err(reason) => serde_json::json!({ "rejection": reason }),
+                Err(BindingFailure::Captured(reason)) => serde_json::json!({ "rejection": reason }),
+                Err(BindingFailure::Inconclusive(reason)) if reads_shared_host_name(source) => {
+                    serde_json::json!({ "rejection": reason })
+                }
+                Err(BindingFailure::Inconclusive(_)) => serde_json::json!({ "hostGlobals": [] }),
             },
         );
     }
     Ok(serde_json::Value::Object(out).to_string())
+}
+
+/// Whether `source` reads `btoa` or `atob` unbound, as the extractor's
+/// admission decides; text that does not parse is assumed to.
+fn reads_shared_host_name(source: &str) -> bool {
+    let wrapper = format!("const __configured = ({source});");
+    let allocator = Allocator::default();
+    let parsed = Parser::new(&allocator, &wrapper, SourceType::mjs()).parse();
+    if parsed.panicked || !parsed.diagnostics.is_empty() {
+        return true;
+    }
+    let semantic = SemanticBuilder::new().build(&parsed.program).semantic;
+    let unresolved = semantic.scoping().root_unresolved_references();
+    SHARED_HOST_NAMES.iter().any(|name| unresolved.contains_key(*name))
 }
 
 /// The probe's view of each candidate's authored callable, `None` when its
@@ -1497,19 +1520,22 @@ fn authored_positions<'js>(
 }
 
 /// The shared host names the authored function reads as the host's, or why
-/// that cannot be shown: the position must start exactly that function of a
-/// bundled module, its text must be the configured source, and every `btoa`
-/// or `atob` it reads must be unbound in a module without direct eval.
+/// its bindings cannot be admitted: the position must start exactly that
+/// function of a bundled module and its text must be the configured source;
+/// a reference resolving to a binding outside the function is captured; and
+/// every `btoa` or `atob` it reads must be unbound in a module without
+/// direct eval.
 fn host_binding_evidence(
     position: &AuthoredPosition,
     source: &str,
     bundle: &str,
     line_starts: &[usize],
     layout: &BundleLayout,
-) -> Result<Vec<&'static str>, String> {
+) -> Result<Vec<&'static str>, BindingFailure> {
     use oxc::ast::AstKind;
+    let inconclusive = BindingFailure::Inconclusive;
     if position.text != source {
-        return Err("has text that differs from its configured source".to_string());
+        return Err(inconclusive("has text that differs from its configured source".to_string()));
     }
     // QuickJS columns count UTF-8 bytes from 1; lines break only at `\n`.
     let offset = match (position.file.as_deref(), position.line, position.column) {
@@ -1518,18 +1544,18 @@ fn host_binding_evidence(
         }
         _ => None,
     }
-    .ok_or("has no position in the loaded system's modules")?;
+    .ok_or_else(|| inconclusive("has no position in the loaded system's modules".to_string()))?;
     let (start, end, module) = layout
         .module_spans
         .iter()
         .find(|(start, end, _)| (*start..*end).contains(&offset))
-        .ok_or("is not defined in a module of the loaded system")?;
+        .ok_or_else(|| inconclusive("is not defined in a module of the loaded system".to_string()))?;
     let text = &bundle[*start..*end];
     let local = offset - start;
     let allocator = Allocator::default();
     let parsed = Parser::new(&allocator, text, SourceType::mjs()).parse();
     if parsed.panicked || !parsed.diagnostics.is_empty() {
-        return Err(format!("is defined in {module}, which does not parse as module code"));
+        return Err(inconclusive(format!("is defined in {module}, which does not parse as module code")));
     }
     let semantic = SemanticBuilder::new().with_build_nodes(true).build(&parsed.program).semantic;
     let function = semantic.nodes().iter().find_map(|node| match node.kind() {
@@ -1539,26 +1565,38 @@ fn host_binding_evidence(
     });
     let span = function
         .filter(|span| text.get(span.start as usize..span.end as usize) == Some(source))
-        .ok_or_else(|| format!("matches no function of {module} at its position"))?;
+        .ok_or_else(|| inconclusive(format!("matches no function of {module} at its position")))?;
     let scoping = semantic.scoping();
     let direct_eval = scoping.root_unresolved_references().contains_key("eval");
     let mut globals = Vec::new();
+    let mut unproven = None;
+    // Nodes come in source order, so the first captured name is reported.
     for node in semantic.nodes().iter() {
         let AstKind::IdentifierReference(reference) = node.kind() else { continue };
-        let Some(name) = SHARED_HOST_NAMES.iter().find(|name| reference.name == **name) else { continue };
         if !span.contains_inclusive(reference.span) {
             continue;
         }
+        let name = reference.name.as_str();
         let symbol = reference.reference_id.get().and_then(|id| scoping.get_reference(id).symbol_id());
         match symbol {
             Some(symbol) if span.contains_inclusive(scoping.symbol_span(symbol)) => {}
-            Some(_) => return Err(format!("reads '{name}' declared in {module} outside the callback")),
-            None if direct_eval => {
-                return Err(format!("reads '{name}' in {module}, which calls eval directly"));
+            Some(_) => {
+                return Err(BindingFailure::Captured(format!(
+                    "reads '{name}' declared in {module} outside the callback"
+                )));
             }
-            None if !globals.contains(name) => globals.push(*name),
-            None => {}
+            None => {
+                let Some(host) = SHARED_HOST_NAMES.iter().find(|host| name == **host) else { continue };
+                if direct_eval {
+                    unproven.get_or_insert_with(|| format!("reads '{name}' in {module}, which calls eval directly"));
+                } else if !globals.contains(host) {
+                    globals.push(*host);
+                }
+            }
         }
+    }
+    if let Some(reason) = unproven {
+        return Err(inconclusive(reason));
     }
     globals.sort_unstable();
     Ok(globals)
@@ -2090,32 +2128,47 @@ export const ds = tokens;
     #[test]
     fn transform_provenance_follows_each_authored_callable() {
         let dir = scratch_dir("transform-provenance");
-        write_fixture(&dir.join("local.js"), "const btoa = (s) => s;\nexport const local = (v) => btoa(String(v));\n");
+        write_fixture(
+            &dir.join("local.js"),
+            "import { Set } from './set.js';\n\
+             const btoa = (s) => s;\n\
+             const Math = { round: () => 99 };\n\
+             export const local = (v) => btoa(String(v));\n\
+             export const mathLocal = (v) => Math.round(v);\n\
+             export const setImported = (v) => new Set([v]).size;\n",
+        );
+        write_fixture(&dir.join("set.js"), "export class Set { size = 5; }\n");
         write_fixture(
             &dir.join("global.js"),
             "export const global = (v) => btoa(String(v));\n\
              export function decl(v) { return atob(String(v)); }\n\
-             export const own = (v) => { const btoa = (s) => s; return btoa(String(v)); };\n",
+             export const own = (v) => { const btoa = (s) => s; return btoa(String(v)); };\n\
+             export const mathOwn = (v) => { const Math = { round: () => 99 }; return Math.round(v); };\n\
+             export const mathGlobal = (v) => Math.round(v);\n",
         );
         write_fixture(&dir.join("factory.js"), "export const made = ((btoa) => (v) => btoa(String(v)))((s) => s);\n");
         write_fixture(&dir.join("direct.js"), "eval('');\nexport const viaEval = (v) => btoa(String(v));\n");
         write_fixture(
             &dir.join("ds.js"),
             &format!(
-                "import {{ local }} from './local.js';\n\
-                 import {{ global, decl, own }} from './global.js';\n\
+                "import {{ local, mathLocal, setImported }} from './local.js';\n\
+                 import {{ global, decl, own, mathOwn, mathGlobal }} from './global.js';\n\
                  import {{ made }} from './factory.js';\n\
                  import {{ viaEval }} from './direct.js';\n\
                  const link = Symbol.for('animus.transform.authored');\n\
                  const forward = (fn) => {{ const w = (v) => fn(v); Object.defineProperty(w, link, {{ value: fn }}); return w; }};\n\
                  const built = new Function('v', 'return btoa(String(v))');\n\
-                 const linked = {{ local, global, decl, own, made, viaEval, built }};\n\
+                 const linked = {{ local, global, decl, own, made, viaEval, built, mathLocal, setImported, mathOwn, mathGlobal }};\n\
                  const transforms = Object.fromEntries(Object.entries(linked).map(([id, fn]) => [id, forward(fn)]));\n\
                  transforms.unlinked = (v) => btoa(String(v));\n\
                  transforms.renamed = forward(global);\n\
+                 transforms.mathUnlinked = (v) => Math.round(v);\n\
+                 transforms.namedUnlinked = (v) => 'btoa:' + v;\n\
                  const sources = Object.fromEntries(Object.entries(linked).map(([id, fn]) => [id, fn.toString()]));\n\
                  sources.unlinked = transforms.unlinked.toString();\n\
                  sources.renamed = '(v) => btoa(String(v)) ';\n\
+                 sources.mathUnlinked = transforms.mathUnlinked.toString();\n\
+                 sources.namedUnlinked = transforms.namedUnlinked.toString();\n\
                  export const ds = {{\n\
                    toConfig: () => ({{ propConfig: '{{}}', groupRegistry: '{{}}', transforms, transformSources: JSON.stringify(sources) }}),\n\
                    getVocabularyRecord: () => ({{ version: 1, keyframes: [], globalStyles: [], collisions: [], legacyVerbs: [] }}),\n\
@@ -2137,6 +2190,15 @@ export const ds = tokens;
         assert!(reason("built").contains("has no position"), "{}", reason("built"));
         assert!(reason("unlinked").contains("older than this extractor"), "{}", reason("unlinked"));
         assert!(reason("renamed").contains("differs from its configured source"), "{}", reason("renamed"));
+        // Any name bound outside the callable rejects it; without evidence a
+        // source reading neither host name keeps its text admission.
+        assert!(reason("mathLocal").contains("reads 'Math' declared in"), "{}", reason("mathLocal"));
+        assert!(reason("setImported").contains("reads 'Set' declared in"), "{}", reason("setImported"));
+        assert_eq!(provenance["mathOwn"], serde_json::json!({ "hostGlobals": [] }));
+        assert_eq!(provenance["mathGlobal"], serde_json::json!({ "hostGlobals": [] }));
+        assert_eq!(provenance["mathUnlinked"], serde_json::json!({ "hostGlobals": [] }));
+        // Naming btoa in a string is not reading it.
+        assert_eq!(provenance["namedUnlinked"], serde_json::json!({ "hostGlobals": [] }));
         let _ = fs::remove_dir_all(&dir);
     }
 

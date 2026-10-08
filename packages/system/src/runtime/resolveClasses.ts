@@ -17,29 +17,48 @@ export interface ClassResolverConfig {
   customDynamicConfig?: DynamicPropConfig;
   /** Callback props whose `customPropMap` keys are `typedValueKey`s. */
   typedCustomProps?: readonly string[];
+  /** System props bound to a configured transform, whose `systemPropMap`
+   *  keys are `typedValueKey`s. */
+  typedSystemProps?: readonly string[];
 }
 
 export type SystemPropMap = Record<string, Record<string, string>>;
 
+interface ValueDynamicPropConfig {
+  varName: string;
+  slotClass: string;
+  property?: string;
+  properties?: readonly string[];
+  /** The bound transform's readable name, for diagnostics. */
+  transformName?: string;
+  /** The bound definition's key in the generated `transforms` registry. */
+  transformId?: string;
+  transform?: (value: string | number) => string | number;
+  scaleValues?: Record<string, string | number>;
+  negative?: boolean;
+  /** Values outside `scaleValues` are dropped, not applied raw. */
+  strict?: boolean;
+  /** The keywords a strict prop admits beside its tokens. */
+  keywords?: readonly string[];
+  kind?: never;
+}
+
+interface DeclarationDynamicPropConfig {
+  kind: 'declarations';
+  slotClass: string;
+  /** Member property → its variable; a breakpoint appends `-{bp}`. */
+  memberVars: Record<string, string>;
+  /** Scale key → member property → resolved CSS value. */
+  declarationScaleValues: Record<string, Record<string, string>>;
+}
+
+type DeclarationConfig = DeclarationDynamicPropConfig & {
+  [K in Exclude<keyof ValueDynamicPropConfig, 'kind' | 'slotClass'>]?: never;
+};
+
 export type DynamicPropConfig = Record<
   string,
-  {
-    varName: string;
-    slotClass: string;
-    property?: string;
-    properties?: readonly string[];
-    /** The bound transform's readable name, for diagnostics. */
-    transformName?: string;
-    /** The bound definition's key in the generated `transforms` registry. */
-    transformId?: string;
-    transform?: (value: string | number) => string | number;
-    scaleValues?: Record<string, string | number>;
-    negative?: boolean;
-    /** Values outside `scaleValues` are dropped, not applied raw. */
-    strict?: boolean;
-    /** The keywords a strict prop admits beside its tokens. */
-    keywords?: readonly string[];
-  }
+  ValueDynamicPropConfig | DeclarationConfig
 >;
 
 import { isUnitlessProperty } from '@animus-ui/properties';
@@ -82,7 +101,7 @@ export function serializeValueKey(value: unknown): string {
 }
 
 /**
- * A callback can tell `100` from `"100"`, so its static classes are keyed by
+ * A callback, inline or configured, can tell `100` from `"100"`, so its static classes are keyed by
  * type: a string is its JSON literal, a number its decimal text, a
  * responsive value `{…}` its `"breakpoint":key` entries in key order. Must
  * stay in step with the Rust css generator.
@@ -133,7 +152,7 @@ interface StrictScaleMiss {
 type EntryFailure = InvalidResult | TransformThrow | StrictScaleMiss;
 
 type DynamicEntryConfig = Pick<
-  DynamicPropConfig[string],
+  ValueDynamicPropConfig,
   | 'varName'
   | 'property'
   | 'properties'
@@ -445,7 +464,7 @@ function applyDynamicProp(
   classes: string[],
   dynStyle: Record<string, string>,
   propValue: unknown,
-  dc: DynamicPropConfig[string]
+  dc: ValueDynamicPropConfig
 ): EntryFailure | null {
   const staged: [slotClass: string, varName: string, resolved: string][] = [];
   if (
@@ -473,6 +492,47 @@ function applyDynamicProp(
   for (const [slotClass, varName, resolved] of staged) {
     classes.push(slotClass);
     dynStyle[varName] = resolved;
+  }
+  return null;
+}
+
+/**
+ * A declaration prop writes every member of the selected record. The base
+ * consuming class applies whenever the prop applies, so a value without a
+ * base key reads the base member variables an ancestor wrote, or else leaves
+ * lower layers in force. A key outside the scale drops the whole value.
+ */
+function applyDeclarationProp(
+  classes: string[],
+  dynStyle: Record<string, string>,
+  propValue: unknown,
+  dc: DeclarationDynamicPropConfig
+): StrictScaleMiss | null {
+  const records = dc.declarationScaleValues;
+  const memberVars = Object.entries(dc.memberVars);
+  const responsive =
+    typeof propValue === 'object' &&
+    propValue !== null &&
+    !Array.isArray(propValue);
+  const entries: [breakpoint: string, value: unknown][] = responsive
+    ? Object.entries(propValue).filter(([, value]) => value != null)
+    : [['_', propValue]];
+  const staged: [breakpoint: string, record: Record<string, string>][] = [];
+  for (const [breakpoint, value] of entries) {
+    const key = String(value);
+    if (!Object.prototype.hasOwnProperty.call(records, key)) {
+      return responsive ? { entry: value, breakpoint } : { entry: value };
+    }
+    staged.push([breakpoint, records[key]]);
+  }
+  if (staged.length === 0) return null;
+  classes.push(dc.slotClass);
+  for (const [breakpoint, record] of staged) {
+    const suffix = breakpoint === '_' ? '' : `-${breakpoint}`;
+    if (suffix) classes.push(`${dc.slotClass}${suffix}`);
+    for (const [member, varName] of memberVars) {
+      dynStyle[`${varName}${suffix}`] = record[member];
+    }
   }
   return null;
 }
@@ -509,13 +569,13 @@ export function resolveClasses(
       const customOwned =
         customPropMap?.[propName] !== undefined ||
         customDynamicConfig?.[propName] !== undefined;
-      const cls = customOwned
-        ? customPropMap?.[propName]?.[
-            config.typedCustomProps?.includes(propName)
-              ? typedValueKey(propValue)
-              : key
-          ]
-        : systemPropMap?.[propName]?.[key];
+      const [classMap, typedProps] = customOwned
+        ? [customPropMap, config.typedCustomProps]
+        : [systemPropMap, config.typedSystemProps];
+      const cls =
+        classMap?.[propName]?.[
+          typedProps?.includes(propName) ? typedValueKey(propValue) : key
+        ];
 
       if (cls) {
         classes.push(cls);
@@ -529,7 +589,10 @@ export function resolveClasses(
           // Witness only once the whole value applies: a dropped value
           // witnesses as `drop`, never `dynamic`. dynStyle adopts on success.
           const staged = dynStyle ?? {};
-          const failure = applyDynamicProp(classes, staged, propValue, dc);
+          const failure =
+            dc.kind === 'declarations'
+              ? applyDeclarationProp(classes, staged, propValue, dc)
+              : applyDynamicProp(classes, staged, propValue, dc);
           if (failure === null) {
             dynStyle = staged;
             recordWitness(baseClassName, propName, key, 'dynamic');

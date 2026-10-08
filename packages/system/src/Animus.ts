@@ -12,7 +12,8 @@ import {
   CSSPropMap,
   CSSProps,
   CustomPropConfig,
-  Prop,
+  DeclarationProp,
+  SystemProp,
   SystemProps,
   ThemedCSSPropMap,
   ThemedCSSProps,
@@ -27,13 +28,13 @@ import type {
 } from './types/component';
 
 export class AnimusWithAll<
-  PropRegistry extends Record<string, Prop>,
+  PropRegistry extends Record<string, SystemProp>,
   GroupRegistry extends Record<string, (keyof PropRegistry)[]>,
   BaseStyles extends CSSProps<AbstractProps, SystemProps<AbstractParser>>,
   Variants extends Record<string, VariantConfig>,
   States extends CSSPropMap<AbstractProps, SystemProps<AbstractParser>>,
   ActiveGroups extends Record<string, true>,
-  CustomProps extends Record<string, Prop>,
+  CustomProps extends Record<string, SystemProp>,
 > {
   propRegistry = {} as PropRegistry;
   groupRegistry = {} as GroupRegistry;
@@ -162,7 +163,7 @@ export class AnimusWithAll<
 }
 
 class AnimusWithSystem<
-  PropRegistry extends Record<string, Prop>,
+  PropRegistry extends Record<string, SystemProp>,
   GroupRegistry extends Record<string, (keyof PropRegistry)[]>,
   BaseStyles extends CSSProps<AbstractProps, SystemProps<AbstractParser>>,
   Variants extends Record<string, VariantConfig>,
@@ -189,9 +190,9 @@ class AnimusWithSystem<
     super(props, groups, base, variants, states, activeGroups, {}, compounds);
   }
 
-  props<NewCustomProps extends Record<string, CustomPropConfig>>(
-    config: NewCustomProps
-  ) {
+  props<
+    NewCustomProps extends Record<string, CustomPropConfig | DeclarationProp>,
+  >(config: NewCustomProps) {
     return new AnimusWithAll<
       PropRegistry,
       GroupRegistry,
@@ -214,7 +215,7 @@ class AnimusWithSystem<
 }
 
 class AnimusWithStates<
-  PropRegistry extends Record<string, Prop>,
+  PropRegistry extends Record<string, SystemProp>,
   GroupRegistry extends Record<string, (keyof PropRegistry)[]>,
   BaseStyles extends CSSProps<AbstractProps, SystemProps<AbstractParser>>,
   Variants extends Record<string, VariantConfig>,
@@ -263,7 +264,7 @@ class AnimusWithStates<
 }
 
 class AnimusWithCompounds<
-  PropRegistry extends Record<string, Prop>,
+  PropRegistry extends Record<string, SystemProp>,
   GroupRegistry extends Record<string, (keyof PropRegistry)[]>,
   BaseStyles extends CSSProps<AbstractProps, SystemProps<AbstractParser>>,
   Variants extends Record<string, VariantConfig>,
@@ -324,7 +325,7 @@ class AnimusWithCompounds<
 }
 
 class AnimusWithVariants<
-  PropRegistry extends Record<string, Prop>,
+  PropRegistry extends Record<string, SystemProp>,
   GroupRegistry extends Record<string, (keyof PropRegistry)[]>,
   BaseStyles extends CSSProps<AbstractProps, SystemProps<AbstractParser>>,
   Variants extends Record<string, VariantConfig>,
@@ -393,7 +394,7 @@ class AnimusWithVariants<
 }
 
 class AnimusWithBase<
-  PropRegistry extends Record<string, Prop>,
+  PropRegistry extends Record<string, SystemProp>,
   GroupRegistry extends Record<string, (keyof PropRegistry)[]>,
   BaseStyles extends CSSProps<AbstractProps, SystemProps<AbstractParser>>,
 > extends AnimusWithVariants<PropRegistry, GroupRegistry, BaseStyles, {}> {
@@ -431,7 +432,7 @@ class AnimusWithBase<
 }
 
 export class Animus<
-  PropRegistry extends Record<string, Prop>,
+  PropRegistry extends Record<string, SystemProp>,
   GroupRegistry extends Record<string, (keyof PropRegistry)[]>,
 > extends AnimusWithBase<PropRegistry, GroupRegistry, {}> {
   constructor(props: PropRegistry, groups: GroupRegistry) {

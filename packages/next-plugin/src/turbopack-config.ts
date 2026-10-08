@@ -45,6 +45,14 @@ export function resolveTurbopackMode(
   return false;
 }
 
+/** Development under Turbopack: the dev watcher runs, and loaders may wait
+ *  for and re-deliver its generations. */
+export function isTurbopackDevelopment(
+  env: Record<string, string | undefined> = process.env
+): boolean {
+  return env.NODE_ENV === 'development';
+}
+
 function rootRelativeRequest(rootDir: string, absPath: string): string {
   return `./${relative(rootDir, absPath).replace(/\\/g, '/')}`;
 }

@@ -3,16 +3,25 @@ use std::collections::BTreeMap;
 use serde::Serialize;
 use serde_json::Value;
 
+use crate::declarations::{DeclarationBinding, DeclarationNames, DECLARATIONS_KIND};
 use crate::theme::{
     contextual_var_reference, css_keywords, is_strict_scale, ContextualVarsMap, FlatTheme,
     PropConfig,
 };
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(untagged)]
+pub enum DynamicPropMeta {
+    Value(ValuePropMeta),
+    Declarations(DeclarationPropMeta),
+}
+
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct DynamicPropMeta {
+pub struct ValuePropMeta {
     pub var_name: String,
     pub slot_class: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
     pub property: String,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub negative: bool,
@@ -33,6 +42,16 @@ pub struct DynamicPropMeta {
     pub scale_values: BTreeMap<String, Value>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeclarationPropMeta {
+    pub kind: &'static str,
+    pub slot_class: String,
+    pub member_vars: BTreeMap<String, String>,
+    /// Scale key → member → CSS value, as the binding classes declare them.
+    pub declaration_scale_values: BTreeMap<String, BTreeMap<String, String>>,
+}
+
 impl DynamicPropMeta {
     pub fn new(
         var_name: String,
@@ -42,7 +61,7 @@ impl DynamicPropMeta {
         contextual_vars: &ContextualVarsMap,
     ) -> Self {
         let strict = is_strict_scale(config, theme);
-        Self {
+        Self::Value(ValuePropMeta {
             var_name,
             slot_class,
             property: config.property.clone(),
@@ -58,6 +77,29 @@ impl DynamicPropMeta {
             transform_id: config.transform_id.clone(),
             transform_fn_source: config.transform_fn_source.clone(),
             scale_values: scale_values(config, theme, contextual_vars),
+        })
+    }
+
+    /// A declaration prop's runtime entry: its consuming class, each member's
+    /// variable and every key's record.
+    pub fn declarations(class_prefix: &str, prop_name: &str, binding: &DeclarationBinding) -> Self {
+        let names = DeclarationNames::of(class_prefix, prop_name, binding);
+        Self::Declarations(DeclarationPropMeta {
+            kind: DECLARATIONS_KIND,
+            slot_class: names.consuming_class(),
+            member_vars: binding
+                .members
+                .iter()
+                .map(|member| (member.name.clone(), names.member_var(member)))
+                .collect(),
+            declaration_scale_values: binding.records.as_ref().clone(),
+        })
+    }
+
+    pub fn value(&self) -> Option<&ValuePropMeta> {
+        match self {
+            Self::Value(meta) => Some(meta),
+            Self::Declarations(_) => None,
         }
     }
 }

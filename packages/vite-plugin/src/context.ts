@@ -96,6 +96,7 @@ function generateSystemPropsModule(ctx: PluginContext): string {
     groupRegistryJson: ctx.system.groupRegistryJson,
     dynamicProps: JSON.parse(ctx.storedDynamicPropsJson),
     admittedTransforms: JSON.parse(ctx.storedAdmittedTransformsJson),
+    typedSystemProps: JSON.parse(ctx.storedTypedSystemPropsJson),
   });
 }
 
@@ -113,6 +114,7 @@ function systemPropsModuleKey(ctx: PluginContext): string {
     ctx.system.groupRegistryJson,
     ctx.storedDynamicPropsJson,
     ctx.storedAdmittedTransformsJson,
+    ctx.storedTypedSystemPropsJson,
   ].join('\u0000');
 }
 
@@ -186,6 +188,7 @@ export class PluginContext {
   storedSystemPropMapJson = '{}';
   storedDynamicPropsJson = '{}';
   storedAdmittedTransformsJson = '{}';
+  storedTypedSystemPropsJson = '[]';
 
   readonly fileCache: ReadonlyMap<string, { hash: string; source: string }> =
     new Map();
@@ -458,6 +461,9 @@ export class PluginContext {
     this.storedDynamicPropsJson = JSON.stringify(result.manifest.dynamic_props);
     this.storedAdmittedTransformsJson = JSON.stringify(
       result.manifest.admitted_transforms
+    );
+    this.storedTypedSystemPropsJson = JSON.stringify(
+      result.manifest.typed_system_props
     );
 
     this.reverseProvenance = result.manifest.reverse_provenance;

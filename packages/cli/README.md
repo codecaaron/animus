@@ -66,7 +66,12 @@ or imported, through aliases and named re-exports, from an analyzed source
 module, as is a named transform string such as `transform: 'size'`. It also fails on a value that
 names no token on a strict, populated scale (`animus.props.strict-token-miss`);
 that prop's styling is omitted in every mode, and the warning keeps the
-authored value. Each classified diagnostic carries
+authored value. It also fails on a configured transform that cannot be evaluated
+during extraction (it exhausts its budget or reads the host environment) where
+the value has no runtime path, in a style block, variant, state or global style
+(`animus.transform.static-evaluation-unavailable`); the raw value applies in
+every mode, while the same value in JSX stays on its runtime path without a
+diagnostic. Each classified diagnostic carries
 a stable `animus.*` code, its file and binding, the reason and a supported
 rewrite. Genuine degradation stays a warning in every mode (per-property
 skips, name collisions, unsupported-value fallbacks, pruning, valid dynamic

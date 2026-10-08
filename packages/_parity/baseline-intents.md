@@ -333,3 +333,37 @@ committed production/development pair. Ordinary parity runs never write it.
       number's typed key is its decimal text. CSS, sheets, observables and
       every seam case stay byte-identical. Removing the field reproduces both
       previous units.
+- [x] `configured-transform-typed-system-lookup-20261002` — refresh the two
+      modes after system props bound to a configured transform began keying
+      their static lookups by the authored value's type. Only the code
+      surfaces of `extract-all`, `extract/system-props.tsx` and
+      `integration/system-props.tsx` move, with the same exact hashes in both
+      modes. In each unit, Box's active layout group binds the configured
+      size transform, so its replacement imports `typedSystemProps` from the
+      virtual system-props module and gains
+      `,"typedSystemProps":typedSystemProps` in its createComponent config.
+      Text's config stays unchanged. Removing the one import member and one
+      config field reproduces all prior code bytes. All 66 units keep their
+      CSS, maps, dynamic metadata, diagnostics, hasComponents and parse counts
+      unchanged; the seam battery remains 29/29 byte-identical. The corpus
+      contains no configured system string literal or rewritten configured
+      JSX result, so this refresh records metadata delivery only.
+- [x] `configured-custom-prop-runtime-slots-20261002` — record the configured-name custom-prop fallback in the seam battery. An exported component is not proven confined by its observed literal uses, so its configured custom prop keeps a runtime slot beside its unchanged static class. Only `named-transform-cross-file-collision` and `named-transform-cross-file-collision-reversed` change: each gains the base `q` variable-slot rule and its five xs/sm/md/lg/xl breakpoint rules in the custom layer. Their existing literal class, all other CSS and diagnostics stay unchanged; removing those six rules reproduces both prior cases exactly. The other 27 seam cases and both 66-unit corpus oracles are unchanged. Confined components whose values are all covered still prune their slots.
+- [x] `custom-utility-layer-namespace-20261003` — give custom atomic utilities a namespace
+      distinct from system atomic utilities so identical CSS cannot carry
+      custom-layer precedence onto a system-only consumer. System utility
+      names keep `animus-u-<hash>`; custom utility names become
+      `animus-uc-<hash>`, preserving content-based reuse within each layer
+      and the existing rule-order tie-break. In both oracle modes, only
+      `extract-all`, `extract/custom-props.tsx` and
+      `parity/multi-custom.tsx` change: CSS selectors, matching customPropMap
+      references in transformed code, and matching sheetsJson selectors.
+      These are nine artifacts per mode, with eleven distinct registered
+      hash transitions across the two modes. Only four seam cases change:
+      `inline-transform-multiply`, `named-transform-cross-file-collision`,
+      its `-reversed` case, and `throwing-transform`. Inverse renaming
+      reproduces every prior unit and case exactly. Rule order, declaration
+      values, diagnostics, system utility names, declaration binding and
+      consuming names, member variables, runtime slots and all other
+      observable fields stay unchanged. The remaining 63 oracle units in
+      each mode and 25 seam cases are identical.

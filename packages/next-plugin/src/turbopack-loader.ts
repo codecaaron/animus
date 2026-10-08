@@ -21,6 +21,7 @@ import {
   extensionLineage,
   transformWithManifest,
 } from './loader-core';
+import { isTurbopackDevelopment } from './turbopack-config';
 
 import type { LoaderContextBase, LoaderPolicyOptions } from './loader-core';
 import type {
@@ -327,11 +328,10 @@ async function runLoader(ctx: LoaderContext, source: string): Promise<string> {
     });
 
   const deliver = async (covering: Hydration): Promise<string> => {
-    if (process.env.NODE_ENV === 'production') {
+    if (!isTurbopackDevelopment()) {
       return transform(covering.manifestJson);
     }
     const extended = extendedFiles(covering.manifestJson, filename);
-    for (const file of extended) ctx.addDependency?.(join(rootDir, file));
     const generation = await coverExtendedFiles({
       covering,
       extended,
@@ -345,6 +345,7 @@ async function runLoader(ctx: LoaderContext, source: string): Promise<string> {
       generation === covering
         ? extended
         : extendedFiles(generation.manifestJson, filename);
+    for (const file of lineage) ctx.addDependency?.(join(rootDir, file));
     return (
       transform(generation.manifestJson) +
       extensionLineage(lineage, generation.fileHashes)

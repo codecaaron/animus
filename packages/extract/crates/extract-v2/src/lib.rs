@@ -38,6 +38,7 @@ pub mod usage_facts;
 pub mod chain_walk;
 pub mod css;
 pub mod cross_file;
+pub mod declarations;
 pub mod dynamic_meta;
 pub mod forced_usage;
 pub mod owned_ast;
@@ -61,6 +62,9 @@ pub struct NapiSystemConfig {
     pub variable_map_json: String,
     pub variable_css: String,
     pub contextual_vars_json: String,
+    /// Declaration scales JSON (`{ scale: { kind, members, values } }`);
+    /// pass it as `declarationScalesJson`. Absent when the theme has none.
+    pub declaration_scales_json: Option<String>,
     pub selector_aliases: Option<String>,
     pub selector_order: Option<String>,
     /// Condition alias map JSON (the `conditionAliases` manifest field):
@@ -107,6 +111,7 @@ pub fn load_system_module(
         variable_map_json: config.variable_map_json,
         variable_css: config.variable_css,
         contextual_vars_json: config.contextual_vars_json,
+        declaration_scales_json: config.declaration_scales_json,
         selector_aliases: config.selector_aliases,
         selector_order: config.selector_order,
         condition_aliases: config.condition_aliases,

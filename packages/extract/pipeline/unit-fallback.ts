@@ -4,7 +4,8 @@ export function applyUnitFallback(css: string): string {
   return css.replace(
     /([a-z-]+)\s*:\s*([^;{}]+);/g,
     (match, prop: string, value: string) => {
-      if (isUnitlessProperty(prop)) return match;
+      // A custom property has no unit context: its writer emits final values.
+      if (isUnitlessProperty(prop) || prop.startsWith('--')) return match;
       let depth = 0;
       let fixed = '';
       let i = 0;

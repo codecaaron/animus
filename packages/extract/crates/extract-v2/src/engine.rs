@@ -35,6 +35,7 @@ struct AnalyzeResult<'a> {
         &'a std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>,
     dynamic_props: &'a std::collections::BTreeMap<String, crate::dynamic_meta::DynamicPropMeta>,
     admitted_transforms: &'a std::collections::BTreeMap<String, String>,
+    typed_system_props: &'a [String],
     component_fragments: &'a std::collections::BTreeMap<String, crate::css::PerComponentSheets>,
     reverse_provenance: &'a std::collections::BTreeMap<String, Vec<String>>,
     components: &'a std::collections::BTreeMap<String, analyze_css::ComponentDescriptor>,
@@ -52,6 +53,9 @@ pub struct EngineOptions {
     pub theme_json: Option<String>,
     pub variable_map_json: Option<String>,
     pub contextual_vars_json: Option<String>,
+    /// Declaration scales, `{ scale: { kind, members, values } }`; absent
+    /// means none.
+    pub declaration_scales_json: Option<String>,
     pub config_json: Option<String>,
     pub group_registry_json: Option<String>,
     pub transform_sources_json: Option<String>,
@@ -81,6 +85,7 @@ struct ReplacementImportNeeds {
     class_resolver: bool,
     system_prop_map: bool,
     system_prop_groups: bool,
+    typed_system_props: bool,
     dynamic_prop_config: bool,
     transforms: bool,
     /// Import declarations, by span, whose imported callback a replacement no
@@ -112,6 +117,7 @@ fn replacement_import_needs(
         let has_system_props = !payload.system_prop_names.is_empty();
         needs.system_prop_map |= has_system_props;
         needs.system_prop_groups |= !payload.system_group_names.is_empty();
+        needs.typed_system_props |= has_system_props && payload.reads_typed_system_props;
         needs.dynamic_prop_config |= has_system_props && payload.has_dynamic_props;
 
         needs.transforms |= needs.dynamic_prop_config
@@ -119,7 +125,7 @@ fn replacement_import_needs(
                 .custom_dynamic_config
                 .as_ref()
                 .is_some_and(|config| {
-                    config.values().any(|meta| {
+                    config.values().filter_map(crate::dynamic_meta::DynamicPropMeta::value).any(|meta| {
                         meta.transform_id.is_some()
                     })
                 });
@@ -190,6 +196,9 @@ impl ExtractEngine {
         )
         .map_err(napi::Error::from_reason)?;
         let mut css_inputs = css_inputs;
+        css_inputs
+            .bind_declarations(o.declaration_scales_json.as_deref())
+            .map_err(napi::Error::from_reason)?;
         css_inputs
             .set_transform_sources(o.transform_sources_json.as_deref())
             .map_err(napi::Error::from_reason)?;
@@ -458,6 +467,7 @@ impl ExtractEngine {
             system_prop_map: &css.system_prop_map,
             dynamic_props: &css.dynamic_props,
             admitted_transforms: &css.admitted_transforms,
+            typed_system_props: &css.typed_system_props,
             component_fragments: &css.component_fragments,
             reverse_provenance: &css.reverse_provenance,
             components: &css.components,
@@ -577,6 +587,9 @@ impl ExtractEngine {
         }
         if import_needs.system_prop_groups {
             virtual_imports.push("systemPropGroups");
+        }
+        if import_needs.typed_system_props {
+            virtual_imports.push("typedSystemProps");
         }
         if import_needs.dynamic_prop_config {
             virtual_imports.push("dynamicPropConfig");
@@ -735,7 +748,7 @@ mod tests {
         transform_id: Option<&str>,
         transform_fn_source: Option<&str>,
     ) -> crate::dynamic_meta::DynamicPropMeta {
-        crate::dynamic_meta::DynamicPropMeta {
+        crate::dynamic_meta::DynamicPropMeta::Value(crate::dynamic_meta::ValuePropMeta {
             var_name: "--tone".into(),
             slot_class: "tone-slot".into(),
             property: "color".into(),
@@ -747,7 +760,7 @@ mod tests {
             transform_id: transform_id.map(str::to_string),
             transform_fn_source: transform_fn_source.map(str::to_string),
             scale_values: BTreeMap::new(),
-        }
+        })
     }
 
     fn payload_with_dynamic_meta(
