@@ -11,12 +11,12 @@ extraction engine is no longer supported, that v2 is the only engine, and to
 remove the `engine` option and unset `ANIMUS_ENGINE`. It no longer cites an
 internal change name.
 
-**Verbose timing drops the Rust phase lines that were always zero.** The
+**Verbose timing drops the Rust phase lines that were always zero (breaking for importers of `formatRustTimingWaterfall`).** The
 engine stopped reporting per-phase Rust timings when v1 was removed, so
 verbose output from the Vite plugin and the shared session printed eleven
 `0ms` lines under each analysis. Those lines are gone, and every other
 timing line is unchanged. `formatRustTimingWaterfall` is no longer exported
-from `@animus-ui/extract/pipeline`.
+from `@animus-ui/extract/pipeline`, and nothing replaces it.
 
 **The CLI selects the trace tier with `--trace`.** `animus build`, `watch`
 and `print-config` accept `--trace`, which sets `verbose: 'trace'` as the

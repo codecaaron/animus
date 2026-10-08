@@ -4,7 +4,8 @@
  * observed value, to `.receipts/browser-fixtures.json`.
  *
  * The showcase case reads the `--current-bg` registration from the built
- * showcase stylesheet, so it needs `packages/showcase/dist`.
+ * showcase stylesheet, so it needs `packages/showcase/dist`, and the runner
+ * imports the built `@animus-ui/assertions` package (`vp run build:ts`).
  */
 import { findCssFiles, readAllConcat } from '@animus-ui/assertions';
 import { mkdirSync, writeFileSync } from 'node:fs';

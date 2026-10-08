@@ -4,7 +4,8 @@ set -euo pipefail
 # ─── Tag-only release for all publishable packages ────────────────
 #
 # Tags HEAD with the next version and pushes only the tag. HEAD must
-# already be origin's main, so every release has passed CI there. The
+# already be origin's main: push main and let CI pass there first. The
+# tag's own run also gates publishing on every check job. The
 # version comes from origin's tags, never from a possibly stale local
 # list. CI's publish job sets every package version from the tag, so
 # no package.json is edited here.
