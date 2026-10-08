@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useId, useState } from 'react';
 
 import { ChevronDown } from 'lucide-react';
 import { Highlight, type PrismTheme } from 'prism-react-renderer';
@@ -117,6 +117,13 @@ const CollapseToggle = ds
     collapsed: { transform: 'rotate(-90deg)' },
   })
   .asElement('button');
+
+/** Keeps a copy click from reaching the title bar's toggle without adding a box. */
+const CopyClickBoundary = ds
+  .styles({
+    display: 'contents',
+  })
+  .asElement('span');
 
 const CopyOverlay = ds
   .styles({
@@ -345,6 +352,7 @@ export function SyntaxBlock({
   const code = children.trim();
   const lang = language ?? detectLanguage(code);
   const [collapsed, setCollapsed] = useState(collapsible);
+  const codeId = useId();
   const hasChrome = title || collapsible;
 
   return (
@@ -360,7 +368,8 @@ export function SyntaxBlock({
                 type="button"
                 collapsed={collapsed}
                 aria-expanded={!collapsed}
-                aria-label={collapsed ? 'Expand code' : 'Collapse code'}
+                aria-controls={codeId}
+                aria-label={title ? `${title} code` : 'Code'}
               >
                 <ChevronDown size={12} />
               </CollapseToggle>
@@ -372,75 +381,79 @@ export function SyntaxBlock({
               </>
             )}
           </TitleBarLeft>
-          <TitleActions onClick={(e: React.MouseEvent) => e.stopPropagation()}>
+          <TitleActions>
             <LanguageLabel>{lang}</LanguageLabel>
-            {copyable && <CopyButton text={code} size="sm" />}
+            {copyable && (
+              <CopyClickBoundary
+                onClick={(e: React.MouseEvent) => e.stopPropagation()}
+              >
+                <CopyButton text={code} size="sm" />
+              </CopyClickBoundary>
+            )}
           </TitleActions>
         </TitleBar>
       )}
-      {!collapsed && (
-        <CodeWrapper>
-          {!hasChrome && copyable && (
-            <CopyOverlay data-copy-overlay>
-              <CopyButton text={code} size="sm" />
-            </CopyOverlay>
-          )}
-          <Highlight
-            theme={animusTheme}
-            code={code}
-            language={HIGHLIGHT_LANGUAGE[lang]}
-          >
-            {({ tokens: tokenLines, getLineProps, getTokenProps }) => (
-              <SyntaxPre chrome={hasChrome ? 'true' : 'false'}>
-                {tokenLines.map((line, i) => {
-                  const lineNum = i + 1;
-                  const isHighlighted = highlights?.includes(lineNum);
-                  const diffType = diffs?.[lineNum];
-                  const hasDiff = diffType === '+' || diffType === '-';
-                  return (
-                    <SyntaxLine
+      <CodeWrapper id={codeId} hidden={collapsed}>
+        {!hasChrome && copyable && (
+          <CopyOverlay data-copy-overlay>
+            <CopyButton text={code} size="sm" />
+          </CopyOverlay>
+        )}
+        <Highlight
+          theme={animusTheme}
+          code={code}
+          language={HIGHLIGHT_LANGUAGE[lang]}
+        >
+          {({ tokens: tokenLines, getLineProps, getTokenProps }) => (
+            <SyntaxPre chrome={hasChrome ? 'true' : 'false'}>
+              {tokenLines.map((line, i) => {
+                const lineNum = i + 1;
+                const isHighlighted = highlights?.includes(lineNum);
+                const diffType = diffs?.[lineNum];
+                const hasDiff = diffType === '+' || diffType === '-';
+                return (
+                  <SyntaxLine
+                    // oxlint-disable-next-line react/no-array-index-key -- stable token list from syntax highlighter
+                    key={i}
+                    highlighted={isHighlighted && !hasDiff}
+                    diff={
+                      diffType === '+'
+                        ? 'added'
+                        : diffType === '-'
+                          ? 'removed'
+                          : undefined
+                    }
+                    {...getLineProps({ line })}
+                  >
+                    {diffs && (
+                      <DiffMarker
+                        kind={
+                          diffType === '+'
+                            ? 'added'
+                            : diffType === '-'
+                              ? 'removed'
+                              : 'none'
+                        }
+                      >
+                        {diffType || ' '}
+                      </DiffMarker>
+                    )}
+                    {showLineNumbers && (
+                      <LineNumberSpan highlighted={isHighlighted}>
+                        {lineNum}
+                      </LineNumberSpan>
+                    )}
+                    {line.map((token, j) => (
                       // oxlint-disable-next-line react/no-array-index-key -- stable token list from syntax highlighter
-                      key={i}
-                      highlighted={isHighlighted && !hasDiff}
-                      diff={
-                        diffType === '+'
-                          ? 'added'
-                          : diffType === '-'
-                            ? 'removed'
-                            : undefined
-                      }
-                      {...getLineProps({ line })}
-                    >
-                      {diffs && (
-                        <DiffMarker
-                          kind={
-                            diffType === '+'
-                              ? 'added'
-                              : diffType === '-'
-                                ? 'removed'
-                                : 'none'
-                          }
-                        >
-                          {diffType || ' '}
-                        </DiffMarker>
-                      )}
-                      {showLineNumbers && (
-                        <LineNumberSpan highlighted={isHighlighted}>
-                          {lineNum}
-                        </LineNumberSpan>
-                      )}
-                      {line.map((token, j) => (
-                        // oxlint-disable-next-line react/no-array-index-key -- stable token list from syntax highlighter
-                        <span key={j} {...getTokenProps({ token })} />
-                      ))}
-                    </SyntaxLine>
-                  );
-                })}
-              </SyntaxPre>
-            )}
-          </Highlight>
-        </CodeWrapper>
-      )}
+                      <span key={j} {...getTokenProps({ token })} />
+                    ))}
+                  </SyntaxLine>
+                );
+              })}
+            </SyntaxPre>
+          )}
+        </Highlight>
+      </CodeWrapper>
     </SyntaxContainer>
   );
 }
