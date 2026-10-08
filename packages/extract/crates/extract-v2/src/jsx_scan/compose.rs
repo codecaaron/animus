@@ -2,8 +2,10 @@
 //! keys, context flag) read from top-level statements.
 
 use oxc::ast::ast::{
-    Argument, BindingPattern, Declaration, Expression, ObjectPropertyKind, Program, Statement,
+    Argument, BindingPattern, Declaration, Expression, IdentifierReference, ObjectPropertyKind,
+    Program, Statement,
 };
+use oxc::ast_visit::Visit;
 
 use super::value_eval::eval_property_key;
 
@@ -33,6 +35,46 @@ pub fn scan_compose_calls(program: &Program) -> Vec<ComposeFamilyInfo> {
     families
 }
 
+/// The compose callees this file still references outside `families`. The
+/// family calls are replaced, so only these references need the callee's
+/// import to survive.
+pub fn compose_callees_referenced_outside(
+    program: &Program,
+    families: &[ComposeFamilyInfo],
+) -> Vec<String> {
+    if families.is_empty() {
+        return Vec::new();
+    }
+    let mut scan = OutsideReferences {
+        families,
+        names: Vec::new(),
+    };
+    scan.visit_program(program);
+    scan.names
+}
+
+struct OutsideReferences<'f> {
+    families: &'f [ComposeFamilyInfo],
+    names: Vec<String>,
+}
+
+impl<'a> Visit<'a> for OutsideReferences<'_> {
+    fn visit_identifier_reference(&mut self, ident: &IdentifierReference<'a>) {
+        let name = ident.name.as_str();
+        if !matches!(name, "compose" | "composeWithContext") || self.names.iter().any(|n| n == name)
+        {
+            return;
+        }
+        let replaced = self
+            .families
+            .iter()
+            .any(|family| family.span.0 <= ident.span.start && ident.span.end <= family.span.1);
+        if !replaced {
+            self.names.push(name.to_string());
+        }
+    }
+}
+
 fn collect_compose_from_statement(stmt: &Statement, families: &mut Vec<ComposeFamilyInfo>) {
     match stmt {
         Statement::VariableDeclaration(decl) => {
@@ -54,9 +96,8 @@ fn collect_compose_from_statement(stmt: &Statement, families: &mut Vec<ComposeFa
             }
         }
         Statement::ExportDefaultDeclaration(export) => {
-            use oxc::ast::ast::ExportDefaultDeclarationKind;
-            if let ExportDefaultDeclarationKind::CallExpression(call) = &export.declaration {
-                extract_compose_family(call, None, families);
+            if let Some(expr) = export.declaration.as_expression() {
+                collect_compose_from_expression(expr, None, families);
             }
         }
         _ => {}
@@ -75,7 +116,9 @@ fn collect_compose_from_expression(
     family_binding: Option<String>,
     families: &mut Vec<ComposeFamilyInfo>,
 ) {
-    if let Expression::CallExpression(call) = expr {
+    // Type-level wrappers (`as`, `satisfies`, `!`, `<T>`, parentheses) are
+    // erased at runtime, so the call inside is still the family.
+    if let Expression::CallExpression(call) = expr.get_inner_expression() {
         extract_compose_family(call, family_binding, families);
     }
 }

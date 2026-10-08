@@ -32,6 +32,19 @@ Previously it was dropped silently. That holds for `.styles()`, variant
 options, a compound's styles and a `.props()` config, and a nested loss
 names its path, such as `_hover.color`.
 
+**Compose families behind TypeScript syntax are recognised.** A
+`compose(...)` or `composeWithContext(...)` call wrapped in `as`,
+`satisfies`, `!`, parentheses, a `<Type>` assertion or an instantiation
+expression is now a family, including as a default export, so its slots
+keep their styles and its shared variants reach them. Previously the family
+was missed and its slots' styles could be pruned. A file that still uses
+`compose` where extraction does not recognise a family, such as a call
+inside a function, now keeps its `compose` import; before, the import was
+removed and that call failed at runtime. Member tags of
+`export default compose(...)` do not yet resolve through a default import.
+Declare `const Card = compose(...)` with `export default Card`, and import
+it as `Card`.
+
 **Finite declaration scales style several properties through one prop.**
 `createTheme().addDeclarationScale({ name, values })` registers named keys
 whose values are complete, flat records of CSS declarations. Bind a scale

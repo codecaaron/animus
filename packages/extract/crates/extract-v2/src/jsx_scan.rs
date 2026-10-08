@@ -8,7 +8,7 @@ mod system_props;
 mod usage;
 mod value_eval;
 
-pub use compose::{scan_compose_calls, ComposeFamilyInfo};
+pub use compose::{compose_callees_referenced_outside, scan_compose_calls, ComposeFamilyInfo};
 pub use system_props::scan_jsx;
 pub use usage::{
     scan_jsx_usage, ComponentUsageConfig, StateUsage, UsageScanResult, VariantUsage,

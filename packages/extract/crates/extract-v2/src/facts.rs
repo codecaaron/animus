@@ -9,7 +9,7 @@ use serde_json::Value;
 
 use crate::chain_walk::{self, ChainDescriptor};
 use crate::eval;
-use crate::jsx_scan::{scan_compose_calls, ComposeFamilyInfo};
+use crate::jsx_scan::{compose_callees_referenced_outside, scan_compose_calls, ComposeFamilyInfo};
 use crate::owned_ast::OwnedAst;
 use crate::transforms::{CallbackBinding, CallbackDefinition, TransformReferences};
 use crate::usage_facts::{collect_import_facts, ImportFact, UsageFact};
@@ -240,6 +240,10 @@ pub struct FileFacts {
     pub(crate) usage_enriched: Option<Vec<UsageFact>>,
     /// compose() families found in this file.
     pub compose: Vec<ComposeFamilyInfo>,
+    /// `compose` / `composeWithContext` names still referenced outside those
+    /// families, such as a call inside a function, so their imports stay.
+    #[serde(skip)]
+    pub compose_callees_in_use: Vec<String>,
     /// Top-level `const X = Y;` bare-identifier aliases, assertion-peeled
     /// and `const` only.
     #[serde(skip)]
@@ -948,6 +952,9 @@ pub(crate) fn extract_file_facts_from_static_maps(
         &exports,
     );
 
+    let compose = scan_compose_calls(program);
+    let compose_callees_in_use = compose_callees_referenced_outside(program, &compose);
+
     FileFacts {
         path: ast.path.clone(),
         directive_prologue,
@@ -962,7 +969,8 @@ pub(crate) fn extract_file_facts_from_static_maps(
             .collect(),
         usage,
         usage_enriched: Some(usage_enriched),
-        compose: scan_compose_calls(program),
+        compose,
+        compose_callees_in_use,
         aliases: const_initializers.aliases,
         declaration_roots: const_initializers.roots,
         object_members: const_initializers.objects,

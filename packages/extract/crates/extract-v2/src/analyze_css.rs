@@ -6290,6 +6290,38 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
     }
 
     #[test]
+    fn compose_behind_typescript_wrappers_is_still_a_family() {
+        let options = "{ name: 'Card', shared: { size: true } }";
+        for (path, family) in [
+            ("card.tsx", format!("export const Card = compose({{ Root, Body }}, {options}) as unknown as Family;")),
+            ("card.tsx", format!("export const Card = (compose({{ Root, Body }}, {options}) satisfies Shape);")),
+            ("card.tsx", format!("export const Card = compose({{ Root, Body }}, {options})!;")),
+            ("card.tsx", format!("export const Card = compose({{ Root, Body }}, {options})<Shape>;")),
+            ("card.ts", format!("export const Card = <Family>compose({{ Root, Body }}, {options});")),
+            ("card.tsx", format!("export default compose({{ Root, Body }}, {options}) as Family;")),
+            ("card.ts", format!("export default (<Family>compose({{ Root, Body }}, {options}));")),
+        ] {
+            let source = format!(
+                "export const Root = ds\n\
+                   .variant({{ prop: 'size', variants: {{ sm: {{ p: 8 }}, lg: {{ p: 8 }} }} }})\n\
+                   .asElement('div');\n\
+                 export const Body = ds\n\
+                   .variant({{ prop: 'size', variants: {{ sm: {{ p: 8 }}, lg: {{ p: 8 }} }} }})\n\
+                   .asElement('div');\n\
+                 {family}\n"
+            );
+            let out = analyze(&[(path, source.as_str())], &test_inputs());
+            let root = class_of(&out, &format!("{path}::Root"));
+            let body = class_of(&out, &format!("{path}::Body"));
+            assert!(
+                out.sheets.variants.contains(&format!(".{root}--size-lg .{body} {{")),
+                "`{family}` did not share `size` from Root to Body:\n{}",
+                out.sheets.variants
+            );
+        }
+    }
+
+    #[test]
     fn expansion_leaves_flat_class_numbering_and_per_component_fragments_alone() {
         // Expansion only reads the compound data: neither the config list nor
         // the per-component fragment may move.

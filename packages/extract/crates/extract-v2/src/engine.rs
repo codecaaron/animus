@@ -676,10 +676,12 @@ impl ExtractEngine {
         if has_primary_extracted {
             extracted.push("animus");
         }
-        if has_compose_replacements {
+        let still_referenced =
+            |callee: &str| file_facts.compose_callees_in_use.iter().any(|name| name == callee);
+        if has_compose_replacements && !still_referenced("compose") {
             extracted.push("compose");
         }
-        if has_compose_context_replacements {
+        if has_compose_context_replacements && !still_referenced("composeWithContext") {
             extracted.push("composeWithContext");
         }
 
@@ -1066,6 +1068,34 @@ mod tests {
         assert!(out.contains(r#"name: \"Card\""#), "{out}");
         assert!(!out.contains("@animus-ui/system/compose'"), "{out}");
         assert!(out.contains("createComposedFamily }"), "{out}");
+    }
+
+    #[test]
+    fn compose_import_survives_while_an_unrecognised_call_still_uses_it() {
+        let source = "import { compose } from '@animus-ui/system';\n\
+                      const Root = ds.styles({}).asElement('div');\n\
+                      export const Fam = compose({ Root }, { name: 'Card', shared: {} }) as Family;\n\
+                      export function makeFamily(Slot) { return compose({ Root: Slot }); }\n\
+                      export const App = () => <Fam.Root />;\n";
+        let code = transform_source(source);
+
+        assert!(
+            code.contains("createComposedFamily({ Root: Root }, { name: \"Card\" }) as Family"),
+            "{code}"
+        );
+        assert!(code.contains("return compose({ Root: Slot })"), "{code}");
+        let allocator = oxc::allocator::Allocator::default();
+        let parsed =
+            oxc::parser::Parser::new(&allocator, &code, oxc::span::SourceType::tsx()).parse();
+        assert!(parsed.diagnostics.is_empty(), "{:?}\n{code}", parsed.diagnostics);
+        let scoping = oxc::semantic::SemanticBuilder::new()
+            .build(&parsed.program)
+            .semantic
+            .into_scoping();
+        assert!(
+            !scoping.root_unresolved_references().contains_key("compose"),
+            "the remaining compose() call lost its import:\n{code}"
+        );
     }
 
     #[test]
