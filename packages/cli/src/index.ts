@@ -41,7 +41,11 @@ Options:
                       and on classified unsupported Animus declarations
   --fail-on-degraded  watch only: exit 3 instead of running with unwatched
                       roots (degradation is otherwise reported and tolerated)
-  --verbose           Verbose logging (stderr)
+  --verbose           Verbose logging (stderr): phase checkpoints,
+                      summaries and timing
+  --trace             The trace tier (config: verbose: 'trace'); the CLI
+                      has no per-item lines yet, so it logs what --verbose
+                      logs
   --print-config      Alias of the print-config command
   --help              This text
 
@@ -104,6 +108,7 @@ export async function main(
         targets: { type: 'string' },
         strict: { type: 'boolean' },
         verbose: { type: 'boolean' },
+        trace: { type: 'boolean' },
         'fail-on-degraded': { type: 'boolean' },
         'print-config': { type: 'boolean' },
         help: { type: 'boolean' },
@@ -146,7 +151,7 @@ export async function main(
     config: values.config,
     outDir: values['out-dir'],
     strict: values.strict,
-    verbose: values.verbose,
+    verbose: values.trace ? ('trace' as const) : values.verbose,
     mode: values.mode,
     targets: values.targets,
     exclude: values.exclude,

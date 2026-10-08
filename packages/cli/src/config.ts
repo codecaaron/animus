@@ -36,7 +36,7 @@ export interface CliFlags {
   config?: string;
   outDir?: string;
   strict?: boolean;
-  verbose?: boolean;
+  verbose?: boolean | 'trace';
   mode?: string;
   targets?: string;
   exclude?: string[];

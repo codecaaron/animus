@@ -59,6 +59,7 @@ import {
   PublishSwapIncompleteError,
 } from '../src/writer';
 
+import type { CliFlags } from '../src/config';
 import type { CliLockRecord } from '@animus-ui/extract/session';
 
 const makeRoot = (): string => mkdtempSync(join(tmpdir(), 'animus-cli-'));
@@ -929,6 +930,41 @@ describe('command-line positionals', () => {
     const { exitCode, stderr } = await runMain(['nonsense']);
     expect(exitCode).toBe(EXIT_USAGE);
     expect(stderr).toContain("Unknown command 'nonsense'");
+  });
+});
+
+describe('verbosity tiers', () => {
+  async function printedVerbose(
+    argv: string[],
+    configVerbose?: CliFlags['verbose']
+  ): Promise<CliFlags['verbose']> {
+    const root = makeRoot();
+    writeFileSync(
+      join(root, 'animus.config.json'),
+      JSON.stringify({ system: './ds.ts', verbose: configVerbose })
+    );
+    const previous = process.exitCode;
+    const stdout = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    try {
+      await withCapturedStderr(() =>
+        main(['print-config', '--root', root, ...argv])
+      );
+      expect(process.exitCode).toBe(0);
+      return JSON.parse(String(stdout.mock.calls[0]?.[0])).verbose;
+    } finally {
+      stdout.mockRestore();
+      process.exitCode = previous ?? undefined;
+    }
+  }
+
+  test('--trace selects the trace tier', async () => {
+    expect(await printedVerbose(['--trace'])).toBe('trace');
+    expect(await printedVerbose(['--trace', '--verbose'])).toBe('trace');
+  });
+
+  test("a config verbose: 'trace' is kept, and a plain --verbose overrides it", async () => {
+    expect(await printedVerbose([], 'trace')).toBe('trace');
+    expect(await printedVerbose(['--verbose'], 'trace')).toBe(true);
   });
 });
 

@@ -5,6 +5,12 @@ See [Conventional Commits](https://conventionalcommits.org) for commit guideline
 
 ## Unreleased
 
+**The CLI selects the trace tier with `--trace`.** `animus build`, `watch`
+and `print-config` accept `--trace`, which sets `verbose: 'trace'` as the
+config file already could. A plain `--verbose` still overrides a config
+`verbose: 'trace'`. The CLI has no per-item lines yet, so `--trace` logs what
+`--verbose` logs.
+
 **Invalid `@property` registrations are reported instead of breaking the
 build.** A contextual-variable registration that browsers would ignore is no
 longer emitted. That covers:
