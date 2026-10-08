@@ -3,15 +3,19 @@ import { ds } from './test-system';
 import type { PropertyTypes } from '../src/types/properties';
 
 /**
- * Style objects accept any string or number for every `--` key today,
- * including a declared contextual variable such as `--current-bg`. Typed
- * writes to declared properties start from this signature; changing it
- * fails here on purpose. `scripts/type-budget/measure.ts` also measures
- * this file.
+ * Style objects accept any string or number for every `--` key today:
+ * a declared contextual variable such as `--current-bg` and an undeclared
+ * name go through the same open index signature. Typed writes to declared
+ * properties start from this signature; changing it fails here on purpose.
+ * `scripts/type-budget/measure.ts` also measures this file.
  */
 type Assert<T extends true> = T;
 
-type Exact<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
+/** Type identity, not mutual assignability, so `any` never matches. */
+type Exact<A, B> =
+  (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2
+    ? true
+    : false;
 
 type OpenCustomPropertyValue = (string & {}) | number | undefined;
 
@@ -23,6 +27,9 @@ type _UndeclaredNameIsOpen = Assert<
 >;
 type _ExactRejectsANarrowerValue = Assert<
   Exact<'red' | undefined, OpenCustomPropertyValue> extends false ? true : false
+>;
+type _ExactRejectsAny = Assert<
+  Exact<any, OpenCustomPropertyValue> extends false ? true : false
 >;
 
 export const DeclaredWrites = ds
