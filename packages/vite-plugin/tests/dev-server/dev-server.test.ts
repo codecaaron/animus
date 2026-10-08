@@ -20,6 +20,7 @@ import {
   themeSource,
   themeViaPaletteSource,
   usageSource,
+  variantComponentSource,
 } from './fixture';
 import {
   canonicalizeCss,
@@ -209,8 +210,16 @@ suite(
       expect(after.systemPropsRevision).toBe(before.systemPropsRevision);
     });
 
-    it('a new system-prop value re-delivers the map', async () => {
+    it('a new system-prop value re-delivers the map and drops the replaced one', async () => {
       const before = await adapter.read();
+      const replacedClass = new RegExp(
+        `"${INITIAL_USAGE_STEP}":"([^"]+)"`
+      ).exec(exportLine(before.systemProps, 'systemPropMap'))?.[1];
+      expect(
+        replacedClass,
+        `system props module:\n${before.systemProps}`
+      ).toBeTruthy();
+      expect(before.componentCss).toContain(replacedClass);
 
       fixture.write('src/Usage.tsx', usageSource(EDITED_USAGE_STEP));
 
@@ -235,6 +244,58 @@ suite(
       expect(after.systemPropsRevision).toBeGreaterThan(
         before.systemPropsRevision
       );
+      // Dev output tracks the current source, and no usage keeps the old step.
+      expect(exportLine(after.systemProps, 'systemPropMap')).not.toContain(
+        `"${INITIAL_USAGE_STEP}":`
+      );
+      expect(after.componentCss).not.toContain(replacedClass);
+    });
+
+    it('removing a variant option from a definition drops its CSS', async () => {
+      fixture.write(
+        'src/Button.ts',
+        variantComponentSource({ sm: '6px', lg: '12px' })
+      );
+      const smClass = `${buttonClass}--size-sm`;
+      const lgClass = `${buttonClass}--size-lg`;
+      await until(
+        async () => {
+          const served = await adapter.read();
+          return served.componentCss.includes(lgClass) ? served : false;
+        },
+        {
+          what: `component CSS serves ${lgClass}`,
+          // Earlier scenarios edited this file, so the write can land inside
+          // the watcher's per-path throttle and be dropped.
+          reassert: () =>
+            fixture.write(
+              'src/Button.ts',
+              variantComponentSource({ sm: '6px', lg: '12px' })
+            ),
+          describe: async () =>
+            `component CSS:\n${(await adapter.read()).componentCss}${renderTrace(adapter)}`,
+        }
+      );
+
+      fixture.write('src/Button.ts', variantComponentSource({ sm: '6px' }));
+
+      const after = await until(
+        async () => {
+          const served = await adapter.read();
+          return served.componentCss.includes(lgClass) ? false : served;
+        },
+        {
+          what: `component CSS drops ${lgClass} after the option is removed`,
+          reassert: () =>
+            fixture.write(
+              'src/Button.ts',
+              variantComponentSource({ sm: '6px' })
+            ),
+          describe: async () =>
+            `component CSS:\n${(await adapter.read()).componentCss}${renderTrace(adapter)}`,
+        }
+      );
+      expect(after.componentCss).toContain(smClass);
     });
 
     it('widening a component system opt-in re-delivers the module', async () => {

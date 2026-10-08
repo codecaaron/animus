@@ -106,6 +106,22 @@ export const ${name} = ds
 `;
 }
 
+/** The Button with a `size` variant, one option per entry in `paddings`. */
+export function variantComponentSource(
+  paddings: Record<string, string>
+): string {
+  const options = Object.entries(paddings)
+    .map(([option, padding]) => `${option}: { padding: '${padding}' }`)
+    .join(', ');
+  return `import { ds } from './ds';
+
+export const Button = ds
+  .styles({ bg: 'primary' })
+  .variant({ prop: 'size', variants: { ${options} } })
+  .asElement('button');
+`;
+}
+
 /**
  * A component that opts into the `space` group. Only a JSX usage of an opted-in
  * prop mints a utility class, so the prop map needs this and `usageSource`.
