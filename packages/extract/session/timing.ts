@@ -1,5 +1,3 @@
-import { formatRustTimingWaterfall } from '../pipeline/index';
-
 export function logBuildTimings(
   bt: Record<string, number>,
   rustTiming: Record<string, number> | undefined,
@@ -29,15 +27,6 @@ export function logBuildTimings(
       ] as const) {
         const sms = bt[sk] ?? 0;
         log(`    ${pad(sl, 15)}${String(sms).padStart(5)}ms`);
-
-        if (sk === 'rustExtract' && rustTiming) {
-          for (const line of formatRustTimingWaterfall(rustTiming, {
-            indent: '      ',
-            labelWidth: 13,
-          })) {
-            log(line);
-          }
-        }
       }
     }
   }

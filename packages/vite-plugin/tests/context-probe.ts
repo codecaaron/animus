@@ -162,7 +162,6 @@ export function makeContextProbe<Overrides extends ContextProbeOverrides>(
       probe.infoLines.push(msg);
     },
     warn() {},
-    logTimingWaterfall() {},
     ...extras,
   };
   probe = {

@@ -14,8 +14,8 @@ Pre-built binaries for:
 
 ## API
 
-v2 is the only engine (v1 was retired — openspec: `retire-extract-v1`); the
-package root entry is the engine.
+v2 is the only engine, since the v1 engine was removed. The package root
+entry is the engine.
 
 ```tsx
 import { ExtractEngine, loadSystemModule } from '@animus-ui/extract';

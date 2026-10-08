@@ -263,7 +263,6 @@ async function analyzeChangedFile(
   ctx.log(
     `HMR update: ${relPath} — analysis ${analysisMs}ms, total ${hmrMs}ms${presentationOnly ? ' (presentation-only)' : ''}`
   );
-  ctx.logTimingWaterfall(ctx.storedManifest?.timing ?? {});
 
   return {
     kind: 'analyzed',

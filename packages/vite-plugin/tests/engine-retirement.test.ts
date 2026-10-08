@@ -5,7 +5,7 @@ import { animusExtract } from '../src/index';
 
 import type { AnimusExtractOptions } from '../src/index';
 
-describe('engine retirement (retire-extract-v1)', () => {
+describe('retired v1 engine selection', () => {
   const saved = process.env.ANIMUS_ENGINE;
 
   afterEach(() => {

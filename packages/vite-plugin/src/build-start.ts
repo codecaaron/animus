@@ -186,7 +186,6 @@ export async function runBuildStart(
     ctx.log(
       `Extracted ${report.components_extracted}/${report.components_total} components (${Math.round(performance.now() - t0)}ms)`
     );
-    ctx.logTimingWaterfall(ctx.storedManifest.timing);
     ctx.log(
       `Reconciliation: ${report.components_extracted} kept, ${report.variants_eliminated} variants pruned, ${report.states_eliminated} states pruned`
     );

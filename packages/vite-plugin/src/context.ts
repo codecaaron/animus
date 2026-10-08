@@ -10,7 +10,6 @@ import {
   enforceExternalTokenContracts,
   createSourceCorpus,
   findAssetSpecifiers,
-  formatRustTimingWaterfall,
   loadSystemConfig,
   parseFilesJson,
   projectExternalFileOwners,
@@ -367,16 +366,6 @@ export class PluginContext {
 
   warn(msg: string): void {
     (this.logger ?? console).warn(`[animus] ${msg}`);
-  }
-
-  logTimingWaterfall(timing: Record<string, number>): void {
-    if (!this.verbose) return;
-    for (const line of formatRustTimingWaterfall(timing, {
-      indent: '         ',
-      labelWidth: 15,
-    })) {
-      this.log(line);
-    }
   }
 
   /** Load the system into `this.system`. On failure the previous config is

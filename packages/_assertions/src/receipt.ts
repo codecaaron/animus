@@ -53,7 +53,7 @@ function assertNoEngineSelection(path: string, label: string): void {
   if (config.includes('ANIMUS_ENGINE') || /\bengine\s*:/.test(config)) {
     throw new AssertionError(
       `${label} must not reference ANIMUS_ENGINE or set the engine ` +
-        'option — the v1 engine was retired (openspec: retire-extract-v1)',
+        'option — the v1 engine is no longer supported and v2 is the only engine',
       { configPath: path }
     );
   }

@@ -4,7 +4,7 @@ set -euo pipefail
 # verify:packed — pack all publishable packages once or consume a supplied
 # immutable tarball directory, lint those exact files, install into an isolated
 # non-workspace consumer, prove ESM/CJS loading, published declarations (stable
-# TypeScript), both extractor engines, Vite + Next production builds, then run
+# TypeScript), the extraction engine, Vite + Next production builds, then run
 # repo-side positional assertions.
 # Fail-loud contract per root CLAUDE.md: name the missing artifact and the
 # repairing command; never rebuild silently.
@@ -73,7 +73,7 @@ for p in "${PKGS[@]}"; do
   echo "[verify:packed] publint @animus-ui/$p"
   bunx publint --strict "$STAGING/tarballs/animus-ui-$p.tgz"
 done
-# Supported type-resolution matrix (design D7, release-truth-v1, revised):
+# Supported type-resolution matrix:
 # node16 profile for CJS/dual surfaces; esm-only for the ESM-only packages
 # (properties, system — require() of these is explicitly unsupported; their
 # node16-ESM declaration gap is DEF-5). node10 is out of contract.
@@ -113,9 +113,8 @@ cp e2e/packed-app/package.json e2e/packed-app/tsconfig.json \
    e2e/packed-app/index.html "$STAGING/"
 cp -R e2e/packed-app/src e2e/packed-app/app "$STAGING/"
 # Optional deps stay installed: third-party natives (lightningcss) ship
-# their binaries as optionalDependencies, and extract's REGISTRY platform
-# packages are part of its published contract (the v1 loader prefers the
-# tarball-local binary; the fault-injection proof below covers absence).
+# their binaries as optionalDependencies. extract ships its own native
+# binary inside its tarball.
 (cd "$STAGING" && npm install --no-audit --no-fund --loglevel=error)
 echo "[verify:packed] npm install complete"
 
@@ -123,7 +122,7 @@ echo "[verify:packed] npm install complete"
 bun scripts/verify/packed-graph.ts installed "$STAGING" "$STAGING"/tarballs/*.tgz
 echo "[verify:packed] recursive installed package graph ok"
 
-# ── 5. Load proof: ESM + CJS + both engines ─────────────────────────
+# ── 5. Load proof: ESM + CJS + the engine ───────────────────────────
 (cd "$STAGING" && node --input-type=module -e "
   for (const p of ['@animus-ui/properties','@animus-ui/system','@animus-ui/vite-plugin','@animus-ui/next-plugin','@animus-ui/extract','@animus-ui/unplugin','@animus-ui/unplugin/rollup']) {
     const m = await import(p);
@@ -132,8 +131,7 @@ echo "[verify:packed] recursive installed package graph ok"
   console.log('[verify:packed] ESM load ok');
 ")
 (cd "$STAGING" && node -e "
-  // Root entry IS the v2 surface since retire-extract-v1 (the transitional
-  // engine-v2 alias was removed once no consumers remained).
+  // The root entry is the v2 engine surface.
   const root = require('@animus-ui/extract');
   if (typeof root.ExtractEngine !== 'function') throw new Error('root entry: ExtractEngine missing from packed install');
   console.log('[verify:packed] CJS root engine ok');

@@ -40,7 +40,7 @@ function assertRetirementGuard(pluginDir: string): void {
     const source = readFileSync(resolve(dir, entry), 'utf8');
     if (
       source.includes('assertNoRetiredEngineSelection') ||
-      source.includes('retire-extract-v1')
+      source.includes('extraction engine is no longer supported')
     ) {
       return;
     }

@@ -812,7 +812,7 @@ describe('watch mode (dev/HMR)', () => {
   });
 });
 
-describe('engine retirement (retire-extract-v1)', () => {
+describe('retired v1 engine selection', () => {
   test('constructing the plugin with engine:v1 throws the canonical message', () => {
     const retiredEngineOptions = { ...OPTIONS, engine: 'v1' };
     expect(

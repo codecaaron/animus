@@ -17,7 +17,7 @@ function loadNative() {
       `(looked for ${candidates.join(', ')} under crates/extract-v2/). ` +
       `Published releases ship this binary for darwin-arm64, linux-x64-gnu and ` +
       `linux-arm64-gnu — reinstall the package to restore it (v2 is the only ` +
-      `engine; the v1 escape hatch was retired, openspec: retire-extract-v1). ` +
+      `engine, so there is no other engine to fall back to). ` +
       `In the animus workspace, build it with: vp run build:extract-v2.`
   );
 }

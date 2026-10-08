@@ -144,7 +144,6 @@ export { loadSystemConfig } from './system-config';
 export type { StructuralCheckInput } from './structural-self-check';
 export { runStructuralSelfCheck } from './structural-self-check';
 export { buildSystemPropsModule } from './system-props-module';
-export { formatRustTimingWaterfall } from './timing-waterfall';
 export { readTsconfigAliasPairs } from './tsconfig-paths';
 export type {
   DynamicPropConfigEntry,
