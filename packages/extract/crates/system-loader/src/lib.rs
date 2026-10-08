@@ -27,6 +27,9 @@ pub struct SystemConfig {
     /// Declaration scales from the built theme's `serialize()`, tagged
     /// `{ scale: { kind, members, values } }`; `None` when it has none.
     pub declaration_scales_json: Option<String>,
+    /// One record per declared custom property from the built theme's
+    /// `serialize()`, sorted by name; `None` when it declares none.
+    pub property_records_json: Option<String>,
     pub selector_aliases: Option<String>,
     pub selector_order: Option<String>,
     /// Condition alias map JSON: alias → `{ value, order, kind }`.
@@ -1344,6 +1347,7 @@ fn extract_system_config<'js>(
         .get("contextualVarsJson")
         .map_err(|e| format!("contextualVarsJson not found: {}", e))?;
     let declaration_scales_json: Option<String> = serialized.get("declarationScalesJson").ok();
+    let property_records_json: Option<String> = serialized.get("propertyRecordsJson").ok();
 
     // The registration record is the only source for keyframe and global-style
     // collections; an exported-but-unregistered value does not carry.
@@ -1370,6 +1374,7 @@ fn extract_system_config<'js>(
         variable_css,
         contextual_vars_json,
         declaration_scales_json,
+        property_records_json,
         selector_aliases,
         selector_order,
         condition_aliases,

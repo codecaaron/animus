@@ -66,6 +66,9 @@ pub struct NapiSystemConfig {
     /// Declaration scales JSON (`{ scale: { kind, members, values } }`);
     /// pass it as `declarationScalesJson`. Absent when the theme has none.
     pub declaration_scales_json: Option<String>,
+    /// Declared custom-property records JSON, sorted by name. Absent when
+    /// the theme declares none.
+    pub property_records_json: Option<String>,
     pub selector_aliases: Option<String>,
     pub selector_order: Option<String>,
     /// Condition alias map JSON (the `conditionAliases` manifest field):
@@ -113,6 +116,7 @@ pub fn load_system_module(
         variable_css: config.variable_css,
         contextual_vars_json: config.contextual_vars_json,
         declaration_scales_json: config.declaration_scales_json,
+        property_records_json: config.property_records_json,
         selector_aliases: config.selector_aliases,
         selector_order: config.selector_order,
         condition_aliases: config.condition_aliases,

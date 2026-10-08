@@ -498,12 +498,13 @@ describe('zero-variant emission parity (G1 pin)', () => {
     }
   });
 
-  it('serialize() still returns exactly the four legacy keys', () => {
+  it('serialize() keeps the four legacy keys and adds only the property records', () => {
     expect(Object.keys(buildSystemRegisteredFixture().serialize())).toEqual([
       'scalesJson',
       'variableMapJson',
       'variableCss',
       'contextualVarsJson',
+      'propertyRecordsJson',
     ]);
   });
 });

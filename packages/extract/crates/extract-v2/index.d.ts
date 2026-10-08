@@ -66,6 +66,11 @@ export interface NapiSystemConfig {
    * pass it as `declarationScalesJson`. Absent when the theme has none.
    */
   declarationScalesJson?: string
+  /**
+   * Declared custom-property records JSON, sorted by name. Absent when
+   * the theme declares none.
+   */
+  propertyRecordsJson?: string
   selectorAliases?: string
   selectorOrder?: string
   /**

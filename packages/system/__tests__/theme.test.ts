@@ -493,6 +493,63 @@ describe('declareContextualVars', () => {
   });
 });
 
+describe('serialized property records', () => {
+  it('serializes one record per contextual variable, sorted by name', () => {
+    const serialized = createTheme()
+      .addBreakpoints(breakpoints)
+      .addColors({ bg: '#000' })
+      .addScale({ name: 'space', values: { sm: '4px' } })
+      .declareContextualVars(
+        { colors: ['tone', 'accent'], space: ['gap'] },
+        {
+          accent: { syntax: '*', inherits: false },
+          gap: { syntax: '<length>', inherits: true, initialValue: '0px' },
+        }
+      )
+      .declareContextualVars({ space: ['tone'] })
+      .build()
+      .serialize();
+
+    expect(JSON.parse(serialized.propertyRecordsJson ?? 'null')).toEqual([
+      {
+        name: 'accent',
+        syntax: '*',
+        inherits: false,
+        scales: ['colors'],
+        home: 'theme',
+        registered: true,
+        legacy: true,
+      },
+      {
+        name: 'gap',
+        syntax: '<length>',
+        inherits: true,
+        initialValue: '0px',
+        scales: ['space'],
+        home: 'theme',
+        registered: true,
+        legacy: true,
+      },
+      {
+        name: 'tone',
+        inherits: true,
+        scales: ['colors', 'space'],
+        home: 'theme',
+        registered: false,
+        legacy: true,
+      },
+    ]);
+  });
+
+  it('serializes no records for a theme without contextual variables', () => {
+    const serialized = createTheme()
+      .addBreakpoints(breakpoints)
+      .build()
+      .serialize();
+    expect(serialized).not.toHaveProperty('propertyRecordsJson');
+  });
+});
+
 describe('declareContextualVars @property registration', () => {
   function buildRegistered() {
     return createTheme()

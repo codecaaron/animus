@@ -16,6 +16,9 @@ export interface SystemConfig {
   contextualVarsJson: string | null;
   /** The theme's declaration scales; absent when it declares none. */
   declarationScalesJson?: string | null;
+  /** One record per declared custom property, sorted by name, with authored
+   *  names: the prefix is not applied. Absent when the theme declares none. */
+  propertyRecordsJson?: string;
   selectorAliasesJson: string | null;
   /** Condition alias map JSON; `null` when the system registers none.
    *  Optional only so the pre-load empty default need not restate it. */
@@ -105,6 +108,9 @@ export function loadSystemConfig(
   };
   if (declarationScalesJson)
     system.declarationScalesJson = declarationScalesJson;
+  if (config.propertyRecordsJson) {
+    system.propertyRecordsJson = config.propertyRecordsJson;
+  }
   if (registrations.invalid.length > 0) {
     system.invalidPropertyRegistrations = registrations.invalid;
   }

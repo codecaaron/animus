@@ -19,6 +19,22 @@ import {
   TokenReference,
 } from '../types/theme';
 import { LiteralPaths } from './flattenScale';
+import {
+  copyPropertyStore,
+  createPropertyStore,
+  declareScaleNames,
+  legacyRegistration,
+  legacyRegistrations,
+  legacySignature,
+  namesByScale,
+  registrationCss,
+  replaceScaleNames,
+  sameRegistration,
+  serializePropertyRecords,
+  setLegacyRegistration,
+  type PropertySource,
+  type PropertyStore,
+} from './property-records';
 import { resolveReferences, resolveValueReferences } from './resolveReferences';
 import {
   dotToDash,
@@ -358,12 +374,8 @@ interface CarriedManifestV2 {
 interface BuilderState {
   theme: Record<string, unknown>;
   emittedScales: Set<string>;
-  contextualVars: Map<string, string[]>;
-  /**
-   * Keyed by contextual var NAME, not the `--` custom property. Kept out of
-   * `contextualVars` so the extractor's names-only registry keeps its shape.
-   */
-  contextualVarRegistrations: Map<string, ContextualVarRegistration>;
+  /** One record per declared custom property, contextual variables included. */
+  properties: PropertyStore;
   carriedManifestV2?: CarriedManifestV2;
   /**
    * A source manifest without the v2 discriminant: the authored graph is
@@ -404,8 +416,7 @@ function createState(theme?: Record<string, unknown>): BuilderState {
   return {
     theme: theme || { breakpoints: {} },
     emittedScales: new Set(),
-    contextualVars: new Map(),
-    contextualVarRegistrations: new Map(),
+    properties: createPropertyStore(),
     hasLegacyManifestSource: false,
     extendProvenance: new Map(),
     extendCount: 0,
@@ -424,8 +435,7 @@ function copyState(
   const next: BuilderState = {
     theme: nextTheme,
     emittedScales: new Set(state.emittedScales),
-    contextualVars: new Map(),
-    contextualVarRegistrations: new Map(state.contextualVarRegistrations),
+    properties: copyPropertyStore(state.properties),
     // Sharing the inner records is safe: carried manifest data is read-only.
     ...(state.carriedManifestV2
       ? { carriedManifestV2: { ...state.carriedManifestV2 } }
@@ -440,9 +450,6 @@ function copyState(
     declarationScales: { ...state.declarationScales },
     declarationProvenance: new Map(state.declarationProvenance),
   };
-  for (const [scale, vars] of state.contextualVars) {
-    next.contextualVars.set(scale, [...vars]);
-  }
   return next;
 }
 
@@ -622,6 +629,7 @@ export type ThemeBuilderStage = 'inherit' | 'extend';
 function reseedStateFromManifest(
   state: BuilderState,
   manifest: ThemeManifest | undefined,
+  source: PropertySource,
   mergeExtensionState = false
 ): void {
   if (manifest?.emittedScales) {
@@ -645,11 +653,13 @@ function reseedStateFromManifest(
   if (manifest?.contextualVars) {
     for (const [scale, vars] of Object.entries(manifest.contextualVars)) {
       const existing = mergeExtensionState
-        ? state.contextualVars.get(scale)
+        ? state.properties.scaleNames.get(scale)
         : undefined;
-      state.contextualVars.set(
+      replaceScaleNames(
+        state.properties,
         scale,
-        existing ? [...new Set([...existing, ...vars])] : [...vars]
+        existing ? [...new Set([...existing, ...vars])] : vars,
+        source
       );
     }
   }
@@ -670,20 +680,21 @@ function reseedStateFromManifest(
         for (const [name, registration] of Object.entries(
           manifest.registrations
         )) {
-          const existing = state.contextualVarRegistrations.get(name);
+          const existing = legacyRegistration(state.properties, name);
           if (
             mergeExtensionState &&
             existing &&
-            (existing.syntax !== registration.syntax ||
-              existing.inherits !== registration.inherits ||
-              existing.initialValue !== registration.initialValue)
+            !sameRegistration(
+              legacySignature(name, existing),
+              legacySignature(name, registration)
+            )
           ) {
             throw new Error(
               `extend: contextual variable '${name}' has divergent ` +
                 `@property registrations across extended themes`
             );
           }
-          state.contextualVarRegistrations.set(name, registration);
+          setLegacyRegistration(state.properties, name, registration, source);
         }
       }
     } else {
@@ -771,7 +782,8 @@ export class ThemeBuilder<
 
     reseedStateFromManifest(
       next._state,
-      (source as { manifest?: ThemeManifest }).manifest
+      (source as { manifest?: ThemeManifest }).manifest,
+      { method: 'from' }
     );
     return next;
   }
@@ -922,6 +934,7 @@ export class ThemeBuilder<
     reseedStateFromManifest(
       next._state,
       (themeHalf as { manifest?: ThemeManifest }).manifest,
+      { method: 'extend', call: sourceIndex },
       true
     );
     return next;
@@ -1168,19 +1181,23 @@ export class ThemeBuilder<
     const next = new ThemeBuilder<WithPhantoms, Emitted, 'extend'>(
       copyState(this._state, this._state.theme)
     );
+    const source: PropertySource = { method: 'declareContextualVars' };
     for (const [scale, names] of Object.entries(vars)) {
-      const existing = next._state.contextualVars.get(scale) || [];
-      next._state.contextualVars.set(scale, [
-        ...existing,
-        ...(names as readonly string[]),
-      ]);
+      declareScaleNames(
+        next._state.properties,
+        scale,
+        names as readonly string[],
+        source
+      );
     }
     if (registrations) {
       for (const [name, registration] of Object.entries(registrations)) {
         if (registration) {
-          next._state.contextualVarRegistrations.set(
+          setLegacyRegistration(
+            next._state.properties,
             name,
-            registration as ContextualVarRegistration
+            registration as ContextualVarRegistration,
+            source
           );
         }
       }
@@ -1207,7 +1224,6 @@ export class ThemeBuilder<
     // (or a branch of it) keeps being augmented.
     const theme = deepCopyPlain(this._state.theme) as Record<string, unknown>;
     const emittedScales = this._state.emittedScales;
-    const contextualVars = this._state.contextualVars;
 
     // Authoritative gate: composition merges modes and options without passing
     // through `addColorModes`. The map resolved here feeds emission.
@@ -1313,20 +1329,11 @@ export class ThemeBuilder<
       }
     }
 
-    let contextualVarsSerialized: Record<string, string[]> | undefined;
-    if (contextualVars.size > 0) {
-      contextualVarsSerialized = {};
-      for (const [scale, vars] of contextualVars) {
-        contextualVarsSerialized[scale] = vars;
-      }
-    }
+    const contextualVarsSerialized = namesByScale(this._state.properties);
 
     // `@property` rules are unlayered and ride at the head of the variables
     // part, landing before the `@layer` declaration. No metadata ⇒ ''.
-    const propertyCss = buildPropertyRegistrationCss(
-      contextualVars,
-      this._state.contextualVarRegistrations
-    );
+    const propertyCss = registrationCss(this._state.properties);
     // The token map keeps the unresolved literal; only the CSS omits it.
     const { emittableVariables, emittableModeVariables, omitted } =
       omitUnresolvedDeclarations(variables, modeVariables);
@@ -1356,9 +1363,7 @@ export class ThemeBuilder<
     // never the source of `variableCss`.
     let manifestV2Fields: Partial<ThemeManifest> = {};
     if (!this._state.hasLegacyManifestSource) {
-      const registrations = Object.fromEntries(
-        this._state.contextualVarRegistrations
-      );
+      const registrations = legacyRegistrations(this._state.properties);
       const cssFragments: ThemeCssFragment[] = [];
       if (propertyCss) {
         cssFragments.push({
@@ -1441,6 +1446,9 @@ export class ThemeBuilder<
     const declarationScalesJson = resolvedDeclarationScales
       ? JSON.stringify(resolvedDeclarationScales)
       : undefined;
+    const propertyRecordsJson = serializePropertyRecords(
+      this._state.properties
+    );
     Object.defineProperty(theme, 'serialize', {
       value: (): SerializedTheme => ({
         scalesJson: JSON.stringify(manifest.tokenMap),
@@ -1448,6 +1456,7 @@ export class ThemeBuilder<
         variableCss: manifest.variableCss,
         contextualVarsJson: JSON.stringify(manifest.contextualVars ?? {}),
         ...(declarationScalesJson ? { declarationScalesJson } : {}),
+        ...(propertyRecordsJson ? { propertyRecordsJson } : {}),
       }),
       enumerable: false,
       configurable: false,
@@ -2097,36 +2106,6 @@ interface ContractHashInput {
 /** Identical authored input ⇒ identical hash, across processes. */
 function computeContractHash(input: ContractHashInput): string {
   return sha256Hex(JSON.stringify(canonicalize(input)));
-}
-
-/**
- * `@property` rules for registered contextual vars, emitted as `--${name}` —
- * the name the Rust resolver maps a bare contextual var to. `''` when none.
- */
-function buildPropertyRegistrationCss(
-  contextualVars: Map<string, string[]>,
-  registrations: Map<string, ContextualVarRegistration>
-): string {
-  if (registrations.size === 0) return '';
-
-  const declaredNames = new Set<string>();
-  for (const names of contextualVars.values()) {
-    for (const name of names) declaredNames.add(name);
-  }
-
-  const blocks: string[] = [];
-  for (const [name, registration] of registrations) {
-    if (!declaredNames.has(name)) continue;
-    const descriptors = [
-      `syntax: "${registration.syntax}";`,
-      `inherits: ${registration.inherits};`,
-    ];
-    if (registration.initialValue !== undefined) {
-      descriptors.push(`initial-value: ${registration.initialValue};`);
-    }
-    blocks.push(`@property --${name} { ${descriptors.join(' ')} }`);
-  }
-  return blocks.join('\n');
 }
 
 interface SystemEmissionConfig {

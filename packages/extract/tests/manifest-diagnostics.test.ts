@@ -262,6 +262,28 @@ describe('invalid @property registrations', () => {
     expect(reasons['--gap']).toMatch(/^the CSS parser rejects/);
   });
 
+  it('passes the property records through with their authored names', () => {
+    const records = JSON.stringify([
+      { name: 'tone', inherits: true, scales: ['colors'], home: 'theme' },
+    ]);
+    const system = loadSystemConfig(
+      () => ({
+        loadSystemModule: () => ({
+          propConfig: '{}',
+          groupRegistry: '{}',
+          scalesJson: '{}',
+          variableMapJson: '{}',
+          variableCss: '',
+          contextualVarsJson: '{"colors":["tone"]}',
+          propertyRecordsJson: records,
+        }),
+      }),
+      { systemPath: 'ds.ts', rootDir: '/', prefix: 'acme' }
+    );
+    expect(system.propertyRecordsJson).toBe(records);
+    expect(system.contextualVarsJson).toBe('{"colors":["acme-tone"]}');
+  });
+
   it('reports authored names and prefixes only the kept rules', () => {
     const system = load('acme');
     expect(system.variableCss).toContain('@property --acme-ok');

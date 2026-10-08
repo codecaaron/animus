@@ -117,6 +117,12 @@ export interface SerializedTheme {
    * scales, so a scalar theme serializes as before.
    */
   declarationScalesJson?: string;
+  /**
+   * One record per declared custom property, sorted by name: authored name,
+   * syntax, inherits, initial value, scales, home, whether it is registered,
+   * and whether the contextual-variable method made it. Absent when none.
+   */
+  propertyRecordsJson?: string;
 }
 
 export interface TokenReference {
