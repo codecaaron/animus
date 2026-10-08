@@ -57,8 +57,11 @@ export interface ManifestUsageResidueRecord {
 export interface ManifestCrossFileFacts {
   componentNames: string[];
   classResolvers: string[];
-  /** `Family.Slot` dotted key → slot binding name. */
-  memberBindings: Record<string, string>;
+  /**
+   * Consuming file → family member tag as written there (`Panel.Body`,
+   * `ui.Card.Body`) → the component id its slot renders.
+   */
+  memberBindings: Record<string, Record<string, string>>;
   renderedComponents: string[];
   /** binding → variant prop → option names. */
   variantOptions: Record<string, Record<string, string[]>>;

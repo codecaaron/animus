@@ -344,6 +344,9 @@ pub struct CssOutput {
     /// Sorted system props bound to a configured transform, whose static
     /// map keys are typed value keys.
     pub typed_system_props: Vec<String>,
+    /// Consuming file → member tag as written there (`Panel.Body`,
+    /// `ui.Card.Body`) → the component its slot renders.
+    pub member_bindings: BTreeMap<String, BTreeMap<String, String>>,
 }
 
 pub fn extract_breakpoints(theme: &FlatTheme) -> BreakpointMap {
@@ -2778,20 +2781,20 @@ fn run_with_system_floor(
             &ids_by_binding,
         )
     };
-    let mut member_expr_bindings: FxHashMap<String, String> = FxHashMap::default();
-    for (family_file, family) in &compose_families {
-        if let Some(ref family_binding) = family.family_binding {
-            for (slot_name, binding_name) in &family.slots {
-                let ids = resolve_slot_ids(family_file, binding_name);
-                let lookup_key = match ids.as_slice() {
-                    [only] => only.clone(),
-                    _ => binding_name.clone(),
-                };
-                member_expr_bindings
-                    .insert(format!("{}.{}", family_binding, slot_name), lookup_key);
-            }
+    let family_index = crate::family_members::FamilyIndex::build(files, |family_file, binding| {
+        match resolve_slot_ids(family_file, binding).as_slice() {
+            [only] => only.clone(),
+            _ => binding.to_string(),
         }
-    }
+    });
+    let member_bindings: BTreeMap<String, FxHashMap<String, String>> = order
+        .iter()
+        .filter_map(|path| {
+            let members = family_index.members_for(path, files.get(path)?, files, inputs);
+            (!members.is_empty()).then(|| (path.clone(), members))
+        })
+        .collect();
+    let no_members = FxHashMap::default();
 
     // Each component's own custom configuration: equally named custom props
     // of different components are distinct props.
@@ -2847,6 +2850,7 @@ fn run_with_system_floor(
             break;
         }
         let Some(ff) = files.get(path) else { continue };
+        let member_expr_bindings = member_bindings.get(path).unwrap_or(&no_members);
 
         let mut file_lookup: Option<UsageLookupMaps> = None;
         let bound_names = ff
@@ -2887,7 +2891,7 @@ fn run_with_system_floor(
             &lookup.props,
             &lookup.custom_props,
             &lookup.configs,
-            &member_expr_bindings,
+            member_expr_bindings,
         );
         identity_policy.attribute_result(&mut usage_result, &lookup.attribution);
 
@@ -2919,14 +2923,14 @@ fn run_with_system_floor(
             let mut custom_scan = crate::usage_facts::filter_custom_prop_scan(
                 ff.usage_for_analysis(),
                 &lookup.custom_props,
-                &member_expr_bindings,
+                member_expr_bindings,
             );
             custom_scan
                 .dynamic_usages
                 .extend(crate::usage_facts::uncertain_custom_renders(
                     ff.usage_for_analysis(),
                     &lookup.custom_props,
-                    &member_expr_bindings,
+                    member_expr_bindings,
                 ));
             identity_policy
                 .attribute_dynamic_usages(&mut custom_scan.dynamic_usages, &lookup.attribution);
@@ -3901,6 +3905,10 @@ fn run_with_system_floor(
         usage_residue,
         admitted_transforms,
         typed_system_props: typed_system_props.into_iter().collect(),
+        member_bindings: member_bindings
+            .into_iter()
+            .map(|(path, members)| (path, members.into_iter().collect()))
+            .collect(),
     }
 }
 
@@ -6015,6 +6023,55 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         }
     }
 
+    /// `a.tsx` and `b.tsx` each export a `Card` family (and `b.tsx` a
+    /// `Panel` one), but only `a.tsx`'s Body takes space props: every way of
+    /// reaching `a.tsx`'s family must give `p={8}` its utility class,
+    /// whichever file is analysed last.
+    #[test]
+    fn family_member_tags_resolve_through_the_consuming_files_imports() {
+        let slots = |body: &str| {
+            format!(
+                "export const Root = ds.styles({{ display: 'flex' }}).asElement('div');\n\
+                 export const Body = ds.styles({{ display: 'block' }}){body}.asElement('div');\n"
+            )
+        };
+        let a_slots = slots(".system({ space: true })");
+        let named = format!("{a_slots}export const Card = compose({{ Root, Body }}, {{ name: 'Card' }});\n");
+        let default_call = format!("{a_slots}export default compose({{ Root, Body }}, {{ name: 'Card' }});\n");
+        let default_binding = format!(
+            "{a_slots}const Card = compose({{ Root, Body }}, {{ name: 'Card' }});\nexport default Card;\n"
+        );
+        let b = format!(
+            "{}export const Card = compose({{ Root, Body }}, {{ name: 'Card' }});\n\
+             export const Panel = compose({{ Root, Body }}, {{ name: 'Panel' }});\n",
+            slots("")
+        );
+        let barrel = "export { Card as Grid } from './a';\n";
+        for (a, app) in [
+            (&named, "import { Card as Panel } from './a';\nexport const App = () => <Panel.Body p={8} />;\n"),
+            (&named, "import { Card } from './a';\nexport const App = () => <Card.Body p={8} />;\n"),
+            (&named, "import { Grid } from './barrel';\nexport const App = () => <Grid.Body p={8} />;\n"),
+            (&named, "import * as ui from './a';\nexport const App = () => <ui.Card.Body p={8} />;\n"),
+            (&default_call, "import Panel from './a';\nexport const App = () => <Panel.Body p={8} />;\n"),
+            (&default_binding, "import Panel from './a';\nexport const App = () => <Panel.Body p={8} />;\n"),
+        ] {
+            for b_first in [false, true] {
+                let mut entries = vec![("a.tsx", a.as_str()), ("b.tsx", b.as_str())];
+                if b_first {
+                    entries.reverse();
+                }
+                entries.push(("barrel.ts", barrel));
+                entries.push(("app.tsx", app));
+                let out = analyze(&entries, &test_inputs());
+                assert!(
+                    out.sheets.system.contains("padding: 0.5rem"),
+                    "{app}(b first: {b_first}) did not resolve to a.tsx's Body:\n{}",
+                    out.sheets.system
+                );
+            }
+        }
+    }
+
     #[test]
     fn compose_slot_unresolvable_by_qualified_id_bails_loud() {
         // The composing file neither defines nor imports the slot bindings.
@@ -7436,4 +7493,5 @@ export const App = () => <><Quiet inl={10} /><Base k={10} /><Kid lift={10} /></>
             assert!(out.css.contains("column-gap: 5;"), "{}", out.css);
         }
     }
+
 }

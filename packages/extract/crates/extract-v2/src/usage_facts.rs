@@ -17,7 +17,7 @@ use std::marker::PhantomData;
 use crate::chain_walk::{ChainDescriptor, TerminalKind};
 use crate::jsx_scan::{
     classify_jsx_attribute_as_variant_value, create_element_props, eval_jsx_attribute_value,
-    is_component_like_identifier, ComponentUsageConfig, CustomPropScanResult,
+    is_component_like_identifier, jsx_member_path, ComponentUsageConfig, CustomPropScanResult,
     DynamicExpressionKind, DynamicPropUsage, PropValueResult, StateUsage, SystemPropUsage,
     UsageResidueSite, UsageScanResult, UsageSpan, VariantUsage,
 };
@@ -57,8 +57,8 @@ pub struct AttrFact {
 pub enum TagFact {
     /// `<Name ...>` — raw identifier.
     Ident(String),
-    /// `<Root.Slot ...>` — dotted key, resolved against member-expr
-    /// bindings at FILTER time.
+    /// `<Root.Slot ...>` or `<ns.Root.Slot ...>` — the dotted path as
+    /// written, resolved against member-expr bindings at FILTER time.
     Member(String),
 }
 
@@ -367,14 +367,10 @@ impl<'a, 's> Visit<'a> for FactCollector<'a, 's> {
             JSXElementName::Identifier(id) => TagFact::Ident(id.name.to_string()),
             JSXElementName::IdentifierReference(id) => TagFact::Ident(id.name.to_string()),
             JSXElementName::MemberExpression(member) => {
-                let Some(root) = member.get_identifier() else {
+                let Some(path) = jsx_member_path(member) else {
                     return;
                 };
-                TagFact::Member(format!(
-                    "{}.{}",
-                    root.name.as_str(),
-                    member.property.name.as_str()
-                ))
+                TagFact::Member(path)
             }
             _ => return,
         };

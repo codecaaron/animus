@@ -32,6 +32,7 @@ pub mod engine;
 pub mod eval;
 pub mod evaluator;
 pub mod facts;
+pub(crate) mod family_members;
 pub mod ids;
 pub mod jsx_scan;
 pub mod usage_facts;

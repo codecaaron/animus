@@ -18,8 +18,10 @@ pub struct CrossFileFacts {
     pub component_names: BTreeSet<String>,
     /// Bindings whose chains terminate in `.asClass()`.
     pub class_resolvers: BTreeSet<String>,
-    /// `Family.Slot` dotted key → slot binding name.
-    pub member_bindings: BTreeMap<String, String>,
+    /// The analysis's family member resolution: consuming file → member
+    /// tag as written there (`Panel.Body`, `ui.Card.Body`) → the component
+    /// its slot renders.
+    pub member_bindings: BTreeMap<String, BTreeMap<String, String>>,
     /// Rendered components, named as written at the use site (local alias).
     pub rendered_components: BTreeSet<String>,
     /// binding → variant prop → option names.
@@ -32,7 +34,8 @@ pub struct CrossFileFacts {
 struct ComponentMetadata {
     component_names: BTreeSet<String>,
     class_resolvers: BTreeSet<String>,
-    member_bindings: BTreeMap<String, String>,
+    /// Every compose slot binding; slots render unconditionally.
+    slot_bindings: BTreeSet<String>,
     variant_options: BTreeMap<String, BTreeMap<String, BTreeSet<String>>>,
     state_names: BTreeMap<String, BTreeSet<String>>,
 }
@@ -49,16 +52,9 @@ fn collect_file_metadata(metadata: &mut ComponentMetadata, file: &FileFacts) {
     for chain in &file.chains {
         collect_chain_metadata(metadata, chain);
     }
-    for family in &file.compose {
-        let Some(family_binding) = &family.family_binding else {
-            continue;
-        };
-        for (slot, binding) in &family.slots {
-            metadata
-                .member_bindings
-                .insert(format!("{family_binding}.{slot}"), binding.clone());
-            metadata.component_names.insert(binding.clone());
-        }
+    for (_, binding) in file.compose.iter().flat_map(|family| &family.slots) {
+        metadata.slot_bindings.insert(binding.clone());
+        metadata.component_names.insert(binding.clone());
     }
 }
 
@@ -126,20 +122,14 @@ fn collect_rendered_components(
 ) -> BTreeSet<String> {
     let mut rendered_components = metadata.class_resolvers.clone();
     // asClass chains and every compose slot binding render unconditionally.
-    rendered_components.extend(metadata.member_bindings.values().cloned());
+    rendered_components.extend(metadata.slot_bindings.iter().cloned());
 
     for file in files.values() {
         let augmented = augmented_component_names(file, metadata);
         rendered_components.extend(
             file.usage
                 .iter()
-                .filter_map(|usage| {
-                    rendered_component_for_usage(
-                        usage,
-                        &augmented,
-                        &metadata.member_bindings,
-                    )
-                })
+                .filter_map(|usage| rendered_component_for_usage(usage, &augmented))
                 .map(str::to_owned),
         );
     }
@@ -161,41 +151,38 @@ fn augmented_component_names(
     augmented
 }
 
+/// A member tag renders a compose slot, which already renders
+/// unconditionally.
 fn rendered_component_for_usage<'a>(
     usage: &'a UsageFact,
     augmented: &'a BTreeSet<String>,
-    member_bindings: &'a BTreeMap<String, String>,
 ) -> Option<&'a str> {
     match usage {
         UsageFact::Element {
             tag: TagFact::Ident(name),
             ..
         } if augmented.contains(name) => Some(name),
-        UsageFact::Element {
-            tag: TagFact::Member(key),
-            ..
-        } => member_bindings.get(key).map(String::as_str),
         UsageFact::CreateElement {
             ident: Some(name), ..
         } if augmented.contains(name) => Some(name),
-        UsageFact::CreateElement {
-            ident: None,
-            member: Some(key),
-            ..
-        } => member_bindings.get(key).map(String::as_str),
         _ => None,
     }
 }
 
-pub fn resolve_cross_file(files: &BTreeMap<String, FileFacts>) -> CrossFileFacts {
+/// `member_bindings` is the analysis's family member resolution, reported
+/// as it was used.
+pub fn resolve_cross_file(
+    files: &BTreeMap<String, FileFacts>,
+    member_bindings: BTreeMap<String, BTreeMap<String, String>>,
+) -> CrossFileFacts {
     let metadata = collect_component_metadata(files);
     let rendered_components = collect_rendered_components(files, &metadata);
     let ComponentMetadata {
         component_names,
         class_resolvers,
-        member_bindings,
         variant_options,
         state_names,
+        ..
     } = metadata;
 
     CrossFileFacts {
@@ -237,7 +224,7 @@ mod tests {
         assert!(metadata.component_names.contains("Card"));
         assert!(metadata.component_names.contains("Root"));
         assert!(metadata.class_resolvers.contains("Card"));
-        assert_eq!(metadata.member_bindings["Family.Root"], "Root");
+        assert!(metadata.slot_bindings.contains("Root"));
         assert!(metadata.variant_options["Card"]["tone"].contains("quiet"));
         assert!(metadata.state_names["Card"].contains("selected"));
     }
@@ -286,7 +273,7 @@ mod tests {
                 "import { Button as TestButton } from './button';\nexport const App = () => <TestButton p={2} />;",
             ),
         ]);
-        let cf = resolve_cross_file(&files);
+        let cf = resolve_cross_file(&files, BTreeMap::new());
         assert!(cf.rendered_components.contains("TestButton"));
         assert!(!cf.rendered_components.contains("Button"));
     }
@@ -297,10 +284,9 @@ mod tests {
             "mix.tsx",
             "export const card = ds.styles({ p: 8 }).asClass();\nconst Root = ds.styles({}).asElement('div');\nexport const Fam = compose({ Root }, { shared: {} });",
         )]);
-        let cf = resolve_cross_file(&files);
+        let cf = resolve_cross_file(&files, BTreeMap::new());
         assert!(cf.rendered_components.contains("card"));
         assert!(cf.rendered_components.contains("Root"));
-        assert!(cf.member_bindings.contains_key("Fam.Root"));
     }
 
     #[test]
@@ -309,7 +295,7 @@ mod tests {
             "btn.tsx",
             "export const Btn = ds\n  .variant({ prop: 'size', variants: { sm: {}, lg: {} } })\n  .states({ loading: {}, disabled: {} })\n  .asElement('button');",
         )]);
-        let cf = resolve_cross_file(&files);
+        let cf = resolve_cross_file(&files, BTreeMap::new());
         let opts = &cf.variant_options["Btn"]["size"];
         assert!(opts.contains("sm") && opts.contains("lg"));
         assert!(cf.state_names["Btn"].contains("loading"));
@@ -321,7 +307,7 @@ mod tests {
             "fam.tsx",
             "const Root = ds.styles({}).asElement('div');\nexport const Fam = compose({ Root }, { shared: {} });\nexport const Bad = ds.mystery({ x: 1 }).asElement('div');\nexport const App = () => <Fam.Root />;",
         )]);
-        let cf = resolve_cross_file(&files);
+        let cf = resolve_cross_file(&files, BTreeMap::new());
         assert!(cf.rendered_components.contains("Root"));
         assert!(!cf.component_names.contains("Bad"));
     }

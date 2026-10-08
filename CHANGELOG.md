@@ -53,10 +53,20 @@ keep their styles and its shared variants reach them. Previously the family
 was missed and its slots' styles could be pruned. A file that still uses
 `compose` where extraction does not recognise a family, such as a call
 inside a function, now keeps its `compose` import; before, the import was
-removed and that call failed at runtime. Member tags of
-`export default compose(...)` do not yet resolve through a default import.
-Declare `const Card = compose(...)` with `export default Card`, and import
-it as `Card`.
+removed and that call failed at runtime.
+
+**Family member tags resolve through the file's own imports.** A tag such
+as `<Card.Body p={8} />` now finds its family through the imports of the
+file it is written in, so it gets its utility classes however the family
+arrives: under another name (`import { Card as Panel }`), through
+re-exports, as a default import, or through a namespace import
+(`<ui.Card.Body />`). Before, member tags were matched by the family's
+declared name across the whole project: an aliased, default or namespace
+import missed its slots, and two modules exporting families with the same
+name could take each other's tags. The manifest's `crossFile.memberBindings`
+changes shape to match. It now maps each consuming file to the member tags
+written there and the component each one renders, for example
+`{ "app.tsx": { "Panel.Body": "card.tsx::Body" } }`.
 
 **Finite declaration scales style several properties through one prop.**
 `createTheme().addDeclarationScale({ name, values })` registers named keys

@@ -14,6 +14,10 @@ pub struct ComposeFamilyInfo {
     /// Variable the `compose()` result is assigned to; `None` for default
     /// exports and expressions not bound to a variable.
     pub family_binding: Option<String>,
+    /// The module's default export, as `export default compose(...)` or
+    /// `export default Family`.
+    #[serde(skip)]
+    pub default_export: bool,
     pub root_binding: String,
     /// (slot name, binding name) pairs for every slot, Root included.
     pub slots: Vec<(String, String)>,
@@ -31,6 +35,20 @@ pub fn scan_compose_calls(program: &Program) -> Vec<ComposeFamilyInfo> {
     let mut families: Vec<ComposeFamilyInfo> = Vec::new();
     for stmt in &program.body {
         collect_compose_from_statement(stmt, &mut families);
+    }
+    let default_binding = program.body.iter().find_map(|stmt| match stmt {
+        Statement::ExportDefaultDeclaration(export) => match export.declaration.as_expression() {
+            Some(Expression::Identifier(id)) => Some(id.name.as_str()),
+            _ => None,
+        },
+        _ => None,
+    });
+    if let Some(name) = default_binding {
+        for family in &mut families {
+            if family.family_binding.as_deref() == Some(name) {
+                family.default_export = true;
+            }
+        }
     }
     families
 }
@@ -97,7 +115,11 @@ fn collect_compose_from_statement(stmt: &Statement, families: &mut Vec<ComposeFa
         }
         Statement::ExportDefaultDeclaration(export) => {
             if let Some(expr) = export.declaration.as_expression() {
+                let found = families.len();
                 collect_compose_from_expression(expr, None, families);
+                if let Some(family) = families.get_mut(found) {
+                    family.default_export = true;
+                }
             }
         }
         _ => {}
@@ -195,6 +217,7 @@ fn extract_compose_family(
 
     families.push(ComposeFamilyInfo {
         family_binding,
+        default_export: false,
         root_binding,
         slots,
         shared_keys,

@@ -448,13 +448,13 @@ impl ExtractEngine {
 
         // Facts own every resolved reference; release the modules' scopings.
         drop(references);
-        let cross = cross_file::resolve_cross_file(&self.facts);
         let css = analyze_css::run(
             &self.facts,
             &self.order,
             &self.opts.css_inputs,
             &self.opts.prefix,
         );
+        let cross = cross_file::resolve_cross_file(&self.facts, css.member_bindings.clone());
         let out = serde_json::to_string(&AnalyzeResult {
             cross_file: cross.clone(),
             file_facts: &self.facts,
@@ -1068,6 +1068,44 @@ mod tests {
         assert!(out.contains(r#"name: \"Card\""#), "{out}");
         assert!(!out.contains("@animus-ui/system/compose'"), "{out}");
         assert!(out.contains("createComposedFamily }"), "{out}");
+    }
+
+    #[test]
+    fn manifest_lists_each_files_family_member_tags() {
+        let mut engine = ExtractEngine::new(None).unwrap();
+        let manifest = engine
+            .analyze(
+                serde_json::json!([
+                    {
+                        "path": "a.tsx",
+                        "source": "export const Root = ds.styles({}).asElement('div');\n\
+                                   export const Body = ds.styles({}).asElement('div');\n\
+                                   export const Card = compose({ Root, Body });\n",
+                    },
+                    {
+                        "path": "app.tsx",
+                        "source": "import { Card as Panel } from './a';\n\
+                                   export const App = () => <Panel.Body />;\n",
+                    },
+                    {
+                        "path": "ns.tsx",
+                        "source": "import * as ui from './a';\n\
+                                   export const App = () => <ui.Card.Body />;\n",
+                    },
+                ])
+                .to_string(),
+            )
+            .unwrap();
+        let manifest: serde_json::Value = serde_json::from_str(&manifest).unwrap();
+
+        assert_eq!(
+            manifest["crossFile"]["memberBindings"],
+            serde_json::json!({
+                "a.tsx": { "Card.Root": "a.tsx::Root", "Card.Body": "a.tsx::Body" },
+                "app.tsx": { "Panel.Root": "a.tsx::Root", "Panel.Body": "a.tsx::Body" },
+                "ns.tsx": { "ui.Card.Root": "a.tsx::Root", "ui.Card.Body": "a.tsx::Body" },
+            })
+        );
     }
 
     #[test]

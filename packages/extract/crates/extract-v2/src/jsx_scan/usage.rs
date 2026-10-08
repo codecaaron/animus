@@ -7,8 +7,8 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use oxc::ast::ast::{
     Argument, CallExpression, Expression, JSXAttributeItem, JSXAttributeName, JSXAttributeValue,
-    JSXElementName, JSXExpression, JSXMemberExpression, JSXOpeningElement, ObjectPropertyKind,
-    Program,
+    JSXElementName, JSXExpression, JSXMemberExpression, JSXMemberExpressionObject,
+    JSXOpeningElement, ObjectPropertyKind, Program,
 };
 use oxc::ast_visit::Visit;
 
@@ -388,17 +388,22 @@ pub(crate) fn classify_jsx_attribute_as_variant_value(value: &Option<JSXAttribut
     }
 }
 
-/// Resolve `Family.Slot` to the extracted component binding via the member
-/// expression map. Single-level only; `None` when unresolvable.
+/// Resolve a member tag to the extracted component binding via the member
+/// expression map; `None` when unresolvable.
 pub(super) fn resolve_jsx_member_expr<'a>(
     member: &JSXMemberExpression,
     member_expr_bindings: &'a FxHashMap<String, String>,
 ) -> Option<&'a String> {
-    // get_identifier() returns the root identifier, so `NavBar.Root` yields
-    // `NavBar`; `this.Root` and deeper chains yield None or the root.
-    let root_ident = member.get_identifier()?;
-    let object_name = root_ident.name.as_str();
-    let slot_name = member.property.name.as_str();
-    let dotted_key = format!("{}.{}", object_name, slot_name);
-    member_expr_bindings.get(&dotted_key)
+    member_expr_bindings.get(&jsx_member_path(member)?)
+}
+
+/// The dotted path a member tag is written as (`Card.Body`,
+/// `ui.Card.Body`); `None` when it is rooted in `this`.
+pub(crate) fn jsx_member_path(member: &JSXMemberExpression) -> Option<String> {
+    let object = match &member.object {
+        JSXMemberExpressionObject::IdentifierReference(id) => id.name.to_string(),
+        JSXMemberExpressionObject::MemberExpression(inner) => jsx_member_path(inner)?,
+        JSXMemberExpressionObject::ThisExpression(_) => return None,
+    };
+    Some(format!("{object}.{}", member.property.name))
 }
