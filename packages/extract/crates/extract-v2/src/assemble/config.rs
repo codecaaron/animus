@@ -1,5 +1,6 @@
-//! Runtime-config JSON for a replacement. Key order and the
-//! `[].concat(...)` splice shape are compared byte-for-byte downstream.
+//! Runtime config for a replacement: an object literal of JSON values and
+//! JavaScript expressions. Key order and the `[].concat(...)` group list are
+//! compared byte-for-byte downstream.
 
 use std::collections::BTreeMap;
 
@@ -22,7 +23,7 @@ pub(super) fn build_config(
     payload: Option<&ReplacementPayload>,
     group_registry: &FxHashMap<String, Vec<String>>,
 ) -> Result<String, AssembleError> {
-    let mut config = Map::new();
+    let mut config = ObjectLiteral::default();
 
     let mut variants = Map::new();
     let mut compounds: Vec<Value> = Vec::new();
@@ -112,152 +113,282 @@ pub(super) fn build_config(
         states = merged.state_names.clone();
     }
     if !variants.is_empty() {
-        config.insert("variants".into(), Value::Object(variants));
+        config.insert("variants", Value::Object(variants));
     }
     if !compounds.is_empty() {
-        config.insert("compounds".into(), json!(compounds));
+        config.insert("compounds", json!(compounds));
     }
     if !states.is_empty() {
-        config.insert("states".into(), json!(states));
+        config.insert("states", json!(states));
     }
 
-    let base_json =
-        serde_json::to_string(&Value::Object(config)).unwrap_or_else(|_| "{}".into());
     let Some(p) = payload else {
-        return Ok(base_json);
+        return Ok(config.render());
     };
 
-    let mut result = if !p.system_group_names.is_empty() {
+    if !p.system_group_names.is_empty() {
         let mut concat_parts: Vec<String> = p
             .system_group_names
             .iter()
             .map(|g| format!("systemPropGroups.{}", g))
             .collect();
-        {
-            let mut extra_names: rustc_hash::FxHashSet<String> = rustc_hash::FxHashSet::default();
-            if !p.system_prop_names.is_empty() {
-                let group_covered: rustc_hash::FxHashSet<String> = p
-                    .system_group_names
-                    .iter()
-                    .filter_map(|g| group_registry.get(g))
-                    .flat_map(|props| props.iter().cloned())
-                    .collect();
-                for prop in &p.system_prop_names {
-                    if !group_covered.contains(prop) {
-                        extra_names.insert(prop.clone());
-                    }
+        let mut extra_names: rustc_hash::FxHashSet<String> = rustc_hash::FxHashSet::default();
+        if !p.system_prop_names.is_empty() {
+            let group_covered: rustc_hash::FxHashSet<String> = p
+                .system_group_names
+                .iter()
+                .filter_map(|g| group_registry.get(g))
+                .flat_map(|props| props.iter().cloned())
+                .collect();
+            for prop in &p.system_prop_names {
+                if !group_covered.contains(prop) {
+                    extra_names.insert(prop.clone());
                 }
             }
-            if let Some(ref cpm) = p.custom_prop_class_map {
-                extra_names.extend(cpm.keys().cloned());
-            }
-            if let Some(ref cdc) = p.custom_dynamic_config {
-                extra_names.extend(cdc.keys().cloned());
-            }
-            if !extra_names.is_empty() {
-                let mut sorted: Vec<String> = extra_names.into_iter().collect();
-                sorted.sort();
-                concat_parts
-                    .push(serde_json::to_string(&sorted).unwrap_or_else(|_| "[]".to_string()));
-            }
         }
-        let concat_expr = concat_parts.join(",");
-        let spn_field = format!("\"systemPropNames\":[].concat({})", concat_expr);
-        if base_json == "{}" {
-            format!("{{{}}}", spn_field)
-        } else {
-            format!("{},{}}}", &base_json[..base_json.len() - 1], spn_field)
+        if let Some(ref cpm) = p.custom_prop_class_map {
+            extra_names.extend(cpm.keys().cloned());
         }
+        if let Some(ref cdc) = p.custom_dynamic_config {
+            extra_names.extend(cdc.keys().cloned());
+        }
+        if !extra_names.is_empty() {
+            let mut sorted: Vec<String> = extra_names.into_iter().collect();
+            sorted.sort();
+            concat_parts.push(json!(sorted).to_string());
+        }
+        config.insert(
+            "systemPropNames",
+            Field::Script(format!("[].concat({})", concat_parts.join(","))),
+        );
     } else if !p.system_prop_names.is_empty() {
-        let mut config_map: Map<String, Value> =
-            serde_json::from_str(&base_json).unwrap_or_default();
-        config_map.insert("systemPropNames".to_string(), json!(p.system_prop_names));
-        serde_json::to_string(&Value::Object(config_map)).unwrap_or(base_json)
-    } else {
-        base_json
-    };
+        config.insert("systemPropNames", json!(p.system_prop_names));
+    }
 
     if let Some(ref cpm) = p.custom_prop_class_map {
         let sorted_cpm: BTreeMap<&String, BTreeMap<&String, &String>> =
             cpm.iter().map(|(k, v)| (k, v.iter().collect())).collect();
-        let cpm_json = serde_json::to_string(&sorted_cpm).unwrap_or_else(|_| "{}".to_string());
-        append_field(&mut result, "customPropMap", &cpm_json);
+        config.insert("customPropMap", json!(sorted_cpm));
     }
 
     if !p.typed_custom_props.is_empty() {
-        let typed = serde_json::to_string(&p.typed_custom_props).unwrap_or_else(|_| "[]".to_string());
-        append_field(&mut result, "typedCustomProps", &typed);
+        config.insert("typedCustomProps", json!(p.typed_custom_props));
     }
 
     // One generated list, shared by every component, names the system props
     // whose static keys are typed.
     if p.reads_typed_system_props {
-        append_field(&mut result, "typedSystemProps", "typedSystemProps");
+        config.insert("typedSystemProps", Field::Script("typedSystemProps".into()));
     }
 
     if let Some(ref cdc) = p.custom_dynamic_config {
-        let mut entries: Vec<String> = Vec::new();
+        let mut dynamic = ObjectLiteral::default();
         let mut sorted_keys: Vec<&String> = cdc.keys().collect();
         sorted_keys.sort();
         for prop_name in sorted_keys {
             let meta = match &cdc[prop_name] {
                 crate::dynamic_meta::DynamicPropMeta::Value(meta) => meta,
                 crate::dynamic_meta::DynamicPropMeta::Declarations(meta) => {
-                    let json = serde_json::to_string(meta).unwrap_or_else(|_| "{}".to_string());
-                    entries.push(format!("\"{}\":{}", prop_name, json));
+                    dynamic.insert(prop_name, json!(meta));
                     continue;
                 }
             };
-            let mut fields: Vec<String> = Vec::new();
-            fields.push(format!("\"varName\":\"{}\"", meta.var_name));
-            fields.push(format!("\"slotClass\":\"{}\"", meta.slot_class));
-            fields.push(format!("\"property\":\"{}\"", meta.property));
+            let mut fields = ObjectLiteral::default();
+            fields.insert("varName", json!(meta.var_name));
+            fields.insert("slotClass", json!(meta.slot_class));
+            fields.insert("property", json!(meta.property));
             if !meta.properties.is_empty() {
-                let props_json =
-                    serde_json::to_string(&meta.properties).unwrap_or_else(|_| "[]".to_string());
-                fields.push(format!("\"properties\":{}", props_json));
+                fields.insert("properties", json!(meta.properties));
             }
             if meta.negative {
-                fields.push("\"negative\":true".to_string());
+                fields.insert("negative", json!(true));
             }
             if meta.strict {
-                fields.push("\"strict\":true".to_string());
+                fields.insert("strict", json!(true));
             }
             if !meta.keywords.is_empty() {
-                let keywords_json =
-                    serde_json::to_string(&meta.keywords).unwrap_or_else(|_| "[]".to_string());
-                fields.push(format!("\"keywords\":{}", keywords_json));
+                fields.insert("keywords", json!(meta.keywords));
             }
             if let Some(ref fn_src) = meta.transform_fn_source {
-                fields.push(format!("\"transform\":{}", fn_src));
+                fields.insert("transform", Field::Script(fn_src.clone()));
             } else if let Some(ref tn) = meta.transform_name {
-                let literal = crate::evaluator::js_string_literal;
-                fields.push(format!("\"transformName\":{}", literal(tn)));
+                fields.insert("transformName", json!(tn));
                 if let Some(ref id) = meta.transform_id {
-                    fields.push(format!("\"transform\":transforms[{}]", literal(id)));
+                    let literal = crate::evaluator::js_string_literal(id);
+                    fields.insert("transform", Field::Script(format!("transforms[{literal}]")));
                 }
             }
             if !meta.scale_values.is_empty() {
-                let sv_json =
-                    serde_json::to_string(&meta.scale_values).unwrap_or_else(|_| "{}".to_string());
-                fields.push(format!("\"scaleValues\":{}", sv_json));
+                fields.insert("scaleValues", json!(meta.scale_values));
             }
-            entries.push(format!("\"{}\":{{{}}}", prop_name, fields.join(",")));
+            dynamic.insert(prop_name, Field::Object(fields));
         }
-        let cdc_str = format!("{{{}}}", entries.join(","));
-        append_field(&mut result, "customDynamicConfig", &cdc_str);
+        config.insert("customDynamicConfig", Field::Object(dynamic));
     }
 
-    Ok(result)
+    Ok(config.render())
 }
 
-/// Appends `"key":value` to the config object literal `config`, whose value
-/// is JavaScript text.
-fn append_field(config: &mut String, key: &str, value: &str) {
-    let field = format!("\"{key}\":{value}");
-    *config = if config == "{}" {
-        format!("{{{field}}}")
-    } else {
-        format!("{},{field}}}", &config[..config.len() - 1])
-    };
+/// One value of the config object literal.
+enum Field {
+    Json(Value),
+    /// JavaScript the runtime evaluates, such as a group list or a transform
+    /// reference.
+    Script(String),
+    Object(ObjectLiteral),
+}
+
+impl From<Value> for Field {
+    fn from(value: Value) -> Self {
+        Field::Json(value)
+    }
+}
+
+/// An object literal rendered with its fields in insertion order.
+#[derive(Default)]
+struct ObjectLiteral(Vec<(String, Field)>);
+
+impl ObjectLiteral {
+    fn insert(&mut self, key: &str, value: impl Into<Field>) {
+        self.0.push((key.to_string(), value.into()));
+    }
+
+    fn render(&self) -> String {
+        let mut out = String::from("{");
+        for (index, (key, value)) in self.0.iter().enumerate() {
+            if index > 0 {
+                out.push(',');
+            }
+            out.push_str(&crate::evaluator::js_string_literal(key));
+            out.push(':');
+            match value {
+                Field::Json(value) => out.push_str(&value.to_string()),
+                Field::Script(script) => out.push_str(script),
+                Field::Object(object) => out.push_str(&object.render()),
+            }
+        }
+        out.push('}');
+        out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use super::super::test_support::facts_for;
+    use super::*;
+    use crate::dynamic_meta::{DeclarationPropMeta, DynamicPropMeta, ValuePropMeta};
+
+    fn value_meta(name: &str) -> ValuePropMeta {
+        ValuePropMeta {
+            var_name: format!("--animus-{name}"),
+            slot_class: format!("animus-dyn-{name}"),
+            property: "width".into(),
+            negative: false,
+            strict: false,
+            keywords: Vec::new(),
+            properties: Vec::new(),
+            transform_name: None,
+            transform_id: None,
+            transform_fn_source: None,
+            scale_values: BTreeMap::new(),
+        }
+    }
+
+    fn config_for(source: &str, payload: &ReplacementPayload) -> String {
+        let facts = facts_for("box.tsx", source);
+        let registry: FxHashMap<String, Vec<String>> =
+            [("space".to_string(), vec!["p".to_string(), "m".to_string()])].into_iter().collect();
+        build_config("box.tsx", "Box", &facts.chains[0], "animus", Some(payload), &registry).unwrap()
+    }
+
+    #[test]
+    fn config_object_carries_every_field_in_order() {
+        let sized = ValuePropMeta {
+            negative: true,
+            strict: true,
+            keywords: vec!["auto".into()],
+            properties: vec!["width".into(), "height".into()],
+            transform_name: Some("size".into()),
+            transform_id: Some("theme.ts#size".into()),
+            scale_values: [("sm".to_string(), json!("4px"))].into_iter().collect(),
+            ..value_meta("sized")
+        };
+        let lifted = ValuePropMeta {
+            transform_fn_source: Some("(v) => v * 2".into()),
+            ..value_meta("lift")
+        };
+        let tone = DeclarationPropMeta {
+            kind: "declarations",
+            slot_class: "animus-dyn-tone".into(),
+            member_vars: [("color".to_string(), "--animus-tone-color".to_string())].into_iter().collect(),
+            declaration_scale_values: BTreeMap::new(),
+        };
+        let payload = ReplacementPayload {
+            system_prop_names: vec!["bg".into(), "p".into()],
+            system_group_names: vec!["space".into()],
+            custom_prop_class_map: Some(HashMap::from([(
+                "sized".to_string(),
+                HashMap::from([("sm".to_string(), "animus-uc-1".to_string())]),
+            )])),
+            custom_dynamic_config: Some(HashMap::from([
+                ("sized".to_string(), DynamicPropMeta::Value(sized)),
+                ("lift".to_string(), DynamicPropMeta::Value(lifted)),
+                ("tone".to_string(), DynamicPropMeta::Declarations(tone)),
+            ])),
+            typed_custom_props: vec!["sized".into()],
+            reads_typed_system_props: true,
+            ..ReplacementPayload::default()
+        };
+        let config = config_for(
+            "export const Box = ds.variant({ prop: 'size', variants: { sm: {} } }).states({ busy: {} }).asElement('div');",
+            &payload,
+        );
+        assert_eq!(
+            config,
+            concat!(
+                r#"{"variants":{"size":{"options":["sm"]}},"states":["busy"],"#,
+                r#""systemPropNames":[].concat(systemPropGroups.space,["bg","lift","sized","tone"]),"#,
+                r#""customPropMap":{"sized":{"sm":"animus-uc-1"}},"#,
+                r#""typedCustomProps":["sized"],"#,
+                r#""typedSystemProps":typedSystemProps,"#,
+                r#""customDynamicConfig":{"#,
+                r#""lift":{"varName":"--animus-lift","slotClass":"animus-dyn-lift","property":"width","transform":(v) => v * 2},"#,
+                r#""sized":{"varName":"--animus-sized","slotClass":"animus-dyn-sized","property":"width","#,
+                r#""properties":["width","height"],"negative":true,"strict":true,"keywords":["auto"],"#,
+                r#""transformName":"size","transform":transforms["theme.ts#size"],"scaleValues":{"sm":"4px"}},"#,
+                r#""tone":{"kind":"declarations","slotClass":"animus-dyn-tone","#,
+                r#""memberVars":{"color":"--animus-tone-color"},"declarationScaleValues":{}}}}"#,
+            )
+        );
+    }
+
+    #[test]
+    fn config_object_without_variants_starts_from_its_first_field() {
+        let plain = "export const Box = ds.styles({}).asElement('div');";
+        let names_only = ReplacementPayload {
+            system_prop_names: vec!["bg".into()],
+            reads_typed_system_props: true,
+            ..ReplacementPayload::default()
+        };
+        assert_eq!(
+            config_for(plain, &names_only),
+            r#"{"systemPropNames":["bg"],"typedSystemProps":typedSystemProps}"#
+        );
+        let groups_only = ReplacementPayload {
+            system_prop_names: vec!["p".into()],
+            system_group_names: vec!["space".into()],
+            ..ReplacementPayload::default()
+        };
+        assert_eq!(
+            config_for(plain, &groups_only),
+            r#"{"systemPropNames":[].concat(systemPropGroups.space)}"#
+        );
+        let typed_only = ReplacementPayload {
+            typed_custom_props: vec!["sized".into()],
+            ..ReplacementPayload::default()
+        };
+        assert_eq!(config_for(plain, &typed_only), r#"{"typedCustomProps":["sized"]}"#);
+    }
 }
