@@ -1,6 +1,6 @@
 {
   "name": "@animus-ui/cli",
-  "version": "0.1.1",
+  "version": "0.1.17",
   "description": "Standalone Animus extraction CLI — one-shot builds and artifact emission for any build system",
   "keywords": [
     "animus",
