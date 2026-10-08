@@ -161,12 +161,14 @@ export type {
 } from './manifest-schema';
 export type { ManifestDiagnostic } from './manifest-diagnostics';
 export {
+  INVALID_PROPERTY_REGISTRATION,
   isUnresolvedParentDrop,
   surfaceManifestDiagnostics,
   unreadableSourceDiagnostic,
   unresolvedParentName,
   VOCABULARY_COLLISION,
   VOCABULARY_LEGACY_VERB,
+  systemLoadDiagnostics,
   vocabularyWitnessDiagnostics,
 } from './manifest-diagnostics';
 export type { DefaultExtension, PreprocessMdxResult } from './mdx-preprocessor';

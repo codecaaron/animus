@@ -1,14 +1,18 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  INVALID_PROPERTY_REGISTRATION,
   SELECTOR_UNSUPPORTED_SUBJECT,
   hasSelectorSubject,
   collectSelectorAliasDiagnostics,
   surfaceManifestDiagnostics,
+  systemLoadDiagnostics,
   VOCABULARY_COLLISION,
   VOCABULARY_LEGACY_VERB,
   vocabularyWitnessDiagnostics,
 } from '../pipeline/manifest-diagnostics';
+import { runProjectAnalysis } from '../pipeline/run-analysis';
+import { loadSystemConfig } from '../pipeline/system-config';
 
 import type { ManifestDiagnostic } from '../pipeline/manifest-diagnostics';
 
@@ -196,5 +200,117 @@ describe('ingestion failures vs degradation under strict', () => {
     );
     expect(warned).toHaveLength(1);
     expect(warned[0]).toContain('animus.vocabulary.from-a-newer-system');
+  });
+});
+
+describe('invalid @property registrations', () => {
+  const registrations = [
+    '@property --ok { syntax: "<color>"; inherits: true; initial-value: transparent; }',
+    '@property --any { syntax: "*"; inherits: false; }',
+    '@property --cap { syntax: "<length>"; inherits: false; }',
+    '@property --tint { syntax: "<colour>"; inherits: true; initial-value: red; }',
+    '@property --gap { syntax: "<length>"; inherits: true; initial-value: red; }',
+    '@property --em { syntax: "<length>"; inherits: true; initial-value: 1em; }',
+    '@property --vw { syntax: "<length>"; inherits: true; initial-value: 1vw; }',
+    '@property --typo { syntax: "<colour>"; inherits: true; }',
+    '@property --label { syntax: "<string>"; inherits: true; initial-value: "5em"; }',
+    '@property --art { syntax: "<url>"; inherits: true; initial-value: url(a2ex.png); }',
+    '@property --fade { syntax: "<image>"; inherits: true; initial-value: linear-gradient(red 1em, blue); }',
+  ].join('\n');
+
+  function load(prefix?: string) {
+    return loadSystemConfig(
+      () => ({
+        loadSystemModule: () => ({
+          propConfig: '{}',
+          groupRegistry: '{}',
+          scalesJson: '{}',
+          variableMapJson: '{}',
+          variableCss: `${registrations}\n\n:root { --ok: red; }`,
+        }),
+      }),
+      { systemPath: 'ds.ts', rootDir: '/', prefix }
+    );
+  }
+
+  it('drops the rules browsers would ignore and keeps the valid ones', () => {
+    const system = load();
+    expect(system.variableCss).toContain('@property --ok');
+    expect(system.variableCss).toContain('@property --any');
+    expect(system.variableCss).toContain('@property --vw');
+    expect(system.variableCss).toContain('@property --label');
+    expect(system.variableCss).toContain('@property --art');
+    const reasons = Object.fromEntries(
+      (system.invalidPropertyRegistrations ?? []).map((r) => [r.name, r.reason])
+    );
+    expect(Object.keys(reasons)).toEqual([
+      '--cap',
+      '--tint',
+      '--gap',
+      '--em',
+      '--typo',
+      '--fade',
+    ]);
+    for (const name of Object.keys(reasons)) {
+      expect(system.variableCss).not.toContain(`@property ${name} `);
+    }
+    expect(reasons['--cap']).toBe('syntax "<length>" needs an initialValue');
+    expect(reasons['--typo']).toBe(
+      'syntax "<colour>" has the unknown component "<colour>"'
+    );
+    expect(reasons['--em']).toMatch(/^initialValue "1em" depends on context/);
+    expect(reasons['--gap']).toMatch(/^the CSS parser rejects/);
+  });
+
+  it('reports authored names and prefixes only the kept rules', () => {
+    const system = load('acme');
+    expect(system.variableCss).toContain('@property --acme-ok');
+    expect(system.invalidPropertyRegistrations?.[0]?.name).toBe('--cap');
+  });
+
+  it('becomes one strict-failing diagnostic per dropped rule', () => {
+    const diagnostics = systemLoadDiagnostics(load());
+    expect(diagnostics.map((d) => [d.component, d.code, d.severity])).toEqual(
+      ['--cap', '--tint', '--gap', '--em', '--typo', '--fade'].map((name) => [
+        name,
+        INVALID_PROPERTY_REGISTRATION,
+        'error',
+      ])
+    );
+    expect(
+      systemLoadDiagnostics({ invalidPropertyRegistrations: undefined })
+    ).toEqual([]);
+  });
+
+  it('reaches the build through runProjectAnalysis, failing strict', () => {
+    const analyze = (strict: boolean, warn: (message: string) => void) =>
+      runProjectAnalysis(
+        () => ({
+          analyzeProject: () =>
+            JSON.stringify({
+              diagnostics: [],
+              sheets: { global: '' },
+              css: '',
+            }),
+        }),
+        {
+          fileEntries: [],
+          packageMap: {},
+          system: load(),
+          emitter: { runtimeImport: 'runtime', cssModuleId: 'styles.css' },
+          pathAliasesJson: null,
+          devMode: false,
+          warn,
+          strict,
+        }
+      );
+    expect(() => analyze(true, () => {})).toThrow(
+      INVALID_PROPERTY_REGISTRATION
+    );
+    const warned: string[] = [];
+    analyze(false, (message) => warned.push(message));
+    expect(
+      warned.filter((m) => m.includes(INVALID_PROPERTY_REGISTRATION))
+    ).toHaveLength(6);
   });
 });

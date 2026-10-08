@@ -2,6 +2,7 @@ import { buildAnalyzeProjectArgs } from './analyze-project-args';
 import {
   collectSelectorAliasDiagnostics,
   surfaceManifestDiagnostics,
+  systemLoadDiagnostics,
 } from './manifest-diagnostics';
 import { applyUnitFallback } from './unit-fallback';
 
@@ -136,6 +137,7 @@ export function runProjectAnalysis(
     strict: opts.strict,
     prepend: [
       ...collectSelectorAliasDiagnostics(opts.system.selectorAliasesJson),
+      ...systemLoadDiagnostics(opts.system),
       ...(opts.extraDiagnostics ?? []),
     ],
   });

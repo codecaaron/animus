@@ -580,8 +580,16 @@ describe('declareContextualVars @property registration', () => {
       .declareContextualVars(
         { colors: ['current-bg', 'current-border'] },
         {
-          'current-bg': { syntax: '<color>', inherits: true },
-          'current-border': { syntax: '<color>', inherits: false },
+          'current-bg': {
+            syntax: '<color>',
+            inherits: true,
+            initialValue: 'transparent',
+          },
+          'current-border': {
+            syntax: '<color>',
+            inherits: false,
+            initialValue: 'transparent',
+          },
         }
       )
       .build()

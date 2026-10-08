@@ -12,7 +12,6 @@ import {
   findAssetSpecifiers,
   formatRustTimingWaterfall,
   loadSystemConfig,
-  vocabularyWitnessDiagnostics,
   parseFilesJson,
   projectExternalFileOwners,
   resolveAssetFile,
@@ -43,7 +42,6 @@ import type { AnimusExtractOptions } from './index';
 import type {
   ExcludeMatcher,
   ExternalPackageOutcome,
-  ManifestDiagnostic,
   ManifestSheets,
   ProjectAnalysisResult,
   ProjectManifest,
@@ -181,10 +179,6 @@ export class PluginContext {
   recordTransformOutput(relativePath: string, code: string): void {
     this.transformOutputHashes.set(relativePath, contentHash(code));
   }
-
-  /** Vocabulary witnesses from the sealed system, awaiting the next analysis.
-   *  Surfacing happens only inside `runProjectAnalysis`. */
-  systemVocabularyDiagnostics: ManifestDiagnostic[] = [];
 
   reverseProvenance: Record<string, string[]> = {};
 
@@ -410,9 +404,6 @@ export class PluginContext {
       this.systemDependencyKeys = keys;
       this.systemDependencyPaths = deps;
       this.registerSystemWatchPaths();
-      this.systemVocabularyDiagnostics = vocabularyWitnessDiagnostics(
-        this.system.vocabularyWitnessesJson
-      );
     } catch (e) {
       if (this.options.strict) {
         throw new Error(
@@ -450,7 +441,6 @@ export class PluginContext {
         devMode: !this.emissionProd,
         warn: (m) => this.warn(m),
         strict: this.options.strict,
-        extraDiagnostics: this.systemVocabularyDiagnostics,
       });
     } catch (e) {
       if (this.options.strict) {
@@ -552,7 +542,6 @@ export class PluginContext {
       ? snapshotFilePlans(this.storedManifest)
       : null;
     const publishedSystem = this.system;
-    const publishedVocabulary = this.systemVocabularyDiagnostics;
     let published = false;
     try {
       if (reloadingSystem) this.loadSystem();
@@ -601,7 +590,6 @@ export class PluginContext {
       const systemHeld = reloadingSystem && this.abortedParseHashes.size > 0;
       if (systemHeld) {
         this.system = publishedSystem;
-        this.systemVocabularyDiagnostics = publishedVocabulary;
       } else if (reloadingSystem) {
         this.systemReloadOwed = false;
         // A type-only definition module has no import edge, so importer

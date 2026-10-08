@@ -1,4 +1,7 @@
 import { applyPrefix, prefixVariableReferences } from './prefix';
+import { splitInvalidPropertyRegistrations } from './property-registrations';
+
+import type { InvalidPropertyRegistration } from './property-registrations';
 
 /**
  * The deserialized `loadSystemModule()` result, prefix transformation
@@ -36,6 +39,8 @@ export interface SystemConfig {
   /** `{ modulePath: { exportName: [token paths] } }` — the source-token
    *  witness for correlation. Null when no module exports a built theme. */
   sourceThemeManifestsJson?: string | null;
+  /** Registrations removed from `variableCss`; absent when all are valid. */
+  invalidPropertyRegistrations?: InvalidPropertyRegistration[];
 }
 
 /**
@@ -52,7 +57,8 @@ export function loadSystemConfig(
 
   let scalesJson: string = config.scalesJson;
   let variableMapJson: string = config.variableMapJson;
-  let variableCss: string = config.variableCss;
+  const registrations = splitInvalidPropertyRegistrations(config.variableCss);
+  let variableCss: string = registrations.css;
   let contextualVarsJson: string | null = config.contextualVarsJson || null;
   let declarationScalesJson: string | null =
     config.declarationScalesJson || null;
@@ -99,5 +105,8 @@ export function loadSystemConfig(
   };
   if (declarationScalesJson)
     system.declarationScalesJson = declarationScalesJson;
+  if (registrations.invalid.length > 0) {
+    system.invalidPropertyRegistrations = registrations.invalid;
+  }
   return system;
 }

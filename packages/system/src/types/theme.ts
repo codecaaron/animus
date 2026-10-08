@@ -73,6 +73,8 @@ export type ColorTokenRef = Theme extends { colors: infer C }
     : never
   : never;
 
+/** `@property` metadata. A syntax other than `'*'` needs an `initialValue`;
+ *  extraction reports a registration browsers would ignore. */
 export interface ContextualVarRegistration {
   syntax: string;
   inherits: boolean;

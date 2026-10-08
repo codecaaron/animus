@@ -35,7 +35,6 @@ import {
   isPathWithinRoot,
   loadSystemConfig,
   postProcessCss,
-  vocabularyWitnessDiagnostics,
   projectExternalFileOwners,
   resolveAssetFile,
   resolveLightningTargets,
@@ -255,9 +254,6 @@ export class ExtractionSession {
   private readonly options: SessionOptions;
   private readonly staticCssJson: string | null;
   private system: SystemConfig | null = null;
-  /** Vocabulary witness diagnostics from the sealed system's registration
-   *  record, awaiting the shared surfacing pass. */
-  private systemVocabularyDiagnostics: ManifestDiagnostic[] = [];
   /** Configured external files that could not be read. Incremental passes
    *  re-collect nothing, so they replay these instead of passing strict. */
   private ingestionFailureDiagnostics: ManifestDiagnostic[] = [];
@@ -851,11 +847,6 @@ export class ExtractionSession {
       rootDir,
       prefix: this.options.prefix,
     });
-    // The loader's evaluation host shims console, so the sealed record is
-    // the witness channel for these diagnostics.
-    this.systemVocabularyDiagnostics = vocabularyWitnessDiagnostics(
-      this.system.vocabularyWitnessesJson
-    );
     this.assetCopyCache.clear();
     this.assetDependencyPaths.clear();
     this.assetDependencyKeys.clear();
@@ -1117,7 +1108,6 @@ export class ExtractionSession {
       externalFileOwners: this.externalFileOwners,
       externalSourceEntries: this.externalSourceEntries,
       externalPackageDirs: this.externalPackageDirs,
-      systemVocabularyDiagnostics: this.systemVocabularyDiagnostics,
       ingestionFailureDiagnostics: this.ingestionFailureDiagnostics,
     };
   }
@@ -1379,10 +1369,7 @@ export class ExtractionSession {
       ...analysisOptions,
       warn: (message) => this.warn(message),
       strict: this.options.strict,
-      extraDiagnostics: [
-        ...this.systemVocabularyDiagnostics,
-        ...this.ingestionFailureDiagnostics,
-      ],
+      extraDiagnostics: this.ingestionFailureDiagnostics,
     });
 
     // Throws on any error diagnostic in EVERY mode, before token contracts

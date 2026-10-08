@@ -5,6 +5,19 @@ See [Conventional Commits](https://conventionalcommits.org) for commit guideline
 
 ## Unreleased
 
+**Invalid `@property` registrations are reported instead of breaking the
+build.** A contextual-variable registration that browsers would ignore is no
+longer emitted. That covers:
+
+- an unknown syntax component;
+- a syntax other than `*` with no initial value;
+- an initial value that depends on context (`1em`, a container unit, `var()`);
+- an initial value the syntax does not accept.
+
+It is reported as `animus.theme.invalid-property-registration`, which fails
+`strict` builds. Vite's production CSS minify used to fail on some of these
+rules.
+
 **Finite declaration scales style several properties through one prop.**
 `createTheme().addDeclarationScale({ name, values })` registers named keys
 whose values are complete, flat records of CSS declarations. Bind a scale

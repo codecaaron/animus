@@ -210,7 +210,13 @@ describe('extend() round-trip fidelity', () => {
       })
       .declareContextualVars(
         { colors: ['current-bg'] },
-        { 'current-bg': { syntax: '<color>', inherits: true } }
+        {
+          'current-bg': {
+            syntax: '<color>',
+            inherits: true,
+            initialValue: 'transparent',
+          },
+        }
       )
       .build();
   }
@@ -319,7 +325,7 @@ describe('extend() round-trip fidelity', () => {
         .addScale({ name: 'space', values: { sm: '4px' } })
         .declareContextualVars(
           { space: ['gap'] },
-          { gap: { syntax: '<length>', inherits } }
+          { gap: { syntax: '<length>', inherits, initialValue: '0px' } }
         )
         .build();
 

@@ -1,5 +1,7 @@
 import { parseInternalWire } from './internal-wire';
 
+import type { SystemConfig } from './system-config';
+
 export type ManifestDiagnostic = {
   file: string;
   component: string;
@@ -122,6 +124,10 @@ export function unreadableSourceDiagnostic<Thrown>(
 /** The collision entry code minted by the system package's merge. */
 export const VOCABULARY_COLLISION = 'animus.vocabulary.collision';
 
+/** A theme `@property` registration browsers would ignore; it is not emitted. */
+export const INVALID_PROPERTY_REGISTRATION =
+  'animus.theme.invalid-property-registration';
+
 /** Minted when a sealed kit with registered vocabulary is consumed through
  *  the deprecated `from()`/`includes:` verbs. */
 export const VOCABULARY_LEGACY_VERB = 'animus.vocabulary.legacy-verb';
@@ -138,6 +144,7 @@ const DIAGNOSTIC_SEVERITY: ReadonlyMap<string, DiagnosticSeverity> = new Map([
   [UNREADABLE_SOURCE_FILE, 'error'],
   [VOCABULARY_COLLISION, 'warn'],
   [VOCABULARY_LEGACY_VERB, 'warn'],
+  [INVALID_PROPERTY_REGISTRATION, 'error'],
 ]);
 
 /** An unlisted code is `warn`: a witness kind from a newer system package
@@ -202,6 +209,30 @@ export function vocabularyWitnessDiagnostics(
     }
   }
   return diagnostics;
+}
+
+/** The diagnostics a loaded system's own records carry: vocabulary
+ *  witnesses and invalid `@property` registrations. */
+export function systemLoadDiagnostics(
+  system: Pick<
+    SystemConfig,
+    'vocabularyWitnessesJson' | 'invalidPropertyRegistrations'
+  >
+): ManifestDiagnostic[] {
+  const registrations = (system.invalidPropertyRegistrations ?? []).map(
+    ({ name, reason }): ManifestDiagnostic => ({
+      file: 'system',
+      component: name,
+      kind: 'warn',
+      message: `@property ${name} was not emitted: ${reason}. Browsers ignore an invalid registration and minifying it fails; fix it where the theme declares ${name} (${INVALID_PROPERTY_REGISTRATION})`,
+      code: INVALID_PROPERTY_REGISTRATION,
+      severity: severityFor(INVALID_PROPERTY_REGISTRATION),
+    })
+  );
+  return [
+    ...vocabularyWitnessDiagnostics(system.vocabularyWitnessesJson),
+    ...registrations,
+  ];
 }
 
 /**
