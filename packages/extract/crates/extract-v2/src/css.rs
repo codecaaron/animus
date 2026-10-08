@@ -1717,8 +1717,8 @@ pub(crate) fn unit_fallback_rewrites(value: &str, css_property: &str) -> bool {
             }
             _ if i > 0 && continues_word(bytes[i - 1]) => {}
             _ => {
-                // `-?\d+\.?\d*`, kept as authored only before a letter or `%`.
-                let sign = usize::from(bytes[i] == b'-');
+                // `[+-]?\d+\.?\d*`, kept as authored only before a letter or `%`.
+                let sign = usize::from(matches!(bytes[i], b'-' | b'+'));
                 let digits = |from: usize| bytes[from..].iter().take_while(|b| b.is_ascii_digit()).count();
                 let whole = digits(i + sign);
                 if whole > 0 {
@@ -1847,6 +1847,7 @@ mod tests {
             ("8", "padding"),
             ("8 16", "margin"),
             ("0 -4", "margin"),
+            ("+5", "margin"),
             ("2 solid #333", "border"),
         ] {
             assert!(unit_fallback_rewrites(value, property), "{property}: {value}");

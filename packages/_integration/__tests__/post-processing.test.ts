@@ -80,6 +80,7 @@ describe('applyUnitFallback', () => {
     expect(applyUnitFallback('.a { margin: 0 -4; }')).toBe(
       '.a { margin:0px -4px; }'
     );
+    expect(applyUnitFallback('.a { margin: +5; }')).toBe('.a { margin:+5px; }');
   });
 });
 

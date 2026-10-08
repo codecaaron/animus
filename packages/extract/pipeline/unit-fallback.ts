@@ -38,7 +38,7 @@ export function applyUnitFallback(css: string): string {
         } else {
           const startsToken = i === 0 || !WORD_CHAR.test(value[i - 1]);
           const numMatch = startsToken
-            ? value.slice(i).match(/^(-?\d+\.?\d*)/)
+            ? value.slice(i).match(/^([+-]?\d+\.?\d*)/)
             : null;
           if (numMatch) {
             const num = numMatch[1];
