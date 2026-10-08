@@ -27,6 +27,7 @@
   "scripts": {
     "rebuild": "vp run clean:full && vp run build:all",
     "test": "bunx vp test run",
+    "verify:browser-fixtures": "bun scripts/browser-fixtures/run.ts",
     "deploy:showcase": "bun run --filter '@animus-ui/showcase' cf:deploy",
     "deploy:vite": "bun run --filter '@animus-ui/vite-app' cf:deploy",
     "deploy:vinext": "bun run --filter '@animus-ui/vinext-app' cf:deploy",
@@ -50,6 +51,7 @@
     "knip": "^6.34.0",
     "oxc-parser": "0.148.0",
     "oxlint": "1.81.0",
+    "playwright-core": "1.63.0",
     "publint": "^0.3.24",
     "react": "19.2.8",
     "react-dom": "19.2.8",
