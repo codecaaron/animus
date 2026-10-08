@@ -1,6 +1,6 @@
 {
   "name": "@animus-ui/unplugin",
-  "version": "0.1.17",
+  "version": "0.1.1",
   "description": "Animus transform host for non-plugin bundlers — unplugin-based rollup/esbuild/rspack/webpack entry points over the one extraction session",
   "keywords": [
     "animus",
