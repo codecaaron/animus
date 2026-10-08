@@ -49,7 +49,7 @@ async function handleHotUpdateExclusive(
     timestamp
   );
   const absFile = resolve(file);
-  ctx.log(
+  ctx.trace(
     `hotUpdate ${type} ${relative(ctx.rootDir, absFile)} env=${environment.name} owns=${ownsEvent}`
   );
 
@@ -169,7 +169,7 @@ async function analyzeChangedFile(
   const hash = contentHash(source);
   const cached = ctx.fileCache.get(relPath);
   if (cached && cached.hash === hash) {
-    ctx.log(`HMR skip: ${relPath} (unchanged)`);
+    ctx.trace(`HMR skip: ${relPath} (unchanged)`);
     return { kind: 'unchanged' };
   }
 
@@ -310,7 +310,7 @@ async function pruneDeletedFile(
   const prevPlans = snapshotFilePlans(ctx.storedManifest);
   const { ok } = await ctx.analyzeIngested();
   if (!ok) return;
-  ctx.log(`Deleted file pruned: ${relative(ctx.rootDir, absFile)}`);
+  ctx.trace(`Deleted file pruned: ${relative(ctx.rootDir, absFile)}`);
 
   // No exclusion: evicting the deleted file's own residual nodes is harmless
   // and closes the delete-then-recreate-same-path window.
@@ -354,7 +354,7 @@ function invalidateStaleModules(
       graph.getModuleById(absDefPath) ??
       graph.getModulesByFile(absDefPath)?.values().next().value;
     if (defModule) {
-      ctx.log(`HMR invalidate: ${defFile} (re-delivered)`);
+      ctx.trace(`HMR invalidate: ${defFile} (re-delivered)`);
       graph.invalidateModule(defModule);
       modulesToUpdate.push(defModule);
     }

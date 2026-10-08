@@ -16,6 +16,7 @@ import {
   parseFilesJson,
   projectExternalFileOwners,
   resolveAssetFile,
+  resolveVerbosity,
   runProjectAnalysis,
   serializeStaticCss,
   snapshotFilePlans,
@@ -143,6 +144,8 @@ export function pruneFileCache(
 export class PluginContext {
   readonly options: AnimusExtractOptions;
   readonly verbose: boolean;
+  /** The higher tier: `verbose: 'trace'` or `ANIMUS_DEBUG=trace`. */
+  readonly tracing: boolean;
   readonly staticCssJson: string | null;
 
   isProd = false;
@@ -300,10 +303,12 @@ export class PluginContext {
   ) {
     this.options = options;
     this.staticCssJson = serializeStaticCss(options.staticCss);
-    this.verbose =
-      options.verbose ||
-      process.env.ANIMUS_DEBUG === '1' ||
-      process.env.ANIMUS_DEBUG === 'true';
+    const verbosity = resolveVerbosity(
+      options.verbose,
+      process.env.ANIMUS_DEBUG
+    );
+    this.verbose = verbosity !== 'quiet';
+    this.tracing = verbosity === 'trace';
     this.extensionsSet = new Set(options.extensions ?? DEFAULT_EXTENSIONS);
     this.excludeMatcher = createExcludeMatcher(options.exclude);
 
@@ -348,6 +353,14 @@ export class PluginContext {
 
   log(msg: string): void {
     if (this.verbose) {
+      (this.logger ?? console).info(`[animus] ${msg}`);
+    }
+  }
+
+  /** One line per item — a pruned option, a transformed file, an HMR
+   *  decision — printed only at the trace tier. */
+  trace(msg: string): void {
+    if (this.tracing) {
       (this.logger ?? console).info(`[animus] ${msg}`);
     }
   }

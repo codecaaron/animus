@@ -404,8 +404,9 @@ pub fn resolve_import_source<T>(
 
 /// NodeNext specifiers name the emitted file (`./x.js` for `x.ts`). Mirrors
 /// `NODE_NEXT_EXTENSION_MAP` in `packages/extract/pipeline/source-ingestion.ts`.
-const NODE_NEXT_SOURCES: [(&str, &[&str]); 3] = [
+const NODE_NEXT_SOURCES: [(&str, &[&str]); 4] = [
     (".js", &[".ts", ".tsx", ".jsx"]),
+    (".jsx", &[".tsx"]),
     (".mjs", &[".mts"]),
     (".cjs", &[".cts"]),
 ];
@@ -4117,6 +4118,7 @@ mod tests {
         assert_eq!(resolve("./real.js").as_deref(), Some("src/real.js"));
         assert_eq!(resolve("./m.mjs").as_deref(), Some("src/m.mts"));
         assert_eq!(resolve("./signals.JS").as_deref(), Some("src/signals.ts"));
+        assert_eq!(resolve("./icon.jsx").as_deref(), Some("src/icon.tsx"));
         assert_eq!(resolve("./missing.js"), None);
     }
 
@@ -5975,40 +5977,42 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
 
     #[test]
     fn compose_slots_resolve_through_aliased_imports() {
-        let out = analyze(
-            &[
-                (
-                    "slots.tsx",
-                    "export const Root = ds.styles({ display: 'flex' }).asElement('div');\n\
-                     export const Body = ds\n\
-                       .variant({ prop: 'size', variants: { sm: { p: 8 } } })\n\
-                       .asElement('div');\n",
-                ),
-                (
-                    "card.tsx",
-                    "import { Root as CardRoot, Body as CardBody } from './slots.js';\n\
-                     export const Card = compose({ Root: CardRoot, Body: CardBody }, \
-                       { name: 'Card', shared: { size: true } });\n\
-                     export const App = () => <Card.Root><Card.Body size=\"sm\" /></Card.Root>;\n",
-                ),
-            ],
-            &test_inputs(),
-        );
+        for specifier in ["./slots", "./slots.js"] {
+            let card = format!(
+                "import {{ Root as CardRoot, Body as CardBody }} from '{specifier}';\n\
+                 export const Card = compose({{ Root: CardRoot, Body: CardBody }}, \
+                   {{ name: 'Card', shared: {{ size: true }} }});\n\
+                 export const App = () => <Card.Root><Card.Body size=\"sm\" /></Card.Root>;\n"
+            );
+            let out = analyze(
+                &[
+                    (
+                        "slots.tsx",
+                        "export const Root = ds.styles({ display: 'flex' }).asElement('div');\n\
+                         export const Body = ds\n\
+                           .variant({ prop: 'size', variants: { sm: { p: 8 } } })\n\
+                           .asElement('div');\n",
+                    ),
+                    ("card.tsx", card.as_str()),
+                ],
+                &test_inputs(),
+            );
 
-        let root = class_of(&out, "slots.tsx::Root");
-        let body = class_of(&out, "slots.tsx::Body");
-        assert!(
-            out.sheets
-                .variants
-                .contains(&format!(".{root}--size-sm .{body}")),
-            "aliased slot import dropped:\n{}",
-            out.sheets.variants
-        );
-        assert!(
-            !out.diagnostics.iter().any(|d| d.kind == "bail"),
-            "{:?}",
-            out.diagnostics
-        );
+            let root = class_of(&out, "slots.tsx::Root");
+            let body = class_of(&out, "slots.tsx::Body");
+            assert!(
+                out.sheets
+                    .variants
+                    .contains(&format!(".{root}--size-sm .{body}")),
+                "slot import from '{specifier}' dropped:\n{}",
+                out.sheets.variants
+            );
+            assert!(
+                !out.diagnostics.iter().any(|d| d.kind == "bail"),
+                "'{specifier}': {:?}",
+                out.diagnostics
+            );
+        }
     }
 
     #[test]

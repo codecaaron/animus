@@ -36,8 +36,8 @@ acknowledging completion. Empty joins remain no-ops.
 
 **Relative imports written with their emitted extension resolve.** An
 import such as `'./signals.js'` between analyzed source files now resolves to
-`signals.ts` (or `.tsx`, `.jsx`; `.mjs` to `.mts`, `.cjs` to `.cts`), as
-TypeScript's NodeNext and bundler resolution do. A `compose()`
+`signals.ts` (or `.tsx`, `.jsx`; `.jsx` to `.tsx`, `.mjs` to `.mts`, `.cjs`
+to `.cts`), as TypeScript's NodeNext and bundler resolution do. A `compose()`
 slot or `.extend()` parent imported this way no longer fails with
 `compose.unresolvable-slot` or "could not resolve parent component", and a
 component re-exported under another name through such a path keeps its
@@ -50,19 +50,25 @@ forwards its props, previously counted as using only each variant's default,
 so production builds pruned options the wrapper's callers selected and those
 options rendered unstyled. Variant and state options a spread can deliver are
 now kept; an attribute written after the spread still counts as its literal
-value. `createElement(Component, props)` renders are treated the same way.
+value. A `createElement` call whose props argument is an expression, or an
+object with a spread or computed key, is treated the same way; one with no
+props, `null`, or an object literal of static keys settles exactly those keys.
 System and custom props keep their existing runtime handling.
 
-**Pruned variant and state options are verbose output.** The Vite plugin's
-per-option `pruned` lines print only with `verbose: true` or
-`ANIMUS_DEBUG=1`, alongside the reconciliation summary. Component elimination
-warnings still always print.
+**Logging has a trace tier above `verbose`.** `verbose: 'trace'` (or
+`ANIMUS_DEBUG=trace`) prints one line per item: each pruned variant or state
+option, each transformed file, and each per-file HMR event, skip or
+invalidation. `verbose: true` (or `ANIMUS_DEBUG=1`) now keeps to phase
+checkpoints, summaries and timing. The per-option `pruned` lines no longer
+print by default; component elimination warnings still always print. Every
+host accepts `'trace'`; only the Vite plugin has per-item lines today.
 
 **Hex colors and quoted strings no longer gain `px`.** The unit fallback
 appended `px` to a digit run that ended a word, so `#b1b1b7` became
 `#b1b1b7px` and `"ss01"` became `"ss01px"`. A number now gains `px` only
-where it starts a value token, text inside quotes is left alone, and custom
-property values are never rewritten.
+where it starts a value token (so `U+0025-00FF` is left alone too), text
+inside quotes is left alone including escaped quotes, and custom property
+values are never rewritten, whatever the case of the property name.
 
 **`asChild` no longer triggers React 19's `element.ref` warning.** The
 child's ref is read from its props on React 19 and from the element on React

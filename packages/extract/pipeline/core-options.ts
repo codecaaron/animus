@@ -28,6 +28,20 @@ export const DEFAULT_EXCLUDE = [
  *  own signal: Vite `config.command`, Next `NODE_ENV`, CLI production. */
 export type AnimusMode = 'development' | 'production';
 
+export type Verbosity = 'quiet' | 'verbose' | 'trace';
+
+/** The effective log tier: the option or `ANIMUS_DEBUG`, whichever is higher. */
+export function resolveVerbosity(
+  option: boolean | 'trace' | undefined,
+  debugEnv: string | undefined
+): Verbosity {
+  if (option === 'trace' || debugEnv === 'trace') return 'trace';
+  if (option === true || debugEnv === '1' || debugEnv === 'true') {
+    return 'verbose';
+  }
+  return 'quiet';
+}
+
 export interface AnimusCoreOptions {
   /** Path to a module exporting a SystemInstance from `@animus-ui/system`. */
   system: string;
@@ -42,7 +56,10 @@ export interface AnimusCoreOptions {
    *  classified unsupported Animus declarations — fail the build instead of
    *  warning. Omitted or `false` warns. */
   strict?: boolean;
-  verbose?: boolean;
+  /** `true` logs phase checkpoints, summaries and timing; `'trace'` also logs
+   *  one line per item (pruned option, transformed file, HMR decision).
+   *  `ANIMUS_DEBUG=1` or `ANIMUS_DEBUG=trace` raises it from the environment. */
+  verbose?: boolean | 'trace';
   /** Namespace prefix for CSS variables and class names. */
   prefix?: string;
   /** Browser targets for CSS autoprefixing and syntax lowering. */
@@ -168,6 +185,9 @@ const isBoolean = (value: unknown): value is boolean =>
   Object(value) !== value &&
   Object.prototype.toString.call(value) === '[object Boolean]';
 
+const isVerbose = (value: unknown): value is boolean | 'trace' =>
+  isBoolean(value) || value === 'trace';
+
 const isStringArray = (value: unknown): value is readonly string[] =>
   Array.isArray(value) && value.every(isString);
 
@@ -197,7 +217,7 @@ const CORE_VALUE_GATES: ReadonlyArray<{
     expected: 'an array of string extensions',
   },
   { key: 'strict', ok: isBoolean, expected: 'a boolean' },
-  { key: 'verbose', ok: isBoolean, expected: 'a boolean' },
+  { key: 'verbose', ok: isVerbose, expected: "a boolean or 'trace'" },
   { key: 'minify', ok: isBoolean, expected: 'a boolean' },
   { key: 'prefix', ok: isString, expected: 'a string' },
   {

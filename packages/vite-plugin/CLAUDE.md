@@ -67,9 +67,11 @@ This cache stores pre-transformed module results. It persists across Vite dev se
 
 ## Verbose Mode / Debug Logging
 
-Enable with `ANIMUS_DEBUG=1` env var or `verbose: true` plugin option. All output prefixed with `[animus]` for grep filtering.
+All output is prefixed with `[animus]` for grep filtering. Three tiers:
 
-Two tiers: component elimination warnings (`⚠ ComponentName eliminated`, and in dev `would be eliminated in production`) are always-on. The reconciliation summary, pruned variant/state options, phase timing, file counts, per-file transform logs and HMR decisions require verbose mode.
+- **Always on:** component elimination warnings (`⚠ ComponentName eliminated`, and in dev `would be eliminated in production`), bail/skip diagnostics, and `info` events.
+- **`verbose: true` or `ANIMUS_DEBUG=1`:** phase checkpoints, summaries (reconciliation counts, HMR updates and invalidation totals, system reloads) and timing.
+- **`verbose: 'trace'` or `ANIMUS_DEBUG=trace`:** adds one line per item: pruned variant/state options, transformed files, per-file HMR events, skips and invalidations. Use `ctx.trace()` for a new per-item line and `ctx.log()` for a summary.
 
 The plugin runs from `dist/index.mjs` — after editing source, rebuild: `bun run --filter './packages/vite-plugin' build`.
 
@@ -79,7 +81,7 @@ The plugin runs from `dist/index.mjs` — after editing source, rebuild: `bun ru
 animusExtract({
   system: './src/ds.ts', // SystemInstance module (required)
   strict: true, // Throw on extraction failures (CI)
-  verbose: true, // Enable phase checkpoints + timing (or use ANIMUS_DEBUG=1)
+  verbose: true, // Phase checkpoints, summaries + timing (ANIMUS_DEBUG=1); 'trace' adds per-item lines
   verify: true, // Run structural self-check at end of buildStart
 });
 ```

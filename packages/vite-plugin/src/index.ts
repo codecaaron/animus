@@ -46,8 +46,10 @@ export interface AnimusExtractOptions {
    * under `strict`, otherwise warn.
    */
   verify?: boolean;
-  /** Verbose logging; also enabled by `ANIMUS_DEBUG=1`. */
-  verbose?: boolean;
+  /** `true` logs phase checkpoints, summaries and timing (`ANIMUS_DEBUG=1`);
+   *  `'trace'` also logs one line per pruned option, transformed file and
+   *  HMR decision (`ANIMUS_DEBUG=trace`). */
+  verbose?: boolean | 'trace';
   /**
    * Browserslist queries for autoprefixing and syntax lowering; falls back
    * to the project's browserslist config, then to `defaults`.

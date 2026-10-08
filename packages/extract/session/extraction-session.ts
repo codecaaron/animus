@@ -40,6 +40,7 @@ import {
   resolveAssetFile,
   resolveLightningTargets,
   resolveMode,
+  resolveVerbosity,
   runProjectAnalysis,
   serializeStaticCss,
   sharesVolumeRoot,
@@ -341,9 +342,8 @@ export class ExtractionSession {
 
   get verbose(): boolean {
     return (
-      this.options.verbose === true ||
-      process.env.ANIMUS_DEBUG === '1' ||
-      process.env.ANIMUS_DEBUG === 'true'
+      resolveVerbosity(this.options.verbose, process.env.ANIMUS_DEBUG) !==
+      'quiet'
     );
   }
 

@@ -199,9 +199,9 @@ export async function runBuildStart(
           `⚠ ${d.component} would be eliminated in production: ${d.reason}`
         );
       } else if (d.kind === 'variant') {
-        ctx.log(`${d.component} variant '${d.name}' pruned: ${d.reason}`);
+        ctx.trace(`${d.component} variant '${d.name}' pruned: ${d.reason}`);
       } else if (d.kind === 'state') {
-        ctx.log(`${d.component} state '${d.name}' pruned: ${d.reason}`);
+        ctx.trace(`${d.component} state '${d.name}' pruned: ${d.reason}`);
       }
     }
 

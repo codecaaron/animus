@@ -135,12 +135,13 @@ export function createViteDevAdapter(
           // hot-update hook never runs, so HMR stays on with its own port.
           hmr: { port: await reserveHmrPort() },
         },
-        // verbose routes the plugin's HMR decision log into the capturing
-        // logger, so a barrier timeout names the layer that dropped an event.
+        // The trace tier routes the plugin's per-event HMR log into the
+        // capturing logger, so a barrier timeout names the layer that dropped
+        // an event.
         plugins: [
           animusExtract({
             system: './src/ds.ts',
-            verbose: true,
+            verbose: 'trace',
             ...pluginOptions,
           }),
         ],

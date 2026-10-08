@@ -219,7 +219,10 @@ function parseLoadedCliConfig(raw: ConfigRecord): LoadedCliConfig {
         ? raw.extensions
         : undefined,
       strict: isConfigBoolean(raw.strict) ? raw.strict : undefined,
-      verbose: isConfigBoolean(raw.verbose) ? raw.verbose : undefined,
+      verbose:
+        isConfigBoolean(raw.verbose) || raw.verbose === 'trace'
+          ? raw.verbose
+          : undefined,
       prefix: isConfigString(raw.prefix) ? raw.prefix : undefined,
       targets:
         isConfigString(raw.targets) || isConfigStringArray(raw.targets)

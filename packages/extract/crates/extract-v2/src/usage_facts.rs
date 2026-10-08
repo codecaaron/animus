@@ -16,7 +16,7 @@ use std::marker::PhantomData;
 
 use crate::chain_walk::{ChainDescriptor, TerminalKind};
 use crate::jsx_scan::{
-    classify_jsx_attribute_as_variant_value, eval_jsx_attribute_value,
+    classify_jsx_attribute_as_variant_value, create_element_props, eval_jsx_attribute_value,
     is_component_like_identifier, ComponentUsageConfig, CustomPropScanResult,
     DynamicExpressionKind, DynamicPropUsage, PropValueResult, StateUsage, SystemPropUsage,
     UsageResidueSite, UsageScanResult, UsageSpan, VariantUsage,
@@ -81,6 +81,10 @@ pub enum UsageFact {
         member: Option<String>,
         #[serde(skip)]
         identity_uncertain: bool,
+        /// The props the second argument settles with their variant
+        /// classification; `None` when it can deliver unknown props.
+        #[serde(skip)]
+        props: Option<Vec<(String, String)>>,
     },
 }
 
@@ -500,6 +504,7 @@ impl<'a, 's> Visit<'a> for FactCollector<'a, 's> {
                     ident,
                     member,
                     identity_uncertain,
+                    props: create_element_props(call.arguments.get(1)),
                 });
             }
         }
@@ -721,11 +726,16 @@ pub fn uncertain_custom_renders(
 /// Custom props take the order-blind path in `uncertain_custom_renders`.
 fn record_unwritten_options(
     result: &mut UsageScanResult,
+    fully_open: &mut FxHashSet<String>,
     binding: &str,
     config: &ComponentUsageConfig,
     written: &FxHashSet<&str>,
     open_props: bool,
 ) {
+    // After one render with every option open, another adds nothing.
+    if open_props && written.is_empty() && !fully_open.insert(binding.to_string()) {
+        return;
+    }
     let absent = if open_props { "__dynamic__" } else { "__default__" };
     for variant_prop in config.variants.keys() {
         if !written.contains(variant_prop.as_str()) {
@@ -757,6 +767,7 @@ pub fn filter_usage_scan(
     member_expr_bindings: &FxHashMap<String, String>,
 ) -> UsageScanResult {
     let mut seen = FxHashSet::default();
+    let mut fully_open = FxHashSet::default();
     let mut result = UsageScanResult::default();
 
     for fact in facts {
@@ -858,13 +869,21 @@ pub fn filter_usage_scan(
                 }
 
                 if let Some(config) = component_configs.get(tag_name) {
-                    record_unwritten_options(&mut result, &binding, config, &written, spread.is_some());
+                    record_unwritten_options(
+                        &mut result,
+                        &mut fully_open,
+                        &binding,
+                        config,
+                        &written,
+                        spread.is_some(),
+                    );
                 }
             }
             UsageFact::CreateElement {
                 ident,
                 member,
                 identity_uncertain,
+                props,
             } => {
                 let resolved: Option<String> = if let Some(name) = ident {
                     if component_props.contains_key(name.as_str())
@@ -886,12 +905,31 @@ pub fn filter_usage_scan(
                 };
                 if let Some(binding) = resolved {
                     if let Some(config) = component_configs.get(&binding) {
+                        let mut written: FxHashSet<&str> = FxHashSet::default();
+                        for (key, class) in props.iter().flatten() {
+                            if config.variants.contains_key(key) {
+                                written.insert(key);
+                                result.variant_usages.push(VariantUsage {
+                                    component_binding: binding.clone(),
+                                    variant_prop: key.clone(),
+                                    value: class.clone(),
+                                });
+                            }
+                            if config.states.contains(key) {
+                                written.insert(key);
+                                result.state_usages.push(StateUsage {
+                                    component_binding: binding.clone(),
+                                    state_name: key.clone(),
+                                });
+                            }
+                        }
                         record_unwritten_options(
                             &mut result,
+                            &mut fully_open,
                             &binding,
                             config,
-                            &FxHashSet::default(),
-                            true,
+                            &written,
+                            props.is_none(),
                         );
                     }
                     result.rendered_components.insert(binding);
@@ -1391,11 +1429,24 @@ mod tests {
         let no_spread = "const A = () => <Skel shape=\"line\" />;";
         assert_eq!(option_usages(no_spread), (vec![pair("shape", "line")], vec![]));
 
-        let create_element = "const e = createElement(Skel, props);";
+        let open = (vec![pair("shape", "__dynamic__")], vec!["loading".to_string()]);
+        let defaults = (vec![pair("shape", "__default__")], vec![]);
+        assert_eq!(option_usages("const e = createElement(Skel, props);"), open);
         assert_eq!(
-            option_usages(create_element),
-            (vec![pair("shape", "__dynamic__")], vec!["loading".to_string()])
+            option_usages("const e = createElement(Skel, { shape: 'line', ...rest });"),
+            open
         );
+        assert_eq!(option_usages("const e = createElement(Skel);"), defaults);
+        assert_eq!(option_usages("const e = createElement(Skel, null);"), defaults);
+        assert_eq!(
+            option_usages("const e = createElement(Skel, { shape: 'line', loading: true });"),
+            (vec![pair("shape", "line")], vec!["loading".to_string()])
+        );
+
+        // Repeated open renders of one component record its options once.
+        let repeated = "const W = (a, b) => <><Skel {...a} /><Skel {...b} /></>;\n\
+                        const e = createElement(Skel, props);";
+        assert_eq!(option_usages(repeated), open);
     }
 
     #[test]

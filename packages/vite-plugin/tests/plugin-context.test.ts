@@ -109,6 +109,29 @@ describe('info: visible without verbose', () => {
   });
 });
 
+describe('trace: the tier above verbose', () => {
+  function capture(verbose: boolean | 'trace'): string[] {
+    const lines: string[] = [];
+    const ctx = new PluginContext({ system: './ds.ts', verbose });
+    const logger = createLogger('silent');
+    logger.info = (message) => {
+      lines.push(message);
+    };
+    ctx.logger = logger;
+    ctx.log('summary');
+    ctx.trace('per item');
+    return lines;
+  }
+
+  it('verbose prints summaries but not per-item lines', () => {
+    expect(capture(true)).toEqual(['[animus] summary']);
+  });
+
+  it("'trace' prints both", () => {
+    expect(capture('trace')).toEqual(['[animus] summary', '[animus] per item']);
+  });
+});
+
 describe('runtime import selection', () => {
   function emittedRuntimeImport(options: {
     system: string;

@@ -116,6 +116,7 @@ export function makeContextProbe<Overrides extends ContextProbeOverrides>(
   const ctx = {
     isProd: false,
     verbose: false,
+    tracing: false,
     rootDir,
     options: {},
     externalPackageDirs,
@@ -152,6 +153,9 @@ export function makeContextProbe<Overrides extends ContextProbeOverrides>(
       probe.extractedInvalidations++;
     },
     log(msg: string) {
+      probe.verboseLines.push(msg);
+    },
+    trace(msg: string) {
       probe.verboseLines.push(msg);
     },
     info(msg: string) {

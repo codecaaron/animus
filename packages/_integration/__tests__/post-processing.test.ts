@@ -65,6 +65,9 @@ describe('applyUnitFallback', () => {
     ['content', "'1'"],
     ['font-family', 'Inter4, sans-serif'],
     ['--gap', '8'],
+    ['--brandGap', '8'],
+    ['unicode-range', 'U+0025-00FF'],
+    ['content', '"\\"1\\""'],
   ] as const)('leaves %s: %s unchanged', (prop, val) => {
     const css = `.a { ${prop}: ${val}; }`;
     expect(applyUnitFallback(css)).toBe(css);

@@ -7,7 +7,8 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use oxc::ast::ast::{
     Argument, CallExpression, Expression, JSXAttributeItem, JSXAttributeName, JSXAttributeValue,
-    JSXElementName, JSXExpression, JSXMemberExpression, JSXOpeningElement, Program,
+    JSXElementName, JSXExpression, JSXMemberExpression, JSXOpeningElement, ObjectPropertyKind,
+    Program,
 };
 use oxc::ast_visit::Visit;
 
@@ -66,6 +67,7 @@ pub fn scan_jsx_usage<'a>(
         component_configs,
         member_expr_bindings,
         seen: FxHashSet::default(),
+        fully_open: FxHashSet::default(),
         result: UsageScanResult::default(),
         _phantom: PhantomData,
     };
@@ -78,6 +80,8 @@ struct UsageScanner<'a, 'b> {
     component_configs: &'b FxHashMap<String, ComponentUsageConfig>,
     member_expr_bindings: &'b FxHashMap<String, String>,
     seen: FxHashSet<String>,
+    /// Bindings already rendered with every option open.
+    fully_open: FxHashSet<String>,
     result: UsageScanResult,
     _phantom: PhantomData<&'a ()>,
 }
@@ -198,7 +202,8 @@ impl<'a, 'b> Visit<'a> for UsageScanner<'a, 'b> {
             }
         }
 
-        if let Some(config) = self.component_configs.get(tag) {
+        let repeat_open = spread && written.is_empty() && !self.fully_open.insert(binding.clone());
+        if let Some(config) = self.component_configs.get(tag).filter(|_| !repeat_open) {
             let absent = if spread { "__dynamic__" } else { "__default__" };
             for variant_prop in config.variants.keys() {
                 if !written.contains(variant_prop.as_str()) {
@@ -276,20 +281,53 @@ impl<'a, 'b> Visit<'a> for UsageScanner<'a, 'b> {
                 };
 
                 if let Some(binding) = resolved {
-                    // The props argument can deliver any option.
                     if let Some(config) = self.component_configs.get(&binding) {
-                        for variant_prop in config.variants.keys() {
-                            self.result.variant_usages.push(VariantUsage {
-                                component_binding: binding.clone(),
-                                variant_prop: variant_prop.clone(),
-                                value: "__dynamic__".to_string(),
-                            });
-                        }
-                        for state_name in &config.states {
-                            self.result.state_usages.push(StateUsage {
-                                component_binding: binding.clone(),
-                                state_name: state_name.clone(),
-                            });
+                        match create_element_props(call.arguments.get(1)) {
+                            None if self.fully_open.insert(binding.clone()) => {
+                                for variant_prop in config.variants.keys() {
+                                    self.result.variant_usages.push(VariantUsage {
+                                        component_binding: binding.clone(),
+                                        variant_prop: variant_prop.clone(),
+                                        value: "__dynamic__".to_string(),
+                                    });
+                                }
+                                for state_name in &config.states {
+                                    self.result.state_usages.push(StateUsage {
+                                        component_binding: binding.clone(),
+                                        state_name: state_name.clone(),
+                                    });
+                                }
+                            }
+                            None => {}
+                            Some(members) => {
+                                let mut set: FxHashSet<&str> = FxHashSet::default();
+                                for (key, class) in &members {
+                                    if config.variants.contains_key(key) {
+                                        set.insert(key);
+                                        self.result.variant_usages.push(VariantUsage {
+                                            component_binding: binding.clone(),
+                                            variant_prop: key.clone(),
+                                            value: class.clone(),
+                                        });
+                                    }
+                                    if config.states.contains(key) {
+                                        set.insert(key);
+                                        self.result.state_usages.push(StateUsage {
+                                            component_binding: binding.clone(),
+                                            state_name: key.clone(),
+                                        });
+                                    }
+                                }
+                                for variant_prop in config.variants.keys() {
+                                    if !set.contains(variant_prop.as_str()) {
+                                        self.result.variant_usages.push(VariantUsage {
+                                            component_binding: binding.clone(),
+                                            variant_prop: variant_prop.clone(),
+                                            value: "__default__".to_string(),
+                                        });
+                                    }
+                                }
+                            }
                         }
                     }
                     self.result.rendered_components.insert(binding);
@@ -298,6 +336,33 @@ impl<'a, 'b> Visit<'a> for UsageScanner<'a, 'b> {
         }
 
         oxc::ast_visit::walk::walk_call_expression(self, call);
+    }
+}
+
+/// The props a `createElement` call's second argument settles, each with its
+/// variant classification. No argument, `null` or `undefined` settles
+/// nothing; `None` means the argument can deliver unknown props (an
+/// expression, a spread, or a computed key).
+pub(crate) fn create_element_props(argument: Option<&Argument<'_>>) -> Option<Vec<(String, String)>> {
+    match argument {
+        None | Some(Argument::NullLiteral(_)) => Some(Vec::new()),
+        Some(Argument::Identifier(id)) if id.name == "undefined" => Some(Vec::new()),
+        Some(Argument::ObjectExpression(object)) => object
+            .properties
+            .iter()
+            .map(|property| {
+                let ObjectPropertyKind::ObjectProperty(p) = property else {
+                    return None;
+                };
+                let key = p.key.static_name().filter(|_| !p.computed)?;
+                let class = match &p.value {
+                    Expression::StringLiteral(lit) => lit.value.to_string(),
+                    _ => "__dynamic__".to_string(),
+                };
+                Some((key.to_string(), class))
+            })
+            .collect(),
+        Some(_) => None,
     }
 }
 

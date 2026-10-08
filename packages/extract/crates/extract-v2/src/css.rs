@@ -1697,9 +1697,10 @@ pub(crate) fn unit_fallback_rewrites(value: &str, css_property: &str) -> bool {
     if UNITLESS_CSS_PROPERTIES.contains(&css_property) || css_property.starts_with("--") {
         return false;
     }
-    // A digit run after one of these continues a word (`#b1b1b7`, `ss01`);
-    // must match `WORD_CHAR` in `packages/extract/pipeline/unit-fallback.ts`.
-    let continues_word = |b: u8| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'#' | b'-');
+    // A digit run after one of these continues a word (`#b1b1b7`, `ss01`,
+    // `U+0025`); must match `WORD_CHAR` in `packages/extract/pipeline/unit-fallback.ts`.
+    let continues_word =
+        |b: u8| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'#' | b'-' | b'+');
     let bytes = value.as_bytes();
     let mut depth = 0;
     let mut i = 0;
@@ -1711,7 +1712,7 @@ pub(crate) fn unit_fallback_rewrites(value: &str, css_property: &str) -> bool {
             quote @ (b'"' | b'\'') => {
                 i += 1;
                 while i < bytes.len() && bytes[i] != quote {
-                    i += 1;
+                    i += 1 + usize::from(bytes[i] == b'\\');
                 }
             }
             _ if i > 0 && continues_word(bytes[i - 1]) => {}
@@ -1855,6 +1856,8 @@ mod tests {
             ("1px solid #333", "border"),
             ("0px 0px 0px 1px #000", "box-shadow"),
             ("\"ss01\"", "font-feature-settings"),
+            ("\"\\\"1\\\"\"", "content"),
+            ("U+0025-00FF", "unicode-range"),
             ("'1'", "content"),
             ("Inter4, sans-serif", "font-family"),
             ("calc(100% - 16)", "width"),

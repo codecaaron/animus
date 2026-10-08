@@ -16,7 +16,7 @@ export interface AnimusNextOptions {
   /** Project-root-relative path of the one file that receives the stylesheet
    *  import; replaces the `app/layout.*` / `pages/_app.*` detection. */
   cssImportTarget?: string;
-  verbose?: boolean;
+  verbose?: boolean | 'trace';
   /** Namespace prefix for CSS variables and class names. */
   prefix?: string;
   /** Forced-emission declarations for usage the scanner cannot observe

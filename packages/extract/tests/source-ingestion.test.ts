@@ -152,39 +152,44 @@ const attrs = localBadge.attrs({ tone: 'quiet' });
     ).toContain("<localBadge tone={'quiet'} />");
   });
 
-  test('resolves NodeNext-style relative specifiers carrying the emitted extension', async () => {
-    const definitionPath = 'src/definition.ts';
-    const sveltePath = 'src/Usage.svelte';
-    const svelteSource = `<script>
-import { badge } from './definition.js';
+  test.each([
+    ['./definition.js', 'src/definition.ts'],
+    ['./definition.jsx', 'src/definition.tsx'],
+  ])(
+    'resolves the NodeNext specifier %s to %s',
+    async (specifier, definitionPath) => {
+      const sveltePath = 'src/Usage.svelte';
+      const svelteSource = `<script>
+import { badge } from '${specifier}';
 const attrs = badge.attrs({ tone: 'quiet' });
 </script>`;
 
-    const result = await ingestSourceEntries(
-      [
+      const result = await ingestSourceEntries(
+        [
+          {
+            path: definitionPath,
+            source: `export const badge = ds.styles({}).asClass();`,
+          },
+          { path: sveltePath, source: svelteSource },
+        ],
         {
-          path: definitionPath,
-          source: `export const badge = ds.styles({}).asClass();`,
-        },
-        { path: sveltePath, source: svelteSource },
-      ],
-      {
-        extractFacts: factsExtractor({
-          [definitionPath]: resolverFacts(definitionPath),
-        }),
-      }
-    );
+          extractFacts: factsExtractor({
+            [definitionPath]: resolverFacts(definitionPath),
+          }),
+        }
+      );
 
-    expect(result.diagnostics).toEqual([]);
-    expect(result.ownership[sveltePath].analysisPaths).toEqual([
-      `${sveltePath}.instance.tsx`,
-    ]);
-    expect(
-      result.analysisEntries.find(
-        (entry) => entry.path === `${sveltePath}.instance.tsx`
-      )?.source
-    ).toContain("<badge tone={'quiet'} />");
-  });
+      expect(result.diagnostics).toEqual([]);
+      expect(result.ownership[sveltePath].analysisPaths).toEqual([
+        `${sveltePath}.instance.tsx`,
+      ]);
+      expect(
+        result.analysisEntries.find(
+          (entry) => entry.path === `${sveltePath}.instance.tsx`
+        )?.source
+      ).toContain("<badge tone={'quiet'} />");
+    }
+  );
 
   test('attributes Windows-style source keys without rewriting public identities', async () => {
     const definitionPath = 'src\\definition.ts';

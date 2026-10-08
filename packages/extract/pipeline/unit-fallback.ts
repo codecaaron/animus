@@ -1,14 +1,14 @@
 import { isUnitlessProperty } from '@animus-ui/properties';
 
-/** A digit run after one of these continues a word (`#b1b1b7`, `ss01`),
- *  so it is not a bare number. The extractor predicts this pass with
- *  `unit_fallback_rewrites` in `crates/extract-v2/src/css.rs`; keep both in
- *  step. */
-const WORD_CHAR = /[A-Za-z0-9_#-]/;
+/** A digit run after one of these continues a word (`#b1b1b7`, `ss01`,
+ *  `U+0025`), so it is not a bare number. The extractor predicts this pass
+ *  with `unit_fallback_rewrites` in `crates/extract-v2/src/css.rs`; keep both
+ *  in step. */
+const WORD_CHAR = /[A-Za-z0-9_#+-]/;
 
 export function applyUnitFallback(css: string): string {
   return css.replace(
-    /([a-z-]+)\s*:\s*([^;{}]+);/g,
+    /(--[\w-]+|[a-z-]+)\s*:\s*([^;{}]+);/g,
     (match, prop: string, value: string) => {
       // A custom property has no unit context: its writer emits final values.
       if (isUnitlessProperty(prop) || prop.startsWith('--')) return match;
@@ -28,8 +28,11 @@ export function applyUnitFallback(css: string): string {
           fixed += value[i];
           i++;
         } else if (value[i] === '"' || value[i] === "'") {
-          const close = value.indexOf(value[i], i + 1);
-          const end = close === -1 ? value.length : close + 1;
+          let end = i + 1;
+          while (end < value.length && value[end] !== value[i]) {
+            end += value[end] === '\\' ? 2 : 1;
+          }
+          end = Math.min(end + 1, value.length);
           fixed += value.slice(i, end);
           i = end;
         } else {

@@ -14,7 +14,9 @@ pub use usage::{
     scan_jsx_usage, ComponentUsageConfig, StateUsage, UsageScanResult, VariantUsage,
 };
 
-pub(crate) use usage::{classify_jsx_attribute_as_variant_value, is_component_like_identifier};
+pub(crate) use usage::{
+    classify_jsx_attribute_as_variant_value, create_element_props, is_component_like_identifier,
+};
 pub(crate) use value_eval::eval_jsx_attribute_value;
 
 #[derive(Debug, Clone, serde::Serialize)]

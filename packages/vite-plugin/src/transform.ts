@@ -198,9 +198,9 @@ export async function transformSource(
       return null;
     }
 
-    if (ctx.verbose) {
+    if (ctx.tracing) {
       const compCount = ctx.storedManifest.files[relativePath]?.length ?? 0;
-      ctx.log(`transform ${relativePath}: ${compCount} components`);
+      ctx.trace(`transform ${relativePath}: ${compCount} components`);
     }
 
     // Every component-bearing dev module imports the bridge, so SSR hosts

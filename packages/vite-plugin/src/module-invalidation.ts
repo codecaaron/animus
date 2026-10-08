@@ -40,7 +40,9 @@ export function invalidateFileModules(
       }
     }
     if (fileCount > 0) {
-      ctx.log(`HMR invalidate: ${relPath} (plan changed, ${fileCount} nodes)`);
+      ctx.trace(
+        `HMR invalidate: ${relPath} (plan changed, ${fileCount} nodes)`
+      );
     }
     total += fileCount;
   }

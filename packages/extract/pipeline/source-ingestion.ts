@@ -241,6 +241,7 @@ interface NodeNextExtensionMap {
 
 const NODE_NEXT_EXTENSION_MAP: NodeNextExtensionMap = {
   '.js': ['.ts', '.tsx', '.jsx'],
+  '.jsx': ['.tsx'],
   '.mjs': ['.mts'],
   '.cjs': ['.cts'],
 };

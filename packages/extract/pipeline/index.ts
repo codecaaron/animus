@@ -33,6 +33,7 @@ export type {
   ExcludeMatcher,
   OptionProvenance,
   ResolvedMode,
+  Verbosity,
 } from './core-options';
 export {
   AnimusConfigError,
@@ -44,6 +45,7 @@ export {
   REPLACEABLE_DEFAULT_EXCLUDE,
   STRUCTURAL_EXCLUDE,
   resolveMode,
+  resolveVerbosity,
 } from './core-options';
 export { compareDiscoveryOrder, discoverFiles } from './discover-files';
 export type {

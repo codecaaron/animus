@@ -9,6 +9,7 @@ import {
   createExcludeMatcher,
   DEFAULT_EXCLUDE,
   resolveMode,
+  resolveVerbosity,
   STRUCTURAL_EXCLUDE,
 } from '../pipeline/core-options';
 import { discoverFiles } from '../pipeline/discover-files';
@@ -74,6 +75,12 @@ describe('assertKnownOptionKeys', () => {
     expect(() =>
       assertKnownOptionKeys({ system: './ds.ts', targets: 'defaults' })
     ).not.toThrow();
+    expect(() =>
+      assertKnownOptionKeys({ system: './ds.ts', verbose: 'trace' })
+    ).not.toThrow();
+    expect(() =>
+      assertKnownOptionKeys({ system: './ds.ts', verbose: 'debug' })
+    ).toThrow(/"verbose".*'trace'/);
   });
 
   test('rejects an unknown top-level key, naming it with a suggestion', () => {
@@ -290,6 +297,22 @@ describe('resolveMode', () => {
       mode: 'production',
       provenance: 'driver-default',
     });
+  });
+});
+
+describe('resolveVerbosity', () => {
+  test.each([
+    [undefined, undefined, 'quiet'],
+    [false, undefined, 'quiet'],
+    [true, undefined, 'verbose'],
+    ['trace', undefined, 'trace'],
+    [undefined, '1', 'verbose'],
+    [undefined, 'true', 'verbose'],
+    [undefined, 'trace', 'trace'],
+    [true, 'trace', 'trace'],
+    ['trace', '1', 'trace'],
+  ] as const)('option %s with ANIMUS_DEBUG=%s is %s', (option, env, tier) => {
+    expect(resolveVerbosity(option, env)).toBe(tier);
   });
 });
 
