@@ -1,5 +1,11 @@
 import { isUnitlessProperty } from '@animus-ui/properties';
 
+/** A digit run after one of these continues a word (`#b1b1b7`, `ss01`),
+ *  so it is not a bare number. The extractor predicts this pass with
+ *  `unit_fallback_rewrites` in `crates/extract-v2/src/css.rs`; keep both in
+ *  step. */
+const WORD_CHAR = /[A-Za-z0-9_#-]/;
+
 export function applyUnitFallback(css: string): string {
   return css.replace(
     /([a-z-]+)\s*:\s*([^;{}]+);/g,
@@ -21,9 +27,16 @@ export function applyUnitFallback(css: string): string {
         } else if (depth > 0) {
           fixed += value[i];
           i++;
+        } else if (value[i] === '"' || value[i] === "'") {
+          const close = value.indexOf(value[i], i + 1);
+          const end = close === -1 ? value.length : close + 1;
+          fixed += value.slice(i, end);
+          i = end;
         } else {
-          const rest = value.slice(i);
-          const numMatch = rest.match(/^(-?\d+\.?\d*)/);
+          const startsToken = i === 0 || !WORD_CHAR.test(value[i - 1]);
+          const numMatch = startsToken
+            ? value.slice(i).match(/^(-?\d+\.?\d*)/)
+            : null;
           if (numMatch) {
             const num = numMatch[1];
             const after = value[i + num.length];

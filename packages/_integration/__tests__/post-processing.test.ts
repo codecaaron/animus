@@ -56,6 +56,28 @@ describe('applyUnitFallback', () => {
     const result = applyUnitFallback(input);
     expect(result).toMatch(/margin:\s*0(px)?;/);
   });
+
+  test.each([
+    ['color', '#b1b1b7'],
+    ['color', '#0f0'],
+    ['border', '1px solid #333'],
+    ['font-feature-settings', '"ss01"'],
+    ['content', "'1'"],
+    ['font-family', 'Inter4, sans-serif'],
+    ['--gap', '8'],
+  ] as const)('leaves %s: %s unchanged', (prop, val) => {
+    const css = `.a { ${prop}: ${val}; }`;
+    expect(applyUnitFallback(css)).toBe(css);
+  });
+
+  test('appends px to bare numbers beside words and hex colors', () => {
+    expect(applyUnitFallback('.a { border: 2 solid #333; }')).toBe(
+      '.a { border:2px solid #333; }'
+    );
+    expect(applyUnitFallback('.a { margin: 0 -4; }')).toBe(
+      '.a { margin:0px -4px; }'
+    );
+  });
 });
 
 describe('applyPrefix', () => {

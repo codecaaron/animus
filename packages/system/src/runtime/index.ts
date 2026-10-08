@@ -57,6 +57,19 @@ function forwardProps(
 }
 
 /**
+ * React 19 carries a ref as a plain prop and warns on `element.ref`; React 18
+ * keeps it on the element and guards `props.ref` with a warning getter.
+ * Reading the descriptor never invokes either getter.
+ */
+function childRefOf(
+  child: ReactElement<Record<string, any>> & { ref?: Ref<unknown> }
+): Ref<unknown> | undefined {
+  const propRef = Object.getOwnPropertyDescriptor(child.props, 'ref');
+  if (propRef && !propRef.get) return propRef.value;
+  return child.ref;
+}
+
+/**
  * The child wins every conflict: parent props spread under the child's own, so
  * a handler declared on the child replaces the parent's instead of chaining.
  */
@@ -77,9 +90,7 @@ function renderAsChild(
     );
   }
 
-  const childRef = (
-    child as ReactElement<Record<string, any>> & { ref?: Ref<unknown> }
-  ).ref;
+  const childRef = childRefOf(child);
   const mergedClassName = [classes.join(' '), child.props.className]
     .filter(Boolean)
     .join(' ');

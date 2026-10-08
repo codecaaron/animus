@@ -69,7 +69,7 @@ This cache stores pre-transformed module results. It persists across Vite dev se
 
 Enable with `ANIMUS_DEBUG=1` env var or `verbose: true` plugin option. All output prefixed with `[animus]` for grep filtering.
 
-Two tiers: reconciliation elimination warnings (`⚠ ComponentName eliminated`) are always-on. Phase timing, file counts, per-file transform logs, HMR decisions require verbose mode.
+Two tiers: component elimination warnings (`⚠ ComponentName eliminated`, and in dev `would be eliminated in production`) are always-on. The reconciliation summary, pruned variant/state options, phase timing, file counts, per-file transform logs and HMR decisions require verbose mode.
 
 The plugin runs from `dist/index.mjs` — after editing source, rebuild: `bun run --filter './packages/vite-plugin' build`.
 

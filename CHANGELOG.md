@@ -34,6 +34,40 @@ names must update those selectors. Rule order is unchanged.
 for another analysis now ingests its own changed or removed files before
 acknowledging completion. Empty joins remain no-ops.
 
+**Relative imports written with their emitted extension resolve.** An
+import such as `'./signals.js'` between analyzed source files now resolves to
+`signals.ts` (or `.tsx`, `.jsx`; `.mjs` to `.mts`, `.cjs` to `.cts`), as
+TypeScript's NodeNext and bundler resolution do. A `compose()`
+slot or `.extend()` parent imported this way no longer fails with
+`compose.unresolvable-slot` or "could not resolve parent component", and a
+component re-exported under another name through such a path keeps its
+consumers' static utility classes. A real `.js` file of the same name still
+wins.
+
+**A `{...props}` spread keeps the variant and state options it can
+reach.** A component rendered through a spread, such as a wrapper that
+forwards its props, previously counted as using only each variant's default,
+so production builds pruned options the wrapper's callers selected and those
+options rendered unstyled. Variant and state options a spread can deliver are
+now kept; an attribute written after the spread still counts as its literal
+value. `createElement(Component, props)` renders are treated the same way.
+System and custom props keep their existing runtime handling.
+
+**Pruned variant and state options are verbose output.** The Vite plugin's
+per-option `pruned` lines print only with `verbose: true` or
+`ANIMUS_DEBUG=1`, alongside the reconciliation summary. Component elimination
+warnings still always print.
+
+**Hex colors and quoted strings no longer gain `px`.** The unit fallback
+appended `px` to a digit run that ended a word, so `#b1b1b7` became
+`#b1b1b7px` and `"ss01"` became `"ss01px"`. A number now gains `px` only
+where it starts a value token, text inside quotes is left alone, and custom
+property values are never rewritten.
+
+**`asChild` no longer triggers React 19's `element.ref` warning.** The
+child's ref is read from its props on React 19 and from the element on React
+18, and it is still composed with the parent's ref.
+
 **Variable prefixes also rename `@property` registrations.** A configured
 prefix now applies consistently to registration names, declarations and
 `var()` references, preserving registered inheritance and initial values.

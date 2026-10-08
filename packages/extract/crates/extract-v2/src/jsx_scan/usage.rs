@@ -115,7 +115,9 @@ impl<'a, 'b> Visit<'a> for UsageScanner<'a, 'b> {
 
         let active_props = self.component_props.get(tag);
 
-        let mut seen_variant_props: FxHashSet<String> = FxHashSet::default();
+        // Option names settled by an attribute; a spread unsettles earlier ones.
+        let mut written: FxHashSet<&str> = FxHashSet::default();
+        let mut spread = false;
 
         for attr_item in &elem.attributes {
             match attr_item {
@@ -169,7 +171,7 @@ impl<'a, 'b> Visit<'a> for UsageScanner<'a, 'b> {
 
                     if let Some(config) = self.component_configs.get(tag) {
                         if config.variants.contains_key(prop_name) {
-                            seen_variant_props.insert(prop_name.to_string());
+                            written.insert(prop_name);
 
                             let variant_value =
                                 classify_jsx_attribute_as_variant_value(&attr.value);
@@ -181,6 +183,7 @@ impl<'a, 'b> Visit<'a> for UsageScanner<'a, 'b> {
                         }
 
                         if config.states.contains(prop_name) {
+                            written.insert(prop_name);
                             self.result.state_usages.push(StateUsage {
                                 component_binding: binding.clone(),
                                 state_name: prop_name.to_string(),
@@ -188,18 +191,32 @@ impl<'a, 'b> Visit<'a> for UsageScanner<'a, 'b> {
                         }
                     }
                 }
-                JSXAttributeItem::SpreadAttribute(_) => {}
+                JSXAttributeItem::SpreadAttribute(_) => {
+                    written.clear();
+                    spread = true;
+                }
             }
         }
 
         if let Some(config) = self.component_configs.get(tag) {
+            let absent = if spread { "__dynamic__" } else { "__default__" };
             for variant_prop in config.variants.keys() {
-                if !seen_variant_props.contains(variant_prop) {
+                if !written.contains(variant_prop.as_str()) {
                     self.result.variant_usages.push(VariantUsage {
                         component_binding: binding.clone(),
                         variant_prop: variant_prop.clone(),
-                        value: "__default__".to_string(),
+                        value: absent.to_string(),
                     });
+                }
+            }
+            if spread {
+                for state_name in &config.states {
+                    if !written.contains(state_name.as_str()) {
+                        self.result.state_usages.push(StateUsage {
+                            component_binding: binding.clone(),
+                            state_name: state_name.clone(),
+                        });
+                    }
                 }
             }
         }
@@ -259,6 +276,22 @@ impl<'a, 'b> Visit<'a> for UsageScanner<'a, 'b> {
                 };
 
                 if let Some(binding) = resolved {
+                    // The props argument can deliver any option.
+                    if let Some(config) = self.component_configs.get(&binding) {
+                        for variant_prop in config.variants.keys() {
+                            self.result.variant_usages.push(VariantUsage {
+                                component_binding: binding.clone(),
+                                variant_prop: variant_prop.clone(),
+                                value: "__dynamic__".to_string(),
+                            });
+                        }
+                        for state_name in &config.states {
+                            self.result.state_usages.push(StateUsage {
+                                component_binding: binding.clone(),
+                                state_name: state_name.clone(),
+                            });
+                        }
+                    }
                     self.result.rendered_components.insert(binding);
                 }
             }

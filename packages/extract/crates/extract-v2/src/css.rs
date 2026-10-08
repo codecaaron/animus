@@ -1694,9 +1694,12 @@ pub(crate) fn is_unitless_css_property(css_property: &str) -> bool {
 /// outside parentheses. This list is a subset of the post-processor's
 /// unitless set, so a miss here only predicts a rewrite that will not happen.
 pub(crate) fn unit_fallback_rewrites(value: &str, css_property: &str) -> bool {
-    if UNITLESS_CSS_PROPERTIES.contains(&css_property) {
+    if UNITLESS_CSS_PROPERTIES.contains(&css_property) || css_property.starts_with("--") {
         return false;
     }
+    // A digit run after one of these continues a word (`#b1b1b7`, `ss01`);
+    // must match `WORD_CHAR` in `packages/extract/pipeline/unit-fallback.ts`.
+    let continues_word = |b: u8| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'#' | b'-');
     let bytes = value.as_bytes();
     let mut depth = 0;
     let mut i = 0;
@@ -1705,6 +1708,13 @@ pub(crate) fn unit_fallback_rewrites(value: &str, css_property: &str) -> bool {
             b'(' => depth += 1,
             b')' => depth -= 1,
             _ if depth > 0 => {}
+            quote @ (b'"' | b'\'') => {
+                i += 1;
+                while i < bytes.len() && bytes[i] != quote {
+                    i += 1;
+                }
+            }
+            _ if i > 0 && continues_word(bytes[i - 1]) => {}
             _ => {
                 // `-?\d+\.?\d*`, kept as authored only before a letter or `%`.
                 let sign = usize::from(bytes[i] == b'-');
@@ -1828,6 +1838,31 @@ mod tests {
 
     fn empty_vars() -> VariableMap {
         FxHashMap::default()
+    }
+
+    #[test]
+    fn unit_fallback_predicts_only_bare_numbers() {
+        for (value, property) in [
+            ("8", "padding"),
+            ("8 16", "margin"),
+            ("0 -4", "margin"),
+            ("2 solid #333", "border"),
+        ] {
+            assert!(unit_fallback_rewrites(value, property), "{property}: {value}");
+        }
+        for (value, property) in [
+            ("#b1b1b7", "color"),
+            ("1px solid #333", "border"),
+            ("0px 0px 0px 1px #000", "box-shadow"),
+            ("\"ss01\"", "font-feature-settings"),
+            ("'1'", "content"),
+            ("Inter4, sans-serif", "font-family"),
+            ("calc(100% - 16)", "width"),
+            ("8", "--gap"),
+            ("1.5", "line-height"),
+        ] {
+            assert!(!unit_fallback_rewrites(value, property), "{property}: {value}");
+        }
     }
 
     fn test_breakpoints() -> BreakpointMap {

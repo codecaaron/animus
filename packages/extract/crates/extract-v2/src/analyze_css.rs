@@ -402,7 +402,18 @@ pub fn resolve_import_source<T>(
     probe_files(&base, files)
 }
 
-/// Candidate order decides which file wins when several extensions exist.
+/// NodeNext specifiers name the emitted file (`./x.js` for `x.ts`). Mirrors
+/// `NODE_NEXT_EXTENSION_MAP` in `packages/extract/pipeline/source-ingestion.ts`.
+const NODE_NEXT_SOURCES: [(&str, &[&str]); 3] = [
+    (".js", &[".ts", ".tsx", ".jsx"]),
+    (".mjs", &[".mts"]),
+    (".cjs", &[".cts"]),
+];
+
+/// Candidate order decides which file wins when several extensions exist; the
+/// literal spelling is probed before a NodeNext source, so a real `.js`
+/// neighbor still wins. Mirrors `resolveRelativeSource` in
+/// `packages/extract/pipeline/source-ingestion.ts`.
 fn probe_files<T>(base: &str, files: &BTreeMap<String, T>) -> Option<String> {
     let candidates = [
         base.to_string(),
@@ -415,7 +426,23 @@ fn probe_files<T>(base: &str, files: &BTreeMap<String, T>) -> Option<String> {
         format!("{base}/index.js"),
         format!("{base}/index.jsx"),
     ];
-    candidates.into_iter().find(|c| files.contains_key(c))
+    candidates
+        .into_iter()
+        .find(|c| files.contains_key(c))
+        .or_else(|| {
+            NODE_NEXT_SOURCES.iter().find_map(|(emitted, sources)| {
+                let split = base.len().checked_sub(emitted.len())?;
+                let suffix = base.get(split..)?;
+                if !suffix.eq_ignore_ascii_case(emitted) {
+                    return None;
+                }
+                let stem = &base[..split];
+                sources
+                    .iter()
+                    .map(|source| format!("{stem}{source}"))
+                    .find(|c| files.contains_key(c))
+            })
+        })
 }
 
 /// Follow `export { X as Y } from '...'` hops to the file defining the name.
@@ -1610,7 +1637,7 @@ fn confined_uses(
             if tag != binding {
                 continue;
             }
-            confined.spread |= *spread;
+            confined.spread |= spread.is_some();
             for attr in attrs {
                 match (&attr.static_value, attr.dynamic) {
                     (Some(value), false) => confined
@@ -4076,6 +4103,22 @@ mod tests {
         );
     }
 
+    #[test]
+    fn node_next_specifiers_resolve_to_their_typescript_sources() {
+        let mut files: BTreeMap<String, ()> = BTreeMap::new();
+        for path in ["src/signals.ts", "src/icon.tsx", "src/real.js", "src/real.ts", "src/m.mts"] {
+            files.insert(path.into(), ());
+        }
+        let inputs = CssInputs::default();
+        let resolve = |spec| resolve_import_source("src/app.tsx", spec, &files, &inputs);
+
+        assert_eq!(resolve("./signals.js").as_deref(), Some("src/signals.ts"));
+        assert_eq!(resolve("./icon.js").as_deref(), Some("src/icon.tsx"));
+        assert_eq!(resolve("./real.js").as_deref(), Some("src/real.js"));
+        assert_eq!(resolve("./m.mjs").as_deref(), Some("src/m.mts"));
+        assert_eq!(resolve("./signals.JS").as_deref(), Some("src/signals.ts"));
+        assert_eq!(resolve("./missing.js"), None);
+    }
 
     #[test]
     fn base_css_flows_through_sheets_and_layers() {
@@ -5943,7 +5986,7 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
                 ),
                 (
                     "card.tsx",
-                    "import { Root as CardRoot, Body as CardBody } from './slots';\n\
+                    "import { Root as CardRoot, Body as CardBody } from './slots.js';\n\
                      export const Card = compose({ Root: CardRoot, Body: CardBody }, \
                        { name: 'Card', shared: { size: true } });\n\
                      export const App = () => <Card.Root><Card.Body size=\"sm\" /></Card.Root>;\n",

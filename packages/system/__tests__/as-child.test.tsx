@@ -1,9 +1,9 @@
-import { createElement, type ReactElement } from 'react';
+import { createElement, createRef, type ReactElement } from 'react';
 import { flushSync } from 'react-dom';
 
 import { createRoot } from 'react-dom/client';
 import { renderToString } from 'react-dom/server';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { ds } from './test-system';
 
@@ -218,5 +218,28 @@ describe('asChild', () => {
     expect(html).not.toContain('parent label');
     expect(html).toContain('role="button"');
     expect(html).not.toContain('role="tab"');
+  });
+
+  it("composes the child's ref with the parent's without a React warning", () => {
+    const childRef = createRef<HTMLElement>();
+    const parentRef = createRef<HTMLDivElement>();
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      mountAndInspect(
+        createElement(
+          Box,
+          { asChild: true, ref: parentRef },
+          createElement('output', { ref: childRef }, 'text')
+        ),
+        (container) => {
+          const output = container.querySelector('output');
+          expect(childRef.current).toBe(output);
+          expect(parentRef.current).toBe(output);
+        }
+      );
+      expect(errors).not.toHaveBeenCalled();
+    } finally {
+      errors.mockRestore();
+    }
   });
 });

@@ -68,9 +68,11 @@ pub enum UsageFact {
     Element {
         tag: TagFact,
         attrs: Vec<AttrFact>,
-        /// A `{...props}` attribute can deliver any prop at runtime.
+        /// `Some(n)` when a `{...props}` attribute can deliver any prop at
+        /// runtime: the first `n` attrs precede the last spread, which can
+        /// replace them; the rest are settled.
         #[serde(skip)]
-        spread: bool,
+        spread: Option<usize>,
     },
     /// createElement(X, ...) / React.createElement(X, ...): the first
     /// argument as a raw name or dotted key (None = unattributable form).
@@ -373,11 +375,11 @@ impl<'a, 's> Visit<'a> for FactCollector<'a, 's> {
             _ => return,
         };
         let mut attrs = Vec::new();
-        let spread = elem
-            .attributes
-            .iter()
-            .any(|item| matches!(item, JSXAttributeItem::SpreadAttribute(_)));
+        let mut spread = None;
         for attr_item in &elem.attributes {
+            if matches!(attr_item, JSXAttributeItem::SpreadAttribute(_)) {
+                spread = Some(attrs.len());
+            }
             if let JSXAttributeItem::Attribute(attr) = attr_item {
                 let JSXAttributeName::Identifier(id) = &attr.name else {
                     continue;
@@ -689,7 +691,7 @@ pub fn uncertain_custom_renders(
     let mut usages = Vec::new();
     for fact in facts {
         let binding = match fact {
-            UsageFact::Element { tag, spread: true, .. } => match resolve_tag(tag, member_expr_bindings) {
+            UsageFact::Element { tag, spread: Some(_), .. } => match resolve_tag(tag, member_expr_bindings) {
                 Some((binding, _)) => binding,
                 None => continue,
             },
@@ -712,6 +714,40 @@ pub fn uncertain_custom_renders(
     usages
 }
 
+/// Records the variant and state options a render leaves unsettled. A render
+/// that can deliver any prop at runtime — a `{...props}` spread or a
+/// `createElement` call — keeps every unsettled option; otherwise an
+/// unwritten variant uses its default and an unwritten state stays off.
+/// Custom props take the order-blind path in `uncertain_custom_renders`.
+fn record_unwritten_options(
+    result: &mut UsageScanResult,
+    binding: &str,
+    config: &ComponentUsageConfig,
+    written: &FxHashSet<&str>,
+    open_props: bool,
+) {
+    let absent = if open_props { "__dynamic__" } else { "__default__" };
+    for variant_prop in config.variants.keys() {
+        if !written.contains(variant_prop.as_str()) {
+            result.variant_usages.push(VariantUsage {
+                component_binding: binding.to_string(),
+                variant_prop: variant_prop.clone(),
+                value: absent.to_string(),
+            });
+        }
+    }
+    if open_props {
+        for state_name in &config.states {
+            if !written.contains(state_name.as_str()) {
+                result.state_usages.push(StateUsage {
+                    component_binding: binding.to_string(),
+                    state_name: state_name.clone(),
+                });
+            }
+        }
+    }
+}
+
 /// Variant/state/system-prop usage scan over collected facts.
 pub fn filter_usage_scan(
     facts: &[UsageFact],
@@ -725,7 +761,7 @@ pub fn filter_usage_scan(
 
     for fact in facts {
         match fact {
-            UsageFact::Element { tag, attrs, .. } => {
+            UsageFact::Element { tag, attrs, spread } => {
                 let Some((tag_name, resolved_binding)) = resolve_tag(tag, member_expr_bindings)
                 else {
                     result.identity_uncertain = true;
@@ -744,9 +780,10 @@ pub fn filter_usage_scan(
 
                 let active_props = component_props.get(tag_name);
                 let custom = custom_props.get(tag_name);
-                let mut seen_variant_props: FxHashSet<String> = FxHashSet::default();
+                let mut written: FxHashSet<&str> = FxHashSet::default();
 
-                for attr in attrs {
+                for (index, attr) in attrs.iter().enumerate() {
+                    let settled = spread.is_none_or(|before| index >= before);
                     if let Some(props) = active_props {
                         if props.contains(&attr.name) {
                             // A custom prop's static values belong to the custom
@@ -799,7 +836,9 @@ pub fn filter_usage_scan(
 
                     if let Some(config) = component_configs.get(tag_name) {
                         if config.variants.contains_key(&attr.name) {
-                            seen_variant_props.insert(attr.name.clone());
+                            if settled {
+                                written.insert(attr.name.as_str());
+                            }
                             result.variant_usages.push(VariantUsage {
                                 component_binding: binding.clone(),
                                 variant_prop: attr.name.clone(),
@@ -807,6 +846,9 @@ pub fn filter_usage_scan(
                             });
                         }
                         if config.states.contains(&attr.name) {
+                            if settled {
+                                written.insert(attr.name.as_str());
+                            }
                             result.state_usages.push(StateUsage {
                                 component_binding: binding.clone(),
                                 state_name: attr.name.clone(),
@@ -816,15 +858,7 @@ pub fn filter_usage_scan(
                 }
 
                 if let Some(config) = component_configs.get(tag_name) {
-                    for variant_prop in config.variants.keys() {
-                        if !seen_variant_props.contains(variant_prop) {
-                            result.variant_usages.push(VariantUsage {
-                                component_binding: binding.clone(),
-                                variant_prop: variant_prop.clone(),
-                                value: "__default__".to_string(),
-                            });
-                        }
-                    }
+                    record_unwritten_options(&mut result, &binding, config, &written, spread.is_some());
                 }
             }
             UsageFact::CreateElement {
@@ -851,6 +885,15 @@ pub fn filter_usage_scan(
                     None
                 };
                 if let Some(binding) = resolved {
+                    if let Some(config) = component_configs.get(&binding) {
+                        record_unwritten_options(
+                            &mut result,
+                            &binding,
+                            config,
+                            &FxHashSet::default(),
+                            true,
+                        );
+                    }
                     result.rendered_components.insert(binding);
                 } else if *identity_uncertain {
                     result.identity_uncertain = true;
@@ -1295,6 +1338,63 @@ mod tests {
             &props(&[("Box", &["p"])]),
             &configs(&[]),
             &FxHashMap::default(),
+        );
+    }
+
+    fn option_usages(source: &str) -> (Vec<(String, String)>, Vec<String>) {
+        let skel = configs(&[("Skel", &[("shape", &["line", "block"])], &["loading"])]);
+        assert_paths_agree(source, &props(&[]), &skel, &FxHashMap::default());
+        let ast = parse(source);
+        let facts = collect_usage_facts(ast.program());
+        let result = filter_usage_scan(
+            &facts,
+            &props(&[]),
+            &FxHashMap::default(),
+            &skel,
+            &FxHashMap::default(),
+        );
+        let mut variants: Vec<_> = result
+            .variant_usages
+            .iter()
+            .map(|u| (u.variant_prop.clone(), u.value.clone()))
+            .collect();
+        variants.sort();
+        let mut states: Vec<_> = result.state_usages.iter().map(|u| u.state_name.clone()).collect();
+        states.sort();
+        (variants, states)
+    }
+
+    #[test]
+    fn spread_keeps_the_options_it_can_reach() {
+        let pair = |prop: &str, value: &str| (prop.to_string(), value.to_string());
+        let wrapper = "const W = (p) => <Skel {...p} />;";
+        assert_eq!(
+            option_usages(wrapper),
+            (vec![pair("shape", "__dynamic__")], vec!["loading".to_string()])
+        );
+
+        let settled_after = "const W = (p) => <Skel {...p} shape=\"line\" loading={false} />;";
+        assert_eq!(
+            option_usages(settled_after),
+            (vec![pair("shape", "line")], vec!["loading".to_string()])
+        );
+
+        let overridable_before = "const W = (p) => <Skel shape=\"line\" {...p} />;";
+        assert_eq!(
+            option_usages(overridable_before),
+            (
+                vec![pair("shape", "__dynamic__"), pair("shape", "line")],
+                vec!["loading".to_string()]
+            )
+        );
+
+        let no_spread = "const A = () => <Skel shape=\"line\" />;";
+        assert_eq!(option_usages(no_spread), (vec![pair("shape", "line")], vec![]));
+
+        let create_element = "const e = createElement(Skel, props);";
+        assert_eq!(
+            option_usages(create_element),
+            (vec![pair("shape", "__dynamic__")], vec!["loading".to_string()])
         );
     }
 
