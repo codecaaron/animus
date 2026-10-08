@@ -1368,6 +1368,7 @@ export class ExtractionSession {
     const result = runProjectAnalysis(engineApi, {
       ...analysisOptions,
       warn: (message) => this.warn(message),
+      info: (message) => this.log(message),
       strict: this.options.strict,
       extraDiagnostics: this.ingestionFailureDiagnostics,
     });

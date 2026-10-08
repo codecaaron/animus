@@ -4,6 +4,7 @@ import {
   surfaceManifestDiagnostics,
   systemLoadDiagnostics,
 } from './manifest-diagnostics';
+import { checkCustomProperties } from './property-diagnostics';
 import { applyUnitFallback } from './unit-fallback';
 
 import type { AnalyzeProjectInputs } from './analyze-project-args';
@@ -115,7 +116,12 @@ function hasSourceThemeManifests(system: SystemConfig): boolean {
 export function runProjectAnalysis(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   engineApi: () => any,
-  opts: AnalysisOptions & { warn: (message: string) => void; strict?: boolean }
+  opts: AnalysisOptions & {
+    warn: (message: string) => void;
+    /** Receives info-severity diagnostics; pass a verbose-tier logger. */
+    info?: (message: string) => void;
+    strict?: boolean;
+  }
 ): ProjectAnalysisResult {
   const { analyzeProject } = engineApi();
 
@@ -133,11 +139,19 @@ export function runProjectAnalysis(
   // SAFETY: `manifestJson` is this call's own `analyzeProject` return value,
   // the serde output `ProjectManifest` mirrors. Unparseable JSON throws.
   const manifest = JSON.parse(manifestJson) as ProjectManifest;
+  const properties = checkCustomProperties({
+    system: opts.system,
+    manifest,
+    componentCss: applyUnitFallback(manifest.css),
+    globalCss: manifest.sheets.global,
+  });
   surfaceManifestDiagnostics(manifest, opts.warn, {
     strict: opts.strict,
+    info: opts.info,
     prepend: [
       ...collectSelectorAliasDiagnostics(opts.system.selectorAliasesJson),
       ...systemLoadDiagnostics(opts.system),
+      ...properties.diagnostics,
       ...(opts.extraDiagnostics ?? []),
     ],
   });
@@ -146,8 +160,8 @@ export function runProjectAnalysis(
   return {
     manifest,
     manifestJson,
-    globalCss: manifest.sheets.global,
-    componentCss: applyUnitFallback(manifest.css),
+    globalCss: properties.globalCss,
+    componentCss: properties.componentCss,
     inputs,
     timings: { serializeMs, extractMs, parseMs },
   };

@@ -313,6 +313,7 @@ describe('invalid @property registrations', () => {
               diagnostics: [],
               sheets: { global: '' },
               css: '',
+              components: {},
             }),
         }),
         {

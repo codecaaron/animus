@@ -11,7 +11,8 @@ export type ManifestDiagnostic = {
    *  `external-token-candidate` diagnostics. */
   token?: string;
   code?: string;
-  /** `"error"` fails strict builds; `"warn"`/absent never does. A property
+  /** `"error"` fails strict builds; `"warn"`/absent never does; `"info"`
+   *  prints only at the verbose tier. A property
    *  of the code, never chosen per emission site: `DIAGNOSTIC_SEVERITY` for
    *  codes minted here, the engine's `diagnostic_severity_for_code` for its
    *  own. */
@@ -44,6 +45,8 @@ export interface DiagnosticPolicy {
   /** When true, error-severity diagnostics throw instead of warning. */
   strict?: boolean;
   prepend?: ManifestDiagnostic[];
+  /** Receives info-severity lines; without it they are not printed. */
+  info?: (message: string) => void;
 }
 
 /** True when the selector carries at least one substitutable `&` subject
@@ -132,12 +135,33 @@ export const INVALID_PROPERTY_REGISTRATION =
  *  the deprecated `from()`/`includes:` verbs. */
 export const VOCABULARY_LEGACY_VERB = 'animus.vocabulary.legacy-verb';
 
+/** A `var()` fallback that never applies: the property is registered with an
+ *  initial value. */
+export const PROPERTY_FALLBACK_SUPPRESSED =
+  'animus.property.fallback-suppressed';
+
+/** The same, where the fallback heads a chain of further `var()` reads. */
+export const PROPERTY_FALLBACK_CHAIN_SUPPRESSED =
+  'animus.property.fallback-chain-suppressed';
+
+/** A declared property set in keyframes or transitioned without a typed
+ *  registration, so it does not interpolate. */
+export const PROPERTY_UNREGISTERED_ANIMATION =
+  'animus.property.unregistered-animation';
+
+/** The same, where `allow-discrete` shows interpolation was intended. */
+export const PROPERTY_DISCRETE_ANIMATION = 'animus.property.discrete-animation';
+
+/** A custom property whose resolved value is `var()` of itself; the
+ *  declaration is not emitted. */
+export const PROPERTY_SELF_REFERENCE = 'animus.property.self-reference';
+
 /**
  * A lost or unreadable configured input, or a classified unsupported Animus
  * declaration, is `error` — what `--strict` refuses; degradation that still
- * emits complete output is `warn`.
+ * emits complete output is `warn`; output that may be intended is `info`.
  */
-type DiagnosticSeverity = 'error' | 'warn';
+type DiagnosticSeverity = 'error' | 'warn' | 'info';
 
 const DIAGNOSTIC_SEVERITY: ReadonlyMap<string, DiagnosticSeverity> = new Map([
   [SELECTOR_UNSUPPORTED_SUBJECT, 'error'],
@@ -145,11 +169,16 @@ const DIAGNOSTIC_SEVERITY: ReadonlyMap<string, DiagnosticSeverity> = new Map([
   [VOCABULARY_COLLISION, 'warn'],
   [VOCABULARY_LEGACY_VERB, 'warn'],
   [INVALID_PROPERTY_REGISTRATION, 'error'],
+  [PROPERTY_FALLBACK_SUPPRESSED, 'info'],
+  [PROPERTY_FALLBACK_CHAIN_SUPPRESSED, 'warn'],
+  [PROPERTY_UNREGISTERED_ANIMATION, 'info'],
+  [PROPERTY_DISCRETE_ANIMATION, 'warn'],
+  [PROPERTY_SELF_REFERENCE, 'error'],
 ]);
 
 /** An unlisted code is `warn`: a witness kind from a newer system package
  *  must not fail the strict build of a host that predates its writer. */
-function severityFor(code: string | undefined): DiagnosticSeverity {
+export function severityFor(code: string | undefined): DiagnosticSeverity {
   return (
     (code === undefined ? undefined : DIAGNOSTIC_SEVERITY.get(code)) ?? 'warn'
   );
@@ -255,11 +284,16 @@ export function surfaceManifestDiagnostics(
     } else if (diagnostic.kind === 'skip') {
       line = `⚠ ${diagnostic.component}: skipped ${diagnostic.message}`;
     } else if (diagnostic.kind === 'warn') {
-      line = `⚠ ${diagnostic.file}: ${diagnostic.component}: ${diagnostic.message}`;
+      const mark = diagnostic.severity === 'info' ? 'ℹ' : '⚠';
+      line = `${mark} ${diagnostic.file}: ${diagnostic.component}: ${diagnostic.message}`;
     }
     if (line === null) continue;
     if (diagnostic.code && !diagnostic.message.includes(diagnostic.code)) {
       line += ` [${diagnostic.code}]`;
+    }
+    if (diagnostic.severity === 'info') {
+      policy.info?.(line);
+      continue;
     }
     if (policy.strict && diagnostic.severity === 'error') {
       errors.push(

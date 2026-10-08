@@ -429,6 +429,7 @@ export class PluginContext {
         ),
         devMode: !this.emissionProd,
         warn: (m) => this.warn(m),
+        info: (m) => this.log(m),
         strict: this.options.strict,
       });
     } catch (e) {

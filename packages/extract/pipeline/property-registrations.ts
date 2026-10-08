@@ -64,9 +64,32 @@ export function splitInvalidPropertyRegistrations(css: string) {
   return { css: kept, invalid };
 }
 
+/** What a kept `@property` rule registers. */
+export interface PropertyRegistration {
+  syntax: string;
+  initialValue: string | undefined;
+}
+
+/** The registrations in `css`, by custom-property name. */
+export function propertyRegistrations(
+  css: string
+): Map<string, PropertyRegistration> {
+  const registrations = new Map<string, PropertyRegistration>();
+  for (const match of css.matchAll(PROPERTY_RULE)) {
+    registrations.set(match[1], readRegistration(match[0]));
+  }
+  return registrations;
+}
+
+function readRegistration(rule: string): PropertyRegistration {
+  return {
+    syntax: /syntax:\s*"([^"]*)"/.exec(rule)?.[1]?.trim() ?? '',
+    initialValue: /initial-value\s*:\s*([^;}]*)/.exec(rule)?.[1]?.trim(),
+  };
+}
+
 function registrationFailure(rule: string): string | null {
-  const syntax = /syntax:\s*"([^"]*)"/.exec(rule)?.[1]?.trim() ?? '';
-  const initialValue = /initial-value\s*:\s*([^;}]*)/.exec(rule)?.[1]?.trim();
+  const { syntax, initialValue } = readRegistration(rule);
   if (syntax !== '*') {
     const components = syntax.split('|').map((component) => ({
       text: component.trim(),

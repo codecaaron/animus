@@ -5,6 +5,26 @@ See [Conventional Commits](https://conventionalcommits.org) for commit guideline
 
 ## Unreleased
 
+**Registered custom properties report what will not behave as written.**
+When the theme registers at least one `@property`, extraction now reports:
+
+- a `var(--x, fallback)` read of a property registered with an initial
+  value, whose fallback never applies (`animus.property.fallback-suppressed`,
+  info). It is a warning when the fallback starts a chain of further
+  `var()` reads (`animus.property.fallback-chain-suppressed`);
+- a declared contextual variable set in keyframes or named in a transition
+  while it is unregistered or registered with the universal syntax `*`, so it
+  does not interpolate (`animus.property.unregistered-animation`, info). It
+  is a warning when `allow-discrete` shows interpolation was intended
+  (`animus.property.discrete-animation`);
+- a custom property whose value resolves to `var()` of itself, for example a
+  component prop given its own property's contextual name
+  (`animus.property.self-reference`, error, so it fails `strict` builds). The
+  declaration is no longer emitted.
+
+Info diagnostics print only with `verbose`. A theme without registrations
+reports none of these and its CSS is unchanged.
+
 **Selecting the removed v1 engine explains itself.** Setting `engine: 'v1'`
 or `ANIMUS_ENGINE=v1` still fails, and the error now says that the v1
 extraction engine is no longer supported, that v2 is the only engine, and to
