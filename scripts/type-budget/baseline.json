@@ -1,0 +1,139 @@
+{
+  "typescript": "7.0.2",
+  "machine": {
+    "platform": "darwin",
+    "cpu": "Apple M4 Pro",
+    "cores": 12,
+    "memoryGb": 48,
+    "node": "24.3.0"
+  },
+  "recordedOn": "2026-10-08",
+  "runs": 5,
+  "fixtures": {
+    "vars-0_positions-0_depth-0": {
+      "load": {
+        "vars": 0,
+        "positions": 0,
+        "depth": 0
+      },
+      "instantiations": 451923,
+      "types": 134255,
+      "checkMs": 398
+    },
+    "vars-0_positions-8_depth-1": {
+      "load": {
+        "vars": 0,
+        "positions": 8,
+        "depth": 1
+      },
+      "instantiations": 494017,
+      "types": 150609,
+      "checkMs": 359
+    },
+    "vars-8_positions-8_depth-1": {
+      "load": {
+        "vars": 8,
+        "positions": 8,
+        "depth": 1
+      },
+      "instantiations": 495003,
+      "types": 151159,
+      "checkMs": 400
+    },
+    "vars-32_positions-8_depth-1": {
+      "load": {
+        "vars": 32,
+        "positions": 8,
+        "depth": 1
+      },
+      "instantiations": 495291,
+      "types": 151639,
+      "checkMs": 375
+    },
+    "vars-128_positions-8_depth-1": {
+      "load": {
+        "vars": 128,
+        "positions": 8,
+        "depth": 1
+      },
+      "instantiations": 496443,
+      "types": 153623,
+      "checkMs": 360
+    },
+    "vars-8_positions-1_depth-1": {
+      "load": {
+        "vars": 8,
+        "positions": 1,
+        "depth": 1
+      },
+      "instantiations": 481849,
+      "types": 141926,
+      "checkMs": 375
+    },
+    "vars-8_positions-32_depth-1": {
+      "load": {
+        "vars": 8,
+        "positions": 32,
+        "depth": 1
+      },
+      "instantiations": 534405,
+      "types": 178561,
+      "checkMs": 358
+    },
+    "vars-8_positions-128_depth-1": {
+      "load": {
+        "vars": 8,
+        "positions": 128,
+        "depth": 1
+      },
+      "instantiations": 692013,
+      "types": 288169,
+      "checkMs": 357
+    },
+    "vars-8_positions-8_depth-0": {
+      "load": {
+        "vars": 8,
+        "positions": 8,
+        "depth": 0
+      },
+      "instantiations": 494659,
+      "types": 151084,
+      "checkMs": 349
+    },
+    "vars-8_positions-8_depth-2": {
+      "load": {
+        "vars": 8,
+        "positions": 8,
+        "depth": 2
+      },
+      "instantiations": 495003,
+      "types": 151184,
+      "checkMs": 350
+    },
+    "vars-8_positions-8_depth-4": {
+      "load": {
+        "vars": 8,
+        "positions": 8,
+        "depth": 4
+      },
+      "instantiations": 495003,
+      "types": 151219,
+      "checkMs": 344
+    },
+    "vars-8_positions-8_depth-8": {
+      "load": {
+        "vars": 8,
+        "positions": 8,
+        "depth": 8
+      },
+      "instantiations": 495003,
+      "types": 151283,
+      "checkMs": 343
+    },
+    "open-custom-property": {
+      "instantiations": 476375,
+      "types": 135920,
+      "checkMs": 330
+    }
+  }
+}

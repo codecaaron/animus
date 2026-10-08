@@ -470,6 +470,10 @@ export default defineConfig({
         command: 'bunx vp test run',
         cache: false,
       },
+      'measure:type-budget': {
+        command: 'bun scripts/type-budget/measure.ts',
+        cache: false,
+      },
 
       clean: {
         command:
