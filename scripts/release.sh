@@ -3,9 +3,11 @@ set -euo pipefail
 
 # ─── Tag-only release for all publishable packages ────────────────
 #
-# Tags HEAD with the next version and pushes main and the tag. CI's
-# publish job sets every package version from the tag, so no
-# package.json is edited here.
+# Tags HEAD with the next version and pushes only the tag. HEAD must
+# already be origin's main, so every release has passed CI there. The
+# version comes from origin's tags, never from a possibly stale local
+# list. CI's publish job sets every package version from the tag, so
+# no package.json is edited here.
 #
 # Usage:
 #   bun release <bump> [--channel <name>] [--dry-run]
@@ -57,22 +59,19 @@ if ! git diff --quiet HEAD; then
   exit 1
 fi
 
-# ─── Resolve current version from latest semver tag ───────────────
-get_latest_tag() {
-  git tag --list 'v*' --sort=-v:refname \
-    | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z]+\.[0-9]+)?$' \
-    | head -1
-}
-
-LATEST_TAG=$(get_latest_tag)
-if [[ -z "$LATEST_TAG" ]]; then
-  echo "No valid semver tag found — starting from 0.0.0"
-  CURRENT="0.0.0"
-else
-  CURRENT="${LATEST_TAG#v}"
+# ─── Guard: HEAD must be origin's main ────────────────────────────
+if ! git fetch --tags "$REMOTE"; then
+  echo "Error: could not fetch from $REMOTE"
+  exit 1
 fi
 
-echo "Current version: $CURRENT"
+HEAD_SHA=$(git rev-parse HEAD)
+REMOTE_MAIN_SHA=$(git rev-parse "$REMOTE/main")
+if [[ "$HEAD_SHA" != "$REMOTE_MAIN_SHA" ]]; then
+  echo "Error: HEAD ($(git rev-parse --short HEAD)) is not $REMOTE/main ($(git rev-parse --short "$REMOTE/main"))."
+  echo "Push main, let CI pass on it, then release from that commit."
+  exit 1
+fi
 
 # ─── Semver arithmetic ────────────────────────────────────────────
 parse_semver() {
@@ -92,6 +91,54 @@ parse_semver() {
     PRE_NUM=""
   fi
 }
+
+# Succeeds when $1 is a higher version than $2. A release outranks its
+# own prereleases.
+semver_gt() {
+  parse_semver "$1"
+  local a=("$MAJOR" "$MINOR" "$PATCH") a_id="$PRE_ID" a_num="$PRE_NUM"
+  parse_semver "$2"
+  local b=("$MAJOR" "$MINOR" "$PATCH") b_id="$PRE_ID" b_num="$PRE_NUM"
+  local i
+  for i in 0 1 2; do
+    if ((a[i] != b[i])); then
+      ((a[i] > b[i]))
+      return
+    fi
+  done
+  if [[ "$a_id" == "$b_id" ]]; then
+    [[ -n "$a_id" ]] && ((a_num > b_num))
+    return
+  fi
+  [[ -z "$a_id" ]] && return 0
+  [[ -z "$b_id" ]] && return 1
+  [[ "$a_id" > "$b_id" ]]
+}
+
+# ─── Resolve current version from origin's newest semver tag ──────
+if ! REMOTE_TAG_REFS=$(git ls-remote --tags --refs "$REMOTE" 'v*'); then
+  echo "Error: could not list tags on $REMOTE"
+  exit 1
+fi
+
+CURRENT=""
+while read -r _ ref; do
+  version="${ref#refs/tags/v}"
+  [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z]+\.[0-9]+)?$ ]] || continue
+  if [[ -z "$CURRENT" ]] || semver_gt "$version" "$CURRENT"; then
+    CURRENT="$version"
+  fi
+done <<< "$REMOTE_TAG_REFS"
+
+if [[ -z "$CURRENT" ]]; then
+  echo "No valid semver tag found on $REMOTE — starting from 0.0.0"
+  CURRENT="0.0.0"
+  LATEST_REMOTE=""
+else
+  LATEST_REMOTE="$CURRENT"
+fi
+
+echo "Current version: $CURRENT"
 
 parse_semver "$CURRENT"
 
@@ -149,6 +196,11 @@ echo ""
 
 TAG="v$NEXT"
 
+if [[ -n "$LATEST_REMOTE" ]] && ! semver_gt "$NEXT" "$LATEST_REMOTE"; then
+  echo "Error: $TAG is not newer than v$LATEST_REMOTE, the newest tag on $REMOTE"
+  exit 1
+fi
+
 if git rev-parse --quiet --verify "refs/tags/$TAG" >/dev/null; then
   echo "Error: tag $TAG already exists locally"
   exit 1
@@ -164,13 +216,13 @@ if [[ -n "$REMOTE_TAGS" ]]; then
 fi
 
 if $DRY_RUN; then
-  echo "[dry-run] Would tag $(git rev-parse --short HEAD) as $TAG and push main and $TAG to $REMOTE"
+  echo "[dry-run] Would tag $(git rev-parse --short HEAD) as $TAG and push $TAG to $REMOTE"
   exit 0
 fi
 
 # ─── Tag, push ────────────────────────────────────────────────────
 git tag "$TAG"
-if ! git push --atomic "$REMOTE" main "$TAG"; then
+if ! git push "$REMOTE" "refs/tags/$TAG"; then
   git tag -d "$TAG" >/dev/null
   echo "Error: push failed — removed the local $TAG tag"
   exit 1
