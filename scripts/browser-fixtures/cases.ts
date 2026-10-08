@@ -23,7 +23,6 @@ const RED = 'rgb(255, 0, 0)';
 const GREEN = 'rgb(0, 128, 0)';
 const BLUE = 'rgb(0, 0, 255)';
 const BLACK = 'rgb(0, 0, 0)';
-const TRANSPARENT = 'rgba(0, 0, 0, 0)';
 
 const KEYWORDS = [
   'initial',
@@ -267,7 +266,7 @@ const pseudoElementSlot: FixtureCase = {
 
 /**
  * The showcase's `bg` writes `--current-bg` on the element it styles, and its
- * card footer reads it from a child.
+ * card footer and container-card media read it from a child.
  */
 export function showcaseCurrentBg(registration: string): FixtureCase {
   return {
@@ -286,10 +285,10 @@ export function showcaseCurrentBg(registration: string): FixtureCase {
         expected: RED,
       },
       {
-        label: 'a child reader gets the initial value',
+        label: 'a child reader gets the written colour',
         selector: '#footer',
         property: 'border-top-color',
-        expected: TRANSPARENT,
+        expected: RED,
       },
     ],
   };

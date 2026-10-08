@@ -660,7 +660,9 @@ export const theme = createTheme()
     {
       'current-bg': {
         syntax: '<color>',
-        inherits: false,
+        // Card footers and container-card media read the background their
+        // ancestor wrote, so the value must inherit.
+        inherits: true,
         initialValue: 'transparent',
       },
     }
