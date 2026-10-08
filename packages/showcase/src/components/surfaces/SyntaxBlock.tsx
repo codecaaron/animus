@@ -353,15 +353,13 @@ export function SyntaxBlock({
         <TitleBar
           collapsible={collapsible}
           onClick={collapsible ? () => setCollapsed(!collapsed) : undefined}
-          role={collapsible ? 'button' : undefined}
-          aria-expanded={collapsible ? !collapsed : undefined}
         >
           <TitleBarLeft>
             {collapsible && (
               <CollapseToggle
                 type="button"
                 collapsed={collapsed}
-                onClick={(e: React.MouseEvent) => e.stopPropagation()}
+                aria-expanded={!collapsed}
                 aria-label={collapsed ? 'Expand code' : 'Collapse code'}
               >
                 <ChevronDown size={12} />
@@ -374,7 +372,7 @@ export function SyntaxBlock({
               </>
             )}
           </TitleBarLeft>
-          <TitleActions>
+          <TitleActions onClick={(e: React.MouseEvent) => e.stopPropagation()}>
             <LanguageLabel>{lang}</LanguageLabel>
             {copyable && <CopyButton text={code} size="sm" />}
           </TitleActions>
