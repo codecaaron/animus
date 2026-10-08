@@ -605,10 +605,15 @@ fn collect_static_values_impl(
 }
 
 /// Marks a value a const object cannot carry statically — a skipped key or
-/// a captured `transform` callback — so a `.props()` stage reached through
-/// the const can report what it lost. Readers take or strip markers before
-/// a stage value is used, and a member read of a marked key is a miss.
+/// a captured `transform` callback — so whichever stage reads the const can
+/// report what it lost. Stage readers take markers with `take_lost_values`
+/// or `take_lost_custom_props`; only serialized statics strip them silently.
+/// A member read of a marked key is a miss.
 const LOST_VALUE: &str = "$animus.lost";
+
+/// Set on a marker for a captured inline `transform` callback, which only a
+/// `.props()` config can lose: other stages capture it, as inline.
+const LOST_CAPTURE: &str = "$animus.capture";
 
 struct LostValueSource<'s, 'a> {
     obj: &'s ObjectExpression<'a>,
@@ -629,6 +634,7 @@ fn mark_lost_values(
             parent,
             "transform",
             format!("an inline function in const '{}'", source.name),
+            true,
         );
     }
     for skip in skips {
@@ -641,12 +647,19 @@ fn mark_lost_values(
                 skip.parent.as_deref(),
                 &skip.key,
                 format!("{} in const '{}'", skip.reason, source.name),
+                false,
             );
         }
     }
 }
 
-fn mark_lost_value(value: &mut Value, parent: Option<&str>, key: &str, reason: String) {
+fn mark_lost_value(
+    value: &mut Value,
+    parent: Option<&str>,
+    key: &str,
+    reason: String,
+    capture: bool,
+) {
     let mut current = value;
     for segment in parent.into_iter().flat_map(|path| path.split('.')) {
         match current.get_mut(segment) {
@@ -657,6 +670,9 @@ fn mark_lost_value(value: &mut Value, parent: Option<&str>, key: &str, reason: S
     if let Some(object) = current.as_object_mut() {
         let mut marker = Map::new();
         marker.insert(LOST_VALUE.to_string(), Value::String(reason));
+        if capture {
+            marker.insert(LOST_CAPTURE.to_string(), Value::Bool(true));
+        }
         object.insert(key.to_string(), Value::Object(marker));
     }
 }
@@ -665,15 +681,17 @@ fn lost_value_reason(value: &Value) -> Option<&str> {
     value.as_object()?.get(LOST_VALUE)?.as_str()
 }
 
-/// What a `.props()` value lost through const configs, as `(prop, reason)`.
+/// What a `.props()` value lost through const configs, as `(prop, reason)`;
+/// `skipped` holds the losses inside a config, as per-property skips.
 #[derive(Default)]
 pub(crate) struct LostCustomProps {
     pub transforms: Vec<(String, String)>,
     pub configs: Vec<(String, String)>,
+    pub skipped: Vec<(String, String)>,
 }
 
 /// Takes the markers on top-level custom prop configs and their `transform`
-/// from a `.props()` value, then strips every other marker.
+/// from a `.props()` value, then takes every other marker as a skip.
 pub(crate) fn take_lost_custom_props(value: &mut Value) -> LostCustomProps {
     let mut lost = LostCustomProps::default();
     if let Some(configs) = value.as_object_mut() {
@@ -698,20 +716,54 @@ pub(crate) fn take_lost_custom_props(value: &mut Value) -> LostCustomProps {
             }
         }
     }
-    strip_lost_values(value);
+    lost.skipped = take_lost_values(value);
     lost
 }
 
-/// Removes every marker; the evaluator drops those values silently.
-pub(crate) fn strip_lost_values(value: &mut Value) {
+/// Removes the lost-value markers from a stage value reached through a const,
+/// returning each lost property, as a dotted path, with its reason. A
+/// captured inline `transform` is removed without a skip.
+pub(crate) fn take_lost_values(value: &mut Value) -> Vec<(String, String)> {
+    let mut lost = Vec::new();
+    collect_lost_values(value, "", &mut lost);
+    lost
+}
+
+fn collect_lost_values(value: &mut Value, path: &str, lost: &mut Vec<(String, String)>) {
     match value {
         Value::Object(map) => {
-            map.retain(|_, v| lost_value_reason(v).is_none());
-            map.values_mut().for_each(strip_lost_values);
+            let keys: Vec<String> = map.keys().cloned().collect();
+            for key in keys {
+                let at = if path.is_empty() {
+                    key.clone()
+                } else {
+                    format!("{path}.{key}")
+                };
+                let Some(child) = map.get_mut(&key) else {
+                    continue;
+                };
+                match lost_value_reason(child).map(str::to_string) {
+                    Some(reason) => {
+                        if child.get(LOST_CAPTURE).is_none() {
+                            lost.push((at, reason));
+                        }
+                        map.shift_remove(&key);
+                    }
+                    None => collect_lost_values(child, &at, lost),
+                }
+            }
         }
-        Value::Array(items) => items.iter_mut().for_each(strip_lost_values),
+        Value::Array(items) => items
+            .iter_mut()
+            .for_each(|v| collect_lost_values(v, path, lost)),
         _ => {}
     }
+}
+
+/// Removes every marker without reporting: serialized statics are not a
+/// stage reader, so the stage that later reads one reports its losses.
+pub(crate) fn strip_lost_values(value: &mut Value) {
+    take_lost_values(value);
 }
 
 /// Whether a module-scope declaration or import binds `name`; chain and

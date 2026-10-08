@@ -18,6 +18,14 @@ It is reported as `animus.theme.invalid-property-registration`, which fails
 `strict` builds. Vite's production CSS minify used to fail on some of these
 rules.
 
+**A `const` style config reports what it could not carry.** When
+`.styles(config)` or another stage receives a same-file `const` object, a
+property the extractor cannot evaluate statically, such as `color: someVar`,
+is now reported as a `[skip]` warning, as it is for an inline object.
+Previously it was dropped silently. That holds for `.styles()`, variant
+options, a compound's styles and a `.props()` config, and a nested loss
+names its path, such as `_hover.color`.
+
 **Finite declaration scales style several properties through one prop.**
 `createTheme().addDeclarationScale({ name, values })` registers named keys
 whose values are complete, flat records of CSS declarations. Bind a scale

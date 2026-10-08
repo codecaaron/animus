@@ -758,10 +758,11 @@ pub(crate) fn extract_file_facts_from_static_maps(
                                     "base": cfg.base,
                                     "variants": Value::Object(cfg.variants),
                                 });
-                                eval::strip_lost_values(&mut value);
+                                let lost = eval::take_lost_values(&mut value);
                                 facts.value = Some(value);
                                 facts.skipped =
                                     skips.into_iter().map(|s| (s.key, s.reason)).collect();
+                                facts.skipped.extend(lost);
                             }
                             Err(bail) => {
                                 facts.eval_error =
@@ -863,8 +864,9 @@ pub(crate) fn extract_file_facts_from_static_maps(
                                     let lost = eval::take_lost_custom_props(value);
                                     facts.dropped_transforms.extend(lost.transforms);
                                     facts.dropped_configs.extend(lost.configs);
+                                    facts.skipped.extend(lost.skipped);
                                 } else {
-                                    eval::strip_lost_values(value);
+                                    facts.skipped.extend(eval::take_lost_values(value));
                                 }
                             }
                         }
@@ -892,11 +894,12 @@ pub(crate) fn extract_file_facts_from_static_maps(
                                     Some(&statics_fx),
                                 ) {
                                     Ok((mut v, skips, _captures)) => {
-                                        eval::strip_lost_values(&mut v);
+                                        let lost = eval::take_lost_values(&mut v);
                                         facts.second_value = Some(v);
                                         facts
                                             .skipped
                                             .extend(skips.into_iter().map(|s| (s.key, s.reason)));
+                                        facts.skipped.extend(lost);
                                     }
                                     Err(bail) => {
                                         facts.eval_error = Some(format!(
@@ -1129,6 +1132,76 @@ mod tests {
         assert_eq!(stage.value.as_ref().unwrap()["p"], 4);
         assert!(stage.eval_error.is_none());
         assert!(facts.chains[0].fatal_error.is_none());
+    }
+
+    fn skipped_of(source: &str, method: &str) -> Vec<String> {
+        let facts = facts_for(source);
+        let stage = facts.chains[0]
+            .stages
+            .iter()
+            .find(|stage| stage.method == method)
+            .unwrap();
+        stage.skipped.iter().map(|(key, _)| key.clone()).collect()
+    }
+
+    #[test]
+    fn every_stage_reports_what_a_const_could_not_carry() {
+        let styles = facts_for(
+            r#"
+            const CONFIG = { gap: 16, color: someVar, _hover: { opacity: level } };
+            export const Box = ds.styles(CONFIG).asElement('div');
+            "#,
+        );
+        let stage = &styles.chains[0].stages[0];
+        let value = stage.value.as_ref().unwrap();
+        assert_eq!(value["gap"], 16);
+        assert!(value.get("color").is_none(), "{value}");
+        assert!(value["_hover"].get("opacity").is_none(), "{value}");
+        let mut skipped: Vec<&str> = stage.skipped.iter().map(|(key, _)| key.as_str()).collect();
+        skipped.sort_unstable();
+        assert_eq!(skipped, ["_hover.opacity", "color"]);
+        assert!(
+            stage
+                .skipped
+                .iter()
+                .all(|(_, reason)| reason.contains("in const 'CONFIG'")),
+            "{:?}",
+            stage.skipped
+        );
+
+        let variant = r#"
+            const SMALL = { padding: 4, color: someVar };
+            export const Box = ds
+              .styles({})
+              .variant({ prop: 'size', variants: { sm: SMALL } })
+              .asElement('div');
+            "#;
+        assert_eq!(skipped_of(variant, "variant"), ["variants.sm.color"]);
+
+        let compound = r#"
+            const HOVER = { opacity: level };
+            export const Box = ds
+              .styles({})
+              .variant({ prop: 'size', variants: { sm: {} } })
+              .compound({ size: 'sm' }, { _hover: HOVER })
+              .asElement('div');
+            "#;
+        assert_eq!(skipped_of(compound, "compound"), ["_hover.opacity"]);
+
+        let props = r#"
+            const SCALE = { sm: 4, lg: someVar };
+            export const Box = ds
+              .styles({})
+              .props({ w: { property: 'width', scale: SCALE } })
+              .asElement('div');
+            "#;
+        assert_eq!(skipped_of(props, "props"), ["w.scale.lg"]);
+
+        let captured = r#"
+            const C = { transform: (v) => v };
+            export const Box = ds.styles(C).asElement('div');
+            "#;
+        assert!(skipped_of(captured, "styles").is_empty());
     }
 
     #[test]
