@@ -17,11 +17,16 @@ text inside strings and `url()` are left alone. The option is off by
 default; a project with a prefix and contextual variables that has not
 turned it on reports `animus.prefix.contextual-vars-unprefixed`.
 
-**Only `url()` arguments are treated as `asset()` references.** Placeholder
-text elsewhere in a style, such as `content: "animus-asset:note"`, is now left
-as written. Before, any such text in component CSS was taken for an asset: a
-`strict` build failed on it as an unresolvable specifier, and otherwise it
-was rewritten.
+**`asset()` references are recognised where a browser loads them.** A
+placeholder is an asset reference when it is the argument of `url()` in any
+letter case, quoted or bare, or a quoted string that opens an `image-set()`
+or `-webkit-image-set()` candidate, such as
+`image-set("${asset('./hero.png')}" 1x)`. Placeholder text anywhere else, such
+as `content: "animus-asset:note"`, is left as written. Before, any such text
+in component CSS was taken for an asset: a `strict` build failed on it as an
+unresolvable specifier, and otherwise it was rewritten. Placeholder text still
+inside a `url()` or `image-set()` after substitution is reported as
+`animus.asset.unsubstituted-placeholder`, which fails `strict` builds.
 
 **Custom-property diagnostics find more transitions and cost less.** A
 transitioned custom property is now recognised after a leading comment

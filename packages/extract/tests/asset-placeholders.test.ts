@@ -177,3 +177,89 @@ describe('generated runtime modules', () => {
     );
   });
 });
+
+describe('asset reference referenceForms', () => {
+  const urls = new Map([
+    ['./hero.png', '/assets/hero.1.png'],
+    ['./a.png', '/assets/a.1.png'],
+    ['./b.png', '/assets/b.1.png'],
+  ]);
+  const referenceForms: [string, string, string[], string][] = [
+    [
+      'an image-set() candidate',
+      '.a{background:image-set("animus-asset:./hero.png" 1x)}',
+      ['./hero.png'],
+      '.a{background:image-set("/assets/hero.1.png" 1x)}',
+    ],
+    [
+      'every image-set() candidate',
+      '.a{background:image-set("animus-asset:./a.png" 1x, \'animus-asset:./b.png\' 2x)}',
+      ['./a.png', './b.png'],
+      '.a{background:image-set("/assets/a.1.png" 1x, \'/assets/b.1.png\' 2x)}',
+    ],
+    [
+      'a -webkit-image-set() candidate',
+      '.a{background:-webkit-image-set("animus-asset:./a.png" 1x)}',
+      ['./a.png'],
+      '.a{background:-webkit-image-set("/assets/a.1.png" 1x)}',
+    ],
+    [
+      'a URL() argument in capitals',
+      '.a{background:URL("animus-asset:./hero.png")}',
+      ['./hero.png'],
+      '.a{background:URL("/assets/hero.1.png")}',
+    ],
+    [
+      'a url() candidate inside image-set()',
+      '.a{background:image-set(url(animus-asset:./a.png) 1x, "animus-asset:./b.png" 2x)}',
+      ['./a.png', './b.png'],
+      '.a{background:image-set(url(/assets/a.1.png) 1x, "/assets/b.1.png" 2x)}',
+    ],
+  ];
+
+  test.each(referenceForms)(
+    '%s is a reference',
+    (_form, css, specifiers, substituted) => {
+      expect(findAssetSpecifiers(css).sort()).toEqual(specifiers);
+      expect(substituteAssetPlaceholders(css, urls)).toBe(substituted);
+    }
+  );
+
+  test('a string outside url() and image-set() is ordinary text', () => {
+    const css = '.a::after{content:"animus-asset:./hero.png"}';
+    expect(findAssetSpecifiers(css)).toEqual([]);
+    expect(substituteAssetPlaceholders(css, urls)).toBe(css);
+  });
+
+  test.each([
+    [
+      'an unmapped image-set() candidate',
+      '.a{background:image-set("animus-asset:./gone.png" 1x)}',
+    ],
+    [
+      'an unmapped URL() argument',
+      '.a{background:URL(animus-asset:./gone.png)}',
+    ],
+    [
+      'placeholder text elsewhere in image-set()',
+      '.a{background:image-set("/x.png" 1x, local "animus-asset:./gone.png")}',
+    ],
+  ])('%s left after substitution is reported', (_form, css) => {
+    expect(() =>
+      reportSurvivingAssetPlaceholders(css, {
+        strict: true,
+        warn: () => {},
+        prefix: '[animus]',
+      })
+    ).toThrow(`./gone.png (${UNSUBSTITUTED_ASSET_CODE})`);
+  });
+
+  test('a content string is not reported', () => {
+    const warnings: string[] = [];
+    reportSurvivingAssetPlaceholders(
+      '.a::after{content:"animus-asset:./note"}',
+      { warn: (message) => warnings.push(message), prefix: '[animus]' }
+    );
+    expect(warnings).toEqual([]);
+  });
+});

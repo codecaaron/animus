@@ -5,37 +5,106 @@ import type {
 
 export const ASSET_PLACEHOLDER_PREFIX = 'animus-asset:';
 
-const escapeRegExp = (value: string): string =>
-  value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+/**
+ * An asset reference: `animus-asset:<specifier>` at `[start, end)`, where a
+ * browser would load it. That is the argument of a `url()` in any case,
+ * quoted or bare, or a quoted string opening an `image-set()` or
+ * `-webkit-image-set()` candidate. The same text elsewhere, such as in a
+ * `content` string, is ordinary text.
+ */
+interface AssetReference {
+  start: number;
+  end: number;
+  specifier: string;
+}
 
-const PREFIX_RE = escapeRegExp(ASSET_PLACEHOLDER_PREFIX);
+const URL_OPEN_RE = /url\(\s*(['"]?)/gi;
+const IMAGE_SET_OPEN_RE = /(?:-webkit-)?image-set\(/gi;
+const BARE_SPECIFIER_RE = /^[^'")\s]+/;
 
-// Only a url() argument is an asset reference; the same text elsewhere, such
-// as in a `content` string, is ordinary text.
-const QUOTED_PLACEHOLDER_RE = new RegExp(
-  `url\\(\\s*(['"])${PREFIX_RE}([^'"]*?)\\1`,
-  'g'
-);
+/** The index of the `)` that closes the `(` at `open`, outside strings. */
+function closingParen(css: string, open: number): number {
+  let depth = 0;
+  let quote: string | null = null;
+  for (let i = open; i < css.length; i += 1) {
+    const c = css[i];
+    if (quote !== null) {
+      if (c === quote) quote = null;
+    } else if (c === '"' || c === "'") {
+      quote = c;
+    } else if (c === '(') {
+      depth += 1;
+    } else if (c === ')') {
+      depth -= 1;
+      if (depth === 0) return i;
+    }
+  }
+  return css.length;
+}
 
-const BARE_PLACEHOLDER_RE = new RegExp(
-  `url\\(\\s*${PREFIX_RE}([^'")\\s]+)`,
-  'g'
-);
+function quotedReference(css: string, quoteAt: number): AssetReference | null {
+  const start = quoteAt + 1;
+  if (!css.startsWith(ASSET_PLACEHOLDER_PREFIX, start)) return null;
+  const end = css.indexOf(css[quoteAt], start);
+  if (end === -1) return null;
+  return {
+    start,
+    end,
+    specifier: css.slice(start + ASSET_PLACEHOLDER_PREFIX.length, end),
+  };
+}
+
+function assetReferences(css: string): AssetReference[] {
+  if (!css.includes(ASSET_PLACEHOLDER_PREFIX)) return [];
+  const references: AssetReference[] = [];
+  for (const open of css.matchAll(URL_OPEN_RE)) {
+    const at = (open.index ?? 0) + open[0].length;
+    if (open[1]) {
+      const reference = quotedReference(css, at - 1);
+      if (reference) references.push(reference);
+      continue;
+    }
+    if (!css.startsWith(ASSET_PLACEHOLDER_PREFIX, at)) continue;
+    const specifier = BARE_SPECIFIER_RE.exec(
+      css.slice(at + ASSET_PLACEHOLDER_PREFIX.length)
+    )?.[0];
+    if (specifier === undefined) continue;
+    const end = at + ASSET_PLACEHOLDER_PREFIX.length + specifier.length;
+    references.push({ start: at, end, specifier });
+  }
+  for (const open of css.matchAll(IMAGE_SET_OPEN_RE)) {
+    const paren = (open.index ?? 0) + open[0].length - 1;
+    const close = closingParen(css, paren);
+    let depth = 0;
+    let candidateStart = true;
+    for (let i = paren + 1; i < close; i += 1) {
+      const c = css[i];
+      if (/\s/.test(c)) continue;
+      if (c === '"' || c === "'") {
+        if (depth === 0 && candidateStart) {
+          const reference = quotedReference(css, i);
+          if (reference) references.push(reference);
+        }
+        const end = css.indexOf(c, i + 1);
+        i = end === -1 ? close : end;
+      } else if (c === '(') {
+        depth += 1;
+      } else if (c === ')') {
+        depth -= 1;
+      } else if (c === ',' && depth === 0) {
+        candidateStart = true;
+        continue;
+      }
+      candidateStart = false;
+    }
+  }
+  return references.sort((a, b) => a.start - b.start);
+}
 
 export function findAssetSpecifiers(css: string): string[] {
-  if (!css.includes(ASSET_PLACEHOLDER_PREFIX)) return [];
-  const seen = new Set<string>();
-  const remainder = css.replace(
-    QUOTED_PLACEHOLDER_RE,
-    (_match, _quote, specifier: string) => {
-      seen.add(specifier);
-      return '';
-    }
-  );
-  for (const match of remainder.matchAll(BARE_PLACEHOLDER_RE)) {
-    seen.add(match[1]);
-  }
-  return [...seen];
+  return [
+    ...new Set(assetReferences(css).map((reference) => reference.specifier)),
+  ];
 }
 
 export function substituteAssetPlaceholders(
@@ -43,24 +112,41 @@ export function substituteAssetPlaceholders(
   urlBySpecifier: ReadonlyMap<string, string>
 ): string {
   if (urlBySpecifier.size === 0) return css;
-  if (!css.includes(ASSET_PLACEHOLDER_PREFIX)) return css;
-  const specifiers = [...urlBySpecifier.keys()].sort(
-    (a, b) => b.length - a.length
-  );
   let out = css;
-  for (const specifier of specifiers) {
-    const placeholder = new RegExp(
-      String.raw`(url\(\s*['"]?)` +
-        escapeRegExp(ASSET_PLACEHOLDER_PREFIX + specifier) +
-        String.raw`(?=['")\s]|$)`,
-      'g'
-    );
-    out = out.replace(
-      placeholder,
-      (_match, opening: string) => opening + urlBySpecifier.get(specifier)!
-    );
+  // From the end, so each earlier reference keeps its offsets.
+  for (const reference of assetReferences(css).reverse()) {
+    const url = urlBySpecifier.get(reference.specifier);
+    if (url === undefined) continue;
+    out = out.slice(0, reference.start) + url + out.slice(reference.end);
   }
   return out;
+}
+
+/**
+ * Specifiers of placeholder text anywhere inside a `url()` or `image-set()`
+ * call, a reference or not: after substitution any of it is a broken load.
+ */
+function placeholdersInAssetCalls(css: string): string[] {
+  if (!css.includes(ASSET_PLACEHOLDER_PREFIX)) return [];
+  const calls = [
+    ...css.matchAll(URL_OPEN_RE),
+    ...css.matchAll(IMAGE_SET_OPEN_RE),
+  ].map((open) => {
+    const paren = css.indexOf('(', open.index ?? 0);
+    return [paren, closingParen(css, paren)] as const;
+  });
+  const found = new Set<string>();
+  for (
+    let at = css.indexOf(ASSET_PLACEHOLDER_PREFIX);
+    at !== -1;
+    at = css.indexOf(ASSET_PLACEHOLDER_PREFIX, at + 1)
+  ) {
+    if (!calls.some(([open, close]) => open < at && at < close)) continue;
+    found.add(
+      /^[^'")\s,]*/.exec(css.slice(at + ASSET_PLACEHOLDER_PREFIX.length))![0]
+    );
+  }
+  return [...found];
 }
 
 /** The stylesheets one analysis emits. A theme scale value lands in
@@ -115,7 +201,7 @@ export function reportSurvivingAssetPlaceholders(
     surface?: string;
   }
 ): void {
-  const specifiers = findAssetSpecifiers(css);
+  const specifiers = placeholdersInAssetCalls(css);
   if (specifiers.length === 0) return;
   const message = `${report.prefix} asset() placeholders reached ${report.surface ?? 'emitted CSS'} unsubstituted: ${specifiers.join(', ')} (${UNSUBSTITUTED_ASSET_CODE})`;
   if (report.strict) throw new Error(message);
