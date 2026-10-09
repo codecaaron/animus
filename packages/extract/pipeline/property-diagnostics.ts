@@ -7,6 +7,7 @@ import {
 } from '@animus-ui/properties';
 
 import {
+  PROPERTY_CURRENT_VAR_CYCLE,
   PROPERTY_FALLBACK_CHAIN_SUPPRESSED,
   PROPERTY_FALLBACK_SELF_REFERENCE,
   PROPERTY_FALLBACK_SUPPRESSED,
@@ -27,7 +28,8 @@ import type {
 } from '@animus-ui/properties';
 
 export interface CustomPropertyCheckInput {
-  system: Pick<SystemConfig, 'variableCss' | 'contextualProperties'>;
+  system: Pick<SystemConfig, 'variableCss' | 'contextualProperties'> &
+    Partial<Pick<SystemConfig, 'propConfigJson'>>;
   manifest: Pick<ProjectManifest, 'components'>;
   componentCss: string;
   globalCss: string;
@@ -72,14 +74,31 @@ export function checkCustomProperties(
   const withInitialValue = [...registered]
     .filter(([, registration]) => registration.initialValue !== undefined)
     .map(([name]) => name);
+  const writers = currentVarWriters(input.system.propConfigJson);
+  const currentVars = new Set(writers.keys());
   const findings: Finding[] = [];
   const sheets = [
     { css: input.componentCss, owner: componentOwner(input.manifest) },
     { css: input.globalCss, owner: globalOwner },
   ];
   for (const { css, owner } of sheets) {
-    if (!mayHoldFinding(css, withInitialValue, declaredNames)) continue;
+    if (!mayHoldFinding(css, withInitialValue, declaredNames, currentVars)) {
+      continue;
+    }
     const parsed = declarations(css);
+    for (const cycle of currentVarCycles(parsed, currentVars)) {
+      const [first] = cycle;
+      const names = cycle.map((d) => d.property);
+      const props = [
+        ...new Set(cycle.flatMap((d) => writers.get(d.property) ?? [])),
+      ];
+      findings.push({
+        code: PROPERTY_CURRENT_VAR_CYCLE,
+        property: first.property,
+        message: `${cycle.map((d) => `${d.property}: ${d.value}`).join('; ')} are written by the currentVar of ${props.join(', ')} in one rule and read each other, a cycle, so ${names.join(', ')} are invalid at computed-value time wherever this rule applies. Give one of the props a value that does not read another's current variable`,
+        owner: owner(first),
+      });
+    }
     const discreteRules = new Set(
       parsed
         .filter(
@@ -100,6 +119,15 @@ export function checkCustomProperties(
           PROPERTY_SELF_REFERENCE,
           declaration.property,
           `${declaration.property} resolves to var(${declaration.property}), a reference to itself, so it is invalid at computed-value time. Give it a value other than its own name`
+        );
+        continue;
+      }
+      if (readsItselfDirectly(declaration, reads)) {
+        const { property, value } = declaration;
+        found(
+          PROPERTY_SELF_REFERENCE,
+          property,
+          `${property}: ${value} reads ${property} directly, a reference to itself, so it is invalid at computed-value time; a fallback inside that var() does not break the cycle. Give it a value that does not read its own name`
         );
         continue;
       }
@@ -148,15 +176,17 @@ export function checkCustomProperties(
 /**
  * Whether a sheet can hold a finding, shown by its text before anything is
  * parsed: a custom property reading its own name, a `var(` with a fallback
- * of a registration that has an initial value, or a transition or keyframes
- * and a declared contextual variable's name. An escape or a comment can hide
+ * of a registration that has an initial value, a transition or keyframes
+ * and a declared contextual variable's name, or a `var(` of a currentVar name
+ * when two or more props write one. An escape or a comment can hide
  * a name or a function from the text, so a sheet with either is always
  * parsed.
  */
 function mayHoldFinding(
   css: string,
   withInitialValue: readonly string[],
-  declared: readonly string[]
+  declared: readonly string[],
+  currentVars: ReadonlySet<string>
 ): boolean {
   return (
     css.includes('\\') ||
@@ -166,7 +196,12 @@ function mayHoldFinding(
       new RegExp(String.raw`var\(\s*${escapeRegExp(name)}\s*,`, 'i').test(css)
     ) ||
     (declared.some((name) => css.includes(name)) &&
-      /transition|@keyframes/i.test(css))
+      /transition|@keyframes/i.test(css)) ||
+    // A cycle needs two currentVar writes, one read through `var()`.
+    (currentVars.size > 1 &&
+      [...currentVars].some((name) =>
+        new RegExp(String.raw`var\(\s*${escapeRegExp(name)}`, 'i').test(css)
+      ))
   );
 }
 
@@ -352,6 +387,140 @@ function isSelfReference(
     declaration.values.length === 1 &&
     declaration.values[0].start === reads[0].start
   );
+}
+
+/** Whether a read of the declared property sits outside every other read's
+ *  fallback, as in `--a: var(--a, red)` or `--a: calc(var(--a) + 1px)`: cyclic
+ *  whatever the fallback, as the bare `var(--a)` is. */
+function readsItselfDirectly(
+  declaration: Declaration,
+  reads: readonly VariableRead[]
+): boolean {
+  return (
+    declaration.custom &&
+    reads.some(
+      (read) => read.name === declaration.property && isDirectRead(read, reads)
+    )
+  );
+}
+
+/** Whether `read` sits outside every other read's fallback, so it is taken
+ *  whenever the declaration is. */
+function isDirectRead(
+  read: VariableRead,
+  reads: readonly VariableRead[]
+): boolean {
+  return !reads.some(
+    (outer) =>
+      outer !== read &&
+      outer.fallback !== undefined &&
+      outer.fallback.start <= read.start &&
+      read.end <= outer.fallback.end
+  );
+}
+
+/** Each custom property a `currentVar` writes, with the props writing it. */
+function currentVarWriters(
+  propConfigJson: string | undefined
+): Map<string, string[]> {
+  const writers = new Map<string, string[]>();
+  if (propConfigJson === undefined) return writers;
+  // SAFETY: `propConfigJson` is the system's own serialized prop config, one
+  // object per prop whose `currentVar`, when set, is the custom property name.
+  const config = JSON.parse(propConfigJson) as Record<
+    string,
+    { currentVar?: string }
+  >;
+  for (const [prop, entry] of Object.entries(config)) {
+    if (!entry.currentVar) continue;
+    writers.set(entry.currentVar, [
+      ...(writers.get(entry.currentVar) ?? []),
+      prop,
+    ]);
+  }
+  return writers;
+}
+
+/**
+ * Cycles among the `currentVar` writes of one rule, read directly. One rule
+ * is one element under one set of conditions, so its writes are always
+ * active together; writes in different rules, or a read only inside another
+ * read's fallback, are left alone. Each cycle is listed once, in declaration
+ * order.
+ */
+function currentVarCycles(
+  parsed: readonly Declaration[],
+  currentVars: ReadonlySet<string>
+): Declaration[][] {
+  if (currentVars.size === 0) return [];
+  const byRule = new Map<number, Map<string, Declaration>>();
+  for (const declaration of parsed) {
+    if (!declaration.custom || !currentVars.has(declaration.property)) continue;
+    const writes = byRule.get(declaration.rule) ?? new Map();
+    // A later declaration of a name wins within its rule, as in CSS.
+    writes.set(declaration.property, declaration);
+    byRule.set(declaration.rule, writes);
+  }
+  const cycles: Declaration[][] = [];
+  for (const writes of byRule.values()) {
+    const edges = new Map<string, string[]>();
+    for (const [name, declaration] of writes) {
+      const reads = variableReads(declaration.values);
+      edges.set(
+        name,
+        reads
+          .filter(
+            (read) =>
+              read.name !== name &&
+              writes.has(read.name) &&
+              isDirectRead(read, reads)
+          )
+          .map((read) => read.name)
+      );
+    }
+    for (const component of stronglyConnected(edges)) {
+      if (component.length < 2) continue;
+      cycles.push(
+        [...writes.values()].filter((d) => component.includes(d.property))
+      );
+    }
+  }
+  return cycles;
+}
+
+/** Tarjan's strongly connected components of a small graph. */
+function stronglyConnected(edges: ReadonlyMap<string, string[]>): string[][] {
+  const index = new Map<string, number>();
+  const low = new Map<string, number>();
+  const stack: string[] = [];
+  const onStack = new Set<string>();
+  const components: string[][] = [];
+  const visit = (node: string) => {
+    index.set(node, index.size);
+    low.set(node, index.get(node)!);
+    stack.push(node);
+    onStack.add(node);
+    for (const next of edges.get(node) ?? []) {
+      if (!index.has(next)) {
+        visit(next);
+        low.set(node, Math.min(low.get(node)!, low.get(next)!));
+      } else if (onStack.has(next)) {
+        low.set(node, Math.min(low.get(node)!, index.get(next)!));
+      }
+    }
+    if (low.get(node) === index.get(node)) {
+      const component: string[] = [];
+      let member: string | undefined;
+      do {
+        member = stack.pop()!;
+        onStack.delete(member);
+        component.push(member);
+      } while (member !== node);
+      components.push(component);
+    }
+  };
+  for (const node of edges.keys()) if (!index.has(node)) visit(node);
+  return components;
 }
 
 /** Whether every read of the declared property sits inside another read's

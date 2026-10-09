@@ -370,7 +370,9 @@ describe('checks on emitted CSS alone', () => {
         '.authored { --a: var(--b, var(--a)); }',
         '.slot { width: var(--b, var(--a)); --a: var(--b, var(--a)); }',
         String.raw`.escaped { --\61: var(--b, VAR(--a)); }`,
-        // A direct read, or a read of another name, is not that case.
+        // A direct read, inside math or beside its own fallback, is a
+        // self-reference like the bare var(); a read of another name is
+        // neither.
         '.direct { --a: calc(var(--a) + 1px); --c: var(--b, var(--a)); }',
       ].join('\n'),
       globalCss: '',
@@ -381,6 +383,7 @@ describe('checks on emitted CSS alone', () => {
       [PROPERTY_FALLBACK_SELF_REFERENCE, '.authored'],
       [PROPERTY_FALLBACK_SELF_REFERENCE, '.slot'],
       [PROPERTY_FALLBACK_SELF_REFERENCE, '.escaped'],
+      [PROPERTY_SELF_REFERENCE, '.direct'],
     ]);
     expect(diagnostics[2].message).toContain(
       'Wherever that fallback is used, --a refers to itself, a cycle in every browser'

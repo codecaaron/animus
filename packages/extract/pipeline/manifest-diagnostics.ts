@@ -172,6 +172,11 @@ export const PROPERTY_SELF_REFERENCE = 'animus.property.self-reference';
 export const PROPERTY_FALLBACK_SELF_REFERENCE =
   'animus.property.fallback-self-reference';
 
+/** Custom properties that `currentVar` writes in one rule, each reading
+ *  another directly, so every property in the cycle is invalid at
+ *  computed-value time. */
+export const PROPERTY_CURRENT_VAR_CYCLE = 'animus.property.current-var-cycle';
+
 /** A prefix renamed contextual variables without `prefixContextualVars`, so
  *  their declared names no longer resolve. */
 export const PREFIX_CONTEXTUAL_VARS_UNPREFIXED =
@@ -208,6 +213,7 @@ const DIAGNOSTIC_SEVERITY: ReadonlyMap<string, DiagnosticSeverity> = new Map([
   [PROPERTY_UNREGISTERED_ANIMATION, 'info'],
   [PROPERTY_SELF_REFERENCE, 'warn'],
   [PROPERTY_FALLBACK_SELF_REFERENCE, 'warn'],
+  [PROPERTY_CURRENT_VAR_CYCLE, 'warn'],
   [PREFIX_CONTEXTUAL_VARS_UNPREFIXED, 'warn'],
   [PREFIX_NAME_CONFLICT, 'error'],
   [PROPERTY_LEGACY_TOKEN_COLLISION, 'warn'],
