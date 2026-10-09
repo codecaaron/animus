@@ -418,3 +418,52 @@ export function variableReads(
   visit(values);
   return reads;
 }
+
+/** How a value spells the `!important` it ends with: `hidden !important`,
+ *  any case and spacing, or the shorthand `hidden!`. */
+export type ImportantSpelling = 'important' | 'shorthand';
+
+export interface ImportantPriority {
+  spelling: ImportantSpelling;
+  /** Where the value before the priority ends. */
+  end: number;
+}
+
+/**
+ * The `!important` `css` ends with; kept in step with `important_priority`
+ * in the Rust engine. The value has one `!`, a delim token, so a `!` inside
+ * a string, a `url()` or an escape is no priority, and neither is a lone `!`
+ * or `!important`.
+ */
+export function importantPriority(css: string): ImportantPriority | undefined {
+  const trimmed = css.trimEnd();
+  const endsImportant =
+    trimmed.length >= 9 && /^important$/i.test(trimmed.slice(-9));
+  if (!css.endsWith('!') && !endsImportant) return undefined;
+  const tokens = tokenize(css);
+  let bang = -1;
+  for (let index = 0; index < tokens.length; index += 1) {
+    if (tokens[index].type !== 'delim' || tokens[index].value !== '!') continue;
+    if (bang !== -1) return undefined;
+    bang = index;
+  }
+  if (bang === -1) return undefined;
+  if (bang === tokens.length - 1) {
+    const previous = tokens[bang - 1];
+    return previous !== undefined &&
+      previous.type !== 'whitespace' &&
+      previous.end === tokens[bang].start
+      ? { spelling: 'shorthand', end: previous.end }
+      : undefined;
+  }
+  const after = tokens.slice(bang + 1).filter((t) => t.type !== 'whitespace');
+  if (
+    after.length !== 1 ||
+    after[0].type !== 'ident' ||
+    !/^important$/i.test(after[0].value)
+  ) {
+    return undefined;
+  }
+  const value = tokens.slice(0, bang).findLast((t) => t.type !== 'whitespace');
+  return value && { spelling: 'important', end: value.end };
+}

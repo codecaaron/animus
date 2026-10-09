@@ -4,12 +4,19 @@ export {
   componentValues,
   decodedIdentifier,
   identifierAt,
+  importantPriority,
   isSpace,
   someValue,
   tokenize,
   variableReads,
 } from './css-tokens.js';
-export type { ComponentValue, CssToken, VariableRead } from './css-tokens.js';
+export type {
+  ComponentValue,
+  CssToken,
+  ImportantPriority,
+  ImportantSpelling,
+  VariableRead,
+} from './css-tokens.js';
 export {
   dependsOnContext,
   foldInitialValue,

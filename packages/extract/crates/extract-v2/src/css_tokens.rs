@@ -303,3 +303,43 @@ pub fn variable_reads<'t>(tokens: &'t [Token<'_>]) -> impl Iterator<Item = &'t s
         (name.kind == Kind::Ident && name.value.starts_with("--")).then_some(name.value.as_ref())
     })
 }
+
+/// How a value spells the `!important` it ends with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImportantSpelling {
+    /// `hidden !important`, any case and spacing.
+    Important,
+    /// `hidden!`: one `!` written right after the value.
+    Shorthand,
+}
+
+/// The `!important` `css` ends with, and where the value before it ends; kept
+/// in step with `importantPriority` in `@animus-ui/properties`. The value has
+/// one `!`, a delim token, so a `!` inside a string, a `url()` or an escape is
+/// no priority, and neither is a lone `!` or `!important`.
+pub fn important_priority(css: &str) -> Option<(ImportantSpelling, usize)> {
+    let trimmed = css.trim_end().as_bytes();
+    let ends_important = trimmed.len() >= 9 && trimmed[trimmed.len() - 9..].eq_ignore_ascii_case(b"important");
+    if !css.ends_with('!') && !ends_important {
+        return None;
+    }
+    let tokens = tokenize(css);
+    let mut bangs = tokens.iter().enumerate().filter(|(_, token)| token.kind == Kind::Delim(b'!'));
+    let (bang, _) = bangs.next()?;
+    if bangs.next().is_some() {
+        return None;
+    }
+    if bang == tokens.len() - 1 {
+        let previous = tokens[..bang].last()?;
+        return (previous.kind != Kind::Whitespace && previous.end == tokens[bang].start)
+            .then_some((ImportantSpelling::Shorthand, previous.end));
+    }
+    let mut after = tokens[bang + 1..].iter().filter(|token| token.kind != Kind::Whitespace);
+    match (after.next(), after.next()) {
+        (Some(name), None) if name.kind == Kind::Ident && name.value.eq_ignore_ascii_case("important") => {
+            let value = tokens[..bang].iter().rev().find(|token| token.kind != Kind::Whitespace)?;
+            Some((ImportantSpelling::Important, value.end))
+        }
+        _ => None,
+    }
+}

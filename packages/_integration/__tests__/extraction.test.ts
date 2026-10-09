@@ -557,3 +557,20 @@ export const App = ({ tint }) => <div {...tinted.attrs({ tint })} />;
     expect(css).toContain('var(--animus-tint');
   });
 });
+
+describe('!important shorthand', () => {
+  test('a trailing ! emits the CSS of !important', () => {
+    const css = (value: string) =>
+      runPipeline([
+        {
+          path: 'important.tsx',
+          source: `import { ds } from '../setup';
+const Box = ds.styles({ visibility: '${value}' }).asElement('div');
+export const App = () => <Box />;
+`,
+        },
+      ]).css;
+    expect(css('hidden!')).toContain('visibility: hidden !important');
+    expect(css('hidden!')).toBe(css('hidden !important'));
+  });
+});
