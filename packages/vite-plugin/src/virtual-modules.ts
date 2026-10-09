@@ -35,16 +35,23 @@ function sheetRegistryHash(ctx: PluginContext): string {
 export function resolveVirtualId(
   ctx: PluginContext,
   id: string
-): string | null {
+): string | { id: string; moduleSideEffects: boolean } | null {
   if (id === VIRTUAL_CSS_ID) return RESOLVED_CSS_ID;
   if (id === VIRTUAL_COMPONENTS_ID) return RESOLVED_COMPONENTS_ID;
   if (id === VIRTUAL_BRIDGE_ID) return RESOLVED_BRIDGE_ID;
   if (id === VIRTUAL_SYSTEM_PROPS_ID) return RESOLVED_SYSTEM_PROPS_ID;
 
   // Redirect external DS package imports to their source entry
-  // so Vite serves .ts files (transformable) instead of .mjs dist files
+  // so Vite serves .ts files (transformable) instead of .mjs dist files.
+  // A plain path would drop the package's `sideEffects`, so unused code in
+  // the entry could no longer tree-shake out.
   const srcEntry = ctx.externalSourceEntries.get(id);
-  if (srcEntry) return srcEntry;
+  if (srcEntry) {
+    const moduleSideEffects = ctx.externalSourceSideEffects.get(id);
+    return moduleSideEffects === undefined
+      ? srcEntry
+      : { id: srcEntry, moduleSideEffects };
+  }
 
   return null;
 }

@@ -120,6 +120,7 @@ export async function runBuildStart(
   for (const [specifier, srcEntry] of collected.sourceEntries) {
     ctx.externalSourceEntries.set(specifier, srcEntry);
   }
+  ctx.externalSourceSideEffects = collected.sourceEntrySideEffects;
   for (const entry of collected.entries) {
     const hash = !ctx.isProd ? contentHash(entry.source) : undefined;
     rawEntries.push({ path: entry.path, source: entry.source, hash });

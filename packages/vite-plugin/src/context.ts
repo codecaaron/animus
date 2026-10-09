@@ -275,6 +275,10 @@ export class PluginContext {
 
   externalDirOwners: Record<string, string> = {};
 
+  /** specifier → whether its redirected source entry has side effects, from
+   *  the owning package's `sideEffects`; absent leaves Vite's default. */
+  externalSourceSideEffects = new Map<string, boolean>();
+
   externalFileOwners: Record<string, string> = {};
 
   externalSourceEntries = new Map<string, string>();
