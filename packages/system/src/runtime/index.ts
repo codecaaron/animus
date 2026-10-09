@@ -26,17 +26,66 @@ type AnimusComponent = ReturnType<typeof forwardRef> & {
   customTransforms: Readonly<Record<string, Transform>>;
 };
 
+/** Sets one ref, returning the cleanup a callback ref hands back, if any. */
+function setRef<T>(
+  ref: Ref<T> | undefined,
+  value: T | null
+): (() => void) | undefined {
+  if (typeof ref === 'function') {
+    const cleanup = ref(value);
+    return typeof cleanup === 'function' ? cleanup : undefined;
+  }
+  if (ref) (ref as React.MutableRefObject<T | null>).current = value;
+  return undefined;
+}
+
 /**
- * A new callback on every call: the runtime stays hook-free so components
- * work in server components, which rules memoization out.
+ * Attaches every ref. When one hands back a cleanup (React 19), the merged
+ * callback returns a cleanup that runs it and resets the others with null.
+ * Otherwise it returns nothing, since React 18 warns on a returned function,
+ * and React detaches by calling it with null, which reaches every ref.
  */
-function composeRefs<T>(...refs: (Ref<T> | undefined)[]): RefCallback<T> {
+function mergeRefs<T>(parent: Ref<T>, child: Ref<T>): RefCallback<T> {
   return (node) => {
-    for (const ref of refs) {
-      if (typeof ref === 'function') ref(node);
-      else if (ref) (ref as React.MutableRefObject<T | null>).current = node;
-    }
+    const refs = [parent, child];
+    const cleanups = refs.map((ref) => setRef(ref, node));
+    if (!cleanups.some(Boolean)) return;
+    return () => {
+      refs.forEach((ref, index) => {
+        const cleanup = cleanups[index];
+        if (cleanup) cleanup();
+        else setRef(ref, null);
+      });
+    };
   };
+}
+
+const mergedRefs = new WeakMap<object, WeakMap<object, RefCallback<any>>>();
+
+/**
+ * The ref an asChild element gets. A single ref needs no merging; a pair gets
+ * one merged callback, cached by the refs themselves, so a re-render with
+ * unchanged refs hands React the same callback and the refs stay attached.
+ * The runtime is hook-free so components work in server components, which
+ * rules per-instance memoization out.
+ */
+function composeRefs<T>(
+  parent: Ref<T> | undefined,
+  child: Ref<T> | undefined
+): Ref<T> | undefined {
+  if (!parent) return child;
+  if (!child) return parent;
+  let byChild = mergedRefs.get(parent);
+  if (!byChild) {
+    byChild = new WeakMap();
+    mergedRefs.set(parent, byChild);
+  }
+  let merged = byChild.get(child);
+  if (!merged) {
+    merged = mergeRefs(parent, child);
+    byChild.set(child, merged);
+  }
+  return merged;
 }
 
 /**

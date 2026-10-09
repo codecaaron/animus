@@ -20,6 +20,7 @@ import {
   VariantConfig,
 } from './types/config';
 import { AbstractProps } from './types/props';
+import { admittedPropNames } from './utils/admittedPropNames';
 import { deepMerge } from './utils/deepMerge';
 
 import type {
@@ -148,16 +149,16 @@ export class AnimusWithAll<
 
     const states = Object.keys(this.statesConfig);
 
-    const allPropNames = [
-      ...Object.keys(this.propRegistry),
-      ...Object.keys(this.custom),
-    ];
-
     return {
       variants:
         Object.keys(variantConfig).length > 0 ? variantConfig : undefined,
       states: states.length > 0 ? states : undefined,
-      systemPropNames: allPropNames,
+      systemPropNames: admittedPropNames(
+        this.propRegistry,
+        this.groupRegistry,
+        this.activeGroups,
+        this.custom
+      ),
     };
   }
 }
