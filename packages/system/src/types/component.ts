@@ -124,6 +124,43 @@ type ResolvedGroupProps<
   AG,
 > = GroupProps<PR, GR, AG>;
 
+/** What `as` names on a string terminal: an element tag or a component. */
+type AsTarget = keyof JSX.IntrinsicElements | ComponentType<any>;
+
+/** Everything the builder admitted, whichever element renders. */
+type AnimusOwnProps<
+  PR extends Record<string, SystemProp>,
+  GR extends Record<string, (keyof PR)[]>,
+  V,
+  S,
+  AG,
+  CP extends Record<string, SystemProp>,
+> = ResolvedGroupProps<PR, GR, AG> &
+  VariantProps<V> &
+  StateProps<S> &
+  CustomPropValues<CP> &
+  SelectorAliasProps<ResolvedGroupProps<PR, GR, AG>> & {
+    asChild?: boolean;
+    className?: string;
+    children?: ReactNode;
+  };
+
+/** A string terminal rendered as `E`: E's native props and ref, then Animus's. */
+type AnimusNativeProps<
+  E extends AsTarget,
+  PR extends Record<string, SystemProp>,
+  GR extends Record<string, (keyof PR)[]>,
+  V,
+  S,
+  AG,
+  CP extends Record<string, SystemProp>,
+> = Omit<ComponentPropsWithRef<E>, AnimusManagedKeys<PR, GR, V, S, AG, CP>> &
+  AnimusOwnProps<PR, GR, V, S, AG, CP>;
+
+/**
+ * The default element's props with `as` open to any target, as compose()
+ * reads a slot.
+ */
 type AnimusConsumerProps<
   El extends keyof JSX.IntrinsicElements,
   PR extends Record<string, SystemProp>,
@@ -132,18 +169,25 @@ type AnimusConsumerProps<
   S,
   AG,
   CP extends Record<string, SystemProp>,
-> = Omit<ComponentPropsWithRef<El>, AnimusManagedKeys<PR, GR, V, S, AG, CP>> &
-  ResolvedGroupProps<PR, GR, AG> &
-  VariantProps<V> &
-  StateProps<S> &
-  CustomPropValues<CP> &
-  SelectorAliasProps<ResolvedGroupProps<PR, GR, AG>> & {
-    as?: keyof JSX.IntrinsicElements | ComponentType<any>;
-    asChild?: boolean;
-    className?: string;
-    children?: ReactNode;
-  };
+> = AnimusNativeProps<El, PR, GR, V, S, AG, CP> & { as?: AsTarget };
 
+/**
+ * The element `As` selects, or the default element when `As` stays at its
+ * constraint.
+ */
+type ElementFor<As extends AsTarget, El extends keyof JSX.IntrinsicElements> = [
+  AsTarget,
+] extends [As]
+  ? El
+  : As;
+
+/**
+ * The default element's signature comes first; without it the builder classes
+ * hit TS2589 or check in seconds instead of under one. The polymorphic
+ * signature comes last: `ComponentProps` and `createElement` read the last
+ * signature, and a rejected JSX call reports its error, naming the prop the
+ * selected element or component lacks.
+ */
 export type AnimusComponent<
   El extends keyof JSX.IntrinsicElements,
   PR extends Record<string, SystemProp>,
@@ -153,7 +197,14 @@ export type AnimusComponent<
   S,
   AG,
   CP extends Record<string, SystemProp>,
-> = ForwardRefExoticComponent<AnimusConsumerProps<El, PR, GR, V, S, AG, CP>> &
+> = ForwardRefExoticComponent<
+  AnimusNativeProps<El, PR, GR, V, S, AG, CP> & { as?: El }
+> &
+  (<As extends AsTarget>(
+    props: AnimusNativeProps<ElementFor<As, El>, PR, GR, V, S, AG, CP> & {
+      as?: As;
+    }
+  ) => ReactNode) &
   ExtendFn<PR, GR, BS, V, S, AG, CP> & {
     readonly [ConsumerProps]: AnimusConsumerProps<El, PR, GR, V, S, AG, CP>;
     readonly [VariantConfigBrand]: V;
