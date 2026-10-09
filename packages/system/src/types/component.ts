@@ -148,8 +148,8 @@ type AnimusOwnProps<
   StateProps<S> &
   CustomPropValues<CP> &
   SelectorAliasProps<ResolvedGroupProps<PR, GR, AG>> & {
-    asChild?: boolean;
-    className?: string;
+    asChild?: boolean | undefined;
+    className?: string | undefined;
     children?: ReactNode;
   };
 
@@ -177,7 +177,7 @@ type AnimusConsumerProps<
   S,
   AG,
   CP extends Record<string, SystemProp>,
-> = AnimusNativeProps<El, PR, GR, V, S, AG, CP> & { as?: AsTarget };
+> = AnimusNativeProps<El, PR, GR, V, S, AG, CP> & { as?: AsTarget | undefined };
 
 /**
  * The element `As` selects, or the default element when `As` stays at its
@@ -206,11 +206,11 @@ export type AnimusComponent<
   AG,
   CP extends Record<string, SystemProp>,
 > = ForwardRefExoticComponent<
-  AnimusNativeProps<El, PR, GR, V, S, AG, CP> & { as?: El }
+  AnimusNativeProps<El, PR, GR, V, S, AG, CP> & { as?: El | undefined }
 > &
   (<As extends AsTarget>(
     props: AnimusNativeProps<ElementFor<As, El>, PR, GR, V, S, AG, CP> & {
-      as?: As;
+      as?: As | undefined;
     }
   ) => ReactNode) &
   ExtendFn<PR, GR, BS, V, S, AG, CP> & {
@@ -249,7 +249,7 @@ type AnimusWrappedConsumerProps<
   StateProps<S> &
   CustomPropValues<CP> &
   SelectorAliasProps<ResolvedGroupProps<PR, GR, AG>> & {
-    className?: string;
+    className?: string | undefined;
     children?: ReactNode;
   };
 
@@ -306,9 +306,15 @@ export type SharedConfig<Slots extends Record<string, unknown>> = {
 type SealedProps<C> = C extends {
   readonly [ConsumerProps]: infer P;
 }
-  ? Omit<P, 'extend'> & { className?: string; children?: ReactNode }
+  ? Omit<P, 'extend'> & {
+      className?: string | undefined;
+      children?: ReactNode;
+    }
   : C extends ForwardRefExoticComponent<infer P>
-    ? Omit<P, 'extend'> & { className?: string; children?: ReactNode }
+    ? Omit<P, 'extend'> & {
+        className?: string | undefined;
+        children?: ReactNode;
+      }
     : never;
 
 export type ComposedFamily<Slots extends Record<string, unknown>> = {
