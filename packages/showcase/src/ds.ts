@@ -694,7 +694,12 @@ const bundle = createSystem({
   .addGroup('motion', { ...transitions })
   .addGroup('space', space)
   .addGroup('positioning', positioning)
-  .addSelectors({ _emphasized: '&[data-emphasis]' })
+  // testDs's own aliases: `includes` carries none, and its GroupItem uses both.
+  .addSelectors({
+    _emphasized: '&[data-emphasis]',
+    _groupHover: '.group:hover &',
+    _dark: '[data-color-mode="dark"] &',
+  })
   // Same threshold as the theme's `sm` breakpoint.
   .addConditions({ _wideViewport: '@media (min-width: 768px)' })
   .build();
