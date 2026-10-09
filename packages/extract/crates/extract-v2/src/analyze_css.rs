@@ -286,6 +286,9 @@ const UNSUPPORTED_TRANSFORM_REFERENCE: &str = "animus.props.unsupported-transfor
 const UNSUPPORTED_PROPS_CONFIG: &str = "animus.props.unsupported-config";
 const UNSUPPORTED_DEFAULT_EXPORT: &str = "animus.chain.unsupported-default-export";
 const UNSUPPORTED_NAMESPACE_ROOT: &str = "animus.chain.unsupported-namespace-root";
+/// A warning: the same root reached through a barrel's local export of an
+/// import, which went unreported before the resolver followed it.
+const NAMESPACE_ROOT_THROUGH_BARREL: &str = "animus.chain.namespace-root-through-barrel";
 /// A configured transform rejected before registration loses its meaning
 /// the same way, so it shares the optional-strict policy.
 const CONFIGURED_TRANSFORM_REJECTED: &str = "animus.transform.configured-rejected";
@@ -480,34 +483,54 @@ fn probe_files<T>(base: &str, files: &BTreeMap<String, T>) -> Option<String> {
         })
 }
 
-/// Follow `export { X as Y } from '...'` hops to the file defining the name.
-/// Cycle-guarded; an unresolvable hop returns the last node reached.
+/// Follow `export { X as Y } from '...'` hops, and local exports of an
+/// import (`import { X as y } from '...'; export { y as Y }`, as a compiler
+/// writes a barrel), to the file defining the name. Cycle-guarded; an
+/// unresolvable hop returns the last node reached.
 pub fn follow_reexports(
+    file: String,
+    name: String,
+    files: &BTreeMap<String, FileFacts>,
+    inputs: &CssInputs,
+) -> (String, String) {
+    let (file, name, _) = follow_reexports_traced(file, name, files, inputs);
+    (file, name)
+}
+
+/// `follow_reexports`, also naming the first barrel left through a local
+/// export of an import.
+fn follow_reexports_traced(
     mut file: String,
     mut name: String,
     files: &BTreeMap<String, FileFacts>,
     inputs: &CssInputs,
-) -> (String, String) {
+) -> (String, String, Option<String>) {
+    let mut barrel = None;
     let mut seen: FxHashSet<(String, String)> = FxHashSet::default();
     while seen.insert((file.clone(), name.clone())) {
         let Some(ff) = files.get(&file) else { break };
-        let Some(exp) = ff
-            .exports
-            .iter()
-            .find(|e| e.exported == name && e.source.is_some())
-        else {
+        let Some(exp) = ff.exports.iter().find(|e| e.exported == name) else {
             break;
         };
-        let (Some(spec), Some(original)) = (&exp.source, &exp.original) else {
-            break;
+        let (spec, original, through_import) = match (&exp.source, &exp.original) {
+            (Some(spec), Some(original)) => (spec, original, false),
+            (None, _) => {
+                let import = exp.local.as_ref().and_then(|local| ff.imports.iter().find(|i| &i.local == local));
+                let Some(import) = import else { break };
+                (&import.source, &import.imported, true)
+            }
+            _ => break,
         };
         let Some(next) = resolve_import_source(&file, spec, files, inputs) else {
             break;
         };
+        if through_import && barrel.is_none() {
+            barrel = Some(file.clone());
+        }
         name = original.clone();
         file = next;
     }
-    (file, name)
+    (file, name, barrel)
 }
 
 /// `Some(true)` = an extractable chain, `Some(false)` = a chain that failed
@@ -575,8 +598,21 @@ fn resolve_export(
     files: &BTreeMap<String, FileFacts>,
     inputs: &CssInputs,
 ) -> Option<(String, String, bool)> {
+    resolve_export_traced(file_path, specifier, imported, files, inputs)
+        .map(|(file, binding, local, _)| (file, binding, local))
+}
+
+/// `resolve_export`, also naming the first barrel left through a local export
+/// of an import.
+fn resolve_export_traced(
+    file_path: &str,
+    specifier: &str,
+    imported: &str,
+    files: &BTreeMap<String, FileFacts>,
+    inputs: &CssInputs,
+) -> Option<(String, String, bool, Option<String>)> {
     let f = resolve_import_source(file_path, specifier, files, inputs)?;
-    let (pf, pn) = follow_reexports(f, imported.to_string(), files, inputs);
+    let (pf, pn, barrel) = follow_reexports_traced(f, imported.to_string(), files, inputs);
     let landing = files.get(&pf);
 
     // Component ids key on the DECLARATOR, not the exported name, so an
@@ -596,11 +632,12 @@ fn resolve_export(
             && (local_export.is_some()
                 || pff.chains.iter().any(|c| c.descriptor.binding == binding))
     });
-    Some((pf, binding, locally_defined))
+    Some((pf, binding, locally_defined, barrel))
 }
 
 /// A parent bails only when its landing file is in the analyzed set AND
-/// declares the name locally; barrels and outside files stay standalone.
+/// declares the name locally; a barrel the resolver cannot follow, and an
+/// outside file, stay standalone.
 fn resolve_extension_parent(
     file_path: &str,
     ff: &FileFacts,
@@ -909,8 +946,8 @@ fn unsupported_namespace_root(
     inputs: &CssInputs,
 ) -> Option<CssDiagnostic> {
     let specifier = ff.namespace_imports.get(&chain.object)?;
-    let Some((defining_file, defining_name, true)) =
-        resolve_export(file, specifier, &chain.member, files, inputs)
+    let Some((defining_file, defining_name, true, barrel)) =
+        resolve_export_traced(file, specifier, &chain.member, files, inputs)
     else {
         return None;
     };
@@ -928,13 +965,14 @@ fn unsupported_namespace_root(
             "bail",
             format!(
                 "chain dropped: its root '{object}.{member}' reads '{member}' through \
-                 namespace import '{object}'; the declaration in {file} is left \
+                 namespace import '{object}'{reached}; the declaration in {file} is left \
                  untransformed — use a named import (import {{ {member} }} from \
                  '{specifier}') and build from '{member}'",
                 object = chain.object,
                 member = chain.member,
+                reached = barrel.as_deref().map(|barrel| format!(", reached through {barrel}")).unwrap_or_default(),
             ),
-            Some(UNSUPPORTED_NAMESPACE_ROOT),
+            Some(if barrel.is_some() { NAMESPACE_ROOT_THROUGH_BARREL } else { UNSUPPORTED_NAMESPACE_ROOT }),
         )
     })
 }
@@ -6791,8 +6829,9 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
     }
 
     #[test]
-    fn import_then_reexport_barrel_stays_standalone() {
-        // The barrel's export fact names an import, not a declarator.
+    fn import_then_reexport_barrel_inherits_from_the_declarator() {
+        // The barrel's export fact names an import, which resolves on to the
+        // declarator, as a compiler's barrel does.
         for (barrel_export, imported) in [
             ("export { CardBase as Card };", "Card"),
             ("export { CardBase };", "CardBase"),
@@ -6830,8 +6869,8 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             let child_rule = child_rule(&out);
             assert!(child_rule.contains("display: grid"), "{}", out.sheets.base);
             assert!(
-                !child_rule.contains("padding"),
-                "standalone fallback, not inheritance:\n{}",
+                child_rule.contains("padding"),
+                "inherits the declarator's styles:\n{}",
                 out.sheets.base
             );
         }
