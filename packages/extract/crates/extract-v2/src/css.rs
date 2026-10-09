@@ -3,9 +3,9 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt::Write;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -13,7 +13,42 @@ use serde_json::Value;
 use crate::declarations::{breakpoint_of, record_key, DeclarationBinding, DeclarationNames};
 use crate::theme::{ConditionedGroup, CssDeclaration, PropConfig, PropConfigMap, ResolveContext, ResolvedStyles, TransformFailure, TransformFailureSink, first_top_level_branch, is_responsive_value, resolve_styles, split_top_level_commas};
 
-pub fn camel_to_kebab(s: &str) -> String {
+/// The unitless property names and the style-key vendor prefixes of
+/// `@animus-ui/properties`, written by `packages/extract/scripts/property-table.ts`.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PropertyTable {
+    unitless: FxHashSet<String>,
+    vendor_prefixes: Vec<(String, String)>,
+}
+
+static PROPERTY_TABLE: LazyLock<PropertyTable> = LazyLock::new(|| {
+    serde_json::from_str(include_str!("property_table.json"))
+        .expect("property_table.json is generated valid JSON")
+});
+
+/// The CSS property a style key names: a custom property
+/// (`--leadingVisual-size`) exactly as written, a vendor-prefixed key
+/// (`WebkitLineClamp`, `msFlex`) with its leading hyphen, and any other
+/// camelCase key hyphenated.
+pub(crate) fn css_property_name(key: &str) -> String {
+    if key.starts_with("--") {
+        return key.to_string();
+    }
+    let vendor = PROPERTY_TABLE.vendor_prefixes.iter().find_map(|(vendor, prefix)| {
+        let rest = key.strip_prefix(vendor.as_str())?;
+        rest.starts_with(|c: char| c.is_uppercase()).then_some((prefix, rest))
+    });
+    match vendor {
+        Some((prefix, rest)) => format!("{prefix}{}", hyphenated(rest)),
+        None => hyphenated(key),
+    }
+}
+
+/// A camelCase name with each capital but a leading one lowercased behind a
+/// hyphen: the rest of a property key, and generated variable and class
+/// name segments (`--animus-gutter`), which are not property names.
+pub(crate) fn hyphenated(s: &str) -> String {
     let mut result = String::with_capacity(s.len() + 4);
     for (i, ch) in s.chars().enumerate() {
         if ch.is_uppercase() {
@@ -56,7 +91,7 @@ fn css_property_cascade_key(css_property: &str) -> usize {
         if css_property == shorthand {
             return i;
         }
-        let kebab = camel_to_kebab(shorthand);
+        let kebab = css_property_name(shorthand);
         if css_property == kebab {
             return i;
         }
@@ -1778,34 +1813,17 @@ pub fn resolve_custom_prop_classes(
     ResolvedCustomUtilities { seen, class_map, typed, declarations, class_prefix: class_prefix.to_string() }
 }
 
-/// Must stay in step with the runtime's unitless property set.
-const UNITLESS_CSS_PROPERTIES: &[&str] = &[
-    "animation-iteration-count", "border-image-outset", "border-image-slice",
-    "border-image-width", "box-flex", "box-flex-group", "box-ordinal-group",
-    "column-count", "columns", "flex", "flex-grow", "flex-positive",
-    "flex-shrink", "flex-negative", "flex-order", "font-weight",
-    "grid-area", "grid-column", "grid-column-end", "grid-column-span",
-    "grid-column-start", "grid-row", "grid-row-end", "grid-row-span",
-    "grid-row-start", "line-clamp", "line-height", "opacity", "order",
-    "orphans", "tab-size", "widows", "z-index", "zoom",
-    "fill-opacity", "flood-opacity", "stop-opacity",
-    "stroke-dasharray", "stroke-dashoffset", "stroke-miterlimit",
-    "stroke-opacity", "stroke-width",
-];
-
-/// The post-processor's whole unitless set: the predicted list plus the
-/// properties it leaves unitless for other reasons.
+/// Whether CSS post-processing leaves a bare number on `css_property`
+/// unitless: the shared table's unitless properties.
 pub(crate) fn is_unitless_css_property(css_property: &str) -> bool {
-    UNITLESS_CSS_PROPERTIES.contains(&css_property)
-        || matches!(css_property, "animation-name" | "aspect-ratio" | "scale")
+    PROPERTY_TABLE.unitless.contains(css_property)
 }
 
 /// Whether CSS post-processing would append `px` to `value` on
 /// `css_property`, as the pipeline's unit fallback does to a bare number
-/// outside parentheses. This list is a subset of the post-processor's
-/// unitless set, so a miss here only predicts a rewrite that will not happen.
+/// outside parentheses.
 pub(crate) fn unit_fallback_rewrites(value: &str, css_property: &str) -> bool {
-    if UNITLESS_CSS_PROPERTIES.contains(&css_property) || css_property.starts_with("--") {
+    if is_unitless_css_property(css_property) || css_property.starts_with("--") {
         return false;
     }
     // A digit run after one of these continues a word (`#b1b1b7`, `ss01`,
@@ -1850,22 +1868,6 @@ pub(crate) fn unit_fallback_rewrites(value: &str, css_property: &str) -> bool {
     false
 }
 
-pub fn apply_unit_fallback_for_property(value: f64, css_property: &str) -> String {
-    if UNITLESS_CSS_PROPERTIES.contains(&css_property) {
-        if value.fract() == 0.0 {
-            format!("{}", value as i64)
-        } else {
-            format!("{}", value)
-        }
-    } else if value == 0.0 {
-        "0".to_string()
-    } else if value.fract() == 0.0 {
-        format!("{}px", value as i64)
-    } else {
-        format!("{}px", value)
-    }
-}
-
 use crate::dynamic_meta::DynamicPropMeta;
 
 pub fn build_variable_slot_entries(
@@ -1879,7 +1881,7 @@ pub fn build_variable_slot_entries(
 
     // A declaration prop's consuming rules render in the declaration band.
     for meta in dynamic_props.values().filter_map(DynamicPropMeta::value) {
-        let css_property = camel_to_kebab(&meta.property);
+        let css_property = css_property_name(&meta.property);
         let declarations = |var: &str, write_current_var: bool| {
             let value = format!("var({var})");
             let mut declarations: Vec<CssDeclaration> = if meta.properties.is_empty() {
@@ -1887,7 +1889,7 @@ pub fn build_variable_slot_entries(
             } else {
                 meta.properties
                     .iter()
-                    .map(|p| CssDeclaration { property: camel_to_kebab(p), value: value.clone() })
+                    .map(|p| CssDeclaration { property: css_property_name(p), value: value.clone() })
                     .collect()
             };
             if let Some(current_var) = meta.current_var.as_ref().filter(|_| write_current_var) {
@@ -2815,13 +2817,25 @@ mod tests {
     }
 
     #[test]
-    fn variable_slot_camel_to_kebab() {
-        
-        assert_eq!(camel_to_kebab("borderRadius"), "border-radius");
-        assert_eq!(camel_to_kebab("p"), "p");
-        assert_eq!(camel_to_kebab("mt"), "mt");
-        assert_eq!(camel_to_kebab("paddingLeft"), "padding-left");
-        assert_eq!(camel_to_kebab("backgroundColor"), "background-color");
+    fn css_property_name_basic() {
+        assert_eq!(css_property_name("backgroundColor"), "background-color");
+        assert_eq!(css_property_name("fontSize"), "font-size");
+        assert_eq!(css_property_name("display"), "display");
+        assert_eq!(css_property_name("--leadingVisual-size"), "--leadingVisual-size");
+    }
+
+    #[test]
+    fn css_property_name_vendor() {
+        assert_eq!(css_property_name("WebkitTextFillColor"), "-webkit-text-fill-color");
+    }
+
+    #[test]
+    fn variable_slot_hyphenated() {
+        assert_eq!(hyphenated("borderRadius"), "border-radius");
+        assert_eq!(hyphenated("p"), "p");
+        assert_eq!(hyphenated("mt"), "mt");
+        assert_eq!(hyphenated("paddingLeft"), "padding-left");
+        assert_eq!(hyphenated("backgroundColor"), "background-color");
     }
 
     fn make_component_css(class_name: &str, variant_prop: &str, options: &[(&str, &str, &str)]) -> ComponentCss {

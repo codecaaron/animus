@@ -77,13 +77,18 @@ import { recordWitness } from './witness';
 /**
  * A mixed property set resolves to unitless: a bare number on a length
  * property is dropped by the parser, `px` on a unitless one shifts layout.
+ * Custom properties have no unit context, so a set of only those keeps the
+ * number as written, as the static path does.
  */
 export function applyUnitFallback(
   value: string | number,
   cssProperties: readonly string[]
 ): string {
   if (typeof value === 'number') {
-    if (cssProperties.some(isUnitlessProperty)) {
+    const customOnly =
+      cssProperties.length > 0 &&
+      cssProperties.every((property) => property.startsWith('--'));
+    if (customOnly || cssProperties.some(isUnitlessProperty)) {
       return String(value);
     }
     return `${value}px`;

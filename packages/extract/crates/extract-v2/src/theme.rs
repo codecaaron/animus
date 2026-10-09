@@ -790,7 +790,7 @@ fn resolve_single_prop(
                     resolve_color_family_pass_through(value, theme, variable_map, contextual_vars)
                 {
                     return vec![CssDeclaration {
-                        property: camel_to_kebab(prop_name),
+                        property: crate::css::css_property_name(prop_name),
                         value: resolved,
                     }];
                 }
@@ -805,7 +805,7 @@ fn resolve_single_prop(
                     contextual_vars,
                 );
                 return vec![CssDeclaration {
-                    property: contextual_vars.emitted_property(&camel_to_kebab(prop_name)).into_owned(),
+                    property: contextual_vars.emitted_property(&crate::css::css_property_name(prop_name)).into_owned(),
                     value: resolved,
                 }];
             }
@@ -845,7 +845,7 @@ fn resolve_single_prop(
         .css_properties()
         .iter()
         .map(|css_prop| CssDeclaration {
-            property: contextual_vars.emitted_property(&camel_to_kebab(css_prop)).into_owned(),
+            property: contextual_vars.emitted_property(&crate::css::css_property_name(css_prop)).into_owned(),
             value: resolved_value.clone(),
         })
         .collect();
@@ -1034,7 +1034,7 @@ pub(crate) fn extracts_callback_value(
             || config
                 .css_properties()
                 .iter()
-                .any(|property| crate::css::unit_fallback_rewrites(css, &camel_to_kebab(property)))
+                .any(|property| crate::css::unit_fallback_rewrites(css, &crate::css::css_property_name(property)))
     };
     let evaluated = |entry: &Value| {
         if !(entry.is_string() || entry.is_number()) {
@@ -1402,36 +1402,6 @@ fn value_to_css_string(value: &Value) -> Option<String> {
         Value::Bool(b) => Some(b.to_string()),
         _ => None,
     }
-}
-
-pub(crate) fn camel_to_kebab(s: &str) -> String {
-    if let Some(rest) = s.strip_prefix("Webkit") {
-        return format!("-webkit-{}", camel_to_kebab_inner(rest));
-    }
-    if let Some(rest) = s.strip_prefix("Moz") {
-        return format!("-moz-{}", camel_to_kebab_inner(rest));
-    }
-    if s.starts_with("ms") && s.chars().nth(2).is_some_and(|c| c.is_uppercase()) {
-        let rest = &s[2..];
-        return format!("-ms-{}", camel_to_kebab_inner(rest));
-    }
-
-    camel_to_kebab_inner(s)
-}
-
-fn camel_to_kebab_inner(s: &str) -> String {
-    let mut result = String::new();
-    for (i, c) in s.chars().enumerate() {
-        if c.is_uppercase() {
-            if i > 0 {
-                result.push('-');
-            }
-            result.push(c.to_lowercase().next().unwrap());
-        } else {
-            result.push(c);
-        }
-    }
-    result
 }
 
 fn scan_top_level_commas(selector: &str, mut on_comma: impl FnMut(usize) -> bool) {
@@ -2115,21 +2085,6 @@ mod tests {
         let resolved = resolve_styles(&styles, &owner.ctx(), true);
         assert_eq!(resolved.declarations[0].property, "cursor");
         assert_eq!(resolved.declarations[0].value, "pointer");
-    }
-
-    #[test]
-    fn camel_to_kebab_basic() {
-        assert_eq!(camel_to_kebab("backgroundColor"), "background-color");
-        assert_eq!(camel_to_kebab("fontSize"), "font-size");
-        assert_eq!(camel_to_kebab("display"), "display");
-    }
-
-    #[test]
-    fn camel_to_kebab_vendor() {
-        assert_eq!(
-            camel_to_kebab("WebkitTextFillColor"),
-            "-webkit-text-fill-color"
-        );
     }
 
     #[test]

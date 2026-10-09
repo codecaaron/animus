@@ -15,7 +15,7 @@ use crate::chain_merge::{
 };
 use crate::chain_walk::{MemberParentExtension, TerminalKind};
 use crate::css::{
-    build_variable_slot_entries, camel_to_kebab, generate_composed_compound_css,
+    build_variable_slot_entries, css_property_name, generate_composed_compound_css, hyphenated,
     generate_composed_variant_css, generate_css_sheets_ordered, layer_name,
     resolve_custom_prop_classes, resolve_utility_classes, wrap_layer, BreakpointMap, ComponentCss, ComposeFamilyRef, CompoundConditionMap,
     CssFragmentStore, CssSheets, UtilityInput, VariantCss,
@@ -1017,13 +1017,13 @@ fn scale_family_css_properties(config: &PropConfigMap) -> FxHashSet<String> {
         if pc.scale.is_none() {
             continue;
         }
-        props.insert(camel_to_kebab(&pc.property));
+        props.insert(css_property_name(&pc.property));
         for p in &pc.properties {
-            props.insert(camel_to_kebab(p));
+            props.insert(css_property_name(p));
         }
     }
     for p in crate::theme::COLOR_FAMILY_PASS_THROUGH {
-        props.insert(camel_to_kebab(p));
+        props.insert(css_property_name(p));
     }
     props
 }
@@ -1093,13 +1093,13 @@ fn scale_name_by_css_property(config: &PropConfigMap) -> FxHashMap<String, Strin
         let Some(Value::String(scale)) = &pc.scale else {
             continue;
         };
-        map.insert(camel_to_kebab(&pc.property), scale.clone());
+        map.insert(css_property_name(&pc.property), scale.clone());
         for p in &pc.properties {
-            map.insert(camel_to_kebab(p), scale.clone());
+            map.insert(css_property_name(p), scale.clone());
         }
     }
     for p in crate::theme::COLOR_FAMILY_PASS_THROUGH {
-        map.entry(camel_to_kebab(p))
+        map.entry(css_property_name(p))
             .or_insert_with(|| "colors".to_string());
     }
     map
@@ -4221,7 +4221,7 @@ fn run_with_system_floor(
                 );
                 continue;
             }
-            let kebab = camel_to_kebab(prop_name);
+            let kebab = hyphenated(prop_name);
             dynamic_props.insert(
                 prop_name.clone(),
                 DynamicPropMeta::new(
@@ -4417,7 +4417,7 @@ fn run_with_system_floor(
                     );
                     continue;
                 }
-                let kebab = camel_to_kebab(prop_name);
+                let kebab = hyphenated(prop_name);
                 component_dynamic.insert(
                     prop_name.clone(),
                     DynamicPropMeta::new(
