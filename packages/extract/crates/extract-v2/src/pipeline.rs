@@ -402,6 +402,7 @@ mod tests {
             transform_evaluator: None,
             transform_failures: None,
             token_misses: None,
+            dropped_keys: None,
         };
         let registry: FxHashMap<String, Vec<String>> = FxHashMap::default();
         process_chain_facts(&facts.chains[0], &ctx, &registry).unwrap()
@@ -539,6 +540,7 @@ mod tests {
             transform_evaluator: None,
             transform_failures: None,
             token_misses: None,
+            dropped_keys: None,
         };
         let mut registry: FxHashMap<String, Vec<String>> = FxHashMap::default();
         registry.insert("space".into(), vec!["p".into(), "m".into()]);

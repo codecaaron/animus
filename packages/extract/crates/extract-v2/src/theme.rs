@@ -225,6 +225,22 @@ pub struct StrictTokenMiss {
 
 pub type StrictTokenMissSink = RefCell<Vec<StrictTokenMiss>>;
 
+/// A style-object key whose block no rule emits, so its styling is lost.
+pub const UNRECOGNIZED_STYLE_KEY: &str = "animus.style.unrecognized-key";
+
+/// A style-object key given an object that resolves to nothing.
+#[derive(Debug, Clone, PartialEq)]
+pub enum DroppedStyleKey {
+    /// `_name` is neither a registered selector nor a condition alias.
+    UnregisteredAlias(String),
+    /// A registered prop given an object whose keys are not all breakpoints.
+    NonResponsiveObject(String),
+    /// Any other key, such as an HTML element name written without `&`.
+    UnrecognizedKey(String),
+}
+
+pub type DroppedStyleKeySink = RefCell<Vec<DroppedStyleKey>>;
+
 pub struct ResolveContext<'a> {
     pub config: &'a PropConfigMap,
     pub theme: &'a FlatTheme,
@@ -236,6 +252,7 @@ pub struct ResolveContext<'a> {
     pub transform_evaluator: Option<&'a crate::evaluator::TransformEvaluator>,
     pub transform_failures: Option<&'a TransformFailureSink>,
     pub token_misses: Option<&'a StrictTokenMissSink>,
+    pub dropped_keys: Option<&'a DroppedStyleKeySink>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -438,6 +455,8 @@ pub fn resolve_styles(
                         nested_obj, ctx, &frame, auto_content, false, &mut result, &mut raw_condition_index,
                     );
                 }
+            } else if value.is_object() {
+                record_dropped_key(ctx, DroppedStyleKey::UnregisteredAlias(key.clone()));
             }
             continue;
         }
@@ -486,9 +505,7 @@ pub fn resolve_styles(
             continue;
         }
 
-        let declarations =
-            resolve_single_prop(key, value, ctx.config, ctx.theme, ctx.variable_map, ctx.contextual_vars, ctx.transform_evaluator, ctx.transform_failures);
-        result.declarations.extend(declarations);
+        result.declarations.extend(resolve_entry(key, value, ctx));
     }
 
     result
@@ -535,6 +552,8 @@ fn resolve_block_entries(
                         nested_obj, ctx, &child, auto_content, false, result, raw_condition_index,
                     );
                 }
+            } else if value.is_object() {
+                record_dropped_key(ctx, DroppedStyleKey::UnregisteredAlias(key.clone()));
             }
             continue;
         }
@@ -583,10 +602,7 @@ fn resolve_block_entries(
             continue;
         }
 
-        let declarations = resolve_single_prop(
-            key, value, ctx.config, ctx.theme, ctx.variable_map, ctx.contextual_vars, ctx.transform_evaluator, ctx.transform_failures,
-        );
-        plain_decls.extend(declarations);
+        plain_decls.extend(resolve_entry(key, value, ctx));
     }
 
     if inject_content && !plain_decls.iter().any(|d| d.property == "content") {
@@ -617,6 +633,34 @@ fn resolve_block_entries(
             },
         );
     }
+}
+
+fn record_dropped_key(ctx: &ResolveContext, dropped: DroppedStyleKey) {
+    if let Some(sink) = ctx.dropped_keys {
+        sink.borrow_mut().push(dropped);
+    }
+}
+
+/// One non-responsive entry's declarations. An object value that yields
+/// none, and failed no transform (which reports itself), is a dropped key.
+fn resolve_entry(key: &str, value: &Value, ctx: &ResolveContext) -> Vec<CssDeclaration> {
+    let failures = || ctx.transform_failures.map_or(0, |sink| sink.borrow().len());
+    let failures_before = failures();
+    let declarations = resolve_single_prop(
+        key, value, ctx.config, ctx.theme, ctx.variable_map, ctx.contextual_vars, ctx.transform_evaluator, ctx.transform_failures,
+    );
+    if declarations.is_empty() && value.is_object() && failures() == failures_before {
+        let key = key.to_string();
+        record_dropped_key(
+            ctx,
+            if ctx.config.contains_key(&key) {
+                DroppedStyleKey::NonResponsiveObject(key)
+            } else {
+                DroppedStyleKey::UnrecognizedKey(key)
+            },
+        );
+    }
+    declarations
 }
 
 fn push_nested_breakpoint_group(
@@ -1492,6 +1536,7 @@ pub fn resolve_global_block(
     };
 
     let mut rules: Vec<String> = Vec::new();
+    let breakpoints = crate::analyze_css::extract_breakpoints(ctx.theme);
 
     for (selector, style_obj) in selectors {
         if selector.starts_with("@keyframes") {
@@ -1521,22 +1566,118 @@ pub fn resolve_global_block(
             continue;
         }
 
-        let style_map = match style_obj.as_object() {
-            Some(o) => o,
-            None => continue,
+        let Some(style_map) = style_obj.as_object() else {
+            continue;
         };
-        let decls = resolve_flat_styles(style_map, ctx);
-        if !decls.is_empty() {
-            let decl_str: String = decls
-                .iter()
-                .map(|d| format!("  {}: {};", d.property, d.value))
-                .collect::<Vec<_>>()
-                .join("\n");
-            rules.push(format!("{} {{\n{}\n}}", selector, decl_str));
+        // An at-rule selector (`@font-face`, `@page`) holds declarations
+        // only, as before; nesting under one is not supported.
+        if selector.starts_with('@') {
+            let decls = resolve_flat_styles(style_map, ctx);
+            if !decls.is_empty() {
+                rules.push(global_rule(selector, &decls, 0));
+            }
+            continue;
         }
+        // The resolver components use: nested `&` selectors, aliases,
+        // breakpoints and at-rule conditions, with the global's selector as
+        // the subject; `_before`/`_after` gain `content` as on a component.
+        let resolved = resolve_styles(style_obj, ctx, true);
+        push_global_rules(&mut rules, selector, &resolved, &breakpoints);
     }
 
     rules.join("\n\n")
+}
+
+/// One rule, its declarations indented under it, at `depth` levels deep.
+fn global_rule(selector: &str, declarations: &[CssDeclaration], depth: usize) -> String {
+    let pad = "  ".repeat(depth);
+    let body: String = declarations
+        .iter()
+        .map(|d| format!("{pad}  {}: {};", d.property, d.value))
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!("{pad}{selector} {{\n{body}\n{pad}}}")
+}
+
+/// A rule wrapped in each prelude, outermost first.
+fn global_conditioned_rule(preludes: &[String], selector: &str, declarations: &[CssDeclaration]) -> String {
+    let mut out = String::new();
+    for (depth, prelude) in preludes.iter().enumerate() {
+        out.push_str(&"  ".repeat(depth));
+        out.push_str(prelude);
+        out.push_str(" {\n");
+    }
+    out.push_str(&global_rule(selector, declarations, preludes.len()));
+    for depth in (0..preludes.len()).rev() {
+        out.push('\n');
+        out.push_str(&"  ".repeat(depth));
+        out.push('}');
+    }
+    out
+}
+
+/// A global's rules in the order components emit them, except that nested
+/// selectors keep the resolver's order (authored, with a block after the
+/// blocks nested inside it): the base rule, nested selectors, breakpoints by
+/// width, then the other conditions.
+fn push_global_rules(
+    rules: &mut Vec<String>,
+    selector: &str,
+    resolved: &ResolvedStyles,
+    breakpoints: &crate::css::BreakpointMap,
+) {
+    // Each branch trimmed, or `a , b` would compose to the descendant `a :hover`.
+    let branches = split_top_level_commas(selector)
+        .iter()
+        .map(|branch| branch.trim())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let subject = |nested: &Option<String>| match nested {
+        Some(inner) => compose_selectors(&branches, inner),
+        None => selector.to_string(),
+    };
+    if !resolved.declarations.is_empty() {
+        rules.push(global_rule(selector, &resolved.declarations, 0));
+    }
+    for (nested, declarations) in &resolved.pseudo_selectors {
+        if !declarations.is_empty() {
+            rules.push(global_rule(&subject(&Some(nested.clone())), declarations, 0));
+        }
+    }
+    let width = |bp: &str| breakpoints.breakpoints.get(bp).copied().unwrap_or(0);
+    let mut by_width: Vec<&ConditionedGroup> = resolved
+        .conditioned
+        .iter()
+        .filter(|g| matches!(g.conditions.as_slice(), [Condition::Breakpoint(_)]))
+        .collect();
+    by_width.sort_by_key(|g| match g.conditions.as_slice() {
+        [Condition::Breakpoint(bp)] => (g.selector.is_some(), width(bp)),
+        _ => (false, 0),
+    });
+    for group in by_width {
+        let [Condition::Breakpoint(bp)] = group.conditions.as_slice() else {
+            continue;
+        };
+        if let (Some(query), false) = (breakpoints.media_query(bp), group.declarations.is_empty()) {
+            rules.push(global_conditioned_rule(&[query], &subject(&group.selector), &group.declarations));
+        }
+    }
+    for group in resolved.conditioned_emission_order() {
+        if group.declarations.is_empty() {
+            continue;
+        }
+        let preludes: Option<Vec<String>> = group
+            .conditions
+            .iter()
+            .map(|condition| match condition {
+                Condition::Breakpoint(bp) => breakpoints.media_query(bp),
+                other => other.prelude().map(str::to_string),
+            })
+            .collect();
+        if let Some(preludes) = preludes.filter(|p| !p.is_empty()) {
+            rules.push(global_conditioned_rule(&preludes, &subject(&group.selector), &group.declarations));
+        }
+    }
 }
 
 pub fn resolve_all_global_blocks(
@@ -1972,6 +2113,7 @@ mod tests {
                 transform_evaluator: None,
                 transform_failures: None,
                 token_misses: None,
+                dropped_keys: None,
             }
         }
     }

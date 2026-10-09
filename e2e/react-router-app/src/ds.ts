@@ -12,6 +12,8 @@ import { system as testDs } from '@animus-ui/test-ds/definition';
 // `tokens` is the deprecated fallback export name the loader still accepts;
 // this lane is its coverage, so the spelling stays.
 export const tokens = createTheme()
+  // testDs's Card is responsive at `sm`, at testDs's own width.
+  .addBreakpoints({ sm: 640 })
   .addColors({
     blue: { 100: '#dbeafe', 500: '#3b82f6', 700: '#1d4ed8' },
     gray: { 100: '#f5f5f5', 500: '#737373', 800: '#262626', 950: '#0a0a0a' },
@@ -76,6 +78,11 @@ const bundle = createSystem()
   .addGroup('layout', { ...layout, ...flex })
   .addGroup('text', typography)
   .addGroup('surface', { ...color, ...border })
+  // testDs's own aliases, which `from()` does not carry; GroupItem uses both.
+  .addSelectors({
+    _groupHover: '.group:hover &',
+    _dark: '[data-color-mode="dark"] &',
+  })
   .build();
 
 export const { createGlobalStyles } = bundle;

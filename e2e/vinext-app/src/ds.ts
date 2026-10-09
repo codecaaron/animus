@@ -2,6 +2,8 @@ import { createSystem, createTheme } from '@animus-ui/system';
 import { system as testDs } from '@animus-ui/test-ds/definition';
 
 export const theme = createTheme()
+  // testDs's Card is responsive at `sm`, at testDs's own width.
+  .addBreakpoints({ sm: 640 })
   .addColors({
     blue: { 100: '#dbeafe', 500: '#3b82f6', 700: '#1d4ed8' },
     gray: { 100: '#f5f5f5', 500: '#737373', 800: '#262626', 950: '#0a0a0a' },

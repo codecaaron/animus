@@ -852,6 +852,45 @@ fn drain_strict_token_misses(
     }
 }
 
+fn drain_dropped_style_keys(
+    sink: &crate::theme::DroppedStyleKeySink,
+    file: &str,
+    component: &str,
+    diagnostics: &mut Vec<CssDiagnostic>,
+) {
+    for dropped in sink.borrow_mut().drain(..) {
+        diagnostics.push(dropped_style_key(file, component, &dropped));
+    }
+}
+
+/// A style key whose block is not emitted, named with the form it needs.
+fn dropped_style_key(file: &str, component: &str, dropped: &crate::theme::DroppedStyleKey) -> CssDiagnostic {
+    use crate::theme::DroppedStyleKey;
+    // `'& p'` is the fix only for a key spelled like an HTML element.
+    let element_hint = |key: &str| {
+        let element = key.chars().next().is_some_and(|c| c.is_ascii_lowercase())
+            && key.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit());
+        if element { format!("; for the {key} element, write the selector '& {key}'") } else { String::new() }
+    };
+    let message = match dropped {
+        DroppedStyleKey::UnregisteredAlias(key) => format!(
+            "style key '{key}' is not a registered selector or condition alias, so its block is \
+             not emitted — register the alias in the system, or fix its name"
+        ),
+        DroppedStyleKey::NonResponsiveObject(key) => format!(
+            "prop '{key}' was given an object whose keys are not breakpoints, so its block is \
+             not emitted — give it a value or an object of breakpoint keys{}",
+            element_hint(key)
+        ),
+        DroppedStyleKey::UnrecognizedKey(key) => format!(
+            "style key '{key}' is not a prop, selector, alias or supported at-rule, so its block \
+             is not emitted{}",
+            element_hint(key)
+        ),
+    };
+    diagnostic(file, component, "warn", message, Some(crate::theme::UNRECOGNIZED_STYLE_KEY))
+}
+
 /// A `.props()` custom prop of a proven Animus chain whose whole config
 /// the evaluator skipped, so it is no styling prop at all.
 fn unsupported_props_config(
@@ -3027,6 +3066,7 @@ fn run_with_system_floor(
     let evaluator = TransformEvaluator::new();
     let transform_failures = TransformFailureSink::default();
     let token_misses = StrictTokenMissSink::default();
+    let dropped_keys = crate::theme::DroppedStyleKeySink::default();
     let mut diagnostics: Vec<CssDiagnostic> = Vec::new();
     let mut deferred_errors: Vec<DeferredComponentError> = Vec::new();
 
@@ -3140,6 +3180,7 @@ fn run_with_system_floor(
         transform_evaluator: Some(&evaluator),
         transform_failures: Some(&transform_failures),
         token_misses: Some(&token_misses),
+        dropped_keys: Some(&dropped_keys),
     };
 
     let mut parent_map: FxHashMap<String, String> = FxHashMap::default();
@@ -3320,6 +3361,7 @@ fn run_with_system_floor(
             &chain.descriptor.binding,
             &mut diagnostics,
         );
+        drain_dropped_style_keys(&dropped_keys, file_path, &chain.descriptor.binding, &mut diagnostics);
         match result {
             Ok(out) => {
                 let mut component_css = out.component_css;
@@ -4998,6 +5040,7 @@ fn run_with_system_floor(
             &mut deferred_errors,
         );
         drain_strict_token_misses(&token_misses, "system", "system", &mut diagnostics);
+        drain_dropped_style_keys(&dropped_keys, "system", "system", &mut diagnostics);
         css
     } else {
         String::new()

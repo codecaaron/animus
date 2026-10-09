@@ -185,6 +185,11 @@ const bundle = createSystem({
   .addGroup('text', typography)
   .addGroup('surface', { ...color, ...border, ...shadows })
   .addGroup('positioning', positioning)
+  // testDs's own aliases, which `includes:` does not carry; GroupItem uses both.
+  .addSelectors({
+    _groupHover: '.group:hover &',
+    _dark: '[data-color-mode="dark"] &',
+  })
   .build();
 
 export const { createGlobalStyles, createKeyframes } = bundle;
