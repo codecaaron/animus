@@ -181,8 +181,9 @@ export interface CollectedExternalPackages {
   sourceEntries: Map<string, string>;
   /** specifier → its source entry's side effects, from the owning package's
    *  `sideEffects`. The source entry stands in for the entry it replaces, so
-   *  either path matching a listed glob keeps side effects. Absent when the
-   *  package declares nothing. */
+   *  either path matching a listed glob keeps side effects, and a list with
+   *  no replaced entry to carry keeps them too. Absent when the package
+   *  declares nothing. */
   sourceEntrySideEffects: Map<string, boolean>;
   /** Absolute directories for bundler loader allowlisting. */
   packageDirs: string[];
@@ -243,14 +244,14 @@ export async function collectExternalPackageSources(opts: {
       sourceEntrySideEffects.set(specifier, field);
       return;
     }
+    // A list names the files the package ships, so it classifies the source
+    // entry only through the entry it stands in for. With no such entry the
+    // mapping is unproven, and the entry stays side-effectful.
     const replacedEntry = await replaced();
     sourceEntrySideEffects.set(
       specifier,
-      matchesSideEffects(
-        field,
-        pkgRoot,
-        replacedEntry ? [srcEntry, replacedEntry] : [srcEntry]
-      )
+      replacedEntry === null ||
+        matchesSideEffects(field, pkgRoot, [srcEntry, replacedEntry])
     );
   };
   const packageDirs: string[] = [];
