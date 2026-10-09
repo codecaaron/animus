@@ -125,6 +125,7 @@ export function makeContextProbe<Overrides extends ContextProbeOverrides>(
     excludeMatcher: createExcludeMatcher(undefined),
     fileCache,
     fileCacheGeneration: 0,
+    ingestionFailureDiagnostics: [],
     mutateFileCache: PluginContext.prototype.mutateFileCache,
     corpus,
     rawExtensionFallbacks: new Set<string>(),

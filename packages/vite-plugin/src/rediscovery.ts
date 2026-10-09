@@ -72,7 +72,6 @@ export async function reconcileSourceCorpus(
     if (unresolvedDropFiles(ctx).size === 0) {
       // Drops resolved — future occurrences of the same conditions warn anew.
       warnedVerdicts.get(ctx)?.clear();
-      warnedUnreadable.get(ctx)?.clear();
       return reanalyzed;
     }
     const drops = unresolvedParentDrops(ctx);
@@ -92,8 +91,13 @@ export async function reconcileSourceCorpus(
       return reanalyzed;
     }
 
+    const recordedFailures = ctx.ingestionFailureDiagnostics.length;
     const folded = foldUndiscoveredFiles(ctx);
-    if (folded.length === 0) {
+    // A newly unreadable file is lost input the next analysis must report,
+    // under the strict policy, even when nothing else folded.
+    const newlyUnreadable =
+      ctx.ingestionFailureDiagnostics.length > recordedFailures;
+    if (folded.length === 0 && !newlyUnreadable) {
       // The walk is complete and the parents are still unresolvable; teach
       // the reason where resolution succeeds on disk.
       barrenWalkMemos.set(ctx, {
@@ -105,9 +109,11 @@ export async function reconcileSourceCorpus(
     }
     barrenWalkMemos.delete(ctx);
 
-    ctx.log(
-      `rediscovery: folded ${folded.length} on-disk file(s) after unresolved-parent drop`
-    );
+    if (folded.length > 0) {
+      ctx.log(
+        `rediscovery: folded ${folded.length} on-disk file(s) after unresolved-parent drop`
+      );
+    }
     reanalyzed = true;
     // Roll the fold back unless the analysis published: kept entries make the
     // next walk barren, memoize that, and short-circuit every later call. An
@@ -141,7 +147,8 @@ export async function reconcileSourceCorpus(
 }
 
 /** Returns the cache keys this fold added: a failed analysis must restore
- *  the cache, or the content-hash gate suppresses the retry forever. */
+ *  the cache, or the content-hash gate suppresses the retry forever. A file
+ *  it cannot read joins the context's ingestion failures instead. */
 function foldUndiscoveredFiles(ctx: PluginContext): string[] {
   const excludeMatcher = ctx.excludeMatcher;
   const filePaths = discoverFiles(
@@ -163,16 +170,14 @@ function foldUndiscoveredFiles(ctx: PluginContext): string[] {
       source = readFileSync(filePath, 'utf-8');
     } catch (err) {
       // A late file that vanished is a deletion; one that cannot be read is
-      // lost input the build should hear about.
-      let warned = warnedUnreadable.get(ctx);
-      if (!warned) {
-        warned = new Set();
-        warnedUnreadable.set(ctx, warned);
-      }
-      if (!isDeletedSource(err) && !warned.has(relPath)) {
-        warned.add(relPath);
-        const diagnostic = unreadableSourceDiagnostic(relPath, err);
-        ctx.warn(`${diagnostic.code} ${diagnostic.message}`);
+      // lost input, held like a buildStart failure until it is read or gone.
+      if (
+        !isDeletedSource(err) &&
+        !ctx.ingestionFailureDiagnostics.some((d) => d.file === relPath)
+      ) {
+        ctx.ingestionFailureDiagnostics.push(
+          unreadableSourceDiagnostic(relPath, err)
+        );
       }
       continue;
     }
@@ -199,10 +204,6 @@ const barrenWalkMemos = new WeakMap<
 /** Per-context (file, parent, condition) verdicts already warned — each
  *  condition warns once; cleared when the drops disappear. */
 const warnedVerdicts = new WeakMap<object, Set<string>>();
-
-/** Late files already reported unreadable, until the drops resolve: the
- *  bounded retries walk them again. */
-const warnedUnreadable = new WeakMap<object, Set<string>>();
 
 const PARENT_PROBE_EXTENSIONS: ReadonlySet<string> = new Set([
   '.tsx',

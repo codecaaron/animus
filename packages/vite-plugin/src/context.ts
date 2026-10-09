@@ -11,6 +11,7 @@ import {
   createSourceCorpus,
   findSheetAssetSpecifiers,
   generatedModuleCode,
+  isDeletedSource,
   loadSystemConfig,
   parseFilesJson,
   projectExternalFileOwners,
@@ -26,6 +27,7 @@ import {
   unresolvableIncludesMessage,
   runStructuralSelfCheck,
 } from '@animus-ui/extract/pipeline';
+import { statSync } from 'fs';
 import { isAbsolute, relative, resolve } from 'path';
 
 import {
@@ -277,8 +279,9 @@ export class PluginContext {
   externalSourceEntries = new Map<string, string>();
 
   externalPackageOutcomes: ExternalPackageOutcome[] = [];
-  /** Configured files buildStart could not read. Later analyses read no
-   *  files themselves, so they replay these. */
+  /** Configured files buildStart or a late rediscovery could not read.
+   *  Later analyses read no files themselves, so they replay these until the
+   *  file is read into the cache or deleted. */
   ingestionFailureDiagnostics: ManifestDiagnostic[] = [];
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -421,6 +424,21 @@ export class PluginContext {
     }
   }
 
+  /** The read failures still standing: a file stops counting once the cache
+   *  holds a read of it or it is gone, as in the shared session, so it stops
+   *  warning and stops holding pruning off. */
+  private unsettledIngestionFailures(): ManifestDiagnostic[] {
+    return this.ingestionFailureDiagnostics.filter(({ file }) => {
+      if (this.fileCache.has(file)) return false;
+      try {
+        statSync(resolve(this.rootDir, file));
+        return true;
+      } catch (err) {
+        return !isDeletedSource(err);
+      }
+    });
+  }
+
   /** Runs project analysis and updates every manifest-derived state. Returns
    *  false when nothing published, and the caller must roll its cache back.
    *  While a source is skipped or unreadable, its renders are unseen, so
@@ -429,6 +447,7 @@ export class PluginContext {
     fileEntries: Array<{ path: string; source: string; hash?: string }>,
     skippedOriginals: readonly string[] = []
   ): boolean {
+    const ingestionFailures = this.unsettledIngestionFailures();
     let result: ProjectAnalysisResult;
     try {
       result = runProjectAnalysis(this.engineApi, {
@@ -449,7 +468,7 @@ export class PluginContext {
         analysisContext: {
           skippedSources: [
             ...skippedOriginals,
-            ...this.ingestionFailureDiagnostics.map((d) => d.file),
+            ...ingestionFailures.map((d) => d.file),
           ].map((file) =>
             isAbsolute(file) ? relative(this.rootDir, file) : file
           ),
@@ -461,7 +480,7 @@ export class PluginContext {
         warn: (m) => this.warn(m),
         info: (m) => this.log(m),
         strict: this.options.strict,
-        extraDiagnostics: this.ingestionFailureDiagnostics,
+        extraDiagnostics: ingestionFailures,
       });
     } catch (e) {
       if (this.options.strict) {
@@ -484,6 +503,9 @@ export class PluginContext {
 
     this.storedManifest = result.manifest;
     this.storedManifestJson = result.manifestJson;
+    // Forgotten only with a published analysis: an unpublished one rolls the
+    // read file's cache entry back, and its failure must still stand.
+    this.ingestionFailureDiagnostics = ingestionFailures;
 
     this.storedSystemPropMapJson = JSON.stringify(
       result.manifest.system_prop_map
