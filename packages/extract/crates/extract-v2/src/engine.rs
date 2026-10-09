@@ -1136,6 +1136,27 @@ mod tests {
         );
     }
 
+    /// Only references to the imported binding keep the import: a parameter
+    /// that shadows it, or a `typeof` type query, does not.
+    #[test]
+    fn compose_import_goes_when_only_shadows_or_type_queries_remain() {
+        for remaining in [
+            "export function make(compose) { return compose({ Root }); }",
+            "export type Composer = typeof compose;",
+        ] {
+            let source = format!(
+                "import {{ compose }} from '@animus-ui/system';\n\
+                 const Root = ds.styles({{}}).asElement('div');\n\
+                 export const Fam = compose({{ Root }}, {{ name: 'Card', shared: {{}} }});\n\
+                 {remaining}\n\
+                 export const App = () => <Fam.Root />;\n"
+            );
+            let code = transform_source(&source);
+            assert!(code.contains("createComposedFamily({ Root: Root }"), "{code}");
+            assert!(!code.contains("import { compose }"), "{remaining}: the import stayed:\n{code}");
+        }
+    }
+
     #[test]
     fn compose_with_context_keeps_directive_and_import_capabilities_separate() {
         let source = "'use client';\nimport { composeWithContext } from '@animus-ui/system/compose-with-context';\nconst Root = ds.styles({}).asElement('div');\nexport const Fam = composeWithContext({ Root }, { name: 'Card', shared: {} });\nexport const App = () => <Fam.Root />;\n";

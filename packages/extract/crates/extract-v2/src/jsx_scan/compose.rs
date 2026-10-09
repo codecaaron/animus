@@ -2,10 +2,10 @@
 //! keys, context flag) read from top-level statements.
 
 use oxc::ast::ast::{
-    Argument, BindingPattern, Declaration, Expression, IdentifierReference, ObjectPropertyKind,
-    Program, Statement,
+    Argument, BindingPattern, Declaration, Expression, ObjectPropertyKind, Program, Statement,
 };
-use oxc::ast_visit::Visit;
+use oxc::semantic::SemanticBuilder;
+use oxc::span::GetSpan;
 
 use super::value_eval::eval_property_key;
 
@@ -53,9 +53,11 @@ pub fn scan_compose_calls(program: &Program) -> Vec<ComposeFamilyInfo> {
     families
 }
 
-/// The compose callees this file still references outside `families`. The
-/// family calls are replaced, so only these references need the callee's
-/// import to survive.
+/// The compose callees whose imported binding this file still references
+/// outside `families`. The family calls are replaced, so only these imports
+/// must survive. References resolve through the file's semantic scoping, so
+/// a parameter that shadows the import, or a `typeof` type query, is no use
+/// of it.
 pub fn compose_callees_referenced_outside(
     program: &Program,
     families: &[ComposeFamilyInfo],
@@ -63,34 +65,31 @@ pub fn compose_callees_referenced_outside(
     if families.is_empty() {
         return Vec::new();
     }
-    let mut scan = OutsideReferences {
-        families,
-        names: Vec::new(),
-    };
-    scan.visit_program(program);
-    scan.names
-}
-
-struct OutsideReferences<'f> {
-    families: &'f [ComposeFamilyInfo],
-    names: Vec<String>,
-}
-
-impl<'a> Visit<'a> for OutsideReferences<'_> {
-    fn visit_identifier_reference(&mut self, ident: &IdentifierReference<'a>) {
-        let name = ident.name.as_str();
-        if !matches!(name, "compose" | "composeWithContext") || self.names.iter().any(|n| n == name)
-        {
-            return;
-        }
-        let replaced = self
-            .families
-            .iter()
-            .any(|family| family.span.0 <= ident.span.start && ident.span.end <= family.span.1);
-        if !replaced {
-            self.names.push(name.to_string());
-        }
-    }
+    // Reference spans come from the node table, which is opt-in.
+    let semantic = SemanticBuilder::new()
+        .with_build_nodes(true)
+        .build(program)
+        .semantic;
+    let scoping = semantic.scoping();
+    ["compose", "composeWithContext"]
+        .into_iter()
+        .filter(|callee| {
+            scoping
+                .get_root_binding((*callee).into())
+                .is_some_and(|symbol| {
+                    scoping
+                        .get_resolved_references(symbol)
+                        .filter(|reference| reference.is_value())
+                        .any(|reference| {
+                            let span = semantic.nodes().get_node(reference.node_id()).span();
+                            !families.iter().any(|family| {
+                                family.span.0 <= span.start && span.end <= family.span.1
+                            })
+                        })
+                })
+        })
+        .map(str::to_string)
+        .collect()
 }
 
 fn collect_compose_from_statement(stmt: &Statement, families: &mut Vec<ComposeFamilyInfo>) {
