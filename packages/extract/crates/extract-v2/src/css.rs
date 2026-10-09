@@ -121,7 +121,7 @@ impl CssSheets {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PerComponentSheets {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub base: Option<String>,
@@ -131,6 +131,14 @@ pub struct PerComponentSheets {
     pub compounds: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub states: Option<String>,
+    /// Rules a compose family emits for this child slot, in the variants
+    /// layer's `composed` sublayer.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub composed_variants: Option<String>,
+    /// Rules a compose family emits for this child slot, after the flat
+    /// compound rules.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub composed_compounds: Option<String>,
 }
 
 pub struct CssFragmentStore {
@@ -175,24 +183,16 @@ impl CssFragmentStore {
     pub fn to_per_component_map(&self) -> HashMap<String, PerComponentSheets> {
         let mut map: HashMap<String, PerComponentSheets> = HashMap::new();
         for (id, css) in &self.base {
-            map.entry(id.clone()).or_insert_with(|| PerComponentSheets {
-                base: None, variants: None, compounds: None, states: None,
-            }).base = Some(css.clone());
+            map.entry(id.clone()).or_default().base = Some(css.clone());
         }
         for (id, css) in &self.variants {
-            map.entry(id.clone()).or_insert_with(|| PerComponentSheets {
-                base: None, variants: None, compounds: None, states: None,
-            }).variants = Some(css.clone());
+            map.entry(id.clone()).or_default().variants = Some(css.clone());
         }
         for (id, css) in &self.compounds {
-            map.entry(id.clone()).or_insert_with(|| PerComponentSheets {
-                base: None, variants: None, compounds: None, states: None,
-            }).compounds = Some(css.clone());
+            map.entry(id.clone()).or_default().compounds = Some(css.clone());
         }
         for (id, css) in &self.states {
-            map.entry(id.clone()).or_insert_with(|| PerComponentSheets {
-                base: None, variants: None, compounds: None, states: None,
-            }).states = Some(css.clone());
+            map.entry(id.clone()).or_default().states = Some(css.clone());
         }
         map
     }
@@ -738,12 +738,14 @@ pub struct ComposeFamilyRef<'a> {
     pub shared_keys: &'a [String],
 }
 
-pub fn generate_composed_variant_css(
-    families: &[ComposeFamilyRef],
+/// Composed variant rules per child slot, as (child class, rules), in
+/// emission order.
+pub fn generate_composed_variant_css<'a>(
+    families: &[ComposeFamilyRef<'a>],
     components: &[ComponentCss],
     breakpoints: &BreakpointMap,
-) -> String {
-    let mut output = String::new();
+) -> Vec<(&'a str, String)> {
+    let mut rules_by_child = Vec::new();
 
     let class_map: FxHashMap<&str, &ComponentCss> = components
         .iter()
@@ -758,6 +760,7 @@ pub fn generate_composed_variant_css(
                 continue;
             };
 
+            let mut output = String::new();
             for shared_key in family.shared_keys {
                 let Some(variant) = child_css
                     .variants
@@ -798,10 +801,13 @@ pub fn generate_composed_variant_css(
                     breakpoints,
                 );
             }
+            if !output.is_empty() {
+                rules_by_child.push((child_class, output));
+            }
         }
     }
 
-    output
+    rules_by_child
 }
 
 fn write_composed_rule_pair(
@@ -919,16 +925,17 @@ pub type CompoundConfig = (CompoundConditions, String);
 pub type CompoundConditionMap<'a> = FxHashMap<&'a str, &'a [CompoundConfig]>;
 
 /// `compound_conditions` aligns positionally with `ComponentCss::compounds`.
-/// Returns compounds-layer content with no layer wrapper; flat rules precede.
+/// Returns compounds-layer content per child slot, as (child class, rules),
+/// with no layer wrapper; flat rules precede.
 /// A child's runtime writes classes for its own props only, so the shared half
 /// of a compound must chain on the root class or the rule never activates.
-pub fn generate_composed_compound_css(
-    families: &[ComposeFamilyRef],
+pub fn generate_composed_compound_css<'a>(
+    families: &[ComposeFamilyRef<'a>],
     components: &[ComponentCss],
     compound_conditions: &CompoundConditionMap,
     breakpoints: &BreakpointMap,
-) -> String {
-    let mut output = String::new();
+) -> Vec<(&'a str, String)> {
+    let mut rules_by_child = Vec::new();
 
     let class_map: FxHashMap<&str, &ComponentCss> = components
         .iter()
@@ -945,6 +952,7 @@ pub fn generate_composed_compound_css(
             let Some(configs) = compound_conditions.get(child_class) else {
                 continue;
             };
+            let mut output = String::new();
             for (styles, (conditions, _)) in child_css.compounds.iter().zip(configs.iter()) {
                 let Some(selector) = composed_compound_selector(
                     family.root_class,
@@ -962,10 +970,13 @@ pub fn generate_composed_compound_css(
                     breakpoints,
                 );
             }
+            if !output.is_empty() {
+                rules_by_child.push((child_class, output));
+            }
         }
     }
 
-    output
+    rules_by_child
 }
 
 fn composed_compound_selector(
@@ -2866,6 +2877,10 @@ mod tests {
         assert_ne!(slot("x", "--keep"), slot("x-Keep", ""));
     }
 
+    fn joined(rules_by_child: Vec<(&str, String)>) -> String {
+        rules_by_child.into_iter().map(|(_, rules)| rules).collect()
+    }
+
     fn make_component_css(class_name: &str, variant_prop: &str, options: &[(&str, &str, &str)]) -> ComponentCss {
         ComponentCss {
             class_name: class_name.to_string(),
@@ -2915,7 +2930,7 @@ mod tests {
         }];
 
         let bp = test_breakpoints();
-        let css = generate_composed_variant_css(&families, &components, &bp);
+        let css = joined(generate_composed_variant_css(&families, &components, &bp));
 
         assert!(css.contains(".animus-Root-abc--size-sm .animus-Child-def"));
         assert!(css.contains(".animus-Root-abc .animus-Child-def.animus-Child-def--size-sm"));
@@ -2942,7 +2957,7 @@ mod tests {
         }];
 
         let bp = test_breakpoints();
-        let css = generate_composed_variant_css(&families, &components, &bp);
+        let css = joined(generate_composed_variant_css(&families, &components, &bp));
 
         let inheritance_sel = ".animus-Root-abc--size-sm .animus-Child-def";
         let override_sel = ".animus-Root-abc .animus-Child-def.animus-Child-def--size-sm";
@@ -2971,7 +2986,7 @@ mod tests {
         }];
 
         let bp = test_breakpoints();
-        let css = generate_composed_variant_css(&families, &components, &bp);
+        let css = joined(generate_composed_variant_css(&families, &components, &bp));
 
         let inheritance_pos = css.find(".animus-Root-abc--size-sm .animus-Child-def").unwrap();
         let override_pos = css.find(".animus-Root-abc .animus-Child-def.animus-Child-def--size-sm").unwrap();
@@ -2999,7 +3014,7 @@ mod tests {
         }];
 
         let bp = test_breakpoints();
-        let css = generate_composed_variant_css(&families, &components, &bp);
+        let css = joined(generate_composed_variant_css(&families, &components, &bp));
 
         assert!(
             css.contains(".animus-Root-abc--size-default .animus-Child-def {\n    padding: 4px;"),
@@ -3036,7 +3051,7 @@ mod tests {
         }];
 
         let bp = test_breakpoints();
-        let css = generate_composed_variant_css(&families, &components, &bp);
+        let css = joined(generate_composed_variant_css(&families, &components, &bp));
         assert!(!css.contains("--size-default"), "{css}");
     }
 
@@ -3073,7 +3088,7 @@ mod tests {
         }];
 
         let bp = test_breakpoints();
-        let css = generate_composed_variant_css(&families, &components, &bp);
+        let css = joined(generate_composed_variant_css(&families, &components, &bp));
 
         assert!(css.contains(".animus-Root-abc--size-sm .animus-Control-def"));
         assert!(css.contains(".animus-Root-abc--tone-muted .animus-Control-def"));
@@ -3118,7 +3133,7 @@ mod tests {
         }];
 
         let bp = test_breakpoints();
-        let css = generate_composed_variant_css(&families, &components, &bp);
+        let css = joined(generate_composed_variant_css(&families, &components, &bp));
 
         assert!(css.contains(".animus-Root-abc--size-sm .animus-Child-def:hover"));
         assert!(css.contains(".animus-Root-abc .animus-Child-def.animus-Child-def--size-sm:hover"));
@@ -3174,7 +3189,7 @@ mod tests {
         }];
 
         let bp = test_breakpoints();
-        let css = generate_composed_variant_css(&families, &components, &bp);
+        let css = joined(generate_composed_variant_css(&families, &components, &bp));
 
         assert_eq!(
             css.matches("@media (min-width: 768px)").count(),
@@ -3281,7 +3296,7 @@ mod tests {
         let conditions = conditions_map(&configs);
         let shared: Vec<String> = shared.iter().map(|axis| (*axis).to_string()).collect();
         let families = one_child_family(&shared);
-        generate_composed_compound_css(&families, components, &conditions, &test_breakpoints())
+        joined(generate_composed_compound_css(&families, components, &conditions, &test_breakpoints()))
     }
 
     #[test]
