@@ -28,6 +28,8 @@ import {
   SYSTEM_CONFIG,
 } from './session-fixtures';
 
+const DEV_MODE_SLOT = 7;
+
 let restoreGlobals: () => void;
 let warned: string[];
 const lockedFiles: string[] = [];
@@ -87,6 +89,29 @@ describe('a configured package file that cannot be read', () => {
     expect(lines).toHaveLength(1);
     expect(lines[0]).toContain('Button.tsx');
     expect(mocks.analyzeProject.mock.calls.length).toBe(1);
+    session.close();
+  });
+
+  // The file may render any option, so a production build prunes nothing.
+  test('keeps every option and says so, even in production', async () => {
+    const { app } = createWorkspace();
+    const session = makeSession(app, { mode: 'production' });
+
+    await session.runFullPipeline();
+
+    const line = warned.find((entry) => entry.includes(UNREADABLE_SOURCE_FILE));
+    expect(line).toContain('its renders are not seen, so nothing is pruned');
+    expect(mocks.analyzeProject.mock.calls[0][DEV_MODE_SLOT]).toBe(true);
+    session.close();
+  });
+
+  test('prunes when every configured file reads', async () => {
+    const { app } = createKitWorkspace();
+    const session = makeSession(app, { mode: 'production' });
+
+    await session.runFullPipeline();
+
+    expect(mocks.analyzeProject.mock.calls[0][DEV_MODE_SLOT]).toBe(false);
     session.close();
   });
 });

@@ -106,6 +106,11 @@ export function collectSelectorAliasDiagnostics(
 
 export const UNREADABLE_SOURCE_FILE = 'animus.ingestion.unreadable-source-file';
 
+/** What a skipped source file costs: the analysis never sees what it
+ *  renders. */
+export const SKIPPED_SOURCE_COST =
+  'skipped: its renders are not seen, so nothing is pruned and every component, variant option and state is kept until it is analyzed';
+
 /**
  * A configured source file that could not be read is a LOST INPUT: the
  * emitted artifacts silently lack whatever that file declared.
@@ -118,7 +123,7 @@ export function unreadableSourceDiagnostic<Thrown>(
     file: relPath,
     component: 'source',
     kind: 'warn',
-    message: `configured source file ${relPath} could not be read and was skipped: ${String(error)}`,
+    message: `configured source file ${relPath} could not be read: ${String(error)} (${SKIPPED_SOURCE_COST})`,
     code: UNREADABLE_SOURCE_FILE,
     severity: severityFor(UNREADABLE_SOURCE_FILE),
   };

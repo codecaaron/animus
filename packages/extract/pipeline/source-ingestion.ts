@@ -2,6 +2,7 @@ import { posix } from 'node:path';
 
 import { contentHash } from './content-hash';
 import { parseInternalWire } from './internal-wire';
+import { SKIPPED_SOURCE_COST } from './manifest-diagnostics';
 import { preprocessMdx, type PreprocessMdxResult } from './mdx-preprocessor';
 import {
   adaptSvelteSource,
@@ -718,10 +719,6 @@ export interface SourceIngestor {
    *  re-warns; hosts call it from their publish step. */
   markPublished(result: SourceIngestionResult): void;
 }
-
-/** What a skipped file costs: the analysis never sees what it renders. */
-const SKIPPED_SOURCE_COST =
-  'skipped: its renders are not seen, so nothing is pruned and every component, variant option and state is kept until it is analyzed';
 
 /**
  * One ingestion policy point for every host: a host supplies only a prefix, a

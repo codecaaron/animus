@@ -1370,8 +1370,12 @@ export class ExtractionSession {
       externalDirs: this.externalPackageDirs.map((dir) =>
         relative(this.rootDir!, dir)
       ),
-      // A skipped file may render any option, so nothing is pruned.
-      devMode: this.engineDevMode(devMode) || this.skippedSources,
+      // A skipped or unreadable file may render any option, so nothing is
+      // pruned.
+      devMode:
+        this.engineDevMode(devMode) ||
+        this.skippedSources ||
+        this.ingestionFailureDiagnostics.length > 0,
     };
 
     this.writeAnalysisStatus('analyzing', pending);
