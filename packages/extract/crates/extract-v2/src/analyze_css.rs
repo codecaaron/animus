@@ -15,7 +15,7 @@ use crate::chain_merge::{
 };
 use crate::chain_walk::{MemberParentExtension, TerminalKind};
 use crate::css::{
-    build_variable_slot_entries, css_property_name, generate_composed_compound_css, hyphenated,
+    build_variable_slot_entries, css_property_name, generate_composed_compound_css, slot_segment,
     generate_composed_variant_css, generate_css_sheets_ordered, layer_name, layer_order,
     resolve_custom_prop_classes, resolve_utility_classes, wrap_layer, BreakpointMap, ComponentCss, ComposeFamilyRef, CompoundConditionMap,
     CssFragmentStore, CssSheets, UtilityInput, VariantCss,
@@ -4737,12 +4737,12 @@ fn run_with_system_floor(
                 );
                 continue;
             }
-            let kebab = hyphenated(prop_name);
+            let segment = slot_segment(prop_name);
             dynamic_props.insert(
                 prop_name.clone(),
                 DynamicPropMeta::new(
-                    format!("--{}-{}", class_prefix, kebab),
-                    format!("{}-dyn-{}", class_prefix, kebab),
+                    format!("--{class_prefix}-{segment}"),
+                    format!("{class_prefix}-dyn-{segment}"),
                     prop_config,
                     &inputs.theme,
                     &inputs.contextual_vars,
@@ -4933,12 +4933,15 @@ fn run_with_system_floor(
                     );
                     continue;
                 }
-                let kebab = hyphenated(prop_name);
+                // The component's hash follows the segment's `_`: its slot
+                // never shares a name with a system prop's or another
+                // component's.
+                let segment = slot_segment(prop_name);
                 component_dynamic.insert(
                     prop_name.clone(),
                     DynamicPropMeta::new(
-                        format!("--{}-{}", class_prefix, kebab),
-                        format!("{}-dyn-{}-{}", class_prefix, hash8, kebab),
+                        format!("--{class_prefix}-{segment}{hash8}"),
+                        format!("{class_prefix}-dyn-{segment}{hash8}"),
                         prop_config,
                         &inputs.theme,
                         &inputs.contextual_vars,
@@ -6418,7 +6421,7 @@ mod tests {
             assert!(
                 out.sheets
                     .system
-                    .contains(&format!(".animus-dyn-{prop} {{")),
+                    .contains(&format!(".animus-dyn-{prop}_ {{")),
                 "missing slot for {prop}: {}",
                 out.sheets.system
             );

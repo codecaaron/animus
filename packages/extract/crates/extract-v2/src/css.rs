@@ -1,6 +1,7 @@
 //! `@layer`-structured CSS generation with deterministic ordering: sorted
 //! component ids, sorted declarations, topological cascade ranks.
 
+use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt::Write;
 use std::sync::{Arc, LazyLock};
@@ -63,40 +64,30 @@ pub(crate) fn hyphenated(s: &str) -> String {
     result
 }
 
-const SHORTHAND_PROPERTIES: &[&str] = &[
-    "border",
-    "borderTop",
-    "borderBottom",
-    "borderLeft",
-    "borderRight",
-    "borderWidth",
-    "borderStyle",
-    "borderColor",
-    "background",
-    "flex",
-    "margin",
-    "padding",
-    "transition",
-    "gap",
-    "grid",
-    "gridArea",
-    "gridColumn",
-    "gridRow",
-    "gridTemplate",
-    "overflow",
-];
-
-fn css_property_cascade_key(css_property: &str) -> usize {
-    for (i, &shorthand) in SHORTHAND_PROPERTIES.iter().enumerate() {
-        if css_property == shorthand {
-            return i;
+/// A prop or member name as a runtime slot-name segment: injective, and
+/// ended by `_`, its only `_`, so nothing appended after it (`--keep`,
+/// `-{breakpoint}`, a member or a key) makes two slots' names equal. A name
+/// of ASCII letters and digits reads as its kebab spelling, with a leading
+/// hyphen when it starts uppercase (`stackSm` → `stack-sm_`, `WebkitBoxFlex`
+/// → `-webkit-box-flex_`); any other name is `--` and the hex of its UTF-8
+/// bytes (`a-b` → `--612d62_`).
+pub fn slot_segment(name: &str) -> String {
+    let mut segment = String::with_capacity(name.len() + 4);
+    if name.starts_with(|ch: char| ch.is_ascii_alphabetic()) && name.chars().all(|ch| ch.is_ascii_alphanumeric()) {
+        for ch in name.chars() {
+            if ch.is_ascii_uppercase() {
+                segment.push('-');
+            }
+            segment.push(ch.to_ascii_lowercase());
         }
-        let kebab = css_property_name(shorthand);
-        if css_property == kebab {
-            return i;
+    } else {
+        segment.push_str("--");
+        for byte in name.bytes() {
+            let _ = write!(segment, "{byte:02x}");
         }
     }
-    SHORTHAND_PROPERTIES.len() + 1
+    segment.push('_');
+    segment
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1456,17 +1447,6 @@ fn render_utility_layer(
     writeln!(css, "@layer {} {{", layer_name).unwrap();
     // Binding classes declare only variables, so their position is inert.
     css.push_str(&binding_classes);
-    let prop_from = |s: &ResolvedStyles| -> String {
-        if let Some(d) = s.declarations.first() {
-            return d.property.clone();
-        }
-        if let Some((_, decls)) = s.breakpoint_groups().next() {
-            if let Some(d) = decls.first() {
-                return d.property.clone();
-            }
-        }
-        String::new()
-    };
     let bp_order = |s: &ResolvedStyles| -> u32 {
         if !s.declarations.is_empty() { return 0; }
         if let Some((bp_name, _)) = s.breakpoint_groups().next() {
@@ -1474,17 +1454,22 @@ fn render_utility_layer(
         }
         0
     };
-    // Existing canonical order, with the rule kind after the condition: a
+    // A rule precedes every rule whose properties its own contain, so a
+    // longhand beats each shorthand that resets it on the same element: rules
+    // rank by the first shorthand they reset, then by breadth, the properties
+    // they reset in all. Rules that only overlap keep the shorthands' order
+    // (the border sides before its aspects), then the first property each
+    // declares. The condition, then the rule kind, order the rest: a
     // breakpoint declaration still follows a base atomic rule.
-    entries.sort_by(|(kind_a, name_a, styles_a), (kind_b, name_b, styles_b)| {
-        let css_prop_a = prop_from(styles_a);
-        let css_prop_b = prop_from(styles_b);
-        css_property_cascade_key(&css_prop_a)
-            .cmp(&css_property_cascade_key(&css_prop_b))
-            .then_with(|| css_prop_a.cmp(&css_prop_b))
-            .then_with(|| bp_order(styles_a).cmp(&bp_order(styles_b)))
-            .then_with(|| kind_a.cmp(kind_b))
-            .then_with(|| name_a.cmp(name_b))
+    entries.sort_by_cached_key(|(kind, name, styles)| {
+        let declarations = match styles.breakpoint_groups().next() {
+            Some((_, decls)) if styles.declarations.is_empty() => decls,
+            _ => &styles.declarations,
+        };
+        let resets = crate::declarations::reset_set(declarations.iter().map(|d| d.property.as_str()));
+        let rank = resets.iter().filter_map(|property| crate::declarations::shorthand_rank(property)).min();
+        let first = declarations.first().map(|d| d.property.clone()).unwrap_or_default();
+        (rank.unwrap_or(usize::MAX), Reverse(resets.len()), first, bp_order(styles), *kind, name.clone())
     });
     for (_, class_name, styles) in &entries {
         write_utility_rule(&mut css, class_name, styles, breakpoints);
@@ -2905,6 +2890,15 @@ mod tests {
         assert_eq!(hyphenated("mt"), "mt");
         assert_eq!(hyphenated("paddingLeft"), "padding-left");
         assert_eq!(hyphenated("backgroundColor"), "background-color");
+    }
+
+    #[test]
+    fn two_props_never_share_a_runtime_slot() {
+        // The runtime appends `--keep` and `-{breakpoint}` to a slot's names.
+        let slot = |prop: &str, suffix: &str| format!("{}{suffix}", slot_segment(prop));
+        assert_ne!(slot("stack", "-sm"), slot("stackSm", ""));
+        assert_ne!(slot("aB", ""), slot("a-b", ""));
+        assert_ne!(slot("x", "--keep"), slot("x-Keep", ""));
     }
 
     fn make_component_css(class_name: &str, variant_prop: &str, options: &[(&str, &str, &str)]) -> ComponentCss {

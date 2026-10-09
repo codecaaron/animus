@@ -181,6 +181,17 @@ const CASCADE_CASES = [
       left: '.25rem',
     },
   },
+  {
+    label: 'PlRawPadding',
+    binding: 'PlRawPadding',
+    property: 'padding',
+    expected: {
+      top: '1rem',
+      right: '1rem',
+      bottom: '1rem',
+      left: '.25rem',
+    },
+  },
 ] satisfies readonly CascadeCase[];
 
 const CSS_PROCESSORS = [

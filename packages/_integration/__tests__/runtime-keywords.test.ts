@@ -11,7 +11,7 @@ import { analyzeProject } from './run-pipeline';
 /**
  * A CSS-wide keyword passed at runtime must render as the same keyword
  * written statically. Through the inline variable it would act on the
- * variable: `inherit` would take the parent's `--animus-p`, not its padding.
+ * variable: `inherit` would take the parent's `--animus-p_`, not its padding.
  */
 const KEYWORDS = [
   'initial',
@@ -104,7 +104,7 @@ describe.each(KEYWORDS)('runtime %s', (keyword) => {
     expect(resolved.classes).toContain(cls);
     expect(ruleOf(runtime.css, cls)).toBe(ruleOf(statics.css, cls));
     expect(ruleOf(runtime.css, cls)).toContain('@media (min-width: 640px)');
-    expect(resolved.dynamicStyle).toEqual({ '--animus-p': '1rem' });
+    expect(resolved.dynamicStyle).toEqual({ '--animus-p_': '1rem' });
   });
 });
 

@@ -60,38 +60,38 @@ const resolve = (bg: string | Record<string, string>) =>
 
 test('the slot writes currentVar, and a second slot leaves it alone', () => {
   expect(css).toContain(
-    '.animus-dyn-bg { background-color: var(--animus-bg); --current-bg: var(--animus-bg); }'
+    '.animus-dyn-bg_ { background-color: var(--animus-bg_); --current-bg: var(--animus-bg_); }'
   );
   expect(css).toContain(
-    '.animus-dyn-bg--keep { background-color: var(--animus-bg); }'
+    '.animus-dyn-bg_--keep { background-color: var(--animus-bg_); }'
   );
   expect(css).toMatch(
-    /@media \(min-width: 640px\) \{ \.animus-dyn-bg-sm \{ background-color: var\(--animus-bg-sm\); --current-bg: var\(--animus-bg-sm\); \}/
+    /@media \(min-width: 640px\) \{ \.animus-dyn-bg_-sm \{ background-color: var\(--animus-bg_-sm\); --current-bg: var\(--animus-bg_-sm\); \}/
   );
   expect(css).toMatch(
-    /@media \(min-width: 640px\) \{ \.animus-dyn-bg--keep-sm \{ background-color: var\(--animus-bg-sm\); \}/
+    /@media \(min-width: 640px\) \{ \.animus-dyn-bg_--keep-sm \{ background-color: var\(--animus-bg_-sm\); \}/
   );
 });
 
 test('a prop without currentVar keeps one slot', () => {
-  expect(css).toContain('.animus-dyn-p { padding: var(--animus-p); }');
-  expect(css).not.toContain('animus-dyn-p--keep');
+  expect(css).toContain('.animus-dyn-p_ { padding: var(--animus-p_); }');
+  expect(css).not.toContain('animus-dyn-p_--keep');
 });
 
 test('a runtime value selects the slot that writes currentVar', () => {
   expect(resolve('ink')).toEqual({
-    classes: ['animus-Box', 'animus-dyn-bg'],
-    dynamicStyle: { '--animus-bg': 'var(--color-ink)' },
+    classes: ['animus-Box', 'animus-dyn-bg_'],
+    dynamicStyle: { '--animus-bg_': 'var(--color-ink)' },
     activeStates: [],
   });
 });
 
 test('a runtime value reading currentVar selects the slot that leaves it alone', () => {
   expect(resolve({ _: 'current-bg', sm: 'ink' })).toEqual({
-    classes: ['animus-Box', 'animus-dyn-bg--keep', 'animus-dyn-bg-sm'],
+    classes: ['animus-Box', 'animus-dyn-bg_--keep', 'animus-dyn-bg_-sm'],
     dynamicStyle: {
-      '--animus-bg': 'var(--current-bg)',
-      '--animus-bg-sm': 'var(--color-ink)',
+      '--animus-bg_': 'var(--current-bg)',
+      '--animus-bg_-sm': 'var(--color-ink)',
     },
     activeStates: [],
   });
