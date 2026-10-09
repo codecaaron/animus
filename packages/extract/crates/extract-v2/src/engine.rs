@@ -676,8 +676,13 @@ impl ExtractEngine {
         if has_primary_extracted {
             extracted.push("animus");
         }
-        let still_referenced =
-            |callee: &str| file_facts.compose_callees_in_use.iter().any(|name| name == callee);
+        // Only a remaining use of an import the strip would remove keeps it.
+        let still_referenced = |callee: &str| {
+            file_facts
+                .compose_callees_in_use
+                .iter()
+                .any(|(name, source)| name == callee && consumed.contains(&source.as_str()))
+        };
         if has_compose_replacements && !still_referenced("compose") {
             extracted.push("compose");
         }
@@ -1187,6 +1192,23 @@ mod tests {
             !scoping.root_unresolved_references().contains_key("c"),
             "the call through `c` lost its import:\n{code}"
         );
+    }
+
+    /// Another library's `compose`, imported under another name, keeps only
+    /// its own import: the Animus `compose` import still goes.
+    #[test]
+    fn another_librarys_compose_does_not_keep_the_animus_import() {
+        let source = "import { compose } from '@animus-ui/system';\n\
+                      import { compose as rc } from 'redux';\n\
+                      const Root = ds.styles({}).asElement('div');\n\
+                      export const Fam = compose({ Root }, { name: 'Card', shared: {} });\n\
+                      export const enhance = rc(first, second);\n\
+                      export const App = () => <Fam.Root />;\n";
+        let code = transform_source(source);
+
+        assert!(code.contains("createComposedFamily({ Root: Root }"), "{code}");
+        assert!(!code.contains("import { compose } from '@animus-ui/system'"), "{code}");
+        assert!(code.contains("import { compose as rc } from 'redux'"), "{code}");
     }
 
     #[test]

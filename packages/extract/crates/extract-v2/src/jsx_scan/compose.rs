@@ -54,15 +54,17 @@ pub fn scan_compose_calls(program: &Program) -> Vec<ComposeFamilyInfo> {
     families
 }
 
-/// The compose callees whose import this file still uses outside `families`,
-/// through any local name (`compose`, or `compose as c`). The family calls
-/// are replaced, so only these imports must survive. References resolve
-/// through the file's semantic scoping, so a parameter that shadows the
-/// import, or a `typeof` type query, is no use of it.
+/// The `compose` / `composeWithContext` imports this file still uses outside
+/// `families`, through any local name (`compose`, or `compose as c`), as
+/// (imported name, source) pairs. The family calls are replaced, so only these
+/// imports must survive; the transform keeps a name only for a source it would
+/// strip. References resolve through the file's semantic scoping, so a
+/// parameter that shadows the import, or a `typeof` type query, is no use of
+/// it.
 pub fn compose_callees_referenced_outside(
     program: &Program,
     families: &[ComposeFamilyInfo],
-) -> Vec<String> {
+) -> Vec<(String, String)> {
     if families.is_empty() {
         return Vec::new();
     }
@@ -87,7 +89,7 @@ pub fn compose_callees_referenced_outside(
                     })
             })
     };
-    let mut in_use: Vec<String> = Vec::new();
+    let mut in_use: Vec<(String, String)> = Vec::new();
     for stmt in &program.body {
         let Statement::ImportDeclaration(import) = stmt else {
             continue;
@@ -97,11 +99,12 @@ pub fn compose_callees_referenced_outside(
                 continue;
             };
             let imported = named.imported.name();
-            if matches!(imported.as_str(), "compose" | "composeWithContext")
-                && !in_use.iter().any(|name| name == imported.as_str())
-                && used_outside(named.local.name.as_str())
-            {
-                in_use.push(imported.to_string());
+            if !matches!(imported.as_str(), "compose" | "composeWithContext") {
+                continue;
+            }
+            let entry = (imported.to_string(), import.source.value.to_string());
+            if !in_use.contains(&entry) && used_outside(named.local.name.as_str()) {
+                in_use.push(entry);
             }
         }
     }

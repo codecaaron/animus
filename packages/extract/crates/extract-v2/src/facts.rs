@@ -246,10 +246,11 @@ pub struct FileFacts {
     /// The identifier `export default X;` names.
     #[serde(skip)]
     pub default_export_binding: Option<String>,
-    /// `compose` / `composeWithContext` names still referenced outside those
-    /// families, such as a call inside a function, so their imports stay.
+    /// `compose` / `composeWithContext` imports still referenced outside those
+    /// families, such as a call inside a function, as (imported name, source)
+    /// pairs: the transform keeps those it would otherwise strip.
     #[serde(skip)]
-    pub compose_callees_in_use: Vec<String>,
+    pub compose_callees_in_use: Vec<(String, String)>,
     /// Top-level `const X = Y;` bare-identifier aliases, assertion-peeled
     /// and `const` only.
     #[serde(skip)]
