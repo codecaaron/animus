@@ -48,8 +48,9 @@ struct SystemPropScanner<'a, 'b> {
     _phantom: PhantomData<&'a ()>,
 }
 
-impl<'a, 'b> Visit<'a> for SystemPropScanner<'a, 'b> {
-    fn visit_jsx_opening_element(&mut self, elem: &JSXOpeningElement<'a>) {
+impl<'a> SystemPropScanner<'a, '_> {
+    /// Records one element's system props.
+    fn record_element(&mut self, elem: &JSXOpeningElement<'a>) {
         let (tag, resolved_binding) = match &elem.name {
             JSXElementName::Identifier(id) => (id.name.as_str(), None),
             JSXElementName::IdentifierReference(id) => (id.name.as_str(), None),
@@ -116,6 +117,13 @@ impl<'a, 'b> Visit<'a> for SystemPropScanner<'a, 'b> {
                 JSXAttributeItem::SpreadAttribute(_) => {}
             }
         }
-        // Attributes are handled here; walk_jsx_opening_element is not called.
+    }
+}
+
+impl<'a, 'b> Visit<'a> for SystemPropScanner<'a, 'b> {
+    fn visit_jsx_opening_element(&mut self, elem: &JSXOpeningElement<'a>) {
+        self.record_element(elem);
+        // An attribute value can hold JSX too, which is a use like a child.
+        oxc::ast_visit::walk::walk_jsx_opening_element(self, elem);
     }
 }

@@ -511,3 +511,49 @@ describe('multi-file extraction', () => {
     assertNoUnresolvedTokens(css);
   });
 });
+
+describe('usage', () => {
+  test('a JSX element inside an attribute value counts as a use', () => {
+    const { css } = runPipeline([
+      {
+        path: 'attribute-jsx.tsx',
+        source: `import { ds } from '../setup';
+
+const R = ds
+  .styles({ display: 'block' })
+  .variant({ prop: 'tone', defaultVariant: 'a', variants: { a: { width: '1.5px' }, b: { width: '2.5px' } } })
+  .asElement('span');
+const B = ds.styles({ display: 'block' }).system({ space: true }).asElement('div');
+const Frame = ({ preview }) => <div>{preview}</div>;
+
+export const App = () => (
+  <>
+    <R tone="a" />
+    <Frame preview={<><R tone="b" /><B p={8} /></>} />
+  </>
+);
+`,
+      },
+    ]);
+    expect(css).toContain('width: 2.5px');
+    expect(css).toContain('padding: 0.5rem');
+  });
+
+  test('a class resolver called through .attrs keeps its custom-prop slots', () => {
+    const { css } = runPipeline([
+      {
+        path: 'resolver-attrs.tsx',
+        source: `import { ds } from '../setup';
+
+const tinted = ds
+  .styles({ display: 'block' })
+  .props({ tint: { property: 'color', scale: 'colors' } })
+  .asClass();
+
+export const App = ({ tint }) => <div {...tinted.attrs({ tint })} />;
+`,
+      },
+    ]);
+    expect(css).toContain('var(--animus-tint');
+  });
+});
