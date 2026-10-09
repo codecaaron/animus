@@ -37,6 +37,12 @@ export const STYLES_VIRTUAL_ID = 'animus:styles';
 
 export const PROPS_VIRTUAL_ID = 'animus:system-props';
 
+/** What webpack requests in place of the session's system-props id: webpack
+ *  hands a scheme-shaped request such as `virtual:…` to its scheme handlers,
+ *  never the resolver, so only a plain id reaches `resolveId` and the
+ *  virtual-module bridge behind it. */
+const WEBPACK_PROPS_REQUEST = '@animus-ui/unplugin/system-props';
+
 export const CSS_ASSET_NAME = 'animus.css';
 
 const TRANSFORM_INCLUDE_RE = new RegExp(
@@ -128,7 +134,9 @@ export function resolveAnimusId(id: string): string | null {
     return STYLES_VIRTUAL_ID;
   }
   if (id === STYLES_VIRTUAL_ID || id === PROPS_VIRTUAL_ID) return id;
-  if (id === TURBOPACK_SYSTEM_PROPS_ID) return PROPS_VIRTUAL_ID;
+  if (id === TURBOPACK_SYSTEM_PROPS_ID || id === WEBPACK_PROPS_REQUEST) {
+    return PROPS_VIRTUAL_ID;
+  }
   return null;
 }
 
@@ -488,6 +496,13 @@ export const unpluginFactory: UnpluginFactory<
     webpack(compiler) {
       wireWebpackLike(compiler);
       classifyWebpackRedirects(compiler);
+      compiler.hooks.normalModuleFactory.tap(PLUGIN_NAME, (nmf) => {
+        nmf.hooks.beforeResolve.tap(PLUGIN_NAME, (resolveData) => {
+          if (resolveData.request === TURBOPACK_SYSTEM_PROPS_ID) {
+            resolveData.request = WEBPACK_PROPS_REQUEST;
+          }
+        });
+      });
     },
 
     rspack(compiler) {
