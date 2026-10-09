@@ -1601,6 +1601,133 @@ fn resolve_identity(
     by_bare_name(local)
 }
 
+/// The analysed modules a runtime module load in `file` can name. A pattern
+/// into an analysed package names every module. A specifier usage cannot
+/// read names the modules under `file`'s own directory: that is all webpack
+/// bundles for an expression (`require(expr)` becomes a context of the
+/// importer's directory, and a fully dynamic `import(expr)` is rejected),
+/// and Rollup and Vite leave `import(expr)` unbundled, so it loads code
+/// outside the bundle rather than an analysed module.
+fn loaded_modules<'f>(
+    file: &str,
+    load: &crate::usage_facts::ModuleLoad,
+    files: &'f BTreeMap<String, FileFacts>,
+    inputs: &CssInputs,
+) -> Vec<&'f String> {
+    use crate::usage_facts::ModuleLoad;
+    let every = || files.keys().collect();
+    let prefix = match load {
+        ModuleLoad::Unknown => "./",
+        ModuleLoad::Prefix(prefix) if prefix.is_empty() => "./",
+        ModuleLoad::Specifier(spec) => {
+            return resolve_import_source(file, spec, files, inputs)
+                .and_then(|module| files.get_key_value(&module).map(|(key, _)| key))
+                .into_iter()
+                .collect();
+        }
+        ModuleLoad::Prefix(prefix) => prefix.as_str(),
+    };
+    if prefix.starts_with('.') {
+        let start = relative_prefix(file, prefix);
+        return files.keys().filter(|key| key.starts_with(&start)).collect();
+    }
+    // Root-relative (`/src/pages/`): matched anywhere in the path, which
+    // also covers absolute file keys.
+    if prefix.starts_with('/') {
+        return files
+            .keys()
+            .filter(|key| format!("/{}", key.trim_start_matches('/')).contains(prefix))
+            .collect();
+    }
+    if let Some(expanded) = expand_alias(prefix, &inputs.path_aliases) {
+        return files.keys().filter(|key| key.starts_with(&expanded)).collect();
+    }
+    // A package: only an analysed one can hold components.
+    let mut segments = prefix.splitn(3, '/');
+    let package = match (segments.next(), segments.next()) {
+        (Some(scope), Some(name)) if scope.starts_with('@') => format!("{scope}/{name}"),
+        (Some(name), _) => name.to_string(),
+        _ => String::new(),
+    };
+    let analysed = !package.is_empty()
+        && inputs
+            .package_map
+            .keys()
+            .any(|key| key == &package || key.starts_with(&format!("{package}/")));
+    if analysed {
+        every()
+    } else {
+        Vec::new()
+    }
+}
+
+/// A relative specifier prefix resolved against `from_file`'s directory,
+/// its last segment kept partial (`./pages/Ho` → `src/pages/Ho`).
+fn relative_prefix(from_file: &str, prefix: &str) -> String {
+    let mut parts: Vec<&str> = match from_file.rfind('/') {
+        Some(pos) => from_file[..pos].split('/').collect(),
+        None => Vec::new(),
+    };
+    let (dirs, mut last) = prefix.rsplit_once('/').unwrap_or(("", prefix));
+    for segment in dirs.split('/').chain(matches!(last, "." | "..").then_some(last)) {
+        match segment {
+            "." | "" => {}
+            ".." => {
+                parts.pop();
+            }
+            segment => parts.push(segment),
+        }
+    }
+    if matches!(last, "." | "..") {
+        last = "";
+    }
+    let mut start = parts.join("/");
+    if !start.is_empty() || from_file.starts_with('/') {
+        start.push('/');
+    }
+    start.push_str(last);
+    start
+}
+
+/// Every component `module` exports, through re-exports and barrels, with
+/// the slots of an exported compose family.
+fn exported_component_ids(
+    module: &str,
+    files: &BTreeMap<String, FileFacts>,
+    inputs: &CssInputs,
+    evaluated_ids: &FxHashSet<String>,
+) -> Vec<String> {
+    let mut ids = Vec::new();
+    for name in crate::family_members::module_export_names(module, files, inputs) {
+        let Some((declaring, exported)) =
+            crate::family_members::follow_exports(module.to_string(), name, files, inputs)
+        else {
+            continue;
+        };
+        let Some(ff) = files.get(&declaring) else {
+            continue;
+        };
+        let declared = ff
+            .exports
+            .iter()
+            .find(|e| e.exported == exported && e.source.is_none())
+            .and_then(|e| e.local.clone())
+            .or_else(|| ff.default_export_binding.clone().filter(|_| exported == "default"))
+            .unwrap_or_else(|| exported.clone());
+        ids.extend(resolve_identity(&declaring, &declared, files, inputs, evaluated_ids, None));
+        let families = ff.compose.iter().filter(|family| {
+            family.family_binding.as_deref() == Some(declared.as_str())
+                || (exported == "default" && family.default_export)
+        });
+        for family in families {
+            for (_, slot) in &family.slots {
+                ids.extend(resolve_identity(&declaring, slot, files, inputs, evaluated_ids, None));
+            }
+        }
+    }
+    ids
+}
+
 /// Each spread wrapper of `file` its renders can stand in for, with the
 /// components its forwarding elements reach (through same-module wrapper
 /// chains too), and what the filters need to proxy them. Each wrapper is
@@ -3437,6 +3564,19 @@ fn run_with_system_floor(
     // A component a reference hands somewhere usage tracking does not follow
     // can render there with any props, so every option it declares stays.
     let mut escaped_ids: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    // A module loaded at runtime renders its exports where usage cannot
+    // follow.
+    let loaded: std::collections::BTreeSet<&String> = files
+        .iter()
+        .flat_map(|(path, ff)| {
+            ff.module_loads
+                .iter()
+                .flat_map(move |load| loaded_modules(path, load, files, inputs))
+        })
+        .collect();
+    for module in loaded {
+        escaped_ids.extend(exported_component_ids(module, files, inputs, &evaluated_ids));
+    }
     for (path, ff) in files {
         let mut names: Vec<&str> = Vec::new();
         for name in &ff.value_escapes {
@@ -6713,6 +6853,100 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
     fn direct_renders_still_prune_unused_options() {
         let app = "import { R } from './r';\nexport const App = () => <R size=\"sm\" active />;\n";
         assert_eq!(kept_options(&[("r.tsx", RECIPE), ("app.tsx", app)]), (vec!["sm"], vec!["active"]));
+    }
+
+    /// A module loaded at runtime (`import()`, `require()`, a context or a
+    /// glob) renders its exports where usage cannot follow, so each
+    /// component it can load keeps every option.
+    #[test]
+    fn components_a_module_load_can_reach_keep_every_option() {
+        let kept = |setup: &str| {
+            let app = format!(
+                "import {{ R }} from './r';\n{setup}\nexport const App = () => <R size=\"sm\" active />;\n"
+            );
+            kept_options(&[
+                ("r.tsx", RECIPE),
+                ("index.ts", "export * from './r';\n"),
+                ("other.ts", "export const other = 1;\n"),
+                ("app.tsx", app.as_str()),
+            ])
+        };
+        for setup in [
+            "import { lazy } from 'react';\n\
+             const L = lazy(() => import('./r').then((m) => ({ default: m.R })));",
+            "import { lazy } from 'react';\n\
+             const L = lazy(() => import('./index').then((m) => ({ default: m.R })));",
+            "import dynamic from 'next/dynamic';\nconst L = dynamic(() => import('./r').then((m) => m.R));",
+            "export const load = async (name) => (await import(name)).R;",
+            "export const load = (name) => import(`./${name}`);",
+            "export const load = (name) => import('./' + name);",
+            "const ui = require('./r');\nexport const Big = () => <ui.R size=\"lg\" />;",
+            "const context = require.context('./', false, /r\\.tsx$/);",
+            "const context = import.meta.webpackContext('./');",
+            "const modules = import.meta.glob('./*.tsx', { eager: true });",
+            "const modules = import.meta.glob(['./*.tsx', '!./app.tsx']);",
+        ] {
+            assert_eq!(kept(setup), (vec!["sm", "md", "lg"], vec!["active", "busy"]), "{setup}");
+        }
+        // Loads that cannot reach `R` leave it pruned.
+        for setup in [
+            "export const load = () => import('./other');",
+            "const modules = import.meta.glob('./pages/*.tsx');",
+            "export const where = require.resolve('./');",
+            "export const locale = (lang) => import(`dayjs/locale/${lang}`);",
+        ] {
+            assert_eq!(kept(setup), (vec!["sm"], vec!["active"]), "{setup}");
+        }
+        // A loaded compose family hands over its slots.
+        let family = format!(
+            "{}export const Fam = compose({{ Root: R }}, {{ name: 'Fam' }});\n",
+            RECIPE.replacen("export const R", "const R", 1)
+        );
+        let app = "import { Fam } from './r';\nimport { lazy } from 'react';\n\
+                   const L = lazy(() => import('./r').then((m) => ({ default: m.Fam.Root })));\n\
+                   export const App = () => <Fam.Root size=\"sm\" active />;\n";
+        assert_eq!(
+            kept_options(&[("r.tsx", family.as_str()), ("app.tsx", app)]),
+            (vec!["sm", "md", "lg"], vec!["active", "busy"])
+        );
+    }
+
+    /// A specifier usage cannot read loads from the importer's own
+    /// directory down: a script beside `src/` that imports a built file by
+    /// URL reaches no source component, and a loader inside `src/` reaches
+    /// them all.
+    #[test]
+    fn unreadable_loads_reach_only_the_importers_directory() {
+        let kept = |loader: (&str, &str)| {
+            let out = analyze(
+                &[
+                    ("src/r.tsx", RECIPE),
+                    (
+                        "src/app.tsx",
+                        "import { R } from './r';\nexport const App = () => <R size=\"sm\" active />;\n",
+                    ),
+                    loader,
+                ],
+                &test_inputs(),
+            );
+            let class = class_of(&out, "src/r.tsx::R");
+            ["sm", "md", "lg"]
+                .into_iter()
+                .filter(|size| out.css.contains(&format!(".{class}--size-{size}")))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            kept((
+                "scripts/check.ts",
+                "import { pathToFileURL } from 'node:url';\n\
+                 const ssr = await import(pathToFileURL('dist/ssr.js').href);\n",
+            )),
+            vec!["sm"]
+        );
+        assert_eq!(
+            kept(("src/load.ts", "export const load = async (name) => (await import(name)).R;\n")),
+            vec!["sm", "md", "lg"]
+        );
     }
 
     /// Renders usage tracking follows still prune: a compose slot and

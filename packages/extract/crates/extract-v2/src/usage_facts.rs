@@ -452,6 +452,111 @@ pub(crate) struct EnrichedUsage {
     pub escapes: BTreeSet<String>,
     /// See `FileFacts::spread_wrappers`.
     pub spread_wrappers: BTreeMap<String, SpreadWrapper>,
+    /// See `FileFacts::module_loads`.
+    pub module_loads: Vec<ModuleLoad>,
+}
+
+/// A module a file loads at runtime, outside its `import` declarations:
+/// `import()`, `require()`, `require.context()`, `import.meta.glob()`.
+/// Whatever the loaded module exports renders where usage cannot follow.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ModuleLoad {
+    /// One specifier: `import('./r')`, `require('./r')`.
+    Specifier(String),
+    /// Every module whose specifier starts with this: a template literal
+    /// (`import(`./pages/${name}`)`), a concatenation, a context directory
+    /// or the fixed part of a glob.
+    Prefix(String),
+    /// A specifier usage cannot read.
+    Unknown,
+}
+
+/// The modules a specifier expression can name.
+fn load_of(specifier: &Expression<'_>) -> ModuleLoad {
+    match specifier.get_inner_expression() {
+        Expression::StringLiteral(literal) => ModuleLoad::Specifier(literal.value.to_string()),
+        Expression::TemplateLiteral(template) => {
+            let head = template.quasis.first().and_then(|quasi| quasi.value.cooked.as_ref());
+            match (template.expressions.is_empty(), head) {
+                (true, Some(head)) => ModuleLoad::Specifier(head.to_string()),
+                (false, Some(head)) => ModuleLoad::Prefix(head.to_string()),
+                _ => ModuleLoad::Unknown,
+            }
+        }
+        Expression::BinaryExpression(binary)
+            if binary.operator == oxc::syntax::operator::BinaryOperator::Addition =>
+        {
+            match load_of(&binary.left) {
+                ModuleLoad::Specifier(head) | ModuleLoad::Prefix(head) => ModuleLoad::Prefix(head),
+                ModuleLoad::Unknown => ModuleLoad::Unknown,
+            }
+        }
+        _ => ModuleLoad::Unknown,
+    }
+}
+
+/// The loads one glob argument names: a pattern, or an array of them; a
+/// negated pattern only narrows, so it is skipped.
+fn glob_loads(argument: Option<&Argument<'_>>) -> Vec<ModuleLoad> {
+    let pattern = |expression: &Expression<'_>| match expression.get_inner_expression() {
+        Expression::StringLiteral(literal) if literal.value.starts_with('!') => None,
+        Expression::StringLiteral(literal) => {
+            let fixed = literal.value.split(['*', '?', '[', '{']).next().unwrap_or_default();
+            Some(ModuleLoad::Prefix(fixed.to_string()))
+        }
+        _ => Some(ModuleLoad::Unknown),
+    };
+    match argument.and_then(Argument::as_expression).map(Expression::get_inner_expression) {
+        Some(Expression::ArrayExpression(array)) => array
+            .elements
+            .iter()
+            .filter_map(|element| match element.as_expression() {
+                Some(expression) => pattern(expression),
+                None => Some(ModuleLoad::Unknown),
+            })
+            .collect(),
+        Some(expression) => pattern(expression).into_iter().collect(),
+        None => vec![ModuleLoad::Unknown],
+    }
+}
+
+/// The module loads a call makes: `require(…)`, `require.context(dir)`,
+/// `import.meta.webpackContext(dir)` and `import.meta.glob(…)` (also the
+/// older `globEager`). `require.resolve` loads nothing.
+fn call_loads(call: &CallExpression<'_>) -> Vec<ModuleLoad> {
+    let first = call.arguments.first().and_then(Argument::as_expression);
+    let directory = || match first.map(load_of) {
+        Some(ModuleLoad::Specifier(dir) | ModuleLoad::Prefix(dir)) if dir.ends_with('/') => {
+            ModuleLoad::Prefix(dir)
+        }
+        Some(ModuleLoad::Specifier(dir) | ModuleLoad::Prefix(dir)) => {
+            ModuleLoad::Prefix(format!("{dir}/"))
+        }
+        _ => ModuleLoad::Unknown,
+    };
+    match &call.callee {
+        Expression::Identifier(id) if id.name == "require" => {
+            vec![first.map_or(ModuleLoad::Unknown, load_of)]
+        }
+        Expression::StaticMemberExpression(member) => {
+            match (&member.object, member.property.name.as_str()) {
+                (Expression::Identifier(object), "context") if object.name == "require" => {
+                    vec![directory()]
+                }
+                (Expression::MetaProperty(meta), property)
+                    if meta.meta.name == "import" && meta.property.name == "meta" =>
+                {
+                    match property {
+                        "webpackContext" => vec![directory()],
+                        "glob" | "globEager" => glob_loads(call.arguments.first()),
+                        _ => Vec::new(),
+                    }
+                }
+                _ => Vec::new(),
+            }
+        }
+        _ => Vec::new(),
+    }
 }
 
 pub(crate) fn collect_enriched_usage(
@@ -494,8 +599,10 @@ pub(crate) fn collect_enriched_usage(
             elements: FxHashMap::default(),
             pending: Vec::new(),
         }),
+        module_loads: Some(Vec::new()),
     };
     collector.visit_program(program);
+    let module_loads = collector.module_loads.take().unwrap_or_default();
     let usage = collector.finish();
     let confined = match &scoping {
         // Direct eval can read any binding by name.
@@ -558,6 +665,7 @@ pub(crate) fn collect_enriched_usage(
         confined,
         escapes,
         spread_wrappers,
+        module_loads,
     }
 }
 
@@ -1202,6 +1310,8 @@ struct FactCollector<'a, 's> {
     /// Enriched collection only: the file's bindings and source, for
     /// `cloneElement` calls.
     clones: Option<CloneScan<'a, 's>>,
+    /// Enriched collection only: the modules the file loads at runtime.
+    module_loads: Option<Vec<ModuleLoad>>,
 }
 
 /// `cloneElement` calls, resolved once the walk has seen every `const`
@@ -1354,7 +1464,17 @@ impl<'a, 's> Visit<'a> for FactCollector<'a, 's> {
         oxc::ast_visit::walk::walk_variable_declarator(self, declarator);
     }
 
+    fn visit_import_expression(&mut self, import: &oxc::ast::ast::ImportExpression<'a>) {
+        if let Some(loads) = &mut self.module_loads {
+            loads.push(load_of(&import.source));
+        }
+        oxc::ast_visit::walk::walk_import_expression(self, import);
+    }
+
     fn visit_call_expression(&mut self, call: &CallExpression<'a>) {
+        if let Some(loads) = &mut self.module_loads {
+            loads.extend(call_loads(call));
+        }
         if self.react.calls(&call.callee, "createElement") {
             if let Some(first_arg) = call.arguments.first() {
                 let (ident, member, identity_uncertain) = match first_arg {
@@ -1590,6 +1710,7 @@ pub fn collect_usage_facts(program: &Program<'_>) -> Vec<UsageFact> {
         enrich: false,
         react: ReactNames::by_name(),
         clones: None,
+        module_loads: None,
     };
     collector.visit_program(program);
     collector.finish()

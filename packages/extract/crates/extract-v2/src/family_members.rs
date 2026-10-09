@@ -205,7 +205,7 @@ fn resolve_export(
 
 /// Every name `module` exports, including through its `export *` sources,
 /// which never carry a default export.
-fn module_export_names(
+pub(crate) fn module_export_names(
     module: &str,
     files: &BTreeMap<String, FileFacts>,
     inputs: &CssInputs,

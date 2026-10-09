@@ -301,6 +301,10 @@ pub struct FileFacts {
     /// components they spread their props into.
     #[serde(skip)]
     pub(crate) spread_wrappers: BTreeMap<String, crate::usage_facts::SpreadWrapper>,
+    /// Modules this file loads at runtime (`import()`, `require()`, a
+    /// context or a glob): their exports render where usage cannot follow.
+    #[serde(skip)]
+    pub(crate) module_loads: Vec<crate::usage_facts::ModuleLoad>,
     /// Extracted createTransform() declarations: serialized with the facts
     /// for probes, and the source of their bail diagnostics. They are never
     /// registered with the evaluator.
@@ -970,6 +974,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
         confined: confined_components,
         escapes: value_escapes,
         spread_wrappers,
+        module_loads,
     } = crate::usage_facts::collect_enriched_usage(
         program,
         &usage_statics_fx,
@@ -1016,6 +1021,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
         confined_components,
         value_escapes,
         spread_wrappers,
+        module_loads,
         parse_diagnostics: ast.diagnostics.clone(),
         parse_panicked: ast.panicked,
     }

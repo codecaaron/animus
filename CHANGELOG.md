@@ -14,6 +14,20 @@ nothing is pruned, so every component, variant option and state is kept,
 and the skip warning now says so. `strict` builds still fail on a skipped
 file.
 
+**Components loaded at runtime keep their CSS.** A component reached
+through `import()`, `require()`, `require.context()`,
+`import.meta.webpackContext()` or `import.meta.glob()` renders where usage
+tracking cannot follow, as with `lazy(() => import('./button'))`,
+`next/dynamic`, or `require('./button').Button`. Production builds used to
+prune the variant and state options those renders set. Now every component
+such a load can reach keeps every option it declares. That covers the loaded
+module's exports, through re-exports, barrels and compose families, and
+every analysed module a template literal, a concatenation, a context
+directory or a glob can match. A specifier the analysis cannot read, such as
+`require(name)`, reaches the modules in the importing file's directory and
+below, which is all a bundler can load for it. Loads into packages outside
+the analysis change nothing.
+
 **`cloneElement` overrides keep their CSS.** Production builds dropped the
 variant and state options a `cloneElement` call sets:
 `cloneElement(<Button size="sm" />, { size: 'lg' })` kept only `sm`. Overrides
