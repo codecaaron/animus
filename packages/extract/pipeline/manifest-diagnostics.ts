@@ -1,5 +1,6 @@
 import { parseInternalWire } from './internal-wire';
 
+import type { ExternalPackageOutcome } from './discover-packages';
 import type { SystemConfig } from './system-config';
 
 export type ManifestDiagnostic = {
@@ -106,6 +107,9 @@ export function collectSelectorAliasDiagnostics(
 
 export const UNREADABLE_SOURCE_FILE = 'animus.ingestion.unreadable-source-file';
 
+/** A kit the system extends resolved, yet discovery found none of its files. */
+export const NO_KIT_FILES = 'animus.discovery.no-kit-files';
+
 /** What a skipped source file costs: the analysis never sees what it
  *  renders. */
 export const SKIPPED_SOURCE_COST =
@@ -136,6 +140,24 @@ export function unreadableSourceDiagnostic<Thrown>(
     code: UNREADABLE_SOURCE_FILE,
     severity: severityFor(UNREADABLE_SOURCE_FILE),
   };
+}
+
+/** One warning per kit the system extends that resolved, yet yielded no
+ *  files: none of its components are extracted. */
+export function noKitFilesDiagnostics(
+  outcomes: readonly ExternalPackageOutcome[]
+): ManifestDiagnostic[] {
+  return outcomes
+    .filter((record) => record.outcome === 'empty')
+    .map((record) => ({
+      file: record.specifier,
+      component: 'kit',
+      kind: 'warn',
+      message:
+        'resolved, but discovery found none of its files, so none of its components are extracted — check that the package ships its src/ directory or a readable entry',
+      code: NO_KIT_FILES,
+      severity: severityFor(NO_KIT_FILES),
+    }));
 }
 
 /** The collision entry code minted by the system package's merge. */
@@ -205,6 +227,7 @@ type DiagnosticSeverity = 'error' | 'warn' | 'info';
 const DIAGNOSTIC_SEVERITY: ReadonlyMap<string, DiagnosticSeverity> = new Map([
   [SELECTOR_UNSUPPORTED_SUBJECT, 'error'],
   [UNREADABLE_SOURCE_FILE, 'error'],
+  [NO_KIT_FILES, 'warn'],
   [VOCABULARY_COLLISION, 'warn'],
   [VOCABULARY_LEGACY_VERB, 'warn'],
   [INVALID_PROPERTY_REGISTRATION, 'error'],
