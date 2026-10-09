@@ -476,6 +476,10 @@ export default defineConfig({
         command: 'bun scripts/type-budget/measure.ts',
         cache: false,
       },
+      'measure:consumers': {
+        command: 'bun scripts/consumers/measure.ts',
+        cache: false,
+      },
 
       clean: {
         command:
