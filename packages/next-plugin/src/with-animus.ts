@@ -264,6 +264,7 @@ export function withAnimus(
         // an earlier build's session stylesheet. The alias stays for resolves
         // that bypass the module factory.
         const sessionSystemPropsPath = systemPropsPath(sessionDir);
+        const redirectSideEffects = new WeakMap<KitResolveData, boolean>();
         config.plugins.push({
           apply(compiler: {
             hooks: {
@@ -275,7 +276,13 @@ export function withAnimus(
                       beforeResolve: {
                         tap: (
                           name: string,
-                          fn: (resolveData: { request: string }) => void
+                          fn: (resolveData: KitResolveData) => void
+                        ) => void;
+                      };
+                      afterResolve: {
+                        tap: (
+                          name: string,
+                          fn: (resolveData: KitResolveData) => void
                         ) => void;
                       };
                     };
@@ -302,7 +309,26 @@ export function withAnimus(
                     const entries = plugin.getExternalSourceEntries();
                     const srcEntry = entries.get(resolveData.request);
                     if (srcEntry) {
+                      const sideEffects = plugin
+                        .getExternalSourceSideEffects()
+                        .get(resolveData.request);
+                      if (sideEffects !== undefined) {
+                        redirectSideEffects.set(resolveData, sideEffects);
+                      }
                       resolveData.request = srcEntry;
+                    }
+                  }
+                );
+                // Webpack would classify the source entry by its own path
+                // against the package's `sideEffects`, so the classification
+                // of the entry it replaces is set as a rule's would be.
+                nmf.hooks.afterResolve.tap(
+                  'AnimusVirtualResolve',
+                  (resolveData) => {
+                    const sideEffects = redirectSideEffects.get(resolveData);
+                    const settings = resolveData.createData?.settings;
+                    if (sideEffects !== undefined && settings) {
+                      settings.sideEffects = sideEffects;
                     }
                   }
                 );
@@ -337,6 +363,12 @@ export function withAnimus(
       },
     };
   };
+}
+
+/** The part of webpack's resolve data the kit redirect reads and writes. */
+interface KitResolveData {
+  request: string;
+  createData?: { settings?: { sideEffects?: boolean } };
 }
 
 export function bindTurbopackWatchDeathReport(

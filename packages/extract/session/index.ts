@@ -65,6 +65,7 @@ export {
   getSharedCss,
   getSharedExternalDirs,
   getSharedExternalEntries,
+  getSharedExternalSideEffects,
   getSharedSystemProps,
   resetAnalysisStartedPromise,
   setAnalysisStartedPromise,

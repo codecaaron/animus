@@ -102,6 +102,7 @@ import {
   setSharedCss,
   setSharedExternalDirs,
   setSharedExternalEntries,
+  setSharedExternalSideEffects,
   setSharedSystemProps,
   setWatchTransaction,
 } from './singleton';
@@ -234,6 +235,9 @@ export class ExtractionSession {
   private externalFileOwners: Record<string, string> = {};
   /** External package specifier → absolute source entry path. */
   externalSourceEntries = new Map<string, string>();
+  /** Specifier → its source entry's side effects, from the owning package's
+   *  `sideEffects`; absent leaves the bundler's own classification. */
+  externalSourceSideEffects = new Map<string, boolean>();
   /** SourceId authority for this generation — roots realpath'd once per
    *  pipeline; aliases recorded while files exist so deletions resolve. */
   private sourceIdentity: SourceIdentity | null = null;
@@ -1075,6 +1079,7 @@ export class ExtractionSession {
       this.externalDirOwners = firstOwners(admitted.dirOwnerSets);
       this.externalFileOwners = admitted.fileOwners;
       this.externalSourceEntries = admitted.sourceEntries;
+      this.externalSourceSideEffects = admitted.sourceEntrySideEffects;
       for (const entry of admitted.entries) {
         const hash = contentHash(entry.source);
         rawEntries.push({ path: entry.path, source: entry.source, hash });
@@ -1117,6 +1122,7 @@ export class ExtractionSession {
       // as the source projection.
       setSharedExternalDirs(admitted.packageDirs);
       setSharedExternalEntries(admitted.sourceEntries);
+      setSharedExternalSideEffects(admitted.sourceEntrySideEffects);
 
       this.onExternalRootsCommitted?.(this.externalWatchRoots);
 
@@ -1152,6 +1158,7 @@ export class ExtractionSession {
       externalDirOwners: this.externalDirOwners,
       externalFileOwners: this.externalFileOwners,
       externalSourceEntries: this.externalSourceEntries,
+      externalSourceSideEffects: this.externalSourceSideEffects,
       externalPackageDirs: this.externalPackageDirs,
       ingestionFailureDiagnostics: this.ingestionFailureDiagnostics,
     };
