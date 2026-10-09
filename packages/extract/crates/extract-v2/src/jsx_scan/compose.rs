@@ -22,6 +22,10 @@ pub struct ComposeFamilyInfo {
     pub root_binding: String,
     /// (slot name, binding name) pairs for every slot, Root included.
     pub slots: Vec<(String, String)>,
+    /// A slot property is a spread, or has a key or value this scan cannot
+    /// read: the family may hold members `slots` does not list.
+    #[serde(skip)]
+    pub open: bool,
     pub shared_keys: Vec<String>,
     /// Shared variants propagate through React context across portals.
     pub context: bool,
@@ -190,21 +194,30 @@ fn extract_compose_family(
 
     let mut slots: Vec<(String, String)> = Vec::new();
     let mut root_binding = String::new();
+    let mut open = false;
 
     for prop in &obj.properties {
         if let ObjectPropertyKind::ObjectProperty(prop) = prop {
             let slot_name = match eval_property_key(&prop.key) {
                 Some(name) => name,
-                None => continue,
+                None => {
+                    open = true;
+                    continue;
+                }
             };
             let binding_name = match &prop.value {
                 Expression::Identifier(id) => id.name.to_string(),
-                _ => continue,
+                _ => {
+                    open = true;
+                    continue;
+                }
             };
             if slot_name == "Root" {
                 root_binding = binding_name.clone();
             }
             slots.push((slot_name, binding_name));
+        } else {
+            open = true;
         }
     }
 
@@ -236,6 +249,7 @@ fn extract_compose_family(
         default_export: false,
         root_binding,
         slots,
+        open,
         shared_keys,
         context,
         span: (call.span.start, call.span.end),

@@ -1624,6 +1624,18 @@ fn resolve_identity(
     by_bare_name(local)
 }
 
+/// Every member tag a file writes, as a JSX tag or a `createElement` type.
+fn written_member_tags(ff: &FileFacts) -> std::collections::BTreeSet<&str> {
+    ff.usage_for_analysis()
+        .iter()
+        .filter_map(|fact| match fact {
+            UsageFact::Element { tag: TagFact::Member(path), .. } => Some(path.as_str()),
+            UsageFact::CreateElement { member: Some(path), .. } => Some(path.as_str()),
+            _ => None,
+        })
+        .collect()
+}
+
 /// Each member tag `file` writes through a namespace binding (`ui.R`, and
 /// `ui.sub.R` through a re-exported namespace), with the components it
 /// renders. A binding is a namespace import, or a named import of a
@@ -1635,16 +1647,7 @@ fn namespace_member_ids(
     inputs: &CssInputs,
     evaluated_ids: &FxHashSet<String>,
 ) -> Vec<(String, Vec<String>)> {
-    let written: std::collections::BTreeSet<&str> = ff
-        .usage_for_analysis()
-        .iter()
-        .filter_map(|fact| match fact {
-            UsageFact::Element { tag: TagFact::Member(path), .. } => Some(path.as_str()),
-            UsageFact::CreateElement { member: Some(path), .. } => Some(path.as_str()),
-            _ => None,
-        })
-        .collect();
-    written
+    written_member_tags(ff)
         .into_iter()
         .filter_map(|tag| {
             let ids = member_path_ids(file, ff, tag, false, files, inputs, evaluated_ids);
@@ -1699,7 +1702,7 @@ fn member_path_ids(
 /// unless the host says its bundler leaves it unbundled (Vite, Rollup,
 /// Turbopack), in which case it loads code outside the bundle and reaches
 /// no analysed module.
-fn loaded_modules<'f>(
+pub(crate) fn loaded_modules<'f>(
     file: &str,
     load: &crate::usage_facts::ModuleLoad,
     files: &'f BTreeMap<String, FileFacts>,
@@ -2310,10 +2313,11 @@ fn passed_system_props<'u>(
 }
 
 /// One warning per member tag, and set of props, read through an object
-/// member tags do not resolve through (an object of components, a facade
-/// copying a compose family, or an alias of one), whose member names an
-/// extracted component that takes system props the tag is passed: they get
-/// no static classes.
+/// (an object of components, a facade copying a compose family, or an
+/// alias of one) whose member named an extracted component when the object
+/// was built, but which something may have changed since, when that
+/// component takes system props the tag is passed: they get no static
+/// classes.
 fn untraced_member_system_props(
     file: &str,
     ff: &FileFacts,
@@ -2335,7 +2339,7 @@ fn untraced_member_system_props(
         if props.is_empty() {
             continue;
         }
-        let Some(component) = objects.traced(file, tag) else {
+        let Some(crate::family_members::Member::Unstable(component, reason)) = objects.member(file, tag) else {
             continue;
         };
         props.retain(|prop| component_takes(&component, prop));
@@ -2357,9 +2361,10 @@ fn untraced_member_system_props(
             "warn",
             format!(
                 "system props {listed} get no static utility classes: the tag renders {binding} \
-                 from {component_file}, but member tags do not resolve through the object \
-                 {object}, so they fall back to dynamic slots — render {binding} directly or \
-                 through its compose family, or list the values under staticCss.systemProps"
+                 from {component_file} through the object {object}, which the extractor cannot \
+                 prove unchanged since it was built ({reason}), so they fall back to dynamic \
+                 slots — render {binding} directly or through its compose family, or list the \
+                 values under staticCss.systemProps"
             ),
             Some(UNATTRIBUTED_SYSTEM_PROPS),
         ));
@@ -3750,14 +3755,6 @@ fn run_with_system_floor(
             _ => binding.to_string(),
         }
     });
-    let member_bindings: BTreeMap<String, FxHashMap<String, String>> = order
-        .iter()
-        .filter_map(|path| {
-            let members = family_index.members_for(path, files.get(path)?, files, inputs);
-            (!members.is_empty()).then(|| (path.clone(), members))
-        })
-        .collect();
-    let no_members = FxHashMap::default();
     let declared_component = |file: &str, binding: &str| {
         match resolve_declared_identity(file, binding, files, inputs, &evaluated_ids).as_slice() {
             [only] => Some(only.clone()),
@@ -3766,6 +3763,25 @@ fn run_with_system_floor(
     };
     let mut object_members =
         crate::family_members::ObjectMembers::new(files, inputs, &family_index, &declared_component);
+    // A member tag written through a facade or alias whose member is stable
+    // resolves like a family member tag.
+    let member_bindings: BTreeMap<String, FxHashMap<String, String>> = order
+        .iter()
+        .filter_map(|path| {
+            let ff = files.get(path)?;
+            let mut members = family_index.members_for(path, ff, files, inputs);
+            for tag in written_member_tags(ff) {
+                if members.contains_key(tag) {
+                    continue;
+                }
+                if let Some(crate::family_members::Member::Stable(component)) = object_members.member(path, tag) {
+                    members.insert(tag.to_string(), component);
+                }
+            }
+            (!members.is_empty()).then(|| (path.clone(), members))
+        })
+        .collect();
+    let no_members = FxHashMap::default();
 
     // Each component's own custom configuration: equally named custom props
     // of different components are distinct props.
@@ -4069,6 +4085,9 @@ fn run_with_system_floor(
                     &evaluated_ids,
                 )),
             }
+            // An escaping facade or alias hands over its members, and one
+            // member of it that component.
+            escaped_ids.extend(object_members.escaped_components(path, name));
             // An escaping compose family hands over its slots.
             if let Some(members) = member_bindings.get(path) {
                 escaped_ids.extend(
@@ -8317,7 +8336,7 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             ("export const Button = ButtonRecipe;", "Button"),
             ("export const Button = Object.assign(ButtonRecipe, { Icon: ButtonRecipe });", "Button"),
             (
-                "const Family = compose({ Root: ButtonRecipe }, { name: 'Family' });\nexport const Button = { ...Family };",
+                "const Family = compose({ Root: ButtonRecipe }, { name: 'Family' });\nexport const Button = { ...Family };\ndecorate(Button);",
                 "Button.Root",
             ),
         ] {
@@ -8563,7 +8582,8 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
     }
 
     /// Every barrel shape a family can travel through, plus a namespace
-    /// import of one: the member tag keeps its utility class.
+    /// import of one and a facade copying it that nothing changes: the
+    /// member tag keeps its utility class.
     #[test]
     fn family_member_tags_resolve_through_barrels() {
         let named = barrel_family("export const Card = compose({ Root, Body }, { name: 'Card' });");
@@ -8573,6 +8593,7 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             (&named, "export * from './inner';", "import { Card } from './barrel';\nexport const App = () => <Card.Body p={8} />;"),
             (&named, "import { Card } from './a';\nexport { Card };", "import { Card } from './barrel';\nexport const App = () => <Card.Body p={8} />;"),
             (&named, "import { Card } from './a';\nexport { Card as default };", "import Card from './barrel';\nexport const App = () => <Card.Body p={8} />;"),
+            (&named, "import { Card as Base } from './a';\nexport const Card = { ...Base };", "import { Card } from './barrel';\nexport const App = () => <Card.Body p={8} />;"),
             (&named, "export * from './a';", "import * as ui from './barrel';\nexport const App = () => <ui.Card.Body p={8} />;"),
             (&default, "export { default as Card } from './a';", "import { Card } from './barrel';\nexport const App = () => <Card.Body p={8} />;"),
             (&default, "import Card from './a';\nexport { Card };", "import { Card } from './barrel';\nexport const App = () => <Card.Body p={8} />;"),

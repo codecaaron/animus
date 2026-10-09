@@ -491,6 +491,19 @@ pub(crate) struct EnrichedUsage {
     pub spread_wrappers: BTreeMap<String, SpreadWrapper>,
     /// See `FileFacts::module_loads`.
     pub module_loads: Vec<ModuleLoad>,
+    /// See `FileFacts::unsafe_object_uses`.
+    pub unsafe_object_uses: BTreeMap<String, ObjectUse>,
+}
+
+/// A use of a binding that holds an object which may change the object's
+/// members later, or hand the object to code the analysis does not follow.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ObjectUse {
+    /// 1-based line of the use; `None` for a direct `eval`, which can reach
+    /// any binding.
+    pub line: Option<usize>,
+    /// What the use does, said of the object: `is passed to decorate()`.
+    pub what: String,
 }
 
 /// A module a file loads at runtime, outside its `import` declarations:
@@ -669,6 +682,7 @@ pub(crate) fn collect_enriched_usage(
     static_values: &FxHashMap<String, Value>,
     chains: &[&ChainDescriptor],
     exports: &[ExportFact],
+    object_consts: &BTreeMap<&str, bool>,
 ) -> EnrichedUsage {
     let exported: FxHashSet<&str> = exports.iter().filter_map(|e| e.local.as_deref()).collect();
     let candidates: Vec<&str> = chains
@@ -766,12 +780,343 @@ pub(crate) fn collect_enriched_usage(
         }
         _ => BTreeMap::new(),
     };
+    let unsafe_object_uses = match &scoping {
+        Some(scoping) => unsafe_object_uses(program, scoping, object_consts),
+        None => BTreeMap::new(),
+    };
     EnrichedUsage {
         usage,
         confined,
         escapes,
         spread_wrappers,
         module_loads,
+        unsafe_object_uses,
+    }
+}
+
+/// Module-scope bindings that may hold an object: imports, flagged when a
+/// namespace import (only its members can be such an object), and the
+/// module's own families, facades and aliases, flagged when a facade
+/// whose top-level writes its member facts already record.
+fn object_bindings(
+    program: &Program<'_>,
+    scoping: &Scoping,
+    object_consts: &BTreeMap<&str, bool>,
+) -> FxHashMap<SymbolId, ObjectBinding> {
+    use oxc::ast::ast::ImportOrExportKind;
+    let mut bindings = FxHashMap::default();
+    let mut add = |binding: &oxc::ast::ast::BindingIdentifier<'_>, namespace: bool| {
+        if let Some(symbol) = binding.symbol_id.get() {
+            let name = binding.name.to_string();
+            bindings.insert(symbol, ObjectBinding { name, namespace, facade: false });
+        }
+    };
+    for stmt in &program.body {
+        let Statement::ImportDeclaration(import) = stmt else { continue };
+        if import.import_kind == ImportOrExportKind::Type {
+            continue;
+        }
+        for specifier in import.specifiers.iter().flatten() {
+            match specifier {
+                ImportDeclarationSpecifier::ImportSpecifier(named) => {
+                    if named.import_kind != ImportOrExportKind::Type {
+                        add(&named.local, false);
+                    }
+                }
+                ImportDeclarationSpecifier::ImportDefaultSpecifier(default) => add(&default.local, false),
+                ImportDeclarationSpecifier::ImportNamespaceSpecifier(namespace) => add(&namespace.local, true),
+            }
+        }
+    }
+    for (name, &facade) in object_consts {
+        if let Some(symbol) = scoping.get_root_binding((*name).into()) {
+            let name = name.to_string();
+            bindings.insert(symbol, ObjectBinding { name, namespace: false, facade });
+        }
+    }
+    bindings
+}
+
+/// A binding `ObjectUseScan` watches.
+struct ObjectBinding {
+    name: String,
+    namespace: bool,
+    /// A facade of this module, whose top-level member writes its member
+    /// facts record in order.
+    facade: bool,
+}
+
+/// See `FileFacts::unsafe_object_uses`.
+fn unsafe_object_uses(
+    program: &Program<'_>,
+    scoping: &Scoping,
+    object_consts: &BTreeMap<&str, bool>,
+) -> BTreeMap<String, ObjectUse> {
+    let candidates = object_bindings(program, scoping, object_consts);
+    if candidates.is_empty() {
+        return BTreeMap::new();
+    }
+    if scoping.root_unresolved_references().contains_key("eval") {
+        // Direct eval can reach any binding by name.
+        let what = ObjectUse { line: None, what: "can be changed by a direct eval".to_string() };
+        return candidates.into_values().map(|binding| (binding.name, what.clone())).collect();
+    }
+    let mut scan = ObjectUseScan {
+        scoping,
+        source: program.source_text,
+        candidates,
+        // A module-scope `Object` is not the global one.
+        global_object: scoping.get_root_binding("Object".into()).is_none(),
+        uses: BTreeMap::new(),
+        ancestors: Vec::new(),
+    };
+    scan.visit_program(program);
+    scan.uses
+}
+
+/// Visits every value reference to an object binding and records the first
+/// one that may change the object's members or hand the object on: a
+/// member write, update or delete, a method call (it receives the object as
+/// `this`), a call argument, or any use besides a member read, a JSX tag,
+/// a spread into an object literal or props, an export, a top-level `const`
+/// alias, a destructuring read and an `Object.assign` source. A namespace
+/// import is followed through one member, which is the object.
+struct ObjectUseScan<'a, 's> {
+    scoping: &'s Scoping,
+    source: &'s str,
+    candidates: FxHashMap<SymbolId, ObjectBinding>,
+    global_object: bool,
+    uses: BTreeMap<String, ObjectUse>,
+    ancestors: Vec<AstKind<'a>>,
+}
+
+impl<'a> Visit<'a> for ObjectUseScan<'a, '_> {
+    fn enter_node(&mut self, kind: AstKind<'a>) {
+        self.ancestors.push(kind);
+    }
+
+    fn leave_node(&mut self, _kind: AstKind<'a>) {
+        self.ancestors.pop();
+    }
+
+    fn visit_identifier_reference(&mut self, ident: &IdentifierReference<'a>) {
+        let Some(reference) = ident.reference_id.get().map(|id| self.scoping.get_reference(id)) else {
+            return;
+        };
+        let Some(symbol) = reference.symbol_id() else { return };
+        let Some(binding) = self.candidates.get(&symbol) else { return };
+        if !reference.is_value() {
+            return;
+        }
+        let mut ancestors = self.ancestors.iter().rev();
+        let (key, what) = if binding.namespace {
+            let (span, parent) = peel_wrappers(ident.span, &mut ancestors);
+            match parent {
+                Some(AstKind::JSXMemberExpression(_)) => return,
+                Some(AstKind::StaticMemberExpression(member)) if member.object.span() == span => {
+                    let key = format!("{}.{}", binding.name, member.property.name);
+                    if self.uses.contains_key(&key) {
+                        return;
+                    }
+                    let what = object_use(member.span, ancestors, false, self.global_object);
+                    (key, what)
+                }
+                _ => (binding.name.clone(), Some("is used as a whole namespace".to_string())),
+            }
+        } else {
+            if self.uses.contains_key(&binding.name)
+                || (binding.facade && top_level_write(ident.span, &self.ancestors))
+            {
+                return;
+            }
+            (binding.name.clone(), object_use(ident.span, ancestors, true, self.global_object))
+        };
+        let Some(what) = what else { return };
+        let start = (ident.span.start as usize).min(self.source.len());
+        let line = self.source[..start].matches('\n').count() + 1;
+        self.uses.entry(key).or_insert(ObjectUse { line: Some(line), what });
+    }
+}
+
+/// Whether the reference at `span` is the object of a top-level statement
+/// write: `X.key = …`, `X[k] = …` or `Object.assign(X, …)`.
+fn top_level_write(span: oxc::span::Span, ancestors: &[AstKind<'_>]) -> bool {
+    let mut rest = ancestors.iter().rev();
+    let (current, parent) = peel_wrappers(span, &mut rest);
+    let written = match parent {
+        Some(AstKind::StaticMemberExpression(member)) if member.object.span() == current => {
+            let (member_span, parent) = peel_wrappers(member.span, &mut rest);
+            matches!(parent, Some(AstKind::AssignmentExpression(assignment)) if assignment.left.span() == member_span)
+        }
+        Some(AstKind::ComputedMemberExpression(member)) if member.object.span() == current => {
+            let (member_span, parent) = peel_wrappers(member.span, &mut rest);
+            matches!(parent, Some(AstKind::AssignmentExpression(assignment)) if assignment.left.span() == member_span)
+        }
+        Some(AstKind::CallExpression(call)) => {
+            matches!(&call.callee, Expression::StaticMemberExpression(member)
+                if member.object.is_specific_id("Object") && member.property.name == "assign")
+                && call.arguments.first().map(GetSpan::span) == Some(current)
+        }
+        _ => false,
+    };
+    if !written {
+        return false;
+    }
+    let mut statement = rest.skip_while(|kind| is_erased_wrapper(kind));
+    matches!(statement.next(), Some(AstKind::ExpressionStatement(_)))
+        && matches!(statement.next(), Some(AstKind::Program(_)))
+}
+
+/// Parentheses and type syntax erased at runtime: the expression inside is
+/// what an enclosing node uses.
+fn is_erased_wrapper(kind: &AstKind<'_>) -> bool {
+    matches!(
+        kind,
+        AstKind::ParenthesizedExpression(_)
+            | AstKind::TSAsExpression(_)
+            | AstKind::TSSatisfiesExpression(_)
+            | AstKind::TSNonNullExpression(_)
+            | AstKind::TSTypeAssertion(_)
+            | AstKind::TSInstantiationExpression(_)
+    )
+}
+
+/// Skips the erased wrappers and optional chains around the expression at
+/// `span`: the expression they amount to, and the first other ancestor.
+fn peel_wrappers<'b, 'a: 'b>(
+    span: oxc::span::Span,
+    ancestors: &mut impl Iterator<Item = &'b AstKind<'a>>,
+) -> (oxc::span::Span, Option<&'b AstKind<'a>>) {
+    let mut current = span;
+    loop {
+        match ancestors.next() {
+            Some(kind) if is_erased_wrapper(kind) || matches!(kind, AstKind::ChainExpression(_)) => {
+                current = kind.span();
+            }
+            other => return (current, other),
+        }
+    }
+}
+
+/// What a use of an object binding at `span` may do to the object, or
+/// `None` when it only reads it. `ancestors` runs from the parent out. Only
+/// a bare binding (`alias`) can be a top-level `const` alias the module
+/// facts follow; `global_object` is false when a module-scope `Object`
+/// shadows the global one.
+fn object_use<'b, 'a: 'b>(
+    span: oxc::span::Span,
+    mut ancestors: impl Iterator<Item = &'b AstKind<'a>>,
+    alias: bool,
+    global_object: bool,
+) -> Option<String> {
+    use oxc::ast::ast::{AssignmentTarget, BindingPattern};
+    let (current, parent) = peel_wrappers(span, &mut ancestors);
+    let unfollowed = |what: &str| Some(what.to_string());
+    match parent? {
+        AstKind::JSXMemberExpression(_)
+        | AstKind::JSXOpeningElement(_)
+        | AstKind::JSXClosingElement(_)
+        | AstKind::JSXSpreadAttribute(_)
+        | AstKind::ExportSpecifier(_)
+        | AstKind::ExportDefaultDeclaration(_)
+        | AstKind::UnaryExpression(_)
+        | AstKind::BinaryExpression(_) => None,
+        AstKind::StaticMemberExpression(member) if member.object.span() == current => {
+            member_use(&format!("its member {}", member.property.name), member.span, ancestors)
+        }
+        AstKind::ComputedMemberExpression(member) if member.object.span() == current => {
+            member_use("a computed member", member.span, ancestors)
+        }
+        AstKind::SpreadElement(_) => match ancestors.next() {
+            Some(AstKind::ObjectExpression(_)) => None,
+            _ => unfollowed("is spread into a call or an array"),
+        },
+        AstKind::CallExpression(call) if call.callee.span() == current => unfollowed("is called"),
+        AstKind::CallExpression(call) => {
+            let callee = crate::chain_walk::unwrap_type_assertions(&call.callee);
+            let object_function = match callee {
+                Expression::StaticMemberExpression(member)
+                    if global_object && member.object.is_specific_id("Object") =>
+                {
+                    Some(member.property.name.as_str())
+                }
+                _ => None,
+            };
+            let first = call.arguments.first().map(GetSpan::span) == Some(current);
+            match object_function {
+                Some("assign") if first => unfollowed("is the target of Object.assign()"),
+                Some("assign" | "freeze" | "keys" | "values" | "entries") => None,
+                _ => Some(match callee {
+                    Expression::Identifier(id) => format!("is passed to {}()", id.name),
+                    Expression::StaticMemberExpression(member) => {
+                        format!("is passed to {}()", member.property.name)
+                    }
+                    _ => "is passed to a call".to_string(),
+                }),
+            }
+        }
+        parent @ AstKind::VariableDeclarator(declarator)
+            if declarator.init.as_ref().map(GetSpan::span) == Some(current) =>
+        {
+            match &declarator.id {
+                BindingPattern::ObjectPattern(_) => None,
+                BindingPattern::BindingIdentifier(_)
+                    if alias
+                        && initializes_top_level_const(current, std::iter::once(parent).chain(ancestors)) =>
+                {
+                    None
+                }
+                _ => unfollowed("is assigned to a variable"),
+            }
+        }
+        // A destructuring assignment reads members, then yields the object.
+        AstKind::AssignmentExpression(assignment) if assignment.right.span() == current => {
+            match &assignment.left {
+                AssignmentTarget::ObjectAssignmentTarget(_) => {
+                    object_use(assignment.span, ancestors, false, global_object)
+                }
+                _ => unfollowed("is assigned to a variable"),
+            }
+        }
+        AstKind::ExpressionStatement(_) => None,
+        AstKind::ForInStatement(statement) if statement.right.span() == current => None,
+        AstKind::ObjectProperty(_) => unfollowed("is stored in an object"),
+        AstKind::ArrayExpression(_) => unfollowed("is stored in an array"),
+        AstKind::JSXExpressionContainer(_) => unfollowed("is passed as a prop"),
+        _ => unfollowed("is used where the extractor does not follow it"),
+    }
+}
+
+/// What a use of one member of an object (`X.key`, at `span`) may do to
+/// the object: replace or delete the member, or call it as a method.
+fn member_use<'b, 'a: 'b>(
+    noun: &str,
+    span: oxc::span::Span,
+    mut ancestors: impl Iterator<Item = &'b AstKind<'a>>,
+) -> Option<String> {
+    let (current, parent) = peel_wrappers(span, &mut ancestors);
+    let assigned = || Some(format!("has {noun} assigned"));
+    match parent? {
+        AstKind::AssignmentExpression(assignment) if assignment.left.span() == current => assigned(),
+        AstKind::UpdateExpression(_)
+        | AstKind::ArrayAssignmentTarget(_)
+        | AstKind::AssignmentTargetRest(_)
+        | AstKind::AssignmentTargetWithDefault(_)
+        | AstKind::AssignmentTargetPropertyProperty(_) => assigned(),
+        AstKind::ForInStatement(statement) if statement.left.span() == current => assigned(),
+        AstKind::ForOfStatement(statement) if statement.left.span() == current => assigned(),
+        AstKind::UnaryExpression(unary)
+            if unary.operator == oxc::syntax::operator::UnaryOperator::Delete =>
+        {
+            Some(format!("has {noun} deleted"))
+        }
+        AstKind::CallExpression(call) if call.callee.span() == current => {
+            Some(format!("has {noun} called as a method"))
+        }
+        AstKind::TaggedTemplateExpression(tagged) if tagged.tag.span() == current => {
+            Some(format!("has {noun} called as a method"))
+        }
+        _ => None,
     }
 }
 
@@ -1249,12 +1594,7 @@ fn escape_path(
     let mut rest = ancestors.iter().rev();
     while let Some(parent) = rest.next() {
         match parent {
-            AstKind::ParenthesizedExpression(_)
-            | AstKind::TSAsExpression(_)
-            | AstKind::TSSatisfiesExpression(_)
-            | AstKind::TSNonNullExpression(_)
-            | AstKind::TSTypeAssertion(_)
-            | AstKind::TSInstantiationExpression(_) => current = parent.span(),
+            kind if is_erased_wrapper(kind) => current = kind.span(),
             AstKind::JSXOpeningElement(_)
             | AstKind::JSXClosingElement(_)
             | AstKind::JSXMemberExpression(_)
@@ -1320,14 +1660,7 @@ fn initializes_top_level_const<'b, 'a: 'b>(
     let mut current = span;
     let declarator = loop {
         match ancestors.next() {
-            Some(
-                kind @ (AstKind::ParenthesizedExpression(_)
-                | AstKind::TSAsExpression(_)
-                | AstKind::TSSatisfiesExpression(_)
-                | AstKind::TSNonNullExpression(_)
-                | AstKind::TSTypeAssertion(_)
-                | AstKind::TSInstantiationExpression(_)),
-            ) => current = kind.span(),
+            Some(kind) if is_erased_wrapper(kind) => current = kind.span(),
             Some(AstKind::VariableDeclarator(declarator)) => break declarator,
             _ => return false,
         }
@@ -1871,7 +2204,7 @@ pub fn collect_usage_facts_with_statics(
     program: &Program<'_>,
     static_values: &FxHashMap<String, Value>,
 ) -> Vec<UsageFact> {
-    collect_enriched_usage(program, static_values, &[], &[]).usage
+    collect_enriched_usage(program, static_values, &[], &[], &BTreeMap::new()).usage
 }
 
 fn attribute_expression<'a, 'b>(

@@ -280,6 +280,12 @@ pub struct FileFacts {
     /// writes its members, in source order.
     #[serde(skip)]
     pub(crate) facades: BTreeMap<String, Vec<FacadeEntry>>,
+    /// Module-scope bindings that may hold an object, each with its first
+    /// use that may change the object's members later or hand it to code the
+    /// analysis does not follow. Keyed by name, or `ns.name` for a member of
+    /// a namespace import.
+    #[serde(skip)]
+    pub(crate) unsafe_object_uses: BTreeMap<String, crate::usage_facts::ObjectUse>,
     /// Extensions of an `Object.member` parent, which are never chains.
     #[serde(skip)]
     pub member_parent_extensions: Vec<chain_walk::MemberParentExtension>,
@@ -468,9 +474,12 @@ pub(crate) enum FacadeEntry {
         binding: String,
         member: Option<String>,
     },
-    /// `key` set to a value no binding names (a literal, a call, a method,
-    /// a later `X.key = …`), or read through an accessor.
+    /// `key` set to a value no binding names: a literal, a call, a later
+    /// `X.key = …`.
     Other(String),
+    /// A method, accessor or function value, by key when it has a static
+    /// one: it runs with the object as `this` and can change its members.
+    Code(Option<String>),
     /// A write that may set any member: a spread of an expression, a
     /// computed key, a `__proto__` key, a later `X[k] = …` or
     /// `Object.assign(X, …)`.
@@ -541,8 +550,11 @@ fn literal_entries(object: &ObjectExpression<'_>, entries: &mut Vec<FacadeEntry>
             }
             ObjectPropertyKind::ObjectProperty(p) => p,
         };
+        let code = p.method
+            || p.kind != PropertyKind::Init
+            || matches!(crate::chain_walk::unwrap_type_assertions(&p.value), Expression::FunctionExpression(_));
         let Some(key) = p.key.static_name().filter(|_| !p.computed) else {
-            entries.push(FacadeEntry::Unknown);
+            entries.push(if code { FacadeEntry::Code(None) } else { FacadeEntry::Unknown });
             continue;
         };
         if sets_prototype(p) {
@@ -550,8 +562,11 @@ fn literal_entries(object: &ObjectExpression<'_>, entries: &mut Vec<FacadeEntry>
             continue;
         }
         let key = key.to_string();
+        if code {
+            entries.push(FacadeEntry::Code(Some(key)));
+            continue;
+        }
         let value = match crate::chain_walk::unwrap_type_assertions(&p.value) {
-            _ if p.method || p.kind != PropertyKind::Init => None,
             Expression::Identifier(id) => Some((id.name.to_string(), None)),
             Expression::StaticMemberExpression(member) => match &member.object {
                 Expression::Identifier(object) => {
@@ -649,10 +664,10 @@ fn identifier_members(entries: &[FacadeEntry]) -> BTreeMap<String, String> {
             FacadeEntry::Member { key, binding, member: None } => {
                 members.insert(key.clone(), binding.clone());
             }
-            FacadeEntry::Member { key, .. } | FacadeEntry::Other(key) => {
+            FacadeEntry::Member { key, .. } | FacadeEntry::Other(key) | FacadeEntry::Code(Some(key)) => {
                 members.remove(key);
             }
-            FacadeEntry::Copy(_) | FacadeEntry::Unknown => members.clear(),
+            FacadeEntry::Copy(_) | FacadeEntry::Unknown | FacadeEntry::Code(None) => members.clear(),
         }
     }
     members
@@ -1097,20 +1112,31 @@ pub(crate) fn extract_file_facts_from_static_maps(
     let exports = crate::usage_facts::collect_export_facts(program);
     let descriptors: Vec<&ChainDescriptor> = chains.iter().map(|chain| &chain.descriptor).collect();
     let usage = crate::usage_facts::collect_usage_facts(program);
+    let compose = scan_compose_calls(program);
+    // The module's own bindings that can hold a family or facade, flagged
+    // when a facade, whose top-level member writes its entries record.
+    let object_consts: BTreeMap<&str, bool> = const_initializers
+        .aliases
+        .keys()
+        .map(|name| (name.as_str(), false))
+        .chain(compose.iter().filter_map(|family| Some((family.family_binding.as_deref()?, false))))
+        .chain(const_initializers.facades.keys().map(|name| (name.as_str(), true)))
+        .collect();
     let crate::usage_facts::EnrichedUsage {
         usage: usage_enriched,
         confined: confined_components,
         escapes: value_escapes,
         spread_wrappers,
         module_loads,
+        unsafe_object_uses,
     } = crate::usage_facts::collect_enriched_usage(
         program,
         &usage_statics_fx,
         &descriptors,
         &exports,
+        &object_consts,
     );
 
-    let compose = scan_compose_calls(program);
     let compose_callees_in_use = compose_callees_referenced_outside(program, &compose);
 
     FileFacts {
@@ -1138,6 +1164,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
         declaration_roots: const_initializers.roots,
         object_members: const_initializers.objects,
         facades: const_initializers.facades,
+        unsafe_object_uses,
         member_parent_extensions,
         member_rooted_chains: walked.member_rooted,
         namespace_imports: crate::usage_facts::collect_namespace_imports(program),
