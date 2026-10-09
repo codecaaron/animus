@@ -14,7 +14,7 @@ import type {
   SystemProp,
   SelectorAliasProps,
   SystemProps,
-  ThemedScale,
+  ThemedPropValue,
   VariantConfig,
 } from './config';
 import type { AbstractProps } from './props';
@@ -69,13 +69,13 @@ type GroupProps<
   AG,
 > = {
   [K in ActiveGroupPropNames<PR, GR, AG> as K extends string ? K : never]?:
-    | ThemedScale<PR[K & keyof PR], undefined>
+    | ThemedPropValue<PR[K & keyof PR]>
     | undefined;
 };
 
 type CustomPropValues<CP extends Record<string, SystemProp>> = {
   [K in keyof StripIndex<CP>]?:
-    | ThemedScale<StripIndex<CP>[K & keyof StripIndex<CP>], undefined>
+    | ThemedPropValue<StripIndex<CP>[K & keyof StripIndex<CP>]>
     | undefined;
 };
 

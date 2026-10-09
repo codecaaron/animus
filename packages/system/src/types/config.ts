@@ -7,7 +7,12 @@ import {
 import { KeyframeRef } from '../keyframes';
 import { type Selectors } from '../selectors';
 import { PropertyTypes } from './properties';
-import { AbstractProps, ResponsiveProp, ThemeProps } from './props';
+import {
+  AbstractProps,
+  ResponsiveProp,
+  ResponsivePropValue,
+  ThemeProps,
+} from './props';
 import { ArrayScale, MapScale } from './scales';
 import { CSSObject } from './shared';
 import { BaseTheme, Theme, TokenScales } from './theme';
@@ -279,12 +284,18 @@ export type ThemedScaleValue<Config extends SystemProp> =
               >
         : PropertyValues<Config, true>;
 
-/** `Omitted` is what a breakpoint may hold to mean it was left out. */
-export type ThemedScale<Config extends SystemProp, Omitted = never> = [
-  Config,
-] extends [DeclarationProp]
-  ? ResponsiveProp<DeclarationKey<Extract<Config, DeclarationProp>>, Omitted>
-  : ResponsiveProp<ThemedScaleValue<Config>, Omitted>;
+export type ThemedScale<Config extends SystemProp> = [Config] extends [
+  DeclarationProp,
+]
+  ? ResponsiveProp<DeclarationKey<Extract<Config, DeclarationProp>>>
+  : ResponsiveProp<ThemedScaleValue<Config>>;
+
+/** `ThemedScale` as a component prop takes it: see `ResponsivePropValue`. */
+export type ThemedPropValue<Config extends SystemProp> = [Config] extends [
+  DeclarationProp,
+]
+  ? ResponsivePropValue<DeclarationKey<Extract<Config, DeclarationProp>>>
+  : ResponsivePropValue<ThemedScaleValue<Config>>;
 
 type RawSelectorKey = `${string}&${string}`;
 
