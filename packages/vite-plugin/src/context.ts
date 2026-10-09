@@ -856,6 +856,7 @@ export class PluginContext {
       componentCss: this.resolvedComponentCss,
       layers: this.options.layers,
       externalOutcomes: this.externalPackageOutcomes,
+      variableMapJson: this.system.variableMapJson,
     });
 
     for (const message of failures) {
