@@ -291,11 +291,13 @@ export function systemLoadDiagnostics(
             severity: severityFor(PREFIX_CONTEXTUAL_VARS_UNPREFIXED),
           },
         ];
+  // A conflict leaves the emitted names ambiguous, so it is an error in
+  // every mode, never a warning.
   const conflicts = (system.prefixNameConflicts ?? []).map(
     ({ name, final, reason }): ManifestDiagnostic => ({
       file: 'system',
       component: `--${name}`,
-      kind: 'warn',
+      kind: 'error',
       message:
         reason === 'transport'
           ? `the prefix would emit the contextual variable ${name} as --${final}, inside the --animus- names of the runtime's transport variables, where it can collide with a prop's own variable. Use a different prefix (${PREFIX_NAME_CONFLICT})`
