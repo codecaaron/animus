@@ -33,9 +33,15 @@ function parseReferences(value: string): ParsedReference[] {
   return references;
 }
 
+/** An opacity modifier: a percentage from 0 to 100, decimals allowed. */
+const OPACITY_RE = /^\d+(?:\.\d+)?$/;
+
 function applyOpacity(base: string, opacity: string | undefined): string {
   if (opacity === undefined) return base;
-  const alpha = Number.parseInt(opacity, 10);
+  const alpha =
+    OPACITY_RE.test(opacity) && Number(opacity) <= 100
+      ? Number(opacity)
+      : Number.parseInt(opacity, 10);
   // Empty or non-numeric modifiers ('{path/}', '{path/abc}') degrade to the
   // unmodified base — never a NaN% color-mix.
   if (Number.isNaN(alpha)) return base;
@@ -48,17 +54,19 @@ function applyOpacity(base: string, opacity: string | undefined): string {
 
 /**
  * Substitutes `{path}` references in one value from a resolved token map,
- * whose emitted paths already read `var(--…)`. An unknown path warns and
- * keeps its literal, as a token's own reference does.
+ * whose emitted paths already read `var(--…)`, or else a declared contextual
+ * variable. An unknown path warns and keeps its literal, as a token's own
+ * reference does.
  */
 export function resolveValueReferences(
   value: string,
-  tokenMap: Record<string, string>
+  tokenMap: Record<string, string>,
+  contextual: Record<string, string>
 ): string {
   if (!value.includes('{')) return value;
   return value.replace(TOKEN_REF_RE, (match) => {
     const [reference] = parseReferences(match);
-    const target = tokenMap[reference.path];
+    const target = tokenMap[reference.path] ?? contextual[reference.path];
     if (target === undefined) {
       // oxlint-disable-next-line no-console -- intentional runtime diagnostic
       console.warn(
@@ -84,13 +92,15 @@ export interface ResolvedReferences {
 }
 
 /**
- * An unresolvable reference warns and keeps its literal: a kit theme may
- * reference tokens its consumer supplies later.
+ * A path that names no token but a declared contextual variable resolves to
+ * that variable. Any other unresolvable reference warns and keeps its
+ * literal: a kit theme may reference tokens its consumer supplies later.
  */
 export function resolveReferences(
   tokenMap: Record<string, string>,
   variableMap: Record<string, string>,
-  variables: Record<string, string>
+  variables: Record<string, string>,
+  contextual: Record<string, string>
 ): ResolvedReferences {
   // The sorted path list drives traversal and output assembly, so neither
   // resolution nor key order can observe declaration order.
@@ -121,6 +131,9 @@ export function resolveReferences(
 
   const substitute = (reference: ParsedReference, match: string): string => {
     if (!known.has(reference.path)) {
+      const variable = contextual[reference.path];
+      if (variable !== undefined)
+        return applyOpacity(variable, reference.opacity);
       if (!warnedMissing.has(reference.path)) {
         warnedMissing.add(reference.path);
         // oxlint-disable-next-line no-console -- intentional runtime diagnostic

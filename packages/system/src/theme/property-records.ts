@@ -208,6 +208,19 @@ export function namesByScale(
   return result;
 }
 
+/**
+ * Each declared contextual variable as the token path a theme value writes,
+ * `{scale.name}`, and the `var()` it resolves to: `--${name}`, the property
+ * the Rust resolver maps the same path to.
+ */
+export function contextualReferences(store: PropertyStore) {
+  const result: Record<string, string> = {};
+  for (const [scale, names] of store.scaleNames) {
+    for (const name of names) result[`${scale}.${name}`] = `var(--${name})`;
+  }
+  return result;
+}
+
 /** The manifest's `registrations`: authored objects, in registration order. */
 export function legacyRegistrations(
   store: PropertyStore
