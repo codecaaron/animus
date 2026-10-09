@@ -1647,29 +1647,48 @@ fn namespace_member_ids(
     written
         .into_iter()
         .filter_map(|tag| {
-            let (namespace, name) = tag.rsplit_once('.')?;
-            let ids = match namespace_path_module(file, ff, namespace, files, inputs) {
-                Some(module) => {
-                    export_ids(&module, name.to_string(), false, files, inputs, evaluated_ids)
-                }
-                // `ui.sub.Card.Body`: a slot of a family the namespace exports.
-                None => {
-                    let (namespace, family) = namespace.rsplit_once('.')?;
-                    let module = namespace_path_module(file, ff, namespace, files, inputs)?;
-                    let (declaring, exported, declared) =
-                        declared_export(&module, family.to_string(), files, inputs)?;
-                    exported_family_slots(&declaring, &exported, &declared, files)
-                        .into_iter()
-                        .filter(|(slot, _)| slot == name)
-                        .flat_map(|(_, binding)| {
-                            resolve_identity(&declaring, binding, files, inputs, evaluated_ids, None)
-                        })
-                        .collect()
-                }
-            };
+            let ids = member_path_ids(file, ff, tag, false, files, inputs, evaluated_ids);
             (!ids.is_empty()).then(|| (tag.to_string(), ids))
         })
         .collect()
+}
+
+/// The components a dotted member path in `file` names through namespace
+/// bindings: `ui.R`, `ui.sub.R`, `sub.R` through a named import of a
+/// namespace, and a family's slot (`ui.sub.Card.Body`). With `slots`, an
+/// exported compose family hands over its slots, as a value use does.
+fn member_path_ids(
+    file: &str,
+    ff: &FileFacts,
+    path: &str,
+    slots: bool,
+    files: &BTreeMap<String, FileFacts>,
+    inputs: &CssInputs,
+    evaluated_ids: &FxHashSet<String>,
+) -> Vec<String> {
+    let Some((namespace, name)) = path.rsplit_once('.') else {
+        return Vec::new();
+    };
+    if let Some(module) = namespace_path_module(file, ff, namespace, files, inputs) {
+        return export_ids(&module, name.to_string(), slots, files, inputs, evaluated_ids);
+    }
+    // `ui.sub.Card.Body`: a slot of a family the namespace exports.
+    let slot_ids = || {
+        let (namespace, family) = namespace.rsplit_once('.')?;
+        let module = namespace_path_module(file, ff, namespace, files, inputs)?;
+        let (declaring, exported, declared) =
+            declared_export(&module, family.to_string(), files, inputs)?;
+        Some(
+            exported_family_slots(&declaring, &exported, &declared, files)
+                .into_iter()
+                .filter(|(slot, _)| slot == name)
+                .flat_map(|(_, binding)| {
+                    resolve_identity(&declaring, binding, files, inputs, evaluated_ids, None)
+                })
+                .collect(),
+        )
+    };
+    slot_ids().unwrap_or_default()
 }
 
 /// The analysed modules one runtime module load in `file` can reach.
@@ -3924,9 +3943,21 @@ fn run_with_system_floor(
         let mut names: Vec<&str> = Vec::new();
         for name in &ff.value_escapes {
             names.push(name);
-            // A namespace object hands over everything its module exports.
-            if let Some(module) = namespace_path_module(path, ff, name, files, inputs) {
-                escaped_ids.extend(exported_component_ids(&module, files, inputs, &evaluated_ids));
+            // A namespace object hands over everything its module exports, and
+            // a member of one at any depth (`ui.sub.X`) that component.
+            match namespace_path_module(path, ff, name, files, inputs) {
+                Some(module) => {
+                    escaped_ids.extend(exported_component_ids(&module, files, inputs, &evaluated_ids));
+                }
+                None => escaped_ids.extend(member_path_ids(
+                    path,
+                    ff,
+                    name,
+                    true,
+                    files,
+                    inputs,
+                    &evaluated_ids,
+                )),
             }
             // An escaping compose family hands over its slots.
             if let Some(members) = member_bindings.get(path) {
@@ -7213,8 +7244,8 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
 
     /// A namespace re-exported as `export * as sub` or as an imported
     /// namespace exported again reaches its components: member tags at any
-    /// depth record usage, and a value use of an enclosing namespace opens
-    /// them.
+    /// depth record usage, and a value use of an enclosing namespace, or of a
+    /// member at any depth, opens them.
     #[test]
     fn nested_namespace_re_exports_record_and_open_their_components() {
         let kept = |index: &str, setup: &str| {
@@ -7244,6 +7275,10 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
                 "export const all = Object.values(ui);",
                 "export const all = Object.values(ui.sub);",
                 "import { sub } from './index';\nexport const all = Object.values(sub);",
+                "export const picked = pick(ui.sub.R);",
+                "const C = ui.sub.R;\nexport const Big = () => <C size=\"lg\" />;",
+                "export const Poly = () => <Box as={ui.sub.R} />;",
+                "import { sub } from './index';\nexport const picked = pick(sub.R);",
             ] {
                 assert_eq!(
                     kept(index, setup),
