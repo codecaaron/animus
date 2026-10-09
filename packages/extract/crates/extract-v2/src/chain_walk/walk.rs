@@ -2,13 +2,18 @@
 //! `.asClass()` terminal, then walk the member chain back to its root.
 
 use oxc::ast::ast::{
-    BindingPattern, CallExpression, Declaration, Expression, Program, Statement,
-    VariableDeclarator,
+    BindingPattern, CallExpression, Declaration, Expression, IdentifierReference,
+    ModuleExportName, Program, Statement, VariableDeclarationKind, VariableDeclarator,
 };
+use oxc::ast_visit::Visit;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::expr::{match_static_member, unwrap_type_assertions};
 use super::terminal::{extract_terminal_arg, first_arg_span, second_arg_span_fn, TerminalArg};
-use super::{ChainDescriptor, ChainStage, MemberParentExtension, MemberRootedChain, TerminalKind};
+use super::{
+    ChainDescriptor, ChainStage, MemberParentExtension, MemberRootedChain, StagedBuilder,
+    TerminalKind,
+};
 
 const BAIL_METHODS: &[&str] = &[];
 pub(crate) const CHAIN_METHODS: &[&str] = &["styles", "variant", "compound", "states", "system", "props"];
@@ -29,6 +34,8 @@ pub struct WalkedProgram {
     pub member_rooted: Vec<MemberRootedChain>,
     /// Start offset of a terminal chain bound by `export default`.
     pub default_export: Option<u32>,
+    /// Builders chains may continue, in declaration order.
+    pub staged_builders: Vec<StagedBuilder>,
 }
 
 enum ChainRoot {
@@ -36,16 +43,131 @@ enum ChainRoot {
     Member { object: String, member: String },
 }
 
+/// Top-level `const` builders a later chain continues: name → (initializer,
+/// declaration statement span, whether it declares only this builder). A
+/// builder is builder stages on an identifier with no terminal, and no
+/// export names it. Every stage returns a new builder, so each chain from
+/// one builder starts from the same stages.
+type StagedBuilders<'p, 'a> = FxHashMap<&'p str, (&'p Expression<'a>, (u32, u32), bool)>;
+
+fn staged_builders<'p, 'a>(program: &'p Program<'a>) -> StagedBuilders<'p, 'a> {
+    let mut builders = StagedBuilders::default();
+    let mut exported: FxHashSet<&str> = FxHashSet::default();
+    for stmt in &program.body {
+        match stmt {
+            Statement::VariableDeclaration(decl) if decl.kind == VariableDeclarationKind::Const => {
+                for declarator in &decl.declarations {
+                    let (BindingPattern::BindingIdentifier(id), Some(init)) =
+                        (&declarator.id, &declarator.init)
+                    else {
+                        continue;
+                    };
+                    let init = unwrap_type_assertions(init);
+                    if is_builder_chain(init) {
+                        let sole = decl.declarations.len() == 1;
+                        builders.insert(id.name.as_str(), (init, (decl.span.start, decl.span.end), sole));
+                    }
+                }
+            }
+            Statement::ExportNamedDeclaration(export) if export.source.is_none() => {
+                for specifier in &export.specifiers {
+                    if let ModuleExportName::IdentifierReference(local) = &specifier.local {
+                        exported.insert(local.name.as_str());
+                    }
+                }
+            }
+            Statement::ExportDefaultDeclaration(export) => {
+                if let Some(Expression::Identifier(id)) =
+                    export.declaration.as_expression().map(unwrap_type_assertions)
+                {
+                    exported.insert(id.name.as_str());
+                }
+            }
+            _ => {}
+        }
+    }
+    builders.retain(|name, _| !exported.contains(name));
+    builders
+}
+
+/// The builders in declaration order, with what deciding whether a
+/// replaced module still needs each declaration takes.
+fn staged_builder_facts(program: &Program<'_>, builders: &StagedBuilders<'_, '_>) -> Vec<StagedBuilder> {
+    let mut references = References {
+        counts: builders.keys().map(|name| (*name, 0)).collect(),
+    };
+    references.visit_program(program);
+    let mut facts: Vec<(u32, StagedBuilder)> = builders
+        .iter()
+        .map(|(name, &(init, statement, sole))| {
+            let mut stages = Vec::new();
+            let (mut extractable, mut bail_reason, mut extend) = (true, None, false);
+            let followed_builder = walk_chain_backwards(
+                init,
+                &mut stages,
+                &mut extractable,
+                &mut bail_reason,
+                &mut extend,
+                builders,
+            )
+            .and_then(|(_, _, followed)| followed);
+            let fact = StagedBuilder {
+                name: name.to_string(),
+                statement: sole.then_some(statement),
+                followed_builder,
+                references: references.counts[name],
+            };
+            (statement.0, fact)
+        })
+        .collect();
+    facts.sort_by_key(|(start, _)| *start);
+    facts.into_iter().map(|(_, fact)| fact).collect()
+}
+
+struct References<'n> {
+    counts: FxHashMap<&'n str, usize>,
+}
+
+impl<'a> Visit<'a> for References<'_> {
+    fn visit_identifier_reference(&mut self, id: &IdentifierReference<'a>) {
+        if let Some(count) = self.counts.get_mut(id.name.as_str()) {
+            *count += 1;
+        }
+    }
+}
+
+/// Builder stages (`extend()` included) on an identifier, with no terminal.
+fn is_builder_chain(expr: &Expression<'_>) -> bool {
+    let mut current = expr;
+    loop {
+        let Expression::CallExpression(call) = current else {
+            return false;
+        };
+        let Some((object, method)) = match_static_member(&call.callee) else {
+            return false;
+        };
+        let stage = CHAIN_METHODS.contains(&method) || (method == "extend" && call.arguments.is_empty());
+        if !stage {
+            return false;
+        }
+        match object {
+            Expression::Identifier(_) => return true,
+            next => current = next,
+        }
+    }
+}
+
 pub fn walk_program(program: &Program<'_>) -> Vec<ChainDescriptor> {
     walk_program_facts(program).chains
 }
 
 pub fn walk_program_facts(program: &Program<'_>) -> WalkedProgram {
+    let builders = staged_builders(program);
     let mut chains = Vec::new();
     let mut member_parents = Vec::new();
     let mut member_rooted = Vec::new();
     let mut default_export = None;
-    let mut record = |declarator: &VariableDeclarator<'_>| match try_extract_chain(declarator) {
+    let mut record = |declarator: &VariableDeclarator<'_>| match try_extract_chain(declarator, &builders) {
         Some(WalkedChain::Chain(chain)) => chains.push(chain),
         Some(WalkedChain::MemberParent(extension)) => member_parents.push(extension),
         Some(WalkedChain::MemberRooted(chain)) => member_rooted.push(chain),
@@ -64,7 +186,11 @@ pub fn walk_program_facts(program: &Program<'_>) -> WalkedProgram {
                     .as_expression()
                     .map(unwrap_type_assertions)
                 {
-                    if let Some(WalkedChain::Chain(_)) = try_walk_chain(call, "default".to_string()) {
+                    // Builders are not followed here: a default export is
+                    // only reported, never extracted.
+                    if let Some(WalkedChain::Chain(_)) =
+                        try_walk_chain(call, "default".to_string(), &StagedBuilders::default())
+                    {
                         default_export = Some(call.span.start);
                     }
                 }
@@ -77,15 +203,20 @@ pub fn walk_program_facts(program: &Program<'_>) -> WalkedProgram {
             _ => {}
         }
     }
+    let staged_builders = staged_builder_facts(program, &builders);
     WalkedProgram {
         chains,
         member_parents,
         member_rooted,
         default_export,
+        staged_builders,
     }
 }
 
-fn try_extract_chain(declarator: &VariableDeclarator<'_>) -> Option<WalkedChain> {
+fn try_extract_chain(
+    declarator: &VariableDeclarator<'_>,
+    builders: &StagedBuilders<'_, '_>,
+) -> Option<WalkedChain> {
     let init = declarator.init.as_ref()?;
     let binding = match &declarator.id {
         BindingPattern::BindingIdentifier(id) => id.name.to_string(),
@@ -95,10 +226,14 @@ fn try_extract_chain(declarator: &VariableDeclarator<'_>) -> Option<WalkedChain>
         Expression::CallExpression(call) => call.as_ref(),
         _ => return None,
     };
-    try_walk_chain(call, binding)
+    try_walk_chain(call, binding, builders)
 }
 
-fn try_walk_chain(call: &CallExpression<'_>, binding: String) -> Option<WalkedChain> {
+fn try_walk_chain(
+    call: &CallExpression<'_>,
+    binding: String,
+    builders: &StagedBuilders<'_, '_>,
+) -> Option<WalkedChain> {
     let (object, method_name) = match_static_member(&call.callee)?;
 
     let terminal = match method_name {
@@ -123,12 +258,13 @@ fn try_walk_chain(call: &CallExpression<'_>, binding: String) -> Option<WalkedCh
     let mut has_extend_marker = false;
     let chain_end = call.span;
 
-    let (chain_start, root) = walk_chain_backwards(
+    let (chain_start, root, followed_builder) = walk_chain_backwards(
         object,
         &mut stages,
         &mut extractable,
         &mut bail_reason,
         &mut has_extend_marker,
+        builders,
     )?;
 
     let root_identifier = match root {
@@ -171,6 +307,7 @@ fn try_walk_chain(call: &CallExpression<'_>, binding: String) -> Option<WalkedCh
         bail_reason,
         span: (chain_start, chain_end.end),
         extends_from,
+        followed_builder,
     }))
 }
 
@@ -180,11 +317,28 @@ fn walk_chain_backwards(
     extractable: &mut bool,
     bail_reason: &mut Option<String>,
     has_extend_marker: &mut bool,
-) -> Option<(u32, ChainRoot)> {
+    builders: &StagedBuilders<'_, '_>,
+) -> Option<(u32, ChainRoot, Option<String>)> {
     match expr {
-        Expression::Identifier(id) => {
-            Some((id.span.start, ChainRoot::Identifier(id.name.to_string())))
-        }
+        // A builder declared earlier continues into its own stages; the
+        // chain keeps its own span. Declarations only ever point back, so
+        // the walk ends. After `.extend()` the name is a parent component.
+        Expression::Identifier(id) => match builders.get(id.name.as_str()) {
+            Some(&(init, (_, declared_end), _))
+                if declared_end <= id.span.start && !*has_extend_marker =>
+            {
+                let (_, root, _) = walk_chain_backwards(
+                    init,
+                    stages,
+                    extractable,
+                    bail_reason,
+                    has_extend_marker,
+                    builders,
+                )?;
+                Some((id.span.start, root, Some(id.name.to_string())))
+            }
+            _ => Some((id.span.start, ChainRoot::Identifier(id.name.to_string()), None)),
+        },
         Expression::StaticMemberExpression(member) => match &member.object {
             Expression::Identifier(object) => Some((
                 member.span.start,
@@ -192,6 +346,7 @@ fn walk_chain_backwards(
                     object: object.name.to_string(),
                     member: member.property.name.to_string(),
                 },
+                None,
             )),
             _ => None,
         },
@@ -236,7 +391,7 @@ fn walk_chain_backwards(
                 }
             }
 
-            walk_chain_backwards(object, stages, extractable, bail_reason, has_extend_marker)
+            walk_chain_backwards(object, stages, extractable, bail_reason, has_extend_marker, builders)
         }
         _ => None,
     }

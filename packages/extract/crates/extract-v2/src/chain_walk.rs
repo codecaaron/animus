@@ -38,6 +38,22 @@ pub struct ChainDescriptor {
     pub bail_reason: Option<String>,
     pub span: (u32, u32),
     pub extends_from: Option<String>,
+    /// The same-module staged builder its root continued into.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub followed_builder: Option<String>,
+}
+
+/// A top-level `const` builder chains may continue (see `walk.rs`).
+#[derive(Debug, Clone)]
+pub struct StagedBuilder {
+    pub name: String,
+    /// The declaration statement, when it declares only this builder.
+    pub statement: Option<(u32, u32)>,
+    /// The builder its own root continued into.
+    pub followed_builder: Option<String>,
+    /// References to the name anywhere in the module, shadowed ones
+    /// included, so the count never runs short.
+    pub references: usize,
 }
 
 /// `const X = Object.member.extend()…` — an extension whose parent is a

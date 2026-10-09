@@ -287,6 +287,9 @@ pub struct FileFacts {
     /// A terminal chain bound by `export default`, which is never a chain.
     #[serde(skip)]
     pub default_export_chain: Option<DefaultExportChain>,
+    /// Top-level builders chains here continue, in declaration order.
+    #[serde(skip)]
+    pub(crate) staged_builders: Vec<chain_walk::StagedBuilder>,
     /// Named-import specifiers (alias augmentation inputs).
     pub imports: Vec<ImportFact>,
     /// Named-export facts (re-export following for provenance/statics).
@@ -1018,6 +1021,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
         default_export_chain: walked
             .default_export
             .map(|start| default_export_chain(program, source, start)),
+        staged_builders: walked.staged_builders,
         imports,
         exports,
         transforms,

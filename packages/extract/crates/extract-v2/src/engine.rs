@@ -98,6 +98,40 @@ struct ReplacementImportNeeds {
     effect_imports: std::collections::BTreeMap<(u32, u32), String>,
 }
 
+/// Declaration spans of staged builders the replaced module no longer
+/// needs: every reference is a chain that continued into the builder and
+/// was extracted, or a builder dropped before it. A kept declaration of an
+/// extension builder would throw, since an extracted parent cannot extend
+/// at runtime.
+fn dead_staged_builders(
+    file_facts: &facts::FileFacts,
+    payloads: &std::collections::HashMap<String, assemble::ReplacementPayload>,
+) -> Vec<(u32, u32)> {
+    let mut consumed: rustc_hash::FxHashMap<&str, usize> = rustc_hash::FxHashMap::default();
+    for chain in &file_facts.chains {
+        if let Some(builder) = &chain.descriptor.followed_builder {
+            if payloads.contains_key(&chain.descriptor.binding) {
+                *consumed.entry(builder.as_str()).or_default() += 1;
+            }
+        }
+    }
+    let mut dead = Vec::new();
+    // Last first: a builder only continues one declared before it.
+    for builder in file_facts.staged_builders.iter().rev() {
+        let Some(statement) = builder.statement else {
+            continue;
+        };
+        if consumed.get(builder.name.as_str()).copied().unwrap_or(0) < builder.references {
+            continue;
+        }
+        dead.push(statement);
+        if let Some(root) = &builder.followed_builder {
+            *consumed.entry(root.as_str()).or_default() += 1;
+        }
+    }
+    dead
+}
+
 fn replacement_import_needs(
     file_facts: &facts::FileFacts,
     payloads: &std::collections::HashMap<String, assemble::ReplacementPayload>,
@@ -553,11 +587,17 @@ impl ExtractEngine {
             )),
         })?;
 
+        let mut replacements = replacements;
+        replacements.extend(
+            dead_staged_builders(file_facts, &file_payloads)
+                .into_iter()
+                .map(|(start, end)| (start, end, String::new())),
+        );
+
         let has_any_compose = !file_facts.compose.is_empty();
         let has_compose_replacements = file_facts.compose.iter().any(|f| !f.context);
         let has_compose_context_replacements = file_facts.compose.iter().any(|f| f.context);
         let import_needs = replacement_import_needs(file_facts, &file_payloads);
-        let mut replacements = replacements;
         for family in &file_facts.compose {
             let slots_entries: Vec<String> = family
                 .slots
@@ -1744,5 +1784,55 @@ export const App = () => <Box tone="red" />;
         assert!(code.contains("import './poly';\nimport { shift } from './cb';import \"./cb\";\n"), "{code}");
         assert!(code.contains("import { Kit } from './kit';import \"./kit\";\n"), "{code}");
         assert!(!code.contains("import \"./kept\";"), "{code}");
+    }
+
+    #[test]
+    fn chains_continue_from_staged_builders() {
+        // A chain continued from a same-module staged builder carries the
+        // builder's stages, and the builder's declaration leaves the module
+        // once every reference to it is such a chain.
+        let mut engine = ExtractEngine::new(None).unwrap();
+        let source = "const base = ds.styles({ paddingLeft: '2px' });\n\
+            export const Staged = base.variant({ prop: 'size', variants: { sm: { marginTop: '1px' } } }).asElement('div');\n\
+            export const Twin = base.asElement('span');\n\
+            export const Parent = ds.styles({ marginLeft: '4px' }).asElement('div');\n\
+            const ext = Parent.extend().styles({ paddingTop: '3px' });\n\
+            export const Extended = ext.asElement('p');\n\
+            const kept = ds.styles({ paddingRight: '5px' });\n\
+            export const FromKept = kept.asElement('i');\n\
+            export const useKept = () => kept;\n\
+            export const shared = ds.styles({ paddingBottom: '6px' });\n\
+            export const FromShared = shared.asElement('b');\n\
+            export const App = () => <><Staged size='sm' /><Twin /><Extended /><FromKept /><FromShared /></>;\n";
+        let out = engine
+            .analyze(serde_json::json!([{ "path": "a.tsx", "source": source }]).to_string())
+            .unwrap();
+        let manifest: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let css = manifest["css"].as_str().unwrap();
+        let rule = |binding: &str, suffix: &str| {
+            let class = manifest["components"][format!("a.tsx::{binding}")]["class_name"]
+                .as_str()
+                .unwrap_or_else(|| panic!("{binding} is not extracted: {css}"));
+            let open = format!(".{class}{suffix} {{");
+            let start = css.find(&open).unwrap_or_else(|| panic!("no {open}: {css}"));
+            css[start..start + css[start..].find('}').unwrap()].to_string()
+        };
+        assert!(rule("Staged", "").contains("padding-left: 2px"), "{css}");
+        assert!(rule("Staged", "--size-sm").contains("margin-top: 1px"), "{css}");
+        assert!(rule("Twin", "").contains("padding-left: 2px"), "{css}");
+        let extended = rule("Extended", "");
+        assert!(extended.contains("margin-left: 4px") && extended.contains("padding-top: 3px"), "{css}");
+        assert!(rule("FromKept", "").contains("padding-right: 5px"), "{css}");
+        // An exported builder is out of reach: another module may continue it.
+        assert!(manifest["components"].get("a.tsx::FromShared").is_none(), "{css}");
+
+        let code: serde_json::Value =
+            serde_json::from_str(&engine.transform_file("a.tsx".to_string()).unwrap()).unwrap();
+        let code = code["code"].as_str().unwrap();
+        assert!(!code.contains("const base") && !code.contains("const ext"), "{code}");
+        // An extracted parent cannot extend at runtime.
+        assert!(!code.contains(".extend("), "{code}");
+        assert!(code.contains("const kept = ds.styles"), "{code}");
+        assert!(code.contains("export const shared = ds.styles"), "{code}");
     }
 }
