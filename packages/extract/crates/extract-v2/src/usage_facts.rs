@@ -495,53 +495,130 @@ pub(crate) struct EnrichedUsage {
 
 /// A module a file loads at runtime, outside its `import` declarations:
 /// `import()`, `require()`, `require.context()`, `import.meta.glob()`.
-/// Whatever the loaded module exports renders where usage cannot follow.
+/// Whatever the loaded module exports renders where usage cannot follow. A
+/// glob array gives one load per pattern, all from one call.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ModuleLoad {
+pub struct ModuleLoad {
+    pub target: LoadTarget,
+    /// An `import()`: some hosts leave an unreadable one unbundled.
+    pub dynamic_import: bool,
+    /// The call's line and spelling, for the warning when it opens many
+    /// components.
+    pub line: usize,
+    pub call: String,
+}
+
+/// What a module load names.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LoadTarget {
     /// One specifier: `import('./r')`, `require('./r')`.
     Specifier(String),
     /// Every module whose specifier starts with this: a template literal
-    /// (`import(`./pages/${name}`)`), a concatenation, a context directory
-    /// or the fixed part of a glob.
+    /// (`import(`./pages/${name}`)`) or a concatenation.
     Prefix(String),
+    /// `require.context(dir, recursive, filter)` and
+    /// `import.meta.webpackContext(dir, { recursive, regExp })`: modules
+    /// under `dir`, at any depth when `recursive`, whose `./`-relative path
+    /// `filter` (a regular expression) matches; `None` matches any.
+    Context {
+        dir: String,
+        recursive: bool,
+        filter: Option<String>,
+    },
+    /// One `import.meta.glob` pattern.
+    Glob(String),
     /// A specifier usage cannot read.
     Unknown,
 }
 
 /// The modules a specifier expression can name.
-fn load_of(specifier: &Expression<'_>) -> ModuleLoad {
+fn load_of(specifier: &Expression<'_>) -> LoadTarget {
     match specifier.get_inner_expression() {
-        Expression::StringLiteral(literal) => ModuleLoad::Specifier(literal.value.to_string()),
+        Expression::StringLiteral(literal) => LoadTarget::Specifier(literal.value.to_string()),
         Expression::TemplateLiteral(template) => {
             let head = template.quasis.first().and_then(|quasi| quasi.value.cooked.as_ref());
             match (template.expressions.is_empty(), head) {
-                (true, Some(head)) => ModuleLoad::Specifier(head.to_string()),
-                (false, Some(head)) => ModuleLoad::Prefix(head.to_string()),
-                _ => ModuleLoad::Unknown,
+                (true, Some(head)) => LoadTarget::Specifier(head.to_string()),
+                (false, Some(head)) => LoadTarget::Prefix(head.to_string()),
+                _ => LoadTarget::Unknown,
             }
         }
         Expression::BinaryExpression(binary)
             if binary.operator == oxc::syntax::operator::BinaryOperator::Addition =>
         {
             match load_of(&binary.left) {
-                ModuleLoad::Specifier(head) | ModuleLoad::Prefix(head) => ModuleLoad::Prefix(head),
-                ModuleLoad::Unknown => ModuleLoad::Unknown,
+                LoadTarget::Specifier(head) | LoadTarget::Prefix(head) => LoadTarget::Prefix(head),
+                _ => LoadTarget::Unknown,
             }
         }
-        _ => ModuleLoad::Unknown,
+        _ => LoadTarget::Unknown,
     }
 }
 
-/// The loads one glob argument names: a pattern, or an array of them; a
+/// A regular expression literal as a pattern for the `regex` crate, its
+/// flags folded in; `None` for anything else.
+fn regex_of(expression: Option<&Expression<'_>>) -> Option<String> {
+    let Expression::RegExpLiteral(literal) = expression?.get_inner_expression() else {
+        return None;
+    };
+    let flags = literal.regex.flags.to_string();
+    let inline: String = flags.chars().filter(|flag| matches!(flag, 'i' | 'm' | 's')).collect();
+    let pattern = literal.regex.pattern.text.to_string();
+    Some(if inline.is_empty() { pattern } else { format!("(?{inline}){pattern}") })
+}
+
+/// A context's modules: `dir`, how deep, and which paths. An argument
+/// usage cannot read keeps the widest reading: any depth, any path.
+fn context_of(
+    dir: Option<&Expression<'_>>,
+    recursive: Option<&Expression<'_>>,
+    filter: Option<&Expression<'_>>,
+) -> LoadTarget {
+    let dir = match dir.map(load_of) {
+        Some(LoadTarget::Specifier(dir)) => dir,
+        Some(LoadTarget::Prefix(prefix)) => {
+            return LoadTarget::Prefix(prefix);
+        }
+        _ => return LoadTarget::Unknown,
+    };
+    let recursive = !matches!(
+        recursive.map(Expression::get_inner_expression),
+        Some(Expression::BooleanLiteral(literal)) if !literal.value
+    );
+    LoadTarget::Context {
+        dir,
+        recursive,
+        filter: regex_of(filter),
+    }
+}
+
+/// `import.meta.webpackContext(dir, { recursive, regExp })`.
+fn webpack_context_of(call: &CallExpression<'_>) -> LoadTarget {
+    let options = call.arguments.get(1).and_then(Argument::as_expression);
+    let option = |name: &str| match options.map(Expression::get_inner_expression) {
+        Some(Expression::ObjectExpression(object)) => object.properties.iter().find_map(|property| {
+            match property {
+                oxc::ast::ast::ObjectPropertyKind::ObjectProperty(property)
+                    if property.key.static_name().as_deref() == Some(name) =>
+                {
+                    Some(&property.value)
+                }
+                _ => None,
+            }
+        }),
+        _ => None,
+    };
+    let first = call.arguments.first().and_then(Argument::as_expression);
+    context_of(first, option("recursive"), option("regExp"))
+}
+
+/// The patterns one glob argument names: a pattern, or an array of them; a
 /// negated pattern only narrows, so it is skipped.
-fn glob_loads(argument: Option<&Argument<'_>>) -> Vec<ModuleLoad> {
+fn glob_loads(argument: Option<&Argument<'_>>) -> Vec<LoadTarget> {
     let pattern = |expression: &Expression<'_>| match expression.get_inner_expression() {
         Expression::StringLiteral(literal) if literal.value.starts_with('!') => None,
-        Expression::StringLiteral(literal) => {
-            let fixed = literal.value.split(['*', '?', '[', '{']).next().unwrap_or_default();
-            Some(ModuleLoad::Prefix(fixed.to_string()))
-        }
-        _ => Some(ModuleLoad::Unknown),
+        Expression::StringLiteral(literal) => Some(LoadTarget::Glob(literal.value.to_string())),
+        _ => Some(LoadTarget::Unknown),
     };
     match argument.and_then(Argument::as_expression).map(Expression::get_inner_expression) {
         Some(Expression::ArrayExpression(array)) => array
@@ -549,42 +626,33 @@ fn glob_loads(argument: Option<&Argument<'_>>) -> Vec<ModuleLoad> {
             .iter()
             .filter_map(|element| match element.as_expression() {
                 Some(expression) => pattern(expression),
-                None => Some(ModuleLoad::Unknown),
+                None => Some(LoadTarget::Unknown),
             })
             .collect(),
         Some(expression) => pattern(expression).into_iter().collect(),
-        None => vec![ModuleLoad::Unknown],
+        None => vec![LoadTarget::Unknown],
     }
 }
 
-/// The module loads a call makes: `require(…)`, `require.context(dir)`,
-/// `import.meta.webpackContext(dir)` and `import.meta.glob(…)` (also the
+/// What a call loads: `require(…)`, `require.context(…)`,
+/// `import.meta.webpackContext(…)` and `import.meta.glob(…)` (also the
 /// older `globEager`). `require.resolve` loads nothing.
-fn call_loads(call: &CallExpression<'_>) -> Vec<ModuleLoad> {
-    let first = call.arguments.first().and_then(Argument::as_expression);
-    let directory = || match first.map(load_of) {
-        Some(ModuleLoad::Specifier(dir) | ModuleLoad::Prefix(dir)) if dir.ends_with('/') => {
-            ModuleLoad::Prefix(dir)
-        }
-        Some(ModuleLoad::Specifier(dir) | ModuleLoad::Prefix(dir)) => {
-            ModuleLoad::Prefix(format!("{dir}/"))
-        }
-        _ => ModuleLoad::Unknown,
-    };
+fn call_loads(call: &CallExpression<'_>) -> Vec<LoadTarget> {
+    let argument = |index: usize| call.arguments.get(index).and_then(Argument::as_expression);
     match &call.callee {
         Expression::Identifier(id) if id.name == "require" => {
-            vec![first.map_or(ModuleLoad::Unknown, load_of)]
+            vec![argument(0).map_or(LoadTarget::Unknown, load_of)]
         }
         Expression::StaticMemberExpression(member) => {
             match (&member.object, member.property.name.as_str()) {
                 (Expression::Identifier(object), "context") if object.name == "require" => {
-                    vec![directory()]
+                    vec![context_of(argument(0), argument(1), argument(2))]
                 }
                 (Expression::MetaProperty(meta), property)
                     if meta.meta.name == "import" && meta.property.name == "meta" =>
                 {
                     match property {
-                        "webpackContext" => vec![directory()],
+                        "webpackContext" => vec![webpack_context_of(call)],
                         "glob" | "globEager" => glob_loads(call.arguments.first()),
                         _ => Vec::new(),
                     }
@@ -1507,16 +1575,12 @@ impl<'a, 's> Visit<'a> for FactCollector<'a, 's> {
     }
 
     fn visit_import_expression(&mut self, import: &oxc::ast::ast::ImportExpression<'a>) {
-        if let Some(loads) = &mut self.module_loads {
-            loads.push(load_of(&import.source));
-        }
+        self.record_loads(import.span, vec![load_of(&import.source)], true);
         oxc::ast_visit::walk::walk_import_expression(self, import);
     }
 
     fn visit_call_expression(&mut self, call: &CallExpression<'a>) {
-        if let Some(loads) = &mut self.module_loads {
-            loads.extend(call_loads(call));
-        }
+        self.record_loads(call.span, call_loads(call), false);
         if self.react.calls(&call.callee, "createElement") {
             if let Some(first_arg) = call.arguments.first() {
                 let (ident, member, identity_uncertain) = match first_arg {
@@ -1544,6 +1608,27 @@ impl<'a, 's> Visit<'a> for FactCollector<'a, 's> {
 }
 
 impl<'a> FactCollector<'a, '_> {
+    /// Records one call's module loads with its line and spelling.
+    fn record_loads(&mut self, span: oxc::span::Span, targets: Vec<LoadTarget>, dynamic_import: bool) {
+        let (Some(loads), Some(clones)) = (&mut self.module_loads, &self.clones) else {
+            return;
+        };
+        if targets.is_empty() {
+            return;
+        }
+        let line = clones.source[..span.start as usize].matches('\n').count() + 1;
+        let call = clones.source[span.start as usize..span.end as usize]
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        loads.extend(targets.into_iter().map(|target| ModuleLoad {
+            target,
+            dynamic_import,
+            line,
+            call: call.clone(),
+        }));
+    }
+
     /// A `cloneElement` call: its overrides count for the cloned element's
     /// component when the first argument is a JSX element or a `const`
     /// bound to one, and for any component otherwise.

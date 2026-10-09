@@ -26,7 +26,7 @@ import {
   unresolvableIncludesMessage,
   runStructuralSelfCheck,
 } from '@animus-ui/extract/pipeline';
-import { relative, resolve } from 'path';
+import { isAbsolute, relative, resolve } from 'path';
 
 import {
   RESOLVED_COMPONENTS_ID,
@@ -444,10 +444,20 @@ export class PluginContext {
         externalDirs: this.externalPackageDirs.map((dir) =>
           relative(this.rootDir, dir)
         ),
-        devMode:
-          !this.emissionProd ||
-          skippedOriginals.length > 0 ||
-          this.ingestionFailureDiagnostics.length > 0,
+        devMode: !this.emissionProd,
+        // Rollup leaves an `import(expr)` it cannot read unbundled.
+        analysisContext: {
+          skippedSources: [
+            ...skippedOriginals,
+            ...this.ingestionFailureDiagnostics.map((d) => d.file),
+          ].map((file) =>
+            isAbsolute(file) ? relative(this.rootDir, file) : file
+          ),
+          unbundledComputedImports: true,
+          packageDirs: this.externalPackageDirs.map((dir) =>
+            relative(this.rootDir, dir)
+          ),
+        },
         warn: (m) => this.warn(m),
         info: (m) => this.log(m),
         strict: this.options.strict,

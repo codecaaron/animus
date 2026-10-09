@@ -10,7 +10,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from 'fs';
-import { basename, extname, join, relative, resolve } from 'path';
+import { basename, extname, isAbsolute, join, relative, resolve } from 'path';
 
 import {
   assembleStylesheet,
@@ -109,6 +109,15 @@ import type {
 } from '../pipeline/index';
 
 export type SessionOptions = AnimusCoreOptions;
+
+/** What the hosting bundler does, which the user does not configure. */
+export interface SessionHost {
+  /** The bundler leaves an `import(expr)` it cannot read unbundled
+   *  (Rollup, Vite, Turbopack), so the load reaches no analysed module.
+   *  Omitted, it reaches the importer's directory, as a webpack context
+   *  does. */
+  unbundledComputedImports?: boolean;
+}
 
 import type { ExcludeMatcher } from '../pipeline/index';
 import type {
@@ -262,7 +271,7 @@ export class ExtractionSession {
   private ingestionFailureDiagnostics: ManifestDiagnostic[] = [];
   /** Whether the corpus being analyzed left a file out, whose renders the
    *  analysis cannot see. */
-  private skippedSources = false;
+  private skippedSources: readonly string[] = [];
   /** Full package-resolution map from the last full pipeline — replayed by
    *  incremental passes (sourceEntries alone omits dist-resolved packages). */
   private lastPackageMap: Record<string, string> = {};
@@ -331,7 +340,10 @@ export class ExtractionSession {
   // config I/O).
   private lcssTargets: LightningTargets | null = null;
 
-  constructor(options: SessionOptions) {
+  constructor(
+    options: SessionOptions,
+    private readonly host: SessionHost = {}
+  ) {
     this.options = options;
     // Serialized once (stable key order) so the analysis-inputs hash is
     // insensitive to option-object identity.
@@ -722,7 +734,7 @@ export class ExtractionSession {
           externalFileOwners: this.externalFileOwners,
         });
         this.throwOnAbortedParse(ingested);
-        this.skippedSources = ingested.skippedOriginals !== undefined;
+        this.skippedSources = ingested.skippedOriginals ?? [];
         if (this.systemReloadOwed) {
           this.log(
             'system reload: publishing the reload a parse hold deferred'
@@ -1057,7 +1069,7 @@ export class ExtractionSession {
       try {
         accepted = await this.corpus.prepare(rawEntries);
         this.throwOnAbortedParse(accepted);
-        this.skippedSources = accepted.skippedOriginals !== undefined;
+        this.skippedSources = accepted.skippedOriginals ?? [];
       } catch (err) {
         this.debouncePending.clear();
         this.writeAnalysisStatus('failed', pending, String(err));
@@ -1374,12 +1386,21 @@ export class ExtractionSession {
       externalDirs: this.externalPackageDirs.map((dir) =>
         relative(this.rootDir!, dir)
       ),
+      devMode: this.engineDevMode(devMode),
       // A skipped or unreadable file may render any option, so nothing is
-      // pruned.
-      devMode:
-        this.engineDevMode(devMode) ||
-        this.skippedSources ||
-        this.ingestionFailureDiagnostics.length > 0,
+      // pruned while one is.
+      analysisContext: {
+        skippedSources: [
+          ...this.skippedSources,
+          ...this.ingestionFailureDiagnostics.map((d) => d.file),
+        ].map((file) =>
+          isAbsolute(file) ? relative(this.rootDir!, file) : file
+        ),
+        unbundledComputedImports: this.host.unbundledComputedImports,
+        packageDirs: this.externalPackageDirs.map((dir) =>
+          relative(this.rootDir!, dir)
+        ),
+      },
     };
 
     this.writeAnalysisStatus('analyzing', pending);

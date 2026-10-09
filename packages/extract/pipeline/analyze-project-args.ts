@@ -20,6 +20,7 @@ export type AnalyzeProjectArgs = [
   transformSourcesJson: string | null,
   transformProvenanceJson: string | null,
   declarationScalesJson?: string,
+  analysisContextJson?: string,
 ];
 
 /** @internal */
@@ -46,6 +47,9 @@ export interface AnalyzeProjectInputs {
   transformProvenanceJson?: string | null;
   /** Present only for a theme with declaration scales; absence means none. */
   declarationScalesJson?: string;
+  /** Present only when the host knows about renders the analysis cannot
+   *  see (`AnalysisContext`); absence means it knows nothing. */
+  analysisContextJson?: string;
 }
 
 /** @internal */
@@ -73,7 +77,11 @@ export function buildAnalyzeProjectArgs(
     inputs.transformSourcesJson,
     inputs.transformProvenanceJson ?? null,
   ];
-  // Sent only when present, so a scalar system's slots are unchanged.
-  if (inputs.declarationScalesJson) args.push(inputs.declarationScalesJson);
+  // Each sent only when present, so the slots of a run without them are
+  // unchanged; the context's slot follows the scales' slot.
+  if (inputs.declarationScalesJson || inputs.analysisContextJson) {
+    args.push(inputs.declarationScalesJson);
+  }
+  if (inputs.analysisContextJson) args.push(inputs.analysisContextJson);
   return args;
 }

@@ -33,6 +33,7 @@ dependencies = [
  "napi-derive",
  "oxc",
  "rayon",
+ "regex",
  "rquickjs",
  "rustc-hash",
  "self_cell",

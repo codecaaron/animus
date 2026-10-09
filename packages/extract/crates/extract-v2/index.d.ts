@@ -41,6 +41,12 @@ export interface EngineOptions {
   staticCssJson?: string
   externalDirsJson?: string
   devMode?: boolean
+  /**
+   * What the host knows about renders the analysis cannot see:
+   * `{ skippedSources, unbundledComputedImports, packageDirs }`, each
+   * optional.
+   */
+  analysisContextJson?: string
 }
 
 /** Probe identity: proves the binary loads and its oxc linkage parses. */

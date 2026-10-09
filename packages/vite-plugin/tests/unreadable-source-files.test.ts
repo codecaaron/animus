@@ -14,6 +14,7 @@ import { makeManifest } from './manifest-fixture';
 
 const UNREADABLE = 'animus.ingestion.unreadable-source-file';
 const DEV_MODE_SLOT = 7;
+const ANALYSIS_CONTEXT_SLOT = 20;
 
 const lockedFiles: string[] = [];
 
@@ -51,7 +52,17 @@ async function productionBuild(app: string, strict: boolean) {
     }),
     extractFacts: factsExtractor({}),
     analyzeProject: (...args: unknown[]) => {
-      prunes.push(args[DEV_MODE_SLOT] === false);
+      // SAFETY: the context slot holds the host's own JSON.stringify output,
+      // or nothing when the host knows of no unseen source.
+      const json = args[ANALYSIS_CONTEXT_SLOT] as string | undefined;
+      // SAFETY: as above, the context's wire shape.
+      const skipped = JSON.parse(json ?? '{}') as {
+        skippedSources?: string[];
+      };
+      prunes.push(
+        args[DEV_MODE_SLOT] === false &&
+          (skipped.skippedSources ?? []).length === 0
+      );
       return JSON.stringify(makeManifest());
     },
   }));

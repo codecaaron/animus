@@ -44,9 +44,26 @@ export interface AnalysisOptions {
   /** rootDir-relative external package dirs (external-token candidates). */
   externalDirs?: string[];
   devMode: boolean;
+  /** What the host knows about renders the analysis cannot see. */
+  analysisContext?: AnalysisContext;
   /** Diagnostics gathered outside analysis, surfaced through the same
    *  policy point as the manifest's own. */
   extraDiagnostics?: import('./manifest-diagnostics').ManifestDiagnostic[];
+}
+
+/** What a host knows about renders the analysis cannot see. */
+export interface AnalysisContext {
+  /** rootDir-relative sources ingestion skipped. Their renders are unseen,
+   *  so nothing is pruned while any is skipped, and an error from an option
+   *  kept only for that reason is reported as a warning. */
+  skippedSources?: string[];
+  /** The bundler leaves an `import(expr)` it cannot read unbundled (Vite,
+   *  Rollup, Turbopack), so the load reaches no analysed module. Omitted,
+   *  it reaches the importer's directory, as a webpack context does. */
+  unbundledComputedImports?: boolean;
+  /** rootDir-relative directories of the analysed packages: a load into
+   *  one reaches only its modules. */
+  packageDirs?: string[];
 }
 
 /**
@@ -100,6 +117,19 @@ export function buildAnalysisInputs(
   // persisted inputs are unchanged.
   if (opts.system.declarationScalesJson) {
     inputs.declarationScalesJson = opts.system.declarationScalesJson;
+  }
+  // Present only when the host knows something, for the same reason.
+  const context = opts.analysisContext;
+  if (
+    context?.skippedSources?.length ||
+    context?.unbundledComputedImports ||
+    context?.packageDirs?.length
+  ) {
+    inputs.analysisContextJson = JSON.stringify({
+      skippedSources: context.skippedSources ?? [],
+      unbundledComputedImports: context.unbundledComputedImports ?? false,
+      packageDirs: context.packageDirs ?? [],
+    });
   }
   return inputs;
 }

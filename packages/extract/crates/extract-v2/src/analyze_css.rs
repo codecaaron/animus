@@ -91,6 +91,7 @@ pub struct CssInputs {
     pub static_css: Option<crate::forced_usage::StaticCssConfig>,
     /// Directory prefixes, relative to rootDir, of external packages.
     pub external_dirs: Vec<String>,
+    pub analysis_context: AnalysisContext,
     /// `{ definitionKey: sourceText }` for the loaded system's configured
     /// transforms, keyed as its props' `transformId` (or, for a system that
     /// predates identities, their name).
@@ -101,6 +102,23 @@ pub struct CssInputs {
     /// component props alike.
     pub declaration_scales: DeclarationScales,
     pub dev_mode: bool,
+}
+
+/// What the host knows about renders the analysis cannot see.
+#[derive(Debug, Default, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct AnalysisContext {
+    /// Sources ingestion skipped. Their renders are unseen, so while any is
+    /// skipped nothing is pruned, and an error from an option kept only for
+    /// that reason is a warning.
+    pub skipped_sources: Vec<String>,
+    /// The bundler leaves an `import(expr)` it cannot read unbundled (Vite,
+    /// Rollup, Turbopack), so the load reaches no analysed module. Absent,
+    /// it is read as webpack does: a context of the importer's directory.
+    pub unbundled_computed_imports: bool,
+    /// The analysed packages' directories, relative to rootDir: a load into
+    /// one reaches only its modules.
+    pub package_dirs: Vec<String>,
 }
 
 impl CssInputs {
@@ -189,6 +207,7 @@ impl CssInputs {
             transform_provenance: Default::default(),
             declaration_scales: DeclarationScales::default(),
             external_dirs: parse("externalDirsJson", external_dirs_json)?,
+            analysis_context: AnalysisContext::default(),
             dev_mode,
         })
     }
@@ -285,6 +304,10 @@ const UNATTRIBUTED_SYSTEM_PROPS: &str = "animus.usage.unattributed-system-props"
 /// element usage cannot name, from a value it cannot list, are not tracked,
 /// so options only they set can be pruned.
 const UNTRACKED_CLONE_PROPS: &str = "animus.usage.untracked-clone-props";
+/// A warning: one runtime module load opens more components than
+/// `WIDE_MODULE_LOAD_LIMIT`, so the user can see why pruning stopped.
+const WIDE_MODULE_LOAD: &str = "animus.usage.wide-module-load";
+const WIDE_MODULE_LOAD_LIMIT: usize = 20;
 
 pub(crate) fn diagnostic_severity_for_code(code: &str) -> &'static str {
     match code {
@@ -1649,64 +1672,209 @@ fn namespace_member_ids(
         .collect()
 }
 
-/// The analysed modules a runtime module load in `file` can name. A pattern
-/// into an analysed package names every module. A specifier usage cannot
-/// read names the modules under `file`'s own directory: that is all webpack
-/// bundles for an expression (`require(expr)` becomes a context of the
-/// importer's directory, and a fully dynamic `import(expr)` is rejected),
-/// and Rollup and Vite leave `import(expr)` unbundled, so it loads code
-/// outside the bundle rather than an analysed module.
+/// The analysed modules one runtime module load in `file` can reach.
+///
+/// A specifier usage cannot read reaches, for `require(expr)`, the modules
+/// under `file`'s own directory, which is all webpack bundles for it (a
+/// context of the importer's directory). An `import(expr)` reaches the same
+/// unless the host says its bundler leaves it unbundled (Vite, Rollup,
+/// Turbopack), in which case it loads code outside the bundle and reaches
+/// no analysed module.
 fn loaded_modules<'f>(
     file: &str,
     load: &crate::usage_facts::ModuleLoad,
     files: &'f BTreeMap<String, FileFacts>,
     inputs: &CssInputs,
 ) -> Vec<&'f String> {
-    use crate::usage_facts::ModuleLoad;
-    let every = || files.keys().collect();
-    let prefix = match load {
-        ModuleLoad::Unknown => "./",
-        ModuleLoad::Prefix(prefix) if prefix.is_empty() => "./",
-        ModuleLoad::Specifier(spec) => {
-            return resolve_import_source(file, spec, files, inputs)
-                .and_then(|module| files.get_key_value(&module).map(|(key, _)| key))
-                .into_iter()
-                .collect();
+    use crate::usage_facts::LoadTarget;
+    let any = |_: &str| true;
+    match &load.target {
+        LoadTarget::Specifier(spec) => resolve_import_source(file, spec, files, inputs)
+            .and_then(|module| files.get_key_value(&module).map(|(key, _)| key))
+            .into_iter()
+            .collect(),
+        LoadTarget::Prefix(prefix) if !prefix.is_empty() => {
+            modules_under(file, prefix, files, inputs, any)
         }
-        ModuleLoad::Prefix(prefix) => prefix.as_str(),
+        LoadTarget::Context {
+            dir,
+            recursive,
+            filter,
+        } => {
+            // A filter the `regex` crate cannot compile matches any path.
+            let filter = filter.as_deref().and_then(|filter| regex::Regex::new(filter).ok());
+            let dir = if dir.ends_with('/') {
+                dir.clone()
+            } else {
+                format!("{dir}/")
+            };
+            modules_under(file, &dir, files, inputs, |rest| {
+                (*recursive || !rest.contains('/'))
+                    && filter.as_ref().is_none_or(|filter| filter.is_match(&format!("./{rest}")))
+            })
+        }
+        LoadTarget::Glob(pattern) => {
+            let split = pattern.find(['*', '?', '[', '{']).unwrap_or(pattern.len());
+            let (fixed, rest) = pattern.split_at(split);
+            let fixed = if fixed.is_empty() { "./" } else { fixed };
+            // A pattern it cannot read keeps only the fixed part's filter.
+            let glob = glob_regex(rest);
+            modules_under(file, fixed, files, inputs, |path| {
+                glob.as_ref().is_none_or(|glob| glob.is_match(path))
+            })
+        }
+        LoadTarget::Prefix(_) | LoadTarget::Unknown => {
+            if load.dynamic_import && inputs.analysis_context.unbundled_computed_imports {
+                Vec::new()
+            } else {
+                modules_under(file, "./", files, inputs, any)
+            }
+        }
+    }
+}
+
+/// The analysed modules a specifier prefix names, each kept when `keep`
+/// accepts its path past the prefix. A relative prefix resolves against
+/// `file`; a root-relative one (`/src/pages/`) matches anywhere in the path,
+/// which also covers absolute file keys; an alias is expanded. A prefix into
+/// an analysed package names that package's modules, or every module when
+/// its directory is unknown, and one into any other package names none.
+fn modules_under<'f>(
+    file: &str,
+    prefix: &str,
+    files: &'f BTreeMap<String, FileFacts>,
+    inputs: &CssInputs,
+    keep: impl Fn(&str) -> bool,
+) -> Vec<&'f String> {
+    let starting = |start: &str| -> Vec<&'f String> {
+        files
+            .keys()
+            .filter(|key| key.strip_prefix(start).is_some_and(&keep))
+            .collect()
     };
     if prefix.starts_with('.') {
-        let start = relative_prefix(file, prefix);
-        return files.keys().filter(|key| key.starts_with(&start)).collect();
+        return starting(&relative_prefix(file, prefix));
     }
-    // Root-relative (`/src/pages/`): matched anywhere in the path, which
-    // also covers absolute file keys.
     if prefix.starts_with('/') {
         return files
             .keys()
-            .filter(|key| format!("/{}", key.trim_start_matches('/')).contains(prefix))
+            .filter(|key| {
+                let path = format!("/{}", key.trim_start_matches('/'));
+                path.match_indices(prefix).any(|(at, _)| keep(&path[at + prefix.len()..]))
+            })
             .collect();
     }
     if let Some(expanded) = expand_alias(prefix, &inputs.path_aliases) {
-        return files.keys().filter(|key| key.starts_with(&expanded)).collect();
+        return starting(&expanded);
     }
-    // A package: only an analysed one can hold components.
     let mut segments = prefix.splitn(3, '/');
     let package = match (segments.next(), segments.next()) {
         (Some(scope), Some(name)) if scope.starts_with('@') => format!("{scope}/{name}"),
         (Some(name), _) => name.to_string(),
-        _ => String::new(),
+        _ => return Vec::new(),
     };
-    let analysed = !package.is_empty()
-        && inputs
-            .package_map
-            .keys()
-            .any(|key| key == &package || key.starts_with(&format!("{package}/")));
-    if analysed {
-        every()
-    } else {
-        Vec::new()
+    let entries: Vec<&String> = inputs
+        .package_map
+        .iter()
+        .filter(|(spec, _)| *spec == &package || spec.starts_with(&format!("{package}/")))
+        .map(|(_, entry)| entry)
+        .collect();
+    if entries.is_empty() {
+        return Vec::new();
     }
+    // The package's own directory, when the host named it.
+    let dir = inputs.analysis_context.package_dirs.iter().find(|dir| {
+        let dir = format!("{}/", dir.trim_end_matches('/'));
+        entries.iter().all(|entry| entry.starts_with(&dir))
+    });
+    match dir {
+        Some(dir) => {
+            let dir = format!("{}/", dir.trim_end_matches('/'));
+            files.keys().filter(|key| key.starts_with(&dir)).collect()
+        }
+        None => files.keys().collect(),
+    }
+}
+
+/// A glob pattern (the part past its fixed prefix) as an anchored regular
+/// expression over a path: `**/` any directories, `*` and `?` within one
+/// segment, `[…]` a class, `{a,b}` alternatives. `None` for an extglob or a
+/// pattern it cannot translate, which then matches any path.
+fn glob_regex(glob: &str) -> Option<regex::Regex> {
+    fn translate(glob: &str) -> Option<String> {
+        let mut out = String::new();
+        let chars: Vec<char> = glob.chars().collect();
+        let mut i = 0;
+        while i < chars.len() {
+            match chars[i] {
+                '*' if chars.get(i + 1) == Some(&'*') => {
+                    if chars.get(i + 2) == Some(&'/') {
+                        out.push_str("(?:.*/)?");
+                        i += 3;
+                    } else {
+                        out.push_str(".*");
+                        i += 2;
+                    }
+                    continue;
+                }
+                '*' | '?' | '+' | '@' | '!' if chars.get(i + 1) == Some(&'(') => return None,
+                '*' => out.push_str("[^/]*"),
+                '?' => out.push_str("[^/]"),
+                '[' => {
+                    let end = chars[i..].iter().position(|c| *c == ']')? + i;
+                    let class: String = chars[i + 1..end].iter().collect();
+                    let class = class.strip_prefix('!').map_or(class.clone(), |rest| format!("^{rest}"));
+                    out.push('[');
+                    out.push_str(&class);
+                    out.push(']');
+                    i = end + 1;
+                    continue;
+                }
+                '{' => {
+                    let mut depth = 0;
+                    let mut end = None;
+                    for (offset, c) in chars[i..].iter().enumerate() {
+                        match c {
+                            '{' => depth += 1,
+                            '}' => {
+                                depth -= 1;
+                                if depth == 0 {
+                                    end = Some(i + offset);
+                                    break;
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    let end = end?;
+                    let inner: String = chars[i + 1..end].iter().collect();
+                    let mut alternatives = Vec::new();
+                    let (mut depth, mut start) = (0, 0);
+                    for (at, c) in inner.char_indices() {
+                        match c {
+                            '{' => depth += 1,
+                            '}' => depth -= 1,
+                            ',' if depth == 0 => {
+                                alternatives.push(translate(&inner[start..at])?);
+                                start = at + 1;
+                            }
+                            _ => {}
+                        }
+                    }
+                    alternatives.push(translate(&inner[start..])?);
+                    out.push_str("(?:");
+                    out.push_str(&alternatives.join("|"));
+                    out.push(')');
+                    i = end + 1;
+                    continue;
+                }
+                c => out.push_str(&regex::escape(&c.to_string())),
+            }
+            i += 1;
+        }
+        Some(out)
+    }
+    regex::Regex::new(&format!("^{}$", translate(glob)?)).ok()
 }
 
 /// A relative specifier prefix resolved against `from_file`'s directory,
@@ -2563,36 +2731,52 @@ fn report_key(diagnostic: &CssDiagnostic) -> ReportKey {
     (diagnostic.file.clone(), diagnostic.component.clone(), diagnostic.message.clone())
 }
 
+/// Components with the CSS reconciliation keeps for them.
+type Reconciled = [(String, ComponentCss)];
+
+/// `skip_pruned`: while sources are skipped, what pruning would have kept,
+/// and those sources. An error from an option kept only because of the skip
+/// is a warning that says so.
 fn resolve_deferred_component_errors(
     deferred: &mut Vec<DeferredComponentError>,
-    reconciled: &[(String, ComponentCss)],
+    reconciled: &Reconciled,
+    skip_pruned: Option<(&Reconciled, &[String])>,
     diagnostics: &mut Vec<CssDiagnostic>,
 ) {
-    let by_id: FxHashMap<&str, &ComponentCss> = reconciled
-        .iter()
-        .map(|(id, css)| (id.as_str(), css))
-        .collect();
-    let mut reported_once: FxHashSet<ReportKey> = FxHashSet::default();
-    for entry in deferred.drain(..) {
-        let Some(component) = by_id.get(entry.component_id.as_str()) else {
+    fn survives(components: &Reconciled, entry: &DeferredComponentError) -> bool {
+        let Some((_, component)) = components.iter().find(|(id, _)| *id == entry.component_id)
+        else {
             // Component eliminated wholesale — none of its CSS ships.
-            continue;
+            return false;
         };
-        if let Some((prop, option)) = &entry.variant_origin {
-            let survives = component
+        entry.variant_origin.as_ref().is_none_or(|(prop, option)| {
+            component
                 .variants
                 .iter()
                 .find(|variant| &variant.prop == prop)
-                .is_some_and(|variant| {
-                    variant.options.iter().any(|(name, _)| name == option)
-                });
-            if !survives {
-                continue;
-            }
+                .is_some_and(|variant| variant.options.iter().any(|(name, _)| name == option))
+        })
+    }
+    let mut reported_once: FxHashSet<ReportKey> = FxHashSet::default();
+    for mut entry in deferred.drain(..) {
+        if !survives(reconciled, &entry) {
+            continue;
         }
         let diagnostic = &entry.diagnostic;
         if entry.once && !reported_once.insert(report_key(diagnostic)) {
             continue;
+        }
+        if let Some((pruned, skipped)) = skip_pruned {
+            if !survives(pruned, &entry) {
+                let diagnostic = &mut entry.diagnostic;
+                diagnostic.kind = "warn".to_string();
+                diagnostic.severity = Some("warn".to_string());
+                diagnostic.message = format!(
+                    "{} (this option ships only because pruning is off while {} is skipped)",
+                    diagnostic.message,
+                    skipped.join(", ")
+                );
+            }
         }
         diagnostics.push(entry.diagnostic);
     }
@@ -3704,17 +3888,37 @@ fn run_with_system_floor(
     // can render there with any props, so every option it declares stays.
     let mut escaped_ids: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     // A module loaded at runtime renders its exports where usage cannot
-    // follow.
-    let loaded: std::collections::BTreeSet<&String> = files
-        .iter()
-        .flat_map(|(path, ff)| {
-            ff.module_loads
-                .iter()
-                .flat_map(move |load| loaded_modules(path, load, files, inputs))
-        })
-        .collect();
-    for module in loaded {
-        escaped_ids.extend(exported_component_ids(module, files, inputs, &evaluated_ids));
+    // follow. One call site that opens many components is named, so the
+    // user can see why pruning stopped.
+    let mut exports_by_module: FxHashMap<&String, Vec<String>> = FxHashMap::default();
+    for (path, ff) in files {
+        let mut sites: BTreeMap<(usize, &str), std::collections::BTreeSet<String>> = BTreeMap::new();
+        for load in &ff.module_loads {
+            let opened = sites.entry((load.line, load.call.as_str())).or_default();
+            for module in loaded_modules(path, load, files, inputs) {
+                let ids = exports_by_module.entry(module).or_insert_with(|| {
+                    exported_component_ids(module, files, inputs, &evaluated_ids)
+                });
+                opened.extend(ids.iter().cloned());
+            }
+        }
+        for ((line, call), opened) in sites {
+            if opened.len() > WIDE_MODULE_LOAD_LIMIT {
+                diagnostics.push(diagnostic(
+                    path,
+                    call,
+                    "warn",
+                    format!(
+                        "line {line}: {call} can load {} components, so each keeps every \
+                         variant and state option it declares — write the specifier \
+                         literally so only what it loads keeps its options",
+                        opened.len()
+                    ),
+                    Some(WIDE_MODULE_LOAD),
+                ));
+            }
+            escaped_ids.extend(opened);
+        }
     }
     for (path, ff) in files {
         let mut names: Vec<&str> = Vec::new();
@@ -4439,7 +4643,15 @@ fn run_with_system_floor(
 
     let parent_ids: FxHashSet<String> = parent_map.values().cloned().collect();
 
-    let reconciliation = if inputs.dev_mode {
+    // A skipped source may render any option, so nothing is pruned. The
+    // pruned result still tells which options its errors come from.
+    let skipped = &inputs.analysis_context.skipped_sources;
+    let pruned_components = (!inputs.dev_mode && !skipped.is_empty()).then(|| {
+        let mut pruned = reconciled_components.clone();
+        reconcile(&mut pruned, &usage_ledger, &parent_ids);
+        pruned
+    });
+    let reconciliation = if inputs.dev_mode || pruned_components.is_some() {
         let prospective =
             identify_prospective_eliminations(&reconciled_components, &usage_ledger, &parent_ids);
         let mut report = crate::reconcile::ReconciliationReport {
@@ -4463,6 +4675,7 @@ fn run_with_system_floor(
     resolve_deferred_component_errors(
         &mut deferred_errors,
         &reconciled_components,
+        pruned_components.as_deref().map(|pruned| (pruned, skipped.as_slice())),
         &mut diagnostics,
     );
 
@@ -7229,6 +7442,99 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         );
     }
 
+    /// A recipe named `name` with `R`'s size variant.
+    fn sized(name: &str) -> String {
+        RECIPE.replacen("export const R", &format!("export const {name}"), 1)
+    }
+
+    /// The sizes `component_id` keeps.
+    fn kept_sizes(out: &CssOutput, component_id: &str) -> Vec<&'static str> {
+        let class = class_of(out, component_id);
+        ["sm", "md", "lg"]
+            .into_iter()
+            .filter(|size| out.css.contains(&format!(".{class}--size-{size}")))
+            .collect()
+    }
+
+    /// An unreadable `import()` opens nothing when the host leaves it
+    /// unbundled, and otherwise the importer's directory (as `require(expr)`
+    /// always does); one load site opening more than 20 components warns once.
+    #[test]
+    fn computed_imports_follow_the_host_and_wide_loads_warn() {
+        let run = |loader: &str, unbundled: bool, extra: Option<&str>| {
+            let mut inputs = test_inputs();
+            inputs.analysis_context.unbundled_computed_imports = unbundled;
+            let mut entries = vec![
+                ("src/r.tsx", RECIPE.to_string()),
+                ("src/app.tsx", "import { R } from './r';\nexport const App = () => <R size=\"sm\" />;\n".into()),
+                ("src/main.tsx", loader.to_string()),
+            ];
+            entries.extend(extra.map(|many| ("src/many.tsx", many.to_string())));
+            let entries: Vec<(&str, &str)> = entries.iter().map(|(path, source)| (*path, source.as_str())).collect();
+            analyze(&entries, &inputs)
+        };
+        let import = "export const load = (name) => import(name);\n";
+        let require = "export const load = (name) => require(name);\n";
+        assert_eq!(kept_sizes(&run(import, true, None), "src/r.tsx::R"), vec!["sm"]);
+        assert_eq!(kept_sizes(&run(import, false, None), "src/r.tsx::R"), vec!["sm", "md", "lg"]);
+        assert_eq!(kept_sizes(&run(require, true, None), "src/r.tsx::R"), vec!["sm", "md", "lg"]);
+        let many: String = (0..20).map(|i| sized(&format!("C{i}"))).collect();
+        let out = run(import, false, Some(&many));
+        let warnings: Vec<&str> = out
+            .diagnostics
+            .iter()
+            .filter(|d| d.code.as_deref() == Some(WIDE_MODULE_LOAD))
+            .map(|d| d.message.as_str())
+            .collect();
+        assert_eq!(warnings.len(), 1, "{warnings:#?}");
+        assert!(warnings[0].starts_with("line 1: import(name) can load 21 components"), "{warnings:#?}");
+    }
+
+    /// A context load honours its recursion flag and filter, a glob its
+    /// filename pattern, and a load into an analysed package opens only that
+    /// package's components.
+    #[test]
+    fn module_load_filters_narrow_what_opens() {
+        let render = "import { R } from './r';\nimport { Q } from './sub/q';\nimport { O } from './other';\n\
+                      export const App = () => <><R size=\"sm\" /><Q size=\"sm\" /><O size=\"sm\" /></>;\n";
+        let opened = |loader: &str| {
+            let out = analyze(
+                &[
+                    ("src/r.tsx", RECIPE),
+                    ("src/other.ts", sized("O").as_str()),
+                    ("src/sub/q.tsx", sized("Q").as_str()),
+                    ("src/app.tsx", render),
+                    ("src/main.tsx", loader),
+                ],
+                &test_inputs(),
+            );
+            ["src/r.tsx::R", "src/sub/q.tsx::Q", "src/other.ts::O"].map(|id| kept_sizes(&out, id).len() == 3)
+        };
+        assert_eq!(opened("const c = require.context('./', false, /\\.tsx$/);\n"), [true, false, false]);
+        assert_eq!(opened("const g = import.meta.glob('./**/*.tsx');\n"), [true, true, false]);
+        let mut inputs = test_inputs();
+        inputs.package_map.insert("@acme/ui".into(), "packages/ui/src/index.ts".into());
+        inputs.analysis_context.package_dirs = vec!["packages/ui".into()];
+        let out = analyze(
+            &[
+                ("packages/ui/src/index.ts", "export * from './button';\n"),
+                ("packages/ui/src/button.tsx", sized("Button").as_str()),
+                ("src/r.tsx", RECIPE),
+                (
+                    "src/app.tsx",
+                    "import { R } from './r';\nimport { Button } from '@acme/ui';\n\
+                     export const App = () => <><R size=\"sm\" /><Button size=\"sm\" /></>;\n\
+                     export const load = (name) => import(`@acme/ui/${name}`);\n",
+                ),
+            ],
+            &inputs,
+        );
+        assert_eq!(
+            (kept_sizes(&out, "packages/ui/src/button.tsx::Button").len(), kept_sizes(&out, "src/r.tsx::R").len()),
+            (3, 1)
+        );
+    }
+
     /// Renders usage tracking follows still prune: a compose slot and
     /// `createElement` with literal props.
     #[test]
@@ -9166,6 +9472,45 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             "dev emits both options, so both errors are real: {:#?}",
             out.diagnostics
         );
+    }
+
+    /// While a source is skipped nothing is pruned, and an error from an
+    /// option kept only for that reason is a warning naming the skip. An
+    /// option something renders keeps its error.
+    #[test]
+    fn skipped_sources_keep_every_option_and_downgrade_their_errors() {
+        let source = "export const Button = ds.styles({}).variant({ prop: 'tone', defaultVariant: 'quiet', variants: { quiet: { w: 1 }, loud: { w: 2 } } }).asElement('button');\n";
+        let run = |skipped: &[&str]| {
+            let mut inputs = failing_transform_variant_inputs(false);
+            inputs.analysis_context.skipped_sources = skipped.iter().map(|file| file.to_string()).collect();
+            analyze(
+                &[("one.tsx", source), ("app.tsx", "export const App = () => <Button tone=\"quiet\" />;\n")],
+                &inputs,
+            )
+        };
+        let out = run(&["docs/intro.mdx"]);
+        let errors = out.diagnostics.iter().filter(|d| d.kind == "error").count();
+        let skip_warnings: Vec<&CssDiagnostic> = out
+            .diagnostics
+            .iter()
+            .filter(|d| d.kind == "warn" && d.message.contains("pruning is off while docs/intro.mdx is skipped"))
+            .collect();
+        assert_eq!((errors, skip_warnings.len()), (1, 1), "{:#?}", out.diagnostics);
+        assert_eq!(skip_warnings[0].severity.as_deref(), Some("warn"));
+        // Without a skip the unrendered option is pruned with its error.
+        let pruned = run(&[]);
+        assert_eq!(pruned.diagnostics.iter().filter(|d| d.kind == "error").count(), 1);
+        assert!(!pruned.diagnostics.iter().any(|d| d.message.contains("is skipped")));
+        // Nothing is pruned while a source is skipped.
+        let mut inputs = test_inputs();
+        inputs.analysis_context.skipped_sources = vec!["docs/intro.mdx".into()];
+        let app = "import { R } from './r';\nexport const App = () => <R size=\"sm\" active />;\n";
+        assert_eq!(
+            kept_options(&[("r.tsx", RECIPE), ("app.tsx", app)]),
+            (vec!["sm"], vec!["active"])
+        );
+        let out = analyze(&[("r.tsx", RECIPE), ("app.tsx", app)], &inputs);
+        assert_eq!(kept_sizes(&out, "r.tsx::R"), vec!["sm", "md", "lg"]);
     }
 
     #[test]

@@ -1,5 +1,9 @@
 export { ExtractionSession, pruneStaleAssets } from './extraction-session';
-export type { SessionOptions, WatchChanges } from './extraction-session';
+export type {
+  SessionHost,
+  SessionOptions,
+  WatchChanges,
+} from './extraction-session';
 export {
   checkLockLiveness,
   CLI_LOCK_HEARTBEAT_INTERVAL_MS,

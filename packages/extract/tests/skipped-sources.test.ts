@@ -22,9 +22,16 @@ const NATIVE = join(__dirname, '../index-v2.js');
 const theme = createTheme().build();
 const ds = createSystem().addGroup('space', space).build().seal();
 
+/** A system prop whose configured transform fails for every value. */
+const FAILING = {
+  propConfig: { w: { property: 'width', transform: 'boom' } },
+  transformSources: { boom: '(v) => ({ bad: v })' },
+};
+
 /** The native engine, with the system served in-process: a temp project
- *  cannot resolve `@animus-ui/system` for the engine's own system loader. */
-function nativeApiServing(): () => object {
+ *  cannot resolve `@animus-ui/system` for the engine's own system loader.
+ *  `failing` adds the `w` prop, whose transform fails. */
+function nativeApiServing(failing = false): () => object {
   let engine: V2ExtractEngine | null = null;
   let sentSources: Map<string, string> | null = null;
   let driftWarned = false;
@@ -49,13 +56,23 @@ function nativeApiServing(): () => object {
     },
   });
   const config = ds.toConfig();
+  const propConfig = failing
+    ? JSON.stringify({
+        ...JSON.parse(config.propConfig),
+        ...FAILING.propConfig,
+      })
+    : config.propConfig;
+  const served = {
+    ...theme.serialize(),
+    propConfig,
+    groupRegistry: config.groupRegistry,
+  };
+  const system = failing
+    ? { ...served, transformSources: JSON.stringify(FAILING.transformSources) }
+    : served;
   return () => ({
     ...native(),
-    loadSystemModule: () => ({
-      ...theme.serialize(),
-      propConfig: config.propConfig,
-      groupRegistry: config.groupRegistry,
-    }),
+    loadSystemModule: () => system,
   });
 }
 
@@ -86,13 +103,13 @@ afterEach(() => {
   root = null;
 });
 
-async function build(extra: Record<string, string>) {
+async function build(extra: Record<string, string>, failing = false) {
   root = realpathSync(mkdtempSync(join(tmpdir(), 'animus-skipped-')));
   for (const [path, source] of Object.entries({ ...FILES, ...extra })) {
     mkdirSync(join(root, path, '..'), { recursive: true });
     writeFileSync(join(root, path), source);
   }
-  setEngineApiOverride(nativeApiServing());
+  setEngineApiOverride(nativeApiServing(failing));
   session = new ExtractionSession({
     system: './src/ds.ts',
     extensions: ['.ts', '.tsx', '.mdx'],
@@ -124,5 +141,29 @@ describe('a source ingestion skips', () => {
     expect(warned).toContain('its renders are not seen, so nothing is pruned');
     expect(css).toContain('padding:1px');
     expect(css).toContain('padding:9px');
+  });
+
+  // Only `loud` uses the failing transform, and nothing renders it.
+  const LOUD = {
+    'src/Tone.tsx': `import { ds } from './ds';
+export const Tone = ds
+  .styles({ display: 'block' })
+  .variant({ prop: 'tone', variants: { quiet: { padding: '1px' }, loud: { w: 2 } }, defaultVariant: 'quiet' })
+  .asElement('div');
+`,
+    'src/App.tsx': `import { R } from './R';
+import { Tone } from './Tone';
+export const App = () => <><R size="sm" /><Tone tone="quiet" /></>;
+`,
+  };
+
+  it('warns, without failing, on an error from an option kept only by the skip', async () => {
+    const { warned } = await build(
+      { ...LOUD, 'src/Doc.mdx': BROKEN_MDX },
+      true
+    );
+    expect(warned).toContain(
+      'ships only because pruning is off while src/Doc.mdx is skipped'
+    );
   });
 });

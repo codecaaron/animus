@@ -69,6 +69,10 @@ pub struct EngineOptions {
     pub static_css_json: Option<String>,
     pub external_dirs_json: Option<String>,
     pub dev_mode: Option<bool>,
+    /// What the host knows about renders the analysis cannot see:
+    /// `{ skippedSources, unbundledComputedImports, packageDirs }`, each
+    /// optional.
+    pub analysis_context_json: Option<String>,
 }
 
 struct ResolvedOptions {
@@ -196,6 +200,11 @@ impl ExtractEngine {
         )
         .map_err(napi::Error::from_reason)?;
         let mut css_inputs = css_inputs;
+        css_inputs.analysis_context = match o.analysis_context_json.as_deref().map(str::trim) {
+            None | Some("" | "null") => analyze_css::AnalysisContext::default(),
+            Some(json) => serde_json::from_str(json)
+                .map_err(|e| napi::Error::from_reason(format!("EngineOptions.analysisContextJson: {e}")))?,
+        };
         css_inputs
             .bind_declarations(o.declaration_scales_json.as_deref())
             .map_err(napi::Error::from_reason)?;
