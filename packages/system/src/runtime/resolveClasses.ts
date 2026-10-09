@@ -95,7 +95,10 @@ function slotProperties(
       : [];
 }
 
-/** A responsive value's set entries by breakpoint, or a bare value at `_`. */
+/**
+ * A responsive value's entries by breakpoint, or a bare value at `_`. The
+ * value arrives without nullish breakpoints (`withoutAbsentBreakpoints`).
+ */
 function responsiveEntries(
   propValue: unknown
 ): [responsive: boolean, entries: [breakpoint: string, value: unknown][]] {
@@ -105,9 +108,7 @@ function responsiveEntries(
     !Array.isArray(propValue);
   return [
     responsive,
-    responsive
-      ? Object.entries(propValue).filter(([, value]) => value != null)
-      : [['_', propValue]],
+    responsive ? Object.entries(propValue) : [['_', propValue]],
   ];
 }
 
@@ -354,6 +355,7 @@ function warnDroppedValue(
 /**
  * A value taken from a variant default emits `--{prop}-default`, not the
  * value, so the compose override rule misses and the parent's value wins.
+ * An explicit `undefined` takes the default as an omitted prop does.
  */
 function applyVariantClasses(
   classes: string[],
@@ -365,7 +367,7 @@ function applyVariantClasses(
   for (const [prop, vc] of Object.entries(config.variants)) {
     const value = props[prop] ?? vc.default;
     if (value != null) {
-      const isDefault = !(prop in props) && vc.default != null;
+      const isDefault = props[prop] == null && vc.default != null;
       classes.push(
         `${baseClassName}--${prop}-${isDefault ? 'default' : value}`
       );
@@ -676,6 +678,21 @@ function applyDeclarationProp(
   return null;
 }
 
+/**
+ * A responsive value without its nullish breakpoints, so it keys the same
+ * static class as the value written without them; `undefined` when none
+ * remain, as if the prop were omitted.
+ */
+function withoutAbsentBreakpoints(value: unknown): unknown {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return value;
+  }
+  const entries = Object.entries(value);
+  if (entries.every(([, entry]) => entry != null)) return value;
+  const present = entries.filter(([, entry]) => entry != null);
+  return present.length > 0 ? Object.fromEntries(present) : undefined;
+}
+
 export function resolveClasses(
   baseClassName: string,
   props: Record<string, any>,
@@ -698,8 +715,7 @@ export function resolveClasses(
     const { customPropMap, customDynamicConfig } = config;
 
     for (const propName of systemPropNames) {
-      if (!(propName in props)) continue;
-      const propValue = props[propName];
+      const propValue = withoutAbsentBreakpoints(props[propName]);
       if (propValue == null) continue;
 
       const key = serializeValueKey(propValue);

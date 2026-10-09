@@ -7,7 +7,12 @@ import {
 import { KeyframeRef } from '../keyframes';
 import { type Selectors } from '../selectors';
 import { PropertyTypes } from './properties';
-import { AbstractProps, ResponsiveProp, ThemeProps } from './props';
+import {
+  AbstractProps,
+  ResponsiveProp,
+  ResponsivePropValue,
+  ThemeProps,
+} from './props';
 import { ArrayScale, MapScale } from './scales';
 import { CSSObject } from './shared';
 import { BaseTheme, Theme, TokenScales } from './theme';
@@ -285,6 +290,13 @@ export type ThemedScale<Config extends SystemProp> = [Config] extends [
   ? ResponsiveProp<DeclarationKey<Extract<Config, DeclarationProp>>>
   : ResponsiveProp<ThemedScaleValue<Config>>;
 
+/** `ThemedScale` as a component prop takes it: see `ResponsivePropValue`. */
+export type ThemedPropValue<Config extends SystemProp> = [Config] extends [
+  DeclarationProp,
+]
+  ? ResponsivePropValue<DeclarationKey<Extract<Config, DeclarationProp>>>
+  : ResponsivePropValue<ThemedScaleValue<Config>>;
+
 type RawSelectorKey = `${string}&${string}`;
 
 type PublishedAliasKeys = Extract<
@@ -421,7 +433,7 @@ export type BuiltInConditionAlias =
   | '_osLight';
 
 export type SelectorAliasProps<GroupPropValues> = {
-  [
-    K in BuiltInSelectorAlias | Extract<keyof Selectors, `_${string}`>
-  ]?: Partial<GroupPropValues>;
+  [K in BuiltInSelectorAlias | Extract<keyof Selectors, `_${string}`>]?:
+    | Partial<GroupPropValues>
+    | undefined;
 };
