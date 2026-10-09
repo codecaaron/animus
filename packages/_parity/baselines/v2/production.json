@@ -2,7 +2,7 @@
   "corpusSha256": "fcbf88aba94840f3174347541e76afbf310dd399d29c45489e7ba63635f4c5d2",
   "engine": "v2",
   "mode": "production",
-  "refreshIntent": "identity-uncertainty-warning-20261009",
+  "refreshIntent": "identity-uncertainty-summary-20261009",
   "surfaceSchemaSha256": "43eb1265e97aab8497c11ca05e8a4159a6d4f4b69a6837a704e1d96fa75eb108",
   "units": {
     "extract-all": {
@@ -35,7 +35,8 @@
         "per-property-bail.tsx|skip|Hero|[skip] Hero: property 'background' — variable reference (non-static)",
         "per-property-bail.tsx|warn|HoverCard|prop 'color' value \"dynamic\" is not a token of its strict scale; its styling is omitted — use a scale key, or declare the prop strict: false to accept raw values",
         "pkg-consumer.tsx|warn|<FlexBox>|<FlexBox> is imported from '@my-ui/components', which extraction does not analyse; extraction counts a tag it cannot match to an Animus component as unknown, so every extracted component is kept and none is removed as unused",
-        "token-alias.tsx|warn|Broken|unresolvable token alias {colors.nonexistent} in 'border' — declaration dropped"
+        "token-alias.tsx|warn|Broken|unresolvable token alias {colors.nonexistent} in 'border' — declaration dropped",
+        "usage|warn|whole-component removal|off for this build: 1 tag in 1 file cannot be matched to an Animus component (1 import from a module extraction does not analyse), for example <FlexBox> in pkg-consumer.tsx. Extraction counts such a tag as unknown, so no extracted component is removed as unused. ANIMUS_DEBUG=1, or the host's verbose option, lists each tag with its file and line"
       ],
       "hasComponents": {
         "as-class.tsx": true,
@@ -346,7 +347,8 @@
       "css": "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-base {\n  .animus-Card-7272e303 {\n    border-radius: 4px;\n    background-color: var(--color-background-current);\n    --current-bg: var(--color-background-current);\n  }\n}\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer composed {\n  }\n}\n\n",
       "diagnostics": [
         "pkg-consumer.tsx|warn|<Box>|<Box> is imported from '@my-ui/components', which extraction does not analyse; extraction counts a tag it cannot match to an Animus component as unknown, so every extracted component is kept and none is removed as unused",
-        "pkg-consumer.tsx|warn|<FlexBox>|<FlexBox> is imported from '@my-ui/components', which extraction does not analyse; extraction counts a tag it cannot match to an Animus component as unknown, so every extracted component is kept and none is removed as unused"
+        "pkg-consumer.tsx|warn|<FlexBox>|<FlexBox> is imported from '@my-ui/components', which extraction does not analyse; extraction counts a tag it cannot match to an Animus component as unknown, so every extracted component is kept and none is removed as unused",
+        "usage|warn|whole-component removal|off for this build: 2 tags in 1 file cannot be matched to an Animus component (2 imports from modules extraction does not analyse), for example <FlexBox> in pkg-consumer.tsx and <Box> in pkg-consumer.tsx. Extraction counts such a tag as unknown, so no extracted component is removed as unused. ANIMUS_DEBUG=1, or the host's verbose option, lists each tag with its file and line"
       ],
       "hasComponents": {
         "pkg-consumer.tsx": true
@@ -582,7 +584,8 @@
         "usage.mdx.tsx|warn|<MDXLayout>|<MDXLayout> is a parameter or a binding inside a function, so the component it holds is chosen at runtime; extraction counts a tag it cannot match to an Animus component as unknown, so every extracted component is kept and none is removed as unused",
         "usage.mdx.tsx|warn|<_components.code>|<_components.code> is a member of '_components', a parameter or a binding inside a function, so the component is chosen at runtime; extraction counts a tag it cannot match to an Animus component as unknown, so every extracted component is kept and none is removed as unused",
         "usage.mdx.tsx|warn|<_components.h1>|<_components.h1> is a member of '_components', a parameter or a binding inside a function, so the component is chosen at runtime; extraction counts a tag it cannot match to an Animus component as unknown, so every extracted component is kept and none is removed as unused",
-        "usage.mdx.tsx|warn|<_components.p>|<_components.p> is a member of '_components', a parameter or a binding inside a function, so the component is chosen at runtime; extraction counts a tag it cannot match to an Animus component as unknown, so every extracted component is kept and none is removed as unused"
+        "usage.mdx.tsx|warn|<_components.p>|<_components.p> is a member of '_components', a parameter or a binding inside a function, so the component is chosen at runtime; extraction counts a tag it cannot match to an Animus component as unknown, so every extracted component is kept and none is removed as unused",
+        "usage|warn|whole-component removal|off for this build: 4 tags in 1 file cannot be matched to an Animus component (3 member tags, 1 parameter or binding inside a function), for example <_components.h1> in usage.mdx.tsx, <MDXLayout> in usage.mdx.tsx and <_components.p> in usage.mdx.tsx. Extraction counts such a tag as unknown, so no extracted component is removed as unused. ANIMUS_DEBUG=1, or the host's verbose option, lists each tag with its file and line"
       ],
       "hasComponents": {
         "component.tsx": true,
