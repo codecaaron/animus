@@ -48,6 +48,18 @@
       "types": "./dist/appearance/index.d.ts",
       "import": "./dist/appearance/index.js"
     },
+    "./appearance/controller": {
+      "types": "./dist/appearance/controller.d.ts",
+      "import": "./dist/appearance/controller.js"
+    },
+    "./appearance/react": {
+      "types": "./dist/appearance/react.d.ts",
+      "import": "./dist/appearance/react.js"
+    },
+    "./appearance/svelte": {
+      "types": "./dist/appearance/svelte.d.ts",
+      "import": "./dist/appearance/svelte.js"
+    },
     "./compose": {
       "types": "./dist/compose.d.ts",
       "import": "./dist/compose.js"
