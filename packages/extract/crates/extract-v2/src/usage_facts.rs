@@ -1837,7 +1837,7 @@ impl<'a> FactCollector<'a, '_> {
                 let mut enumerable_values = Vec::new();
                 if dynamic && self.enrich {
                     if let Some(expression) = attribute_expression(&attr.value) {
-                        let expression = unwrap_parenthesized(expression);
+                        let expression = crate::chain_walk::unwrap_type_assertions(expression);
                         match expression {
                             Expression::Identifier(_)
                             | Expression::StaticMemberExpression(_)
@@ -1856,12 +1856,12 @@ impl<'a> FactCollector<'a, '_> {
                             }
                             Expression::ConditionalExpression(conditional) => {
                                 let consequent = evaluate_with_statics(
-                                    unwrap_parenthesized(&conditional.consequent),
+                                    crate::chain_walk::unwrap_type_assertions(&conditional.consequent),
                                     self.static_values,
                                     self.scoping,
                                 );
                                 let alternate = evaluate_with_statics(
-                                    unwrap_parenthesized(&conditional.alternate),
+                                    crate::chain_walk::unwrap_type_assertions(&conditional.alternate),
                                     self.static_values,
                                     self.scoping,
                                 );
@@ -1875,14 +1875,14 @@ impl<'a> FactCollector<'a, '_> {
                                 if logical.operator.is_or() || logical.operator.is_coalesce() =>
                             {
                                 if let Some(value) = evaluate_with_statics(
-                                    unwrap_parenthesized(&logical.left),
+                                    crate::chain_walk::unwrap_type_assertions(&logical.left),
                                     self.static_values,
                                     self.scoping,
                                 ) {
                                     push_unique(&mut enumerable_values, value);
                                 }
                                 if let Some(value) = evaluate_with_statics(
-                                    unwrap_parenthesized(&logical.right),
+                                    crate::chain_walk::unwrap_type_assertions(&logical.right),
                                     self.static_values,
                                     self.scoping,
                                 ) {
@@ -2227,13 +2227,6 @@ fn attribute_expression<'a, 'b>(
         return None;
     };
     Some(container.expression.to_expression())
-}
-
-fn unwrap_parenthesized<'a, 'b>(mut expression: &'b Expression<'a>) -> &'b Expression<'a> {
-    while let Expression::ParenthesizedExpression(parenthesized) = expression {
-        expression = &parenthesized.expression;
-    }
-    expression
 }
 
 fn evaluate_with_statics(

@@ -164,7 +164,9 @@ fn collect_references_from_expr(
     expr: &Expression<'_>,
     validation: &mut ReferenceValidation<'_>,
 ) {
-    match expr {
+    // Runtime-erased TypeScript wrappers and parentheses, as value
+    // evaluation peels them, so a reference under one is still checked.
+    match crate::chain_walk::unwrap_type_assertions(expr) {
         Expression::Identifier(ident) => {
             validation.collect_identifier(ident);
         }
@@ -241,9 +243,6 @@ fn collect_references_from_expr(
             // Nested arrows are not descended into; the top-level check
             // is what the self-contained constraint rests on.
         }
-        Expression::ParenthesizedExpression(paren) => {
-            collect_references_from_expr(&paren.expression, validation);
-        }
         Expression::SequenceExpression(seq) => {
             for e in &seq.expressions {
                 collect_references_from_expr(e, validation);
@@ -252,15 +251,6 @@ fn collect_references_from_expr(
         Expression::UpdateExpression(_) => {
             // The operand is a SimpleAssignmentTarget, not an Expression;
             // an `i++` target is already a local binding.
-        }
-        Expression::TSAsExpression(ts_as) => {
-            collect_references_from_expr(&ts_as.expression, validation);
-        }
-        Expression::TSNonNullExpression(non_null) => {
-            collect_references_from_expr(&non_null.expression, validation);
-        }
-        Expression::TSSatisfiesExpression(satisfies) => {
-            collect_references_from_expr(&satisfies.expression, validation);
         }
         _ => {}
     }

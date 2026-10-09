@@ -19,38 +19,32 @@ pub(crate) fn eval_jsx_attribute_value(value: &Option<JSXAttributeValue>) -> Pro
         }
 
         Some(JSXAttributeValue::ExpressionContainer(container)) => {
-            match &container.expression {
-                JSXExpression::EmptyExpression(_) => PropValueResult::Skip,
-                // JSXExpression inherits Expression; match static literals directly.
-                JSXExpression::StringLiteral(lit) => {
+            if matches!(container.expression, JSXExpression::EmptyExpression(_)) {
+                return PropValueResult::Skip;
+            }
+            // Runtime-erased TypeScript wrappers and parentheses hold the
+            // same value.
+            let expr = crate::chain_walk::unwrap_type_assertions(container.expression.to_expression());
+            match expr {
+                Expression::StringLiteral(lit) => {
                     PropValueResult::Static(Value::String(lit.value.to_string()))
                 }
-                JSXExpression::NumericLiteral(lit) => {
-                    PropValueResult::Static(make_json_number(lit.value))
-                }
-                JSXExpression::BooleanLiteral(lit) => {
-                    PropValueResult::Static(Value::Bool(lit.value))
-                }
-                JSXExpression::NullLiteral(_) => PropValueResult::Static(Value::Null),
-                JSXExpression::UnaryExpression(unary) => {
+                Expression::NumericLiteral(lit) => PropValueResult::Static(make_json_number(lit.value)),
+                Expression::BooleanLiteral(lit) => PropValueResult::Static(Value::Bool(lit.value)),
+                Expression::NullLiteral(_) => PropValueResult::Static(Value::Null),
+                Expression::UnaryExpression(unary) => {
                     if unary.operator == oxc::syntax::operator::UnaryOperator::UnaryNegation {
                         if let Expression::NumericLiteral(lit) = &unary.argument {
                             return PropValueResult::Static(make_json_number(-lit.value));
                         }
                     }
-                    dynamic_expression(container.expression.to_expression())
+                    dynamic_expression(expr)
                 }
-                JSXExpression::ObjectExpression(obj) => match eval_static_object(obj) {
+                Expression::ObjectExpression(obj) => match eval_static_object(obj) {
                     Some(v) => PropValueResult::Static(v),
-                    None => dynamic_expression(container.expression.to_expression()),
+                    None => dynamic_expression(expr),
                 },
-                JSXExpression::ParenthesizedExpression(paren) => {
-                    match eval_static_expression(&paren.expression) {
-                        Some(v) => PropValueResult::Static(v),
-                        None => dynamic_expression(&paren.expression),
-                    }
-                }
-                JSXExpression::TemplateLiteral(tpl) if tpl.expressions.is_empty() => {
+                Expression::TemplateLiteral(tpl) if tpl.expressions.is_empty() => {
                     match tpl
                         .quasis
                         .first()
@@ -60,7 +54,7 @@ pub(crate) fn eval_jsx_attribute_value(value: &Option<JSXAttributeValue>) -> Pro
                         None => PropValueResult::Skip,
                     }
                 }
-                _ => dynamic_expression(container.expression.to_expression()),
+                _ => dynamic_expression(expr),
             }
         }
 
@@ -71,10 +65,7 @@ pub(crate) fn eval_jsx_attribute_value(value: &Option<JSXAttributeValue>) -> Pro
 }
 
 fn dynamic_expression(expr: &Expression<'_>) -> PropValueResult {
-    let mut expr = expr;
-    while let Expression::ParenthesizedExpression(paren) = expr {
-        expr = &paren.expression;
-    }
+    let expr = crate::chain_walk::unwrap_type_assertions(expr);
     let kind = match expr {
         Expression::Identifier(_) => DynamicExpressionKind::Identifier,
         Expression::ComputedMemberExpression(_)
@@ -100,7 +91,7 @@ fn dynamic_expression(expr: &Expression<'_>) -> PropValueResult {
 }
 
 fn eval_static_expression(expr: &Expression) -> Option<Value> {
-    match expr {
+    match crate::chain_walk::unwrap_type_assertions(expr) {
         Expression::StringLiteral(lit) => Some(Value::String(lit.value.to_string())),
         Expression::NumericLiteral(lit) => Some(make_json_number(lit.value)),
         Expression::BooleanLiteral(lit) => Some(Value::Bool(lit.value)),
@@ -116,8 +107,6 @@ fn eval_static_expression(expr: &Expression) -> Option<Value> {
         }
 
         Expression::ObjectExpression(obj) => eval_static_object(obj),
-
-        Expression::ParenthesizedExpression(paren) => eval_static_expression(&paren.expression),
 
         Expression::TemplateLiteral(tpl) if tpl.expressions.is_empty() => tpl
             .quasis
