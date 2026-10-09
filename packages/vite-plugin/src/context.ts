@@ -9,7 +9,7 @@ import {
   diffFilePlans,
   enforceExternalTokenContracts,
   createSourceCorpus,
-  findAssetSpecifiers,
+  findSheetAssetSpecifiers,
   loadSystemConfig,
   parseFilesJson,
   projectExternalFileOwners,
@@ -622,11 +622,44 @@ export class PluginContext {
     this.assetResolutionFailures.add(specifier);
   }
 
+  /** Every asset() specifier in the sheets the plugin emits. */
+  sheetAssetSpecifiers(): string[] {
+    return findSheetAssetSpecifiers({
+      variableCss: this.system.variableCss,
+      globalCss: this.globalCss,
+      componentCss: this.resolvedComponentCss,
+    });
+  }
+
+  /** `system.variableCss` with its asset() placeholders substituted from
+   *  the current asset map. Derived on every read, so it always matches
+   *  `system`, however and whenever that was assigned; `system` keeps the
+   *  placeholders for the next asset pass. */
+  get variableCss(): string {
+    return substituteAssetPlaceholders(
+      this.system.variableCss,
+      this.assetUrlBySpecifier
+    );
+  }
+
+  /** Substitutes the analysis sheets in place; the theme's variable CSS is
+   *  substituted on read (`variableCss`). */
+  substituteSheets(): void {
+    this.globalCss = substituteAssetPlaceholders(
+      this.globalCss,
+      this.assetUrlBySpecifier
+    );
+    this.resolvedComponentCss = substituteAssetPlaceholders(
+      this.resolvedComponentCss,
+      this.assetUrlBySpecifier
+    );
+  }
+
   /** Resolves asset specifiers a system reload introduced. Node-side only —
    *  the plugin hook context is unavailable here, so results can differ. */
   private applyAssetSubstitutions(): void {
     if (!this.isProd && this.assetPassComplete) {
-      for (const specifier of findAssetSpecifiers(this.globalCss)) {
+      for (const specifier of this.sheetAssetSpecifiers()) {
         if (this.assetResolutionFailures.delete(specifier)) {
           this.assetUrlBySpecifier.delete(specifier);
         }
@@ -646,10 +679,7 @@ export class PluginContext {
         }
       }
     }
-    this.globalCss = substituteAssetPlaceholders(
-      this.globalCss,
-      this.assetUrlBySpecifier
-    );
+    this.substituteSheets();
   }
 
   private resetCoalescer: ResetCoalescer | null = null;
@@ -777,7 +807,7 @@ export class PluginContext {
   runSelfVerify(): void {
     const failures = runStructuralSelfCheck({
       componentCount: Object.keys(this.storedManifest?.components ?? {}).length,
-      variableCss: this.system.variableCss,
+      variableCss: this.variableCss,
       globalCss: this.globalCss,
       componentCss: this.resolvedComponentCss,
       layers: this.options.layers,

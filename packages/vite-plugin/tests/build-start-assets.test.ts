@@ -4,7 +4,9 @@ import { join } from 'node:path';
 import { afterAll, describe, expect, test } from 'vitest';
 
 import { runBuildStart } from '../src/build-start';
+import { RESOLVED_CSS_ID } from '../src/constants';
 import { PluginContext } from '../src/context';
+import { loadVirtualModule } from '../src/virtual-modules';
 import { makeManifest } from './manifest-fixture';
 
 /** Vite calls buildStart once per environment and per rebuild, so the asset
@@ -18,13 +20,14 @@ afterAll(() => {
 
 const FONT_SPECIFIER = '@acme/fonts/inter.woff2';
 
-function makeContext() {
+function makeContext(theme = { variableCss: '', componentCss: '' }) {
   mkdirSync(join(scratch, 'src'), { recursive: true });
   writeFileSync(join(scratch, 'src', 'ds.ts'), 'export const ds = {};\n');
   const fontPath = join(scratch, 'inter.woff2');
   writeFileSync(fontPath, 'font-bytes');
 
   const manifest = makeManifest({
+    css: theme.componentCss,
     sheets: {
       ...makeManifest().sheets,
       global: `@font-face { font-family: Inter; src: url('animus-asset:${FONT_SPECIFIER}'); }`,
@@ -36,7 +39,7 @@ function makeContext() {
       groupRegistry: '{}',
       scalesJson: '{}',
       variableMapJson: '{}',
-      variableCss: '',
+      variableCss: theme.variableCss,
       dependencies: [],
     }),
     extractFacts: () => JSON.stringify({ files: {}, parseCount: 0 }),
@@ -80,4 +83,19 @@ describe('runBuildStart asset pass across environments/rebuilds', () => {
     expect(ctx.globalCss).toContain('__VITE_ASSET__ref2__');
     expect(ctx.globalCss).not.toContain('__VITE_ASSET__ref1__');
   });
+});
+
+test('asset() in a theme scale value and in component CSS resolves like global styles', async () => {
+  const placeholder = `url('animus-asset:${FONT_SPECIFIER}')`;
+  const { ctx, emitted, resolveSpecifier, emitAsset } = makeContext({
+    variableCss: `:root { --fonts-inter: ${placeholder}; }`,
+    componentCss: `.hero { background-image: ${placeholder}; }`,
+  });
+
+  await runBuildStart(ctx, resolveSpecifier, emitAsset);
+  const css = loadVirtualModule(ctx, RESOLVED_CSS_ID) ?? '';
+
+  expect(css).not.toContain('animus-asset:');
+  expect(emitted).toEqual(['ref1']);
+  expect(css.match(/__VITE_ASSET__ref1__/g)).toHaveLength(3);
 });

@@ -27,8 +27,8 @@ import {
   enforceExternalTokenContracts,
   excludeCollectedPackages,
   extractSystemFilePackages,
-  findAssetSpecifiers,
   findPackageRoot,
+  findSheetAssetSpecifiers,
   firstOwners,
   hashReplacementPlans,
   isExcludedPackageRelativePath,
@@ -45,7 +45,8 @@ import {
   sharesVolumeRoot,
   snapshotFilePlans,
   staleDistIncludesMessage,
-  substituteAssetPlaceholders,
+  reportSurvivingAssetPlaceholders,
+  substituteSheetAssets,
   toWatchKeys,
   unreadableSourceDiagnostic,
   unresolvableIncludesMessage,
@@ -110,6 +111,7 @@ export type SessionOptions = AnimusCoreOptions;
 
 import type { ExcludeMatcher } from '../pipeline/index';
 import type {
+  AssetSheets,
   LightningTargets,
   ManifestDiagnostic,
   SourceCorpus,
@@ -1406,16 +1408,18 @@ export class ExtractionSession {
 
     // Substitution happens before assembly so every CSS consumer receives
     // substituted urls. Pruning: every full pass, incremental on request.
-    const globalCss = this.substituteAssetReferences(
-      result.globalCss,
+    const sheets = this.substituteAssetReferences(
+      {
+        variableCss: system.variableCss,
+        globalCss: result.globalCss,
+        componentCss: result.componentCss,
+      },
       !devMode || this.staleAssetPruning === 'every-cycle'
     );
 
     const { declaration, variables, body } = assembleStylesheet({
       layers: this.options.layers,
-      variableCss: system.variableCss,
-      globalCss,
-      componentCss: result.componentCss,
+      ...sheets,
       split: true,
     });
 
@@ -1440,6 +1444,11 @@ export class ExtractionSession {
     const fullCss = [declaration, variables, processedBody]
       .filter(Boolean)
       .join('\n');
+    reportSurvivingAssetPlaceholders(fullCss, {
+      strict: this.options.strict,
+      warn: (message) => this.warn(message),
+      prefix: `[${this.driverLabel}]`,
+    });
 
     setSharedCss(fullCss);
 
@@ -1892,13 +1901,14 @@ export class ExtractionSession {
     this.onArtifactWrite?.(name, content);
   }
 
-  /** Copy each asset() specifier's bytes into `assets/` under a
-   *  content-hashed name and substitute a url relative to styles.css. */
+  /** Copy each asset() specifier's bytes, from every sheet, into `assets/`
+   *  under a content-hashed name and substitute a url relative to
+   *  styles.css. */
   private substituteAssetReferences(
-    globalCss: string,
+    sheets: AssetSheets,
     pruneSuperseded: boolean
-  ): string {
-    const specifiers = findAssetSpecifiers(globalCss);
+  ): AssetSheets {
+    const specifiers = findSheetAssetSpecifiers(sheets);
     const assetsDir = join(this.sessionDir, SESSION_ASSETS_DIR);
     const expected = new Set<string>();
     this.assetDependencyPaths.clear();
@@ -1963,7 +1973,7 @@ export class ExtractionSession {
     // content-hashed and never overwritten, so superseded ones accumulate.
     if (pruneSuperseded) pruneStaleAssets(assetsDir, expected);
 
-    return substituteAssetPlaceholders(globalCss, urlBySpecifier);
+    return substituteSheetAssets(sheets, urlBySpecifier);
   }
 
   private trackAssetDependency(path: string): void {

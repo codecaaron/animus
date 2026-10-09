@@ -1,5 +1,6 @@
 import {
   assembleStylesheet,
+  reportSurvivingAssetPlaceholders,
   stableStringify,
   stripLeadingLayerDeclaration,
 } from '@animus-ui/extract/pipeline';
@@ -59,11 +60,20 @@ export function loadVirtualModule(
     warnFn: (msg: string) => ctx.warn(msg),
   };
 
+  const checked = (css: string): string => {
+    reportSurvivingAssetPlaceholders(css, {
+      strict: ctx.options.strict,
+      warn: (message) => ctx.warn(message),
+      prefix: '[animus-extract]',
+    });
+    return css;
+  };
+
   if (id === RESOLVED_CSS_ID) {
     if (!ctx.isProd && ctx.storedSheets) {
       const { variables, body } = assembleStylesheet({
         layers: ctx.options.layers,
-        variableCss: ctx.system.variableCss,
+        variableCss: ctx.variableCss,
         globalCss: ctx.globalCss,
         split: true,
       });
@@ -71,27 +81,29 @@ export function loadVirtualModule(
         ...lcssOpts,
         minify: false,
       });
-      return [variables, processedBody].filter(Boolean).join('\n');
+      return checked([variables, processedBody].filter(Boolean).join('\n'));
     }
     const { variables, body } = assembleStylesheet({
       layers: ctx.options.layers,
-      variableCss: ctx.system.variableCss,
+      variableCss: ctx.variableCss,
       globalCss: ctx.globalCss,
       componentCss: ctx.resolvedComponentCss,
       split: true,
     });
     const processedBody = postProcessCss(body, lcssOpts);
-    return [variables, processedBody].filter(Boolean).join('\n');
+    return checked([variables, processedBody].filter(Boolean).join('\n'));
   }
 
   if (id === RESOLVED_COMPONENTS_ID) {
     const strippedCss = stripLeadingLayerDeclaration(
       ctx.resolvedComponentCss || ''
     );
-    const css = postProcessCss(strippedCss, {
-      ...lcssOpts,
-      minify: false,
-    });
+    const css = checked(
+      postProcessCss(strippedCss, {
+        ...lcssOpts,
+        minify: false,
+      })
+    );
     const escaped = css
       .replace(/\\/g, '\\\\')
       .replace(/`/g, '\\`')

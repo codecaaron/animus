@@ -45,3 +45,56 @@ export function substituteAssetPlaceholders(
   }
   return out;
 }
+
+/** The stylesheets one analysis emits. A theme scale value lands in
+ *  `variableCss`, a global style in `globalCss` and a component's styles in
+ *  `componentCss`; an asset() placeholder can sit in any of them. */
+export interface AssetSheets {
+  variableCss: string;
+  globalCss: string;
+  componentCss: string;
+}
+
+export function findSheetAssetSpecifiers(sheets: AssetSheets): string[] {
+  return [
+    ...new Set([
+      ...findAssetSpecifiers(sheets.variableCss),
+      ...findAssetSpecifiers(sheets.globalCss),
+      ...findAssetSpecifiers(sheets.componentCss),
+    ]),
+  ];
+}
+
+/** The one substitution step every emitted sheet passes through. */
+export function substituteSheetAssets(
+  sheets: AssetSheets,
+  urlBySpecifier: ReadonlyMap<string, string>
+): AssetSheets {
+  return {
+    variableCss: substituteAssetPlaceholders(
+      sheets.variableCss,
+      urlBySpecifier
+    ),
+    globalCss: substituteAssetPlaceholders(sheets.globalCss, urlBySpecifier),
+    componentCss: substituteAssetPlaceholders(
+      sheets.componentCss,
+      urlBySpecifier
+    ),
+  };
+}
+
+export const UNSUBSTITUTED_ASSET_CODE =
+  'animus.asset.unsubstituted-placeholder';
+
+/** A placeholder in emitted CSS is a broken URL in the browser: it fails a
+ *  strict build and warns otherwise. */
+export function reportSurvivingAssetPlaceholders(
+  css: string,
+  report: { strict?: boolean; warn: (message: string) => void; prefix: string }
+): void {
+  const specifiers = findAssetSpecifiers(css);
+  if (specifiers.length === 0) return;
+  const message = `${report.prefix} asset() placeholders reached emitted CSS unsubstituted: ${specifiers.join(', ')} (${UNSUBSTITUTED_ASSET_CODE})`;
+  if (report.strict) throw new Error(message);
+  report.warn(message);
+}

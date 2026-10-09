@@ -3,7 +3,10 @@ import { describe, expect, test } from 'vitest';
 import {
   ASSET_PLACEHOLDER_PREFIX,
   findAssetSpecifiers,
+  findSheetAssetSpecifiers,
+  reportSurvivingAssetPlaceholders,
   substituteAssetPlaceholders,
+  UNSUBSTITUTED_ASSET_CODE,
 } from '../pipeline/asset-placeholders';
 
 test('the scanner-side scheme matches the producer constant in @animus-ui/system', () => {
@@ -79,5 +82,44 @@ describe('substituteAssetPlaceholders', () => {
       new Map([['@acme/x.woff2', "__VITE_ASSET__a$'b__"]])
     );
     expect(out).toBe("url('__VITE_ASSET__a$'b__')");
+  });
+});
+
+test('every sheet contributes its specifiers, once each', () => {
+  expect(
+    findSheetAssetSpecifiers({
+      variableCss: ":root{--rock:url('animus-asset:@acme/rock.jpg')}",
+      globalCss: "body{background:url('animus-asset:@acme/rock.jpg')}",
+      componentCss: ".hero{background:url('animus-asset:@acme/sky.jpg')}",
+    }).sort()
+  ).toEqual(['@acme/rock.jpg', '@acme/sky.jpg']);
+});
+
+describe('reportSurvivingAssetPlaceholders', () => {
+  const leaked = ".hero{background:url('animus-asset:@acme/rock.jpg')}";
+
+  test('a placeholder in emitted CSS fails a strict build, naming it and the code', () => {
+    expect(() =>
+      reportSurvivingAssetPlaceholders(leaked, {
+        strict: true,
+        warn: () => {},
+        prefix: '[animus]',
+      })
+    ).toThrow(`@acme/rock.jpg (${UNSUBSTITUTED_ASSET_CODE})`);
+  });
+
+  test('a non-strict build warns, and clean CSS reports nothing', () => {
+    const warnings: string[] = [];
+    const warn = (message: string) => warnings.push(message);
+    reportSurvivingAssetPlaceholders(leaked, { warn, prefix: '[animus]' });
+    reportSurvivingAssetPlaceholders(
+      ".hero{background:url('./assets/rock.1.jpg')}",
+      {
+        warn,
+        prefix: '[animus]',
+      }
+    );
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain(UNSUBSTITUTED_ASSET_CODE);
   });
 });

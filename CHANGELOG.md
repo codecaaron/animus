@@ -5,6 +5,18 @@ See [Conventional Commits](https://conventionalcommits.org) for commit guideline
 
 ## Unreleased
 
+**`asset()` resolves in theme scale values.** An `asset()` call inside a
+`createTheme` scale value, such as
+``images: { rock: `url("${asset('@acme/media/rock.jpg')}")` }``, now
+resolves to the same hashed URL the same call gets in global styles, and its
+file is copied or emitted and watched the same way. Before, the theme's
+variable CSS and the component CSS skipped asset substitution, so the built
+CSS shipped `url(animus-asset:…)` unchanged. Every stylesheet now passes
+through one substitution step, in the Vite plugin and in the shared session
+behind the Next.js plugin and the CLI. A placeholder that still reaches
+emitted CSS is reported as `animus.asset.unsubstituted-placeholder`, which
+fails `strict` builds.
+
 **Registered custom properties report what will not behave as written.**
 When the theme registers at least one `@property`, extraction now reports:
 

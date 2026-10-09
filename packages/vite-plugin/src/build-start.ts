@@ -7,9 +7,7 @@ import {
   DEFAULT_EXTENSIONS,
   discoverFiles,
   extractSystemFilePackages,
-  findAssetSpecifiers,
   firstOwners,
-  substituteAssetPlaceholders,
   validateLayerOrder,
 } from '@animus-ui/extract/pipeline';
 import { readFileSync } from 'fs';
@@ -143,7 +141,7 @@ export async function runBuildStart(
 
   // Vite's CSS pipeline resolves `__VITE_ASSET__` markers to hashed names
   // before the stylesheet is hashed, so the CSS hash reflects the final URL.
-  const assetSpecifiers = findAssetSpecifiers(ctx.globalCss);
+  const assetSpecifiers = ctx.sheetAssetSpecifiers();
   for (const specifier of assetSpecifiers) {
     const resolvedPath = await resolveSpecifier(specifier);
     if (!resolvedPath) {
@@ -174,10 +172,7 @@ export async function runBuildStart(
       ctx.assetUrlBySpecifier.set(specifier, ctx.devFsUrl(resolvedPath));
     }
   }
-  ctx.globalCss = substituteAssetPlaceholders(
-    ctx.globalCss,
-    ctx.assetUrlBySpecifier
-  );
+  ctx.substituteSheets();
   // From here on, runAnalysis owns late-appearing specifiers (dev resets).
   ctx.assetPassComplete = true;
 
@@ -211,7 +206,7 @@ export async function runBuildStart(
     if (!ctx.isProd && ctx.storedSheets) {
       const staticCss = assembleStylesheet({
         layers: ctx.options.layers,
-        variableCss: ctx.system.variableCss,
+        variableCss: ctx.variableCss,
         globalCss: ctx.globalCss,
       });
       const staticSize = staticCss.length;

@@ -120,8 +120,12 @@ export type {
 } from './source-corpus';
 export {
   findAssetSpecifiers,
+  findSheetAssetSpecifiers,
+  reportSurvivingAssetPlaceholders,
   substituteAssetPlaceholders,
+  substituteSheetAssets,
 } from './asset-placeholders';
+export type { AssetSheets } from './asset-placeholders';
 export { resolveAssetFile, resolveThroughPathAliases } from './resolve-asset';
 export { enforceExternalTokenContracts } from './correlate-external-tokens';
 export { buildPathAliasesJson } from './path-aliases';
