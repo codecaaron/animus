@@ -22,7 +22,13 @@
 // Usage:
 //   bun scripts/consumers/measure.ts --base <ref> --head <ref>
 //     [--consumer <app dir>]... [--script <name>] [--config <file>]
-//     [--work <dir>] [--json <file>]
+//     [--retention] [--work <dir>] [--json <file>]
+// --retention adds which @animus-ui/system modules each app's client bundle
+// keeps, builder modules (theme and system construction) apart from the
+// runtime, with rendered bytes. It costs one extra bundling run per app and
+// ref: the script's last step, after the measured build, with the app's
+// Vite config wrapped in the copy so @animus-ui/system resolves to the
+// ref's sources and a plugin records each module's rendered length.
 // Consumers may also come from a local config file,
 // scripts/consumers/consumers.local.json by default (gitignored):
 //   { "consumers": [{ "app": "<dir>", "outDir": "dist" }] }
@@ -112,6 +118,10 @@ interface Measurement {
   componentsExtracted?: number;
   variantsPruned?: number;
   statesPruned?: number;
+  /** Rendered bytes per retained @animus-ui/system source module, from the
+   *  retention run; absent without --retention or when it failed. */
+  systemModules?: Map<string, number>;
+  retentionFailure?: string;
 }
 
 interface RunResult {
@@ -389,6 +399,129 @@ function binPath(app: string, copy: string): string {
   return [...dirs, process.env.PATH ?? ''].join(':');
 }
 
+/** System source modules the runtime needs; every other retained module
+ *  of the package is builder code. */
+const RUNTIME_MODULE =
+  /^(runtime\/|runtime-entry\.|class-resolver\.|compose\.|composeWithContext\.|appearance\/|bootstrap\/)/;
+
+const RETENTION_PLUGIN = `import { appendFileSync } from 'node:fs';
+export function animusMeasureRetention(outFile, systemSrc) {
+  return {
+    name: 'animus-measure-retention',
+    enforce: 'post',
+    generateBundle(_options, bundle) {
+      if ((this.environment?.name ?? 'client') !== 'client') return;
+      for (const chunk of Object.values(bundle)) {
+        if (chunk.type !== 'chunk') continue;
+        for (const [id, info] of Object.entries(chunk.modules)) {
+          if (info.renderedLength > 0 && id.startsWith(systemSrc)) {
+            appendFileSync(outFile, JSON.stringify([id.slice(systemSrc.length), info.renderedLength]) + '\\n');
+          }
+        }
+      }
+    },
+  };
+}
+`;
+
+/** The app's Vite config, wrapped: the original is imported unchanged, and
+ *  only the retention run's environment adds the plugin and aliases. */
+function retentionWrapper(original: string, pluginPath: string): string {
+  return `// @ts-nocheck
+import original from './${original.replace(/\.[mc]?[jt]s$/, '')}';
+import { animusMeasureRetention } from ${JSON.stringify(pluginPath)};
+export default async (env) => {
+  const config = typeof original === 'function' ? await original(env) : await original;
+  const out = process.env.ANIMUS_MEASURE_RETENTION;
+  if (!out) return config;
+  // Longest first: a string alias also matches the specifier's subpaths.
+  const aliases = JSON.parse(process.env.ANIMUS_MEASURE_ALIASES)
+    .sort((a, b) => b[0].length - a[0].length)
+    .map(([find, replacement]) => ({ find, replacement }));
+  const existing = config.resolve?.alias ?? [];
+  const merged = Array.isArray(existing) ? existing : Object.entries(existing).map(([find, replacement]) => ({ find, replacement }));
+  return {
+    ...config,
+    plugins: [...(config.plugins ?? []), animusMeasureRetention(out, process.env.ANIMUS_MEASURE_SYSTEM_SRC)],
+    resolve: { ...config.resolve, alias: [...aliases, ...merged] },
+  };
+};
+`;
+}
+
+/** @animus-ui/system and each of its subpath exports, mapped to the ref's
+ *  source module: `./dist/x.js` names `./src/x.ts` (or `.tsx`). */
+function systemSourceAliases(systemDir: string): Array<[string, string]> {
+  // SAFETY: the ref's own package manifest; only `exports` keys and their
+  // `import` strings are read, and a missing source file drops the entry.
+  const { exports } = JSON.parse(
+    readFileSync(join(systemDir, 'package.json'), 'utf8')
+  ) as { exports?: Record<string, { import?: string }> };
+  const aliases: Array<[string, string]> = [];
+  for (const [subpath, conditions] of Object.entries(exports ?? {})) {
+    const target = conditions.import;
+    if (!target?.startsWith('./dist/')) continue;
+    const stem = join(
+      systemDir,
+      'src',
+      target.slice('./dist/'.length).replace(/\.js$/, '')
+    );
+    const source = ['.ts', '.tsx'].map((ext) => stem + ext).find(existsSync);
+    if (source) aliases.push([`@animus-ui/system${subpath.slice(1)}`, source]);
+  }
+  return aliases;
+}
+
+/** Which @animus-ui/system source modules the app's client bundle keeps:
+ *  one more run of the script's last step, with the config wrapped. */
+function retentionRun(
+  app: string,
+  build: string,
+  runDir: string,
+  bundleStep: string,
+  env: NodeJS.ProcessEnv
+): { modules: Map<string, number> } | { failure: string } {
+  const config = readdirSync(app).find((file) =>
+    /^vite\.config\.m?[jt]s$/.test(file)
+  );
+  if (!config) return { failure: 'no Vite config' };
+  const original = config.replace(
+    /^vite\.config/,
+    'vite.config.animus-measure-original'
+  );
+  cpSync(join(app, config), join(app, original));
+  const pluginPath = join(runDir, 'retention-plugin.mjs');
+  writeFileSync(pluginPath, RETENTION_PLUGIN);
+  writeFileSync(join(app, config), retentionWrapper(original, pluginPath));
+  const systemDir = join(build, 'packages', 'system');
+  const out = join(runDir, 'retention.jsonl');
+  rmSync(out, { force: true });
+  const result = spawnSync('sh', ['-c', bundleStep], {
+    cwd: app,
+    encoding: 'utf8',
+    maxBuffer: 256 * 1024 * 1024,
+    env: {
+      ...env,
+      ANIMUS_MEASURE_RETENTION: out,
+      ANIMUS_MEASURE_SYSTEM_SRC: `${join(systemDir, 'src')}/`,
+      ANIMUS_MEASURE_ALIASES: JSON.stringify(systemSourceAliases(systemDir)),
+    },
+  });
+  const text = `${result.stdout ?? ''}${result.stderr ?? ''}`.replace(ANSI, '');
+  writeFileSync(join(runDir, 'retention.log'), text);
+  if (result.status !== 0) return { failure: failureLine(text, result.status) };
+  const modules = new Map<string, number>();
+  if (existsSync(out)) {
+    for (const line of readFileSync(out, 'utf8').split('\n')) {
+      if (!line) continue;
+      // SAFETY: lines the plugin above wrote, each [module path, bytes].
+      const [path, bytes] = JSON.parse(line) as [string, number];
+      modules.set(path, (modules.get(path) ?? 0) + bytes);
+    }
+  }
+  return { modules };
+}
+
 /** The most telling line of a failed step: a thrown error, else a
  *  compiler error, else any error or failure line. */
 function failureLine(text: string, status: number | null): string {
@@ -404,7 +537,8 @@ function measure(
   consumer: Consumer,
   build: string,
   runDir: string,
-  script: string
+  script: string,
+  retention: boolean
 ): Measurement {
   const copy = join(runDir, 'checkout');
   prepareCopy(consumer, build, copy);
@@ -462,10 +596,18 @@ function measure(
   const reconciled = output.match(
     /Reconciliation: \d+ kept, (\d+) variants pruned, (\d+) states pruned/
   );
+  // After the measured output is read, since the run rewrites it.
+  const retained = retention
+    ? retentionRun(app, build, runDir, steps[steps.length - 1].command, env)
+    : null;
   return {
     passed,
     steps,
     seconds,
+    systemModules:
+      retained && 'modules' in retained ? retained.modules : undefined,
+    retentionFailure:
+      retained && 'failure' in retained ? retained.failure : undefined,
     cssRaw: css.length,
     cssGzip: gzipSync(css, { level: 9 }).length,
     jsRaw,
@@ -538,6 +680,35 @@ function report(
       (m) => (m.layers ? (m.layers.get(layer) ?? 0) : undefined),
     ]);
   }
+  if (base.systemModules || head.systemModules) {
+    const sum = (m: Measurement, builder: boolean) =>
+      m.systemModules
+        ? [...m.systemModules].reduce(
+            (total, [path, bytes]) =>
+              RUNTIME_MODULE.test(path) === builder ? total : total + bytes,
+            0
+          )
+        : undefined;
+    rows.push([
+      '@animus-ui/system builder bytes (rendered)',
+      (m) => sum(m, true),
+    ]);
+    rows.push([
+      '@animus-ui/system runtime bytes (rendered)',
+      (m) => sum(m, false),
+    ]);
+    const modules = new Set([
+      ...(base.systemModules?.keys() ?? []),
+      ...(head.systemModules?.keys() ?? []),
+    ]);
+    for (const path of [...modules].sort()) {
+      if (RUNTIME_MODULE.test(path)) continue;
+      rows.push([
+        `builder \`${path}\``,
+        (m) => (m.systemModules ? (m.systemModules.get(path) ?? 0) : undefined),
+      ]);
+    }
+  }
   const codes = new Set([
     ...(base.diagnostics?.keys() ?? []),
     ...(head.diagnostics?.keys() ?? []),
@@ -558,6 +729,12 @@ function report(
     [refs.base, base],
     [refs.head, head],
   ] as const) {
+    if (m.retentionFailure) {
+      lines.push(
+        '',
+        `At ${ref}, the retention run failed: \`${m.retentionFailure}\``
+      );
+    }
     for (const step of m.steps) {
       if (step.failure) {
         lines.push(
@@ -577,6 +754,7 @@ function main(): void {
       head: { type: 'string' },
       consumer: { type: 'string', multiple: true },
       script: { type: 'string', default: 'build' },
+      retention: { type: 'boolean', default: false },
       config: { type: 'string' },
       work: { type: 'string' },
       json: { type: 'string' },
@@ -620,7 +798,13 @@ function main(): void {
       );
       mkdirSync(runDir, { recursive: true });
       console.error(`[measure:consumers] ${consumer.name} at ${refs[side]}`);
-      return measure(consumer, builds[side].dir, runDir, values.script);
+      return measure(
+        consumer,
+        builds[side].dir,
+        runDir,
+        values.script,
+        values.retention
+      );
     };
     const base = runFor('base');
     const head = runFor('head');
@@ -638,7 +822,11 @@ function main(): void {
     // A Map serializes as `{}`, so layer counts become plain objects here.
     const toPlain = (
       _key: string,
-      value: Measurement['layers'] | Measurement['diagnostics'] | string
+      value:
+        | Measurement['layers']
+        | Measurement['diagnostics']
+        | Measurement['systemModules']
+        | string
     ) => (value instanceof Map ? Object.fromEntries(value) : value);
     writeFileSync(
       values.json,
