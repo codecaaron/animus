@@ -538,6 +538,10 @@ fi
       if (owner.worker) {
         expectedCalls.push(`run ${owner.manifest.name}#verify:dry-run`);
       }
+      // A prefixed variant's build and assertions run with its owner's own.
+      if (scripts['verify:prefixed']) {
+        expectedCalls.push(`run ${owner.manifest.name}#verify:prefixed`);
+      }
 
       expect(result.status, owner.manifest.name).toBe(0);
       expect(readFileSync(callLog, 'utf8').trim().split('\n')).toEqual(
