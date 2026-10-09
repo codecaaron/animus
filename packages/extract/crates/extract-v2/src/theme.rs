@@ -1699,10 +1699,21 @@ fn push_global_rules(
     }
 }
 
+/// The global blocks that emit inside `anm-global`, in registration order.
 pub fn resolve_all_global_blocks(
     blocks: &Value,
     ctx: &ResolveContext,
 ) -> String {
+    resolve_global_blocks(blocks, ctx, false)
+}
+
+/// The global blocks registered `unlayered`, which emit outside every
+/// cascade layer, in registration order.
+pub fn resolve_unlayered_global_blocks(blocks: &Value, ctx: &ResolveContext) -> String {
+    resolve_global_blocks(blocks, ctx, true)
+}
+
+fn resolve_global_blocks(blocks: &Value, ctx: &ResolveContext, unlayered: bool) -> String {
     let block_map = match blocks.as_object() {
         Some(o) => o,
         None => return String::new(),
@@ -1710,15 +1721,18 @@ pub fn resolve_all_global_blocks(
 
     let mut parts: Vec<String> = Vec::new();
     for (_name, block) in block_map {
-        let (styles, faces) = match block.as_object() {
+        let (styles, faces, block_unlayered) = match block.as_object() {
             Some(obj)
                 if obj.get("styles").map(|s| s.is_object()).unwrap_or(false)
-                    && obj.keys().all(|k| k == "styles" || k == "fontFaces") =>
+                    && obj.keys().all(|k| k == "styles" || k == "fontFaces" || k == "unlayered") =>
             {
-                (obj.get("styles").unwrap(), obj.get("fontFaces"))
+                (obj.get("styles").unwrap(), obj.get("fontFaces"), obj.get("unlayered") == Some(&Value::Bool(true)))
             }
-            _ => (block, None),
+            _ => (block, None, false),
         };
+        if block_unlayered != unlayered {
+            continue;
+        }
         if let Some(faces) = faces {
             let css = render_font_faces(faces, ctx);
             if !css.is_empty() {
