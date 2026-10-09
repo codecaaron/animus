@@ -181,6 +181,15 @@ export const PREFIX_CONTEXTUAL_VARS_UNPREFIXED =
  *  transport variable or a theme variable of the same spelling. */
 export const PREFIX_NAME_CONFLICT = 'animus.prefix.name-conflict';
 
+/** A contextual variable declared on a scale that also holds a token of its
+ *  name: scale reads resolve to the token. */
+export const PROPERTY_LEGACY_TOKEN_COLLISION =
+  'animus.property.legacy-token-collision';
+
+/** A theme property declared on a scale that also holds a token of its
+ *  name. */
+export const PROPERTY_TOKEN_COLLISION = 'animus.property.token-collision';
+
 /**
  * A lost or unreadable configured input, or a classified unsupported Animus
  * declaration, is `error` — what `--strict` refuses; degradation that still
@@ -201,6 +210,8 @@ const DIAGNOSTIC_SEVERITY: ReadonlyMap<string, DiagnosticSeverity> = new Map([
   [PROPERTY_FALLBACK_SELF_REFERENCE, 'warn'],
   [PREFIX_CONTEXTUAL_VARS_UNPREFIXED, 'warn'],
   [PREFIX_NAME_CONFLICT, 'error'],
+  [PROPERTY_LEGACY_TOKEN_COLLISION, 'warn'],
+  [PROPERTY_TOKEN_COLLISION, 'error'],
 ]);
 
 /** An unlisted code is `warn`: a witness kind from a newer system package
@@ -276,6 +287,8 @@ export function systemLoadDiagnostics(
     | 'invalidPropertyRegistrations'
     | 'legacyPrefixedContextualVars'
     | 'prefixNameConflicts'
+    | 'scalesJson'
+    | 'propertyRecordsJson'
   >
 ): ManifestDiagnostic[] {
   const registrations = (system.invalidPropertyRegistrations ?? []).map(
@@ -322,7 +335,54 @@ export function systemLoadDiagnostics(
     ...registrations,
     ...unprefixed,
     ...conflicts,
+    ...tokenCollisionDiagnostics(system),
   ];
+}
+
+/**
+ * Each declared property whose name is also a token on a scale it is
+ * declared on. A scale read of that key, a prop value or a `{scale.key}`
+ * reference, resolves to the token, so the property is unreachable through
+ * the scale. A legacy declaration warns and the token stays the winner; any
+ * other is an error in every mode.
+ */
+function tokenCollisionDiagnostics(
+  system: Pick<SystemConfig, 'scalesJson' | 'propertyRecordsJson'>
+): ManifestDiagnostic[] {
+  if (!system.propertyRecordsJson) return [];
+  const records = parseInternalWire<
+    Array<{ name: string; scales: string[]; legacy: boolean }>
+  >(system.propertyRecordsJson, "propertyRecordsJson (the theme's properties)");
+  const declared = records.flatMap((record) =>
+    record.scales.map((scale) => ({
+      record,
+      scale,
+      path: `${scale}.${record.name}`,
+    }))
+  );
+  if (declared.length === 0) return [];
+  const tokens = parseInternalWire<Record<string, string>>(
+    system.scalesJson,
+    "scalesJson (the theme's scale tokens)"
+  );
+  return declared
+    .filter(({ path }) => Object.hasOwn(tokens, path))
+    .map(({ record, scale, path }): ManifestDiagnostic => {
+      const code = record.legacy
+        ? PROPERTY_LEGACY_TOKEN_COLLISION
+        : PROPERTY_TOKEN_COLLISION;
+      const declaration = record.legacy
+        ? `the contextual variable ${record.name}, which declareContextualVars declares on ${scale},`
+        : `the theme property ${record.name}, declared on ${scale},`;
+      return {
+        file: 'system',
+        component: path,
+        kind: record.legacy ? 'warn' : 'error',
+        message: `the ${scale} token ${record.name} (${tokens[path]}) and ${declaration} share this key. A scale read of it, such as {${path}} or a prop on the ${scale} scale set to '${record.name}', resolves to the token, so the ${record.legacy ? 'contextual variable' : 'property'} is unreachable through ${scale}. Rename one of them (${code})`,
+        code,
+        severity: severityFor(code),
+      };
+    });
 }
 
 /**
