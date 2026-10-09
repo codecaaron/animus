@@ -1347,6 +1347,12 @@ export class ThemeBuilder<
       emittableVariables,
       bpVariables,
       emittableModeVariables,
+      modeDependentDeclarations(
+        tokenDefinitions,
+        effectiveModes,
+        variableMap,
+        emittableVariables
+      ),
       {
         initialMode: typeof theme.mode === 'string' ? theme.mode : undefined,
         systemPreference,
@@ -1783,6 +1789,48 @@ function resolveModeValueMaps(
 }
 
 /**
+ * Root declarations of the tokens whose value reads a colour a mode redefines,
+ * directly or through other tokens, by the authored reference graph. A custom
+ * property computes where it is declared, so a token declared only at `:root`
+ * carries the root's colours into a nested mode scope; every mode scope
+ * re-declares these. `resolveReferences` has already rejected any cycle in
+ * the graph.
+ */
+function modeDependentDeclarations(
+  tokenDefinitions: Record<string, TokenDefinition>,
+  effectiveModes: ModeAliasDefinition,
+  variableMap: Record<string, string>,
+  rootVariables: Record<string, string>
+): Record<string, string> {
+  const modeAliases = new Set<string>();
+  for (const aliases of Object.values(effectiveModes)) {
+    for (const alias of Object.keys(aliases)) {
+      modeAliases.add(`colors.${alias}`);
+    }
+  }
+  const dependent = new Set(modeAliases);
+  let grew = modeAliases.size > 0;
+  while (grew) {
+    grew = false;
+    for (const [path, definition] of Object.entries(tokenDefinitions)) {
+      if (dependent.has(path) || definition.kind !== 'reference') continue;
+      if (definition.references.some((ref) => dependent.has(ref.path))) {
+        dependent.add(path);
+        grew = true;
+      }
+    }
+  }
+  const declarations: Record<string, string> = {};
+  for (const path of dependent) {
+    if (modeAliases.has(path)) continue;
+    const varName = variableMap[path];
+    const value = varName === undefined ? undefined : rootVariables[varName];
+    if (value !== undefined) declarations[varName] = value;
+  }
+  return sortRecordByKey(declarations);
+}
+
+/**
  * A reference to a target dropped by `addScale({ replace: true })` fails the
  * build. Targets never defined anywhere stay warn-and-literal.
  */
@@ -2118,6 +2166,7 @@ function buildVariableCss(
   rootVariables: Record<string, string>,
   breakpointVariables: Record<string, string>,
   modeVariables: Record<string, Record<string, string>>,
+  modeDependents: Record<string, string>,
   systemEmission: SystemEmissionConfig = {}
 ): string {
   const { initialMode, systemPreference, browserColorScheme } = systemEmission;
@@ -2171,6 +2220,18 @@ function buildVariableCss(
         `[data-color-mode="${modeName}"] {\n${modeLines.join('\n')}\n}`
       );
     }
+  }
+
+  // One rule for every mode scope: the values are the same in each, and only
+  // the colours they read differ. The media rules above need none, because
+  // they match `:root`, where the root declarations already read the mode's
+  // colours.
+  const dependentLines: string[] = [];
+  for (const [varName, value] of Object.entries(modeDependents)) {
+    dependentLines.push(`  ${varName}: ${value};`);
+  }
+  if (dependentLines.length > 0) {
+    parts.push(`[data-color-mode] {\n${dependentLines.join('\n')}\n}`);
   }
 
   return parts.join('\n\n');
