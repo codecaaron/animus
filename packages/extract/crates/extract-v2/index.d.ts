@@ -10,6 +10,13 @@ export declare class ExtractEngine {
 }
 
 /**
+ * Every diagnostic code the engine emits, with the severity it carries, as
+ * JSON: `{ "animus.chain.unextractable": "warn", … }`. Hosts check codes
+ * against it instead of keeping a table of their own.
+ */
+export declare function diagnosticCodes(): string
+
+/**
  * Chain discovery over a file set: one parse per file, then one walk per
  * stored AST.
  */

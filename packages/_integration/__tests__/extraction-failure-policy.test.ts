@@ -357,8 +357,11 @@ describe.each([
       const found = forComponent(analysis.diagnostics, component);
       expect(found.length, component).toBeGreaterThan(0);
       for (const diagnostic of found) {
-        expect(diagnostic.code, component).toBeUndefined();
-        expect(diagnostic.severity, component).toBeUndefined();
+        expect(
+          ['animus.chain.unextractable', 'animus.chain.skipped-value'],
+          component
+        ).toContain(diagnostic.code);
+        expect(diagnostic.severity, component).toBe('warn');
       }
     }
     expect(
@@ -577,7 +580,8 @@ export const App = ({ v }) => <Named shared={v} ambiguous={v} unknown={v} />;
         kind: 'warn',
         file: 'fixtures/policy-named.tsx',
       });
-      expect(diagnostic.code ?? null).toBeNull();
+      expect(diagnostic.code).toBe('animus.props.unbound-transform-name');
+      expect(diagnostic.severity).toBe('warn');
     }
     const messages = named.map((d) => d.message).sort();
     expect(messages[0]).toContain("custom prop 'ambiguous'");

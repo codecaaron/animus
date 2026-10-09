@@ -260,6 +260,68 @@ pub struct CssDiagnostic {
     /// `"error"` fails strict builds in the plugin; `"warn"` does not.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub severity: Option<String>,
+    /// 1-based line and column of the dropped or degraded input, or of the
+    /// declaration it belongs to; absent where the input has no source
+    /// location (the loaded system, `staticCss`). A line can come alone.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub line: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub column: Option<u32>,
+    /// The dropped key or expression as written, cut to
+    /// `DROPPED_TEXT_LIMIT` characters; a wholly dropped declaration is named
+    /// by `component` instead.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dropped: Option<String>,
+    /// Byte offset of the location in `file`, until the engine, which holds
+    /// the source, turns it into `line` and `column`.
+    #[serde(skip)]
+    pub(crate) offset: Option<u32>,
+}
+
+/// The longest `dropped` text a diagnostic carries, in characters.
+const DROPPED_TEXT_LIMIT: usize = 120;
+
+impl CssDiagnostic {
+    /// Located at byte `offset` of its file.
+    pub(crate) fn at(mut self, offset: u32) -> Self {
+        self.offset = Some(offset);
+        self
+    }
+
+    /// Located on `line` of its file, where nothing finer is known.
+    pub(crate) fn on_line(mut self, line: usize) -> Self {
+        self.line = u32::try_from(line).ok();
+        self
+    }
+
+    /// The column on that line, in characters.
+    pub(crate) fn with_column(mut self, column: usize) -> Self {
+        self.column = u32::try_from(column).ok();
+        self
+    }
+
+    /// What was dropped, as written.
+    pub(crate) fn dropping(mut self, text: &str) -> Self {
+        self.dropped = Some(match text.char_indices().nth(DROPPED_TEXT_LIMIT) {
+            Some(_) => {
+                let end = text.char_indices().nth(DROPPED_TEXT_LIMIT - 1).map_or(text.len(), |(at, _)| at);
+                format!("{}…", &text[..end])
+            }
+            None => text.to_string(),
+        });
+        self
+    }
+
+    /// Turns a byte offset into `source`, the diagnostic's file, into a
+    /// 1-based line and a column counted in characters.
+    pub fn locate(&mut self, source: &str) {
+        let Some(offset) = self.offset.take() else { return };
+        let Some(before) = source.get(..(offset as usize).min(source.len())) else { return };
+        let line = before.matches('\n').count() + 1;
+        let column = before.rsplit('\n').next().map_or(0, |text| text.chars().count()) + 1;
+        self.line = u32::try_from(line).ok();
+        self.column = u32::try_from(column).ok();
+    }
 }
 
 pub(crate) fn diagnostic_code_from_message(message: &str) -> Option<String> {
@@ -311,37 +373,88 @@ const WIDE_MODULE_LOAD_LIMIT: usize = 20;
 /// A warning: a variant prop, option or state name with whitespace names a
 /// class the element's class attribute splits, so its rule never applies.
 const CLASS_NAME_WHITESPACE: &str = "animus.chain.class-name-whitespace";
+/// Warnings for losses the engine reported without a code before.
+const UNEXTRACTABLE_CHAIN: &str = "animus.chain.unextractable";
+const SKIPPED_VALUE: &str = "animus.chain.skipped-value";
+const UNRESOLVED_PARENT: &str = "animus.extension.unresolved-parent";
+const UNBOUND_TRANSFORM_NAME: &str = "animus.props.unbound-transform-name";
+const UNRESOLVED_TOKEN_ALIAS: &str = "animus.style.unresolved-token-alias";
+const TOKEN_SHAPED_VALUE: &str = "animus.style.unresolved-token-value";
+const EXTERNAL_TOKEN_CANDIDATE: &str = "animus.theme.external-token-candidate";
+const TRANSFORM_THREW: &str = "animus.transform.threw";
+const UNSUPPORTED_TRANSFORM_DECLARATION: &str = "animus.transform.unsupported-declaration";
+/// A transform result that is neither a string nor a finite number: an error,
+/// as before it had a code.
+const TRANSFORM_INVALID_RESULT: &str = "animus.transform.invalid-result";
+pub(crate) const STATIC_CSS_UNKNOWN_NAME: &str = "animus.static-css.unknown-name";
+pub(crate) const STATIC_CSS_INVALID_SHAPE: &str = "animus.static-css.invalid-shape";
+
+/// Every code the engine emits, with its severity: `error` fails strict
+/// builds, `warn` never does. Codes group by their `animus.<area>.` prefix.
+/// The native module publishes this table (`diagnosticCodes`), so a host
+/// checks a code without keeping a copy of its own.
+pub(crate) const DIAGNOSTIC_CODES: &[(&str, &str)] = &[
+    (crate::eval::SELECTOR_UNSUPPORTED_SUBJECT, "error"),
+    (crate::eval::KEYFRAMES_UNREGISTERED_REFERENCE, "warn"),
+    (COMPOSE_UNRESOLVABLE_SLOT, "error"),
+    (UNSUPPORTED_MEMBER_PARENT, "error"),
+    (UNSUPPORTED_EXTEND_ARGUMENTS, "error"),
+    (UNSUPPORTED_VARIANT_CONFIG_REFERENCE, "error"),
+    (STAGE_EVALUATION_FAILED, "error"),
+    (UNSUPPORTED_CHAIN_METHOD, "error"),
+    (UNSUPPORTED_TERMINAL_TARGET, "error"),
+    (UNSUPPORTED_TRANSFORM_REFERENCE, "error"),
+    (UNSUPPORTED_PROPS_CONFIG, "error"),
+    (UNSUPPORTED_DEFAULT_EXPORT, "error"),
+    (UNSUPPORTED_NAMESPACE_ROOT, "error"),
+    (CONFIGURED_TRANSFORM_REJECTED, "error"),
+    (STATIC_EVALUATION_UNAVAILABLE, "error"),
+    (STRICT_TOKEN_MISS, "error"),
+    (TRANSFORM_INVALID_RESULT, "error"),
+    (UNATTRIBUTED_SYSTEM_PROPS, "warn"),
+    (UNTRACKED_CLONE_PROPS, "warn"),
+    (WIDE_MODULE_LOAD, "warn"),
+    (UNEXTRACTABLE_CHAIN, "warn"),
+    (SKIPPED_VALUE, "warn"),
+    (UNRESOLVED_PARENT, "warn"),
+    (UNBOUND_TRANSFORM_NAME, "warn"),
+    (UNRESOLVED_TOKEN_ALIAS, "warn"),
+    (TOKEN_SHAPED_VALUE, "warn"),
+    (EXTERNAL_TOKEN_CANDIDATE, "warn"),
+    (TRANSFORM_THREW, "warn"),
+    (UNSUPPORTED_TRANSFORM_DECLARATION, "warn"),
+    (STATIC_CSS_UNKNOWN_NAME, "warn"),
+    (STATIC_CSS_INVALID_SHAPE, "warn"),
+    (crate::theme::UNRECOGNIZED_STYLE_KEY, "warn"),
+    (CLASS_NAME_WHITESPACE, "warn"),
+];
 
 pub(crate) fn diagnostic_severity_for_code(code: &str) -> &'static str {
-    match code {
-        crate::eval::SELECTOR_UNSUPPORTED_SUBJECT
-        | COMPOSE_UNRESOLVABLE_SLOT
-        | UNSUPPORTED_MEMBER_PARENT
-        | UNSUPPORTED_EXTEND_ARGUMENTS
-        | UNSUPPORTED_VARIANT_CONFIG_REFERENCE
-        | STAGE_EVALUATION_FAILED
-        | UNSUPPORTED_CHAIN_METHOD
-        | UNSUPPORTED_TERMINAL_TARGET
-        | UNSUPPORTED_TRANSFORM_REFERENCE
-        | UNSUPPORTED_PROPS_CONFIG
-        | UNSUPPORTED_DEFAULT_EXPORT
-        | UNSUPPORTED_NAMESPACE_ROOT
-        | CONFIGURED_TRANSFORM_REJECTED
-        | STATIC_EVALUATION_UNAVAILABLE
-        | STRICT_TOKEN_MISS => "error",
-        _ => "warn",
-    }
+    DIAGNOSTIC_CODES
+        .iter()
+        .find(|(known, _)| *known == code)
+        .map_or("warn", |&(_, severity)| severity)
 }
 
-/// A diagnostic whose severity is the one its `code` owns; uncoded
-/// diagnostics carry none.
-fn diagnostic(
+/// The published code table as JSON: code → severity.
+pub fn diagnostic_codes_json() -> String {
+    let table: BTreeMap<&str, &str> = DIAGNOSTIC_CODES.iter().copied().collect();
+    serde_json::to_string(&table).expect("the code table serializes")
+}
+
+/// A diagnostic whose severity is the one its `code` owns, which must be
+/// listed in `DIAGNOSTIC_CODES`.
+pub(crate) fn diagnostic(
     file: &str,
     component: &str,
     kind: &str,
     message: String,
     code: Option<&str>,
 ) -> CssDiagnostic {
+    debug_assert!(
+        code.is_none_or(|code| DIAGNOSTIC_CODES.iter().any(|(known, _)| *known == code)),
+        "diagnostic code {code:?} is missing from DIAGNOSTIC_CODES"
+    );
     CssDiagnostic {
         token: None,
         file: file.to_string(),
@@ -350,6 +463,10 @@ fn diagnostic(
         message,
         code: code.map(str::to_string),
         severity: code.map(|c| diagnostic_severity_for_code(c).to_string()),
+        line: None,
+        column: None,
+        dropped: None,
+        offset: None,
     }
 }
 
@@ -720,6 +837,7 @@ fn unsupported_member_parent_bail(
         ),
         Some(UNSUPPORTED_MEMBER_PARENT),
     )
+    .dropping(&format!("{}.{}", extension.object, extension.member))
 }
 
 /// The bail for a chain the walker could not extract. A chain of proven
@@ -759,7 +877,7 @@ fn unextractable_chain_bail(file: &str, binding: &str, reason: &str, animus: boo
     };
     match classified {
         Some((message, code)) => diagnostic(file, binding, "bail", message, Some(code)),
-        None => diagnostic(file, binding, "bail", reason.to_string(), None),
+        None => diagnostic(file, binding, "bail", reason.to_string(), Some(UNEXTRACTABLE_CHAIN)),
     }
 }
 
@@ -784,6 +902,7 @@ fn unsupported_transform_reference(
         ),
         Some(UNSUPPORTED_TRANSFORM_REFERENCE),
     )
+    .dropping(prop)
 }
 
 /// A warning, never escalated by build strictness: the prop keeps its raw
@@ -813,8 +932,9 @@ fn unbound_transform_name(
              so it binds no transform and '{prop}' values apply as raw CSS values — \
              {advice} or write the transform inline inside the .props() object literal"
         ),
-        None,
+        Some(UNBOUND_TRANSFORM_NAME),
     )
+    .dropping(name)
 }
 
 /// Keeps the authored value so the omission can be traced to its source.
@@ -842,6 +962,7 @@ fn strict_token_miss(file: &str, component: &str, miss: &StrictTokenMiss) -> Css
         ),
         Some(STRICT_TOKEN_MISS),
     )
+    .dropping(&authored)
 }
 
 fn drain_strict_token_misses(
@@ -912,6 +1033,7 @@ fn unsupported_props_config(
         ),
         Some(UNSUPPORTED_PROPS_CONFIG),
     )
+    .dropping(prop)
 }
 
 /// The chain a module default-exports, when its root has proven Animus
@@ -938,6 +1060,8 @@ fn unsupported_default_export(
             ),
             Some(UNSUPPORTED_DEFAULT_EXPORT),
         )
+        .on_line(export.line)
+        .with_column(export.column)
     })
 }
 
@@ -978,6 +1102,7 @@ fn unsupported_namespace_root(
             ),
             Some(UNSUPPORTED_NAMESPACE_ROOT),
         )
+        .dropping(&format!("{}.{}", chain.object, chain.member))
     })
 }
 
@@ -1018,19 +1143,17 @@ fn shed_unresolved_alias_decls(
             warn_token_shaped_value(d, scale_family, file, component, diagnostics);
             return true;
         }
-        diagnostics.push(CssDiagnostic {
-            token: None,
-            file: file.to_string(),
-            component: component.to_string(),
-            kind: "warn".to_string(),
-            message: format!(
-                "unresolvable token alias {} in '{}' — declaration dropped",
-                spans.join(", "),
-                d.property
-            ),
-            code: None,
-            severity: None,
-        });
+        let aliases = spans.join(", ");
+        diagnostics.push(
+            diagnostic(
+                file,
+                component,
+                "warn",
+                format!("unresolvable token alias {aliases} in '{}' — declaration dropped", d.property),
+                Some(UNRESOLVED_TOKEN_ALIAS),
+            )
+            .dropping(&aliases),
+        );
         false
     });
 }
@@ -1112,20 +1235,21 @@ fn warn_token_shaped_value(
     {
         return;
     }
-    diagnostics.push(CssDiagnostic {
-        token: None,
-        file: file.to_string(),
-        component: component.to_string(),
-        kind: "warn".to_string(),
-        message: format!(
-            "token-shaped value '{}' in '{}' did not resolve — likely an unresolved token: \
-             check the key against the theme. The declaration is emitted as authored and \
-             will be ignored by browsers.",
-            decl.value, decl.property
-        ),
-        code: None,
-        severity: None,
-    });
+    diagnostics.push(
+        diagnostic(
+            file,
+            component,
+            "warn",
+            format!(
+                "token-shaped value '{}' in '{}' did not resolve — likely an unresolved token: \
+                 check the key against the theme. The declaration is emitted as authored and \
+                 will be ignored by browsers.",
+                decl.value, decl.property
+            ),
+            Some(TOKEN_SHAPED_VALUE),
+        )
+        .dropping(&decl.value),
+    );
 }
 
 /// Inline object/array scales resolve locally, so only string scales map.
@@ -1242,18 +1366,16 @@ fn record_external_candidates_in_decls(
                 .collect()
         };
         for token in tokens {
-            diagnostics.push(CssDiagnostic {
-                token: Some(token.clone()),
-                file: file.to_string(),
-                component: component.to_string(),
-                kind: "external-token-candidate".to_string(),
-                message: format!(
-                    "'{}' in '{}' did not resolve against the consumer theme",
-                    token, d.property
-                ),
-                code: None,
-                severity: None,
-            });
+            let mut candidate = diagnostic(
+                file,
+                component,
+                "external-token-candidate",
+                format!("'{}' in '{}' did not resolve against the consumer theme", token, d.property),
+                Some(EXTERNAL_TOKEN_CANDIDATE),
+            )
+            .dropping(&token);
+            candidate.token = Some(token);
+            diagnostics.push(candidate);
         }
     }
 }
@@ -1428,7 +1550,7 @@ fn emit_eval_drop_bail(
     let (message, code) = match (cause, animus) {
         (_, false) => (
             format!("chain dropped: stage '{stage}' evaluation failed — {detail}"),
-            None,
+            Some(UNEXTRACTABLE_CHAIN),
         ),
         (DropCause::InvalidShape { offending }, true) => (
             format!(
@@ -1488,13 +1610,13 @@ fn resolve_compose_slot_class<'a>(
 fn emit_compose_slot_bail(
     diagnostics: &mut Vec<CssDiagnostic>,
     file: &str,
-    family_name: &str,
+    family: &ComposeFamilyInfo,
     slot_name: &str,
     binding: &str,
 ) {
     diagnostics.push(diagnostic(
         file,
-        family_name,
+        &family.name,
         "bail",
         format!(
             "compose slot '{}' names binding '{}', which resolves to no extracted \
@@ -1502,7 +1624,9 @@ fn emit_compose_slot_bail(
             slot_name, binding
         ),
         Some(COMPOSE_UNRESOLVABLE_SLOT),
-    ));
+    )
+    .at(family.span.0)
+    .dropping(binding));
 }
 
 /// Runs before the extension merge, so parent contributions are already shed
@@ -2332,7 +2456,7 @@ fn unattributed_system_props(
     let mut reported: FxHashSet<(&str, Vec<&str>)> = FxHashSet::default();
     let mut warnings = Vec::new();
     for usage in ff.usage_for_analysis() {
-        let UsageFact::Element { tag: TagFact::Ident(tag), attrs, .. } = usage else {
+        let UsageFact::Element { tag: TagFact::Ident(tag), attrs, span, .. } = usage else {
             continue;
         };
         if !tag.starts_with(|c: char| c.is_ascii_uppercase())
@@ -2393,7 +2517,9 @@ fn unattributed_system_props(
                  staticCss.systemProps"
             ),
             Some(UNATTRIBUTED_SYSTEM_PROPS),
-        ));
+        )
+        .at(span.0)
+        .dropping(&listed));
     }
     warnings
 }
@@ -2469,6 +2595,19 @@ fn untraced_member_system_props(
     warnings
 }
 
+/// A diagnostic about a component with no finer location points at the
+/// chain that declares it.
+fn locate_at_declarations(diagnostics: &mut [CssDiagnostic], files: &BTreeMap<String, FileFacts>) {
+    for diagnostic in diagnostics.iter_mut().filter(|d| d.offset.is_none() && d.line.is_none()) {
+        let chain = files
+            .get(&diagnostic.file)
+            .and_then(|ff| ff.chains.iter().find(|chain| chain.descriptor.binding == diagnostic.component));
+        if let Some(chain) = chain {
+            diagnostic.offset = Some(chain.descriptor.span.0);
+        }
+    }
+}
+
 /// One warning per `cloneElement` call whose element and overrides usage
 /// can name neither of.
 fn untracked_clone_props(file: &str, ff: &FileFacts) -> Vec<CssDiagnostic> {
@@ -2487,7 +2626,8 @@ fn untracked_clone_props(file: &str, ff: &FileFacts) -> Vec<CssDiagnostic> {
                      staticCss.components"
                 ),
                 Some(UNTRACKED_CLONE_PROPS),
-            )),
+            )
+            .on_line(*line)),
             _ => None,
         })
         .collect()
@@ -3069,34 +3209,31 @@ fn drain_transform_failures(
                 ),
                 Some(STATIC_EVALUATION_UNAVAILABLE),
             ),
-            EvalError::InvalidResultShape { shape } => CssDiagnostic {
-                token: None,
-                file: file.to_string(),
-                component,
-                kind: "error".to_string(),
-                message: format!(
+            EvalError::InvalidResultShape { shape } => diagnostic(
+                file,
+                &component,
+                "error",
+                format!(
                     "transform '{}' returned {} for prop '{}' — transforms must \
                      return a string or finite number; rule-level styling ships \
                      as declaration scales (see composite-style-scales)",
                     failure.transform_name, shape, failure.prop
                 ),
-                code: None,
-                severity: Some("error".to_string()),
-            },
-            EvalError::Throw { message } => CssDiagnostic {
-                token: None,
-                file: file.to_string(),
-                component,
-                kind: "warn".to_string(),
-                message: format!(
+                Some(TRANSFORM_INVALID_RESULT),
+            ),
+            EvalError::Throw { message } => diagnostic(
+                file,
+                &component,
+                "warn",
+                format!(
                     "transform '{}' threw for prop '{}' in {}; raw value \
                      applied as fallback ({})",
                     failure.transform_name, failure.prop, file, message
                 ),
-                code: None,
-                severity: None,
-            },
-        };
+                Some(TRANSFORM_THREW),
+            ),
+        }
+        .dropping(&failure.prop);
         // Only an error that names a component can be pruned by reconciliation.
         match (&failure.failure, component_id) {
             (EvalError::InvalidResultShape { .. }, Some(id)) => {
@@ -3213,15 +3350,13 @@ fn run_with_system_floor(
             let reached = |binding: &String| captured.contains(&(t.file.as_str(), binding.as_str()));
             if !t.valid && !t.binding.as_ref().is_some_and(reached) {
                 for diag in &t.diagnostics {
-                    diagnostics.push(CssDiagnostic {
-                        token: None,
-                        file: t.file.clone(),
-                        component: format!("createTransform('{}')", t.name),
-                        kind: "bail".to_string(),
-                        message: diag.clone(),
-                        code: None,
-                        severity: None,
-                    });
+                    diagnostics.push(diagnostic(
+                        &t.file,
+                        &format!("createTransform('{}')", t.name),
+                        "bail",
+                        diag.clone(),
+                        Some(UNSUPPORTED_TRANSFORM_DECLARATION),
+                    ));
                 }
             }
         }
@@ -3270,15 +3405,11 @@ fn run_with_system_floor(
                     Err(reason) => {
                         // The child is excluded from `sorted_ids` elsewhere;
                         // this diagnostic is the only witness for that drop.
-                        diagnostics.push(CssDiagnostic {
-                            token: None,
-                            file: file_path.clone(),
-                            component: d.binding.clone(),
-                            kind: "bail".to_string(),
-                            message: reason,
-                            code: None,
-                            severity: None,
-                        });
+                        let parent = d.extends_from.clone().unwrap_or_default();
+                        diagnostics.push(
+                            diagnostic(file_path, &d.binding, "bail", reason, Some(UNRESOLVED_PARENT))
+                                .dropping(&parent),
+                        );
                         unresolvable_extensions.insert(component_id);
                     }
                 }
@@ -3496,19 +3627,15 @@ fn run_with_system_floor(
                         replaced.swap_remove(index);
                         continue;
                     }
+                    // A skip names its own code when it has one.
                     let code = diagnostic_code_from_message(warning);
-                    let severity = code
-                        .as_deref()
-                        .map(|c| diagnostic_severity_for_code(c).to_string());
-                    diagnostics.push(CssDiagnostic {
-                        token: None,
-                        file: file_path.to_string(),
-                        component: chain.descriptor.binding.clone(),
-                        kind: "skip".to_string(),
-                        message: warning.clone(),
-                        code,
-                        severity,
-                    });
+                    diagnostics.push(diagnostic(
+                        file_path,
+                        &chain.descriptor.binding,
+                        "skip",
+                        warning.clone(),
+                        Some(code.as_deref().unwrap_or(SKIPPED_VALUE)),
+                    ));
                 }
                 if classify_drops {
                     for dropped in dropped {
@@ -4170,7 +4297,9 @@ fn run_with_system_floor(
                         opened.len()
                     ),
                     Some(WIDE_MODULE_LOAD),
-                ));
+                )
+                .on_line(line)
+                .dropping(call));
             }
             escaped_ids.extend(opened);
         }
@@ -5002,7 +5131,7 @@ fn run_with_system_floor(
                 emit_compose_slot_bail(
                     &mut diagnostics,
                     family_file,
-                    &family.name,
+                    family,
                     "Root",
                     &family.root_binding,
                 );
@@ -5024,7 +5153,7 @@ fn run_with_system_floor(
                     None => emit_compose_slot_bail(
                         &mut diagnostics,
                         family_file,
-                        &family.name,
+                        family,
                         slot_name,
                         binding,
                     ),
@@ -5249,6 +5378,7 @@ fn run_with_system_floor(
     for children in reverse_provenance.values_mut() {
         children.sort();
     }
+    locate_at_declarations(&mut diagnostics, files);
 
     CssOutput {
         css,
@@ -7400,7 +7530,8 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         assert_eq!(warns.len(), 1, "{:?}", out.diagnostics);
         assert_eq!(warns[0].file, "a.tsx");
         assert_eq!(warns[0].component, "C");
-        assert!(warns[0].severity.is_none(), "{:?}", warns[0]);
+        assert_eq!(warns[0].code.as_deref(), Some(TRANSFORM_THREW), "{:?}", warns[0]);
+        assert_eq!(warns[0].severity.as_deref(), Some("warn"), "{:?}", warns[0]);
         assert!(
             warns[0].message.contains("raw value applied as fallback"),
             "{}",
