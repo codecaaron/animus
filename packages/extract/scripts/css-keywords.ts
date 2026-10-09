@@ -54,6 +54,26 @@ function checkExit(tool: string, run: ToolRun, expected: number): void {
   }
 }
 
+/** A key every probe object carries, so an empty union still rejects `Symbol()`. */
+const PROBE_KEY = '~probe';
+
+/**
+ * The keys of the one object type in a printed probe type. A key prints as
+ * its literal, so an alias the compiler chose for the union cannot hide it.
+ */
+function mappedKeys(printed: string): string[] {
+  const body = /\{(.*)\}/.exec(printed)?.[1] ?? '';
+  return body
+    .split(';')
+    .map((entry) => entry.trim())
+    .filter((entry) => entry !== '')
+    .map((entry) => {
+      const key = entry.slice(0, entry.lastIndexOf(':')).trim();
+      return key.startsWith('"') ? String(JSON.parse(key)) : key;
+    })
+    .filter((key) => key !== PROBE_KEY);
+}
+
 /**
  * Each probe's string-literal members, from exactly one assignability error
  * at its declaration; a valid error may list none. Probes are declared from
@@ -81,9 +101,7 @@ export function probeLiterals(
         `css-keywords: two diagnostics for probe ${index} (${declarations[index]}): ${line}`
       );
     }
-    unions[index] = [...match[2].matchAll(/"([^"]+)"/g)].map(
-      (literal) => literal[1]
-    );
+    unions[index] = mappedKeys(match[2]);
   }
   return unions.map((union, index) => {
     if (union === undefined) {
@@ -102,7 +120,10 @@ export function checkFormatterRun(run: ToolRun): void {
 }
 
 /** The string-literal members of each probed type, read from the compiler's
- *  untruncated assignability errors: the type checker is the authority. */
+ *  untruncated assignability errors: the type checker is the authority. Each
+ *  union is probed as the keys of a mapped type, because the compiler prints
+ *  a union through whatever alias it was first built with, while it prints
+ *  every key of an object type as its literal. */
 function literalUnions(header: string[], declarations: string[]): string[][] {
   const dir = mkdtempSync(join(tmpdir(), 'css-keywords-'));
   try {
@@ -111,7 +132,8 @@ function literalUnions(header: string[], declarations: string[]): string[][] {
       [
         ...header,
         ...declarations.map(
-          (type, i) => `export const k${i}: ${type} | 0n = Symbol();`
+          (type, i) =>
+            `export const k${i}: { [K in ${type} | '${PROBE_KEY}']: 0 } | 0n = Symbol();`
         ),
       ].join('\n') + '\n'
     );
