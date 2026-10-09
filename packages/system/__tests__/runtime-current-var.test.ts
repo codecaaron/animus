@@ -34,6 +34,10 @@ describe('a runtime value of a prop with currentVar', () => {
     ['var( --current-bg )', false],
     ['VAR(--current-bg)', false],
     ['Var(\n  --current-bg ,red)', false],
+    ['var(--current-bg /* c */)', false],
+    ['var(/* c */ --current-bg\t,\fred)', false],
+    ['var(\ufeff--current-bg)', true],
+    ['var(--current-bg\u0085)', true],
     ['var(--color-ink)', true], // 'ink'
     ['#0af', true],
     ['var(--current-bg-alt)', true],

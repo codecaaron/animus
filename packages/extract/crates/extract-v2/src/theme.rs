@@ -756,17 +756,29 @@ fn resolve_color_family_pass_through(
 /// Whether a prop with `current_var` also writes `value` to it: a value that
 /// reads the variable itself, with or without a fallback, would make it
 /// cyclic, so it leaves it alone. `var` matches in any case and the name with
-/// any spacing around it; the name itself is case-sensitive. The runtime
-/// resolver keeps an identical predicate.
+/// any CSS whitespace or comments around it; the name itself is
+/// case-sensitive. The runtime resolver keeps an identical predicate.
 pub fn writes_current_var(value: &str, current_var: &str) -> bool {
     // ASCII lowering keeps every byte offset, so a match indexes `value`.
     let lowered = value.to_ascii_lowercase();
     !lowered.match_indices("var(").any(|(at, read)| {
-        value[at + read.len()..]
-            .trim_start()
+        skip_css_space(&value[at + read.len()..])
             .strip_prefix(current_var)
-            .is_some_and(|after| matches!(after.trim_start().chars().next(), Some(')' | ',')))
+            .is_some_and(|after| matches!(skip_css_space(after).chars().next(), Some(')' | ',')))
     })
+}
+
+/// `text` after its leading CSS whitespace (space, tab, line feed, carriage
+/// return, form feed) and comments.
+fn skip_css_space(text: &str) -> &str {
+    let mut rest = text;
+    loop {
+        let trimmed = rest.trim_start_matches([' ', '\t', '\n', '\r', '\x0c']);
+        match trimmed.strip_prefix("/*") {
+            Some(comment) => rest = comment.find("*/").map_or("", |end| &comment[end + 2..]),
+            None => return trimmed,
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1743,6 +1755,10 @@ mod tests {
             ("var( --current-bg )", false),
             ("VAR(--current-bg)", false),
             ("Var(\n  --current-bg ,red)", false),
+            ("var(--current-bg /* c */)", false),
+            ("var(/* c */ --current-bg\t,\x0cred)", false),
+            ("var(\u{feff}--current-bg)", true),
+            ("var(--current-bg\u{85})", true),
             ("var(--color-ink)", true),                                        // 'ink'
             ("#0af", true),
             ("var(--current-bg-alt)", true),

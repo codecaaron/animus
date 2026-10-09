@@ -459,9 +459,9 @@ function warnTransformThrow(
 
 /**
  * Whether `resolved` reads `currentVar`, with or without a fallback. `var`
- * matches in any case and the name with any spacing around it; the name itself
- * is case-sensitive. The extractor's static path skips its `currentVar` write
- * by the same predicate.
+ * matches in any case and the name with any CSS whitespace or comments around
+ * it; the name itself is case-sensitive. The extractor's static path skips
+ * its `currentVar` write by the same predicate.
  */
 function readsCurrentVar(resolved: string, currentVar: string): boolean {
   // ASCII lowering keeps every offset, so a match indexes `resolved`.
@@ -471,12 +471,24 @@ function readsCurrentVar(resolved: string, currentVar: string): boolean {
     at !== -1;
     at = lowered.indexOf('var(', at + 1)
   ) {
-    const name = resolved.slice(at + 'var('.length).trimStart();
+    const name = skipCssSpace(resolved.slice(at + 'var('.length));
     if (!name.startsWith(currentVar)) continue;
-    const next = name.slice(currentVar.length).trimStart()[0];
+    const next = skipCssSpace(name.slice(currentVar.length))[0];
     if (next === ')' || next === ',') return true;
   }
   return false;
+}
+
+/** `text` after its leading CSS whitespace (space, tab, line feed, carriage
+ *  return, form feed) and comments. */
+function skipCssSpace(text: string): string {
+  let rest = text;
+  for (;;) {
+    const trimmed = rest.replace(/^[ \t\n\r\f]+/, '');
+    if (!trimmed.startsWith('/*')) return trimmed;
+    const end = trimmed.indexOf('*/', 2);
+    rest = end === -1 ? '' : trimmed.slice(end + 2);
+  }
 }
 
 /**

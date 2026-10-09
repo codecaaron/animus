@@ -176,10 +176,15 @@ export function runtimeKeywordCases(): FixtureCase[] {
     {
       name: 'a responsive runtime value mixing keyword classes and the inline variable',
       css,
-      body: `<div style="color: ${RED}">${render('keyword-then-slot', {
-        _: 'inherit',
-        sm: 'ink',
-      })}${render('slot-then-keyword', { _: 'ink', sm: 'inherit' })}</div>`,
+      // The wrapper's own breakpoint variable holds blue, so an `inherit`
+      // written into that variable instead of a keyword class reads blue.
+      body: `<div style="color: ${RED}; --animus-color-sm: ${BLUE}">${render(
+        'keyword-then-slot',
+        {
+          _: 'inherit',
+          sm: 'ink',
+        }
+      )}${render('slot-then-keyword', { _: 'ink', sm: 'inherit' })}</div>`,
       probes: [
         colorProbe(
           '{ _: inherit, sm: ink } at a wide viewport',
