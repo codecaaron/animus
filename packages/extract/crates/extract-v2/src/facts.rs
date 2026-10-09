@@ -301,6 +301,9 @@ pub struct FileFacts {
     /// A terminal chain bound by `export default`, which is never a chain.
     #[serde(skip)]
     pub default_export_chain: Option<DefaultExportChain>,
+    /// Chain-shaped calls on an identifier that no walked chain contains.
+    #[serde(skip)]
+    pub(crate) unwalked_chains: Vec<UnwalkedChainSite>,
     /// Named-import specifiers (alias augmentation inputs).
     pub imports: Vec<ImportFact>,
     /// Named-export facts (re-export following for provenance/statics).
@@ -345,6 +348,21 @@ pub struct DefaultExportChain {
     /// 1-based source position of the chain expression.
     pub line: usize,
     pub column: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct UnwalkedChainSite {
+    pub chain: chain_walk::UnwalkedChain,
+    /// 1-based line of the call.
+    pub line: usize,
+}
+
+/// 1-based line and column of a byte offset.
+fn line_column(source: &str, offset: u32) -> (usize, usize) {
+    let before = &source[..(offset as usize).min(source.len())];
+    let line = before.matches('\n').count() + 1;
+    let column = before.rsplit('\n').next().map_or(0, |l| l.chars().count()) + 1;
+    (line, column)
 }
 
 impl FileFacts {
@@ -832,9 +850,7 @@ fn default_export_chain(program: &Program<'_>, source: &str, start: u32) -> Defa
         }
         _ => None,
     });
-    let before = &source[..(start as usize).min(source.len())];
-    let line = before.matches('\n').count() + 1;
-    let column = before.rsplit('\n').next().map_or(0, |l| l.chars().count()) + 1;
+    let (line, column) = line_column(source, start);
     DefaultExportChain { root, line, column }
 }
 
@@ -1209,6 +1225,14 @@ pub(crate) fn extract_file_facts_from_static_maps(
         default_export_chain: walked
             .default_export
             .map(|start| default_export_chain(program, source, start)),
+        unwalked_chains: walked
+            .unwalked
+            .into_iter()
+            .map(|chain| {
+                let (line, _) = line_column(source, chain.start);
+                UnwalkedChainSite { chain, line }
+            })
+            .collect(),
         imports,
         exports,
         transforms,
