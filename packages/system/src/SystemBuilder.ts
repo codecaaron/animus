@@ -348,7 +348,7 @@ export type SealedSystemInstance<
   Conds extends string = never,
   Sels extends string = never,
   Vocab extends string = never,
-> = SystemInstance<PropReg, GroupReg, Conds, Sels> & {
+> = SystemInstance<PropReg, GroupReg, Conds, Sels, Vocab> & {
   getVocabularyRecord(): VocabularyRecord;
   readonly [VOCABULARY_BRAND]?: [Vocab];
 };
@@ -370,7 +370,7 @@ export interface SystemBundle<
   Sels extends string = never,
   Vocab extends string = never,
 > {
-  system: SystemInstance<PropReg, GroupReg, Conds, Sels>;
+  system: SystemInstance<PropReg, GroupReg, Conds, Sels, never>;
   createGlobalStyles: GlobalStylesFactory<PropReg>;
   createKeyframes: CreateKeyframesFactory<PropReg>;
   /**
@@ -464,6 +464,45 @@ export interface LibraryBundle<Vocab extends string = never> {
 export function isLibraryBundle(value: unknown): value is LibraryBundle {
   const system = (value as { system?: { toConfig?: unknown } } | null)?.system;
   return Boolean(system) && typeof system?.toConfig === 'function';
+}
+
+declare const EXTEND_SOURCE_BRAND: unique symbol;
+
+/**
+ * Present only on systems Animus built. A private member is dropped from an
+ * object spread's type, so a hand-assembled object cannot carry it.
+ */
+declare class SourceOrigin {
+  private readonly __animusSourceOrigin: void;
+}
+
+/**
+ * What typed `extend()` reads from its source: the registry axes as one
+ * record, plus the methods the runtime merge calls. Comparing a whole
+ * `SystemInstance` instead expands every component type it can author, so
+ * extending a kit cost millions of instantiations; this record keeps the cost
+ * near the kit's own. The private origin keeps a forged record, whose
+ * snapshot carries none of the registries it claims, out.
+ */
+export interface ExtendSource<
+  PropReg extends Record<string, SystemProp>,
+  GroupReg extends Record<string, (keyof PropReg)[]>,
+  Conds extends string = never,
+  Sels extends string = never,
+  Vocab extends string = never,
+>
+  extends SourceOrigin, RegistryBrand<Conds, Sels> {
+  readonly [EXTEND_SOURCE_BRAND]: {
+    readonly props: PropReg;
+    readonly groups: GroupReg;
+    readonly conditions: Conds;
+    readonly selectors: Sels;
+    readonly vocabulary: Vocab;
+  };
+  toConfig(): SerializedConfig;
+  getRegistrySnapshot?(): RegistrySnapshot;
+  getVocabularyRecord?(): VocabularyRecord;
+  readonly [VOCABULARY_BRAND]?: [Vocab];
 }
 
 export interface CreateSystemConfig {
@@ -666,9 +705,15 @@ export class SystemBuilder<
   >(
     this: SystemBuilder<PropReg, GroupReg, Conds, Sels, 'inherit', Vocab>,
     source:
-      | SystemInstance<SrcProps, SrcGroups, SrcConds, SrcSels>
+      | SystemInstance<SrcProps, SrcGroups, SrcConds, SrcSels, string>
       | {
-          system: SystemInstance<SrcProps, SrcGroups, SrcConds, SrcSels>;
+          system: SystemInstance<
+            SrcProps,
+            SrcGroups,
+            SrcConds,
+            SrcSels,
+            string
+          >;
           theme?: unknown;
           tokens?: unknown;
         }
@@ -728,13 +773,15 @@ export class SystemBuilder<
   >(
     this: SystemBuilder<PropReg, GroupReg, Conds, Sels, 'inherit', Vocab>,
     source:
-      | (SystemInstance<SrcProps, SrcGroups, SrcConds, SrcSels> & {
-          readonly [VOCABULARY_BRAND]?: [SrcVocab];
-        })
+      | ExtendSource<SrcProps, SrcGroups, SrcConds, SrcSels, SrcVocab>
       | {
-          system: SystemInstance<SrcProps, SrcGroups, SrcConds, SrcSels> & {
-            readonly [VOCABULARY_BRAND]?: [SrcVocab];
-          };
+          system: ExtendSource<
+            SrcProps,
+            SrcGroups,
+            SrcConds,
+            SrcSels,
+            SrcVocab
+          >;
           theme?: unknown;
           tokens?: unknown;
         }
@@ -744,7 +791,9 @@ export class SystemBuilder<
     Conds | SrcConds,
     Sels | SrcSels,
     'inherit',
-    Vocab | SrcVocab
+    // A source typed through the four-axis `SystemInstance` annotation has
+    // vocabulary `string`: unknown, so treated as erased, not as every name.
+    Vocab | (string extends SrcVocab ? never : SrcVocab)
   >;
   /**
    * A `LibraryBundle` annotation has erased the system half's generics: the
@@ -1217,7 +1266,13 @@ export class SystemBuilder<
       this.#conditionRegistry
     );
 
-    const mintInstance = (): SystemInstance<PropReg, GroupReg, Conds, Sels> => {
+    const mintInstance = (): SystemInstance<
+      PropReg,
+      GroupReg,
+      Conds,
+      Sels,
+      never
+    > => {
       const animus = new Animus<PropReg, GroupReg>(
         Object.fromEntries(
           Object.entries(propSource).map(([key, entry]) => [key, { ...entry }])
@@ -1239,7 +1294,7 @@ export class SystemBuilder<
             snapshot.conditions
           );
         },
-      }) as SystemInstance<PropReg, GroupReg, Conds, Sels>;
+      }) as SystemInstance<PropReg, GroupReg, Conds, Sels, never>;
 
       // Non-enumerable: the QuickJS capture script's discriminators walk
       // enumerable keys only.
@@ -1493,6 +1548,8 @@ export type SystemInstance<
   GroupReg extends Record<string, (keyof PropReg)[]>,
   Conds extends string = never,
   Sels extends string = never,
+  // Unknown by default, so the four-axis annotation accepts any built system.
+  Vocab extends string = string,
 > = Animus<PropReg, GroupReg> & {
   toConfig(): SerializedConfig;
   /**
@@ -1500,7 +1557,8 @@ export type SystemInstance<
    * from. Optional only for systems built by an older @animus-ui/system.
    */
   getRegistrySnapshot?(): RegistrySnapshot;
-} & RegistryBrand<Conds, Sels>;
+} & RegistryBrand<Conds, Sels> &
+  ExtendSource<PropReg, GroupReg, Conds, Sels, Vocab>;
 
 export interface SerializedConfig {
   propConfig: string;
