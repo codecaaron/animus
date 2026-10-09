@@ -852,6 +852,26 @@ fn with_priority<'v>(value: &'v Value, custom_only: bool) -> Cow<'v, Value> {
     }
 }
 
+/// A [`with_priority`] value's `!important` apart from the value it applies
+/// to: the bare value, and the priority as written. A shorthand left as
+/// written is no priority.
+fn split_priority(value: &Value) -> Option<(Value, &str)> {
+    let Value::String(text) = value else {
+        return None;
+    };
+    match important_priority(text)? {
+        (ImportantSpelling::Important, end) => Some((Value::String(text[..end].to_string()), &text[end..])),
+        (ImportantSpelling::Shorthand, _) => None,
+    }
+}
+
+/// The value a prop's lookups read: its priority belongs to the declaration.
+fn without_priority(value: &Value, custom_only: bool) -> Cow<'_, Value> {
+    let value = with_priority(value, custom_only);
+    let bare = split_priority(&value).map(|(bare, _)| bare);
+    bare.map_or(value, Cow::Owned)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn resolve_single_prop(
     prop_name: &str,
@@ -865,6 +885,19 @@ fn resolve_single_prop(
 ) -> Vec<CssDeclaration> {
     let found = config.get(prop_name);
     let value = &*with_priority(value, found.map_or(prop_name.starts_with("--"), PropConfig::custom_only));
+    // The bare value resolves through the prop's tokens, strictness and
+    // transform, and each declaration it makes carries the priority. A
+    // declaration prop's records are looked up as written.
+    if found.is_none_or(|prop| prop.declaration_binding().is_none()) {
+        if let Some((bare, priority)) = split_priority(value) {
+            let mut declarations =
+                resolve_single_prop(prop_name, &bare, config, theme, variable_map, contextual_vars, evaluator, failures);
+            for declaration in &mut declarations {
+                declaration.value.push_str(priority);
+            }
+            return declarations;
+        }
+    }
     let prop_config = match found {
         Some(c) => c,
         None => {
@@ -1108,7 +1141,7 @@ pub(crate) fn extracts_callback_value(
                 .any(|property| crate::css::unit_fallback_rewrites(css, &crate::css::css_property_name(property)))
     };
     let evaluated = |entry: &Value| {
-        let entry = &*with_priority(entry, config.custom_only());
+        let entry = &*without_priority(entry, config.custom_only());
         if !(entry.is_string() || entry.is_number()) {
             return false;
         }
@@ -1203,7 +1236,7 @@ fn strict_token_misses(
         return vec![];
     }
     let miss = |entry: &Value| {
-        is_strict_token_miss(&with_priority(entry, config.custom_only()), config, ctx.theme, ctx.contextual_vars)
+        is_strict_token_miss(&without_priority(entry, config.custom_only()), config, ctx.theme, ctx.contextual_vars)
     };
     let rejected: Vec<(Option<String>, Value)> = match value.as_object() {
         Some(entries) if is_responsive_value(value, ctx.breakpoint_keys) => entries
