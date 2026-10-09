@@ -163,7 +163,8 @@ export const ShadowedUndefined = ds
 `,
 };
 
-/** Chains the extractor never takes, each building at runtime. */
+/** Chains the extractor never takes, each building at runtime, and one
+ *  builder a chain continues, which it does take. */
 const RUNTIME_BUILDERS = {
   path: 'fixtures/policy-runtime.tsx',
   source: `import { lib } from 'other-lib';
@@ -174,8 +175,10 @@ export function InRender() {
   const Inner = ds.styles({ cursor: 'pointer' }).asElement('div');
   return <Inner />;
 }
-const staged = ds.styles({ cursor: 'text' });
+export const staged = ds.styles({ cursor: 'grabbing' });
 export const Staged = staged.variant({ prop: 'tone', variants: { x: { display: 'block' } } }).asElement('div');
+const followed = ds.styles({ cursor: 'nwse-resize' });
+export const Followed = followed.asElement('div');
 export const LookalikeInRender = () => lib.styles({ cursor: 'copy' }).asElement('div');
 `,
 };
@@ -430,7 +433,7 @@ describe.each([
     ]);
   });
 
-  test('a system chain built in a function, in render or across declarations warns once at its line', () => {
+  test('a system chain built in a function, in render or in a builder no chain continues warns once at its line', () => {
     const runtime = analysis.diagnostics.filter(
       (d) => d.code === RUNTIME_BUILDER_REFERENCE
     );
