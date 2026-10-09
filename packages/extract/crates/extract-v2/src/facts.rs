@@ -243,6 +243,9 @@ pub struct FileFacts {
     /// Sources of `export * from '…'`.
     #[serde(skip)]
     pub star_exports: Vec<String>,
+    /// `export * as name from '…'`: name → source.
+    #[serde(skip)]
+    pub(crate) namespace_exports: BTreeMap<String, String>,
     /// The identifier `export default X;` names.
     #[serde(skip)]
     pub default_export_binding: Option<String>,
@@ -1001,6 +1004,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
         usage_enriched: Some(usage_enriched),
         compose,
         star_exports: crate::usage_facts::collect_star_exports(program),
+        namespace_exports: crate::usage_facts::collect_namespace_exports(program),
         default_export_binding: crate::usage_facts::collect_default_export_binding(program),
         compose_callees_in_use,
         aliases: const_initializers.aliases,

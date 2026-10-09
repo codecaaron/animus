@@ -384,6 +384,43 @@ pub fn collect_default_export_binding(program: &Program<'_>) -> Option<String> {
     })
 }
 
+/// The local names of a file's named and default imports.
+fn named_import_locals(program: &Program<'_>) -> BTreeSet<String> {
+    let mut locals = BTreeSet::new();
+    for stmt in &program.body {
+        let Statement::ImportDeclaration(import) = stmt else {
+            continue;
+        };
+        for specifier in import.specifiers.iter().flatten() {
+            match specifier {
+                ImportDeclarationSpecifier::ImportSpecifier(named) => {
+                    locals.insert(named.local.name.to_string());
+                }
+                ImportDeclarationSpecifier::ImportDefaultSpecifier(default) => {
+                    locals.insert(default.local.name.to_string());
+                }
+                ImportDeclarationSpecifier::ImportNamespaceSpecifier(_) => {}
+            }
+        }
+    }
+    locals
+}
+
+/// `export * as name from '…'`: name → source.
+pub fn collect_namespace_exports(program: &Program<'_>) -> BTreeMap<String, String> {
+    program
+        .body
+        .iter()
+        .filter_map(|stmt| match stmt {
+            Statement::ExportAllDeclaration(export) => export
+                .exported
+                .as_ref()
+                .map(|name| (name.name().to_string(), export.source.value.to_string())),
+            _ => None,
+        })
+        .collect()
+}
+
 /// The sources of `export * from '…'`, which re-export every named export.
 pub fn collect_star_exports(program: &Program<'_>) -> Vec<String> {
     program
@@ -633,6 +670,7 @@ pub(crate) fn collect_enriched_usage(
                 chains,
                 react: &react,
                 namespaces: collect_namespace_imports(program).into_keys().collect(),
+                imports: named_import_locals(program),
                 escapes: BTreeSet::new(),
                 ancestors: Vec::new(),
             };
@@ -1061,6 +1099,9 @@ struct EscapeScan<'a, 's> {
     /// Namespace imports: `ui.Button` can name a component whatever the
     /// namespace is called.
     namespaces: BTreeSet<String>,
+    /// Named and default imports: one may be a namespace another module
+    /// re-exports, or a component whatever its name's case.
+    imports: BTreeSet<String>,
     escapes: BTreeSet<String>,
     ancestors: Vec<AstKind<'a>>,
 }
@@ -1069,6 +1110,7 @@ impl EscapeScan<'_, '_> {
     fn is_candidate(&self, name: &str) -> bool {
         name.starts_with(|c: char| c.is_ascii_uppercase())
             || self.namespaces.contains(name)
+            || self.imports.contains(name)
             || self.chains.iter().any(|chain| chain.binding == name)
     }
 }
@@ -1479,17 +1521,9 @@ impl<'a, 's> Visit<'a> for FactCollector<'a, 's> {
             if let Some(first_arg) = call.arguments.first() {
                 let (ident, member, identity_uncertain) = match first_arg {
                     Argument::Identifier(id) => (Some(id.name.to_string()), None, false),
-                    Argument::StaticMemberExpression(m) => match &m.object {
-                        Expression::Identifier(obj) => (
-                            None,
-                            Some(format!(
-                                "{}.{}",
-                                obj.name.as_str(),
-                                m.property.name.as_str()
-                            )),
-                            false,
-                        ),
-                        _ => (None, None, true),
+                    Argument::StaticMemberExpression(m) => match static_member_path(m) {
+                        Some(path) => (None, Some(path), false),
+                        None => (None, None, true),
                     },
                     Argument::StringLiteral(_) => (None, None, false),
                     _ => (None, None, true),
@@ -1609,6 +1643,17 @@ fn unknown_clone(
 ) -> Option<UsageFact> {
     (props.as_ref().is_none_or(|props| !props.is_empty()))
         .then_some(UsageFact::CloneUnknown { props, line, call })
+}
+
+/// The dotted path a static member chain rooted in an identifier is
+/// written as (`Card.Body`, `ui.sub.R`).
+fn static_member_path(member: &oxc::ast::ast::StaticMemberExpression<'_>) -> Option<String> {
+    let object = match &member.object {
+        Expression::Identifier(object) => object.name.to_string(),
+        Expression::StaticMemberExpression(inner) => static_member_path(inner)?,
+        _ => return None,
+    };
+    Some(format!("{object}.{}", member.property.name))
 }
 
 /// React's `createElement` and `cloneElement` as a file can call them:

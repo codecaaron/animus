@@ -1601,8 +1601,10 @@ fn resolve_identity(
     by_bare_name(local)
 }
 
-/// Each member tag `file`'s namespace imports can write (`ui.R`), with the
-/// components it renders.
+/// Each member tag `file` writes through a namespace binding (`ui.R`, and
+/// `ui.sub.R` through a re-exported namespace), with the components it
+/// renders. A binding is a namespace import, or a named import of a
+/// namespace another module exports.
 fn namespace_member_ids(
     file: &str,
     ff: &FileFacts,
@@ -1610,20 +1612,24 @@ fn namespace_member_ids(
     inputs: &CssInputs,
     evaluated_ids: &FxHashSet<String>,
 ) -> Vec<(String, Vec<String>)> {
-    let mut members = Vec::new();
-    for (namespace, source) in &ff.namespace_imports {
-        let Some(module) = resolve_import_source(file, source, files, inputs) else {
-            continue;
-        };
-        for name in crate::family_members::module_export_names(&module, files, inputs) {
-            let tag = format!("{namespace}.{name}");
-            let ids = resolve_declared_identity(file, &tag, files, inputs, evaluated_ids);
-            if !ids.is_empty() {
-                members.push((tag, ids));
-            }
-        }
-    }
-    members
+    let written: std::collections::BTreeSet<&str> = ff
+        .usage_for_analysis()
+        .iter()
+        .filter_map(|fact| match fact {
+            UsageFact::Element { tag: TagFact::Member(path), .. } => Some(path.as_str()),
+            UsageFact::CreateElement { member: Some(path), .. } => Some(path.as_str()),
+            _ => None,
+        })
+        .collect();
+    written
+        .into_iter()
+        .filter_map(|tag| {
+            let (namespace, name) = tag.rsplit_once('.')?;
+            let module = namespace_path_module(file, ff, namespace, files, inputs)?;
+            let ids = export_ids(&module, name.to_string(), false, files, inputs, evaluated_ids);
+            (!ids.is_empty()).then(|| (tag.to_string(), ids))
+        })
+        .collect()
 }
 
 /// The analysed modules a runtime module load in `file` can name. A pattern
@@ -1715,7 +1721,8 @@ fn relative_prefix(from_file: &str, prefix: &str) -> String {
 }
 
 /// Every component `module` exports, through re-exports and barrels, with
-/// the slots of an exported compose family.
+/// the slots of an exported compose family and everything a re-exported
+/// namespace (`export * as sub from '…'`) exports in turn.
 fn exported_component_ids(
     module: &str,
     files: &BTreeMap<String, FileFacts>,
@@ -1723,23 +1730,51 @@ fn exported_component_ids(
     evaluated_ids: &FxHashSet<String>,
 ) -> Vec<String> {
     let mut ids = Vec::new();
-    for name in crate::family_members::module_export_names(module, files, inputs) {
-        let Some((declaring, exported)) =
-            crate::family_members::follow_exports(module.to_string(), name, files, inputs)
-        else {
+    let mut modules = vec![module.to_string()];
+    let mut seen: FxHashSet<String> = FxHashSet::default();
+    while let Some(module) = modules.pop() {
+        if !seen.insert(module.clone()) {
             continue;
-        };
-        let Some(ff) = files.get(&declaring) else {
-            continue;
-        };
-        let declared = ff
-            .exports
-            .iter()
-            .find(|e| e.exported == exported && e.source.is_none())
-            .and_then(|e| e.local.clone())
-            .or_else(|| ff.default_export_binding.clone().filter(|_| exported == "default"))
-            .unwrap_or_else(|| exported.clone());
-        ids.extend(resolve_identity(&declaring, &declared, files, inputs, evaluated_ids, None));
+        }
+        for name in crate::family_members::module_export_names(&module, files, inputs) {
+            let namespace =
+                crate::family_members::namespace_export(module.clone(), name.clone(), files, inputs);
+            match namespace {
+                Some(namespace) => modules.push(namespace),
+                None => ids.extend(export_ids(&module, name, true, files, inputs, evaluated_ids)),
+            }
+        }
+    }
+    ids
+}
+
+/// The components `module` exports as `name`, followed to its declaration;
+/// with `slots`, an exported compose family's slots too.
+fn export_ids(
+    module: &str,
+    name: String,
+    slots: bool,
+    files: &BTreeMap<String, FileFacts>,
+    inputs: &CssInputs,
+    evaluated_ids: &FxHashSet<String>,
+) -> Vec<String> {
+    let Some((declaring, exported)) =
+        crate::family_members::follow_exports(module.to_string(), name, files, inputs)
+    else {
+        return Vec::new();
+    };
+    let Some(ff) = files.get(&declaring) else {
+        return Vec::new();
+    };
+    let declared = ff
+        .exports
+        .iter()
+        .find(|e| e.exported == exported && e.source.is_none())
+        .and_then(|e| e.local.clone())
+        .or_else(|| ff.default_export_binding.clone().filter(|_| exported == "default"))
+        .unwrap_or_else(|| exported.clone());
+    let mut ids = resolve_identity(&declaring, &declared, files, inputs, evaluated_ids, None);
+    if slots {
         let families = ff.compose.iter().filter(|family| {
             family.family_binding.as_deref() == Some(declared.as_str())
                 || (exported == "default" && family.default_export)
@@ -1751,6 +1786,33 @@ fn exported_component_ids(
         }
     }
     ids
+}
+
+/// The module a dotted namespace path in `file` names (`ui`, `ui.sub`):
+/// its first segment a namespace binding, each further one a namespace
+/// that module re-exports.
+fn namespace_path_module(
+    file: &str,
+    ff: &FileFacts,
+    path: &str,
+    files: &BTreeMap<String, FileFacts>,
+    inputs: &CssInputs,
+) -> Option<String> {
+    let mut segments = path.split('.');
+    let local = segments.next()?;
+    let mut module = crate::family_members::local_namespace(
+        file,
+        ff,
+        local,
+        files,
+        inputs,
+        &mut FxHashSet::default(),
+    )?;
+    for segment in segments {
+        let segment = segment.to_string();
+        module = crate::family_members::namespace_export(module, segment, files, inputs)?;
+    }
+    Some(module)
 }
 
 /// Each spread wrapper of `file` its renders can stand in for, with the
@@ -3619,11 +3681,7 @@ fn run_with_system_floor(
         for name in &ff.value_escapes {
             names.push(name);
             // A namespace object hands over everything its module exports.
-            if let Some(module) = ff
-                .namespace_imports
-                .get(name)
-                .and_then(|source| resolve_import_source(path, source, files, inputs))
-            {
+            if let Some(module) = namespace_path_module(path, ff, name, files, inputs) {
                 escaped_ids.extend(exported_component_ids(&module, files, inputs, &evaluated_ids));
             }
             // An escaping compose family hands over its slots.
@@ -6898,6 +6956,54 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
     fn direct_renders_still_prune_unused_options() {
         let app = "import { R } from './r';\nexport const App = () => <R size=\"sm\" active />;\n";
         assert_eq!(kept_options(&[("r.tsx", RECIPE), ("app.tsx", app)]), (vec!["sm"], vec!["active"]));
+    }
+
+    /// A namespace re-exported as `export * as sub` or as an imported
+    /// namespace exported again reaches its components: member tags at any
+    /// depth record usage, and a value use of an enclosing namespace opens
+    /// them.
+    #[test]
+    fn nested_namespace_re_exports_record_and_open_their_components() {
+        let kept = |index: &str, setup: &str| {
+            let app = format!(
+                "import {{ R }} from './r';\nimport * as ui from './index';\n{setup}\n\
+                 export const App = () => <R size=\"sm\" active />;\n"
+            );
+            kept_options(&[("r.tsx", RECIPE), ("index.ts", index), ("app.tsx", app.as_str())])
+        };
+        for index in [
+            "export * as sub from './r';\n",
+            "import * as sub from './r';\nexport { sub };\n",
+            // A namespace that re-exports itself still resolves.
+            "export * as again from './index';\nexport * as sub from './r';\n",
+        ] {
+            for setup in [
+                "export const Big = () => <ui.sub.R size=\"lg\" />;",
+                "import { createElement } from 'react';\n\
+                 export const Big = () => createElement(ui.sub.R, { size: 'lg' });",
+                "import { cloneElement } from 'react';\n\
+                 export const Big = () => cloneElement(<ui.sub.R size=\"sm\" />, { size: 'lg' });",
+                "import { sub } from './index';\nexport const Big = () => <sub.R size=\"lg\" />;",
+            ] {
+                assert_eq!(kept(index, setup), (vec!["sm", "lg"], vec!["active"]), "{index}{setup}");
+            }
+            for setup in [
+                "export const all = Object.values(ui);",
+                "export const all = Object.values(ui.sub);",
+                "import { sub } from './index';\nexport const all = Object.values(sub);",
+            ] {
+                assert_eq!(
+                    kept(index, setup),
+                    (vec!["sm", "md", "lg"], vec!["active", "busy"]),
+                    "{index}{setup}"
+                );
+            }
+        }
+        let cycle = "export * as again from './index';\nexport * as sub from './r';\n";
+        assert_eq!(
+            kept(cycle, "export const Big = () => <ui.again.sub.R size=\"lg\" />;"),
+            (vec!["sm", "lg"], vec!["active"])
+        );
     }
 
     /// A namespace object used as a value hands over every component its

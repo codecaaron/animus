@@ -5,6 +5,16 @@ See [Conventional Commits](https://conventionalcommits.org) for commit guideline
 
 ## Unreleased
 
+**Nested namespaces keep their CSS.** A module that re-exports another as a
+namespace, with `export * as forms from './forms'` or
+`import * as forms from './forms'; export { forms }`, made its components
+reachable through the outer namespace without usage tracking seeing them.
+`<ui.forms.Input size="lg" />`, `createElement(ui.forms.Input, …)` and a
+clone of `<ui.forms.Input />` now count for `Input`, at any depth and
+through a named import of the namespace. A value use such as
+`Object.values(ui)` or `Object.values(ui.forms)` keeps every option of every
+component the nested namespaces export.
+
 **Namespace objects passed as values keep their CSS.** A namespace import
 used as a value, as in `<MDXProvider components={ui}>`, `Object.values(ui)`,
 `ui[name]` or `{ ...ui }`, can render any component the module exports, with
