@@ -68,15 +68,15 @@ type GroupProps<
   GR extends Record<string, (keyof PR)[]>,
   AG,
 > = {
-  [
-    K in ActiveGroupPropNames<PR, GR, AG> as K extends string ? K : never
-  ]?: ThemedScale<PR[K & keyof PR]>;
+  [K in ActiveGroupPropNames<PR, GR, AG> as K extends string ? K : never]?:
+    | ThemedScale<PR[K & keyof PR], undefined>
+    | undefined;
 };
 
 type CustomPropValues<CP extends Record<string, SystemProp>> = {
-  [K in keyof StripIndex<CP>]?: ThemedScale<
-    StripIndex<CP>[K & keyof StripIndex<CP>]
-  >;
+  [K in keyof StripIndex<CP>]?:
+    | ThemedScale<StripIndex<CP>[K & keyof StripIndex<CP>], undefined>
+    | undefined;
 };
 
 type StripIndex<T> = {
@@ -95,11 +95,11 @@ type VariantProps<V> = {
   [K in keyof StripIndex<V>]?: StripIndex<V>[K] extends {
     variants: infer Options;
   }
-    ? keyof Options
-    : string;
+    ? keyof Options | undefined
+    : string | undefined;
 };
 
-type StateProps<S> = { [K in keyof StripIndex<S>]?: boolean };
+type StateProps<S> = { [K in keyof StripIndex<S>]?: boolean | undefined };
 
 /**
  * Keys Animus consumes; the runtime strips them before DOM forwarding.

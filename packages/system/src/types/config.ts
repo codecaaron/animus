@@ -279,11 +279,12 @@ export type ThemedScaleValue<Config extends SystemProp> =
               >
         : PropertyValues<Config, true>;
 
-export type ThemedScale<Config extends SystemProp> = [Config] extends [
-  DeclarationProp,
-]
-  ? ResponsiveProp<DeclarationKey<Extract<Config, DeclarationProp>>>
-  : ResponsiveProp<ThemedScaleValue<Config>>;
+/** `Omitted` is what a breakpoint may hold to mean it was left out. */
+export type ThemedScale<Config extends SystemProp, Omitted = never> = [
+  Config,
+] extends [DeclarationProp]
+  ? ResponsiveProp<DeclarationKey<Extract<Config, DeclarationProp>>, Omitted>
+  : ResponsiveProp<ThemedScaleValue<Config>, Omitted>;
 
 type RawSelectorKey = `${string}&${string}`;
 
@@ -421,7 +422,7 @@ export type BuiltInConditionAlias =
   | '_osLight';
 
 export type SelectorAliasProps<GroupPropValues> = {
-  [
-    K in BuiltInSelectorAlias | Extract<keyof Selectors, `_${string}`>
-  ]?: Partial<GroupPropValues>;
+  [K in BuiltInSelectorAlias | Extract<keyof Selectors, `_${string}`>]?:
+    | Partial<GroupPropValues>
+    | undefined;
 };

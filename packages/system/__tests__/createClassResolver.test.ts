@@ -108,6 +108,36 @@ describe('createClassResolver', () => {
     expect(resolver({ p: 8 })).toBe('animus-box-abc animus-u-p8');
   });
 
+  it('treats an explicit undefined prop as omitted', () => {
+    const resolver = createClassResolver(
+      'animus-btn-abc',
+      {
+        variants: { size: { options: ['sm', 'md'], default: 'md' } },
+        compounds: [
+          {
+            conditions: { size: 'md' },
+            className: 'animus-btn-abc--compound-0',
+          },
+        ],
+        states: ['busy'],
+        systemPropNames: ['p', 'm'],
+      },
+      { p: { '_:8': 'animus-u-p8' } },
+      { m: { varName: '--animus-m', slotClass: 'animus-dyn-m' } }
+    );
+    // A variant default stays the `-default` marker, which lets a compose
+    // parent's shared value win; a breakpoint left undefined keeps the
+    // static class of the value without it.
+    expect(
+      resolver.attrs({
+        size: undefined,
+        busy: undefined,
+        m: undefined,
+        p: { _: 8, sm: undefined },
+      })
+    ).toEqual(resolver.attrs({ p: { _: 8 } }));
+  });
+
   it('combines all resolution types', () => {
     const systemPropMap = {
       p: { '8': 'animus-u-p8' },
