@@ -12,9 +12,12 @@ and used only as a JSX tag there, now counts its renders for the component it
 forwards to: `<Fancy size="lg" />` keeps exactly `lg` for `Button` in
 production builds, and `<Fancy p={8} />` gets `Button`'s static utility class.
 A function declaration and `forwardRef` or `memo` imported from `react` are
-recognised too. A wrapper that is exported, passed as a value, reads its props
-any way other than `props.name`, or spreads them more than once still keeps
-every option of what it renders, as before.
+recognised too. A prop the wrapper takes by name and passes on unchanged, as
+in `({ size = 'sm', ...rest }) => <Button size={size} {...rest} />`, keeps
+only the values its renders write, plus its string default (or `Button`'s
+own) where a render leaves it out. A wrapper that is exported, passed as a
+value, reads its props any way other than `props.name`, or spreads them more
+than once still keeps every option of what it renders, as before.
 
 **Variant CSS is no longer dropped for components passed as values.**
 Production builds keep only the variant and state options a component's

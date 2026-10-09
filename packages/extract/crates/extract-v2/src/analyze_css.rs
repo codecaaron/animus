@@ -1616,78 +1616,148 @@ fn spread_wrapper_targets(
     crate::usage_facts::WrapperProxies,
 ) {
     use std::collections::BTreeSet;
-    /// The props a path drops → the components it reaches.
-    type Paths = BTreeMap<BTreeSet<String>, BTreeSet<String>>;
-    fn reach(
-        name: &str,
-        file: &str,
-        ff: &FileFacts,
-        files: &BTreeMap<String, FileFacts>,
-        inputs: &CssInputs,
-        evaluated_ids: &FxHashSet<String>,
-        memo: &mut FxHashMap<String, Option<Option<Paths>>>,
-    ) -> Option<Paths> {
-        match memo.get(name) {
-            Some(Some(done)) => return done.clone(),
-            // Revisited before it resolved: a cycle.
-            Some(None) => return None,
-            None => {}
-        }
-        memo.insert(name.to_string(), None);
-        let wrapper = ff.spread_wrappers.get(name)?;
-        // The rest never carries the wrapper's own named props, on any path.
-        let named: BTreeSet<String> = wrapper.named.iter().cloned().collect();
-        let mut paths = Paths::new();
-        let mut complete = true;
-        for (_, tag) in &wrapper.forwarding {
-            if ff.spread_wrappers.contains_key(tag) {
-                match reach(tag, file, ff, files, inputs, evaluated_ids, memo) {
-                    Some(inner) => {
-                        for (dropped, ids) in inner {
-                            let dropped = dropped.union(&named).cloned().collect();
-                            paths.entry(dropped).or_default().extend(ids);
-                        }
-                    }
-                    None => complete = false,
-                }
-                continue;
-            }
-            let ids = resolve_declared_identity(file, tag, files, inputs, evaluated_ids);
-            // A member tag, or a component-like name, that resolves to
-            // nothing renders something unseen.
-            if ids.is_empty()
-                && (tag.contains('.') || crate::jsx_scan::is_component_like_identifier(tag))
-            {
-                complete = false;
-            }
-            if !ids.is_empty() {
-                paths.entry(named.clone()).or_default().extend(ids);
-            }
-        }
-        let result = (complete && !paths.is_empty()).then_some(paths);
-        memo.insert(name.to_string(), Some(result.clone()));
-        result
+    /// What a wrapper's renders reach: the props each path drops → the
+    /// components it reaches, and the props its forwarding elements settle
+    /// themselves.
+    #[derive(Clone)]
+    struct Reach {
+        paths: BTreeMap<BTreeSet<String>, BTreeSet<String>>,
+        settled: FxHashSet<String>,
     }
-    let mut memo = FxHashMap::default();
-    let mut published = Vec::new();
+    struct Walk<'s> {
+        file: &'s str,
+        ff: &'s FileFacts,
+        files: &'s BTreeMap<String, FileFacts>,
+        inputs: &'s CssInputs,
+        evaluated_ids: &'s FxHashSet<String>,
+        /// Each element by its opening-element span.
+        elements: FxHashMap<(u32, u32), &'s UsageFact>,
+        /// `None` while a wrapper resolves: meeting it again is a cycle.
+        memo: FxHashMap<String, Option<Option<Reach>>>,
+    }
+    impl Walk<'_> {
+        fn reach(&mut self, name: &str) -> Option<Reach> {
+            match self.memo.get(name) {
+                Some(Some(done)) => return done.clone(),
+                Some(None) => return None,
+                None => {}
+            }
+            self.memo.insert(name.to_string(), None);
+            let wrapper = self.ff.spread_wrappers.get(name)?;
+            // The rest never carries the wrapper's own named props, on any path.
+            let named: BTreeSet<String> = wrapper.named.iter().cloned().collect();
+            let mut paths: BTreeMap<BTreeSet<String>, BTreeSet<String>> = BTreeMap::new();
+            let mut settled: Option<FxHashSet<String>> = None;
+            let mut complete = true;
+            for (span, tag) in &wrapper.forwarding {
+                let element_settles = if self.ff.spread_wrappers.contains_key(tag) {
+                    let Some(inner) = self.reach(tag) else {
+                        complete = false;
+                        continue;
+                    };
+                    for (dropped, ids) in inner.paths {
+                        let dropped = dropped.union(&named).cloned().collect();
+                        paths.entry(dropped).or_default().extend(ids);
+                    }
+                    inner.settled
+                } else {
+                    let ids = resolve_declared_identity(
+                        self.file,
+                        tag,
+                        self.files,
+                        self.inputs,
+                        self.evaluated_ids,
+                    );
+                    // A member tag, or a component-like name, that resolves to
+                    // nothing renders something unseen.
+                    if ids.is_empty()
+                        && (tag.contains('.') || crate::jsx_scan::is_component_like_identifier(tag))
+                    {
+                        complete = false;
+                    }
+                    if !ids.is_empty() {
+                        paths.entry(named.clone()).or_default().extend(ids);
+                    }
+                    // An attribute after the spread, or one the rest cannot
+                    // carry, is the element's own.
+                    match self.elements.get(span) {
+                        Some(UsageFact::Element { attrs, spread, .. }) => attrs
+                            .iter()
+                            .enumerate()
+                            .filter(|(index, attr)| {
+                                spread.is_none_or(|before| *index >= before)
+                                    || named.contains(&attr.name)
+                            })
+                            .map(|(_, attr)| attr.name.clone())
+                            .collect(),
+                        _ => FxHashSet::default(),
+                    }
+                };
+                settled = Some(match settled {
+                    Some(so_far) => so_far.intersection(&element_settles).cloned().collect(),
+                    None => element_settles,
+                });
+            }
+            let result = (complete && !paths.is_empty()).then(|| Reach {
+                paths,
+                settled: settled.unwrap_or_default(),
+            });
+            self.memo.insert(name.to_string(), Some(result.clone()));
+            result
+        }
+    }
     let mut proxies = crate::usage_facts::WrapperProxies::default();
+    if ff.spread_wrappers.is_empty() {
+        return (Vec::new(), proxies);
+    }
+    let usage = ff.usage_for_analysis();
+    let mut walk = Walk {
+        file,
+        ff,
+        files,
+        inputs,
+        evaluated_ids,
+        elements: usage
+            .iter()
+            .filter_map(|fact| match fact {
+                UsageFact::Element { span, .. } => Some((*span, fact)),
+                UsageFact::CreateElement { .. } => None,
+            })
+            .collect(),
+        memo: FxHashMap::default(),
+    };
+    let mut published = Vec::new();
     for (name, wrapper) in &ff.spread_wrappers {
-        let Some(paths) = reach(name, file, ff, files, inputs, evaluated_ids, &mut memo) else {
+        let Some(reach) = walk.reach(name) else {
             continue;
         };
-        let all: BTreeSet<&String> = paths.values().flatten().collect();
+        let all: BTreeSet<&String> = reach.paths.values().flatten().collect();
         published.push((name.clone(), all.into_iter().cloned().collect()));
         let mut lookups = Vec::new();
-        for (index, (dropped, ids)) in paths.into_iter().enumerate() {
+        for (index, (dropped, ids)) in reach.paths.into_iter().enumerate() {
             // `#` never appears in a binding or a component id.
             let key = format!("{name}#{index}");
             published.push((key.clone(), ids.into_iter().collect()));
             lookups.push((key, dropped.into_iter().collect()));
         }
         proxies.paths.insert(name.clone(), lookups);
+        proxies.settled.insert(name.clone(), reach.settled);
         proxies
             .forwarding
             .extend(wrapper.forwarding.iter().map(|(span, _)| *span));
+        for pass in &wrapper.passed {
+            let values = crate::usage_facts::passed_values(
+                usage,
+                name,
+                &pass.key,
+                pass.default.as_deref(),
+            );
+            proxies
+                .passed
+                .entry(pass.element)
+                .or_default()
+                .insert(pass.attr.clone(), values);
+        }
     }
     (published, proxies)
 }
@@ -6970,6 +7040,87 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
              export const App = () => <W2 size=\"lg\" />;",
         );
         assert_eq!(sizes, vec!["md", "lg"]);
+    }
+
+    /// A named prop a wrapper passes on (`size={size}`) takes what its
+    /// renders write, or its default where they leave it out, rather than
+    /// keeping every option.
+    #[test]
+    fn named_props_a_wrapper_passes_on_keep_what_its_renders_write() {
+        for (app, sizes) in [
+            (
+                "const Button = ({ size = 'sm', ...rest }) => <R size={size} {...rest} />;\n\
+                 export const App = () => <><Button /><Button size=\"lg\" /></>;",
+                vec!["sm", "lg"],
+            ),
+            (
+                "const Button = ({ tone: size, ...rest }) => <R size={size} {...rest} />;\n\
+                 export const App = () => <><Button tone=\"lg\" /><Button /></>;",
+                vec!["md", "lg"],
+            ),
+            (
+                "const Button = ({ size, ...rest }) => <R size={size} {...rest} />;\n\
+                 export const App = () => <Button />;",
+                vec!["md"],
+            ),
+        ] {
+            let (kept_sizes, _, _) = wrapper_kept(app);
+            assert_eq!(kept_sizes, sizes, "{app}");
+        }
+        // The showcase's `Reveal` shape: a function declaration with hooks.
+        let (sizes, states, _) = wrapper_kept(
+            "function Reveal({ children, size = 'sm', threshold = 0.15, ...props }) {\n\
+               const [visible] = useState(false);\n\
+               return <R id=\"x\" active={visible} size={size} {...props}>{children}</R>;\n\
+             }\n\
+             export const App = () => <><Reveal>a</Reveal><Reveal size=\"md\">b</Reveal></>;",
+        );
+        assert_eq!((sizes, states), (vec!["sm", "md"], vec!["active"]));
+        // The rest still carries a renamed prop's own name.
+        let (sizes, _, _) = wrapper_kept(
+            "const Button = ({ tone: size, ...rest }) => <R size={size} {...rest} />;\n\
+             export const App = () => <Button size=\"sm\" />;",
+        );
+        assert_eq!(sizes, vec!["sm", "md"]);
+        // A prop is settled only where every element the wrapper forwards
+        // to sets it, and never by a wrapper that drops it.
+        for app in [
+            "const Button = (props) => <><R {...props} size=\"sm\" /><R {...props} /></>;\n\
+             export const App = () => <Button />;",
+            "const Inner = ({ size, ...rest }) => <R {...rest} />;\n\
+             const Outer = (p) => <Inner {...p} size=\"lg\" />;\n\
+             export const App = () => <><Outer /><R size=\"sm\" /></>;",
+        ] {
+            let (sizes, _, _) = wrapper_kept(app);
+            assert_eq!(sizes, vec!["sm", "md"], "{app}");
+        }
+    }
+
+    /// A passed-on prop the analysis cannot follow keeps every option.
+    #[test]
+    fn named_props_a_wrapper_cannot_follow_keep_every_option() {
+        for wrapper in [
+            "const Button = ({ size, ...rest }) => { size = size ?? 'lg'; return <R size={size} {...rest} />; };",
+            "const Button = ({ size, ...rest }) => <R size={size === 'big' ? 'lg' : 'sm'} {...rest} />;",
+            "const Button = ({ size = DEFAULT, ...rest }) => <R size={size} {...rest} />;",
+            "const Button = ({ size = 'sm', ...rest }) => <R size={size} {...rest} size={pick()} />;",
+        ] {
+            let app = format!("{wrapper}\nexport const App = () => <Button size=\"sm\" />;");
+            let (sizes, _, _) = wrapper_kept(&app);
+            assert_eq!(sizes, vec!["sm", "md", "lg"], "{wrapper}");
+        }
+        for render in [
+            "<Button size={pick()} />",
+            "<Button {...extra} />",
+            "<Button size=\"lg\" {...extra} />",
+        ] {
+            let app = format!(
+                "const Button = ({{ size = 'sm', ...rest }}) => <R size={{size}} {{...rest}} />;\n\
+                 export const App = () => {render};"
+            );
+            let (sizes, _, _) = wrapper_kept(&app);
+            assert_eq!(sizes, vec!["sm", "md", "lg"], "{render}");
+        }
     }
 
     fn analyze_with_logical_space(entries: &[(&str, &str)]) -> CssOutput {

@@ -541,6 +541,24 @@ pub struct SpreadWrapper {
     /// Each element receiving the spread. An element with a second spread
     /// is not listed.
     pub forwarding: Vec<Forwarding>,
+    /// Attributes of those elements that pass a named prop on.
+    pub passed: Vec<PassThrough>,
+}
+
+/// A forwarding-element attribute whose whole value is a named prop
+/// (`size={size}`): it takes what each render writes for the prop, or the
+/// prop's default when a render leaves it out.
+#[derive(Debug, Clone)]
+pub struct PassThrough {
+    /// The forwarding element's opening-element span.
+    pub element: (u32, u32),
+    /// The attribute as the element writes it.
+    pub attr: String,
+    /// The prop as renders write it: the key in the parameter pattern.
+    pub key: String,
+    /// The string default in the pattern; `None` without one, so the
+    /// element passes `undefined` and the target uses its own default.
+    pub default: Option<String>,
 }
 
 /// An element a spread wrapper forwards its props to: its opening-element
@@ -553,7 +571,15 @@ struct WrapperCandidate<'b, 'a> {
     name: String,
     binding: &'b oxc::ast::ast::BindingIdentifier<'a>,
     spread: &'b oxc::ast::ast::BindingIdentifier<'a>,
-    named: Vec<String>,
+    named: Vec<NamedProp<'b, 'a>>,
+}
+
+/// A prop the parameter pattern names: its key, its local binding, and its
+/// default: `Some(None)` without one, `None` when it is not a string literal.
+struct NamedProp<'b, 'a> {
+    key: String,
+    binding: &'b oxc::ast::ast::BindingIdentifier<'a>,
+    default: Option<Option<String>>,
 }
 
 /// Top-level, non-exported `const`/`let`/`var` declarators and function
@@ -635,15 +661,27 @@ fn spread_wrapper_candidates<'b, 'a>(program: &'b Program<'a>) -> Vec<WrapperCan
                 };
                 let mut named = Vec::new();
                 for property in &object.properties {
-                    // An unknown (computed) key gives up: `static_name` has none.
-                    let mut value = &property.value;
-                    if let BindingPattern::AssignmentPattern(assignment) = value {
-                        value = &assignment.left;
-                    }
-                    if !matches!(value, BindingPattern::BindingIdentifier(_)) {
+                    let (value, default) = match &property.value {
+                        BindingPattern::AssignmentPattern(assignment) => (
+                            &assignment.left,
+                            match &assignment.right {
+                                Expression::StringLiteral(literal) => {
+                                    Some(Some(literal.value.to_string()))
+                                }
+                                _ => None,
+                            },
+                        ),
+                        value => (value, Some(None)),
+                    };
+                    let BindingPattern::BindingIdentifier(binding) = value else {
                         return None;
-                    }
-                    named.push(property.key.static_name()?.to_string());
+                    };
+                    named.push(NamedProp {
+                        // An unknown (computed) key gives up: `static_name` has none.
+                        key: property.key.static_name()?.to_string(),
+                        binding,
+                        default,
+                    });
                 }
                 (rest.as_ref(), named)
             }
@@ -697,8 +735,10 @@ fn spread_wrappers(
         scoping,
         bindings: FxHashMap::default(),
         spreads: FxHashMap::default(),
+        named: FxHashMap::default(),
         invalid: FxHashSet::default(),
         forwarding: FxHashMap::default(),
+        passed: FxHashMap::default(),
         ancestors: Vec::new(),
     };
     for (index, candidate) in candidates.iter().enumerate() {
@@ -714,6 +754,15 @@ fn spread_wrappers(
         }
         scan.bindings.insert(binding, index);
         scan.spreads.insert(spread, index);
+        // A named prop the body reassigns no longer holds what renders pass.
+        for prop in &candidate.named {
+            if let (Some(symbol), Some(default)) = (prop.binding.symbol_id.get(), &prop.default) {
+                if !scoping.symbol_is_mutated(symbol) {
+                    scan.named
+                        .insert(symbol, (index, prop.key.clone(), default.clone()));
+                }
+            }
+        }
     }
     scan.visit_program(program);
     candidates
@@ -722,11 +771,19 @@ fn spread_wrappers(
         .filter(|(index, _)| !scan.invalid.contains(index))
         .filter_map(|(index, candidate)| {
             let forwarding = scan.forwarding.remove(&index)?;
+            let passed = scan
+                .passed
+                .remove(&index)
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|pass| forwarding.iter().any(|(span, _)| *span == pass.element))
+                .collect();
             Some((
                 candidate.name,
                 SpreadWrapper {
-                    named: candidate.named,
+                    named: candidate.named.into_iter().map(|prop| prop.key).collect(),
                     forwarding,
+                    passed,
                 },
             ))
         })
@@ -739,8 +796,12 @@ struct WrapperScan<'a, 's> {
     bindings: FxHashMap<SymbolId, usize>,
     /// Spread parameter symbol → candidate index.
     spreads: FxHashMap<SymbolId, usize>,
+    /// Named-prop symbol that can pass on → candidate index, key, default.
+    named: FxHashMap<SymbolId, (usize, String, Option<String>)>,
     invalid: FxHashSet<usize>,
     forwarding: FxHashMap<usize, Vec<Forwarding>>,
+    /// Attributes whose whole value is a named prop, on any element.
+    passed: FxHashMap<usize, Vec<PassThrough>>,
     ancestors: Vec<AstKind<'a>>,
 }
 
@@ -769,6 +830,39 @@ impl<'a> Visit<'a> for WrapperScan<'a, '_> {
             );
             if !tag {
                 self.invalid.insert(index);
+            }
+            return;
+        }
+        if let Some((index, key, default)) = self.named.get(&symbol) {
+            if let (
+                Some(AstKind::JSXExpressionContainer(_)),
+                Some(AstKind::JSXAttribute(attr)),
+                Some(AstKind::JSXOpeningElement(element)),
+            ) = (ancestors.next(), ancestors.next(), ancestors.next())
+            {
+                // The element records per attribute name, so an attribute it
+                // writes twice keeps its own values.
+                let written_once = |name: &str| {
+                    let named = |item: &&JSXAttributeItem| match item {
+                        JSXAttributeItem::Attribute(other) => matches!(
+                            &other.name,
+                            JSXAttributeName::Identifier(id) if id.name == name
+                        ),
+                        JSXAttributeItem::SpreadAttribute(_) => false,
+                    };
+                    element.attributes.iter().filter(named).count() == 1
+                };
+                if let JSXAttributeName::Identifier(name) = &attr.name {
+                    if !written_once(&name.name) {
+                        return;
+                    }
+                    self.passed.entry(*index).or_default().push(PassThrough {
+                        element: (element.span.start, element.span.end),
+                        attr: name.name.to_string(),
+                        key: key.clone(),
+                        default: default.clone(),
+                    });
+                }
             }
             return;
         }
@@ -1347,6 +1441,13 @@ pub struct WrapperProxies {
     /// Opening-element spans of forwarding elements: their spread carries
     /// exactly the wrapper's renders, so it opens nothing itself.
     pub forwarding: FxHashSet<(u32, u32)>,
+    /// Wrapper tag → props every element it forwards to sets itself, where
+    /// no render can replace them: those elements record them, so a render
+    /// that leaves them out keeps no default for them.
+    pub settled: FxHashMap<String, FxHashSet<String>>,
+    /// Forwarding element span → attribute → the variant values a named
+    /// prop passes on across the wrapper's renders (`passed_values`).
+    pub passed: FxHashMap<(u32, u32), FxHashMap<String, Vec<String>>>,
 }
 
 /// A lookup key a render records under, with the props that never reach
@@ -1365,6 +1466,39 @@ impl WrapperProxies {
             _ => vec![(tag_name, None)],
         }
     }
+}
+
+/// The variant values the prop `key` takes across `wrapper`'s renders in
+/// `facts`: what each render writes, `__dynamic__` where a spread at the
+/// render can deliver it, and `default` (or the target's own, `__default__`)
+/// where a render leaves it out.
+pub(crate) fn passed_values(
+    facts: &[UsageFact],
+    wrapper: &str,
+    key: &str,
+    default: Option<&str>,
+) -> Vec<String> {
+    let mut values = BTreeSet::new();
+    for fact in facts {
+        let UsageFact::Element { tag: TagFact::Ident(tag), attrs, spread, .. } = fact else {
+            continue;
+        };
+        if tag != wrapper {
+            continue;
+        }
+        let mut settled = false;
+        for (index, attr) in attrs.iter().enumerate().filter(|(_, attr)| attr.name == key) {
+            values.insert(attr.variant_class.as_str());
+            settled |= spread.is_none_or(|before| index >= before);
+        }
+        if !settled {
+            values.insert(match spread {
+                Some(_) => "__dynamic__",
+                None => default.unwrap_or("__default__"),
+            });
+        }
+    }
+    values.into_iter().map(str::to_string).collect()
 }
 
 /// Custom-prop scan over collected facts.
@@ -1550,6 +1684,13 @@ pub fn filter_usage_scan(
                     let active_props = component_props.get(tag_name);
                     let custom = custom_props.get(tag_name);
                     let mut written: FxHashSet<&str> = FxHashSet::default();
+                    if let Some(settled) = match tag {
+                        TagFact::Ident(name) => proxies.settled.get(name),
+                        TagFact::Member(_) => None,
+                    } {
+                        written.extend(settled.iter().map(String::as_str));
+                    }
+                    let passed = proxies.passed.get(span);
 
                     for (index, attr) in attrs.iter().enumerate() {
                         if dropped.is_some_and(|dropped| dropped.contains(&attr.name)) {
@@ -1611,11 +1752,18 @@ pub fn filter_usage_scan(
                                 if settled {
                                     written.insert(attr.name.as_str());
                                 }
-                                result.variant_usages.push(VariantUsage {
-                                    component_binding: binding.clone(),
-                                    variant_prop: attr.name.clone(),
-                                    value: attr.variant_class.clone(),
-                                });
+                                let passed = passed.and_then(|passed| passed.get(&attr.name));
+                                let values = match passed {
+                                    Some(values) => values.as_slice(),
+                                    None => std::slice::from_ref(&attr.variant_class),
+                                };
+                                for value in values {
+                                    result.variant_usages.push(VariantUsage {
+                                        component_binding: binding.clone(),
+                                        variant_prop: attr.name.clone(),
+                                        value: value.clone(),
+                                    });
+                                }
                             }
                             if config.states.contains(&attr.name) {
                                 if settled {
