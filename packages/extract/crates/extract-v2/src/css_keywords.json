@@ -5909,6 +5909,7 @@
       "open-quote"
     ],
     "contentVisibility": ["auto", "hidden", "visible"],
+    "cornerShape": ["bevel", "notch", "round", "scoop", "square", "squircle"],
     "counterIncrement": ["none"],
     "counterReset": ["none"],
     "counterSet": ["none"],

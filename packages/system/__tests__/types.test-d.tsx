@@ -33,6 +33,11 @@ type IsExact<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
 
 const _testTransform = createTransform('testTransform', (v) => `${v}px`);
 
+// Logical sizes take numbers, as their physical counterparts do.
+ds.styles({ inlineSize: 50 });
+// `cornerShape` is typed, though the pinned csstype predates it.
+ds.styles({ cornerShape: 'squircle' });
+
 const DivBox = ds.styles({ display: 'flex' }).asElement('div');
 const BtnBox = ds.styles({ display: 'flex' }).asElement('button');
 const InputBox = ds.styles({ display: 'flex' }).asElement('input');
@@ -1046,6 +1051,7 @@ ds.styles({}).props({
 ds.styles({}).props({
   sizing: {
     property: 'width',
+    // @ts-expect-error — a transform returns a string or a number, not a CSS object
     transform: (val: string | number) => ({ width: `${val}px` }),
   },
 });
