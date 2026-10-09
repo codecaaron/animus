@@ -1298,6 +1298,7 @@ pub const CSS_WIDE_KEYWORDS: [&str; 5] = ["initial", "inherit", "unset", "revert
 fn add_keyword_classes(
     prop_name: &str,
     prop: &PropConfig,
+    scale: &BTreeMap<String, Value>,
     breakpoints: &BreakpointMap,
     contextual_vars: &ContextualVarsMap,
     seen: &mut FxHashMap<String, (String, ResolvedStyles)>,
@@ -1308,6 +1309,11 @@ fn add_keyword_classes(
     let key = value_key(prop.keys_typed());
     let classes = class_map.entry(prop_name.to_string()).or_default();
     for keyword in CSS_WIDE_KEYWORDS {
+        // A scale key spelled like a keyword reaches the slot, which reads the
+        // scale, as a static write of it does.
+        if scale.contains_key(keyword) {
+            continue;
+        }
         let mut declarations: Vec<CssDeclaration> = prop
             .css_properties()
             .iter()
@@ -1536,17 +1542,19 @@ impl ResolvedUtilities {
         !self.declarations.props.is_empty()
     }
 
-    /// Keyword classes for the props whose values arrive at runtime.
+    /// Keyword classes for the props whose values arrive at runtime, each with
+    /// its runtime scale.
     pub fn add_runtime_keyword_classes<'a>(
         &mut self,
-        props: impl IntoIterator<Item = (&'a str, &'a PropConfig)>,
+        props: impl IntoIterator<Item = (&'a str, &'a PropConfig, &'a BTreeMap<String, Value>)>,
         breakpoints: &BreakpointMap,
         contextual_vars: &ContextualVarsMap,
     ) {
-        for (prop_name, prop) in props {
+        for (prop_name, prop, scale) in props {
             add_keyword_classes(
                 prop_name,
                 prop,
+                scale,
                 breakpoints,
                 contextual_vars,
                 &mut self.seen,
@@ -1688,19 +1696,21 @@ impl ResolvedCustomUtilities {
         !self.declarations.props.is_empty()
     }
 
-    /// Keyword classes for `owner`'s props whose values arrive at runtime.
+    /// Keyword classes for `owner`'s props whose values arrive at runtime,
+    /// each with its runtime scale.
     pub fn add_runtime_keyword_classes<'a>(
         &mut self,
         owner: &str,
-        props: impl IntoIterator<Item = (&'a str, &'a PropConfig)>,
+        props: impl IntoIterator<Item = (&'a str, &'a PropConfig, &'a BTreeMap<String, Value>)>,
         breakpoints: &BreakpointMap,
         contextual_vars: &ContextualVarsMap,
     ) {
         let classes = self.class_map.entry(owner.to_string()).or_default();
-        for (prop_name, prop) in props {
+        for (prop_name, prop, scale) in props {
             add_keyword_classes(
                 prop_name,
                 prop,
+                scale,
                 breakpoints,
                 contextual_vars,
                 &mut self.seen,
@@ -2508,7 +2518,7 @@ mod tests {
         let bp = test_breakpoints();
         let tc = TestUtilCtx::new(keyword_config(), utility_theme(), &bp);
         let mut resolved = resolve_utility_classes(&[], &tc.ctx(), "animus");
-        resolved.add_runtime_keyword_classes(["p", "px", "bg", "sized"].map(|p| (p, &tc.config[p])), &bp, &ContextualVarsMap::default());
+        resolved.add_runtime_keyword_classes(["p", "px", "bg", "sized"].map(|p| (p, &tc.config[p], &NO_SCALE)), &bp, &ContextualVarsMap::default());
         let out = resolved.render(&bp, None, &[]);
 
         for keyword in CSS_WIDE_KEYWORDS {
@@ -2533,7 +2543,7 @@ mod tests {
         let bp = test_breakpoints();
         let tc = TestUtilCtx::new(keyword_config(), utility_theme(), &bp);
         let mut resolved = resolve_utility_classes(&[], &tc.ctx(), "animus");
-        resolved.add_runtime_keyword_classes([("p", &tc.config["p"]), ("sized", &tc.config["sized"])], &bp, &ContextualVarsMap::default());
+        resolved.add_runtime_keyword_classes([("p", &tc.config["p"], &NO_SCALE), ("sized", &tc.config["sized"], &NO_SCALE)], &bp, &ContextualVarsMap::default());
         let out = resolved.render(&bp, None, &[]);
 
         for (breakpoint, px) in [("xs", 480), ("sm", 768), ("md", 1024), ("lg", 1200), ("xl", 1440)] {
@@ -2558,13 +2568,33 @@ mod tests {
         ];
         let statics = resolve_utility_classes(&usages, &tc.ctx(), "animus").render(&bp, None, &[]);
         let mut resolved = resolve_utility_classes(&usages, &tc.ctx(), "animus");
-        resolved.add_runtime_keyword_classes([("p", &tc.config["p"])], &bp, &ContextualVarsMap::default());
+        resolved.add_runtime_keyword_classes([("p", &tc.config["p"], &NO_SCALE)], &bp, &ContextualVarsMap::default());
         let out = resolved.render(&bp, None, &[]);
 
         assert_eq!(out.class_map["p"]["inherit"], statics.class_map["p"]["inherit"]);
         assert_eq!(out.class_map["p"]["md:initial"], statics.class_map["p"]["md:initial"]);
         let class = &out.class_map["p"]["inherit"];
         assert_eq!(out.css.matches(&format!(".{class} {{")).count(), 1);
+    }
+
+    static NO_SCALE: std::collections::BTreeMap<String, Value> = std::collections::BTreeMap::new();
+
+    /// A runtime value spelled like a scale key reaches the slot, which reads
+    /// the scale, as a static write of it does.
+    #[test]
+    fn a_scale_key_spelled_like_a_keyword_keeps_its_scale_value() {
+        let bp = test_breakpoints();
+        let tc = TestUtilCtx::new(keyword_config(), utility_theme(), &bp);
+        let scale: std::collections::BTreeMap<String, Value> =
+            [("inherit".to_string(), json!("3px")), ("4".to_string(), json!("0.25rem"))].into_iter().collect();
+        let mut resolved = resolve_utility_classes(&[], &tc.ctx(), "animus");
+        resolved.add_runtime_keyword_classes([("p", &tc.config["p"], &scale)], &bp, &ContextualVarsMap::default());
+        let out = resolved.render(&bp, None, &[]);
+
+        let p = &out.class_map["p"];
+        assert!(!p.contains_key("inherit") && !p.contains_key("md:inherit"), "{p:?}");
+        assert!(p.contains_key("initial") && p.contains_key("md:unset"), "{p:?}");
+        assert!(!out.css.contains("padding: inherit"), "{}", out.css);
     }
 
     #[test]
@@ -2574,7 +2604,7 @@ mod tests {
         tc.theme.insert("space.inherit".to_string(), "3px".to_string());
         let usages = vec![UtilityInput { prop_name: "p".to_string(), value: json!("inherit") }];
         let mut resolved = resolve_utility_classes(&usages, &tc.ctx(), "animus");
-        resolved.add_runtime_keyword_classes([("p", &tc.config["p"])], &bp, &ContextualVarsMap::default());
+        resolved.add_runtime_keyword_classes([("p", &tc.config["p"], &NO_SCALE)], &bp, &ContextualVarsMap::default());
         let out = resolved.render(&bp, None, &[]);
 
         assert!(rule_of(&out.css, &out.class_map["p"]["inherit"]).contains("padding: 3px;"));
@@ -2586,7 +2616,12 @@ mod tests {
         let tc = TestUtilCtx::new(keyword_config(), utility_theme(), &bp);
         let configs: FxHashMap<&str, &PropConfigMap> = [("a.tsx::A", &tc.config)].into_iter().collect();
         let mut resolved = resolve_custom_prop_classes(&[], &configs, &tc.ctx(), "animus", |_, _| {});
-        resolved.add_runtime_keyword_classes("a.tsx::A", [("p", &tc.config["p"]), ("sized", &tc.config["sized"])], &bp, &ContextualVarsMap::default());
+        resolved.add_runtime_keyword_classes(
+            "a.tsx::A",
+            [("p", &tc.config["p"], &NO_SCALE), ("sized", &tc.config["sized"], &NO_SCALE)],
+            &bp,
+            &ContextualVarsMap::default(),
+        );
         let out = resolved.render(&bp, None, &[]);
 
         let class = &out.class_map["a.tsx::A"]["p"]["inherit"];

@@ -458,17 +458,22 @@ function warnTransformThrow(
 }
 
 /**
- * Whether `resolved` reads `currentVar`, with or without a fallback. The
- * extractor's static path skips its `currentVar` write by the same predicate.
+ * Whether `resolved` reads `currentVar`, with or without a fallback. `var`
+ * matches in any case and the name with any spacing around it; the name itself
+ * is case-sensitive. The extractor's static path skips its `currentVar` write
+ * by the same predicate.
  */
 function readsCurrentVar(resolved: string, currentVar: string): boolean {
-  const read = `var(${currentVar}`;
+  // ASCII lowering keeps every offset, so a match indexes `resolved`.
+  const lowered = resolved.replace(/[A-Z]/g, (letter) => letter.toLowerCase());
   for (
-    let at = resolved.indexOf(read);
+    let at = lowered.indexOf('var(');
     at !== -1;
-    at = resolved.indexOf(read, at + 1)
+    at = lowered.indexOf('var(', at + 1)
   ) {
-    const next = resolved[at + read.length];
+    const name = resolved.slice(at + 'var('.length).trimStart();
+    if (!name.startsWith(currentVar)) continue;
+    const next = name.slice(currentVar.length).trimStart()[0];
     if (next === ')' || next === ',') return true;
   }
   return false;

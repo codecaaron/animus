@@ -34,102 +34,6 @@ export const STYLESHEET_URL = `${FIXTURE_ORIGIN}/assets/styles.css`;
 
 const RED = 'rgb(255, 0, 0)';
 const GREEN = 'rgb(0, 128, 0)';
-const BLUE = 'rgb(0, 0, 255)';
-const BLACK = 'rgb(0, 0, 0)';
-
-const KEYWORDS = [
-  'initial',
-  'inherit',
-  'unset',
-  'revert',
-  'revert-layer',
-] as const;
-
-/**
- * The fix gives a runtime keyword the class a static write of it selects: a
- * direct declaration in the system layer, above the component's base. Through
- * the inline variable the keyword acts on the variable instead: `initial`
- * leaves it invalid, so `color` inherits the parent's red, and the others
- * hand `color` the parent's own `--slot`, blue.
- */
-const KEYWORD_EXPECTATIONS = {
-  initial: { keywordClass: BLACK, transport: RED },
-  inherit: { keywordClass: RED, transport: BLUE },
-  unset: { keywordClass: RED, transport: BLUE },
-  revert: { keywordClass: RED, transport: BLUE },
-  'revert-layer': { keywordClass: GREEN, transport: BLUE },
-} satisfies Record<
-  (typeof KEYWORDS)[number],
-  { keywordClass: string; transport: string }
->;
-
-const keywordTransport: FixtureCase = {
-  name: 'a runtime CSS-wide keyword through its keyword class versus the inline variable',
-  css: `
-    @layer anm-base, anm-system;
-    @layer anm-base { .box { color: ${GREEN}; } }
-    @layer anm-system {
-      .slot { color: var(--slot); }
-      ${KEYWORDS.map((keyword) => `.keyword-${keyword} { color: ${keyword}; }`).join('\n')}
-    }
-    .parent { color: ${RED}; --slot: ${BLUE}; }
-  `,
-  body: `<div class="parent">${KEYWORDS.map(
-    (keyword) =>
-      `<div class="box keyword-${keyword}" id="keyword-${keyword}"></div>` +
-      `<div class="box slot" id="transport-${keyword}" style="--slot: ${keyword}"></div>`
-  ).join('')}</div>`,
-  probes: KEYWORDS.flatMap((keyword) => [
-    {
-      label: `${keyword}, static or runtime, through the keyword class`,
-      selector: `#keyword-${keyword}`,
-      property: 'color',
-      expected: KEYWORD_EXPECTATIONS[keyword].keywordClass,
-    },
-    {
-      label: `${keyword} through the inline variable, as before the fix`,
-      selector: `#transport-${keyword}`,
-      property: 'color',
-      expected: KEYWORD_EXPECTATIONS[keyword].transport,
-    },
-  ]),
-};
-
-/**
- * A responsive runtime value mixes keyword classes with slot classes. They
- * share the system layer, where base rules come before breakpoint rules, so
- * the entry for the widest matching breakpoint wins either way round.
- */
-const responsiveKeywordMix: FixtureCase = {
-  name: 'a responsive runtime value mixing keyword classes and the inline variable',
-  css: `
-    @layer anm-system {
-      .slot { color: var(--slot); }
-      .keyword-inherit { color: inherit; }
-      @media (min-width: 768px) { .slot-sm { color: var(--slot-sm); } }
-      @media (min-width: 768px) { .keyword-sm-inherit { color: inherit; } }
-    }
-    .parent { color: ${RED}; }
-  `,
-  body: `<div class="parent">
-    <div class="slot keyword-sm-inherit" id="slot-then-keyword" style="--slot: ${BLUE}"></div>
-    <div class="keyword-inherit slot-sm" id="keyword-then-slot" style="--slot-sm: ${GREEN}"></div>
-  </div>`,
-  probes: [
-    {
-      label: '{ _: blue, sm: inherit } at a wide viewport',
-      selector: '#slot-then-keyword',
-      property: 'color',
-      expected: RED,
-    },
-    {
-      label: '{ _: inherit, sm: green } at a wide viewport',
-      selector: '#keyword-then-slot',
-      property: 'color',
-      expected: GREEN,
-    },
-  ],
-};
 
 const nonInheritingRegistration: FixtureCase = {
   name: "a non-inheriting registration blocks an ancestor's value",
@@ -515,8 +419,6 @@ export function showcaseRuntimeCurrentBg(
 }
 
 export const PLATFORM_CASES: FixtureCase[] = [
-  keywordTransport,
-  responsiveKeywordMix,
   nonInheritingRegistration,
   initialValueAndFallback,
   relativeInitialValues,

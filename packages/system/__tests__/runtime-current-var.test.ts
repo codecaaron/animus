@@ -31,6 +31,9 @@ describe('a runtime value of a prop with currentVar', () => {
     ['color-mix(in srgb, var(--current-bg) 85%, transparent)', false], // '{colors.current-bg/85}'
     ['var(--current-bg, red)', false],
     ['var(--current-bg,red)', false],
+    ['var( --current-bg )', false],
+    ['VAR(--current-bg)', false],
+    ['Var(\n  --current-bg ,red)', false],
     ['var(--color-ink)', true], // 'ink'
     ['#0af', true],
     ['var(--current-bg-alt)', true],

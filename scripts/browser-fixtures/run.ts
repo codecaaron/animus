@@ -4,8 +4,10 @@
  * observed value, to `.receipts/browser-fixtures.json`.
  *
  * The showcase cases read the built showcase stylesheet, so they need
- * `packages/showcase/dist` (or `ANIMUS_SHOWCASE_DIST`), and the runner
- * imports the built `@animus-ui/assertions` package (`vp run build:ts`).
+ * `packages/showcase/dist` (or `ANIMUS_SHOWCASE_DIST`). The runtime keyword
+ * cases analyze a fixture through the native engine (`vp run
+ * build:extract-v2`), and the runner imports the built `@animus-ui/assertions`
+ * package (`vp run build:ts`).
  */
 import { findCssFiles, readAllConcat } from '@animus-ui/assertions';
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -24,6 +26,7 @@ import {
   VIEWPORT_WIDTH,
   type FixtureCase,
 } from './cases';
+import { runtimeKeywordCases } from './runtime-keywords';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const SHOWCASE_DIST =
@@ -79,7 +82,11 @@ async function showcaseCases(): Promise<FixtureCase[]> {
 }
 
 async function main(): Promise<void> {
-  const cases = [...PLATFORM_CASES, ...(await showcaseCases())];
+  const cases = [
+    ...PLATFORM_CASES,
+    ...runtimeKeywordCases(),
+    ...(await showcaseCases()),
+  ];
   const browser = await chromium.launch();
   const browserName = browser.browserType().name();
   const browserVersion = browser.version();

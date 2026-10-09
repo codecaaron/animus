@@ -3371,8 +3371,11 @@ fn run_with_system_floor(
     utility_classes.add_runtime_keyword_classes(
         dynamic_props
             .iter()
-            .filter(|(name, meta)| meta.value().is_some() && detected_dynamic_prop_names.contains(*name))
-            .filter_map(|(name, _)| inputs.config.get(name.as_str()).map(|config| (name.as_str(), config))),
+            .filter(|(name, _)| detected_dynamic_prop_names.contains(*name))
+            .filter_map(|(name, meta)| {
+                let scale = &meta.value()?.scale_values;
+                inputs.config.get(name.as_str()).map(|config| (name.as_str(), config, scale))
+            }),
         &breakpoints,
         &inputs.contextual_vars,
     );
@@ -3563,8 +3566,11 @@ fn run_with_system_floor(
             component_id,
             component_dynamic
                 .iter()
-                .filter(|(name, meta)| meta.value().is_some() && observed.is_some_and(|props| props.contains(*name)))
-                .filter_map(|(name, _)| cc.get(name).map(|config| (name.as_str(), config))),
+                .filter(|(name, _)| observed.is_some_and(|props| props.contains(*name)))
+                .filter_map(|(name, meta)| {
+                    let scale = &meta.value()?.scale_values;
+                    cc.get(name).map(|config| (name.as_str(), config, scale))
+                }),
             &breakpoints,
             &inputs.contextual_vars,
         );

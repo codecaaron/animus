@@ -75,7 +75,8 @@ keyword entry, and its other entries still use the inline variable. A prop
 that receives runtime values only through a spread, forwarding or an alias
 gets no keyword classes and keeps the old behaviour. Props bound to a
 declaration scale get none either, because they accept only the scale's
-keys.
+keys. A scale key spelled like a keyword, such as `inherit` in a `space`
+scale, keeps its scale value at runtime, as it does when written statically.
 
 **A prop's `currentVar` now carries runtime values to descendants.** A
 prop with `currentVar`, such as `bg` writing `--current-bg`, set that variable
@@ -90,7 +91,8 @@ alone, so each prop with `currentVar` emits two slot classes at the base and
 at each breakpoint. Props without `currentVar` emit the same CSS as before.
 The check now also recognises a read with a fallback, such as
 `var(--current-bg, red)`, which a static write used to copy into
-`currentVar`, making it cyclic.
+`currentVar`, making it cyclic, and a read in any case or spacing, such as
+`VAR( --current-bg )`.
 
 **`asset()` in a scale value now loads when a prop selects it at runtime.**
 A theme scale value such as ``images: { rock: `url("${asset('@acme/media/rock.jpg')}")` }``

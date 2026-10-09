@@ -755,13 +755,18 @@ fn resolve_color_family_pass_through(
 
 /// Whether a prop with `current_var` also writes `value` to it: a value that
 /// reads the variable itself, with or without a fallback, would make it
-/// cyclic, so it leaves it alone. The runtime resolver keeps an identical
-/// predicate.
+/// cyclic, so it leaves it alone. `var` matches in any case and the name with
+/// any spacing around it; the name itself is case-sensitive. The runtime
+/// resolver keeps an identical predicate.
 pub fn writes_current_var(value: &str, current_var: &str) -> bool {
-    let read = format!("var({current_var}");
-    !value
-        .match_indices(&read)
-        .any(|(at, _)| matches!(value[at + read.len()..].chars().next(), Some(')' | ',')))
+    // ASCII lowering keeps every byte offset, so a match indexes `value`.
+    let lowered = value.to_ascii_lowercase();
+    !lowered.match_indices("var(").any(|(at, read)| {
+        value[at + read.len()..]
+            .trim_start()
+            .strip_prefix(current_var)
+            .is_some_and(|after| matches!(after.trim_start().chars().next(), Some(')' | ',')))
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1735,6 +1740,9 @@ mod tests {
             ("color-mix(in srgb, var(--current-bg) 85%, transparent)", false), // '{colors.current-bg/85}'
             ("var(--current-bg, red)", false),
             ("var(--current-bg,red)", false),
+            ("var( --current-bg )", false),
+            ("VAR(--current-bg)", false),
+            ("Var(\n  --current-bg ,red)", false),
             ("var(--color-ink)", true),                                        // 'ink'
             ("#0af", true),
             ("var(--current-bg-alt)", true),
