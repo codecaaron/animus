@@ -5,6 +5,17 @@ See [Conventional Commits](https://conventionalcommits.org) for commit guideline
 
 ## Unreleased
 
+**Variant CSS is no longer dropped for components passed as values.**
+Production builds keep only the variant and state options a component's
+JSX renders write. A component that also reached JSX another way lost the
+CSS for options written there: `const B = Object.assign(R, …)` with
+`<B size="lg" />`, a component passed to a function (`pick(R)`), as a prop
+(`as={R}`), in an object or array, through a plain `const` alias, or as a
+default export. `Object.assign` aliases are now followed, so `<B size="lg" />`
+keeps exactly `lg` for `R`. Any other value use of a component keeps every
+variant and state option it declares, and a runtime slot for each custom
+prop, as a `{...props}` spread already does.
+
 **Contextual variables can take the variable prefix.** With `prefix` set,
 `prefixContextualVars: true` gives each contextual variable its prefixed
 name everywhere Animus emits it, while authors keep writing the declared

@@ -291,6 +291,11 @@ pub struct FileFacts {
     /// this module (see `confined_component_bindings`).
     #[serde(skip)]
     pub(crate) confined_components: BTreeSet<String>,
+    /// Module-scope names (or dotted member paths) of possible components
+    /// with a value reference usage tracking does not follow: passed to a
+    /// call, a prop, an object or an array, or default-exported.
+    #[serde(skip)]
+    pub(crate) value_escapes: BTreeSet<String>,
     /// Extracted createTransform() declarations: serialized with the facts
     /// for probes, and the source of their bail diagnostics. They are never
     /// registered with the evaluator.
@@ -955,7 +960,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
     let exports = crate::usage_facts::collect_export_facts(program);
     let descriptors: Vec<&ChainDescriptor> = chains.iter().map(|chain| &chain.descriptor).collect();
     let usage = crate::usage_facts::collect_usage_facts(program);
-    let (usage_enriched, confined_components) = crate::usage_facts::collect_enriched_usage(
+    let (usage_enriched, confined_components, value_escapes) = crate::usage_facts::collect_enriched_usage(
         program,
         &usage_statics_fx,
         &descriptors,
@@ -999,6 +1004,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
         transforms,
         captured_transform_bindings,
         confined_components,
+        value_escapes,
         parse_diagnostics: ast.diagnostics.clone(),
         parse_panicked: ast.panicked,
     }

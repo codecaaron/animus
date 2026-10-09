@@ -1436,12 +1436,13 @@ fn resolve_alias_terminal<'a>(
     binding: &'a str,
     files: &'a BTreeMap<String, FileFacts>,
 ) -> &'a str {
-    let Some(aliases) = files.get(file).map(|ff| &ff.aliases) else {
+    let Some(ff) = files.get(file) else {
         return binding;
     };
     let mut current = binding;
     let mut visited: FxHashSet<&str> = FxHashSet::default();
-    while let Some(next) = aliases.get(current) {
+    // `Object.assign(R, …)` returns `R` itself, so it renders as `R` does.
+    while let Some(next) = ff.aliases.get(current).or_else(|| ff.assigned_aliases.get(current)) {
         if !visited.insert(current) {
             return binding;
         }
@@ -3093,6 +3094,17 @@ fn run_with_system_floor(
                 .get_or_insert_with(|| global_lookup.clone())
                 .publish(name, &ids, &usage_sources);
         }
+        // `const B = Object.assign(R, …)` returns `R` itself: `<B>` renders as
+        // `R` when this file's own declarations and imports settle it.
+        for alias in ff.assigned_aliases.keys() {
+            let ids = resolve_declared_identity(path, alias, files, inputs, &evaluated_ids);
+            if ids.is_empty() || global_lookup.attribution.get(alias.as_str()) == Some(&ids) {
+                continue;
+            }
+            file_lookup
+                .get_or_insert_with(|| global_lookup.clone())
+                .publish(alias, &ids, &usage_sources);
+        }
         let takes_system_prop = |file: &str, name: &str, prop: &str| {
             resolve_declared_identity(file, name, files, inputs, &evaluated_ids)
                 .iter()
@@ -3200,6 +3212,76 @@ fn run_with_system_floor(
 
         all_usage_results.push(usage_result);
     }
+
+    // A component a reference hands somewhere usage tracking does not follow
+    // can render there with any props, so every option it declares stays.
+    let mut escaped_ids: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for (path, ff) in files {
+        let mut names: Vec<&str> = Vec::new();
+        for name in &ff.value_escapes {
+            names.push(name);
+            // An escaping compose family hands over its slots.
+            if let Some(members) = member_bindings.get(path) {
+                escaped_ids.extend(
+                    members
+                        .iter()
+                        .filter(|(tag, _)| {
+                            tag.strip_prefix(name.as_str()).is_some_and(|rest| rest.starts_with('.'))
+                        })
+                        .map(|(_, component)| component.clone()),
+                );
+            }
+        }
+        // An exported `Object.assign` alias renders in other modules, where it
+        // is not followed.
+        for alias in ff.assigned_aliases.keys() {
+            let exported = ff.default_export_binding.as_deref() == Some(alias)
+                || ff.exports.iter().any(|e| e.source.is_none() && e.local.as_deref() == Some(alias));
+            if exported {
+                names.push(alias);
+            }
+        }
+        for name in names {
+            escaped_ids.extend(resolve_usage_identity(
+                path,
+                name,
+                files,
+                inputs,
+                &evaluated_ids,
+                &ids_by_binding,
+            ));
+        }
+    }
+    let mut opened_usage = UsageScanResult::default();
+    for component_id in &escaped_ids {
+        let Some((component_css, _, _, _, _, custom_configs, _)) = evaluated.get(component_id)
+        else {
+            continue;
+        };
+        for variant in &component_css.variants {
+            opened_usage.variant_usages.extend(variant.options.iter().map(|(option, _)| {
+                crate::jsx_scan::VariantUsage {
+                    component_binding: component_id.clone(),
+                    variant_prop: variant.prop.clone(),
+                    value: option.clone(),
+                }
+            }));
+        }
+        opened_usage.state_usages.extend(component_css.states.iter().map(|(state, _)| {
+            crate::jsx_scan::StateUsage {
+                component_binding: component_id.clone(),
+                state_name: state.clone(),
+            }
+        }));
+        for prop_name in custom_configs.iter().flat_map(|cc| cc.keys()) {
+            all_custom_dynamic_usages.push(DynamicPropUsage {
+                prop_name: prop_name.clone(),
+                binding: component_id.clone(),
+            });
+        }
+        opened_usage.rendered_components.insert(component_id.clone());
+    }
+    all_usage_results.push(opened_usage);
 
     usage_residue.sort_by(|a, b| {
         (&a.file, a.span.start, a.span.end, &a.binding, &a.prop).cmp(&(
@@ -6375,6 +6457,117 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
                 !out.diagnostics.iter().any(|d| d.kind == "bail"),
                 "'{specifier}': {:?}",
                 out.diagnostics
+            );
+        }
+    }
+
+    const RECIPE: &str = "export const R = ds.styles({})\n\
+        .variant({ prop: 'size', defaultVariant: 'md', variants: { sm: { padding: '1px' }, md: { padding: '2px' }, lg: { padding: '3px' } } })\n\
+        .states({ active: { display: 'flex' }, busy: { display: 'grid' } })\n\
+        .asElement('div');\n";
+
+    /// The `size` options and states whose CSS survives pruning for `R`.
+    fn kept_options(entries: &[(&str, &str)]) -> (Vec<&'static str>, Vec<&'static str>) {
+        let out = analyze(entries, &test_inputs());
+        let class = class_of(&out, "r.tsx::R");
+        let sizes = ["sm", "md", "lg"]
+            .into_iter()
+            .filter(|size| out.css.contains(&format!(".{class}--size-{size}")))
+            .collect();
+        let states = ["active", "busy"]
+            .into_iter()
+            .filter(|state| out.css.contains(&format!(".{class}--{state}")))
+            .collect();
+        (sizes, states)
+    }
+
+    #[test]
+    fn direct_renders_still_prune_unused_options() {
+        let app = "import { R } from './r';\nexport const App = () => <R size=\"sm\" active />;\n";
+        assert_eq!(kept_options(&[("r.tsx", RECIPE), ("app.tsx", app)]), (vec!["sm"], vec!["active"]));
+    }
+
+    /// Renders usage tracking follows still prune: a compose slot and
+    /// `createElement` with literal props.
+    #[test]
+    fn followed_renders_through_values_still_prune() {
+        for setup in [
+            "const Fam = compose({ Root: R }, { name: 'Fam' });\n\
+             export const App = () => <Fam.Root size=\"sm\" active />;",
+            "export const App = () => createElement(R, { size: 'sm', active: true });",
+        ] {
+            let app = format!("import {{ R }} from './r';\n{setup}\n");
+            assert_eq!(
+                kept_options(&[("r.tsx", RECIPE), ("app.tsx", app.as_str())]),
+                (vec!["sm"], vec!["active"]),
+                "{setup}"
+            );
+        }
+    }
+
+    /// `Object.assign(R, …)` returns `R`, so its renders count for `R`: `lg`
+    /// stays and nothing else opens.
+    #[test]
+    fn object_assign_aliases_keep_the_options_they_render() {
+        let app = "import { R } from './r';\n\
+                   const B = Object.assign(R, { displayName: 'B' });\n\
+                   export const App = () => <><R size=\"sm\" active /><B size=\"lg\" /></>;\n";
+        assert_eq!(
+            kept_options(&[("r.tsx", RECIPE), ("app.tsx", app)]),
+            (vec!["sm", "lg"], vec!["active"])
+        );
+    }
+
+    /// A component passed anywhere but a JSX tag can render with any props
+    /// there, so every option it declares stays.
+    #[test]
+    fn components_passed_as_values_keep_every_option() {
+        for (setup, render) in [
+            ("const pick = (c) => c;\nconst C = pick(R);", "<C size=\"lg\" />"),
+            ("const Slot = (props) => null;", "<Slot as={R} size=\"lg\" />"),
+            ("const registry = { button: R };\nexport const lookup = () => registry;", "null"),
+            ("const list = [R];", "null"),
+            ("const Kit = { Item: R };", "<Kit.Item size=\"lg\" />"),
+            (
+                "const pick = (c) => c;\nconst Fam = compose({ Root: R }, { name: 'Fam' });\nconst F = pick(Fam);",
+                "<F.Root size=\"lg\" />",
+            ),
+        ] {
+            let app = format!(
+                "import {{ R }} from './r';\n{setup}\n\
+                 export const App = () => <><R size=\"sm\" active />{{{render}}}</>;\n"
+            );
+            assert_eq!(
+                kept_options(&[("r.tsx", RECIPE), ("app.tsx", app.as_str())]),
+                (vec!["sm", "md", "lg"], vec!["active", "busy"]),
+                "{setup}"
+            );
+        }
+    }
+
+    /// An alias exported to other modules, or a default export, is rendered
+    /// where usage tracking does not follow it, so it opens its target.
+    #[test]
+    fn exported_aliases_keep_every_option_of_their_target() {
+        for (recipe, consumer) in [
+            (
+                format!("{RECIPE}export const B = Object.assign(R, {{}});\n"),
+                "import { B } from './r';\nexport const Other = () => <B size=\"lg\" />;\n",
+            ),
+            (
+                format!("{RECIPE}export const B = R;\n"),
+                "import { B } from './r';\nexport const Other = () => <B size=\"lg\" />;\n",
+            ),
+            (
+                format!("{RECIPE}export default R;\n"),
+                "import B from './r';\nexport const Other = () => <B size=\"lg\" />;\n",
+            ),
+        ] {
+            let app = "import { R } from './r';\nexport const App = () => <R size=\"sm\" active />;\n";
+            assert_eq!(
+                kept_options(&[("r.tsx", recipe.as_str()), ("app.tsx", app), ("other.tsx", consumer)]),
+                (vec!["sm", "md", "lg"], vec!["active", "busy"]),
+                "{recipe}"
             );
         }
     }

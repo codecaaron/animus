@@ -426,7 +426,7 @@ pub(crate) fn collect_enriched_usage(
     static_values: &FxHashMap<String, Value>,
     chains: &[&ChainDescriptor],
     exports: &[ExportFact],
-) -> (Vec<UsageFact>, BTreeSet<String>) {
+) -> (Vec<UsageFact>, BTreeSet<String>, BTreeSet<String>) {
     let exported: FxHashSet<&str> = exports.iter().filter_map(|e| e.local.as_deref()).collect();
     let candidates: Vec<&str> = chains
         .iter()
@@ -437,7 +437,9 @@ pub(crate) fn collect_enriched_usage(
         })
         .map(|chain| chain.binding.as_str())
         .collect();
-    let scoping = (!static_values.is_empty() || !candidates.is_empty())
+    let may_escape = !chains.is_empty()
+        || program.body.iter().any(|stmt| matches!(stmt, Statement::ImportDeclaration(_)));
+    let scoping = (!static_values.is_empty() || !candidates.is_empty() || may_escape)
         .then(|| SemanticBuilder::new().build(program).semantic.into_scoping());
     let mut collector = FactCollector {
         facts: Vec::new(),
@@ -469,8 +471,200 @@ pub(crate) fn collect_enriched_usage(
         }
         _ => BTreeSet::new(),
     };
-    (collector.facts, confined)
+    let escapes = match &scoping {
+        Some(scoping) if may_escape => {
+            let mut scan = EscapeScan {
+                scoping,
+                chains,
+                namespaces: collect_namespace_imports(program).into_keys().collect(),
+                escapes: BTreeSet::new(),
+                ancestors: Vec::new(),
+            };
+            if scoping.root_unresolved_references().contains_key("eval") {
+                // Direct eval can hand any binding anywhere.
+                let every: Vec<String> = scoping
+                    .iter_bindings_in(scoping.root_scope_id())
+                    .map(|symbol| scoping.symbol_name(symbol).to_string())
+                    .filter(|name| scan.is_candidate(name))
+                    .collect();
+                scan.escapes.extend(every);
+            } else {
+                scan.visit_program(program);
+            }
+            scan.escapes
+        }
+        _ => BTreeSet::new(),
+    };
+    (collector.facts, confined, escapes)
 }
+
+/// Visits every value reference to a module-scope binding that may name a
+/// component, and records the ones usage tracking does not follow: a
+/// reference that is not a JSX tag, an extracted `.extend()` base, a
+/// `createElement` first argument, a named export, the target of a top-level
+/// `const X = Object.assign(…)`, or a member of a `compose()` call. Such a
+/// component can render anywhere with any props: a plain `const X = R` alias
+/// and an object member (`<Kit.Item>`) are escapes, since usage follows
+/// neither. A member read records its dotted path (`Card.Body`).
+struct EscapeScan<'a, 's> {
+    scoping: &'s Scoping,
+    chains: &'s [&'s ChainDescriptor],
+    /// Namespace imports: `ui.Button` can name a component whatever the
+    /// namespace is called.
+    namespaces: BTreeSet<String>,
+    escapes: BTreeSet<String>,
+    ancestors: Vec<AstKind<'a>>,
+}
+
+impl EscapeScan<'_, '_> {
+    fn is_candidate(&self, name: &str) -> bool {
+        name.starts_with(|c: char| c.is_ascii_uppercase())
+            || self.namespaces.contains(name)
+            || self.chains.iter().any(|chain| chain.binding == name)
+    }
+}
+
+impl<'a> Visit<'a> for EscapeScan<'a, '_> {
+    fn enter_node(&mut self, kind: AstKind<'a>) {
+        self.ancestors.push(kind);
+    }
+
+    fn leave_node(&mut self, _kind: AstKind<'a>) {
+        self.ancestors.pop();
+    }
+
+    fn visit_identifier_reference(&mut self, ident: &IdentifierReference<'a>) {
+        let Some(reference) = ident.reference_id.get().map(|id| self.scoping.get_reference(id)) else {
+            return;
+        };
+        let Some(symbol) = reference.symbol_id() else { return };
+        if !reference.is_value()
+            || self.scoping.symbol_scope_id(symbol) != self.scoping.root_scope_id()
+        {
+            return;
+        }
+        let name = self.scoping.symbol_name(symbol);
+        if !self.is_candidate(name) {
+            return;
+        }
+        if let Some(path) = escape_path(name, ident.span, &self.ancestors, self.chains) {
+            self.escapes.insert(path);
+        }
+    }
+}
+
+/// The dotted path under which a reference escapes, or `None` when usage
+/// tracking follows it. `ancestors` runs from the root to the parent.
+fn escape_path(
+    name: &str,
+    span: oxc::span::Span,
+    ancestors: &[AstKind<'_>],
+    chains: &[&ChainDescriptor],
+) -> Option<String> {
+    use oxc::span::GetSpan;
+    let mut path = name.to_string();
+    let mut current = span;
+    let mut rest = ancestors.iter().rev();
+    while let Some(parent) = rest.next() {
+        match parent {
+            AstKind::ParenthesizedExpression(_)
+            | AstKind::TSAsExpression(_)
+            | AstKind::TSSatisfiesExpression(_)
+            | AstKind::TSNonNullExpression(_)
+            | AstKind::TSTypeAssertion(_)
+            | AstKind::TSInstantiationExpression(_) => current = parent.span(),
+            AstKind::JSXOpeningElement(_)
+            | AstKind::JSXClosingElement(_)
+            | AstKind::JSXMemberExpression(_)
+            | AstKind::ExportSpecifier(_) => return None,
+            AstKind::StaticMemberExpression(member) if member.object.span() == current => {
+                let extracted_base = member.property.name == "extend"
+                    && chains.iter().any(|chain| {
+                        chain.extractable
+                            && chain.extends_from.as_deref() == Some(name)
+                            && chain.span.0 <= member.span.start
+                            && member.span.end <= chain.span.1
+                    });
+                if extracted_base {
+                    return None;
+                }
+                path.push('.');
+                path.push_str(&member.property.name);
+                current = member.span;
+            }
+            AstKind::CallExpression(call)
+                if call.arguments.first().map(GetSpan::span) == Some(current) =>
+            {
+                let callee = crate::chain_walk::unwrap_type_assertions(&call.callee);
+                let callee_name = match callee {
+                    Expression::Identifier(id) => Some(id.name.as_str()),
+                    Expression::StaticMemberExpression(member) => Some(member.property.name.as_str()),
+                    _ => None,
+                };
+                if callee_name == Some("createElement") {
+                    return None;
+                }
+                let object_assign = matches!(callee, Expression::StaticMemberExpression(member)
+                    if member.object.is_specific_id("Object") && member.property.name == "assign");
+                return (!(object_assign && initializes_top_level_const(call.span, rest))).then_some(path);
+            }
+            // A compose() family's slots render through its member tags; any
+            // other object member is not followed.
+            AstKind::ObjectProperty(property) if property.value.span() == current => {
+                let Some(AstKind::ObjectExpression(object)) = rest.next() else {
+                    return Some(path);
+                };
+                let slot = matches!(rest.next(), Some(AstKind::CallExpression(call))
+                    if call.arguments.first().map(GetSpan::span) == Some(object.span)
+                        && matches!(crate::chain_walk::unwrap_type_assertions(&call.callee), Expression::Identifier(id)
+                            if matches!(id.name.as_str(), "compose" | "composeWithContext")));
+                return (!slot).then_some(path);
+            }
+            _ => return Some(path),
+        }
+    }
+    Some(path)
+}
+
+/// Whether the expression at `span` initializes a top-level `const`, given
+/// the ancestors above it from the innermost out.
+fn initializes_top_level_const<'b, 'a: 'b>(
+    span: oxc::span::Span,
+    mut ancestors: impl Iterator<Item = &'b AstKind<'a>>,
+) -> bool {
+    use oxc::ast::ast::VariableDeclarationKind;
+    use oxc::span::GetSpan;
+    let mut current = span;
+    let declarator = loop {
+        match ancestors.next() {
+            Some(
+                kind @ (AstKind::ParenthesizedExpression(_)
+                | AstKind::TSAsExpression(_)
+                | AstKind::TSSatisfiesExpression(_)
+                | AstKind::TSNonNullExpression(_)
+                | AstKind::TSTypeAssertion(_)
+                | AstKind::TSInstantiationExpression(_)),
+            ) => current = kind.span(),
+            Some(AstKind::VariableDeclarator(declarator)) => break declarator,
+            _ => return false,
+        }
+    };
+    if declarator.init.as_ref().map(GetSpan::span) != Some(current) {
+        return false;
+    }
+    let Some(AstKind::VariableDeclaration(declaration)) = ancestors.next() else {
+        return false;
+    };
+    declaration.kind == VariableDeclarationKind::Const
+        && match ancestors.next() {
+            Some(AstKind::Program(_)) => true,
+            Some(AstKind::ExportNamedDeclaration(_)) => {
+                matches!(ancestors.next(), Some(AstKind::Program(_)))
+            }
+            _ => false,
+        }
+}
+
 
 /// Visits every value reference to a candidate component binding. The
 /// binding stays confined only while each is the name of a JSX element
