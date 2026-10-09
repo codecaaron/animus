@@ -57,6 +57,9 @@ export function checkCustomProperties(
     { css: input.globalCss, owner: globalOwner },
   ];
   for (const { css, owner } of sheets) {
+    // Without a registration only a self-reference can be found, and the
+    // text shows whether one may exist before any declaration is parsed.
+    if (registered.size === 0 && !SELF_REFERENCE_TEXT.test(css)) continue;
     const parsed = declarations(css);
     const discreteRules = new Set(
       parsed
@@ -185,6 +188,9 @@ function declarations(css: string): Declaration[] {
   return found;
 }
 
+/** Every `--x: var(--x)` that `isSelfReference` finds, and more. */
+const SELF_REFERENCE_TEXT = /(--[^\s:;{}()]+)\s*:\s*var\(\s*\1\s*\)/;
+
 function isSelfReference(declaration: Declaration): boolean {
   return (
     declaration.property.startsWith('--') &&
@@ -241,10 +247,13 @@ function animatedProperties(
   ) {
     return [];
   }
-  // Each item names its property first; a later `--x` is a value, such as
-  // a duration read from a variable.
+  // A bare `--x` names the item's property wherever it stands, before or
+  // after its duration; a value read from a variable sits inside var().
   return topLevelItems(declaration.value).flatMap((item) => {
-    const property = item.trim().split(/\s+/)[0] ?? '';
+    const property =
+      topLevelTokens(item.replace(/\/\*[\s\S]*?\*\//g, ' ')).find((token) =>
+        token.startsWith('--')
+      ) ?? '';
     return property.startsWith('--')
       ? [
           {
@@ -257,6 +266,25 @@ function animatedProperties(
         ]
       : [];
   });
+}
+
+/** The whitespace-separated tokens of `item` outside any parentheses. */
+function topLevelTokens(item: string): string[] {
+  const tokens: string[] = [];
+  let depth = 0;
+  let token = '';
+  for (const c of item) {
+    if (c === '(') depth += 1;
+    else if (c === ')') depth -= 1;
+    if (depth === 0 && /\s/.test(c)) {
+      if (token) tokens.push(token);
+      token = '';
+    } else {
+      token += c;
+    }
+  }
+  if (token) tokens.push(token);
+  return tokens;
 }
 
 function topLevelItems(value: string): string[] {
@@ -289,7 +317,7 @@ function interpolationGap(
 function componentOwner(
   manifest: Pick<ProjectManifest, 'components'>
 ): (declaration: Declaration) => Finding['owner'] {
-  const components = Object.values(manifest.components);
+  const components = Object.values(manifest.components ?? {});
   return (declaration) => {
     const selector = [...declaration.context]
       .reverse()

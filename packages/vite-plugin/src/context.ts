@@ -21,7 +21,7 @@ import {
   serializeStaticCss,
   snapshotFilePlans,
   staleDistIncludesMessage,
-  substituteAssetPlaceholders,
+  substituteSheetAssets,
   toWatchKeys,
   unresolvableIncludesMessage,
   runStructuralSelfCheck,
@@ -41,6 +41,7 @@ import { ResetCoalescer } from './reset-coalescer';
 import type { LightningTargets } from './css';
 import type { AnimusExtractOptions } from './index';
 import type {
+  AssetSheets,
   ExcludeMatcher,
   ExternalPackageOutcome,
   ManifestSheets,
@@ -139,6 +140,12 @@ export function pruneFileCache(
   const rel = relative(rootDir, resolve(absPath));
   return cache.delete(rel);
 }
+
+const NO_SHEETS: AssetSheets = {
+  variableCss: '',
+  globalCss: '',
+  componentCss: '',
+};
 
 export class PluginContext {
   readonly options: AnimusExtractOptions;
@@ -644,23 +651,26 @@ export class PluginContext {
    *  `system`, however and whenever that was assigned; `system` keeps the
    *  placeholders for the next asset pass. */
   get variableCss(): string {
-    return substituteAssetPlaceholders(
-      this.system.variableCss,
+    return substituteSheetAssets(
+      { ...NO_SHEETS, variableCss: this.system.variableCss },
       this.assetUrlBySpecifier
-    );
+    ).variableCss;
   }
 
-  /** Substitutes the analysis sheets in place; the theme's variable CSS is
-   *  substituted on read (`variableCss`). */
+  /** Substitutes the analysis sheets in place, through the same step as the
+   *  session; the theme's variable CSS is substituted on read
+   *  (`variableCss`). */
   substituteSheets(): void {
-    this.globalCss = substituteAssetPlaceholders(
-      this.globalCss,
+    const substituted = substituteSheetAssets(
+      {
+        ...NO_SHEETS,
+        globalCss: this.globalCss,
+        componentCss: this.resolvedComponentCss,
+      },
       this.assetUrlBySpecifier
     );
-    this.resolvedComponentCss = substituteAssetPlaceholders(
-      this.resolvedComponentCss,
-      this.assetUrlBySpecifier
-    );
+    this.globalCss = substituted.globalCss;
+    this.resolvedComponentCss = substituted.componentCss;
   }
 
   /** Resolves asset specifiers a system reload introduced. Node-side only —

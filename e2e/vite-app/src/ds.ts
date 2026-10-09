@@ -68,6 +68,15 @@ export const theme = createTheme()
       texture: `url("${asset('@animus-ui/test-ds/assets/test-font.woff2')}")`,
     },
   })
+  // An emitted scale declares asset() on `:root`, through the theme's
+  // variable CSS; `Grained` reads it as a variable.
+  .addScale({
+    name: 'patterns',
+    emit: true,
+    values: {
+      grain: `url("${asset('@animus-ui/test-ds/assets/test-font.woff2')}")`,
+    },
+  })
   .build();
 
 export type ViteAppTheme = typeof theme;

@@ -10,9 +10,17 @@ const escapeRegExp = (value: string): string =>
 
 const PREFIX_RE = escapeRegExp(ASSET_PLACEHOLDER_PREFIX);
 
-const QUOTED_PLACEHOLDER_RE = new RegExp(`(['"])${PREFIX_RE}([^'"]*?)\\1`, 'g');
+// Only a url() argument is an asset reference; the same text elsewhere, such
+// as in a `content` string, is ordinary text.
+const QUOTED_PLACEHOLDER_RE = new RegExp(
+  `url\\(\\s*(['"])${PREFIX_RE}([^'"]*?)\\1`,
+  'g'
+);
 
-const BARE_PLACEHOLDER_RE = new RegExp(`${PREFIX_RE}([^'")\\s]+)`, 'g');
+const BARE_PLACEHOLDER_RE = new RegExp(
+  `url\\(\\s*${PREFIX_RE}([^'")\\s]+)`,
+  'g'
+);
 
 export function findAssetSpecifiers(css: string): string[] {
   if (!css.includes(ASSET_PLACEHOLDER_PREFIX)) return [];
@@ -42,11 +50,15 @@ export function substituteAssetPlaceholders(
   let out = css;
   for (const specifier of specifiers) {
     const placeholder = new RegExp(
-      escapeRegExp(ASSET_PLACEHOLDER_PREFIX + specifier) +
+      String.raw`(url\(\s*['"]?)` +
+        escapeRegExp(ASSET_PLACEHOLDER_PREFIX + specifier) +
         String.raw`(?=['")\s]|$)`,
       'g'
     );
-    out = out.replace(placeholder, () => urlBySpecifier.get(specifier)!);
+    out = out.replace(
+      placeholder,
+      (_match, opening: string) => opening + urlBySpecifier.get(specifier)!
+    );
   }
   return out;
 }

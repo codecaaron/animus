@@ -22,6 +22,10 @@ const Textured = ds
   .styles({ backgroundImage: '{images.texture}' })
   .asElement('div');
 
+const Grained = ds
+  .styles({ backgroundImage: '{patterns.grain}' })
+  .asElement('div');
+
 export function App() {
   return (
     <Stack p={32} gap={24}>
@@ -29,6 +33,7 @@ export function App() {
         <Heading>Vite Test App</Heading>
         <Subheading>Extraction proof for vite-plugin</Subheading>
         <Textured />
+        <Grained />
       </Stack>
 
       <Stack direction="row" gap={8}>

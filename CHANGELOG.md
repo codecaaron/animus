@@ -5,6 +5,19 @@ See [Conventional Commits](https://conventionalcommits.org) for commit guideline
 
 ## Unreleased
 
+**Only `url()` arguments are treated as `asset()` references.** Placeholder
+text elsewhere in a style, such as `content: "animus-asset:note"`, is now left
+as written. Before, any such text in component CSS was taken for an asset: a
+`strict` build failed on it as an unresolvable specifier, and otherwise it
+was rewritten.
+
+**Custom-property diagnostics find more transitions and cost less.** A
+transitioned custom property is now recognised after a leading comment
+(`transition: /* fade */ --tone 0.2s`) and after its duration
+(`transition: 1s --tone`). A project without `@property` registrations no
+longer parses its stylesheets for the self-reference check unless the text
+can hold one, and the unit fallback runs once per analysis instead of twice.
+
 **`asset()` resolves in theme scale values.** An `asset()` call inside a
 `createTheme` scale value, such as
 ``images: { rock: `url("${asset('@acme/media/rock.jpg')}")` }``, now

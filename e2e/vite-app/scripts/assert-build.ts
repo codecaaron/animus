@@ -172,6 +172,22 @@ async function main(): Promise<void> {
     );
   });
 
+  // asset() in an emitted scale: the theme declares it on `:root`.
+  const grainUrl = css.match(
+    /--patterns-grain:\s*url\((['"]?)([^'")]+)\1\)/
+  )?.[2];
+  if (!grainUrl || !/test-font[^'")]*\.woff2$/.test(grainUrl)) {
+    throw new AssertionError(
+      `asset() theme-variable witness: expected a bundler-resolved test-font URL in --patterns-grain on :root, got ${grainUrl ?? '<none>'}`
+    );
+  }
+  await readFile(resolve(DIST, grainUrl.replace(/^\//, ''))).catch(() => {
+    throw new AssertionError(
+      `asset() theme-variable witness: ${grainUrl} does not correspond to an emitted file in dist`,
+      { grainUrl }
+    );
+  });
+
   // The theme's system-fallback blocks stay unlayered beside `:root` so an
   // explicit mode can override the OS fallback at the same cascade level.
   assertConditionsInsideLayers(css, {

@@ -37,6 +37,12 @@ describe('findAssetSpecifiers', () => {
     expect(findAssetSpecifiers(css)).toEqual(['@acme/tokens/inter.woff2']);
   });
 
+  test('placeholder text outside url() is ordinary text', () => {
+    const css =
+      '.note::after { content: "animus-asset:foo"; } .hero { background: url("animus-asset:@acme/rock.jpg"); }';
+    expect(findAssetSpecifiers(css)).toEqual(['@acme/rock.jpg']);
+  });
+
   test('duplicate references dedupe', () => {
     const css =
       "url('animus-asset:@acme/x.woff2') url('animus-asset:@acme/x.woff2')";
@@ -67,6 +73,19 @@ describe('substituteAssetPlaceholders', () => {
       ])
     );
     expect(out).toBe("url('/short.woff') url('/long.woff2')");
+  });
+
+  test('placeholder text outside url() is left as written', () => {
+    const css =
+      '.note::after { content: "animus-asset:@acme/rock.jpg"; } .hero { background: url( "animus-asset:@acme/rock.jpg" ); }';
+    expect(
+      substituteAssetPlaceholders(
+        css,
+        new Map([['@acme/rock.jpg', '/rock.1.jpg']])
+      )
+    ).toBe(
+      '.note::after { content: "animus-asset:@acme/rock.jpg"; } .hero { background: url( "/rock.1.jpg" ); }'
+    );
   });
 
   test('unmapped specifiers keep their placeholder for the caller to gate', () => {

@@ -315,3 +315,57 @@ describe('owner lookup', () => {
     expect(reads).toBe(0);
   });
 });
+
+describe('checks on emitted CSS alone', () => {
+  // Both the theme's contextual names and their custom-property form, as the
+  // system config carries them.
+  const unregistered = {
+    variableCss: '',
+    contextualVarsJson: null,
+    contextualProperties: [],
+  };
+  const registeredAnimation = {
+    variableCss: '@property --x { syntax: "*"; inherits: true; }',
+    contextualVarsJson: '{"colors":["a","b"]}',
+    contextualProperties: ['--a', '--b'],
+  };
+
+  it('reports a self-reference in any spacing without registrations', () => {
+    const diagnostics = checkCustomProperties({
+      system: unregistered,
+      manifest: { components: {} },
+      componentCss: '.x {\n  --a :var( --a ) ;\n}\n',
+      globalCss: '',
+    });
+    expect(diagnostics.map((d) => d.code)).toEqual([PROPERTY_SELF_REFERENCE]);
+  });
+
+  it('reads a manifest without components', () => {
+    const manifest: Parameters<typeof checkCustomProperties>[0]['manifest'] =
+      JSON.parse('{}');
+    const diagnostics = checkCustomProperties({
+      system: unregistered,
+      manifest,
+      componentCss: '.x {\n  --a: var(--a);\n}\n',
+      globalCss: '',
+    });
+    expect(diagnostics.map((d) => d.code)).toEqual([PROPERTY_SELF_REFERENCE]);
+  });
+
+  it('finds a transitioned property after a comment or a duration', () => {
+    const diagnostics = checkCustomProperties({
+      system: registeredAnimation,
+      manifest: { components: {} },
+      componentCss:
+        '.t {\n  transition: /* x */ --a 0.2s;\n}\n.u {\n  transition: 1s --b, opacity 1s;\n}\n.v {\n  transition: opacity var( --b ) ease;\n}\n',
+      globalCss: '',
+    });
+    expect(diagnostics.map((d) => d.code)).toEqual([
+      PROPERTY_UNREGISTERED_ANIMATION,
+      PROPERTY_UNREGISTERED_ANIMATION,
+    ]);
+    expect(diagnostics.map((d) => d.message).join('\n')).toMatch(
+      /--a[\s\S]*--b|--b[\s\S]*--a/
+    );
+  });
+});
