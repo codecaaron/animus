@@ -200,6 +200,10 @@ const config: KnipConfig = {
     // Sources the animus CLI build finds by walking the directory.
     'e2e/rollup-app/src/**',
     'packages/system/__tests__/types.test-d.tsx',
+    // Consumer fixtures verify:types compiles through their tsconfigs.
+    'packages/system/__tests__/published/**',
+    'packages/test-ds/__tests__/published/**',
+    'e2e/packed-app/src/published-types.ts',
     'packages/test-ds/src/dev-types.ts',
   ],
   ignoreExportsUsedInFile: true,
