@@ -1,4 +1,9 @@
-import { createElement, createRef, type ReactElement } from 'react';
+import {
+  createElement,
+  createRef,
+  type ReactElement,
+  type ReactNode,
+} from 'react';
 import { flushSync } from 'react-dom';
 
 import { createRoot } from 'react-dom/client';
@@ -241,5 +246,39 @@ describe('asChild', () => {
     } finally {
       errors.mockRestore();
     }
+  });
+});
+
+describe('component terminals', () => {
+  it('hand as and asChild to the target, which renders in every case', () => {
+    const received: { as?: string; asChild?: boolean }[] = [];
+    function Target(props: {
+      as?: 'h3' | 'button';
+      asChild?: boolean;
+      className?: string;
+      children?: ReactNode;
+    }) {
+      received.push({ as: props.as, asChild: props.asChild });
+      return createElement(
+        props.asChild ? 'span' : (props.as ?? 'h3'),
+        { id: 'wired', className: props.className },
+        props.children
+      );
+    }
+    const Heading = ds.styles({ display: 'block' }).asComponent(Target);
+
+    const asButton = renderToString(
+      createElement(Heading, { as: 'button' }, 'Title')
+    );
+    const asChild = renderToString(
+      createElement(Heading, { asChild: true }, createElement('a', {}, 'Title'))
+    );
+
+    expect(received).toEqual([
+      { as: 'button', asChild: undefined },
+      { as: undefined, asChild: true },
+    ]);
+    expect(asButton).toMatch(/^<button id="wired"/);
+    expect(asChild).toMatch(/^<span id="wired"[^>]*><a>Title<\/a><\/span>$/);
   });
 });

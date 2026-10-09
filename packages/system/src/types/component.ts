@@ -170,6 +170,8 @@ type DistributiveOmit<T, K extends PropertyKey> = T extends unknown
  * builder admitted: the active groups' props, variants, states and custom
  * props. Managed keys are removed from the wrapped component's props first —
  * intersecting a variant union with its own type for a key collapses to never.
+ * `as` and `asChild` are the target's own, since the runtime hands them to it:
+ * a target without them does not offer them.
  */
 type AnimusWrappedConsumerProps<
   C extends ComponentType<any>,
@@ -181,15 +183,13 @@ type AnimusWrappedConsumerProps<
   CP extends Record<string, SystemProp>,
 > = DistributiveOmit<
   ComponentPropsWithRef<C>,
-  AnimusManagedKeys<PR, GR, V, S, AG, CP>
+  Exclude<AnimusManagedKeys<PR, GR, V, S, AG, CP>, 'as' | 'asChild'>
 > &
   ResolvedGroupProps<PR, GR, AG> &
   VariantProps<V> &
   StateProps<S> &
   CustomPropValues<CP> &
   SelectorAliasProps<ResolvedGroupProps<PR, GR, AG>> & {
-    as?: keyof JSX.IntrinsicElements | ComponentType<any>;
-    asChild?: boolean;
     className?: string;
     children?: ReactNode;
   };

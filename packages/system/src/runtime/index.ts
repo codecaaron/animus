@@ -168,6 +168,11 @@ function renderAsChild(
   });
 }
 
+/**
+ * A string terminal renders `as` in place of its tag. A component terminal
+ * always renders its component, which receives `as` and `asChild` like any
+ * other prop, so its own wiring runs whatever element it ends up rendering.
+ */
 function renderElement(
   element: ElementType,
   filterProps: Set<string>,
@@ -176,7 +181,7 @@ function renderElement(
   classes: string[],
   dynamicStyle: Record<string, string> | undefined
 ): ReactElement {
-  const target = props.as || element;
+  const target = typeof element === 'string' ? props.as || element : element;
 
   const domProps: Record<string, any> = {
     ref,
@@ -203,9 +208,9 @@ export function createComponent(
   const variantProps = config.variants ? Object.keys(config.variants) : [];
   const stateProps = config.states || [];
   const systemPropNames = config.systemPropNames || [];
+  const ownsPolymorphism = typeof element === 'string';
   const filterProps = new Set([
-    'as',
-    'asChild',
+    ...(ownsPolymorphism ? ['as', 'asChild'] : []),
     ...variantProps,
     ...stateProps,
     ...systemPropNames,
@@ -225,7 +230,7 @@ export function createComponent(
         classes.push(props.className);
       }
 
-      return props.asChild
+      return props.asChild && ownsPolymorphism
         ? renderAsChild(
             className,
             filterProps,
