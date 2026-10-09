@@ -1340,18 +1340,30 @@ fn resolve_tag<'m>(
 /// renders and forwarding elements contribute.
 #[derive(Debug, Default)]
 pub struct WrapperProxies {
-    /// Wrapper tag → props its parameter names, which never reach a target.
-    pub named: FxHashMap<String, FxHashSet<String>>,
+    /// Wrapper tag → one lookup key per path to its targets, with the props
+    /// that path drops. A render records once per path, so a prop one path
+    /// drops still reaches the targets another path spreads it into.
+    pub paths: FxHashMap<String, Vec<(String, FxHashSet<String>)>>,
     /// Opening-element spans of forwarding elements: their spread carries
     /// exactly the wrapper's renders, so it opens nothing itself.
     pub forwarding: FxHashSet<(u32, u32)>,
 }
 
+/// A lookup key a render records under, with the props that never reach
+/// the components published there.
+type Lookup<'p> = (&'p str, Option<&'p FxHashSet<String>>);
+
 impl WrapperProxies {
-    /// Whether `attr` on `tag` reaches the component the tag renders.
-    fn reaches(&self, tag: &TagFact, attr: &str) -> bool {
-        !matches!(tag, TagFact::Ident(name)
-            if self.named.get(name).is_some_and(|named| named.contains(attr)))
+    /// Where a render of `tag`, found under `tag_name`, records: once per
+    /// path for a wrapper, else under `tag_name` with every prop.
+    fn lookups<'p>(&'p self, tag: &TagFact, tag_name: &'p str) -> Vec<Lookup<'p>> {
+        match tag {
+            TagFact::Ident(name) if self.paths.contains_key(name) => self.paths[name]
+                .iter()
+                .map(|(key, dropped)| (key.as_str(), Some(dropped)))
+                .collect(),
+            _ => vec![(tag_name, None)],
+        }
     }
 }
 
@@ -1374,43 +1386,47 @@ pub fn filter_custom_prop_scan(
         let Some((tag_name, resolved_binding)) = resolve_tag(tag, member_expr_bindings) else {
             continue;
         };
-        let Some(active_props) = component_props.get(tag_name) else {
-            continue;
-        };
-        let binding = resolved_binding.unwrap_or_else(|| tag_name.to_string());
-
-        for attr in attrs {
-            if !active_props.contains(&attr.name) || !proxies.reaches(tag, &attr.name) {
+        for (tag_name, dropped) in proxies.lookups(tag, tag_name) {
+            let Some(active_props) = component_props.get(tag_name) else {
                 continue;
-            }
-            for value in attr
-                .static_value
-                .iter()
-                .chain(attr.enumerable_values.iter())
-            {
-                // Per binding: equally named custom props of two components
-                // resolve through different configs.
-                let dedup_key = format!(
-                    "{}:{}:{}",
-                    binding,
-                    attr.name,
-                    serde_json::to_string(value).unwrap_or_else(|_| "null".to_string())
-                );
-                if seen.insert(dedup_key) {
-                    results.push(SystemPropUsage {
-                        prop_name: attr.name.clone(),
-                        value: value.clone(),
-                        binding: binding.clone(),
-                    });
+            };
+            let binding = resolved_binding.clone().unwrap_or_else(|| tag_name.to_string());
+
+            for attr in attrs {
+                if !active_props.contains(&attr.name)
+                    || dropped.is_some_and(|dropped| dropped.contains(&attr.name))
+                {
+                    continue;
                 }
-            }
-            if attr.dynamic {
-                let dedup_key = format!("{}::{}", binding, attr.name);
-                if dynamic_seen.insert(dedup_key) {
-                    dynamic_results.push(DynamicPropUsage {
-                        prop_name: attr.name.clone(),
-                        binding: binding.clone(),
-                    });
+                for value in attr
+                    .static_value
+                    .iter()
+                    .chain(attr.enumerable_values.iter())
+                {
+                    // Per binding: equally named custom props of two components
+                    // resolve through different configs.
+                    let dedup_key = format!(
+                        "{}:{}:{}",
+                        binding,
+                        attr.name,
+                        serde_json::to_string(value).unwrap_or_else(|_| "null".to_string())
+                    );
+                    if seen.insert(dedup_key) {
+                        results.push(SystemPropUsage {
+                            prop_name: attr.name.clone(),
+                            value: value.clone(),
+                            binding: binding.clone(),
+                        });
+                    }
+                }
+                if attr.dynamic {
+                    let dedup_key = format!("{}::{}", binding, attr.name);
+                    if dynamic_seen.insert(dedup_key) {
+                        dynamic_results.push(DynamicPropUsage {
+                            prop_name: attr.name.clone(),
+                            binding: binding.clone(),
+                        });
+                    }
                 }
             }
         }
@@ -1518,113 +1534,116 @@ pub fn filter_usage_scan(
                     result.identity_uncertain = true;
                     continue;
                 };
-                let has_props = component_props.contains_key(tag_name);
-                let has_config = component_configs.contains_key(tag_name);
-                if !has_props && !has_config {
-                    if matches!(tag, TagFact::Ident(name) if is_component_like_identifier(name)) {
-                        result.identity_uncertain = true;
-                    }
-                    continue;
-                }
-                let binding = resolved_binding.unwrap_or_else(|| tag_name.to_string());
-                result.rendered_components.insert(binding.clone());
-
-                let active_props = component_props.get(tag_name);
-                let custom = custom_props.get(tag_name);
-                let mut written: FxHashSet<&str> = FxHashSet::default();
-
-                for (index, attr) in attrs.iter().enumerate() {
-                    if !proxies.reaches(tag, &attr.name) {
+                // A wrapper render records once per path to its targets.
+                for (tag_name, dropped) in proxies.lookups(tag, tag_name) {
+                    let has_props = component_props.contains_key(tag_name);
+                    let has_config = component_configs.contains_key(tag_name);
+                    if !has_props && !has_config {
+                        if matches!(tag, TagFact::Ident(name) if is_component_like_identifier(name)) {
+                            result.identity_uncertain = true;
+                        }
                         continue;
                     }
-                    let settled = spread.is_none_or(|before| index >= before);
-                    if let Some(props) = active_props {
-                        if props.contains(&attr.name) {
-                            // A custom prop's static values belong to the custom
-                            // scan; decided before de-duplication so its usage
-                            // never takes a system usage's slot.
-                            let custom_owned = custom.is_some_and(|c| c.contains(&attr.name));
-                            for value in attr
-                                .static_value
-                                .iter()
-                                .chain(attr.enumerable_values.iter())
-                                .filter(|_| !custom_owned)
-                            {
-                                let dedup_key = format!(
-                                    "{}:{}",
-                                    attr.name,
-                                    serde_json::to_string(value)
-                                        .unwrap_or_else(|_| "null".to_string())
-                                );
-                                if seen.insert(dedup_key) {
-                                    result.system_prop_usages.push(SystemPropUsage {
-                                        prop_name: attr.name.clone(),
-                                        value: value.clone(),
+                    let binding = resolved_binding.clone().unwrap_or_else(|| tag_name.to_string());
+                    result.rendered_components.insert(binding.clone());
+
+                    let active_props = component_props.get(tag_name);
+                    let custom = custom_props.get(tag_name);
+                    let mut written: FxHashSet<&str> = FxHashSet::default();
+
+                    for (index, attr) in attrs.iter().enumerate() {
+                        if dropped.is_some_and(|dropped| dropped.contains(&attr.name)) {
+                            continue;
+                        }
+                        let settled = spread.is_none_or(|before| index >= before);
+                        if let Some(props) = active_props {
+                            if props.contains(&attr.name) {
+                                // A custom prop's static values belong to the custom
+                                // scan; decided before de-duplication so its usage
+                                // never takes a system usage's slot.
+                                let custom_owned = custom.is_some_and(|c| c.contains(&attr.name));
+                                for value in attr
+                                    .static_value
+                                    .iter()
+                                    .chain(attr.enumerable_values.iter())
+                                    .filter(|_| !custom_owned)
+                                {
+                                    let dedup_key = format!(
+                                        "{}:{}",
+                                        attr.name,
+                                        serde_json::to_string(value)
+                                            .unwrap_or_else(|_| "null".to_string())
+                                    );
+                                    if seen.insert(dedup_key) {
+                                        result.system_prop_usages.push(SystemPropUsage {
+                                            prop_name: attr.name.clone(),
+                                            value: value.clone(),
+                                            binding: binding.clone(),
+                                        });
+                                    }
+                                }
+                                if attr.dynamic {
+                                    let kind = attr
+                                        .dynamic_kind
+                                        .expect("dynamic AttrFact must carry an expression kind");
+                                    let span = attr
+                                        .dynamic_span
+                                        .expect("dynamic AttrFact must carry an expression span");
+                                    result.residue_sites.push(UsageResidueSite {
                                         binding: binding.clone(),
+                                        prop_name: attr.name.clone(),
+                                        kind,
+                                        span,
                                     });
+                                    let dedup_key = format!("__dynamic__:{}", attr.name);
+                                    if seen.insert(dedup_key) {
+                                        result.dynamic_prop_usages.push(DynamicPropUsage {
+                                            prop_name: attr.name.clone(),
+                                            binding: binding.clone(),
+                                        });
+                                    }
                                 }
                             }
-                            if attr.dynamic {
-                                let kind = attr
-                                    .dynamic_kind
-                                    .expect("dynamic AttrFact must carry an expression kind");
-                                let span = attr
-                                    .dynamic_span
-                                    .expect("dynamic AttrFact must carry an expression span");
-                                result.residue_sites.push(UsageResidueSite {
-                                    binding: binding.clone(),
-                                    prop_name: attr.name.clone(),
-                                    kind,
-                                    span,
+                        }
+
+                        if let Some(config) = component_configs.get(tag_name) {
+                            if config.variants.contains_key(&attr.name) {
+                                if settled {
+                                    written.insert(attr.name.as_str());
+                                }
+                                result.variant_usages.push(VariantUsage {
+                                    component_binding: binding.clone(),
+                                    variant_prop: attr.name.clone(),
+                                    value: attr.variant_class.clone(),
                                 });
-                                let dedup_key = format!("__dynamic__:{}", attr.name);
-                                if seen.insert(dedup_key) {
-                                    result.dynamic_prop_usages.push(DynamicPropUsage {
-                                        prop_name: attr.name.clone(),
-                                        binding: binding.clone(),
-                                    });
+                            }
+                            if config.states.contains(&attr.name) {
+                                if settled {
+                                    written.insert(attr.name.as_str());
                                 }
+                                result.state_usages.push(StateUsage {
+                                    component_binding: binding.clone(),
+                                    state_name: attr.name.clone(),
+                                });
                             }
                         }
                     }
 
-                    if let Some(config) = component_configs.get(tag_name) {
-                        if config.variants.contains_key(&attr.name) {
-                            if settled {
-                                written.insert(attr.name.as_str());
-                            }
-                            result.variant_usages.push(VariantUsage {
-                                component_binding: binding.clone(),
-                                variant_prop: attr.name.clone(),
-                                value: attr.variant_class.clone(),
-                            });
-                        }
-                        if config.states.contains(&attr.name) {
-                            if settled {
-                                written.insert(attr.name.as_str());
-                            }
-                            result.state_usages.push(StateUsage {
-                                component_binding: binding.clone(),
-                                state_name: attr.name.clone(),
-                            });
-                        }
+                    // A forwarding element's spread carries exactly the wrapper's
+                    // renders, which are recorded at the render.
+                    if let Some(config) = component_configs
+                        .get(tag_name)
+                        .filter(|_| !proxies.forwarding.contains(span))
+                    {
+                        record_unwritten_options(
+                            &mut result,
+                            &mut fully_open,
+                            &binding,
+                            config,
+                            &written,
+                            spread.is_some(),
+                        );
                     }
-                }
-
-                // A forwarding element's spread carries exactly the wrapper's
-                // renders, which are recorded at the render.
-                if let Some(config) = component_configs
-                    .get(tag_name)
-                    .filter(|_| !proxies.forwarding.contains(span))
-                {
-                    record_unwritten_options(
-                        &mut result,
-                        &mut fully_open,
-                        &binding,
-                        config,
-                        &written,
-                        spread.is_some(),
-                    );
                 }
             }
             UsageFact::CreateElement {

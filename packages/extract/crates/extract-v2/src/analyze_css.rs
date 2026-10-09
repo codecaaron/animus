@@ -1599,9 +1599,11 @@ fn resolve_identity(
 
 /// Each spread wrapper of `file` its renders can stand in for, with the
 /// components its forwarding elements reach (through same-module wrapper
-/// chains too), and what the filters need to proxy them. A wrapper that
-/// forwards to a component-like tag that resolves to nothing, or that sits in
-/// a cycle, is left out: its elements stay open and its renders stay
+/// chains too), and what the filters need to proxy them. Each wrapper is
+/// published under its own name for all its targets and under one key per
+/// path to them, grouped by the props that path drops. A wrapper that
+/// forwards to a component-like tag that resolves to nothing, or that sits
+/// in a cycle, is left out: its elements stay open and its renders stay
 /// uncertain.
 fn spread_wrapper_targets(
     file: &str,
@@ -1613,7 +1615,9 @@ fn spread_wrapper_targets(
     Vec<(String, Vec<String>)>,
     crate::usage_facts::WrapperProxies,
 ) {
-    type Reach = Option<(std::collections::BTreeSet<String>, FxHashSet<String>)>;
+    use std::collections::BTreeSet;
+    /// The props a path drops → the components it reaches.
+    type Paths = BTreeMap<BTreeSet<String>, BTreeSet<String>>;
     fn reach(
         name: &str,
         file: &str,
@@ -1621,8 +1625,8 @@ fn spread_wrapper_targets(
         files: &BTreeMap<String, FileFacts>,
         inputs: &CssInputs,
         evaluated_ids: &FxHashSet<String>,
-        memo: &mut FxHashMap<String, Option<Reach>>,
-    ) -> Reach {
+        memo: &mut FxHashMap<String, Option<Option<Paths>>>,
+    ) -> Option<Paths> {
         match memo.get(name) {
             Some(Some(done)) => return done.clone(),
             // Revisited before it resolved: a cycle.
@@ -1631,15 +1635,18 @@ fn spread_wrapper_targets(
         }
         memo.insert(name.to_string(), None);
         let wrapper = ff.spread_wrappers.get(name)?;
-        let mut targets = std::collections::BTreeSet::new();
-        let mut named: FxHashSet<String> = wrapper.named.iter().cloned().collect();
+        // The rest never carries the wrapper's own named props, on any path.
+        let named: BTreeSet<String> = wrapper.named.iter().cloned().collect();
+        let mut paths = Paths::new();
         let mut complete = true;
         for (_, tag) in &wrapper.forwarding {
             if ff.spread_wrappers.contains_key(tag) {
                 match reach(tag, file, ff, files, inputs, evaluated_ids, memo) {
-                    Some((inner, inner_named)) => {
-                        targets.extend(inner);
-                        named.extend(inner_named);
+                    Some(inner) => {
+                        for (dropped, ids) in inner {
+                            let dropped = dropped.union(&named).cloned().collect();
+                            paths.entry(dropped).or_default().extend(ids);
+                        }
                     }
                     None => complete = false,
                 }
@@ -1653,9 +1660,11 @@ fn spread_wrapper_targets(
             {
                 complete = false;
             }
-            targets.extend(ids);
+            if !ids.is_empty() {
+                paths.entry(named.clone()).or_default().extend(ids);
+            }
         }
-        let result = (complete && !targets.is_empty()).then_some((targets, named));
+        let result = (complete && !paths.is_empty()).then_some(paths);
         memo.insert(name.to_string(), Some(result.clone()));
         result
     }
@@ -1663,12 +1672,19 @@ fn spread_wrapper_targets(
     let mut published = Vec::new();
     let mut proxies = crate::usage_facts::WrapperProxies::default();
     for (name, wrapper) in &ff.spread_wrappers {
-        let Some((targets, named)) = reach(name, file, ff, files, inputs, evaluated_ids, &mut memo)
-        else {
+        let Some(paths) = reach(name, file, ff, files, inputs, evaluated_ids, &mut memo) else {
             continue;
         };
-        published.push((name.clone(), targets.into_iter().collect()));
-        proxies.named.insert(name.clone(), named);
+        let all: BTreeSet<&String> = paths.values().flatten().collect();
+        published.push((name.clone(), all.into_iter().cloned().collect()));
+        let mut lookups = Vec::new();
+        for (index, (dropped, ids)) in paths.into_iter().enumerate() {
+            // `#` never appears in a binding or a component id.
+            let key = format!("{name}#{index}");
+            published.push((key.clone(), ids.into_iter().collect()));
+            lookups.push((key, dropped.into_iter().collect()));
+        }
+        proxies.paths.insert(name.clone(), lookups);
         proxies
             .forwarding
             .extend(wrapper.forwarding.iter().map(|(span, _)| *span));
@@ -6921,6 +6937,39 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
              export const App = () => <><A size=\"lg\" /><R size=\"sm\" active /></>;",
         );
         assert!(sizes.contains(&"sm"), "{sizes:?}");
+    }
+
+    /// A prop an inner wrapper drops still reaches what the outer wrapper,
+    /// or another inner wrapper, spreads it into.
+    #[test]
+    fn wrapper_paths_drop_props_only_on_their_own_path() {
+        for (app, sizes, tones) in [
+            (
+                "const W1 = ({ tone, ...rest }) => <R {...rest} />;\n\
+                 const W2 = (props) => <><W1 {...props} /><S {...props} /></>;\n\
+                 export const App = () => <W2 tone=\"b\" size=\"lg\" />;",
+                vec!["lg"],
+                vec!["b"],
+            ),
+            (
+                "const W1a = ({ tone, ...rest }) => <R {...rest} />;\n\
+                 const W1b = (p) => <S {...p} />;\n\
+                 const W2 = (props) => <><W1a {...props} /><W1b {...props} /></>;\n\
+                 export const App = () => <W2 tone=\"b\" />;",
+                vec!["md"],
+                vec!["b"],
+            ),
+        ] {
+            let (kept_sizes, _, kept_tones) = wrapper_kept(app);
+            assert_eq!((kept_sizes, kept_tones), (sizes, tones), "{app}");
+        }
+        // Two paths to one component: each renders it.
+        let (sizes, _, _) = wrapper_kept(
+            "const W1 = ({ size, ...rest }) => <R {...rest} />;\n\
+             const W2 = (props) => <><W1 {...props} /><R {...props} /></>;\n\
+             export const App = () => <W2 size=\"lg\" />;",
+        );
+        assert_eq!(sizes, vec!["md", "lg"]);
     }
 
     fn analyze_with_logical_space(entries: &[(&str, &str)]) -> CssOutput {
