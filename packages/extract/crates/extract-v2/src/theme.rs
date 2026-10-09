@@ -1,6 +1,7 @@
 //! Theme and scale resolution: evaluated style values and the flat theme
 //! produce CSS declarations, shorthand tiers ordered before longhands.
 
+use std::borrow::Cow;
 use std::cell::RefCell;
 
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -154,7 +155,7 @@ pub type FlatTheme = FxHashMap<String, String>;
 
 pub type VariableMap = FxHashMap<String, String>;
 
-pub type ContextualVarsMap = FxHashMap<String, Vec<String>>;
+pub use crate::property_names::{ContextualVar, ContextualVarsMap};
 
 pub type SelectorAliasesMap = FxHashMap<String, String>;
 
@@ -176,6 +177,15 @@ impl ConditionAliasEntry {
 }
 
 pub type ConditionAliasesMap = FxHashMap<String, ConditionAliasEntry>;
+
+/// An alias's condition, with declared contextual variables in a style query
+/// given their final names.
+fn alias_condition(alias: &ConditionAliasEntry, contextual_vars: &ContextualVarsMap) -> Condition {
+    match contextual_vars.rename_authored(&alias.value) {
+        Cow::Borrowed(_) => alias.to_condition(),
+        Cow::Owned(value) => ConditionAliasEntry { value, ..alias.clone() }.to_condition(),
+    }
+}
 
 pub fn condition_from_raw_key(key: &str) -> Option<Condition> {
     if key.starts_with("@media") {
@@ -420,7 +430,7 @@ pub fn resolve_styles(
             } else if let Some(cond_alias) = ctx.condition_aliases.get(key) {
                 if let Some(nested_obj) = value.as_object() {
                     let frame = NestFrame::default().with_condition(
-                        cond_alias.to_condition(),
+                        alias_condition(cond_alias, ctx.contextual_vars),
                         ConditionEmitOrder::Aliased(cond_alias.order),
                     );
                     resolve_block_entries(
@@ -442,7 +452,7 @@ pub fn resolve_styles(
         }
 
         if key.starts_with('@') {
-            if let Some(condition) = condition_from_raw_key(key) {
+            if let Some(condition) = condition_from_raw_key(&ctx.contextual_vars.rename_authored(key)) {
                 let idx = raw_condition_index;
                 raw_condition_index += 1;
                 if let Some(nested_obj) = value.as_object() {
@@ -517,7 +527,7 @@ fn resolve_block_entries(
             } else if let Some(cond_alias) = ctx.condition_aliases.get(key) {
                 if let Some(nested_obj) = value.as_object() {
                     let child = frame.with_condition(
-                        cond_alias.to_condition(),
+                        alias_condition(cond_alias, ctx.contextual_vars),
                         ConditionEmitOrder::Aliased(cond_alias.order),
                     );
                     resolve_block_entries(
@@ -539,7 +549,7 @@ fn resolve_block_entries(
         }
 
         if key.starts_with('@') {
-            if let Some(condition) = condition_from_raw_key(key) {
+            if let Some(condition) = condition_from_raw_key(&ctx.contextual_vars.rename_authored(key)) {
                 let idx = *raw_condition_index;
                 *raw_condition_index += 1;
                 if let Some(nested_obj) = value.as_object() {
@@ -779,10 +789,16 @@ fn resolve_single_prop(
                 }
             }
             if let Some(css_value) = value_to_css_string(value) {
-                let resolved =
-                    resolve_token_aliases(&css_value, theme, variable_map, contextual_vars);
+                // Authored text is renamed before any token substitution, so
+                // a token's own final name is never renamed again.
+                let resolved = resolve_token_aliases(
+                    &contextual_vars.rename_authored(&css_value),
+                    theme,
+                    variable_map,
+                    contextual_vars,
+                );
                 return vec![CssDeclaration {
-                    property: camel_to_kebab(prop_name),
+                    property: contextual_vars.emitted_property(&camel_to_kebab(prop_name)).into_owned(),
                     value: resolved,
                 }];
             }
@@ -809,21 +825,29 @@ fn resolve_single_prop(
     let Some(resolved) = resolve_value(prop_name, value, prop_config, theme, evaluator, failures) else {
         return vec![];
     };
+    // Only the authored value is renamed: a scale token or transform result
+    // passes through as resolved.
+    let resolved = if value_to_css_string(value).as_deref() == Some(resolved.as_str()) {
+        contextual_vars.rename_authored(&resolved).into_owned()
+    } else {
+        resolved
+    };
     let resolved_value = finish_value(&resolved, value, prop_config, theme, variable_map, contextual_vars);
 
     let mut declarations: Vec<CssDeclaration> = prop_config
         .css_properties()
         .iter()
         .map(|css_prop| CssDeclaration {
-            property: camel_to_kebab(css_prop),
+            property: contextual_vars.emitted_property(&camel_to_kebab(css_prop)).into_owned(),
             value: resolved_value.clone(),
         })
         .collect();
 
     if let Some(current_var) = &prop_config.current_var {
-        if writes_current_var(&resolved_value, current_var) {
+        let current_var = contextual_vars.emitted_property(current_var);
+        if writes_current_var(&resolved_value, &current_var) {
             declarations.push(CssDeclaration {
-                property: current_var.clone(),
+                property: current_var.into_owned(),
                 value: resolved_value,
             });
         }
@@ -857,12 +881,9 @@ fn resolve_contextual_var(
     value: &str,
     contextual_vars: &ContextualVarsMap,
 ) -> Option<String> {
-    if let Some(var_names) = contextual_vars.get(scale_name) {
-        if var_names.iter().any(|n| n == value) {
-            return Some(contextual_var_reference(value));
-        }
-    }
-    None
+    contextual_vars
+        .in_scale(scale_name, value)
+        .map(|var| contextual_var_reference(&var.var))
 }
 
 /// The CSS a contextual variable token resolves to.
@@ -2130,7 +2151,10 @@ mod tests {
         let p = owner.config.get_mut("p").unwrap();
         p.strict = Some(true);
         p.negative = true;
-        owner.contextual_vars.insert("space".to_string(), vec!["gutter".to_string()]);
+        owner.contextual_vars.insert(
+            "space".to_string(),
+            vec![ContextualVar { name: "gutter".to_string(), var: "gutter".to_string() }],
+        );
         let property = |name: &str| PropConfig { property: name.to_string(), ..owner.config["p"].clone() };
         let ctx = owner.ctx();
         let miss = |config: &PropConfig, value: Value| !strict_token_misses(config, &value, &ctx).is_empty();
@@ -3104,5 +3128,128 @@ mod tests {
         });
         let resolved = resolve_styles(&styles, &owner.ctx(), true);
         assert!(resolved.pseudo_selectors.iter().any(|(s, d)| s == "&:a1:a2:a3:a4:a5:a6:a7:a8" && d[0].value == "var(--colors-primary)"));
+    }
+
+    /// `tone` is declared under a prefix; `acme-tone` is declared too, so it
+    /// is never an alias; `gap`'s final spelling `acme-gap` is. The theme's
+    /// `colors.brand` already holds a final name, as system load leaves it.
+    fn prefixed_owner() -> TestCtxOwner {
+        let mut owner = TestCtxOwner::new();
+        owner.contextual_vars = serde_json::from_str(
+            r#"{"colors":[{"name":"tone","var":"acme-tone"},{"name":"acme-tone","var":"acme-acme-tone"}],
+                "space":[{"name":"gap","var":"acme-gap"}]}"#,
+        )
+        .unwrap();
+        owner.theme.insert("colors.brand".into(), "var(--acme-tone, red)".into());
+        let base = owner.config["color"].clone();
+        owner.config.insert(
+            "tint".into(),
+            PropConfig { property: "--tone".into(), current_var: Some("--tone".into()), ..base },
+        );
+        owner
+    }
+
+    fn declarations_of(resolved: &ResolvedStyles) -> Vec<String> {
+        resolved.declarations.iter().map(|d| format!("{}: {}", d.property, d.value)).collect()
+    }
+
+    #[test]
+    fn declared_names_take_their_final_name_wherever_they_are_written() {
+        let owner = prefixed_owner();
+        let styles = json!({
+            "color": "tone",
+            "p": "acme-gap",
+            "outlineColor": "tone",
+            "caretColor": "brand",
+            "--tone": "red",
+            "--acme-tone": "blue",
+            "--other": "var(--tone, var(--gap, 1px))",
+            "transition": "--tone 1s, --other 2s",
+            "content": "\"var(--tone)\"",
+            "tint": "red",
+            "--mix": "{colors.brand}",
+        });
+        let resolved = resolve_styles(&styles, &owner.ctx(), false);
+        let declarations = declarations_of(&resolved);
+        for expected in [
+            "color: var(--acme-tone)",
+            "padding: var(--acme-gap)",
+            "outline-color: var(--acme-tone)",
+            "caret-color: var(--acme-tone, red)",
+            "--acme-tone: red",
+            "--acme-acme-tone: blue",
+            "--other: var(--acme-tone, var(--acme-gap, 1px))",
+            "transition: --acme-tone 1s, --other 2s",
+            "content: \"var(--tone)\"",
+            "--mix: var(--acme-tone, red)",
+        ] {
+            assert!(declarations.iter().any(|d| d == expected), "missing `{expected}` in {declarations:#?}");
+        }
+        assert!(
+            !declarations.iter().any(|d| d.starts_with("--tone") || d.contains("acme-acme-acme")),
+            "{declarations:#?}"
+        );
+        assert!(declarations.iter().any(|d| d == "--acme-tone: red"), "{declarations:#?}");
+    }
+
+    #[test]
+    fn a_strict_scale_admits_the_declared_and_the_final_spelling() {
+        let mut owner = prefixed_owner();
+        owner.config.get_mut("p").unwrap().strict = Some(true);
+        let ctx = owner.ctx();
+        let p = &owner.config["p"];
+        for admitted in [json!("gap"), json!("acme-gap")] {
+            assert!(strict_token_misses(p, &admitted, &ctx).is_empty(), "{admitted}");
+        }
+        assert!(!strict_token_misses(p, &json!("acme-acme-gap"), &ctx).is_empty());
+    }
+
+    #[test]
+    fn a_style_query_names_the_final_property() {
+        let owner = prefixed_owner();
+        let styles = json!({ "@container style(--tone: dark)": { "--gap": "2px" } });
+        let resolved = resolve_styles(&styles, &owner.ctx(), false);
+        let group = &resolved.conditioned[0];
+        assert_eq!(group.conditions, [Condition::Container("@container style(--acme-tone: dark)".into())]);
+        assert_eq!(group.declarations[0].property, "--acme-gap");
+    }
+
+    #[test]
+    fn a_keyframe_sets_the_final_property() {
+        let owner = prefixed_owner();
+        let block = json!({ "name": "pulse", "frames": { "to": { "--tone": "var(--gap)" } } });
+        assert_eq!(
+            resolve_keyframes_block(&block, &owner.ctx()),
+            "@keyframes pulse {\n  to {\n    --acme-tone: var(--acme-gap);\n  }\n}"
+        );
+    }
+
+    #[test]
+    fn the_legacy_string_form_resolves_exactly_as_before() {
+        let mut owner = TestCtxOwner::new();
+        owner.contextual_vars = serde_json::from_str(r#"{"colors":["tone"],"space":["gap"]}"#).unwrap();
+        let styles = json!({
+            "color": "tone",
+            "p": "gap",
+            "--tone": "red",
+            "--other": "var(--tone, var(--gap, 1px))",
+            "transition": "--tone 1s",
+            "@container style(--tone: dark)": { "--gap": "2px" },
+        });
+        let resolved = resolve_styles(&styles, &owner.ctx(), false);
+        assert_eq!(
+            declarations_of(&resolved),
+            [
+                "padding: var(--gap)",
+                "color: var(--tone)",
+                "--tone: red",
+                "--other: var(--tone, var(--gap, 1px))",
+                "transition: --tone 1s",
+            ]
+        );
+        assert_eq!(
+            resolved.conditioned[0].conditions,
+            [Condition::Container("@container style(--tone: dark)".into())]
+        );
     }
 }

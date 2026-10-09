@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::declarations::{breakpoint_of, record_key, DeclarationBinding, DeclarationNames};
-use crate::theme::{ConditionedGroup, CssDeclaration, PropConfig, PropConfigMap, ResolveContext, ResolvedStyles, TransformFailure, TransformFailureSink, first_top_level_branch, is_responsive_value, resolve_styles, split_top_level_commas};
+use crate::theme::{ConditionedGroup, ContextualVarsMap, CssDeclaration, PropConfig, PropConfigMap, ResolveContext, ResolvedStyles, TransformFailure, TransformFailureSink, first_top_level_branch, is_responsive_value, resolve_styles, split_top_level_commas};
 
 pub fn camel_to_kebab(s: &str) -> String {
     let mut result = String::with_capacity(s.len() + 4);
@@ -1294,10 +1294,12 @@ pub const CSS_WIDE_KEYWORDS: [&str; 5] = ["initial", "inherit", "unset", "revert
 /// and at each breakpoint, holding the direct declaration. The keys are the
 /// ones a static write of the keyword takes, and a class a static write
 /// already maps is kept, so runtime and static keywords select one class.
+#[allow(clippy::too_many_arguments)]
 fn add_keyword_classes(
     prop_name: &str,
     prop: &PropConfig,
     breakpoints: &BreakpointMap,
+    contextual_vars: &ContextualVarsMap,
     seen: &mut FxHashMap<String, (String, ResolvedStyles)>,
     class_map: &mut UtilityClassMap,
     class_prefix: &str,
@@ -1309,10 +1311,16 @@ fn add_keyword_classes(
         let mut declarations: Vec<CssDeclaration> = prop
             .css_properties()
             .iter()
-            .map(|property| CssDeclaration { property: camel_to_kebab(property), value: keyword.to_string() })
+            .map(|property| CssDeclaration {
+                property: contextual_vars.emitted_property(&camel_to_kebab(property)).into_owned(),
+                value: keyword.to_string(),
+            })
             .collect();
         if let Some(current_var) = &prop.current_var {
-            declarations.push(CssDeclaration { property: current_var.clone(), value: keyword.to_string() });
+            declarations.push(CssDeclaration {
+                property: contextual_vars.emitted_property(current_var).into_owned(),
+                value: keyword.to_string(),
+            });
         }
         let base = (Value::from(keyword), ResolvedStyles { declarations: declarations.clone(), ..Default::default() });
         let at_breakpoints = breakpoints.breakpoints.keys().map(|bp| {
@@ -1533,12 +1541,14 @@ impl ResolvedUtilities {
         &mut self,
         props: impl IntoIterator<Item = (&'a str, &'a PropConfig)>,
         breakpoints: &BreakpointMap,
+        contextual_vars: &ContextualVarsMap,
     ) {
         for (prop_name, prop) in props {
             add_keyword_classes(
                 prop_name,
                 prop,
                 breakpoints,
+                contextual_vars,
                 &mut self.seen,
                 &mut self.class_map,
                 &self.class_prefix,
@@ -1684,6 +1694,7 @@ impl ResolvedCustomUtilities {
         owner: &str,
         props: impl IntoIterator<Item = (&'a str, &'a PropConfig)>,
         breakpoints: &BreakpointMap,
+        contextual_vars: &ContextualVarsMap,
     ) {
         let classes = self.class_map.entry(owner.to_string()).or_default();
         for (prop_name, prop) in props {
@@ -1691,6 +1702,7 @@ impl ResolvedCustomUtilities {
                 prop_name,
                 prop,
                 breakpoints,
+                contextual_vars,
                 &mut self.seen,
                 classes,
                 &self.class_prefix,
@@ -2496,7 +2508,7 @@ mod tests {
         let bp = test_breakpoints();
         let tc = TestUtilCtx::new(keyword_config(), utility_theme(), &bp);
         let mut resolved = resolve_utility_classes(&[], &tc.ctx(), "animus");
-        resolved.add_runtime_keyword_classes(["p", "px", "bg", "sized"].map(|p| (p, &tc.config[p])), &bp);
+        resolved.add_runtime_keyword_classes(["p", "px", "bg", "sized"].map(|p| (p, &tc.config[p])), &bp, &ContextualVarsMap::default());
         let out = resolved.render(&bp, None, &[]);
 
         for keyword in CSS_WIDE_KEYWORDS {
@@ -2521,7 +2533,7 @@ mod tests {
         let bp = test_breakpoints();
         let tc = TestUtilCtx::new(keyword_config(), utility_theme(), &bp);
         let mut resolved = resolve_utility_classes(&[], &tc.ctx(), "animus");
-        resolved.add_runtime_keyword_classes([("p", &tc.config["p"]), ("sized", &tc.config["sized"])], &bp);
+        resolved.add_runtime_keyword_classes([("p", &tc.config["p"]), ("sized", &tc.config["sized"])], &bp, &ContextualVarsMap::default());
         let out = resolved.render(&bp, None, &[]);
 
         for (breakpoint, px) in [("xs", 480), ("sm", 768), ("md", 1024), ("lg", 1200), ("xl", 1440)] {
@@ -2546,7 +2558,7 @@ mod tests {
         ];
         let statics = resolve_utility_classes(&usages, &tc.ctx(), "animus").render(&bp, None, &[]);
         let mut resolved = resolve_utility_classes(&usages, &tc.ctx(), "animus");
-        resolved.add_runtime_keyword_classes([("p", &tc.config["p"])], &bp);
+        resolved.add_runtime_keyword_classes([("p", &tc.config["p"])], &bp, &ContextualVarsMap::default());
         let out = resolved.render(&bp, None, &[]);
 
         assert_eq!(out.class_map["p"]["inherit"], statics.class_map["p"]["inherit"]);
@@ -2562,7 +2574,7 @@ mod tests {
         tc.theme.insert("space.inherit".to_string(), "3px".to_string());
         let usages = vec![UtilityInput { prop_name: "p".to_string(), value: json!("inherit") }];
         let mut resolved = resolve_utility_classes(&usages, &tc.ctx(), "animus");
-        resolved.add_runtime_keyword_classes([("p", &tc.config["p"])], &bp);
+        resolved.add_runtime_keyword_classes([("p", &tc.config["p"])], &bp, &ContextualVarsMap::default());
         let out = resolved.render(&bp, None, &[]);
 
         assert!(rule_of(&out.css, &out.class_map["p"]["inherit"]).contains("padding: 3px;"));
@@ -2574,7 +2586,7 @@ mod tests {
         let tc = TestUtilCtx::new(keyword_config(), utility_theme(), &bp);
         let configs: FxHashMap<&str, &PropConfigMap> = [("a.tsx::A", &tc.config)].into_iter().collect();
         let mut resolved = resolve_custom_prop_classes(&[], &configs, &tc.ctx(), "animus", |_, _| {});
-        resolved.add_runtime_keyword_classes("a.tsx::A", [("p", &tc.config["p"]), ("sized", &tc.config["sized"])], &bp);
+        resolved.add_runtime_keyword_classes("a.tsx::A", [("p", &tc.config["p"]), ("sized", &tc.config["sized"])], &bp, &ContextualVarsMap::default());
         let out = resolved.render(&bp, None, &[]);
 
         let class = &out.class_map["a.tsx::A"]["p"]["inherit"];

@@ -5,6 +5,18 @@ See [Conventional Commits](https://conventionalcommits.org) for commit guideline
 
 ## Unreleased
 
+**Contextual variables can take the variable prefix.** With `prefix` set,
+`prefixContextualVars: true` gives each contextual variable its prefixed
+name everywhere Animus emits it, while authors keep writing the declared
+name: scale values, `{scale.name}` references, `var()` reads including
+fallbacks, declaration keys, keyframes, global styles, declaration-scale
+records, transition lists, style queries, component custom props,
+`currentVar`, the runtime scale map and the runtime keyword classes. The
+exact prefixed spelling still resolves. Undeclared custom properties and
+text inside strings and `url()` are left alone. The option is off by
+default; a project with a prefix and contextual variables that has not
+turned it on reports `animus.prefix.contextual-vars-unprefixed`.
+
 **Only `url()` arguments are treated as `asset()` references.** Placeholder
 text elsewhere in a style, such as `content: "animus-asset:note"`, is now left
 as written. Before, any such text in component CSS was taken for an asset: a

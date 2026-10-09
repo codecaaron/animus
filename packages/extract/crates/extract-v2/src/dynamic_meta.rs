@@ -67,7 +67,7 @@ impl DynamicPropMeta {
         Self::Value(ValuePropMeta {
             var_name,
             slot_class,
-            property: config.property.clone(),
+            property: contextual_vars.emitted_property(&config.property).into_owned(),
             negative: config.negative,
             strict,
             keywords: if strict {
@@ -75,12 +75,19 @@ impl DynamicPropMeta {
             } else {
                 Vec::new()
             },
-            properties: config.properties.clone(),
+            properties: config
+                .properties
+                .iter()
+                .map(|property| contextual_vars.emitted_property(property).into_owned())
+                .collect(),
             transform_name: config.transform.clone(),
             transform_id: config.transform_id.clone(),
             transform_fn_source: config.transform_fn_source.clone(),
             scale_values: scale_values(config, theme, contextual_vars),
-            current_var: config.current_var.clone(),
+            current_var: config
+                .current_var
+                .as_deref()
+                .map(|current_var| contextual_vars.emitted_property(current_var).into_owned()),
         })
     }
 
@@ -121,10 +128,17 @@ fn scale_values(
             let mut values: BTreeMap<String, Value> = theme.iter().filter_map(|(key, value)| {
                 key.strip_prefix(&prefix).map(|key| (key.to_string(), Value::String(value.clone())))
             }).collect();
-            for var_name in contextual_vars.get(name).into_iter().flatten() {
+            let vars = contextual_vars.scale(name);
+            for var in vars {
                 values
-                    .entry(var_name.clone())
-                    .or_insert_with(|| Value::String(contextual_var_reference(var_name)));
+                    .entry(var.name.clone())
+                    .or_insert_with(|| Value::String(contextual_var_reference(&var.var)));
+            }
+            // A final spelling still resolves, after every declared name.
+            for var in vars {
+                values
+                    .entry(var.var.clone())
+                    .or_insert_with(|| Value::String(contextual_var_reference(&var.var)));
             }
             values
         }
@@ -148,5 +162,57 @@ fn scale_values(
             }).collect()
         }
         _ => BTreeMap::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    fn runtime_meta(contextual_vars: &str) -> ValuePropMeta {
+        let config: PropConfig = serde_json::from_value(json!({
+            "property": "--tone",
+            "properties": ["--tone", "outlineColor"],
+            "scale": "colors",
+            "currentVar": "--tone",
+        }))
+        .unwrap();
+        let theme: FlatTheme = [("colors.red".to_string(), "#f00".to_string())].into_iter().collect();
+        let contextual_vars: ContextualVarsMap = serde_json::from_str(contextual_vars).unwrap();
+        let meta = DynamicPropMeta::new("--animus-tint".into(), "animus-dyn-tint".into(), &config, &theme, &contextual_vars);
+        meta.value().unwrap().clone()
+    }
+
+    #[test]
+    fn runtime_writes_and_the_scale_map_use_final_names() {
+        let meta = runtime_meta(
+            r#"{"colors":[{"name":"tone","var":"acme-tone"},{"name":"acme-tone","var":"acme-acme-tone"}]}"#,
+        );
+        assert_eq!(meta.property, "--acme-tone");
+        assert_eq!(meta.properties, ["--acme-tone", "outlineColor"]);
+        assert_eq!(meta.current_var.as_deref(), Some("--acme-tone"));
+        assert_eq!(
+            serde_json::to_value(&meta.scale_values).unwrap(),
+            json!({
+                "red": "#f00",
+                "tone": "var(--acme-tone)",
+                "acme-tone": "var(--acme-acme-tone)",
+                "acme-acme-tone": "var(--acme-acme-tone)",
+            })
+        );
+    }
+
+    #[test]
+    fn the_legacy_string_form_keeps_its_runtime_map() {
+        let meta = runtime_meta(r#"{"colors":["tone"]}"#);
+        assert_eq!(meta.property, "--tone");
+        assert_eq!(meta.properties, ["--tone", "outlineColor"]);
+        assert_eq!(meta.current_var.as_deref(), Some("--tone"));
+        assert_eq!(
+            serde_json::to_value(&meta.scale_values).unwrap(),
+            json!({ "red": "#f00", "tone": "var(--tone)" })
+        );
     }
 }

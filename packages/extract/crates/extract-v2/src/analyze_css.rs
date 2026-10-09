@@ -3374,6 +3374,7 @@ fn run_with_system_floor(
             .filter(|(name, meta)| meta.value().is_some() && detected_dynamic_prop_names.contains(*name))
             .filter_map(|(name, _)| inputs.config.get(name.as_str()).map(|config| (name.as_str(), config))),
         &breakpoints,
+        &inputs.contextual_vars,
     );
     let slot_entries = if !dynamic_props.is_empty() {
         Some(build_variable_slot_entries(&dynamic_props, &breakpoints))
@@ -3565,6 +3566,7 @@ fn run_with_system_floor(
                 .filter(|(name, meta)| meta.value().is_some() && observed.is_some_and(|props| props.contains(*name)))
                 .filter_map(|(name, _)| cc.get(name).map(|config| (name.as_str(), config))),
             &breakpoints,
+            &inputs.contextual_vars,
         );
         if !component_dynamic.is_empty() {
             all_custom_slot_entries.extend(build_variable_slot_entries(
