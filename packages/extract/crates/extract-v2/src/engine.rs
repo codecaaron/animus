@@ -363,15 +363,35 @@ impl ExtractEngine {
                     let mut hops = 0usize;
                     while hops < 32 && seen.insert((resolved_file.clone(), resolved_name.clone())) {
                         hops += 1;
-                        let Some((_, exps)) = imports_by_file.get(&resolved_file) else {
+                        let Some((imps, exps)) = imports_by_file.get(&resolved_file) else {
                             break;
                         };
                         let Some(exp) = exps.iter().find(|e| e.exported == resolved_name) else {
                             break;
                         };
                         if exp.source.is_none() {
-                            terminated_locally = exp.local.is_some();
-                            break;
+                            // A local export of an import, as a compiler writes
+                            // a barrel (`import { x as y } …; export { y as x }`),
+                            // continues to that import's module.
+                            let barrel = exp
+                                .local
+                                .as_ref()
+                                .and_then(|local| imps.iter().find(|i| &i.local == local));
+                            let Some(import) = barrel else {
+                                terminated_locally = exp.local.is_some();
+                                break;
+                            };
+                            let Some(next) = crate::analyze_css::resolve_import_source(
+                                &resolved_file,
+                                &import.source,
+                                &statics_by_file,
+                                &self.opts.css_inputs,
+                            ) else {
+                                break;
+                            };
+                            resolved_name = import.imported.clone();
+                            resolved_file = next;
+                            continue;
                         }
                         let (Some(spec), Some(original)) = (&exp.source, &exp.original) else {
                             break;
@@ -1472,9 +1492,11 @@ export const App = () => <Box tone="red" />;
             &engine
                 .analyze(
                     serde_json::json!([
-                        { "path": "tokens.ts", "source": "export const GAP = 24;\n" },
+                        { "path": "tokens.ts", "source": "export const GAP = 24;\nexport const WIDE = 32;\n" },
                         { "path": "barrel.ts", "source": "export { GAP as SPACING } from './tokens';\n" },
-                        { "path": "a.tsx", "source": "import { SPACING } from './barrel';\nexport const Box = ds.system({ space: true }).asElement('div');\nexport const App = () => <Box p={SPACING} />;\n" }
+                        // A compiler's barrel: an import exported locally.
+                        { "path": "compiled.js", "source": "import { WIDE as w } from './tokens';\nexport { w as WIDE_SPACING };\n" },
+                        { "path": "a.tsx", "source": "import { SPACING } from './barrel';\nimport { WIDE_SPACING } from './compiled';\nexport const Box = ds.system({ space: true }).asElement('div');\nexport const App = () => <><Box p={SPACING} /><Box p={WIDE_SPACING} /></>;\n" }
                     ])
                     .to_string(),
                 )
@@ -1483,6 +1505,7 @@ export const App = () => <Box tone="red" />;
         .unwrap();
 
         assert!(manifest["system_prop_map"]["p"]["24"].is_string());
+        assert!(manifest["system_prop_map"]["p"]["32"].is_string());
         assert_eq!(manifest["usageResidue"], serde_json::json!([]));
     }
 
