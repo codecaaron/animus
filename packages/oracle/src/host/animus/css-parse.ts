@@ -1,3 +1,4 @@
+import { collapseWhitespace } from './css-escape';
 import { AnimusAdapterError } from './errors';
 
 import type { AnimusAdapterErrorContext } from './errors';
@@ -62,8 +63,6 @@ const CONTAINER_WIDTH_GTE =
   /^(?:([A-Za-z_][A-Za-z0-9_-]*)\s+)?\(\s*width\s*>=\s*(-?\d+(?:\.\d+)?)px\s*\)$/;
 const IMPORTANT = /!\s*important$/i;
 
-const collapse = (text: string): string => text.replace(/\s+/g, ' ').trim();
-
 interface Prelude {
   text: string;
   terminator: '{' | ';' | '}' | '';
@@ -80,6 +79,10 @@ export const splitTopLevel = (text: string, separator: string): string[] => {
     if (quote !== null) {
       if (char === '\\') index += 1;
       else if (char === quote) quote = null;
+      continue;
+    }
+    if (char === '\\') {
+      index += 1;
       continue;
     }
     if (char === '"' || char === "'") {
@@ -133,7 +136,7 @@ const parseMedia = (
   prelude: string,
   fail: (message: string, snippet: string) => never
 ): AtCondition => {
-  const query = collapse(prelude);
+  const query = collapseWhitespace(prelude);
   if (query === '') fail('`@media` with an empty query', prelude);
 
   const minWidth = MEDIA_MIN_WIDTH.exec(query) ?? MEDIA_WIDTH_GTE.exec(query);
@@ -153,7 +156,7 @@ const parseContainer = (
   prelude: string,
   fail: (message: string, snippet: string) => never
 ): AtCondition => {
-  const query = collapse(prelude);
+  const query = collapseWhitespace(prelude);
 
   const minWidth = CONTAINER_MIN_WIDTH.exec(query);
   if (minWidth !== null) {
@@ -235,6 +238,10 @@ export const parseStylesheet = (
         }
         continue;
       }
+      if (char === '\\') {
+        pos += 2;
+        continue;
+      }
       checkComment(pos);
       if (char === '"' || char === "'") {
         quote = char;
@@ -268,6 +275,10 @@ export const parseStylesheet = (
           if (char === quote) quote = null;
           pos += 1;
         }
+        continue;
+      }
+      if (char === '\\') {
+        pos += 2;
         continue;
       }
       checkComment(pos);
@@ -311,7 +322,7 @@ export const parseStylesheet = (
     );
 
     for (const part of splitTopLevel(selectorList, ',')) {
-      const selector = collapse(part);
+      const selector = collapseWhitespace(part);
       if (selector === '') fail('empty selector in a selector list', part);
       rules.push({
         selector,
@@ -382,7 +393,7 @@ export const parseStylesheet = (
           continue;
         }
         if (name === 'supports') {
-          const raw = collapse(rest);
+          const raw = collapseWhitespace(rest);
           if (raw === '') fail('`@supports` with an empty condition', head);
           parseBlock([...atStack, { kind: 'supports', raw }], layerPath, true);
           continue;

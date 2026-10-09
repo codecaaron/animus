@@ -202,4 +202,23 @@ describe('analyzeSelector', () => {
     expect(analyzed.model.subject).toBeUndefined();
     expect(analyzed.model.ancestry).toBeUndefined();
   });
+
+  it('reads escaped class names as the class attribute spells them', () => {
+    const variant = analyzeSelector(
+      '.animus-Track\\$1-5afbe264--dir-md\\:flex-row:hover'
+    );
+    expect(variant.classification).toBe('class-simple');
+    expect(variant.model.classNames).toEqual([
+      'animus-Track$1-5afbe264--dir-md:flex-row',
+    ]);
+    expect(variant.model.pseudo).toEqual([':hover']);
+
+    // A hex escape's terminating space is part of the escape, not a combinator.
+    const hex = analyzeSelector('.\\31 23 .a\\31  .b');
+    expect(hex.model.ancestry?.map((link) => link.model.classNames)).toEqual([
+      ['123'],
+      ['a1'],
+    ]);
+    expect(hex.model.subject?.classNames).toEqual(['b']);
+  });
 });
