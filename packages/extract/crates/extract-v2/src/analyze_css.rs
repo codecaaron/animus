@@ -3109,9 +3109,10 @@ fn run_with_system_floor(
                 .get_or_insert_with(|| global_lookup.clone())
                 .publish(name, &ids, &usage_sources);
         }
-        // `const B = Object.assign(R, …)` returns `R` itself: `<B>` renders as
-        // `R` when this file's own declarations and imports settle it.
-        for alias in ff.assigned_aliases.keys() {
+        // `const B = R`, or `Object.assign(R, …)`, which returns `R` itself:
+        // `<B>` renders as `R` when this file's own declarations and imports
+        // settle it.
+        for alias in ff.aliases.keys().chain(ff.assigned_aliases.keys()) {
             let ids = resolve_declared_identity(path, alias, files, inputs, &evaluated_ids);
             if ids.is_empty() || global_lookup.attribution.get(alias.as_str()) == Some(&ids) {
                 continue;
@@ -3247,9 +3248,9 @@ fn run_with_system_floor(
                 );
             }
         }
-        // An exported `Object.assign` alias renders in other modules, where it
-        // is not followed.
-        for alias in ff.assigned_aliases.keys() {
+        // An exported alias renders in other modules, where it is not
+        // followed.
+        for alias in ff.aliases.keys().chain(ff.assigned_aliases.keys()) {
             let exported = ff.default_export_binding.as_deref() == Some(alias)
                 || ff.exports.iter().any(|e| e.source.is_none() && e.local.as_deref() == Some(alias));
             if exported {
@@ -5235,10 +5236,16 @@ mod tests {
         assert_uncertain_identity_widens_and_retains(&out);
     }
 
+    /// A same-module alias is followed: `<C>` renders `Box`, its system props
+    /// get static classes, and nothing else is kept or widened, unlike an
+    /// unresolved tag.
     #[test]
-    fn unresolved_local_component_alias_widens_floor_and_retains_evaluated_components() {
-        let out = analyze_uncertain_identity("const C = Box;\nexport const App = () => <C />;");
-        assert_uncertain_identity_widens_and_retains(&out);
+    fn local_component_alias_renders_its_target() {
+        let out = analyze_uncertain_identity("const C = Box;\nexport const App = () => <C p={8} />;");
+        assert!(out.sheets.system.contains("padding: 0.5rem"), "{}", out.sheets.system);
+        assert!(out.sheets.base.contains("display: flex"), "{}", out.sheets.base);
+        assert!(!out.sheets.base.contains("display: grid"), "{}", out.sheets.base);
+        assert!(!out.dynamic_props.contains_key("display"), "{:?}", out.dynamic_props.keys());
     }
 
     #[test]
@@ -6531,6 +6538,36 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         assert_eq!(
             kept_options(&[("r.tsx", RECIPE), ("app.tsx", app)]),
             (vec!["sm", "lg"], vec!["active"])
+        );
+    }
+
+    /// A `const` alias in the module that renders it is followed, through
+    /// type assertions too: `<B size="lg">` keeps exactly `lg` for `R`.
+    #[test]
+    fn same_module_const_aliases_keep_the_options_they_render() {
+        for alias in ["const B = R;", "const B = R as typeof R;"] {
+            let app = format!(
+                "import {{ R }} from './r';\n{alias}\n\
+                 export const App = () => <><R size=\"sm\" active /><B size=\"lg\" /></>;\n"
+            );
+            assert_eq!(
+                kept_options(&[("r.tsx", RECIPE), ("app.tsx", app.as_str())]),
+                (vec!["sm", "lg"], vec!["active"]),
+                "{alias}"
+            );
+        }
+    }
+
+    /// An alias declared inside a function is not followed, so it opens its
+    /// target instead of losing what it renders.
+    #[test]
+    fn nested_const_aliases_keep_every_option() {
+        let app = "import { R } from './r';\n\
+                   function Make() { const B = R; return <B size=\"lg\" />; }\n\
+                   export const App = () => <><R size=\"sm\" active /><Make /></>;\n";
+        assert_eq!(
+            kept_options(&[("r.tsx", RECIPE), ("app.tsx", app)]),
+            (vec!["sm", "md", "lg"], vec!["active", "busy"])
         );
     }
 

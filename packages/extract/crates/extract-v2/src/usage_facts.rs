@@ -502,10 +502,11 @@ pub(crate) fn collect_enriched_usage(
 /// component, and records the ones usage tracking does not follow: a
 /// reference that is not a JSX tag, an extracted `.extend()` base, a
 /// `createElement` first argument, a named export, the target of a top-level
-/// `const X = Object.assign(…)`, or a member of a `compose()` call. Such a
-/// component can render anywhere with any props: a plain `const X = R` alias
-/// and an object member (`<Kit.Item>`) are escapes, since usage follows
-/// neither. A member read records its dotted path (`Card.Body`).
+/// `const X = R` or `const X = Object.assign(R, …)`, or a member of a
+/// `compose()` call. Such a component can render anywhere with any props: an
+/// object member (`<Kit.Item>`) and an alias declared inside a function are
+/// escapes, since usage follows neither. A member read records its dotted
+/// path (`Card.Body`).
 struct EscapeScan<'a, 's> {
     scoping: &'s Scoping,
     chains: &'s [&'s ChainDescriptor],
@@ -607,6 +608,11 @@ fn escape_path(
                 let object_assign = matches!(callee, Expression::StaticMemberExpression(member)
                     if member.object.is_specific_id("Object") && member.property.name == "assign");
                 return (!(object_assign && initializes_top_level_const(call.span, rest))).then_some(path);
+            }
+            // `const B = R` at the top level is followed: `<B>` renders as `R`.
+            AstKind::VariableDeclarator(_) if path == name => {
+                return (!initializes_top_level_const(current, std::iter::once(parent).chain(rest)))
+                    .then_some(path);
             }
             // A compose() family's slots render through its member tags; any
             // other object member is not followed.

@@ -8,13 +8,15 @@ See [Conventional Commits](https://conventionalcommits.org) for commit guideline
 **Variant CSS is no longer dropped for components passed as values.**
 Production builds keep only the variant and state options a component's
 JSX renders write. A component that also reached JSX another way lost the
-CSS for options written there: `const B = Object.assign(R, …)` with
-`<B size="lg" />`, a component passed to a function (`pick(R)`), as a prop
-(`as={R}`), in an object or array, through a plain `const` alias, or as a
-default export. `Object.assign` aliases are now followed, so `<B size="lg" />`
-keeps exactly `lg` for `R`. Any other value use of a component keeps every
-variant and state option it declares, and a runtime slot for each custom
-prop, as a `{...props}` spread already does.
+CSS for options written there: an alias such as `const B = R` or
+`const B = Object.assign(R, …)` with `<B size="lg" />`, a component passed
+to a function (`pick(R)`), as a prop (`as={R}`), in an object or array, or
+as a default export. An alias declared at the top of the module that renders
+it is now followed, so `<B size="lg" />` keeps exactly `lg` for `R`, and
+`<B p={8} />` gets `R`'s static utility class. Any other value use of a
+component, including an exported alias or one declared inside a function,
+keeps every variant and state option it declares, and a runtime slot for
+each custom prop, as a `{...props}` spread already does.
 
 **System warnings print once per loaded system.** A registration that is
 dropped as invalid, and the other diagnostics a system carries, used to
