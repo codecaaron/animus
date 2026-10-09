@@ -243,6 +243,9 @@ pub struct FileFacts {
     /// Sources of `export * from '…'`.
     #[serde(skip)]
     pub star_exports: Vec<String>,
+    /// The identifier `export default X;` names.
+    #[serde(skip)]
+    pub default_export_binding: Option<String>,
     /// `compose` / `composeWithContext` names still referenced outside those
     /// families, such as a call inside a function, so their imports stay.
     #[serde(skip)]
@@ -978,6 +981,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
         usage_enriched: Some(usage_enriched),
         compose,
         star_exports: crate::usage_facts::collect_star_exports(program),
+        default_export_binding: crate::usage_facts::collect_default_export_binding(program),
         compose_callees_in_use,
         aliases: const_initializers.aliases,
         assigned_aliases: const_initializers.assigned,

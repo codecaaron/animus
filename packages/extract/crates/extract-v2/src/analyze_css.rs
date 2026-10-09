@@ -6435,6 +6435,50 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         assert!(replacement.contains(r#""customPropMap":{"size":{"sm":"#), "{replacement}");
     }
 
+    /// `import { Card } from './a'; export default Card;` in a barrel: a
+    /// default import of the barrel reaches the family's slots.
+    #[test]
+    fn a_default_export_of_an_imported_family_resolves_through_the_barrel() {
+        let family = barrel_family("export const Card = compose({ Root, Body }, { name: 'Card' });");
+        let out = analyze(
+            &[
+                ("a.tsx", family.as_str()),
+                ("barrel.ts", "import { Card } from './a';\nexport default Card;\n"),
+                (
+                    "app.tsx",
+                    "import Card from './barrel';\nexport const App = () => <Card.Body p={8} size=\"sm\" />;\n",
+                ),
+            ],
+            &test_inputs(),
+        );
+        assert!(out.sheets.system.contains("padding: 0.5rem"), "{}", out.sheets.system);
+        let replacement = &out.components["a.tsx::Body"].replacement;
+        assert!(replacement.contains(r#""customPropMap":{"size":{"sm":"#), "{replacement}");
+        assert_eq!(out.member_bindings["app.tsx"]["Card.Body"], "a.tsx::Body");
+    }
+
+    /// `x.ts` re-exports `y.ts`, which re-exports `x.ts` back, before the
+    /// star export that leads to the family: every route is tried.
+    #[test]
+    fn star_export_cycles_fall_through_to_the_route_that_reaches_the_family() {
+        let family = barrel_family("export const Card = compose({ Root, Body }, { name: 'Card' });");
+        for app in [
+            "import { Card } from './x';\nexport const App = () => <Card.Body p={8} />;\n",
+            "import * as ui from './x';\nexport const App = () => <ui.Card.Body p={8} />;\n",
+        ] {
+            let out = analyze(
+                &[
+                    ("a.tsx", family.as_str()),
+                    ("x.ts", "export * from './y';\nexport * from './a';\n"),
+                    ("y.ts", "export * from './x';\n"),
+                    ("app.tsx", app),
+                ],
+                &test_inputs(),
+            );
+            assert!(out.sheets.system.contains("padding: 0.5rem"), "{app}{}", out.sheets.system);
+        }
+    }
+
     /// An export alias names the family for importers only; inside the file
     /// `<Card.Body>` is still the local `Card`.
     #[test]

@@ -105,7 +105,8 @@ arrives: under another name (`import { Card as Panel }`), through
 re-exports and barrels (`export * from`, or an imported name exported
 again), as a default import, or through a namespace import
 (`<ui.Card.Body />`). An import from a package the analysis cannot resolve
-still finds the family when exactly one family has that name. Before,
+still finds the family when exactly one family has that name; that match
+is by name alone, so it can pick a family the package does not export. Before,
 member tags were matched by the family's declared name across the whole
 project: an aliased, default or namespace import missed its slots, and two
 modules exporting families with the same name could take each other's tags.
