@@ -5404,24 +5404,15 @@ fn run_with_system_floor(
         &mut diagnostics,
     );
 
-    let reconciled_order: Vec<String> = reconciled_components
-        .iter()
-        .map(|(id, _)| id.clone())
-        .collect();
+    let (mut sheets, fragments) =
+        generate_css_sheets_ordered(&reconciled_components, &breakpoints);
     let component_css_list: Vec<ComponentCss> = reconciled_components
         .into_iter()
         .map(|(_, css)| css)
         .collect();
 
-    let (mut sheets, fragments) = generate_css_sheets_ordered(
-        &component_css_list,
-        &breakpoints,
-        &reconciled_order,
-        class_prefix,
-    );
-
-    let mut composed_variant_css = String::new();
-    let mut composed_compound_css = String::new();
+    let mut composed_variants: Vec<(&str, String)> = Vec::new();
+    let mut composed_compounds: Vec<(&str, String)> = Vec::new();
     if !compose_families.is_empty() {
         let id_to_class: FxHashMap<&str, &str> = evaluated
             .iter()
@@ -5477,7 +5468,7 @@ fn run_with_system_floor(
             });
         }
         if !family_refs.is_empty() {
-            composed_variant_css =
+            composed_variants =
                 generate_composed_variant_css(&family_refs, &component_css_list, &breakpoints);
             let compound_conditions: CompoundConditionMap = evaluated
                 .iter()
@@ -5485,7 +5476,7 @@ fn run_with_system_floor(
                     (css.class_name.as_str(), configs.as_slice())
                 })
                 .collect();
-            composed_compound_css = generate_composed_compound_css(
+            composed_compounds = generate_composed_compound_css(
                 &family_refs,
                 &component_css_list,
                 &compound_conditions,
@@ -5493,6 +5484,10 @@ fn run_with_system_floor(
             );
         }
     }
+    let composed_variant_css: String =
+        composed_variants.iter().map(|(_, rules)| rules.as_str()).collect();
+    let composed_compound_css: String =
+        composed_compounds.iter().map(|(_, rules)| rules.as_str()).collect();
 
     // Ancestor forms outrank the flat rules on class count inside the same
     // layer, so no cross-layer precedence moves.
@@ -5624,8 +5619,25 @@ fn run_with_system_floor(
         .unwrap_or_default();
     let dynamic_props_sorted: BTreeMap<String, DynamicPropMeta> =
         dynamic_props.into_iter().collect();
-    let component_fragments: BTreeMap<String, crate::css::PerComponentSheets> =
+    let mut component_fragments: BTreeMap<String, crate::css::PerComponentSheets> =
         fragments.to_per_component_map().into_iter().collect();
+    // Composed rules belong to the child slot they style.
+    let id_by_class: FxHashMap<&str, &str> = evaluated
+        .iter()
+        .map(|(id, (css, _, _, _, _, _, _))| (css.class_name.as_str(), id.as_str()))
+        .collect();
+    for (child_class, rules) in &composed_variants {
+        if let Some(id) = id_by_class.get(child_class) {
+            let fragment = component_fragments.entry(id.to_string()).or_default();
+            fragment.composed_variants.get_or_insert_with(String::new).push_str(rules);
+        }
+    }
+    for (child_class, rules) in &composed_compounds {
+        if let Some(id) = id_by_class.get(child_class) {
+            let fragment = component_fragments.entry(id.to_string()).or_default();
+            fragment.composed_compounds.get_or_insert_with(String::new).push_str(rules);
+        }
+    }
     let mut components: BTreeMap<String, ComponentDescriptor> = BTreeMap::new();
     let mut files_map: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for component_id in &sorted_ids {
@@ -9712,6 +9724,14 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
                  \x20 .{body}--compound-1 {{\n    display: grid;\n  }}\n"
             ),
             "per-component fragment must stay flat-only: {fragment}"
+        );
+        let composed = out.component_fragments["card.tsx::Body"]
+            .composed_compounds
+            .as_deref()
+            .unwrap_or_else(|| panic!("Body has no composed compounds fragment"));
+        assert!(
+            out.sheets.compounds.contains(&format!("{fragment}{composed}")),
+            "the child's flat and composed fragments must be the emitted rules: {composed}"
         );
         assert!(
             out.sheets.compounds.contains(&format!(

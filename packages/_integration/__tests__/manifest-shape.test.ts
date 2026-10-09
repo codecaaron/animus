@@ -127,6 +127,8 @@ const FRAGMENT_LAYERS = [
   'variants',
   'compounds',
   'states',
+  'composed_variants',
+  'composed_compounds',
 ] as const satisfies ReadonlyArray<keyof ManifestComponentSheets>;
 
 function isFragmentLayer(

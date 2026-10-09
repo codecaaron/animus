@@ -36,6 +36,12 @@ export interface ManifestComponentSheets {
   variants?: string;
   compounds?: string;
   states?: string;
+  /** A compose family's rules for this child slot, emitted in the variants
+   *  layer's `composed` sublayer. */
+  composed_variants?: string;
+  /** A compose family's rules for this child slot, emitted after the flat
+   *  compound rules. */
+  composed_compounds?: string;
 }
 
 /** Byte offsets into the source file. */
