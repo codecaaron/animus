@@ -1733,7 +1733,15 @@ fn loaded_modules<'f>(
             })
         }
         LoadTarget::Glob(pattern) => {
-            let split = pattern.find(['*', '?', '[', '{']).unwrap_or(pattern.len());
+            // The fixed part ends at the first glob syntax, an extglob group
+            // (`+(`, `@(`, `!(`) included.
+            let split = pattern
+                .char_indices()
+                .find(|&(at, c)| {
+                    matches!(c, '*' | '?' | '[' | '{')
+                        || (matches!(c, '+' | '@' | '!') && pattern[at + 1..].starts_with('('))
+                })
+                .map_or(pattern.len(), |(at, _)| at);
             let (fixed, rest) = pattern.split_at(split);
             let fixed = if fixed.is_empty() { "./" } else { fixed };
             // A pattern it cannot read keeps only the fixed part's filter.
@@ -7547,6 +7555,8 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         };
         assert_eq!(opened("const c = require.context('./', false, /\\.tsx$/);\n"), [true, false, false]);
         assert_eq!(opened("const g = import.meta.glob('./**/*.tsx');\n"), [true, true, false]);
+        // An extglob is never a fixed prefix: it opens all under the fixed part.
+        assert_eq!(opened("const g = import.meta.glob('./+(r).tsx');\n"), [true, true, true]);
         let mut inputs = test_inputs();
         inputs.package_map.insert("@acme/ui".into(), "packages/ui/src/index.ts".into());
         inputs.analysis_context.package_dirs = vec!["packages/ui".into()];
