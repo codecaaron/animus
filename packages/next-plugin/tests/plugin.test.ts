@@ -361,7 +361,7 @@ describe('production run (full pipeline)', () => {
     expect(parseRequiredJsonObject(args[8], 'emitter config')).toEqual({
       runtime_import: '@animus-ui/system/runtime',
       css_module_id: '.animus/styles.css',
-      system_props_module_id: artifactPath(root, plugin, 'system-props.js'),
+      system_props_module_id: 'virtual:animus/system-props',
     });
     expect(args[9]).toBeNull();
     expect(args[10]).toBeNull();

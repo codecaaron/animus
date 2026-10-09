@@ -17,6 +17,7 @@ import {
   setAnalysisStartedPromise,
   setSharedEngine,
   stylesPath,
+  TURBOPACK_SYSTEM_PROPS_ID,
 } from '@animus-ui/extract/session';
 import { existsSync } from 'fs';
 
@@ -166,6 +167,10 @@ export class AnimusWebpackPlugin {
     assertNoRetiredEngineSelection(options.engine);
     setSharedEngine(options.engine ?? 'v2');
     this.session = new ExtractionSession(options);
+    // Transforms import the virtual id, which the module factory resolves to
+    // this session's system-props module: a transform a persistent cache
+    // restores then binds to the current session, not the one that built it.
+    this.session.systemPropsModuleId = TURBOPACK_SYSTEM_PROPS_ID;
     this.animusLoaderPaths = new Set([resolveAnimusLoaderPath()]);
     if (options.loaderPath) {
       this.animusLoaderPaths.add(options.loaderPath);
