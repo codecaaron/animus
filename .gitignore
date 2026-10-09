@@ -97,3 +97,6 @@ docs/*
 # should ever be tracked)
 packages/_bench/
 .vite-hooks/
+
+# measure:consumers reads consumer checkouts from this machine-local list
+scripts/consumers/consumers.local.json
