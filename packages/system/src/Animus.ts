@@ -21,11 +21,13 @@ import {
 } from './types/config';
 import { AbstractProps } from './types/props';
 import { deepMerge } from './utils/deepMerge';
+import { assertDisjointStylingNames } from './utils/stylingNameCollisions';
 
 import type {
   AnimusComponent,
   AnimusWrappedComponent,
 } from './types/component';
+import type { StylingNames, SystemPicks } from './types/styling-names';
 
 export class AnimusWithAll<
   PropRegistry extends Record<string, SystemProp>,
@@ -132,6 +134,13 @@ export class AnimusWithAll<
   }
 
   _buildComponentConfig() {
+    assertDisjointStylingNames(
+      this.variants as Record<string, VariantConfig>,
+      Object.keys(this.statesConfig),
+      this.groupRegistry,
+      this.propRegistry,
+      this.activeGroups
+    );
     const variantConfig: Record<
       string,
       { options: string[]; default?: string }
@@ -243,7 +252,13 @@ class AnimusWithStates<
     PickedKeys extends
       | keyof GroupRegistry
       | Extract<keyof PropRegistry, string>,
-  >(config: Record<PickedKeys, true>) {
+  >(
+    config: SystemPicks<
+      GroupRegistry,
+      PickedKeys,
+      StylingNames<Variants, States>
+    >
+  ) {
     return new AnimusWithSystem<
       PropRegistry,
       GroupRegistry,
@@ -257,7 +272,7 @@ class AnimusWithStates<
       this.baseStyles,
       this.variants,
       this.statesConfig,
-      config,
+      config as Record<PickedKeys, true>,
       this.compounds
     );
   }

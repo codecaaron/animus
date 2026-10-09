@@ -61,6 +61,11 @@ const SpaceOnly = ds
   .system({ space: true })
   .asElement('div');
 
+ds.styles({ display: 'flex' })
+  .variant({ prop: 'p', variants: { tight: { display: 'grid' } } })
+  // @ts-expect-error — `space` admits `p`, which the variant already names
+  .system({ space: true });
+
 const TextOnly = ds
   .styles({ display: 'flex' })
   .system({ text: true })
