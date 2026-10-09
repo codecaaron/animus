@@ -18,6 +18,14 @@ export interface AppearanceBootstrapTheme {
 
 export interface AppearanceBootstrapOptions {
   storageKey?: string;
+  /**
+   * Keys your application owns that hold a bare mode name from before the
+   * appearance record. Before paint, each is migrated as
+   * `migrateLegacyModeKey` migrates it, in order, so the first declared mode
+   * becomes the record when none exists. An undeclared value is removed,
+   * never applied. The shared `color-mode` key stays read-only.
+   */
+  legacyKeys?: readonly string[];
 }
 
 export interface AppearanceBootstrapArtifact {
@@ -52,12 +60,30 @@ export function createAppearanceBootstrap(
   theme: AppearanceBootstrapTheme,
   options: AppearanceBootstrapOptions = {}
 ): AppearanceBootstrapArtifact {
-  const { storageKey = DEFAULT_STORAGE_KEY } = options;
+  const { storageKey = DEFAULT_STORAGE_KEY, legacyKeys = [] } = options;
 
   if (typeof storageKey !== 'string' || storageKey === '') {
     throw new Error(
       'createAppearanceBootstrap: storageKey must be a non-empty string.'
     );
+  }
+
+  for (const legacyKey of legacyKeys) {
+    if (typeof legacyKey !== 'string' || legacyKey === '') {
+      throw new Error(
+        'createAppearanceBootstrap: each legacy key must be a non-empty string.'
+      );
+    }
+    if (legacyKey === LEGACY_STORAGE_KEY) {
+      throw new Error(
+        `createAppearanceBootstrap: '${LEGACY_STORAGE_KEY}' is the contract's shared legacy key — the bootstrap reads it read-only and it may belong to another app on this origin. List only keys your application owns.`
+      );
+    }
+    if (legacyKey === storageKey) {
+      throw new Error(
+        `createAppearanceBootstrap: legacy key '${legacyKey}' is the record key itself — nothing to migrate.`
+      );
+    }
   }
 
   const modeNames = Object.keys(theme?.manifest?.modes ?? {}).sort();
@@ -81,13 +107,33 @@ export function createAppearanceBootstrap(
   }
 
   const allowlist = `[${modeNames.map(inlineLiteral).join(',')}]`;
+  const record = inlineLiteral(storageKey);
+
+  // `migrateLegacyModeKey` once per key, in order. A record that parses to
+  // an object exists, so the key is only removed; otherwise a declared mode
+  // becomes the record `persistColorMode` writes. Removing an absent key, or
+  // a key whose value was undeclared, leaves the same storage behind.
+  const migration =
+    legacyKeys.length === 0
+      ? ''
+      : `var k=[${legacyKeys.map(inlineLiteral).join(',')}];` +
+        // No raw `<`, as in the rest of the script.
+        'for(var i=0;k.length>i;i++){try{' +
+        `var g=localStorage,w=g.getItem(${record}),a=1;` +
+        'if(w){try{var q=JSON.parse(w);' +
+        'a=!(q&&typeof q==="object"&&!Array.isArray(q));}catch(e){}}' +
+        'var l=a?g.getItem(k[i]):null;' +
+        `if(m.indexOf(l)!==-1)g.setItem(${record},JSON.stringify({v:${RECORD_VERSION},mode:l,theme:"default"}));` +
+        'g.removeItem(k[i]);' +
+        '}catch(e){}}';
 
   const code =
     '(function(){try{' +
     `var m=${allowlist};` +
+    migration +
     'var r=document.documentElement;' +
     'var v=null;' +
-    `try{v=localStorage.getItem(${inlineLiteral(storageKey)});}catch(e){v=null;}` +
+    `try{v=localStorage.getItem(${record});}catch(e){v=null;}` +
     'var n=null;' +
     'if(typeof v==="string"&&v!==""){' +
     'var p;' +
