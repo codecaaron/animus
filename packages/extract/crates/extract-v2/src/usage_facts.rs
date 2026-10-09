@@ -1059,6 +1059,27 @@ impl<'a> Visit<'a> for WrapperScan<'a, '_> {
     }
 
     fn visit_identifier_reference(&mut self, ident: &IdentifierReference<'a>) {
+        // `arguments` reaches the props object past every binding the scan
+        // follows (`arguments[0].size = 'lg'`), so any wrapper around it
+        // gives up.
+        if ident.name == "arguments" {
+            for kind in &self.ancestors {
+                let binding = match kind {
+                    AstKind::Function(function) => function.id.as_ref(),
+                    AstKind::VariableDeclarator(declarator) => {
+                        declarator.id.get_binding_identifier()
+                    }
+                    _ => None,
+                };
+                let index = binding
+                    .and_then(|binding| binding.symbol_id.get())
+                    .and_then(|symbol| self.bindings.get(&symbol));
+                if let Some(&index) = index {
+                    self.invalid.insert(index);
+                }
+            }
+            return;
+        }
         let Some(reference) = ident.reference_id.get().map(|id| self.scoping.get_reference(id)) else {
             return;
         };
