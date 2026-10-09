@@ -12,16 +12,11 @@ pub(super) fn match_static_member<'a, 'b>(expr: &'a Expression<'b>) -> Option<(&
     }
 }
 
-/// Peel TS type assertions and parentheses: they are erased type-level
-/// syntax, so `asComponent(Link as T)` must extract like `asComponent(Link)`.
+/// The crate's one peeler for TypeScript-only wrappers: `as`, `satisfies`,
+/// `!`, parentheses, `<T>expr` and instantiation expressions are erased at
+/// runtime, so `asComponent(<T>Link)` extracts like `asComponent(Link)`.
 pub(crate) fn unwrap_type_assertions<'a, 'b>(expr: &'a Expression<'b>) -> &'a Expression<'b> {
-    match expr {
-        Expression::TSAsExpression(x) => unwrap_type_assertions(&x.expression),
-        Expression::TSSatisfiesExpression(x) => unwrap_type_assertions(&x.expression),
-        Expression::TSNonNullExpression(x) => unwrap_type_assertions(&x.expression),
-        Expression::ParenthesizedExpression(x) => unwrap_type_assertions(&x.expression),
-        _ => expr,
-    }
+    expr.get_inner_expression()
 }
 
 /// Dotted static-member path (`Ns.Compound.Item`), or None for computed

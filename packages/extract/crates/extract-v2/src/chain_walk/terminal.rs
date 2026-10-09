@@ -53,22 +53,9 @@ macro_rules! get_arg_span {
     ($arg:expr, $fallback:expr) => {
         match $arg {
             Argument::SpreadElement(x) => x.span,
-            Argument::BooleanLiteral(x) => x.span,
-            Argument::NullLiteral(x) => x.span,
-            Argument::NumericLiteral(x) => x.span,
-            Argument::BigIntLiteral(x) => x.span,
-            Argument::RegExpLiteral(x) => x.span,
-            Argument::StringLiteral(x) => x.span,
-            Argument::TemplateLiteral(x) => x.span,
-            Argument::Identifier(x) => x.span,
-            Argument::ObjectExpression(x) => x.span,
-            Argument::ArrayExpression(x) => x.span,
-            Argument::CallExpression(x) => x.span,
-            Argument::TSAsExpression(x) => unwrapped_span(&x.expression, $fallback),
-            Argument::TSSatisfiesExpression(x) => unwrapped_span(&x.expression, $fallback),
-            Argument::TSNonNullExpression(x) => unwrapped_span(&x.expression, $fallback),
-            Argument::ParenthesizedExpression(x) => unwrapped_span(&x.expression, $fallback),
-            _ => $fallback,
+            arg => arg
+                .as_expression()
+                .map_or($fallback, |expr| unwrapped_span(expr, $fallback)),
         }
     };
 }

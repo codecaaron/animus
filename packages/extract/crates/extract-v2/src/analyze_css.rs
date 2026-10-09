@@ -6772,6 +6772,93 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         }
     }
 
+    /// The six TypeScript-only wrappers around `expr`, each valid in a `.ts`
+    /// module.
+    fn typescript_wrappers(expr: &str) -> [String; 6] {
+        [
+            format!("{expr} as unknown as T"),
+            format!("({expr} satisfies T)"),
+            format!("{expr}!"),
+            format!("({expr})"),
+            format!("<T>{expr}"),
+            format!("{expr}<T>"),
+        ]
+    }
+
+    #[test]
+    fn chains_behind_typescript_wrappers_extract_like_the_bare_chain() {
+        let chain = "ds.styles({ display: 'flex' }).variant({ prop: 'size', variants: { sm: { p: 8 } } }).asElement('div')";
+        let app = "import { Box } from './box';\nexport const App = () => <Box size=\"sm\" />;\n";
+        let bare_source = format!("export const Box = {chain};\n");
+        let bare = analyze(&[("box.ts", bare_source.as_str()), ("app.tsx", app)], &test_inputs());
+        assert!(bare.css.contains("display: flex"), "{}", bare.css);
+        for wrapped in typescript_wrappers(chain) {
+            let source = format!("export const Box = {wrapped};\n");
+            let out = analyze(&[("box.ts", source.as_str()), ("app.tsx", app)], &test_inputs());
+            assert_eq!(class_of(&out, "box.ts::Box"), class_of(&bare, "box.ts::Box"), "{wrapped}");
+            assert_eq!(out.css, bare.css, "{wrapped}");
+        }
+    }
+
+    #[test]
+    fn default_exported_chains_behind_typescript_wrappers_report_like_the_bare_chain() {
+        let system = "import { createSystem } from '@animus-ui/system';\nconst ds = createSystem().build();\n";
+        let chain = "ds.styles({ display: 'flex' }).asElement('div')";
+        let codes = |expr: &str| {
+            let source = format!("{system}export default {expr};\n");
+            let out = analyze(&[("box.ts", source.as_str())], &test_inputs());
+            out.diagnostics.iter().filter_map(|d| d.code.clone()).collect::<Vec<_>>()
+        };
+        assert_eq!(codes(chain), [UNSUPPORTED_DEFAULT_EXPORT]);
+        for wrapped in typescript_wrappers(chain) {
+            assert_eq!(codes(&wrapped), [UNSUPPORTED_DEFAULT_EXPORT], "{wrapped}");
+        }
+    }
+
+    #[test]
+    fn terminal_targets_behind_typescript_wrappers_extract_like_the_bare_target() {
+        let extract = |target: &str| {
+            let source = format!(
+                "import {{ Link }} from 'router';\n\
+                 export const Anchor = ds.styles({{ display: 'flex' }}).asComponent({target});\n"
+            );
+            analyze(&[("anchor.ts", source.as_str())], &test_inputs())
+        };
+        let bare = extract("Link");
+        let replacement = &bare.components["anchor.ts::Anchor"].replacement;
+        assert!(replacement.starts_with("createComponent(Link,"), "{replacement}");
+        for wrapped in typescript_wrappers("Link") {
+            let out = extract(&wrapped);
+            assert_eq!(
+                out.components.get("anchor.ts::Anchor").map(|c| &c.replacement),
+                bare.components.get("anchor.ts::Anchor").map(|c| &c.replacement),
+                "{wrapped}"
+            );
+            assert_eq!(out.css, bare.css, "{wrapped}");
+        }
+    }
+
+    #[test]
+    fn families_keep_slots_declared_behind_typescript_wrappers() {
+        let slot = "ds.variant({ prop: 'size', variants: { sm: { p: 8 }, lg: { p: 8 } } }).asElement('div')";
+        let family = "compose({ Root, Body }, { name: 'Card', shared: { size: true } })";
+        for wrapped in typescript_wrappers(slot) {
+            for declared in [family.to_string(), format!("{family} as Family")] {
+                let source = format!(
+                    "export const Root = {wrapped};\nexport const Body = {wrapped};\nexport const Card = {declared};\n"
+                );
+                let out = analyze(&[("card.ts", source.as_str())], &test_inputs());
+                let root = class_of(&out, "card.ts::Root");
+                let body = class_of(&out, "card.ts::Body");
+                assert!(
+                    out.sheets.variants.contains(&format!(".{root}--size-lg .{body} {{")),
+                    "{source}did not share `size` from Root to Body:\n{}",
+                    out.sheets.variants
+                );
+            }
+        }
+    }
+
     #[test]
     fn expansion_leaves_flat_class_numbering_and_per_component_fragments_alone() {
         // Expansion only reads the compound data: neither the config list nor

@@ -325,7 +325,9 @@ fn index_objects<'a, 'b>(
     expr: &'b Expression<'a>,
     index: &mut BTreeMap<(u32, u32), &'b ObjectExpression<'a>>,
 ) {
-    match expr {
+    // Erased type wrappers index their operand, so span lookups resolve to
+    // the inner object.
+    match chain_walk::unwrap_type_assertions(expr) {
         Expression::ObjectExpression(obj) => {
             index.insert((obj.span.start, obj.span.end), obj.as_ref());
             for prop in &obj.properties {
@@ -344,20 +346,6 @@ fn index_objects<'a, 'b>(
         }
         Expression::StaticMemberExpression(member) => {
             index_objects(&member.object, index);
-        }
-        Expression::ParenthesizedExpression(paren) => {
-            index_objects(&paren.expression, index);
-        }
-        // Erased type wrappers (`as const`, `satisfies T`, `x!`): index the
-        // operand so span lookups resolve to the inner object.
-        Expression::TSAsExpression(x) => {
-            index_objects(&x.expression, index);
-        }
-        Expression::TSSatisfiesExpression(x) => {
-            index_objects(&x.expression, index);
-        }
-        Expression::TSNonNullExpression(x) => {
-            index_objects(&x.expression, index);
         }
         Expression::ArrayExpression(arr) => {
             for el in &arr.elements {
@@ -402,7 +390,9 @@ fn build_object_index<'a, 'b>(
 /// Identifier spans → names, so `.styles(BASE)` can resolve BASE from
 /// same-file statics.
 fn index_identifiers<'a>(expr: &Expression<'a>, index: &mut BTreeMap<(u32, u32), String>) {
-    match expr {
+    // Erased type wrappers: `styles(s as const)` resolves the same identifier
+    // as `styles(s)`.
+    match chain_walk::unwrap_type_assertions(expr) {
         Expression::Identifier(id) => {
             index.insert((id.span.start, id.span.end), id.name.to_string());
         }
@@ -416,20 +406,6 @@ fn index_identifiers<'a>(expr: &Expression<'a>, index: &mut BTreeMap<(u32, u32),
         }
         Expression::StaticMemberExpression(member) => {
             index_identifiers(&member.object, index);
-        }
-        // Erased type wrappers: `styles(s as const)` resolves the same
-        // identifier as `styles(s)`.
-        Expression::TSAsExpression(x) => {
-            index_identifiers(&x.expression, index);
-        }
-        Expression::TSSatisfiesExpression(x) => {
-            index_identifiers(&x.expression, index);
-        }
-        Expression::TSNonNullExpression(x) => {
-            index_identifiers(&x.expression, index);
-        }
-        Expression::ParenthesizedExpression(x) => {
-            index_identifiers(&x.expression, index);
         }
         _ => {}
     }
@@ -867,7 +843,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
                                                 continue;
                                             }
                                             if let Some(Expression::Identifier(reference)) =
-                                                transform.map(Expression::get_inner_expression)
+                                                transform.map(chain_walk::unwrap_type_assertions)
                                             {
                                                 match references.resolve(&ast.path, &reference.name) {
                                                     Ok(resolved) => {

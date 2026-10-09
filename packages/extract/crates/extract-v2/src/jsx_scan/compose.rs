@@ -138,9 +138,7 @@ fn collect_compose_from_expression(
     family_binding: Option<String>,
     families: &mut Vec<ComposeFamilyInfo>,
 ) {
-    // Type-level wrappers (`as`, `satisfies`, `!`, `<T>`, parentheses) are
-    // erased at runtime, so the call inside is still the family.
-    if let Expression::CallExpression(call) = expr.get_inner_expression() {
+    if let Expression::CallExpression(call) = crate::chain_walk::unwrap_type_assertions(expr) {
         extract_compose_family(call, family_binding, families);
     }
 }

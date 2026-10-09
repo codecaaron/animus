@@ -6,7 +6,7 @@ use oxc::ast::ast::{
     VariableDeclarator,
 };
 
-use super::expr::match_static_member;
+use super::expr::{match_static_member, unwrap_type_assertions};
 use super::terminal::{extract_terminal_arg, first_arg_span, second_arg_span_fn, TerminalArg};
 use super::{ChainDescriptor, ChainStage, MemberParentExtension, MemberRootedChain, TerminalKind};
 
@@ -59,7 +59,11 @@ pub fn walk_program_facts(program: &Program<'_>) -> WalkedProgram {
             // Chains bound by export default are not extracted; only their
             // presence is recorded.
             Statement::ExportDefaultDeclaration(export) => {
-                if let Some(Expression::CallExpression(call)) = export.declaration.as_expression() {
+                if let Some(Expression::CallExpression(call)) = export
+                    .declaration
+                    .as_expression()
+                    .map(unwrap_type_assertions)
+                {
                     if let Some(WalkedChain::Chain(_)) = try_walk_chain(call, "default".to_string()) {
                         default_export = Some(call.span.start);
                     }
@@ -87,7 +91,7 @@ fn try_extract_chain(declarator: &VariableDeclarator<'_>) -> Option<WalkedChain>
         BindingPattern::BindingIdentifier(id) => id.name.to_string(),
         _ => return None, // destructuring bindings are not extracted
     };
-    let call = match init {
+    let call = match unwrap_type_assertions(init) {
         Expression::CallExpression(call) => call.as_ref(),
         _ => return None,
     };

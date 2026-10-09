@@ -75,6 +75,17 @@ was missed and its slots' styles could be pruned. A file that still uses
 inside a function, now keeps its `compose` import; before, the import was
 removed and that call failed at runtime.
 
+**Chains behind TypeScript syntax extract like bare chains.** A chain
+declaration wrapped in `as`, `satisfies`, `!`, parentheses, a `<Type>`
+assertion or an instantiation expression, such as
+`export const Root = ds.variant({ … }).asElement('div') as typeof Base`, is
+now extracted with the same class and CSS as the bare chain. Before, it was
+left untransformed, and a compose family using it as a slot lost that
+slot's styles and shared variants. `asComponent(<Type>Link)` and
+`asComponent(Link<Type>)` now extract as `asComponent(Link)` does, and a
+wrapped default-exported chain reports `animus.chain.unsupported-default-export`
+as the bare one does.
+
 **Family member tags resolve through the file's own imports.** A tag such
 as `<Card.Body p={8} />` now finds its family through the imports of the
 file it is written in, so it gets its utility classes however the family

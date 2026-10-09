@@ -129,7 +129,7 @@ impl<'s> TransformReferences<'s> {
         seen: &mut Visited,
     ) -> Result<Resolved, Unsupported> {
         let at = owner.unwrap_or("default");
-        match init.get_inner_expression() {
+        match crate::chain_walk::unwrap_type_assertions(init) {
             function if is_function_expression(function) => {
                 Ok(Resolved::function(self.definition(file, at, at, function)))
             }
@@ -155,7 +155,7 @@ impl<'s> TransformReferences<'s> {
                     .arguments
                     .get(1)
                     .and_then(Argument::as_expression)
-                    .map(Expression::get_inner_expression)
+                    .map(crate::chain_walk::unwrap_type_assertions)
                     .filter(|callback| is_function_expression(callback))
                     .map(|callback| self.definition(file, at, name, callback));
                 Ok(Resolved {
