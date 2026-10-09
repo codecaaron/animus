@@ -286,6 +286,8 @@ const UNSUPPORTED_TRANSFORM_REFERENCE: &str = "animus.props.unsupported-transfor
 const UNSUPPORTED_PROPS_CONFIG: &str = "animus.props.unsupported-config";
 const UNSUPPORTED_DEFAULT_EXPORT: &str = "animus.chain.unsupported-default-export";
 const UNSUPPORTED_NAMESPACE_ROOT: &str = "animus.chain.unsupported-namespace-root";
+/// A warning: a chain written as an object-literal property is never
+/// extracted, so its component renders without its styles.
 const UNSUPPORTED_OBJECT_MEMBER: &str = "animus.chain.unsupported-object-member";
 /// A configured transform rejected before registration loses its meaning
 /// the same way, so it shares the optional-strict policy.
@@ -324,7 +326,6 @@ pub(crate) fn diagnostic_severity_for_code(code: &str) -> &'static str {
         | UNSUPPORTED_PROPS_CONFIG
         | UNSUPPORTED_DEFAULT_EXPORT
         | UNSUPPORTED_NAMESPACE_ROOT
-        | UNSUPPORTED_OBJECT_MEMBER
         | CONFIGURED_TRANSFORM_REJECTED
         | STATIC_EVALUATION_UNAVAILABLE
         | STRICT_TOKEN_MISS => "error",
