@@ -51,9 +51,11 @@ export { compareDiscoveryOrder, discoverFiles } from './discover-files';
 export type {
   CollectedExternalPackages,
   ExternalPackageOutcome,
+  ImportParser,
 } from './discover-packages';
 export {
   collectExternalPackageSources,
+  engineImportParser,
   excludeCollectedPackages,
   extractSystemFilePackages,
   findPackageRoot,
@@ -169,6 +171,7 @@ export {
   isUnresolvedParentDrop,
   surfaceManifestDiagnostics,
   isDeletedSource,
+  noKitFilesDiagnostics,
   unreadableSourceDiagnostic,
   unresolvedParentName,
   VOCABULARY_COLLISION,

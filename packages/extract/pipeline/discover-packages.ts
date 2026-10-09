@@ -11,9 +11,12 @@ import {
 
 import { globToRegExp } from './core-options';
 import { discoverFiles } from './discover-files';
+import { parseInternalWire } from './internal-wire';
 import { isPathWithinRoot } from './source-identity';
 import { isJsonBlock, isJsonString } from './tsconfig-paths';
 
+import type { EngineApi } from './engine-adapter';
+import type { ExtractFactsResult, ExtractImportFact } from './source-ingestion';
 import type { JsonValue } from './tsconfig-paths';
 
 export function findPackageRoot(absEntryPath: string): string {
@@ -523,7 +526,45 @@ export function staleDistIncludesMessage(
   return `[animus-extract] stale dist for include specifier(s): ${stale.join(', ')} — dist entry is older than the newest src/ file; rebuild the package(s) before extracting`;
 }
 
-export function extractSystemFilePackages(systemFilePath: string): string[] {
+/** A module's parsed import bindings, or null when it cannot be parsed. */
+export type ImportParser = (
+  source: string,
+  path: string
+) => readonly ExtractImportFact[] | null;
+
+/** The engine's own parse of a module's imports, through its
+ *  `extractFacts`; undefined for an engine without one. A parse that
+ *  panicked reports no imports, so it counts as no parse. */
+export function engineImportParser(
+  engine: Pick<EngineApi, 'extractFacts'>
+): ImportParser | undefined {
+  const { extractFacts } = engine;
+  if (!extractFacts) return undefined;
+  return (source, path) => {
+    try {
+      const facts = parseInternalWire<ExtractFactsResult>(
+        extractFacts(JSON.stringify([{ path, source }])),
+        'extractFacts'
+      ).files[path];
+      return facts && !facts.parsePanicked ? facts.imports : null;
+    } catch {
+      return null;
+    }
+  };
+}
+
+/** A pattern matching a call of any of `callees` as a whole name, or null
+ *  when there is none to anchor on. */
+function rootCallPattern(callees: readonly string[]): string | null {
+  if (callees.length === 0) return null;
+  const names = callees.map((callee) => callee.replace(/[.$]/g, '\\$&'));
+  return `(?<![a-zA-Z0-9_$.])(?:${names.join('|')})`;
+}
+
+export function extractSystemFilePackages(
+  systemFilePath: string,
+  parseImports?: ImportParser
+): string[] {
   let source: string;
   try {
     source = readFileSync(systemFilePath, 'utf-8');
@@ -531,10 +572,50 @@ export function extractSystemFilePackages(systemFilePath: string): string[] {
     return [];
   }
 
+  // A parse that reports no imports names no kit, so the spelling path
+  // decides, as without a parse.
+  const parsed = parseImports?.(source, systemFilePath) ?? null;
+  const parsedImports = parsed && parsed.length > 0 ? parsed : null;
+  let rootCall: string | null = 'createSystem';
+  if (parsedImports) {
+    // The roots are the local names an import binds `createSystem` to:
+    // Animus's export, renamed or not, or a module re-exporting it, which
+    // is not followed. The parse omits namespace imports, so those are read
+    // from their syntax. The bare name also anchors, as a global or a
+    // destructured binding, unless the file binds it to something else.
+    const shadowed =
+      parsedImports.some(
+        (binding) =>
+          binding.local === 'createSystem' &&
+          binding.imported !== 'createSystem'
+      ) ||
+      /\b(?:function\*?|class)\s+createSystem\b|\b(?:const|let|var)\s+createSystem\b/.test(
+        source
+      );
+    const roots = new Set([
+      ...parsedImports
+        .filter((binding) => binding.imported === 'createSystem')
+        .map((binding) => binding.local),
+      ...Array.from(
+        source.matchAll(
+          /\bimport\s+(?:[a-zA-Z_$][a-zA-Z0-9_$]*\s*,\s*)?\*\s*as\s+([a-zA-Z_$][a-zA-Z0-9_$]*)\s+from\s+['"]@animus-ui\/system(?:\/[^'"]*)?['"]/g
+        ),
+        (match) => `${match[1]}.createSystem`
+      ),
+      ...(shadowed ? [] : ['createSystem']),
+    ]);
+    rootCall = rootCallPattern([...roots]);
+  }
+
   const identifiers = new Set<string>();
 
   const constructorRegex =
-    /createSystem\s*\(\s*\{[^}]*?\bincludes\s*:\s*\[([^\]]*)\]/gs;
+    rootCall === null
+      ? null
+      : new RegExp(
+          `${rootCall}\\s*\\(\\s*\\{[^}]*?\\bincludes\\s*:\\s*\\[([^\\]]*)\\]`,
+          'gs'
+        );
 
   const chainRegex = /\.includes\s*\(\s*\[([^\]]*)\]\s*\)/gs;
 
@@ -551,7 +632,7 @@ export function extractSystemFilePackages(systemFilePath: string): string[] {
     }
   };
 
-  collectIdentifiers(constructorRegex);
+  if (constructorRegex) collectIdentifiers(constructorRegex);
   collectIdentifiers(chainRegex);
 
   const IDENT_START_RE = /^[a-zA-Z_$][a-zA-Z0-9_$]*/;
@@ -711,9 +792,10 @@ export function extractSystemFilePackages(systemFilePath: string): string[] {
 
   const chainRootIdentifiers = new Set<string>();
 
-  const createSystemAnchor = /createSystem\s*\(/g;
+  const createSystemAnchor =
+    rootCall === null ? null : new RegExp(`${rootCall}\\s*\\(`, 'g');
   let anchorMatch: RegExpExecArray | null;
-  while ((anchorMatch = createSystemAnchor.exec(source)) !== null) {
+  while ((anchorMatch = createSystemAnchor?.exec(source) ?? null) !== null) {
     let pos = anchorMatch.index + anchorMatch[0].length;
     let depth = 1;
     while (pos < source.length && depth > 0) {
@@ -752,28 +834,34 @@ export function extractSystemFilePackages(systemFilePath: string): string[] {
   if (identifiers.size === 0) return [];
 
   const importMap = new Map<string, string>();
+  for (const binding of parsedImports ?? []) {
+    importMap.set(binding.local, binding.source);
+  }
   const importRegex =
     /^\s*import\s+(?:([a-zA-Z_$][a-zA-Z0-9_$]*)\s*,\s*)?(?:\{([^}]*)\}|([a-zA-Z_$][a-zA-Z0-9_$]*))\s+from\s+['"]([^'"]+)['"]/gm;
 
-  let importMatch: RegExpExecArray | null;
-  while ((importMatch = importRegex.exec(source)) !== null) {
-    const [, comboDefault, namedImports, defaultImport, specifier] =
-      importMatch;
+  // Without a parse, the import table is read from its syntax.
+  if (!parsedImports) {
+    let importMatch: RegExpExecArray | null;
+    while ((importMatch = importRegex.exec(source)) !== null) {
+      const [, comboDefault, namedImports, defaultImport, specifier] =
+        importMatch;
 
-    if (comboDefault) {
-      importMap.set(comboDefault, specifier);
-    }
+      if (comboDefault) {
+        importMap.set(comboDefault, specifier);
+      }
 
-    if (defaultImport) {
-      importMap.set(defaultImport, specifier);
-    }
+      if (defaultImport) {
+        importMap.set(defaultImport, specifier);
+      }
 
-    if (namedImports) {
-      for (const binding of namedImports.split(',')) {
-        const parts = binding.trim().split(/\s+as\s+/);
-        const localName = (parts[1] || parts[0]).trim();
-        if (localName) {
-          importMap.set(localName, specifier);
+      if (namedImports) {
+        for (const binding of namedImports.split(',')) {
+          const parts = binding.trim().split(/\s+as\s+/);
+          const localName = (parts[1] || parts[0]).trim();
+          if (localName) {
+            importMap.set(localName, specifier);
+          }
         }
       }
     }

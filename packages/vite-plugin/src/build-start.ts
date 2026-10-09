@@ -6,9 +6,12 @@ import {
   createExcludeMatcher,
   DEFAULT_EXTENSIONS,
   discoverFiles,
+  engineImportParser,
   extractSystemFilePackages,
   firstOwners,
   isDeletedSource,
+  noKitFilesDiagnostics,
+  surfaceManifestDiagnostics,
   unreadableSourceDiagnostic,
   validateLayerOrder,
 } from '@animus-ui/extract/pipeline';
@@ -93,7 +96,10 @@ export async function runBuildStart(
   }
 
   const localFileCount = rawEntries.length;
-  const packageSpecifiers = extractSystemFilePackages(ctx.resolvedSystemPath!);
+  const packageSpecifiers = extractSystemFilePackages(
+    ctx.resolvedSystemPath!,
+    engineImportParser(ctx.engineApi())
+  );
 
   ctx.externalSourceEntries.clear();
 
@@ -111,6 +117,10 @@ export async function runBuildStart(
     },
   });
   ctx.ingestionFailureDiagnostics = ingestionFailures;
+  surfaceManifestDiagnostics(
+    { diagnostics: noKitFilesDiagnostics(collected.outcomes) },
+    (message) => ctx.warn(message)
+  );
 
   ctx.packageMap = collected.packageMap;
   ctx.externalPackageOutcomes = collected.outcomes;

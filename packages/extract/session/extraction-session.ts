@@ -53,6 +53,9 @@ import {
   unreadableSourceDiagnostic,
   unresolvableIncludesMessage,
   walkPackageSources,
+  engineImportParser,
+  noKitFilesDiagnostics,
+  surfaceManifestDiagnostics,
 } from '../pipeline/index';
 import {
   checkLockLiveness,
@@ -945,7 +948,10 @@ export class ExtractionSession {
     // Workspace walk + require.resolve stays local (the Node-resolution
     // seam); the traversal and ingest below are the shared collector.
     t = this.now();
-    const packageNames = extractSystemFilePackages(resolvedSystemPath);
+    const packageNames = extractSystemFilePackages(
+      resolvedSystemPath,
+      engineImportParser(engineApi())
+    );
     const preResolved = resolvePackagesByName(rootDir, packageNames);
 
     // Raw content hashes of every walked external file, keyed by absolute
@@ -985,13 +991,10 @@ export class ExtractionSession {
     this.lastExternalOutcomes = collected.outcomes;
     this.ingestionFailureDiagnostics = ingestionFailures;
 
-    for (const record of collected.outcomes) {
-      if (record.outcome === 'empty') {
-        this.warn(
-          `include '${record.specifier}' resolved but discovered no component sources`
-        );
-      }
-    }
+    surfaceManifestDiagnostics(
+      { diagnostics: noKitFilesDiagnostics(collected.outcomes) },
+      (message) => this.warn(message)
+    );
     const unresolvableMessage = unresolvableIncludesMessage(collected.outcomes);
     if (unresolvableMessage !== null) {
       if (this.options.strict) {
