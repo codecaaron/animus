@@ -57,6 +57,21 @@ const COLOR_FUNCTION_PREFIXES = [
   'color-mix(',
 ];
 
+/**
+ * A hex or functional colour. Named colours and keywords are not literals:
+ * in a colour mode they stay palette lookups, so a palette key never reads as
+ * a CSS name.
+ */
+function isLiteralColor(value: string): boolean {
+  const v = value.trim();
+  if (/^#([0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test(v)) {
+    return true;
+  }
+  return COLOR_FUNCTION_PREFIXES.some(
+    (prefix) => v.startsWith(prefix) && v.endsWith(')')
+  );
+}
+
 function isValidCSSColor(value: unknown): boolean {
   if (typeof value !== 'string') return false;
   const v = value.trim();
@@ -65,15 +80,7 @@ function isValidCSSColor(value: unknown): boolean {
   if (v === 'transparent' || v === 'currentColor' || v === 'currentcolor')
     return true;
 
-  if (
-    v.startsWith('#') &&
-    /^#([0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test(v)
-  )
-    return true;
-
-  for (const prefix of COLOR_FUNCTION_PREFIXES) {
-    if (v.startsWith(prefix) && v.endsWith(')')) return true;
-  }
+  if (isLiteralColor(v)) return true;
 
   // Named colors pass unvalidated — the browser is the authority.
   if (/^[a-zA-Z]+$/.test(v)) return true;
@@ -92,7 +99,10 @@ function validateModeAliases(
     const aliasPath = prefix ? `${prefix}.${key}` : key;
     if (key === '_') {
       if (typeof value === 'string') {
-        if (walkDotPath(nestedColors, value) === undefined) {
+        if (
+          !isLiteralColor(value) &&
+          walkDotPath(nestedColors, value) === undefined
+        ) {
           throw new Error(
             `addColorModes: mode '${modeName}' references unknown color '${value}' for alias '${prefix || key}'. ` +
               `Available colors: ${flatColorKeys.slice(0, 10).join(', ')}${flatColorKeys.length > 10 ? ', ...' : ''}`
@@ -108,7 +118,10 @@ function validateModeAliases(
         );
       }
     } else if (typeof value === 'string') {
-      if (walkDotPath(nestedColors, value) === undefined) {
+      if (
+        !isLiteralColor(value) &&
+        walkDotPath(nestedColors, value) === undefined
+      ) {
         throw new Error(
           `addColorModes: mode '${modeName}' references unknown color '${value}' for alias '${aliasPath}'. ` +
             `Available colors: ${flatColorKeys.slice(0, 10).join(', ')}${flatColorKeys.length > 10 ? ', ...' : ''}`
@@ -1620,8 +1633,10 @@ function flattenTheme(
         }
       } else {
         // Non-emitted palettes still need a concrete semantic declaration.
+        // A literal colour is declared as written.
         const literal = tokenMap[`colors.${colorRef}`];
         if (literal !== undefined) variables[varName] = literal;
+        else if (isLiteralColor(colorRef)) variables[varName] = colorRef;
       }
       tokenMap[`colors.${aliasDotKey}`] = `var(${varName})`;
       variableMap[`colors.${aliasDotKey}`] = varName;
@@ -1757,8 +1772,12 @@ function resolveModeValueMaps(
     } else if (tokenMap[path] !== undefined) {
       return tokenMap[path];
     }
-    // Unknown target: keep the authored ref string. Build-time alias
-    // validation rejects this for object-mode themes.
+    // A literal colour resolves its token references as the root declaration
+    // does. An unknown target keeps the authored string; build-time alias
+    // validation rejects it.
+    if (isLiteralColor(colorRef)) {
+      return resolveValueReferences(colorRef, tokenMap);
+    }
     return String(colorRef);
   };
   for (const modeName of Object.keys(effectiveModes).sort()) {
