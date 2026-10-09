@@ -306,3 +306,36 @@ type SealedProps<C> = C extends {
 export type ComposedFamily<Slots extends Record<string, unknown>> = {
   [K in keyof Slots]: ForwardRefExoticComponent<SealedProps<Slots[K]>>;
 };
+
+/** An `asClass()` resolver's input: exactly the props the builder admitted. */
+export type AnimusClassProps<
+  PR extends Record<string, SystemProp>,
+  GR extends Record<string, (keyof PR)[]>,
+  V,
+  S,
+  AG,
+  CP extends Record<string, SystemProp>,
+> = ResolvedGroupProps<PR, GR, AG> &
+  VariantProps<V> &
+  StateProps<S> &
+  CustomPropValues<CP> &
+  SelectorAliasProps<ResolvedGroupProps<PR, GR, AG>>;
+
+/**
+ * The `asClass()` input of the builder `B`, read from the registries its
+ * public fields carry. Resolved from the receiver at the call, so the
+ * builder classes' own type parameters never carry it.
+ */
+export type BuilderClassProps<B> = B extends {
+  propRegistry: infer PR extends Record<string, SystemProp>;
+}
+  ? B extends {
+      groupRegistry: infer GR extends Record<string, (keyof PR)[]>;
+      variants: infer V;
+      statesConfig: infer S;
+      activeGroups: infer AG;
+      custom: infer CP extends Record<string, SystemProp>;
+    }
+    ? AnimusClassProps<PR, GR, V, S, AG, CP>
+    : never
+  : never;

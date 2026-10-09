@@ -22,9 +22,11 @@ import { AbstractProps } from './types/props';
 import { admittedPropNames } from './utils/admittedPropNames';
 import { deepMerge } from './utils/deepMerge';
 
+import type { ClassResolverConfig } from './runtime/resolveClasses';
 import type {
   AnimusComponent,
   AnimusWrappedComponent,
+  BuilderClassProps,
 } from './types/component';
 
 /**
@@ -135,7 +137,9 @@ export class AnimusExtendedWithAll<
     >;
   }
 
-  asClass(): ClassResolver {
+  asClass<This extends { _buildComponentConfig(): ClassResolverConfig }>(
+    this: This
+  ): ClassResolver<BuilderClassProps<This>> {
     const config = this._buildComponentConfig();
     return createClassResolver('', config);
   }
