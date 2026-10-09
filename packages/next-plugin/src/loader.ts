@@ -27,8 +27,9 @@ export default function animusLoader(
   this: LoaderContext,
   source: string
 ): string {
-  const watching = this.mode !== 'production';
-  if (watching && this.addDependency !== undefined) {
+  // In every mode: a persistent cache restores a module only while the
+  // epoch of the session that built it still agrees with this analysis.
+  if (this.addDependency !== undefined) {
     const sessionDir = getSessionArtifactDir();
     if (sessionDir) {
       const epochPath = replacementEpochPath(sessionDir);
@@ -65,6 +66,7 @@ export default function animusLoader(
     engineApi,
     opts: this.getOptions?.() ?? {},
   });
+  const watching = this.mode !== 'production';
   if (!watching || this.addDependency === undefined) return code;
 
   // watchRun analyzed the edited files before this compilation, so these

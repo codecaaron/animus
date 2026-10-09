@@ -137,15 +137,15 @@ describe('replacements-epoch artifact registered as a file dependency (design D2
     expect(runLoader({ root, source: OLD_SOURCE }).dependencies).toEqual([]);
   });
 
-  test('production invocations never register the artifact (prod untouched)', () => {
-    const { root } = createRoot(true);
+  test('production invocations register the artifact too, so a rebuild never restores a transform from a disagreeing analysis', () => {
+    const { root, epochPath } = createRoot(true);
     const { output, dependencies } = runLoader({
       root,
       source: OLD_SOURCE,
       mode: 'production',
     });
     expect(output).toBe(OLD_SOURCE);
-    expect(dependencies).toEqual([]);
+    expect(dependencies).toEqual([epochPath]);
   });
 });
 
