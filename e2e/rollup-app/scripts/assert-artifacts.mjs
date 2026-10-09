@@ -53,6 +53,15 @@ for (const name of assetUrls) {
     Object.hasOwn(commit.payloads, `assets/${name}`)
   );
 }
+// asset() in a theme scale value: `Textured` inlines it into component CSS.
+const textureUrl = styles.match(
+  /background-image:\s*url\(\.\/assets\/([^)'"]+)\)/
+)?.[1];
+check(
+  'theme-scale asset() resolves to a published ./assets/ url',
+  textureUrl !== undefined && existsSync(join(outDir, 'assets', textureUrl)),
+  textureUrl ?? 'no background-image url'
+);
 const manifest = JSON.parse(
   readFileSync(join(outDir, 'manifest.json'), 'utf-8')
 );

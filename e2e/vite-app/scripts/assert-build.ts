@@ -156,6 +156,22 @@ async function main(): Promise<void> {
     );
   });
 
+  // asset() in a theme scale value: `Textured` inlines it into component CSS.
+  const textureUrl = css.match(
+    /background-image:\s*url\((['"]?)([^'")]+)\1\)/
+  )?.[2];
+  if (!textureUrl || !/test-font[^'")]*\.woff2$/.test(textureUrl)) {
+    throw new AssertionError(
+      `asset() theme-scale witness: expected a bundler-resolved test-font URL in Textured's background-image, got ${textureUrl ?? '<none>'}`
+    );
+  }
+  await readFile(resolve(DIST, textureUrl.replace(/^\//, ''))).catch(() => {
+    throw new AssertionError(
+      `asset() theme-scale witness: ${textureUrl} does not correspond to an emitted file in dist`,
+      { textureUrl }
+    );
+  });
+
   // The theme's system-fallback blocks stay unlayered beside `:root` so an
   // explicit mode can override the OS fallback at the same cascade level.
   assertConditionsInsideLayers(css, {

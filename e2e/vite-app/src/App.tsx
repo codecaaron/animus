@@ -18,6 +18,9 @@ import { ds } from './ds';
 
 const Heading = ds.styles({ fontSize: 24, fontWeight: 700 }).asElement('h1');
 const Subheading = ds.styles({ color: 'text.muted' }).asElement('p');
+const Textured = ds
+  .styles({ backgroundImage: '{images.texture}' })
+  .asElement('div');
 
 export function App() {
   return (
@@ -25,6 +28,7 @@ export function App() {
       <Stack gap={8}>
         <Heading>Vite Test App</Heading>
         <Subheading>Extraction proof for vite-plugin</Subheading>
+        <Textured />
       </Stack>
 
       <Stack direction="row" gap={8}>

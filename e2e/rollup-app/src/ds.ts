@@ -60,6 +60,14 @@ export const theme = createTheme()
       24: '1.5rem',
     },
   })
+  // asset() inside a scale value resolves like the @font-face asset below;
+  // `Textured` inlines it into component CSS.
+  .addScale({
+    name: 'images',
+    values: {
+      texture: `url("${asset('@animus-ui/test-ds/assets/test-font.woff2')}")`,
+    },
+  })
   .build();
 
 export type RollupAppTheme = typeof theme;
