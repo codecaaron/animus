@@ -1614,6 +1614,7 @@ pub fn resolve_global_block(
     };
 
     let mut rules: Vec<String> = Vec::new();
+    let breakpoints = crate::analyze_css::extract_breakpoints(ctx.theme);
 
     for (selector, style_obj) in selectors {
         if selector.starts_with("@keyframes") {
@@ -1643,14 +1644,22 @@ pub fn resolve_global_block(
             continue;
         }
 
-        if !style_obj.is_object() {
+        let Some(style_map) = style_obj.as_object() else {
+            continue;
+        };
+        // An at-rule selector (`@font-face`, `@page`) holds declarations
+        // only, as before; nesting under one is not supported.
+        if selector.starts_with('@') {
+            let decls = resolve_flat_styles(style_map, ctx);
+            if !decls.is_empty() {
+                rules.push(global_rule(selector, &decls, 0));
+            }
             continue;
         }
         // The resolver components use: nested `&` selectors, aliases,
         // breakpoints and at-rule conditions, with the global's selector as
-        // the subject.
-        let resolved = resolve_styles(style_obj, ctx, false);
-        let breakpoints = crate::analyze_css::extract_breakpoints(ctx.theme);
+        // the subject; `_before`/`_after` gain `content` as on a component.
+        let resolved = resolve_styles(style_obj, ctx, true);
         push_global_rules(&mut rules, selector, &resolved, &breakpoints);
     }
 
@@ -1686,16 +1695,23 @@ fn global_conditioned_rule(preludes: &[String], selector: &str, declarations: &[
 }
 
 /// A global's rules in the order components emit them, except that nested
-/// selectors keep their authored order: the base rule, nested selectors,
-/// breakpoints by width, then the other conditions.
+/// selectors keep the resolver's order (authored, with a block after the
+/// blocks nested inside it): the base rule, nested selectors, breakpoints by
+/// width, then the other conditions.
 fn push_global_rules(
     rules: &mut Vec<String>,
     selector: &str,
     resolved: &ResolvedStyles,
     breakpoints: &crate::css::BreakpointMap,
 ) {
+    // Each branch trimmed, or `a , b` would compose to the descendant `a :hover`.
+    let branches = split_top_level_commas(selector)
+        .iter()
+        .map(|branch| branch.trim())
+        .collect::<Vec<_>>()
+        .join(", ");
     let subject = |nested: &Option<String>| match nested {
-        Some(inner) => compose_selectors(selector, inner),
+        Some(inner) => compose_selectors(&branches, inner),
         None => selector.to_string(),
     };
     if !resolved.declarations.is_empty() {
@@ -1703,7 +1719,7 @@ fn push_global_rules(
     }
     for (nested, declarations) in &resolved.pseudo_selectors {
         if !declarations.is_empty() {
-            rules.push(global_rule(&compose_selectors(selector, nested), declarations, 0));
+            rules.push(global_rule(&subject(&Some(nested.clone())), declarations, 0));
         }
     }
     let width = |bp: &str| breakpoints.breakpoints.get(bp).copied().unwrap_or(0);

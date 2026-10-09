@@ -866,6 +866,12 @@ fn drain_dropped_style_keys(
 /// A style key whose block is not emitted, named with the form it needs.
 fn dropped_style_key(file: &str, component: &str, dropped: &crate::theme::DroppedStyleKey) -> CssDiagnostic {
     use crate::theme::DroppedStyleKey;
+    // `'& p'` is the fix only for a key spelled like an HTML element.
+    let element_hint = |key: &str| {
+        let element = key.chars().next().is_some_and(|c| c.is_ascii_lowercase())
+            && key.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit());
+        if element { format!("; for the {key} element, write the selector '& {key}'") } else { String::new() }
+    };
     let message = match dropped {
         DroppedStyleKey::UnregisteredAlias(key) => format!(
             "style key '{key}' is not a registered selector or condition alias, so its block is \
@@ -873,12 +879,13 @@ fn dropped_style_key(file: &str, component: &str, dropped: &crate::theme::Droppe
         ),
         DroppedStyleKey::NonResponsiveObject(key) => format!(
             "prop '{key}' was given an object whose keys are not breakpoints, so its block is \
-             not emitted — for the {key} element write the selector '& {key}', or give the prop a \
-             value or an object of breakpoint keys"
+             not emitted — give it a value or an object of breakpoint keys{}",
+            element_hint(key)
         ),
         DroppedStyleKey::UnrecognizedKey(key) => format!(
             "style key '{key}' is not a prop, selector, alias or supported at-rule, so its block \
-             is not emitted — for the {key} element write the selector '& {key}'"
+             is not emitted{}",
+            element_hint(key)
         ),
     };
     diagnostic(file, component, "warn", message, Some(crate::theme::UNRECOGNIZED_STYLE_KEY))

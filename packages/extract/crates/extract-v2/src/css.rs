@@ -1313,7 +1313,7 @@ fn add_keyword_classes(
 ) {
     let key = value_key(ctx.config.get(prop_name).is_some_and(PropConfig::keys_typed));
     // No usage wrote these keywords, so nothing is reported against one.
-    let quiet = ResolveContext { transform_failures: None, token_misses: None, ..*ctx };
+    let quiet = ResolveContext { transform_failures: None, token_misses: None, dropped_keys: None, ..*ctx };
     let classes = class_map.entry(prop_name.to_string()).or_default();
     for keyword in CSS_WIDE_KEYWORDS {
         // A scale key spelled like a keyword reaches the slot, which reads the
