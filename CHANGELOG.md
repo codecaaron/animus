@@ -37,6 +37,19 @@ one `@property`, it also reports:
 Info diagnostics print only with `verbose`. None of these checks changes the
 emitted CSS.
 
+**CSS-wide keywords passed at runtime now mean what they mean when written
+statically.** A runtime value of `initial`, `inherit`, `unset`, `revert` or
+`revert-layer` used to reach the property through the prop's inline CSS
+variable, so the keyword acted on that variable. For example, a runtime
+`inherit` picked up the parent's runtime variable instead of the parent's
+padding. A system or component prop that a JSX attribute passes a runtime
+value, such as `<Box p={pad} />`, now gets one class per keyword, at the base
+and at each breakpoint, holding the direct declaration, and a runtime
+keyword selects it. A responsive value selects the keyword class for each
+keyword entry, and its other entries still use the inline variable. A prop
+that receives runtime values only through a spread, forwarding or an alias
+gets no keyword classes and keeps the old behaviour.
+
 **Selecting the removed v1 engine explains itself.** Setting `engine: 'v1'`
 or `ANIMUS_ENGINE=v1` still fails, and the error now says that the v1
 extraction engine is no longer supported, that v2 is the only engine, and to

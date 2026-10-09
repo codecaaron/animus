@@ -1,13 +1,15 @@
 parity baseline — engines: baseline:v2 vs v2 — devMode: false
 
-Units passed: 65/66 (98.48%)
-Divergences: 4 (4 unregistered)
+Units passed: 64/66 (96.97%)
+Divergences: 6 (6 unregistered)
 
 Failing units (sorted):
-  integration/extended.tsx · css (UNREGISTERED) [7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39 -> dcf25e1b438599b78769ba1e8ccad9cf2d17171f2b7897d34836046533edb4d6] — unit missing from baseline
-  integration/extended.tsx · code (UNREGISTERED) [7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39 -> ced3d69b657daf5ceafe7246dff836c080aa32d491f5afd3711f3f057753ee42] — unit missing from baseline
-  integration/extended.tsx · observables (UNREGISTERED) [7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39 -> 42d5fb8fab40ec14100d4eb5a596e43bc6d0f4df6cec4d7c2d4ac2fb129119a1] — unit missing from baseline
-  integration/extended.tsx · diagnostics (UNREGISTERED) [7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39 -> 97ca2717c37e577206a357c652d5f190ec4d14afb5d403678650fcf330a4b6ae] — unit missing from baseline
+  extract-all · code (UNREGISTERED) [1a0df1658be1f6cb7da107a244ad8483998c9ab9e4819b789ca34da7470dabfe -> 8c4319368a95bb39eb00b2887c58fc61faf8ef94e145afa471e4151c919e20b7] — custom-props.tsx: transformed code not AST-equivalent
+  extract-all · css [selector] (UNREGISTERED) [7d23755a43d33c1d968f9659184ddfa821494f2d81626865d3c29ab2735cd4de -> a7b24ae83e93fadf8567e69d355d28d5e73646a108b792c25e9cc4a3b5f38542] — CSS bytes differ (56682 vs 59299)
+  extract-all · observables (UNREGISTERED) [17044a9329dcb25abcb6407c09e03fd789fabf42319e98e2630dd2264b1a1695 -> 76a7d917610bb21408044fbc0f8b4992ac9758aa06c31234969cbbc4976f1872] — sheetsJson differs
+  extract/custom-props.tsx · code (UNREGISTERED) [66958e9b0d29f69677b73d9ca3187f6345d44e174d9172a04f3f1f6512d87b57 -> 7ae4e60ba3dca5b4ac52e7fb5a81f25d1dcc621ede0bc4b99e6ab86783c37f8a] — custom-props.tsx: transformed code not AST-equivalent
+  extract/custom-props.tsx · css [selector] (UNREGISTERED) [aa53b9fadd7265fc4b64c8f4feb0f9ea72db352b8f79a36e1c789bdad628f296 -> eb2dddcdb52ced19955c7f25ed9342f22080011f163420cdf9d2e7892d320296] — CSS bytes differ (10436 vs 13053)
+  extract/custom-props.tsx · observables (UNREGISTERED) [ca0c6281fe89315940afa6f3570cd0045f08215fae5241b09455aac0d1991480 -> 1bb57e92d287b36ff86e46f4f865ff629ecd248219eb9b5a28d769601ae0c654] — sheetsJson differs
 
 Usage-case families:
   ok mdx-provider-scope — expected identical, observed identical
@@ -24,21 +26,21 @@ Usage-case families:
   ok extension-compounds — expected identical, observed identical
   ok compose-default — expected identical, observed identical
   ok compose-slot-bail — expected identical, observed identical
-Baseline metadata errors:
-  baseline corpus digest differs
 
 ---
 
 parity baseline — engines: baseline:v2 vs v2 — devMode: true
 
-Units passed: 65/66 (98.48%)
-Divergences: 4 (4 unregistered)
+Units passed: 64/66 (96.97%)
+Divergences: 6 (6 unregistered)
 
 Failing units (sorted):
-  integration/extended.tsx · css (UNREGISTERED) [7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39 -> dcf25e1b438599b78769ba1e8ccad9cf2d17171f2b7897d34836046533edb4d6] — unit missing from baseline
-  integration/extended.tsx · code (UNREGISTERED) [7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39 -> ced3d69b657daf5ceafe7246dff836c080aa32d491f5afd3711f3f057753ee42] — unit missing from baseline
-  integration/extended.tsx · observables (UNREGISTERED) [7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39 -> 42d5fb8fab40ec14100d4eb5a596e43bc6d0f4df6cec4d7c2d4ac2fb129119a1] — unit missing from baseline
-  integration/extended.tsx · diagnostics (UNREGISTERED) [7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39 -> 97ca2717c37e577206a357c652d5f190ec4d14afb5d403678650fcf330a4b6ae] — unit missing from baseline
+  extract-all · code (UNREGISTERED) [1a0df1658be1f6cb7da107a244ad8483998c9ab9e4819b789ca34da7470dabfe -> 8c4319368a95bb39eb00b2887c58fc61faf8ef94e145afa471e4151c919e20b7] — custom-props.tsx: transformed code not AST-equivalent
+  extract-all · css [selector] (UNREGISTERED) [40c73f8b65edb2c2841720ef23eaa47adcf4cc389ee3ca64d25dbf55b677b3b2 -> d5083e2f0d090d60d43b3b3337bf696fd0cb16104fda8e64401a19024a959b5c] — CSS bytes differ (56910 vs 59527)
+  extract-all · observables (UNREGISTERED) [605d2a841dfe1e2c119bb803cd1749ce2ab5c96c794c0c8b999794eb3da209d4 -> 6b4d002fcb0f51e5ddeaf29247a27865264436c9a597233d69a8b3e993f4e20d] — sheetsJson differs
+  extract/custom-props.tsx · code (UNREGISTERED) [66958e9b0d29f69677b73d9ca3187f6345d44e174d9172a04f3f1f6512d87b57 -> 7ae4e60ba3dca5b4ac52e7fb5a81f25d1dcc621ede0bc4b99e6ab86783c37f8a] — custom-props.tsx: transformed code not AST-equivalent
+  extract/custom-props.tsx · css [selector] (UNREGISTERED) [aa53b9fadd7265fc4b64c8f4feb0f9ea72db352b8f79a36e1c789bdad628f296 -> eb2dddcdb52ced19955c7f25ed9342f22080011f163420cdf9d2e7892d320296] — CSS bytes differ (10436 vs 13053)
+  extract/custom-props.tsx · observables (UNREGISTERED) [ca0c6281fe89315940afa6f3570cd0045f08215fae5241b09455aac0d1991480 -> 1bb57e92d287b36ff86e46f4f865ff629ecd248219eb9b5a28d769601ae0c654] — sheetsJson differs
 
 Usage-case families:
   ok mdx-provider-scope — expected identical, observed identical
@@ -55,5 +57,3 @@ Usage-case families:
   ok extension-compounds — expected identical, observed identical
   ok compose-default — expected identical, observed identical
   ok compose-slot-bail — expected identical, observed identical
-Baseline metadata errors:
-  baseline corpus digest differs

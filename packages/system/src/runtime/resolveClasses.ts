@@ -455,18 +455,29 @@ function warnTransformThrow(
   }
 }
 
+/** Through an inline variable these would act on the variable itself. */
+const CSS_WIDE_KEYWORDS: ReadonlySet<unknown> = new Set([
+  'initial',
+  'inherit',
+  'unset',
+  'revert',
+  'revert-layer',
+]);
+
 /**
  * Resolution is staged so a drop is atomic: one entry that misses a strict
  * scale, or one transform that throws or returns an invalid result, leaves
- * `classes` and `dynStyle` untouched.
+ * `classes` and `dynStyle` untouched. A responsive entry that is a CSS-wide
+ * keyword takes the class extraction emits for it at that breakpoint.
  */
 function applyDynamicProp(
   classes: string[],
   dynStyle: Record<string, string>,
   propValue: unknown,
-  dc: ValueDynamicPropConfig
+  dc: ValueDynamicPropConfig,
+  literalClass: (value: unknown) => string | undefined
 ): EntryFailure | null {
-  const staged: [slotClass: string, varName: string, resolved: string][] = [];
+  const staged: [cls: string, varName?: string, resolved?: string][] = [];
   if (
     typeof propValue === 'object' &&
     propValue !== null &&
@@ -474,6 +485,13 @@ function applyDynamicProp(
   ) {
     for (const [bp, bpVal] of Object.entries(propValue)) {
       if (bpVal == null) continue;
+      const keywordClass = CSS_WIDE_KEYWORDS.has(bpVal)
+        ? literalClass(bp === '_' ? bpVal : { [bp]: bpVal })
+        : undefined;
+      if (keywordClass) {
+        staged.push([keywordClass]);
+        continue;
+      }
       const resolved = resolveEntry(bpVal, dc);
       if (typeof resolved !== 'string') {
         return 'entry' in resolved ? { ...resolved, breakpoint: bp } : resolved;
@@ -489,9 +507,11 @@ function applyDynamicProp(
     if (typeof resolved !== 'string') return resolved;
     staged.push([dc.slotClass, dc.varName, resolved]);
   }
-  for (const [slotClass, varName, resolved] of staged) {
-    classes.push(slotClass);
-    dynStyle[varName] = resolved;
+  for (const [cls, varName, resolved] of staged) {
+    classes.push(cls);
+    if (varName !== undefined && resolved !== undefined) {
+      dynStyle[varName] = resolved;
+    }
   }
   return null;
 }
@@ -572,10 +592,12 @@ export function resolveClasses(
       const [classMap, typedProps] = customOwned
         ? [customPropMap, config.typedCustomProps]
         : [systemPropMap, config.typedSystemProps];
-      const cls =
-        classMap?.[propName]?.[
-          typedProps?.includes(propName) ? typedValueKey(propValue) : key
-        ];
+      const keyOf = typedProps?.includes(propName)
+        ? typedValueKey
+        : serializeValueKey;
+      const literalClass = (value: unknown) =>
+        classMap?.[propName]?.[keyOf(value)];
+      const cls = literalClass(propValue);
 
       if (cls) {
         classes.push(cls);
@@ -592,7 +614,7 @@ export function resolveClasses(
           const failure =
             dc.kind === 'declarations'
               ? applyDeclarationProp(classes, staged, propValue, dc)
-              : applyDynamicProp(classes, staged, propValue, dc);
+              : applyDynamicProp(classes, staged, propValue, dc, literalClass);
           if (failure === null) {
             dynStyle = staged;
             recordWitness(baseClassName, propName, key, 'dynamic');

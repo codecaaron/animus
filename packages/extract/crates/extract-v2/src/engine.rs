@@ -854,14 +854,19 @@ mod tests {
         );
         assert_eq!(
             manifest["css"],
-            "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer composed {\n  }\n}\n\n@layer anm-system {\n  .animus-dyn-p {\n    padding: var(--animus-p);\n  }\n  .animus-u-919d7eb1 {\n    padding: 4;\n  }\n  .animus-u-91c0915d {\n    padding: 8;\n  }\n}\n\n"
+            "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer composed {\n  }\n}\n\n@layer anm-system {\n  .animus-dyn-p {\n    padding: var(--animus-p);\n  }\n  .animus-u-2abf9989 {\n    padding: initial;\n  }\n  .animus-u-32d02e7f {\n    padding: revert-layer;\n  }\n  .animus-u-3f76fadb {\n    padding: revert;\n  }\n  .animus-u-4cab6402 {\n    padding: unset;\n  }\n  .animus-u-919d7eb1 {\n    padding: 4;\n  }\n  .animus-u-91c0915d {\n    padding: 8;\n  }\n  .animus-u-c801800c {\n    padding: inherit;\n  }\n}\n\n"
         );
         assert_eq!(
             manifest["system_prop_map"],
             serde_json::json!({
                 "p": {
                     "4": "animus-u-919d7eb1",
-                    "8": "animus-u-91c0915d"
+                    "8": "animus-u-91c0915d",
+                    "inherit": "animus-u-c801800c",
+                    "initial": "animus-u-2abf9989",
+                    "revert": "animus-u-3f76fadb",
+                    "revert-layer": "animus-u-32d02e7f",
+                    "unset": "animus-u-4cab6402"
                 }
             })
         );
@@ -1444,7 +1449,12 @@ export const App = () => <Box tone="red" />;
         )
         .unwrap();
 
-        assert_eq!(manifest["system_prop_map"], serde_json::json!({}));
+        // The rejected object reaches `mt` at runtime, so `mt` maps only
+        // its keyword classes.
+        let mt = manifest["system_prop_map"]["mt"].as_object().unwrap();
+        assert_eq!(mt.len(), crate::css::CSS_WIDE_KEYWORDS.len());
+        assert!(crate::css::CSS_WIDE_KEYWORDS.iter().all(|keyword| mt.contains_key(*keyword)));
+        assert_eq!(manifest["system_prop_map"].as_object().unwrap().len(), 1);
         assert_eq!(manifest["usageResidue"].as_array().unwrap().len(), 1);
         assert_eq!(manifest["usageResidue"][0]["kind"], "identifier");
     }

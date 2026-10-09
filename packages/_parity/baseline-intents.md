@@ -367,3 +367,4 @@ committed production/development pair. Ordinary parity runs never write it.
       consuming names, member variables, runtime slots and all other
       observable fields stay unchanged. The remaining 63 oracle units in
       each mode and 25 seam cases are identical.
+- [x] `runtime-css-wide-keyword-classes-20261008` — refresh after every value prop that a JSX attribute passes a runtime value gained one class per CSS-wide keyword (`initial`, `inherit`, `unset`, `revert`, `revert-layer`) at the base and at each breakpoint: `animus-u-` rules in the system layer for system props and `animus-uc-` rules in the custom layer for custom props, entered in `systemPropMap` and `customPropMap` (typed keys for transform and callback props, which `typedCustomProps` then lists). Only `extract-all` and `extract/custom-props.tsx` change, in code, CSS and sheetsJson, in both modes. Only additions: every pre-existing rule, class name and map entry stays byte-identical.
