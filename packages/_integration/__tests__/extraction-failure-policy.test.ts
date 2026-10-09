@@ -329,7 +329,6 @@ describe.each([
       'OtherNamespace',
       'AssertedAbsent',
       'AssertedInline',
-      'BarrelNamespace',
       'ShadowedUndefined',
     ]) {
       expect(forComponent(analysis.diagnostics, component), component).toEqual(
@@ -345,6 +344,21 @@ describe.each([
     expect(analysis.manifest.components).toHaveProperty(`${FILE}::NestedAxis`);
     expect(analysis.manifest.components).toHaveProperty(
       `${FILE}::InlineTransform`
+    );
+  });
+
+  test('a namespace-root chain reached through a barrel is reported, not silently dropped', () => {
+    expect(forComponent(analysis.diagnostics, 'BarrelNamespace')).toMatchObject(
+      [
+        {
+          kind: 'bail',
+          code: 'animus.chain.namespace-root-through-barrel',
+          severity: 'warn',
+          message: expect.stringContaining(
+            "reads 'ds' through namespace import 'barrel', reached through fixtures/policy-barrel.ts"
+          ),
+        },
+      ]
     );
   });
 
