@@ -3,7 +3,7 @@
 // leaves 0-byte modules (TS2306) and stale barrel re-exports (TS2305).
 
 import { readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { extname, join, resolve } from 'node:path';
 
 import {
   type Node,
@@ -117,19 +117,24 @@ function collectBindingNames(name: Node, out: Set<string>): void {
   }
 }
 
-// VariableDeclaration is absent: it may bind many names via destructuring.
-const NAMED_DECLARATION_TYPES = new Set([
-  'FunctionDeclaration',
-  'ClassDeclaration',
-  'TSInterfaceDeclaration',
-  'TSTypeAliasDeclaration',
-  'TSEnumDeclaration',
-]);
+function sourceSpecifier(node: Node): string | undefined {
+  const sourceNode = childNode(node, 'source');
+  return sourceNode === undefined
+    ? undefined
+    : stringField(sourceNode, 'value');
+}
 
-export function getExportsOfFile(filePath: string): Set<string> {
+interface ModuleExports {
+  names: Set<string>;
+  /** The specifiers of the module's `export * from` statements. */
+  stars: string[];
+}
+
+function moduleExports(filePath: string): ModuleExports {
   const source = readFileSync(filePath, 'utf-8');
   const program = parseProgram(filePath, source);
   const exports = new Set<string>();
+  const stars: string[] = [];
 
   const visit = (node: Node): void => {
     if (node.type === 'ExportNamedDeclaration') {
@@ -148,7 +153,9 @@ export function getExportsOfFile(filePath: string): Set<string> {
           const id = childNode(d, 'id');
           if (id !== undefined) collectBindingNames(id, exports);
         }
-      } else if (NAMED_DECLARATION_TYPES.has(decl.type)) {
+      } else {
+        // Every other declaration, `declare function` and `namespace`
+        // included, binds the one name at its `id`.
         const declaredName = identifierName(decl, 'id');
         if (declaredName !== undefined) exports.add(declaredName);
       }
@@ -162,12 +169,60 @@ export function getExportsOfFile(filePath: string): Set<string> {
       exports.add('default');
       return;
     }
-    // `export * from './x'` contributes no named exports of this file.
+    // `export * as ns from './x'` binds one name; `export * from './x'`
+    // passes the target's names through, which `reachableExports` follows.
+    if (node.type === 'ExportAllDeclaration') {
+      const exported = childNode(node, 'exported');
+      if (exported !== undefined) {
+        const namespace = stringField(exported, 'name');
+        if (namespace !== undefined) exports.add(namespace);
+        return;
+      }
+      const spec = sourceSpecifier(node);
+      if (spec !== undefined) stars.push(spec);
+    }
   };
 
   for (const stmt of childNodeList(program, 'body')) visit(stmt);
-  return exports;
+  return { names: exports, stars };
 }
+
+export function getExportsOfFile(filePath: string): Set<string> {
+  return moduleExports(filePath).names;
+}
+
+/**
+ * The names a module exports, with those its `export * from` statements pass
+ * through (never `default`). `undefined` when a star leads to a package or to
+ * a path that does not resolve, since the module could then export any name.
+ */
+function reachableExports(
+  filePath: string,
+  visited = new Set<string>()
+): Set<string> | undefined {
+  const { names, stars } = moduleExports(filePath);
+  visited.add(filePath);
+  for (const spec of stars) {
+    const target = resolveRelativeModule(filePath, spec);
+    if (target === undefined) return undefined;
+    if (visited.has(target)) continue;
+    const passed = reachableExports(target, visited);
+    if (passed === undefined) return undefined;
+    for (const name of passed) if (name !== 'default') names.add(name);
+  }
+  return names;
+}
+
+const SCRIPT_FILE = /\.[cm]?[jt]sx?$/;
+
+// TypeScript resolves a JavaScript extension to the source compiled to it
+// before the file itself, so `./asset.js` names `./asset.ts`.
+const SOURCE_EXTENSIONS = new Map([
+  ['.js', ['.ts', '.tsx', '.d.ts']],
+  ['.jsx', ['.tsx', '.d.ts']],
+  ['.mjs', ['.mts', '.d.mts']],
+  ['.cjs', ['.cts', '.d.cts']],
+]);
 
 function resolveRelativeModule(
   fromFile: string,
@@ -177,7 +232,12 @@ function resolveRelativeModule(
     return undefined;
   const dir = fromFile.substring(0, fromFile.lastIndexOf('/'));
   const base = resolve(dir, specifier);
+  const extension = extname(base);
+  const sources = (SOURCE_EXTENSIONS.get(extension) ?? []).map(
+    (source) => `${base.slice(0, -extension.length)}${source}`
+  );
   const candidates = [
+    ...sources,
     base, // explicit extension in specifier
     `${base}.ts`,
     `${base}.tsx`,
@@ -293,14 +353,11 @@ export function fixStaleBarrelReExports(files: string[]): string[] {
     }[] = [];
 
     for (const stmt of childNodeList(program, 'body')) {
-      const sourceNode = childNode(stmt, 'source');
+      const spec = sourceSpecifier(stmt);
       const isNamedFrom =
-        stmt.type === 'ExportNamedDeclaration' && sourceNode !== undefined;
+        stmt.type === 'ExportNamedDeclaration' && spec !== undefined;
       const isStarFrom = stmt.type === 'ExportAllDeclaration';
       if (!isNamedFrom && !isStarFrom) continue;
-
-      const spec =
-        sourceNode === undefined ? undefined : stringField(sourceNode, 'value');
       if (spec === undefined) continue;
       const isRelative = spec.startsWith('./') || spec.startsWith('../');
       if (!isRelative) continue;
@@ -316,6 +373,8 @@ export function fixStaleBarrelReExports(files: string[]): string[] {
         });
         continue;
       }
+      // Only a script declares exports to check; a JSON or CSS target stays.
+      if (!SCRIPT_FILE.test(target)) continue;
 
       let targetSize: number;
       try {
@@ -330,12 +389,13 @@ export function fixStaleBarrelReExports(files: string[]): string[] {
         continue;
       }
 
-      let targetExports: Set<string>;
+      let targetExports: Set<string> | undefined;
       try {
-        targetExports = getExportsOfFile(target);
+        targetExports = reachableExports(target);
       } catch {
-        continue;
+        // An unreadable target keeps every re-export of it.
       }
+      if (targetExports === undefined) continue;
 
       if (isStarFrom) {
         if (targetExports.size === 0) {
