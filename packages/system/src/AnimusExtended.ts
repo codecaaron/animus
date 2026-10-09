@@ -21,6 +21,7 @@ import {
 import { AbstractProps } from './types/props';
 import { admittedPropNames } from './utils/admittedPropNames';
 import { deepMerge } from './utils/deepMerge';
+import { assertDisjointStylingNames } from './utils/stylingNameCollisions';
 
 import type { ClassResolverConfig } from './runtime/resolveClasses';
 import type {
@@ -28,6 +29,13 @@ import type {
   AnimusWrappedComponent,
   BuilderClassProps,
 } from './types/component';
+import type {
+  AdmittedNames,
+  StylingNames,
+  SystemPicks,
+  UnadmittedName,
+  UnadmittedStates,
+} from './types/styling-names';
 
 /** `T`'s declared keys, without a string index signature. */
 type KnownKeys<T> = keyof {
@@ -161,6 +169,13 @@ export class AnimusExtendedWithAll<
   }
 
   _buildComponentConfig() {
+    assertDisjointStylingNames(
+      this.variants as Record<string, VariantConfig>,
+      Object.keys(this.statesConfig),
+      this.groupRegistry,
+      this.propRegistry,
+      this.activeGroups
+    );
     const variantConfig: Record<
       string,
       { options: string[]; default?: string }
@@ -251,7 +266,13 @@ class AnimusExtendedWithStates<
     PickedKeys extends
       | keyof GroupRegistry
       | Extract<keyof PropRegistry, string>,
-  >(config: Record<PickedKeys, true>) {
+  >(
+    config: SystemPicks<
+      GroupRegistry,
+      PickedKeys,
+      StylingNames<Variants, States>
+    >
+  ) {
     return new AnimusExtendedWithSystem<
       PropRegistry,
       GroupRegistry,
@@ -325,7 +346,8 @@ class AnimusExtendedWithCompounds<
   }
 
   states<Props extends AbstractProps>(
-    config: ThemedCSSPropMap<Props, PropRegistry>
+    config: ThemedCSSPropMap<Props, PropRegistry> &
+      UnadmittedStates<Props, AdmittedNames<GroupRegistry, ActiveGroups>>
   ) {
     return new AnimusExtendedWithStates<
       PropRegistry,
@@ -405,7 +427,7 @@ class AnimusExtendedWithVariants<
     Props extends Record<Keys, AbstractProps>,
     PropKey extends Readonly<string> = 'variant',
   >(options: {
-    prop?: PropKey;
+    prop?: UnadmittedName<PropKey, AdmittedNames<GroupRegistry, ActiveGroups>>;
     defaultVariant?:
       | Extract<keyof Props, string>
       | InheritedOptions<Variants, PropKey>;
@@ -458,7 +480,7 @@ class AnimusExtendedWithBase<
     Props extends Record<Keys, AbstractProps>,
     PropKey extends Readonly<string> = 'variant',
   >(options: {
-    prop?: PropKey;
+    prop?: UnadmittedName<PropKey, AdmittedNames<GroupRegistry, ActiveGroups>>;
     defaultVariant?:
       | Extract<keyof Props, string>
       | InheritedOptions<Variants, PropKey>;
