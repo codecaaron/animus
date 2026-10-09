@@ -15,12 +15,16 @@ such as `<ui.Button size="lg" />` stay precise.
 
 **A skipped source no longer costs its components their CSS.** When a
 non-strict build skips a source file, such as an MDX file that fails to
-compile or whose `@mdx-js/mdx` peer is missing, or a configured package file
+compile or whose `@mdx-js/mdx` peer is missing, or a configured source file
 it cannot read, the analysis cannot see what it renders. Production builds
 pruned the options only that file used: `<R size="lg">` in a skipped MDX
 file lost `lg`. While any file is skipped, nothing is pruned, so every
 component, variant option and state is kept, and the skip warning now says
-so. `strict` builds still fail on a skipped file.
+so. `strict` builds still fail on a skipped file. The Vite plugin now reports
+an unreadable project or package file as
+`animus.ingestion.unreadable-source-file`, so a `strict` Vite build fails on
+one; before, it skipped a project file silently and a package file with a
+plain warning.
 
 **Namespace member renders keep their CSS.** With
 `import * as ui from './components'`, a render such as `<ui.Button size="lg" />`

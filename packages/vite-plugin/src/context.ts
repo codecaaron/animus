@@ -44,6 +44,7 @@ import type {
   AssetSheets,
   ExcludeMatcher,
   ExternalPackageOutcome,
+  ManifestDiagnostic,
   ManifestSheets,
   ProjectAnalysisResult,
   ProjectManifest,
@@ -276,6 +277,9 @@ export class PluginContext {
   externalSourceEntries = new Map<string, string>();
 
   externalPackageOutcomes: ExternalPackageOutcome[] = [];
+  /** Configured files buildStart could not read. Later analyses read no
+   *  files themselves, so they replay these. */
+  ingestionFailureDiagnostics: ManifestDiagnostic[] = [];
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   devServer: any;
@@ -419,7 +423,8 @@ export class PluginContext {
 
   /** Runs project analysis and updates every manifest-derived state. Returns
    *  false when nothing published, and the caller must roll its cache back.
-   *  While a source is skipped, its renders are unseen, so nothing is pruned. */
+   *  While a source is skipped or unreadable, its renders are unseen, so
+   *  nothing is pruned. */
   runAnalysis(
     fileEntries: Array<{ path: string; source: string; hash?: string }>,
     skippedOriginals: readonly string[] = []
@@ -439,10 +444,14 @@ export class PluginContext {
         externalDirs: this.externalPackageDirs.map((dir) =>
           relative(this.rootDir, dir)
         ),
-        devMode: !this.emissionProd || skippedOriginals.length > 0,
+        devMode:
+          !this.emissionProd ||
+          skippedOriginals.length > 0 ||
+          this.ingestionFailureDiagnostics.length > 0,
         warn: (m) => this.warn(m),
         info: (m) => this.log(m),
         strict: this.options.strict,
+        extraDiagnostics: this.ingestionFailureDiagnostics,
       });
     } catch (e) {
       if (this.options.strict) {

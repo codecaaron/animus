@@ -8,12 +8,14 @@ import {
   discoverFiles,
   extractSystemFilePackages,
   firstOwners,
+  unreadableSourceDiagnostic,
   validateLayerOrder,
 } from '@animus-ui/extract/pipeline';
 import { readFileSync } from 'fs';
 import { basename, relative } from 'path';
 
 import type { PluginContext } from './context';
+import type { ManifestDiagnostic } from '@animus-ui/extract/pipeline';
 
 /**
  * `resolveSpecifier` maps a specifier to an absolute id. `emitAsset` is
@@ -71,15 +73,20 @@ export async function runBuildStart(
     source: string;
     hash?: string;
   }> = [];
+  // A configured file that cannot be read is lost input: error severity fails
+  // a strict build, and the analysis prunes nothing it might render.
+  const ingestionFailures: ManifestDiagnostic[] = [];
   for (const filePath of filePaths) {
+    const relPath = relative(ctx.rootDir, filePath);
+    let source: string;
     try {
-      const source = readFileSync(filePath, 'utf-8');
-      const relPath = relative(ctx.rootDir, filePath);
-      const hash = !ctx.isProd ? contentHash(source) : undefined;
-      rawEntries.push({ path: relPath, source, hash });
-    } catch {
-      // Skip unreadable files silently
+      source = readFileSync(filePath, 'utf-8');
+    } catch (err) {
+      ingestionFailures.push(unreadableSourceDiagnostic(relPath, err));
+      continue;
     }
+    const hash = !ctx.isProd ? contentHash(source) : undefined;
+    rawEntries.push({ path: relPath, source, hash });
   }
 
   const localFileCount = rawEntries.length;
@@ -95,8 +102,9 @@ export async function runBuildStart(
     extensionsSet: ctx.extensionsSet,
     hasEntry: (relPath) => rawEntries.some((entry) => entry.path === relPath),
     onUnreadable: (relPath, err) =>
-      ctx.warn(`skipped unreadable package file ${relPath}: ${String(err)}`),
+      ingestionFailures.push(unreadableSourceDiagnostic(relPath, err)),
   });
+  ctx.ingestionFailureDiagnostics = ingestionFailures;
 
   ctx.packageMap = collected.packageMap;
   ctx.externalPackageOutcomes = collected.outcomes;
