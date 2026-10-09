@@ -32,10 +32,7 @@ const isIdentChar = (char: string): boolean =>
   /[A-Za-z0-9_\u0080-\uFFFF-]/.test(char);
 
 /** The identifier at `from`, escapes decoded, and the index just past it. */
-const readIdent = (
-  raw: string,
-  from: number
-): { name: string; end: number } => {
+const readIdent = (raw: string, from: number) => {
   let name = '';
   let end = from;
   while (end < raw.length) {

@@ -25,10 +25,7 @@ export const startsEscape = (text: string, at: number): boolean =>
  * digits and one terminating whitespace; zero, a surrogate or a value past
  * U+10FFFF stands for U+FFFD.
  */
-export const readEscape = (
-  text: string,
-  at: number
-): { value: string; end: number } => {
+export const readEscape = (text: string, at: number) => {
   let end = at + 1;
   if (!HEX_DIGIT.test(text[end])) {
     const value = String.fromCodePoint(text.codePointAt(end) ?? 0xfffd);
