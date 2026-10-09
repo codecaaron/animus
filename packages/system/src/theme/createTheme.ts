@@ -1330,7 +1330,8 @@ export class ThemeBuilder<
       effectiveModes,
       variableMap,
       variables,
-      tokenMap
+      tokenMap,
+      contextual
     );
 
     // Sorted by property name so reversed declarations emit byte-identically.
@@ -1768,7 +1769,8 @@ function resolveModeValueMaps(
   effectiveModes: ModeAliasDefinition,
   variableMap: Record<string, string>,
   variables: Record<string, string>,
-  tokenMap: Record<string, string>
+  tokenMap: Record<string, string>,
+  contextual: Record<string, string>
 ): {
   modeVariables: Record<string, Record<string, string>>;
   modeTokens: Record<string, Record<string, string>>;
@@ -1788,7 +1790,7 @@ function resolveModeValueMaps(
     // does. An unknown target keeps the authored string; build-time alias
     // validation rejects it.
     if (isLiteralColor(colorRef)) {
-      return resolveValueReferences(colorRef, tokenMap);
+      return resolveValueReferences(colorRef, tokenMap, contextual);
     }
     return String(colorRef);
   };
