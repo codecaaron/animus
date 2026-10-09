@@ -97,7 +97,7 @@ import '.animus/styles.css';
 
 Build, then wire the emitted asset into your page:
 
-<!-- source lane: e2e/rollup-app/package.json `verify:build` script; verified by running `animus build --root . --system ./src/ds.ts --strict --exclude 'fixtures/**'` (exit 0) and `rollup -c rollup.config.mjs` (exit 0) in the lane -->
+<!-- source lane: e2e/rollup-app/package.json `build` script; verified by running `animus build --root . --system ./src/ds.ts --strict --exclude 'fixtures/**'` (exit 0) and `rollup -c rollup.config.mjs` (exit 0) in the lane -->
 
 ```bash
 npx rollup -c rollup.config.mjs
@@ -216,7 +216,7 @@ at intake.
 one-shot and publishes a deterministic artifact set for consumers that are
 not JS bundlers: CI gates, Makefiles, non-JS build orchestrators, tooling.
 
-<!-- source lane: e2e/rollup-app/package.json `verify:build` script; verified by running it in the lane (exit 0: "build complete: 10 components from 15 files") -->
+<!-- source lane: e2e/rollup-app/package.json `build` script; verified by running it in the lane (exit 0: "build complete: 10 components from 15 files") -->
 
 ```bash
 npx animus build --root . --system ./src/ds.ts --strict

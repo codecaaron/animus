@@ -582,6 +582,22 @@ fi
     ]);
   });
 
+  it('every consumer build runs through build-consumer, which clears it first', () => {
+    const buildConsumer = 'bash ../../scripts/verify/build-consumer.sh';
+
+    for (const owner of discoverOwners()) {
+      const scripts = owner.manifest.scripts ?? {};
+      expect(scripts['verify:build'], owner.manifest.name).toBe(buildConsumer);
+
+      if (scripts['verify:prefixed']) {
+        expect(
+          sequentialCommands(scripts['verify:prefixed']),
+          owner.manifest.name
+        ).toContain(`${buildConsumer} build:prefixed prefixed-variant`);
+      }
+    }
+  });
+
   it('verification claims exclude mutating cleanup', () => {
     const forbidden = [
       /(^|[\s:#])clean(?=[:\s&]|$)/,
