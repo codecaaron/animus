@@ -1,5 +1,4 @@
 import type {
-  ComponentProps,
   ComponentPropsWithRef,
   ComponentType,
   ForwardRefExoticComponent,
@@ -161,8 +160,15 @@ export type AnimusComponent<
     readonly variantDefaults: Readonly<Record<string, string>>;
   };
 
+/** `Omit` per union member, so a discriminated-union target keeps each arm. */
+type DistributiveOmit<T, K extends PropertyKey> = T extends unknown
+  ? Omit<T, K>
+  : never;
+
 /**
- * Managed keys are removed from the wrapped component's props first —
+ * The wrapped component's own props, with its ref, then exactly what the
+ * builder admitted: the active groups' props, variants, states and custom
+ * props. Managed keys are removed from the wrapped component's props first —
  * intersecting a variant union with its own type for a key collapses to never.
  */
 type AnimusWrappedConsumerProps<
@@ -171,13 +177,17 @@ type AnimusWrappedConsumerProps<
   GR extends Record<string, (keyof PR)[]>,
   V,
   S,
+  AG,
   CP extends Record<string, SystemProp>,
-> = Omit<ComponentProps<C>, AnimusManagedKeys<PR, GR, V, S, {}, CP>> &
-  Record<string, any> &
-  GroupProps<PR, GR, {}> &
+> = DistributiveOmit<
+  ComponentPropsWithRef<C>,
+  AnimusManagedKeys<PR, GR, V, S, AG, CP>
+> &
+  ResolvedGroupProps<PR, GR, AG> &
   VariantProps<V> &
   StateProps<S> &
-  SelectorAliasProps<GroupProps<PR, GR, {}>> & {
+  CustomPropValues<CP> &
+  SelectorAliasProps<ResolvedGroupProps<PR, GR, AG>> & {
     as?: keyof JSX.IntrinsicElements | ComponentType<any>;
     asChild?: boolean;
     className?: string;
@@ -193,9 +203,19 @@ export type AnimusWrappedComponent<
   S,
   AG,
   CP extends Record<string, SystemProp>,
-> = ForwardRefExoticComponent<AnimusWrappedConsumerProps<C, PR, GR, V, S, CP>> &
+> = ForwardRefExoticComponent<
+  AnimusWrappedConsumerProps<C, PR, GR, V, S, AG, CP>
+> &
   ExtendFn<PR, GR, BS, V, S, AG, CP> & {
-    readonly [ConsumerProps]: AnimusWrappedConsumerProps<C, PR, GR, V, S, CP>;
+    readonly [ConsumerProps]: AnimusWrappedConsumerProps<
+      C,
+      PR,
+      GR,
+      V,
+      S,
+      AG,
+      CP
+    >;
     readonly [VariantConfigBrand]: V;
     readonly variantDefaults: Readonly<Record<string, string>>;
   };
