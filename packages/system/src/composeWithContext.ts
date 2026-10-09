@@ -5,7 +5,6 @@ import {
   createElement,
   type ForwardRefExoticComponent,
   forwardRef,
-  type ReactNode,
   useContext,
 } from 'react';
 
@@ -55,14 +54,12 @@ export function composeWithContext<
           const value = props[key] ?? rootDefaults?.[key];
           if (value != null) shared[key] = value;
         }
+        // The Provider wraps the Root's own render, so an `asChild` Root
+        // clones its real child, not the Provider.
         return createElement(
-          SourceComponent,
-          { ...props, ref },
-          createElement(
-            FamilyCtx.Provider,
-            { value: shared },
-            props.children as ReactNode
-          )
+          FamilyCtx.Provider,
+          { value: shared },
+          createElement(SourceComponent, { ...props, ref })
         );
       });
     } else {
@@ -117,13 +114,9 @@ export function createComposedFamilyWithContext(
           if (value != null) shared[key] = value;
         }
         return createElement(
-          SourceComponent,
-          { ...props, ref },
-          createElement(
-            Ctx.Provider,
-            { value: shared },
-            props.children as ReactNode
-          )
+          Ctx.Provider,
+          { value: shared },
+          createElement(SourceComponent, { ...props, ref })
         );
       });
     } else {
