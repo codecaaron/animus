@@ -85,6 +85,11 @@ export const AbsentTransform = ds
 export const AbsentConstConfig = ds.styles({ cursor: 'ns-resize' }).props({ inset: ABSENT_CFG }).asElement('div');
 export const NamedTransform = ds.styles({ cursor: 'col-resize' }).props({ inset: { property: 'width', transform: 'size' } }).asElement('div');
 export const DefaultVariantProp = ds.styles({ cursor: 'row-resize' }).variant({ variants: { a: { display: 'block' } } }).asElement('div');
+export const StylingCollision = ds
+  .styles({ cursor: 'auto' })
+  .variant({ prop: 'size', variants: { medium: { display: 'grid' } } })
+  .system({ layout: true })
+  .asElement('div');
 export const OtherNamespace = other.lib.styles({ cursor: 'all-scroll' }).asElement('div');
 
 export const WholeAxis = ds.styles({ cursor: 'pointer' }).variant(TONE_AXIS).asElement('div');
@@ -211,6 +216,12 @@ const CLASSIFIED = [
     code: 'animus.extension.unsupported-arguments',
     reason: 'with arguments',
     alternative: 'no arguments',
+  },
+  {
+    component: 'StylingCollision',
+    code: 'animus.chain.styling-name-collision',
+    reason: "the system prop 'size' admitted by group 'layout'",
+    alternative: 'different names',
   },
   ...[
     'ReferencedTransform',
