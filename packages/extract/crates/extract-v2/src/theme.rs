@@ -782,6 +782,19 @@ fn resolve_flat_styles(obj: &Map<String, Value>, ctx: &ResolveContext) -> Vec<Cs
     declarations
 }
 
+/// A `@font-face` block's declarations: each key names a descriptor, never a
+/// system prop, so no prop's scale, strictness or transform applies and the
+/// keys keep their authored order. Token references resolve as on any key
+/// that names no prop.
+fn resolve_descriptors(obj: &Map<String, Value>, ctx: &ResolveContext) -> Vec<CssDeclaration> {
+    let no_props = PropConfigMap::default();
+    obj.iter()
+        .flat_map(|(key, value)| {
+            resolve_single_prop(key, value, &no_props, ctx.theme, ctx.variable_map, ctx.contextual_vars, None, None)
+        })
+        .collect()
+}
+
 fn resolve_color_family_pass_through(
     value: &Value,
     theme: &FlatTheme,
@@ -1620,7 +1633,11 @@ pub fn resolve_global_block(
         // An at-rule selector (`@font-face`, `@page`) holds declarations
         // only, as before; nesting under one is not supported.
         if selector.starts_with('@') {
-            let decls = resolve_flat_styles(style_map, ctx);
+            let decls = if selector.starts_with("@font-face") {
+                resolve_descriptors(style_map, ctx)
+            } else {
+                resolve_flat_styles(style_map, ctx)
+            };
             if !decls.is_empty() {
                 rules.push(global_rule(selector, &decls, 0));
             }
@@ -2843,6 +2860,25 @@ mod tests {
         assert!(
             css.contains("font-family: Inter, sans-serif;"),
             "family token unresolved:\n{css}"
+        );
+    }
+
+    #[test]
+    fn font_face_descriptors_bypass_props_of_the_same_name() {
+        let mut owner = TestCtxOwner::new();
+        for (prop, scale) in [("fontFamily", "fonts"), ("fontWeight", "fontWeights")] {
+            let config = json!({ "property": prop, "scale": scale, "strict": true });
+            owner.config.insert(prop.to_string(), serde_json::from_value(config).unwrap());
+        }
+        owner.theme.insert("fonts.body".to_string(), "Inter".to_string());
+        owner.theme.insert("fontWeights.bold".to_string(), "700".to_string());
+        let block = json!({
+            "@font-face": { "fontFamily": "Mona Sans", "src": "local(Arial)", "fontWeight": "bold" }
+        });
+        let css = resolve_global_block(&block, &owner.ctx());
+        assert_eq!(
+            css,
+            "@font-face {\n  font-family: Mona Sans;\n  src: local(Arial);\n  font-weight: bold;\n}"
         );
     }
 
