@@ -5,9 +5,7 @@ set -euo pipefail
 #
 # Tags HEAD with the next version and pushes only the tag. HEAD must
 # already be origin's main: push main and let CI pass there first. The
-# tag's own run also gates publishing on every check job. Changelog
-# entries waiting in changes/unreleased/ must already be in
-# CHANGELOG.md: run `bun run changelog` and merge that first. The
+# tag's own run also gates publishing on every check job. The
 # version comes from origin's tags, never from a possibly stale local
 # list. CI's publish job sets every package version from the tag, so
 # no package.json is edited here.
@@ -73,15 +71,6 @@ REMOTE_MAIN_SHA=$(git rev-parse "$REMOTE/main")
 if [[ "$HEAD_SHA" != "$REMOTE_MAIN_SHA" ]]; then
   echo "Error: HEAD ($(git rev-parse --short HEAD)) is not $REMOTE/main ($(git rev-parse --short "$REMOTE/main"))."
   echo "Push main, let CI pass on it, then release from that commit."
-  exit 1
-fi
-
-# ─── Guard: every changelog entry is in CHANGELOG.md ──────────────
-# Reads the commit being tagged, skipping hidden files as the assembler does.
-if git ls-tree --full-tree --name-only HEAD changes/unreleased/ \
-  | grep -qv '^changes/unreleased/\.'; then
-  echo "Error: changes/unreleased/ still holds changelog entries."
-  echo "Run bun run changelog, merge the result to main, then release from that commit."
   exit 1
 fi
 

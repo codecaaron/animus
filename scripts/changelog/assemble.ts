@@ -12,9 +12,9 @@ import {
 } from 'node:fs';
 import { join, resolve } from 'node:path';
 
-export const FRAGMENT_DIRECTORY = 'changes/unreleased';
+const FRAGMENT_DIRECTORY = 'changes/unreleased';
 
-export interface Fragment {
+interface Fragment {
   name: string;
   text: string;
 }
@@ -23,6 +23,7 @@ const FRAGMENT_NAME = /^[a-z0-9]+(?:-[a-z0-9]+)*\.md$/;
 // A bold lead may wrap across lines, as the changelog's own leads do.
 const BOLD_LEAD = /^\*\*[^*\s][\s\S]*?\*\*/;
 const HEADING = /^ {0,3}#{1,6}(?:[ \t]|$)/;
+const SETEXT_UNDERLINE = /^ {0,3}(?:=+|-+)[ \t]*$/;
 const FENCE = /^ {0,3}(`{3,}|~{3,})/;
 const UNRELEASED_HEADING = /^## Unreleased[ \t]*$/m;
 const SECTION_HEADING = /^## /m;
@@ -38,16 +39,24 @@ function readFragments(directory: string): Fragment[] {
     }));
 }
 
+// ATX headings (`### Details`), and setext headings: a text line underlined
+// by `===` or `---`. After a blank line, `---` is a thematic break instead.
 function headingLines(text: string): number[] {
   const lines: number[] = [];
   let fence: string | undefined;
+  let afterText = false;
   text.split('\n').forEach((line, index) => {
     const marker = FENCE.exec(line)?.[1]?.[0];
     if (marker !== undefined) {
       if (fence === undefined) fence = marker;
       else if (fence === marker) fence = undefined;
-    } else if (fence === undefined && HEADING.test(line)) {
-      lines.push(index + 1);
+      afterText = false;
+    } else if (fence === undefined) {
+      const atx = HEADING.test(line);
+      const underline = afterText && SETEXT_UNDERLINE.test(line);
+      if (atx) lines.push(index + 1);
+      if (underline) lines.push(index);
+      afterText = !atx && !underline && line.trim() !== '';
     }
   });
   return lines;
@@ -94,7 +103,7 @@ function joinBlocks(blocks: readonly string[]): string {
 // order, so the output depends only on the fragments, never on the order a
 // directory listing returns them in. Without that section, a new one opens
 // above the newest release.
-export function assembleChangelog(
+function assembleChangelog(
   changelog: string,
   fragments: readonly Fragment[]
 ): string {
@@ -112,7 +121,7 @@ export function assembleChangelog(
   ]);
 }
 
-export function main(root: string, args: readonly string[]): number {
+function main(root: string, args: readonly string[]): number {
   const unknown = args.filter((arg) => arg !== '--check');
   if (unknown.length > 0) {
     console.error(`ERROR: unknown argument ${unknown.join(' ')}`);

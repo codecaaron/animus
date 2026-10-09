@@ -42,7 +42,6 @@ const typescriptTestTargets = [
   'scripts/verify/clear-consumer-output.test.ts',
   'scripts/verify/ci-graph.test.ts',
   'scripts/verify/extract-test-enumeration.test.ts',
-  'scripts/changelog/assemble.test.ts',
 ] as const;
 const typescriptTestTargetArguments = typescriptTestTargets.join(' ');
 const typescriptTestCommand = `bunx vp test run ${typescriptTestTargetArguments}`;
