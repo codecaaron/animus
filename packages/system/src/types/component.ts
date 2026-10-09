@@ -85,9 +85,17 @@ type StripIndex<T> = {
   ]: T[K];
 };
 
+/**
+ * Each axis's options, read from its `variants` table alone. A declaration
+ * build without `exactOptionalPropertyTypes` prints a config's optional fields
+ * as `?: X | undefined`, so testing the whole config against `VariantConfig`
+ * fails in a consumer that sets it, and the axis would widen to `string`.
+ */
 type VariantProps<V> = {
-  [K in keyof StripIndex<V>]?: StripIndex<V>[K] extends VariantConfig
-    ? keyof StripIndex<V>[K]['variants']
+  [K in keyof StripIndex<V>]?: StripIndex<V>[K] extends {
+    variants: infer Options;
+  }
+    ? keyof Options
     : string;
 };
 
