@@ -18,7 +18,19 @@ export type ManifestDiagnostic = {
    *  codes minted here, the engine's `diagnostic_severity_for_code` for its
    *  own. */
   severity?: string;
+  /** 1-based line and column in `file`, where the engine located the record. */
+  line?: number;
+  column?: number;
 };
+
+/** `file`, then its line and column where the record has them. */
+function locationOf(diagnostic: ManifestDiagnostic): string {
+  if (diagnostic.line === undefined) return diagnostic.file;
+  if (diagnostic.column === undefined) {
+    return `${diagnostic.file}:${diagnostic.line}`;
+  }
+  return `${diagnostic.file}:${diagnostic.line}:${diagnostic.column}`;
+}
 
 /** Stable code for selector forms with no substitutable subject; the
  *  extraction engine mints the same string. */
@@ -435,7 +447,7 @@ export function surfaceManifestDiagnostics(
       line = `⚠ ${diagnostic.component}: skipped ${diagnostic.message}`;
     } else if (diagnostic.kind === 'warn') {
       const mark = diagnostic.severity === 'info' ? 'ℹ' : '⚠';
-      line = `${mark} ${diagnostic.file}: ${diagnostic.component}: ${diagnostic.message}`;
+      line = `${mark} ${locationOf(diagnostic)}: ${diagnostic.component}: ${diagnostic.message}`;
     }
     if (line === null) continue;
     if (diagnostic.code && !diagnostic.message.includes(diagnostic.code)) {

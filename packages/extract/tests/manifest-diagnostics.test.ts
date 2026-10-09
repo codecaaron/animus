@@ -103,6 +103,27 @@ describe('surfaceManifestDiagnostics strict policy', () => {
       false
     );
   });
+
+  it('prints the line and column the engine located a record at', () => {
+    const tag: ManifestDiagnostic = {
+      file: 'src/App.tsx',
+      component: '<Card>',
+      kind: 'warn',
+      message: '<Card> is an ordinary component declared in src/Card.tsx',
+      code: 'animus.usage.identity-uncertain-tag',
+      severity: 'info',
+      line: 12,
+      column: 5,
+    };
+    const info: string[] = [];
+    surfaceManifestDiagnostics(
+      { diagnostics: [tag, { ...tag, column: undefined }] },
+      () => {},
+      { info: (m) => info.push(m) }
+    );
+    expect(info[0]).toMatch(/^ℹ src\/App\.tsx:12:5: <Card>: /);
+    expect(info[1]).toMatch(/^ℹ src\/App\.tsx:12: <Card>: /);
+  });
 });
 
 describe('collectSelectorAliasDiagnostics', () => {
