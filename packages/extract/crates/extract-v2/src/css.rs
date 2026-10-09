@@ -1292,9 +1292,9 @@ pub const CSS_WIDE_KEYWORDS: [&str; 5] = ["initial", "inherit", "unset", "revert
 
 /// Gives a runtime-delivered prop one class per CSS-wide keyword, at the base
 /// and at each breakpoint, holding what a static write of the keyword
-/// declares: for a transformed prop, the transform's result. A keyword the
-/// static path leaves to the runtime (`admits` says no) gets no class, so
-/// the runtime resolves it as it resolves a static write. The keys are the
+/// declares: the bare keyword, which no transform sees. A keyword the static
+/// path leaves to the runtime (`admits` says no) gets no class, so the
+/// runtime resolves it as it resolves a static write. The keys are the
 /// ones a static write takes, and a class a static write already maps is
 /// kept, so runtime and static keywords select one class.
 #[allow(clippy::too_many_arguments)]

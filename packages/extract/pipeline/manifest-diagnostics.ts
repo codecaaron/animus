@@ -168,7 +168,7 @@ export const PROPERTY_UNREGISTERED_ANIMATION =
 export const PROPERTY_SELF_REFERENCE = 'animus.property.self-reference';
 
 /** A custom property that reads itself only inside another `var()`'s
- *  fallback, so whether it is cyclic depends on the browser. */
+ *  fallback: cyclic wherever that fallback is used. */
 export const PROPERTY_FALLBACK_SELF_REFERENCE =
   'animus.property.fallback-self-reference';
 

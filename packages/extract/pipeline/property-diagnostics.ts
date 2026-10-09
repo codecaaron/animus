@@ -1,4 +1,12 @@
 import {
+  componentValues,
+  isSpace,
+  someValue,
+  tokenize,
+  variableReads,
+} from '@animus-ui/properties';
+
+import {
   PROPERTY_FALLBACK_CHAIN_SUPPRESSED,
   PROPERTY_FALLBACK_SELF_REFERENCE,
   PROPERTY_FALLBACK_SUPPRESSED,
@@ -6,13 +14,17 @@ import {
   PROPERTY_UNREGISTERED_ANIMATION,
   severityFor,
 } from './manifest-diagnostics';
-import { readCustomPropertyName } from './property-names';
 import { propertyRegistrations } from './property-registrations';
 
 import type { ManifestDiagnostic } from './manifest-diagnostics';
 import type { ProjectManifest } from './manifest-schema';
 import type { PropertyRegistration } from './property-registrations';
 import type { SystemConfig } from './system-config';
+import type {
+  ComponentValue,
+  CssToken,
+  VariableRead,
+} from '@animus-ui/properties';
 
 export interface CustomPropertyCheckInput {
   system: Pick<SystemConfig, 'variableCss' | 'contextualProperties'>;
@@ -22,14 +34,17 @@ export interface CustomPropertyCheckInput {
 }
 
 interface Declaration {
+  /** A custom property's decoded name, or any other property's name
+   *  lowercased. */
   property: string;
+  custom: boolean;
+  /** As written, without surrounding whitespace. */
   value: string;
-  /** Offsets of the declaration text, its `;` included when present. */
-  start: number;
-  end: number;
+  /** The value's component values, without surrounding whitespace. */
+  values: readonly ComponentValue[];
   /** The enclosing rule, unique within one sheet. */
   rule: number;
-  /** Enclosing preludes, outermost first. */
+  /** Enclosing preludes, outermost first, without comments. */
   context: readonly string[];
 }
 
@@ -43,31 +58,34 @@ interface Finding {
 /**
  * Reports custom properties that will not behave as their CSS suggests: a
  * property that refers to itself, a fallback a registered initial value
- * applies ahead of, and an animated property that cannot interpolate. Names
- * are read as CSS tokenizes them, so escapes, function case, comments and
- * quoted text match the prefix pass. The CSS itself is never changed.
+ * applies ahead of, and an animated property that cannot interpolate. Sheets
+ * are read through the shared CSS tokenizer, as the prefix pass reads them:
+ * comments are trivia, quoted text holds no names, and escapes and function
+ * case are decoded. The CSS itself is never changed.
  */
 export function checkCustomProperties(
   input: CustomPropertyCheckInput
 ): ManifestDiagnostic[] {
   const registered = propertyRegistrations(input.system.variableCss);
-  const declared = new Set(input.system.contextualProperties ?? []);
+  const declaredNames = input.system.contextualProperties ?? [];
+  const declared = new Set(declaredNames);
+  const withInitialValue = [...registered]
+    .filter(([, registration]) => registration.initialValue !== undefined)
+    .map(([name]) => name);
   const findings: Finding[] = [];
   const sheets = [
     { css: input.componentCss, owner: componentOwner(input.manifest) },
     { css: input.globalCss, owner: globalOwner },
   ];
   for (const { css, owner } of sheets) {
-    // A sheet that reads no variable and animates nothing has no finding,
-    // which the text shows before any declaration is parsed.
-    if (!/var\(|transition|@keyframes/i.test(css)) continue;
+    if (!mayHoldFinding(css, withInitialValue, declaredNames)) continue;
     const parsed = declarations(css);
     const discreteRules = new Set(
       parsed
         .filter(
           (d) =>
             d.property === 'transition-behavior' &&
-            /\ballow-discrete\b/.test(d.value)
+            topLevelItems(d.values).some(isDiscrete)
         )
         .map((d) => d.rule)
     );
@@ -76,7 +94,8 @@ export function checkCustomProperties(
       // for every declaration costs more than the checks themselves.
       const found = (code: string, property: string, message: string) =>
         findings.push({ code, property, message, owner: owner(declaration) });
-      if (isSelfReference(declaration)) {
+      const reads = variableReads(declaration.values);
+      if (isSelfReference(declaration, reads)) {
         found(
           PROPERTY_SELF_REFERENCE,
           declaration.property,
@@ -84,14 +103,15 @@ export function checkCustomProperties(
         );
         continue;
       }
-      if (readsItselfOnlyInFallback(declaration)) {
+      if (readsItselfOnlyInFallback(declaration, reads)) {
+        const { property, value } = declaration;
         found(
           PROPERTY_FALLBACK_SELF_REFERENCE,
-          declaration.property,
-          `${declaration.property}: ${declaration.value} reads ${declaration.property} only inside another var()'s fallback, so the result depends on how the browser treats fallback references: one that evaluates a fallback only when it is used keeps the value, one that counts every reference makes ${declaration.property} cyclic and invalid at computed-value time`
+          property,
+          `${property}: ${value} reads ${property} inside another var()'s fallback. Wherever that fallback is used, ${property} refers to itself, a cycle in every browser, so ${property} is invalid at computed-value time, or takes its registered initial value, and so is every property that reads it; where it is not used, browsers differ on whether the cycle still counts. Without this declaration, descendants read the inherited ${property} instead, also where the outer variable is set, which is what a prop with currentVar does for such a value`
         );
       }
-      for (const read of varReads(declaration.value)) {
+      for (const read of reads) {
         const registration = registered.get(read.name);
         if (
           read.fallback === undefined ||
@@ -99,13 +119,14 @@ export function checkCustomProperties(
         ) {
           continue;
         }
-        const chain = read.fallback.startsWith('var(');
+        const { fallback } = read;
+        const chain = reads.some((other) => other.start === fallback.first);
         found(
           chain
             ? PROPERTY_FALLBACK_CHAIN_SUPPRESSED
             : PROPERTY_FALLBACK_SUPPRESSED,
           read.name,
-          `var(${read.name}, ${read.fallback}): where its registration applies, ${read.name}'s initial-value ${registration.initialValue} is used ahead of the ${chain ? 'fallback chain' : 'fallback'} whenever ${read.name} is unset; the fallback still serves browsers without the registration`
+          `var(${read.name}, ${css.slice(fallback.start, fallback.end).trim()}): where its registration applies, ${read.name}'s initial-value ${registration.initialValue} is used ahead of the ${chain ? 'fallback chain' : 'fallback'} whenever ${read.name} is unset; the fallback still serves browsers without the registration`
         );
       }
       for (const animated of animatedProperties(declaration, discreteRules)) {
@@ -124,189 +145,234 @@ export function checkCustomProperties(
   return toDiagnostics(findings);
 }
 
-/** Declarations in engine-emitted CSS: one `property: value` per `;`. */
-function declarations(css: string): Declaration[] {
-  const found: Declaration[] = [];
-  const stack: Array<{ prelude: string; rule: number }> = [];
-  let rules = 0;
-  let segment = 0;
-  let parens = 0;
-  let quote: string | null = null;
-  const take = (end: number) => {
-    const text = css.slice(segment, end);
-    const colon = text.indexOf(':');
-    const current = stack[stack.length - 1];
-    if (current === undefined || colon <= 0) return;
-    found.push({
-      property: text.slice(0, colon).trim(),
-      value: text
-        .slice(colon + 1)
-        .replace(/;$/, '')
-        .trim(),
-      start: segment + (text.length - text.trimStart().length),
-      end,
-      rule: current.rule,
-      context: stack.map((entry) => entry.prelude),
-    });
-  };
-  for (let i = 0; i < css.length; i += 1) {
-    const c = css[i];
-    if (quote !== null) {
-      if (c === '\\') i += 1;
-      else if (c === quote) quote = null;
-      continue;
-    }
-    if (c === '"' || c === "'") quote = c;
-    else if (c === '(') parens += 1;
-    else if (c === ')') parens -= 1;
-    else if (parens === 0 && c === '{') {
-      stack.push({ prelude: css.slice(segment, i).trim(), rule: rules });
-      rules += 1;
-      segment = i + 1;
-    } else if (parens === 0 && c === ';') {
-      take(i + 1);
-      segment = i + 1;
-    } else if (parens === 0 && c === '}') {
-      take(i);
-      stack.pop();
-      segment = i + 1;
+/**
+ * Whether a sheet can hold a finding, shown by its text before anything is
+ * parsed: a custom property reading its own name, a `var(` with a fallback
+ * of a registration that has an initial value, or a transition or keyframes
+ * and a declared contextual variable's name. An escape or a comment can hide
+ * a name or a function from the text, so a sheet with either is always
+ * parsed.
+ */
+function mayHoldFinding(
+  css: string,
+  withInitialValue: readonly string[],
+  declared: readonly string[]
+): boolean {
+  return (
+    css.includes('\\') ||
+    css.includes('/*') ||
+    readsOwnName(css) ||
+    withInitialValue.some((name) =>
+      new RegExp(String.raw`var\(\s*${escapeRegExp(name)}\s*,`, 'i').test(css)
+    ) ||
+    (declared.some((name) => css.includes(name)) &&
+      /transition|@keyframes/i.test(css))
+  );
+}
+
+const escapeRegExp = (text: string) =>
+  text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/** A custom-property declaration key, as the text shows one: anything but
+ *  CSS whitespace and the characters that end a name, so a non-ASCII space
+ *  stays part of the name, as CSS reads it. */
+const CUSTOM_PROPERTY_KEY = /(--[^\t\n\f\r :;{}()"'\\/]+)[\t\n\f\r ]*:/g;
+
+const VAR_OPEN = /var\(\s*/iy;
+
+const isNameCode = (c: number) =>
+  (c >= 0x30 && c <= 0x39) ||
+  (c >= 0x41 && c <= 0x5a) ||
+  (c >= 0x61 && c <= 0x7a) ||
+  c === 0x2d ||
+  c === 0x5f ||
+  c >= 0x80;
+
+/**
+ * Whether a custom-property declaration has `var(` of its own whole name in
+ * its value, bounded as the declaration scanner bounds one: by a `;`, `{` or
+ * `}` outside parentheses, brackets and quoted text. `var` matches in any
+ * case, so this errs toward parsing.
+ */
+function readsOwnName(css: string): boolean {
+  for (const match of css.matchAll(CUSTOM_PROPERTY_KEY)) {
+    const name = match[1];
+    let depth = 0;
+    let quote = -1;
+    for (let i = match.index + match[0].length; i < css.length; i += 1) {
+      const c = css.charCodeAt(i);
+      if (quote !== -1) {
+        // A newline ends a quoted string, as it does for the tokenizer.
+        if (c === quote || c === 0x0a || c === 0x0d || c === 0x0c) quote = -1;
+      } else if (c === 0x22 || c === 0x27) {
+        quote = c;
+      } else if (c === 0x28 || c === 0x5b) {
+        depth += 1;
+      } else if (c === 0x29 || c === 0x5d) {
+        depth = Math.max(0, depth - 1);
+      } else if (depth === 0 && (c === 0x3b || c === 0x7b || c === 0x7d)) {
+        break;
+      } else if (c === 0x76 || c === 0x56) {
+        VAR_OPEN.lastIndex = i;
+        const at = VAR_OPEN.test(css) ? VAR_OPEN.lastIndex : -1;
+        if (
+          at !== -1 &&
+          css.startsWith(name, at) &&
+          !isNameCode(css.charCodeAt(at + name.length))
+        ) {
+          return true;
+        }
+      }
     }
   }
+  return false;
+}
+
+/** `items` as text without comments, at-keywords decoded. */
+function textOf(css: string, items: readonly ComponentValue[]): string {
+  let text = '';
+  const add = (token: CssToken) => {
+    if (token.type === 'whitespace') text += ' ';
+    else if (token.type === 'at-keyword')
+      text += `@${token.value.toLowerCase()}`;
+    else text += css.slice(token.start, token.end);
+  };
+  const walk = (list: readonly ComponentValue[]) => {
+    for (const item of list) {
+      if (item.kind === 'token') {
+        add(item.token);
+      } else {
+        add(item.open);
+        walk(item.children);
+        if (item.close) add(item.close);
+      }
+    }
+  };
+  walk(items);
+  return text.trim();
+}
+
+/** Declarations in a sheet: one `property: value` per `;` inside a `{}`
+ *  block, read from component values, so comments separate nothing. */
+function declarations(css: string): Declaration[] {
+  const found: Declaration[] = [];
+  let rules = 0;
+  const visit = (
+    items: readonly ComponentValue[],
+    context: readonly string[],
+    rule: number | undefined
+  ) => {
+    let segment: ComponentValue[] = [];
+    const take = () => {
+      const declaration = declarationOf(css, segment);
+      if (rule !== undefined && declaration !== undefined) {
+        found.push({ ...declaration, rule, context });
+      }
+      segment = [];
+    };
+    for (const item of items) {
+      if (item.kind === 'block' && item.open.type === '{') {
+        const prelude = textOf(css, segment);
+        segment = [];
+        rules += 1;
+        visit(item.children, [...context, prelude], rules - 1);
+      } else if (item.kind === 'token' && item.token.type === ';') {
+        take();
+      } else {
+        segment.push(item);
+      }
+    }
+    take();
+  };
+  visit(componentValues(tokenize(css)), [], undefined);
   return found;
 }
 
-/** `text` as a whole custom-property name, escapes decoded; `undefined`
- *  when it is not one. */
-function customPropertyName(text: string): string | undefined {
-  if (!text.startsWith('--')) return undefined;
-  const { end, name } = readCustomPropertyName(text, 2);
-  return end === text.length ? `--${name}` : undefined;
+/** The declaration a `;`-separated segment holds, if any. A bad string or
+ *  url makes a declaration invalid, so browsers drop it, and so does this. */
+function declarationOf(
+  css: string,
+  segment: readonly ComponentValue[]
+): Omit<Declaration, 'rule' | 'context'> | undefined {
+  const colon = segment.findIndex(
+    (item) => item.kind === 'token' && item.token.type === ':'
+  );
+  const named = segment.slice(0, Math.max(colon, 0)).filter((i) => !isSpace(i));
+  const values = trimSpace(segment.slice(colon + 1));
+  if (
+    colon === -1 ||
+    named.length === 0 ||
+    someValue(
+      values,
+      (v) =>
+        v.kind === 'token' &&
+        (v.token.type === 'bad-url' || v.token.type === 'bad-string')
+    )
+  ) {
+    return undefined;
+  }
+  const [only] = named;
+  const ident =
+    named.length === 1 && only.kind === 'token' && only.token.type === 'ident'
+      ? only.token.value
+      : undefined;
+  const custom = ident?.startsWith('--') === true;
+  return {
+    property:
+      custom && ident !== undefined
+        ? ident
+        : (ident ?? textOf(css, named)).toLowerCase(),
+    custom,
+    value:
+      values.length > 0
+        ? css.slice(values[0].start, values[values.length - 1].end)
+        : '',
+    values,
+  };
 }
 
-function isSelfReference(declaration: Declaration): boolean {
-  const property = customPropertyName(declaration.property);
-  const reads = varReads(declaration.value);
+function trimSpace(items: readonly ComponentValue[]): ComponentValue[] {
+  let start = 0;
+  let end = items.length;
+  while (start < end && isSpace(items[start])) start += 1;
+  while (end > start && isSpace(items[end - 1])) end -= 1;
+  return items.slice(start, end);
+}
+
+/** Whether the value is exactly `var()` of the declared property. */
+function isSelfReference(
+  declaration: Declaration,
+  reads: readonly VariableRead[]
+): boolean {
   return (
-    property !== undefined &&
+    declaration.custom &&
     reads.length === 1 &&
-    reads[0].name === property &&
+    reads[0].name === declaration.property &&
     reads[0].fallback === undefined &&
-    withoutComments(declaration.value).trim() ===
-      withoutComments(
-        declaration.value.slice(reads[0].start, reads[0].end)
-      ).trim()
+    declaration.values.length === 1 &&
+    declaration.values[0].start === reads[0].start
   );
 }
 
 /** Whether every read of the declared property sits inside another read's
  *  fallback, as in `--a: var(--b, var(--a))`. */
-function readsItselfOnlyInFallback(declaration: Declaration): boolean {
-  const property = customPropertyName(declaration.property);
-  if (property === undefined) return false;
-  const reads = varReads(declaration.value);
-  const own = reads.filter((read) => read.name === property);
+function readsItselfOnlyInFallback(
+  declaration: Declaration,
+  reads: readonly VariableRead[]
+): boolean {
+  if (!declaration.custom) return false;
+  const own = reads.filter((read) => read.name === declaration.property);
   return (
     own.length > 0 &&
     own.every((read) =>
       reads.some(
         (outer) =>
-          outer !== read && outer.start < read.start && read.end <= outer.end
+          outer.fallback !== undefined &&
+          outer.fallback.start <= read.start &&
+          read.end <= outer.fallback.end
       )
     )
   );
-}
-
-/** A `var()` read: the decoded name, its fallback, and the call's offsets. */
-interface VarRead {
-  name: string;
-  fallback: string | undefined;
-  start: number;
-  end: number;
-}
-
-/** Every `var()` read in `value`, nested fallbacks included, in any case
- *  and spacing. Quoted text and comments hold none. */
-function varReads(value: string): VarRead[] {
-  const reads: VarRead[] = [];
-  for (let at = 0; at < value.length;) {
-    const c = value[at];
-    if (c === '"' || c === "'") {
-      at = closingQuote(value, at);
-      continue;
-    }
-    if (value.startsWith('/*', at)) {
-      at = skipSpace(value, at);
-      continue;
-    }
-    if (
-      value.slice(at, at + 4).toLowerCase() !== 'var(' ||
-      /[\w-]/.test(value[at - 1] ?? '')
-    ) {
-      at += 1;
-      continue;
-    }
-    const nameAt = skipSpace(value, at + 4);
-    if (!value.startsWith('--', nameAt)) {
-      at += 4;
-      continue;
-    }
-    const { end: nameEnd, name } = readCustomPropertyName(value, nameAt + 2);
-    const after = skipSpace(value, nameEnd);
-    const close = closingParen(value, at + 4);
-    reads.push({
-      name: `--${name}`,
-      fallback:
-        value[after] === ','
-          ? value.slice(after + 1, close - 1).trim()
-          : undefined,
-      start: at,
-      end: close,
-    });
-    // Reads inside the fallback are found on the next steps.
-    at = after;
-  }
-  return reads;
-}
-
-/** The index after the `)` that closes the call whose arguments start at
- *  `from`. Quoted text and comments are skipped. */
-function closingParen(value: string, from: number): number {
-  let depth = 1;
-  let at = from;
-  while (at < value.length && depth > 0) {
-    const c = value[at];
-    if (c === '"' || c === "'") at = closingQuote(value, at);
-    else if (value.startsWith('/*', at)) at = skipSpace(value, at);
-    else {
-      if (c === '(') depth += 1;
-      else if (c === ')') depth -= 1;
-      at += 1;
-    }
-  }
-  return at;
-}
-
-function closingQuote(value: string, open: number): number {
-  let at = open + 1;
-  while (at < value.length && value[at] !== value[open]) {
-    at += value[at] === '\\' ? 2 : 1;
-  }
-  return Math.min(at + 1, value.length);
-}
-
-/** The index after CSS whitespace and comments starting at `from`. */
-function skipSpace(value: string, from: number): number {
-  let at = from;
-  for (;;) {
-    while (/[ \t\n\r\f]/.test(value[at] ?? '')) at += 1;
-    if (!value.startsWith('/*', at)) return at;
-    const close = value.indexOf('*/', at + 2);
-    at = close === -1 ? value.length : close + 2;
-  }
-}
-
-function withoutComments(text: string): string {
-  return text.replace(/\/\*[\s\S]*?\*\//g, '');
 }
 
 /** Custom properties this declaration sets in a keyframe or names in a
@@ -318,11 +384,10 @@ function animatedProperties(
   const keyframes = declaration.context.find((prelude) =>
     prelude.startsWith('@keyframes')
   );
-  const set = customPropertyName(declaration.property);
-  if (keyframes !== undefined && set !== undefined) {
+  if (keyframes !== undefined && declaration.custom) {
     return [
       {
-        name: set,
+        name: declaration.property,
         how: `set in ${keyframes}`,
         discrete: false,
       },
@@ -336,56 +401,41 @@ function animatedProperties(
   }
   // A bare `--x` names the item's property wherever it stands, before or
   // after its duration; a value read from a variable sits inside var().
-  return topLevelItems(declaration.value).flatMap((item) => {
-    const property = topLevelTokens(item.replace(/\/\*[\s\S]*?\*\//g, ' '))
-      .map(customPropertyName)
-      .find((name) => name !== undefined);
-    return property !== undefined
+  return topLevelItems(declaration.values).flatMap((item) => {
+    const named = item.find(
+      (value) =>
+        value.kind === 'token' &&
+        value.token.type === 'ident' &&
+        value.token.value.startsWith('--')
+    );
+    return named?.kind === 'token'
       ? [
           {
-            name: property,
+            name: named.token.value,
             how: 'transitioned',
-            discrete:
-              /\ballow-discrete\b/.test(item) ||
-              discreteRules.has(declaration.rule),
+            discrete: isDiscrete(item) || discreteRules.has(declaration.rule),
           },
         ]
       : [];
   });
 }
 
-/** The whitespace-separated tokens of `item` outside any parentheses. */
-function topLevelTokens(item: string): string[] {
-  const tokens: string[] = [];
-  let depth = 0;
-  let token = '';
-  for (const c of item) {
-    if (c === '(') depth += 1;
-    else if (c === ')') depth -= 1;
-    if (depth === 0 && /\s/.test(c)) {
-      if (token) tokens.push(token);
-      token = '';
-    } else {
-      token += c;
-    }
-  }
-  if (token) tokens.push(token);
-  return tokens;
+function isDiscrete(item: readonly ComponentValue[]): boolean {
+  return item.some(
+    (value) =>
+      value.kind === 'token' &&
+      value.token.type === 'ident' &&
+      value.token.value.toLowerCase() === 'allow-discrete'
+  );
 }
 
-function topLevelItems(value: string): string[] {
-  const items: string[] = [];
-  let depth = 0;
-  let start = 0;
-  for (let i = 0; i < value.length; i += 1) {
-    if (value[i] === '(') depth += 1;
-    else if (value[i] === ')') depth -= 1;
-    else if (value[i] === ',' && depth === 0) {
-      items.push(value.slice(start, i));
-      start = i + 1;
-    }
+/** The comma-separated items of a value, each its top-level values. */
+function topLevelItems(values: readonly ComponentValue[]): ComponentValue[][] {
+  const items: ComponentValue[][] = [[]];
+  for (const value of values) {
+    if (value.kind === 'token' && value.token.type === ',') items.push([]);
+    else items[items.length - 1].push(value);
   }
-  items.push(value.slice(start));
   return items;
 }
 

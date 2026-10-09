@@ -95,5 +95,16 @@ describe('runtime CSS-wide keyword values', () => {
       class: 'animus-box-abc animus-dyn-p animus-dyn-p-md',
       style: '--animus-p: inherit; --animus-p-md: initial',
     });
+    // A keyword skips the prop's transform, as a static write does.
+    const transformed = createClassResolver(
+      'animus-box-abc',
+      { systemPropNames: ['p'] },
+      { p: {} },
+      { p: { ...slot.p, transform: (value: string | number) => `${value}px` } }
+    );
+    expect(transformed.attrs({ p: { _: 'unset', md: 4 } })).toEqual({
+      class: 'animus-box-abc animus-dyn-p animus-dyn-p-md',
+      style: '--animus-p: unset; --animus-p-md: 4px',
+    });
   });
 });

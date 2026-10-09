@@ -363,8 +363,10 @@ describe('checks on emitted CSS alone', () => {
       manifest: { components: {} },
       componentCss: [
         '.x {\n  --a :var( --a ) ;\n}',
-        // Reads only inside another var()'s fallback: authored, the write a
-        // prop with `currentVar: '--a'` emits for that value, and escaped.
+        // A comment before the declaration separates nothing.
+        '.c { /* note; { } */ --a: var(--a); }',
+        // Reads only inside another var()'s fallback: authored, beside a
+        // property reading the same value, and escaped.
         '.authored { --a: var(--b, var(--a)); }',
         '.slot { width: var(--b, var(--a)); --a: var(--b, var(--a)); }',
         String.raw`.escaped { --\61: var(--b, VAR(--a)); }`,
@@ -375,12 +377,13 @@ describe('checks on emitted CSS alone', () => {
     });
     expect(diagnostics.map((d) => [d.code, d.component])).toEqual([
       [PROPERTY_SELF_REFERENCE, '.x'],
+      [PROPERTY_SELF_REFERENCE, '.c'],
       [PROPERTY_FALLBACK_SELF_REFERENCE, '.authored'],
       [PROPERTY_FALLBACK_SELF_REFERENCE, '.slot'],
       [PROPERTY_FALLBACK_SELF_REFERENCE, '.escaped'],
     ]);
-    expect(diagnostics[1].message).toContain(
-      'depends on how the browser treats fallback references'
+    expect(diagnostics[2].message).toContain(
+      'Wherever that fallback is used, --a refers to itself, a cycle in every browser'
     );
   });
 
@@ -407,7 +410,8 @@ describe('checks on emitted CSS alone', () => {
       componentCss: [
         String.raw`.s { --\61: VAR( /* c */ --a ); }`,
         '.q { content: "var(--x, 1px)"; width: var(--x, 2px); }',
-        String.raw`.t { transition: --\61 1s; }`,
+        // An escape's hex digits take one following space, so the name ends here.
+        String.raw`.t { transition: 1s --\61; }`,
         String.raw`.n { --b: var(--a\62); transition: --a\62 1s, --ab 1s; }`,
       ].join('\n'),
       globalCss: '',

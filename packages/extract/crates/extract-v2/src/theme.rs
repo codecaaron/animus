@@ -9,6 +9,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+use crate::css_tokens::{decoded_identifier, tokenize, variable_reads};
 use crate::evaluator::{EvalError, TransformEvaluator};
 
 const CSS_SHORTHANDS: &[&str] = &[
@@ -754,69 +755,20 @@ fn resolve_color_family_pass_through(
 }
 
 /// Whether a prop with `current_var` also writes `value` to it: a value that
-/// reads the variable directly, with or without a fallback, would make it
-/// cyclic, so it leaves it alone. A read inside another `var()`'s fallback is
-/// not direct, so it still writes. `var` matches in any case and the name with
-/// any CSS whitespace or comments around it; the name itself is
-/// case-sensitive. Comments and strings read nothing. The runtime resolver
-/// keeps an identical predicate.
+/// reads the variable, directly or inside another `var()`'s fallback, leaves
+/// it alone, since writing it would make the variable cyclic wherever that
+/// read is used. A read is a function token whose decoded name is `var` in
+/// any case, with the decoded variable name as its first argument; comments,
+/// quoted strings and `url()` read nothing. The runtime resolver keeps an
+/// identical predicate.
 pub fn writes_current_var(value: &str, current_var: &str) -> bool {
-    let bytes = value.as_bytes();
-    // Per open parenthesis: whether it opens a `var()`, and whether that
-    // `var()` has reached its fallback.
-    let mut open: Vec<(bool, bool)> = Vec::new();
-    let mut at = 0;
-    while at < bytes.len() {
-        match bytes[at] {
-            b'/' if bytes.get(at + 1) == Some(&b'*') => {
-                at = value[at + 2..].find("*/").map_or(bytes.len(), |end| at + 2 + end + 2);
-                continue;
-            }
-            quote @ (b'"' | b'\'') => {
-                at += 1;
-                while at < bytes.len() && bytes[at] != quote {
-                    at += if bytes[at] == b'\\' { 2 } else { 1 };
-                }
-            }
-            b'(' => {
-                let var = at >= 3 && bytes[at - 3..at].eq_ignore_ascii_case(b"var");
-                let in_fallback = open.iter().any(|&(var, fallback)| var && fallback);
-                if var
-                    && !in_fallback
-                    && skip_css_space(&value[at + 1..])
-                        .strip_prefix(current_var)
-                        .is_some_and(|after| matches!(skip_css_space(after).chars().next(), Some(')' | ',')))
-                {
-                    return false;
-                }
-                open.push((var, false));
-            }
-            b',' => {
-                if let Some((true, fallback)) = open.last_mut() {
-                    *fallback = true;
-                }
-            }
-            b')' => {
-                open.pop();
-            }
-            _ => {}
-        }
-        at += 1;
+    if !value.contains('(') {
+        return true;
     }
-    true
-}
-
-/// `text` after its leading CSS whitespace (space, tab, line feed, carriage
-/// return, form feed) and comments.
-fn skip_css_space(text: &str) -> &str {
-    let mut rest = text;
-    loop {
-        let trimmed = rest.trim_start_matches([' ', '\t', '\n', '\r', '\x0c']);
-        match trimmed.strip_prefix("/*") {
-            Some(comment) => rest = comment.find("*/").map_or("", |end| &comment[end + 2..]),
-            None => return trimmed,
-        }
-    }
+    let destination = decoded_identifier(current_var);
+    let tokens = tokenize(value);
+    let reads_destination = variable_reads(&tokens).any(|name| name == destination);
+    !reads_destination
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1824,9 +1776,17 @@ mod tests {
             ("#0af", true),
             ("var(--current-bg-alt)", true),
             ("var(--Current-bg)", true),
-            ("var(--other, var(--current-bg))", true),
-            ("VAR(--other, VAR(--current-bg))", true),
-            ("var(--other, calc(var(--current-bg) + 1px))", true),
+            ("var(--other, var(--current-bg))", false),
+            ("VAR(--other, VAR(--current-bg))", false),
+            ("var(--other, calc(var(--current-bg) + 1px))", false),
+            (r"var(--\63 urrent-bg)", false),
+            (r"var(--\000063urrent-bg)", false),
+            (r"v\61r(--current-bg)", false),
+            ("myvar(--current-bg)", true),
+            ("myvar(var(--current-bg))", false),
+            ("var(/**/--current-bg/**/, blue)", false),
+            ("var/**/(--current-bg)", true),
+            ("\"var(--current-bg)\" red", true),
             ("var(--current-bg, var(--other))", false),
             ("var(--other, var(--current-bg)) var(--current-bg)", false),
             ("calc(var(--other, 1px) + var(--current-bg))", false),
