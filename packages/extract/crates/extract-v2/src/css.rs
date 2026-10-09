@@ -77,6 +77,24 @@ pub struct CssSheets {
     pub custom: String,
 }
 
+impl CssSheets {
+    /// The sheet holding a layer's block; `None` for a layer the engine
+    /// writes no sheet for.
+    pub fn of_layer(&self, layer: &str) -> Option<&String> {
+        [
+            ("global", &self.global),
+            ("base", &self.base),
+            ("variants", &self.variants),
+            ("compounds", &self.compounds),
+            ("states", &self.states),
+            ("system", &self.system),
+            ("custom", &self.custom),
+        ]
+        .into_iter()
+        .find_map(|(name, sheet)| (layer_name(name) == layer).then_some(sheet))
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PerComponentSheets {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -231,17 +249,28 @@ pub fn wrap_layer(name: &str, content: &str) -> String {
     format!("@layer {} {{\n{}}}\n", layer_name(name), content)
 }
 
+/// The cascade layer order, outermost first. Its one definition is
+/// `ANIMUS_LAYERS` in `packages/extract/pipeline/assemble-stylesheet.ts`;
+/// `packages/extract/scripts/layer-order.ts --write` writes it here.
+pub fn layer_order() -> &'static [String] {
+    static ORDER: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+    ORDER.get_or_init(|| {
+        serde_json::from_str(include_str!("layer_order.json")).expect("layer_order.json is generated valid JSON")
+    })
+}
+
+/// The leading statement that fixes the layer order before any block.
+fn layer_declaration() -> String {
+    format!("@layer {};", layer_order().join(", "))
+}
+
 pub fn generate_css(
     components: &[ComponentCss],
     breakpoints: &BreakpointMap,
 ) -> String {
     let mut output = String::new();
 
-    let layer_names: Vec<String> = ["global", "base", "variants", "compounds", "states", "system", "custom"]
-        .iter()
-        .map(|n| layer_name(n))
-        .collect();
-    writeln!(output, "@layer {};", layer_names.join(", ")).unwrap();
+    writeln!(output, "{}", layer_declaration()).unwrap();
     writeln!(output).unwrap();
 
     let base_css = generate_layer_content(components, breakpoints, LayerKind::Base);
@@ -386,11 +415,7 @@ pub fn generate_css_sheets_ordered(
         }
     }
 
-    let layer_names: Vec<String> = ["global", "base", "variants", "compounds", "states", "system", "custom"]
-        .iter()
-        .map(|n| layer_name(n))
-        .collect();
-    let declaration = format!("@layer {};\n", layer_names.join(", "));
+    let declaration = format!("{}\n", layer_declaration());
 
     let base_content = fragments.concat_base();
     let base = if !base_content.is_empty() {
