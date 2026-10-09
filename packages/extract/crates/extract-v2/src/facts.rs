@@ -281,6 +281,9 @@ pub struct FileFacts {
     /// Chains rooted in an `Object.member` path, which are never chains.
     #[serde(skip)]
     pub member_rooted_chains: Vec<chain_walk::MemberRootedChain>,
+    /// Chains written as top-level object-literal properties.
+    #[serde(skip)]
+    pub object_member_chains: Vec<chain_walk::ObjectMemberChain>,
     /// Namespace imports (`import * as ns from 'x'`): local → specifier.
     #[serde(skip)]
     pub namespace_imports: BTreeMap<String, String>,
@@ -448,6 +451,7 @@ struct ConstInitializerFacts {
     assigned: BTreeMap<String, String>,
     roots: BTreeMap<String, String>,
     objects: BTreeMap<String, BTreeMap<String, String>>,
+    chains: Vec<chain_walk::ObjectMemberChain>,
 }
 
 /// `Y` in `Object.assign(Y, …)`.
@@ -511,6 +515,21 @@ fn collect_const_initializers(program: &Program<'_>) -> ConstInitializerFacts {
                     members.clear();
                     continue;
                 };
+                if let Expression::CallExpression(call) = crate::chain_walk::unwrap_type_assertions(&p.value) {
+                    let terminal = match &call.callee {
+                        Expression::StaticMemberExpression(member) => {
+                            crate::chain_walk::terminal_kind(&member.property.name).is_some()
+                        }
+                        _ => false,
+                    };
+                    if let (true, Some(root)) = (terminal, expression_root(&p.value)) {
+                        facts.chains.push(chain_walk::ObjectMemberChain {
+                            object: name.to_string(),
+                            key: key.to_string(),
+                            root,
+                        });
+                    }
+                }
                 match crate::chain_walk::unwrap_type_assertions(&p.value) {
                     Expression::Identifier(value)
                         if p.kind == PropertyKind::Init && !p.method =>
@@ -1014,6 +1033,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
         object_members: const_initializers.objects,
         member_parent_extensions,
         member_rooted_chains: walked.member_rooted,
+        object_member_chains: const_initializers.chains,
         namespace_imports: crate::usage_facts::collect_namespace_imports(program),
         default_export_chain: walked
             .default_export

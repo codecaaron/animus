@@ -98,15 +98,20 @@ fn try_extract_chain(declarator: &VariableDeclarator<'_>) -> Option<WalkedChain>
     try_walk_chain(call, binding)
 }
 
+/// The terminal a builder method name ends a chain with.
+pub fn terminal_kind(method_name: &str) -> Option<TerminalKind> {
+    match method_name {
+        "asElement" => Some(TerminalKind::AsElement),
+        "asComponent" => Some(TerminalKind::AsComponent),
+        "asClass" => Some(TerminalKind::AsClass),
+        _ => None,
+    }
+}
+
 fn try_walk_chain(call: &CallExpression<'_>, binding: String) -> Option<WalkedChain> {
     let (object, method_name) = match_static_member(&call.callee)?;
 
-    let terminal = match method_name {
-        "asElement" => TerminalKind::AsElement,
-        "asComponent" => TerminalKind::AsComponent,
-        "asClass" => TerminalKind::AsClass,
-        _ => return None,
-    };
+    let terminal = terminal_kind(method_name)?;
 
     let mut stages = Vec::new();
     let mut extractable = true;

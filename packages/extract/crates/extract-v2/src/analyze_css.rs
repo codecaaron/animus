@@ -286,6 +286,7 @@ const UNSUPPORTED_TRANSFORM_REFERENCE: &str = "animus.props.unsupported-transfor
 const UNSUPPORTED_PROPS_CONFIG: &str = "animus.props.unsupported-config";
 const UNSUPPORTED_DEFAULT_EXPORT: &str = "animus.chain.unsupported-default-export";
 const UNSUPPORTED_NAMESPACE_ROOT: &str = "animus.chain.unsupported-namespace-root";
+const UNSUPPORTED_OBJECT_MEMBER: &str = "animus.chain.unsupported-object-member";
 /// A configured transform rejected before registration loses its meaning
 /// the same way, so it shares the optional-strict policy.
 const CONFIGURED_TRANSFORM_REJECTED: &str = "animus.transform.configured-rejected";
@@ -323,6 +324,7 @@ pub(crate) fn diagnostic_severity_for_code(code: &str) -> &'static str {
         | UNSUPPORTED_PROPS_CONFIG
         | UNSUPPORTED_DEFAULT_EXPORT
         | UNSUPPORTED_NAMESPACE_ROOT
+        | UNSUPPORTED_OBJECT_MEMBER
         | CONFIGURED_TRANSFORM_REJECTED
         | STATIC_EVALUATION_UNAVAILABLE
         | STRICT_TOKEN_MISS => "error",
@@ -651,15 +653,16 @@ fn has_animus_origin(
 }
 
 /// The component an `Object.member` extension parent names — `(file,
-/// binding)` — when `Object` is an exported object literal whose member is a
-/// chain of Animus origin. None when that provenance is not established.
+/// binding)` — when `Object` is an object literal, exported or local, whose
+/// member is a chain of Animus origin, and whether the object is exported.
+/// None when that provenance is not established.
 fn member_parent_component(
     file_path: &str,
     ff: &FileFacts,
     extension: &MemberParentExtension,
     files: &BTreeMap<String, FileFacts>,
     inputs: &CssInputs,
-) -> Option<(String, String)> {
+) -> Option<(String, String, bool)> {
     let Some((object_file, object_binding, true)) =
         resolve_declaration(file_path, ff, &extension.object, files, inputs)
     else {
@@ -670,9 +673,6 @@ fn member_parent_component(
         .exports
         .iter()
         .any(|e| e.source.is_none() && e.local.as_deref() == Some(object_binding.as_str()));
-    if !exported {
-        return None;
-    }
     let value = object_ff
         .object_members
         .get(&object_binding)?
@@ -695,28 +695,56 @@ fn member_parent_component(
             inputs,
             &mut FxHashSet::default(),
         );
-    animus.then_some((component_file, component))
+    animus.then_some((component_file, component, exported))
 }
 
 fn unsupported_member_parent_bail(
     file: &str,
     extension: &MemberParentExtension,
-    (component_file, component): (String, String),
+    (component_file, component, exported): (String, String, bool),
 ) -> CssDiagnostic {
     diagnostic(
         file,
         &extension.binding,
         "bail",
         format!(
-            "chain dropped: parent '{object}.{member}' is a member of exported object \
+            "chain dropped: parent '{object}.{member}' is a member of {kind} object \
              '{object}', and member-parent extension is not supported; the declaration \
              in {file} is left untransformed — extend '{component}' from \
              {component_file} directly",
             object = extension.object,
             member = extension.member,
+            kind = if exported { "exported" } else { "local" },
         ),
         Some(UNSUPPORTED_MEMBER_PARENT),
     )
+}
+
+/// A chain written as an object-literal property whose root has proven
+/// Animus origin: chain collection does not extract it, so the component
+/// renders without its styles.
+fn unsupported_object_member(
+    file: &str,
+    chain: &crate::chain_walk::ObjectMemberChain,
+    files: &BTreeMap<String, FileFacts>,
+    inputs: &CssInputs,
+) -> Option<CssDiagnostic> {
+    has_animus_origin(file, &chain.root, files, inputs, &mut FxHashSet::default()).then(|| {
+        diagnostic(
+            file,
+            &format!("{}.{}", chain.object, chain.key),
+            "bail",
+            format!(
+                "chain dropped: component '{object}.{key}' is a builder chain written as a \
+                 property of object '{object}', which is not extracted, so it renders \
+                 without its styles — declare it as a named binding (const {key} = …) \
+                 and reference that binding from '{object}'",
+                object = chain.object,
+                key = chain.key,
+            ),
+            Some(UNSUPPORTED_OBJECT_MEMBER),
+        )
+    })
 }
 
 /// The bail for a chain the walker could not extract. A chain of proven
@@ -3122,6 +3150,9 @@ fn run_with_system_floor(
         }
         for chain in &ff.member_rooted_chains {
             diagnostics.extend(unsupported_namespace_root(file_path, ff, chain, files, inputs));
+        }
+        for chain in &ff.object_member_chains {
+            diagnostics.extend(unsupported_object_member(file_path, chain, files, inputs));
         }
         diagnostics.extend(unsupported_default_export(file_path, ff, files, inputs));
     }

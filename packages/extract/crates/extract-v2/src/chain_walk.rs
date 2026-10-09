@@ -8,7 +8,7 @@ mod terminal;
 mod walk;
 
 pub(crate) use expr::unwrap_type_assertions;
-pub use walk::{walk_program, walk_program_facts, WalkedProgram};
+pub use walk::{terminal_kind, walk_program, walk_program_facts, WalkedProgram};
 pub(crate) use walk::CHAIN_METHODS;
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -56,6 +56,16 @@ pub struct MemberRootedChain {
     pub binding: String,
     pub object: String,
     pub member: String,
+}
+
+/// `const Parts = { Base: ds.styles()…terminal }` — a chain written as an
+/// object-literal property, which chain collection does not extract; `root`
+/// is the identifier the chain starts from.
+#[derive(Debug, Clone)]
+pub struct ObjectMemberChain {
+    pub object: String,
+    pub key: String,
+    pub root: String,
 }
 
 #[cfg(test)]
