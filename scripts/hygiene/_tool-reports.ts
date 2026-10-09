@@ -85,9 +85,10 @@ export type OxlintReport = { diagnostics: OxlintDiagnostic[] };
 // knip `--reporter=json` wire shape, the subset the cascade reads.
 type KnipNamedSymbol = { name: string; line?: number };
 type KnipPackage = { name: string };
+type KnipFile = { name: string };
 type KnipIssue = {
   file: string;
-  files?: string[];
+  files?: KnipFile[];
   exports?: KnipNamedSymbol[];
   dependencies?: KnipPackage[];
   devDependencies?: KnipPackage[];

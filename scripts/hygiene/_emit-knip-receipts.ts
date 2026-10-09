@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 
-import { isJsonNumber, isJsonString } from '@animus-ui/assertions';
+import { isJsonNumber } from '@animus-ui/assertions';
 
 import { emitReceipt } from './_receipts';
 import {
@@ -19,9 +19,9 @@ export function emitForReport(report: KnipReport): number {
     if (!issue.file) continue;
 
     if (Array.isArray(issue.files)) {
-      for (const filename of issue.files) {
-        if (!isJsonString(filename)) continue;
-        emitReceipt('D', 'delete', filename, 'file');
+      for (const entry of issue.files) {
+        if (!entry?.name) continue;
+        emitReceipt('D', 'delete', entry.name, 'file');
         count++;
       }
     }
