@@ -9,6 +9,10 @@ export default createConfigWithDeclarations({
     // Ships in application bundles, so it must import nothing from
     // ./bootstrap, which reaches node:crypto.
     './src/appearance/index.ts',
+    // The light/dark kit: opt-in subpaths over the appearance core.
+    './src/appearance/controller.ts',
+    './src/appearance/react.ts',
+    './src/appearance/svelte.ts',
     './src/class-resolver.ts',
     './src/runtime-entry.ts',
     './src/compose.ts',
