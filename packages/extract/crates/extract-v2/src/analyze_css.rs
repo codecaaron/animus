@@ -1242,7 +1242,7 @@ fn unresolved_alias_spans(value: &str) -> Vec<String> {
 
 fn shed_unresolved_alias_decls(
     decls: &mut Vec<CssDeclaration>,
-    scale_family: &FxHashSet<String>,
+    scale_check: &ScaleCheck<'_>,
     file: &str,
     component: &str,
     diagnostics: &mut Vec<CssDiagnostic>,
@@ -1250,7 +1250,7 @@ fn shed_unresolved_alias_decls(
     decls.retain(|d| {
         let spans = unresolved_alias_spans(&d.value);
         if spans.is_empty() {
-            warn_token_shaped_value(d, scale_family, file, component, diagnostics);
+            warn_token_shaped_value(d, scale_check, file, component, diagnostics);
             return true;
         }
         let aliases = spans.join(", ");
@@ -1286,21 +1286,50 @@ const TOKEN_SHAPE_EXEMPT_PROPERTIES: &[&str] = &[
     "will-change",
 ];
 
-fn scale_family_css_properties(config: &PropConfigMap) -> FxHashSet<String> {
-    let mut props: FxHashSet<String> = FxHashSet::default();
+/// Each scaled CSS property, with the literal values its scales hold: a
+/// value among them came from a token, so it is no miss.
+type ScaleFamily = FxHashMap<String, FxHashSet<String>>;
+
+/// What a scale-miss warning reads: the scaled properties, and whether the
+/// file is an included package's, whose identifier misses are external
+/// token candidates instead.
+struct ScaleCheck<'a> {
+    family: &'a ScaleFamily,
+    external: bool,
+}
+
+fn scale_family_css_properties(config: &PropConfigMap, theme: &crate::theme::FlatTheme) -> ScaleFamily {
+    let literals_of = |scale: &Value| -> FxHashSet<String> {
+        let text = |value: &Value| match value {
+            Value::String(text) => Some(text.clone()),
+            Value::Number(number) => Some(number.to_string()),
+            _ => None,
+        };
+        match scale {
+            Value::String(name) => {
+                let prefix = format!("{name}.");
+                theme.iter().filter(|(key, _)| key.starts_with(&prefix)).map(|(_, value)| value.clone()).collect()
+            }
+            Value::Object(values) => values.values().filter_map(text).collect(),
+            Value::Array(values) => values.iter().filter_map(text).collect(),
+            _ => FxHashSet::default(),
+        }
+    };
+    let mut family = ScaleFamily::default();
     for pc in config.values() {
-        if pc.scale.is_none() {
+        let Some(scale) = &pc.scale else {
             continue;
-        }
-        props.insert(css_property_name(&pc.property));
-        for p in &pc.properties {
-            props.insert(css_property_name(p));
+        };
+        let literals = literals_of(scale);
+        for property in std::iter::once(&pc.property).chain(&pc.properties) {
+            family.entry(css_property_name(property)).or_default().extend(literals.iter().cloned());
         }
     }
+    let colors = literals_of(&Value::String("colors".to_string()));
     for p in crate::theme::COLOR_FAMILY_PASS_THROUGH {
-        props.insert(css_property_name(p));
+        family.entry(css_property_name(p)).or_default().extend(colors.iter().cloned());
     }
-    props
+    family
 }
 
 /// A bare dotted token path, `^[A-Za-z][\w-]*(\.[\w-]+)+$`. Never valid
@@ -1333,34 +1362,145 @@ fn is_token_shaped_value(value: &str) -> bool {
 /// arrive through a spread, and browsers discard an invalid declaration.
 fn warn_token_shaped_value(
     decl: &CssDeclaration,
-    scale_family: &FxHashSet<String>,
+    scale_check: &ScaleCheck<'_>,
     file: &str,
     component: &str,
     diagnostics: &mut Vec<CssDiagnostic>,
 ) {
-    if decl.property.starts_with("--")
-        || TOKEN_SHAPE_EXEMPT_PROPERTIES.contains(&decl.property.as_str())
-        || !scale_family.contains(&decl.property)
-        || !is_token_shaped_value(&decl.value)
-    {
+    let Some(literals) = scale_check.family.get(&decl.property) else {
+        return;
+    };
+    if decl.property.starts_with("--") || TOKEN_SHAPE_EXEMPT_PROPERTIES.contains(&decl.property.as_str()) {
         return;
     }
-    diagnostics.push(
-        diagnostic(
-            file,
-            component,
-            "warn",
-            format!(
-                "token-shaped value '{}' in '{}' did not resolve — likely an unresolved token: \
-                 check the key against the theme. The declaration is emitted as authored and \
-                 will be ignored by browsers.",
-                decl.value, decl.property
-            ),
-            Some(TOKEN_SHAPED_VALUE),
+    let message = if is_token_shaped_value(&decl.value) {
+        format!(
+            "token-shaped value '{}' in '{}' did not resolve — likely an unresolved token: \
+             check the key against the theme. The declaration is emitted as authored and \
+             will be ignored by browsers.",
+            decl.value, decl.property
         )
-        .dropping(&decl.value),
-    );
+    } else if !scale_check.external && is_unknown_identifier(&decl.property, &decl.value, literals) {
+        format!(
+            "value '{}' in '{}' is neither a key of its scale nor a keyword of the property — \
+             likely an unresolved token: check the key against the theme. The declaration is \
+             emitted as authored.",
+            decl.value, decl.property
+        )
+    } else {
+        return;
+    };
+    diagnostics.push(diagnostic(file, component, "warn", message, Some(TOKEN_SHAPED_VALUE)).dropping(&decl.value));
 }
+
+/// Properties whose values take author-defined names, so an identifier there
+/// is no evidence of a missed token.
+const CUSTOM_IDENT_PROPERTIES: &[&str] = &[
+    "list-style-type",
+    "list-style",
+    "container-name",
+    "container",
+    "anchor-name",
+    "position-anchor",
+    "view-transition-name",
+    "view-transition-class",
+    "scroll-timeline-name",
+    "view-timeline-name",
+    "timeline-scope",
+    "animation-timeline",
+    "font-palette",
+    "page",
+];
+
+/// A lone CSS identifier on a scaled property that its scales do not hold and
+/// the property does not take: not a CSS-wide or property keyword, nor a
+/// named colour on a colour property.
+fn is_unknown_identifier(property: &str, value: &str, literals: &FxHashSet<String>) -> bool {
+    let unprefixed = value.strip_prefix('-').unwrap_or(value);
+    let identifier = !value.starts_with("--")
+        && unprefixed.starts_with(|ch: char| ch.is_ascii_alphabetic() || ch == '_')
+        && value.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_');
+    if !identifier || literals.contains(value) || CUSTOM_IDENT_PROPERTIES.contains(&property) {
+        return false;
+    }
+    if crate::theme::css_keywords(&camel_property(property)).any(|keyword| keyword.eq_ignore_ascii_case(value)) {
+        return false;
+    }
+    !(is_colour_property(property) && NAMED_COLOURS.iter().any(|colour| colour.eq_ignore_ascii_case(value)))
+}
+
+/// A kebab property as the keyword table keys it: `padding-left` is
+/// `paddingLeft`, `-webkit-line-clamp` is `WebkitLineClamp`, `-ms-flex` is
+/// `msFlex`.
+fn camel_property(property: &str) -> String {
+    let (capitalise_first, rest) = match property.strip_prefix('-') {
+        Some(rest) if rest.starts_with("ms-") => (false, rest),
+        Some(rest) => (true, rest),
+        None => (false, property),
+    };
+    let mut camel = String::with_capacity(rest.len());
+    for (index, word) in rest.split('-').enumerate() {
+        let mut chars = word.chars();
+        match chars.next() {
+            Some(first) if index > 0 || capitalise_first => {
+                camel.push(first.to_ascii_uppercase());
+                camel.extend(chars);
+            }
+            _ => camel.push_str(word),
+        }
+    }
+    camel
+}
+
+fn is_colour_property(property: &str) -> bool {
+    property.ends_with("color")
+        || matches!(
+            property,
+            "fill"
+                | "stroke"
+                | "background"
+                | "border"
+                | "border-top"
+                | "border-right"
+                | "border-bottom"
+                | "border-left"
+                | "border-block"
+                | "border-block-start"
+                | "border-block-end"
+                | "border-inline"
+                | "border-inline-start"
+                | "border-inline-end"
+                | "outline"
+                | "column-rule"
+                | "text-decoration"
+                | "text-emphasis"
+        )
+}
+
+/// CSS Color 4's named colours and system colours.
+const NAMED_COLOURS: &[&str] = &[
+    "aliceblue", "antiquewhite", "aqua", "aquamarine", "azure", "beige", "bisque", "black", "blanchedalmond",
+    "blue", "blueviolet", "brown", "burlywood", "cadetblue", "chartreuse", "chocolate", "coral", "cornflowerblue",
+    "cornsilk", "crimson", "cyan", "darkblue", "darkcyan", "darkgoldenrod", "darkgray", "darkgreen", "darkgrey",
+    "darkkhaki", "darkmagenta", "darkolivegreen", "darkorange", "darkorchid", "darkred", "darksalmon",
+    "darkseagreen", "darkslateblue", "darkslategray", "darkslategrey", "darkturquoise", "darkviolet", "deeppink",
+    "deepskyblue", "dimgray", "dimgrey", "dodgerblue", "firebrick", "floralwhite", "forestgreen", "fuchsia",
+    "gainsboro", "ghostwhite", "gold", "goldenrod", "gray", "green", "greenyellow", "grey", "honeydew", "hotpink",
+    "indianred", "indigo", "ivory", "khaki", "lavender", "lavenderblush", "lawngreen", "lemonchiffon", "lightblue",
+    "lightcoral", "lightcyan", "lightgoldenrodyellow", "lightgray", "lightgreen", "lightgrey", "lightpink",
+    "lightsalmon", "lightseagreen", "lightskyblue", "lightslategray", "lightslategrey", "lightsteelblue",
+    "lightyellow", "lime", "limegreen", "linen", "magenta", "maroon", "mediumaquamarine", "mediumblue",
+    "mediumorchid", "mediumpurple", "mediumseagreen", "mediumslateblue", "mediumspringgreen", "mediumturquoise",
+    "mediumvioletred", "midnightblue", "mintcream", "mistyrose", "moccasin", "navajowhite", "navy", "oldlace",
+    "olive", "olivedrab", "orange", "orangered", "orchid", "palegoldenrod", "palegreen", "paleturquoise",
+    "palevioletred", "papayawhip", "peachpuff", "peru", "pink", "plum", "powderblue", "purple", "rebeccapurple",
+    "red", "rosybrown", "royalblue", "saddlebrown", "salmon", "sandybrown", "seagreen", "seashell", "sienna",
+    "silver", "skyblue", "slateblue", "slategray", "slategrey", "snow", "springgreen", "steelblue", "tan", "teal",
+    "thistle", "tomato", "turquoise", "violet", "wheat", "white", "whitesmoke", "yellow", "yellowgreen",
+    "AccentColor", "AccentColorText", "ActiveText", "ButtonBorder", "ButtonFace", "ButtonText", "Canvas",
+    "CanvasText", "Field", "FieldText", "GrayText", "Highlight", "HighlightText", "LinkText", "Mark", "MarkText",
+    "SelectedItem", "SelectedItemText", "VisitedText",
+];
 
 /// Inline object/array scales resolve locally, so only string scales map.
 fn scale_name_by_css_property(config: &PropConfigMap) -> FxHashMap<String, String> {
@@ -1546,25 +1686,25 @@ pub(crate) fn is_external_file(file: &str, external_dirs: &[String]) -> bool {
 
 fn shed_unresolved_aliases_in_styles(
     styles: &mut ResolvedStyles,
-    scale_family: &FxHashSet<String>,
+    scale_check: &ScaleCheck<'_>,
     file: &str,
     component: &str,
     diagnostics: &mut Vec<CssDiagnostic>,
 ) {
     shed_unresolved_alias_decls(
         &mut styles.declarations,
-        scale_family,
+        scale_check,
         file,
         component,
         diagnostics,
     );
     for (_, decls) in &mut styles.pseudo_selectors {
-        shed_unresolved_alias_decls(decls, scale_family, file, component, diagnostics);
+        shed_unresolved_alias_decls(decls, scale_check, file, component, diagnostics);
     }
     for group in &mut styles.conditioned {
         shed_unresolved_alias_decls(
             &mut group.declarations,
-            scale_family,
+            scale_check,
             file,
             component,
             diagnostics,
@@ -1788,24 +1928,24 @@ fn warn_invalid_opacity_modifiers(
 /// and each leak is diagnosed once, on its defining component.
 fn shed_unresolved_aliases(
     css: &mut ComponentCss,
-    scale_family: &FxHashSet<String>,
+    scale_check: &ScaleCheck<'_>,
     file: &str,
     component: &str,
     diagnostics: &mut Vec<CssDiagnostic>,
 ) {
     if let Some(base) = css.base.as_mut() {
-        shed_unresolved_aliases_in_styles(base, scale_family, file, component, diagnostics);
+        shed_unresolved_aliases_in_styles(base, scale_check, file, component, diagnostics);
     }
     for vc in &mut css.variants {
         for (_, styles) in &mut vc.options {
-            shed_unresolved_aliases_in_styles(styles, scale_family, file, component, diagnostics);
+            shed_unresolved_aliases_in_styles(styles, scale_check, file, component, diagnostics);
         }
     }
     for styles in &mut css.compounds {
-        shed_unresolved_aliases_in_styles(styles, scale_family, file, component, diagnostics);
+        shed_unresolved_aliases_in_styles(styles, scale_check, file, component, diagnostics);
     }
     for (_, styles) in &mut css.states {
-        shed_unresolved_aliases_in_styles(styles, scale_family, file, component, diagnostics);
+        shed_unresolved_aliases_in_styles(styles, scale_check, file, component, diagnostics);
     }
 }
 
@@ -3612,7 +3752,7 @@ fn run_with_system_floor(
         Vec<(BTreeMap<String, Value>, String)>, // POST-MERGE compound configs
     );
     let mut evaluated: FxHashMap<String, EvalEntry> = FxHashMap::default();
-    let scale_family_props = scale_family_css_properties(&inputs.config);
+    let scale_family_props = scale_family_css_properties(&inputs.config, &inputs.theme);
     let scale_names = if inputs.external_dirs.is_empty() {
         FxHashMap::default()
     } else {
@@ -3830,7 +3970,10 @@ fn run_with_system_floor(
 
                 shed_unresolved_aliases(
                     &mut component_css,
-                    &scale_family_props,
+                    &ScaleCheck {
+                        family: &scale_family_props,
+                        external: is_external_file(file_path, &inputs.external_dirs),
+                    },
                     file_path,
                     &chain.descriptor.binding,
                     &mut diagnostics,
@@ -6294,15 +6437,15 @@ mod tests {
             false,
         )
         .unwrap();
-        let props = scale_family_css_properties(&inputs.config);
-        assert!(props.contains("padding"));
-        assert!(props.contains("padding-left"));
-        assert!(props.contains("padding-right"));
+        let props = scale_family_css_properties(&inputs.config, &inputs.theme);
+        assert!(props.contains_key("padding"));
+        assert!(props.contains_key("padding-left"));
+        assert!(props.contains_key("padding-right"));
         // Scale-less config entries carry no theme meaning.
-        assert!(!props.contains("display"));
+        assert!(!props.contains_key("display"));
         // Color-family pass-throughs join without a propConfig entry.
-        assert!(props.contains("outline-color"));
-        assert!(props.contains("border-inline-start-color"));
+        assert!(props.contains_key("outline-color"));
+        assert!(props.contains_key("border-inline-start-color"));
     }
 
     #[test]
