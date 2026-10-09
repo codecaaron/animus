@@ -307,7 +307,7 @@ function compilePattern(raw: string): (full: string, rel: string) => boolean {
 }
 
 /** Minimal glob → RegExp: `**` spans segments, `*`/`?` stay within one. */
-function globToRegExp(glob: string): RegExp {
+export function globToRegExp(glob: string): RegExp {
   let out = '';
   let i = 0;
   const normalized = glob.split('\\').join('/');

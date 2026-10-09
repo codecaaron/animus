@@ -1,8 +1,20 @@
-import { existsSync, readFileSync, statSync } from 'fs';
-import { dirname, extname, isAbsolute, join, relative, resolve } from 'path';
+import { existsSync, readFileSync, realpathSync, statSync } from 'fs';
+import {
+  dirname,
+  extname,
+  isAbsolute,
+  join,
+  relative,
+  resolve,
+  sep,
+} from 'path';
 
+import { globToRegExp } from './core-options';
 import { discoverFiles } from './discover-files';
 import { isPathWithinRoot } from './source-identity';
+import { isJsonBlock, isJsonString } from './tsconfig-paths';
+
+import type { JsonValue } from './tsconfig-paths';
 
 export function findPackageRoot(absEntryPath: string): string {
   let pkgRoot = dirname(absEntryPath);
@@ -92,6 +104,54 @@ function sourceEntryForSpecifier(
   return resolveAbsolutePathSpecifier(sourceStem, extensionsSet);
 }
 
+/**
+ * A package's `sideEffects` field, decoded the way Vite reads it: a boolean
+ * as written, or the list's globs, one with no `/` matching the basename
+ * anywhere and any other rooted at the package. Undefined without a readable
+ * field, or with glob syntax this matcher lacks (braces, classes, negation,
+ * extglobs), which leaves the bundler's side-effectful default.
+ */
+function readPackageSideEffects(
+  pkgRoot: string
+): boolean | RegExp[] | undefined {
+  let manifest: JsonValue;
+  try {
+    manifest = JSON.parse(readFileSync(join(pkgRoot, 'package.json'), 'utf-8'));
+  } catch {
+    return undefined;
+  }
+  const field = isJsonBlock(manifest) ? manifest.sideEffects : undefined;
+  if (field === true || field === false) return field;
+  if (!Array.isArray(field)) return undefined;
+  const globs = field.filter(isJsonString);
+  if (globs.some((glob) => /[{}[\]()!+@]/.test(glob))) return undefined;
+  return globs.map((glob) =>
+    globToRegExp(glob.includes('/') ? glob.replace(/^\.?\//, '') : `**/${glob}`)
+  );
+}
+
+function matchesSideEffects(
+  globs: readonly RegExp[],
+  pkgRoot: string,
+  absFiles: readonly string[]
+): boolean {
+  return absFiles.some((file) => {
+    const relPath = relative(pkgRoot, file).split(sep).join('/');
+    return globs.some((glob) => glob.test(relPath));
+  });
+}
+
+/** Installed content is release content, and unpacking can leave any file
+ *  times, so only a package whose real path is outside `node_modules`, such
+ *  as a workspace link, is judged stale by them. */
+function isInstalledPackage(pkgRoot: string): boolean {
+  let realRoot = pkgRoot;
+  try {
+    realRoot = realpathSync(pkgRoot);
+  } catch {}
+  return realRoot.split(/[\\/]/).includes('node_modules');
+}
+
 function distEntryIsStale(
   absEntry: string,
   srcDir: string,
@@ -119,6 +179,11 @@ export interface CollectedExternalPackages {
   /** specifier → rootDir-relative module-resolution entry. */
   packageMap: Record<string, string>;
   sourceEntries: Map<string, string>;
+  /** specifier → its source entry's side effects, from the owning package's
+   *  `sideEffects`. The source entry stands in for the entry it replaces, so
+   *  either path matching a listed glob keeps side effects. Absent when the
+   *  package declares nothing. */
+  sourceEntrySideEffects: Map<string, boolean>;
   /** Absolute directories for bundler loader allowlisting. */
   packageDirs: string[];
   /** Absolute package dir → every declared specifier that claimed it, in
@@ -162,6 +227,32 @@ export async function collectExternalPackageSources(opts: {
   const pushed = new Set<string>();
   const packageMap: Record<string, string> = {};
   const sourceEntries = new Map<string, string>();
+  const sourceEntrySideEffects = new Map<string, boolean>();
+  /** `replaced` names the entry the redirect stands in for; it is only
+   *  needed, and so only resolved, for a glob list. */
+  const redirect = async (
+    specifier: string,
+    srcEntry: string,
+    pkgRoot: string,
+    replaced: () => Promise<string | null>
+  ): Promise<void> => {
+    sourceEntries.set(specifier, srcEntry);
+    const field = readPackageSideEffects(pkgRoot);
+    if (field === undefined) return;
+    if (field === true || field === false) {
+      sourceEntrySideEffects.set(specifier, field);
+      return;
+    }
+    const replacedEntry = await replaced();
+    sourceEntrySideEffects.set(
+      specifier,
+      matchesSideEffects(
+        field,
+        pkgRoot,
+        replacedEntry ? [srcEntry, replacedEntry] : [srcEntry]
+      )
+    );
+  };
   const packageDirs: string[] = [];
   const dirOwnerSets: Record<string, string[]> = {};
   const dirExtensions: Record<string, string[]> = {};
@@ -210,7 +301,8 @@ export async function collectExternalPackageSources(opts: {
       );
       if (srcEntry) {
         packageMap[specifier] = relative(rootDir, srcEntry);
-        sourceEntries.set(specifier, srcEntry);
+        const replaced = absEntry;
+        await redirect(specifier, srcEntry, pkgRoot, async () => replaced);
       } else {
         packageMap[specifier] = relative(rootDir, absEntry);
       }
@@ -227,14 +319,22 @@ export async function collectExternalPackageSources(opts: {
           );
           if (rootEntry) {
             packageMap[packageName] = relative(rootDir, rootEntry);
-            sourceEntries.set(packageName, rootEntry);
+            await redirect(packageName, rootEntry, pkgRoot, async () => {
+              try {
+                return await resolveSpecifier(packageName);
+              } catch {
+                return null;
+              }
+            });
           }
         }
       }
 
       const pkgFiles = walkPackageSources(srcDir, extensionsSet);
 
-      staleDist = distEntryIsStale(absEntry, srcDir, pkgFiles);
+      staleDist =
+        !isInstalledPackage(pkgRoot) &&
+        distEntryIsStale(absEntry, srcDir, pkgFiles);
 
       for (const pkgFile of pkgFiles) {
         const relPath = relative(rootDir, pkgFile);
@@ -313,6 +413,7 @@ export async function collectExternalPackageSources(opts: {
     entries,
     packageMap,
     sourceEntries,
+    sourceEntrySideEffects,
     packageDirs,
     dirOwnerSets,
     dirExtensions,
@@ -356,9 +457,14 @@ export function excludeCollectedPackages(
     packageMap[specifier] = relTarget;
   }
   const sourceEntries = new Map<string, string>();
+  const sourceEntrySideEffects = new Map<string, boolean>();
   for (const [specifier, absEntry] of collected.sourceEntries) {
     if (targetRejected(specifier, absEntry)) continue;
     sourceEntries.set(specifier, absEntry);
+    const sideEffects = collected.sourceEntrySideEffects.get(specifier);
+    if (sideEffects !== undefined) {
+      sourceEntrySideEffects.set(specifier, sideEffects);
+    }
   }
   const dirOwnerSets: Record<string, string[]> = {};
   for (const [dir, specs] of Object.entries(collected.dirOwnerSets)) {
@@ -383,6 +489,7 @@ export function excludeCollectedPackages(
     ),
     packageMap,
     sourceEntries,
+    sourceEntrySideEffects,
     packageDirs: collected.packageDirs.filter(
       (dir) => !rejectedDirs.includes(dir)
     ),
@@ -466,10 +573,45 @@ export function extractSystemFilePackages(systemFilePath: string): string[] {
     }
   };
 
+  /** The index after the string literal opening at `from`. */
+  const skipString = (from: number): number => {
+    const quote = source[from];
+    let pos = from + 1;
+    while (pos < source.length && source[pos] !== quote) {
+      pos += source[pos] === '\\' ? 2 : 1;
+    }
+    return pos + 1;
+  };
+
+  /** The index after the bracketed span opening at `from`, balanced across
+   *  `<>`, `()`, `[]` and `{}`, or -1 when it never closes. An arrow type's
+   *  `=>` closes nothing. */
+  const skipBalanced = (from: number): number => {
+    let depth = 0;
+    let pos = from;
+    while (pos < source.length) {
+      const ch = source[pos];
+      if (ch === "'" || ch === '"' || ch === '`') {
+        pos = skipString(pos);
+        continue;
+      }
+      if (source.startsWith('//', pos) || source.startsWith('/*', pos)) {
+        pos = skipTrivia(pos);
+        continue;
+      }
+      if ('<([{'.includes(ch)) depth++;
+      else if (')]}'.includes(ch) || (ch === '>' && source[pos - 1] !== '=')) {
+        depth--;
+        if (depth === 0) return pos + 1;
+      }
+      pos++;
+    }
+    return -1;
+  };
+
   // Primary form: createSystem(...).extend(a); `.from(a)` is its deprecated
   // spelling. Chains are followed only from a createSystem anchor, so
-  // `createTheme().extend()` grants no membership, and a kit reached through a
-  // local rebinding rather than its import name loses its CSS.
+  // `createTheme().extend()` grants no membership.
   const consumeChainLinks = (from: number): number => {
     let pos = from;
     for (;;) {
@@ -479,6 +621,12 @@ export function extractSystemFilePackages(systemFilePath: string): string[] {
       const method = IDENT_START_RE.exec(source.slice(cursor))?.[0];
       if (method !== 'extend' && method !== 'from') return pos;
       cursor = skipTrivia(cursor + method.length);
+      // Type arguments do not change the runtime inheritance edge.
+      if (source[cursor] === '<') {
+        const afterTypeArguments = skipBalanced(cursor);
+        if (afterTypeArguments === -1) return pos;
+        cursor = skipTrivia(afterTypeArguments);
+      }
       if (source[cursor] !== '(') return pos;
       cursor = skipTrivia(cursor + 1);
       const base = IDENT_START_RE.exec(source.slice(cursor))?.[0];
@@ -497,7 +645,63 @@ export function extractSystemFilePackages(systemFilePath: string): string[] {
     }
   };
 
+  // Every `const`/`let`/`var` binding by where its initializer starts, so a
+  // type annotation (`const ds: AppSystem = …`) still names the binding, and
+  // a binding whose initializer is a bare identifier records a local alias.
+  const bindingAt = new Map<number, string>();
+  const aliasOf = new Map<string, string>();
+  const declarationRe = /\b(?:const|let|var)\s+([a-zA-Z_$][a-zA-Z0-9_$]*)/g;
+  let declaration: RegExpExecArray | null;
+  while ((declaration = declarationRe.exec(source)) !== null) {
+    const name = declaration[1];
+    let cursor = skipTrivia(declaration.index + declaration[0].length);
+    if (source[cursor] === ':') {
+      // Skip the annotation to its top-level `=`; a `;` or `,` there, or a
+      // line that opens another declaration, means it has no initializer.
+      cursor++;
+      while (cursor < source.length) {
+        const ch = source[cursor];
+        if (ch === ';' || ch === ',') break;
+        if (
+          ch === '\n' &&
+          /^\s*(?:export\s+)?(?:const|let|var|function|class|type|interface|import)\b/.test(
+            source.slice(cursor + 1, cursor + 80)
+          )
+        ) {
+          break;
+        }
+        if (ch === '=' && source[cursor + 1] !== '>') break;
+        if ('<([{'.includes(ch) || ch === "'" || ch === '"' || ch === '`') {
+          const after = '<([{'.includes(ch)
+            ? skipBalanced(cursor)
+            : skipString(cursor);
+          if (after === -1) break;
+          cursor = after;
+          continue;
+        }
+        cursor = ch === '=' ? cursor + 2 : cursor + 1;
+      }
+    }
+    if (source[cursor] !== '=' || source[cursor + 1] === '=') continue;
+    const initializer = skipTrivia(cursor + 1);
+    bindingAt.set(initializer, name);
+    const target = IDENT_START_RE.exec(source.slice(initializer))?.[0];
+    if (!target) continue;
+    // `const base = kit;` and `const base = kit as KitSystem` are aliases;
+    // `const base = kit\n  .extend(…)` and `kit.system` are not.
+    const rest = source.slice(initializer + target.length);
+    if (
+      /^[ \t]*(?:(?:as|satisfies)\s[^;\n]*)?(?:\/\/[^\n]*)?(?:;|\r?\n(?!\s*[.([?`])|$)/.test(
+        rest
+      )
+    ) {
+      aliasOf.set(name, target);
+    }
+  }
+
   const boundIdentifierBefore = (index: number): string | null => {
+    const declared = bindingAt.get(index);
+    if (declared) return declared;
     const match = /([a-zA-Z_$][a-zA-Z0-9_$]*)\s*=\s*$/.exec(
       source.slice(0, index)
     );
@@ -576,8 +780,21 @@ export function extractSystemFilePackages(systemFilePath: string): string[] {
 
   const systemFileDir = dirname(systemFilePath);
   const packages = new Set<string>();
+  /** The import a local alias chain ends at, or the identifier itself. */
+  const throughAliases = (id: string): string => {
+    const seen = new Set<string>();
+    let current = id;
+    while (!importMap.has(current) && !seen.has(current)) {
+      seen.add(current);
+      const target = aliasOf.get(current);
+      if (!target) break;
+      current = target;
+    }
+    return current;
+  };
+
   for (const id of identifiers) {
-    const specifier = importMap.get(id);
+    const specifier = importMap.get(throughAliases(id));
     if (!specifier) continue;
 
     if (specifier.startsWith('.')) {
