@@ -2,9 +2,10 @@
 set -euo pipefail
 
 # Usage: build-consumer.sh [package script] [build root]
-# Runs the calling consumer's package script (default `build`) once that
-# script's build root (default the consumer itself) holds no output from an
-# earlier build and every workspace package it consumes is freshly built.
+# Runs the calling consumer's package script (default `build`) once the known
+# build output under its build root (default the consumer itself; relative to
+# the consumer unless absolute) is cleared and every workspace package it
+# consumes is freshly built. clear-consumer-output.ts names what is cleared.
 
 BUILD_SCRIPT="${1:-build}"
 BUILD_ROOT="${2:-.}"
@@ -24,9 +25,14 @@ if [ -z "$OWNER_PACKAGE" ]; then
   exit 2
 fi
 
+case "$BUILD_ROOT" in
+  /*) BUILD_PATH="$BUILD_ROOT" ;;
+  *) BUILD_PATH="$CALLER_DIR/$BUILD_ROOT" ;;
+esac
+
 cd "$ROOT"
 # First, so output from an earlier build never outlives a failed one.
-bun scripts/verify/clear-consumer-output.ts "$CALLER_DIR/$BUILD_ROOT"
+bun scripts/verify/clear-consumer-output.ts "$BUILD_PATH"
 source "$ROOT/scripts/verify/_preconditions.sh"
 
 if ! CLOSURE=$(bun scripts/verify/workspace-graph.ts closure "$OWNER_PACKAGE"); then

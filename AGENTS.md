@@ -151,7 +151,7 @@ This map routes an edit to the smallest sufficient claim plus any source-owned d
 
 `clean:light` — `.vite` + `dist/` (<1s); use when transforms seem stale. `clean:full` — adds Rust `target/` + `.node` binary (30-60s rebuild); use for NAPI errors or "nothing works." `clean` — legacy alias for `dist/` + `target/`.
 
-Consumer builds need no manual clean: every `verify:build` and `verify:prefixed` builds through `scripts/verify/build-consumer.sh [script] [build root]`, which first removes the ignored `.animus`, `.next`, `build`, `dist` and `tsconfig.tsbuildinfo` directly under the root it builds. It removes nothing, and fails, when git tracks a file inside that output.
+Every `verify:build` and `verify:prefixed` builds through `scripts/verify/build-consumer.sh [script] [build root]`, which first removes exactly `.animus`, `.next`, `build`, `dist` and `tsconfig.tsbuildinfo` directly under the root it builds. Other ignored state, such as `.svelte-kit`, `.react-router`, `.wrangler` and `out`, stays; clear it by hand when it matters. It removes nothing, and fails, unless git ignores every file in that output.
 
 ### Debugging Quick-Ref
 
