@@ -1,3 +1,4 @@
+import { collapseWhitespace, readEscape, startsEscape } from './css-escape';
 import { splitTopLevel } from './css-parse';
 import { MODE_SELECTOR } from './tokens';
 
@@ -19,17 +20,35 @@ export interface AnalyzedSelector {
 
 export const splitSelectorList = (raw: string): string[] =>
   splitTopLevel(raw, ',')
-    .map((part) => part.replace(/\s+/g, ' ').trim())
+    .map(collapseWhitespace)
     .filter((part) => part !== '');
 
-const isIdentStart = (char: string): boolean => /[A-Za-z_]/.test(char);
+// Non-ASCII code points are identifier characters; the engine writes them
+// unescaped.
+const isIdentStart = (char: string): boolean =>
+  /[A-Za-z_\u0080-\uFFFF]/.test(char);
 
-const isIdentChar = (char: string): boolean => /[A-Za-z0-9_-]/.test(char);
+const isIdentChar = (char: string): boolean =>
+  /[A-Za-z0-9_\u0080-\uFFFF-]/.test(char);
 
-const readIdent = (raw: string, from: number): string => {
+/** The identifier at `from`, escapes decoded, and the index just past it. */
+const readIdent = (
+  raw: string,
+  from: number
+): { name: string; end: number } => {
+  let name = '';
   let end = from;
-  while (end < raw.length && isIdentChar(raw[end])) end += 1;
-  return raw.slice(from, end);
+  while (end < raw.length) {
+    if (startsEscape(raw, end)) {
+      const escape = readEscape(raw, end);
+      name += escape.value;
+      end = escape.end;
+    } else if (isIdentChar(raw[end])) {
+      name += raw[end];
+      end += 1;
+    } else break;
+  }
+  return { name, end };
 };
 
 type Combinator = AncestorLink['combinator'];
@@ -84,6 +103,12 @@ const splitCompoundChain = (selector: string): CompoundChainLink[] => {
       closeBoundary();
     }
 
+    if (startsEscape(selector, index)) {
+      const { end } = readEscape(selector, index);
+      current += selector.slice(index, end);
+      index = end - 1;
+      continue;
+    }
     if (char === '"' || char === "'") {
       quote = char;
       current += char;
@@ -146,6 +171,7 @@ const analyzeCompound = (raw: string): CompoundAnalysis => {
             if (next === '\\') end += 1;
             else if (next === inner) inner = null;
           } else if (next === '"' || next === "'") inner = next;
+          else if (next === '\\') end += 1;
           else if (next === ']') break;
           end += 1;
         }
@@ -154,6 +180,11 @@ const analyzeCompound = (raw: string): CompoundAnalysis => {
       }
       depth += 1;
       atCompoundStart = false;
+      continue;
+    }
+    const escaped = startsEscape(raw, index);
+    if (escaped && depth > 0) {
+      index = readEscape(raw, index).end - 1;
       continue;
     }
     if (char === '(') {
@@ -167,24 +198,24 @@ const analyzeCompound = (raw: string): CompoundAnalysis => {
     if (depth > 0) continue;
 
     if (char === '.') {
-      const name = readIdent(raw, index + 1);
+      const { name, end } = readIdent(raw, index + 1);
       if (name !== '') classNames.push(name);
-      index += name.length;
+      index = end - 1;
       atCompoundStart = false;
       continue;
     }
     if (char === ':') {
       const doubled = raw[index + 1] === ':';
       const from = index + (doubled ? 2 : 1);
-      const name = readIdent(raw, from);
+      const { name, end } = readIdent(raw, from);
       if (name !== '') pseudo.push(`${doubled ? '::' : ':'}${name}`);
-      index = from + name.length - 1;
+      index = end - 1;
       atCompoundStart = false;
       continue;
     }
-    if (char === '*' || isIdentStart(char)) {
+    if (char === '*' || escaped || isIdentStart(char)) {
       if (atCompoundStart) hasTypeSelector = true;
-      if (isIdentStart(char)) index += readIdent(raw, index).length - 1;
+      if (char !== '*') index = readIdent(raw, index).end - 1;
       atCompoundStart = false;
       continue;
     }
@@ -200,7 +231,7 @@ const analyzeCompound = (raw: string): CompoundAnalysis => {
 };
 
 export const analyzeSelector = (raw: string): AnalyzedSelector => {
-  const selector = raw.replace(/\s+/g, ' ').trim();
+  const selector = collapseWhitespace(raw);
   const chain = splitCompoundChain(selector);
   const parts = chain.map((link) => analyzeCompound(link.compound));
 
