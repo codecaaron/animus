@@ -26,6 +26,22 @@ import type {
   AnimusWrappedComponent,
 } from './types/component';
 
+/** `T`'s declared keys, without a string index signature. */
+type KnownKeys<T> = keyof {
+  [K in keyof T as string extends K ? never : K]: T[K];
+};
+
+/**
+ * The options an extension inherits on the axis `PropKey`. Redeclaring the
+ * axis merges its options at runtime, so a default may name any of them. An
+ * axis the parent never declared resolves through the extension's string
+ * index to a table with no declared options.
+ */
+type InheritedOptions<Variants, PropKey extends string> = Variants[PropKey &
+  keyof Variants] extends { variants: infer Options }
+  ? Extract<KnownKeys<Options>, string>
+  : never;
+
 /**
  * The inherited custom props without those `Own` redeclares, then `Own`.
  * Key remapping keeps the known keys beside the extension's index signature,
@@ -384,7 +400,9 @@ class AnimusExtendedWithVariants<
     PropKey extends Readonly<string> = 'variant',
   >(options: {
     prop?: PropKey;
-    defaultVariant?: Extract<keyof Props, string>;
+    defaultVariant?:
+      | Extract<keyof Props, string>
+      | InheritedOptions<Variants, PropKey>;
     base?: ThemedCSSProps<Base, PropRegistry>;
     variants: ThemedCSSPropMap<Props, PropRegistry>;
   }) {
@@ -435,7 +453,9 @@ class AnimusExtendedWithBase<
     PropKey extends Readonly<string> = 'variant',
   >(options: {
     prop?: PropKey;
-    defaultVariant?: Extract<keyof Props, string>;
+    defaultVariant?:
+      | Extract<keyof Props, string>
+      | InheritedOptions<Variants, PropKey>;
     base?: ThemedCSSProps<Base, PropRegistry>;
     variants: ThemedCSSPropMap<Props, PropRegistry>;
   }) {

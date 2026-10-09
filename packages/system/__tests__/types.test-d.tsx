@@ -949,6 +949,13 @@ function TypeTests() {
   <BigCard size="xl" />;
   <BigCard size="sm" intent="primary" />;
 
+  // Inherited options are valid defaults when an extension redeclares the axis.
+  BaseCard.extend().variant({
+    prop: 'size',
+    defaultVariant: 'sm',
+    variants: { xl: { p: 16, fontSize: 16 } },
+  });
+
   const ElevatedCard = BaseCard.extend()
     .variant({
       prop: 'elevation',
