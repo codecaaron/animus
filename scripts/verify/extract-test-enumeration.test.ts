@@ -19,6 +19,7 @@ const ENGINE_BOUND = new Set([
   'canary.test.ts',
   'property-diagnostics.test.ts',
   'prefix-contextual-vars.test.ts',
+  'skipped-sources.test.ts',
   'static-css-overrides.test.ts',
 ]);
 

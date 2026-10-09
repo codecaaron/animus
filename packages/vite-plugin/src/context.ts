@@ -418,9 +418,11 @@ export class PluginContext {
   }
 
   /** Runs project analysis and updates every manifest-derived state. Returns
-   *  false when nothing published, and the caller must roll its cache back. */
+   *  false when nothing published, and the caller must roll its cache back.
+   *  While a source is skipped, its renders are unseen, so nothing is pruned. */
   runAnalysis(
-    fileEntries: Array<{ path: string; source: string; hash?: string }>
+    fileEntries: Array<{ path: string; source: string; hash?: string }>,
+    skippedOriginals: readonly string[] = []
   ): boolean {
     let result: ProjectAnalysisResult;
     try {
@@ -437,7 +439,7 @@ export class PluginContext {
         externalDirs: this.externalPackageDirs.map((dir) =>
           relative(this.rootDir, dir)
         ),
-        devMode: !this.emissionProd,
+        devMode: !this.emissionProd || skippedOriginals.length > 0,
         warn: (m) => this.warn(m),
         info: (m) => this.log(m),
         strict: this.options.strict,
@@ -577,7 +579,11 @@ export class PluginContext {
       // rejected reset leaves the last-good transform engine usable.
       if (reloadingSystem) clearEngineCache(this.engineApi);
       options?.beforeAnalysis?.(accepted);
-      const ok = this.runAnalysis(accepted.analysisEntries) !== false;
+      const ok =
+        this.runAnalysis(
+          accepted.analysisEntries,
+          accepted.skippedOriginals
+        ) !== false;
       if (!ok) return { ok, accepted, endedHold: false, redeliver: [] };
       this.publishSourceIngestion(accepted);
       published = true;

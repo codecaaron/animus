@@ -5,6 +5,15 @@ See [Conventional Commits](https://conventionalcommits.org) for commit guideline
 
 ## Unreleased
 
+**A skipped source no longer costs its components their CSS.** When a
+non-strict build skips a source file, such as an MDX file that fails to
+compile or whose `@mdx-js/mdx` peer is missing, the analysis cannot see what
+it renders. Production builds pruned the options only that file used:
+`<R size="lg">` in a skipped MDX file lost `lg`. While any file is skipped,
+nothing is pruned, so every component, variant option and state is kept,
+and the skip warning now says so. `strict` builds still fail on a skipped
+file.
+
 **`cloneElement` overrides keep their CSS.** Production builds dropped the
 variant and state options a `cloneElement` call sets:
 `cloneElement(<Button size="sm" />, { size: 'lg' })` kept only `sm`. Overrides

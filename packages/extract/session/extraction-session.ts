@@ -260,6 +260,9 @@ export class ExtractionSession {
   /** Configured external files that could not be read. Incremental passes
    *  re-collect nothing, so they replay these instead of passing strict. */
   private ingestionFailureDiagnostics: ManifestDiagnostic[] = [];
+  /** Whether the corpus being analyzed left a file out, whose renders the
+   *  analysis cannot see. */
+  private skippedSources = false;
   /** Full package-resolution map from the last full pipeline — replayed by
    *  incremental passes (sourceEntries alone omits dist-resolved packages). */
   private lastPackageMap: Record<string, string> = {};
@@ -719,6 +722,7 @@ export class ExtractionSession {
           externalFileOwners: this.externalFileOwners,
         });
         this.throwOnAbortedParse(ingested);
+        this.skippedSources = ingested.skippedOriginals !== undefined;
         if (this.systemReloadOwed) {
           this.log(
             'system reload: publishing the reload a parse hold deferred'
@@ -1049,6 +1053,7 @@ export class ExtractionSession {
       try {
         accepted = await this.corpus.prepare(rawEntries);
         this.throwOnAbortedParse(accepted);
+        this.skippedSources = accepted.skippedOriginals !== undefined;
       } catch (err) {
         this.debouncePending.clear();
         this.writeAnalysisStatus('failed', pending, String(err));
@@ -1365,7 +1370,8 @@ export class ExtractionSession {
       externalDirs: this.externalPackageDirs.map((dir) =>
         relative(this.rootDir!, dir)
       ),
-      devMode: this.engineDevMode(devMode),
+      // A skipped file may render any option, so nothing is pruned.
+      devMode: this.engineDevMode(devMode) || this.skippedSources,
     };
 
     this.writeAnalysisStatus('analyzing', pending);

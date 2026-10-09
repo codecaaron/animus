@@ -6,6 +6,7 @@ import { contentHash } from '../pipeline/content-hash';
 import { createSourceCorpus } from '../pipeline/source-corpus';
 import {
   abortedFacts,
+  ADVISORY_DIAGNOSTIC,
   emptyFacts,
   factsExtractor,
   FATAL_DIAGNOSTIC,
@@ -100,6 +101,57 @@ describe('createSourceCorpus', () => {
     expect(accepted.originalEntries.map((e) => e.path)).toEqual([ok.path]);
     expect(accepted.analysisEntries.map((e) => e.path)).toEqual([ok.path]);
     expect(Object.keys(accepted.ownership)).toEqual([ok.path]);
+  });
+
+  test.each([
+    {
+      code: 'SOURCE_MDX_DEPENDENCY_MISSING' as const,
+      originalPath: 'src/Doc.mdx',
+      message: "Install optional peer dependency '@mdx-js/mdx'",
+    },
+    {
+      code: 'SOURCE_MDX_PARSE_ERROR' as const,
+      originalPath: 'src/Doc.mdx',
+      message: 'Expected a closing tag for `<R>`',
+    },
+    FATAL_DIAGNOSTIC,
+  ])(
+    '$code names its skipped original and what skipping costs',
+    async (diagnostic) => {
+      const warnings: string[] = [];
+      const host = makeHost({ warnings });
+      const corpus = createSourceCorpus(
+        host,
+        scriptedSourceIngestor(host, { diagnostics: [diagnostic] })
+      );
+
+      const accepted = await corpus.prepare([
+        entry(diagnostic.originalPath),
+        ok,
+      ]);
+
+      expect(accepted.skippedOriginals).toEqual([diagnostic.originalPath]);
+      expect(warnings).toEqual([
+        expect.stringContaining(
+          'its renders are not seen, so nothing is pruned'
+        ),
+      ]);
+    }
+  );
+
+  test('nothing skipped: no skipped originals, and an advisory skips nothing', async () => {
+    const warnings: string[] = [];
+    const host = makeHost({ warnings });
+    const corpus = createSourceCorpus(
+      host,
+      scriptedSourceIngestor(host, { diagnostics: [ADVISORY_DIAGNOSTIC] })
+    );
+
+    const accepted = await corpus.prepare([entry('src/app.js'), ok]);
+
+    expect(accepted.skippedOriginals).toBeUndefined();
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).not.toContain('nothing is pruned');
   });
 
   test('strict mode throws out of prepare and publishes nothing', async () => {

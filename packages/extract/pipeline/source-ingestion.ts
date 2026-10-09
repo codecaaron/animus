@@ -183,6 +183,9 @@ export interface SourceIngestionResult {
   /** Originals owning an analysis entry whose parse aborted; see
    *  `SourceCorpus.rejection`. Absent when every parse completed. */
   abortedParses?: AbortedParse[];
+  /** Originals a fatal diagnostic left out. Their renders are unseen, so an
+   *  analysis without them must not prune. Absent when none was left out. */
+  skippedOriginals?: string[];
 }
 
 export interface AbortedParse {
@@ -666,6 +669,7 @@ export function withoutInvalidOriginals(
       analysisPaths.has(entry.path)
     ),
     ownership,
+    skippedOriginals: [...invalidOriginals].sort(),
   };
 }
 
@@ -715,6 +719,10 @@ export interface SourceIngestor {
   markPublished(result: SourceIngestionResult): void;
 }
 
+/** What a skipped file costs: the analysis never sees what it renders. */
+const SKIPPED_SOURCE_COST =
+  'skipped: its renders are not seen, so nothing is pruned and every component, variant option and state is kept until it is analyzed';
+
 /**
  * One ingestion policy point for every host: a host supplies only a prefix, a
  * strict flag, and a warn sink; policy and per-host memos stay here.
@@ -750,7 +758,10 @@ export function createSourceIngestor(host: SourceIngestorHost): SourceIngestor {
         throw new Error(`${host.prefix} ${lines.join(`\n${host.prefix} `)}`);
       }
       for (const diagnostic of diagnostics) {
-        const line = `${diagnostic.code} ${diagnostic.originalPath}: ${diagnostic.message}`;
+        const skipped = isAdvisorySourceDiagnostic(diagnostic)
+          ? ''
+          : ` (${SKIPPED_SOURCE_COST})`;
+        const line = `${diagnostic.code} ${diagnostic.originalPath}: ${diagnostic.message}${skipped}`;
         let warned = warnedByOriginal.get(diagnostic.originalPath);
         if (!warned) {
           warned = new Set();
