@@ -88,16 +88,19 @@ export const spawnAnimus = (args) => {
     signal(name) {
       if (child.exitCode === null) child.kill(name);
     },
+    // Clearing the deadline once the race settles lets the process end as
+    // soon as its work does, instead of when the timer would have fired.
     exit(timeoutMs = 30_000) {
-      return Promise.race([
-        exited,
-        new Promise((_, rej) =>
-          setTimeout(
-            () => rej(new Error('timed out waiting for exit')),
-            timeoutMs
-          )
-        ),
-      ]);
+      let timer;
+      const deadline = new Promise((_, rej) => {
+        timer = setTimeout(
+          () => rej(new Error('timed out waiting for exit')),
+          timeoutMs
+        );
+      });
+      return Promise.race([exited, deadline]).finally(() =>
+        clearTimeout(timer)
+      );
     },
   };
 };
