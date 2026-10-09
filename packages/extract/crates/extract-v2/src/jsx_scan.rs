@@ -850,7 +850,6 @@ mod tests {
                 DynamicExpressionKind::ResponsiveObjectDynamic,
             ),
             ("[value]", DynamicExpressionKind::Array),
-            ("value as number", DynamicExpressionKind::Other),
         ];
 
         for (expression, expected_kind) in cases {
@@ -879,6 +878,8 @@ mod tests {
                 DynamicExpressionKind::Identifier,
                 "spacing",
             ),
+            // Runtime-erased TypeScript wrappers unwrap as parentheses do.
+            ("value as number", DynamicExpressionKind::Identifier, "value"),
         ];
 
         for (expression, expected_kind, expected_slice) in cases {
