@@ -4868,8 +4868,9 @@ fn run_with_system_floor(
         }
     }
 
-    let global_css_raw = if let Some(blocks) = &inputs.global_style_blocks {
+    let (global_css_raw, unlayered_global_css) = if let Some(blocks) = &inputs.global_style_blocks {
         let css = crate::theme::resolve_all_global_blocks(blocks, &resolve_ctx);
+        let unlayered = crate::theme::resolve_unlayered_global_blocks(blocks, &resolve_ctx);
         // Global blocks come from system config, not a resolved source file.
         drain_transform_failures(
             &transform_failures,
@@ -4880,9 +4881,9 @@ fn run_with_system_floor(
             &mut deferred_errors,
         );
         drain_strict_token_misses(&token_misses, "system", "system", &mut diagnostics);
-        css
+        (css, unlayered)
     } else {
-        String::new()
+        (String::new(), String::new())
     };
     let keyframes_css_raw = if let Some(blocks) = &inputs.keyframes_blocks {
         let css = crate::theme::resolve_all_keyframes_blocks(blocks, &resolve_ctx);
@@ -4922,6 +4923,12 @@ fn run_with_system_floor(
             layer_name("global"),
             combined_global
         );
+    }
+    // Blocks registered `unlayered` follow, outside every layer: an
+    // unlayered rule outranks any layered one wherever it sits.
+    if !unlayered_global_css.is_empty() {
+        sheets.global.push_str(&unlayered_global_css);
+        sheets.global.push('\n');
     }
 
     // Global is excluded here; it flows through `sheets`.

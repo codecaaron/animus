@@ -92,8 +92,13 @@ export interface FontFace {
 export interface GlobalStyleBlock {
   __brand: 'GlobalStyleBlock';
   styles: GlobalStyleMap;
-  /** Rendered ahead of the block's selector rules in `@layer anm-global`. */
+  /** Rendered ahead of the block's selector rules. */
   fontFaces?: FontFace[];
+  /**
+   * Emitted outside every cascade layer, after `@layer anm-global`, so its
+   * rules can win over unlayered vendor CSS; otherwise in `anm-global`.
+   */
+  unlayered?: true;
 }
 
 export type GlobalStylesFactory<
@@ -102,7 +107,7 @@ export type GlobalStylesFactory<
   styles: {
     readonly [K in keyof Map]: ThemedCSSProps<Map[K], PropReg>;
   },
-  options?: { fontFaces?: readonly FontFace[] }
+  options?: { fontFaces?: readonly FontFace[]; unlayered?: boolean }
 ) => GlobalStyleBlock;
 
 export type CreateKeyframesFactory<
@@ -163,6 +168,7 @@ export interface VocabularyGlobalStyleEntry {
   readonly name: string;
   readonly styles: GlobalStyleMap;
   readonly fontFaces?: readonly FontFace[];
+  readonly unlayered?: true;
 }
 
 export interface VocabularyCollisionEntry {
@@ -213,6 +219,7 @@ type VocabularyEntryState =
       name: string;
       styles: GlobalStyleMap;
       fontFaces?: readonly FontFace[];
+      unlayered?: true;
       origin: string;
     };
 
@@ -223,6 +230,7 @@ type VocabularyEntryInput =
       name: string;
       styles: GlobalStyleMap;
       fontFaces?: readonly FontFace[];
+      unlayered?: true;
     };
 
 /**
@@ -383,7 +391,9 @@ export interface SystemBundle<
   ): SystemBundle<PropReg, GroupReg, Conds, Sels, Vocab | (keyof M & string)>;
   /**
    * Keys equal the block's module-scope export name. Blocks and keyframes
-   * collections share ONE vocabulary name-space.
+   * collections share ONE vocabulary name-space. Blocks marked `unlayered`
+   * emit after `@layer anm-global`, outside every layer, in registration
+   * order.
    */
   registerGlobalStyles<M extends Record<string, RegisterableGlobalStyles>>(
     map: M &
@@ -936,6 +946,7 @@ export class SystemBuilder<
         name: entry.name,
         styles: entry.styles,
         ...(entry.fontFaces ? { fontFaces: entry.fontFaces } : {}),
+        ...(entry.unlayered ? { unlayered: true as const } : {}),
       })),
     ];
     if (inheritedEntries.length > 0) {
@@ -1254,13 +1265,14 @@ export class SystemBuilder<
 
     const createGlobalStyles = ((
       styles: GlobalStyleMap,
-      options?: { fontFaces?: readonly FontFace[] }
+      options?: { fontFaces?: readonly FontFace[]; unlayered?: boolean }
     ): GlobalStyleBlock => ({
       __brand: 'GlobalStyleBlock' as const,
       styles,
       ...(options?.fontFaces?.length
         ? { fontFaces: [...options.fontFaces] }
         : {}),
+      ...(options?.unlayered ? { unlayered: true as const } : {}),
     })) as GlobalStylesFactory<PropReg>;
 
     const createKeyframes = ((frames: Record<string, KeyframeFrameMap>) =>
@@ -1369,6 +1381,7 @@ export class SystemBuilder<
                   ) as readonly FontFace[],
                 }
               : {}),
+            ...(blockValue.unlayered ? { unlayered: true as const } : {}),
           });
         }
         return registerEntries('registerGlobalStyles', incoming);
@@ -1412,6 +1425,7 @@ export class SystemBuilder<
                   name: entry.name,
                   styles: entry.styles,
                   ...(entry.fontFaces ? { fontFaces: entry.fontFaces } : {}),
+                  ...(entry.unlayered ? { unlayered: true as const } : {}),
                 })
               )
           ),

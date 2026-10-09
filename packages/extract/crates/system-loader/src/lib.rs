@@ -1648,7 +1648,7 @@ fn extract_vocabulary_record<'js>(
     keyframeCount: keyframes.length,
     keyframes: Object.fromEntries(keyframes.map((entry) => [entry.name, entry.frames])),
     globalStyleCount: globalStyles.length,
-    globalStyles: Object.fromEntries(globalStyles.map((entry) => [entry.name, { styles: entry.styles, fontFaces: entry.fontFaces || [] }])),
+    globalStyles: Object.fromEntries(globalStyles.map((entry) => [entry.name, Object.assign({ styles: entry.styles, fontFaces: entry.fontFaces || [] }, entry.unlayered === true ? { unlayered: true } : {})])),
     witnesses: collisions.concat(legacyVerbs),
   });
 })()"#;
