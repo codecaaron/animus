@@ -64,7 +64,7 @@ function stripJsonc(text: string): string {
  * Exactly what `JSON.parse` produces for a consumer-authored tsconfig:
  * nothing is guaranteed, so every value is guarded at the file boundary.
  */
-type JsonValue =
+export type JsonValue =
   | null
   | boolean
   | number
@@ -72,13 +72,13 @@ type JsonValue =
   | readonly JsonValue[]
   | JsonBlock;
 
-interface JsonBlock {
+export interface JsonBlock {
   readonly [key: string]: JsonValue;
 }
 
 /** `Object(value) === value` holds for exactly the blocks and lists
  *  `JSON.parse` produces; the `[object Object]` tag separates the two. */
-function isJsonBlock(value: JsonValue | undefined): value is JsonBlock {
+export function isJsonBlock(value: JsonValue | undefined): value is JsonBlock {
   return (
     Object(value) === value &&
     Object.prototype.toString.call(value) === '[object Object]'
@@ -95,7 +95,7 @@ function isJsonKeyed(
 
 /** A JSON string, excluding the boxed `String` object, which no path join
  *  accepts. */
-function isJsonString(value: JsonValue | undefined): value is string {
+export function isJsonString(value: JsonValue | undefined): value is string {
   return (
     Object(value) !== value &&
     Object.prototype.toString.call(value) === '[object String]'
