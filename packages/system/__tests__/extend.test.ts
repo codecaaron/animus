@@ -12,6 +12,7 @@ import {
   type RegistrySnapshot,
   type TransformFn,
 } from '../src';
+import { color } from '../src/groups';
 import { resolveValue } from '../src/runtime/resolveClasses';
 
 function prop(overrides: Partial<Prop> = {}): Prop {
@@ -378,6 +379,14 @@ describe('SystemBuilder extend()', () => {
     expect(() => createSystem().extend(groupKit).extend(propKit)).toThrow(
       /prop "card".*collides with an existing group name/
     );
+  });
+
+  it('accepts a group named after one of its own props, as the stock color group is', () => {
+    const kit = () => createSystem().addGroup('color', color).build().seal();
+
+    expect(() =>
+      createSystem().extend(kit()).extend(kit()).build().seal()
+    ).not.toThrow();
   });
 
   // Function equality cannot be inferred from source text: equal-looking

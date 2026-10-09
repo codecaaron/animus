@@ -823,9 +823,15 @@ export class SystemBuilder<
     const incomingOrigin = `extended source #${sourceIndex}`;
     const provenance = new Map(this.#extendProvenance);
 
+    // A group may be named after one of its own props, as the stock `color`
+    // group is; `addGroup` builds it, so extending it must accept it too.
+    const groupsByName = this.#groupRegistry as Record<
+      string,
+      readonly string[]
+    >;
     const nextProps: Record<string, SystemProp> = { ...this.#propRegistry };
     for (const [name, incoming] of Object.entries(snapshot.props)) {
-      if (name in this.#groupRegistry) {
+      if (name in groupsByName && !groupsByName[name].includes(name)) {
         throw new Error(
           `extend: prop "${name}" (${incomingOrigin}) collides with an ` +
             `existing group name (${this.#originOf(`group:${name}`)}). ` +
@@ -853,7 +859,7 @@ export class SystemBuilder<
     for (const [name, incoming] of Object.entries(snapshot.groups)) {
       const existing = nextGroups[name];
       if (!existing) {
-        if (name in nextProps) {
+        if (name in nextProps && !incoming.includes(name)) {
           throw new Error(
             `extend: group name "${name}" (${incomingOrigin}) collides with ` +
               `an existing prop name (${this.#originOf(`prop:${name}`)}). ` +
