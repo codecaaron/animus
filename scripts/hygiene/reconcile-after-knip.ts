@@ -2,8 +2,15 @@
 // Knip's fixer is a single-pass text splice with no post-state reasoning, so it
 // leaves 0-byte modules (TS2306) and stale barrel re-exports (TS2305).
 
-import { readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { isJsonString } from '@animus-ui/assertions';
+import {
+  existsSync,
+  readdirSync,
+  readFileSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
+import { extname, join, resolve } from 'node:path';
 
 import {
   type Node,
@@ -15,7 +22,8 @@ import {
   parseProgram,
   stringField,
 } from './_ast';
-import { emitReceipt } from './_receipts';
+import { type Receipt, emitReceipt } from './_receipts';
+import { parseReceipts } from './presenter';
 
 function computeLineStarts(text: string): number[] {
   const starts = [0];
@@ -117,19 +125,24 @@ function collectBindingNames(name: Node, out: Set<string>): void {
   }
 }
 
-// VariableDeclaration is absent: it may bind many names via destructuring.
-const NAMED_DECLARATION_TYPES = new Set([
-  'FunctionDeclaration',
-  'ClassDeclaration',
-  'TSInterfaceDeclaration',
-  'TSTypeAliasDeclaration',
-  'TSEnumDeclaration',
-]);
+function sourceSpecifier(node: Node): string | undefined {
+  const sourceNode = childNode(node, 'source');
+  return sourceNode === undefined
+    ? undefined
+    : stringField(sourceNode, 'value');
+}
 
-export function getExportsOfFile(filePath: string): Set<string> {
+interface ModuleExports {
+  names: Set<string>;
+  /** The specifiers of the module's `export * from` statements. */
+  stars: string[];
+}
+
+function moduleExports(filePath: string): ModuleExports {
   const source = readFileSync(filePath, 'utf-8');
   const program = parseProgram(filePath, source);
   const exports = new Set<string>();
+  const stars: string[] = [];
 
   const visit = (node: Node): void => {
     if (node.type === 'ExportNamedDeclaration') {
@@ -148,7 +161,9 @@ export function getExportsOfFile(filePath: string): Set<string> {
           const id = childNode(d, 'id');
           if (id !== undefined) collectBindingNames(id, exports);
         }
-      } else if (NAMED_DECLARATION_TYPES.has(decl.type)) {
+      } else {
+        // Every other declaration, `declare function` and `namespace`
+        // included, binds the one name at its `id`.
         const declaredName = identifierName(decl, 'id');
         if (declaredName !== undefined) exports.add(declaredName);
       }
@@ -162,40 +177,128 @@ export function getExportsOfFile(filePath: string): Set<string> {
       exports.add('default');
       return;
     }
-    // `export * from './x'` contributes no named exports of this file.
+    // `export * as ns from './x'` binds one name; `export * from './x'`
+    // passes the target's names through, which `reachableExports` follows.
+    if (node.type === 'ExportAllDeclaration') {
+      const exported = childNode(node, 'exported');
+      if (exported !== undefined) {
+        const namespace = stringField(exported, 'name');
+        if (namespace !== undefined) exports.add(namespace);
+        return;
+      }
+      const spec = sourceSpecifier(node);
+      if (spec !== undefined) stars.push(spec);
+    }
   };
 
   for (const stmt of childNodeList(program, 'body')) visit(stmt);
-  return exports;
+  return { names: exports, stars };
+}
+
+export function getExportsOfFile(filePath: string): Set<string> {
+  return moduleExports(filePath).names;
+}
+
+/**
+ * The names a module exports, with those its `export * from` statements pass
+ * through (never `default`). `undefined` when a star leads to a package or to
+ * a path that does not resolve, since the module could then export any name.
+ */
+function reachableExports(
+  filePath: string,
+  visited = new Set<string>()
+): Set<string> | undefined {
+  const { names, stars } = moduleExports(filePath);
+  visited.add(filePath);
+  for (const spec of stars) {
+    const target = resolveRelativeModule(filePath, spec);
+    if (target === undefined) return undefined;
+    if (visited.has(target)) continue;
+    const passed = reachableExports(target, visited);
+    if (passed === undefined) return undefined;
+    for (const name of passed) if (name !== 'default') names.add(name);
+  }
+  return names;
+}
+
+const SCRIPT_FILE = /\.[cm]?[jt]sx?$/;
+
+// TypeScript resolves a JavaScript extension to the source compiled to it
+// before the file itself, so `./asset.js` names `./asset.ts`.
+const SOURCE_EXTENSIONS = new Map([
+  ['.js', ['.ts', '.tsx', '.d.ts']],
+  ['.jsx', ['.tsx', '.d.ts']],
+  ['.mjs', ['.mts', '.d.mts']],
+  ['.cjs', ['.cts', '.d.cts']],
+]);
+
+/** The files a relative specifier can name, in TypeScript's order. */
+function moduleCandidates(fromFile: string, specifier: string): string[] {
+  if (!specifier.startsWith('./') && !specifier.startsWith('../')) return [];
+  const dir = fromFile.substring(0, fromFile.lastIndexOf('/'));
+  const base = resolve(dir, specifier);
+  const extension = extname(base);
+  const sources = (SOURCE_EXTENSIONS.get(extension) ?? []).map(
+    (source) => `${base.slice(0, -extension.length)}${source}`
+  );
+  return [
+    ...sources,
+    base, // explicit extension in specifier
+    `${base}.ts`,
+    `${base}.tsx`,
+    `${base}.d.ts`,
+    `${base}/index.ts`,
+    `${base}/index.tsx`,
+    `${base}/index.d.ts`,
+  ];
+}
+
+function isFile(path: string): boolean {
+  try {
+    return statSync(path).isFile();
+  } catch {
+    return false;
+  }
 }
 
 function resolveRelativeModule(
   fromFile: string,
   specifier: string
 ): string | undefined {
-  if (!specifier.startsWith('./') && !specifier.startsWith('../'))
-    return undefined;
-  const dir = fromFile.substring(0, fromFile.lastIndexOf('/'));
-  const base = resolve(dir, specifier);
-  const candidates = [
-    base, // explicit extension in specifier
-    `${base}.ts`,
-    `${base}.tsx`,
-    // Declaration files are live targets: an unresolvable target counts as
-    // deleted, so omitting `.d.ts` would strip live re-exports.
-    `${base}.d.ts`,
-    `${base}/index.ts`,
-    `${base}/index.tsx`,
-    `${base}/index.d.ts`,
-  ];
-  for (const c of candidates) {
-    try {
-      if (statSync(c).isFile()) return c;
-    } catch {
-      /* not found, try next */
+  return moduleCandidates(fromFile, specifier).find(isFile);
+}
+
+/** What knip removed in this hygiene run, as its Layer D receipts record. */
+export interface KnipRemovals {
+  files: Set<string>;
+  /** The export names removed from each file. */
+  exports: Map<string, Set<string>>;
+}
+
+export function knipRemovals(receipts: Receipt[], root: string): KnipRemovals {
+  const removals: KnipRemovals = { files: new Set(), exports: new Map() };
+  for (const receipt of receipts) {
+    if (receipt.layer !== 'D' || receipt.verb !== 'delete') continue;
+    if (receipt.kind === 'file') {
+      removals.files.add(resolve(root, receipt.target));
+    }
+    const name = receipt.extras?.name;
+    if (
+      receipt.kind === 'export-clause' &&
+      name !== undefined &&
+      isJsonString(name)
+    ) {
+      // The target is `<file>:<line>` or `<file>:<name>`.
+      const file = resolve(
+        root,
+        receipt.target.slice(0, receipt.target.lastIndexOf(':'))
+      );
+      const names = removals.exports.get(file) ?? new Set<string>();
+      names.add(name);
+      removals.exports.set(file, names);
     }
   }
-  return undefined;
+  return removals;
 }
 
 function lineOf(lineStarts: number[], pos: number): number {
@@ -272,7 +375,17 @@ export function computeStaleElementRanges(
   return ranges;
 }
 
-export function fixStaleBarrelReExports(files: string[]): string[] {
+/**
+ * Removes re-exports that knip's removals in this run left dangling. A
+ * re-export is removed only when `removed` proves it dead: its target file was
+ * deleted, or a name it imports was removed from the target or from a module
+ * the target's star re-exports reach. Anything else stays, so a resolver or
+ * export-reading gap keeps a live export rather than deleting it.
+ */
+export function fixStaleBarrelReExports(
+  files: string[],
+  removed: KnipRemovals
+): string[] {
   const fixed: string[] = [];
 
   for (const file of files) {
@@ -293,22 +406,25 @@ export function fixStaleBarrelReExports(files: string[]): string[] {
     }[] = [];
 
     for (const stmt of childNodeList(program, 'body')) {
-      const sourceNode = childNode(stmt, 'source');
+      const spec = sourceSpecifier(stmt);
       const isNamedFrom =
-        stmt.type === 'ExportNamedDeclaration' && sourceNode !== undefined;
+        stmt.type === 'ExportNamedDeclaration' && spec !== undefined;
       const isStarFrom = stmt.type === 'ExportAllDeclaration';
       if (!isNamedFrom && !isStarFrom) continue;
-
-      const spec =
-        sourceNode === undefined ? undefined : stringField(sourceNode, 'value');
       if (spec === undefined) continue;
       const isRelative = spec.startsWith('./') || spec.startsWith('../');
       if (!isRelative) continue;
 
-      const target = resolveRelativeModule(file, spec);
+      const candidates = moduleCandidates(file, spec);
+      const target = candidates.find(isFile);
       const stmtLine = lineOf(lineStarts, stmt.start);
 
       if (!target) {
+        // A path alias or an unknown extension also fails to resolve; only a
+        // file knip deleted is gone.
+        if (!candidates.some((candidate) => removed.files.has(candidate))) {
+          continue;
+        }
         wholeRemovals.push(fullNodeRange(source, stmt));
         emitReceipt('D1', 'delete', `${file}:${stmtLine}`, 'export-clause', {
           reason: 'target-deleted',
@@ -316,6 +432,8 @@ export function fixStaleBarrelReExports(files: string[]): string[] {
         });
         continue;
       }
+      // Only a script declares exports to check; a JSON or CSS target stays.
+      if (!SCRIPT_FILE.test(target)) continue;
 
       let targetSize: number;
       try {
@@ -330,15 +448,23 @@ export function fixStaleBarrelReExports(files: string[]): string[] {
         continue;
       }
 
-      let targetExports: Set<string>;
+      const modules = new Set<string>();
+      let targetExports: Set<string> | undefined;
       try {
-        targetExports = getExportsOfFile(target);
+        targetExports = reachableExports(target, modules);
       } catch {
-        continue;
+        // An unreadable target keeps every re-export of it.
       }
+      if (targetExports === undefined) continue;
+
+      const knipRemoved = (name?: string): boolean =>
+        [...modules].some((module) => {
+          const names = removed.exports.get(module);
+          return names !== undefined && (name === undefined || names.has(name));
+        });
 
       if (isStarFrom) {
-        if (targetExports.size === 0) {
+        if (targetExports.size === 0 && knipRemoved()) {
           wholeRemovals.push(fullNodeRange(source, stmt));
           emitReceipt('D1', 'delete', `${file}:${stmtLine}`, 'export-clause', {
             reason: 'target-empty',
@@ -357,7 +483,7 @@ export function fixStaleBarrelReExports(files: string[]): string[] {
         const exportedName = identifierName(el, 'exported');
         const originalName = identifierName(el, 'local');
         if (exportedName === undefined || originalName === undefined) continue;
-        if (!targetExports.has(originalName)) {
+        if (!targetExports.has(originalName) && knipRemoved(originalName)) {
           stale.add(exportedName);
         }
       }
@@ -425,11 +551,19 @@ export function collectSourceFiles(root: string): string[] {
 function main(): void {
   const root = process.cwd();
   const files = collectSourceFiles(root);
+  // Without the run's receipts nothing is proven removed, and no re-export is.
+  const receiptsFile = process.env.RECEIPTS_FILE ?? '';
+  const removed = knipRemovals(
+    receiptsFile !== '' && existsSync(receiptsFile)
+      ? parseReceipts(readFileSync(receiptsFile, 'utf-8'))
+      : [],
+    root
+  );
 
   const empty = fixEmptyModules(files);
   // Order matters: once `export {};` is written, the barrel pass sees a
   // zero-export module and strips named re-exports of it.
-  const barrels = fixStaleBarrelReExports(files);
+  const barrels = fixStaleBarrelReExports(files, removed);
 
   console.log(
     `reconcile-after-knip: wrote export {} to ${empty.length} empty file(s); pruned stale re-exports in ${barrels.length} barrel(s)`

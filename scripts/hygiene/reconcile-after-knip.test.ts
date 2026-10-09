@@ -10,6 +10,7 @@ import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
 
 import {
+  type KnipRemovals,
   fixEmptyModules,
   fixStaleBarrelReExports,
   getExportsOfFile,
@@ -17,6 +18,21 @@ import {
 
 function scratch(): string {
   return mkdtempSync(join(tmpdir(), 'reconcile-'));
+}
+
+// What knip removed in a scenario: export names by file, and deleted files.
+// A test that checks a form stays live lists its name as removed too, so only
+// the export reader can keep it.
+function removed(
+  exports: Record<string, string[]> = {},
+  files: string[] = []
+): KnipRemovals {
+  return {
+    files: new Set(files),
+    exports: new Map(
+      Object.entries(exports).map(([file, names]) => [file, new Set(names)])
+    ),
+  };
 }
 
 function write(dir: string, rel: string, content: string): string {
@@ -141,13 +157,16 @@ describe('fixStaleBarrelReExports — TS2305 shape', () => {
   test('strips a single stale named re-export from a barrel', () => {
     const dir = scratch();
     try {
-      write(dir, 'packages/a/src/source.ts', 'export {};\n');
+      const source = write(dir, 'packages/a/src/source.ts', 'export {};\n');
       const barrel = write(
         dir,
         'packages/a/src/index.ts',
         `export { EmberGlow } from './source';\n`
       );
-      const fixed = fixStaleBarrelReExports([barrel]);
+      const fixed = fixStaleBarrelReExports(
+        [barrel],
+        removed({ [source]: ['EmberGlow'] })
+      );
       expect(fixed).toEqual([barrel]);
       const out = readFileSync(barrel, 'utf-8');
       expect(out).not.toContain('EmberGlow');
@@ -159,13 +178,20 @@ describe('fixStaleBarrelReExports — TS2305 shape', () => {
   test('preserves live bindings, strips only stale ones', () => {
     const dir = scratch();
     try {
-      write(dir, 'packages/a/src/source.ts', 'export const Keep = 1;\n');
+      const source = write(
+        dir,
+        'packages/a/src/source.ts',
+        'export const Keep = 1;\n'
+      );
       const barrel = write(
         dir,
         'packages/a/src/index.ts',
         `export { Keep, Drop } from './source';\n`
       );
-      const fixed = fixStaleBarrelReExports([barrel]);
+      const fixed = fixStaleBarrelReExports(
+        [barrel],
+        removed({ [source]: ['Keep', 'Drop'] })
+      );
       expect(fixed).toEqual([barrel]);
       const out = readFileSync(barrel, 'utf-8');
       expect(out).toContain('Keep');
@@ -180,7 +206,7 @@ describe('fixStaleBarrelReExports — TS2459 shape (declared-but-not-exported)',
   test('strips name when target has declaration but no `export` keyword', () => {
     const dir = scratch();
     try {
-      write(
+      const source = write(
         dir,
         'packages/a/src/source.ts',
         `
@@ -193,7 +219,10 @@ const Dead = 2;
         'packages/a/src/index.ts',
         `export { Live, Dead } from './source';\n`
       );
-      const fixed = fixStaleBarrelReExports([barrel]);
+      const fixed = fixStaleBarrelReExports(
+        [barrel],
+        removed({ [source]: ['Dead'] })
+      );
       expect(fixed).toEqual([barrel]);
       const out = readFileSync(barrel, 'utf-8');
       expect(out).toContain('Live');
@@ -208,7 +237,7 @@ describe('fixStaleBarrelReExports — whole-declaration removal', () => {
   test('removes entire `export { X } from` when X is stale (all specifiers dead)', () => {
     const dir = scratch();
     try {
-      write(dir, 'packages/a/src/source.ts', 'export {};\n');
+      const source = write(dir, 'packages/a/src/source.ts', 'export {};\n');
       const barrel = write(
         dir,
         'packages/a/src/index.ts',
@@ -219,7 +248,10 @@ describe('fixStaleBarrelReExports — whole-declaration removal', () => {
         ].join('\n')
       );
       write(dir, 'packages/a/src/other-source.ts', 'export const Keep = 1;\n');
-      const fixed = fixStaleBarrelReExports([barrel]);
+      const fixed = fixStaleBarrelReExports(
+        [barrel],
+        removed({ [source]: ['Dead'] })
+      );
       expect(fixed).toEqual([barrel]);
       const out = readFileSync(barrel, 'utf-8');
       expect(out).toContain('./other-source');
@@ -238,7 +270,10 @@ describe('fixStaleBarrelReExports — whole-declaration removal', () => {
         'packages/a/src/index.ts',
         `export { Zombie } from './gone';\n`
       );
-      const fixed = fixStaleBarrelReExports([barrel]);
+      const fixed = fixStaleBarrelReExports(
+        [barrel],
+        removed({}, [join(dir, 'packages/a/src/gone.ts')])
+      );
       expect(fixed).toEqual([barrel]);
       const out = readFileSync(barrel, 'utf-8');
       expect(out).not.toContain('Zombie');
@@ -260,7 +295,10 @@ describe('fixStaleBarrelReExports — `export * from` handling', () => {
         'packages/a/src/index.ts',
         `export * from './source';\n`
       );
-      const fixed = fixStaleBarrelReExports([barrel]);
+      const fixed = fixStaleBarrelReExports(
+        [barrel],
+        removed({ [empty]: ['Gone'] })
+      );
       expect(fixed).toEqual([]);
       expect(readFileSync(barrel, 'utf-8')).toBe(`export * from './source';\n`);
     } finally {
@@ -276,7 +314,7 @@ describe('fixStaleBarrelReExports — `export * from` handling', () => {
         'packages/a/src/index.ts',
         `export { SomeThing } from 'some-external-package';\n`
       );
-      const fixed = fixStaleBarrelReExports([barrel]);
+      const fixed = fixStaleBarrelReExports([barrel], removed());
       expect(fixed).toEqual([]);
       expect(readFileSync(barrel, 'utf-8')).toContain(
         "from 'some-external-package'"
@@ -294,7 +332,7 @@ describe('fixStaleBarrelReExports — `export * from` handling', () => {
         'packages/a/src/index.ts',
         ["import X from './target';", 'export { X };', ''].join('\n')
       );
-      const fixed = fixStaleBarrelReExports([barrel]);
+      const fixed = fixStaleBarrelReExports([barrel], removed());
       expect(fixed).toEqual([]);
       expect(readFileSync(barrel, 'utf-8')).toContain('export { X };');
     } finally {
@@ -307,13 +345,20 @@ describe('fixStaleBarrelReExports — type-only re-exports', () => {
   test('preserves `export type` prefix when stripping', () => {
     const dir = scratch();
     try {
-      write(dir, 'packages/a/src/source.ts', 'export type Live = number;\n');
+      const source = write(
+        dir,
+        'packages/a/src/source.ts',
+        'export type Live = number;\n'
+      );
       const barrel = write(
         dir,
         'packages/a/src/index.ts',
         `export type { Live, Dead } from './source';\n`
       );
-      const fixed = fixStaleBarrelReExports([barrel]);
+      const fixed = fixStaleBarrelReExports(
+        [barrel],
+        removed({ [source]: ['Dead'] })
+      );
       expect(fixed).toEqual([barrel]);
       const out = readFileSync(barrel, 'utf-8');
       expect(out).toContain('export type');
@@ -369,13 +414,16 @@ describe('getExportsOfFile — binding-pattern walker', () => {
         'scripts/hygiene/__fixtures__/reconciler/destructured-binding-export.ts.in'
       );
       const sourceContent = readFileSync(fixturePath, 'utf-8');
-      write(dir, 'packages/a/src/system.ts', sourceContent);
+      const system = write(dir, 'packages/a/src/system.ts', sourceContent);
       const barrel = write(
         dir,
         'packages/a/src/index.ts',
         `export { ds } from './system';\n`
       );
-      const fixed = fixStaleBarrelReExports([barrel]);
+      const fixed = fixStaleBarrelReExports(
+        [barrel],
+        removed({ [system]: ['ds'] })
+      );
       expect(fixed).toEqual([]);
       expect(readFileSync(barrel, 'utf-8')).toContain(
         "export { ds } from './system';"
@@ -395,13 +443,16 @@ describe('fixStaleBarrelReExports — span-preserving partial removals', () => {
         'scripts/hygiene/__fixtures__/reconciler/jsdoc-above-retained.ts.in'
       );
       const barrelSource = readFileSync(fixturePath, 'utf-8');
-      write(
+      const target = write(
         dir,
         'packages/a/src/target.ts',
         'export const a = 1;\nexport const c = 3;\n'
       );
       const barrel = write(dir, 'packages/a/src/index.ts', barrelSource);
-      const fixed = fixStaleBarrelReExports([barrel]);
+      const fixed = fixStaleBarrelReExports(
+        [barrel],
+        removed({ [target]: ['b'] })
+      );
       expect(fixed).toEqual([barrel]);
       const out = readFileSync(barrel, 'utf-8');
       expect(out).toContain('/** doc-A */');
@@ -421,13 +472,16 @@ describe('fixStaleBarrelReExports — span-preserving partial removals', () => {
         'scripts/hygiene/__fixtures__/reconciler/type-modifier-mixed.ts.in'
       );
       const barrelSource = readFileSync(fixturePath, 'utf-8');
-      write(
+      const target = write(
         dir,
         'packages/a/src/target.ts',
         'export type Foo = number;\nexport const bar = 1;\n'
       );
       const barrel = write(dir, 'packages/a/src/index.ts', barrelSource);
-      const fixed = fixStaleBarrelReExports([barrel]);
+      const fixed = fixStaleBarrelReExports(
+        [barrel],
+        removed({ [target]: ['baz'] })
+      );
       expect(fixed).toEqual([barrel]);
       const out = readFileSync(barrel, 'utf-8');
       expect(out).toContain('type Foo');
@@ -446,9 +500,16 @@ describe('fixStaleBarrelReExports — span-preserving partial removals', () => {
         'scripts/hygiene/__fixtures__/reconciler/biome-ignore-directive.ts.in'
       );
       const barrelSource = readFileSync(fixturePath, 'utf-8');
-      write(dir, 'packages/a/src/target.ts', 'export const a = 1;\n');
+      const target = write(
+        dir,
+        'packages/a/src/target.ts',
+        'export const a = 1;\n'
+      );
       const barrel = write(dir, 'packages/a/src/index.ts', barrelSource);
-      const fixed = fixStaleBarrelReExports([barrel]);
+      const fixed = fixStaleBarrelReExports(
+        [barrel],
+        removed({ [target]: ['b'] })
+      );
       expect(fixed).toEqual([barrel]);
       const out = readFileSync(barrel, 'utf-8');
       expect(out).toContain('biome-ignore');
@@ -466,7 +527,7 @@ describe('fixStaleBarrelReExports — CJS export = (Tier 3 corner case)', () => 
   test('does not strip a live `default as X` re-export from an `export =` target', () => {
     const dir = scratch();
     try {
-      write(
+      const target = write(
         dir,
         'packages/a/src/cjs-target.ts',
         ['const X = 42;', 'export = X;', ''].join('\n')
@@ -477,7 +538,10 @@ describe('fixStaleBarrelReExports — CJS export = (Tier 3 corner case)', () => 
       );
       const barrelSource = readFileSync(fixturePath, 'utf-8');
       const barrel = write(dir, 'packages/a/src/index.ts', barrelSource);
-      const fixed = fixStaleBarrelReExports([barrel]);
+      const fixed = fixStaleBarrelReExports(
+        [barrel],
+        removed({ [target]: ['default'] })
+      );
       expect(fixed).toEqual([]);
       expect(readFileSync(barrel, 'utf-8')).toBe(barrelSource);
     } finally {
@@ -487,19 +551,22 @@ describe('fixStaleBarrelReExports — CJS export = (Tier 3 corner case)', () => 
 });
 
 describe('fixStaleBarrelReExports — .d.ts targets (Tier 3 corner case)', () => {
-  // An unresolvable target is treated as deleted, so a `.d.ts` target must
-  // resolve; leaving a stale re-export beats stripping a live one.
+  // A `.d.ts` target must resolve for its exports to be read; leaving a stale
+  // re-export beats stripping a live one.
   test('does not strip a live extensionless re-export whose target is a .d.ts file', () => {
     const dir = scratch();
     try {
-      write(
+      const types = write(
         dir,
         'packages/a/src/types.d.ts',
         'export declare const X: number;\n'
       );
       const barrelSource = "export { X } from './types';\n";
       const barrel = write(dir, 'packages/a/src/index.ts', barrelSource);
-      const fixed = fixStaleBarrelReExports([barrel]);
+      const fixed = fixStaleBarrelReExports(
+        [barrel],
+        removed({ [types]: ['X'] })
+      );
       expect(fixed).toEqual([]);
       expect(readFileSync(barrel, 'utf-8')).toBe(barrelSource);
     } finally {
