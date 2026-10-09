@@ -5,6 +5,14 @@ See [Conventional Commits](https://conventionalcommits.org) for commit guideline
 
 ## Unreleased
 
+**Namespace objects passed as values keep their CSS.** A namespace import
+used as a value, as in `<MDXProvider components={ui}>`, `Object.values(ui)`,
+`ui[name]` or `{ ...ui }`, can render any component the module exports, with
+any props. Production builds used to keep only the options those components'
+visible renders set. Every component the namespace's module exports, through
+re-exports and barrels, now keeps every option it declares. Member renders
+such as `<ui.Button size="lg" />` stay precise.
+
 **A skipped source no longer costs its components their CSS.** When a
 non-strict build skips a source file, such as an MDX file that fails to
 compile or whose `@mdx-js/mdx` peer is missing, or a configured package file

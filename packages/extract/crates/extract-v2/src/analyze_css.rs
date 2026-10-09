@@ -3618,6 +3618,14 @@ fn run_with_system_floor(
         let mut names: Vec<&str> = Vec::new();
         for name in &ff.value_escapes {
             names.push(name);
+            // A namespace object hands over everything its module exports.
+            if let Some(module) = ff
+                .namespace_imports
+                .get(name)
+                .and_then(|source| resolve_import_source(path, source, files, inputs))
+            {
+                escaped_ids.extend(exported_component_ids(&module, files, inputs, &evaluated_ids));
+            }
             // An escaping compose family hands over its slots.
             if let Some(members) = member_bindings.get(path) {
                 escaped_ids.extend(
@@ -6890,6 +6898,35 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
     fn direct_renders_still_prune_unused_options() {
         let app = "import { R } from './r';\nexport const App = () => <R size=\"sm\" active />;\n";
         assert_eq!(kept_options(&[("r.tsx", RECIPE), ("app.tsx", app)]), (vec!["sm"], vec!["active"]));
+    }
+
+    /// A namespace object used as a value hands over every component its
+    /// module exports, through barrels; its member renders stay precise.
+    #[test]
+    fn namespace_objects_used_as_values_keep_every_option_of_their_exports() {
+        let kept = |setup: &str| {
+            let app = format!(
+                "import {{ R }} from './r';\nimport * as ui from './index';\n{setup}\n\
+                 export const App = () => <R size=\"sm\" active />;\n"
+            );
+            kept_options(&[
+                ("r.tsx", RECIPE),
+                ("index.ts", "export * from './r';\n"),
+                ("app.tsx", app.as_str()),
+            ])
+        };
+        for setup in [
+            "export const P = ({ children }) => <MDXProvider components={ui}>{children}</MDXProvider>;",
+            "export const all = Object.values(ui);",
+            "export const pick = (name) => ui[name];",
+            "export const merged = { ...ui };",
+        ] {
+            assert_eq!(kept(setup), (vec!["sm", "md", "lg"], vec!["active", "busy"]), "{setup}");
+        }
+        assert_eq!(
+            kept("export const Big = () => <ui.R size=\"lg\" />;"),
+            (vec!["sm", "lg"], vec!["active"])
+        );
     }
 
     /// `<ui.R>` through `import * as ui` records its props for `R`, directly
