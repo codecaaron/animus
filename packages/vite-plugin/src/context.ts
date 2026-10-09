@@ -8,6 +8,7 @@ import {
   clearEngineCache,
   diffFilePlans,
   enforceExternalTokenContracts,
+  findPackageRoot,
   createSourceCorpus,
   findSheetAssetSpecifiers,
   generatedModuleCode,
@@ -27,8 +28,8 @@ import {
   unresolvableIncludesMessage,
   runStructuralSelfCheck,
 } from '@animus-ui/extract/pipeline';
-import { statSync } from 'fs';
-import { isAbsolute, relative, resolve } from 'path';
+import { existsSync, statSync } from 'fs';
+import { isAbsolute, join, relative, resolve } from 'path';
 
 import {
   RESOLVED_COMPONENTS_ID,
@@ -401,7 +402,21 @@ export class PluginContext {
         prefix: this.options.prefix,
         prefixContextualVars: this.options.prefixContextualVars,
       });
-      const deps = this.system.dependencies ?? [];
+      // A package's manifest decides, through `exports`, which of its files
+      // the loader reads, so an edit to it reloads the system too. The app's
+      // own manifest decides nothing the loader reads.
+      const appManifest = join(
+        findPackageRoot(this.resolvedSystemPath),
+        'package.json'
+      );
+      const manifests = new Set<string>();
+      for (const dep of this.system.dependencies ?? []) {
+        const manifest = join(findPackageRoot(dep), 'package.json');
+        if (manifest !== appManifest && existsSync(manifest)) {
+          manifests.add(manifest);
+        }
+      }
+      const deps = [...(this.system.dependencies ?? []), ...manifests];
       const keys = new Set<string>();
       for (const key of toWatchKeys(this.resolvedSystemPath)) keys.add(key);
       for (const dep of deps) {
