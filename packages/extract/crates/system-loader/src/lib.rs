@@ -253,19 +253,32 @@ fn resolve_relative(base_dir: &Path, specifier: &str) -> Result<String, String> 
         return Ok(target.to_string_lossy().to_string());
     }
 
+    // Appended, not replaced: `./tokens.theme` names `tokens.theme.ts`.
+    // Extractor twin: `probe_files` in crates/extract-v2/src/analyze_css.rs.
+    let target_str = target.to_string_lossy().to_string();
     let extensions = [".ts", ".tsx", ".js", ".mjs"];
     for ext in &extensions {
-        let with_ext = target.with_extension(&ext[1..]);
+        let with_ext = PathBuf::from(format!("{}{}", target_str, ext));
         if with_ext.is_file() {
             return Ok(with_ext.to_string_lossy().to_string());
         }
     }
 
-    let index_files = ["index.ts", "index.js", "index.mjs"];
+    let index_files = ["index.ts", "index.tsx", "index.js", "index.mjs"];
     for idx in &index_files {
         let with_index = target.join(idx);
         if with_index.is_file() {
             return Ok(with_index.to_string_lossy().to_string());
+        }
+    }
+
+    // NodeNext specifiers name the emitted file: `./x.js` for `x.ts`.
+    if let Some(stem) = target_str.strip_suffix(".js") {
+        for ext in [".ts", ".tsx"] {
+            let source = PathBuf::from(format!("{}{}", stem, ext));
+            if source.is_file() {
+                return Ok(source.to_string_lossy().to_string());
+            }
         }
     }
 
