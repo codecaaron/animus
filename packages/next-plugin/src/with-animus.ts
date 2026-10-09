@@ -174,7 +174,12 @@ export function withAnimus(
 
         const rootDir = context.dir?.length ? context.dir : process.cwd();
 
-        const plugin = new AnimusWebpackPlugin(options);
+        // The session takes the host's mode, so `next dev`'s first full pass
+        // keeps unrendered CSS like every later dev pass.
+        const { mode } = resolveMode(options.mode, () =>
+          context.dev === true ? 'development' : 'production'
+        );
+        const plugin = new AnimusWebpackPlugin({ ...options, mode });
         plugin.setRootDir(rootDir);
         const sessionDir = plugin.sessionDir;
 
@@ -219,11 +224,7 @@ export function withAnimus(
         if (DefinePlugin) {
           config.plugins.push(
             new DefinePlugin({
-              __ANIMUS_DEV__: JSON.stringify(
-                resolveMode(options.mode, () =>
-                  context.dev === true ? 'development' : 'production'
-                ).mode === 'development'
-              ),
+              __ANIMUS_DEV__: JSON.stringify(mode === 'development'),
             })
           );
         }
@@ -332,7 +333,11 @@ async function wireTurbopack<Config extends NextOwnedConfig>(
   // the scan instead of closing the gap.
   const rootDir = process.cwd();
 
-  const session = new ExtractionSession(options);
+  const development = isTurbopackDevelopment();
+  const { mode } = resolveMode(options.mode, () =>
+    development ? 'development' : 'production'
+  );
+  const session = new ExtractionSession({ ...options, mode });
   liveTurbopackSession?.close();
   liveTurbopackSession = session;
   session.rootDir = rootDir;
@@ -343,7 +348,7 @@ async function wireTurbopack<Config extends NextOwnedConfig>(
   }
   await runSessionPipeline(session);
 
-  if (isTurbopackDevelopment()) {
+  if (development) {
     bindTurbopackWatchDeathReport(
       startTurbopackWatcher(session, rootDir),
       rootDir

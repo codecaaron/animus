@@ -1,7 +1,11 @@
 /** The supported consumer surface is the `animus` binary; the programmatic
  *  exports may change without semver ceremony. */
 
-import { AnimusConfigError } from '@animus-ui/extract/pipeline';
+import {
+  AnimusConfigError,
+  REPLACEABLE_DEFAULT_EXCLUDE,
+  STRUCTURAL_EXCLUDE,
+} from '@animus-ui/extract/pipeline';
 import { parseArgs } from 'node:util';
 
 import { EnvironmentFailure, err, runBuild, UsageFailure } from './build';
@@ -33,8 +37,10 @@ Options:
   --root <path>       Root every relative input resolves against
   --config <path>     Explicit config file (default: animus.config.* in root)
   --out-dir <path>    Artifact directory (default: <root>/.animus)
-  --exclude <glob>    Additional exclusion (repeatable; MERGES with defaults;
-                      an explicit exclude: [] in the config file means none)
+  --exclude <glob>    Exclusion (repeatable). With the config file's exclude,
+                      REPLACES the defaults (${REPLACEABLE_DEFAULT_EXCLUDE.join(', ')});
+                      exclude: [] in the config file means none.
+                      ${STRUCTURAL_EXCLUDE.join(', ')} are always excluded
   --mode <m>          'development' | 'production' (default: production)
   --targets <query>   Browserslist query for CSS lowering
   --strict            Fail on inputs that could not be read or resolved,

@@ -196,7 +196,8 @@ describe('withAnimus', () => {
     const config = wrapped.webpack?.({}, {});
     const plugin = injectedAnimusPlugin(config?.plugins);
 
-    expect(plugin.getOptions()).toEqual(options);
+    // With the mode resolved from the Next dev flag, absent here.
+    expect(plugin.getOptions()).toEqual({ ...options, mode: 'production' });
 
     expect(config?.module?.rules?.[0]?.use?.[0]?.options).toEqual({
       strict: true,

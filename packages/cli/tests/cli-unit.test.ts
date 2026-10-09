@@ -244,7 +244,7 @@ describe('config resolution', () => {
     }
   });
 
-  test('exclude flags merge with file patterns and the defaults', async () => {
+  test('exclude flags merge with file patterns and replace the defaults', async () => {
     const root = makeRoot();
     writeFileSync(
       join(root, 'animus.config.json'),
@@ -257,6 +257,8 @@ describe('config resolution', () => {
     expect(config.excludePatterns).toContain('node_modules');
     expect(config.excludePatterns).toContain('fixtures');
     expect(config.excludePatterns).toContain('**/*.stories.tsx');
+    expect(config.excludePatterns).not.toContain('dist');
+    expect(config.excludePatterns).not.toContain('.test.');
   });
 
   test('an explicit empty exclude list means no user exclusions, not the defaults', async () => {

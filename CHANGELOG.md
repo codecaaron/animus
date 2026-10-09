@@ -29,6 +29,18 @@ component, including an exported alias or one declared inside a function,
 keeps every variant and state option it declares, and a runtime slot for
 each custom prop, as a `{...props}` spread already does.
 
+**`next dev` keeps unused CSS from its first analysis.** Development never
+prunes, so a component or variant option that no render uses yet already
+has its CSS when a render first uses it. Under `next dev`, with webpack or
+Turbopack, the first analysis still pruned like a production build until an
+edit re-ran it. It now follows Next's dev signal; an explicit `mode` still
+wins.
+
+**The CLI help describes `--exclude` correctly.** It said the flag merged
+with the default exclusions. The flag, together with the config file's
+`exclude`, replaces them (`dist`, `.test.`, `.spec.`), as the code always
+did; `node_modules`, `.next` and `.animus` are always excluded.
+
 **System warnings print once per loaded system.** A registration that is
 dropped as invalid, and the other diagnostics a system carries, used to
 repeat on every analysis and hot update. They now print when the system
