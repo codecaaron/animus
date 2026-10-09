@@ -391,6 +391,10 @@ const IDENTITY_UNCERTAIN_TAG: &str = "animus.usage.identity-uncertain-tag";
 /// A warning: a variant prop, option or state name with whitespace names a
 /// class the element's class attribute splits, so its rule never applies.
 const CLASS_NAME_WHITESPACE: &str = "animus.chain.class-name-whitespace";
+/// An error, as the builder's own check throws on the same chain when it
+/// runs unextracted: a variant prop or state named after a system prop the
+/// component admits, so one value drives both.
+const STYLING_NAME_COLLISION: &str = "animus.chain.styling-name-collision";
 /// Warnings for losses the engine reported without a code before.
 const UNEXTRACTABLE_CHAIN: &str = "animus.chain.unextractable";
 const SKIPPED_VALUE: &str = "animus.chain.skipped-value";
@@ -430,6 +434,7 @@ pub(crate) const DIAGNOSTIC_CODES: &[(&str, &str)] = &[
     (UNSUPPORTED_PROPS_CONFIG, "error"),
     (UNSUPPORTED_DEFAULT_EXPORT, "error"),
     (UNSUPPORTED_NAMESPACE_ROOT, "error"),
+    (STYLING_NAME_COLLISION, "error"),
     (CONFIGURED_TRANSFORM_REJECTED, "error"),
     (STATIC_EVALUATION_UNAVAILABLE, "error"),
     (STRICT_TOKEN_MISS, "error"),
@@ -1790,6 +1795,49 @@ fn split_class_names(
                      its styles never apply — rename it without whitespace"
                 ),
                 Some(CLASS_NAME_WHITESPACE),
+            )
+        })
+        .collect()
+}
+
+/// The variant props and states, with their kind, that a component names
+/// after a system prop it admits; both sides include what it inherits.
+fn colliding_styling_names<'a>(
+    css: &'a ComponentCss,
+    admitted: Option<&FxHashSet<String>>,
+) -> Vec<(&'static str, &'a str)> {
+    let Some(admitted) = admitted else {
+        return Vec::new();
+    };
+    let variants = css.variants.iter().map(|variant| ("variant prop", variant.prop.as_str()));
+    let states = css.states.iter().map(|(state, _)| ("state", state.as_str()));
+    variants.chain(states).filter(|(_, name)| admitted.contains(*name)).collect()
+}
+
+/// Each collision the builder rejects, except one the parent has too, which
+/// was reported at the parent. `admitted_by` names a prop's admission.
+fn styling_name_collisions(
+    file: &str,
+    binding: &str,
+    collisions: Vec<(&str, &str)>,
+    inherited: &[(&str, &str)],
+    admitted_by: impl Fn(&str) -> String,
+) -> Vec<CssDiagnostic> {
+    collisions
+        .into_iter()
+        .filter(|collision| !inherited.contains(collision))
+        .map(|(kind, name)| {
+            diagnostic(
+                file,
+                binding,
+                "warn",
+                format!(
+                    "{kind} '{name}' in {file} collides with the system prop '{name}' admitted by \
+                     {}, so one value drives both — give the {kind} and the system prop different \
+                     names",
+                    admitted_by(name)
+                ),
+                Some(STYLING_NAME_COLLISION),
             )
         })
         .collect()
@@ -4433,15 +4481,47 @@ fn run_with_system_floor(
                     active_props
                 };
 
-                let parent_css = parent_map
-                    .get(component_id)
-                    .and_then(|parent_id| evaluated.get(parent_id))
-                    .map(|(parent_css, ..)| parent_css);
+                let parent_entry =
+                    parent_map.get(component_id).and_then(|parent_id| evaluated.get(parent_id));
                 diagnostics.extend(split_class_names(
                     file_path,
                     &chain.descriptor.binding,
                     &component_css,
-                    parent_css,
+                    parent_entry.map(|(parent_css, ..)| parent_css),
+                ));
+                let inherited_collisions =
+                    parent_entry.map_or_else(Vec::new, |(parent_css, _, _, parent_admitted, ..)| {
+                        colliding_styling_names(parent_css, parent_admitted.as_ref())
+                    });
+                // The nearest group up the extension lineage that lists the
+                // prop, else the prop admitted by name.
+                let admitted_by = |prop: &str| {
+                    let ancestors = std::iter::successors(parent_map.get(component_id), |id| {
+                        parent_map.get(*id)
+                    })
+                    .take(parent_map.len())
+                    .filter_map(|id| evaluated.get(id))
+                    .map(|(.., ancestor_groups, _, _)| ancestor_groups);
+                    std::iter::once(&active_group_names)
+                        .chain(ancestors)
+                        .flatten()
+                        .find(|group| {
+                            inputs
+                                .group_registry
+                                .get(*group)
+                                .is_some_and(|props| props.iter().any(|member| member == prop))
+                        })
+                        .map_or_else(
+                            || format!(".system({{ {prop}: true }})"),
+                            |group| format!("group '{group}'"),
+                        )
+                };
+                diagnostics.extend(styling_name_collisions(
+                    file_path,
+                    &chain.descriptor.binding,
+                    colliding_styling_names(&component_css, final_active_props.as_ref()),
+                    &inherited_collisions,
+                    admitted_by,
                 ));
                 evaluated.insert(
                     component_id.clone(),
