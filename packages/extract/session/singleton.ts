@@ -14,6 +14,7 @@ const SHARED_CSS_KEY = '__animus_shared_css__';
 const SHARED_SYSTEM_PROPS_KEY = '__animus_shared_system_props__';
 const SHARED_EXTERNAL_DIRS_KEY = '__animus_external_pkg_dirs__';
 const SHARED_EXTERNAL_ENTRIES_KEY = '__animus_external_source_entries__';
+const SHARED_EXTERNAL_SIDE_EFFECTS_KEY = '__animus_external_side_effects__';
 const ANALYZED_HASHES_KEY = '__animus_analyzed_hashes__';
 const REPLACEMENT_EPOCH_KEY = '__animus_replacement_epoch__';
 const WATCH_TRANSACTION_KEY = '__animus_watch_transaction__';
@@ -34,6 +35,7 @@ interface AnimusSingletonStore {
   [SHARED_SYSTEM_PROPS_KEY]: string;
   [SHARED_EXTERNAL_DIRS_KEY]: string[];
   [SHARED_EXTERNAL_ENTRIES_KEY]: Map<string, string>;
+  [SHARED_EXTERNAL_SIDE_EFFECTS_KEY]: Map<string, boolean>;
   [ANALYZED_HASHES_KEY]: Map<string, string> | null;
   [REPLACEMENT_EPOCH_KEY]: string | null;
   [WATCH_TRANSACTION_KEY]: Promise<void> | null;
@@ -118,6 +120,18 @@ export function getSharedExternalEntries(): Map<string, string> {
 
 export function setSharedExternalEntries(entries: Map<string, string>): void {
   singletonStore[SHARED_EXTERNAL_ENTRIES_KEY] = entries;
+}
+
+/** Specifier → its source entry's side effects, published with the shared
+ *  entries; absent leaves the bundler's own classification. */
+export function getSharedExternalSideEffects(): Map<string, boolean> {
+  return singletonStore[SHARED_EXTERNAL_SIDE_EFFECTS_KEY] || new Map();
+}
+
+export function setSharedExternalSideEffects(
+  sideEffects: Map<string, boolean>
+): void {
+  singletonStore[SHARED_EXTERNAL_SIDE_EFFECTS_KEY] = sideEffects;
 }
 
 type NullableSingletonKey =
@@ -329,6 +343,7 @@ export const SINGLETON_GLOBAL_KEYS = [
   SHARED_SYSTEM_PROPS_KEY,
   SHARED_EXTERNAL_DIRS_KEY,
   SHARED_EXTERNAL_ENTRIES_KEY,
+  SHARED_EXTERNAL_SIDE_EFFECTS_KEY,
   ANALYZED_HASHES_KEY,
   REPLACEMENT_EPOCH_KEY,
   WATCH_TRANSACTION_KEY,

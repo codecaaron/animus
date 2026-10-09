@@ -25,7 +25,11 @@ import { resolveHostMode, resolveHostOptions } from './options';
 
 import type { AnimusUnpluginOptions } from './options';
 import type { AnimusMode } from '@animus-ui/extract/pipeline';
-import type { UnpluginBuildContext, UnpluginFactory } from 'unplugin';
+import type {
+  ExternalIdResult,
+  UnpluginBuildContext,
+  UnpluginFactory,
+} from 'unplugin';
 
 /** Extension-free: esbuild picks loaders by extension. No `\0` prefix:
  *  webpack's virtual-module bridge requires plain ids. */
@@ -47,6 +51,9 @@ export interface HostState {
   cssText: string;
   systemPropsJs: string;
   kitRedirects: Map<string, string>;
+  /** Specifier → its redirect target's side effects; absent leaves the
+   *  bundler's own classification. */
+  kitSideEffects: Map<string, boolean>;
   redirectTargets: Set<string>;
   externalPackageDirs: string[];
   watchPaths: string[];
@@ -67,6 +74,7 @@ export function createHostState(): HostState {
     cssText: '',
     systemPropsJs: '',
     kitRedirects: new Map(),
+    kitSideEffects: new Map(),
     redirectTargets: new Set(),
     externalPackageDirs: [],
     watchPaths: [],
@@ -174,6 +182,30 @@ interface WebpackLikeCompiler {
   hooks: {
     done: { tap: (name: string, fn: () => void) => void };
     failed?: { tap: (name: string, fn: () => void) => void };
+    normalModuleFactory: {
+      tap: (
+        name: string,
+        fn: (nmf: {
+          hooks: {
+            afterResolve: {
+              tap: (
+                name: string,
+                fn: (resolveData: KitResolveData) => void
+              ) => void;
+            };
+          };
+        }) => void
+      ) => void;
+    };
+  };
+}
+/** The part of webpack's resolve data the kit classification reads and
+ *  writes. */
+interface KitResolveData {
+  request: string;
+  createData?: {
+    resource?: string;
+    settings?: { sideEffects?: boolean };
   };
 }
 interface WebpackLikeApplied {
@@ -246,6 +278,7 @@ export const unpluginFactory: UnpluginFactory<
       state.cssText = getSharedCss();
       state.systemPropsJs = getSharedSystemProps();
       state.kitRedirects = new Map(session.externalSourceEntries);
+      state.kitSideEffects = new Map(session.externalSourceSideEffects);
       state.redirectTargets = new Set(state.kitRedirects.values());
       state.externalPackageDirs = [...session.externalPackageDirs];
       const watchPaths = new Set<string>();
@@ -348,7 +381,18 @@ export const unpluginFactory: UnpluginFactory<
         return null;
       }
       await joinPipeline();
-      return state.kitRedirects.get(id) ?? null;
+      const target = state.kitRedirects.get(id);
+      if (target === undefined) return null;
+      // A plain path would lose the package's `sideEffects` for the target.
+      // Rollup reads `moduleSideEffects`; webpack is classified in
+      // `wireWebpackLike`.
+      const moduleSideEffects = state.kitSideEffects.get(id);
+      if (moduleSideEffects === undefined) return target;
+      const redirect: ExternalIdResult & { moduleSideEffects: boolean } = {
+        id: target,
+        moduleSideEffects,
+      };
+      return redirect;
     },
 
     loadInclude(id) {
@@ -432,6 +476,7 @@ export const unpluginFactory: UnpluginFactory<
 
     webpack(compiler) {
       wireWebpackLike(compiler);
+      classifyWebpackRedirects(compiler);
     },
 
     rspack(compiler) {
@@ -448,6 +493,27 @@ export const unpluginFactory: UnpluginFactory<
       },
     },
   };
+
+  /** Webpack would classify a redirect target by its own path against the
+   *  package's `sideEffects`, so the replaced entry's classification is set
+   *  as a rule's would be. Rspack's resolve data is not known to carry
+   *  rule settings, so rspack keeps its own classification. */
+  function classifyWebpackRedirects(compiler: WebpackLikeCompiler): void {
+    compiler.hooks.normalModuleFactory.tap(PLUGIN_NAME, (nmf) => {
+      nmf.hooks.afterResolve.tap(PLUGIN_NAME, (resolveData) => {
+        const { createData } = resolveData;
+        const sideEffects = state.kitSideEffects.get(resolveData.request);
+        if (
+          sideEffects === undefined ||
+          !createData?.settings ||
+          createData.resource !== state.kitRedirects.get(resolveData.request)
+        ) {
+          return;
+        }
+        createData.settings.sideEffects = sideEffects;
+      });
+    });
+  }
 
   function wireWebpackLike(compiler: WebpackLikeCompiler): void {
     modeOracle =

@@ -10,6 +10,7 @@ import {
   getSharedCss,
   getSharedExternalDirs,
   getSharedExternalEntries,
+  getSharedExternalSideEffects,
   replacementEpochPath,
   resetAnalysisStartedPromise,
   sessionArtifactDir,
@@ -432,5 +433,13 @@ export class AnimusWebpackPlugin {
     return this.session.externalSourceEntries.size > 0
       ? this.session.externalSourceEntries
       : getSharedExternalEntries();
+  }
+
+  /** The classification of the entries `getExternalSourceEntries` returns,
+   *  from the same source. */
+  getExternalSourceSideEffects(): Map<string, boolean> {
+    return this.session.externalSourceEntries.size > 0
+      ? this.session.externalSourceSideEffects
+      : getSharedExternalSideEffects();
   }
 }
