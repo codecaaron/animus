@@ -10,22 +10,14 @@ export function resolveLightningTargets(
   explicitTargets: string | string[] | undefined,
   rootDir: string
 ): LightningTargets {
-  let queries: string[];
+  // Explicit targets always resolve: a one-word query such as 'defaults' is
+  // no browser id, and a resolved id ('chrome 120') resolves to itself.
   if (explicitTargets) {
-    queries = Array.isArray(explicitTargets)
-      ? explicitTargets
-      : [explicitTargets];
-  } else {
-    const detected = browserslist(undefined, { path: rootDir });
-    queries = detected.length > 0 ? detected : browserslist('defaults');
+    return browserslistToTargets(browserslist(explicitTargets));
   }
-  // A query ('last 2 versions') carries a space; an already-resolved browser
-  // id never does, so it passes through unresolved.
-  const [firstQuery] = queries;
+  const detected = browserslist(undefined, { path: rootDir });
   return browserslistToTargets(
-    firstQuery !== undefined && firstQuery.includes(' ')
-      ? browserslist(queries)
-      : queries
+    detected.length > 0 ? detected : browserslist('defaults')
   );
 }
 
