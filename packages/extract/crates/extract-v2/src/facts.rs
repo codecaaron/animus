@@ -292,6 +292,9 @@ pub struct FileFacts {
     /// Chains rooted in an `Object.member` path, which are never chains.
     #[serde(skip)]
     pub member_rooted_chains: Vec<chain_walk::MemberRootedChain>,
+    /// Chains written as top-level object-literal properties.
+    #[serde(skip)]
+    pub object_member_chains: Vec<chain_walk::ObjectMemberChain>,
     /// Namespace imports (`import * as ns from 'x'`): local → specifier.
     #[serde(skip)]
     pub namespace_imports: BTreeMap<String, String>,
@@ -460,6 +463,7 @@ struct ConstInitializerFacts {
     roots: BTreeMap<String, String>,
     objects: BTreeMap<String, BTreeMap<String, String>>,
     facades: BTreeMap<String, Vec<FacadeEntry>>,
+    chains: Vec<chain_walk::ObjectMemberChain>,
 }
 
 /// One member write of a facade object, in source order.
@@ -600,6 +604,38 @@ fn object_assign_target<'a>(init: &'a Expression<'_>) -> Option<&'a str> {
     }
 }
 
+/// The builder chains written as object literal members, `{ Key: ds….asElement(…) }`,
+/// which extraction reports instead of silently skipping.
+fn object_member_chains(name: &str, init: &Expression<'_>, chains: &mut Vec<chain_walk::ObjectMemberChain>) {
+    let Expression::ObjectExpression(object) = crate::chain_walk::unwrap_type_assertions(init) else {
+        return;
+    };
+    for property in &object.properties {
+        let oxc::ast::ast::ObjectPropertyKind::ObjectProperty(p) = property else {
+            continue;
+        };
+        let Some(key) = p.key.static_name().filter(|_| !p.computed) else {
+            continue;
+        };
+        let Expression::CallExpression(call) = crate::chain_walk::unwrap_type_assertions(&p.value) else {
+            continue;
+        };
+        let terminal = match &call.callee {
+            Expression::StaticMemberExpression(member) => {
+                crate::chain_walk::terminal_kind(&member.property.name).is_some()
+            }
+            _ => false,
+        };
+        if let (true, Some(root)) = (terminal, expression_root(&p.value)) {
+            chains.push(chain_walk::ObjectMemberChain {
+                object: name.to_string(),
+                key: key.to_string(),
+                root,
+            });
+        }
+    }
+}
+
 /// Top-level `const` initializer facts: bare-identifier aliases, each
 /// declaration's root identifier, and object literals' identifier members.
 /// `let`/`var` are excluded: a mutable binding carries no static guarantee.
@@ -625,6 +661,7 @@ fn collect_const_initializers(program: &Program<'_>) -> ConstInitializerFacts {
             if let Some(root) = expression_root(init) {
                 facts.roots.insert(name.to_string(), root);
             }
+            object_member_chains(&name, init, &mut facts.chains);
             let Some(entries) = facade_entries(init) else {
                 continue;
             };
@@ -1167,6 +1204,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
         unsafe_object_uses,
         member_parent_extensions,
         member_rooted_chains: walked.member_rooted,
+        object_member_chains: const_initializers.chains,
         namespace_imports: crate::usage_facts::collect_namespace_imports(program),
         default_export_chain: walked
             .default_export
