@@ -13,7 +13,6 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
-use std::marker::PhantomData;
 
 use crate::chain_walk::{ChainDescriptor, TerminalKind};
 use crate::jsx_scan::{
@@ -89,6 +88,25 @@ pub enum UsageFact {
         /// classification; `None` when it can deliver unknown props.
         #[serde(skip)]
         props: Option<Vec<(String, String)>>,
+        /// A `cloneElement` of an element of this component: `props` are
+        /// its overrides, and the element's own props are recorded where
+        /// it is written.
+        #[serde(skip)]
+        clone: bool,
+    },
+    /// `cloneElement(child, …)` of an element usage cannot name: the
+    /// overrides can reach any component.
+    CloneUnknown {
+        /// The overrides with their variant classification; `None` when
+        /// they can deliver props usage cannot list.
+        #[serde(skip)]
+        props: Option<Vec<(String, String)>>,
+        /// The call's line and its spelling, for the warning when the
+        /// overrides cannot be listed.
+        #[serde(skip)]
+        line: usize,
+        #[serde(skip)]
+        call: String,
     },
 }
 
@@ -460,14 +478,25 @@ pub(crate) fn collect_enriched_usage(
         || may_escape
         || !wrapper_candidates.is_empty())
     .then(|| SemanticBuilder::new().build(program).semantic.into_scoping());
+    let react = match &scoping {
+        Some(scoping) => ReactNames::from_imports(program, scoping),
+        None => ReactNames::by_name(),
+    };
     let mut collector = FactCollector {
         facts: Vec::new(),
         static_values,
         scoping: scoping.as_ref().filter(|_| !static_values.is_empty()),
         enrich: true,
-        _phantom: PhantomData,
+        react: react.clone(),
+        clones: Some(CloneScan {
+            scoping: scoping.as_ref(),
+            source: program.source_text,
+            elements: FxHashMap::default(),
+            pending: Vec::new(),
+        }),
     };
     collector.visit_program(program);
+    let usage = collector.finish();
     let confined = match &scoping {
         // Direct eval can read any binding by name.
         Some(scoping) if !scoping.root_unresolved_references().contains_key("eval") => {
@@ -495,6 +524,7 @@ pub(crate) fn collect_enriched_usage(
             let mut scan = EscapeScan {
                 scoping,
                 chains,
+                react: &react,
                 namespaces: collect_namespace_imports(program).into_keys().collect(),
                 escapes: BTreeSet::new(),
                 ancestors: Vec::new(),
@@ -524,7 +554,7 @@ pub(crate) fn collect_enriched_usage(
         _ => BTreeMap::new(),
     };
     EnrichedUsage {
-        usage: collector.facts,
+        usage,
         confined,
         escapes,
         spread_wrappers,
@@ -919,6 +949,7 @@ impl<'a> Visit<'a> for WrapperScan<'a, '_> {
 struct EscapeScan<'a, 's> {
     scoping: &'s Scoping,
     chains: &'s [&'s ChainDescriptor],
+    react: &'s ReactNames,
     /// Namespace imports: `ui.Button` can name a component whatever the
     /// namespace is called.
     namespaces: BTreeSet<String>,
@@ -957,7 +988,8 @@ impl<'a> Visit<'a> for EscapeScan<'a, '_> {
         if !self.is_candidate(name) {
             return;
         }
-        if let Some(path) = escape_path(name, ident.span, &self.ancestors, self.chains) {
+        let path = escape_path(name, ident.span, &self.ancestors, self.chains, self.react);
+        if let Some(path) = path {
             self.escapes.insert(path);
         }
     }
@@ -970,6 +1002,7 @@ fn escape_path(
     span: oxc::span::Span,
     ancestors: &[AstKind<'_>],
     chains: &[&ChainDescriptor],
+    react: &ReactNames,
 ) -> Option<String> {
     use oxc::span::GetSpan;
     let mut path = name.to_string();
@@ -1006,7 +1039,7 @@ fn escape_path(
                 if call.arguments.first().map(GetSpan::span) == Some(current) =>
             {
                 // Followed only where usage records the render.
-                if is_create_element_callee(&call.callee) {
+                if react.calls(&call.callee, "createElement") {
                     return None;
                 }
                 let callee = crate::chain_walk::unwrap_type_assertions(&call.callee);
@@ -1164,7 +1197,31 @@ struct FactCollector<'a, 's> {
     static_values: &'s FxHashMap<String, Value>,
     scoping: Option<&'s Scoping>,
     enrich: bool,
-    _phantom: PhantomData<&'a ()>,
+    /// What calls React's `createElement` and `cloneElement`.
+    react: ReactNames,
+    /// Enriched collection only: the file's bindings and source, for
+    /// `cloneElement` calls.
+    clones: Option<CloneScan<'a, 's>>,
+}
+
+/// `cloneElement` calls, resolved once the walk has seen every `const`
+/// bound to a JSX element.
+struct CloneScan<'a, 's> {
+    scoping: Option<&'s Scoping>,
+    source: &'a str,
+    /// `const` binding → the element tag it holds (`R`, `Kit.Item`).
+    elements: FxHashMap<SymbolId, TagFact>,
+    /// Calls whose first argument is an identifier.
+    pending: Vec<PendingClone>,
+}
+
+/// A `cloneElement` call whose first argument names a binding: its symbol,
+/// and the overrides, line and spelling either fact needs.
+struct PendingClone {
+    symbol: Option<SymbolId>,
+    props: Option<Vec<(String, String)>>,
+    line: usize,
+    call: String,
 }
 
 impl<'a, 's> Visit<'a> for FactCollector<'a, 's> {
@@ -1277,8 +1334,28 @@ impl<'a, 's> Visit<'a> for FactCollector<'a, 's> {
         });
     }
 
+    fn visit_variable_declarator(&mut self, declarator: &oxc::ast::ast::VariableDeclarator<'a>) {
+        if let Some(clones) = &mut self.clones {
+            if let (
+                oxc::ast::ast::VariableDeclarationKind::Const,
+                oxc::ast::ast::BindingPattern::BindingIdentifier(id),
+                Some(init),
+            ) = (declarator.kind, &declarator.id, &declarator.init)
+            {
+                if let (Some(symbol), Expression::JSXElement(element)) =
+                    (id.symbol_id.get(), init.get_inner_expression())
+                {
+                    if let Some(Some(tag)) = element_tag(&element.opening_element.name) {
+                        clones.elements.insert(symbol, tag);
+                    }
+                }
+            }
+        }
+        oxc::ast_visit::walk::walk_variable_declarator(self, declarator);
+    }
+
     fn visit_call_expression(&mut self, call: &CallExpression<'a>) {
-        if is_create_element_callee(&call.callee) {
+        if self.react.calls(&call.callee, "createElement") {
             if let Some(first_arg) = call.arguments.first() {
                 let (ident, member, identity_uncertain) = match first_arg {
                     Argument::Identifier(id) => (Some(id.name.to_string()), None, false),
@@ -1302,23 +1379,204 @@ impl<'a, 's> Visit<'a> for FactCollector<'a, 's> {
                     member,
                     identity_uncertain,
                     props: create_element_props(call.arguments.get(1)),
+                    clone: false,
                 });
             }
+        } else if self.react.calls(&call.callee, "cloneElement") {
+            self.record_clone(call);
         }
         oxc::ast_visit::walk::walk_call_expression(self, call);
     }
 }
 
-/// The `createElement` calls usage records: a bare `createElement(…)` or
-/// `React.createElement(…)`. The escape scan follows exactly these, so any
-/// other spelling opens its component instead of being lost.
-fn is_create_element_callee(callee: &Expression<'_>) -> bool {
-    match callee {
-        Expression::Identifier(id) => id.name == "createElement",
-        Expression::StaticMemberExpression(member) => {
-            member.object.is_specific_id("React") && member.property.name == "createElement"
+impl<'a> FactCollector<'a, '_> {
+    /// A `cloneElement` call: its overrides count for the cloned element's
+    /// component when the first argument is a JSX element or a `const`
+    /// bound to one, and for any component otherwise.
+    fn record_clone(&mut self, call: &CallExpression<'a>) {
+        let Some(clones) = &mut self.clones else {
+            return;
+        };
+        let first = call.arguments.first().and_then(Argument::as_expression);
+        let props = match first {
+            Some(_) => create_element_props(call.arguments.get(1)),
+            // `cloneElement(...args)`: neither the element nor the overrides.
+            None => None,
+        };
+        let line = clones.source[..call.span.start as usize].matches('\n').count() + 1;
+        let spelling =
+            |span: oxc::span::Span| &clones.source[span.start as usize..span.end as usize];
+        let callee = spelling(call.callee.span());
+        let call_text = match call.arguments.first() {
+            Some(argument) => format!("{callee}({}, …)", spelling(argument.span())),
+            None => format!("{callee}()"),
+        };
+        let fact = match first.map(Expression::get_inner_expression) {
+            Some(Expression::JSXElement(element)) => {
+                match element_tag(&element.opening_element.name) {
+                    Some(Some(tag)) => clone_of(tag, props),
+                    // A host element takes no variant props.
+                    None => return,
+                    Some(None) => unknown_clone(props, line, call_text),
+                }
+            }
+            Some(Expression::JSXFragment(_)) => return,
+            Some(Expression::Identifier(id)) if clones.scoping.is_some() => {
+                let symbol = clones
+                    .scoping
+                    .and_then(|scoping| scoping.get_reference(id.reference_id()).symbol_id());
+                clones.pending.push(PendingClone {
+                    symbol,
+                    props,
+                    line,
+                    call: call_text,
+                });
+                return;
+            }
+            _ => unknown_clone(props, line, call_text),
+        };
+        self.facts.extend(fact);
+    }
+
+    /// The facts, with the `cloneElement` calls whose first argument names a
+    /// binding resolved now that every `const` element is known.
+    fn finish(mut self) -> Vec<UsageFact> {
+        if let Some(clones) = self.clones.take() {
+            for pending in clones.pending {
+                let fact = match pending.symbol.and_then(|symbol| clones.elements.get(&symbol)) {
+                    Some(tag) => clone_of(tag.clone(), pending.props),
+                    None => unknown_clone(pending.props, pending.line, pending.call),
+                };
+                self.facts.extend(fact);
+            }
         }
-        _ => false,
+        self.facts
+    }
+}
+
+/// The component an element tag names: `Some(None)` when it names one usage
+/// cannot (`this.Item`), `None` for a host element.
+fn element_tag(name: &JSXElementName<'_>) -> Option<Option<TagFact>> {
+    match name {
+        JSXElementName::IdentifierReference(id) => Some(Some(TagFact::Ident(id.name.to_string()))),
+        JSXElementName::MemberExpression(member) => {
+            Some(jsx_member_path(member).map(TagFact::Member))
+        }
+        JSXElementName::ThisExpression(_) => Some(None),
+        JSXElementName::Identifier(_) | JSXElementName::NamespacedName(_) => None,
+    }
+}
+
+fn clone_of(tag: TagFact, props: Option<Vec<(String, String)>>) -> Option<UsageFact> {
+    let (ident, member) = match tag {
+        TagFact::Ident(name) => (Some(name), None),
+        TagFact::Member(path) => (None, Some(path)),
+    };
+    Some(UsageFact::CreateElement {
+        ident,
+        member,
+        identity_uncertain: false,
+        props,
+        clone: true,
+    })
+}
+
+/// A clone without overrides adds nothing.
+fn unknown_clone(
+    props: Option<Vec<(String, String)>>,
+    line: usize,
+    call: String,
+) -> Option<UsageFact> {
+    (props.as_ref().is_none_or(|props| !props.is_empty()))
+        .then_some(UsageFact::CloneUnknown { props, line, call })
+}
+
+/// React's `createElement` and `cloneElement` as a file can call them:
+/// through an import from a recognised runtime, or as the unbound globals
+/// `createElement`, `cloneElement` and `React`. Any other binding of such a
+/// name is the file's own function, an ordinary call, so the escape scan
+/// sees a component passed to it as a value.
+#[derive(Clone)]
+pub(crate) struct ReactNames {
+    /// Local name → the runtime function it binds.
+    functions: FxHashMap<String, &'static str>,
+    /// Default and namespace imports of a runtime, and an unbound `React`.
+    namespaces: FxHashSet<String>,
+}
+
+const REACT_RUNTIMES: [&str; 3] = ["react", "preact", "preact/compat"];
+const ELEMENT_FUNCTIONS: [&str; 2] = ["createElement", "cloneElement"];
+
+impl ReactNames {
+    /// By spelling alone, for facts read without bindings.
+    fn by_name() -> Self {
+        Self {
+            functions: ELEMENT_FUNCTIONS.iter().map(|name| (name.to_string(), *name)).collect(),
+            namespaces: std::iter::once("React".to_string()).collect(),
+        }
+    }
+
+    fn from_imports(program: &Program<'_>, scoping: &Scoping) -> Self {
+        let mut names = Self {
+            functions: FxHashMap::default(),
+            namespaces: FxHashSet::default(),
+        };
+        for stmt in &program.body {
+            let Statement::ImportDeclaration(import) = stmt else {
+                continue;
+            };
+            if !REACT_RUNTIMES.contains(&import.source.value.as_str()) {
+                continue;
+            }
+            for specifier in import.specifiers.iter().flatten() {
+                match specifier {
+                    ImportDeclarationSpecifier::ImportSpecifier(named) => {
+                        let imported = named.imported.name();
+                        let function = ELEMENT_FUNCTIONS
+                            .iter()
+                            .find(|function| **function == imported.as_str());
+                        if let Some(function) = function {
+                            names.functions.insert(named.local.name.to_string(), function);
+                        }
+                    }
+                    ImportDeclarationSpecifier::ImportDefaultSpecifier(default) => {
+                        names.namespaces.insert(default.local.name.to_string());
+                    }
+                    ImportDeclarationSpecifier::ImportNamespaceSpecifier(namespace) => {
+                        names.namespaces.insert(namespace.local.name.to_string());
+                    }
+                }
+            }
+        }
+        // A name bound twice may be the file's own where it is called.
+        let mut bound: FxHashMap<&str, usize> = FxHashMap::default();
+        for name in scoping.symbol_names() {
+            *bound.entry(name).or_default() += 1;
+        }
+        names.functions.retain(|local, _| bound.get(local.as_str()) == Some(&1));
+        names.namespaces.retain(|local| bound.get(local.as_str()) == Some(&1));
+        for function in ELEMENT_FUNCTIONS {
+            if !bound.contains_key(function) {
+                names.functions.insert(function.to_string(), function);
+            }
+        }
+        if !bound.contains_key("React") {
+            names.namespaces.insert("React".to_string());
+        }
+        names
+    }
+
+    /// Whether `callee` calls the runtime's `function`.
+    fn calls(&self, callee: &Expression<'_>, function: &str) -> bool {
+        match callee {
+            Expression::Identifier(id) => self.functions.get(id.name.as_str()) == Some(&function),
+            Expression::StaticMemberExpression(member) => {
+                member.property.name == function
+                    && matches!(&member.object, Expression::Identifier(object)
+                        if self.namespaces.contains(object.name.as_str()))
+            }
+            _ => false,
+        }
     }
 }
 
@@ -1330,10 +1588,11 @@ pub fn collect_usage_facts(program: &Program<'_>) -> Vec<UsageFact> {
         static_values: &static_values,
         scoping: None,
         enrich: false,
-        _phantom: PhantomData,
+        react: ReactNames::by_name(),
+        clones: None,
     };
     collector.visit_program(program);
-    collector.facts
+    collector.finish()
 }
 
 pub fn collect_usage_facts_with_statics(
@@ -1583,6 +1842,22 @@ pub fn uncertain_custom_renders(
     let mut seen = FxHashSet::default();
     let mut usages = Vec::new();
     for fact in facts {
+        if let UsageFact::CloneUnknown { props: Some(props), .. } = fact {
+            // Each listed override reaches every component with that prop.
+            let mut bindings: Vec<(&String, &FxHashSet<String>)> = component_props.iter().collect();
+            bindings.sort_unstable_by_key(|(binding, _)| *binding);
+            for (binding, custom) in bindings {
+                for (prop, _) in props.iter().filter(|(prop, _)| custom.contains(prop)) {
+                    if seen.insert((binding.as_str(), prop)) {
+                        usages.push(DynamicPropUsage {
+                            prop_name: prop.clone(),
+                            binding: binding.clone(),
+                        });
+                    }
+                }
+            }
+            continue;
+        }
         let binding = match fact {
             UsageFact::Element { span, .. } if proxies.forwarding.contains(span) => continue,
             UsageFact::Element { tag, spread: Some(_), .. } => match resolve_tag(tag, member_expr_bindings) {
@@ -1799,6 +2074,7 @@ pub fn filter_usage_scan(
                 member,
                 identity_uncertain,
                 props,
+                clone,
             } => {
                 let resolved: Option<String> = if let Some(name) = ident {
                     if component_props.contains_key(name.as_str())
@@ -1838,20 +2114,49 @@ pub fn filter_usage_scan(
                                 });
                             }
                         }
-                        record_unwritten_options(
-                            &mut result,
-                            &mut fully_open,
-                            &binding,
-                            config,
-                            &written,
-                            props.is_none(),
-                        );
+                        // A clone keeps the element's own props, recorded
+                        // where the element is written.
+                        if !*clone || props.is_none() {
+                            record_unwritten_options(
+                                &mut result,
+                                &mut fully_open,
+                                &binding,
+                                config,
+                                &written,
+                                props.is_none(),
+                            );
+                        }
                     }
                     result.rendered_components.insert(binding);
                 } else if *identity_uncertain {
                     result.identity_uncertain = true;
                 }
             }
+            // Overrides usage can list reach every component that declares
+            // them; the warning covers the ones it cannot.
+            UsageFact::CloneUnknown { props: Some(props), .. } => {
+                let mut bindings: Vec<&String> = component_configs.keys().collect();
+                bindings.sort_unstable();
+                for binding in bindings {
+                    let config = &component_configs[binding];
+                    for (key, class) in props {
+                        if config.variants.contains_key(key) {
+                            result.variant_usages.push(VariantUsage {
+                                component_binding: binding.clone(),
+                                variant_prop: key.clone(),
+                                value: class.clone(),
+                            });
+                        }
+                        if config.states.contains(key) {
+                            result.state_usages.push(StateUsage {
+                                component_binding: binding.clone(),
+                                state_name: key.clone(),
+                            });
+                        }
+                    }
+                }
+            }
+            UsageFact::CloneUnknown { props: None, .. } => {}
         }
     }
 

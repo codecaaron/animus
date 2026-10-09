@@ -5,6 +5,27 @@ See [Conventional Commits](https://conventionalcommits.org) for commit guideline
 
 ## Unreleased
 
+**`cloneElement` overrides keep their CSS.** Production builds dropped the
+variant and state options a `cloneElement` call sets:
+`cloneElement(<Button size="sm" />, { size: 'lg' })` kept only `sm`. Overrides
+now count for the cloned element's component when the first argument is a
+JSX element or a `const` bound to one; overrides written as anything other
+than an object of literal keys keep every option of that component. For an
+element the analysis cannot name, such as a `child` from `Children.map`,
+literal overrides count for every component that declares those props.
+Other overrides there, such as `cloneElement(child, props)`, are not
+tracked, and the new warning `animus.usage.untracked-clone-props` names the
+file, the line and the call. Write the override keys literally, or keep the
+options with `staticCss.components`.
+
+**`createElement` is React's only when it comes from React.** A call counts
+as a render when `createElement` (or `cloneElement`) is imported from
+`react`, `preact` or `preact/compat` under any name, is called through a
+default or namespace import of one, or is the unbound global. A function of
+the file's own with that name, or one imported from elsewhere, is an
+ordinary call, so a component passed to it keeps every option instead of
+losing the ones that function sets.
+
 **Same-module wrapper components no longer keep every option.** A
 component such as `const Fancy = (props) => <Button {...props} />`, or
 `({ tone, ...rest }) => <Button {...rest} />`, declared at the top of a module

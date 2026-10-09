@@ -281,6 +281,10 @@ const STATIC_EVALUATION_UNAVAILABLE: &str = "animus.transform.static-evaluation-
 /// whose import resolves to no extracted component still reach the browser
 /// through the dynamic-slot fallback, without their static utility classes.
 const UNATTRIBUTED_SYSTEM_PROPS: &str = "animus.usage.unattributed-system-props";
+/// A warning, never escalated: props a `cloneElement` call passes to an
+/// element usage cannot name, from a value it cannot list, are not tracked,
+/// so options only they set can be pruned.
+const UNTRACKED_CLONE_PROPS: &str = "animus.usage.untracked-clone-props";
 
 pub(crate) fn diagnostic_severity_for_code(code: &str) -> &'static str {
     match code {
@@ -1721,7 +1725,7 @@ fn spread_wrapper_targets(
             .iter()
             .filter_map(|fact| match fact {
                 UsageFact::Element { span, .. } => Some((*span, fact)),
-                UsageFact::CreateElement { .. } => None,
+                UsageFact::CreateElement { .. } | UsageFact::CloneUnknown { .. } => None,
             })
             .collect(),
         memo: FxHashMap::default(),
@@ -1846,6 +1850,30 @@ fn unattributed_system_props(
         ));
     }
     warnings
+}
+
+/// One warning per `cloneElement` call whose element and overrides usage
+/// can name neither of.
+fn untracked_clone_props(file: &str, ff: &FileFacts) -> Vec<CssDiagnostic> {
+    ff.usage_for_analysis()
+        .iter()
+        .filter_map(|fact| match fact {
+            UsageFact::CloneUnknown { props: None, line, call } => Some(diagnostic(
+                file,
+                call,
+                "warn",
+                format!(
+                    "line {line}: props passed through {call} are not tracked, so variant \
+                     and state options only they set can be pruned from production CSS — \
+                     write the override keys literally, as in \
+                     cloneElement(child, {{ size: 'lg' }}), or keep those options with \
+                     staticCss.components"
+                ),
+                Some(UNTRACKED_CLONE_PROPS),
+            )),
+            _ => None,
+        })
+        .collect()
 }
 
 /// How a declaration that usage identity misses still reaches a component:
@@ -3307,6 +3335,7 @@ fn run_with_system_floor(
             inputs,
             &takes_system_prop,
         ));
+        diagnostics.extend(untracked_clone_props(path, ff));
         let lookup = file_lookup.as_ref().unwrap_or(&global_lookup);
 
         let mut usage_result = crate::usage_facts::filter_usage_scan(
@@ -6808,37 +6837,126 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         }
     }
 
-    /// A `createElement` call usage tracking does not record (React under
-    /// another name) is an escape, not a followed render: `lg` stays.
+    /// `createElement` is React's through an import of it from a runtime,
+    /// under any name, and as the unbound global. A function of the file's
+    /// own by that name is an ordinary call, so a component passed to it
+    /// keeps every option.
     #[test]
-    fn create_element_through_another_react_name_keeps_every_option() {
+    fn create_element_is_react_only_through_a_runtime_import_or_the_global() {
+        let kept = |setup: &str| {
+            let app = format!(
+                "import {{ R }} from './r';\n{setup}\nexport const App = () => <R size=\"sm\" active />;\n"
+            );
+            kept_options(&[("r.tsx", RECIPE), ("app.tsx", app.as_str())])
+        };
+        for setup in [
+            "const createElement = (C, p) => <C {...p} size=\"lg\" />;\n\
+             export const Big = () => createElement(R, {});",
+            "import { createElement } from './helpers';\nexport const Big = () => createElement(R, {});",
+            "const React = { createElement: make };\nexport const Big = () => React.createElement(R, {});",
+            "import { createElement } from 'react';\n\
+             export function Big() {\n\
+               const createElement = (C, p) => <C {...p} size=\"lg\" />;\n\
+               return createElement(R, {});\n\
+             }",
+        ] {
+            assert_eq!(kept(setup), (vec!["sm", "md", "lg"], vec!["active", "busy"]), "{setup}");
+        }
         for setup in [
             "import * as Re from 'react';\nexport const Big = () => Re.createElement(R, { size: 'lg' });",
             "import Re from 'react';\nexport const Big = () => Re.createElement(R, { size: 'lg' });",
+            "import { createElement as h } from 'preact';\nexport const Big = () => h(R, { size: 'lg' });",
+            "export const Big = () => React.createElement(R, { size: 'lg' });",
+            "export const Big = () => createElement(R, { size: 'lg' });",
         ] {
+            assert_eq!(kept(setup), (vec!["sm", "lg"], vec!["active"]), "{setup}");
+        }
+    }
+
+    /// A `cloneElement` call's overrides count for the cloned element's
+    /// component: written literally, they keep their own values; any other
+    /// overrides keep every option.
+    #[test]
+    fn clone_element_overrides_count_for_the_cloned_component() {
+        let kept = |setup: &str| {
             let app = format!(
                 "import {{ R }} from './r';\n{setup}\nexport const App = () => <R size=\"sm\" active />;\n"
             );
-            assert_eq!(
-                kept_options(&[("r.tsx", RECIPE), ("app.tsx", app.as_str())]),
-                (vec!["sm", "md", "lg"], vec!["active", "busy"]),
-                "{setup}"
-            );
-        }
-        // The forms usage records stay followed renders.
+            kept_options(&[("r.tsx", RECIPE), ("app.tsx", app.as_str())])
+        };
         for setup in [
-            "import React from 'react';\nexport const Small = () => React.createElement(R, { size: 'sm' });",
-            "import { createElement } from 'react';\nexport const Small = () => createElement(R, { size: 'sm' });",
+            "import { cloneElement } from 'react';\n\
+             export const Big = () => cloneElement(<R size=\"sm\" />, { size: 'lg', busy: true });",
+            "import { cloneElement } from 'react';\nconst element = <R size=\"sm\" />;\n\
+             export const Big = () => cloneElement(element, { size: 'lg', busy: true });",
+            "export const Big = () => React.cloneElement(<R size=\"sm\" />, { size: 'lg', busy: true });",
+            // An element usage cannot name: the overrides reach every
+            // component that declares them.
+            "import { cloneElement } from 'react';\n\
+             export const Big = ({ child }) => cloneElement(child, { size: 'lg', busy: true });",
         ] {
-            let app = format!(
-                "import {{ R }} from './r';\n{setup}\nexport const App = () => <R size=\"sm\" active />;\n"
-            );
-            assert_eq!(
-                kept_options(&[("r.tsx", RECIPE), ("app.tsx", app.as_str())]),
-                (vec!["sm"], vec!["active"]),
-                "{setup}"
-            );
+            assert_eq!(kept(setup), (vec!["sm", "lg"], vec!["active", "busy"]), "{setup}");
         }
+        // The clone keeps the element's own size: no default is added.
+        assert_eq!(
+            kept("import { cloneElement } from 'react';\n\
+                  export const Busy = () => cloneElement(<R size=\"sm\" />, { busy: true });"),
+            (vec!["sm"], vec!["active", "busy"])
+        );
+        for setup in [
+            "import { cloneElement } from 'react';\n\
+             export const Big = () => cloneElement(<R size=\"sm\" />, extra);",
+            "import { cloneElement } from 'react';\nconst element = <R size=\"sm\" />;\n\
+             export const Big = () => cloneElement(element, extra);",
+        ] {
+            assert_eq!(kept(setup), (vec!["sm", "md", "lg"], vec!["active", "busy"]), "{setup}");
+        }
+        // A custom prop set only by a clone keeps its runtime slot.
+        let app = "import { R } from './r';\nimport { cloneElement } from 'react';\n\
+                   export const App = () => <R />;\n\
+                   export const Tinted = ({ child }) => cloneElement(child, { tint: 'red' });\n";
+        let out = analyze(&[("r.tsx", WRAPPED), ("app.tsx", app)], &test_inputs());
+        let replacement = &out.components["r.tsx::R"].replacement;
+        assert!(replacement.contains(r#""customDynamicConfig":{"tint":"#), "{replacement}");
+    }
+
+    /// Overrides usage can name neither the element nor the props of are
+    /// not tracked: one warning per call names the file, the line and the
+    /// call, and nothing is opened.
+    #[test]
+    fn untracked_clone_overrides_warn_once_per_call() {
+        let app = "import { R } from './r';\nimport { cloneElement } from 'react';\n\
+                   export const App = () => <R size=\"sm\" active />;\n\
+                   export const A = ({ child, extra }) => cloneElement(child, extra);\n\
+                   export const B = ({ child, extra }) =>\n  cloneElement(child, { ...extra });\n\
+                   export const C = ({ child }) => cloneElement(child, { size: 'lg' });\n\
+                   export const D = ({ extra }) => cloneElement(<div />, extra);\n";
+        let out = analyze(&[("r.tsx", RECIPE), ("app.tsx", app)], &test_inputs());
+        let warnings: Vec<(&str, &str, &str)> = out
+            .diagnostics
+            .iter()
+            .filter(|d| d.code.as_deref() == Some(UNTRACKED_CLONE_PROPS))
+            .map(|d| (d.file.as_str(), d.component.as_str(), d.severity.as_deref().unwrap_or("")))
+            .collect();
+        assert_eq!(
+            warnings,
+            vec![
+                ("app.tsx", "cloneElement(child, …)", "warn"),
+                ("app.tsx", "cloneElement(child, …)", "warn"),
+            ]
+        );
+        let lines: Vec<bool> = ["line 4:", "line 6:"]
+            .iter()
+            .map(|line| {
+                out.diagnostics
+                    .iter()
+                    .filter(|d| d.code.as_deref() == Some(UNTRACKED_CLONE_PROPS))
+                    .any(|d| d.message.starts_with(line))
+            })
+            .collect();
+        assert_eq!(lines, vec![true, true]);
+        let class = class_of(&out, "r.tsx::R");
+        assert!(!out.css.contains(&format!(".{class}--size-md")), "nothing is opened");
     }
 
     /// An alias exported to other modules, or a default export, is rendered
