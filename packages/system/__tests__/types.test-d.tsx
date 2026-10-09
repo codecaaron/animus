@@ -302,6 +302,9 @@ function TypeTests() {
   // @ts-expect-error — 'type' as submit is not valid on div
   <DivBox type="submit" />;
 
+  // @ts-expect-error — native `as` selects its element's props: `disabled` is not an anchor prop
+  <BtnBox as="a" disabled />;
+
   const SizedInput = ds
     .styles({ display: 'block' })
     .variant({
