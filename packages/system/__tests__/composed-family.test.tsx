@@ -386,10 +386,7 @@ describe('createComposedFamilyWithContext()', () => {
   });
 
   it('an asChild Root renders its child with its classes, refs and context, in both forms', () => {
-    const families: {
-      Root: ForwardRefExoticComponent<any>;
-      Control: ForwardRefExoticComponent<any>;
-    }[] = [
+    const families: Record<string, ForwardRefExoticComponent<any>>[] = [
       composeWithContext({ Root, Control }, { shared: { size: true } }),
       createComposedFamilyWithContext(
         { Root, Control },
