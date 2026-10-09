@@ -455,6 +455,19 @@ function TypeTests() {
     IsExact<RootVariants['size'], 'sm' | 'lg' | undefined>
   >;
 
+  // An axis's options come from its `variants` table alone. Built
+  // declarations print optional fields as `?: X | undefined`, which fails
+  // `VariantConfig` in a consumer compiled with exactOptionalPropertyTypes;
+  // here a `prop` that `VariantConfig` rejects stands in for that.
+  type PrintedVariants = VariantPropsOf<{
+    extend: () => {
+      variants: { tone: { prop?: number; variants: { a: {}; b: {} } } };
+    };
+  }>;
+  type _PrintedToneValues = Assert<
+    IsExact<PrintedVariants['tone'], 'a' | 'b' | undefined>
+  >;
+
   type ControlVariants = VariantPropsOf<typeof SlotControl>;
   type _ControlHasSize = Assert<
     'size' extends keyof ControlVariants ? true : false
