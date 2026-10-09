@@ -1,3 +1,5 @@
+import { tokenize } from '@animus-ui/properties';
+
 import { parseInternalWire } from './internal-wire';
 import { createPropertyNames, renameCustomProperties } from './property-names';
 
@@ -8,13 +10,37 @@ export interface PrefixedSystemArtifacts {
   contextualVarsJson?: string;
 }
 
-/** Prefix variable references without changing their matching rules. */
+/** A name the prefix renames: a letter after the dashes, then word
+ *  characters and hyphens. */
+const PREFIXED_NAME = /^--[a-zA-Z][\w-]*$/;
+
+/**
+ * Prefixes the name every `var()` call reads, at any depth, so a fallback's
+ * own name is prefixed along with the names inside it. Names are read through
+ * the shared CSS tokenizer, so quoted strings, `url()` and comments are
+ * copied unchanged.
+ */
 export function prefixVariableReferences(
   prefix: string,
   value: string
 ): string {
   if (!prefix) return value;
-  return value.replace(/var\(--([a-zA-Z][\w-]*)\)/g, `var(--${prefix}-$1)`);
+  const tokens = tokenize(value);
+  let out = '';
+  let copied = 0;
+  for (const [index, token] of tokens.entries()) {
+    if (token.type !== 'function' || !/^var$/i.test(token.value)) continue;
+    const name =
+      tokens[index + 1]?.type === 'whitespace'
+        ? tokens[index + 2]
+        : tokens[index + 1];
+    if (name?.type !== 'ident') continue;
+    const spelling = value.slice(name.start, name.end);
+    if (!PREFIXED_NAME.test(spelling)) continue;
+    out += `${value.slice(copied, name.start)}--${prefix}-${spelling.slice(2)}`;
+    copied = name.end;
+  }
+  return out + value.slice(copied);
 }
 
 export function applyPrefix(
@@ -49,7 +75,9 @@ export function applyPrefix(
   };
 
   if (themeJson) {
-    result.themeJson = prefixVariableReferences(prefix, themeJson);
+    result.themeJson = renameTokenValues(themeJson, (value) =>
+      prefixVariableReferences(prefix, value)
+    );
   }
 
   if (contextualVarsJson) {
@@ -198,7 +226,7 @@ interface DeclarationScaleWire {
 }
 
 /** Renames inside every declaration-scale record value. */
-function renameDeclarationRecords(
+export function renameDeclarationRecords(
   declarationScalesJson: string,
   rename: (value: string) => string
 ): string {

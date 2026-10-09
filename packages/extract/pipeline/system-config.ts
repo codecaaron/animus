@@ -3,6 +3,7 @@ import {
   applyPrefix,
   applyPropertyNames,
   prefixVariableReferences,
+  renameDeclarationRecords,
 } from './prefix';
 import { splitInvalidPropertyRegistrations } from './property-registrations';
 
@@ -128,9 +129,10 @@ export function loadSystemConfig(
     }
     // Records hold resolved `var()` references, rewritten like scale values.
     if (declarationScalesJson) {
-      declarationScalesJson = prefixVariableReferences(
-        opts.prefix,
-        declarationScalesJson
+      const prefix = opts.prefix;
+      declarationScalesJson = renameDeclarationRecords(
+        declarationScalesJson,
+        (value) => prefixVariableReferences(prefix, value)
       );
     }
   }

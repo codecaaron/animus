@@ -145,6 +145,23 @@ describe('applyPrefix', () => {
     expect(theme['space.4']).toBe('0.25rem');
   });
 
+  test('prefixes the name a fallback reads along with the names inside it', () => {
+    const variableCss =
+      ':root { --space-1: 4px; --space-3: var(--space-1, var(--space-2)); }';
+    const themeJson = JSON.stringify({
+      'space.3': 'var(--space-1, var(--space-2, 1px))',
+    });
+
+    const result = applyPrefix('ds', '{}', variableCss, themeJson);
+
+    expect(result.variableCss).toContain(
+      '--ds-space-3: var(--ds-space-1, var(--ds-space-2));'
+    );
+    expect(JSON.parse(result.themeJson!)['space.3']).toBe(
+      'var(--ds-space-1, var(--ds-space-2, 1px))'
+    );
+  });
+
   test('leaves themeJson undefined when not provided', () => {
     const variableMapJson = JSON.stringify({
       'colors.primary': '--color-primary',
