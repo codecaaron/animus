@@ -1709,6 +1709,11 @@ void (<ExtendedBadge label="hi" />);
 
   const plainSealed = createSystem().build().seal();
   type _EmptyVocab = Assert<IsExact<VocabularyOf<typeof plainSealed>, never>>;
+  // Extending an empty sealed system adds no vocabulary.
+  const hostOfEmpty = createSystem().extend(plainSealed).build();
+  type _HostOfEmptyVocab = Assert<
+    IsExact<VocabularyOf<ReturnType<typeof hostOfEmpty.seal>>, never>
+  >;
 
   const dupBundle = createSystem().build();
   const motion = dupBundle.createKeyframes({ spin: { '0%': { opacity: 0 } } });
