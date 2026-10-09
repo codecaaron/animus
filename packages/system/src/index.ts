@@ -5,7 +5,7 @@ export { AnimusExtended, AnimusExtendedWithAll } from './AnimusExtended';
 export { compose } from './compose';
 export type { KeyframeFrameMap, KeyframeRef, Keyframes } from './keyframes';
 export { asset, ASSET_PLACEHOLDER_PREFIX, type AssetRef } from './asset.js';
-export { createComponent } from './runtime';
+export { createComponent, renderAsChild } from './runtime';
 export {
   type ClassResolver,
   type ClassResolverAttributes,

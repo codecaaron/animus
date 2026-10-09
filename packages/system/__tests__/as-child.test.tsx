@@ -1,4 +1,5 @@
 import {
+  type ComponentPropsWithRef,
   createElement,
   createRef,
   type ReactElement,
@@ -10,6 +11,7 @@ import { createRoot } from 'react-dom/client';
 import { renderToString } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
 
+import { renderAsChild } from '../src';
 import { ds } from './test-system';
 
 const Box = ds
@@ -280,5 +282,59 @@ describe('component terminals', () => {
     ]);
     expect(asButton).toMatch(/^<button id="wired"/);
     expect(asChild).toMatch(/^<span id="wired"[^>]*><a>Title<\/a><\/span>$/);
+  });
+
+  it("render an asChild slot through renderAsChild exactly as Animus's own", () => {
+    function Target({
+      asChild,
+      children,
+      ...props
+    }: ComponentPropsWithRef<'div'> & { asChild?: boolean }) {
+      if (asChild) return renderAsChild(children, props);
+      return createElement('div', props, children);
+    }
+    const Wrapped = ds
+      .styles({ display: 'flex' })
+      .variant({
+        prop: 'size',
+        variants: { sm: { p: 4 }, lg: { p: 16 } },
+      })
+      .asComponent(Target);
+    const size: 'lg' = 'lg';
+    const props = {
+      asChild: true,
+      size,
+      id: 'parent',
+      title: 'parent',
+      className: 'outer',
+      style: { color: 'red', margin: 1 },
+      'data-part': 'slot',
+      'aria-label': 'slot',
+    };
+    const child = () =>
+      createElement(
+        'a',
+        {
+          id: 'child',
+          className: 'inner',
+          style: { color: 'blue' },
+          href: '#',
+        },
+        'x'
+      );
+
+    expect(renderToString(createElement(Wrapped, props, child()))).toBe(
+      renderToString(createElement(Box, props, child()))
+    );
+    const boxRef = createRef<HTMLDivElement>();
+    const wrappedRef = createRef<HTMLDivElement>();
+    mountAndInspect(
+      createElement(Box, { ...props, ref: boxRef }, child()),
+      (c) => expect(boxRef.current).toBe(c.querySelector('a'))
+    );
+    mountAndInspect(
+      createElement(Wrapped, { ...props, ref: wrappedRef }, child()),
+      (c) => expect(wrappedRef.current).toBe(c.querySelector('a'))
+    );
   });
 });

@@ -1,11 +1,11 @@
-import type { ForwardedRef, ReactElement, Ref, RefCallback } from 'react';
-import {
-  Children,
-  cloneElement,
-  createElement,
-  forwardRef,
-  isValidElement,
+import type {
+  ForwardedRef,
+  ReactElement,
+  ReactNode,
+  Ref,
+  RefCallback,
 } from 'react';
+import { Children, cloneElement, createElement, forwardRef } from 'react';
 
 import {
   type ClassResolverConfig,
@@ -119,53 +119,69 @@ function childRefOf(
 }
 
 /**
- * The child wins every conflict: parent props spread under the child's own, so
- * a handler declared on the child replaces the parent's instead of chaining.
+ * The child wins every conflict: the slot's props spread under the child's
+ * own, so a handler declared on the child replaces the slot's instead of
+ * chaining. `variables`, Animus's own dynamic styles, win over the child's.
  */
-function renderAsChild(
-  className: string,
-  filterProps: Set<string>,
+function renderSlot(
+  children: ReactNode,
   props: Record<string, any>,
-  ref: ForwardedRef<any>,
-  classes: string[],
-  dynamicStyle: Record<string, string> | undefined
+  ref: Ref<any> | undefined,
+  variables?: Record<string, string>
 ): ReactElement {
-  const child = Children.only(props.children) as ReactElement<
-    Record<string, any>
-  >;
-  if (!isValidElement(child)) {
-    throw new Error(
-      `${className}: asChild requires a single React element as children`
-    );
-  }
+  // Throws unless `children` is exactly one React element.
+  const child = Children.only(children) as ReactElement<Record<string, any>>;
+  const {
+    asChild: _asChild,
+    children: _children,
+    className,
+    ref: propRef,
+    style,
+    ...slotProps
+  } = props;
 
-  const childRef = childRefOf(child);
-  const mergedClassName = [classes.join(' '), child.props.className]
+  const mergedClassName = [className, child.props.className]
     .filter(Boolean)
     .join(' ');
 
   const mergedStyle =
-    dynamicStyle || props.style || child.props.style
-      ? {
-          ...props.style,
-          ...child.props.style,
-          ...dynamicStyle,
-        }
+    variables || style || child.props.style
+      ? { ...style, ...child.props.style, ...variables }
       : undefined;
 
-  const parentProps: Record<string, any> = {};
-  forwardProps(props, filterProps, parentProps);
-  delete parentProps.children;
-  delete parentProps.style;
-  delete parentProps.ref;
-
   return cloneElement(child, {
-    ...parentProps,
+    ...slotProps,
     ...child.props,
-    ref: composeRefs(ref, childRef),
+    ref: composeRefs(ref ?? propRef, childRefOf(child)),
     className: mergedClassName,
     ...(mergedStyle ? { style: mergedStyle } : {}),
   });
+}
+
+/**
+ * Renders an `asChild` slot exactly as Animus renders its own: the one child
+ * element, with `props` spread under the child's props so the child wins
+ * every conflict, class names joined (the slot's first), styles merged and
+ * both refs attached. An `asComponent` target that receives `asChild` calls
+ * it in place of its element:
+ *
+ * ```tsx
+ * if (asChild) return renderAsChild(children, props, ref);
+ * ```
+ *
+ * `asChild` and `children` in `props` are dropped, and `ref` defaults to
+ * `props.ref`. It throws unless `children` is exactly one React element.
+ *
+ * An `asComponent` component types `children` as any `ReactNode`, whatever
+ * the target declares, so a target rendering a void element such as `input`
+ * leaves its children out without `asChild`, where React would throw.
+ */
+export function renderAsChild(
+  children: ReactNode,
+  props: object,
+  ref?: Ref<any>
+): ReactElement {
+  return renderSlot(children, props as Record<string, any>, ref);
 }
 
 /**
@@ -230,23 +246,19 @@ export function createComponent(
         classes.push(props.className);
       }
 
-      return props.asChild && ownsPolymorphism
-        ? renderAsChild(
-            className,
-            filterProps,
-            props,
-            ref,
-            classes,
-            dynamicStyle
-          )
-        : renderElement(
-            element,
-            filterProps,
-            props,
-            ref,
-            classes,
-            dynamicStyle
-          );
+      if (props.asChild && ownsPolymorphism) {
+        const slotProps: Record<string, any> = { className: classes.join(' ') };
+        forwardProps(props, filterProps, slotProps);
+        return renderSlot(props.children, slotProps, ref, dynamicStyle);
+      }
+      return renderElement(
+        element,
+        filterProps,
+        props,
+        ref,
+        classes,
+        dynamicStyle
+      );
     }
   );
 
