@@ -5404,21 +5404,12 @@ fn run_with_system_floor(
         &mut diagnostics,
     );
 
-    let reconciled_order: Vec<String> = reconciled_components
-        .iter()
-        .map(|(id, _)| id.clone())
-        .collect();
+    let (mut sheets, fragments) =
+        generate_css_sheets_ordered(&reconciled_components, &breakpoints);
     let component_css_list: Vec<ComponentCss> = reconciled_components
         .into_iter()
         .map(|(_, css)| css)
         .collect();
-
-    let (mut sheets, fragments) = generate_css_sheets_ordered(
-        &component_css_list,
-        &breakpoints,
-        &reconciled_order,
-        class_prefix,
-    );
 
     let mut composed_variant_css = String::new();
     let mut composed_compound_css = String::new();

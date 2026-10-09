@@ -357,49 +357,14 @@ pub fn generate_css(
     output
 }
 
+/// `components` arrive in emission order, each with its `file::binding` id.
 pub fn generate_css_sheets_ordered(
-    components: &[ComponentCss],
+    components: &[(String, ComponentCss)],
     breakpoints: &BreakpointMap,
-    order: &[String],
-    class_prefix: &str,
 ) -> (CssSheets, CssFragmentStore) {
-    let order_index: FxHashMap<String, usize> = order
-        .iter()
-        .enumerate()
-        .map(|(i, id)| (id.clone(), i))
-        .collect();
-
-    let mut indexed: Vec<(usize, String, &ComponentCss)> = components
-        .iter()
-        .map(|comp| {
-            if order.is_empty() {
-                return (0, String::new(), comp);
-            }
-            let (rank, id) = order_index
-                .iter()
-                .filter_map(|(id, idx)| {
-                    let binding = id.split("::").last()?;
-                    if comp.class_name.starts_with(&format!("{}-{}-", class_prefix, binding)) {
-                        Some((*idx, id.clone()))
-                    } else {
-                        None
-                    }
-                })
-                .next()
-                .unwrap_or((usize::MAX, String::new()));
-            (rank, id, comp)
-        })
-        .collect();
-
-    if !order.is_empty() {
-        indexed.sort_by_key(|(rank, _, _)| *rank);
-    }
-
     let mut fragments = CssFragmentStore::new();
 
-    for (_, component_id, component) in &indexed {
-        let id = component_id.clone();
-
+    for (id, component) in components {
         if let Some(base) = &component.base {
             let mut frag = String::with_capacity(512);
             write_rule_block(&mut frag, &component.class_name, base, breakpoints);
