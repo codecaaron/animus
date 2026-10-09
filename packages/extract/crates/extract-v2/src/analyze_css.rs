@@ -1463,9 +1463,9 @@ fn resolve_usage_identity(
 }
 
 /// The components `local` names in `file` through that file's own
-/// declarations and imports only, never by bare binding name elsewhere. An
-/// import is also followed through barrels, `export *` included, to the
-/// module that declares it.
+/// declarations and imports only, never by bare binding name elsewhere. A
+/// named import, or a member of a namespace import (`ui.R`), is also followed
+/// through barrels, `export *` included, to the module that declares it.
 fn resolve_declared_identity(
     file: &str,
     local: &str,
@@ -1477,15 +1477,26 @@ fn resolve_declared_identity(
     if !ids.is_empty() {
         return ids;
     }
-    let Some(import) = files.get(file).and_then(|ff| ff.imports.iter().find(|i| i.local == local))
-    else {
+    let Some(ff) = files.get(file) else {
         return ids;
     };
-    let Some((declaring_file, exported)) =
-        resolve_import_source(file, &import.source, files, inputs).and_then(|module| {
-            crate::family_members::follow_exports(module, import.imported.clone(), files, inputs)
-        })
-    else {
+    // A named import (`R`), or one member of a namespace import (`ui.R`).
+    let imported = match local.split_once('.') {
+        None => ff
+            .imports
+            .iter()
+            .find(|i| i.local == local)
+            .map(|import| (&import.source, import.imported.clone())),
+        Some((namespace, member)) if !member.contains('.') => ff
+            .namespace_imports
+            .get(namespace)
+            .map(|source| (source, member.to_string())),
+        Some(_) => None,
+    };
+    let Some((declaring_file, exported)) = imported.and_then(|(source, name)| {
+        let module = resolve_import_source(file, source, files, inputs)?;
+        crate::family_members::follow_exports(module, name, files, inputs)
+    }) else {
         return ids;
     };
     let declared = files
@@ -1512,13 +1523,17 @@ fn resolve_identity(
     // last segment names the component there (`const Compound = { Item }`).
     if let Some((path_head, last)) = local.rsplit_once('.') {
         let root = path_head.split('.').next().unwrap_or(path_head);
-        let root_file = files
-            .get(file)
-            .and_then(|ff| ff.imports.iter().find(|i| i.local == root))
-            .and_then(|imp| resolve_import_source(file, &imp.source, files, inputs))
-            .unwrap_or_else(|| file.to_string());
-        let local_id = format!("{}::{}", root_file, last);
-        if evaluated_ids.contains(&local_id) {
+        // An imported root (named or namespace) names its module, and one the
+        // analysis cannot resolve names nothing here.
+        let root_file = match files.get(file).map(|ff| {
+            let import = ff.imports.iter().find(|i| i.local == root).map(|i| &i.source);
+            import.or_else(|| ff.namespace_imports.get(root))
+        }) {
+            Some(Some(source)) => resolve_import_source(file, source, files, inputs),
+            _ => Some(file.to_string()),
+        };
+        let local_id = root_file.map(|root_file| format!("{root_file}::{last}"));
+        if let Some(local_id) = local_id.filter(|id| evaluated_ids.contains(id)) {
             return vec![local_id];
         }
         return by_bare_name(last);
@@ -3241,14 +3256,15 @@ fn run_with_system_floor(
                 names.push(alias);
             }
         }
+        // Through the file's own declarations and imports only: an outside
+        // package's `R` never opens a project component named `R`.
         for name in names {
-            escaped_ids.extend(resolve_usage_identity(
+            escaped_ids.extend(resolve_declared_identity(
                 path,
                 name,
                 files,
                 inputs,
                 &evaluated_ids,
-                &ids_by_binding,
             ));
         }
     }
@@ -6541,6 +6557,40 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
                 kept_options(&[("r.tsx", RECIPE), ("app.tsx", app.as_str())]),
                 (vec!["sm", "md", "lg"], vec!["active", "busy"]),
                 "{setup}"
+            );
+        }
+    }
+
+    /// An escape opens the component the escaping file names through its own
+    /// imports, never a project component that only shares the name.
+    #[test]
+    fn escapes_of_outside_components_leave_same_named_project_components_pruned() {
+        let app = "import { R } from './r';\nexport const App = () => <R size=\"sm\" active />;\n";
+        for other in [
+            "import { R } from 'some-lib';\nconst pick = (c) => c;\nexport const X = pick(R);\n",
+            "import * as Lib from 'some-lib';\nconst pick = (c) => c;\nexport const X = pick(Lib.R);\n",
+            "import { Lib } from 'some-lib';\nconst pick = (c) => c;\nexport const X = pick(Lib.R);\n",
+        ] {
+            assert_eq!(
+                kept_options(&[("r.tsx", RECIPE), ("app.tsx", app), ("other.tsx", other)]),
+                (vec!["sm"], vec!["active"]),
+                "{other}"
+            );
+        }
+        for other in [
+            "import { R } from './r';\nconst pick = (c) => c;\nexport const X = pick(R);\n",
+            "import * as ui from './r';\nconst pick = (c) => c;\nexport const X = pick(ui.R);\n",
+            "import { R } from './barrel';\nconst pick = (c) => c;\nexport const X = pick(R);\n",
+        ] {
+            assert_eq!(
+                kept_options(&[
+                    ("r.tsx", RECIPE),
+                    ("barrel.ts", "export * from './r';\n"),
+                    ("app.tsx", app),
+                    ("other.tsx", other),
+                ]),
+                (vec!["sm", "md", "lg"], vec!["active", "busy"]),
+                "{other}"
             );
         }
     }
