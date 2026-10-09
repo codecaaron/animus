@@ -3,8 +3,8 @@
  * values with their expectations. It writes the browser it ran on, and every
  * observed value, to `.receipts/browser-fixtures.json`.
  *
- * The showcase case reads the `--current-bg` registration from the built
- * showcase stylesheet, so it needs `packages/showcase/dist`, and the runner
+ * The showcase cases read the built showcase stylesheet, so they need
+ * `packages/showcase/dist` (or `ANIMUS_SHOWCASE_DIST`), and the runner
  * imports the built `@animus-ui/assertions` package (`vp run build:ts`).
  */
 import { findCssFiles, readAllConcat } from '@animus-ui/assertions';
@@ -13,38 +13,71 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright-core';
 
+import { resolveClasses } from '../../packages/system/src/runtime/resolveClasses';
 import {
   PLATFORM_CASES,
+  SHOWCASE_BG_SLOT,
   showcaseCurrentBg,
+  showcaseRuntimeCurrentBg,
   VIEWPORT_WIDTH,
   type FixtureCase,
-  type Probe,
 } from './cases';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
-const SHOWCASE_DIST = resolve(ROOT, 'packages', 'showcase', 'dist');
+const SHOWCASE_DIST =
+  process.env.ANIMUS_SHOWCASE_DIST ??
+  resolve(ROOT, 'packages', 'showcase', 'dist');
 const RECEIPT = resolve(ROOT, '.receipts', 'browser-fixtures.json');
 
-interface ProbeResult extends Probe {
+interface ProbeResult {
   case: string;
+  label: string;
+  selector: string;
+  property: string;
+  expected: string;
   actual: string;
 }
 
-async function showcaseCase(): Promise<FixtureCase> {
-  const files = await findCssFiles(SHOWCASE_DIST);
-  const registration = /@property\s+--current-bg\s*\{[^}]*\}/.exec(
-    await readAllConcat(files)
-  )?.[0];
-  if (registration === undefined) {
+function runtimeBg(value: string) {
+  const { classes, dynamicStyle } = resolveClasses(
+    '',
+    { bg: value },
+    { systemPropNames: ['bg'] },
+    {},
+    { bg: SHOWCASE_BG_SLOT }
+  );
+  return {
+    className: classes.join(' ').trim(),
+    style: Object.entries(dynamicStyle ?? {})
+      .map(([name, css]) => `${name}: ${css}`)
+      .join('; '),
+  };
+}
+
+async function showcaseCases(): Promise<FixtureCase[]> {
+  const css = await readAllConcat(await findCssFiles(SHOWCASE_DIST));
+  const registration = /@property\s+--current-bg\s*\{[^}]*\}/.exec(css)?.[0];
+  const staticBg =
+    /\.(animus-u-[0-9a-f]{8})\{background-color:(var\(--color-[\w-]+\));--current-bg:\2\}/.exec(
+      css
+    );
+  if (registration === undefined || staticBg === null) {
     throw new Error(
-      `No @property --current-bg rule under ${SHOWCASE_DIST}. Build the showcase first: vp run @animus-ui/showcase#verify:build`
+      `No @property --current-bg rule or static bg utility under ${SHOWCASE_DIST}. Build the showcase first: vp run @animus-ui/showcase#verify:build`
     );
   }
-  return showcaseCurrentBg(registration);
+  return [
+    showcaseCurrentBg(registration),
+    showcaseRuntimeCurrentBg(
+      css,
+      { className: staticBg[1], value: staticBg[2] },
+      runtimeBg
+    ),
+  ];
 }
 
 async function main(): Promise<void> {
-  const cases = [...PLATFORM_CASES, await showcaseCase()];
+  const cases = [...PLATFORM_CASES, ...(await showcaseCases())];
   const browser = await chromium.launch();
   const browserName = browser.browserType().name();
   const browserVersion = browser.version();
@@ -57,22 +90,39 @@ async function main(): Promise<void> {
       await page.setContent(
         `<!doctype html><html><head><style>body { margin: 0; } ${fixture.css}</style></head><body>${fixture.body}</body></html>`
       );
-      for (const probe of fixture.probes) {
-        const actual = await page.evaluate(
-          ({ selector, pseudo, property }) => {
-            const element = document.querySelector(selector);
-            if (element === null) return `missing element ${selector}`;
-            return getComputedStyle(element, pseudo ?? null).getPropertyValue(
-              property
-            );
+      const computed = (selector: string, property: string, pseudo?: string) =>
+        page.evaluate(
+          (read) => {
+            const element = document.querySelector(read.selector);
+            if (element === null) return `missing element ${read.selector}`;
+            return getComputedStyle(
+              element,
+              read.pseudo ?? null
+            ).getPropertyValue(read.property);
           },
-          {
-            selector: probe.selector,
-            pseudo: probe.pseudo,
-            property: probe.property,
-          }
+          { selector, property, pseudo }
         );
-        results.push({ ...probe, case: fixture.name, actual });
+      for (const probe of fixture.probes) {
+        const actual = await computed(
+          probe.selector,
+          probe.property,
+          probe.pseudo
+        );
+        const expected =
+          'sameAs' in probe
+            ? await computed(
+                probe.sameAs,
+                probe.sameAsProperty ?? probe.property
+              )
+            : probe.expected;
+        results.push({
+          case: fixture.name,
+          label: probe.label,
+          selector: probe.selector,
+          property: probe.property,
+          expected,
+          actual,
+        });
       }
     }
   } finally {

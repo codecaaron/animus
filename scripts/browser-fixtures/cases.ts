@@ -1,16 +1,19 @@
 /**
  * Custom-property semantics as a browser computes them. Each case is a page of
  * plain CSS and markup, and each probe reads one computed value. Only the
- * showcase case uses Animus output; the rest document platform behaviour.
+ * showcase cases use Animus output; the rest document platform behaviour.
  */
 
-export interface Probe {
+interface ProbeTarget {
   label: string;
   selector: string;
   pseudo?: '::before';
   property: string;
-  expected: string;
 }
+
+/** A probe expects a literal, or another element's computed value. */
+export type Probe = ProbeTarget &
+  ({ expected: string } | { sameAs: string; sameAsProperty?: string });
 
 export interface FixtureCase {
   name: string;
@@ -326,6 +329,71 @@ export function showcaseCurrentBg(registration: string): FixtureCase {
       {
         label: 'a child reader gets the written colour',
         selector: '#footer',
+        property: 'border-top-color',
+        expected: RED,
+      },
+    ],
+  };
+}
+
+/** The runtime configuration the showcase build emits for its `bg` prop. */
+export const SHOWCASE_BG_SLOT = {
+  varName: '--animus-bg',
+  slotClass: 'animus-dyn-bg',
+  property: 'backgroundColor',
+  currentVar: '--current-bg',
+};
+
+export interface RuntimeWrite {
+  className: string;
+  style: string;
+}
+
+/**
+ * The showcase stylesheet with a runtime `bg` as the runtime resolver applies
+ * it. Its slot writes `--current-bg` as a static `bg` write does, and a value
+ * that reads `--current-bg` takes the slot that leaves it alone: writing it
+ * would make the variable cyclic and the background transparent.
+ */
+export function showcaseRuntimeCurrentBg(
+  css: string,
+  staticWrite: { className: string; value: string },
+  write: (value: string) => RuntimeWrite
+): FixtureCase {
+  const runtime = write(staticWrite.value);
+  const selfReading = write('var(--current-bg)');
+  return {
+    name: "the showcase's runtime bg and the current-bg its children read",
+    css: `${css}
+      .reader { border-top: 1px solid var(--current-bg); }`,
+    body: `<div style="--current-bg: ${RED}">
+      <div class="${staticWrite.className}" id="static"><div class="reader" id="static-reader"></div></div>
+      <div class="${runtime.className}" style="${runtime.style}" id="runtime"><div class="reader" id="runtime-reader"></div></div>
+      <div class="${selfReading.className}" style="${selfReading.style}" id="self"><div class="reader" id="self-reader"></div></div>
+    </div>`,
+    probes: [
+      {
+        label: 'a static bg reaches its child reader',
+        selector: '#static-reader',
+        property: 'border-top-color',
+        sameAs: '#static',
+        sameAsProperty: 'background-color',
+      },
+      {
+        label: 'the same runtime bg reaches its child reader',
+        selector: '#runtime-reader',
+        property: 'border-top-color',
+        sameAs: '#static-reader',
+      },
+      {
+        label: 'a runtime bg reading current-bg paints the context colour',
+        selector: '#self',
+        property: 'background-color',
+        expected: RED,
+      },
+      {
+        label: 'and its child still reads the context colour',
+        selector: '#self-reader',
         property: 'border-top-color',
         expected: RED,
       },

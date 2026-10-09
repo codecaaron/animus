@@ -1,15 +1,18 @@
 parity baseline — engines: baseline:v2 vs v2 — devMode: false
 
-Units passed: 64/66 (96.97%)
-Divergences: 6 (6 unregistered)
+Units passed: 63/66 (95.45%)
+Divergences: 9 (9 unregistered)
 
 Failing units (sorted):
-  extract-all · code (UNREGISTERED) [1a0df1658be1f6cb7da107a244ad8483998c9ab9e4819b789ca34da7470dabfe -> 8c4319368a95bb39eb00b2887c58fc61faf8ef94e145afa471e4151c919e20b7] — custom-props.tsx: transformed code not AST-equivalent
-  extract-all · css [selector] (UNREGISTERED) [7d23755a43d33c1d968f9659184ddfa821494f2d81626865d3c29ab2735cd4de -> a7b24ae83e93fadf8567e69d355d28d5e73646a108b792c25e9cc4a3b5f38542] — CSS bytes differ (56682 vs 59299)
-  extract-all · observables (UNREGISTERED) [17044a9329dcb25abcb6407c09e03fd789fabf42319e98e2630dd2264b1a1695 -> 76a7d917610bb21408044fbc0f8b4992ac9758aa06c31234969cbbc4976f1872] — sheetsJson differs
-  extract/custom-props.tsx · code (UNREGISTERED) [66958e9b0d29f69677b73d9ca3187f6345d44e174d9172a04f3f1f6512d87b57 -> 7ae4e60ba3dca5b4ac52e7fb5a81f25d1dcc621ede0bc4b99e6ab86783c37f8a] — custom-props.tsx: transformed code not AST-equivalent
-  extract/custom-props.tsx · css [selector] (UNREGISTERED) [aa53b9fadd7265fc4b64c8f4feb0f9ea72db352b8f79a36e1c789bdad628f296 -> eb2dddcdb52ced19955c7f25ed9342f22080011f163420cdf9d2e7892d320296] — CSS bytes differ (10436 vs 13053)
-  extract/custom-props.tsx · observables (UNREGISTERED) [ca0c6281fe89315940afa6f3570cd0045f08215fae5241b09455aac0d1991480 -> 1bb57e92d287b36ff86e46f4f865ff629ecd248219eb9b5a28d769601ae0c654] — sheetsJson differs
+  extract-all · css [selector] (UNREGISTERED) [a7b24ae83e93fadf8567e69d355d28d5e73646a108b792c25e9cc4a3b5f38542 -> 01d820d2dbb4284f93c675696bc24f459b1982bed19c95f3d27cd7a7ef8275b2] — CSS bytes differ (59299 vs 60187)
+  extract-all · observables (UNREGISTERED) [76a7d917610bb21408044fbc0f8b4992ac9758aa06c31234969cbbc4976f1872 -> a0e9d2a5780296592c778d337601c8a4bb879c426a64dafd2fed240f40d9d2bc] — dynamicPropsJson differs
+  extract-all · observables (UNREGISTERED) [76a7d917610bb21408044fbc0f8b4992ac9758aa06c31234969cbbc4976f1872 -> a0e9d2a5780296592c778d337601c8a4bb879c426a64dafd2fed240f40d9d2bc] — sheetsJson differs
+  extract/system-props.tsx · css [selector] (UNREGISTERED) [b9440014de89f2e4275d25490feb24572e26d495773cc632b3a1d9bef2fe2e35 -> 24ac77946339bc9d23cf921d87283ebf02d64f093d327eaea1690709b2a1fc4f] — CSS bytes differ (47164 vs 48052)
+  extract/system-props.tsx · observables (UNREGISTERED) [c70dc0421d39c21ad0cb9f1b911c88ef11e6e2f78b56c6ca3b7c74af6251eefc -> 3dc2491e645f42291f3d1d58b2d97a2c0c7f1d76a431a7f0c8798c50433585f9] — dynamicPropsJson differs
+  extract/system-props.tsx · observables (UNREGISTERED) [c70dc0421d39c21ad0cb9f1b911c88ef11e6e2f78b56c6ca3b7c74af6251eefc -> 3dc2491e645f42291f3d1d58b2d97a2c0c7f1d76a431a7f0c8798c50433585f9] — sheetsJson differs
+  integration/system-props.tsx · css [selector] (UNREGISTERED) [c2e617418c7f47206efccb4c153a2f65def5a2129cdd0c2d65ae303d4852d365 -> 2e5130d3a4b97aa90e2ec2eb786a239865e108149d12da83e8bd7ab28cfa6e88] — CSS bytes differ (39916 vs 40804)
+  integration/system-props.tsx · observables (UNREGISTERED) [749f94e24101b7386442f74d79d3d3f871d8e9b6f558773e5a639d7700915242 -> dfdb6b2ce6f3c0286dd1d843226df74d90173567c1ae449c6bdbc9361570c29e] — dynamicPropsJson differs
+  integration/system-props.tsx · observables (UNREGISTERED) [749f94e24101b7386442f74d79d3d3f871d8e9b6f558773e5a639d7700915242 -> dfdb6b2ce6f3c0286dd1d843226df74d90173567c1ae449c6bdbc9361570c29e] — sheetsJson differs
 
 Usage-case families:
   ok mdx-provider-scope — expected identical, observed identical
@@ -31,16 +34,19 @@ Usage-case families:
 
 parity baseline — engines: baseline:v2 vs v2 — devMode: true
 
-Units passed: 64/66 (96.97%)
-Divergences: 6 (6 unregistered)
+Units passed: 63/66 (95.45%)
+Divergences: 9 (9 unregistered)
 
 Failing units (sorted):
-  extract-all · code (UNREGISTERED) [1a0df1658be1f6cb7da107a244ad8483998c9ab9e4819b789ca34da7470dabfe -> 8c4319368a95bb39eb00b2887c58fc61faf8ef94e145afa471e4151c919e20b7] — custom-props.tsx: transformed code not AST-equivalent
-  extract-all · css [selector] (UNREGISTERED) [40c73f8b65edb2c2841720ef23eaa47adcf4cc389ee3ca64d25dbf55b677b3b2 -> d5083e2f0d090d60d43b3b3337bf696fd0cb16104fda8e64401a19024a959b5c] — CSS bytes differ (56910 vs 59527)
-  extract-all · observables (UNREGISTERED) [605d2a841dfe1e2c119bb803cd1749ce2ab5c96c794c0c8b999794eb3da209d4 -> 6b4d002fcb0f51e5ddeaf29247a27865264436c9a597233d69a8b3e993f4e20d] — sheetsJson differs
-  extract/custom-props.tsx · code (UNREGISTERED) [66958e9b0d29f69677b73d9ca3187f6345d44e174d9172a04f3f1f6512d87b57 -> 7ae4e60ba3dca5b4ac52e7fb5a81f25d1dcc621ede0bc4b99e6ab86783c37f8a] — custom-props.tsx: transformed code not AST-equivalent
-  extract/custom-props.tsx · css [selector] (UNREGISTERED) [aa53b9fadd7265fc4b64c8f4feb0f9ea72db352b8f79a36e1c789bdad628f296 -> eb2dddcdb52ced19955c7f25ed9342f22080011f163420cdf9d2e7892d320296] — CSS bytes differ (10436 vs 13053)
-  extract/custom-props.tsx · observables (UNREGISTERED) [ca0c6281fe89315940afa6f3570cd0045f08215fae5241b09455aac0d1991480 -> 1bb57e92d287b36ff86e46f4f865ff629ecd248219eb9b5a28d769601ae0c654] — sheetsJson differs
+  extract-all · css [selector] (UNREGISTERED) [d5083e2f0d090d60d43b3b3337bf696fd0cb16104fda8e64401a19024a959b5c -> 657141c25a8339d8571ee636d5358096926eaee0b8ab7a0144aee36a3bd088e1] — CSS bytes differ (59527 vs 60415)
+  extract-all · observables (UNREGISTERED) [6b4d002fcb0f51e5ddeaf29247a27865264436c9a597233d69a8b3e993f4e20d -> 7e92052e044dc3593202a519b85ea442ed4f6f8bb8587a96c2d0a9e42531c1e3] — dynamicPropsJson differs
+  extract-all · observables (UNREGISTERED) [6b4d002fcb0f51e5ddeaf29247a27865264436c9a597233d69a8b3e993f4e20d -> 7e92052e044dc3593202a519b85ea442ed4f6f8bb8587a96c2d0a9e42531c1e3] — sheetsJson differs
+  extract/system-props.tsx · css [selector] (UNREGISTERED) [b9440014de89f2e4275d25490feb24572e26d495773cc632b3a1d9bef2fe2e35 -> 24ac77946339bc9d23cf921d87283ebf02d64f093d327eaea1690709b2a1fc4f] — CSS bytes differ (47164 vs 48052)
+  extract/system-props.tsx · observables (UNREGISTERED) [c70dc0421d39c21ad0cb9f1b911c88ef11e6e2f78b56c6ca3b7c74af6251eefc -> 3dc2491e645f42291f3d1d58b2d97a2c0c7f1d76a431a7f0c8798c50433585f9] — dynamicPropsJson differs
+  extract/system-props.tsx · observables (UNREGISTERED) [c70dc0421d39c21ad0cb9f1b911c88ef11e6e2f78b56c6ca3b7c74af6251eefc -> 3dc2491e645f42291f3d1d58b2d97a2c0c7f1d76a431a7f0c8798c50433585f9] — sheetsJson differs
+  integration/system-props.tsx · css [selector] (UNREGISTERED) [c2e617418c7f47206efccb4c153a2f65def5a2129cdd0c2d65ae303d4852d365 -> 2e5130d3a4b97aa90e2ec2eb786a239865e108149d12da83e8bd7ab28cfa6e88] — CSS bytes differ (39916 vs 40804)
+  integration/system-props.tsx · observables (UNREGISTERED) [749f94e24101b7386442f74d79d3d3f871d8e9b6f558773e5a639d7700915242 -> dfdb6b2ce6f3c0286dd1d843226df74d90173567c1ae449c6bdbc9361570c29e] — dynamicPropsJson differs
+  integration/system-props.tsx · observables (UNREGISTERED) [749f94e24101b7386442f74d79d3d3f871d8e9b6f558773e5a639d7700915242 -> dfdb6b2ce6f3c0286dd1d843226df74d90173567c1ae449c6bdbc9361570c29e] — sheetsJson differs
 
 Usage-case families:
   ok mdx-provider-scope — expected identical, observed identical

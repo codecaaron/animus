@@ -762,6 +762,7 @@ mod tests {
             transform_id: transform_id.map(str::to_string),
             transform_fn_source: transform_fn_source.map(str::to_string),
             scale_values: BTreeMap::new(),
+            current_var: None,
         })
     }
 

@@ -743,6 +743,17 @@ fn resolve_color_family_pass_through(
     None
 }
 
+/// Whether a prop with `current_var` also writes `value` to it: a value that
+/// reads the variable itself, with or without a fallback, would make it
+/// cyclic, so it leaves it alone. The runtime resolver keeps an identical
+/// predicate.
+pub fn writes_current_var(value: &str, current_var: &str) -> bool {
+    let read = format!("var({current_var}");
+    !value
+        .match_indices(&read)
+        .any(|(at, _)| matches!(value[at + read.len()..].chars().next(), Some(')' | ',')))
+}
+
 #[allow(clippy::too_many_arguments)]
 fn resolve_single_prop(
     prop_name: &str,
@@ -810,8 +821,7 @@ fn resolve_single_prop(
         .collect();
 
     if let Some(current_var) = &prop_config.current_var {
-        let self_ref = format!("var({})", current_var);
-        if !resolved_value.contains(&self_ref) {
+        if writes_current_var(&resolved_value, current_var) {
             declarations.push(CssDeclaration {
                 property: current_var.clone(),
                 value: resolved_value,
@@ -1693,6 +1703,23 @@ mod tests {
             $( s.insert($val.to_string()); )*
             s
         }};
+    }
+
+    /// The runtime resolver keeps an identical predicate and pins these
+    /// same resolved values; the source each one comes from is noted.
+    #[test]
+    fn a_value_reading_its_own_current_var_skips_the_write() {
+        for (resolved, writes) in [
+            ("var(--current-bg)", false),                                      // 'current-bg'
+            ("color-mix(in srgb, var(--current-bg) 85%, transparent)", false), // '{colors.current-bg/85}'
+            ("var(--current-bg, red)", false),
+            ("var(--current-bg,red)", false),
+            ("var(--color-ink)", true),                                        // 'ink'
+            ("#0af", true),
+            ("var(--current-bg-alt)", true),
+        ] {
+            assert_eq!(writes_current_var(resolved, "--current-bg"), writes, "{resolved}");
+        }
     }
 
     fn test_config() -> PropConfigMap {

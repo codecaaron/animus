@@ -1864,58 +1864,51 @@ pub fn build_variable_slot_entries(
     // A declaration prop's consuming rules render in the declaration band.
     for meta in dynamic_props.values().filter_map(DynamicPropMeta::value) {
         let css_property = camel_to_kebab(&meta.property);
-
-        let base_declarations = if meta.properties.is_empty() {
-            vec![CssDeclaration {
-                property: css_property.clone(),
-                value: format!("var({})", meta.var_name),
-            }]
-        } else {
-            meta.properties
-                .iter()
-                .map(|p| CssDeclaration {
-                    property: camel_to_kebab(p),
-                    value: format!("var({})", meta.var_name),
-                })
-                .collect()
-        };
-
-        let styles = ResolvedStyles {
-            declarations: base_declarations,
-            pseudo_selectors: vec![],
-            conditioned: vec![],
-        };
-
-        entries.push((meta.slot_class.clone(), styles, css_property.clone()));
-
-        // One class per breakpoint: the runtime applies only the breakpoints
-        // the callsite provides, so unset ones cannot leak into the cascade.
-        for (bp_name, _) in &sorted_bps {
-            let bp_var = format!("{}-{}", meta.var_name, bp_name);
-            let bp_class = format!("{}-{}", meta.slot_class, bp_name);
-
-            let bp_decls = if meta.properties.is_empty() {
-                vec![CssDeclaration {
-                    property: css_property.clone(),
-                    value: format!("var({})", bp_var),
-                }]
+        let declarations = |var: &str, write_current_var: bool| {
+            let value = format!("var({var})");
+            let mut declarations: Vec<CssDeclaration> = if meta.properties.is_empty() {
+                vec![CssDeclaration { property: css_property.clone(), value: value.clone() }]
             } else {
                 meta.properties
                     .iter()
-                    .map(|p| CssDeclaration {
-                        property: camel_to_kebab(p),
-                        value: format!("var({})", bp_var),
-                    })
+                    .map(|p| CssDeclaration { property: camel_to_kebab(p), value: value.clone() })
                     .collect()
             };
+            if let Some(current_var) = meta.current_var.as_ref().filter(|_| write_current_var) {
+                declarations.push(CssDeclaration { property: current_var.clone(), value });
+            }
+            declarations
+        };
+        // A prop with `current_var` writes it as its static path does, and a
+        // second slot leaves it alone for a value that reads it, which would
+        // otherwise make the variable cyclic.
+        let slots: &[(String, bool)] = &match meta.current_var {
+            Some(_) => vec![(meta.slot_class.clone(), true), (format!("{}--keep", meta.slot_class), false)],
+            None => vec![(meta.slot_class.clone(), false)],
+        };
 
-            let bp_styles = ResolvedStyles {
-                declarations: vec![],
+        for (slot_class, write_current_var) in slots {
+            let styles = ResolvedStyles {
+                declarations: declarations(&meta.var_name, *write_current_var),
                 pseudo_selectors: vec![],
-                conditioned: vec![ConditionedGroup::breakpoint(bp_name.to_string(), bp_decls)],
+                conditioned: vec![],
             };
+            entries.push((slot_class.clone(), styles, css_property.clone()));
 
-            entries.push((bp_class, bp_styles, css_property.clone()));
+            // One class per breakpoint: the runtime applies only the breakpoints
+            // the callsite provides, so unset ones cannot leak into the cascade.
+            for (bp_name, _) in &sorted_bps {
+                let bp_var = format!("{}-{}", meta.var_name, bp_name);
+                let bp_styles = ResolvedStyles {
+                    declarations: vec![],
+                    pseudo_selectors: vec![],
+                    conditioned: vec![ConditionedGroup::breakpoint(
+                        bp_name.to_string(),
+                        declarations(&bp_var, *write_current_var),
+                    )],
+                };
+                entries.push((format!("{slot_class}-{bp_name}"), bp_styles, css_property.clone()));
+            }
         }
     }
 
@@ -2609,6 +2602,65 @@ mod tests {
         assert!(out.css.contains(class_name.as_str()));
     }
 
+    fn slot_meta(current_var: Option<&str>) -> HashMap<String, DynamicPropMeta> {
+        let mut dynamic_props = HashMap::new();
+        dynamic_props.insert(
+            "bg".to_string(),
+            DynamicPropMeta::Value(crate::dynamic_meta::ValuePropMeta {
+                var_name: "--animus-bg".to_string(),
+                slot_class: "animus-dyn-bg".to_string(),
+                property: "backgroundColor".to_string(),
+                properties: vec![],
+                negative: false,
+                strict: false,
+                keywords: vec![],
+                transform_name: None,
+                transform_id: None,
+                transform_fn_source: None,
+                scale_values: std::collections::BTreeMap::new(),
+                current_var: current_var.map(str::to_string),
+            }),
+        );
+        dynamic_props
+    }
+
+    fn declarations_of(styles: &ResolvedStyles) -> Vec<(String, String)> {
+        styles
+            .declarations
+            .iter()
+            .chain(styles.breakpoint_groups().flat_map(|(_, declarations)| declarations))
+            .map(|d| (d.property.clone(), d.value.clone()))
+            .collect()
+    }
+
+    #[test]
+    fn a_current_var_slot_writes_it_and_has_a_slot_that_leaves_it_alone() {
+        let entries = build_variable_slot_entries(&slot_meta(Some("--current-bg")), &test_breakpoints());
+        let by_class: HashMap<&str, Vec<(String, String)>> =
+            entries.iter().map(|(class, styles, _)| (class.as_str(), declarations_of(styles))).collect();
+        let decl = |p: &str, v: &str| (p.to_string(), v.to_string());
+
+        assert_eq!(
+            by_class["animus-dyn-bg"],
+            [decl("background-color", "var(--animus-bg)"), decl("--current-bg", "var(--animus-bg)")]
+        );
+        assert_eq!(by_class["animus-dyn-bg--keep"], [decl("background-color", "var(--animus-bg)")]);
+        assert_eq!(
+            by_class["animus-dyn-bg-md"],
+            [decl("background-color", "var(--animus-bg-md)"), decl("--current-bg", "var(--animus-bg-md)")]
+        );
+        assert_eq!(by_class["animus-dyn-bg--keep-md"], [decl("background-color", "var(--animus-bg-md)")]);
+        assert_eq!(entries.len(), 12);
+    }
+
+    #[test]
+    fn a_slot_without_current_var_is_unchanged() {
+        let entries = build_variable_slot_entries(&slot_meta(None), &test_breakpoints());
+        assert_eq!(entries.len(), 6);
+        assert!(entries.iter().all(|(class, styles, _)| !class.contains("--keep")
+            && declarations_of(styles).iter().all(|(property, _)| property == "background-color")));
+    }
+
     #[test]
     fn variable_slot_single_property() {
         let mut dynamic_props = HashMap::new();
@@ -2626,6 +2678,7 @@ mod tests {
                 transform_id: None,
                 transform_fn_source: None,
                 scale_values: std::collections::BTreeMap::new(),
+                current_var: None,
             }),
         );
         let bp = test_breakpoints();
@@ -2665,6 +2718,7 @@ mod tests {
                 transform_id: None,
                 transform_fn_source: None,
                 scale_values: std::collections::BTreeMap::new(),
+                current_var: None,
             }),
         );
         let bp = test_breakpoints();
@@ -2704,6 +2758,7 @@ mod tests {
                 transform_id: None,
                 transform_fn_source: None,
                 scale_values: std::collections::BTreeMap::new(),
+                current_var: None,
             }),
         );
         let bp = test_breakpoints();

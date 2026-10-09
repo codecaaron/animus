@@ -12,6 +12,8 @@ interface ValuePropMeta {
   negative?: boolean;
   strict?: boolean;
   keywords?: readonly string[];
+  /** The custom property a write of the prop also sets. */
+  currentVar?: string | null;
   kind?: never;
 }
 
@@ -39,6 +41,7 @@ interface ValuePropConfigEntry {
   negative?: boolean;
   strict?: boolean;
   keywords?: readonly string[];
+  currentVar?: string;
   kind?: never;
 }
 
@@ -95,6 +98,7 @@ export function buildDynamicPropConfig(
     if (meta.negative) entry.negative = true;
     if (meta.strict) entry.strict = true;
     if (meta.keywords?.length) entry.keywords = meta.keywords;
+    if (meta.currentVar) entry.currentVar = meta.currentVar;
     configEntries[propName] = entry;
   }
   return configEntries;

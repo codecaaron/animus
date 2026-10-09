@@ -39,6 +39,7 @@ describe('buildDynamicPropConfig', () => {
             negative: true,
             strict: true,
             keywords: ['auto', 'inherit'],
+            currentVar: '--current-mx',
           },
         })
       )
@@ -46,7 +47,7 @@ describe('buildDynamicPropConfig', () => {
       '{"mx":{"varName":"--animus-mx","slotClass":"animus-dyn-mx","property":"margin",' +
         '"properties":["marginLeft","marginRight"],"transformName":"toSpace",' +
         '"transformId":"toSpace@system.mx","scaleValues":{"sm":"4px"},"negative":true,"strict":true,' +
-        '"keywords":["auto","inherit"]}}'
+        '"keywords":["auto","inherit"],"currentVar":"--current-mx"}}'
     );
   });
 

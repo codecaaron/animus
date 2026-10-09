@@ -221,6 +221,9 @@ pub(super) fn build_config(
             if !meta.scale_values.is_empty() {
                 fields.insert("scaleValues", json!(meta.scale_values));
             }
+            if let Some(ref current_var) = meta.current_var {
+                fields.insert("currentVar", json!(current_var));
+            }
             dynamic.insert(prop_name, Field::Object(fields));
         }
         config.insert("customDynamicConfig", Field::Object(dynamic));
@@ -293,6 +296,7 @@ mod tests {
             transform_id: None,
             transform_fn_source: None,
             scale_values: BTreeMap::new(),
+            current_var: None,
         }
     }
 
@@ -313,6 +317,7 @@ mod tests {
             transform_name: Some("size".into()),
             transform_id: Some("theme.ts#size".into()),
             scale_values: [("sm".to_string(), json!("4px"))].into_iter().collect(),
+            current_var: Some("--current-size".into()),
             ..value_meta("sized")
         };
         let lifted = ValuePropMeta {
@@ -357,7 +362,8 @@ mod tests {
                 r#""lift":{"varName":"--animus-lift","slotClass":"animus-dyn-lift","property":"width","transform":(v) => v * 2},"#,
                 r#""sized":{"varName":"--animus-sized","slotClass":"animus-dyn-sized","property":"width","#,
                 r#""properties":["width","height"],"negative":true,"strict":true,"keywords":["auto"],"#,
-                r#""transformName":"size","transform":transforms["theme.ts#size"],"scaleValues":{"sm":"4px"}},"#,
+                r#""transformName":"size","transform":transforms["theme.ts#size"],"scaleValues":{"sm":"4px"},"#,
+                r#""currentVar":"--current-size"},"#,
                 r#""tone":{"kind":"declarations","slotClass":"animus-dyn-tone","#,
                 r#""memberVars":{"color":"--animus-tone-color"},"declarationScaleValues":{}}}}"#,
             )

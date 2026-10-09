@@ -40,6 +40,8 @@ interface ValueDynamicPropConfig {
   strict?: boolean;
   /** The keywords a strict prop admits beside its tokens. */
   keywords?: readonly string[];
+  /** The custom property the prop's slot also writes. */
+  currentVar?: string;
   kind?: never;
 }
 
@@ -455,6 +457,33 @@ function warnTransformThrow(
   }
 }
 
+/**
+ * Whether `resolved` reads `currentVar`, with or without a fallback. The
+ * extractor's static path skips its `currentVar` write by the same predicate.
+ */
+function readsCurrentVar(resolved: string, currentVar: string): boolean {
+  const read = `var(${currentVar}`;
+  for (
+    let at = resolved.indexOf(read);
+    at !== -1;
+    at = resolved.indexOf(read, at + 1)
+  ) {
+    const next = resolved[at + read.length];
+    if (next === ')' || next === ',') return true;
+  }
+  return false;
+}
+
+/**
+ * A value that reads the prop's own `currentVar` takes the slot that leaves
+ * it alone, since writing it would make the variable cyclic.
+ */
+function slotClassFor(dc: ValueDynamicPropConfig, resolved: string): string {
+  return dc.currentVar !== undefined && readsCurrentVar(resolved, dc.currentVar)
+    ? `${dc.slotClass}--keep`
+    : dc.slotClass;
+}
+
 /** Through an inline variable these would act on the variable itself. */
 const CSS_WIDE_KEYWORDS: ReadonlySet<unknown> = new Set([
   'initial',
@@ -496,16 +525,17 @@ function applyDynamicProp(
       if (typeof resolved !== 'string') {
         return 'entry' in resolved ? { ...resolved, breakpoint: bp } : resolved;
       }
+      const slotClass = slotClassFor(dc, resolved);
       staged.push(
         bp === '_'
-          ? [dc.slotClass, dc.varName, resolved]
-          : [`${dc.slotClass}-${bp}`, `${dc.varName}-${bp}`, resolved]
+          ? [slotClass, dc.varName, resolved]
+          : [`${slotClass}-${bp}`, `${dc.varName}-${bp}`, resolved]
       );
     }
   } else {
     const resolved = resolveEntry(propValue, dc);
     if (typeof resolved !== 'string') return resolved;
-    staged.push([dc.slotClass, dc.varName, resolved]);
+    staged.push([slotClassFor(dc, resolved), dc.varName, resolved]);
   }
   for (const [cls, varName, resolved] of staged) {
     classes.push(cls);

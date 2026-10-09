@@ -50,6 +50,21 @@ keyword entry, and its other entries still use the inline variable. A prop
 that receives runtime values only through a spread, forwarding or an alias
 gets no keyword classes and keeps the old behaviour.
 
+**A prop's `currentVar` now carries runtime values to descendants.** A
+prop with `currentVar`, such as `bg` writing `--current-bg`, set that variable
+only when its value was static. A value that arrived at runtime reached the
+property through the inline variable but left `currentVar` alone, so children
+reading it saw an ancestor's or the initial value. The runtime slot now
+writes `currentVar` too, in the same layer as a static write. As with a
+static write, a value that reads the variable itself, such as `current-bg`
+or `{colors.current-bg/85}`, does not write it, because that would make it
+cyclic. Such a value takes a second slot class that leaves `currentVar`
+alone, so each prop with `currentVar` emits two slot classes at the base and
+at each breakpoint. Props without `currentVar` emit the same CSS as before.
+The check now also recognises a read with a fallback, such as
+`var(--current-bg, red)`, which a static write used to copy into
+`currentVar`, making it cyclic.
+
 **Selecting the removed v1 engine explains itself.** Setting `engine: 'v1'`
 or `ANIMUS_ENGINE=v1` still fails, and the error now says that the v1
 extraction engine is no longer supported, that v2 is the only engine, and to

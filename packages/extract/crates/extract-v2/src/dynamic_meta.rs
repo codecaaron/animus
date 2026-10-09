@@ -40,6 +40,9 @@ pub struct ValuePropMeta {
     pub transform_fn_source: Option<String>,
     /// BTreeMap: serialization order must be deterministic.
     pub scale_values: BTreeMap<String, Value>,
+    /// The custom property a write of the prop also sets.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_var: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -77,6 +80,7 @@ impl DynamicPropMeta {
             transform_id: config.transform_id.clone(),
             transform_fn_source: config.transform_fn_source.clone(),
             scale_values: scale_values(config, theme, contextual_vars),
+            current_var: config.current_var.clone(),
         })
     }
 
