@@ -1247,7 +1247,9 @@ fn add_utility_class(
     value_key: fn(&Value) -> String,
 ) {
     let style_obj = serde_json::json!({ &usage.prop_name: usage.value.clone() });
-    let resolved = resolve_styles(&style_obj, ctx, true);
+    // A usage value is no style block, so it reports no dropped key.
+    let usage_ctx = ResolveContext { dropped_keys: None, ..*ctx };
+    let resolved = resolve_styles(&style_obj, &usage_ctx, true);
 
     debug_assert!(
         resolved
@@ -2018,6 +2020,7 @@ mod tests {
                 transform_evaluator: None,
                 transform_failures: None,
                 token_misses: None,
+                dropped_keys: None,
             }
         }
     }
