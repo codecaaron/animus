@@ -216,6 +216,8 @@ describe('invalid @property registrations', () => {
     '@property --label { syntax: "<string>"; inherits: true; initial-value: "5em"; }',
     '@property --art { syntax: "<url>"; inherits: true; initial-value: url(a2ex.png); }',
     '@property --fade { syntax: "<image>"; inherits: true; initial-value: linear-gradient(red 1em, blue); }',
+    '@property --sub { syntax: "*"; inherits: false; initial-value: var(--foreign); }',
+    '@property --ratio { syntax: "<number>"; inherits: false; initial-value: calc(1px / 1px); }',
   ].join('\n');
 
   function load(prefix?: string) {
@@ -240,6 +242,10 @@ describe('invalid @property registrations', () => {
     expect(system.variableCss).toContain('@property --vw');
     expect(system.variableCss).toContain('@property --label');
     expect(system.variableCss).toContain('@property --art');
+    // An all-absolute math initial value is kept as its computed value.
+    expect(system.variableCss).toContain(
+      '@property --ratio { syntax: "<number>"; inherits: false; initial-value: 1; }'
+    );
     const reasons = Object.fromEntries(
       (system.invalidPropertyRegistrations ?? []).map((r) => [r.name, r.reason])
     );
@@ -250,6 +256,7 @@ describe('invalid @property registrations', () => {
       '--em',
       '--typo',
       '--fade',
+      '--sub',
     ]);
     for (const name of Object.keys(reasons)) {
       expect(system.variableCss).not.toContain(`@property ${name} `);
@@ -260,6 +267,9 @@ describe('invalid @property registrations', () => {
     );
     expect(reasons['--em']).toMatch(/^initialValue "1em" depends on context/);
     expect(reasons['--gap']).toMatch(/^the CSS parser rejects/);
+    expect(reasons['--sub']).toMatch(
+      /^initialValue "var\(--foreign\)" substitutes/
+    );
   });
 
   it('passes the property records through with their authored names', () => {
@@ -293,11 +303,9 @@ describe('invalid @property registrations', () => {
   it('becomes one strict-failing diagnostic per dropped rule', () => {
     const diagnostics = systemLoadDiagnostics(load());
     expect(diagnostics.map((d) => [d.component, d.code, d.severity])).toEqual(
-      ['--cap', '--tint', '--gap', '--em', '--typo', '--fade'].map((name) => [
-        name,
-        INVALID_PROPERTY_REGISTRATION,
-        'error',
-      ])
+      ['--cap', '--tint', '--gap', '--em', '--typo', '--fade', '--sub'].map(
+        (name) => [name, INVALID_PROPERTY_REGISTRATION, 'error']
+      )
     );
     expect(
       systemLoadDiagnostics({ invalidPropertyRegistrations: undefined })
@@ -331,9 +339,9 @@ describe('invalid @property registrations', () => {
       return warned.filter((m) => m.includes(INVALID_PROPERTY_REGISTRATION));
     };
     const system = load();
-    expect(analyze(system)).toHaveLength(6);
+    expect(analyze(system)).toHaveLength(7);
     expect(analyze(system)).toHaveLength(0);
-    expect(analyze(load())).toHaveLength(6);
+    expect(analyze(load())).toHaveLength(7);
     const strictSystem = load();
     expect(() => analyze(strictSystem, true)).toThrow(
       INVALID_PROPERTY_REGISTRATION
@@ -373,6 +381,6 @@ describe('invalid @property registrations', () => {
     analyze(false, (message) => warned.push(message));
     expect(
       warned.filter((m) => m.includes(INVALID_PROPERTY_REGISTRATION))
-    ).toHaveLength(6);
+    ).toHaveLength(7);
   });
 });

@@ -1,3 +1,8 @@
+import {
+  dependsOnContext,
+  foldInitialValue,
+  substitutesValue,
+} from '@animus-ui/properties';
 import { transform as lcssTransform } from 'lightningcss';
 
 /** A theme `@property` registration that browsers would ignore. */
@@ -29,36 +34,24 @@ const SYNTAX_TYPES = new Set([
 
 const SYNTAX_COMPONENT = /^(?:<([a-z-]+)>[+#]?|-?[a-zA-Z_][\w-]*)$/;
 
-/** The syntax types whose values can carry a font- or container-relative
- *  unit, which makes a typed initial value depend on context. */
-const DIMENSION_TYPES = new Set([
-  'image',
-  'length',
-  'length-percentage',
-  'transform-function',
-  'transform-list',
-]);
+const INITIAL_VALUE = /(initial-value\s*:\s*)([^;}]*)/;
 
-const RELATIVE_UNIT =
-  /(?:\d|\.)(?:r?em|r?ex|r?cap|r?ch|r?ic|r?lh|cq(?:w|h|i|b|min|max))\b/i;
-
-const SUBSTITUTION = /\b(?:var|env|attr)\(/i;
-
-/** Quoted strings and `url()` hold text, never units or substitutions. */
-const LITERAL_TEXT = /"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|url\([^)]*\)/gi;
+const MATH_FUNCTION = /\b(?:calc|min|max|clamp)\(/i;
 
 /**
  * Removes the `@property` rules browsers would ignore — an unknown syntax
  * component, a syntax other than `*` without an initial value, an initial
- * value that depends on context, or one the syntax does not accept.
- * Minifying a stylesheet that contains such a rule can also fail.
+ * value that substitutes another value or depends on context, or one the
+ * syntax does not accept. Minifying a stylesheet that contains such a rule
+ * can also fail. An all-absolute math initial value is written as its
+ * computed value, which the minifier reads.
  */
 export function splitInvalidPropertyRegistrations(css: string) {
   const invalid: InvalidPropertyRegistration[] = [];
   const kept = css.replace(PROPERTY_RULE, (rule: string, name: string) => {
-    const reason = registrationFailure(rule);
-    if (reason === null) return rule;
-    invalid.push({ name, reason });
+    const checked = checkRegistration(rule);
+    if ('rule' in checked) return checked.rule;
+    invalid.push({ name, reason: checked.reason });
     return '';
   });
   return { css: kept, invalid };
@@ -88,8 +81,18 @@ function readRegistration(rule: string): PropertyRegistration {
   };
 }
 
-function registrationFailure(rule: string): string | null {
+/** The rule to keep, with an all-absolute math initial value folded, or why
+ *  a browser would ignore it. */
+function checkRegistration(
+  rule: string
+): { rule: string } | { reason: string } {
   const { syntax, initialValue } = readRegistration(rule);
+  if (initialValue !== undefined && substitutesValue(initialValue)) {
+    return {
+      reason: `initialValue "${initialValue}" substitutes another value; var(), env() and attr() are not allowed in an initial value`,
+    };
+  }
+  let kept = rule;
   if (syntax !== '*') {
     const components = syntax.split('|').map((component) => ({
       text: component.trim(),
@@ -101,30 +104,43 @@ function registrationFailure(rule: string): string | null {
         (match[1] !== undefined && !SYNTAX_TYPES.has(match[1]))
     );
     if (unknown !== undefined) {
-      return `syntax "${syntax}" has the unknown component "${unknown.text}"`;
+      return {
+        reason: `syntax "${syntax}" has the unknown component "${unknown.text}"`,
+      };
     }
     if (initialValue === undefined) {
-      return `syntax "${syntax}" needs an initialValue`;
+      return { reason: `syntax "${syntax}" needs an initialValue` };
     }
-    const dimensional = components.some(
-      ({ match }) => match?.[1] !== undefined && DIMENSION_TYPES.has(match[1])
-    );
-    const value = initialValue.replace(LITERAL_TEXT, '');
-    if (
-      SUBSTITUTION.test(value) ||
-      (dimensional && RELATIVE_UNIT.test(value))
-    ) {
-      return `initialValue "${initialValue}" depends on context; font- and container-relative units and var(), env() and attr() are not allowed`;
+    if (dependsOnContext(initialValue)) {
+      return {
+        reason: `initialValue "${initialValue}" depends on context; font- and container-relative units are not allowed`,
+      };
+    }
+    const folded = foldInitialValue(syntax, initialValue);
+    if (folded !== undefined && !folded.accepted) {
+      return {
+        reason: `initialValue "${initialValue}" computes to the ${folded.type} ${folded.text}, which syntax "${syntax}" does not accept`,
+      };
+    }
+    if (folded !== undefined) {
+      kept = rule.replace(INITIAL_VALUE, `$1${folded.text}`);
     }
   }
   try {
     lcssTransform({
       filename: 'animus-registrations.css',
-      code: Buffer.from(rule),
+      code: Buffer.from(kept),
     });
-    return null;
+    return { rule: kept };
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
-    return `the CSS parser rejects \`${rule.trim()}\` (${detail})`;
+    if (initialValue !== undefined && MATH_FUNCTION.test(initialValue)) {
+      return {
+        reason: `the CSS parser that builds the stylesheet cannot read the math in initialValue "${initialValue}" (${detail}); write its computed value instead`,
+      };
+    }
+    return {
+      reason: `the CSS parser rejects \`${kept.trim()}\` (${detail})`,
+    };
   }
 }

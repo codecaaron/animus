@@ -1,3 +1,5 @@
+import { registeredInitialValue } from '@animus-ui/properties';
+
 import type { ContextualVarRegistration, ThemeManifest } from '../types/theme';
 
 /** Where a record was first declared. Kept for diagnostics; not serialized,
@@ -122,14 +124,20 @@ export function replaceScaleNames(
 
 /** The fields a contextual-variable registration sets, read literally: an
  *  untyped registration without a syntax keeps emitting `syntax: "undefined"`,
- *  which extraction reports as an invalid registration. */
+ *  which extraction reports as an invalid registration. An all-absolute math
+ *  initial value is recorded as its computed value (`calc(1px / 1px)` → `1`),
+ *  so both spellings are one registration, and CSS tooling reads the rule. */
 function legacyFields(
   registration: ContextualVarRegistration
 ): Pick<PropertyRecord, 'syntax' | 'inherits' | 'initialValue'> {
+  const syntax = `${registration.syntax}`;
   return {
-    syntax: `${registration.syntax}`,
+    syntax,
     inherits: registration.inherits ?? THEME_INHERITS,
-    initialValue: registration.initialValue,
+    initialValue:
+      registration.initialValue === undefined
+        ? undefined
+        : registeredInitialValue(syntax, registration.initialValue),
   };
 }
 
