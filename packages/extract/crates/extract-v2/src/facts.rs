@@ -275,6 +275,11 @@ pub struct FileFacts {
     /// `Object.assign(X, …)`) can replace.
     #[serde(skip)]
     pub object_members: BTreeMap<String, BTreeMap<String, String>>,
+    /// Top-level `const` objects built from a literal or a fresh
+    /// `Object.assign({}, …)` that copy or name another binding: how each
+    /// writes its members, in source order.
+    #[serde(skip)]
+    pub(crate) facades: BTreeMap<String, Vec<FacadeEntry>>,
     /// Extensions of an `Object.member` parent, which are never chains.
     #[serde(skip)]
     pub member_parent_extensions: Vec<chain_walk::MemberParentExtension>,
@@ -448,6 +453,119 @@ struct ConstInitializerFacts {
     assigned: BTreeMap<String, String>,
     roots: BTreeMap<String, String>,
     objects: BTreeMap<String, BTreeMap<String, String>>,
+    facades: BTreeMap<String, Vec<FacadeEntry>>,
+}
+
+/// One member write of a facade object, in source order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum FacadeEntry {
+    /// `...Y`, or `Y` as an `Object.assign` source: Y's own members, as they
+    /// are when the object is built.
+    Copy(String),
+    /// `key: Y`, `key: Y.member` or shorthand `key`.
+    Member {
+        key: String,
+        binding: String,
+        member: Option<String>,
+    },
+    /// `key` set to a value no binding names (a literal, a call, a method,
+    /// a later `X.key = …`), or read through an accessor.
+    Other(String),
+    /// A write that may set any member: a spread of an expression, a
+    /// computed key, a `__proto__` key, a later `X[k] = …` or
+    /// `Object.assign(X, …)`.
+    Unknown,
+}
+
+/// `__proto__: …` sets the prototype, which can supply any member; the
+/// shorthand `{ __proto__ }` and a computed key define an own member.
+fn sets_prototype(p: &oxc::ast::ast::ObjectProperty<'_>) -> bool {
+    !p.computed && !p.shorthand && p.key.static_name().as_deref() == Some("__proto__")
+}
+
+/// The member writes of `const X = { … }` or `const X = Object.assign({ … },
+/// …)`, or `None` for any other initializer. `Object.assign` sets each member
+/// on its target, so a target with accessors or a prototype key lets any
+/// copied member go elsewhere.
+fn facade_entries(init: &Expression<'_>) -> Option<Vec<FacadeEntry>> {
+    use oxc::ast::ast::PropertyKind;
+    let accessor_or_prototype = |object: &ObjectExpression<'_>| {
+        object.properties.iter().any(|property| match property {
+            oxc::ast::ast::ObjectPropertyKind::ObjectProperty(p) => {
+                p.kind != PropertyKind::Init || sets_prototype(p)
+            }
+            oxc::ast::ast::ObjectPropertyKind::SpreadProperty(_) => false,
+        })
+    };
+    match crate::chain_walk::unwrap_type_assertions(init) {
+        Expression::ObjectExpression(object) => {
+            let mut entries = Vec::new();
+            literal_entries(object, &mut entries);
+            Some(entries)
+        }
+        Expression::CallExpression(call) if is_object_assign(&call.callee) => {
+            let Expression::ObjectExpression(target) =
+                crate::chain_walk::unwrap_type_assertions(call.arguments.first()?.as_expression()?)
+            else {
+                return None;
+            };
+            if accessor_or_prototype(target) {
+                return None;
+            }
+            let mut entries = Vec::new();
+            literal_entries(target, &mut entries);
+            for argument in call.arguments.iter().skip(1) {
+                match argument.as_expression().map(crate::chain_walk::unwrap_type_assertions) {
+                    Some(Expression::Identifier(id)) => entries.push(FacadeEntry::Copy(id.name.to_string())),
+                    Some(Expression::ObjectExpression(object)) => literal_entries(object, &mut entries),
+                    _ => entries.push(FacadeEntry::Unknown),
+                }
+            }
+            Some(entries)
+        }
+        _ => None,
+    }
+}
+
+/// The member writes of one object literal, in source order.
+fn literal_entries(object: &ObjectExpression<'_>, entries: &mut Vec<FacadeEntry>) {
+    use oxc::ast::ast::{ObjectPropertyKind, PropertyKind};
+    for property in &object.properties {
+        let p = match property {
+            ObjectPropertyKind::SpreadProperty(spread) => {
+                entries.push(match crate::chain_walk::unwrap_type_assertions(&spread.argument) {
+                    Expression::Identifier(id) => FacadeEntry::Copy(id.name.to_string()),
+                    _ => FacadeEntry::Unknown,
+                });
+                continue;
+            }
+            ObjectPropertyKind::ObjectProperty(p) => p,
+        };
+        let Some(key) = p.key.static_name().filter(|_| !p.computed) else {
+            entries.push(FacadeEntry::Unknown);
+            continue;
+        };
+        if sets_prototype(p) {
+            entries.push(FacadeEntry::Unknown);
+            continue;
+        }
+        let key = key.to_string();
+        let value = match crate::chain_walk::unwrap_type_assertions(&p.value) {
+            _ if p.method || p.kind != PropertyKind::Init => None,
+            Expression::Identifier(id) => Some((id.name.to_string(), None)),
+            Expression::StaticMemberExpression(member) => match &member.object {
+                Expression::Identifier(object) => {
+                    Some((object.name.to_string(), Some(member.property.name.to_string())))
+                }
+                _ => None,
+            },
+            _ => None,
+        };
+        entries.push(match value {
+            Some((binding, member)) => FacadeEntry::Member { key, binding, member },
+            None => FacadeEntry::Other(key),
+        });
+    }
 }
 
 /// `Y` in `Object.assign(Y, …)`.
@@ -471,9 +589,7 @@ fn object_assign_target<'a>(init: &'a Expression<'_>) -> Option<&'a str> {
 /// declaration's root identifier, and object literals' identifier members.
 /// `let`/`var` are excluded: a mutable binding carries no static guarantee.
 fn collect_const_initializers(program: &Program<'_>) -> ConstInitializerFacts {
-    use oxc::ast::ast::{
-        Declaration, ObjectPropertyKind, PropertyKind, Statement, VariableDeclarationKind,
-    };
+    use oxc::ast::ast::{Declaration, Statement, VariableDeclarationKind};
     let mut facts = ConstInitializerFacts::default();
     let mut record = |decl: &oxc::ast::ast::VariableDeclaration<'_>| {
         if decl.kind != VariableDeclarationKind::Const {
@@ -494,35 +610,18 @@ fn collect_const_initializers(program: &Program<'_>) -> ConstInitializerFacts {
             if let Some(root) = expression_root(init) {
                 facts.roots.insert(name.to_string(), root);
             }
-            let Expression::ObjectExpression(object) =
-                crate::chain_walk::unwrap_type_assertions(init)
-            else {
+            let Some(entries) = facade_entries(init) else {
                 continue;
             };
-            // Source order: a later spread, computed key or non-identifier
-            // write may replace an earlier member, which then proves nothing.
-            let mut members: BTreeMap<String, String> = BTreeMap::new();
-            for property in &object.properties {
-                let ObjectPropertyKind::ObjectProperty(p) = property else {
-                    members.clear();
-                    continue;
-                };
-                let Some(key) = p.key.static_name().filter(|_| !p.computed) else {
-                    members.clear();
-                    continue;
-                };
-                match crate::chain_walk::unwrap_type_assertions(&p.value) {
-                    Expression::Identifier(value)
-                        if p.kind == PropertyKind::Init && !p.method =>
-                    {
-                        members.insert(key.to_string(), value.name.to_string());
-                    }
-                    _ => {
-                        members.remove(key.as_ref());
-                    }
-                }
+            if matches!(crate::chain_walk::unwrap_type_assertions(init), Expression::ObjectExpression(_)) {
+                facts.objects.insert(name.to_string(), identifier_members(&entries));
             }
-            facts.objects.insert(name.to_string(), members);
+            if entries
+                .iter()
+                .any(|entry| matches!(entry, FacadeEntry::Copy(_) | FacadeEntry::Member { .. }))
+            {
+                facts.facades.insert(name.to_string(), entries);
+            }
         }
     };
     for stmt in &program.body {
@@ -536,8 +635,27 @@ fn collect_const_initializers(program: &Program<'_>) -> ConstInitializerFacts {
             _ => {}
         }
     }
-    invalidate_top_level_writes(program, &mut facts.objects);
+    invalidate_top_level_writes(program, &mut facts.objects, &mut facts.facades);
     facts
+}
+
+/// An object literal's members that name an identifier: source order, so a
+/// later spread, computed key or other write may replace an earlier member,
+/// which then proves nothing.
+fn identifier_members(entries: &[FacadeEntry]) -> BTreeMap<String, String> {
+    let mut members = BTreeMap::new();
+    for entry in entries {
+        match entry {
+            FacadeEntry::Member { key, binding, member: None } => {
+                members.insert(key.clone(), binding.clone());
+            }
+            FacadeEntry::Member { key, .. } | FacadeEntry::Other(key) => {
+                members.remove(key);
+            }
+            FacadeEntry::Copy(_) | FacadeEntry::Unknown => members.clear(),
+        }
+    }
+    members
 }
 
 fn is_object_assign(callee: &Expression<'_>) -> bool {
@@ -549,25 +667,38 @@ fn is_object_assign(callee: &Expression<'_>) -> bool {
     )
 }
 
-/// The recorded members of the object an expression names, if any.
-fn written_object<'m>(
-    objects: &'m mut BTreeMap<String, BTreeMap<String, String>>,
-    expr: &Expression<'_>,
-) -> Option<&'m mut BTreeMap<String, String>> {
+/// The object an expression names, if it is a bare identifier.
+fn written_object<'e>(expr: &'e Expression<'_>) -> Option<&'e str> {
     match crate::chain_walk::unwrap_type_assertions(expr) {
-        Expression::Identifier(id) => objects.get_mut(id.name.as_str()),
+        Expression::Identifier(id) => Some(id.name.as_str()),
         _ => None,
     }
 }
 
 /// Top-level statement writes to recorded objects: `X.key = …` removes that
-/// key; `X[expr] = …` and `Object.assign(X, …)` clear X. Writes in nested
-/// scopes, through aliases or from other modules are not seen.
+/// key; `X[expr] = …` and `Object.assign(X, …)` clear X. A facade records
+/// each as a later write. Writes in nested scopes, through aliases or from
+/// other modules are not seen.
 fn invalidate_top_level_writes(
     program: &Program<'_>,
     objects: &mut BTreeMap<String, BTreeMap<String, String>>,
+    facades: &mut BTreeMap<String, Vec<FacadeEntry>>,
 ) {
     use oxc::ast::ast::{AssignmentTarget, Statement};
+    let mut write = |object: Option<&str>, key: Option<&str>| {
+        let Some(object) = object else { return };
+        if let Some(members) = objects.get_mut(object) {
+            match key {
+                Some(key) => {
+                    members.remove(key);
+                }
+                None => members.clear(),
+            }
+        }
+        if let Some(entries) = facades.get_mut(object) {
+            entries.push(key.map_or(FacadeEntry::Unknown, |key| FacadeEntry::Other(key.to_string())));
+        }
+    };
     for stmt in &program.body {
         let Statement::ExpressionStatement(statement) = stmt else {
             continue;
@@ -575,22 +706,16 @@ fn invalidate_top_level_writes(
         match crate::chain_walk::unwrap_type_assertions(&statement.expression) {
             Expression::AssignmentExpression(assignment) => match &assignment.left {
                 AssignmentTarget::StaticMemberExpression(member) => {
-                    if let Some(members) = written_object(objects, &member.object) {
-                        members.remove(member.property.name.as_str());
-                    }
+                    write(written_object(&member.object), Some(member.property.name.as_str()));
                 }
                 AssignmentTarget::ComputedMemberExpression(member) => {
-                    if let Some(members) = written_object(objects, &member.object) {
-                        members.clear();
-                    }
+                    write(written_object(&member.object), None);
                 }
                 _ => {}
             },
             Expression::CallExpression(call) if is_object_assign(&call.callee) => {
                 let target = call.arguments.first().and_then(|arg| arg.as_expression());
-                if let Some(members) = target.and_then(|t| written_object(objects, t)) {
-                    members.clear();
-                }
+                write(target.and_then(written_object), None);
             }
             _ => {}
         }
@@ -1012,6 +1137,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
         props_forwarding: crate::usage_facts::collect_props_forwarding(program),
         declaration_roots: const_initializers.roots,
         object_members: const_initializers.objects,
+        facades: const_initializers.facades,
         member_parent_extensions,
         member_rooted_chains: walked.member_rooted,
         namespace_imports: crate::usage_facts::collect_namespace_imports(program),

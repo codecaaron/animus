@@ -1984,7 +1984,7 @@ fn export_ids(
 
 /// Where `module`'s export `name` is declared: the declaring file, the
 /// name it exports there, and the local binding it declares.
-fn declared_export(
+pub(crate) fn declared_export(
     module: &str,
     name: String,
     files: &BTreeMap<String, FileFacts>,
@@ -2026,7 +2026,7 @@ fn exported_family_slots<'f>(
 /// The module a dotted namespace path in `file` names (`ui`, `ui.sub`):
 /// its first segment a namespace binding, each further one a namespace
 /// that module re-exports.
-fn namespace_path_module(
+pub(crate) fn namespace_path_module(
     file: &str,
     ff: &FileFacts,
     path: &str,
@@ -2251,10 +2251,7 @@ fn unattributed_system_props(
         let Some(lost) = LostThrough::of(&declaration_file, &declaration, files) else {
             continue;
         };
-        let mut props: Vec<&str> = attrs
-            .iter()
-            .filter(|attr| !attr.skip && inputs.config.contains_key(&attr.name))
-            .map(|attr| attr.name.as_str())
+        let mut props: Vec<&str> = passed_system_props(attrs, inputs)
             .filter(|prop| {
                 lost.reaches(prop)
                     && lost
@@ -2294,6 +2291,75 @@ fn unattributed_system_props(
                  {declaration} in {declaration_file}, {how}, so they fall back to dynamic \
                  slots — render the extracted component itself, or list the values under \
                  staticCss.systemProps"
+            ),
+            Some(UNATTRIBUTED_SYSTEM_PROPS),
+        ));
+    }
+    warnings
+}
+
+/// The registered system props an element passes, as written.
+fn passed_system_props<'u>(
+    attrs: &'u [crate::usage_facts::AttrFact],
+    inputs: &'u CssInputs,
+) -> impl Iterator<Item = &'u str> {
+    attrs
+        .iter()
+        .filter(|attr| !attr.skip && inputs.config.contains_key(&attr.name))
+        .map(|attr| attr.name.as_str())
+}
+
+/// One warning per member tag, and set of props, read through an object
+/// member tags do not resolve through (an object of components, a facade
+/// copying a compose family, or an alias of one), whose member names an
+/// extracted component that takes system props the tag is passed: they get
+/// no static classes.
+fn untraced_member_system_props(
+    file: &str,
+    ff: &FileFacts,
+    member_expr_bindings: &FxHashMap<String, String>,
+    objects: &mut crate::family_members::ObjectMembers<'_>,
+    inputs: &CssInputs,
+    component_takes: &dyn Fn(&str, &str) -> bool,
+) -> Vec<CssDiagnostic> {
+    let mut reported: FxHashSet<(&str, Vec<&str>)> = FxHashSet::default();
+    let mut warnings = Vec::new();
+    for usage in ff.usage_for_analysis() {
+        let UsageFact::Element { tag: TagFact::Member(tag), attrs, .. } = usage else {
+            continue;
+        };
+        if member_expr_bindings.contains_key(tag) {
+            continue;
+        }
+        let mut props: Vec<&str> = passed_system_props(attrs, inputs).collect();
+        if props.is_empty() {
+            continue;
+        }
+        let Some(component) = objects.traced(file, tag) else {
+            continue;
+        };
+        props.retain(|prop| component_takes(&component, prop));
+        props.sort_unstable();
+        props.dedup();
+        if props.is_empty() {
+            continue;
+        }
+        let listed = props.join(", ");
+        if !reported.insert((tag.as_str(), props)) {
+            continue;
+        }
+        let binding = binding_of(&component);
+        let component_file = component.strip_suffix(binding).and_then(|id| id.strip_suffix("::")).unwrap_or("");
+        let object = tag.rsplit_once('.').map_or(tag.as_str(), |(object, _)| object);
+        warnings.push(diagnostic(
+            file,
+            tag,
+            "warn",
+            format!(
+                "system props {listed} get no static utility classes: the tag renders {binding} \
+                 from {component_file}, but member tags do not resolve through the object \
+                 {object}, so they fall back to dynamic slots — render {binding} directly or \
+                 through its compose family, or list the values under staticCss.systemProps"
             ),
             Some(UNATTRIBUTED_SYSTEM_PROPS),
         ));
@@ -3692,6 +3758,14 @@ fn run_with_system_floor(
         })
         .collect();
     let no_members = FxHashMap::default();
+    let declared_component = |file: &str, binding: &str| {
+        match resolve_declared_identity(file, binding, files, inputs, &evaluated_ids).as_slice() {
+            [only] => Some(only.clone()),
+            _ => None,
+        }
+    };
+    let mut object_members =
+        crate::family_members::ObjectMembers::new(files, inputs, &family_index, &declared_component);
 
     // Each component's own custom configuration: equally named custom props
     // of different components are distinct props.
@@ -3826,10 +3900,13 @@ fn run_with_system_floor(
                 .insert(tag.clone(), tag);
         }
         let member_expr_bindings = members_with_namespaces.as_ref().unwrap_or(member_expr_bindings);
+        let component_takes = |id: &str, prop: &str| {
+            system_props_by_id.get(id).is_some_and(|props| props.contains(prop))
+        };
         let takes_system_prop = |file: &str, name: &str, prop: &str| {
             resolve_declared_identity(file, name, files, inputs, &evaluated_ids)
                 .iter()
-                .any(|id| system_props_by_id.get(id).is_some_and(|props| props.contains(prop)))
+                .any(|id| component_takes(id, prop))
         };
         diagnostics.extend(unattributed_system_props(
             path,
@@ -3838,6 +3915,14 @@ fn run_with_system_floor(
             files,
             inputs,
             &takes_system_prop,
+        ));
+        diagnostics.extend(untraced_member_system_props(
+            path,
+            ff,
+            member_expr_bindings,
+            &mut object_members,
+            inputs,
+            &component_takes,
         ));
         diagnostics.extend(untracked_clone_props(path, ff));
         let lookup = file_lookup.as_ref().unwrap_or(&global_lookup);
@@ -8228,21 +8313,24 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
     #[test]
     fn renamed_and_assigned_recipes_warn_but_resolved_and_outside_tags_do_not() {
         let recipe = "const ButtonRecipe = ds.styles({}).system({ space: true }).asElement('button');\n";
-        for declaration in [
-            "export const Button = ButtonRecipe;",
-            "export const Button = Object.assign(ButtonRecipe, { Icon: ButtonRecipe });",
+        for (declaration, tag) in [
+            ("export const Button = ButtonRecipe;", "Button"),
+            ("export const Button = Object.assign(ButtonRecipe, { Icon: ButtonRecipe });", "Button"),
+            (
+                "const Family = compose({ Root: ButtonRecipe }, { name: 'Family' });\nexport const Button = { ...Family };",
+                "Button.Root",
+            ),
         ] {
             let source = format!("{recipe}{declaration}\n");
-            let out = analyze_with_logical_space(&[
-                ("recipe.tsx", source.as_str()),
-                ("app.tsx", "import { Button } from './recipe';\nexport const App = () => <Button marginInlineStart={8} />;\n"),
-            ]);
+            let app = format!("import {{ Button }} from './recipe';\nexport const App = () => <{tag} marginInlineStart={{8}} />;\n");
+            let out = analyze_with_logical_space(&[("recipe.tsx", source.as_str()), ("app.tsx", app.as_str())]);
             assert_eq!(unattributed(&out).len(), 1, "{declaration}: {:?}", out.diagnostics);
         }
         let recipe = "export const ButtonRecipe = ds.styles({}).system({ space: true }).asElement('button');\n";
         for app in [
             "import { ButtonRecipe as Button } from './recipe';\nexport const App = () => <Button marginInlineStart={8} />;\n",
             "import { Dialog } from '@ark-ui/react';\nexport const App = () => <Dialog marginInlineStart={8} />;\n",
+            "import { Dialog } from '@ark-ui/react';\nexport const App = () => <Dialog.Content marginInlineStart={8} />;\n",
             "import { Button } from './wrapper';\nexport const App = () => <Button onClick={go} />;\n",
         ] {
             let out = analyze_with_logical_space(&[
