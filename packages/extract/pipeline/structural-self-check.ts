@@ -1,4 +1,5 @@
 import { assembleStylesheet } from './assemble-stylesheet';
+import { parseInternalWire } from './internal-wire';
 
 import type { ExternalPackageOutcome } from './discover-packages';
 
@@ -10,6 +11,9 @@ export interface StructuralCheckInput {
   layers?: string[];
   assembledCss?: string;
   externalOutcomes?: readonly ExternalPackageOutcome[];
+  /** The loaded theme's token → variable map. A theme that declares no
+   *  variables emits no `:root` block; without the map, one is required. */
+  variableMapJson?: string | null;
 }
 
 export function runStructuralSelfCheck(input: StructuralCheckInput): string[] {
@@ -43,7 +47,15 @@ export function runStructuralSelfCheck(input: StructuralCheckInput): string[] {
     }
   }
 
-  if (!input.variableCss.includes(':root')) {
+  const declaresVariables =
+    input.variableMapJson == null ||
+    Object.keys(
+      parseInternalWire<Record<string, string>>(
+        input.variableMapJson,
+        "variableMapJson (the theme's token → variable map)"
+      )
+    ).length > 0;
+  if (declaresVariables && !input.variableCss.includes(':root')) {
     failures.push('No :root variable block found in variable CSS');
   }
 

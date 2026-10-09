@@ -408,6 +408,11 @@ export class ExtractionSession {
    *  read by drivers instead of re-parsing the manifest JSON every cycle. */
   lastComponentCount: number | null = null;
 
+  /** The loaded theme's token → variable map; null before the system loads. */
+  get variableMapJson(): string | null {
+    return this.system?.variableMapJson ?? null;
+  }
+
   /** When superseded asset copies leave `assets/`: `'full-pipeline'` suits a
    *  driver serving the dir in place, `'every-cycle'` one republishing it. */
   staleAssetPruning: 'full-pipeline' | 'every-cycle' = 'full-pipeline';

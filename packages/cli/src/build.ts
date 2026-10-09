@@ -153,6 +153,7 @@ export function publishSharedPayloads(
     assembledCss: stylesCss,
     layers: options.layers,
     externalOutcomes: session.lastExternalOutcomes,
+    variableMapJson: session.variableMapJson,
   });
   if (failures.length > 0) {
     throw new ExtractionFailure(
