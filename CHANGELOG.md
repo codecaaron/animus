@@ -39,6 +39,16 @@ Turbopack, the first analysis still pruned like a production build until an
 edit re-ran it. It now follows Next's dev signal; an explicit `mode` still
 wins.
 
+**Under Turbopack, `withAnimus(options)(nextConfig)` returns a config
+function.** Next calls it with its phase, and only `next dev` analyzes in
+development mode, starts the watcher, and has its loaders wait for the
+watcher's analyses. A `next build` run with `NODE_ENV=development` used to
+do all three and ship unpruned CSS; it now prunes like any build.
+The exported `TurbopackNextConfig` type is that function, and the config it
+resolves to is `TurbopackNextConfigObject`. Export the result as your
+config. A wrapper that expects a config object cannot wrap it, as it could
+not wrap the promise returned before.
+
 **The CLI help describes `--exclude` correctly.** It said the flag merged
 with the default exclusions. The flag, together with the config file's
 `exclude`, replaces them (`dist`, `.test.`, `.spec.`), as the code always

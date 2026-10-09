@@ -46,6 +46,10 @@ export interface TurbopackLoaderOptions extends LoaderPolicyOptions {
   rootDir?: string;
   sessionId?: string;
   sessionDir?: string;
+  /** Decided from Next's phase when the config loads: true under `next dev`,
+   *  where a watcher publishes newer generations. Absent, `NODE_ENV`
+   *  decides. */
+  development?: boolean;
 }
 
 type LoaderCallback = (err: Error | null, content?: string) => void;
@@ -327,8 +331,9 @@ async function runLoader(ctx: LoaderContext, source: string): Promise<string> {
       opts,
     });
 
+  const development = opts.development ?? isTurbopackDevelopment();
   const deliver = async (covering: Hydration): Promise<string> => {
-    if (!isTurbopackDevelopment()) {
+    if (!development) {
       return transform(covering.manifestJson);
     }
     const extended = extendedFiles(covering.manifestJson, filename);

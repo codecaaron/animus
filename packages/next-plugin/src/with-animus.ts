@@ -23,13 +23,15 @@ import { ANIMUS_CSS_MODULE_ID, AnimusWebpackPlugin } from './plugin';
 import {
   ANIMUS_TURBOPACK_RULE_GLOB,
   buildTurbopackConfig,
-  isTurbopackDevelopment,
   resolveTurbopackLoaderPath,
   resolveTurbopackMode,
 } from './turbopack-config';
 
 import type { AnimusNextOptions } from './types';
-import type { TurbopackWatchOutcome } from '@animus-ui/extract/session';
+import type {
+  TurbopackWatcherHandle,
+  TurbopackWatchOutcome,
+} from '@animus-ui/extract/session';
 import type {
   NextConfig as NextOwnedConfig,
   TurbopackOptions,
@@ -102,12 +104,22 @@ export type WebpackNextConfig<Config extends NextOwnedConfig> = Omit<
   webpack: NextWebpackHook;
 };
 
-export type TurbopackNextConfig<Config extends NextOwnedConfig> = Omit<
+export type TurbopackNextConfigObject<Config extends NextOwnedConfig> = Omit<
   Config,
   'turbopack'
 > & {
   turbopack: TurbopackOptions;
 };
+
+/** Next calls a function config with its phase, the one signal that tells
+ *  `next dev` from `next build` while the config loads: `NODE_ENV` can be
+ *  set either way, and `NEXT_PHASE` is set only after compiling. */
+export type TurbopackNextConfig<Config extends NextOwnedConfig> = (
+  phase: string
+) => Promise<TurbopackNextConfigObject<Config>>;
+
+/** `PHASE_DEVELOPMENT_SERVER` in `next/constants`. */
+const PHASE_DEVELOPMENT_SERVER = 'phase-development-server';
 
 let warnedGitignore = false;
 let warnedUnstableTurbopack = false;
@@ -116,7 +128,7 @@ export function withAnimus(
   options: AnimusNextOptions
 ): <Config extends NextOwnedConfig>(
   nextConfig: NextConfigInput<Config>
-) => WebpackNextConfig<Config> | Promise<TurbopackNextConfig<Config>> {
+) => WebpackNextConfig<Config> | TurbopackNextConfig<Config> {
   if (!options.system) {
     throw new Error(
       '[animus-extract] Missing required option `system`. ' +
@@ -158,9 +170,9 @@ export function withAnimus(
 
   return <Config extends NextOwnedConfig>(
     nextConfig: NextConfigInput<Config>
-  ): WebpackNextConfig<Config> | Promise<TurbopackNextConfig<Config>> => {
+  ): WebpackNextConfig<Config> | TurbopackNextConfig<Config> => {
     if (resolveTurbopackMode(options)) {
-      return wireTurbopack(nextConfig, options);
+      return (phase) => wireTurbopack(nextConfig, options, phase);
     }
 
     const existingWebpack = nextConfig.webpack;
@@ -322,23 +334,28 @@ export function bindTurbopackWatchDeathReport(
 }
 
 let liveTurbopackSession: ExtractionSession | null = null;
+let liveTurbopackWatcher: TurbopackWatcherHandle | null = null;
 
 async function wireTurbopack<Config extends NextOwnedConfig>(
   nextConfig: NextConfigInput<Config>,
-  options: AnimusNextOptions
-): Promise<TurbopackNextConfig<Config>> {
+  options: AnimusNextOptions,
+  phase: string
+): Promise<TurbopackNextConfigObject<Config>> {
   // `next dev <subdir>` under Turbopack is a known gap: no dir reaches a
   // config module, so cwd is the only root signal. Next 16's `turbopack.root`
   // is the workspace root, broader than the app dir, so adopting it widens
   // the scan instead of closing the gap.
   const rootDir = process.cwd();
 
-  const development = isTurbopackDevelopment();
+  const development = phase === PHASE_DEVELOPMENT_SERVER;
   const { mode } = resolveMode(options.mode, () =>
     development ? 'development' : 'production'
   );
   const session = new ExtractionSession({ ...options, mode });
+  // A replaced session's watcher would keep the root claimed for it.
   liveTurbopackSession?.close();
+  liveTurbopackWatcher?.close();
+  liveTurbopackWatcher = null;
   liveTurbopackSession = session;
   session.rootDir = rootDir;
   const aliasPairs = readTsconfigAliasPairs(rootDir);
@@ -349,10 +366,9 @@ async function wireTurbopack<Config extends NextOwnedConfig>(
   await runSessionPipeline(session);
 
   if (development) {
-    bindTurbopackWatchDeathReport(
-      startTurbopackWatcher(session, rootDir),
-      rootDir
-    );
+    const outcome = startTurbopackWatcher(session, rootDir);
+    bindTurbopackWatchDeathReport(outcome, rootDir);
+    if (outcome.kind === 'started') liveTurbopackWatcher = outcome.handle;
   }
 
   const fragment = buildTurbopackConfig({
@@ -362,6 +378,7 @@ async function wireTurbopack<Config extends NextOwnedConfig>(
     externalSourceEntries: session.externalSourceEntries,
     sessionId: session.sessionId,
     sessionDir: session.sessionDir,
+    development,
   });
 
   const existing: TurbopackOptions = nextConfig.turbopack ?? {};

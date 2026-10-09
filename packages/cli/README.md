@@ -36,8 +36,10 @@ animus print-config --root . --system ./src/ds.ts
 Configuration lives in `animus.config.{json,mjs,js,ts}` (probed in that
 order; `.ts` needs Node >= 23.6 native type stripping — older runtimes get
 a guided error naming the `.mjs`/`.json` remedy). Flags override file
-values; `--exclude` merges, and an explicit `exclude: []` in the config file
-means no user exclusions (the replaceable defaults are not restored).
+values. `--exclude` patterns join the config file's `exclude`, and together
+they replace the defaults (`dist`, `.test.`, `.spec.`); an explicit
+`exclude: []` in the config file means no user exclusions (the defaults are
+not restored). `node_modules`, `.next` and `.animus` are always excluded.
 `animus print-config` prints the fully resolved configuration as JSON on
 stdout with per-key provenance, including `extensions` and `staticCss`.
 

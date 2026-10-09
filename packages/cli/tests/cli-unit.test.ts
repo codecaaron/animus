@@ -40,6 +40,7 @@ import {
   EXIT_ENVIRONMENT,
   EXIT_EXTRACTION,
   EXIT_INSTALL,
+  EXIT_OK,
   EXIT_USAGE,
   main,
 } from '../src/index';
@@ -953,6 +954,17 @@ describe('command-line positionals', () => {
     const { exitCode, stderr } = await runMain(['nonsense']);
     expect(exitCode).toBe(EXIT_USAGE);
     expect(stderr).toContain("Unknown command 'nonsense'");
+  });
+
+  test('--help says --exclude replaces the defaults', async () => {
+    const { exitCode, stderr } = await runMain(['--help']);
+    expect(exitCode).toBe(EXIT_OK);
+    expect(stderr.replace(/\s+/g, ' ')).toContain(
+      "--exclude <glob> Exclusion (repeatable). With the config file's " +
+        'exclude, REPLACES the defaults (dist, .test., .spec.); exclude: [] ' +
+        'in the config file means none. node_modules, .next, .animus are ' +
+        'always excluded'
+    );
   });
 });
 

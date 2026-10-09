@@ -64,6 +64,7 @@ export function buildTurbopackConfig(args: {
   externalSourceEntries: ReadonlyMap<string, string>;
   sessionId: string;
   sessionDir: string;
+  development: boolean;
 }): TurbopackConfigFragment {
   const {
     rootDir,
@@ -72,12 +73,14 @@ export function buildTurbopackConfig(args: {
     externalSourceEntries,
     sessionId,
     sessionDir,
+    development,
   } = args;
 
   const loaderOptions: TurbopackLoaderOptions = {
     rootDir,
     sessionId,
     sessionDir,
+    development,
   };
   if (options.strict !== undefined) loaderOptions.strict = options.strict;
   if (options.cssImportTarget !== undefined) {

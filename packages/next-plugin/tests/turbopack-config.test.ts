@@ -64,7 +64,8 @@ describe('buildTurbopackConfig', () => {
 
   const build = (
     options: AnimusNextOptions,
-    entries: Array<[string, string]> = []
+    entries: Array<[string, string]> = [],
+    development = false
   ) =>
     buildTurbopackConfig({
       rootDir: '/proj',
@@ -73,6 +74,7 @@ describe('buildTurbopackConfig', () => {
       externalSourceEntries: new Map(entries),
       sessionId: SESSION_ID,
       sessionDir: SESSION_DIR,
+      development,
     });
 
   test('the loader glob is the shared engine-transform file class, verbatim', () => {
@@ -84,11 +86,15 @@ describe('buildTurbopackConfig', () => {
   });
 
   test('emits one glob rule with JSON-round-trippable options carrying the session identity', () => {
-    const fragment = build({
-      ...BASE,
-      strict: true,
-      cssImportTarget: 'src/app/[locale]/layout.tsx',
-    });
+    const fragment = build(
+      {
+        ...BASE,
+        strict: true,
+        cssImportTarget: 'src/app/[locale]/layout.tsx',
+      },
+      [],
+      true
+    );
 
     const rule = fragment.rules[ANIMUS_TURBOPACK_RULE_GLOB];
     expect(rule.loaders).toHaveLength(1);
@@ -97,6 +103,7 @@ describe('buildTurbopackConfig', () => {
       rootDir: '/proj',
       sessionId: SESSION_ID,
       sessionDir: SESSION_DIR,
+      development: true,
       strict: true,
       cssImportTarget: 'src/app/[locale]/layout.tsx',
     });
@@ -113,6 +120,7 @@ describe('buildTurbopackConfig', () => {
       rootDir: '/proj',
       sessionId: SESSION_ID,
       sessionDir: SESSION_DIR,
+      development: false,
     });
   });
 

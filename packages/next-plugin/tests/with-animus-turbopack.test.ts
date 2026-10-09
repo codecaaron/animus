@@ -29,8 +29,10 @@ import { bindTurbopackWatchDeathReport, withAnimus } from '../src/with-animus';
 import type { AnalyzeProjectInputs } from '../../extract/pipeline';
 import type { TurbopackWatcherHandle } from '../../extract/session/turbopack-orchestrator';
 import type { TurbopackLoaderOptions } from '../src/turbopack-loader';
+import type { TurbopackNextConfigObject } from '../src/with-animus';
 import type { JsonValue } from '@animus-ui/assertions';
 import type {
+  NextConfig,
   TurbopackLoaderItem,
   TurbopackOptions,
   TurbopackRuleConfigItemOptions,
@@ -87,12 +89,21 @@ type ForwardedLoaderOptions = Extract<
   { loader: string }
 >['options'];
 
-function turbopackOptions(config: Awaited<AnimusNextConfig>): TurbopackOptions {
-  if (!('turbopack' in config)) {
+type TurbopackConfigObject = TurbopackNextConfigObject<NextConfig>;
+
+/** Resolves the config as Next does under `next build`. */
+function loadBuildConfig(
+  config: AnimusNextConfig
+): Promise<TurbopackConfigObject> {
+  if ('webpack' in config) {
     throw new TypeError(
       'withAnimus returned the webpack branch, not the Turbopack branch'
     );
   }
+  return config('phase-production-build');
+}
+
+function turbopackOptions(config: TurbopackConfigObject): TurbopackOptions {
   return config.turbopack;
 }
 
@@ -171,20 +182,20 @@ describe('withAnimus Turbopack wiring', () => {
     const root = createProject();
     process.chdir(root);
     const config = withAnimus({ system: './src/system.ts' })({});
-    expect(config).not.toBeInstanceOf(Promise);
+    expect(config).not.toBeTypeOf('function');
     expect('turbopack' in config).toBe(false);
   });
 
-  test('active mode resolves after the session artifact set exists and merges config', async () => {
+  test('active mode returns a config function that resolves after the session artifact set exists and merges config', async () => {
     const root = createProject();
     process.chdir(root);
 
-    const pending = withAnimus({
+    const load = withAnimus({
       system: './src/system.ts',
       unstable_turbopack: { mode: 'on' },
     })({});
-    expect(pending).toBeInstanceOf(Promise);
-    const config = await pending;
+    expect(load).toBeTypeOf('function');
+    const config = await loadBuildConfig(load);
 
     const turbopack = turbopackOptions(config);
     expect(turbopack.rules?.[ANIMUS_TURBOPACK_RULE_GLOB]).toBeDefined();
@@ -244,10 +255,12 @@ describe('withAnimus Turbopack wiring', () => {
     const root = createProject();
     process.chdir(root);
 
-    const first = await withAnimus({
-      system: './src/system.ts',
-      unstable_turbopack: { mode: 'on' },
-    })({});
+    const first = await loadBuildConfig(
+      withAnimus({
+        system: './src/system.ts',
+        unstable_turbopack: { mode: 'on' },
+      })({})
+    );
     const { sessionDir } = animusLoaderOptions(turbopackOptions(first));
 
     // bigint stat: write-then-rename gives a rewritten artifact a new inode,
@@ -262,10 +275,12 @@ describe('withAnimus Turbopack wiring', () => {
       commit: statOf('analysis-commit'),
     };
 
-    await withAnimus({
-      system: './src/system.ts',
-      unstable_turbopack: { mode: 'on' },
-    })({});
+    await loadBuildConfig(
+      withAnimus({
+        system: './src/system.ts',
+        unstable_turbopack: { mode: 'on' },
+      })({})
+    );
 
     expect(statOf('manifest.json')).toEqual(before.manifest);
     expect(statOf('analysis-inputs.json')).toEqual(before.inputs);
@@ -277,14 +292,16 @@ describe('withAnimus Turbopack wiring', () => {
     process.chdir(root);
 
     await expect(
-      withAnimus({
-        system: './src/system.ts',
-        unstable_turbopack: { mode: 'on' },
-      })({
-        turbopack: {
-          rules: { [ANIMUS_TURBOPACK_RULE_GLOB]: { loaders: [] } },
-        },
-      })
+      loadBuildConfig(
+        withAnimus({
+          system: './src/system.ts',
+          unstable_turbopack: { mode: 'on' },
+        })({
+          turbopack: {
+            rules: { [ANIMUS_TURBOPACK_RULE_GLOB]: { loaders: [] } },
+          },
+        })
+      )
     ).rejects.toThrow('already configured');
   });
 
@@ -301,12 +318,12 @@ describe('withAnimus Turbopack wiring', () => {
 
     // Config is returned only after a complete extraction, so a startup
     // rejection needs the source repaired and Next started again.
-    await expect(withAnimus(options)({})).rejects.toThrow(
+    await expect(loadBuildConfig(withAnimus(options)({}))).rejects.toThrow(
       /analysis not published: .*src\/Button\.tsx/
     );
 
     writeFileSync(button, BUTTON_SOURCE);
-    const config = await withAnimus(options)({});
+    const config = await loadBuildConfig(withAnimus(options)({}));
     expect(
       turbopackOptions(config).rules?.[ANIMUS_TURBOPACK_RULE_GLOB]
     ).toBeDefined();

@@ -15,8 +15,13 @@ setEngineApiOverride(() => ({
   clearAnalysisCache: mocks.clearAnalysisCache,
 }));
 
-import { ExtractionSession } from '../../extract/session/extraction-session';
-import { startTurbopackWatcher } from '../../extract/session/turbopack-orchestrator';
+// The package entry, as with-animus imports it: the source module would
+// keep its own set of watched roots.
+import {
+  ExtractionSession,
+  startTurbopackWatcher,
+} from '@animus-ui/extract/session';
+
 import {
   buildManifest,
   createProject,
@@ -25,6 +30,7 @@ import {
   SYSTEM_CONFIG,
 } from '../../extract/tests/session/session-fixtures';
 import { AnimusWebpackPlugin } from '../src/plugin';
+import { ANIMUS_TURBOPACK_RULE_GLOB } from '../src/turbopack-config';
 import { withAnimus } from '../src/with-animus';
 
 import type { AnalyzeProjectArgs } from '../../extract/pipeline';
@@ -102,7 +108,9 @@ describe('the webpack first full pass', () => {
   async function firstPass(dev: boolean, mode?: AnimusMode): Promise<void> {
     const root = createProject('animus-next-first-pass-');
     const wrapped = withAnimus({ system: './src/system.ts', mode })({});
-    if (wrapped instanceof Promise) throw new Error('unexpected async config');
+    if (!('webpack' in wrapped)) {
+      throw new Error('withAnimus returned the Turbopack branch');
+    }
     const config = wrapped.webpack?.({}, { dev, dir: root });
     const plugin = config?.plugins?.find(
       (candidate): candidate is AnimusWebpackPlugin =>
@@ -130,32 +138,73 @@ describe('the webpack first full pass', () => {
 });
 
 describe('the Turbopack first full pass', () => {
-  async function firstPass(nodeEnv: string): Promise<void> {
-    vi.stubEnv('NODE_ENV', nodeEnv);
+  /** Resolves the config as Next does in `phase`, and reports the first
+   *  pass's engine mode, whether a dev watcher now holds the root, and the
+   *  Animus loader rule. */
+  async function loadInPhase(phase: string, mode?: AnimusMode) {
     process.chdir(createProject('animus-next-first-pass-'));
-    // Claiming the root first leaves withAnimus no dev watcher to start, and
-    // the test a handle to close.
-    const claim = startTurbopackWatcher(
+    const config = withAnimus({
+      system: './src/system.ts',
+      mode,
+      turbopack: { mode: 'on' },
+    })({});
+    if ('webpack' in config) {
+      throw new Error('withAnimus returned the webpack branch');
+    }
+    const resolved = await config(phase);
+    const devMode = firstPassDevMode();
+    // A root that is already watched refuses a second watcher.
+    const probe = startTurbopackWatcher(
       new ExtractionSession({ system: './src/system.ts' }),
       process.cwd()
     );
-    try {
-      await withAnimus({
-        system: './src/system.ts',
-        turbopack: { mode: 'on' },
-      })({});
-    } finally {
-      if (claim.kind === 'started') claim.handle.close();
-    }
+    if (probe.kind === 'started') probe.handle.close();
+    const watching = probe.kind === 'already-watched';
+    // A later config load closes the watcher of the session it replaces.
+    if (watching) await config('phase-production-build');
+    return {
+      devMode,
+      watching,
+      loaderRule: resolved.turbopack.rules?.[ANIMUS_TURBOPACK_RULE_GLOB],
+    };
   }
 
-  test('keeps unrendered CSS under next dev', async () => {
-    await firstPass('development');
-    expect(firstPassDevMode()).toBe(true);
+  /** The loader takes the dev delivery path only where a watcher publishes
+   *  newer generations. */
+  const loaderTakingDevPath = (development: boolean) => ({
+    loaders: [
+      expect.objectContaining({
+        options: expect.objectContaining({ development }),
+      }),
+    ],
   });
 
-  test('prunes in a build', async () => {
-    await firstPass('production');
-    expect(firstPassDevMode()).toBe(false);
+  test('next dev analyzes in dev mode, starts the watcher and sends the loader down the dev path', async () => {
+    expect(await loadInPhase('phase-development-server')).toEqual({
+      devMode: true,
+      watching: true,
+      loaderRule: loaderTakingDevPath(true),
+    });
+  });
+
+  test('next build prunes, starts no watcher and sends the loader down the build path, even with NODE_ENV=development', async () => {
+    vi.stubEnv('NODE_ENV', 'development');
+    expect(await loadInPhase('phase-production-build')).toEqual({
+      devMode: false,
+      watching: false,
+      loaderRule: loaderTakingDevPath(false),
+    });
+  });
+
+  test('an explicit mode wins for the analysis; the watcher and loader path follow the phase', async () => {
+    expect(await loadInPhase('phase-development-server', 'production')).toEqual(
+      { devMode: false, watching: true, loaderRule: loaderTakingDevPath(true) }
+    );
+    mocks.analyzeProject.mockClear();
+    expect(await loadInPhase('phase-production-build', 'development')).toEqual({
+      devMode: true,
+      watching: false,
+      loaderRule: loaderTakingDevPath(false),
+    });
   });
 });

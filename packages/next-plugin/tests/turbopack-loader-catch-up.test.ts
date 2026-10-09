@@ -836,4 +836,43 @@ describe('extensions re-deliver with the generation of the file they extend', ()
       expect(dependencies).not.toContain(join(root, PARENT));
     }
   );
+
+  /** An edited parent on disk under an idle status: the dev path depends on
+   *  the parent and carries lineage, the build path does neither. */
+  function editedParentAtRest(development: boolean, nodeEnv: string) {
+    mocks.analyzeProject.mockImplementation(fixedManifest);
+    const root = makeTempRoot('animus-turbo-lineage-');
+    const { sessionDir } = commit(root, 1, fixedGeneration(parentSource(3), 1));
+    writeFileSync(join(root, PARENT), parentSource(4));
+    writeStatus(sessionDir, { state: 'idle', pending: [] });
+    vi.stubEnv('NODE_ENV', nodeEnv);
+    const plain = `${CHILD_SOURCE}/* via ${fixedManifest(
+      buildInputs(fixedGeneration(parentSource(3), 1)).filesJson
+    )} */`;
+    return {
+      root,
+      plain,
+      run: () =>
+        runLoader({
+          root,
+          relPath: CHILD,
+          source: CHILD_SOURCE,
+          options: { development },
+        }),
+    };
+  }
+
+  test('a loader configured in the build phase takes the build path even with NODE_ENV=development', async () => {
+    const { root, plain, run } = editedParentAtRest(false, 'development');
+    const { code, dependencies } = await run();
+    expect(code).toBe(plain);
+    expect(dependencies).not.toContain(join(root, PARENT));
+  });
+
+  test('a loader configured under next dev takes the dev path whatever NODE_ENV says', async () => {
+    const { root, plain, run } = editedParentAtRest(true, 'production');
+    const { code, dependencies } = await run();
+    expect(code).not.toBe(plain);
+    expect(dependencies).toContain(join(root, PARENT));
+  });
 });

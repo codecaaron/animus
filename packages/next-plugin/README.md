@@ -27,10 +27,14 @@ export default withAnimus({
 
 Turbopack support activates automatically whenever the process runs under
 Turbopack (`next dev --turbopack`, or Next 16 where Turbopack is the
-default) — no config change needed. Extraction runs while `next.config`
-resolves, a watcher re-analyzes on source changes in dev, and per-file
+default) — no config change needed. `withAnimus(...)(nextConfig)` then
+returns a config function: Next calls it with its phase, and extraction runs
+before it resolves. Only `next dev` analyzes in development mode and starts
+a watcher that re-analyzes on source changes; `next build` prunes. Per-file
 transforms run in a stateless loader fed by generated `.animus/` artifacts.
-tsconfig `paths` aliases are honored.
+tsconfig `paths` aliases are honored. Export the result as your config:
+another config wrapper that expects an object cannot wrap it, so apply such
+wrappers to `nextConfig` before passing it in.
 
 Because `next.config` resolves only after that first extraction, a source the
 parser cannot finish at startup rejects the config before any watcher exists:

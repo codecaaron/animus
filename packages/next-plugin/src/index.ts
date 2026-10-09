@@ -6,5 +6,6 @@ export type {
   AnimusNextConfigBoundary,
   NextConfigInput,
   TurbopackNextConfig,
+  TurbopackNextConfigObject,
   WebpackNextConfig,
 } from './with-animus';

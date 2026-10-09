@@ -64,7 +64,9 @@ describe('withAnimus', () => {
     const wrapped = withAnimus({ system: './src/ds.ts' })({
       webpack: consumerWebpack,
     });
-    if (wrapped instanceof Promise) throw new Error('unexpected async config');
+    if (!('webpack' in wrapped)) {
+      throw new Error('withAnimus returned the Turbopack branch');
+    }
     const incomingConfig = {};
     const context = {};
 
@@ -86,7 +88,9 @@ describe('withAnimus', () => {
 
   function loaderRuleTest(options: AnimusNextOptions) {
     const wrapped = withAnimus(options)({});
-    if (wrapped instanceof Promise) throw new Error('unexpected async config');
+    if (!('webpack' in wrapped)) {
+      throw new Error('withAnimus returned the Turbopack branch');
+    }
     const ruleTest = wrapped.webpack?.({}, {})?.module?.rules?.[0]?.test;
     if (ruleTest === undefined || ruleTest instanceof RegExp) {
       throw new Error('expected a callable webpack rule test');
@@ -133,7 +137,9 @@ describe('withAnimus', () => {
     vi.spyOn(process, 'cwd').mockReturnValue(monorepoRoot);
 
     const wrapped = withAnimus({ system: './src/ds.ts' })({});
-    if (wrapped instanceof Promise) throw new Error('unexpected async config');
+    if (!('webpack' in wrapped)) {
+      throw new Error('withAnimus returned the Turbopack branch');
+    }
     const config = wrapped.webpack?.({}, { dir: appDir });
 
     const plugin = injectedAnimusPlugin(config?.plugins);
@@ -192,7 +198,9 @@ describe('withAnimus', () => {
     };
 
     const wrapped = withAnimus(options)({});
-    if (wrapped instanceof Promise) throw new Error('unexpected async config');
+    if (!('webpack' in wrapped)) {
+      throw new Error('withAnimus returned the Turbopack branch');
+    }
     const config = wrapped.webpack?.({}, {});
     const plugin = injectedAnimusPlugin(config?.plugins);
 
@@ -216,8 +224,9 @@ describe('withAnimus', () => {
 
     const definitionsFor = (dev: boolean) => {
       const wrapped = withAnimus({ system: './src/ds.ts' })({});
-      if (wrapped instanceof Promise)
-        throw new Error('unexpected async config');
+      if (!('webpack' in wrapped)) {
+        throw new Error('withAnimus returned the Turbopack branch');
+      }
       const config = wrapped.webpack?.(
         {},
         { dev, webpack: { DefinePlugin: FakeDefinePlugin } }
