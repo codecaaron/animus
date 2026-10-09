@@ -349,7 +349,7 @@ export default defineConfig({
     tasks: {
       'verify:lint': {
         command:
-          'bunx vp lint && bunx vp fmt --check && bun scripts/verify/topology.ts',
+          'bunx vp lint && bunx vp fmt --check && bun scripts/verify/topology.ts && bun scripts/changelog/assemble.ts --check',
         cache: false,
       },
       'verify:compile': {

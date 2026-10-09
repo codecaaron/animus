@@ -3,6 +3,10 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+A new entry goes in its own file under `changes/unreleased/`, not in this
+file. `bun run changelog` folds those files into the Unreleased section
+below. AGENTS.md § Changelog Entries has the format.
+
 ## Unreleased
 
 **Nested namespaces keep their CSS.** A module that re-exports another as a
