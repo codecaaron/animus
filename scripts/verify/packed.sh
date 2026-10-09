@@ -75,8 +75,8 @@ for p in "${PKGS[@]}"; do
 done
 # Supported type-resolution matrix:
 # node16 profile for CJS/dual surfaces; esm-only for the ESM-only packages
-# (properties, system — require() of these is explicitly unsupported; their
-# node16-ESM declaration gap is DEF-5). node10 is out of contract.
+# (properties, system — require() of these is explicitly unsupported).
+# node10 is out of contract.
 # NOTE: always invoke attw with repo-root cwd — bunx from elsewhere can
 # fetch the unrelated "attw" placeholder package (dependency confusion).
 for p in "${PKGS[@]}"; do
@@ -84,12 +84,10 @@ for p in "${PKGS[@]}"; do
     properties|system)
       # Bounded DEF-5 gate (guardrail G6, replaces the broad rule-wide attw
       # allowlist that ignored every internal resolution error). properties/system
-      # source uses extensionless relative imports under bundler resolution;
-      # stable-TS (7.0.2) emits them verbatim, so their declarations fail
-      # node16-ESM resolution. attw runs with NO ignored rule and its JSON is
-      # checked against the exact captured DEF-5 diagnostic set: a new resolution
-      # error, an obsolete one, or any other esm-only-visible problem fails
-      # closed. See scripts/verify/attw-def5.ts.
+      # ship bundled declarations whose imports name their files, so the DEF-5
+      # set is empty. attw runs with NO ignored rule and its JSON is checked
+      # against that exact set: a new resolution error, an obsolete one, or any
+      # other esm-only-visible problem fails closed. See scripts/verify/attw-def5.ts.
       echo "[verify:packed] attw @animus-ui/$p (--profile esm-only, bounded DEF-5 gate)"
       # attw JSON exceeds the 64KiB command-substitution/pipe cap for system, so
       # stage it to a file (no truncation) and feed it to the validator on stdin.

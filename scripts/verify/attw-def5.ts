@@ -11,50 +11,13 @@ interface Def5Baseline {
   [packageName: string]: Def5Tuple[];
 }
 
-// @animus-ui/properties and @animus-ui/system emit extensionless relative
-// specifiers under bundler resolution, which fail node16-ESM resolution.
-// The fix is an explicit .js on each declaration import, so this list is meant
-// to shrink to empty: trim any entry that starts resolving.
+// @animus-ui/properties and @animus-ui/system ship bundled declarations whose
+// imports name their files (`./chunk.js`), so nothing fails node16-ESM
+// resolution and both lists are empty. An entry here is a regression to fix,
+// not one to record.
 export const DEF5_BASELINE: Def5Baseline = {
-  '@animus-ui/properties': [
-    { file: 'dist/index.d.ts', specifier: './shorthands' },
-    { file: 'dist/index.d.ts', specifier: './unitless' },
-  ],
-  '@animus-ui/system': [
-    { file: 'dist/compose.d.ts', specifier: './types/component' },
-    { file: 'dist/composeWithContext.d.ts', specifier: './types/component' },
-    { file: 'dist/groups/index.d.ts', specifier: '..' },
-    { file: 'dist/index.d.ts', specifier: './Animus' },
-    { file: 'dist/index.d.ts', specifier: './AnimusExtended' },
-    { file: 'dist/index.d.ts', specifier: './SystemBuilder' },
-    { file: 'dist/index.d.ts', specifier: './compose' },
-    { file: 'dist/index.d.ts', specifier: './keyframes' },
-    { file: 'dist/index.d.ts', specifier: './runtime' },
-    { file: 'dist/index.d.ts', specifier: './runtime/createClassResolver' },
-    { file: 'dist/index.d.ts', specifier: './runtime/createComposedFamily' },
-    { file: 'dist/index.d.ts', specifier: './scales/createScale' },
-    { file: 'dist/index.d.ts', specifier: './selectors' },
-    { file: 'dist/index.d.ts', specifier: './theme' },
-    { file: 'dist/index.d.ts', specifier: './transforms/border' },
-    { file: 'dist/index.d.ts', specifier: './transforms/createTransform' },
-    { file: 'dist/index.d.ts', specifier: './transforms/grid' },
-    { file: 'dist/index.d.ts', specifier: './transforms/size' },
-    { file: 'dist/index.d.ts', specifier: './types/component' },
-    { file: 'dist/index.d.ts', specifier: './types/config' },
-    { file: 'dist/index.d.ts', specifier: './types/props' },
-    { file: 'dist/index.d.ts', specifier: './types/scales' },
-    { file: 'dist/index.d.ts', specifier: './types/shared' },
-    { file: 'dist/index.d.ts', specifier: './types/theme' },
-    { file: 'dist/runtime-entry.d.ts', specifier: './runtime' },
-    {
-      file: 'dist/runtime-entry.d.ts',
-      specifier: './runtime/createClassResolver',
-    },
-    {
-      file: 'dist/runtime-entry.d.ts',
-      specifier: './runtime/createComposedFamily',
-    },
-  ],
+  '@animus-ui/properties': [],
+  '@animus-ui/system': [],
 };
 
 export const ESM_ONLY_IGNORED_RESOLUTIONS = new Set(['node10', 'node16-cjs']);

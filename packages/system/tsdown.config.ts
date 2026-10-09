@@ -1,6 +1,6 @@
-import { createConfig } from '../../tsdown.config.base.ts';
+import { createConfigWithDeclarations } from '../../tsdown.config.base.ts';
 
-export default createConfig({
+export default createConfigWithDeclarations({
   entry: [
     './src/index.ts',
     './src/groups/index.ts',
