@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { createV2EngineApi } from '../pipeline/engine-adapter';
 import {
+  PREFIX_NAME_CONFLICT,
   PROPERTY_UNREGISTERED_ANIMATION,
   systemLoadDiagnostics,
 } from '../pipeline/manifest-diagnostics';
@@ -51,11 +52,19 @@ describe('one final name per managed property', () => {
     );
   });
 
-  it('serializes the declared-to-final map', () => {
-    expect(JSON.parse(names.toJson())).toEqual({
-      gap: 'acme-gap',
-      tone: 'acme-tone',
-    });
+  it('resolves theme names below contextual aliases, as the extractor does', () => {
+    const themed = createPropertyNames(['tone'], 'acme', [
+      'acme-tone',
+      'color-red',
+      'tone',
+    ]);
+    expect(themed.identity('acme-tone')).toBe('tone');
+    expect(themed.identity('color-red')).toBe('color-red');
+    expect(themed.finalName('color-red')).toBe('acme-color-red');
+    expect(themed.identity('acme-color-red')).toBeUndefined();
+    expect(themed.ambiguous()).toEqual([
+      { name: 'acme-tone', contextual: 'tone' },
+    ]);
   });
 });
 
@@ -207,6 +216,31 @@ describe('system load under a prefix', () => {
       '{"colors":[{"name":"tone","var":"acme-tone"}]}'
     );
     expect(system.contextualProperties).toEqual(['--acme-tone']);
+  });
+
+  it('reports a final name that would collide, and nothing otherwise', () => {
+    const conflicts = (system: ReturnType<typeof load>) =>
+      systemLoadDiagnostics(system)
+        .filter((d) => d.code === PREFIX_NAME_CONFLICT)
+        .map((d) => [d.component, d.severity]);
+    expect(conflicts(load('acme', true))).toEqual([]);
+    // `animus-tone` would sit among the runtime's `--animus-<prop>` variables.
+    expect(conflicts(load('animus', true))).toEqual([['--tone', 'error']]);
+    const shadowed = loadSystemConfig(
+      () => ({
+        loadSystemModule: () => ({
+          ...SYSTEM,
+          variableCss: `${SYSTEM.variableCss}\n:root { --acme-tone: blue; }`,
+        }),
+      }),
+      {
+        systemPath: 'ds.ts',
+        rootDir: '/',
+        prefix: 'acme',
+        prefixContextualVars: true,
+      }
+    );
+    expect(conflicts(shadowed)).toEqual([['--acme-tone', 'error']]);
   });
 
   it('names the option when a prefix meets contextual variables without it', () => {

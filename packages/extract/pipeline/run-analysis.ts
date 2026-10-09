@@ -8,6 +8,7 @@ import { checkCustomProperties } from './property-diagnostics';
 import { applyUnitFallback } from './unit-fallback';
 
 import type { AnalyzeProjectInputs } from './analyze-project-args';
+import type { ManifestDiagnostic } from './manifest-diagnostics';
 import type { ProjectManifest } from './manifest-schema';
 import type { SystemConfig } from './system-config';
 
@@ -109,6 +110,27 @@ function hasSourceThemeManifests(system: SystemConfig): boolean {
   return json.length > 0 && json !== '{}';
 }
 
+/** Systems whose load diagnostics were surfaced: each loaded system reports
+ *  them once, not again on every analysis and hot update. */
+const surfacedSystems = new WeakSet<SystemConfig>();
+
+/** The loaded system's own diagnostics, the first time it is analyzed. A
+ *  strict error keeps failing every analysis until the system changes. */
+function systemDiagnostics(
+  system: SystemConfig,
+  strict: boolean | undefined
+): ManifestDiagnostic[] {
+  const diagnostics = [
+    ...collectSelectorAliasDiagnostics(system.selectorAliasesJson),
+    ...systemLoadDiagnostics(system),
+  ];
+  const blocking =
+    strict === true && diagnostics.some((d) => d.severity === 'error');
+  if (surfacedSystems.has(system) && !blocking) return [];
+  surfacedSystems.add(system);
+  return diagnostics;
+}
+
 /**
  * The one analysis invocation both plugins share. Error handling stays at
  * the call site (strict-mode throw vs warn).
@@ -150,8 +172,7 @@ export function runProjectAnalysis(
     strict: opts.strict,
     info: opts.info,
     prepend: [
-      ...collectSelectorAliasDiagnostics(opts.system.selectorAliasesJson),
-      ...systemLoadDiagnostics(opts.system),
+      ...systemDiagnostics(opts.system, opts.strict),
       ...propertyDiagnostics,
       ...(opts.extraDiagnostics ?? []),
     ],

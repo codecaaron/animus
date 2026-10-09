@@ -304,6 +304,45 @@ describe('invalid @property registrations', () => {
     ).toEqual([]);
   });
 
+  it('reports a loaded system once, however often it is analyzed', () => {
+    const analyze = (system: ReturnType<typeof load>, strict = false) => {
+      const warned: string[] = [];
+      runProjectAnalysis(
+        () => ({
+          analyzeProject: () =>
+            JSON.stringify({
+              diagnostics: [],
+              sheets: { global: '' },
+              css: '',
+              components: {},
+            }),
+        }),
+        {
+          fileEntries: [],
+          packageMap: {},
+          system,
+          emitter: { runtimeImport: 'runtime', cssModuleId: 'styles.css' },
+          pathAliasesJson: null,
+          devMode: false,
+          warn: (message) => warned.push(message),
+          strict,
+        }
+      );
+      return warned.filter((m) => m.includes(INVALID_PROPERTY_REGISTRATION));
+    };
+    const system = load();
+    expect(analyze(system)).toHaveLength(6);
+    expect(analyze(system)).toHaveLength(0);
+    expect(analyze(load())).toHaveLength(6);
+    const strictSystem = load();
+    expect(() => analyze(strictSystem, true)).toThrow(
+      INVALID_PROPERTY_REGISTRATION
+    );
+    expect(() => analyze(strictSystem, true)).toThrow(
+      INVALID_PROPERTY_REGISTRATION
+    );
+  });
+
   it('reaches the build through runProjectAnalysis, failing strict', () => {
     const analyze = (strict: boolean, warn: (message: string) => void) =>
       runProjectAnalysis(

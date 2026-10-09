@@ -161,6 +161,10 @@ export const PROPERTY_SELF_REFERENCE = 'animus.property.self-reference';
 export const PREFIX_CONTEXTUAL_VARS_UNPREFIXED =
   'animus.prefix.contextual-vars-unprefixed';
 
+/** Under `prefixContextualVars`, a final name that collides with a runtime
+ *  transport variable or a theme variable of the same spelling. */
+export const PREFIX_NAME_CONFLICT = 'animus.prefix.name-conflict';
+
 /**
  * A lost or unreadable configured input, or a classified unsupported Animus
  * declaration, is `error` — what `--strict` refuses; degradation that still
@@ -180,6 +184,7 @@ const DIAGNOSTIC_SEVERITY: ReadonlyMap<string, DiagnosticSeverity> = new Map([
   [PROPERTY_DISCRETE_ANIMATION, 'warn'],
   [PROPERTY_SELF_REFERENCE, 'warn'],
   [PREFIX_CONTEXTUAL_VARS_UNPREFIXED, 'warn'],
+  [PREFIX_NAME_CONFLICT, 'error'],
 ]);
 
 /** An unlisted code is `warn`: a witness kind from a newer system package
@@ -254,6 +259,7 @@ export function systemLoadDiagnostics(
     | 'vocabularyWitnessesJson'
     | 'invalidPropertyRegistrations'
     | 'legacyPrefixedContextualVars'
+    | 'prefixNameConflicts'
   >
 ): ManifestDiagnostic[] {
   const registrations = (system.invalidPropertyRegistrations ?? []).map(
@@ -280,10 +286,24 @@ export function systemLoadDiagnostics(
             severity: severityFor(PREFIX_CONTEXTUAL_VARS_UNPREFIXED),
           },
         ];
+  const conflicts = (system.prefixNameConflicts ?? []).map(
+    ({ name, final, reason }): ManifestDiagnostic => ({
+      file: 'system',
+      component: `--${name}`,
+      kind: 'warn',
+      message:
+        reason === 'transport'
+          ? `the prefix would emit the contextual variable ${name} as --${final}, inside the --animus- names of the runtime's transport variables, where it can collide with a prop's own variable. Use a different prefix (${PREFIX_NAME_CONFLICT})`
+          : `the theme variable --${name} is spelled like the final name of the contextual variable ${final}, so under prefixContextualVars a reference to --${name} reaches ${final} and the theme variable is unreachable. Rename one of them (${PREFIX_NAME_CONFLICT})`,
+      code: PREFIX_NAME_CONFLICT,
+      severity: severityFor(PREFIX_NAME_CONFLICT),
+    })
+  );
   return [
     ...vocabularyWitnessDiagnostics(system.vocabularyWitnessesJson),
     ...registrations,
     ...unprefixed,
+    ...conflicts,
   ];
 }
 

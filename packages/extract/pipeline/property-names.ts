@@ -1,22 +1,25 @@
 /**
  * The one map from a managed property's declared name to its final name.
- * Names carry no `--`. Lookups go by identity: a declared name, or the exact
- * final spelling of one, which still resolves as a compatibility alias. A
- * declared name wins over another name's final spelling, so nothing is
- * renamed twice.
+ * Names carry no `--`. Lookups go by identity: a declared contextual
+ * variable, the exact final spelling of one, which still resolves as a
+ * compatibility alias, or another name the theme defines. A declared name
+ * wins over another name's final spelling, and an alias over a theme name,
+ * as the extractor's index rules, so nothing is renamed twice and both
+ * sides resolve every spelling alike.
  */
 export interface PropertyNames {
   /** The declared name a spelling refers to; `undefined` when unmanaged. */
   identity(spelling: string): string | undefined;
   /** The final name of a declared name; `undefined` when unmanaged. */
   finalName(declared: string): string | undefined;
-  /** `{ declared: final }`, sorted by declared name. */
-  toJson(): string;
+  /** Theme names that are also a contextual variable's final spelling. */
+  ambiguous(): Array<{ name: string; contextual: string }>;
 }
 
 export function createPropertyNames(
   declared: Iterable<string>,
-  prefix: string
+  prefix: string,
+  themeNames: Iterable<string> = []
 ): PropertyNames {
   const finals = new Map<string, string>();
   for (const name of [...new Set(declared)].sort()) {
@@ -26,11 +29,21 @@ export function createPropertyNames(
   for (const [name, final] of finals) {
     if (!finals.has(final)) aliases.set(final, name);
   }
+  const others = new Map<string, string>();
+  for (const name of [...new Set(themeNames)].sort()) {
+    if (!finals.has(name)) others.set(name, `${prefix}-${name}`);
+  }
   return {
     identity: (spelling) =>
-      finals.has(spelling) ? spelling : aliases.get(spelling),
-    finalName: (name) => finals.get(name),
-    toJson: () => JSON.stringify(Object.fromEntries(finals)),
+      finals.has(spelling)
+        ? spelling
+        : (aliases.get(spelling) ??
+          (others.has(spelling) ? spelling : undefined)),
+    finalName: (name) => finals.get(name) ?? others.get(name),
+    ambiguous: () =>
+      [...others.keys()]
+        .filter((name) => aliases.has(name))
+        .map((name) => ({ name, contextual: aliases.get(name) ?? name })),
   };
 }
 

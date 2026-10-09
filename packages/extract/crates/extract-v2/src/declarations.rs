@@ -168,6 +168,10 @@ fn overlap_in(members: &[DeclarationMember]) -> Option<(&str, &str)> {
 fn css_members(names: &[String], label: &str) -> Result<Vec<DeclarationMember>, String> {
     let mut members: Vec<DeclarationMember> = Vec::with_capacity(names.len());
     for name in names {
+        // As the system package rules: custom properties are not members.
+        if name.starts_with("--") {
+            return Err(format!("{label}: member \"{name}\" is not a CSS property name."));
+        }
         let css_property = camel_to_kebab(name);
         if members.iter().any(|member| member.css_property == css_property) {
             return Err(format!("{label}: member '{name}' is listed more than once"));
@@ -496,4 +500,35 @@ impl<'a> DeclarationNames<'a> {
 /// The breakpoint suffix a responsive entry writes; `_` is the base.
 pub fn breakpoint_of(entry_key: &str) -> Option<&str> {
     (entry_key != "_").then_some(entry_key)
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    fn bind(scale_members: &[&str], prop_members: &[&str]) -> Result<DeclarationScales, String> {
+        let mut config: PropConfigMap = serde_json::from_value(json!({
+            "look": { "kind": "declarations", "scale": "looks", "members": prop_members },
+        }))
+        .unwrap();
+        let record: Map<String, Value> = scale_members.iter().map(|member| (member.to_string(), json!("red"))).collect();
+        let scales = json!({
+            "looks": { "kind": "declarations", "members": scale_members, "values": { "loud": record } },
+        })
+        .to_string();
+        bind_declaration_props(&mut config, Some(&scales), &FlatTheme::default())
+    }
+
+    /// The system package refuses custom-property members; the engine
+    /// refuses the same input when it arrives as hand-written options.
+    #[test]
+    fn a_custom_property_member_is_not_a_css_property_name() {
+        let error = bind(&["--bg", "color"], &["color"]).unwrap_err();
+        assert!(error.contains("member \"--bg\" is not a CSS property name"), "{error}");
+        let error = bind(&["color"], &["--bg", "color"]).unwrap_err();
+        assert!(error.contains("member \"--bg\" is not a CSS property name"), "{error}");
+        assert!(bind(&["backgroundColor", "color"], &["backgroundColor", "color"]).is_ok());
+    }
 }

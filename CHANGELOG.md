@@ -16,15 +16,25 @@ keeps exactly `lg` for `R`. Any other value use of a component keeps every
 variant and state option it declares, and a runtime slot for each custom
 prop, as a `{...props}` spread already does.
 
+**System warnings print once per loaded system.** A registration that is
+dropped as invalid, and the other diagnostics a system carries, used to
+repeat on every analysis and hot update. They now print when the system
+loads and again only after it reloads; under `strict` an error still fails
+every analysis until it is fixed.
+
 **Contextual variables can take the variable prefix.** With `prefix` set,
 `prefixContextualVars: true` gives each contextual variable its prefixed
 name everywhere Animus emits it, while authors keep writing the declared
 name: scale values, `{scale.name}` references, `var()` reads including
-fallbacks, declaration keys, keyframes, global styles, declaration-scale
-records, transition lists, style queries, component custom props,
-`currentVar`, the runtime scale map and the runtime keyword classes. The
-exact prefixed spelling still resolves. Undeclared custom properties and
-text inside strings and `url()` are left alone. The option is off by
+fallbacks, style-object keys such as `'--tone': value`, keyframes, global
+styles, the values of declaration-scale records, transition lists, style
+queries, component custom props, `currentVar`, the runtime scale map and the
+runtime keyword classes. The exact prefixed spelling still resolves.
+Undeclared custom properties and text inside strings and `url()` are left
+alone, and so are values a transform returns and strings set at runtime:
+write the prefixed name there. A final name that would collide, inside the
+runtime's `--animus-` variables or with a theme variable of the same
+spelling, reports `animus.prefix.name-conflict`. So `prefix: 'animus'` cannot be used with `prefixContextualVars`: every contextual variable would land among those variables, and each one reports the error. The option is off by
 default; a project with a prefix and contextual variables that has not
 turned it on reports `animus.prefix.contextual-vars-unprefixed`.
 

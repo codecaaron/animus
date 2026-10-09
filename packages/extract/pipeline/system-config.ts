@@ -6,6 +6,7 @@ import {
 } from './prefix';
 import { splitInvalidPropertyRegistrations } from './property-registrations';
 
+import type { PrefixNameConflict } from './prefix';
 import type { InvalidPropertyRegistration } from './property-registrations';
 
 /**
@@ -51,6 +52,8 @@ export interface SystemConfig {
   invalidPropertyRegistrations?: InvalidPropertyRegistration[];
   /** The custom properties the declared contextual variables emit. */
   contextualProperties?: string[];
+  /** Final names that would collide under `prefixContextualVars`. */
+  prefixNameConflicts?: PrefixNameConflict[];
   /** Contextual variables a prefix renamed without `prefixContextualVars`,
    *  so their declared names no longer resolve. */
   legacyPrefixedContextualVars?: string[];
@@ -89,6 +92,7 @@ export function loadSystemConfig(
   ).flat();
   let contextualProperties = declaredNames.map((name) => `--${name}`);
   let legacyPrefixedContextualVars: string[] = [];
+  let prefixNameConflicts: PrefixNameConflict[] = [];
   if (opts.prefix && opts.prefixContextualVars) {
     const resolved = applyPropertyNames(opts.prefix, {
       variableMapJson,
@@ -102,6 +106,7 @@ export function loadSystemConfig(
     scalesJson = resolved.themeJson;
     contextualVarsJson = resolved.contextualVarsJson;
     contextualProperties = resolved.contextualProperties;
+    prefixNameConflicts = resolved.nameConflicts;
     declarationScalesJson = resolved.declarationScalesJson;
   } else if (opts.prefix) {
     legacyPrefixedContextualVars = declaredNames;
@@ -155,6 +160,9 @@ export function loadSystemConfig(
   }
   if (registrations.invalid.length > 0) {
     system.invalidPropertyRegistrations = registrations.invalid;
+  }
+  if (prefixNameConflicts.length > 0) {
+    system.prefixNameConflicts = prefixNameConflicts;
   }
   if (legacyPrefixedContextualVars.length > 0) {
     system.legacyPrefixedContextualVars = [

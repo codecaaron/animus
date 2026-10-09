@@ -39,6 +39,22 @@ impl<'de> Deserialize<'de> for ContextualVarsMap {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let wire = FxHashMap::<String, Vec<WireEntry>>::deserialize(deserializer)?;
         let mut map = Self::default();
+        let mut finals: FxHashMap<String, String> = FxHashMap::default();
+        for entries in wire.values() {
+            for entry in entries {
+                let (name, var) = match entry {
+                    WireEntry::Named(name) => (name, name),
+                    WireEntry::Renamed { name, var } => (name, var),
+                };
+                if let Some(other) = finals.insert(name.clone(), var.clone()) {
+                    if other != *var {
+                        return Err(serde::de::Error::custom(format!(
+                            "contextual variable '{name}' has two final names, '{other}' and '{var}'"
+                        )));
+                    }
+                }
+            }
+        }
         for (scale, entries) in wire {
             let vars = entries
                 .into_iter()
@@ -203,6 +219,20 @@ mod tests {
                 ContextualVar { name: "tone".into(), var: "acme-tone".into() },
             ]
         );
+    }
+
+    #[test]
+    fn one_name_with_two_final_names_is_rejected() {
+        let error = serde_json::from_str::<ContextualVarsMap>(
+            r#"{"colors":[{"name":"tone","var":"acme-tone"}],"space":[{"name":"tone","var":"other-tone"}]}"#,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("contextual variable 'tone' has two final names"), "{error}");
+        assert!(serde_json::from_str::<ContextualVarsMap>(
+            r#"{"colors":[{"name":"tone","var":"acme-tone"}],"space":[{"name":"tone","var":"acme-tone"}]}"#,
+        )
+        .is_ok());
     }
 
     #[test]
