@@ -15,7 +15,7 @@
     "cf:dry-run": "wrangler deploy --dry-run",
     "verify:tsc": "bash ../../scripts/verify/tsc-consumer.sh e2e/vite-app",
     "build:prefixed": "vite build --config prefixed-variant/vite.config.ts",
-    "verify:prefixed": "bash ../../scripts/verify/tsc-consumer.sh e2e/vite-app/prefixed-variant && bun run build:prefixed && bun scripts/assert-prefixed.ts"
+    "verify:prefixed": "bash ../../scripts/verify/tsc-consumer.sh e2e/vite-app/prefixed-variant && bash ../../scripts/verify/build-consumer.sh build:prefixed prefixed-variant && bun scripts/assert-prefixed.ts"
   },
   "dependencies": {
     "@animus-ui/system": "workspace:*",

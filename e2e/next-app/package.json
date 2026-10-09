@@ -12,7 +12,7 @@
     "start": "next start",
     "verify:tsc": "bash ../../scripts/verify/tsc-consumer.sh e2e/next-app",
     "build:prefixed": "next build prefixed-variant",
-    "verify:prefixed": "bun run build:prefixed && bun scripts/assert-prefixed.ts"
+    "verify:prefixed": "bash ../../scripts/verify/build-consumer.sh build:prefixed prefixed-variant && bun scripts/assert-prefixed.ts"
   },
   "dependencies": {
     "@animus-ui/next-plugin": "workspace:*",

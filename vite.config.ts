@@ -39,6 +39,7 @@ const typescriptTestTargets = [
   'packages/extract/tests/vocabulary-witness-diagnostics.test.ts',
   'packages/extract/tests/watch-keys.test.ts',
   'scripts/verify/owner-graph.test.ts',
+  'scripts/verify/clear-consumer-output.test.ts',
   'scripts/verify/ci-graph.test.ts',
   'scripts/verify/extract-test-enumeration.test.ts',
 ] as const;
