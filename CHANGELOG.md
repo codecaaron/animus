@@ -73,7 +73,9 @@ and at each breakpoint, holding the direct declaration, and a runtime
 keyword selects it. A responsive value selects the keyword class for each
 keyword entry, and its other entries still use the inline variable. A prop
 that receives runtime values only through a spread, forwarding or an alias
-gets no keyword classes and keeps the old behaviour.
+gets no keyword classes and keeps the old behaviour. Props bound to a
+declaration scale get none either, because they accept only the scale's
+keys.
 
 **A prop's `currentVar` now carries runtime values to descendants.** A
 prop with `currentVar`, such as `bg` writing `--current-bg`, set that variable

@@ -454,15 +454,15 @@ export class PluginContext {
 
     assertNoErrorDiagnostics(result.manifest.diagnostics);
     this.assertRuntimeImportSuppliesTerminals(result.manifest);
-
-    this.storedManifest = result.manifest;
-    this.storedManifestJson = result.manifestJson;
     reportSurvivingAssetPlaceholders(generatedModuleCode(result.manifest), {
       strict: this.options.strict,
       warn: (message) => this.warn(message),
       prefix: '[animus-extract]',
       surface: 'generated runtime modules',
     });
+
+    this.storedManifest = result.manifest;
+    this.storedManifestJson = result.manifestJson;
 
     this.storedSystemPropMapJson = JSON.stringify(
       result.manifest.system_prop_map

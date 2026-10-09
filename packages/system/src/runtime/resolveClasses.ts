@@ -622,12 +622,9 @@ export function resolveClasses(
       const [classMap, typedProps] = customOwned
         ? [customPropMap, config.typedCustomProps]
         : [systemPropMap, config.typedSystemProps];
-      const keyOf = typedProps?.includes(propName)
-        ? typedValueKey
-        : serializeValueKey;
-      const literalClass = (value: unknown) =>
-        classMap?.[propName]?.[keyOf(value)];
-      const cls = literalClass(propValue);
+      const typed = typedProps?.includes(propName) === true;
+      const cls =
+        classMap?.[propName]?.[typed ? typedValueKey(propValue) : key];
 
       if (cls) {
         classes.push(cls);
@@ -644,7 +641,16 @@ export function resolveClasses(
           const failure =
             dc.kind === 'declarations'
               ? applyDeclarationProp(classes, staged, propValue, dc)
-              : applyDynamicProp(classes, staged, propValue, dc, literalClass);
+              : applyDynamicProp(
+                  classes,
+                  staged,
+                  propValue,
+                  dc,
+                  (value) =>
+                    classMap?.[propName]?.[
+                      (typed ? typedValueKey : serializeValueKey)(value)
+                    ]
+                );
           if (failure === null) {
             dynStyle = staged;
             recordWitness(baseClassName, propName, key, 'dynamic');

@@ -33,7 +33,16 @@ function scaleValuesManifest(rock: string): ProjectManifest {
   });
 }
 
-function analyze(manifest: ProjectManifest, strict: boolean) {
+/** The manifest a later analysis returns, once a test sets it. */
+interface NextAnalysis {
+  manifest?: ProjectManifest;
+}
+
+function analyze(
+  manifest: ProjectManifest,
+  strict: boolean,
+  next: NextAnalysis = {}
+) {
   mkdirSync(join(scratch, 'src'), { recursive: true });
   writeFileSync(join(scratch, 'src', 'ds.ts'), 'export const ds = {};\n');
   const engine = {
@@ -46,13 +55,13 @@ function analyze(manifest: ProjectManifest, strict: boolean) {
       dependencies: [],
     }),
     extractFacts: () => JSON.stringify({ files: {}, parseCount: 0 }),
-    analyzeProject: () => JSON.stringify(manifest),
+    analyzeProject: () => JSON.stringify(next.manifest ?? manifest),
   };
   const ctx = new PluginContext({ system: 'src/ds.ts', strict }, () => engine);
   ctx.rootDir = scratch;
   ctx.loadSystem();
   const warn = vi.spyOn(ctx, 'warn').mockImplementation(() => {});
-  return { run: () => ctx.runAnalysis([]), warn };
+  return { ctx, run: () => ctx.runAnalysis([]), warn };
 }
 
 test('a placeholder left in a runtime config fails a strict build', () => {
@@ -76,4 +85,36 @@ test('a runtime config reading a root variable reports nothing', () => {
   const { run, warn } = analyze(lifted, true);
   expect(run()).toBe(true);
   expect(warn).not.toHaveBeenCalled();
+});
+
+test('a strict failure keeps the last published analysis whole', () => {
+  const published = scaleValuesManifest('var(--animus-asset-1a2b3c4d)');
+  published.css = '.animus-u-1 { padding: 4px; }';
+  published.sheets.global = '@layer anm-global {\n:root {}\n}\n';
+  published.system_prop_map = { p: { '4': 'animus-u-1' } };
+  const next: NextAnalysis = {};
+  const { ctx, run } = analyze(published, true, next);
+  run();
+  const before = {
+    manifest: ctx.storedManifest,
+    manifestJson: ctx.storedManifestJson,
+    propMap: ctx.storedSystemPropMapJson,
+    dynamicProps: ctx.storedDynamicPropsJson,
+    globalCss: ctx.globalCss,
+    componentCss: ctx.resolvedComponentCss,
+  };
+
+  next.manifest = scaleValuesManifest(ROCK);
+  next.manifest.css = '.animus-u-2 { padding: 8px; }';
+  next.manifest.system_prop_map = { p: { '8': 'animus-u-2' } };
+  expect(run).toThrow('generated runtime modules');
+
+  expect({
+    manifest: ctx.storedManifest,
+    manifestJson: ctx.storedManifestJson,
+    propMap: ctx.storedSystemPropMapJson,
+    dynamicProps: ctx.storedDynamicPropsJson,
+    globalCss: ctx.globalCss,
+    componentCss: ctx.resolvedComponentCss,
+  }).toEqual(before);
 });
