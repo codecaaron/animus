@@ -308,6 +308,9 @@ const UNTRACKED_CLONE_PROPS: &str = "animus.usage.untracked-clone-props";
 /// `WIDE_MODULE_LOAD_LIMIT`, so the user can see why pruning stopped.
 const WIDE_MODULE_LOAD: &str = "animus.usage.wide-module-load";
 const WIDE_MODULE_LOAD_LIMIT: usize = 20;
+/// A warning: a colour token's opacity modifier that is not a percentage
+/// from 0 to 100 keeps its old reading, an integer or nothing.
+const INVALID_OPACITY_MODIFIER: &str = "animus.style.invalid-opacity-modifier";
 
 pub(crate) fn diagnostic_severity_for_code(code: &str) -> &'static str {
     match code {
@@ -1406,6 +1409,51 @@ fn emit_compose_slot_bail(
         ),
         Some(COMPOSE_UNRESOLVABLE_SLOT),
     ));
+}
+
+/// One warning per token alias in a chain's authored values whose opacity
+/// modifier is not a percentage from 0 to 100 (`{colors.ink/150}`).
+fn warn_invalid_opacity_modifiers(
+    chain: &crate::facts::ChainFacts,
+    file: &str,
+    diagnostics: &mut Vec<CssDiagnostic>,
+) {
+    fn collect(value: &Value, found: &mut std::collections::BTreeSet<String>) {
+        match value {
+            Value::String(text) => {
+                for alias in text.split('{').skip(1).filter_map(|rest| rest.split_once('}').map(|(alias, _)| alias)) {
+                    let invalid = alias.split_once('/').is_some_and(|(path, modifier)| {
+                        path.contains('.') && crate::theme::opacity_percentage(modifier).is_none()
+                    });
+                    if invalid {
+                        found.insert(alias.to_string());
+                    }
+                }
+            }
+            Value::Array(items) => items.iter().for_each(|item| collect(item, found)),
+            Value::Object(entries) => entries.values().for_each(|entry| collect(entry, found)),
+            _ => {}
+        }
+    }
+    let mut found = std::collections::BTreeSet::new();
+    for stage in &chain.stages {
+        for value in stage.value.iter().chain(&stage.second_value) {
+            collect(value, &mut found);
+        }
+    }
+    for alias in found {
+        let modifier = alias.split_once('/').map_or("", |(_, modifier)| modifier);
+        diagnostics.push(diagnostic(
+            file,
+            &chain.descriptor.binding,
+            "warn",
+            format!(
+                "opacity modifier '/{modifier}' in '{{{alias}}}' is not a percentage from 0 to 100, \
+                 so the colour does not take it as written — use one such as /50 or /2.5"
+            ),
+            Some(INVALID_OPACITY_MODIFIER),
+        ));
+    }
 }
 
 /// Runs before the extension merge, so parent contributions are already shed
@@ -3376,6 +3424,7 @@ fn run_with_system_floor(
                     &chain.descriptor.binding,
                     &mut diagnostics,
                 );
+                warn_invalid_opacity_modifiers(chain, file_path, &mut diagnostics);
 
                 let variant_configs = effective_variant_configs(chain, parent_variant_configs);
                 if !variant_configs.is_empty() {

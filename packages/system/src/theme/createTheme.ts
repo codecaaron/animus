@@ -20,6 +20,7 @@ import {
 } from '../types/theme';
 import { LiteralPaths } from './flattenScale';
 import {
+  contextualReferences,
   copyPropertyStore,
   createPropertyStore,
   declareScaleNames,
@@ -1296,17 +1297,20 @@ export class ThemeBuilder<
 
     // Late-binding resolution over the COMPLETE maps: references inside
     // emitted scales resolve into declarations, and both maps come back sorted.
+    const contextual = contextualReferences(this._state.properties);
     const { tokenMap, variables } = resolveReferences(
       flatTokenMap,
       variableMap,
-      flatVariables
+      flatVariables,
+      contextual
     );
 
     const declarationScales = this._state.declarationScales;
     const resolvedDeclarationScales = resolveDeclarationScales(
       declarationScales,
       theme,
-      tokenMap
+      tokenMap,
+      contextual
     );
 
     const { modeVariables, modeTokens } = resolveModeValueMaps(
@@ -1499,12 +1503,14 @@ interface SerializedDeclarationScale {
 
 /**
  * The effective declaration scales in serialized order, token references
- * resolved against the final token map; `undefined` when there are none.
+ * resolved against the final token map and the declared contextual
+ * variables; `undefined` when there are none.
  */
 function resolveDeclarationScales(
   declarationScales: Record<string, DeclarationScaleValues>,
   theme: Record<string, unknown>,
-  tokenMap: Record<string, string>
+  tokenMap: Record<string, string>,
+  contextual: Record<string, string>
 ): Record<string, SerializedDeclarationScale> | undefined {
   const names = Object.keys(declarationScales).sort();
   if (names.length === 0) return undefined;
@@ -1526,7 +1532,7 @@ function resolveDeclarationScales(
           Object.entries(record).map(([member, value]) => [
             member,
             typeof value === 'string'
-              ? resolveValueReferences(value, tokenMap)
+              ? resolveValueReferences(value, tokenMap, contextual)
               : value,
           ])
         )

@@ -969,42 +969,42 @@ fn resolve_value(
         let definition = &config.callback.as_ref()?.definition;
         evaluator?.is_registered(&definition.key).then_some((definition.key.as_str(), definition.name.as_str()))
     });
+    // As at runtime, the bound transform takes every value that reaches it:
+    // a scale's token, or a value missing a non-strict scale.
     if let Some((transform_key, transform_name)) = binding {
-        if transform_applies(config, resolved.is_some()) {
-            if let Some(eval) = evaluator {
-                match eval.evaluate(transform_key, transform_name, final_value) {
-                    Ok(css) => {
-                        return Some(if is_negative {
-                            negate_css_value(&css)
-                        } else {
-                            css
+        if let Some(eval) = evaluator {
+            match eval.evaluate(transform_key, transform_name, final_value) {
+                Ok(css) => {
+                    return Some(if is_negative {
+                        negate_css_value(&css)
+                    } else {
+                        css
+                    });
+                }
+                // A throw, or a decline where no runtime slot exists (the
+                // usage gate keeps JSX declines away), is reported and
+                // applies the raw value.
+                Err(err) => {
+                    if let Some(sink) = failures {
+                        sink.borrow_mut().push(TransformFailure {
+                            transform_name: transform_name.to_string(),
+                            prop: prop_name.to_string(),
+                            failure: err.clone(),
+                            variant_origin: None,
                         });
                     }
-                    // A throw, or a decline where no runtime slot exists (the
-                    // usage gate keeps JSX declines away), is reported and
-                    // applies the raw value.
-                    Err(err) => {
-                        if let Some(sink) = failures {
-                            sink.borrow_mut().push(TransformFailure {
-                                transform_name: transform_name.to_string(),
-                                prop: prop_name.to_string(),
-                                failure: err.clone(),
-                                variant_origin: None,
-                            });
-                        }
-                        if matches!(err, EvalError::InvalidResultShape { .. }) {
-                            return None;
-                        }
+                    if matches!(err, EvalError::InvalidResultShape { .. }) {
+                        return None;
                     }
                 }
-            } else if let Some(raw_str) = value_to_css_string(final_value) {
-                let css = format!("__TRANSFORM__{}__{}__", transform_name, raw_str);
-                return Some(if is_negative {
-                    negate_css_value(&css)
-                } else {
-                    css
-                });
             }
+        } else if let Some(raw_str) = value_to_css_string(final_value) {
+            let css = format!("__TRANSFORM__{}__{}__", transform_name, raw_str);
+            return Some(if is_negative {
+                negate_css_value(&css)
+            } else {
+                css
+            });
         }
     }
 
@@ -1048,25 +1048,13 @@ pub(crate) fn skips_transforms(config: &PropConfig, value: &Value, ctx: &Resolve
     }
 }
 
-/// Whether the bound transform applies to a value: one the scale resolves,
-/// or any value of a prop without a populated scale. Otherwise the value
-/// applies raw.
-fn transform_applies(config: &PropConfig, scale_resolved: bool) -> bool {
-    match &config.scale {
-        None => true,
-        Some(Value::Array(scale)) if scale.is_empty() => true,
-        Some(_) => scale_resolved,
-    }
-}
-
 /// Whether extraction can resolve every entry of `value` through the prop's
 /// admitted callback with the meaning the runtime gives it; otherwise the
-/// whole value stays on the runtime path. The runtime passes an entry that
-/// misses a populated scale through the callback, where extraction would
-/// apply it raw; an isolated evaluation can exhaust its budget or read the
-/// host; and extraction or its CSS post-processing can rewrite a string
-/// result the runtime applies verbatim, such as a bare number or token
-/// syntax. A throw or an invalid result keeps its build-time policy.
+/// whole value stays on the runtime path. An isolated evaluation can exhaust
+/// its budget or read the host, and extraction or its CSS post-processing
+/// can rewrite a string result the runtime applies verbatim, such as a bare
+/// number or token syntax. A throw or an invalid result keeps its build-time
+/// policy.
 pub(crate) fn extracts_callback_value(
     config: &PropConfig,
     key: &str,
@@ -1091,9 +1079,6 @@ pub(crate) fn extracts_callback_value(
         let token = lookup_scale_token(entry, config, ctx.theme);
         if token.is_none() && is_css_wide_keyword(entry) {
             return true;
-        }
-        if !transform_applies(config, token.is_some()) {
-            return false;
         }
         let input = token.as_ref().map_or(entry, |(token, _)| token);
         match evaluator.evaluate_callback(key, name, input) {
@@ -1350,6 +1335,21 @@ fn resolve_token_aliases(
     variable_map: &VariableMap,
     contextual_vars: &ContextualVarsMap,
 ) -> String {
+    resolve_aliases_within(value, theme, variable_map, contextual_vars, 0)
+}
+
+/// How deep a theme literal's own aliases expand. The theme build already
+/// rejects a reference cycle; past this depth an alias stays unresolved and
+/// is reported as one.
+const ALIAS_DEPTH_LIMIT: usize = 16;
+
+fn resolve_aliases_within(
+    value: &str,
+    theme: &FlatTheme,
+    variable_map: &VariableMap,
+    contextual_vars: &ContextualVarsMap,
+    depth: usize,
+) -> String {
     if !value.contains('{') {
         return value.to_string();
     }
@@ -1372,8 +1372,7 @@ fn resolve_token_aliases(
 
             if let Some(end_idx) = end {
                 let alias_content = &value[content_start..end_idx];
-                let resolved =
-                    resolve_single_alias(alias_content, theme, variable_map, contextual_vars);
+                let resolved = resolve_single_alias(alias_content, theme, variable_map, contextual_vars, depth);
                 result.push_str(&resolved);
             } else {
                 result.push('{');
@@ -1388,17 +1387,31 @@ fn resolve_token_aliases(
     result
 }
 
+/// A colour token's opacity modifier: a percentage from 0 to 100, decimals
+/// allowed (`/2.6`), as the text it writes; `None` for anything else.
+pub(crate) fn opacity_percentage(modifier: &str) -> Option<String> {
+    let digits = |text: &str| !text.is_empty() && text.bytes().all(|byte| byte.is_ascii_digit());
+    let well_formed = match modifier.split_once('.') {
+        Some((whole, fraction)) => digits(whole) && digits(fraction),
+        None => digits(modifier),
+    };
+    let percentage: f64 = modifier.parse().ok().filter(|_| well_formed)?;
+    (percentage <= 100.0).then(|| percentage.to_string())
+}
+
 fn resolve_single_alias(
     content: &str,
     theme: &FlatTheme,
     variable_map: &VariableMap,
     contextual_vars: &ContextualVarsMap,
+    depth: usize,
 ) -> String {
+    // A malformed modifier keeps its old reading: an integer, or none.
     let (token_path, alpha) = match content.split_once('/') {
-        Some((path, alpha_str)) => {
-            let alpha: Option<u32> = alpha_str.parse().ok();
-            (path, alpha)
-        }
+        Some((path, modifier)) => (
+            path,
+            opacity_percentage(modifier).or_else(|| modifier.parse::<u32>().ok().map(|integer| integer.to_string())),
+        ),
         None => (content, None),
     };
 
@@ -1407,7 +1420,13 @@ fn resolve_single_alias(
     let resolved = if let Some(var_name) = variable_map.get(&flat_key) {
         format!("var({})", var_name)
     } else if let Some(literal) = theme.get(&flat_key) {
-        literal.clone()
+        // A literal can itself hold aliases, a contextual variable among
+        // them, when the theme was built before they resolved there.
+        if literal.contains('{') && depth < ALIAS_DEPTH_LIMIT {
+            resolve_aliases_within(literal, theme, variable_map, contextual_vars, depth + 1)
+        } else {
+            literal.clone()
+        }
     } else if let Some(dot_idx) = token_path.find('.') {
         let scale_name = &token_path[..dot_idx];
         let var_name = &token_path[dot_idx + 1..];
@@ -1420,9 +1439,9 @@ fn resolve_single_alias(
         return format!("{{{}}}", content);
     };
 
-    match alpha {
-        Some(0) => "transparent".to_string(),
-        Some(100) | None => resolved,
+    match alpha.as_deref() {
+        Some("0") => "transparent".to_string(),
+        Some("100") | None => resolved,
         Some(pct) => {
             format!("color-mix(in srgb, {} {}%, transparent)", resolved, pct)
         }
