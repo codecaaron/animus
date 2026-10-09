@@ -1601,6 +1601,31 @@ fn resolve_identity(
     by_bare_name(local)
 }
 
+/// Each member tag `file`'s namespace imports can write (`ui.R`), with the
+/// components it renders.
+fn namespace_member_ids(
+    file: &str,
+    ff: &FileFacts,
+    files: &BTreeMap<String, FileFacts>,
+    inputs: &CssInputs,
+    evaluated_ids: &FxHashSet<String>,
+) -> Vec<(String, Vec<String>)> {
+    let mut members = Vec::new();
+    for (namespace, source) in &ff.namespace_imports {
+        let Some(module) = resolve_import_source(file, source, files, inputs) else {
+            continue;
+        };
+        for name in crate::family_members::module_export_names(&module, files, inputs) {
+            let tag = format!("{namespace}.{name}");
+            let ids = resolve_declared_identity(file, &tag, files, inputs, evaluated_ids);
+            if !ids.is_empty() {
+                members.push((tag, ids));
+            }
+        }
+    }
+    members
+}
+
 /// The analysed modules a runtime module load in `file` can name. A pattern
 /// into an analysed package names every module. A specifier usage cannot
 /// read names the modules under `file`'s own directory: that is all webpack
@@ -3449,6 +3474,18 @@ fn run_with_system_floor(
                 .get_or_insert_with(|| global_lookup.clone())
                 .publish(wrapper, ids, &usage_sources);
         }
+        // `<ui.R>` through `import * as ui` renders what the namespace's
+        // module exports as `R`, followed through barrels.
+        let mut members_with_namespaces: Option<FxHashMap<String, String>> = None;
+        for (tag, ids) in namespace_member_ids(path, ff, files, inputs, &evaluated_ids) {
+            file_lookup
+                .get_or_insert_with(|| global_lookup.clone())
+                .publish(&tag, &ids, &usage_sources);
+            members_with_namespaces
+                .get_or_insert_with(|| member_expr_bindings.clone())
+                .insert(tag.clone(), tag);
+        }
+        let member_expr_bindings = members_with_namespaces.as_ref().unwrap_or(member_expr_bindings);
         let takes_system_prop = |file: &str, name: &str, prop: &str| {
             resolve_declared_identity(file, name, files, inputs, &evaluated_ids)
                 .iter()
@@ -6853,6 +6890,43 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
     fn direct_renders_still_prune_unused_options() {
         let app = "import { R } from './r';\nexport const App = () => <R size=\"sm\" active />;\n";
         assert_eq!(kept_options(&[("r.tsx", RECIPE), ("app.tsx", app)]), (vec!["sm"], vec!["active"]));
+    }
+
+    /// `<ui.R>` through `import * as ui` records its props for `R`, directly
+    /// and through barrels, as do `createElement(ui.R, …)` and a clone of
+    /// `<ui.R>`.
+    #[test]
+    fn namespace_member_tags_record_usage_for_their_component() {
+        for (source, setup) in [
+            ("./r", "export const Big = () => <ui.R size=\"lg\" />;"),
+            ("./index", "export const Big = () => <ui.R size=\"lg\" />;"),
+            ("./named", "export const Big = () => <ui.R size=\"lg\" />;"),
+            (
+                "./index",
+                "import { createElement } from 'react';\n\
+                 export const Big = () => createElement(ui.R, { size: 'lg' });",
+            ),
+            (
+                "./index",
+                "import { cloneElement } from 'react';\n\
+                 export const Big = () => cloneElement(<ui.R size=\"sm\" />, { size: 'lg' });",
+            ),
+        ] {
+            let app = format!(
+                "import {{ R }} from './r';\nimport * as ui from '{source}';\n{setup}\n\
+                 export const App = () => <R size=\"sm\" active />;\n"
+            );
+            assert_eq!(
+                kept_options(&[
+                    ("r.tsx", RECIPE),
+                    ("index.ts", "export * from './r';\n"),
+                    ("named.ts", "export { R } from './r';\n"),
+                    ("app.tsx", app.as_str()),
+                ]),
+                (vec!["sm", "lg"], vec!["active"]),
+                "{source}: {setup}"
+            );
+        }
     }
 
     /// A module loaded at runtime (`import()`, `require()`, a context or a

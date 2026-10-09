@@ -14,6 +14,14 @@ nothing is pruned, so every component, variant option and state is kept,
 and the skip warning now says so. `strict` builds still fail on a skipped
 file.
 
+**Namespace member renders keep their CSS.** With
+`import * as ui from './components'`, a render such as `<ui.Button size="lg" />`
+recorded nothing for `Button`, so when `Button` was also rendered directly,
+production builds kept only the direct render's options and dropped `lg`.
+Namespace member tags now resolve through the module's exports, re-exports
+and `export *` barrels, and count like a direct render. The same applies to
+`createElement(ui.Button, …)` and `cloneElement(<ui.Button />, …)`.
+
 **Components loaded at runtime keep their CSS.** A component reached
 through `import()`, `require()`, `require.context()`,
 `import.meta.webpackContext()` or `import.meta.glob()` renders where usage
