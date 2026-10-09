@@ -18,6 +18,9 @@ export default defineConfig({
       appearanceBootstrap,
       verify: true,
       strict: true,
+      // REPLACEABLE_DEFAULT_EXCLUDE (extract/pipeline/core-options.ts), plus
+      // the prefixed variant, which builds on its own.
+      exclude: ['dist', '.test.', '.spec.', 'prefixed-variant'],
     }),
     cloudflare(),
   ],

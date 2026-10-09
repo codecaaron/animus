@@ -10,7 +10,9 @@
     "verify:assert": "bash ../../scripts/verify/assert-consumer.sh e2e/next-app/.next e2e/next-app/scripts/assert-build.ts",
     "verify": "vp run @animus-ui/next-app#verify:build && vp run @animus-ui/next-app#verify:tsc && vp run @animus-ui/next-app#verify:assert",
     "start": "next start",
-    "verify:tsc": "bash ../../scripts/verify/tsc-consumer.sh e2e/next-app"
+    "verify:tsc": "bash ../../scripts/verify/tsc-consumer.sh e2e/next-app",
+    "build:prefixed": "next build prefixed-variant",
+    "verify:prefixed": "bun run build:prefixed && bun scripts/assert-prefixed.ts"
   },
   "dependencies": {
     "@animus-ui/next-plugin": "workspace:*",

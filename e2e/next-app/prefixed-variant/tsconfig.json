@@ -1,5 +1,5 @@
 {
-  "extends": "../../tsconfig.json",
+  "extends": "../../../tsconfig.json",
   "compilerOptions": {
     "jsx": "preserve",
     "module": "esnext",
@@ -17,5 +17,5 @@
     "incremental": true
   },
   "include": ["**/*.ts", "**/*.tsx", "next-env.d.ts", ".next/types/**/*.ts"],
-  "exclude": ["node_modules", ".next", "prefixed-variant"]
+  "exclude": ["node_modules", ".next"]
 }

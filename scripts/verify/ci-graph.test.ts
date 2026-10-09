@@ -330,11 +330,13 @@ describe('parsed CI graph', () => {
     );
     expect(namedStep(jobs['verify-next'], 'Next consumer lane').run).toBe(
       'bunx vp run @animus-ui/next-app#verify:build\n' +
-        'bunx vp run @animus-ui/next-app#verify:assert\n'
+        'bunx vp run @animus-ui/next-app#verify:assert\n' +
+        'bunx vp run @animus-ui/next-app#verify:prefixed\n'
     );
     expect(namedStep(jobs['verify-vite'], 'Vite consumer lane').run).toBe(
       'bunx vp run @animus-ui/vite-app#verify:build\n' +
-        'bunx vp run @animus-ui/vite-app#verify:assert\n'
+        'bunx vp run @animus-ui/vite-app#verify:assert\n' +
+        'bunx vp run @animus-ui/vite-app#verify:prefixed\n'
     );
 
     const workerCommands = jobs['verify-workers'].steps

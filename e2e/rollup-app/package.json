@@ -6,7 +6,7 @@
   "type": "module",
   "scripts": {
     "verify:build": "animus build --root . --system ./src/ds.ts --strict --exclude 'fixtures/**' && rollup -c rollup.config.mjs",
-    "verify:assert": "node scripts/assert-artifacts.mjs && node scripts/assert-host.mjs && node scripts/assert-watch.mjs && node scripts/assert-watch-build-parity.mjs",
+    "verify:assert": "node scripts/assert-artifacts.mjs && node scripts/assert-host.mjs && node scripts/assert-watch.mjs && node scripts/assert-watch-build-parity.mjs && node scripts/assert-prefixed.mjs",
     "verify": "vp run @animus-ui/rollup-app#verify:build && vp run @animus-ui/rollup-app#verify:assert"
   },
   "dependencies": {

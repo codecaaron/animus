@@ -274,6 +274,7 @@ jobs:
         run: |
           bunx vp run @animus-ui/next-app#verify:build
           bunx vp run @animus-ui/next-app#verify:assert
+          bunx vp run @animus-ui/next-app#verify:prefixed
 
       - name: Upload lane receipts
         uses: actions/upload-artifact@v7
@@ -317,6 +318,7 @@ jobs:
         run: |
           bunx vp run @animus-ui/vite-app#verify:build
           bunx vp run @animus-ui/vite-app#verify:assert
+          bunx vp run @animus-ui/vite-app#verify:prefixed
 
       - name: List lane receipts (diagnosing empty artifact)
         # The receipt writes locally and next-app's analog uploads fine;
