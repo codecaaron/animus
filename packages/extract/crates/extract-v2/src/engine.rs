@@ -281,14 +281,20 @@ impl ExtractEngine {
         > = std::collections::BTreeMap::new();
         for ast in store.iter() {
             let program = ast.program();
-            let statics = crate::eval::collect_static_values(program);
+            let statics = if crate::analyze_css::is_external_file(&ast.path, &self.opts.css_inputs.external_dirs) {
+                crate::eval::collect_package_static_values(program)
+            } else {
+                crate::eval::collect_static_values(program)
+            };
             let complete_statics = crate::eval::collect_complete_static_values(program);
             let exports = collect_export_facts(program);
             let mut static_exports = rustc_hash::FxHashMap::default();
             let mut complete_static_exports = rustc_hash::FxHashMap::default();
             for exp in &exports {
                 if let Some(local) = &exp.local {
-                    if let Some(value) = statics.get(local) {
+                    // A relative `asset()` specifier means its own file's
+                    // directory, which an importer cannot carry.
+                    if let Some(value) = statics.get(local).filter(|value| !crate::eval::carries_relative_asset(value)) {
                         static_exports.insert(exp.exported.clone(), value.clone());
                     }
                     if let Some(value) = complete_statics.get(local) {
@@ -1395,6 +1401,27 @@ export const App = () => <Box tone="red" />;
         let out = engine.transform_file("child.tsx".to_string()).unwrap();
         assert!(out.contains(r#"\"variants\":{\"size\""#), "{out}");
         assert!(out.contains(r#"\"states\":[\"loading\"]"#), "{out}");
+    }
+
+    #[test]
+    fn relative_asset_specifiers_never_cross_files() {
+        // The host resolves an `asset()` specifier without its importer, so a
+        // relative one evaluates only in its own file.
+        let mut engine = ExtractEngine::new(None).unwrap();
+        let out = engine
+            .analyze(
+                serde_json::json!([
+                    { "path": "assets.ts", "source": "import { asset } from '@animus-ui/system';\nexport const relative = `url(\"${asset('./hero.svg')}\")`;\nexport const bare = `url(\"${asset('@kit/hero.svg')}\")`;\n" },
+                    { "path": "a.tsx", "source": "import { asset } from '@animus-ui/system';\nimport { relative, bare } from './assets';\nexport const Own = ds.styles({ backgroundImage: `url(\"${asset('./own.svg')}\")` }).asElement('div');\nexport const Relative = ds.styles({ backgroundImage: relative }).asElement('div');\nexport const Bare = ds.styles({ backgroundImage: bare }).asElement('div');\nexport const App = () => <><Own /><Relative /><Bare /></>;\n" }
+                ])
+                .to_string(),
+            )
+            .unwrap();
+        let manifest: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let css = manifest["css"].as_str().unwrap();
+        assert!(css.contains("animus-asset:./own.svg"), "{css}");
+        assert!(css.contains("animus-asset:@kit/hero.svg"), "{css}");
+        assert!(!css.contains("animus-asset:./hero.svg"), "{css}");
     }
 
     #[test]
