@@ -62,6 +62,31 @@ pub enum TagFact {
     Member(String),
 }
 
+/// Where the name a tag starts with is bound, as the file's own scopes tell
+/// it: for `<ui.Item>`, where `ui` is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TagOrigin {
+    Import,
+    /// Any other top-level binding of the file.
+    TopLevel,
+    /// A parameter, or a binding inside a function or block.
+    Nested,
+    /// No binding in the file: a global, or nothing.
+    Undeclared,
+}
+
+/// A tag that left the usage scan unable to tell which component it renders.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UncertainTag {
+    /// The name or dotted path as written; `None` for a `createElement`
+    /// argument that names nothing (`createElement(pick())`).
+    pub tag: Option<String>,
+    pub create_element: bool,
+    pub origin: Option<TagOrigin>,
+    /// Byte offset of the element or call.
+    pub at: u32,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum UsageFact {
@@ -76,6 +101,9 @@ pub enum UsageFact {
         /// Byte span of the opening element.
         #[serde(skip)]
         span: (u32, u32),
+        /// Collected with the file's scopes only.
+        #[serde(skip)]
+        origin: Option<TagOrigin>,
     },
     /// createElement(X, ...) / React.createElement(X, ...): the first
     /// argument as a raw name or dotted key (None = unattributable form).
@@ -93,6 +121,12 @@ pub enum UsageFact {
         /// it is written.
         #[serde(skip)]
         clone: bool,
+        /// Byte offset of the call.
+        #[serde(skip)]
+        at: u32,
+        /// Collected with the file's scopes only.
+        #[serde(skip)]
+        origin: Option<TagOrigin>,
     },
     /// `cloneElement(child, …)` of an element usage cannot name: the
     /// overrides can reach any component.
@@ -493,6 +527,8 @@ pub(crate) struct EnrichedUsage {
     pub module_loads: Vec<ModuleLoad>,
     /// See `FileFacts::unsafe_object_uses`.
     pub unsafe_object_uses: BTreeMap<String, ObjectUse>,
+    /// See `FileFacts::ordinary_components`.
+    pub ordinary_components: BTreeSet<String>,
 }
 
 /// A use of a binding that holds an object which may change the object's
@@ -706,6 +742,13 @@ pub(crate) fn collect_enriched_usage(
         Some(scoping) => ReactNames::from_imports(program, scoping),
         None => ReactNames::by_name(),
     };
+    // Tag origins and ordinary components read the same scopes, built here
+    // when nothing above needed them.
+    let tag_scoping = match &scoping {
+        Some(_) => None,
+        None => Some(SemanticBuilder::new().build(program).semantic.into_scoping()),
+    };
+    let origins = scoping.as_ref().or(tag_scoping.as_ref());
     let mut collector = FactCollector {
         facts: Vec::new(),
         static_values,
@@ -719,10 +762,14 @@ pub(crate) fn collect_enriched_usage(
             pending: Vec::new(),
         }),
         module_loads: Some(Vec::new()),
+        origins,
     };
     collector.visit_program(program);
     let module_loads = collector.module_loads.take().unwrap_or_default();
     let usage = collector.finish();
+    let ordinary_components = origins
+        .map(|scoping| ordinary_components(program, scoping))
+        .unwrap_or_default();
     let confined = match &scoping {
         // Direct eval can read any binding by name.
         Some(scoping) if !scoping.root_unresolved_references().contains_key("eval") => {
@@ -791,6 +838,7 @@ pub(crate) fn collect_enriched_usage(
         spread_wrappers,
         module_loads,
         unsafe_object_uses,
+        ordinary_components,
     }
 }
 
@@ -1780,6 +1828,8 @@ struct FactCollector<'a, 's> {
     clones: Option<CloneScan<'a, 's>>,
     /// Enriched collection only: the modules the file loads at runtime.
     module_loads: Option<Vec<ModuleLoad>>,
+    /// Enriched collection only: the scopes a tag's origin is read from.
+    origins: Option<&'s Scoping>,
 }
 
 /// `cloneElement` calls, resolved once the walk has seen every `const`
@@ -1800,22 +1850,24 @@ struct PendingClone {
     props: Option<Vec<(String, String)>>,
     line: usize,
     call: String,
+    at: u32,
 }
 
 impl<'a> FactCollector<'a, '_> {
     /// Records one element's usage fact.
     fn record_element(&mut self, elem: &JSXOpeningElement<'a>) {
-        let tag = match &elem.name {
-            JSXElementName::Identifier(id) => TagFact::Ident(id.name.to_string()),
-            JSXElementName::IdentifierReference(id) => TagFact::Ident(id.name.to_string()),
+        let (tag, root) = match &elem.name {
+            JSXElementName::Identifier(id) => (TagFact::Ident(id.name.to_string()), None),
+            JSXElementName::IdentifierReference(id) => (TagFact::Ident(id.name.to_string()), Some(&**id)),
             JSXElementName::MemberExpression(member) => {
                 let Some(path) = jsx_member_path(member) else {
                     return;
                 };
-                TagFact::Member(path)
+                (TagFact::Member(path), jsx_member_root(member))
             }
             _ => return,
         };
+        let origin = self.origins.zip(root).map(|(scoping, root)| tag_origin(scoping, root));
         let mut attrs = Vec::new();
         let mut spread = None;
         for attr_item in &elem.attributes {
@@ -1910,6 +1962,7 @@ impl<'a> FactCollector<'a, '_> {
             attrs,
             spread,
             span: (elem.span.start, elem.span.end),
+            origin,
         });
     }
 }
@@ -1959,12 +2012,19 @@ impl<'a, 's> Visit<'a> for FactCollector<'a, 's> {
                     Argument::StringLiteral(_) => (None, None, false),
                     _ => (None, None, true),
                 };
+                let root = match first_arg {
+                    Argument::Identifier(id) => Some(&**id),
+                    Argument::StaticMemberExpression(m) => static_member_root(m),
+                    _ => None,
+                };
                 self.facts.push(UsageFact::CreateElement {
                     ident,
                     member,
                     identity_uncertain,
                     props: create_element_props(call.arguments.get(1)),
                     clone: false,
+                    at: call.span.start,
+                    origin: self.origins.zip(root).map(|(scoping, root)| tag_origin(scoping, root)),
                 });
             }
         } else if self.react.calls(&call.callee, "cloneElement") {
@@ -2020,7 +2080,7 @@ impl<'a> FactCollector<'a, '_> {
         let fact = match first.map(Expression::get_inner_expression) {
             Some(Expression::JSXElement(element)) => {
                 match element_tag(&element.opening_element.name) {
-                    Some(Some(tag)) => clone_of(tag, props),
+                    Some(Some(tag)) => clone_of(tag, props, call.span.start),
                     // A host element takes no variant props.
                     None => return,
                     Some(None) => unknown_clone(props, line, call_text),
@@ -2036,6 +2096,7 @@ impl<'a> FactCollector<'a, '_> {
                     props,
                     line,
                     call: call_text,
+                    at: call.span.start,
                 });
                 return;
             }
@@ -2050,7 +2111,7 @@ impl<'a> FactCollector<'a, '_> {
         if let Some(clones) = self.clones.take() {
             for pending in clones.pending {
                 let fact = match pending.symbol.and_then(|symbol| clones.elements.get(&symbol)) {
-                    Some(tag) => clone_of(tag.clone(), pending.props),
+                    Some(tag) => clone_of(tag.clone(), pending.props, pending.at),
                     None => unknown_clone(pending.props, pending.line, pending.call),
                 };
                 self.facts.extend(fact);
@@ -2073,7 +2134,8 @@ fn element_tag(name: &JSXElementName<'_>) -> Option<Option<TagFact>> {
     }
 }
 
-fn clone_of(tag: TagFact, props: Option<Vec<(String, String)>>) -> Option<UsageFact> {
+/// The element's own fact carries its origin.
+fn clone_of(tag: TagFact, props: Option<Vec<(String, String)>>, at: u32) -> Option<UsageFact> {
     let (ident, member) = match tag {
         TagFact::Ident(name) => (Some(name), None),
         TagFact::Member(path) => (None, Some(path)),
@@ -2084,6 +2146,8 @@ fn clone_of(tag: TagFact, props: Option<Vec<(String, String)>>) -> Option<UsageF
         identity_uncertain: false,
         props,
         clone: true,
+        at,
+        origin: None,
     })
 }
 
@@ -2106,6 +2170,112 @@ fn static_member_path(member: &oxc::ast::ast::StaticMemberExpression<'_>) -> Opt
         _ => return None,
     };
     Some(format!("{object}.{}", member.property.name))
+}
+
+/// The identifier a static member chain starts with: `ui` in `ui.Kit.Item`.
+fn static_member_root<'b, 'a>(
+    member: &'b oxc::ast::ast::StaticMemberExpression<'a>,
+) -> Option<&'b IdentifierReference<'a>> {
+    match &member.object {
+        Expression::Identifier(object) => Some(object),
+        Expression::StaticMemberExpression(inner) => static_member_root(inner),
+        _ => None,
+    }
+}
+
+fn jsx_member_root<'b, 'a>(
+    member: &'b oxc::ast::ast::JSXMemberExpression<'a>,
+) -> Option<&'b IdentifierReference<'a>> {
+    match &member.object {
+        oxc::ast::ast::JSXMemberExpressionObject::IdentifierReference(id) => Some(id),
+        oxc::ast::ast::JSXMemberExpressionObject::MemberExpression(inner) => jsx_member_root(inner),
+        oxc::ast::ast::JSXMemberExpressionObject::ThisExpression(_) => None,
+    }
+}
+
+/// Read from the reference's own symbol, so a parameter that shadows an
+/// import is a parameter.
+fn tag_origin(scoping: &Scoping, name: &IdentifierReference<'_>) -> TagOrigin {
+    let symbol = name.reference_id.get().and_then(|id| scoping.get_reference(id).symbol_id());
+    match symbol {
+        None => TagOrigin::Undeclared,
+        Some(symbol) if scoping.symbol_scope_id(symbol) != scoping.root_scope_id() => TagOrigin::Nested,
+        Some(symbol) if scoping.symbol_flags(symbol).is_import() => TagOrigin::Import,
+        Some(_) => TagOrigin::TopLevel,
+    }
+}
+
+/// Top-level functions and classes, and `const` bindings of a function or
+/// class expression, that nothing in the file writes: what a tag naming an
+/// ordinary component is proved by. An ordinary default export is also
+/// `default`.
+fn ordinary_components(program: &Program<'_>, scoping: &Scoping) -> BTreeSet<String> {
+    use oxc::ast::ast::{BindingIdentifier, Declaration, ExportDefaultDeclarationKind};
+    // Direct eval can write any binding by name.
+    if scoping.root_unresolved_references().contains_key("eval") {
+        return BTreeSet::new();
+    }
+    let unwritten = |id: &BindingIdentifier<'_>| {
+        id.symbol_id.get().is_some_and(|symbol| !scoping.symbol_is_mutated(symbol))
+    };
+    let mut names = BTreeSet::new();
+    for statement in &program.body {
+        let declaration = match statement {
+            Statement::ExportNamedDeclaration(export) => export.declaration.as_ref(),
+            Statement::ExportDefaultDeclaration(export) => {
+                let id = match &export.declaration {
+                    ExportDefaultDeclarationKind::FunctionDeclaration(function) if function.body.is_some() => {
+                        function.id.as_ref()
+                    }
+                    ExportDefaultDeclarationKind::ClassDeclaration(class) => class.id.as_ref(),
+                    ExportDefaultDeclarationKind::ArrowFunctionExpression(_)
+                    | ExportDefaultDeclarationKind::FunctionExpression(_)
+                    | ExportDefaultDeclarationKind::ClassExpression(_) => None,
+                    _ => continue,
+                };
+                match id {
+                    Some(id) if !unwritten(id) => continue,
+                    Some(id) => {
+                        names.insert(id.name.to_string());
+                    }
+                    None => {}
+                }
+                names.insert("default".to_string());
+                continue;
+            }
+            statement => statement.as_declaration(),
+        };
+        let ids: Vec<&BindingIdentifier<'_>> = match declaration {
+            Some(Declaration::FunctionDeclaration(function)) if function.body.is_some() => {
+                function.id.iter().collect()
+            }
+            Some(Declaration::ClassDeclaration(class)) if !class.declare => class.id.iter().collect(),
+            Some(Declaration::VariableDeclaration(variables))
+                if variables.kind == oxc::ast::ast::VariableDeclarationKind::Const =>
+            {
+                variables
+                    .declarations
+                    .iter()
+                    .filter_map(|declarator| match (&declarator.id, &declarator.init) {
+                        (oxc::ast::ast::BindingPattern::BindingIdentifier(id), Some(init))
+                            if matches!(
+                                init.get_inner_expression(),
+                                Expression::ArrowFunctionExpression(_)
+                                    | Expression::FunctionExpression(_)
+                                    | Expression::ClassExpression(_)
+                            ) =>
+                        {
+                            Some(&**id)
+                        }
+                        _ => None,
+                    })
+                    .collect()
+            }
+            _ => Vec::new(),
+        };
+        names.extend(ids.into_iter().filter(|id| unwritten(id)).map(|id| id.name.to_string()));
+    }
+    names
 }
 
 /// React's `createElement` and `cloneElement` as a file can call them:
@@ -2208,6 +2378,7 @@ pub fn collect_usage_facts(program: &Program<'_>) -> Vec<UsageFact> {
         react: ReactNames::by_name(),
         clones: None,
         module_loads: None,
+        origins: None,
     };
     collector.visit_program(program);
     collector.finish()
@@ -2548,10 +2719,21 @@ pub fn filter_usage_scan(
 
     for fact in facts {
         match fact {
-            UsageFact::Element { tag, attrs, spread, span } => {
+            UsageFact::Element { tag, attrs, spread, span, origin } => {
+                let uncertain = |result: &mut UsageScanResult, name: &str| {
+                    result.identity_uncertain = true;
+                    result.uncertain_tags.push(UncertainTag {
+                        tag: Some(name.to_string()),
+                        create_element: false,
+                        origin: *origin,
+                        at: span.0,
+                    });
+                };
                 let Some((tag_name, resolved_binding)) = resolve_tag(tag, member_expr_bindings)
                 else {
-                    result.identity_uncertain = true;
+                    if let TagFact::Member(path) = tag {
+                        uncertain(&mut result, path);
+                    }
                     continue;
                 };
                 // A wrapper render records once per path to its targets.
@@ -2559,8 +2741,10 @@ pub fn filter_usage_scan(
                     let has_props = component_props.contains_key(tag_name);
                     let has_config = component_configs.contains_key(tag_name);
                     if !has_props && !has_config {
-                        if matches!(tag, TagFact::Ident(name) if is_component_like_identifier(name)) {
-                            result.identity_uncertain = true;
+                        if let TagFact::Ident(name) = tag {
+                            if is_component_like_identifier(name) {
+                                uncertain(&mut result, name);
+                            }
                         }
                         continue;
                     }
@@ -2686,20 +2870,31 @@ pub fn filter_usage_scan(
                 identity_uncertain,
                 props,
                 clone,
+                at,
+                origin,
             } => {
+                let uncertain = |result: &mut UsageScanResult, tag: Option<&String>| {
+                    result.identity_uncertain = true;
+                    result.uncertain_tags.push(UncertainTag {
+                        tag: tag.cloned(),
+                        create_element: true,
+                        origin: *origin,
+                        at: *at,
+                    });
+                };
                 let resolved: Option<String> = if let Some(name) = ident {
                     if component_props.contains_key(name.as_str())
                         || component_configs.contains_key(name.as_str())
                     {
                         Some(name.clone())
                     } else {
-                        result.identity_uncertain = true;
+                        uncertain(&mut result, Some(name));
                         None
                     }
                 } else if let Some(key) = member {
                     let resolved = member_expr_bindings.get(key).cloned();
                     if resolved.is_none() {
-                        result.identity_uncertain = true;
+                        uncertain(&mut result, Some(key));
                     }
                     resolved
                 } else {
@@ -2740,7 +2935,7 @@ pub fn filter_usage_scan(
                     }
                     result.rendered_components.insert(binding);
                 } else if *identity_uncertain {
-                    result.identity_uncertain = true;
+                    uncertain(&mut result, None);
                 }
             }
             // Overrides usage can list reach every component that declares

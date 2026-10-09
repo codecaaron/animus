@@ -458,6 +458,7 @@ mod tests {
                 s
             },
             identity_uncertain: false,
+            uncertain_tags: vec![],
         };
 
         let ledger = build_ledger(&[scan_result], &variant_configs);
@@ -510,6 +511,7 @@ mod tests {
                 s
             },
             identity_uncertain: false,
+            uncertain_tags: vec![],
         };
 
         let ledger = build_ledger(&[scan_result], &variant_configs);
