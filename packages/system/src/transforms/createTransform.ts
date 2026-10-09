@@ -1,15 +1,11 @@
 import type { AbstractProps } from '../types/props';
-import type { CSSObject } from '../types/shared';
 
-/**
- * The `CSSObject` return arm fails the build and drops the value at runtime;
- * a transform must return a string or a finite number.
- */
+/** A transform returns a string or a finite number. */
 export type TransformFn = (
   value: string | number,
   property?: string,
   props?: AbstractProps
-) => string | number | CSSObject;
+) => string | number;
 
 export type NamedTransform = TransformFn & {
   transformName: string;

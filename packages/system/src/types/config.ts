@@ -34,7 +34,7 @@ export interface Prop extends BaseProperty {
     val: string | number,
     prop?: string,
     props?: AbstractProps
-  ) => string | number | CSSObject;
+  ) => string | number;
 }
 
 /**
@@ -78,16 +78,14 @@ export type DeclarationKey<Config extends DeclarationProp> =
     ? keyof DeclarationScalesOf<Theme>[Config['scale']]
     : string | number;
 
-// The `CSSObject` return branch is rejected on both paths: build-time
-// evaluation errors and the runtime drops the value; return a string or number.
-// The arm stays in the union only so imported transforms keep compiling at
-// `.props({ transform })` callsites — narrowing it is a breaking change.
+// A transform returns a string or a finite number: build-time evaluation
+// rejects an object result, and the runtime drops it.
 export interface CustomPropConfig extends Prop {
   transform?: (
     val: string | number,
     prop?: string,
     props?: AbstractProps
-  ) => string | number | CSSObject;
+  ) => string | number;
 }
 
 export interface AbstractParser {
