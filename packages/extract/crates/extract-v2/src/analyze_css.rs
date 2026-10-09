@@ -30,9 +30,9 @@ use crate::jsx_scan::{
 use crate::pipeline::process_chain_facts;
 use crate::reconcile::{build_ledger, identify_prospective_eliminations, reconcile, VariantConfigMap};
 use crate::theme::{
-    ConditionAliasesMap, ContextualVarsMap, CssDeclaration, FlatTheme, PropConfigMap,
+    ConditionAliasesMap, ContextualVarsMap, CssDeclaration, FlatTheme, PropConfig, PropConfigMap,
     ResolveContext, ResolvedStyles, SelectorAliasesMap, StrictTokenMiss, StrictTokenMissSink,
-    TransformFailure, TransformFailureSink, VariableMap, extracts_callback_value, extracts_configured_value, strict_token_miss_of,
+    TransformFailure, TransformFailureSink, VariableMap, extracts_callback_value, extracts_configured_value, skips_transforms, strict_token_miss_of,
 };
 use crate::transforms::CallbackDefinition;
 use crate::usage_facts::{is_animus_system_specifier, TagFact, UsageFact, UsageResidueRecord};
@@ -2851,6 +2851,27 @@ fn admit_callback(
     evaluator.is_registered(&definition.key)
 }
 
+/// Whether extraction resolves `value` of a custom prop: a callback that
+/// cannot evaluate it applies it at runtime, and no callback sees a CSS-wide
+/// keyword.
+fn extracts_custom_value(
+    prop_config: &PropConfig,
+    value: &Value,
+    evaluator: &TransformEvaluator,
+    attempted: &mut FxHashSet<String>,
+    ctx: &ResolveContext,
+) -> bool {
+    match &prop_config.callback {
+        _ if prop_config.transform_fn_source.is_none() || skips_transforms(prop_config, value, ctx) => true,
+        Some(callback) => {
+            let definition = &callback.definition;
+            admit_callback(definition, evaluator, attempted)
+                && extracts_callback_value(prop_config, &definition.key, &definition.name, value, ctx)
+        }
+        None => false,
+    }
+}
+
 fn drain_transform_failures(
     sink: &TransformFailureSink,
     file: &str,
@@ -3709,6 +3730,12 @@ fn run_with_system_floor(
             value: value.clone(),
         })
     };
+    // The same admission for a runtime keyword, which no usage wrote and so
+    // reports nothing.
+    let admits_keyword = |config: &PropConfig, prop_name: &str, value: &Value| {
+        strict_token_miss_of(prop_name, config, value, &resolve_ctx).is_none()
+            && extracts_configured_value(config, value, &resolve_ctx)
+    };
 
     let mut all_utility_inputs: Vec<UtilityInput> = Vec::new();
     let mut all_custom_inputs: Vec<(String, UtilityInput)> = Vec::new();
@@ -3884,23 +3911,13 @@ fn run_with_system_floor(
                         &usage.value,
                         &mut diagnostics,
                     );
-                    // A callback that cannot evaluate this value applies it at runtime.
-                    let extracted = match &prop_config.callback {
-                        _ if prop_config.transform_fn_source.is_none() => true,
-                        Some(callback) => {
-                            let definition = &callback.definition;
-                            admit_callback(definition, &evaluator, &mut attempted_callbacks)
-                                && extracts_callback_value(
-                                    prop_config,
-                                    &definition.key,
-                                    &definition.name,
-                                    &usage.value,
-                                    &resolve_ctx,
-                                )
-                        }
-                        None => false,
-                    };
-                    if extracted {
+                    if extracts_custom_value(
+                        prop_config,
+                        &usage.value,
+                        &evaluator,
+                        &mut attempted_callbacks,
+                        &resolve_ctx,
+                    ) {
                         all_custom_inputs.extend(input.map(|input| (owner.clone(), input)));
                     }
                 }
@@ -4224,12 +4241,12 @@ fn run_with_system_floor(
         dynamic_props
             .iter()
             .filter(|(name, _)| detected_dynamic_prop_names.contains(*name))
-            .filter_map(|(name, meta)| {
-                let scale = &meta.value()?.scale_values;
-                inputs.config.get(name.as_str()).map(|config| (name.as_str(), config, scale))
-            }),
+            .filter_map(|(name, meta)| Some((name.as_str(), &meta.value()?.scale_values))),
         &breakpoints,
-        &inputs.contextual_vars,
+        &resolve_ctx,
+        |prop_name, value| {
+            inputs.config.get(prop_name).is_some_and(|config| admits_keyword(config, prop_name, value))
+        },
     );
     let slot_entries = if !dynamic_props.is_empty() {
         Some(build_variable_slot_entries(&dynamic_props, &breakpoints))
@@ -4416,15 +4433,19 @@ fn run_with_system_floor(
         let observed = observed_custom_dynamic.get(component_id);
         custom_classes.add_runtime_keyword_classes(
             component_id,
+            cc,
             component_dynamic
                 .iter()
                 .filter(|(name, _)| observed.is_some_and(|props| props.contains(*name)))
-                .filter_map(|(name, meta)| {
-                    let scale = &meta.value()?.scale_values;
-                    cc.get(name).map(|config| (name.as_str(), config, scale))
-                }),
+                .filter_map(|(name, meta)| Some((name.as_str(), &meta.value()?.scale_values))),
             &breakpoints,
-            &inputs.contextual_vars,
+            &resolve_ctx,
+            |prop_name, value| {
+                cc.get(prop_name).is_some_and(|config| {
+                    admits_keyword(config, prop_name, value)
+                        && extracts_custom_value(config, value, &evaluator, &mut attempted_callbacks, &resolve_ctx)
+                })
+            },
         );
         if !component_dynamic.is_empty() {
             all_custom_slot_entries.extend(build_variable_slot_entries(
@@ -6306,6 +6327,42 @@ export const App = ({ n, rest }) => <><Box p={n} gap={n} /><Box {...rest} /></>;
         let payload = &out.replacement_configs["a.tsx::Box"];
         assert!(payload.custom_dynamic_config.as_ref().unwrap().contains_key("edge"));
         assert!(custom_classes(&out, "a.tsx::Box", "edge").is_empty());
+    }
+
+    /// A runtime keyword declares what a static write of it declares, at the
+    /// base and every breakpoint, whether or not a static write exists; no
+    /// transform sees a CSS-wide keyword on either path.
+    #[test]
+    fn runtime_keywords_declare_what_a_static_write_declares() {
+        let to_px = "(v) => `${v}px`";
+        let mut inputs = test_inputs();
+        inputs.config.insert(
+            "w".into(),
+            serde_json::from_str(r#"{"property": "width", "transform": "toPx", "transformId": "toPx@system.w"}"#)
+                .unwrap(),
+        );
+        inputs.set_transform_sources(Some(&serde_json::json!({ "toPx@system.w": to_px }).to_string())).unwrap();
+        inputs.group_registry.insert("sizing".into(), vec!["w".into()]);
+        let classes_of = |statics: &str| {
+            let source = format!(
+                "export const Box = ds.props({{ cw: {{ property: 'height', transform: {to_px} }} }}).system({{ sizing: true }}).asElement('div');\n\
+                 export const App = ({{ n }}) => <><Box w={{n}} cw={{n}} />{statics}</>;\n"
+            );
+            let out = analyze(&[("a.tsx", &source)], &inputs);
+            let rule = |css: &str, class: &str| {
+                css.split(&format!(".{class} {{")).nth(1).and_then(|rule| rule.split('}').next()).unwrap_or_default().to_string()
+            };
+            let mut found = Vec::new();
+            for key in ["\"initial\"", "{\"sm\":\"initial\"}"] {
+                let w = &out.system_prop_map["w"][key];
+                assert!(rule(&out.sheets.system, w).contains("width: initial;"), "{key}\n{}", out.sheets.system);
+                let cw = &custom_classes(&out, "a.tsx::Box", "cw")[key];
+                assert!(rule(&out.sheets.custom, cw).contains("height: initial;"), "{key}\n{}", out.sheets.custom);
+                found.push((w.clone(), cw.clone()));
+            }
+            found
+        };
+        assert_eq!(classes_of(""), classes_of(r#"<Box w="initial" cw="initial" />"#));
     }
 
     #[test]

@@ -919,6 +919,11 @@ fn resolve_value(
     let (resolved, is_negative) = lookup_scale_token(value, config, theme)
         .map_or((None, false), |(token, negated)| (Some(token), negated));
     let final_value = resolved.as_ref().unwrap_or(value);
+    // A CSS-wide keyword is a cascade instruction, not a value: no transform
+    // sees it. A scale key spelled like one resolved above, as a token.
+    if resolved.is_none() && is_css_wide_keyword(value) {
+        return value_to_css_string(value);
+    }
 
     // A name bound to no definition was reported at its declaration; a
     // component callback binds its definition once admitted.
@@ -990,6 +995,21 @@ fn lookup_scale_token(value: &Value, config: &PropConfig, theme: &FlatTheme) -> 
     lookup_scale_value(&absolute, config, theme).map(|token| (token, true))
 }
 
+/// Whether `value` is one of the CSS-wide keywords, which no transform sees.
+fn is_css_wide_keyword(value: &Value) -> bool {
+    value.as_str().is_some_and(|text| crate::css::CSS_WIDE_KEYWORDS.contains(&text))
+}
+
+/// Whether every entry of `value` is a CSS-wide keyword no scale key
+/// resolves, so no transform sees any of it.
+pub(crate) fn skips_transforms(config: &PropConfig, value: &Value, ctx: &ResolveContext) -> bool {
+    let skips = |entry: &Value| is_css_wide_keyword(entry) && lookup_scale_token(entry, config, ctx.theme).is_none();
+    match value.as_object() {
+        Some(entries) if is_responsive_value(value, ctx.breakpoint_keys) => entries.values().all(skips),
+        _ => skips(value),
+    }
+}
+
 /// Whether the bound transform applies to a value: one the scale resolves,
 /// or any value of a prop without a populated scale. Otherwise the value
 /// applies raw.
@@ -1031,6 +1051,9 @@ pub(crate) fn extracts_callback_value(
             return false;
         }
         let token = lookup_scale_token(entry, config, ctx.theme);
+        if token.is_none() && is_css_wide_keyword(entry) {
+            return true;
+        }
         if !transform_applies(config, token.is_some()) {
             return false;
         }
