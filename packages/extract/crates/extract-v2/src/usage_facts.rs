@@ -596,15 +596,11 @@ fn escape_path(
             AstKind::CallExpression(call)
                 if call.arguments.first().map(GetSpan::span) == Some(current) =>
             {
-                let callee = crate::chain_walk::unwrap_type_assertions(&call.callee);
-                let callee_name = match callee {
-                    Expression::Identifier(id) => Some(id.name.as_str()),
-                    Expression::StaticMemberExpression(member) => Some(member.property.name.as_str()),
-                    _ => None,
-                };
-                if callee_name == Some("createElement") {
+                // Followed only where usage records the render.
+                if is_create_element_callee(&call.callee) {
                     return None;
                 }
+                let callee = crate::chain_walk::unwrap_type_assertions(&call.callee);
                 let object_assign = matches!(callee, Expression::StaticMemberExpression(member)
                     if member.object.is_specific_id("Object") && member.property.name == "assign");
                 return (!(object_assign && initializes_top_level_const(call.span, rest))).then_some(path);
@@ -868,17 +864,7 @@ impl<'a, 's> Visit<'a> for FactCollector<'a, 's> {
     }
 
     fn visit_call_expression(&mut self, call: &CallExpression<'a>) {
-        let is_create_element = match &call.callee {
-            Expression::Identifier(id) => id.name.as_str() == "createElement",
-            Expression::StaticMemberExpression(member) => match &member.object {
-                Expression::Identifier(obj) => {
-                    obj.name.as_str() == "React" && member.property.name.as_str() == "createElement"
-                }
-                _ => false,
-            },
-            _ => false,
-        };
-        if is_create_element {
+        if is_create_element_callee(&call.callee) {
             if let Some(first_arg) = call.arguments.first() {
                 let (ident, member, identity_uncertain) = match first_arg {
                     Argument::Identifier(id) => (Some(id.name.to_string()), None, false),
@@ -906,6 +892,19 @@ impl<'a, 's> Visit<'a> for FactCollector<'a, 's> {
             }
         }
         oxc::ast_visit::walk::walk_call_expression(self, call);
+    }
+}
+
+/// The `createElement` calls usage records: a bare `createElement(…)` or
+/// `React.createElement(…)`. The escape scan follows exactly these, so any
+/// other spelling opens its component instead of being lost.
+fn is_create_element_callee(callee: &Expression<'_>) -> bool {
+    match callee {
+        Expression::Identifier(id) => id.name == "createElement",
+        Expression::StaticMemberExpression(member) => {
+            member.object.is_specific_id("React") && member.property.name == "createElement"
+        }
+        _ => false,
     }
 }
 

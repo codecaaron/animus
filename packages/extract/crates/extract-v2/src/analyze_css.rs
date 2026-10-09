@@ -6632,6 +6632,39 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         }
     }
 
+    /// A `createElement` call usage tracking does not record (React under
+    /// another name) is an escape, not a followed render: `lg` stays.
+    #[test]
+    fn create_element_through_another_react_name_keeps_every_option() {
+        for setup in [
+            "import * as Re from 'react';\nexport const Big = () => Re.createElement(R, { size: 'lg' });",
+            "import Re from 'react';\nexport const Big = () => Re.createElement(R, { size: 'lg' });",
+        ] {
+            let app = format!(
+                "import {{ R }} from './r';\n{setup}\nexport const App = () => <R size=\"sm\" active />;\n"
+            );
+            assert_eq!(
+                kept_options(&[("r.tsx", RECIPE), ("app.tsx", app.as_str())]),
+                (vec!["sm", "md", "lg"], vec!["active", "busy"]),
+                "{setup}"
+            );
+        }
+        // The forms usage records stay followed renders.
+        for setup in [
+            "import React from 'react';\nexport const Small = () => React.createElement(R, { size: 'sm' });",
+            "import { createElement } from 'react';\nexport const Small = () => createElement(R, { size: 'sm' });",
+        ] {
+            let app = format!(
+                "import {{ R }} from './r';\n{setup}\nexport const App = () => <R size=\"sm\" active />;\n"
+            );
+            assert_eq!(
+                kept_options(&[("r.tsx", RECIPE), ("app.tsx", app.as_str())]),
+                (vec!["sm"], vec!["active"]),
+                "{setup}"
+            );
+        }
+    }
+
     /// An alias exported to other modules, or a default export, is rendered
     /// where usage tracking does not follow it, so it opens its target.
     #[test]
