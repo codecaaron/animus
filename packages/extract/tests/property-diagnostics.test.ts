@@ -11,6 +11,7 @@ import {
   PROPERTY_SELF_REFERENCE,
   PROPERTY_UNREGISTERED_ANIMATION,
 } from '../pipeline/manifest-diagnostics';
+import { checkCustomProperties } from '../pipeline/property-diagnostics';
 import { runProjectAnalysis } from '../pipeline/run-analysis';
 import { loadSystemConfig } from '../pipeline/system-config';
 
@@ -188,7 +189,10 @@ export const Flip = ds
 export const Behaved = ds
   .styles({ transitionProperty: '--spare', transitionBehavior: 'allow-discrete' })
   .asElement('div');
-export const App = () => <><Mover /><Flip /><Behaved /></>;
+export const Speedy = ds
+  .styles({ transition: 'background-color var(--lift) ease' })
+  .asElement('div');
+export const App = () => <><Mover /><Flip /><Behaved /><Speedy /></>;
 `;
 
   it('reports declared properties set in keyframes or transitioned without a typed registration', () => {
@@ -203,6 +207,7 @@ export const App = () => <><Mover /><Flip /><Behaved /></>;
     expect(informed.join('\n')).toContain('--lift');
     expect(informed.join('\n')).not.toContain('--tone');
     expect(informed.join('\n')).not.toContain('--undeclared');
+    expect([...informed, ...warned].join('\n')).not.toContain('Speedy');
     expect(codesIn(warned)).toEqual([
       PROPERTY_DISCRETE_ANIMATION,
       PROPERTY_DISCRETE_ANIMATION,
@@ -220,17 +225,23 @@ export const Self = ds
 export const App = () => <Self toneProp="tone" />;
 `;
 
-  it('is an error and the declaration is not emitted', () => {
+  it('warns and keeps the declaration', () => {
     const { componentCss, warned } = analyze(SELF);
     expect(codesIn(warned)).toEqual([PROPERTY_SELF_REFERENCE]);
     expect(warned[0]).toContain('Self');
-    expect(componentCss).not.toMatch(/--tone:\s*var\(--tone\)/);
+    expect(componentCss).toMatch(/--tone:\s*var\(--tone\)/);
   });
 
-  it('fails a strict build', () => {
-    expect(() => analyze(SELF, registeredTheme(), { strict: true })).toThrow(
-      PROPERTY_SELF_REFERENCE
-    );
+  it('does not fail a strict build', () => {
+    expect(() =>
+      analyze(SELF, registeredTheme(), { strict: true })
+    ).not.toThrow();
+  });
+
+  it('is reported without any registration', () => {
+    const { componentCss, warned } = analyze(SELF, unregisteredTheme());
+    expect(codesIn(warned)).toEqual([PROPERTY_SELF_REFERENCE]);
+    expect(componentCss).toMatch(/--tone:\s*var\(--tone\)/);
   });
 });
 
@@ -254,11 +265,10 @@ export const App = () => <Scroller cap="24rem" allRows />;
 
   it('a project without registrations reports nothing and keeps its CSS', () => {
     const source = `import { ds } from './ds';
-export const Self = ds
-  .props({ toneProp: { property: '--tone', scale: 'colors' } })
+export const Plain = ds
   .styles({ '--fill': 'var(--tone, red)', transition: '--lift 1s' })
   .asElement('div');
-export const App = () => <Self toneProp="tone" />;
+export const App = () => <Plain />;
 `;
     const { componentCss, globalCss, informed, warned } = analyze(
       source,
@@ -266,7 +276,42 @@ export const App = () => <Self toneProp="tone" />;
       { keyframes: KEYFRAMES }
     );
     expect(codesIn([...informed, ...warned])).toEqual([]);
-    expect(componentCss).toMatch(/--tone:\s*var\(--tone\)/);
+    expect(componentCss).toContain('--fill: var(--tone, red)');
     expect(globalCss).toContain('--accent: red');
+  });
+});
+
+describe('owner lookup', () => {
+  it('reads no component when nothing is found', () => {
+    let reads = 0;
+    const component = {
+      file: 'src/a.tsx',
+      binding: 'A',
+      extends_from: null,
+      terminal: 'asElement',
+      tag: 'div',
+      system_prop_names: [],
+      get class_name() {
+        reads += 1;
+        return 'animus-A';
+      },
+      get replacement() {
+        reads += 1;
+        return '';
+      },
+    };
+    const system = {
+      variableCss: '@property --x { syntax: "*"; inherits: true; }',
+      contextualVarsJson: null,
+      contextualProperties: [],
+    };
+    const diagnostics = checkCustomProperties({
+      system,
+      manifest: { components: { 'src/a.tsx::A': component } },
+      componentCss: '.animus-A {\n  color: red;\n  --y: var(--x);\n}\n',
+      globalCss: '',
+    });
+    expect(diagnostics).toEqual([]);
+    expect(reads).toBe(0);
   });
 });

@@ -139,7 +139,7 @@ export function runProjectAnalysis(
   // SAFETY: `manifestJson` is this call's own `analyzeProject` return value,
   // the serde output `ProjectManifest` mirrors. Unparseable JSON throws.
   const manifest = JSON.parse(manifestJson) as ProjectManifest;
-  const properties = checkCustomProperties({
+  const propertyDiagnostics = checkCustomProperties({
     system: opts.system,
     manifest,
     componentCss: applyUnitFallback(manifest.css),
@@ -151,7 +151,7 @@ export function runProjectAnalysis(
     prepend: [
       ...collectSelectorAliasDiagnostics(opts.system.selectorAliasesJson),
       ...systemLoadDiagnostics(opts.system),
-      ...properties.diagnostics,
+      ...propertyDiagnostics,
       ...(opts.extraDiagnostics ?? []),
     ],
   });
@@ -160,8 +160,8 @@ export function runProjectAnalysis(
   return {
     manifest,
     manifestJson,
-    globalCss: properties.globalCss,
-    componentCss: properties.componentCss,
+    globalCss: manifest.sheets.global,
+    componentCss: applyUnitFallback(manifest.css),
     inputs,
     timings: { serializeMs, extractMs, parseMs },
   };

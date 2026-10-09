@@ -21,14 +21,6 @@ export interface CustomPropertyCheckInput {
   globalCss: string;
 }
 
-/** The sheets with self-referencing declarations removed, and what the
- *  checks found. */
-export interface CustomPropertyCheck {
-  componentCss: string;
-  globalCss: string;
-  diagnostics: ManifestDiagnostic[];
-}
-
 interface Declaration {
   property: string;
   value: string;
@@ -49,30 +41,23 @@ interface Finding {
 }
 
 /**
- * Reports custom properties that will not behave as their CSS suggests:
- * a fallback an initial value suppresses, an animated property that cannot
- * interpolate, and a property that refers to itself, whose declaration is
- * removed. A system that emits no `@property` rule is left untouched.
+ * Reports custom properties that will not behave as their CSS suggests: a
+ * property that refers to itself and, once the system emits an `@property`
+ * rule, a fallback an initial value suppresses and an animated property that
+ * cannot interpolate. The CSS itself is never changed.
  */
 export function checkCustomProperties(
   input: CustomPropertyCheckInput
-): CustomPropertyCheck {
+): ManifestDiagnostic[] {
   const registered = propertyRegistrations(input.system.variableCss);
-  if (registered.size === 0) {
-    return {
-      componentCss: input.componentCss,
-      globalCss: input.globalCss,
-      diagnostics: [],
-    };
-  }
   const declared = declaredProperties(input.system.contextualVarsJson);
   const findings: Finding[] = [];
   const sheets = [
     { css: input.componentCss, owner: componentOwner(input.manifest) },
     { css: input.globalCss, owner: globalOwner },
-  ].map(({ css, owner }) => {
+  ];
+  for (const { css, owner } of sheets) {
     const parsed = declarations(css);
-    const removed: Declaration[] = [];
     const discreteRules = new Set(
       parsed
         .filter(
@@ -83,17 +68,19 @@ export function checkCustomProperties(
         .map((d) => d.rule)
     );
     for (const declaration of parsed) {
-      const where = owner(declaration);
+      // The owner is looked up only for a finding: scanning every component
+      // for every declaration costs more than the checks themselves.
+      const found = (code: string, property: string, message: string) =>
+        findings.push({ code, property, message, owner: owner(declaration) });
       if (isSelfReference(declaration)) {
-        removed.push(declaration);
-        findings.push({
-          code: PROPERTY_SELF_REFERENCE,
-          property: declaration.property,
-          message: `${declaration.property} resolves to var(${declaration.property}), a reference to itself, which makes it invalid; the declaration is not emitted. Give it a value other than its own name`,
-          owner: where,
-        });
+        found(
+          PROPERTY_SELF_REFERENCE,
+          declaration.property,
+          `${declaration.property} resolves to var(${declaration.property}), a reference to itself, so it is invalid at computed-value time. Give it a value other than its own name`
+        );
         continue;
       }
+      if (registered.size === 0) continue;
       for (const read of varReads(declaration.value)) {
         const registration = registered.get(read.name);
         if (
@@ -103,45 +90,37 @@ export function checkCustomProperties(
           continue;
         }
         const chain = read.fallback.startsWith('var(');
-        findings.push({
-          code: chain
+        found(
+          chain
             ? PROPERTY_FALLBACK_CHAIN_SUPPRESSED
             : PROPERTY_FALLBACK_SUPPRESSED,
-          property: read.name,
-          message: chain
+          read.name,
+          chain
             ? `var(${read.name}, ${read.fallback}) never reads its fallback chain: ${read.name} is registered with initial-value ${registration.initialValue}, which applies whenever it is unset. Remove the initial value or reorder the chain`
-            : `var(${read.name}, ${read.fallback}) never uses its fallback: ${read.name} is registered with initial-value ${registration.initialValue}, which applies whenever it is unset`,
-          owner: where,
-        });
+            : `var(${read.name}, ${read.fallback}) never uses its fallback: ${read.name} is registered with initial-value ${registration.initialValue}, which applies whenever it is unset`
+        );
       }
       for (const animated of animatedProperties(declaration, discreteRules)) {
         if (!declared.has(animated.name)) continue;
         const reason = interpolationGap(registered.get(animated.name));
         if (reason === null) continue;
-        findings.push(
-          animated.discrete
-            ? {
-                code: PROPERTY_DISCRETE_ANIMATION,
-                property: animated.name,
-                message: `${animated.name} is transitioned with allow-discrete but ${reason}, so it flips at the midpoint instead of interpolating. Register it with a typed syntax`,
-                owner: where,
-              }
-            : {
-                code: PROPERTY_UNREGISTERED_ANIMATION,
-                property: animated.name,
-                message: `${animated.name} is ${animated.how} but ${reason}, so it changes in one step instead of interpolating. Register it with a typed syntax to animate it`,
-                owner: where,
-              }
-        );
+        if (animated.discrete) {
+          found(
+            PROPERTY_DISCRETE_ANIMATION,
+            animated.name,
+            `${animated.name} is transitioned with allow-discrete but ${reason}, so it flips at the midpoint instead of interpolating. Register it with a typed syntax`
+          );
+        } else {
+          found(
+            PROPERTY_UNREGISTERED_ANIMATION,
+            animated.name,
+            `${animated.name} is ${animated.how} but ${reason}, so it changes in one step instead of interpolating. Register it with a typed syntax to animate it`
+          );
+        }
       }
     }
-    return withoutDeclarations(css, removed);
-  });
-  return {
-    componentCss: sheets[0],
-    globalCss: sheets[1],
-    diagnostics: toDiagnostics(findings),
-  };
+  }
+  return toDiagnostics(findings);
 }
 
 function declaredProperties(contextualVarsJson: string | null): Set<string> {
@@ -262,14 +241,22 @@ function animatedProperties(
   ) {
     return [];
   }
-  return topLevelItems(declaration.value).flatMap((item) =>
-    (item.match(/--[\w-]+/g) ?? []).map((name) => ({
-      name,
-      how: 'transitioned',
-      discrete:
-        /\ballow-discrete\b/.test(item) || discreteRules.has(declaration.rule),
-    }))
-  );
+  // Each item names its property first; a later `--x` is a value, such as
+  // a duration read from a variable.
+  return topLevelItems(declaration.value).flatMap((item) => {
+    const property = item.trim().split(/\s+/)[0] ?? '';
+    return property.startsWith('--')
+      ? [
+          {
+            name: property,
+            how: 'transitioned',
+            discrete:
+              /\ballow-discrete\b/.test(item) ||
+              discreteRules.has(declaration.rule),
+          },
+        ]
+      : [];
+  });
 }
 
 function topLevelItems(value: string): string[] {
@@ -333,29 +320,6 @@ function globalOwner(declaration: Declaration): Finding['owner'] {
     file: 'system',
     component: keyframes ?? selector ?? 'global styles',
   };
-}
-
-/** Removes whole declarations, and their lines when nothing else is on them. */
-function withoutDeclarations(
-  css: string,
-  removed: readonly Declaration[]
-): string {
-  let result = css;
-  for (const declaration of [...removed].sort((a, b) => b.start - a.start)) {
-    let start = declaration.start;
-    let end = declaration.end;
-    const lineStart = result.lastIndexOf('\n', start - 1) + 1;
-    const lineEnd = result.indexOf('\n', end);
-    if (
-      result.slice(lineStart, start).trim() === '' &&
-      result.slice(end, lineEnd === -1 ? undefined : lineEnd).trim() === ''
-    ) {
-      start = lineStart;
-      end = lineEnd === -1 ? result.length : lineEnd + 1;
-    }
-    result = result.slice(0, start) + result.slice(end);
-  }
-  return result;
 }
 
 /** One diagnostic per code, property and owner. */
