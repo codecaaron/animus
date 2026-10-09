@@ -443,6 +443,9 @@ pub(crate) const DIAGNOSTIC_CODES: &[(&str, &str)] = &[
     (crate::theme::UNRECOGNIZED_STYLE_KEY, "warn"),
     (CLASS_NAME_WHITESPACE, "warn"),
     (INVALID_OPACITY_MODIFIER, "warn"),
+    (UNSUPPORTED_OBJECT_MEMBER, "warn"),
+    (NAMESPACE_ROOT_THROUGH_BARREL, "warn"),
+    (RUNTIME_BUILDER_REFERENCE, "warn"),
 ];
 
 pub(crate) fn diagnostic_severity_for_code(code: &str) -> &'static str {
