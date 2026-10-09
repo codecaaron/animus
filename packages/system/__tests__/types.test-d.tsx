@@ -1507,6 +1507,9 @@ void (<StyledBadge label="hi" className="extra" tone="calm" />);
 // @ts-expect-error — `label` is required by the wrapped Badge
 void (<StyledBadge tone="calm" />);
 
+// @ts-expect-error — asComponent props are closed: `notAProp` is not a prop
+void (<StyledBadge label="hi" notAProp={1} />);
+
 const ExtendedBadge = StyledBadge.extend()
   .styles({ display: 'flex' })
   .asComponent(Badge);
