@@ -267,6 +267,22 @@ run_layer_c() {
   printf '%s' "$oxlint_json" | bun run "$ROOT/scripts/hygiene/delete-unused.ts" || true
 }
 
+# knip exits 0 with no issues and 1 with issues. Any other exit, or no report,
+# means it analyzed nothing, and an empty Layer D would read as "nothing to
+# remove", so the run stops. Scan mode restores the worktree as its report
+# does; fix mode leaves earlier layers' changes, as the safety envelope does.
+knip_failed() {
+  echo "ERROR: knip $1. Run: ${KNIP[*]} --no-progress" >&2
+  sed 's/^/  knip: /' "$TMPDIR/knip.err" >&2
+  if [ "$MODE" = "scan" ]; then
+    git reset --hard HEAD >/dev/null 2>&1 || true
+    git clean -fd >/dev/null 2>&1 || true
+  else
+    echo "  Earlier layers' changes are NOT reverted. Inspect: git status --short" >&2
+  fi
+  exit 1
+}
+
 run_layer_d() {
   # knip 6.6.2: comma-separated --fix-type does not parse; use repeated --fix-type= form.
   # `types` is intentionally excluded: `declare module` augmentations are
@@ -280,23 +296,21 @@ run_layer_d() {
     --allow-remove-files
     --no-progress
   )
+  if [ "$SCOPE" = "changed" ] && [ "${#KNIP_WORKSPACE_ARGS[@]}" -eq 0 ]; then
+    echo "  (no workspaces derived; skipping knip)"
+    return 0
+  fi
   # Pre-fix JSON snapshot drives Layer D receipts. The same scope is used for
   # both the report and the fix to keep them in sync.
-  local knip_json=""
-  if [ "$SCOPE" = "changed" ]; then
-    if [ "${#KNIP_WORKSPACE_ARGS[@]}" -eq 0 ]; then
-      echo "  (no workspaces derived; skipping knip)"
-      return 0
-    fi
-    knip_json="$("${KNIP[@]}" --reporter=json --no-progress "${KNIP_WORKSPACE_ARGS[@]}" 2>/dev/null || true)"
-    "${KNIP[@]}" "${knip_flags[@]}" "${KNIP_WORKSPACE_ARGS[@]}" >/dev/null 2>&1 || true
-  else
-    knip_json="$("${KNIP[@]}" --reporter=json --no-progress 2>/dev/null || true)"
-    "${KNIP[@]}" "${knip_flags[@]}" >/dev/null 2>&1 || true
-  fi
-  if [ -n "$knip_json" ]; then
-    printf '%s' "$knip_json" | bun run "$ROOT/scripts/hygiene/_emit-knip-receipts.ts" || true
-  fi
+  local knip_json="" status=0
+  knip_json="$("${KNIP[@]}" --reporter=json --no-progress ${KNIP_WORKSPACE_ARGS[@]+"${KNIP_WORKSPACE_ARGS[@]}"} 2>"$TMPDIR/knip.err")" || status=$?
+  [ "$status" -le 1 ] || knip_failed "exited $status"
+  [ -n "$knip_json" ] || knip_failed "printed no report (exit $status)"
+  status=0
+  "${KNIP[@]}" "${knip_flags[@]}" ${KNIP_WORKSPACE_ARGS[@]+"${KNIP_WORKSPACE_ARGS[@]}"} >/dev/null 2>"$TMPDIR/knip.err" || status=$?
+  [ "$status" -le 1 ] || knip_failed "--fix exited $status"
+  printf '%s' "$knip_json" | bun run "$ROOT/scripts/hygiene/_emit-knip-receipts.ts" ||
+    knip_failed "printed a report the receipt emitter could not read"
 }
 
 run_layer_d1() {
