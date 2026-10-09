@@ -2,7 +2,7 @@ import type { ComponentProps } from 'react';
 
 import { ds } from './kit';
 
-import type { Assert, Equal } from './guards';
+import type { Assert, Equal, IsNever } from './guards';
 import type { VariantPropsOf } from '@animus-ui/system';
 
 const Base = ds
@@ -62,6 +62,20 @@ export type _ExtendedAxes = [
   Assert<Equal<ExtendedProps['emphasis'], 'strong' | 'soft' | undefined>>,
   Assert<Equal<ExtendedProps['busy'], boolean | undefined>>,
   Assert<Equal<ExtendedProps['pressed'], boolean | undefined>>,
+];
+
+// An extension's props are its base's plus the ones the extension declares.
+const Restyled = Base.extend().styles({ gap: 4 }).asElement('button');
+type AddedKeys<Ext, Of> = Exclude<keyof Ext, keyof Of>;
+
+export type _ExtensionKeys = [
+  Assert<IsNever<AddedKeys<ComponentProps<typeof Restyled>, BaseProps>>>,
+  Assert<
+    Equal<
+      AddedKeys<ExtendedProps, BaseProps>,
+      'density' | 'emphasis' | 'pressed'
+    >
+  >,
 ];
 
 export type _VariantPropsOf = Assert<
