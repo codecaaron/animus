@@ -20,11 +20,12 @@ it cannot read, the analysis cannot see what it renders. Production builds
 pruned the options only that file used: `<R size="lg">` in a skipped MDX
 file lost `lg`. While any file is skipped, nothing is pruned, so every
 component, variant option and state is kept, and the skip warning now says
-so. `strict` builds still fail on a skipped file. The Vite plugin now reports
-an unreadable project or package file as
-`animus.ingestion.unreadable-source-file`, so a `strict` Vite build fails on
-one; before, it skipped a project file silently and a package file with a
-plain warning.
+so. `strict` builds still fail on a skipped file. Every host now reports an
+unreadable project or package file as
+`animus.ingestion.unreadable-source-file`, which fails a `strict` build.
+Before, the Vite plugin skipped a project file silently and a package file
+with a plain warning, and the Next.js plugin and the CLI stopped on an
+unreadable project file even without `strict`.
 
 **Namespace member renders keep their CSS.** With
 `import * as ui from './components'`, a render such as `<ui.Button size="lg" />`

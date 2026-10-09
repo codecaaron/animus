@@ -115,3 +115,37 @@ describe('a configured package file that cannot be read', () => {
     session.close();
   });
 });
+
+describe('a project file that cannot be read', () => {
+  function lockedProject() {
+    const { app } = createKitWorkspace();
+    const unreadable = join(app, 'src', 'App.tsx');
+    chmodSync(unreadable, 0o000);
+    lockedFiles.push(unreadable);
+    expect(() => readFileSync(unreadable, 'utf-8')).toThrow();
+    return app;
+  }
+
+  test('fails the build under strict, naming the file and the code', async () => {
+    const session = makeSession(lockedProject(), { strict: true });
+
+    await expect(session.runFullPipeline()).rejects.toThrow(
+      new RegExp(
+        `${UNREADABLE_SOURCE_FILE.replace(/\./g, '\\.')}.*src/App\\.tsx`
+      )
+    );
+    session.close();
+  });
+
+  test('warns with what it costs, publishes, and prunes nothing', async () => {
+    const session = makeSession(lockedProject(), { mode: 'production' });
+
+    await session.runFullPipeline();
+
+    const line = warned.find((entry) => entry.includes(UNREADABLE_SOURCE_FILE));
+    expect(line).toContain('src/App.tsx');
+    expect(line).toContain('its renders are not seen, so nothing is pruned');
+    expect(mocks.analyzeProject.mock.calls[0][DEV_MODE_SLOT]).toBe(true);
+    session.close();
+  });
+});

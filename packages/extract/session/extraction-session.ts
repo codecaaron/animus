@@ -897,11 +897,21 @@ export class ExtractionSession {
     // before shared adaptation runs.
     t = this.now();
     const rawEntries: FileEntry[] = [];
+    // Published only once collection completes, so a throw in between leaves
+    // the previous generation's set in place. A configured file that cannot
+    // be read is lost input, not degradation: error severity fails a strict
+    // build.
+    const ingestionFailures: ManifestDiagnostic[] = [];
     for (const filePath of files) {
-      const source = readFileSync(filePath, 'utf-8');
       const relPath = relative(rootDir, filePath);
-      const hash = contentHash(source);
-      rawEntries.push({ path: relPath, source, hash });
+      let source: string;
+      try {
+        source = readFileSync(filePath, 'utf-8');
+      } catch (err) {
+        ingestionFailures.push(unreadableSourceDiagnostic(relPath, err));
+        continue;
+      }
+      rawEntries.push({ path: relPath, source, hash: contentHash(source) });
     }
 
     bt.fileRead = this.elapsed(t);
@@ -916,10 +926,6 @@ export class ExtractionSession {
     // path — recorded before MDX preprocessing so the diff sees raw bytes.
     const rawExternalFiles = new Map<string, string>();
 
-    // Published only once collection completes, so a throw in between leaves
-    // the previous generation's set in place.
-    const ingestionFailures: ManifestDiagnostic[] = [];
-
     const collected = await collectExternalPackageSources({
       specifiers: packageNames,
       resolveSpecifier: (name) =>
@@ -931,8 +937,6 @@ export class ExtractionSession {
         rawExternalFiles.set(absPath, contentHash(source));
       },
       onUnreadable: (relPath, err) =>
-        // A configured file that cannot be read is lost input, not
-        // degradation: error severity fails a strict build.
         ingestionFailures.push(unreadableSourceDiagnostic(relPath, err)),
       onPackageResolved: (_specifier, packageDir) => {
         if (!this.onExternalRootResolved) return;
