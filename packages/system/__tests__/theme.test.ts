@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { createTheme } from '../src';
 
+import type { ContextualVarRegistration } from '../src';
+
 const breakpoints = { xs: 480, sm: 768, md: 1024, lg: 1200, xl: 1440 } as const;
 
 function buildTestTheme() {
@@ -539,6 +541,47 @@ describe('serialized property records', () => {
         legacy: true,
       },
     ]);
+  });
+
+  it('marks a registered name that lost its scale as not registered', () => {
+    const source = createTheme()
+      .addBreakpoints(breakpoints)
+      .addScale({ name: 'space', values: { sm: '4px' } })
+      .declareContextualVars({ space: ['gap'] })
+      .build();
+    const serialized = createTheme()
+      .addBreakpoints(breakpoints)
+      .addScale({ name: 'space', values: { sm: '4px' } })
+      .declareContextualVars(
+        { space: ['local'] },
+        { local: { syntax: '*', inherits: true } }
+      )
+      .from(source)
+      .build()
+      .serialize();
+    expect(serialized.variableCss).not.toContain('@property --local');
+    expect(JSON.parse(serialized.propertyRecordsJson ?? '[]')).toContainEqual(
+      expect.objectContaining({
+        name: 'local',
+        scales: [],
+        registered: false,
+      })
+    );
+  });
+
+  it('emits a registration without a syntax literally, as before', () => {
+    // SAFETY: an untyped JavaScript caller can omit `syntax`; the emitted
+    // rule is then invalid, and extraction reports it.
+    const untyped = { inherits: true } as ContextualVarRegistration;
+    const css = createTheme()
+      .addBreakpoints(breakpoints)
+      .addColors({ bg: '#000' })
+      .declareContextualVars({ colors: ['tone'] }, { tone: untyped })
+      .build()
+      .serialize().variableCss;
+    expect(css).toContain(
+      '@property --tone { syntax: "undefined"; inherits: true; }'
+    );
   });
 
   it('serializes no records for a theme without contextual variables', () => {

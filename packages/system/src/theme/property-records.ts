@@ -120,12 +120,14 @@ export function replaceScaleNames(
   }
 }
 
-/** The fields a contextual-variable registration sets, read literally. */
+/** The fields a contextual-variable registration sets, read literally: an
+ *  untyped registration without a syntax keeps emitting `syntax: "undefined"`,
+ *  which extraction reports as an invalid registration. */
 function legacyFields(
   registration: ContextualVarRegistration
 ): Pick<PropertyRecord, 'syntax' | 'inherits' | 'initialValue'> {
   return {
-    syntax: registration.syntax,
+    syntax: `${registration.syntax}`,
     inherits: registration.inherits ?? THEME_INHERITS,
     initialValue: registration.initialValue,
   };
@@ -254,7 +256,8 @@ export function serializePropertyRecords(
         .filter(([, names]) => names.includes(record.name))
         .map(([scale]) => scale),
       home: record.home,
-      registered: isRegistered(record),
+      // Whether its `@property` rule is emitted, which needs a declaration.
+      registered: isRegistered(record) && isDeclared(store, record.name),
       legacy: record.legacy !== undefined,
     }));
   return JSON.stringify(records);

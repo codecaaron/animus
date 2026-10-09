@@ -69,6 +69,12 @@ It is reported as `animus.theme.invalid-property-registration`, which fails
 `strict` builds. Vite's production CSS minify used to fail on some of these
 rules.
 
+**A contextual-variable registration that omits `inherits` now inherits.**
+It registers with `inherits: true`, the documented default, instead of
+emitting `inherits: undefined`, which browsers reject. Extending themes
+compares registrations the same way, so such a registration no longer counts
+as divergent from one that says `inherits: true`.
+
 **A `const` style config reports what it could not carry.** When
 `.styles(config)` or another stage receives a same-file `const` object, a
 property the extractor cannot evaluate statically, such as `color: someVar`,
