@@ -9,7 +9,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use crate::css_tokens::{decoded_identifier, tokenize, variable_reads};
+use crate::css_tokens::{decoded_identifier, important_priority, tokenize, variable_reads, ImportantSpelling};
 use crate::evaluator::{EvalError, TransformEvaluator};
 
 // Not registered in propConfig, but typed against the `colors` scale in TS:
@@ -141,6 +141,11 @@ impl PropConfig {
         } else {
             &self.properties
         }
+    }
+
+    /// Whether every property the prop sets is a custom property.
+    pub fn custom_only(&self) -> bool {
+        self.css_properties().iter().all(|property| property.starts_with("--"))
     }
 
     /// The bound definition's registry key and readable name.
@@ -821,6 +826,19 @@ pub fn writes_current_var(value: &str, current_var: &str) -> bool {
     !reads_destination
 }
 
+/// The value a prop's properties read: a trailing `!` is `!important`, so
+/// `'hidden!'` reads as `'hidden !important'` everywhere the long form does.
+/// A value only custom properties read is never rewritten.
+fn with_priority<'v>(value: &'v Value, custom_only: bool) -> Cow<'v, Value> {
+    match value {
+        Value::String(text) if !custom_only => match important_priority(text) {
+            Some((ImportantSpelling::Shorthand, end)) => Cow::Owned(Value::String(format!("{} !important", &text[..end]))),
+            _ => Cow::Borrowed(value),
+        },
+        _ => Cow::Borrowed(value),
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn resolve_single_prop(
     prop_name: &str,
@@ -832,7 +850,9 @@ fn resolve_single_prop(
     evaluator: Option<&TransformEvaluator>,
     failures: Option<&TransformFailureSink>,
 ) -> Vec<CssDeclaration> {
-    let prop_config = match config.get(prop_name) {
+    let found = config.get(prop_name);
+    let value = &*with_priority(value, found.map_or(prop_name.starts_with("--"), PropConfig::custom_only));
+    let prop_config = match found {
         Some(c) => c,
         None => {
             if COLOR_FAMILY_PASS_THROUGH.contains(&prop_name) {
@@ -1075,6 +1095,7 @@ pub(crate) fn extracts_callback_value(
                 .any(|property| crate::css::unit_fallback_rewrites(css, &crate::css::css_property_name(property)))
     };
     let evaluated = |entry: &Value| {
+        let entry = &*with_priority(entry, config.custom_only());
         if !(entry.is_string() || entry.is_number()) {
             return false;
         }
@@ -1168,7 +1189,9 @@ fn strict_token_misses(
     if config.strict != Some(true) {
         return vec![];
     }
-    let miss = |entry: &Value| is_strict_token_miss(entry, config, ctx.theme, ctx.contextual_vars);
+    let miss = |entry: &Value| {
+        is_strict_token_miss(&with_priority(entry, config.custom_only()), config, ctx.theme, ctx.contextual_vars)
+    };
     let rejected: Vec<(Option<String>, Value)> = match value.as_object() {
         Some(entries) if is_responsive_value(value, ctx.breakpoint_keys) => entries
             .iter()

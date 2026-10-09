@@ -1943,6 +1943,13 @@ impl<'a> FactCollector<'a, '_> {
                             }
                             _ => {}
                         }
+                        if dynamic {
+                            // A runtime slot cannot carry `!important`, so a
+                            // literal that carries it takes a static class from
+                            // any branch extraction reads; only runtime values
+                            // lose it.
+                            important_literals(expression, self.static_values, self.scoping, &mut enumerable_values);
+                        }
                     }
                 }
                 attrs.push(AttrFact {
@@ -2449,6 +2456,66 @@ impl<'a> Visit<'a> for StaticReferenceGuard<'_> {
         if root_symbol.is_none() || reference_symbol != root_symbol {
             self.resolves_to_root_bindings = false;
         }
+    }
+}
+
+/// The literals `expression` may evaluate to that carry `!important`, in
+/// either spelling: each branch of a conditional or logical expression, and
+/// each entry of a responsive object, that evaluates statically. An entry
+/// keeps its breakpoint, as a runtime entry's lookup spells it.
+fn important_literals(
+    expression: &Expression<'_>,
+    static_values: &FxHashMap<String, Value>,
+    scoping: Option<&Scoping>,
+    literals: &mut Vec<Value>,
+) {
+    match crate::chain_walk::unwrap_type_assertions(expression) {
+        Expression::ConditionalExpression(conditional) => {
+            important_literals(&conditional.consequent, static_values, scoping, literals);
+            important_literals(&conditional.alternate, static_values, scoping, literals);
+        }
+        Expression::LogicalExpression(logical) => {
+            important_literals(&logical.left, static_values, scoping, literals);
+            important_literals(&logical.right, static_values, scoping, literals);
+        }
+        Expression::ObjectExpression(object) => {
+            for property in &object.properties {
+                let oxc::ast::ast::ObjectPropertyKind::ObjectProperty(property) = property else {
+                    continue;
+                };
+                let Some(breakpoint) = property.key.static_name().filter(|_| !property.computed) else {
+                    continue;
+                };
+                let mut entries = Vec::new();
+                important_literals(&property.value, static_values, scoping, &mut entries);
+                for entry in entries.into_iter().filter(Value::is_string) {
+                    let entry = if breakpoint == "_" { entry } else { serde_json::json!({ breakpoint.as_ref(): entry }) };
+                    push_unique(literals, entry);
+                }
+            }
+        }
+        // Only a literal, or a reference extraction may resolve to one,
+        // can carry `!important` statically.
+        expression @ (Expression::StringLiteral(_)
+        | Expression::TemplateLiteral(_)
+        | Expression::Identifier(_)
+        | Expression::StaticMemberExpression(_)
+        | Expression::ComputedMemberExpression(_)) => {
+            let value = evaluate_with_statics(expression, static_values, scoping);
+            if let Some(value) = value.filter(carries_important) {
+                push_unique(literals, value);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Whether `value`, or an entry of a responsive one, ends with `!important`.
+fn carries_important(value: &Value) -> bool {
+    match value {
+        Value::String(text) => crate::css_tokens::important_priority(text).is_some(),
+        Value::Object(entries) => entries.values().any(carries_important),
+        _ => false,
     }
 }
 

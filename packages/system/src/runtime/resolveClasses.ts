@@ -66,6 +66,7 @@ export type DynamicPropConfig = Record<
 import {
   componentValues,
   decodedIdentifier,
+  importantPriority,
   isUnitlessProperty,
   tokenize,
   variableReads,
@@ -73,6 +74,42 @@ import {
 
 import { IS_DEV } from './is-dev';
 import { recordWitness } from './witness';
+
+/** Whether a property set is custom properties only, which read a value as
+ *  written: no unit, and a trailing `!` that is no priority. */
+function isCustomOnly(cssProperties: readonly string[]): boolean {
+  return (
+    cssProperties.length > 0 &&
+    cssProperties.every((property) => property.startsWith('--'))
+  );
+}
+
+/** The properties a slot's value is written to. */
+function slotProperties(
+  dc: Pick<ValueDynamicPropConfig, 'property' | 'properties'>
+): readonly string[] {
+  return dc.properties && dc.properties.length > 0
+    ? dc.properties
+    : dc.property
+      ? [dc.property]
+      : [];
+}
+
+/** A responsive value's set entries by breakpoint, or a bare value at `_`. */
+function responsiveEntries(
+  propValue: unknown
+): [responsive: boolean, entries: [breakpoint: string, value: unknown][]] {
+  const responsive =
+    typeof propValue === 'object' &&
+    propValue !== null &&
+    !Array.isArray(propValue);
+  return [
+    responsive,
+    responsive
+      ? Object.entries(propValue).filter(([, value]) => value != null)
+      : [['_', propValue]],
+  ];
+}
 
 /**
  * A mixed property set resolves to unitless: a bare number on a length
@@ -85,10 +122,7 @@ export function applyUnitFallback(
   cssProperties: readonly string[]
 ): string {
   if (typeof value === 'number') {
-    const customOnly =
-      cssProperties.length > 0 &&
-      cssProperties.every((property) => property.startsWith('--'));
-    if (customOnly || cssProperties.some(isUnitlessProperty)) {
+    if (isCustomOnly(cssProperties) || cssProperties.some(isUnitlessProperty)) {
       return String(value);
     }
     return `${value}px`;
@@ -265,13 +299,7 @@ function resolveEntry(
   }
   let css: string;
   if (typeof transformed === 'number') {
-    const cssProperties =
-      dc.properties && dc.properties.length > 0
-        ? dc.properties
-        : dc.property
-          ? [dc.property]
-          : [];
-    css = applyUnitFallback(transformed, cssProperties);
+    css = applyUnitFallback(transformed, slotProperties(dc));
   } else {
     css = String(transformed);
   }
@@ -406,6 +434,25 @@ function warnInvalidTransformResult(
   }
 }
 
+const warnedImportant = new Set<string>();
+
+/** Keyed by value: each runtime value that loses `!important` is reported once. */
+function warnIgnoredImportant(
+  baseClassName: string,
+  propName: string,
+  value: string
+): void {
+  if (IS_DEV) {
+    const dedupeKey = `${baseClassName}|${propName}|${value}`;
+    if (warnedImportant.has(dedupeKey)) return;
+    warnedImportant.add(dedupeKey);
+    // oxlint-disable-next-line no-console -- intentional runtime diagnostic
+    console.warn(
+      `[animus:important] ${baseClassName}: !important is ignored on the runtime-generated value ${JSON.stringify(value)} of prop '${propName}' — a runtime value reaches CSS through a variable, which cannot carry it; declare the value literally to keep !important`
+    );
+  }
+}
+
 const warnedThrows = new Set<string>();
 const warnedStrictMisses = new Set<string>();
 
@@ -510,44 +557,80 @@ function slotClassFor(dc: ValueDynamicPropConfig, resolved: string): string {
  * scale, or one transform that throws or returns an invalid result, leaves
  * `classes` and `dynStyle` untouched. A responsive entry that is a CSS-wide
  * keyword takes the class extraction emits for it at that breakpoint.
+ *
+ * A slot is a CSS variable, which cannot carry `!important`. A literal that
+ * carries it, at a breakpoint, takes the class extraction emits for every
+ * literal branch it reads; a bare literal's class the caller already found.
+ * Any other value is runtime-generated: it resolves as at build time, where
+ * a trailing `!` is ` !important`, and the slot takes the result without the
+ * priority, which `ignoredImportant` hears of. Where only custom properties
+ * read the value, a trailing `!` is no priority, as at build time.
  */
 function applyDynamicProp(
   classes: string[],
   dynStyle: Record<string, string>,
   propValue: unknown,
   dc: ValueDynamicPropConfig,
-  literalClass: (value: unknown) => string | undefined
+  literalClass: (value: unknown) => string | undefined,
+  ignoredImportant: (value: string) => void
 ): EntryFailure | null {
   const staged: [cls: string, varName?: string, resolved?: string][] = [];
-  if (
-    typeof propValue === 'object' &&
-    propValue !== null &&
-    !Array.isArray(propValue)
-  ) {
-    for (const [bp, bpVal] of Object.entries(propValue)) {
-      if (bpVal == null) continue;
-      const keywordClass = CSS_WIDE_KEYWORDS.has(bpVal)
-        ? literalClass(bp === '_' ? bpVal : { [bp]: bpVal })
-        : undefined;
-      if (keywordClass) {
-        staged.push([keywordClass]);
+  const [responsive, entries] = responsiveEntries(propValue);
+  const lookup = (bp: string, value: unknown) =>
+    literalClass(bp === '_' ? value : { [bp]: value });
+  for (const [bp, authored] of entries) {
+    let value = authored;
+    // The authored text, when its priority cannot reach the slot.
+    let ignored: string | undefined;
+    const priority =
+      typeof authored === 'string' ? importantPriority(authored) : undefined;
+    if (
+      typeof authored === 'string' &&
+      priority &&
+      (priority.spelling === 'important' || !isCustomOnly(slotProperties(dc)))
+    ) {
+      const literal = responsive ? lookup(bp, authored) : undefined;
+      if (literal) {
+        staged.push([literal]);
         continue;
       }
-      const resolved = resolveEntry(bpVal, dc);
-      if (typeof resolved !== 'string') {
-        return 'entry' in resolved ? { ...resolved, breakpoint: bp } : resolved;
+      ignored = authored;
+      if (priority.spelling === 'shorthand') {
+        value = `${authored.slice(0, priority.end)} !important`;
       }
-      const slotClass = slotClassFor(dc, resolved);
-      staged.push(
-        bp === '_'
-          ? [slotClass, dc.varName, resolved]
-          : [`${slotClass}-${bp}`, `${dc.varName}-${bp}`, resolved]
-      );
     }
-  } else {
-    const resolved = resolveEntry(propValue, dc);
-    if (typeof resolved !== 'string') return resolved;
-    staged.push([slotClassFor(dc, resolved), dc.varName, resolved]);
+    const keywordClass =
+      responsive && CSS_WIDE_KEYWORDS.has(value)
+        ? lookup(bp, value)
+        : undefined;
+    if (keywordClass) {
+      staged.push([keywordClass]);
+      continue;
+    }
+    let resolved = resolveEntry(value, dc);
+    if (typeof resolved !== 'string') {
+      return 'entry' in resolved && responsive
+        ? { ...resolved, breakpoint: bp }
+        : resolved;
+    }
+    if (ignored !== undefined) {
+      ignoredImportant(ignored);
+      const end = importantPriority(resolved)?.end;
+      resolved = end === undefined ? resolved : resolved.slice(0, end);
+      const bareKeyword = CSS_WIDE_KEYWORDS.has(resolved)
+        ? lookup(bp, resolved)
+        : undefined;
+      if (bareKeyword) {
+        staged.push([bareKeyword]);
+        continue;
+      }
+    }
+    const slotClass = slotClassFor(dc, resolved);
+    staged.push(
+      bp === '_'
+        ? [slotClass, dc.varName, resolved]
+        : [`${slotClass}-${bp}`, `${dc.varName}-${bp}`, resolved]
+    );
   }
   for (const [cls, varName, resolved] of staged) {
     classes.push(cls);
@@ -572,13 +655,7 @@ function applyDeclarationProp(
 ): StrictScaleMiss | null {
   const records = dc.declarationScaleValues;
   const memberVars = Object.entries(dc.memberVars);
-  const responsive =
-    typeof propValue === 'object' &&
-    propValue !== null &&
-    !Array.isArray(propValue);
-  const entries: [breakpoint: string, value: unknown][] = responsive
-    ? Object.entries(propValue).filter(([, value]) => value != null)
-    : [['_', propValue]];
+  const [responsive, entries] = responsiveEntries(propValue);
   const staged: [breakpoint: string, record: Record<string, string>][] = [];
   for (const [breakpoint, value] of entries) {
     const key = String(value);
@@ -661,7 +738,9 @@ export function resolveClasses(
                   (value) =>
                     classMap?.[propName]?.[
                       (typed ? typedValueKey : serializeValueKey)(value)
-                    ]
+                    ],
+                  (value) =>
+                    warnIgnoredImportant(baseClassName, propName, value)
                 );
           if (failure === null) {
             dynStyle = staged;

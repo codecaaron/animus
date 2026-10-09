@@ -37,6 +37,8 @@ const _testTransform = createTransform('testTransform', (v) => `${v}px`);
 ds.styles({ inlineSize: 50 });
 // `cornerShape` is typed, though the pinned csstype predates it.
 ds.styles({ cornerShape: 'squircle' });
+// A style value takes `!important`, and a trailing `!` means the same.
+ds.styles({ visibility: 'hidden!', boxSizing: 'border-box !important' });
 
 const DivBox = ds.styles({ display: 'flex' }).asElement('div');
 const BtnBox = ds.styles({ display: 'flex' }).asElement('button');

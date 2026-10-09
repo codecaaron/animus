@@ -296,9 +296,18 @@ type KnownUnderscoreKey = [PublishedAliasKeys] extends [never]
   ? `_${string}`
   : BuiltInSelectorAlias | BuiltInConditionAlias | PublishedAliasKeys;
 
+/** A keyword with `!important`, which CSS accepts after any declared value,
+ *  or the shorthand `!` that means the same. */
+type Important<Value> = Value extends string
+  ? `${Value} !important` | `${Value}!`
+  : never;
+
+// A style value may carry `!important`. A registered prop's value does not:
+// widening every prop's union overflows (TS2590) where a consumer relates a
+// component's whole props to an annotation or a spread.
 type PassThroughProp<K extends keyof PropertyTypes> = K extends 'animationName'
   ? ResponsiveProp<KeyframeRef<string> | PropertyTypes[K]>
-  : ResponsiveProp<PropertyTypes[K]>;
+  : ResponsiveProp<PropertyTypes[K] | Important<PropertyTypes<never>[K]>>;
 
 type UnderscoreBlockMembers<Config extends Record<string, SystemProp>> = {
   [K in KnownUnderscoreKey]?: ThemedBlockBody<Config>;
