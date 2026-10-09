@@ -48,6 +48,14 @@ const VariantBtn = ds
   })
   .asElement('button');
 
+const sizeClass = ds
+  .styles({ display: 'flex' })
+  .variant({ prop: 'size', variants: { sm: { p: 4 }, lg: { p: 16 } } })
+  .asClass();
+
+// @ts-expect-error — asClass resolver inputs are typed: 'xl' is not a size option
+sizeClass({ size: 'xl' });
+
 const StatefulBox = ds
   .styles({ display: 'flex' })
   .states({

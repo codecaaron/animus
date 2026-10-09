@@ -10,9 +10,13 @@ export interface ClassResolverAttributes {
   style?: string;
 }
 
-export interface ClassResolver {
-  (props?: Record<string, unknown>): string;
-  attrs(props?: Record<string, unknown>): ClassResolverAttributes;
+/**
+ * Input defaults to an open record; a builder's `asClass()` narrows it to the
+ * props the builder admitted.
+ */
+export interface ClassResolver<Props extends object = Record<string, unknown>> {
+  (props?: Props): string;
+  attrs(props?: Props): ClassResolverAttributes;
 }
 
 function serializeDynamicStyle(style: Record<string, string>): string {

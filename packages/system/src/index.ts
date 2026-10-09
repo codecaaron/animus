@@ -100,6 +100,7 @@ export { gridItem, gridItemRatio } from './transforms/grid';
 export { percentageOrAbsolute, size } from './transforms/size';
 // Re-exported so consumer declaration emit stays portable (TS2742).
 export type {
+  AnimusClassProps,
   AnimusComponent,
   AnimusWrappedComponent,
   AnyBrandedComponent,
