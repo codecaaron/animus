@@ -60,15 +60,22 @@ Turbopack, the first analysis still pruned like a production build until an
 edit re-ran it. It now follows Next's dev signal; an explicit `mode` still
 wins.
 
-**Under Turbopack, `withAnimus(options)(nextConfig)` returns a config
-function.** Next calls it with its phase, and only `next dev` analyzes in
-development mode, starts the watcher, and has its loaders wait for the
-watcher's analyses. A `next build` run with `NODE_ENV=development` used to
-do all three and ship unpruned CSS; it now prunes like any build.
-The exported `TurbopackNextConfig` type is that function, and the config it
-resolves to is `TurbopackNextConfigObject`. Export the result as your
-config. A wrapper that expects a config object cannot wrap it, as it could
-not wrap the promise returned before.
+**Under Turbopack, `withAnimus(options)(nextConfig)` takes its mode from
+Next's config phase.** Only `next dev` analyzes in development mode, starts
+the watcher, and has its loaders wait for the watcher's analyses. A
+`next build` run with `NODE_ENV=development` used to do all three and ship
+unpruned CSS; it now prunes like any build. This changes the exported
+`TurbopackNextConfig` type: it was a promise of the config, and is now a
+function that Next calls with its phase and that can also be awaited. The
+config object it resolves to is the new `TurbopackNextConfigObject` type.
+Exporting the result directly needs no change. A config function of your own
+should pass Next's phase through the new `phase` option:
+`export default (phase) => withAnimus({ ...options, phase })(nextConfig)`.
+Awaited without a phase, as in `{ ...(await withAnimus(options)(nextConfig)) }`
+or an `async` config function, it resolves as `next dev` when `NODE_ENV` is
+`development` and as a build otherwise. Next loads the config a second time
+after the dev server is ready; that load and any repeat in the same phase
+share the first analysis, and the watcher keeps running.
 
 **The CLI help describes `--exclude` correctly.** It said the flag merged
 with the default exclusions. The flag, together with the config file's

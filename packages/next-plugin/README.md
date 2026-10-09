@@ -32,9 +32,18 @@ returns a config function: Next calls it with its phase, and extraction runs
 before it resolves. Only `next dev` analyzes in development mode and starts
 a watcher that re-analyzes on source changes; `next build` prunes. Per-file
 transforms run in a stateless loader fed by generated `.animus/` artifacts.
-tsconfig `paths` aliases are honored. Export the result as your config:
-another config wrapper that expects an object cannot wrap it, so apply such
-wrappers to `nextConfig` before passing it in.
+tsconfig `paths` aliases are honored.
+
+If your config is a function of its own, pass Next's phase through:
+
+```tsx
+export default (phase: string) =>
+  withAnimus({ system: './src/ds.ts', phase })(nextConfig);
+```
+
+The result can also be awaited, as in
+`{ ...(await withAnimus(options)(nextConfig)) }`. Without a phase it then
+reads `NODE_ENV=development` as `next dev` and anything else as a build.
 
 Because `next.config` resolves only after that first extraction, a source the
 parser cannot finish at startup rejects the config before any watcher exists:

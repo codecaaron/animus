@@ -24,9 +24,11 @@ import {
   ANIMUS_TURBOPACK_RULE_GLOB,
   buildTurbopackConfig,
   resolveTurbopackLoaderPath,
+  isTurbopackDevelopment,
   resolveTurbopackMode,
 } from './turbopack-config';
 
+import type { TurbopackConfigFragment } from './turbopack-config';
 import type { AnimusNextOptions } from './types';
 import type {
   TurbopackWatcherHandle,
@@ -113,13 +115,18 @@ export type TurbopackNextConfigObject<Config extends NextOwnedConfig> = Omit<
 
 /** Next calls a function config with its phase, the one signal that tells
  *  `next dev` from `next build` while the config loads: `NODE_ENV` can be
- *  set either way, and `NEXT_PHASE` is set only after compiling. */
-export type TurbopackNextConfig<Config extends NextOwnedConfig> = (
+ *  set either way, and `NEXT_PHASE` is set only after compiling. A config
+ *  that wraps this one awaits it instead, and it then resolves in the
+ *  `phase` option's phase, or by `NODE_ENV` without one. */
+export type TurbopackNextConfig<Config extends NextOwnedConfig> = ((
   phase: string
-) => Promise<TurbopackNextConfigObject<Config>>;
+) => Promise<TurbopackNextConfigObject<Config>>) &
+  PromiseLike<TurbopackNextConfigObject<Config>>;
 
-/** `PHASE_DEVELOPMENT_SERVER` in `next/constants`. */
+/** `PHASE_DEVELOPMENT_SERVER` and `PHASE_PRODUCTION_BUILD` in
+ *  `next/constants`. */
 const PHASE_DEVELOPMENT_SERVER = 'phase-development-server';
+const PHASE_PRODUCTION_BUILD = 'phase-production-build';
 
 let warnedGitignore = false;
 let warnedUnstableTurbopack = false;
@@ -142,7 +149,13 @@ export function withAnimus(
   // consumer root can only contradict it.
   assertKnownOptionKeys(
     { ...options },
-    ['cssImportTarget', 'turbopack', 'unstable_turbopack', 'loaderPath'],
+    [
+      'cssImportTarget',
+      'turbopack',
+      'unstable_turbopack',
+      'loaderPath',
+      'phase',
+    ],
     [
       {
         key: 'root',
@@ -172,7 +185,7 @@ export function withAnimus(
     nextConfig: NextConfigInput<Config>
   ): WebpackNextConfig<Config> | TurbopackNextConfig<Config> => {
     if (resolveTurbopackMode(options)) {
-      return (phase) => wireTurbopack(nextConfig, options, phase);
+      return turbopackConfig(nextConfig, options);
     }
 
     const existingWebpack = nextConfig.webpack;
@@ -333,20 +346,70 @@ export function bindTurbopackWatchDeathReport(
   };
 }
 
+function turbopackConfig<Config extends NextOwnedConfig>(
+  nextConfig: NextConfigInput<Config>,
+  options: AnimusNextOptions
+): TurbopackNextConfig<Config> {
+  const load = (phase: string): Promise<TurbopackNextConfigObject<Config>> =>
+    loadTurbopackFragment(options, phase).then((fragment) =>
+      mergeTurbopackFragment(nextConfig, fragment)
+    );
+  function then<Resolved = TurbopackNextConfigObject<Config>, Rejected = never>(
+    onResolved?:
+      | ((
+          config: TurbopackNextConfigObject<Config>
+        ) => Resolved | PromiseLike<Resolved>)
+      | null,
+    onRejected?:
+      | (<Thrown>(reason: Thrown) => Rejected | PromiseLike<Rejected>)
+      | null
+  ): Promise<Resolved | Rejected> {
+    const phase =
+      options.phase ??
+      (isTurbopackDevelopment()
+        ? PHASE_DEVELOPMENT_SERVER
+        : PHASE_PRODUCTION_BUILD);
+    return load(phase).then(onResolved, onRejected);
+  }
+  return Object.assign(load, { then });
+}
+
 let liveTurbopackSession: ExtractionSession | null = null;
 let liveTurbopackWatcher: TurbopackWatcherHandle | null = null;
+/** The load the live session came from. Next loads the config again after
+ *  Ready (validateTurboNextConfig), and a user config may await this one
+ *  besides: the same phase and root share one analysis and keep the watcher.
+ *  A rejected load is dropped, so a repaired source loads again. */
+let liveTurbopackLoad: {
+  key: string;
+  fragment: Promise<TurbopackConfigFragment>;
+} | null = null;
 
-async function wireTurbopack<Config extends NextOwnedConfig>(
-  nextConfig: NextConfigInput<Config>,
+function loadTurbopackFragment(
   options: AnimusNextOptions,
   phase: string
-): Promise<TurbopackNextConfigObject<Config>> {
+): Promise<TurbopackConfigFragment> {
   // `next dev <subdir>` under Turbopack is a known gap: no dir reaches a
   // config module, so cwd is the only root signal. Next 16's `turbopack.root`
   // is the workspace root, broader than the app dir, so adopting it widens
   // the scan instead of closing the gap.
   const rootDir = process.cwd();
+  const key = JSON.stringify([phase, rootDir]);
+  if (liveTurbopackLoad?.key === key) return liveTurbopackLoad.fragment;
+  const fragment = analyzeForTurbopack(options, phase, rootDir);
+  const load = { key, fragment };
+  liveTurbopackLoad = load;
+  fragment.catch(() => {
+    if (liveTurbopackLoad === load) liveTurbopackLoad = null;
+  });
+  return fragment;
+}
 
+async function analyzeForTurbopack(
+  options: AnimusNextOptions,
+  phase: string,
+  rootDir: string
+): Promise<TurbopackConfigFragment> {
   const development = phase === PHASE_DEVELOPMENT_SERVER;
   const { mode } = resolveMode(options.mode, () =>
     development ? 'development' : 'production'
@@ -365,13 +428,14 @@ async function wireTurbopack<Config extends NextOwnedConfig>(
   }
   await runSessionPipeline(session);
 
-  if (development) {
+  // A load that started while this one analyzed has replaced its session.
+  if (development && liveTurbopackSession === session) {
     const outcome = startTurbopackWatcher(session, rootDir);
     bindTurbopackWatchDeathReport(outcome, rootDir);
     if (outcome.kind === 'started') liveTurbopackWatcher = outcome.handle;
   }
 
-  const fragment = buildTurbopackConfig({
+  return buildTurbopackConfig({
     rootDir,
     loaderPath: resolveTurbopackLoaderPath(__dirname),
     options,
@@ -380,7 +444,12 @@ async function wireTurbopack<Config extends NextOwnedConfig>(
     sessionDir: session.sessionDir,
     development,
   });
+}
 
+function mergeTurbopackFragment<Config extends NextOwnedConfig>(
+  nextConfig: NextConfigInput<Config>,
+  fragment: TurbopackConfigFragment
+): TurbopackNextConfigObject<Config> {
   const existing: TurbopackOptions = nextConfig.turbopack ?? {};
   if (existing.rules && ANIMUS_TURBOPACK_RULE_GLOB in existing.rules) {
     throw new Error(

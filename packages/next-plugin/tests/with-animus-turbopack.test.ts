@@ -55,6 +55,8 @@ setEngineApiOverride(() => ({
   clearAnalysisCache: mocks.clearAnalysisCache,
 }));
 
+const DEV_MODE_SLOT = 7;
+
 let restoreGlobals: () => void;
 let savedCwd: string;
 
@@ -91,16 +93,23 @@ type ForwardedLoaderOptions = Extract<
 
 type TurbopackConfigObject = TurbopackNextConfigObject<NextConfig>;
 
-/** Resolves the config as Next does under `next build`. */
-function loadBuildConfig(
+function turbopackBranch(
   config: AnimusNextConfig
-): Promise<TurbopackConfigObject> {
+): Exclude<AnimusNextConfig, { webpack: object }> {
   if ('webpack' in config) {
     throw new TypeError(
       'withAnimus returned the webpack branch, not the Turbopack branch'
     );
   }
-  return config('phase-production-build');
+  return config;
+}
+
+/** Resolves the config as Next does under `next build`, or in `phase`. */
+function loadBuildConfig(
+  config: AnimusNextConfig,
+  phase = 'phase-production-build'
+): Promise<TurbopackConfigObject> {
+  return turbopackBranch(config)(phase);
 }
 
 function turbopackOptions(config: TurbopackConfigObject): TurbopackOptions {
@@ -172,6 +181,7 @@ beforeEach(() => {
 
 afterEach(() => {
   process.chdir(savedCwd);
+  vi.unstubAllEnvs();
   restoreGlobals();
   vi.restoreAllMocks();
   disposeTempRoots();
@@ -275,13 +285,16 @@ describe('withAnimus Turbopack wiring', () => {
       commit: statOf('analysis-commit'),
     };
 
+    // Another phase analyzes again; the same phase would share the first load.
     await loadBuildConfig(
       withAnimus({
         system: './src/system.ts',
         unstable_turbopack: { mode: 'on' },
-      })({})
+      })({}),
+      'phase-production-server'
     );
 
+    expect(mocks.analyzeProject).toHaveBeenCalledTimes(2);
     expect(statOf('manifest.json')).toEqual(before.manifest);
     expect(statOf('analysis-inputs.json')).toEqual(before.inputs);
     expect(statOf('analysis-commit')).toEqual(before.commit);
@@ -327,6 +340,51 @@ describe('withAnimus Turbopack wiring', () => {
     expect(
       turbopackOptions(config).rules?.[ANIMUS_TURBOPACK_RULE_GLOB]
     ).toBeDefined();
+  });
+
+  test('a config function of your own that returns this one gets the Animus rules in the phase it passes', async () => {
+    process.chdir(createProject());
+    vi.stubEnv('NODE_ENV', 'development');
+    const userConfig = (phase: string) =>
+      withAnimus({
+        system: './src/system.ts',
+        turbopack: { mode: 'on' },
+        phase,
+      })({ reactStrictMode: true });
+
+    // What Next does with a function export: call it, then await the result.
+    const config = await turbopackBranch(userConfig('phase-production-build'));
+
+    expect(config.reactStrictMode).toBe(true);
+    expect(
+      turbopackOptions(config).rules?.[ANIMUS_TURBOPACK_RULE_GLOB]
+    ).toBeDefined();
+    expect(mocks.analyzeProject.mock.calls[0][DEV_MODE_SLOT]).toBe(false);
+  });
+
+  test('an awaited config without a phase resolves by NODE_ENV and keeps the Animus rules', async () => {
+    process.chdir(createProject());
+    const options = {
+      system: './src/system.ts',
+      turbopack: { mode: 'on' as const },
+    };
+    const asyncUserConfig = async () =>
+      withAnimus(options)({ reactStrictMode: true });
+
+    const spread = {
+      ...(await withAnimus(options)({ reactStrictMode: true })),
+    };
+    const awaited = await asyncUserConfig();
+
+    for (const config of [spread, awaited]) {
+      expect(config.reactStrictMode).toBe(true);
+      expect(
+        turbopackOptions(config).rules?.[ANIMUS_TURBOPACK_RULE_GLOB]
+      ).toBeDefined();
+    }
+    // NODE_ENV is "test" here: a build, analyzed once for both.
+    expect(mocks.analyzeProject).toHaveBeenCalledTimes(1);
+    expect(mocks.analyzeProject.mock.calls[0][DEV_MODE_SLOT]).toBe(false);
   });
 });
 

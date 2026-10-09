@@ -41,6 +41,12 @@ export interface AnimusNextOptions {
   /** `'auto'` (default) generates Turbopack wiring whenever the `TURBOPACK`
    *  environment variable is set; `'on'` always, `'off'` never. */
   turbopack?: { mode?: 'auto' | 'on' | 'off' };
+  /** Next's config phase, for a config function of your own that returns
+   *  this one under Turbopack: `(phase) => withAnimus({ ...options, phase
+   *  })(nextConfig)`. Next calls a config exported directly with its phase,
+   *  and that phase wins. Without either, `NODE_ENV=development` reads as
+   *  `next dev`. */
+  phase?: string;
   /** @deprecated Use `turbopack` — same shape, and it wins when both are
    *  set. This alias warns once. */
   unstable_turbopack?: { mode?: 'off' | 'auto' | 'on' };
