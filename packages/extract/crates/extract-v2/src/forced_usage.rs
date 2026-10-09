@@ -97,16 +97,10 @@ pub fn merge_into_report(
         .extend(forced.details.iter().cloned());
 }
 
-fn warn(warnings: &mut Vec<CssDiagnostic>, component: &str, message: String) {
-    warnings.push(CssDiagnostic {
-        token: None,
-        file: STATIC_CSS_SOURCE.to_string(),
-        component: component.to_string(),
-        kind: "warn".to_string(),
-        message,
-        code: None,
-        severity: None,
-    });
+/// A `staticCss` entry naming nothing the analysis knows, or written in a
+/// shape it does not read, by `code`.
+fn warn(warnings: &mut Vec<CssDiagnostic>, component: &str, message: String, code: &str) {
+    warnings.push(crate::analyze_css::diagnostic(STATIC_CSS_SOURCE, component, "warn", message, Some(code)));
 }
 
 fn sorted_keys<V>(map: &FxHashMap<String, V>) -> Vec<&String> {
@@ -139,6 +133,7 @@ pub fn build_forced_injection(
                 &mut out.warnings,
                 name,
                 format!("staticCss names unknown component '{}'", name),
+                crate::analyze_css::STATIC_CSS_UNKNOWN_NAME,
             );
             continue;
         }
@@ -169,6 +164,7 @@ pub fn build_forced_injection(
                             "staticCss variants for '{}' must be '*' or a per-prop map (got '{}')",
                             name, star
                         ),
+                        crate::analyze_css::STATIC_CSS_INVALID_SHAPE,
                     );
                 } else if let Some(cfg) = declared {
                     let mut props: Vec<&String> = cfg.variants.keys().collect();
@@ -181,6 +177,7 @@ pub fn build_forced_injection(
                         &mut out.warnings,
                         name,
                         format!("staticCss forces variants on '{}', which declares none", name),
+                        crate::analyze_css::STATIC_CSS_UNKNOWN_NAME,
                     );
                 }
             }
@@ -196,6 +193,7 @@ pub fn build_forced_injection(
                                 "staticCss names unknown variant prop '{}' on '{}'",
                                 prop, name
                             ),
+                            crate::analyze_css::STATIC_CSS_UNKNOWN_NAME,
                         );
                         continue;
                     };
@@ -211,6 +209,7 @@ pub fn build_forced_injection(
                                     "staticCss variant list for '{}.{}' must be '*' or an array (got '{}')",
                                     name, prop, other
                                 ),
+                                crate::analyze_css::STATIC_CSS_INVALID_SHAPE,
                             );
                         }
                         ListOrAll::List(options) => {
@@ -224,6 +223,7 @@ pub fn build_forced_injection(
                                             "staticCss names unknown option '{}' for '{}.{}'",
                                             option, name, prop
                                         ),
+                                        crate::analyze_css::STATIC_CSS_UNKNOWN_NAME,
                                     );
                                     continue;
                                 }
@@ -254,6 +254,7 @@ pub fn build_forced_injection(
                             "staticCss states for '{}' must be '*' or an array (got '{}')",
                             name, star
                         ),
+                        crate::analyze_css::STATIC_CSS_INVALID_SHAPE,
                     );
                 } else if let Some(cfg) = declared {
                     let mut states: Vec<&String> = cfg.states.iter().collect();
@@ -266,6 +267,7 @@ pub fn build_forced_injection(
                         &mut out.warnings,
                         name,
                         format!("staticCss forces states on '{}', which declares none", name),
+                        crate::analyze_css::STATIC_CSS_UNKNOWN_NAME,
                     );
                 }
             }
@@ -279,6 +281,7 @@ pub fn build_forced_injection(
                             &mut out.warnings,
                             name,
                             format!("staticCss names unknown state '{}' on '{}'", state, name),
+                            crate::analyze_css::STATIC_CSS_UNKNOWN_NAME,
                         );
                         continue;
                     }
@@ -300,6 +303,7 @@ pub fn build_forced_injection(
                         "staticCss names unknown custom prop '{}' on '{}'",
                         prop, name
                     ),
+                    crate::analyze_css::STATIC_CSS_UNKNOWN_NAME,
                 );
                 continue;
             }
@@ -316,6 +320,7 @@ pub fn build_forced_injection(
                 &mut out.warnings,
                 prop,
                 format!("staticCss names unknown system prop '{}'", prop),
+                crate::analyze_css::STATIC_CSS_UNKNOWN_NAME,
             );
             continue;
         }

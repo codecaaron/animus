@@ -457,12 +457,19 @@ impl ExtractEngine {
 
         // Facts own every resolved reference; release the modules' scopings.
         drop(references);
-        let css = analyze_css::run(
+        let mut css = analyze_css::run(
             &self.facts,
             &self.order,
             &self.opts.css_inputs,
             &self.opts.prefix,
         );
+        // Only the engine holds the sources a diagnostic's line and column
+        // are read from.
+        for diagnostic in &mut css.diagnostics {
+            if let Some(source) = self.sources.get(&diagnostic.file) {
+                diagnostic.locate(source);
+            }
+        }
         let cross = cross_file::resolve_cross_file(&self.facts, css.member_bindings.clone());
         let out = serde_json::to_string(&AnalyzeResult {
             cross_file: cross.clone(),

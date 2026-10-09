@@ -15,6 +15,14 @@ pub fn engine_version() -> String {
     )
 }
 
+/// Every diagnostic code the engine emits, with the severity it carries, as
+/// JSON: `{ "animus.chain.unextractable": "warn", … }`. Hosts check codes
+/// against it instead of keeping a table of their own.
+#[napi]
+pub fn diagnostic_codes() -> String {
+    analyze_css::diagnostic_codes_json()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
