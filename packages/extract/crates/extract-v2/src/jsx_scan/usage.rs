@@ -86,8 +86,9 @@ struct UsageScanner<'a, 'b> {
     _phantom: PhantomData<&'a ()>,
 }
 
-impl<'a, 'b> Visit<'a> for UsageScanner<'a, 'b> {
-    fn visit_jsx_opening_element(&mut self, elem: &JSXOpeningElement<'a>) {
+impl<'a> UsageScanner<'a, '_> {
+    /// Records one element's usage.
+    fn record_element(&mut self, elem: &JSXOpeningElement<'a>) {
         let (tag, resolved_binding) = match &elem.name {
             JSXElementName::Identifier(id) => (id.name.as_str(), None),
             JSXElementName::IdentifierReference(id) => (id.name.as_str(), None),
@@ -225,7 +226,14 @@ impl<'a, 'b> Visit<'a> for UsageScanner<'a, 'b> {
                 }
             }
         }
-        // Attributes are handled here, so the element walk is not called.
+    }
+}
+
+impl<'a, 'b> Visit<'a> for UsageScanner<'a, 'b> {
+    fn visit_jsx_opening_element(&mut self, elem: &JSXOpeningElement<'a>) {
+        self.record_element(elem);
+        // An attribute value can hold JSX too, which is a use like a child.
+        oxc::ast_visit::walk::walk_jsx_opening_element(self, elem);
     }
 
     fn visit_call_expression(&mut self, call: &CallExpression<'a>) {

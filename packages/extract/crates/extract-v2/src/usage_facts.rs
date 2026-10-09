@@ -1287,7 +1287,11 @@ fn escape_path(
                 return (!(object_assign && initializes_top_level_const(call.span, rest))).then_some(path);
             }
             // `const B = R` at the top level is followed: `<B>` renders as `R`.
-            AstKind::VariableDeclarator(_) if path == name => {
+            // A destructuring declarator reads members, which nothing follows.
+            AstKind::VariableDeclarator(declarator)
+                if path == name
+                    && matches!(declarator.id, oxc::ast::ast::BindingPattern::BindingIdentifier(_)) =>
+            {
                 return (!initializes_top_level_const(current, std::iter::once(parent).chain(rest)))
                     .then_some(path);
             }
@@ -1465,8 +1469,9 @@ struct PendingClone {
     call: String,
 }
 
-impl<'a, 's> Visit<'a> for FactCollector<'a, 's> {
-    fn visit_jsx_opening_element(&mut self, elem: &JSXOpeningElement<'a>) {
+impl<'a> FactCollector<'a, '_> {
+    /// Records one element's usage fact.
+    fn record_element(&mut self, elem: &JSXOpeningElement<'a>) {
         let tag = match &elem.name {
             JSXElementName::Identifier(id) => TagFact::Ident(id.name.to_string()),
             JSXElementName::IdentifierReference(id) => TagFact::Ident(id.name.to_string()),
@@ -1573,6 +1578,14 @@ impl<'a, 's> Visit<'a> for FactCollector<'a, 's> {
             spread,
             span: (elem.span.start, elem.span.end),
         });
+    }
+}
+
+impl<'a, 's> Visit<'a> for FactCollector<'a, 's> {
+    fn visit_jsx_opening_element(&mut self, elem: &JSXOpeningElement<'a>) {
+        self.record_element(elem);
+        // An attribute value can hold JSX too, which is a use like a child.
+        oxc::ast_visit::walk::walk_jsx_opening_element(self, elem);
     }
 
     fn visit_variable_declarator(&mut self, declarator: &oxc::ast::ast::VariableDeclarator<'a>) {

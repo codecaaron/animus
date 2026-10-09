@@ -3968,6 +3968,20 @@ fn run_with_system_floor(
         let mut names: Vec<&str> = Vec::new();
         for name in &ff.value_escapes {
             names.push(name);
+            // A class resolver has no component members, so a path through
+            // one (`resolver.attrs`, `resolver.attrs.call`) is the resolver
+            // itself, called for attributes instead of a class name.
+            for (dot, _) in name.match_indices('.') {
+                let prefix = &name[..dot];
+                escaped_ids.extend(
+                    resolve_declared_identity(path, prefix, files, inputs, &evaluated_ids)
+                        .into_iter()
+                        .chain(member_path_ids(path, ff, prefix, false, files, inputs, &evaluated_ids))
+                        .filter(|id| {
+                            evaluated.get(id).is_some_and(|(_, _, terminal, ..)| *terminal == TerminalKind::AsClass)
+                        }),
+                );
+            }
             // A namespace object hands over everything its module exports, and
             // a member of one at any depth (`ui.sub.X`) that component.
             match namespace_path_module(path, ff, name, files, inputs) {
