@@ -339,6 +339,8 @@ declare const VOCABULARY_BRAND: unique symbol;
 /**
  * What `seal()` returns. The registered names ride as phantom type state so
  * `.extend()` can make a collision a compile error in a consumer's chain.
+ * They ride in a one-element tuple: inferring from a bare optional `never`
+ * yields `string`, which made an empty system's vocabulary every name.
  */
 export type SealedSystemInstance<
   PropReg extends Record<string, SystemProp>,
@@ -348,11 +350,11 @@ export type SealedSystemInstance<
   Vocab extends string = never,
 > = SystemInstance<PropReg, GroupReg, Conds, Sels> & {
   getVocabularyRecord(): VocabularyRecord;
-  readonly [VOCABULARY_BRAND]?: Vocab;
+  readonly [VOCABULARY_BRAND]?: [Vocab];
 };
 
 export type VocabularyOf<S> = S extends {
-  readonly [VOCABULARY_BRAND]?: infer V;
+  readonly [VOCABULARY_BRAND]?: [infer V];
 }
   ? Extract<V, string>
   : never;
@@ -727,11 +729,11 @@ export class SystemBuilder<
     this: SystemBuilder<PropReg, GroupReg, Conds, Sels, 'inherit', Vocab>,
     source:
       | (SystemInstance<SrcProps, SrcGroups, SrcConds, SrcSels> & {
-          readonly [VOCABULARY_BRAND]?: SrcVocab;
+          readonly [VOCABULARY_BRAND]?: [SrcVocab];
         })
       | {
           system: SystemInstance<SrcProps, SrcGroups, SrcConds, SrcSels> & {
-            readonly [VOCABULARY_BRAND]?: SrcVocab;
+            readonly [VOCABULARY_BRAND]?: [SrcVocab];
           };
           theme?: unknown;
           tokens?: unknown;
