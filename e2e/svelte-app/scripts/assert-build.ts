@@ -213,24 +213,23 @@ async function main(): Promise<void> {
   const dynamicHash = dynamicBase.slice('animus-dynamicNotice-'.length);
   const gapClass = classToken(
     dynamicTag,
-    /^animus-dyn-[a-f0-9]+-gap$/,
+    /^animus-dyn-gap_[a-f0-9]+$/,
     'dynamicNotice gap'
   );
   expect(
-    gapClass === `animus-dyn-${dynamicHash}-gap`,
+    gapClass === `animus-dyn-gap_${dynamicHash}`,
     `Rendered gap class ${gapClass} must belong to ${dynamicBase}`
   );
 
+  const gapVar = `--animus-gap_${dynamicHash}`;
   const dynamicStyle = attribute(dynamicTag, 'style');
   expect(
-    /(?:^|;)\s*--animus-gap:\s*13px(?:;|$)/.test(dynamicStyle),
-    `Marked dynamic SSR element must carry --animus-gap: 13px; got ${dynamicStyle}`
+    new RegExp(`(?:^|;)\\s*${gapVar}:\\s*13px(?:;|$)`).test(dynamicStyle),
+    `Marked dynamic SSR element must carry ${gapVar}: 13px; got ${dynamicStyle}`
   );
   expect(
-    compact(ruleBody(css, `.${gapClass}`) ?? '').includes(
-      'gap:var(--animus-gap)'
-    ),
-    `Client CSS must contain exact rendered selector .${gapClass} with gap: var(--animus-gap)`
+    compact(ruleBody(css, `.${gapClass}`) ?? '').includes(`gap:var(${gapVar})`),
+    `Client CSS must contain exact rendered selector .${gapClass} with gap: var(${gapVar})`
   );
 
   const calmClass = `${dynamicBase}--tone-calm`;

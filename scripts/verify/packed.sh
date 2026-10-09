@@ -398,8 +398,8 @@ const dynamicTag = renderedHtml.match(
 )?.[0];
 if (
   !dynamicTag ||
-  !/\banimus-dyn-[a-f0-9]+-gap\b/.test(dynamicTag) ||
-  !/--animus-gap:\s*13px/.test(dynamicTag)
+  !/\banimus-dyn-gap_[a-f0-9]+\b/.test(dynamicTag) ||
+  !/--animus-gap_[a-f0-9]+:\s*13px/.test(dynamicTag)
 ) {
   throw new Error(
     `packed Svelte SSR output lacks the dynamic class/style probe: ${dynamicTag}`

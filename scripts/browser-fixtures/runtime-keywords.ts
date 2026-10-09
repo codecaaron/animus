@@ -127,6 +127,7 @@ export function runtimeKeywordCases(): FixtureCase[] {
   const { manifest, variableCss } = analyzeFixture();
   const box = manifest.components['fixtures/keywords.tsx::Box'];
   const dynamicPropConfig = buildDynamicPropConfig(manifest.dynamic_props);
+  const { slotClass, varName } = dynamicPropConfig.color;
   const css = `${variableCss}\n${applyUnitFallback(manifest.css)}`;
   const render = (id: string, color: string | Record<string, string>) => {
     const { classes, dynamicStyle } = resolveClasses(
@@ -144,7 +145,7 @@ export function runtimeKeywordCases(): FixtureCase[] {
   // The slot class written by hand with the keyword in its variable: what
   // the resolver did before it selected keyword classes.
   const transport = (id: string, keyword: string) =>
-    `<div id="${id}" class="${box.class_name} ${dynamicPropConfig.color.slotClass}" style="--animus-color: ${keyword}"></div>`;
+    `<div id="${id}" class="${box.class_name} ${slotClass}" style="${varName}: ${keyword}"></div>`;
   const colorProbe = (
     label: string,
     selector: string,
@@ -155,7 +156,7 @@ export function runtimeKeywordCases(): FixtureCase[] {
     {
       name: 'a runtime CSS-wide keyword through the emitted CSS and the resolver',
       css,
-      body: `<div style="color: ${RED}; --animus-color: ${BLUE}">${KEYWORDS.map(
+      body: `<div style="color: ${RED}; ${varName}: ${BLUE}">${KEYWORDS.map(
         (keyword) =>
           render(`runtime-${keyword}`, keyword) +
           transport(`transport-${keyword}`, keyword)
@@ -178,7 +179,7 @@ export function runtimeKeywordCases(): FixtureCase[] {
       css,
       // The wrapper's own breakpoint variable holds blue, so an `inherit`
       // written into that variable instead of a keyword class reads blue.
-      body: `<div style="color: ${RED}; --animus-color-sm: ${BLUE}">${render(
+      body: `<div style="color: ${RED}; ${varName}-sm: ${BLUE}">${render(
         'keyword-then-slot',
         {
           _: 'inherit',

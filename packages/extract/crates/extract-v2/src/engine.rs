@@ -876,7 +876,7 @@ mod tests {
         );
         assert_eq!(
             manifest["css"],
-            "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer composed {\n  }\n}\n\n@layer anm-system {\n  .animus-dyn-p {\n    padding: var(--animus-p);\n  }\n  .animus-u-2abf9989 {\n    padding: initial;\n  }\n  .animus-u-32d02e7f {\n    padding: revert-layer;\n  }\n  .animus-u-3f76fadb {\n    padding: revert;\n  }\n  .animus-u-4cab6402 {\n    padding: unset;\n  }\n  .animus-u-919d7eb1 {\n    padding: 4;\n  }\n  .animus-u-91c0915d {\n    padding: 8;\n  }\n  .animus-u-c801800c {\n    padding: inherit;\n  }\n}\n\n"
+            "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer composed {\n  }\n}\n\n@layer anm-system {\n  .animus-dyn-p_ {\n    padding: var(--animus-p_);\n  }\n  .animus-u-2abf9989 {\n    padding: initial;\n  }\n  .animus-u-32d02e7f {\n    padding: revert-layer;\n  }\n  .animus-u-3f76fadb {\n    padding: revert;\n  }\n  .animus-u-4cab6402 {\n    padding: unset;\n  }\n  .animus-u-919d7eb1 {\n    padding: 4;\n  }\n  .animus-u-91c0915d {\n    padding: 8;\n  }\n  .animus-u-c801800c {\n    padding: inherit;\n  }\n}\n\n"
         );
         assert_eq!(
             manifest["system_prop_map"],
@@ -896,8 +896,8 @@ mod tests {
             manifest["dynamic_props"],
             serde_json::json!({
                 "p": {
-                    "varName": "--animus-p",
-                    "slotClass": "animus-dyn-p",
+                    "varName": "--animus-p_",
+                    "slotClass": "animus-dyn-p_",
                     "property": "padding",
                     "transformName": null,
                     "transformFnSource": null,

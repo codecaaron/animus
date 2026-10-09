@@ -19,3 +19,7 @@ export const MxMl = ds.styles({ mx: 8, ml: 4 }).asElement('div');
 export const MyMt = ds.styles({ my: 8, mt: 16 }).asElement('div');
 
 export const MMxMl = ds.styles({ m: 16, mx: 8, ml: 4 }).asElement('div');
+
+export const PlRawPadding = ds
+  .styles({ pl: 4, padding: '1rem' })
+  .asElement('div');

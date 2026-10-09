@@ -11,29 +11,6 @@ use serde_json::{Map, Value};
 
 use crate::evaluator::{EvalError, TransformEvaluator};
 
-const CSS_SHORTHANDS: &[&str] = &[
-    "border",
-    "borderTop",
-    "borderBottom",
-    "borderLeft",
-    "borderRight",
-    "borderWidth",
-    "borderStyle",
-    "borderColor",
-    "background",
-    "flex",
-    "margin",
-    "padding",
-    "transition",
-    "gap",
-    "grid",
-    "gridArea",
-    "gridColumn",
-    "gridRow",
-    "gridTemplate",
-    "overflow",
-];
-
 // Not registered in propConfig, but typed against the `colors` scale in TS:
 // their string values resolve through that scale at every position.
 pub(crate) const COLOR_FAMILY_PASS_THROUGH: &[&str] = &[
@@ -59,7 +36,7 @@ pub(crate) const COLOR_FAMILY_PASS_THROUGH: &[&str] = &[
 fn prop_cascade_tier(prop_name: &str, config: &PropConfigMap) -> (usize, usize) {
     match config.get(prop_name) {
         Some(pc) => {
-            let is_shorthand = CSS_SHORTHANDS.iter().any(|&s| s == pc.property);
+            let is_shorthand = crate::declarations::is_shorthand(&camel_to_kebab(&pc.property));
             if is_shorthand {
                 if pc.properties.is_empty() {
                     (0, 0)
@@ -72,6 +49,44 @@ fn prop_cascade_tier(prop_name: &str, config: &PropConfigMap) -> (usize, usize) 
         }
         None => (3, 0),
     }
+}
+
+/// The CSS properties a style-object entry sets: a registered prop's, or the
+/// property a raw key names; none for a selector or condition key.
+fn entry_properties(key: &str, config: &PropConfigMap) -> Vec<String> {
+    match config.get(key) {
+        Some(pc) => match pc.declaration_binding() {
+            Some(binding) => binding.members.iter().map(|member| member.css_property.clone()).collect(),
+            None => pc.css_properties().iter().map(|property| camel_to_kebab(property)).collect(),
+        },
+        None if key.starts_with("--") => vec![key.to_string()],
+        None if key.chars().all(|ch| ch.is_ascii_alphanumeric()) => vec![camel_to_kebab(key)],
+        None => Vec::new(),
+    }
+}
+
+/// A style object's entries in cascade order: by tier, except that an entry
+/// moves ahead of every entry whose properties it strictly contains,
+/// whatever their tiers, so a longhand always beats its shorthand. Entries
+/// keep their relative order otherwise; selectors and conditions never move
+/// past each other.
+fn cascade_order<'a>(obj: &'a Map<String, Value>, config: &PropConfigMap) -> Vec<(&'a String, &'a Value)> {
+    let mut entries: Vec<(&String, &Value)> = obj.iter().collect();
+    entries.sort_by_key(|(key, _)| prop_cascade_tier(key, config));
+    let properties: Vec<Vec<String>> = entries.iter().map(|(key, _)| entry_properties(key, config)).collect();
+    let resets: Vec<_> =
+        properties.iter().map(|set| crate::declarations::reset_set(set.iter().map(String::as_str))).collect();
+    let broader = |a: usize, b: usize| {
+        !resets[b].is_empty() && resets[a].len() > resets[b].len() && resets[a].is_superset(&resets[b])
+    };
+    let mut pending: Vec<usize> = (0..entries.len()).collect();
+    let mut ordered = Vec::with_capacity(entries.len());
+    while !pending.is_empty() {
+        // Strict containment is acyclic, so some entry is always free.
+        let free = pending.iter().position(|&entry| !pending.iter().any(|&other| broader(other, entry))).unwrap_or(0);
+        ordered.push(entries[pending.remove(free)]);
+    }
+    ordered
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -410,10 +425,7 @@ pub fn resolve_styles(
         None => return result,
     };
 
-    let mut entries: Vec<(&String, &Value)> = obj.iter().collect();
-    entries.sort_by(|(a, _), (b, _)| {
-        prop_cascade_tier(a, ctx.config).cmp(&prop_cascade_tier(b, ctx.config))
-    });
+    let entries = cascade_order(obj, ctx.config);
 
     let mut raw_condition_index = 0usize;
 
@@ -503,10 +515,7 @@ fn resolve_block_entries(
     result: &mut ResolvedStyles,
     raw_condition_index: &mut usize,
 ) {
-    let mut entries: Vec<(&String, &Value)> = obj.iter().collect();
-    entries.sort_by(|(a, _), (b, _)| {
-        prop_cascade_tier(a, ctx.config).cmp(&prop_cascade_tier(b, ctx.config))
-    });
+    let entries = cascade_order(obj, ctx.config);
 
     // This block's own declarations must precede its children's groups, or
     // the breakpoint override is cascade-dead at equal specificity.
@@ -702,10 +711,7 @@ fn resolve_responsive_prop(
 }
 
 fn resolve_flat_styles(obj: &Map<String, Value>, ctx: &ResolveContext) -> Vec<CssDeclaration> {
-    let mut entries: Vec<(&String, &Value)> = obj.iter().collect();
-    entries.sort_by(|(a, _), (b, _)| {
-        prop_cascade_tier(a, ctx.config).cmp(&prop_cascade_tier(b, ctx.config))
-    });
+    let entries = cascade_order(obj, ctx.config);
 
     let mut declarations = Vec::new();
     for (key, value) in entries {

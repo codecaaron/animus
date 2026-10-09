@@ -119,11 +119,11 @@ const RUNTIME_INPUTS: ProbeProps = {
   named: 3,
 };
 const PARENT_STYLE = {
-  '--animus-inl': '40px',
-  '--animus-loc': '15px',
-  '--animus-imp': '14px',
-  '--animus-gap': '8px',
-  '--animus-named': '27px',
+  '--animus-inl_': '40px',
+  '--animus-loc_': '15px',
+  '--animus-imp_': '14px',
+  '--animus-gap_': '8px',
+  '--animus-named_': '27px',
 };
 
 describe('custom props inherited through extend()', () => {
@@ -193,11 +193,14 @@ describe('custom props inherited through extend()', () => {
 
   const render = (binding: keyof Levels, props: ProbeProps) => {
     const html = renderToString(createElement(components[binding], props));
+    // Each level's slot variables end in its own component hash; the
+    // values are what the levels share.
     const style = Object.fromEntries(
       (/style="([^"]*)"/.exec(html)?.[1] ?? '')
         .split(';')
         .filter(Boolean)
         .map((declaration) => declaration.split(':'))
+        .map(([name, value]) => [name.replace(/_[0-9a-f]{8}$/, '_'), value])
     );
     return { html, style };
   };
@@ -215,7 +218,7 @@ describe('custom props inherited through extend()', () => {
       const { style } = render(binding, RUNTIME_INPUTS);
       expect(style, binding).toEqual({
         ...PARENT_STYLE,
-        '--animus-inl': '130px',
+        '--animus-inl_': '130px',
       });
     }
   });

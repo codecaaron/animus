@@ -3,8 +3,8 @@
 //! prop's records are validated against the effective scale and lowered to
 //! CSS once, so its binding classes and its runtime writes read one table.
 
-use std::collections::{BTreeMap, BTreeSet};
-use std::sync::Arc;
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::sync::{Arc, OnceLock};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -145,6 +145,46 @@ fn expansion(css_property: &str) -> BTreeSet<&str> {
         }
     }
     seen
+}
+
+/// Whether a CSS property is a shorthand: it resets longhands.
+pub(crate) fn is_shorthand(css_property: &str) -> bool {
+    SHORTHANDS.iter().any(|(name, _)| *name == css_property)
+}
+
+/// The properties a set of CSS properties resets: each one, and every
+/// longhand a shorthand among them resets. A strict superset is a broader
+/// set, which the cascade orders first so the narrower one wins.
+pub(crate) fn reset_set<'a>(properties: impl IntoIterator<Item = &'a str>) -> BTreeSet<&'a str> {
+    properties.into_iter().flat_map(expansion).collect()
+}
+
+/// The utility cascade's rank of a shorthand: after every shorthand that
+/// contains it, with siblings in the order their parent lists them, so the
+/// border sides precede the border aspects. A longhand has none.
+pub(crate) fn shorthand_rank(css_property: &str) -> Option<usize> {
+    static ORDER: OnceLock<Vec<&'static str>> = OnceLock::new();
+    let order = ORDER.get_or_init(|| {
+        let parents = |name: &str| SHORTHANDS.iter().filter(|(_, longhands)| longhands.contains(&name)).count();
+        let mut waiting: BTreeMap<&str, usize> = SHORTHANDS.iter().map(|(name, _)| (*name, parents(name))).collect();
+        let mut queue: VecDeque<&str> =
+            SHORTHANDS.iter().map(|(name, _)| *name).filter(|name| waiting[name] == 0).collect();
+        let mut order = Vec::with_capacity(SHORTHANDS.len());
+        while let Some(name) = queue.pop_front() {
+            order.push(name);
+            let longhands = SHORTHANDS.iter().find(|(shorthand, _)| *shorthand == name).map_or(&[][..], |(_, l)| *l);
+            for longhand in longhands {
+                if let Some(count) = waiting.get_mut(longhand) {
+                    *count -= 1;
+                    if *count == 0 {
+                        queue.push_back(longhand);
+                    }
+                }
+            }
+        }
+        order
+    });
+    order.iter().position(|name| *name == css_property)
 }
 
 /// A longhand both properties set, if one is or contains the other.
@@ -463,10 +503,7 @@ impl<'a> DeclarationNames<'a> {
     }
 
     fn scope(&self) -> String {
-        match self.identity {
-            Some(identity) => format!("{}-{}", identity, crate::css::camel_to_kebab(self.prop)),
-            None => crate::css::camel_to_kebab(self.prop),
-        }
+        format!("{}{}", crate::css::slot_segment(self.prop), self.identity.unwrap_or(""))
     }
 
     fn base(&self) -> String {
@@ -479,12 +516,7 @@ impl<'a> DeclarationNames<'a> {
     }
 
     pub fn member_var(&self, member: &DeclarationMember) -> String {
-        format!(
-            "--{}-{}--{}",
-            self.prefix,
-            self.scope(),
-            member.css_property.trim_start_matches('-')
-        )
+        format!("--{}-{}-{}", self.prefix, self.scope(), crate::css::slot_segment(&member.name))
     }
 
     /// The class declaring one key's member variables, for the base or a
