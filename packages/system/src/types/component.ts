@@ -9,7 +9,6 @@ import type {
 import type { AnimusExtended } from '../AnimusExtended';
 import type {
   AbstractParser,
-  CSSPropMap,
   CSSProps,
   SystemProp,
   SelectorAliasProps,
@@ -49,7 +48,9 @@ type ExtendFn<
     GR,
     BS & CSSProps<AbstractProps, SystemProps<AbstractParser>>,
     V & Record<string, VariantConfig>,
-    S & CSSPropMap<AbstractProps, SystemProps<AbstractParser>>,
+    // The states constraint's string index alone: `CSSPropMap<AbstractProps,
+    // …>` also names `theme`, which every extension would take as a state.
+    S & Record<string, {}>,
     AG & Record<string, true>,
     CP & Record<string, SystemProp>
   >;
