@@ -128,6 +128,27 @@ type NegativeOf<
   Keys,
 > = Config['negative'] extends true ? NegateKeys<Extract<Keys, number>> : never;
 
+/**
+ * What a strict scale admits beside its keys and keywords, as strict
+ * extraction and the runtime do: the string zero on a property that takes a
+ * length, and a reference to one of the scale's own tokens. A non-strict scale
+ * already admits both through its raw values. The numeric zero waits: adding
+ * a number to every length prop overflows the union TS builds when checking
+ * keyframe frames against a large prop registry (TS2590).
+ */
+type StrictAdmissions<
+  Config extends SystemProp,
+  Strict,
+  ScaleName,
+  Keys,
+> = Strict extends true
+  ? never
+  :
+      | (0 extends PropertyValues<Config, true> ? '0' : never)
+      | (ScaleName extends string
+          ? `{${ScaleName}.${Extract<Keys, string | number>}}`
+          : never);
+
 export type ScaleValue<
   Config extends SystemProp,
   T extends BaseTheme,
@@ -139,15 +160,33 @@ export type ScaleValue<
           Config,
           StrictOrEmpty<Config, TokenScales<T>[Config['scale']]>
         >
+      | StrictAdmissions<
+          Config,
+          StrictOrEmpty<Config, TokenScales<T>[Config['scale']]>,
+          Config['scale'],
+          keyof TokenScales<T>[Config['scale']]
+        >
   : Config['scale'] extends MapScale
     ?
         | keyof Config['scale']
         | NegativeOf<Config, keyof Config['scale']>
         | PropertyValues<Config, StrictOrEmpty<Config, Config['scale']>>
+        | StrictAdmissions<
+            Config,
+            StrictOrEmpty<Config, Config['scale']>,
+            never,
+            never
+          >
     : Config['scale'] extends ArrayScale
       ?
           | Config['scale'][number]
           | PropertyValues<Config, StrictOrEmpty<Config, Config['scale']>>
+          | StrictAdmissions<
+              Config,
+              StrictOrEmpty<Config, Config['scale']>,
+              never,
+              never
+            >
       : PropertyValues<Config, true>;
 
 export type Scale<Config extends SystemProp, T extends BaseTheme> = [
@@ -210,6 +249,12 @@ export type ThemedScaleValue<Config extends SystemProp> =
             Config,
             StrictOrEmpty<Config, TokenScales<Theme>[Config['scale']]>
           >
+        | StrictAdmissions<
+            Config,
+            StrictOrEmpty<Config, TokenScales<Theme>[Config['scale']]>,
+            Config['scale'],
+            keyof TokenScales<Theme>[Config['scale']]
+          >
         | ColorOpacityRef<Config>
         | ContainerUnitValue
     : Config['scale'] extends MapScale
@@ -217,11 +262,23 @@ export type ThemedScaleValue<Config extends SystemProp> =
           | keyof Config['scale']
           | NegativeOf<Config, keyof Config['scale']>
           | PropertyValues<Config, StrictOrEmpty<Config, Config['scale']>>
+          | StrictAdmissions<
+              Config,
+              StrictOrEmpty<Config, Config['scale']>,
+              never,
+              never
+            >
           | ContainerUnitValue
       : Config['scale'] extends ArrayScale
         ?
             | Config['scale'][number]
             | PropertyValues<Config, StrictOrEmpty<Config, Config['scale']>>
+            | StrictAdmissions<
+                Config,
+                StrictOrEmpty<Config, Config['scale']>,
+                never,
+                never
+              >
         : PropertyValues<Config, true>;
 
 export type ThemedScale<Config extends SystemProp> = [Config] extends [

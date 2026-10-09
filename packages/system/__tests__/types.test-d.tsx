@@ -141,6 +141,9 @@ function TypeTests() {
   <SpaceOnly p={8} />;
   <SpaceOnly m={16} />;
   <TextOnly fontSize={16} />;
+  // Strict length props accept the string zero, as strict extraction and the
+  // runtime do.
+  <TextOnly fontSize="0" />;
 
   <DivBox className="extra">children here</DivBox>;
   <DivBox className="x">click</DivBox>;
