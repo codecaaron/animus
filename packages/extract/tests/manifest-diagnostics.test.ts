@@ -337,7 +337,10 @@ describe('invalid @property registrations', () => {
       ].map((name) => [name, INVALID_PROPERTY_REGISTRATION, 'error'])
     );
     expect(
-      systemLoadDiagnostics({ invalidPropertyRegistrations: undefined })
+      systemLoadDiagnostics({
+        scalesJson: '{}',
+        invalidPropertyRegistrations: undefined,
+      })
     ).toEqual([]);
   });
 
