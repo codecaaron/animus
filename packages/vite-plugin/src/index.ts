@@ -64,6 +64,10 @@ export interface AnimusExtractOptions {
   mode?: 'development' | 'production';
   /** Namespace prefix for CSS variables and class names. */
   prefix?: string;
+  /** With `prefix` set, contextual variables take the prefixed name
+   *  everywhere Animus emits them, while authors keep writing the declared
+   *  name. */
+  prefixContextualVars?: boolean;
   /**
    * Forced-emission declarations for usage the scanner cannot observe;
    * declared variants, states and prop values are emitted as if used.

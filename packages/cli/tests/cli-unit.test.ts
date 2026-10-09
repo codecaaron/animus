@@ -107,6 +107,27 @@ describe('config resolution', () => {
     await expect(resolveCliConfig({}, root)).rejects.toThrow(/cli\.outDir/);
   });
 
+  test('prefixContextualVars is read from the config file and type-checked', async () => {
+    const root = makeRoot();
+    const write = (prefixContextualVars: boolean | string) =>
+      writeFileSync(
+        join(root, 'animus.config.json'),
+        JSON.stringify({
+          system: './ds.ts',
+          prefix: 'acme',
+          prefixContextualVars,
+        })
+      );
+    write(true);
+    const config = await resolveCliConfig({ root }, root);
+    expect(config.options.prefixContextualVars).toBe(true);
+    expect(projectResolvedConfig(config).prefixContextualVars).toBe(true);
+    write('yes');
+    await expect(resolveCliConfig({ root }, root)).rejects.toThrow(
+      /prefixContextualVars/
+    );
+  });
+
   test('the CLI mode default is production — never NODE_ENV', async () => {
     const root = makeRoot();
     const prev = process.env.NODE_ENV;

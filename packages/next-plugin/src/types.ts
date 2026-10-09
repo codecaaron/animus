@@ -19,6 +19,10 @@ export interface AnimusNextOptions {
   verbose?: boolean | 'trace';
   /** Namespace prefix for CSS variables and class names. */
   prefix?: string;
+  /** With `prefix` set, contextual variables take the prefixed name
+   *  everywhere Animus emits them, while authors keep writing the declared
+   *  name. */
+  prefixContextualVars?: boolean;
   /** Forced-emission declarations for usage the scanner cannot observe
    *  (CMS-driven variants, spread-hidden props). Absent is a no-op. */
   staticCss?: StaticCssConfig;

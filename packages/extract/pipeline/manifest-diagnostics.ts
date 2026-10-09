@@ -156,6 +156,11 @@ export const PROPERTY_DISCRETE_ANIMATION = 'animus.property.discrete-animation';
  *  it invalid at computed-value time. */
 export const PROPERTY_SELF_REFERENCE = 'animus.property.self-reference';
 
+/** A prefix renamed contextual variables without `prefixContextualVars`, so
+ *  their declared names no longer resolve. */
+export const PREFIX_CONTEXTUAL_VARS_UNPREFIXED =
+  'animus.prefix.contextual-vars-unprefixed';
+
 /**
  * A lost or unreadable configured input, or a classified unsupported Animus
  * declaration, is `error` — what `--strict` refuses; degradation that still
@@ -174,6 +179,7 @@ const DIAGNOSTIC_SEVERITY: ReadonlyMap<string, DiagnosticSeverity> = new Map([
   [PROPERTY_UNREGISTERED_ANIMATION, 'info'],
   [PROPERTY_DISCRETE_ANIMATION, 'warn'],
   [PROPERTY_SELF_REFERENCE, 'warn'],
+  [PREFIX_CONTEXTUAL_VARS_UNPREFIXED, 'warn'],
 ]);
 
 /** An unlisted code is `warn`: a witness kind from a newer system package
@@ -245,7 +251,9 @@ export function vocabularyWitnessDiagnostics(
 export function systemLoadDiagnostics(
   system: Pick<
     SystemConfig,
-    'vocabularyWitnessesJson' | 'invalidPropertyRegistrations'
+    | 'vocabularyWitnessesJson'
+    | 'invalidPropertyRegistrations'
+    | 'legacyPrefixedContextualVars'
   >
 ): ManifestDiagnostic[] {
   const registrations = (system.invalidPropertyRegistrations ?? []).map(
@@ -258,9 +266,24 @@ export function systemLoadDiagnostics(
       severity: severityFor(INVALID_PROPERTY_REGISTRATION),
     })
   );
+  const prefixed = system.legacyPrefixedContextualVars ?? [];
+  const unprefixed: ManifestDiagnostic[] =
+    prefixed.length === 0
+      ? []
+      : [
+          {
+            file: 'system',
+            component: 'prefix',
+            kind: 'warn',
+            message: `the prefix renames the contextual variables ${prefixed.join(', ')}, but their declared names are still read and written as written, so scale reads of them fail and their writes miss. Set prefixContextualVars: true to resolve them under the prefix (${PREFIX_CONTEXTUAL_VARS_UNPREFIXED})`,
+            code: PREFIX_CONTEXTUAL_VARS_UNPREFIXED,
+            severity: severityFor(PREFIX_CONTEXTUAL_VARS_UNPREFIXED),
+          },
+        ];
   return [
     ...vocabularyWitnessDiagnostics(system.vocabularyWitnessesJson),
     ...registrations,
+    ...unprefixed,
   ];
 }
 

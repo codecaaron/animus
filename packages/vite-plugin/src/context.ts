@@ -392,6 +392,7 @@ export class PluginContext {
         systemPath: this.resolvedSystemPath,
         rootDir: this.rootDir,
         prefix: this.options.prefix,
+        prefixContextualVars: this.options.prefixContextualVars,
       });
       const deps = this.system.dependencies ?? [];
       const keys = new Set<string>();

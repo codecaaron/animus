@@ -1,4 +1,3 @@
-import { parseInternalWire } from './internal-wire';
 import {
   PROPERTY_DISCRETE_ANIMATION,
   PROPERTY_FALLBACK_CHAIN_SUPPRESSED,
@@ -15,7 +14,7 @@ import type { PropertyRegistration } from './property-registrations';
 import type { SystemConfig } from './system-config';
 
 export interface CustomPropertyCheckInput {
-  system: Pick<SystemConfig, 'variableCss' | 'contextualVarsJson'>;
+  system: Pick<SystemConfig, 'variableCss' | 'contextualProperties'>;
   manifest: Pick<ProjectManifest, 'components'>;
   componentCss: string;
   globalCss: string;
@@ -50,7 +49,7 @@ export function checkCustomProperties(
   input: CustomPropertyCheckInput
 ): ManifestDiagnostic[] {
   const registered = propertyRegistrations(input.system.variableCss);
-  const declared = declaredProperties(input.system.contextualVarsJson);
+  const declared = new Set(input.system.contextualProperties ?? []);
   const findings: Finding[] = [];
   const sheets = [
     { css: input.componentCss, owner: componentOwner(input.manifest) },
@@ -124,17 +123,6 @@ export function checkCustomProperties(
     }
   }
   return toDiagnostics(findings);
-}
-
-function declaredProperties(contextualVarsJson: string | null): Set<string> {
-  if (!contextualVarsJson) return new Set();
-  const byScale = parseInternalWire<Record<string, string[]>>(
-    contextualVarsJson,
-    "contextualVarsJson (the theme's contextual variable names)"
-  );
-  return new Set(
-    Object.values(byScale).flatMap((names) => names.map((name) => `--${name}`))
-  );
 }
 
 /** Declarations in engine-emitted CSS: one `property: value` per `;`. */

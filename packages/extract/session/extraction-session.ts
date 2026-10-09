@@ -849,6 +849,7 @@ export class ExtractionSession {
       systemPath: resolvedSystemPath,
       rootDir,
       prefix: this.options.prefix,
+      prefixContextualVars: this.options.prefixContextualVars,
     });
     this.assetCopyCache.clear();
     this.assetDependencyPaths.clear();

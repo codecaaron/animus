@@ -62,6 +62,10 @@ export interface AnimusCoreOptions {
   verbose?: boolean | 'trace';
   /** Namespace prefix for CSS variables and class names. */
   prefix?: string;
+  /** With `prefix` set, contextual variables take the prefixed name
+   *  everywhere Animus emits them, while authors keep writing the declared
+   *  name. */
+  prefixContextualVars?: boolean;
   /** Browser targets for CSS autoprefixing and syntax lowering. */
   targets?: string | string[];
   /** Minification control; `undefined` = minify in production mode only. */
@@ -88,6 +92,7 @@ export const CORE_OPTION_KEYS: ReadonlySet<string> = new Set([
   'strict',
   'verbose',
   'prefix',
+  'prefixContextualVars',
   'targets',
   'minify',
   'staticCss',
@@ -220,6 +225,7 @@ const CORE_VALUE_GATES: ReadonlyArray<{
   { key: 'verbose', ok: isVerbose, expected: "a boolean or 'trace'" },
   { key: 'minify', ok: isBoolean, expected: 'a boolean' },
   { key: 'prefix', ok: isString, expected: 'a string' },
+  { key: 'prefixContextualVars', ok: isBoolean, expected: 'a boolean' },
   {
     key: 'targets',
     ok: isStringOrStringArray,

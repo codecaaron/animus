@@ -1,4 +1,9 @@
-import { applyPrefix, prefixVariableReferences } from './prefix';
+import { parseInternalWire } from './internal-wire';
+import {
+  applyPrefix,
+  applyPropertyNames,
+  prefixVariableReferences,
+} from './prefix';
 import { splitInvalidPropertyRegistrations } from './property-registrations';
 
 import type { InvalidPropertyRegistration } from './property-registrations';
@@ -44,6 +49,11 @@ export interface SystemConfig {
   sourceThemeManifestsJson?: string | null;
   /** Registrations removed from `variableCss`; absent when all are valid. */
   invalidPropertyRegistrations?: InvalidPropertyRegistration[];
+  /** The custom properties the declared contextual variables emit. */
+  contextualProperties?: string[];
+  /** Contextual variables a prefix renamed without `prefixContextualVars`,
+   *  so their declared names no longer resolve. */
+  legacyPrefixedContextualVars?: string[];
 }
 
 /**
@@ -53,7 +63,12 @@ export interface SystemConfig {
 export function loadSystemConfig(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   engineApi: () => any,
-  opts: { systemPath: string; rootDir: string; prefix?: string }
+  opts: {
+    systemPath: string;
+    rootDir: string;
+    prefix?: string;
+    prefixContextualVars?: boolean;
+  }
 ): SystemConfig {
   const { loadSystemModule } = engineApi();
   const config = loadSystemModule(opts.systemPath, opts.rootDir);
@@ -66,7 +81,33 @@ export function loadSystemConfig(
   let declarationScalesJson: string | null =
     config.declarationScalesJson || null;
 
-  if (opts.prefix) {
+  const declaredNames = Object.values(
+    parseInternalWire<Record<string, string[]>>(
+      contextualVarsJson ?? '{}',
+      "contextualVarsJson (the theme's contextual variable names)"
+    )
+  ).flat();
+  let contextualProperties = declaredNames.map((name) => `--${name}`);
+  let legacyPrefixedContextualVars: string[] = [];
+  if (opts.prefix && opts.prefixContextualVars) {
+    const resolved = applyPropertyNames(opts.prefix, {
+      variableMapJson,
+      variableCss,
+      themeJson: scalesJson,
+      contextualVarsJson,
+      declarationScalesJson,
+    });
+    variableMapJson = resolved.variableMapJson;
+    variableCss = resolved.variableCss;
+    scalesJson = resolved.themeJson;
+    contextualVarsJson = resolved.contextualVarsJson;
+    contextualProperties = resolved.contextualProperties;
+    declarationScalesJson = resolved.declarationScalesJson;
+  } else if (opts.prefix) {
+    legacyPrefixedContextualVars = declaredNames;
+    contextualProperties = declaredNames.map(
+      (name) => `--${opts.prefix}-${name}`
+    );
     const prefixed = applyPrefix(
       opts.prefix,
       variableMapJson,
@@ -96,6 +137,7 @@ export function loadSystemConfig(
     variableMapJson,
     variableCss,
     contextualVarsJson,
+    contextualProperties: [...new Set(contextualProperties)],
     selectorAliasesJson: config.selectorAliases || null,
     conditionAliasesJson: config.conditionAliases || null,
     transformSourcesJson: config.transformSources || null,
@@ -113,6 +155,11 @@ export function loadSystemConfig(
   }
   if (registrations.invalid.length > 0) {
     system.invalidPropertyRegistrations = registrations.invalid;
+  }
+  if (legacyPrefixedContextualVars.length > 0) {
+    system.legacyPrefixedContextualVars = [
+      ...new Set(legacyPrefixedContextualVars),
+    ];
   }
   return system;
 }

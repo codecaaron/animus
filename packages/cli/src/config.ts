@@ -224,6 +224,9 @@ function parseLoadedCliConfig(raw: ConfigRecord): LoadedCliConfig {
           ? raw.verbose
           : undefined,
       prefix: isConfigString(raw.prefix) ? raw.prefix : undefined,
+      prefixContextualVars: isConfigBoolean(raw.prefixContextualVars)
+        ? raw.prefixContextualVars
+        : undefined,
       targets:
         isConfigString(raw.targets) || isConfigStringArray(raw.targets)
           ? raw.targets
@@ -393,6 +396,7 @@ export async function resolveCliConfig(
     strict: pick('strict', flags.strict),
     verbose: pick('verbose', flags.verbose),
     prefix: pick('prefix', undefined),
+    prefixContextualVars: pick('prefixContextualVars', undefined),
     targets: pick('targets', flags.targets),
     minify: pick('minify', undefined),
     staticCss: pick('staticCss', undefined),
@@ -442,6 +446,7 @@ export function projectResolvedConfig(config: ResolvedCliConfig) {
     targets: config.options.targets ?? null,
     minify: config.options.minify ?? null,
     prefix: config.options.prefix ?? null,
+    prefixContextualVars: config.options.prefixContextualVars ?? false,
     layers: config.options.layers ?? null,
     extensions: config.options.extensions ?? null,
     staticCss: config.options.staticCss ?? null,
