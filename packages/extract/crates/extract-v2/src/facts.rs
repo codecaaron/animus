@@ -304,6 +304,9 @@ pub struct FileFacts {
     /// Chain-shaped calls on an identifier that no walked chain contains.
     #[serde(skip)]
     pub(crate) unwalked_chains: Vec<UnwalkedChainSite>,
+    /// Top-level builders chains here continue, in declaration order.
+    #[serde(skip)]
+    pub(crate) staged_builders: Vec<chain_walk::StagedBuilder>,
     /// Named-import specifiers (alias augmentation inputs).
     pub imports: Vec<ImportFact>,
     /// Named-export facts (re-export following for provenance/statics).
@@ -1233,6 +1236,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
                 UnwalkedChainSite { chain, line }
             })
             .collect(),
+        staged_builders: walked.staged_builders,
         imports,
         exports,
         transforms,
