@@ -8,10 +8,11 @@ use oxc::ast::ast::{
 use oxc::ast::AstKind;
 use oxc::ast_visit::Visit;
 use oxc::semantic::{Scoping, SemanticBuilder, SymbolId};
+use oxc::span::GetSpan;
 use rustc_hash::{FxHashMap, FxHashSet};
 use serde::Serialize;
 use serde_json::Value;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::marker::PhantomData;
 
 use crate::chain_walk::{ChainDescriptor, TerminalKind};
@@ -73,6 +74,9 @@ pub enum UsageFact {
         /// replace them; the rest are settled.
         #[serde(skip)]
         spread: Option<usize>,
+        /// Byte span of the opening element.
+        #[serde(skip)]
+        span: (u32, u32),
     },
     /// createElement(X, ...) / React.createElement(X, ...): the first
     /// argument as a raw name or dotted key (None = unattributable form).
@@ -421,12 +425,23 @@ pub fn collect_export_facts(program: &Program<'_>) -> Vec<ExportFact> {
 /// of extracted component chains no other module can name and this module
 /// renders only in place (see `ConfinementScan`), from one semantic analysis:
 /// a second analysis would renumber the references the first one reads.
+/// What `collect_enriched_usage` reads from one semantic build of a module.
+pub(crate) struct EnrichedUsage {
+    pub usage: Vec<UsageFact>,
+    /// See `FileFacts::confined_components`.
+    pub confined: BTreeSet<String>,
+    /// See `FileFacts::value_escapes`.
+    pub escapes: BTreeSet<String>,
+    /// See `FileFacts::spread_wrappers`.
+    pub spread_wrappers: BTreeMap<String, SpreadWrapper>,
+}
+
 pub(crate) fn collect_enriched_usage(
     program: &Program<'_>,
     static_values: &FxHashMap<String, Value>,
     chains: &[&ChainDescriptor],
     exports: &[ExportFact],
-) -> (Vec<UsageFact>, BTreeSet<String>, BTreeSet<String>) {
+) -> EnrichedUsage {
     let exported: FxHashSet<&str> = exports.iter().filter_map(|e| e.local.as_deref()).collect();
     let candidates: Vec<&str> = chains
         .iter()
@@ -439,8 +454,12 @@ pub(crate) fn collect_enriched_usage(
         .collect();
     let may_escape = !chains.is_empty()
         || program.body.iter().any(|stmt| matches!(stmt, Statement::ImportDeclaration(_)));
-    let scoping = (!static_values.is_empty() || !candidates.is_empty() || may_escape)
-        .then(|| SemanticBuilder::new().build(program).semantic.into_scoping());
+    let wrapper_candidates = spread_wrapper_candidates(program);
+    let scoping = (!static_values.is_empty()
+        || !candidates.is_empty()
+        || may_escape
+        || !wrapper_candidates.is_empty())
+    .then(|| SemanticBuilder::new().build(program).semantic.into_scoping());
     let mut collector = FactCollector {
         facts: Vec::new(),
         static_values,
@@ -495,7 +514,303 @@ pub(crate) fn collect_enriched_usage(
         }
         _ => BTreeSet::new(),
     };
-    (collector.facts, confined, escapes)
+    let spread_wrappers = match &scoping {
+        Some(scoping)
+            if !wrapper_candidates.is_empty()
+                && !scoping.root_unresolved_references().contains_key("eval") =>
+        {
+            spread_wrappers(program, scoping, wrapper_candidates)
+        }
+        _ => BTreeMap::new(),
+    };
+    EnrichedUsage {
+        usage: collector.facts,
+        confined,
+        escapes,
+        spread_wrappers,
+    }
+}
+
+/// A module-scope function component, not exported, whose props reach the
+/// components it renders only through `{...props}` (or `{...rest}`) spreads
+/// usage tracking can follow: its renders stand in for those components'.
+#[derive(Debug, Clone, Default)]
+pub struct SpreadWrapper {
+    /// Props the parameter names in its pattern; they never reach a spread.
+    pub named: Vec<String>,
+    /// Each element receiving the spread. An element with a second spread
+    /// is not listed.
+    pub forwarding: Vec<Forwarding>,
+}
+
+/// An element a spread wrapper forwards its props to: its opening-element
+/// span and its tag as written.
+pub type Forwarding = ((u32, u32), String);
+
+/// A wrapper candidate by shape alone: name, binding, the spread parameter
+/// (the props identifier or the rest element), and the named props.
+struct WrapperCandidate<'b, 'a> {
+    name: String,
+    binding: &'b oxc::ast::ast::BindingIdentifier<'a>,
+    spread: &'b oxc::ast::ast::BindingIdentifier<'a>,
+    named: Vec<String>,
+}
+
+/// Top-level, non-exported `const`/`let`/`var` declarators and function
+/// declarations that are a function component, or one wrapped in
+/// `forwardRef`/`memo` imported from `react`, whose first parameter is an
+/// identifier or an object pattern with an identifier rest, static keys and
+/// no non-empty default.
+fn spread_wrapper_candidates<'b, 'a>(program: &'b Program<'a>) -> Vec<WrapperCandidate<'b, 'a>> {
+    use oxc::ast::ast::{BindingPattern, Function};
+    let mut react_hocs: FxHashSet<String> = FxHashSet::default();
+    let mut react_namespaces: FxHashSet<String> = FxHashSet::default();
+    for stmt in &program.body {
+        let Statement::ImportDeclaration(import) = stmt else { continue };
+        if import.source.value != "react" {
+            continue;
+        }
+        for specifier in import.specifiers.iter().flatten() {
+            match specifier {
+                ImportDeclarationSpecifier::ImportSpecifier(named)
+                    if matches!(named.imported.name().as_str(), "forwardRef" | "memo") =>
+                {
+                    react_hocs.insert(named.local.name.to_string());
+                }
+                ImportDeclarationSpecifier::ImportDefaultSpecifier(default) => {
+                    react_namespaces.insert(default.local.name.to_string());
+                }
+                ImportDeclarationSpecifier::ImportNamespaceSpecifier(namespace) => {
+                    react_namespaces.insert(namespace.local.name.to_string());
+                }
+                _ => {}
+            }
+        }
+    }
+    // The component function, through `forwardRef`/`memo` from `react` only.
+    fn component<'b, 'a>(
+        expr: &'b Expression<'a>,
+        hocs: &FxHashSet<String>,
+        namespaces: &FxHashSet<String>,
+    ) -> Option<&'b oxc::ast::ast::FormalParameters<'a>> {
+        match crate::chain_walk::unwrap_type_assertions(expr) {
+            Expression::ArrowFunctionExpression(arrow) => Some(&arrow.params),
+            Expression::FunctionExpression(function) => Some(&function.params),
+            Expression::CallExpression(call) if call.arguments.len() == 1 => {
+                let react = match crate::chain_walk::unwrap_type_assertions(&call.callee) {
+                    Expression::Identifier(id) => hocs.contains(id.name.as_str()),
+                    Expression::StaticMemberExpression(member) => {
+                        matches!(member.property.name.as_str(), "forwardRef" | "memo")
+                            && matches!(&member.object, Expression::Identifier(object)
+                                if namespaces.contains(object.name.as_str()))
+                    }
+                    _ => false,
+                };
+                if !react {
+                    return None;
+                }
+                component(call.arguments[0].as_expression()?, hocs, namespaces)
+            }
+            _ => None,
+        }
+    }
+    let candidate = |name: &'b oxc::ast::ast::BindingIdentifier<'a>,
+                     params: &'b oxc::ast::ast::FormalParameters<'a>|
+     -> Option<WrapperCandidate<'b, 'a>> {
+        let param = params.items.first()?;
+        // React always passes props, so only a direct call, which escapes,
+        // could use a default; an empty one changes nothing either way.
+        let empty = |default: &Expression<'a>| {
+            matches!(default, Expression::ObjectExpression(object) if object.properties.is_empty())
+        };
+        if param.initializer.as_deref().is_some_and(|default| !empty(default)) {
+            return None;
+        }
+        let (spread, named) = match &param.pattern {
+            BindingPattern::BindingIdentifier(id) => (id.as_ref(), Vec::new()),
+            BindingPattern::ObjectPattern(object) => {
+                let BindingPattern::BindingIdentifier(rest) = &object.rest.as_ref()?.argument
+                else {
+                    return None;
+                };
+                let mut named = Vec::new();
+                for property in &object.properties {
+                    // An unknown (computed) key gives up: `static_name` has none.
+                    let mut value = &property.value;
+                    if let BindingPattern::AssignmentPattern(assignment) = value {
+                        value = &assignment.left;
+                    }
+                    if !matches!(value, BindingPattern::BindingIdentifier(_)) {
+                        return None;
+                    }
+                    named.push(property.key.static_name()?.to_string());
+                }
+                (rest.as_ref(), named)
+            }
+            _ => return None,
+        };
+        Some(WrapperCandidate {
+            name: name.name.to_string(),
+            binding: name,
+            spread,
+            named,
+        })
+    };
+    let function = |function: &'b Function<'a>| {
+        function
+            .id
+            .as_ref()
+            .and_then(|id| candidate(id, &function.params))
+    };
+    let mut candidates = Vec::new();
+    for stmt in &program.body {
+        match stmt {
+            Statement::VariableDeclaration(declaration) => {
+                for declarator in &declaration.declarations {
+                    let (oxc::ast::ast::BindingPattern::BindingIdentifier(id), Some(init)) =
+                        (&declarator.id, &declarator.init)
+                    else {
+                        continue;
+                    };
+                    if let Some(params) = component(init, &react_hocs, &react_namespaces) {
+                        candidates.extend(candidate(id, params));
+                    }
+                }
+            }
+            Statement::FunctionDeclaration(declaration) => candidates.extend(function(declaration)),
+            _ => {}
+        }
+    }
+    candidates
+}
+
+/// The candidates that survive every reference check, with their forwarding
+/// elements. A wrapper binding may be used only as a JSX tag name, and is
+/// never reassigned; its spread parameter may be used only as a whole JSX
+/// spread argument or a read of one of its members that is no call.
+fn spread_wrappers(
+    program: &Program<'_>,
+    scoping: &Scoping,
+    candidates: Vec<WrapperCandidate<'_, '_>>,
+) -> BTreeMap<String, SpreadWrapper> {
+    let mut scan = WrapperScan {
+        scoping,
+        bindings: FxHashMap::default(),
+        spreads: FxHashMap::default(),
+        invalid: FxHashSet::default(),
+        forwarding: FxHashMap::default(),
+        ancestors: Vec::new(),
+    };
+    for (index, candidate) in candidates.iter().enumerate() {
+        let (Some(binding), Some(spread)) = (
+            candidate.binding.symbol_id.get(),
+            candidate.spread.symbol_id.get(),
+        ) else {
+            scan.invalid.insert(index);
+            continue;
+        };
+        if scoping.symbol_is_mutated(binding) || scoping.symbol_is_mutated(spread) {
+            scan.invalid.insert(index);
+        }
+        scan.bindings.insert(binding, index);
+        scan.spreads.insert(spread, index);
+    }
+    scan.visit_program(program);
+    candidates
+        .into_iter()
+        .enumerate()
+        .filter(|(index, _)| !scan.invalid.contains(index))
+        .filter_map(|(index, candidate)| {
+            let forwarding = scan.forwarding.remove(&index)?;
+            Some((
+                candidate.name,
+                SpreadWrapper {
+                    named: candidate.named,
+                    forwarding,
+                },
+            ))
+        })
+        .collect()
+}
+
+struct WrapperScan<'a, 's> {
+    scoping: &'s Scoping,
+    /// Wrapper binding symbol → candidate index.
+    bindings: FxHashMap<SymbolId, usize>,
+    /// Spread parameter symbol → candidate index.
+    spreads: FxHashMap<SymbolId, usize>,
+    invalid: FxHashSet<usize>,
+    forwarding: FxHashMap<usize, Vec<Forwarding>>,
+    ancestors: Vec<AstKind<'a>>,
+}
+
+impl<'a> Visit<'a> for WrapperScan<'a, '_> {
+    fn enter_node(&mut self, kind: AstKind<'a>) {
+        self.ancestors.push(kind);
+    }
+
+    fn leave_node(&mut self, _kind: AstKind<'a>) {
+        self.ancestors.pop();
+    }
+
+    fn visit_identifier_reference(&mut self, ident: &IdentifierReference<'a>) {
+        let Some(reference) = ident.reference_id.get().map(|id| self.scoping.get_reference(id)) else {
+            return;
+        };
+        let Some(symbol) = reference.symbol_id() else { return };
+        let mut ancestors = self.ancestors.iter().rev();
+        if let Some(&index) = self.bindings.get(&symbol) {
+            if !reference.is_value() {
+                return;
+            }
+            let tag = matches!(
+                ancestors.next(),
+                Some(AstKind::JSXOpeningElement(_) | AstKind::JSXClosingElement(_))
+            );
+            if !tag {
+                self.invalid.insert(index);
+            }
+            return;
+        }
+        let Some(&index) = self.spreads.get(&symbol) else { return };
+        if !reference.is_value() {
+            return;
+        }
+        match ancestors.next() {
+            Some(AstKind::JSXSpreadAttribute(spread)) if spread.argument.span() == ident.span => {
+                let Some(AstKind::JSXOpeningElement(element)) = ancestors.next() else {
+                    self.invalid.insert(index);
+                    return;
+                };
+                let spreads = element
+                    .attributes
+                    .iter()
+                    .filter(|attr| matches!(attr, JSXAttributeItem::SpreadAttribute(_)))
+                    .count();
+                let tag = match &element.name {
+                    JSXElementName::IdentifierReference(id) => Some(id.name.to_string()),
+                    JSXElementName::MemberExpression(member) => jsx_member_path(member),
+                    _ => None,
+                };
+                if let (1, Some(tag)) = (spreads, tag) {
+                    self.forwarding
+                        .entry(index)
+                        .or_default()
+                        .push(((element.span.start, element.span.end), tag));
+                }
+            }
+            // A read of one member (`props.title`), never written or called.
+            Some(AstKind::StaticMemberExpression(member))
+                if member.object.span() == ident.span
+                    && !reference.flags().is_member_write_target()
+                    && !reference.is_write()
+                    && !matches!(ancestors.next(), Some(AstKind::CallExpression(call))
+                        if call.callee.span() == member.span) => {}
+            _ => {
+                self.invalid.insert(index);
+            }
+        }
+    }
 }
 
 /// Visits every value reference to a module-scope binding that may name a
@@ -860,7 +1175,12 @@ impl<'a, 's> Visit<'a> for FactCollector<'a, 's> {
                 });
             }
         }
-        self.facts.push(UsageFact::Element { tag, attrs, spread });
+        self.facts.push(UsageFact::Element {
+            tag,
+            attrs,
+            spread,
+            span: (elem.span.start, elem.span.end),
+        });
     }
 
     fn visit_call_expression(&mut self, call: &CallExpression<'a>) {
@@ -926,7 +1246,7 @@ pub fn collect_usage_facts_with_statics(
     program: &Program<'_>,
     static_values: &FxHashMap<String, Value>,
 ) -> Vec<UsageFact> {
-    collect_enriched_usage(program, static_values, &[], &[]).0
+    collect_enriched_usage(program, static_values, &[], &[]).usage
 }
 
 fn attribute_expression<'a, 'b>(
@@ -1015,11 +1335,32 @@ fn resolve_tag<'m>(
     }
 }
 
+/// How a file's spread wrappers stand in for their targets in the filters:
+/// each wrapper tag is published as its targets, and these say what its
+/// renders and forwarding elements contribute.
+#[derive(Debug, Default)]
+pub struct WrapperProxies {
+    /// Wrapper tag → props its parameter names, which never reach a target.
+    pub named: FxHashMap<String, FxHashSet<String>>,
+    /// Opening-element spans of forwarding elements: their spread carries
+    /// exactly the wrapper's renders, so it opens nothing itself.
+    pub forwarding: FxHashSet<(u32, u32)>,
+}
+
+impl WrapperProxies {
+    /// Whether `attr` on `tag` reaches the component the tag renders.
+    fn reaches(&self, tag: &TagFact, attr: &str) -> bool {
+        !matches!(tag, TagFact::Ident(name)
+            if self.named.get(name).is_some_and(|named| named.contains(attr)))
+    }
+}
+
 /// Custom-prop scan over collected facts.
 pub fn filter_custom_prop_scan(
     facts: &[UsageFact],
     component_props: &FxHashMap<String, FxHashSet<String>>,
     member_expr_bindings: &FxHashMap<String, String>,
+    proxies: &WrapperProxies,
 ) -> CustomPropScanResult {
     let mut seen = FxHashSet::default();
     let mut dynamic_seen = FxHashSet::default();
@@ -1039,7 +1380,7 @@ pub fn filter_custom_prop_scan(
         let binding = resolved_binding.unwrap_or_else(|| tag_name.to_string());
 
         for attr in attrs {
-            if !active_props.contains(&attr.name) {
+            if !active_props.contains(&attr.name) || !proxies.reaches(tag, &attr.name) {
                 continue;
             }
             for value in attr
@@ -1087,11 +1428,13 @@ pub fn uncertain_custom_renders(
     facts: &[UsageFact],
     component_props: &FxHashMap<String, FxHashSet<String>>,
     member_expr_bindings: &FxHashMap<String, String>,
+    proxies: &WrapperProxies,
 ) -> Vec<DynamicPropUsage> {
     let mut seen = FxHashSet::default();
     let mut usages = Vec::new();
     for fact in facts {
         let binding = match fact {
+            UsageFact::Element { span, .. } if proxies.forwarding.contains(span) => continue,
             UsageFact::Element { tag, spread: Some(_), .. } => match resolve_tag(tag, member_expr_bindings) {
                 Some((binding, _)) => binding,
                 None => continue,
@@ -1161,6 +1504,7 @@ pub fn filter_usage_scan(
     custom_props: &FxHashMap<String, FxHashSet<String>>,
     component_configs: &FxHashMap<String, ComponentUsageConfig>,
     member_expr_bindings: &FxHashMap<String, String>,
+    proxies: &WrapperProxies,
 ) -> UsageScanResult {
     let mut seen = FxHashSet::default();
     let mut fully_open = FxHashSet::default();
@@ -1168,7 +1512,7 @@ pub fn filter_usage_scan(
 
     for fact in facts {
         match fact {
-            UsageFact::Element { tag, attrs, spread } => {
+            UsageFact::Element { tag, attrs, spread, span } => {
                 let Some((tag_name, resolved_binding)) = resolve_tag(tag, member_expr_bindings)
                 else {
                     result.identity_uncertain = true;
@@ -1190,6 +1534,9 @@ pub fn filter_usage_scan(
                 let mut written: FxHashSet<&str> = FxHashSet::default();
 
                 for (index, attr) in attrs.iter().enumerate() {
+                    if !proxies.reaches(tag, &attr.name) {
+                        continue;
+                    }
                     let settled = spread.is_none_or(|before| index >= before);
                     if let Some(props) = active_props {
                         if props.contains(&attr.name) {
@@ -1264,7 +1611,12 @@ pub fn filter_usage_scan(
                     }
                 }
 
-                if let Some(config) = component_configs.get(tag_name) {
+                // A forwarding element's spread carries exactly the wrapper's
+                // renders, which are recorded at the render.
+                if let Some(config) = component_configs
+                    .get(tag_name)
+                    .filter(|_| !proxies.forwarding.contains(span))
+                {
                     record_unwritten_options(
                         &mut result,
                         &mut fully_open,
@@ -1400,7 +1752,12 @@ mod tests {
         let facts = collect_usage_facts(program);
 
         let direct = scan_jsx(program, component_props, member_expr_bindings);
-        let filtered = filter_custom_prop_scan(&facts, component_props, member_expr_bindings);
+        let filtered = filter_custom_prop_scan(
+            &facts,
+            component_props,
+            member_expr_bindings,
+            &WrapperProxies::default(),
+        );
         assert_eq!(
             format!("{:?}", direct.static_usages),
             format!("{:?}", filtered.static_usages),
@@ -1424,6 +1781,7 @@ mod tests {
             &FxHashMap::default(),
             component_configs,
             member_expr_bindings,
+            &WrapperProxies::default(),
         );
         assert_eq!(
             format!("{:?}", direct.system_prop_usages),
@@ -1472,6 +1830,7 @@ mod tests {
             &FxHashMap::default(),
             &configs(&[]),
             &FxHashMap::default(),
+            &WrapperProxies::default(),
         )
     }
 
@@ -1721,6 +2080,7 @@ mod tests {
                 &FxHashMap::default(),
                 &FxHashMap::default(),
                 &FxHashMap::default(),
+                &WrapperProxies::default(),
             );
             let direct = scan_jsx_usage(
                 ast.program(),
@@ -1755,6 +2115,7 @@ mod tests {
                 &FxHashMap::default(),
                 &FxHashMap::default(),
                 &FxHashMap::default(),
+                &WrapperProxies::default(),
             );
             assert!(
                 filtered.identity_uncertain,
@@ -1786,6 +2147,7 @@ mod tests {
             &FxHashMap::default(),
             &skel,
             &FxHashMap::default(),
+            &WrapperProxies::default(),
         );
         let mut variants: Vec<_> = result
             .variant_usages

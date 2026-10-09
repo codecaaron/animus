@@ -1597,6 +1597,85 @@ fn resolve_identity(
     by_bare_name(local)
 }
 
+/// Each spread wrapper of `file` its renders can stand in for, with the
+/// components its forwarding elements reach (through same-module wrapper
+/// chains too), and what the filters need to proxy them. A wrapper that
+/// forwards to a component-like tag that resolves to nothing, or that sits in
+/// a cycle, is left out: its elements stay open and its renders stay
+/// uncertain.
+fn spread_wrapper_targets(
+    file: &str,
+    ff: &FileFacts,
+    files: &BTreeMap<String, FileFacts>,
+    inputs: &CssInputs,
+    evaluated_ids: &FxHashSet<String>,
+) -> (
+    Vec<(String, Vec<String>)>,
+    crate::usage_facts::WrapperProxies,
+) {
+    type Reach = Option<(std::collections::BTreeSet<String>, FxHashSet<String>)>;
+    fn reach(
+        name: &str,
+        file: &str,
+        ff: &FileFacts,
+        files: &BTreeMap<String, FileFacts>,
+        inputs: &CssInputs,
+        evaluated_ids: &FxHashSet<String>,
+        memo: &mut FxHashMap<String, Option<Reach>>,
+    ) -> Reach {
+        match memo.get(name) {
+            Some(Some(done)) => return done.clone(),
+            // Revisited before it resolved: a cycle.
+            Some(None) => return None,
+            None => {}
+        }
+        memo.insert(name.to_string(), None);
+        let wrapper = ff.spread_wrappers.get(name)?;
+        let mut targets = std::collections::BTreeSet::new();
+        let mut named: FxHashSet<String> = wrapper.named.iter().cloned().collect();
+        let mut complete = true;
+        for (_, tag) in &wrapper.forwarding {
+            if ff.spread_wrappers.contains_key(tag) {
+                match reach(tag, file, ff, files, inputs, evaluated_ids, memo) {
+                    Some((inner, inner_named)) => {
+                        targets.extend(inner);
+                        named.extend(inner_named);
+                    }
+                    None => complete = false,
+                }
+                continue;
+            }
+            let ids = resolve_declared_identity(file, tag, files, inputs, evaluated_ids);
+            // A member tag, or a component-like name, that resolves to
+            // nothing renders something unseen.
+            if ids.is_empty()
+                && (tag.contains('.') || crate::jsx_scan::is_component_like_identifier(tag))
+            {
+                complete = false;
+            }
+            targets.extend(ids);
+        }
+        let result = (complete && !targets.is_empty()).then_some((targets, named));
+        memo.insert(name.to_string(), Some(result.clone()));
+        result
+    }
+    let mut memo = FxHashMap::default();
+    let mut published = Vec::new();
+    let mut proxies = crate::usage_facts::WrapperProxies::default();
+    for (name, wrapper) in &ff.spread_wrappers {
+        let Some((targets, named)) = reach(name, file, ff, files, inputs, evaluated_ids, &mut memo)
+        else {
+            continue;
+        };
+        published.push((name.clone(), targets.into_iter().collect()));
+        proxies.named.insert(name.clone(), named);
+        proxies
+            .forwarding
+            .extend(wrapper.forwarding.iter().map(|(span, _)| *span));
+    }
+    (published, proxies)
+}
+
 /// One warning per tag and prop set for a capitalised tag that `file` imports
 /// from an analyzed module and that resolves to no extracted component,
 /// naming only the system props the component it reaches takes and really
@@ -1840,7 +1919,7 @@ fn confined_uses(
         }
         let mut confined = ConfinedUse::default();
         for fact in &ff.usage {
-            let UsageFact::Element { tag: TagFact::Ident(tag), attrs, spread } = fact else {
+            let UsageFact::Element { tag: TagFact::Ident(tag), attrs, spread, .. } = fact else {
                 continue;
             };
             if tag != binding {
@@ -3121,6 +3200,14 @@ fn run_with_system_floor(
                 .get_or_insert_with(|| global_lookup.clone())
                 .publish(alias, &ids, &usage_sources);
         }
+        // A spread wrapper's renders stand in for its targets' renders.
+        let (wrapper_targets, proxies) =
+            spread_wrapper_targets(path, ff, files, inputs, &evaluated_ids);
+        for (wrapper, ids) in &wrapper_targets {
+            file_lookup
+                .get_or_insert_with(|| global_lookup.clone())
+                .publish(wrapper, ids, &usage_sources);
+        }
         let takes_system_prop = |file: &str, name: &str, prop: &str| {
             resolve_declared_identity(file, name, files, inputs, &evaluated_ids)
                 .iter()
@@ -3142,6 +3229,7 @@ fn run_with_system_floor(
             &lookup.custom_props,
             &lookup.configs,
             member_expr_bindings,
+            &proxies,
         );
         identity_policy.attribute_result(&mut usage_result, &lookup.attribution);
 
@@ -3174,11 +3262,13 @@ fn run_with_system_floor(
                 ff.usage_for_analysis(),
                 &lookup.custom_props,
                 member_expr_bindings,
+                &proxies,
             );
             let mut uncertain_renders = crate::usage_facts::uncertain_custom_renders(
                 ff.usage_for_analysis(),
                 &lookup.custom_props,
                 member_expr_bindings,
+                &proxies,
             );
             identity_policy
                 .attribute_dynamic_usages(&mut custom_scan.dynamic_usages, &lookup.attribution);
@@ -6690,6 +6780,147 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
                 "{recipe}"
             );
         }
+    }
+
+    const WRAPPED: &str = "export const R = ds.styles({})\n\
+        .variant({ prop: 'size', defaultVariant: 'md', variants: { sm: { padding: '1px' }, md: { padding: '2px' }, lg: { padding: '3px' } } })\n\
+        .states({ active: { display: 'flex' }, busy: { display: 'grid' } })\n\
+        .props({ tint: { property: 'color' } })\n\
+        .asElement('div');\n\
+        export const S = ds.styles({})\n\
+        .variant({ prop: 'tone', defaultVariant: 'a', variants: { a: { padding: '4px' }, b: { padding: '5px' } } })\n\
+        .asElement('span');\n";
+
+    /// `R`'s kept sizes and states, and `S`'s kept tones, for an `app.tsx`
+    /// that imports both from `r.tsx`.
+    fn wrapper_kept(app: &str) -> (Vec<&'static str>, Vec<&'static str>, Vec<&'static str>) {
+        let source = format!("import {{ R, S }} from './r';\n{app}\n");
+        let out = analyze(&[("r.tsx", WRAPPED), ("app.tsx", source.as_str())], &test_inputs());
+        let r = class_of(&out, "r.tsx::R");
+        let s = class_of(&out, "r.tsx::S");
+        let has = |class: &str| out.css.contains(class);
+        (
+            ["sm", "md", "lg"].into_iter().filter(|o| has(&format!(".{r}--size-{o}"))).collect(),
+            ["active", "busy"].into_iter().filter(|o| has(&format!(".{r}--{o}"))).collect(),
+            ["a", "b"].into_iter().filter(|o| has(&format!(".{s}--tone-{o}"))).collect(),
+        )
+    }
+
+    /// A same-module wrapper that forwards its props by spread stands in for
+    /// its target: its renders count as the target's, so options reached
+    /// only through it prune.
+    #[test]
+    fn same_module_spread_wrappers_prune_through_their_renders() {
+        for (app, sizes, states) in [
+            (
+                "const Button = (props) => <R {...props} />;\nexport const App = () => <><Button size=\"sm\" active /><Button /></>;",
+                vec!["sm", "md"],
+                vec!["active"],
+            ),
+            (
+                "const Button = ({ size, ...rest }) => <R {...rest} />;\nexport const App = () => <Button size=\"lg\" active />;",
+                vec!["md"],
+                vec!["active"],
+            ),
+            (
+                "import { forwardRef, memo } from 'react';\n\
+                 const Button = memo(forwardRef((props, ref) => <R ref={ref} {...props} />));\n\
+                 export const App = () => <Button size=\"sm\" active />;",
+                vec!["sm"],
+                vec!["active"],
+            ),
+            (
+                "const Inner = (p) => <R {...p} />;\nconst Outer = (p) => <Inner {...p} />;\n\
+                 export const App = () => <Outer size=\"sm\" active />;",
+                vec!["sm"],
+                vec!["active"],
+            ),
+            (
+                "const Button = (props) => <R {...props} />;\nexport const App = () => <R size=\"sm\" active />;",
+                vec!["sm"],
+                vec!["active"],
+            ),
+        ] {
+            let (kept_sizes, kept_states, _) = wrapper_kept(app);
+            assert_eq!((kept_sizes, kept_states), (sizes, states), "{app}");
+        }
+        // Attributes the forwarding element writes itself still count.
+        let (sizes, _, _) = wrapper_kept(
+            "const Button = (props) => <R {...props} size=\"sm\" />;\nexport const App = () => <Button size=\"lg\" active />;",
+        );
+        assert!(sizes.contains(&"sm"), "{sizes:?}");
+        let (sizes, _, _) = wrapper_kept(
+            "const Button = (props) => <R size=\"lg\" {...props} />;\nexport const App = () => <Button active />;",
+        );
+        assert!(sizes.contains(&"lg") && sizes.contains(&"md"), "{sizes:?}");
+        // One render reaches every forwarding element.
+        let (sizes, _, tones) = wrapper_kept(
+            "const Button = (props) => <><R {...props} /><S {...props} /></>;\n\
+             export const App = () => <Button size=\"sm\" tone=\"b\" active />;",
+        );
+        assert_eq!((sizes, tones), (vec!["sm"], vec!["b"]));
+    }
+
+    /// A custom prop passed only through a wrapper keeps its class, or its
+    /// runtime slot for a runtime value.
+    #[test]
+    fn custom_props_reach_their_target_through_a_spread_wrapper() {
+        let wrapper = "const Button = (props) => <R {...props} />;\n";
+        for (render, expected) in [
+            ("<Button tint=\"red\" />", r#""customPropMap":{"tint":{"red":"#),
+            ("<Button tint={pick()} />", r#""customDynamicConfig":{"tint":"#),
+        ] {
+            let source = format!("import {{ R }} from './r';\n{wrapper}export const App = () => {render};\n");
+            let out = analyze(&[("r.tsx", WRAPPED), ("app.tsx", source.as_str())], &test_inputs());
+            let replacement = &out.components["r.tsx::R"].replacement;
+            assert!(replacement.contains(expected), "{render}: {replacement}");
+        }
+    }
+
+    /// Every shape the analysis cannot prove keeps today's fully open
+    /// result for `<Button size="sm" active />`.
+    #[test]
+    fn spread_wrappers_that_give_up_keep_every_option() {
+        for wrapper in [
+            "const Button = (props) => items.map((props) => <R {...props} />);",
+            "const Button = (props) => { props = { ...props, size: 'lg' }; return <R {...props} />; };",
+            "const Button = ({ size, ...rest }) => { rest.size = 'lg'; return <R {...rest} />; };",
+            "const Button = ({ size, ...rest }) => { delete rest.size; return <R {...rest} />; };",
+            "const Button = ({ size, ...rest }) => { Object.assign(rest, extra); return <R {...rest} />; };",
+            "const Button = (props) => { log(props); return <R {...props} />; };",
+            "const Button = (props) => { const p = props; return <R {...p} />; };",
+            "const Button = (props) => { const { size, ...r } = props; return <R {...r} />; };",
+            "const Button = (props) => { props.render(); return <R {...props} />; };",
+            "const memo = (f) => f;\nconst Button = memo((props) => <R {...props} />);",
+            "const Button = observer((props) => <R {...props} />);",
+            "const Button = (props) => <R {...props} />;\nexport const Slotted = () => <Slot as={Button} />;",
+            "const Button = (props) => <R {...props} />;\nexport const picked = pick(Button);",
+            "const Button = (props) => <R {...props} />;\nButton.defaultProps = { size: 'lg' };",
+            "const Button = (props) => <R {...props} />;\nexport const made = createElement(Button, extra);",
+            "const Button = (props) => <R {...props} />;\nexport const called = Button({});",
+            "export const Button = (props) => <R {...props} />;",
+            "let Button = (props) => <R {...props} />;\nButton = Other;",
+            "const Button = (props) => <R {...(flag ? props : {})} />;",
+            "const Button = (props) => <R {...defaults} {...props} />;",
+            "const Button = ({ [key]: _, ...rest }) => <R {...rest} />;",
+            "const Button = (props = { size: 'lg' }) => <R {...props} />;",
+            "const Button = (props) => <R {...props} />;\neval('');",
+        ] {
+            let app = format!("{wrapper}\nexport const App = () => <Button size=\"sm\" active />;");
+            let (sizes, states, _) = wrapper_kept(&app);
+            assert_eq!((sizes, states), (vec!["sm", "md", "lg"], vec!["active", "busy"]), "{wrapper}");
+        }
+        // A spread at the render opens the target.
+        let (sizes, _, _) = wrapper_kept(
+            "const Button = (props) => <R {...props} />;\nexport const App = () => <><R size=\"sm\" /><Button {...extra} /></>;",
+        );
+        assert_eq!(sizes, vec!["sm", "md", "lg"]);
+        // Mutually recursive wrappers terminate and leave R's direct render as it was.
+        let (sizes, _, _) = wrapper_kept(
+            "const A = (p) => <B {...p} />;\nconst B = (p) => <A {...p} />;\n\
+             export const App = () => <><A size=\"lg\" /><R size=\"sm\" active /></>;",
+        );
+        assert!(sizes.contains(&"sm"), "{sizes:?}");
     }
 
     fn analyze_with_logical_space(entries: &[(&str, &str)]) -> CssOutput {

@@ -5,6 +5,17 @@ See [Conventional Commits](https://conventionalcommits.org) for commit guideline
 
 ## Unreleased
 
+**Same-module wrapper components no longer keep every option.** A
+component such as `const Fancy = (props) => <Button {...props} />`, or
+`({ tone, ...rest }) => <Button {...rest} />`, declared at the top of a module
+and used only as a JSX tag there, now counts its renders for the component it
+forwards to: `<Fancy size="lg" />` keeps exactly `lg` for `Button` in
+production builds, and `<Fancy p={8} />` gets `Button`'s static utility class.
+A function declaration and `forwardRef` or `memo` imported from `react` are
+recognised too. A wrapper that is exported, passed as a value, reads its props
+any way other than `props.name`, or spreads them more than once still keeps
+every option of what it renders, as before.
+
 **Variant CSS is no longer dropped for components passed as values.**
 Production builds keep only the variant and state options a component's
 JSX renders write. A component that also reached JSX another way lost the

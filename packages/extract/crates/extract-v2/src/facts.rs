@@ -297,6 +297,10 @@ pub struct FileFacts {
     /// call, a prop, an object or an array, or default-exported.
     #[serde(skip)]
     pub(crate) value_escapes: BTreeSet<String>,
+    /// Module-scope function components whose renders stand in for the
+    /// components they spread their props into.
+    #[serde(skip)]
+    pub(crate) spread_wrappers: BTreeMap<String, crate::usage_facts::SpreadWrapper>,
     /// Extracted createTransform() declarations: serialized with the facts
     /// for probes, and the source of their bail diagnostics. They are never
     /// registered with the evaluator.
@@ -961,7 +965,12 @@ pub(crate) fn extract_file_facts_from_static_maps(
     let exports = crate::usage_facts::collect_export_facts(program);
     let descriptors: Vec<&ChainDescriptor> = chains.iter().map(|chain| &chain.descriptor).collect();
     let usage = crate::usage_facts::collect_usage_facts(program);
-    let (usage_enriched, confined_components, value_escapes) = crate::usage_facts::collect_enriched_usage(
+    let crate::usage_facts::EnrichedUsage {
+        usage: usage_enriched,
+        confined: confined_components,
+        escapes: value_escapes,
+        spread_wrappers,
+    } = crate::usage_facts::collect_enriched_usage(
         program,
         &usage_statics_fx,
         &descriptors,
@@ -1006,6 +1015,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
         captured_transform_bindings,
         confined_components,
         value_escapes,
+        spread_wrappers,
         parse_diagnostics: ast.diagnostics.clone(),
         parse_panicked: ast.panicked,
     }
