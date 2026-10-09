@@ -115,6 +115,15 @@ export const SKIPPED_SOURCE_COST =
  * A configured source file that could not be read is a LOST INPUT: the
  * emitted artifacts silently lack whatever that file declared.
  */
+/** Whether a failed source read means the file was deleted after discovery
+ *  (an editor's delete-and-recreate, a branch switch): a deletion, not lost
+ *  input. */
+export function isDeletedSource<Thrown>(error: Thrown): boolean {
+  // SAFETY: `error` is a failed read's throw; `?.code` reads through whatever
+  // it is and only `ENOENT` is acted on.
+  return (error as NodeJS.ErrnoException)?.code === 'ENOENT';
+}
+
 export function unreadableSourceDiagnostic<Thrown>(
   relPath: string,
   error: Thrown

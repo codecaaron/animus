@@ -168,6 +168,7 @@ export {
   INVALID_PROPERTY_REGISTRATION,
   isUnresolvedParentDrop,
   surfaceManifestDiagnostics,
+  isDeletedSource,
   unreadableSourceDiagnostic,
   unresolvedParentName,
   VOCABULARY_COLLISION,

@@ -750,7 +750,7 @@ export function createSourceIngestor(host: SourceIngestorHost): SourceIngestor {
       if (host.strict() && fatal.length > 0) {
         const lines = fatal.map(
           (diagnostic) =>
-            `${diagnostic.code} ${diagnostic.originalPath}: ${diagnostic.message}`
+            `${diagnostic.code} ${diagnostic.originalPath}: ${diagnostic.message} (${SKIPPED_SOURCE_COST})`
         );
         throw new Error(`${host.prefix} ${lines.join(`\n${host.prefix} `)}`);
       }

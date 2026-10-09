@@ -8,6 +8,7 @@ import {
   discoverFiles,
   extractSystemFilePackages,
   firstOwners,
+  isDeletedSource,
   unreadableSourceDiagnostic,
   validateLayerOrder,
 } from '@animus-ui/extract/pipeline';
@@ -82,7 +83,9 @@ export async function runBuildStart(
     try {
       source = readFileSync(filePath, 'utf-8');
     } catch (err) {
-      ingestionFailures.push(unreadableSourceDiagnostic(relPath, err));
+      if (!isDeletedSource(err)) {
+        ingestionFailures.push(unreadableSourceDiagnostic(relPath, err));
+      }
       continue;
     }
     const hash = !ctx.isProd ? contentHash(source) : undefined;
@@ -101,8 +104,11 @@ export async function runBuildStart(
     rootDir: ctx.rootDir,
     extensionsSet: ctx.extensionsSet,
     hasEntry: (relPath) => rawEntries.some((entry) => entry.path === relPath),
-    onUnreadable: (relPath, err) =>
-      ingestionFailures.push(unreadableSourceDiagnostic(relPath, err)),
+    onUnreadable: (relPath, err) => {
+      if (!isDeletedSource(err)) {
+        ingestionFailures.push(unreadableSourceDiagnostic(relPath, err));
+      }
+    },
   });
   ctx.ingestionFailureDiagnostics = ingestionFailures;
 
@@ -196,7 +202,9 @@ export async function runBuildStart(
     for (const d of report.eliminated_details) {
       if (d.kind === 'component') {
         ctx.warn(`⚠ ${d.component} eliminated: ${d.reason}`);
-      } else if (d.kind === 'prospective_component') {
+      } else if (d.kind === 'prospective_component' && !ctx.emissionProd) {
+        // A production build reports prospective entries only while a skipped
+        // source holds pruning off, so this build keeps the component.
         ctx.warn(
           `⚠ ${d.component} would be eliminated in production: ${d.reason}`
         );

@@ -49,6 +49,7 @@ import {
   reportSurvivingAssetPlaceholders,
   substituteSheetAssets,
   toWatchKeys,
+  isDeletedSource,
   unreadableSourceDiagnostic,
   unresolvableIncludesMessage,
   walkPackageSources,
@@ -350,6 +351,14 @@ export class ExtractionSession {
     this.staticCssJson = serializeStaticCss(options.staticCss);
   }
 
+  /** Forgets that `relPath` could not be read once an incremental pass reads
+   *  or deletes it, so its cost stops holding pruning off. */
+  private clearIngestionFailure(relPath: string): void {
+    this.ingestionFailureDiagnostics = this.ingestionFailureDiagnostics.filter(
+      (diagnostic) => diagnostic.file !== relPath
+    );
+  }
+
   get sessionDir(): string {
     return sessionArtifactDir(this.rootDir!, this.sessionId);
   }
@@ -627,6 +636,7 @@ export class ExtractionSession {
           owningRoot = resolved.owningRoot;
         }
         recordPrior(key);
+        this.clearIngestionFailure(key);
         if (this.fileCache.delete(key)) {
           removedAny = true;
           if (owningRoot) {
@@ -673,6 +683,8 @@ export class ExtractionSession {
         // read — it will surface in removedFiles on the next watch cycle.
         continue;
       }
+      // A file read now no longer costs the analysis its renders.
+      this.clearIngestionFailure(relPath);
       // Raw bytes hash — the inventory's diff basis for external files.
       const rawHash = contentHash(source);
 
@@ -920,7 +932,9 @@ export class ExtractionSession {
       try {
         source = readFileSync(filePath, 'utf-8');
       } catch (err) {
-        ingestionFailures.push(unreadableSourceDiagnostic(relPath, err));
+        if (!isDeletedSource(err)) {
+          ingestionFailures.push(unreadableSourceDiagnostic(relPath, err));
+        }
         continue;
       }
       rawEntries.push({ path: relPath, source, hash: contentHash(source) });
@@ -948,8 +962,11 @@ export class ExtractionSession {
       onSourceRead: (source, _relPath, absPath) => {
         rawExternalFiles.set(absPath, contentHash(source));
       },
-      onUnreadable: (relPath, err) =>
-        ingestionFailures.push(unreadableSourceDiagnostic(relPath, err)),
+      onUnreadable: (relPath, err) => {
+        if (!isDeletedSource(err)) {
+          ingestionFailures.push(unreadableSourceDiagnostic(relPath, err));
+        }
+      },
       onPackageResolved: (_specifier, packageDir) => {
         if (!this.onExternalRootResolved) return;
         // The cross-volume gate runs after collection, so the predicate also

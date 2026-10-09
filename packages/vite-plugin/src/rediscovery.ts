@@ -2,8 +2,10 @@ import {
   contentHash,
   discoverFiles,
   isPathWithinRoot,
+  isDeletedSource,
   isUnresolvedParentDrop,
   resolveAbsolutePathSpecifier,
+  unreadableSourceDiagnostic,
   unresolvedParentName,
 } from '@animus-ui/extract/pipeline';
 import { readFileSync } from 'fs';
@@ -70,6 +72,7 @@ export async function reconcileSourceCorpus(
     if (unresolvedDropFiles(ctx).size === 0) {
       // Drops resolved — future occurrences of the same conditions warn anew.
       warnedVerdicts.get(ctx)?.clear();
+      warnedUnreadable.get(ctx)?.clear();
       return reanalyzed;
     }
     const drops = unresolvedParentDrops(ctx);
@@ -158,7 +161,19 @@ function foldUndiscoveredFiles(ctx: PluginContext): string[] {
     let source: string;
     try {
       source = readFileSync(filePath, 'utf-8');
-    } catch {
+    } catch (err) {
+      // A late file that vanished is a deletion; one that cannot be read is
+      // lost input the build should hear about.
+      let warned = warnedUnreadable.get(ctx);
+      if (!warned) {
+        warned = new Set();
+        warnedUnreadable.set(ctx, warned);
+      }
+      if (!isDeletedSource(err) && !warned.has(relPath)) {
+        warned.add(relPath);
+        const diagnostic = unreadableSourceDiagnostic(relPath, err);
+        ctx.warn(`${diagnostic.code} ${diagnostic.message}`);
+      }
       continue;
     }
     pending.push([relPath, { hash: contentHash(source), source }]);
@@ -184,6 +199,10 @@ const barrenWalkMemos = new WeakMap<
 /** Per-context (file, parent, condition) verdicts already warned — each
  *  condition warns once; cleared when the drops disappear. */
 const warnedVerdicts = new WeakMap<object, Set<string>>();
+
+/** Late files already reported unreadable, until the drops resolve: the
+ *  bounded retries walk them again. */
+const warnedUnreadable = new WeakMap<object, Set<string>>();
 
 const PARENT_PROBE_EXTENSIONS: ReadonlySet<string> = new Set([
   '.tsx',
