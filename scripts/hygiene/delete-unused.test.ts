@@ -23,8 +23,8 @@ import {
   classifyUnusedVar,
   decodeKnipReport,
   decodeOxlintReport,
-} from './_tool-reports.ts';
-import { applyDeletions } from './delete-unused.ts';
+} from './_tool-reports';
+import { applyDeletions } from './delete-unused';
 
 import type { JsonObject } from '@animus-ui/assertions';
 

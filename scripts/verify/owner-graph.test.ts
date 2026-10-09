@@ -521,7 +521,7 @@ fi
         expect(scripts['verify:dry-run'], owner.manifest.name).toBeUndefined();
       }
       // These owners build a prefixed variant (prefixed-variant/).
-      if (PREFIXED_OWNERS.includes(owner.manifest.name)) {
+      if (PREFIXED_OWNERS.some((name) => name === owner.manifest.name)) {
         expect(scripts['verify:prefixed'], owner.manifest.name).toBeDefined();
       }
 
