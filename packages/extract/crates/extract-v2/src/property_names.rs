@@ -8,6 +8,8 @@ use std::borrow::Cow;
 use rustc_hash::FxHashMap;
 use serde::{Deserialize, Deserializer};
 
+use crate::css_tokens::{identifier_at, tokenize, Kind};
+
 /// A declared contextual variable: the name authors write and the name it
 /// emits, both without `--`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -110,15 +112,21 @@ impl ContextualVarsMap {
     }
 
     /// The custom property an authored `--name` emits: a declared contextual
-    /// variable takes its final name; anything else passes through.
+    /// variable takes its final name; anything else passes through. The name
+    /// is read as one CSS identifier, escapes decoded.
     pub fn emitted_property<'a>(&self, property: &'a str) -> Cow<'a, str> {
-        let Some(name) = property.strip_prefix("--") else {
+        // A custom-property name starts with `-` or with an escape.
+        if !property.starts_with(['-', '\\']) {
             return Cow::Borrowed(property);
-        };
-        let (end, decoded) = read_name(name, 0);
-        match (end == name.len()).then(|| self.final_of(&decoded)).flatten() {
-            Some(final_name) => Cow::Owned(format!("--{final_name}")),
-            None => Cow::Borrowed(property),
+        }
+        match identifier_at(property, 0) {
+            Some((name, end)) if end == property.len() => {
+                match name.strip_prefix("--").and_then(|name| self.final_of(name)) {
+                    Some(final_name) => Cow::Owned(format!("--{final_name}")),
+                    None => Cow::Borrowed(property),
+                }
+            }
+            _ => Cow::Borrowed(property),
         }
     }
 
@@ -129,126 +137,36 @@ impl ContextualVarsMap {
 
     /// Gives every custom-property token in authored CSS that names a declared
     /// contextual variable its final name: `var()` reads at any depth,
-    /// fallbacks included, transition lists and style queries. A name is read
-    /// whole, escapes decoded, so an undeclared name that starts with a
-    /// declared one is never renamed in part. Quoted strings, `url()` and
-    /// comments are copied unchanged.
+    /// fallbacks included, transition lists and style queries. Names are read
+    /// through the CSS tokenizer, whole and with escapes decoded, escaped
+    /// leading dashes included, so an undeclared identifier that contains or
+    /// starts with a declared name is never renamed in part. Quoted strings,
+    /// `url()` and comments are copied unchanged.
     pub fn rename_authored<'a>(&self, css: &'a str) -> Cow<'a, str> {
-        if !self.renames() || !css.contains("--") {
+        // A custom-property name is spelled with `--` or with an escape.
+        if !self.renames() || !(css.contains("--") || css.contains('\\')) {
             return Cow::Borrowed(css);
         }
-        let bytes = css.as_bytes();
-        let mut out = String::with_capacity(css.len());
-        let mut i = 0;
-        while i < bytes.len() {
-            let c = bytes[i];
-            let end = if c == b'"' || c == b'\'' {
-                closing_quote(bytes, i)
-            } else if css[i..].starts_with("/*") {
-                css[i + 2..].find("*/").map_or(bytes.len(), |at| i + 2 + at + 2)
-            } else if is_url_open(css, i) {
-                closing_url(bytes, i + 4)
-            } else if css[i..].starts_with("--") && !continues_name(bytes, i) {
-                let (end, name) = read_name(css, i + 2);
-                match self.final_of(&name) {
-                    Some(final_name) => {
-                        out.push_str("--");
-                        out.push_str(final_name);
-                    }
-                    None => out.push_str(&css[i..end]),
-                }
-                i = end;
+        let mut out = String::new();
+        let mut copied = 0;
+        for token in tokenize(css) {
+            if token.kind != Kind::Ident {
                 continue;
-            } else {
-                let width = css[i..].chars().next().map_or(1, char::len_utf8);
-                i + width
+            }
+            let Some(final_name) = token.value.strip_prefix("--").and_then(|name| self.final_of(name)) else {
+                continue;
             };
-            out.push_str(&css[i..end]);
-            i = end;
+            out.push_str(&css[copied..token.start]);
+            out.push_str("--");
+            out.push_str(final_name);
+            copied = token.end;
         }
+        if copied == 0 {
+            return Cow::Borrowed(css);
+        }
+        out.push_str(&css[copied..]);
         Cow::Owned(out)
     }
-}
-
-fn is_name_byte(byte: Option<u8>) -> bool {
-    matches!(byte, Some(b) if b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
-}
-
-/// Whether the byte before `at` belongs to a name: a name byte, or part of a
-/// non-ASCII code point.
-fn continues_name(bytes: &[u8], at: usize) -> bool {
-    at.checked_sub(1).is_some_and(|before| is_name_byte(Some(bytes[before])) || bytes[before] >= 0x80)
-}
-
-/// The name starting at `from`, read as CSS tokenizes an identifier: ASCII
-/// letters, digits, `-` and `_`, every non-ASCII code point, and escapes.
-/// Returns the index after it and the name with its escapes decoded.
-fn read_name(css: &str, from: usize) -> (usize, Cow<'_, str>) {
-    let bytes = css.as_bytes();
-    let mut end = from;
-    let mut decoded: Option<String> = None;
-    while end < bytes.len() {
-        if is_name_byte(Some(bytes[end])) || bytes[end] >= 0x80 {
-            let width = css[end..].chars().next().map_or(1, char::len_utf8);
-            if let Some(name) = decoded.as_mut() {
-                name.push_str(&css[end..end + width]);
-            }
-            end += width;
-        } else if let Some((code_point, width)) = escape_at(css, end) {
-            decoded.get_or_insert_with(|| css[from..end].to_string()).push(code_point);
-            end += width;
-        } else {
-            break;
-        }
-    }
-    (end, decoded.map_or(Cow::Borrowed(&css[from..end]), Cow::Owned))
-}
-
-/// The code point a valid escape at `at` stands for, and the escape's length:
-/// up to six hex digits and one following whitespace, or any other code point
-/// but a newline.
-fn escape_at(css: &str, at: usize) -> Option<(char, usize)> {
-    let rest = css.get(at..)?.strip_prefix('\\')?;
-    let first = rest.chars().next()?;
-    if matches!(first, '\n' | '\r' | '\x0c') {
-        return None;
-    }
-    let digits = rest.bytes().take(6).take_while(u8::is_ascii_hexdigit).count();
-    if digits == 0 {
-        return Some((first, 1 + first.len_utf8()));
-    }
-    let after = &rest[digits..];
-    let space = if after.starts_with("\r\n") {
-        2
-    } else {
-        usize::from(after.starts_with([' ', '\t', '\n', '\r', '\x0c']))
-    };
-    let value = u32::from_str_radix(&rest[..digits], 16).ok()?;
-    let code_point = if value == 0 { '\u{FFFD}' } else { char::from_u32(value).unwrap_or('\u{FFFD}') };
-    Some((code_point, 1 + digits + space))
-}
-
-fn is_url_open(css: &str, at: usize) -> bool {
-    css.get(at..at + 4).is_some_and(|head| head.eq_ignore_ascii_case("url("))
-        && !is_name_byte(at.checked_sub(1).map(|before| css.as_bytes()[before]))
-}
-
-fn closing_quote(bytes: &[u8], open: usize) -> usize {
-    let quote = bytes[open];
-    let mut i = open + 1;
-    while i < bytes.len() && bytes[i] != quote {
-        i += if bytes[i] == b'\\' { 2 } else { 1 };
-    }
-    (i + 1).min(bytes.len())
-}
-
-/// The index after the `)` that closes a `url(` whose body starts at `from`.
-fn closing_url(bytes: &[u8], from: usize) -> usize {
-    let mut i = from;
-    while i < bytes.len() && bytes[i] != b')' {
-        i = if bytes[i] == b'"' || bytes[i] == b'\'' { closing_quote(bytes, i) } else { i + 1 };
-    }
-    (i + 1).min(bytes.len())
 }
 
 #[cfg(test)]
@@ -321,10 +239,13 @@ mod tests {
         // with a declared one is left alone, and an escaped spelling of a
         // declared one is renamed.
         assert_eq!(
-            map.rename_authored(r"var(--tone\61) var(--toneé) é--tone var(--\74 one) var(--\74one) VaR(--Tone)"),
-            r"var(--tone\61) var(--toneé) é--tone var(--acme-tone) var(--acme-tone) VaR(--Tone)"
+            map.rename_authored(
+                r"var(--tone\61) var(--toneé) é--tone var(--\74 one) var(--\74one) VaR(--Tone) var(\2d\2d tone) var(-\2d tone) \!--tone"
+            ),
+            r"var(--tone\61) var(--toneé) é--tone var(--acme-tone) var(--acme-tone) VaR(--Tone) var(--acme-tone) var(--acme-tone) \!--tone"
         );
         assert_eq!(map.emitted_property(r"--\74 one"), "--acme-tone");
+        assert_eq!(map.emitted_property(r"\2d\2d tone"), "--acme-tone");
         assert_eq!(map.emitted_property("--toneé"), "--toneé");
     }
 

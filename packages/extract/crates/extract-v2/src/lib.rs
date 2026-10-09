@@ -38,6 +38,7 @@ pub mod jsx_scan;
 pub mod usage_facts;
 pub mod chain_walk;
 pub mod css;
+pub(crate) mod css_tokens;
 pub mod cross_file;
 pub mod declarations;
 pub mod dynamic_meta;

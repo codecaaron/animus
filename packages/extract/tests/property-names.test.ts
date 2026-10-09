@@ -43,14 +43,16 @@ describe('one final name per managed property', () => {
       "background: url(var(--tone).png); quotes: 'var(--gap)'; }";
     expect(renameCustomProperties(css, names)).toBe(css);
     // A name is read whole, escapes decoded: an undeclared name that starts
-    // with a managed one stays as written; an escaped managed one is renamed.
+    // with a managed one stays as written; an escaped managed one is renamed,
+    // escaped leading dashes included, and an identifier that starts with an
+    // escape is not a custom property.
     expect(
       renameCustomProperties(
-        String.raw`a { b: var(--tone\61) var(--toneé) é--tone var(--\74 one) VaR(--Tone) }`,
+        String.raw`a { b: var(--tone\61) var(--toneé) é--tone var(--\74 one) VaR(--Tone) var(\2d\2d tone) var(-\2d tone) \!--tone }`,
         names
       )
     ).toBe(
-      String.raw`a { b: var(--tone\61) var(--toneé) é--tone var(--acme-tone) VaR(--Tone) }`
+      String.raw`a { b: var(--tone\61) var(--toneé) é--tone var(--acme-tone) VaR(--Tone) var(--acme-tone) var(--acme-tone) \!--tone }`
     );
   });
 

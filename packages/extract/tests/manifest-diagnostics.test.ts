@@ -218,6 +218,12 @@ describe('invalid @property registrations', () => {
     '@property --fade { syntax: "<image>"; inherits: true; initial-value: linear-gradient(red 1em, blue); }',
     '@property --sub { syntax: "*"; inherits: false; initial-value: var(--foreign); }',
     '@property --ratio { syntax: "<number>"; inherits: false; initial-value: calc(1px / 1px); }',
+    '@property --round { syntax: "<integer> | <number>"; inherits: false; initial-value: calc(7 / 2); }',
+    '@property --spacing { syntax: "<length>"; inherits: false; initial-value: calc(1px+ 2px); }',
+    '@property --note { syntax: "*"; inherits: false; initial-value: /* var(--other) */ ok; }',
+    '@property --link { syntax: "*"; inherits: false; initial-value: url("var(--other)"); }',
+    String.raw`@property --hidden { syntax: "*"; inherits: false; initial-value: v\61 r(--other); }`,
+    '@property --café { syntax: "<length>"; inherits: true; initial-value: 1em; }',
   ].join('\n');
 
   function load(prefix?: string) {
@@ -242,10 +248,17 @@ describe('invalid @property registrations', () => {
     expect(system.variableCss).toContain('@property --vw');
     expect(system.variableCss).toContain('@property --label');
     expect(system.variableCss).toContain('@property --art');
-    // An all-absolute math initial value is kept as its computed value.
+    // An all-absolute math initial value is kept as its computed value, by
+    // the first syntax alternative that accepts it, rounded for <integer>.
     expect(system.variableCss).toContain(
       '@property --ratio { syntax: "<number>"; inherits: false; initial-value: 1; }'
     );
+    expect(system.variableCss).toContain(
+      '@property --round { syntax: "<integer> | <number>"; inherits: false; initial-value: 4; }'
+    );
+    // Comments and quoted url() text substitute nothing.
+    expect(system.variableCss).toContain('@property --note');
+    expect(system.variableCss).toContain('@property --link');
     const reasons = Object.fromEntries(
       (system.invalidPropertyRegistrations ?? []).map((r) => [r.name, r.reason])
     );
@@ -257,6 +270,9 @@ describe('invalid @property registrations', () => {
       '--typo',
       '--fade',
       '--sub',
+      '--spacing',
+      '--hidden',
+      '--café',
     ]);
     for (const name of Object.keys(reasons)) {
       expect(system.variableCss).not.toContain(`@property ${name} `);
@@ -270,6 +286,10 @@ describe('invalid @property registrations', () => {
     expect(reasons['--sub']).toMatch(
       /^initialValue "var\(--foreign\)" substitutes/
     );
+    expect(reasons['--spacing']).toMatch(
+      /is not a valid calculation: "\+" and "-" need whitespace on both sides$/
+    );
+    expect(reasons['--hidden']).toMatch(/substitutes another value/);
   });
 
   it('passes the property records through with their authored names', () => {
@@ -303,9 +323,18 @@ describe('invalid @property registrations', () => {
   it('becomes one strict-failing diagnostic per dropped rule', () => {
     const diagnostics = systemLoadDiagnostics(load());
     expect(diagnostics.map((d) => [d.component, d.code, d.severity])).toEqual(
-      ['--cap', '--tint', '--gap', '--em', '--typo', '--fade', '--sub'].map(
-        (name) => [name, INVALID_PROPERTY_REGISTRATION, 'error']
-      )
+      [
+        '--cap',
+        '--tint',
+        '--gap',
+        '--em',
+        '--typo',
+        '--fade',
+        '--sub',
+        '--spacing',
+        '--hidden',
+        '--café',
+      ].map((name) => [name, INVALID_PROPERTY_REGISTRATION, 'error'])
     );
     expect(
       systemLoadDiagnostics({ invalidPropertyRegistrations: undefined })
@@ -339,9 +368,9 @@ describe('invalid @property registrations', () => {
       return warned.filter((m) => m.includes(INVALID_PROPERTY_REGISTRATION));
     };
     const system = load();
-    expect(analyze(system)).toHaveLength(7);
+    expect(analyze(system)).toHaveLength(10);
     expect(analyze(system)).toHaveLength(0);
-    expect(analyze(load())).toHaveLength(7);
+    expect(analyze(load())).toHaveLength(10);
     const strictSystem = load();
     expect(() => analyze(strictSystem, true)).toThrow(
       INVALID_PROPERTY_REGISTRATION
@@ -381,6 +410,6 @@ describe('invalid @property registrations', () => {
     analyze(false, (message) => warned.push(message));
     expect(
       warned.filter((m) => m.includes(INVALID_PROPERTY_REGISTRATION))
-    ).toHaveLength(7);
+    ).toHaveLength(10);
   });
 });

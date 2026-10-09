@@ -63,7 +63,13 @@ export type DynamicPropConfig = Record<
   ValueDynamicPropConfig | DeclarationConfig
 >;
 
-import { isUnitlessProperty } from '@animus-ui/properties';
+import {
+  componentValues,
+  decodedIdentifier,
+  isUnitlessProperty,
+  tokenize,
+  variableReads,
+} from '@animus-ui/properties';
 
 import { IS_DEV } from './is-dev';
 import { recordWitness } from './witness';
@@ -204,6 +210,16 @@ function isAdmittedWithoutToken(
   );
 }
 
+/** A CSS-wide keyword is a cascade instruction, not a value: no transform
+ *  sees it, and through an inline variable it would act on the variable. */
+const CSS_WIDE_KEYWORDS: ReadonlySet<unknown> = new Set([
+  'initial',
+  'inherit',
+  'unset',
+  'revert',
+  'revert-layer',
+]);
+
 function resolveEntry(
   value: unknown,
   dc: DynamicEntryConfig
@@ -230,7 +246,9 @@ function resolveEntry(
   }
   const input = scaleResolved ?? value;
   let transformed: unknown = input;
-  if (dc.transform) {
+  // A scale key spelled like a keyword resolved above, as a token.
+  const keyword = scaleResolved == null && CSS_WIDE_KEYWORDS.has(value);
+  if (dc.transform && !keyword) {
     try {
       transformed = dc.transform(input as string | number);
     } catch (cause) {
@@ -458,58 +476,18 @@ function warnTransformThrow(
 }
 
 /**
- * Whether `resolved` reads `currentVar` directly, with or without a fallback;
- * a read inside another `var()`'s fallback is not direct. `var` matches in
- * any case and the name with any CSS whitespace or comments around it; the
- * name itself is case-sensitive. Comments and strings read nothing. The
- * extractor's static path skips its `currentVar` write by the same predicate.
+ * Whether `resolved` reads `currentVar` through a `var()` at any depth, its
+ * fallbacks included: a function token whose decoded name is `var` in any
+ * case, with the decoded variable name as its first argument. Comments,
+ * quoted strings and `url()` read nothing. The extractor's static path skips
+ * its `currentVar` write by the same predicate.
  */
 function readsCurrentVar(resolved: string, currentVar: string): boolean {
-  // Per open parenthesis: whether it opens a `var()`, and whether that
-  // `var()` has reached its fallback.
-  const open: { isVar: boolean; fallback: boolean }[] = [];
-  for (let at = 0; at < resolved.length; at += 1) {
-    const char = resolved[at];
-    if (char === '/' && resolved[at + 1] === '*') {
-      const end = resolved.indexOf('*/', at + 2);
-      at = end === -1 ? resolved.length : end + 1;
-    } else if (char === '"' || char === "'") {
-      at += 1;
-      while (at < resolved.length && resolved[at] !== char) {
-        at += resolved[at] === '\\' ? 2 : 1;
-      }
-    } else if (char === '(') {
-      const isVar =
-        at >= 3 && resolved.slice(at - 3, at).toLowerCase() === 'var';
-      const inFallback = open.some((frame) => frame.isVar && frame.fallback);
-      if (isVar && !inFallback) {
-        const name = skipCssSpace(resolved.slice(at + 1));
-        const next = name.startsWith(currentVar)
-          ? skipCssSpace(name.slice(currentVar.length))[0]
-          : undefined;
-        if (next === ')' || next === ',') return true;
-      }
-      open.push({ isVar, fallback: false });
-    } else if (char === ',') {
-      const top = open.at(-1);
-      if (top?.isVar) top.fallback = true;
-    } else if (char === ')') {
-      open.pop();
-    }
-  }
-  return false;
-}
-
-/** `text` after its leading CSS whitespace (space, tab, line feed, carriage
- *  return, form feed) and comments. */
-function skipCssSpace(text: string): string {
-  let rest = text;
-  for (;;) {
-    const trimmed = rest.replace(/^[ \t\n\r\f]+/, '');
-    if (!trimmed.startsWith('/*')) return trimmed;
-    const end = trimmed.indexOf('*/', 2);
-    rest = end === -1 ? '' : trimmed.slice(end + 2);
-  }
+  if (!resolved.includes('(')) return false;
+  const destination = decodedIdentifier(currentVar);
+  return variableReads(componentValues(tokenize(resolved))).some(
+    (read) => read.name === destination
+  );
 }
 
 /**
@@ -521,15 +499,6 @@ function slotClassFor(dc: ValueDynamicPropConfig, resolved: string): string {
     ? `${dc.slotClass}--keep`
     : dc.slotClass;
 }
-
-/** Through an inline variable these would act on the variable itself. */
-const CSS_WIDE_KEYWORDS: ReadonlySet<unknown> = new Set([
-  'initial',
-  'inherit',
-  'unset',
-  'revert',
-  'revert-layer',
-]);
 
 /**
  * Resolution is staged so a drop is atomic: one entry that misses a strict
