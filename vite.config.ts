@@ -42,6 +42,7 @@ const typescriptTestTargets = [
   'scripts/verify/clear-consumer-output.test.ts',
   'scripts/verify/ci-graph.test.ts',
   'scripts/verify/extract-test-enumeration.test.ts',
+  'scripts/changelog/assemble.test.ts',
 ] as const;
 const typescriptTestTargetArguments = typescriptTestTargets.join(' ');
 const typescriptTestCommand = `bunx vp test run ${typescriptTestTargetArguments}`;
@@ -349,7 +350,7 @@ export default defineConfig({
     tasks: {
       'verify:lint': {
         command:
-          'bunx vp lint && bunx vp fmt --check && bun scripts/verify/topology.ts',
+          'bunx vp lint && bunx vp fmt --check && bun scripts/verify/topology.ts && bun scripts/changelog/assemble.ts --check',
         cache: false,
       },
       'verify:compile': {

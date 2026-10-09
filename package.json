@@ -33,6 +33,7 @@
     "deploy:vinext": "bun run --filter '@animus-ui/vinext-app' cf:deploy",
     "deploy:react-router": "bun run --filter '@animus-ui/react-router-app' cf:deploy",
     "dev:showcase": "bun run --filter './packages/showcase' dev",
+    "changelog": "bun scripts/changelog/assemble.ts",
     "release": "bash scripts/release.sh"
   },
   "devDependencies": {
