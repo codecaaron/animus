@@ -4,6 +4,7 @@ import {
   ASSET_PLACEHOLDER_PREFIX,
   findAssetSpecifiers,
   findSheetAssetSpecifiers,
+  generatedModuleCode,
   reportSurvivingAssetPlaceholders,
   substituteAssetPlaceholders,
   UNSUBSTITUTED_ASSET_CODE,
@@ -121,5 +122,39 @@ describe('reportSurvivingAssetPlaceholders', () => {
     );
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain(UNSUBSTITUTED_ASSET_CODE);
+  });
+});
+
+describe('generated runtime modules', () => {
+  const placeholder = 'url("animus-asset:@acme/rock.jpg")';
+
+  test('carry the dynamic prop configs and every component replacement', () => {
+    const code = generatedModuleCode({
+      dynamic_props: {
+        bgImage: {
+          varName: '--animus-bg-image',
+          slotClass: 'animus-dyn-bg-image',
+          scaleValues: { rock: placeholder },
+        },
+      },
+      components: {
+        'a.tsx::Box': { replacement: 'createComponent("div", "a", {})' },
+      },
+    });
+    expect(findAssetSpecifiers(code)).toEqual(['@acme/rock.jpg']);
+    expect(code).toContain('createComponent("div", "a", {})');
+  });
+
+  test('a placeholder in them fails a strict build, naming where it surfaced', () => {
+    expect(() =>
+      reportSurvivingAssetPlaceholders(placeholder, {
+        strict: true,
+        warn: () => {},
+        prefix: '[animus]',
+        surface: 'generated runtime modules',
+      })
+    ).toThrow(
+      `asset() placeholders reached generated runtime modules unsubstituted: @acme/rock.jpg (${UNSUBSTITUTED_ASSET_CODE})`
+    );
   });
 });

@@ -1,3 +1,8 @@
+import type {
+  ManifestComponentDescriptor,
+  ProjectManifest,
+} from './manifest-schema';
+
 export const ASSET_PLACEHOLDER_PREFIX = 'animus-asset:';
 
 const escapeRegExp = (value: string): string =>
@@ -90,11 +95,38 @@ export const UNSUBSTITUTED_ASSET_CODE =
  *  strict build and warns otherwise. */
 export function reportSurvivingAssetPlaceholders(
   css: string,
-  report: { strict?: boolean; warn: (message: string) => void; prefix: string }
+  report: {
+    strict?: boolean;
+    warn: (message: string) => void;
+    prefix: string;
+    /** Where the text goes; emitted CSS unless named. */
+    surface?: string;
+  }
 ): void {
   const specifiers = findAssetSpecifiers(css);
   if (specifiers.length === 0) return;
-  const message = `${report.prefix} asset() placeholders reached emitted CSS unsubstituted: ${specifiers.join(', ')} (${UNSUBSTITUTED_ASSET_CODE})`;
+  const message = `${report.prefix} asset() placeholders reached ${report.surface ?? 'emitted CSS'} unsubstituted: ${specifiers.join(', ')} (${UNSUBSTITUTED_ASSET_CODE})`;
   if (report.strict) throw new Error(message);
   report.warn(message);
+}
+
+/**
+ * The runtime code an analysis generates: each dynamic prop config, which the
+ * shared prop map module carries, and each component's replacement. Extraction
+ * lifts asset() out of them into root variables, so none should hold one.
+ * Both embed values as JSON strings, so their quote and backslash escapes are
+ * undone for scanning: the text is for `findAssetSpecifiers`, not to run.
+ */
+export function generatedModuleCode(manifest: {
+  dynamic_props: ProjectManifest['dynamic_props'];
+  components: Record<string, Pick<ManifestComponentDescriptor, 'replacement'>>;
+}): string {
+  return [
+    JSON.stringify(manifest.dynamic_props),
+    ...Object.values(manifest.components).map(
+      (component) => component.replacement
+    ),
+  ]
+    .join('\n')
+    .replace(/\\(["\\])/g, '$1');
 }

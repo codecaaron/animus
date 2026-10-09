@@ -19,6 +19,8 @@ import {
   SHOWCASE_BG_SLOT,
   showcaseCurrentBg,
   showcaseRuntimeCurrentBg,
+  PAGE_URL,
+  STYLESHEET_URL,
   VIEWPORT_WIDTH,
   type FixtureCase,
 } from './cases';
@@ -86,10 +88,36 @@ async function main(): Promise<void> {
     const page = await browser.newPage({
       viewport: { width: VIEWPORT_WIDTH, height: 800 },
     });
+    let served: FixtureCase | undefined;
+    await page.route(`${new URL(PAGE_URL).origin}/**`, (route) => {
+      const url = route.request().url();
+      if (served !== undefined && url === PAGE_URL) {
+        const head =
+          served.serve === 'linked'
+            ? `<link rel="stylesheet" href="${STYLESHEET_URL}">`
+            : `<style>body { margin: 0; } ${served.css}</style>`;
+        return route.fulfill({
+          contentType: 'text/html',
+          body: `<!doctype html><html><head>${head}</head><body>${served.body}</body></html>`,
+        });
+      }
+      if (served !== undefined && url === STYLESHEET_URL) {
+        return route.fulfill({
+          contentType: 'text/css',
+          body: `body { margin: 0; } ${served.css}`,
+        });
+      }
+      return route.fulfill({ status: 404, body: '' });
+    });
     for (const fixture of cases) {
-      await page.setContent(
-        `<!doctype html><html><head><style>body { margin: 0; } ${fixture.css}</style></head><body>${fixture.body}</body></html>`
-      );
+      if (fixture.serve !== undefined) {
+        served = fixture;
+        await page.goto(PAGE_URL);
+      } else {
+        await page.setContent(
+          `<!doctype html><html><head><style>body { margin: 0; } ${fixture.css}</style></head><body>${fixture.body}</body></html>`
+        );
+      }
       const computed = (selector: string, property: string, pseudo?: string) =>
         page.evaluate(
           (read) => {

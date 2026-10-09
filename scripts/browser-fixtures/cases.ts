@@ -20,7 +20,17 @@ export interface FixtureCase {
   css: string;
   body: string;
   probes: Probe[];
+  /**
+   * Serve the page at `PAGE_URL`, with `css` either linked as
+   * `STYLESHEET_URL`, so the stylesheet and the document have different base
+   * URLs, or inline in the page, so both share the document's.
+   */
+  serve?: 'linked' | 'inline';
 }
+
+export const FIXTURE_ORIGIN = 'http://fixture.test';
+export const PAGE_URL = `${FIXTURE_ORIGIN}/page/index.html`;
+export const STYLESHEET_URL = `${FIXTURE_ORIGIN}/assets/styles.css`;
 
 const RED = 'rgb(255, 0, 0)';
 const GREEN = 'rgb(0, 128, 0)';
@@ -336,6 +346,109 @@ export function showcaseCurrentBg(registration: string): FixtureCase {
   };
 }
 
+const AT_STYLESHEET = `url("${FIXTURE_ORIGIN}/assets/rock.jpg")`;
+const AT_DOCUMENT = `url("${FIXTURE_ORIGIN}/page/rock.jpg")`;
+
+/**
+ * A relative url() is resolved against the base URL of the declaration that
+ * finally consumes it. Runtime values reach a property through an inline
+ * custom property that a stylesheet rule reads, so a URL in a stylesheet
+ * variable, or written inline, resolves against the stylesheet. Only an inline
+ * property reading the variable resolves against the document, unless the
+ * variable is registered as `<url>`, which resolves where it is declared.
+ */
+const RELATIVE_URL_CSS = `
+  @property --registered { syntax: '<url>'; inherits: true; initial-value: url("about:blank"); }
+  :root { --asset: url("rock.jpg"); --registered: url("rock.jpg"); }
+  .rule { background-image: var(--asset); }
+  .slot { background-image: var(--animus-bg-image); }
+`;
+const RELATIVE_URL_BODY = `
+  <div class="rule" id="rule"></div>
+  <div class="slot" id="slot" style="--animus-bg-image: var(--asset)"></div>
+  <div class="slot" id="slot-literal" style="--animus-bg-image: url(rock.jpg)"></div>
+  <div id="inline" style="background-image: var(--asset)"></div>
+  <div id="inline-registered" style="background-image: var(--registered)"></div>
+`;
+
+function relativeUrlProbes(
+  expected: Record<
+    'rule' | 'slot' | 'literal' | 'inline' | 'registered',
+    string
+  >
+): Probe[] {
+  return [
+    {
+      label: 'a stylesheet rule reading the variable',
+      selector: '#rule',
+      property: 'background-image',
+      expected: expected.rule,
+    },
+    {
+      label: 'a runtime slot reading it through an inline variable',
+      selector: '#slot',
+      property: 'background-image',
+      expected: expected.slot,
+    },
+    {
+      label: 'a url() written into the inline variable',
+      selector: '#slot-literal',
+      property: 'background-image',
+      expected: expected.literal,
+    },
+    {
+      label: 'an inline property reading the variable',
+      selector: '#inline',
+      property: 'background-image',
+      expected: expected.inline,
+    },
+    {
+      label: 'an inline property reading a registered <url>',
+      selector: '#inline-registered',
+      property: 'background-image',
+      expected: expected.registered,
+    },
+  ];
+}
+
+/**
+ * Served as a linked stylesheet, every read resolves against the stylesheet
+ * except an inline property reading the variable, which resolves against the
+ * document unless the variable is registered as `<url>`.
+ */
+const relativeUrlThroughVariables: FixtureCase = {
+  name: 'a relative url() in a linked stylesheet variable, read through var()',
+  serve: 'linked',
+  css: RELATIVE_URL_CSS,
+  body: RELATIVE_URL_BODY,
+  probes: relativeUrlProbes({
+    rule: AT_STYLESHEET,
+    slot: AT_STYLESHEET,
+    literal: AT_STYLESHEET,
+    inline: AT_DOCUMENT,
+    registered: AT_STYLESHEET,
+  }),
+};
+
+/**
+ * The same CSS inline in the page resolves every read against the document,
+ * so the case above proves something only while its stylesheet has a base of
+ * its own.
+ */
+const relativeUrlWithOneBase: FixtureCase = {
+  name: 'the same relative url() CSS inline in the page',
+  serve: 'inline',
+  css: RELATIVE_URL_CSS,
+  body: RELATIVE_URL_BODY,
+  probes: relativeUrlProbes({
+    rule: AT_DOCUMENT,
+    slot: AT_DOCUMENT,
+    literal: AT_DOCUMENT,
+    inline: AT_DOCUMENT,
+    registered: AT_DOCUMENT,
+  }),
+};
+
 /** The runtime configuration the showcase build emits for its `bg` prop. */
 export const SHOWCASE_BG_SLOT = {
   varName: '--animus-bg',
@@ -410,4 +523,6 @@ export const PLATFORM_CASES: FixtureCase[] = [
   laterInvalidWrite,
   inheritedTypedLength,
   pseudoElementSlot,
+  relativeUrlThroughVariables,
+  relativeUrlWithOneBase,
 ];

@@ -121,6 +121,7 @@ export type {
 export {
   findAssetSpecifiers,
   findSheetAssetSpecifiers,
+  generatedModuleCode,
   reportSurvivingAssetPlaceholders,
   substituteAssetPlaceholders,
   substituteSheetAssets,

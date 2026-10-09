@@ -65,6 +65,21 @@ The check now also recognises a read with a fallback, such as
 `var(--current-bg, red)`, which a static write used to copy into
 `currentVar`, making it cyclic.
 
+**`asset()` in a scale value now loads when a prop selects it at runtime.**
+A theme scale value such as ``images: { rock: `url("${asset('@acme/media/rock.jpg')}")` }``
+reached the browser unresolved when a prop picked `rock` at runtime: the
+runtime prop configs carried the raw `url(animus-asset:…)` placeholder into
+an inline style, which loaded nothing. Extraction now replaces such a value
+in every runtime config with `var(--animus-asset-<hash>)` and declares that
+variable on `:root` in the global stylesheet, where the same substitution as
+every other stylesheet resolves the URL, emits the file and watches it. This
+covers system props, component props and declaration scales, in the Vite
+plugin, the Next.js plugin and the CLI. A placeholder still found in the
+generated runtime modules is reported as
+`animus.asset.unsubstituted-placeholder`, which fails `strict` builds. A
+runtime transform bound to such a prop now receives the `var()` reference
+rather than the URL.
+
 **Selecting the removed v1 engine explains itself.** Setting `engine: 'v1'`
 or `ANIMUS_ENGINE=v1` still fails, and the error now says that the v1
 extraction engine is no longer supported, that v2 is the only engine, and to

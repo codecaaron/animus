@@ -10,9 +10,11 @@ import {
   enforceExternalTokenContracts,
   createSourceCorpus,
   findSheetAssetSpecifiers,
+  generatedModuleCode,
   loadSystemConfig,
   parseFilesJson,
   projectExternalFileOwners,
+  reportSurvivingAssetPlaceholders,
   resolveAssetFile,
   resolveVerbosity,
   runProjectAnalysis,
@@ -447,6 +449,12 @@ export class PluginContext {
 
     this.storedManifest = result.manifest;
     this.storedManifestJson = result.manifestJson;
+    reportSurvivingAssetPlaceholders(generatedModuleCode(result.manifest), {
+      strict: this.options.strict,
+      warn: (message) => this.warn(message),
+      prefix: '[animus-extract]',
+      surface: 'generated runtime modules',
+    });
 
     this.storedSystemPropMapJson = JSON.stringify(
       result.manifest.system_prop_map

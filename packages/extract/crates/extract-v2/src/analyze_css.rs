@@ -3574,6 +3574,15 @@ fn run_with_system_floor(
             per_component_custom_dynamic.insert(component_id.clone(), component_dynamic);
         }
     }
+    // Runtime configs carry scale values to the browser; an asset() among them
+    // reaches it through a root variable the global sheet declares.
+    let mut runtime_assets = crate::runtime_assets::RuntimeAssetVars::new(class_prefix);
+    for meta in dynamic_props
+        .values_mut()
+        .chain(per_component_custom_dynamic.values_mut().flat_map(|metas| metas.values_mut()))
+    {
+        runtime_assets.lift_meta(meta);
+    }
     let custom_slot_entries = if !all_custom_slot_entries.is_empty() {
         Some(all_custom_slot_entries)
     } else {
@@ -4009,6 +4018,13 @@ fn run_with_system_floor(
             combined_global.push('\n');
         }
         combined_global.push_str(&keyframes_css_raw);
+    }
+    let runtime_asset_rule = runtime_assets.root_rule();
+    if !runtime_asset_rule.is_empty() {
+        if !combined_global.is_empty() {
+            combined_global.push('\n');
+        }
+        combined_global.push_str(&runtime_asset_rule);
     }
     if !combined_global.is_empty() {
         sheets.global = format!(
@@ -5331,6 +5347,60 @@ export const App = ({ n }) => (
 
     fn custom_classes<'a>(out: &'a CssOutput, id: &str, prop: &str) -> &'a HashMap<String, String> {
         &out.replacement_configs[id].custom_prop_class_map.as_ref().unwrap()[prop]
+    }
+
+    #[test]
+    fn runtime_scale_values_reach_assets_through_a_root_variable() {
+        let source = r#"export const Box = ds
+  .props({ texture: { property: 'backgroundImage', scale: 'images' } })
+  .system({ space: true })
+  .asElement('div');
+export const App = ({ n }) => <Box bgImage={n} texture={n} />;
+"#;
+        let mut inputs = CssInputs::from_json(
+            None,
+            None,
+            None,
+            Some(r#"{"bgImage": {"property": "backgroundImage", "scale": "images"}}"#),
+            Some(r#"{"space": ["bgImage"]}"#),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            false,
+        )
+        .unwrap();
+        let rock = r#"url("animus-asset:@acme/media/rock.jpg")"#;
+        inputs.theme.insert("images.rock".into(), rock.into());
+        inputs.theme.insert("images.none".into(), "none".into());
+        let out = analyze(&[("a.tsx", source)], &inputs);
+
+        let reference = format!("var(--animus-asset-{})", crate::css::content_hash(rock));
+        let system = out.dynamic_props["bgImage"].value().unwrap();
+        assert_eq!(system.scale_values["rock"], serde_json::Value::String(reference.clone()));
+        assert_eq!(system.scale_values["none"], "none");
+        let payload = &out.replacement_configs["a.tsx::Box"];
+        let custom = payload.custom_dynamic_config.as_ref().unwrap()["texture"].value().unwrap();
+        assert_eq!(custom.scale_values["rock"], serde_json::Value::String(reference));
+        assert!(
+            out.sheets.global.contains(&format!("--animus-asset-{}: {rock};", crate::css::content_hash(rock))),
+            "{}",
+            out.sheets.global
+        );
+        let manifest = serde_json::to_string(&out.dynamic_props).unwrap();
+        assert!(!manifest.contains("animus-asset:"), "{manifest}");
+        assert!(!out.components["a.tsx::Box"].replacement.contains("animus-asset:"));
+    }
+
+    #[test]
+    fn no_runtime_asset_leaves_the_global_sheet_alone() {
+        let source = "export const Box = ds.system({ space: true }).asElement('div');\nexport const App = ({ n }) => <Box p={n} />;\n";
+        let out = analyze(&[("a.tsx", source)], &test_inputs());
+        assert_eq!(out.sheets.global, "");
     }
 
     #[test]

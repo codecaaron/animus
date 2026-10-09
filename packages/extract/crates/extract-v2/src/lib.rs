@@ -45,6 +45,7 @@ pub mod forced_usage;
 pub mod owned_ast;
 pub mod pipeline;
 pub mod reconcile;
+pub mod runtime_assets;
 pub mod chain_merge;
 pub(crate) mod selector_subject;
 pub mod transforms;

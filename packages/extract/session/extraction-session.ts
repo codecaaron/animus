@@ -45,6 +45,7 @@ import {
   sharesVolumeRoot,
   snapshotFilePlans,
   staleDistIncludesMessage,
+  generatedModuleCode,
   reportSurvivingAssetPlaceholders,
   substituteSheetAssets,
   toWatchKeys,
@@ -1448,6 +1449,12 @@ export class ExtractionSession {
       strict: this.options.strict,
       warn: (message) => this.warn(message),
       prefix: `[${this.driverLabel}]`,
+    });
+    reportSurvivingAssetPlaceholders(generatedModuleCode(manifest), {
+      strict: this.options.strict,
+      warn: (message) => this.warn(message),
+      prefix: `[${this.driverLabel}]`,
+      surface: 'generated runtime modules',
     });
 
     setSharedCss(fullCss);
