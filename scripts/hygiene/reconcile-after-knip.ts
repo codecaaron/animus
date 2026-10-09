@@ -2,7 +2,14 @@
 // Knip's fixer is a single-pass text splice with no post-state reasoning, so it
 // leaves 0-byte modules (TS2306) and stale barrel re-exports (TS2305).
 
-import { readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { isJsonString } from '@animus-ui/assertions';
+import {
+  existsSync,
+  readdirSync,
+  readFileSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { extname, join, resolve } from 'node:path';
 
 import {
@@ -15,7 +22,8 @@ import {
   parseProgram,
   stringField,
 } from './_ast';
-import { emitReceipt } from './_receipts';
+import { type Receipt, emitReceipt } from './_receipts';
+import { parseReceipts } from './presenter';
 
 function computeLineStarts(text: string): number[] {
   const starts = [0];
@@ -224,38 +232,73 @@ const SOURCE_EXTENSIONS = new Map([
   ['.cjs', ['.cts', '.d.cts']],
 ]);
 
-function resolveRelativeModule(
-  fromFile: string,
-  specifier: string
-): string | undefined {
-  if (!specifier.startsWith('./') && !specifier.startsWith('../'))
-    return undefined;
+/** The files a relative specifier can name, in TypeScript's order. */
+function moduleCandidates(fromFile: string, specifier: string): string[] {
+  if (!specifier.startsWith('./') && !specifier.startsWith('../')) return [];
   const dir = fromFile.substring(0, fromFile.lastIndexOf('/'));
   const base = resolve(dir, specifier);
   const extension = extname(base);
   const sources = (SOURCE_EXTENSIONS.get(extension) ?? []).map(
     (source) => `${base.slice(0, -extension.length)}${source}`
   );
-  const candidates = [
+  return [
     ...sources,
     base, // explicit extension in specifier
     `${base}.ts`,
     `${base}.tsx`,
-    // Declaration files are live targets: an unresolvable target counts as
-    // deleted, so omitting `.d.ts` would strip live re-exports.
     `${base}.d.ts`,
     `${base}/index.ts`,
     `${base}/index.tsx`,
     `${base}/index.d.ts`,
   ];
-  for (const c of candidates) {
-    try {
-      if (statSync(c).isFile()) return c;
-    } catch {
-      /* not found, try next */
+}
+
+function isFile(path: string): boolean {
+  try {
+    return statSync(path).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function resolveRelativeModule(
+  fromFile: string,
+  specifier: string
+): string | undefined {
+  return moduleCandidates(fromFile, specifier).find(isFile);
+}
+
+/** What knip removed in this hygiene run, as its Layer D receipts record. */
+export interface KnipRemovals {
+  files: Set<string>;
+  /** The export names removed from each file. */
+  exports: Map<string, Set<string>>;
+}
+
+export function knipRemovals(receipts: Receipt[], root: string): KnipRemovals {
+  const removals: KnipRemovals = { files: new Set(), exports: new Map() };
+  for (const receipt of receipts) {
+    if (receipt.layer !== 'D' || receipt.verb !== 'delete') continue;
+    if (receipt.kind === 'file') {
+      removals.files.add(resolve(root, receipt.target));
+    }
+    const name = receipt.extras?.name;
+    if (
+      receipt.kind === 'export-clause' &&
+      name !== undefined &&
+      isJsonString(name)
+    ) {
+      // The target is `<file>:<line>` or `<file>:<name>`.
+      const file = resolve(
+        root,
+        receipt.target.slice(0, receipt.target.lastIndexOf(':'))
+      );
+      const names = removals.exports.get(file) ?? new Set<string>();
+      names.add(name);
+      removals.exports.set(file, names);
     }
   }
-  return undefined;
+  return removals;
 }
 
 function lineOf(lineStarts: number[], pos: number): number {
@@ -332,7 +375,17 @@ export function computeStaleElementRanges(
   return ranges;
 }
 
-export function fixStaleBarrelReExports(files: string[]): string[] {
+/**
+ * Removes re-exports that knip's removals in this run left dangling. A
+ * re-export is removed only when `removed` proves it dead: its target file was
+ * deleted, or a name it imports was removed from the target or from a module
+ * the target's star re-exports reach. Anything else stays, so a resolver or
+ * export-reading gap keeps a live export rather than deleting it.
+ */
+export function fixStaleBarrelReExports(
+  files: string[],
+  removed: KnipRemovals
+): string[] {
   const fixed: string[] = [];
 
   for (const file of files) {
@@ -362,10 +415,16 @@ export function fixStaleBarrelReExports(files: string[]): string[] {
       const isRelative = spec.startsWith('./') || spec.startsWith('../');
       if (!isRelative) continue;
 
-      const target = resolveRelativeModule(file, spec);
+      const candidates = moduleCandidates(file, spec);
+      const target = candidates.find(isFile);
       const stmtLine = lineOf(lineStarts, stmt.start);
 
       if (!target) {
+        // A path alias or an unknown extension also fails to resolve; only a
+        // file knip deleted is gone.
+        if (!candidates.some((candidate) => removed.files.has(candidate))) {
+          continue;
+        }
         wholeRemovals.push(fullNodeRange(source, stmt));
         emitReceipt('D1', 'delete', `${file}:${stmtLine}`, 'export-clause', {
           reason: 'target-deleted',
@@ -389,16 +448,23 @@ export function fixStaleBarrelReExports(files: string[]): string[] {
         continue;
       }
 
+      const modules = new Set<string>();
       let targetExports: Set<string> | undefined;
       try {
-        targetExports = reachableExports(target);
+        targetExports = reachableExports(target, modules);
       } catch {
         // An unreadable target keeps every re-export of it.
       }
       if (targetExports === undefined) continue;
 
+      const knipRemoved = (name?: string): boolean =>
+        [...modules].some((module) => {
+          const names = removed.exports.get(module);
+          return names !== undefined && (name === undefined || names.has(name));
+        });
+
       if (isStarFrom) {
-        if (targetExports.size === 0) {
+        if (targetExports.size === 0 && knipRemoved()) {
           wholeRemovals.push(fullNodeRange(source, stmt));
           emitReceipt('D1', 'delete', `${file}:${stmtLine}`, 'export-clause', {
             reason: 'target-empty',
@@ -417,7 +483,7 @@ export function fixStaleBarrelReExports(files: string[]): string[] {
         const exportedName = identifierName(el, 'exported');
         const originalName = identifierName(el, 'local');
         if (exportedName === undefined || originalName === undefined) continue;
-        if (!targetExports.has(originalName)) {
+        if (!targetExports.has(originalName) && knipRemoved(originalName)) {
           stale.add(exportedName);
         }
       }
@@ -485,11 +551,19 @@ export function collectSourceFiles(root: string): string[] {
 function main(): void {
   const root = process.cwd();
   const files = collectSourceFiles(root);
+  // Without the run's receipts nothing is proven removed, and no re-export is.
+  const receiptsFile = process.env.RECEIPTS_FILE ?? '';
+  const removed = knipRemovals(
+    receiptsFile !== '' && existsSync(receiptsFile)
+      ? parseReceipts(readFileSync(receiptsFile, 'utf-8'))
+      : [],
+    root
+  );
 
   const empty = fixEmptyModules(files);
   // Order matters: once `export {};` is written, the barrel pass sees a
   // zero-export module and strips named re-exports of it.
-  const barrels = fixStaleBarrelReExports(files);
+  const barrels = fixStaleBarrelReExports(files, removed);
 
   console.log(
     `reconcile-after-knip: wrote export {} to ${empty.length} empty file(s); pruned stale re-exports in ${barrels.length} barrel(s)`
