@@ -104,13 +104,17 @@ export function createViteDevAdapter(
   // An error payload is what the browser overlay would show.
   const sentErrors: string[] = [];
 
+  // These modules reach a client only as imports, and import analysis
+  // registers each graph node before `load`, as SSR's `fetchModule` does. A
+  // cold `transformRequest` creates the node only after `load`, so an edit
+  // published in that gap would find no node to invalidate.
   const readModule = async (id: string, decode: (code: string) => string) => {
     const environment = startedServer().environments.client;
+    const node = await environment.moduleGraph.ensureEntryFromUrl(id, false);
     const result = await environment.transformRequest(id);
-    const node = environment.moduleGraph.getModuleById(id);
     return {
       css: decode(result?.code ?? ''),
-      revision: node?.lastInvalidationTimestamp ?? 0,
+      revision: node.lastInvalidationTimestamp,
     };
   };
 
