@@ -106,7 +106,10 @@ Awaited without a phase, as in `{ ...(await withAnimus(options)(nextConfig)) }`
 or an `async` config function, it resolves as `next dev` when `NODE_ENV` is
 `development` and as a build otherwise. Next loads the config a second time
 after the dev server is ready; that load and any repeat in the same phase
-share the first analysis, and the watcher keeps running.
+share the first analysis, and the watcher keeps running. Apply wrappers that
+copy the config into an object, such as `withMDX`, to `nextConfig` before
+passing it to `withAnimus`; applied outside, they keep their own keys and
+drop Animus's.
 
 **The CLI help describes `--exclude` correctly.** It said the flag merged
 with the default exclusions. The flag, together with the config file's

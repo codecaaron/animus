@@ -34,6 +34,11 @@ a watcher that re-analyzes on source changes; `next build` prunes. Per-file
 transforms run in a stateless loader fed by generated `.animus/` artifacts.
 tsconfig `paths` aliases are honored.
 
+Apply config wrappers that expect an object, such as `withMDX`, to
+`nextConfig` before passing it to `withAnimus`:
+`withAnimus(options)(withMDX(nextConfig))`. Applied outside, a wrapper that
+copies the config into a new object keeps its own keys and drops Animus's.
+
 If your config is a function of its own, pass Next's phase through:
 
 ```tsx
@@ -43,7 +48,10 @@ export default (phase: string) =>
 
 The result can also be awaited, as in
 `{ ...(await withAnimus(options)(nextConfig)) }`. Without a phase it then
-reads `NODE_ENV=development` as `next dev` and anything else as a build.
+reads `NODE_ENV=development` as `next dev` and anything else as a build. A
+`next.config.ts` that assigns `module.exports = withAnimus(...)(...)` is
+awaited the same way when Next compiles it, so write `export default`, or
+pass the phase from a config function.
 
 Because `next.config` resolves only after that first extraction, a source the
 parser cannot finish at startup rejects the config before any watcher exists:

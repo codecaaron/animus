@@ -371,7 +371,11 @@ function turbopackConfig<Config extends NextOwnedConfig>(
         : PHASE_PRODUCTION_BUILD);
     return load(phase).then(onResolved, onRejected);
   }
-  return Object.assign(load, { then });
+  const config = Object.assign(load, { then });
+  // A wrapper that copies this config's keys into an object would otherwise
+  // copy `then`, and Next would await Animus's config in place of its own.
+  Object.defineProperty(config, 'then', { enumerable: false });
+  return config;
 }
 
 let liveTurbopackSession: ExtractionSession | null = null;

@@ -362,6 +362,35 @@ describe('withAnimus Turbopack wiring', () => {
     expect(mocks.analyzeProject.mock.calls[0][DEV_MODE_SLOT]).toBe(false);
   });
 
+  test('an outer wrapper that copies the config into an object keeps its own keys and loses the Animus rules; applied to nextConfig first, both survive', async () => {
+    process.chdir(createProject());
+    const options = {
+      system: './src/system.ts',
+      turbopack: { mode: 'on' as const },
+    };
+    // The shape of withMDX and similar wrappers.
+    const withPageExtensions = <Config extends object>(config: Config) =>
+      Object.assign({}, config, { pageExtensions: ['mdx', 'tsx'] });
+
+    // Next awaits a config object as it is.
+    const outer = await withPageExtensions(
+      withAnimus(options)({ reactStrictMode: true })
+    );
+    expect(outer).toEqual({ pageExtensions: ['mdx', 'tsx'] });
+    expect(mocks.analyzeProject).not.toHaveBeenCalled();
+
+    const inner = await loadBuildConfig(
+      withAnimus(options)(withPageExtensions({ reactStrictMode: true }))
+    );
+    expect(inner).toMatchObject({
+      reactStrictMode: true,
+      pageExtensions: ['mdx', 'tsx'],
+    });
+    expect(
+      turbopackOptions(inner).rules?.[ANIMUS_TURBOPACK_RULE_GLOB]
+    ).toBeDefined();
+  });
+
   test('an awaited config without a phase resolves by NODE_ENV and keeps the Animus rules', async () => {
     process.chdir(createProject());
     const options = {
