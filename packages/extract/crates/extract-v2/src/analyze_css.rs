@@ -296,6 +296,11 @@ const STRICT_TOKEN_MISS: &str = "animus.props.strict-token-miss";
 /// host where no runtime slot exists (style blocks, variants, states,
 /// global styles): its declaration falls back to the raw value.
 const STATIC_EVALUATION_UNAVAILABLE: &str = "animus.transform.static-evaluation-unavailable";
+/// A warning: a chain built inside a function or render, or a builder a
+/// later declaration completes, is never extracted, so its styles reach no
+/// stylesheet and the system builder stays in the bundle. Valid runtime
+/// uses exist, so build strictness never escalates it.
+const RUNTIME_BUILDER_REFERENCE: &str = "animus.extract.runtime-builder-reference";
 /// A warning, never escalated by build strictness: system props on a tag
 /// whose import resolves to no extracted component still reach the browser
 /// through the dynamic-slot fallback, without their static utility classes.
@@ -895,6 +900,36 @@ fn unsupported_default_export(
                 export.line, export.column
             ),
             Some(UNSUPPORTED_DEFAULT_EXPORT),
+        )
+    })
+}
+
+/// A chain-shaped call no walked chain contains, when its root has proven
+/// Animus origin.
+fn runtime_builder_reference(
+    file: &str,
+    site: &crate::facts::UnwalkedChainSite,
+    files: &BTreeMap<String, FileFacts>,
+    inputs: &CssInputs,
+) -> Option<CssDiagnostic> {
+    let chain = &site.chain;
+    has_animus_origin(file, &chain.root, files, inputs, &mut FxHashSet::default()).then(|| {
+        let spelling = chain
+            .methods
+            .iter()
+            .fold(chain.root.clone(), |spelling, method| format!("{spelling}.{method}(…)"));
+        diagnostic(
+            file,
+            chain.enclosing.as_deref().unwrap_or(&chain.root),
+            "warn",
+            format!(
+                "line {}: {spelling} is not extracted, since extraction collects only chains \
+                 a top-level const declares through to its terminal; its styles reach no \
+                 stylesheet, and it keeps the system builder in the bundle — declare the \
+                 whole chain as one top-level const",
+                site.line
+            ),
+            Some(RUNTIME_BUILDER_REFERENCE),
         )
     })
 }
@@ -3124,6 +3159,9 @@ fn run_with_system_floor(
             diagnostics.extend(unsupported_namespace_root(file_path, ff, chain, files, inputs));
         }
         diagnostics.extend(unsupported_default_export(file_path, ff, files, inputs));
+        for site in &ff.unwalked_chains {
+            diagnostics.extend(runtime_builder_reference(file_path, site, files, inputs));
+        }
     }
 
     let sorted_ids = sorted_resolvable_component_ids(files, &parent_map, &unresolvable_extensions);

@@ -163,6 +163,25 @@ export const ShadowedUndefined = ds
 `,
 };
 
+/** Chains the extractor never takes, each building at runtime. */
+const RUNTIME_BUILDERS = {
+  path: 'fixtures/policy-runtime.tsx',
+  source: `import { lib } from 'other-lib';
+import { ds } from './policy-system';
+const make = (p) => ds.styles({ padding: p }).asElement('div');
+export const Made = make(4);
+export function InRender() {
+  const Inner = ds.styles({ cursor: 'pointer' }).asElement('div');
+  return <Inner />;
+}
+const staged = ds.styles({ cursor: 'text' });
+export const Staged = staged.variant({ prop: 'tone', variants: { x: { display: 'block' } } }).asElement('div');
+export const LookalikeInRender = () => lib.styles({ cursor: 'copy' }).asElement('div');
+`,
+};
+
+const RUNTIME_BUILDER_REFERENCE = 'animus.extract.runtime-builder-reference';
+
 /** Each classified declaration: its code, and the named reason and
  *  supported alternative its message must carry. */
 const CLASSIFIED = [
@@ -250,7 +269,15 @@ type Analysis = {
 function analyze(devMode: boolean): Analysis {
   clearAnalysisCache();
   const { manifest, css } = runPipeline(
-    [SYSTEM, AXIS, BARREL, COMPONENTS, SHADOWED, LOOKALIKE_MODULE],
+    [
+      SYSTEM,
+      AXIS,
+      BARREL,
+      COMPONENTS,
+      SHADOWED,
+      LOOKALIKE_MODULE,
+      RUNTIME_BUILDERS,
+    ],
     {
       devMode,
     }
@@ -384,6 +411,29 @@ describe.each([
           "[skip] LookalikeTransform: property 'transform' — transform reference 'shift' is a mutable `let` binding",
       },
     ]);
+  });
+
+  test('a system chain built in a function, in render or across declarations warns once at its line', () => {
+    const runtime = analysis.diagnostics.filter(
+      (d) => d.code === RUNTIME_BUILDER_REFERENCE
+    );
+    expect(runtime.map((d) => [d.component, d.message.split(':')[0]])).toEqual([
+      ['make', 'line 3'],
+      ['InRender', 'line 6'],
+      ['staged', 'line 9'],
+    ]);
+    for (const diagnostic of runtime) {
+      expect(diagnostic).toMatchObject({
+        kind: 'warn',
+        severity: 'warn',
+        file: RUNTIME_BUILDERS.path,
+      });
+    }
+    const { lines, thrown } = surface(analysis.manifest, true);
+    expect(thrown?.message).not.toContain(RUNTIME_BUILDER_REFERENCE);
+    expect(
+      lines.filter((line) => line.includes(RUNTIME_BUILDER_REFERENCE))
+    ).toHaveLength(3);
   });
 });
 

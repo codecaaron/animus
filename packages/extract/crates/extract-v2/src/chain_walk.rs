@@ -49,6 +49,18 @@ pub struct MemberParentExtension {
     pub member: String,
 }
 
+/// A call built from chain methods on an identifier that no walked chain
+/// contains: inside a function or render, or a builder a later declaration
+/// completes.
+#[derive(Debug, Clone)]
+pub struct UnwalkedChain {
+    pub root: String,
+    pub methods: Vec<String>,
+    /// The top-level declaration it sits in.
+    pub enclosing: Option<String>,
+    pub start: u32,
+}
+
 /// `const X = ns.member.styles()…terminal` — a chain rooted in a static
 /// member path, which chain collection does not extract.
 #[derive(Debug, Clone)]

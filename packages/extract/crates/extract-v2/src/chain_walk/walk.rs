@@ -5,10 +5,14 @@ use oxc::ast::ast::{
     BindingPattern, CallExpression, Declaration, Expression, Program, Statement,
     VariableDeclarator,
 };
+use oxc::ast_visit::Visit;
 
 use super::expr::{match_static_member, unwrap_type_assertions};
 use super::terminal::{extract_terminal_arg, first_arg_span, second_arg_span_fn, TerminalArg};
-use super::{ChainDescriptor, ChainStage, MemberParentExtension, MemberRootedChain, TerminalKind};
+use super::{
+    ChainDescriptor, ChainStage, MemberParentExtension, MemberRootedChain, TerminalKind,
+    UnwalkedChain,
+};
 
 const BAIL_METHODS: &[&str] = &[];
 pub(crate) const CHAIN_METHODS: &[&str] = &["styles", "variant", "compound", "states", "system", "props"];
@@ -29,6 +33,8 @@ pub struct WalkedProgram {
     pub member_rooted: Vec<MemberRootedChain>,
     /// Start offset of a terminal chain bound by `export default`.
     pub default_export: Option<u32>,
+    /// Chain-shaped calls outside every chain above.
+    pub unwalked: Vec<UnwalkedChain>,
 }
 
 enum ChainRoot {
@@ -44,7 +50,7 @@ pub fn walk_program_facts(program: &Program<'_>) -> WalkedProgram {
     let mut chains = Vec::new();
     let mut member_parents = Vec::new();
     let mut member_rooted = Vec::new();
-    let mut default_export = None;
+    let mut default_export_span = None;
     let mut record = |declarator: &VariableDeclarator<'_>| match try_extract_chain(declarator) {
         Some(WalkedChain::Chain(chain)) => chains.push(chain),
         Some(WalkedChain::MemberParent(extension)) => member_parents.push(extension),
@@ -65,7 +71,7 @@ pub fn walk_program_facts(program: &Program<'_>) -> WalkedProgram {
                     .map(unwrap_type_assertions)
                 {
                     if let Some(WalkedChain::Chain(_)) = try_walk_chain(call, "default".to_string()) {
-                        default_export = Some(call.span.start);
+                        default_export_span = Some((call.span.start, call.span.end));
                     }
                 }
             }
@@ -77,11 +83,105 @@ pub fn walk_program_facts(program: &Program<'_>) -> WalkedProgram {
             _ => {}
         }
     }
+    let mut unwalked = UnwalkedChains {
+        taken: chains.iter().map(|chain| chain.span).chain(default_export_span).collect(),
+        enclosing: None,
+        found: Vec::new(),
+    };
+    for stmt in &program.body {
+        unwalked.enclosing = statement_binding(stmt);
+        unwalked.visit_statement(stmt);
+    }
     WalkedProgram {
         chains,
         member_parents,
         member_rooted,
-        default_export,
+        default_export: default_export_span.map(|(start, _)| start),
+        unwalked: unwalked.found,
+    }
+}
+
+/// Collects the outermost chain-shaped calls outside `taken`: the
+/// extractor never sees them, so they run the builder at runtime.
+struct UnwalkedChains {
+    taken: Vec<(u32, u32)>,
+    enclosing: Option<String>,
+    found: Vec<UnwalkedChain>,
+}
+
+impl<'a> Visit<'a> for UnwalkedChains {
+    fn visit_call_expression(&mut self, call: &CallExpression<'a>) {
+        let span = call.span;
+        if self.taken.iter().any(|&(start, end)| start <= span.start && span.end <= end) {
+            return;
+        }
+        let Some((root, methods)) = chain_shape(call) else {
+            oxc::ast_visit::walk::walk_call_expression(self, call);
+            return;
+        };
+        self.found.push(UnwalkedChain {
+            root,
+            methods,
+            enclosing: self.enclosing.clone(),
+            start: span.start,
+        });
+        // The spine is this chain; only its arguments can hold another.
+        let mut current = Some(call);
+        while let Some(link) = current {
+            for argument in &link.arguments {
+                self.visit_argument(argument);
+            }
+            current = match_static_member(&link.callee).and_then(|(object, _)| {
+                match unwrap_type_assertions(object) {
+                    Expression::CallExpression(inner) => Some(inner.as_ref()),
+                    _ => None,
+                }
+            });
+        }
+    }
+}
+
+/// The root identifier and method names of a call built only from chain
+/// methods, `extend()` and terminals on an identifier. `extend` with
+/// arguments is the system and theme builders' merge, not a component's.
+fn chain_shape(call: &CallExpression<'_>) -> Option<(String, Vec<String>)> {
+    let mut methods = Vec::new();
+    let mut current = call;
+    loop {
+        let (object, method) = match_static_member(&current.callee)?;
+        let known = CHAIN_METHODS.contains(&method)
+            || matches!(method, "asElement" | "asComponent" | "asClass")
+            || (method == "extend" && current.arguments.is_empty());
+        if !known {
+            return None;
+        }
+        methods.push(method.to_string());
+        match unwrap_type_assertions(object) {
+            Expression::Identifier(id) => {
+                methods.reverse();
+                return Some((id.name.to_string(), methods));
+            }
+            Expression::CallExpression(inner) => current = inner,
+            _ => return None,
+        }
+    }
+}
+
+/// The name a top-level statement declares, when it declares one.
+fn statement_binding(stmt: &Statement<'_>) -> Option<String> {
+    let declaration = match stmt {
+        Statement::ExportNamedDeclaration(export) => export.declaration.as_ref()?,
+        Statement::ExportDefaultDeclaration(_) => return Some("default".to_string()),
+        other => other.as_declaration()?,
+    };
+    match declaration {
+        Declaration::VariableDeclaration(decl) => match &decl.declarations.first()?.id {
+            BindingPattern::BindingIdentifier(id) => Some(id.name.to_string()),
+            _ => None,
+        },
+        Declaration::FunctionDeclaration(function) => Some(function.id.as_ref()?.name.to_string()),
+        Declaration::ClassDeclaration(class) => Some(class.id.as_ref()?.name.to_string()),
+        _ => None,
     }
 }
 
