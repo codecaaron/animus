@@ -5,8 +5,8 @@ import { describe, expect, it } from 'vitest';
 
 import { createV2EngineApi } from '../pipeline/engine-adapter';
 import {
-  PROPERTY_DISCRETE_ANIMATION,
   PROPERTY_FALLBACK_CHAIN_SUPPRESSED,
+  PROPERTY_FALLBACK_SELF_REFERENCE,
   PROPERTY_FALLBACK_SUPPRESSED,
   PROPERTY_SELF_REFERENCE,
   PROPERTY_UNREGISTERED_ANIMATION,
@@ -76,6 +76,22 @@ function unregisteredTheme() {
       colors: ['tone', 'accent', 'spare'],
       sizes: ['lift', 'cap'],
     })
+    .build();
+}
+
+/** The unregistered theme plus one registration nothing else uses. */
+function unrelatedRegistrationTheme() {
+  return createTheme()
+    .addBreakpoints({ sm: 768 })
+    .addColors({ red: '#f00', blue: '#00f' })
+    .addScale({ name: 'sizes', values: { dialog: '40rem' } })
+    .declareContextualVars(
+      {
+        colors: ['tone', 'accent', 'spare'],
+        sizes: ['lift', 'cap', 'unrelated'],
+      },
+      { unrelated: { syntax: '<length>', inherits: true, initialValue: '0px' } }
+    )
     .build();
 }
 
@@ -208,12 +224,10 @@ export const App = () => <><Mover /><Flip /><Behaved /><Speedy /></>;
     expect(informed.join('\n')).not.toContain('--tone');
     expect(informed.join('\n')).not.toContain('--undeclared');
     expect([...informed, ...warned].join('\n')).not.toContain('Speedy');
-    expect(codesIn(warned)).toEqual([
-      PROPERTY_DISCRETE_ANIMATION,
-      PROPERTY_DISCRETE_ANIMATION,
-    ]);
-    expect(warned.join('\n')).toContain('--accent');
-    expect(warned.join('\n')).toContain('--spare');
+    // `allow-discrete` states that a discrete step is intended.
+    expect(codesIn(warned)).toEqual([]);
+    expect(informed.join('\n')).not.toContain('--spare');
+    expect(informed.join('\n')).not.toContain('Flip');
   });
 });
 
@@ -263,21 +277,34 @@ export const App = () => <Scroller cap="24rem" allRows />;
     expect(codesIn([...informed, ...warned])).toEqual([]);
   });
 
-  it('a project without registrations reports nothing and keeps its CSS', () => {
+  it('a project without registrations reports the same animations as with an unrelated one, and keeps its CSS', () => {
     const source = `import { ds } from './ds';
 export const Plain = ds
   .styles({ '--fill': 'var(--tone, red)', transition: '--lift 1s' })
   .asElement('div');
 export const App = () => <Plain />;
 `;
-    const { componentCss, globalCss, informed, warned } = analyze(
-      source,
-      unregisteredTheme(),
-      { keyframes: KEYFRAMES }
-    );
-    expect(codesIn([...informed, ...warned])).toEqual([]);
-    expect(componentCss).toContain('--fill: var(--tone, red)');
-    expect(globalCss).toContain('--accent: red');
+    const reported = (unrelatedRegistration: boolean) => {
+      const { componentCss, globalCss, informed, warned } = analyze(
+        source,
+        unrelatedRegistration
+          ? unrelatedRegistrationTheme()
+          : unregisteredTheme(),
+        { keyframes: KEYFRAMES }
+      );
+      expect(componentCss).toContain('--fill: var(--tone, red)');
+      expect(globalCss).toContain('--accent: red');
+      expect(codesIn(warned)).toEqual([]);
+      return informed
+        .map((line) => line.match(/--[\w-]+ is [^,]*/)?.[0])
+        .sort();
+    };
+    expect(reported(false)).toEqual([
+      '--accent is set in @keyframes animus-kf-pulse but it is not registered',
+      '--lift is transitioned but it is not registered',
+      '--tone is set in @keyframes animus-kf-pulse but it is not registered',
+    ]);
+    expect(reported(true)).toEqual(reported(false));
   });
 });
 
@@ -334,10 +361,27 @@ describe('checks on emitted CSS alone', () => {
     const diagnostics = checkCustomProperties({
       system: unregistered,
       manifest: { components: {} },
-      componentCss: '.x {\n  --a :var( --a ) ;\n}\n',
+      componentCss: [
+        '.x {\n  --a :var( --a ) ;\n}',
+        // Reads only inside another var()'s fallback: authored, the write a
+        // prop with `currentVar: '--a'` emits for that value, and escaped.
+        '.authored { --a: var(--b, var(--a)); }',
+        '.slot { width: var(--b, var(--a)); --a: var(--b, var(--a)); }',
+        String.raw`.escaped { --\61: var(--b, VAR(--a)); }`,
+        // A direct read, or a read of another name, is not that case.
+        '.direct { --a: calc(var(--a) + 1px); --c: var(--b, var(--a)); }',
+      ].join('\n'),
       globalCss: '',
     });
-    expect(diagnostics.map((d) => d.code)).toEqual([PROPERTY_SELF_REFERENCE]);
+    expect(diagnostics.map((d) => [d.code, d.component])).toEqual([
+      [PROPERTY_SELF_REFERENCE, '.x'],
+      [PROPERTY_FALLBACK_SELF_REFERENCE, '.authored'],
+      [PROPERTY_FALLBACK_SELF_REFERENCE, '.slot'],
+      [PROPERTY_FALLBACK_SELF_REFERENCE, '.escaped'],
+    ]);
+    expect(diagnostics[1].message).toContain(
+      'depends on how the browser treats fallback references'
+    );
   });
 
   it('reads a manifest without components', () => {
@@ -350,6 +394,29 @@ describe('checks on emitted CSS alone', () => {
       globalCss: '',
     });
     expect(diagnostics.map((d) => d.code)).toEqual([PROPERTY_SELF_REFERENCE]);
+  });
+
+  it('reads names as CSS tokenizes them: escapes, function case, comments and quoted text', () => {
+    const diagnostics = checkCustomProperties({
+      system: {
+        variableCss:
+          '@property --x { syntax: "<length>"; inherits: true; initial-value: 0px; }',
+        contextualProperties: ['--a', '--x'],
+      },
+      manifest: { components: {} },
+      componentCss: [
+        String.raw`.s { --\61: VAR( /* c */ --a ); }`,
+        '.q { content: "var(--x, 1px)"; width: var(--x, 2px); }',
+        String.raw`.t { transition: --\61 1s; }`,
+        String.raw`.n { --b: var(--a\62); transition: --a\62 1s, --ab 1s; }`,
+      ].join('\n'),
+      globalCss: '',
+    });
+    expect(diagnostics.map((d) => [d.code, d.component])).toEqual([
+      [PROPERTY_SELF_REFERENCE, '.s'],
+      [PROPERTY_FALLBACK_SUPPRESSED, '.q'],
+      [PROPERTY_UNREGISTERED_ANIMATION, '.t'],
+    ]);
   });
 
   it('finds a transitioned property after a comment or a duration', () => {

@@ -154,12 +154,14 @@ export const PROPERTY_FALLBACK_CHAIN_SUPPRESSED =
 export const PROPERTY_UNREGISTERED_ANIMATION =
   'animus.property.unregistered-animation';
 
-/** The same, where `allow-discrete` shows interpolation was intended. */
-export const PROPERTY_DISCRETE_ANIMATION = 'animus.property.discrete-animation';
-
 /** A custom property whose resolved value is `var()` of itself, which makes
  *  it invalid at computed-value time. */
 export const PROPERTY_SELF_REFERENCE = 'animus.property.self-reference';
+
+/** A custom property that reads itself only inside another `var()`'s
+ *  fallback, so whether it is cyclic depends on the browser. */
+export const PROPERTY_FALLBACK_SELF_REFERENCE =
+  'animus.property.fallback-self-reference';
 
 /** A prefix renamed contextual variables without `prefixContextualVars`, so
  *  their declared names no longer resolve. */
@@ -186,8 +188,8 @@ const DIAGNOSTIC_SEVERITY: ReadonlyMap<string, DiagnosticSeverity> = new Map([
   [PROPERTY_FALLBACK_SUPPRESSED, 'info'],
   [PROPERTY_FALLBACK_CHAIN_SUPPRESSED, 'warn'],
   [PROPERTY_UNREGISTERED_ANIMATION, 'info'],
-  [PROPERTY_DISCRETE_ANIMATION, 'warn'],
   [PROPERTY_SELF_REFERENCE, 'warn'],
+  [PROPERTY_FALLBACK_SELF_REFERENCE, 'warn'],
   [PREFIX_CONTEXTUAL_VARS_UNPREFIXED, 'warn'],
   [PREFIX_NAME_CONFLICT, 'error'],
 ]);

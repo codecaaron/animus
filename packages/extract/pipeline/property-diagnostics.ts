@@ -1,11 +1,12 @@
 import {
-  PROPERTY_DISCRETE_ANIMATION,
   PROPERTY_FALLBACK_CHAIN_SUPPRESSED,
+  PROPERTY_FALLBACK_SELF_REFERENCE,
   PROPERTY_FALLBACK_SUPPRESSED,
   PROPERTY_SELF_REFERENCE,
   PROPERTY_UNREGISTERED_ANIMATION,
   severityFor,
 } from './manifest-diagnostics';
+import { readCustomPropertyName } from './property-names';
 import { propertyRegistrations } from './property-registrations';
 
 import type { ManifestDiagnostic } from './manifest-diagnostics';
@@ -41,9 +42,10 @@ interface Finding {
 
 /**
  * Reports custom properties that will not behave as their CSS suggests: a
- * property that refers to itself and, once the system emits an `@property`
- * rule, a fallback an initial value suppresses and an animated property that
- * cannot interpolate. The CSS itself is never changed.
+ * property that refers to itself, a fallback a registered initial value
+ * applies ahead of, and an animated property that cannot interpolate. Names
+ * are read as CSS tokenizes them, so escapes, function case, comments and
+ * quoted text match the prefix pass. The CSS itself is never changed.
  */
 export function checkCustomProperties(
   input: CustomPropertyCheckInput
@@ -56,9 +58,9 @@ export function checkCustomProperties(
     { css: input.globalCss, owner: globalOwner },
   ];
   for (const { css, owner } of sheets) {
-    // Without a registration only a self-reference can be found, and the
-    // text shows whether one may exist before any declaration is parsed.
-    if (registered.size === 0 && !SELF_REFERENCE_TEXT.test(css)) continue;
+    // A sheet that reads no variable and animates nothing has no finding,
+    // which the text shows before any declaration is parsed.
+    if (!/var\(|transition|@keyframes/i.test(css)) continue;
     const parsed = declarations(css);
     const discreteRules = new Set(
       parsed
@@ -82,7 +84,13 @@ export function checkCustomProperties(
         );
         continue;
       }
-      if (registered.size === 0) continue;
+      if (readsItselfOnlyInFallback(declaration)) {
+        found(
+          PROPERTY_FALLBACK_SELF_REFERENCE,
+          declaration.property,
+          `${declaration.property}: ${declaration.value} reads ${declaration.property} only inside another var()'s fallback, so the result depends on how the browser treats fallback references: one that evaluates a fallback only when it is used keeps the value, one that counts every reference makes ${declaration.property} cyclic and invalid at computed-value time`
+        );
+      }
       for (const read of varReads(declaration.value)) {
         const registration = registered.get(read.name);
         if (
@@ -97,28 +105,19 @@ export function checkCustomProperties(
             ? PROPERTY_FALLBACK_CHAIN_SUPPRESSED
             : PROPERTY_FALLBACK_SUPPRESSED,
           read.name,
-          chain
-            ? `var(${read.name}, ${read.fallback}) never reads its fallback chain: ${read.name} is registered with initial-value ${registration.initialValue}, which applies whenever it is unset. Remove the initial value or reorder the chain`
-            : `var(${read.name}, ${read.fallback}) never uses its fallback: ${read.name} is registered with initial-value ${registration.initialValue}, which applies whenever it is unset`
+          `var(${read.name}, ${read.fallback}): where its registration applies, ${read.name}'s initial-value ${registration.initialValue} is used ahead of the ${chain ? 'fallback chain' : 'fallback'} whenever ${read.name} is unset; the fallback still serves browsers without the registration`
         );
       }
       for (const animated of animatedProperties(declaration, discreteRules)) {
-        if (!declared.has(animated.name)) continue;
+        // `allow-discrete` states that a discrete step is intended.
+        if (animated.discrete || !declared.has(animated.name)) continue;
         const reason = interpolationGap(registered.get(animated.name));
         if (reason === null) continue;
-        if (animated.discrete) {
-          found(
-            PROPERTY_DISCRETE_ANIMATION,
-            animated.name,
-            `${animated.name} is transitioned with allow-discrete but ${reason}, so it flips at the midpoint instead of interpolating. Register it with a typed syntax`
-          );
-        } else {
-          found(
-            PROPERTY_UNREGISTERED_ANIMATION,
-            animated.name,
-            `${animated.name} is ${animated.how} but ${reason}, so it changes in one step instead of interpolating. Register it with a typed syntax to animate it`
-          );
-        }
+        found(
+          PROPERTY_UNREGISTERED_ANIMATION,
+          animated.name,
+          `${animated.name} is ${animated.how} but ${reason}, so it changes in one step instead of interpolating. Register it with a typed syntax to animate it`
+        );
       }
     }
   }
@@ -176,39 +175,138 @@ function declarations(css: string): Declaration[] {
   return found;
 }
 
-/** Every `--x: var(--x)` that `isSelfReference` finds, and more. */
-const SELF_REFERENCE_TEXT = /(--[^\s:;{}()]+)\s*:\s*var\(\s*\1\s*\)/;
+/** `text` as a whole custom-property name, escapes decoded; `undefined`
+ *  when it is not one. */
+function customPropertyName(text: string): string | undefined {
+  if (!text.startsWith('--')) return undefined;
+  const { end, name } = readCustomPropertyName(text, 2);
+  return end === text.length ? `--${name}` : undefined;
+}
 
 function isSelfReference(declaration: Declaration): boolean {
+  const property = customPropertyName(declaration.property);
+  const reads = varReads(declaration.value);
   return (
-    declaration.property.startsWith('--') &&
-    declaration.value.replace(/\s+/g, '') === `var(${declaration.property})`
+    property !== undefined &&
+    reads.length === 1 &&
+    reads[0].name === property &&
+    reads[0].fallback === undefined &&
+    withoutComments(declaration.value).trim() ===
+      withoutComments(
+        declaration.value.slice(reads[0].start, reads[0].end)
+      ).trim()
   );
 }
 
-/** Every `var()` read in `value`, nested fallbacks included. */
-function varReads(
-  value: string
-): Array<{ name: string; fallback: string | undefined }> {
-  const reads: Array<{ name: string; fallback: string | undefined }> = [];
-  for (const match of value.matchAll(/var\(\s*(--[\w-]+)\s*/g)) {
-    const after = (match.index ?? 0) + match[0].length;
-    if (value[after] !== ',') {
-      reads.push({ name: match[1], fallback: undefined });
+/** Whether every read of the declared property sits inside another read's
+ *  fallback, as in `--a: var(--b, var(--a))`. */
+function readsItselfOnlyInFallback(declaration: Declaration): boolean {
+  const property = customPropertyName(declaration.property);
+  if (property === undefined) return false;
+  const reads = varReads(declaration.value);
+  const own = reads.filter((read) => read.name === property);
+  return (
+    own.length > 0 &&
+    own.every((read) =>
+      reads.some(
+        (outer) =>
+          outer !== read && outer.start < read.start && read.end <= outer.end
+      )
+    )
+  );
+}
+
+/** A `var()` read: the decoded name, its fallback, and the call's offsets. */
+interface VarRead {
+  name: string;
+  fallback: string | undefined;
+  start: number;
+  end: number;
+}
+
+/** Every `var()` read in `value`, nested fallbacks included, in any case
+ *  and spacing. Quoted text and comments hold none. */
+function varReads(value: string): VarRead[] {
+  const reads: VarRead[] = [];
+  for (let at = 0; at < value.length;) {
+    const c = value[at];
+    if (c === '"' || c === "'") {
+      at = closingQuote(value, at);
       continue;
     }
-    let depth = 1;
-    let close = after + 1;
-    for (; close < value.length && depth > 0; close += 1) {
-      if (value[close] === '(') depth += 1;
-      else if (value[close] === ')') depth -= 1;
+    if (value.startsWith('/*', at)) {
+      at = skipSpace(value, at);
+      continue;
     }
+    if (
+      value.slice(at, at + 4).toLowerCase() !== 'var(' ||
+      /[\w-]/.test(value[at - 1] ?? '')
+    ) {
+      at += 1;
+      continue;
+    }
+    const nameAt = skipSpace(value, at + 4);
+    if (!value.startsWith('--', nameAt)) {
+      at += 4;
+      continue;
+    }
+    const { end: nameEnd, name } = readCustomPropertyName(value, nameAt + 2);
+    const after = skipSpace(value, nameEnd);
+    const close = closingParen(value, at + 4);
     reads.push({
-      name: match[1],
-      fallback: value.slice(after + 1, close - 1).trim(),
+      name: `--${name}`,
+      fallback:
+        value[after] === ','
+          ? value.slice(after + 1, close - 1).trim()
+          : undefined,
+      start: at,
+      end: close,
     });
+    // Reads inside the fallback are found on the next steps.
+    at = after;
   }
   return reads;
+}
+
+/** The index after the `)` that closes the call whose arguments start at
+ *  `from`. Quoted text and comments are skipped. */
+function closingParen(value: string, from: number): number {
+  let depth = 1;
+  let at = from;
+  while (at < value.length && depth > 0) {
+    const c = value[at];
+    if (c === '"' || c === "'") at = closingQuote(value, at);
+    else if (value.startsWith('/*', at)) at = skipSpace(value, at);
+    else {
+      if (c === '(') depth += 1;
+      else if (c === ')') depth -= 1;
+      at += 1;
+    }
+  }
+  return at;
+}
+
+function closingQuote(value: string, open: number): number {
+  let at = open + 1;
+  while (at < value.length && value[at] !== value[open]) {
+    at += value[at] === '\\' ? 2 : 1;
+  }
+  return Math.min(at + 1, value.length);
+}
+
+/** The index after CSS whitespace and comments starting at `from`. */
+function skipSpace(value: string, from: number): number {
+  let at = from;
+  for (;;) {
+    while (/[ \t\n\r\f]/.test(value[at] ?? '')) at += 1;
+    if (!value.startsWith('/*', at)) return at;
+    const close = value.indexOf('*/', at + 2);
+    at = close === -1 ? value.length : close + 2;
+  }
+}
+
+function withoutComments(text: string): string {
+  return text.replace(/\/\*[\s\S]*?\*\//g, '');
 }
 
 /** Custom properties this declaration sets in a keyframe or names in a
@@ -220,10 +318,11 @@ function animatedProperties(
   const keyframes = declaration.context.find((prelude) =>
     prelude.startsWith('@keyframes')
   );
-  if (keyframes !== undefined && declaration.property.startsWith('--')) {
+  const set = customPropertyName(declaration.property);
+  if (keyframes !== undefined && set !== undefined) {
     return [
       {
-        name: declaration.property,
+        name: set,
         how: `set in ${keyframes}`,
         discrete: false,
       },
@@ -238,11 +337,10 @@ function animatedProperties(
   // A bare `--x` names the item's property wherever it stands, before or
   // after its duration; a value read from a variable sits inside var().
   return topLevelItems(declaration.value).flatMap((item) => {
-    const property =
-      topLevelTokens(item.replace(/\/\*[\s\S]*?\*\//g, ' ')).find((token) =>
-        token.startsWith('--')
-      ) ?? '';
-    return property.startsWith('--')
+    const property = topLevelTokens(item.replace(/\/\*[\s\S]*?\*\//g, ' '))
+      .map(customPropertyName)
+      .find((name) => name !== undefined);
+    return property !== undefined
       ? [
           {
             name: property,
