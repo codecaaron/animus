@@ -1255,7 +1255,7 @@ fn record_external_token_candidates(
 
 /// Paths come from the host's `path.relative`, so Windows sends backslashes;
 /// normalization is for comparison only and diagnostics keep authored paths.
-fn is_external_file(file: &str, external_dirs: &[String]) -> bool {
+pub(crate) fn is_external_file(file: &str, external_dirs: &[String]) -> bool {
     if external_dirs.is_empty() {
         return false;
     }

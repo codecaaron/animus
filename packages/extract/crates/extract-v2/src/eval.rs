@@ -2,7 +2,7 @@
 //! non-static values and captured `transform` functions.
 
 use oxc::ast::ast::{
-    ArrayExpressionElement, Declaration, Expression, ObjectExpression, ObjectPropertyKind,
+    Argument, ArrayExpressionElement, Declaration, Expression, ObjectExpression, ObjectPropertyKind,
     Program, PropertyKey, PropertyKind, Statement, UnaryOperator, VariableDeclarationKind,
 };
 use oxc::span::Span;
@@ -269,20 +269,21 @@ fn eval_expression_scoped(
                     return Ok(Value::String(quasi.value.raw.to_string()));
                 }
             }
-            Err(BailError::new(
-                "template literal with expressions (non-static)",
-            ))
+            eval_asset_template(tpl, static_values, keyframes_eligible).ok_or_else(|| {
+                BailError::new("template literal with expressions (non-static)")
+            })
         }
 
         Expression::Identifier(ident) => {
             if let Some(sv) = static_values {
-                if let Some(val) = sv.get(ident.name.as_str()) {
+                if let Some(val) = sv.get(ident.name.as_str()).filter(|val| asset_function(val).is_none()) {
                     return Ok(val.clone());
                 }
             }
             Err(BailError::new("variable reference (non-static)"))
         }
-        Expression::CallExpression(_) => Err(BailError::new("function call (non-static)")),
+        Expression::CallExpression(call) => eval_asset_call(call, static_values)
+            .unwrap_or_else(|| Err(BailError::new("function call (non-static)"))),
         Expression::ArrowFunctionExpression(_) => {
             Err(BailError::new("arrow function (non-static)"))
         }
@@ -527,20 +528,29 @@ pub fn parse_states_arg(
 }
 
 pub fn collect_static_values(program: &Program<'_>) -> FxHashMap<String, Value> {
-    collect_static_values_impl(program, false)
+    collect_static_values_impl(program, false, false)
+}
+
+/// The static values of a file in an installed or external package, where a
+/// relative `asset()` specifier would resolve from the wrong origin.
+pub fn collect_package_static_values(program: &Program<'_>) -> FxHashMap<String, Value> {
+    collect_static_values_impl(program, false, true)
 }
 
 /// Rejects partially evaluated objects, so an inferred JSX value set can
 /// never omit a runtime-reachable member.
 pub fn collect_complete_static_values(program: &Program<'_>) -> FxHashMap<String, Value> {
-    collect_static_values_impl(program, true)
+    collect_static_values_impl(program, true, false)
 }
 
 fn collect_static_values_impl(
     program: &Program<'_>,
     require_complete: bool,
+    in_package: bool,
 ) -> FxHashMap<String, Value> {
-    let mut values = FxHashMap::default();
+    // Style values may call `asset()`; JSX usage values never read it.
+    let assets = if require_complete { FxHashMap::default() } else { asset_bindings(program, in_package) };
+    let mut values = assets.clone();
     let undefined_bound = !require_complete && module_binds(program, "undefined");
 
     for stmt in &program.body {
@@ -575,7 +585,7 @@ fn collect_static_values_impl(
                 let mut dummy_skips = Vec::new();
                 match init {
                     Expression::ObjectExpression(obj) => {
-                        if let Ok((mut val, skips, captures)) = eval_object_expr(obj) {
+                        if let Ok((mut val, skips, captures)) = eval_object_expr_scoped(obj, Some(&assets), false) {
                             if !require_complete {
                                 let lost = LostValueSource {
                                     obj,
@@ -590,7 +600,7 @@ fn collect_static_values_impl(
                         }
                     }
                     _ => {
-                        if let Ok(val) = eval_expression(init, &mut dummy_skips) {
+                        if let Ok(val) = eval_expression_with_statics(init, &mut dummy_skips, Some(&assets)) {
                             if !require_complete || dummy_skips.is_empty() {
                                 values.insert(name, val);
                             }
@@ -679,6 +689,123 @@ fn mark_lost_value(
 
 fn lost_value_reason(value: &Value) -> Option<&str> {
     value.as_object()?.get(LOST_VALUE)?.as_str()
+}
+
+/// Among a file's static values, a local bound to `@animus-ui/system`'s
+/// `asset`: evaluation calls it, and no read takes it as a value. Its scope
+/// says whether a relative specifier may evaluate: in a project file the
+/// host resolves it as every relative `asset()` is resolved, from the
+/// project root; in a package file that would be the wrong origin.
+const ASSET_FUNCTION: &str = "$animus.asset";
+const ASSET_IN_PROJECT: &str = "project";
+const ASSET_IN_PACKAGE: &str = "package";
+
+/// The placeholder `asset()` returns: the host substitutes the resolved URL.
+pub(crate) const ASSET_PLACEHOLDER_PREFIX: &str = "animus-asset:";
+
+/// Whether relative specifiers may evaluate, for a value that is the
+/// `asset` function; `None` for any other value.
+fn asset_function(value: &Value) -> Option<bool> {
+    match value.as_object()?.get(ASSET_FUNCTION)?.as_str()? {
+        ASSET_IN_PROJECT => Some(true),
+        _ => Some(false),
+    }
+}
+
+/// A specifier `asset()` resolves against the declaring file's directory.
+fn is_relative_specifier(specifier: &str) -> bool {
+    specifier.starts_with("./") || specifier.starts_with("../")
+}
+
+/// `asset('literal')` through a local bound to the `asset` function, as the
+/// placeholder it returns; `None` for any other call.
+fn eval_asset_call(
+    call: &oxc::ast::ast::CallExpression<'_>,
+    static_values: Option<&FxHashMap<String, Value>>,
+) -> Option<Result<Value, BailError>> {
+    let Expression::Identifier(callee) = &call.callee else {
+        return None;
+    };
+    let relative_allowed = asset_function(static_values?.get(callee.name.as_str())?)?;
+    let [Argument::StringLiteral(specifier)] = call.arguments.as_slice() else {
+        return Some(Err(BailError::new("asset() of a non-literal specifier (non-static)")));
+    };
+    if is_relative_specifier(&specifier.value) && !relative_allowed {
+        return Some(Err(BailError::new(
+            "asset() of a relative specifier in a package file, which would resolve from the wrong origin (non-static)",
+        )));
+    }
+    Some(Ok(Value::String(format!("{ASSET_PLACEHOLDER_PREFIX}{}", specifier.value))))
+}
+
+/// A template whose every expression is a static string or number and which
+/// carries an `asset()` placeholder, as its text. Other templates with
+/// expressions stay non-static.
+fn eval_asset_template(
+    tpl: &oxc::ast::ast::TemplateLiteral<'_>,
+    static_values: Option<&FxHashMap<String, Value>>,
+    keyframes_eligible: bool,
+) -> Option<Value> {
+    let mut parts = Vec::with_capacity(tpl.expressions.len());
+    for expression in &tpl.expressions {
+        let mut skips = Vec::new();
+        let part = match eval_expression_scoped(expression, &mut skips, static_values, keyframes_eligible).ok()? {
+            Value::String(text) => text,
+            Value::Number(number) => number.to_string(),
+            _ => return None,
+        };
+        parts.push(part);
+    }
+    if !parts.iter().any(|part| part.contains(ASSET_PLACEHOLDER_PREFIX)) {
+        return None;
+    }
+    let mut text = String::new();
+    for (index, quasi) in tpl.quasis.iter().enumerate() {
+        text.push_str(&quasi.value.raw);
+        if let Some(part) = parts.get(index) {
+            text.push_str(part);
+        }
+    }
+    Some(Value::String(text))
+}
+
+/// Whether a value holds an `asset()` placeholder with a relative
+/// specifier, which only its own file may use.
+pub(crate) fn carries_relative_asset(value: &Value) -> bool {
+    match value {
+        Value::String(text) => text
+            .match_indices(ASSET_PLACEHOLDER_PREFIX)
+            .any(|(at, prefix)| is_relative_specifier(&text[at + prefix.len()..])),
+        Value::Array(items) => items.iter().any(carries_relative_asset),
+        Value::Object(entries) => entries.values().any(carries_relative_asset),
+        _ => false,
+    }
+}
+
+/// The module's locals imported as `asset` from `@animus-ui/system`, bound to
+/// the `asset` function for a project or a package file.
+fn asset_bindings(program: &Program<'_>, in_package: bool) -> FxHashMap<String, Value> {
+    let scope = if in_package { ASSET_IN_PACKAGE } else { ASSET_IN_PROJECT };
+    let mut bindings = FxHashMap::default();
+    for stmt in &program.body {
+        let Statement::ImportDeclaration(import) = stmt else {
+            continue;
+        };
+        if !crate::usage_facts::is_animus_system_specifier(&import.source.value) {
+            continue;
+        }
+        for specifier in import.specifiers.iter().flatten() {
+            if let oxc::ast::ast::ImportDeclarationSpecifier::ImportSpecifier(named) = specifier {
+                if named.imported.name() == "asset" {
+                    bindings.insert(
+                        named.local.name.to_string(),
+                        serde_json::json!({ ASSET_FUNCTION: scope }),
+                    );
+                }
+            }
+        }
+    }
+    bindings
 }
 
 /// What a `.props()` value lost through const configs, as `(prop, reason)`;
