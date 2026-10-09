@@ -141,6 +141,45 @@ function matchesSideEffects(
   });
 }
 
+/** An exports target under the `import` condition, then `default`, as the
+ *  system loader reads it; an array offers its targets in order. */
+function exportTarget(value: JsonValue | undefined): string | null {
+  if (isJsonString(value)) return value;
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      const target = exportTarget(entry);
+      if (target !== null) return target;
+    }
+    return null;
+  }
+  if (!isJsonBlock(value)) return null;
+  return exportTarget(value.import) ?? exportTarget(value.default);
+}
+
+/** Each exact `exports` entry of the package at `pkgRoot`, as its subpath
+ *  and absolute target; `*` patterns name no single file and are skipped. */
+function packageExportEntries(pkgRoot: string): Array<[string, string]> {
+  let manifest: JsonValue;
+  try {
+    manifest = JSON.parse(readFileSync(join(pkgRoot, 'package.json'), 'utf-8'));
+  } catch {
+    return [];
+  }
+  const exports = isJsonBlock(manifest) ? manifest.exports : undefined;
+  if (exports === undefined || exports === null) return [];
+  const subpaths =
+    isJsonBlock(exports) && Object.keys(exports).some((k) => k.startsWith('.'))
+      ? exports
+      : { '.': exports };
+  const entries: Array<[string, string]> = [];
+  for (const [subpath, value] of Object.entries(subpaths)) {
+    if (!subpath.startsWith('.') || subpath.includes('*')) continue;
+    const target = exportTarget(value);
+    if (target !== null) entries.push([subpath, resolve(pkgRoot, target)]);
+  }
+  return entries;
+}
+
 /** Installed content is release content, and unpacking can leave any file
  *  times, so only a package whose real path is outside `node_modules`, such
  *  as a workspace link, is judged stale by them. */
@@ -400,6 +439,22 @@ export async function collectExternalPackageSources(opts: {
         pushed.add(outputRelPath);
         fileOwners[outputRelPath] ??= specifier;
         fileCount++;
+      }
+    }
+
+    // App code imports a package by any of its export entries, often its
+    // root, while only the include specifier was mapped above. An entry whose
+    // target was analysed maps there too, so its bindings resolve, as they do
+    // for a source install through its root redirect.
+    if (!isAbsolute(specifier)) {
+      const packageName = bareSpecifierPackageName(specifier);
+      for (const [subpath, target] of packageExportEntries(pkgRoot)) {
+        const entrySpecifier = packageName + subpath.slice(1);
+        const targetRelPath = relative(rootDir, target);
+        if (entrySpecifier in packageMap || !alreadyIngested(targetRelPath)) {
+          continue;
+        }
+        packageMap[entrySpecifier] = targetRelPath;
       }
     }
 
