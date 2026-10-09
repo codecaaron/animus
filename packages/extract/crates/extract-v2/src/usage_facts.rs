@@ -347,6 +347,20 @@ pub struct ExportFact {
     pub original: Option<String>,
 }
 
+/// The sources of `export * from '…'`, which re-export every named export.
+pub fn collect_star_exports(program: &Program<'_>) -> Vec<String> {
+    program
+        .body
+        .iter()
+        .filter_map(|stmt| match stmt {
+            Statement::ExportAllDeclaration(export) if export.exported.is_none() => {
+                Some(export.source.value.to_string())
+            }
+            _ => None,
+        })
+        .collect()
+}
+
 /// Collect export facts from top-level statements.
 pub fn collect_export_facts(program: &Program<'_>) -> Vec<ExportFact> {
     use oxc::ast::ast::Declaration;

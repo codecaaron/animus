@@ -79,11 +79,14 @@ removed and that call failed at runtime.
 as `<Card.Body p={8} />` now finds its family through the imports of the
 file it is written in, so it gets its utility classes however the family
 arrives: under another name (`import { Card as Panel }`), through
-re-exports, as a default import, or through a namespace import
-(`<ui.Card.Body />`). Before, member tags were matched by the family's
-declared name across the whole project: an aliased, default or namespace
-import missed its slots, and two modules exporting families with the same
-name could take each other's tags. The manifest's `crossFile.memberBindings`
+re-exports and barrels (`export * from`, or an imported name exported
+again), as a default import, or through a namespace import
+(`<ui.Card.Body />`). An import from a package the analysis cannot resolve
+still finds the family when exactly one family has that name. Before,
+member tags were matched by the family's declared name across the whole
+project: an aliased, default or namespace import missed its slots, and two
+modules exporting families with the same name could take each other's tags.
+The manifest's `crossFile.memberBindings`
 changes shape to match. It now maps each consuming file to the member tags
 written there and the component each one renders, for example
 `{ "app.tsx": { "Panel.Body": "card.tsx::Body" } }`.

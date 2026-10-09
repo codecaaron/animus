@@ -6379,6 +6379,93 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         }
     }
 
+    fn barrel_family(family: &str) -> String {
+        format!(
+            "export const Root = ds.styles({{ display: 'flex' }}).asElement('div');\n\
+             export const Body = ds.styles({{ display: 'block' }}).system({{ space: true }})\n\
+               .props({{ size: {{ property: 'flexBasis' }} }}).asElement('div');\n\
+             {family}\n"
+        )
+    }
+
+    /// Every barrel shape a family can travel through, plus a namespace
+    /// import of one: the member tag keeps its utility class.
+    #[test]
+    fn family_member_tags_resolve_through_barrels() {
+        let named = barrel_family("export const Card = compose({ Root, Body }, { name: 'Card' });");
+        let default = barrel_family("export default compose({ Root, Body }, { name: 'Card' });");
+        for (family, barrel, app) in [
+            (&named, "export * from './a';", "import { Card } from './barrel';\nexport const App = () => <Card.Body p={8} />;"),
+            (&named, "export * from './inner';", "import { Card } from './barrel';\nexport const App = () => <Card.Body p={8} />;"),
+            (&named, "import { Card } from './a';\nexport { Card };", "import { Card } from './barrel';\nexport const App = () => <Card.Body p={8} />;"),
+            (&named, "import { Card } from './a';\nexport { Card as default };", "import Card from './barrel';\nexport const App = () => <Card.Body p={8} />;"),
+            (&named, "export * from './a';", "import * as ui from './barrel';\nexport const App = () => <ui.Card.Body p={8} />;"),
+            (&default, "export { default as Card } from './a';", "import { Card } from './barrel';\nexport const App = () => <Card.Body p={8} />;"),
+            (&default, "import Card from './a';\nexport { Card };", "import { Card } from './barrel';\nexport const App = () => <Card.Body p={8} />;"),
+        ] {
+            let out = analyze(
+                &[
+                    ("a.tsx", family.as_str()),
+                    ("inner.ts", "export * from './a';\n"),
+                    ("barrel.ts", barrel),
+                    ("app.tsx", app),
+                ],
+                &test_inputs(),
+            );
+            assert!(
+                out.sheets.system.contains("padding: 0.5rem"),
+                "{barrel} / {app}: lost the utility class:\n{}",
+                out.sheets.system
+            );
+        }
+    }
+
+    #[test]
+    fn custom_props_on_member_tags_resolve_through_barrels() {
+        let family = barrel_family("export const Card = compose({ Root, Body }, { name: 'Card' });");
+        let out = analyze(
+            &[
+                ("a.tsx", family.as_str()),
+                ("barrel.ts", "export * from './a';\n"),
+                ("app.tsx", "import { Card } from './barrel';\nexport const App = () => <Card.Body size=\"sm\" />;\n"),
+            ],
+            &test_inputs(),
+        );
+        let replacement = &out.components["a.tsx::Body"].replacement;
+        assert!(replacement.contains(r#""customPropMap":{"size":{"sm":"#), "{replacement}");
+    }
+
+    /// An export alias names the family for importers only; inside the file
+    /// `<Card.Body>` is still the local `Card`.
+    #[test]
+    fn export_aliases_leave_local_family_names_alone() {
+        let source = "export const Root = ds.styles({ display: 'flex' }).asElement('div');\n\
+                      export const Body = ds.styles({ display: 'block' }).system({ space: true }).asElement('div');\n\
+                      const Plain = ds.styles({ display: 'grid' }).asElement('div');\n\
+                      const Card = compose({ Root, Body }, { name: 'Card' });\n\
+                      const Legacy = compose({ Root, Body: Plain }, { name: 'Legacy' });\n\
+                      export { Card as CardV2, Legacy as Card };\n\
+                      export const App = () => <Card.Body p={8} />;\n";
+        let out = analyze(&[("fam.tsx", source)], &test_inputs());
+        assert!(out.sheets.system.contains("padding: 0.5rem"), "{}", out.sheets.system);
+        assert_eq!(out.member_bindings["fam.tsx"]["Card.Body"], "fam.tsx::Body");
+    }
+
+    /// A package import the analysis cannot resolve still finds the one
+    /// family with its name; two such families leave it unresolved.
+    #[test]
+    fn unresolvable_imports_fall_back_to_the_only_family_with_that_name() {
+        let family = barrel_family("export const Card = compose({ Root, Body }, { name: 'Card' });");
+        let app = "import { Card } from '@acme/ui';\nexport const App = () => <Card.Body p={8} />;\n";
+        let out = analyze(&[("a.tsx", family.as_str()), ("app.tsx", app)], &test_inputs());
+        assert_eq!(out.member_bindings["app.tsx"]["Card.Body"], "a.tsx::Body");
+        let out = analyze(
+            &[("a.tsx", family.as_str()), ("b.tsx", family.as_str()), ("app.tsx", app)],
+            &test_inputs(),
+        );
+        assert!(!out.member_bindings.contains_key("app.tsx"), "{:?}", out.member_bindings);
+    }
+
     #[test]
     fn compose_slot_unresolvable_by_qualified_id_bails_loud() {
         // The composing file neither defines nor imports the slot bindings.
