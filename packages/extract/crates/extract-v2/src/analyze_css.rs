@@ -35,7 +35,7 @@ use crate::theme::{
     TransformFailure, TransformFailureSink, VariableMap, extracts_callback_value, extracts_configured_value, skips_transforms, strict_token_miss_of,
 };
 use crate::transforms::CallbackDefinition;
-use crate::usage_facts::{is_animus_system_specifier, TagFact, UsageFact, UsageResidueRecord};
+use crate::usage_facts::{is_animus_system_specifier, TagFact, TagOrigin, UsageFact, UsageResidueRecord};
 
 type ComponentPropSetMap = FxHashMap<String, FxHashSet<String>>;
 
@@ -381,6 +381,10 @@ const UNTRACKED_CLONE_PROPS: &str = "animus.usage.untracked-clone-props";
 /// `WIDE_MODULE_LOAD_LIMIT`, so the user can see why pruning stopped.
 const WIDE_MODULE_LOAD: &str = "animus.usage.wide-module-load";
 const WIDE_MODULE_LOAD_LIMIT: usize = 20;
+/// A warning, in production builds: a tag usage cannot match to an Animus
+/// component stops whole-component removal, so every extracted component
+/// stays. Named once per file and tag, with what the tag is.
+const IDENTITY_UNCERTAIN: &str = "animus.usage.identity-uncertain";
 /// A warning: a variant prop, option or state name with whitespace names a
 /// class the element's class attribute splits, so its rule never applies.
 const CLASS_NAME_WHITESPACE: &str = "animus.chain.class-name-whitespace";
@@ -429,6 +433,7 @@ pub(crate) const DIAGNOSTIC_CODES: &[(&str, &str)] = &[
     (UNATTRIBUTED_SYSTEM_PROPS, "warn"),
     (UNTRACKED_CLONE_PROPS, "warn"),
     (WIDE_MODULE_LOAD, "warn"),
+    (IDENTITY_UNCERTAIN, "warn"),
     (UNEXTRACTABLE_CHAIN, "warn"),
     (SKIPPED_VALUE, "warn"),
     (UNRESOLVED_PARENT, "warn"),
@@ -2928,6 +2933,176 @@ fn untracked_clone_props(file: &str, ff: &FileFacts) -> Vec<CssDiagnostic> {
         .collect()
 }
 
+/// What left one file's usage scan unable to tell which component it renders.
+enum UncertainIdentity {
+    Tag(crate::usage_facts::UncertainTag),
+    /// A name the scan read as a component that resolved to none: an import
+    /// that declares no extracted component, named like one elsewhere.
+    Unattributed(String),
+}
+
+/// One warning per file and tag, at its first site.
+fn identity_uncertainty_warnings(
+    sites: &[(&String, UncertainIdentity)],
+    files: &BTreeMap<String, FileFacts>,
+    inputs: &CssInputs,
+) -> Vec<CssDiagnostic> {
+    let mut seen: FxHashSet<(&str, String)> = FxHashSet::default();
+    let mut warnings = Vec::new();
+    for (file, site) in sites {
+        let Some(ff) = files.get(*file) else {
+            continue;
+        };
+        let (tag, create_element, origin, at, shared_name) = match site {
+            UncertainIdentity::Tag(site) => {
+                (site.tag.as_deref(), site.create_element, site.origin, Some(site.at), false)
+            }
+            UncertainIdentity::Unattributed(name) => match first_site_of(ff, name) {
+                Some((create_element, origin, at)) => (Some(name.as_str()), create_element, origin, Some(at), true),
+                None => (Some(name.as_str()), false, None, None, true),
+            },
+        };
+        let key = tag.unwrap_or("createElement(…)").to_string();
+        if !seen.insert((file.as_str(), key.clone())) {
+            continue;
+        }
+        let (spelling, reason) = match tag {
+            None => ("createElement(…)".to_string(), "receives a component chosen at runtime".to_string()),
+            Some(tag) => {
+                let spelling = match create_element {
+                    true => format!("createElement({tag})"),
+                    false => format!("<{tag}>"),
+                };
+                let mut reason = uncertain_tag_reason(file, ff, tag, origin, files, inputs);
+                if shared_name {
+                    reason.push_str(", and shares its name with an Animus component another file declares");
+                }
+                (spelling, reason)
+            }
+        };
+        // The tag as written, like a call usage code names its call: the
+        // warning is about this use, not about a component of that name.
+        let warning = diagnostic(
+            file,
+            &spelling,
+            "warn",
+            format!(
+                "{spelling} {reason}; extraction counts a tag it cannot match to an Animus \
+                 component as unknown, so every extracted component is kept and none is \
+                 removed as unused"
+            ),
+            Some(IDENTITY_UNCERTAIN),
+        );
+        warnings.push(match at {
+            Some(at) => warning.at(at),
+            None => warning,
+        });
+    }
+    warnings
+}
+
+/// The first element or `createElement` call naming `name`: whether it is a
+/// call, the origin of its name, and its offset.
+fn first_site_of(ff: &FileFacts, name: &str) -> Option<(bool, Option<TagOrigin>, u32)> {
+    ff.usage_for_analysis().iter().find_map(|fact| match fact {
+        UsageFact::Element { tag: TagFact::Ident(tag) | TagFact::Member(tag), span, origin, .. }
+            if tag == name =>
+        {
+            Some((false, *origin, span.0))
+        }
+        UsageFact::CreateElement { ident: Some(tag), at, origin, .. }
+        | UsageFact::CreateElement { member: Some(tag), at, origin, .. }
+            if tag == name =>
+        {
+            Some((true, *origin, *at))
+        }
+        _ => None,
+    })
+}
+
+/// What a tag usage cannot match to an Animus component is, as far as the
+/// file's scopes and the analysed declarations prove it.
+fn uncertain_tag_reason(
+    file: &str,
+    ff: &FileFacts,
+    tag: &str,
+    origin: Option<TagOrigin>,
+    files: &BTreeMap<String, FileFacts>,
+    inputs: &CssInputs,
+) -> String {
+    let root = tag.split('.').next().unwrap_or(tag);
+    let member = root != tag;
+    // What a declaration proves the binding is, said of the place `at`.
+    let declared = |ff: &FileFacts, binding: &str, at: &str| {
+        if ff.ordinary_components.contains(binding) {
+            Some(format!("is an ordinary component declared in {at}"))
+        } else if ff.chains.iter().any(|chain| chain.descriptor.binding == binding) {
+            Some(format!("is an Animus chain in {at} that extraction could not extract"))
+        } else {
+            None
+        }
+    };
+    match origin {
+        Some(TagOrigin::Import) => {
+            let source = ff
+                .imports
+                .iter()
+                .find(|import| import.local == root)
+                .map(|import| &import.source)
+                .or_else(|| ff.namespace_imports.get(root));
+            let Some(source) = source else {
+                return "is imported from a module extraction cannot name".to_string();
+            };
+            let whose = match member {
+                true => format!("is a member of '{root}', imported from '{source}'"),
+                false => format!("is imported from '{source}'"),
+            };
+            if resolve_import_source(file, source, files, inputs).is_none() {
+                return format!("{whose}, which extraction does not analyse");
+            }
+            let proved = match member {
+                true => None,
+                false => resolve_declaration(file, ff, tag, files, inputs).and_then(
+                    |(declaring_file, binding, local)| {
+                        let dff = files.get(&declaring_file)?;
+                        let binding = match binding.as_str() {
+                            "default" => dff.default_export_binding.clone().unwrap_or(binding),
+                            _ => binding,
+                        };
+                        // `export function` and `export class` record no export
+                        // fact, so a declaration the file does not import is
+                        // its own.
+                        let own = local || !dff.imports.iter().any(|import| import.local == binding);
+                        own.then(|| declared(dff, &binding, &declaring_file)).flatten()
+                    },
+                ),
+            };
+            proved.unwrap_or_else(|| {
+                format!("{whose}, and extraction cannot follow it to a function or class declaration")
+            })
+        }
+        Some(TagOrigin::TopLevel) if member => format!(
+            "is a member of '{root}', declared in this file, that extraction cannot follow to a component"
+        ),
+        Some(TagOrigin::TopLevel) => declared(ff, tag, "this file").unwrap_or_else(|| {
+            "is declared in this file by something other than a function or class: a call such \
+             as memo() or lazy(), or a binding that is reassigned"
+                .to_string()
+        }),
+        Some(TagOrigin::Nested) if member => format!(
+            "is a member of '{root}', a parameter or a binding inside a function, so the \
+             component is chosen at runtime"
+        ),
+        Some(TagOrigin::Nested) => "is a parameter or a binding inside a function, so the \
+                                   component it holds is chosen at runtime"
+            .to_string(),
+        Some(TagOrigin::Undeclared) => {
+            format!("names '{root}', which this file neither declares nor imports")
+        }
+        None => "is a name extraction cannot match to an Animus component".to_string(),
+    }
+}
+
 /// How a declaration that usage identity misses still reaches a component:
 /// the target it names, read in the declaring file. Any other declaration (a
 /// function component that names its props, renders nothing, or is not a
@@ -3114,6 +3289,8 @@ fn confined_uses(
 struct UsageIdentityPolicy {
     rendered_ids: FxHashSet<String>,
     uncertain: bool,
+    /// Keys that resolved to no component, until the file's sites take them.
+    unattributed: Vec<String>,
 }
 
 impl UsageIdentityPolicy {
@@ -3124,6 +3301,7 @@ impl UsageIdentityPolicy {
             Some(ids) => ids.clone(),
             None => {
                 self.uncertain = true;
+                self.unattributed.push(key.to_string());
                 vec![key.to_string()]
             }
         }
@@ -3135,6 +3313,7 @@ impl UsageIdentityPolicy {
             Some(ids) => ids.first().cloned(),
             None => {
                 self.uncertain = true;
+                self.unattributed.push(key.to_string());
                 None
             }
         }
@@ -4379,6 +4558,7 @@ fn run_with_system_floor(
     let mut all_usage_results: Vec<UsageScanResult> = Vec::new();
     let mut usage_residue: Vec<UsageResidueRecord> = Vec::new();
     let mut identity_policy = UsageIdentityPolicy::default();
+    let mut uncertain_identities: Vec<(&String, UncertainIdentity)> = Vec::new();
 
     for path in order {
         if global_lookup.props.is_empty()
@@ -4568,7 +4748,18 @@ fn run_with_system_floor(
             all_custom_dynamic_usages.extend(custom_scan.dynamic_usages.iter().cloned());
         }
 
+        uncertain_identities.extend(
+            std::mem::take(&mut usage_result.uncertain_tags)
+                .into_iter()
+                .map(UncertainIdentity::Tag)
+                .chain(identity_policy.unattributed.drain(..).map(UncertainIdentity::Unattributed))
+                .map(|site| (path, site)),
+        );
         all_usage_results.push(usage_result);
+    }
+    // Development keeps every component anyway.
+    if !inputs.dev_mode {
+        diagnostics.extend(identity_uncertainty_warnings(&uncertain_identities, files, inputs));
     }
 
     // A component a reference hands somewhere usage tracking does not follow
@@ -8270,6 +8461,41 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             .collect();
         assert_eq!(warnings.len(), 1, "{warnings:#?}");
         assert!(warnings[0].starts_with("line 1: import(name) can load 21 components"), "{warnings:#?}");
+    }
+
+    /// A tag usage cannot match to an Animus component warns once per file
+    /// and tag in production, telling an ordinary component from an import
+    /// extraction does not analyse; development keeps every component and
+    /// does not warn.
+    #[test]
+    fn identity_uncertain_tags_warn_once_with_what_they_are() {
+        let entries = [
+            ("src/r.tsx", RECIPE),
+            ("src/card.tsx", "export function Card() { return null; }\n"),
+            (
+                "src/app.tsx",
+                "import { R } from './r';\nimport { Card } from './card';\nimport { Link } from 'router';\n\
+                 export const App = () => <><R size=\"sm\" /><Card /><Link /><Card /></>;\n",
+            ),
+        ];
+        let warnings = |dev_mode: bool| {
+            let mut inputs = test_inputs();
+            inputs.dev_mode = dev_mode;
+            analyze(&entries, &inputs)
+                .diagnostics
+                .into_iter()
+                .filter(|d| d.code.as_deref() == Some(IDENTITY_UNCERTAIN))
+                .map(|d| (d.component, d.message.split(';').next().unwrap_or_default().to_string()))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            warnings(false),
+            vec![
+                ("<Card>".to_string(), "<Card> is an ordinary component declared in src/card.tsx".to_string()),
+                ("<Link>".to_string(), "<Link> is imported from 'router', which extraction does not analyse".to_string()),
+            ]
+        );
+        assert_eq!(warnings(true), vec![]);
     }
 
     /// A context load honours its recursion flag and filter, a glob its

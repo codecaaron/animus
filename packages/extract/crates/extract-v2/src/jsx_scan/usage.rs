@@ -49,6 +49,9 @@ pub struct UsageScanResult {
     /// be resolved. Internal reachability signal.
     #[serde(skip)]
     pub identity_uncertain: bool,
+    /// The tags that set `identity_uncertain`, in fact order.
+    #[serde(skip)]
+    pub uncertain_tags: Vec<crate::usage_facts::UncertainTag>,
 }
 
 pub(crate) fn is_component_like_identifier(name: &str) -> bool {

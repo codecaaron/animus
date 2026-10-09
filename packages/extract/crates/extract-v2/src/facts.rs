@@ -328,6 +328,11 @@ pub struct FileFacts {
     /// context or a glob): their exports render where usage cannot follow.
     #[serde(skip)]
     pub(crate) module_loads: Vec<crate::usage_facts::ModuleLoad>,
+    /// Top-level functions and classes, and `const` bindings of a function or
+    /// class expression, that nothing in the file writes: a tag that names
+    /// one renders an ordinary component, not an Animus one.
+    #[serde(skip)]
+    pub(crate) ordinary_components: BTreeSet<String>,
     /// Extracted createTransform() declarations: serialized with the facts
     /// for probes, and the source of their bail diagnostics. They are never
     /// registered with the evaluator.
@@ -1185,6 +1190,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
         spread_wrappers,
         module_loads,
         unsafe_object_uses,
+        ordinary_components,
     } = crate::usage_facts::collect_enriched_usage(
         program,
         &usage_statics_fx,
@@ -1245,6 +1251,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
         value_escapes,
         spread_wrappers,
         module_loads,
+        ordinary_components,
         parse_diagnostics: ast.diagnostics.clone(),
         parse_panicked: ast.panicked,
     }

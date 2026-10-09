@@ -2,7 +2,7 @@
   "corpusSha256": "fcbf88aba94840f3174347541e76afbf310dd399d29c45489e7ba63635f4c5d2",
   "engine": "v2",
   "mode": "production",
-  "refreshIntent": "component-fragments-keyed-by-component-id-20261009",
+  "refreshIntent": "identity-uncertainty-warning-20261009",
   "surfaceSchemaSha256": "43eb1265e97aab8497c11ca05e8a4159a6d4f4b69a6837a704e1d96fa75eb108",
   "units": {
     "extract-all": {
@@ -34,6 +34,7 @@
         "per-property-bail.tsx|bail|SpreadComponent|chain dropped: stage 'styles' evaluation failed — styles eval failed: spread element in style object",
         "per-property-bail.tsx|skip|Hero|[skip] Hero: property 'background' — variable reference (non-static)",
         "per-property-bail.tsx|warn|HoverCard|prop 'color' value \"dynamic\" is not a token of its strict scale; its styling is omitted — use a scale key, or declare the prop strict: false to accept raw values",
+        "pkg-consumer.tsx|warn|<FlexBox>|<FlexBox> is imported from '@my-ui/components', which extraction does not analyse; extraction counts a tag it cannot match to an Animus component as unknown, so every extracted component is kept and none is removed as unused",
         "token-alias.tsx|warn|Broken|unresolvable token alias {colors.nonexistent} in 'border' — declaration dropped"
       ],
       "hasComponents": {
@@ -343,7 +344,10 @@
         "pkg-consumer.tsx": "import { createComponent } from '@animus-ui/system';\nimport 'virtual:animus/styles.css';\n// @ts-expect-error — fake package for testing external package resolution in Rust extractor\nimport { Box, FlexBox } from '@my-ui/components';\n\nimport { ds } from '../test-system';\n\nexport const Card = createComponent('div', 'animus-Card-7272e303', {});\n\nexport function App() {\n  return (\n    <FlexBox p={16}>\n      <Box p={8} mt={{ _: 8, sm: 16 }}>\n        <Card />\n      </Box>\n    </FlexBox>\n  );\n}\n\n"
       },
       "css": "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-base {\n  .animus-Card-7272e303 {\n    border-radius: 4px;\n    background-color: var(--color-background-current);\n    --current-bg: var(--color-background-current);\n  }\n}\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer composed {\n  }\n}\n\n",
-      "diagnostics": [],
+      "diagnostics": [
+        "pkg-consumer.tsx|warn|<Box>|<Box> is imported from '@my-ui/components', which extraction does not analyse; extraction counts a tag it cannot match to an Animus component as unknown, so every extracted component is kept and none is removed as unused",
+        "pkg-consumer.tsx|warn|<FlexBox>|<FlexBox> is imported from '@my-ui/components', which extraction does not analyse; extraction counts a tag it cannot match to an Animus component as unknown, so every extracted component is kept and none is removed as unused"
+      ],
       "hasComponents": {
         "pkg-consumer.tsx": true
       },
@@ -574,7 +578,12 @@
         "usage.mdx.tsx": "/* @mdx-source: usage.mdx */\n/*@jsxRuntime automatic*/\n/*@jsxImportSource react*/\nfunction _createMdxContent(props) {\n  const _components = {\n    code: \"code\",\n    h1: \"h1\",\n    p: \"p\",\n    ...props.components\n  }, {MdxRenderedBox} = _components;\n  if (!MdxRenderedBox) _missingMdxReference(\"MdxRenderedBox\", true);\n  return <><_components.h1>{\"MDX Usage Fixture\"}</_components.h1>{\"\\n\"}<_components.p>{\"This file renders \"}<_components.code>{\"<MdxRenderedBox>\"}</_components.code>{\" from \"}<_components.code>{\".mdx\"}</_components.code>{\" only — no \"}<_components.code>{\".tsx\"}</_components.code>{\"/\"}<_components.code>{\".jsx\"}</_components.code>{\" callsite.\"}</_components.p>{\"\\n\"}<MdxRenderedBox>{\"Hello from MDX\"}</MdxRenderedBox></>;\n}\nexport default function MDXContent(props = {}) {\n  const {wrapper: MDXLayout} = props.components || ({});\n  return MDXLayout ? <MDXLayout {...props}><_createMdxContent {...props} /></MDXLayout> : _createMdxContent(props);\n}\nfunction _missingMdxReference(id, component) {\n  throw new Error(\"Expected \" + (component ? \"component\" : \"object\") + \" `\" + id + \"` to be defined: you likely forgot to import, pass, or provide it.\");\n}\n"
       },
       "css": "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-base {\n  .animus-MdxRenderedBox-df3bddbe {\n    background-color: var(--color-primary);\n    --current-bg: var(--color-primary);\n    padding: 16;\n  }\n}\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer composed {\n  }\n}\n\n",
-      "diagnostics": [],
+      "diagnostics": [
+        "usage.mdx.tsx|warn|<MDXLayout>|<MDXLayout> is a parameter or a binding inside a function, so the component it holds is chosen at runtime; extraction counts a tag it cannot match to an Animus component as unknown, so every extracted component is kept and none is removed as unused",
+        "usage.mdx.tsx|warn|<_components.code>|<_components.code> is a member of '_components', a parameter or a binding inside a function, so the component is chosen at runtime; extraction counts a tag it cannot match to an Animus component as unknown, so every extracted component is kept and none is removed as unused",
+        "usage.mdx.tsx|warn|<_components.h1>|<_components.h1> is a member of '_components', a parameter or a binding inside a function, so the component is chosen at runtime; extraction counts a tag it cannot match to an Animus component as unknown, so every extracted component is kept and none is removed as unused",
+        "usage.mdx.tsx|warn|<_components.p>|<_components.p> is a member of '_components', a parameter or a binding inside a function, so the component is chosen at runtime; extraction counts a tag it cannot match to an Animus component as unknown, so every extracted component is kept and none is removed as unused"
+      ],
       "hasComponents": {
         "component.tsx": true,
         "usage.mdx.tsx": false
