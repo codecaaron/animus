@@ -308,6 +308,9 @@ const UNTRACKED_CLONE_PROPS: &str = "animus.usage.untracked-clone-props";
 /// `WIDE_MODULE_LOAD_LIMIT`, so the user can see why pruning stopped.
 const WIDE_MODULE_LOAD: &str = "animus.usage.wide-module-load";
 const WIDE_MODULE_LOAD_LIMIT: usize = 20;
+/// A warning: a variant prop, option or state name with whitespace names a
+/// class the element's class attribute splits, so its rule never applies.
+const CLASS_NAME_WHITESPACE: &str = "animus.chain.class-name-whitespace";
 
 pub(crate) fn diagnostic_severity_for_code(code: &str) -> &'static str {
     match code {
@@ -1313,6 +1316,61 @@ fn runtime_declarations_of<'a>(
 ) -> Vec<(String, Arc<DeclarationBinding>)> {
     props
         .filter_map(|prop| Some((prop.clone(), Arc::clone(config.get(prop)?.declaration.binding.as_ref()?))))
+        .collect()
+}
+
+/// One warning per variant prop, option and state whose class has
+/// whitespace, which the class attribute splits so its rule never applies.
+/// Names a parent already declares were reported on the parent.
+fn split_class_names(
+    file: &str,
+    binding: &str,
+    css: &ComponentCss,
+    parent: Option<&ComponentCss>,
+) -> Vec<CssDiagnostic> {
+    let split = |name: &str| name.contains(|c: char| c.is_ascii_whitespace());
+    let inherited_option = |prop: &str, option: &str| {
+        parent.is_some_and(|parent| {
+            parent.variants.iter().any(|variant| {
+                variant.prop == prop && variant.options.iter().any(|(name, _)| name == option)
+            })
+        })
+    };
+    let mut named = Vec::new();
+    for variant in &css.variants {
+        let own = variant.options.iter().filter(|(option, _)| !inherited_option(&variant.prop, option));
+        if split(&variant.prop) {
+            if own.count() > 0 {
+                named.push(format!("variant '{}'", variant.prop));
+            }
+            continue;
+        }
+        named.extend(own.filter(|(option, _)| split(option)).map(|(option, _)| {
+            format!("variant '{}' option '{option}'", variant.prop)
+        }));
+    }
+    named.extend(
+        css.states
+            .iter()
+            .filter(|(state, _)| {
+                split(state) && !parent.is_some_and(|parent| parent.states.iter().any(|(name, _)| name == state))
+            })
+            .map(|(state, _)| format!("state '{state}'")),
+    );
+    named
+        .into_iter()
+        .map(|named| {
+            diagnostic(
+                file,
+                binding,
+                "warn",
+                format!(
+                    "{named} has whitespace, which splits its class in the class attribute, so \
+                     its styles never apply — rename it without whitespace"
+                ),
+                Some(CLASS_NAME_WHITESPACE),
+            )
+        })
         .collect()
 }
 
@@ -3531,6 +3589,16 @@ fn run_with_system_floor(
                     active_props
                 };
 
+                let parent_css = parent_map
+                    .get(component_id)
+                    .and_then(|parent_id| evaluated.get(parent_id))
+                    .map(|(parent_css, ..)| parent_css);
+                diagnostics.extend(split_class_names(
+                    file_path,
+                    &chain.descriptor.binding,
+                    &component_css,
+                    parent_css,
+                ));
                 evaluated.insert(
                     component_id.clone(),
                     (

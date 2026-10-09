@@ -223,6 +223,30 @@ pub struct VariantCss {
 /// framework's layer names; a dash (not a dot) keeps the layers flat.
 const LAYER_PREFIX: &str = "anm";
 
+/// `.{class}` with the class name serialized as a CSS identifier, so a
+/// binding (`trackClass$1`) or option name (`md:flex-row`) holding a
+/// character CSS reads as syntax stays one class: the element's class
+/// attribute carries the raw name. Plain names come back unchanged.
+fn class_selector(class: &str) -> String {
+    let mut selector = String::with_capacity(class.len() + 1);
+    selector.push('.');
+    let after_hyphen = class.starts_with('-');
+    for (index, c) in class.chars().enumerate() {
+        let leading_digit = c.is_ascii_digit() && (index == 0 || (index == 1 && after_hyphen));
+        match c {
+            '\0' => selector.push('\u{fffd}'),
+            c if c.is_ascii_control() || leading_digit => write!(selector, "\\{:x} ", c as u32).unwrap(),
+            '-' if class.len() == 1 => selector.push_str("\\-"),
+            c if c.is_ascii_alphanumeric() || matches!(c, '-' | '_') || !c.is_ascii() => selector.push(c),
+            c => {
+                selector.push('\\');
+                selector.push(c);
+            }
+        }
+    }
+    selector
+}
+
 pub fn layer_name(name: &str) -> String {
     format!("{}-{}", LAYER_PREFIX, name)
 }
@@ -497,7 +521,7 @@ fn write_rule_block(
     breakpoints: &BreakpointMap,
 ) {
     if !styles.declarations.is_empty() {
-        write_declarations(output, &format!(".{}", selector), &styles.declarations);
+        write_declarations(output, &class_selector(selector), &styles.declarations);
     }
 
     let mut sorted_pseudos: Vec<&(String, Vec<CssDeclaration>)> = styles.pseudo_selectors.iter().collect();
@@ -519,7 +543,7 @@ fn write_rule_block(
                 writeln!(output, "  {} {{", mq).unwrap();
                 write_declarations_indented(
                     output,
-                    &format!(".{}", selector),
+                    &class_selector(selector),
                     declarations,
                     4,
                 );
@@ -548,7 +572,7 @@ fn write_rule_block(
         }
     }
 
-    write_condition_blocks(output, &[format!(".{}", selector)], styles, breakpoints);
+    write_condition_blocks(output, &[class_selector(selector)], styles, breakpoints);
 }
 
 fn pseudo_sort_order(selector: &str) -> u32 {
@@ -617,7 +641,7 @@ fn pseudo_sort_order(selector: &str) -> u32 {
 }
 
 fn format_pseudo_selector(class: &str, pseudo: &str) -> String {
-    format_composed_pseudo(&format!(".{}", class), pseudo)
+    format_composed_pseudo(&class_selector(class), pseudo)
 }
 
 fn write_declarations(output: &mut String, selector: &str, declarations: &[CssDeclaration]) {
@@ -776,8 +800,13 @@ fn write_composed_rule_pair(
     let variant_class = format!("{}--{}-{}", root_class, variant_prop, option_name);
     let child_variant_class = format!("{}--{}-{}", child_class, variant_prop, option_name);
 
-    let inheritance_selector = format!(".{} .{}", variant_class, child_class);
-    let override_selector = format!(".{} .{}.{}", root_class, child_class, child_variant_class);
+    let inheritance_selector = format!("{} {}", class_selector(&variant_class), class_selector(child_class));
+    let override_selector = format!(
+        "{} {}{}",
+        class_selector(root_class),
+        class_selector(child_class),
+        class_selector(&child_variant_class)
+    );
 
     write_composed_selector_rules(
         output,
@@ -796,7 +825,7 @@ fn write_composed_default_inheritance_rule(
     breakpoints: &BreakpointMap,
 ) {
     let default_class = format!("{}--{}-default", root_class, variant_prop);
-    let inheritance_selector = format!(".{} .{}", default_class, child_class);
+    let inheritance_selector = format!("{} {}", class_selector(&default_class), class_selector(child_class));
     write_composed_selector_rules(
         output,
         std::slice::from_ref(&inheritance_selector),
@@ -947,7 +976,7 @@ fn composed_compound_selector(
         let values = compound_axis_values(value);
         let mut alternatives: Vec<String> = values
             .iter()
-            .map(|option| format!(".{}--{}-{}", owner, axis, option))
+            .map(|option| class_selector(&format!("{owner}--{axis}-{option}")))
             .collect();
         if alternatives.is_empty() {
             return None;
@@ -956,7 +985,7 @@ fn composed_compound_selector(
             .and_then(|css| css.variants.iter().find(|variant| variant.prop == *axis))
             .and_then(|variant| variant.default_option.as_deref());
         if owner_default.is_some_and(|option| values.iter().any(|v| v == option)) {
-            alternatives.push(format!(".{}--{}-default", owner, axis));
+            alternatives.push(class_selector(&format!("{owner}--{axis}-default")));
         }
 
         if shared {
@@ -965,8 +994,8 @@ fn composed_compound_selector(
                 if !values.iter().any(|v| v == option) {
                     write!(
                         child_exclusions,
-                        ":not(.{}--{}-{})",
-                        child_class, axis, option
+                        ":not({})",
+                        class_selector(&format!("{child_class}--{axis}-{option}"))
                     )
                     .unwrap();
                 }
@@ -980,8 +1009,11 @@ fn composed_compound_selector(
     }
 
     Some(format!(
-        "{} .{}{}{}",
-        root_chain, child_class, child_chain, child_exclusions
+        "{} {}{}{}",
+        root_chain,
+        class_selector(child_class),
+        child_chain,
+        child_exclusions
     ))
 }
 
@@ -1189,7 +1221,7 @@ fn write_utility_rule(
     breakpoints: &BreakpointMap,
 ) {
     if !styles.declarations.is_empty() {
-        write_declarations(layer_body, &format!(".{}", class_name), &styles.declarations);
+        write_declarations(layer_body, &class_selector(class_name), &styles.declarations);
     }
 
     let mut sorted_pseudos: Vec<&(String, Vec<CssDeclaration>)> = styles.pseudo_selectors.iter().collect();
@@ -1215,7 +1247,7 @@ fn write_utility_rule(
                 writeln!(layer_body, "  {} {{", mq).unwrap();
                 write_declarations_indented(
                     layer_body,
-                    &format!(".{}", class_name),
+                    &class_selector(class_name),
                     declarations,
                     4,
                 );
@@ -1224,7 +1256,7 @@ fn write_utility_rule(
         }
     }
 
-    write_condition_blocks(layer_body, &[format!(".{}", class_name)], styles, breakpoints);
+    write_condition_blocks(layer_body, &[class_selector(class_name)], styles, breakpoints);
 }
 
 type UtilityClassMap = HashMap<String, HashMap<String, String>>;
@@ -1458,7 +1490,7 @@ fn render_binding_classes(declarations: &DeclarationUsage, class_prefix: &str) -
                     value: record[&member.name].clone(),
                 })
                 .collect();
-            write_declarations(&mut css, &format!(".{}", names.binding_class(key, breakpoint.as_deref())), &declarations);
+            write_declarations(&mut css, &class_selector(&names.binding_class(key, breakpoint.as_deref())), &declarations);
         }
     }
     css
@@ -2309,11 +2341,20 @@ mod tests {
         assert_ne!(h1, h2);
     }
 
+    /// The class attribute keeps a binding or option name as written; its
+    /// selector escapes what CSS would read as syntax.
     #[test]
     fn make_class_name_format() {
         let name = make_class_name("ButtonContainer", "some-chain-data", "animus");
         assert!(name.starts_with("animus-ButtonContainer-"));
         assert_eq!(name.len(), "animus-ButtonContainer-".len() + 8);
+        assert_eq!(class_selector(&format!("{name}--size-sm")), format!(".{name}--size-sm"));
+        let renamed = make_class_name("trackClass$1", "some-chain-data", "animus");
+        assert!(renamed.starts_with("animus-trackClass$1-"));
+        assert_eq!(
+            class_selector(&format!("{renamed}--dir-md:flex-row")),
+            format!(".{}--dir-md\\:flex-row", renamed.replace('$', "\\$"))
+        );
     }
 
     #[test]
