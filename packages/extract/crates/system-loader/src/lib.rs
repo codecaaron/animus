@@ -499,7 +499,12 @@ pub fn resolve_all_deps(
             raw_source.clone()
         };
 
-        let import_infos = extract_import_specifiers(&raw_source, &current_path);
+        let mut import_infos = extract_import_specifiers(&raw_source, &current_path);
+        if is_ts {
+            // The strip's JSX transform adds an automatic-runtime import the
+            // authored source lacks; the evaluated module needs its stub.
+            import_infos.extend(extract_import_specifiers(&processed, &current_path));
+        }
 
         let current_dir = Path::new(&current_path)
             .parent()
@@ -676,11 +681,15 @@ fn rewrite_module_for_bundle(
                         .unwrap_or_else(|| stub_key(&spec)),
                 );
 
+                // The span takes the statement's own `;`, and compacted output
+                // starts the next statement on the same line, so the
+                // replacement ends itself.
                 let replacement = match &decl.specifiers {
-                    Some(specifiers) if !specifiers.is_empty() => {
+                    Some(specifiers) if !specifiers.is_empty() => format!(
+                        "{};",
                         rewrite_import_specifiers(specifiers, &require_literal)
-                    }
-                    _ => format!("__require('{}')", require_literal),
+                    ),
+                    _ => format!("__require('{}');", require_literal),
                 };
 
                 ops.push(RewriteOp {
@@ -714,7 +723,7 @@ fn rewrite_module_for_bundle(
                     ops.push(RewriteOp {
                         start: decl.span.start as usize,
                         end: decl.span.end as usize,
-                        replacement: assignments.join(";\n"),
+                        replacement: format!("{};", assignments.join(";\n")),
                     });
                 } else if !decl.specifiers.is_empty() {
                     for es in &decl.specifiers {
@@ -747,6 +756,20 @@ fn rewrite_module_for_bundle(
                     end: decl_start,
                     replacement: "__exports.default = ".to_string(),
                 });
+                // A function or class declaration becomes an expression here,
+                // which compacted output must not run into the next statement.
+                if matches!(
+                    decl.declaration,
+                    oxc::ast::ast::ExportDefaultDeclarationKind::FunctionDeclaration(_)
+                        | oxc::ast::ast::ExportDefaultDeclarationKind::ClassDeclaration(_)
+                ) {
+                    let decl_end = decl.span.end as usize;
+                    ops.push(RewriteOp {
+                        start: decl_end,
+                        end: decl_end,
+                        replacement: ";".to_string(),
+                    });
+                }
             }
 
             Statement::ExportAllDeclaration(decl) => {
@@ -761,12 +784,12 @@ fn rewrite_module_for_bundle(
                 // leave surrounding code reading exports that never appear.
                 let replacement = match &decl.exported {
                     Some(exported) => format!(
-                        "__exports['{}'] = __require('{}') || {{}}",
+                        "__exports['{}'] = __require('{}') || {{}};",
                         js_quoted(&module_export_name(exported)),
                         require_literal
                     ),
                     None => format!(
-                        "Object.assign(__exports, __require('{}') || {{}})",
+                        "Object.assign(__exports, __require('{}') || {{}});",
                         require_literal
                     ),
                 };
@@ -781,8 +804,10 @@ fn rewrite_module_for_bundle(
         }
     }
 
-    // Reverse order keeps the not-yet-applied offsets valid.
-    ops.sort_by_key(|op| std::cmp::Reverse(op.start));
+    // Reverse order keeps the not-yet-applied offsets valid. At one offset,
+    // the op replacing text runs before an insertion there, so the insertion
+    // lands ahead of that replacement and shifts no pending range.
+    ops.sort_by_key(|op| std::cmp::Reverse((op.start, op.end)));
     let mut result = source.to_string();
     for op in &ops {
         result.replace_range(op.start..op.end, &op.replacement);
@@ -1807,11 +1832,11 @@ export const ds = tokens;
 
         assert_eq!(
             rewrite_module_for_bundle("import 'react';", "/entry.ts", &stub_map).unwrap(),
-            "__require('__stub__/react')"
+            "__require('__stub__/react');"
         );
         assert_eq!(
             rewrite_module_for_bundle("import {} from 'react';", "/entry.ts", &stub_map,).unwrap(),
-            "__require('__stub__/react')"
+            "__require('__stub__/react');"
         );
         assert_eq!(
             rewrite_module_for_bundle(
@@ -1820,7 +1845,7 @@ export const ds = tokens;
                 &stub_map,
             )
             .unwrap(),
-            "const { same, source: local } = __require('__stub__/react-dom')"
+            "const { same, source: local } = __require('__stub__/react-dom');"
         );
         assert_eq!(
             rewrite_module_for_bundle(
@@ -1829,7 +1854,7 @@ export const ds = tokens;
                 &stub_map,
             )
             .unwrap(),
-            "const Default = __require('__stub__/react').default;\nconst { same, source: local } = __require('__stub__/react')"
+            "const Default = __require('__stub__/react').default;\nconst { same, source: local } = __require('__stub__/react');"
         );
         assert_eq!(
             rewrite_module_for_bundle(
@@ -1838,7 +1863,7 @@ export const ds = tokens;
                 &stub_map,
             )
             .unwrap(),
-            "const namespace = __require('__stub__/react/jsx-runtime')"
+            "const namespace = __require('__stub__/react/jsx-runtime');"
         );
         assert_eq!(
             rewrite_module_for_bundle(
@@ -1847,7 +1872,7 @@ export const ds = tokens;
                 &stub_map,
             )
             .unwrap(),
-            "const namespace = __require('__stub__/react')"
+            "const namespace = __require('__stub__/react');"
         );
 
         let resolved_map = HashMap::from([(
@@ -1857,7 +1882,7 @@ export const ds = tokens;
         assert_eq!(
             rewrite_module_for_bundle("import { same } from 'pkg';", "/entry.ts", &resolved_map,)
                 .unwrap(),
-            "const { same } = __require('/canonical/pkg.ts')"
+            "const { same } = __require('/canonical/pkg.ts');"
         );
     }
 
@@ -1978,7 +2003,7 @@ export const ds = tokens;
         assert_eq!(
             rewrite_module_for_bundle("export * as ns from 'pkg';", "/entry.ts", &resolved_map)
                 .unwrap(),
-            "__exports['ns'] = __require('/canonical/pkg.ts') || {}"
+            "__exports['ns'] = __require('/canonical/pkg.ts') || {};"
         );
 
         let stub_exports =
