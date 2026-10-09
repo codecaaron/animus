@@ -1,4 +1,4 @@
-import { assembleStylesheet } from './assemble-stylesheet';
+import { ANIMUS_LAYERS, assembleStylesheet } from './assemble-stylesheet';
 import { parseInternalWire } from './internal-wire';
 
 import type { ExternalPackageOutcome } from './discover-packages';
@@ -78,11 +78,19 @@ export function runStructuralSelfCheck(input: StructuralCheckInput): string[] {
         globalCss: input.globalCss,
         componentCss: input.componentCss,
       });
-    const baseIdx = assembled.search(/@layer\s+anm-base\s*\{/);
-    const variantsIdx = assembled.search(/@layer\s+anm-variants\s*\{/);
-    if (baseIdx !== -1 && variantsIdx !== -1 && baseIdx >= variantsIdx) {
+    // Each layer's block follows the blocks of the layers before it.
+    const blocks = ANIMUS_LAYERS.map((layer) => ({
+      layer,
+      offset: assembled.search(new RegExp(`@layer\\s+${layer}\\s*\\{`)),
+    })).filter(({ offset }) => offset !== -1);
+    const misplaced = blocks.findIndex(
+      ({ offset }, index) => index > 0 && offset <= blocks[index - 1].offset
+    );
+    if (misplaced !== -1) {
+      const earlier = blocks[misplaced - 1];
+      const later = blocks[misplaced];
       failures.push(
-        `CSS layer ordering violated — @layer anm-base (offset ${baseIdx}) must precede @layer anm-variants (offset ${variantsIdx})`
+        `CSS layer ordering violated — @layer ${earlier.layer} (offset ${earlier.offset}) must precede @layer ${later.layer} (offset ${later.offset})`
       );
     }
   }

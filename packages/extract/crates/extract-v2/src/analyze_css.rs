@@ -16,7 +16,7 @@ use crate::chain_merge::{
 use crate::chain_walk::{MemberParentExtension, TerminalKind};
 use crate::css::{
     build_variable_slot_entries, css_property_name, generate_composed_compound_css, hyphenated,
-    generate_composed_variant_css, generate_css_sheets_ordered, layer_name,
+    generate_composed_variant_css, generate_css_sheets_ordered, layer_name, layer_order,
     resolve_custom_prop_classes, resolve_utility_classes, wrap_layer, BreakpointMap, ComponentCss, ComposeFamilyRef, CompoundConditionMap,
     CssFragmentStore, CssSheets, UtilityInput, VariantCss,
 };
@@ -5336,14 +5336,8 @@ fn run_with_system_floor(
     // Global is excluded here; it flows through `sheets`.
     let mut css = sheets.declaration.clone();
     css.push('\n');
-    for sheet in [
-        &sheets.base,
-        &sheets.variants,
-        &sheets.compounds,
-        &sheets.states,
-        &sheets.system,
-        &sheets.custom,
-    ] {
+    let global = layer_name("global");
+    for sheet in layer_order().iter().filter(|layer| **layer != global).filter_map(|layer| sheets.of_layer(layer)) {
         if !sheet.is_empty() {
             css.push_str(sheet);
             css.push('\n');
