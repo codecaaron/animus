@@ -46,11 +46,14 @@ describe('css keyword probe validation', () => {
     stderr: '',
     ...overrides,
   });
-  const complete = [probe(4, '"auto" | "inherit" | 0n'), probe(5, '0n')];
+  const complete = [
+    probe(4, '0n | { "-moz-initial": 0; auto: 0; inherit: 0; "~probe": 0; }'),
+    probe(5, '0n | { "~probe": 0; }'),
+  ];
 
   test('reads each probe, including a valid probe with no keywords', () => {
     expect(probeLiterals(run(complete), 4, probes)).toEqual([
-      ['auto', 'inherit'],
+      ['-moz-initial', 'auto', 'inherit'],
       [],
     ]);
   });
