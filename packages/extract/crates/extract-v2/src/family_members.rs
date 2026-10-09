@@ -150,7 +150,7 @@ impl FamilyIndex {
 /// (every source is tried, in order), and an imported name exported again
 /// (`import { X } from '…'; export { X }` or `export default X`). `None` when
 /// no route reaches a declaration.
-fn follow_exports(
+pub(crate) fn follow_exports(
     module: String,
     name: String,
     files: &BTreeMap<String, FileFacts>,

@@ -1462,7 +1462,9 @@ fn resolve_usage_identity(
 }
 
 /// The components `local` names in `file` through that file's own
-/// declarations and imports only, never by bare binding name elsewhere.
+/// declarations and imports only, never by bare binding name elsewhere. An
+/// import is also followed through barrels, `export *` included, to the
+/// module that declares it.
 fn resolve_declared_identity(
     file: &str,
     local: &str,
@@ -1470,7 +1472,27 @@ fn resolve_declared_identity(
     inputs: &CssInputs,
     evaluated_ids: &FxHashSet<String>,
 ) -> Vec<String> {
-    resolve_identity(file, local, files, inputs, evaluated_ids, None)
+    let ids = resolve_identity(file, local, files, inputs, evaluated_ids, None);
+    if !ids.is_empty() {
+        return ids;
+    }
+    let Some(import) = files.get(file).and_then(|ff| ff.imports.iter().find(|i| i.local == local))
+    else {
+        return ids;
+    };
+    let Some((declaring_file, exported)) =
+        resolve_import_source(file, &import.source, files, inputs).and_then(|module| {
+            crate::family_members::follow_exports(module, import.imported.clone(), files, inputs)
+        })
+    else {
+        return ids;
+    };
+    let declared = files
+        .get(&declaring_file)
+        .and_then(|ff| ff.exports.iter().find(|e| e.exported == exported && e.source.is_none()))
+        .and_then(|e| e.local.clone())
+        .unwrap_or(exported);
+    resolve_identity(&declaring_file, &declared, files, inputs, evaluated_ids, None)
 }
 
 /// With `ids_by_binding`, a name the file's declarations and imports do not
@@ -6523,6 +6545,33 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
 
     /// A wrapper's own `Box`, local or from a package, is not the extracted
     /// `Box` elsewhere with the same name.
+    /// A recipe the wrapper imports through a barrel is still the recipe:
+    /// `export *`, `export { X } from`, and an imported name exported again.
+    #[test]
+    fn spread_wrappers_reach_their_recipe_through_barrels() {
+        let recipe = "export const ButtonRecipe = ds.styles({}).system({ space: true }).asElement('button');\n";
+        for barrel in [
+            "export * from './recipe';\n",
+            "export { ButtonRecipe } from './recipe';\n",
+            "import { ButtonRecipe } from './recipe';\nexport { ButtonRecipe };\n",
+        ] {
+            let out = analyze_with_logical_space(&[
+                ("recipe.tsx", recipe),
+                ("recipes.ts", barrel),
+                (
+                    "wrapper.tsx",
+                    "import { ButtonRecipe } from './recipes';\nexport const Button = (props) => <ButtonRecipe {...props} />;\n",
+                ),
+                ("app.tsx", "import { Button } from './wrapper';\nexport const App = () => <Button marginInlineStart={8} />;\n"),
+            ]);
+            let warnings = unattributed(&out);
+            assert_eq!(warnings.len(), 1, "{barrel}: {:?}", out.diagnostics);
+            for named in ["Button in wrapper.tsx", "ButtonRecipe"] {
+                assert!(warnings[0].message.contains(named), "{barrel}: {}", warnings[0].message);
+            }
+        }
+    }
+
     #[test]
     fn spread_targets_resolve_through_the_wrapper_file_not_by_name() {
         let recipe = "export const Box = ds.styles({}).system({ space: true }).asElement('div');\n";

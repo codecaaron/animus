@@ -1163,6 +1163,32 @@ mod tests {
         }
     }
 
+    /// `compose` and `compose as c` import one export twice; the call through
+    /// `c` is no family, so its import must survive the replacement.
+    #[test]
+    fn compose_import_survives_while_an_aliased_binding_still_calls_it() {
+        let source = "import { compose, compose as c } from '@animus-ui/system';\n\
+                      const Root = ds.styles({}).asElement('div');\n\
+                      export const Fam = compose({ Root }, { name: 'Card', shared: {} });\n\
+                      export const Other = c({ Root });\n\
+                      export const App = () => <Fam.Root />;\n";
+        let code = transform_source(source);
+
+        assert!(code.contains("createComposedFamily({ Root: Root }"), "{code}");
+        let allocator = oxc::allocator::Allocator::default();
+        let parsed =
+            oxc::parser::Parser::new(&allocator, &code, oxc::span::SourceType::tsx()).parse();
+        assert!(parsed.diagnostics.is_empty(), "{:?}\n{code}", parsed.diagnostics);
+        let scoping = oxc::semantic::SemanticBuilder::new()
+            .build(&parsed.program)
+            .semantic
+            .into_scoping();
+        assert!(
+            !scoping.root_unresolved_references().contains_key("c"),
+            "the call through `c` lost its import:\n{code}"
+        );
+    }
+
     #[test]
     fn compose_with_context_keeps_directive_and_import_capabilities_separate() {
         let source = "'use client';\nimport { composeWithContext } from '@animus-ui/system/compose-with-context';\nconst Root = ds.styles({}).asElement('div');\nexport const Fam = composeWithContext({ Root }, { name: 'Card', shared: {} });\nexport const App = () => <Fam.Root />;\n";

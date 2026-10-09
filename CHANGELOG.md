@@ -162,7 +162,8 @@ expression is now a family, including as a default export, so its slots
 keep their styles and its shared variants reach them. Previously the family
 was missed and its slots' styles could be pruned. A file that still uses
 `compose` where extraction does not recognise a family, such as a call
-inside a function, now keeps its `compose` import; before, the import was
+inside a function or a call through another local name
+(`import { compose as c }`), now keeps that import; before, the import was
 removed and that call failed at runtime.
 
 **Chains behind TypeScript syntax extract like bare chains.** A chain
@@ -204,8 +205,7 @@ declaration it resolved to and the props. It is a warning, so `strict`
 builds still pass. Tags imported from packages outside the analysis, such
 as a UI library's components, never trigger it. It names only props the
 component reached takes as system props, never its variant, state or custom
-props. It does not yet see a wrapper reached through `export *`, a
-wrapper whose recipe is imported through an `export *` barrel, a render
+props. It does not yet see a wrapper reached through `export *`, a render
 through `createElement` or a member tag, an `export default` wrapper, or
 props destructured inside the function body, so those can still lose
 classes without a warning.
