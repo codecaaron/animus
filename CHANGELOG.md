@@ -124,7 +124,12 @@ classes and fall back to dynamic slots. The build now warns with
 `animus.usage.unattributed-system-props`, naming the file, the tag, the
 declaration it resolved to and the props. It is a warning, so `strict`
 builds still pass. Tags imported from packages outside the analysis, such
-as a UI library's components, never trigger it.
+as a UI library's components, never trigger it. It names only props the
+component reached takes as system props, never its variant, state or custom
+props. It does not yet see a wrapper reached through `export *`, a render
+through `createElement` or a member tag, an `export default` wrapper, or
+props destructured inside the function body, so those can still lose
+classes without a warning.
 
 **Finite declaration scales style several properties through one prop.**
 `createTheme().addDeclarationScale({ name, values })` registers named keys

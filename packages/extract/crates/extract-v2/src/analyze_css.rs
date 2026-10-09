@@ -1458,6 +1458,33 @@ fn resolve_usage_identity(
     evaluated_ids: &FxHashSet<String>,
     ids_by_binding: &IdsByBinding,
 ) -> Vec<String> {
+    resolve_identity(file, local, files, inputs, evaluated_ids, Some(ids_by_binding))
+}
+
+/// The components `local` names in `file` through that file's own
+/// declarations and imports only, never by bare binding name elsewhere.
+fn resolve_declared_identity(
+    file: &str,
+    local: &str,
+    files: &BTreeMap<String, FileFacts>,
+    inputs: &CssInputs,
+    evaluated_ids: &FxHashSet<String>,
+) -> Vec<String> {
+    resolve_identity(file, local, files, inputs, evaluated_ids, None)
+}
+
+/// With `ids_by_binding`, a name the file's declarations and imports do not
+/// settle falls back to every component bound to that bare name.
+fn resolve_identity(
+    file: &str,
+    local: &str,
+    files: &BTreeMap<String, FileFacts>,
+    inputs: &CssInputs,
+    evaluated_ids: &FxHashSet<String>,
+    ids_by_binding: Option<&IdsByBinding>,
+) -> Vec<String> {
+    let by_bare_name =
+        |name: &str| ids_by_binding.and_then(|ids| ids.get(name)).cloned().unwrap_or_default();
     // Dotted member path: the root resolves through the import table and the
     // last segment names the component there (`const Compound = { Item }`).
     if let Some((path_head, last)) = local.rsplit_once('.') {
@@ -1471,7 +1498,7 @@ fn resolve_usage_identity(
         if evaluated_ids.contains(&local_id) {
             return vec![local_id];
         }
-        return ids_by_binding.get(last).cloned().unwrap_or_default();
+        return by_bare_name(last);
     }
     let local = resolve_alias_terminal(file, local, files);
     let local_id = format!("{}::{}", file, local);
@@ -1527,25 +1554,24 @@ fn resolve_usage_identity(
                 terminal_name = next_name;
             }
         }
-        return ids_by_binding
-            .get(&imp.imported)
-            .cloned()
-            .unwrap_or_default();
+        return by_bare_name(&imp.imported);
     }
-    ids_by_binding.get(local).cloned().unwrap_or_default()
+    by_bare_name(local)
 }
 
 /// One warning per tag and prop set for a capitalised tag that `file` imports
 /// from an analyzed module and that resolves to no extracted component,
-/// naming only the configured system props that declaration really loses
-/// (`LostThrough`). An import outside the analysis never warns.
+/// naming only the system props the component it reaches takes and really
+/// loses (`LostThrough`). An import outside the analysis never warns.
+/// `takes_system_prop(file, name, prop)`: whether `name`, as `file` declares
+/// or imports it, is an extracted component taking `prop` as a system prop.
 fn unattributed_system_props(
     file: &str,
     ff: &FileFacts,
     unattributed_imports: &[&str],
     files: &BTreeMap<String, FileFacts>,
     inputs: &CssInputs,
-    extracted: &dyn Fn(&str, &str) -> bool,
+    takes_system_prop: &dyn Fn(&str, &str, &str) -> bool,
 ) -> Vec<CssDiagnostic> {
     let mut reported: FxHashSet<(&str, Vec<&str>)> = FxHashSet::default();
     let mut warnings = Vec::new();
@@ -1566,14 +1592,20 @@ fn unattributed_system_props(
         };
         let (declaration_file, declaration) =
             follow_reexports(module, import.imported.clone(), files, inputs);
-        let Some(lost) = LostThrough::of(&declaration_file, &declaration, files, extracted) else {
+        let Some(lost) = LostThrough::of(&declaration_file, &declaration, files) else {
             continue;
         };
         let mut props: Vec<&str> = attrs
             .iter()
             .filter(|attr| !attr.skip && inputs.config.contains_key(&attr.name))
             .map(|attr| attr.name.as_str())
-            .filter(|prop| lost.loses(prop))
+            .filter(|prop| {
+                lost.reaches(prop)
+                    && lost
+                        .targets()
+                        .iter()
+                        .any(|target| takes_system_prop(&declaration_file, target, prop))
+            })
             .collect();
         props.sort_unstable();
         props.dedup();
@@ -1581,14 +1613,19 @@ fn unattributed_system_props(
             continue;
         }
         let listed = props.join(", ");
+        let target = lost
+            .targets()
+            .iter()
+            .find(|target| props.iter().any(|prop| takes_system_prop(&declaration_file, target, prop)))
+            .map_or("", String::as_str);
         if !reported.insert((tag.as_str(), props)) {
             continue;
         }
         let how = match lost {
-            LostThrough::Alias(target) => format!(
+            LostThrough::Alias(_) => format!(
                 "an alias of the extracted component {target} that usage tracking does not follow"
             ),
-            LostThrough::Spread { target, .. } => format!(
+            LostThrough::Spread { .. } => format!(
                 "a function component that forwards them by spread to the extracted component {target}"
             ),
         };
@@ -1597,10 +1634,10 @@ fn unattributed_system_props(
             tag,
             "warn",
             format!(
-                "<{tag}> in {file} passes system props {listed}, but it resolves to \
-                 {declaration} in {declaration_file}, {how}, so those props get no static \
-                 utility classes and fall back to dynamic slots — render the extracted \
-                 component itself, or list the values under staticCss.systemProps"
+                "system props {listed} get no static utility classes: the tag resolves to \
+                 {declaration} in {declaration_file}, {how}, so they fall back to dynamic \
+                 slots — render the extracted component itself, or list the values under \
+                 staticCss.systemProps"
             ),
             Some(UNATTRIBUTED_SYSTEM_PROPS),
         ));
@@ -1608,26 +1645,25 @@ fn unattributed_system_props(
     warnings
 }
 
-/// How a declaration that usage identity misses still reaches an extracted
-/// component. Any other declaration (a function component that names its
-/// props, renders nothing extracted, or is not a component) loses nothing
-/// the extractor can see.
+/// How a declaration that usage identity misses still reaches a component:
+/// the target it names, read in the declaring file. Any other declaration (a
+/// function component that names its props, renders nothing, or is not a
+/// component) loses nothing the extractor can see.
 enum LostThrough<'f> {
     /// `const X = Recipe` or `Object.assign(Recipe, …)`: no function
     /// boundary, so every prop reaches the recipe.
-    Alias(&'f str),
+    Alias(&'f String),
     /// A function component spreading its props, or a rest element of them,
-    /// into the recipe; props it destructures by name never reach it.
-    Spread { target: &'f str, named: &'f [String] },
+    /// into the tags it renders; props it destructures by name never reach
+    /// them.
+    Spread {
+        targets: &'f [String],
+        named: &'f [String],
+    },
 }
 
 impl<'f> LostThrough<'f> {
-    fn of(
-        file: &str,
-        name: &str,
-        files: &'f BTreeMap<String, FileFacts>,
-        extracted: &dyn Fn(&str, &str) -> bool,
-    ) -> Option<Self> {
+    fn of(file: &str, name: &str, files: &'f BTreeMap<String, FileFacts>) -> Option<Self> {
         let ff = files.get(file)?;
         let local = ff
             .exports
@@ -1636,17 +1672,25 @@ impl<'f> LostThrough<'f> {
             .and_then(|e| e.local.as_deref())
             .unwrap_or(name);
         if let Some(target) = ff.aliases.get(local).or_else(|| ff.assigned_aliases.get(local)) {
-            return extracted(file, target).then_some(Self::Alias(target));
+            return Some(Self::Alias(target));
         }
         let forwarding = ff.props_forwarding.get(local)?;
-        let target = forwarding.targets.iter().find(|target| extracted(file, target))?;
         Some(Self::Spread {
-            target,
+            targets: &forwarding.targets,
             named: &forwarding.named,
         })
     }
 
-    fn loses(&self, prop: &str) -> bool {
+    /// The names the declaration hands its props to, read in its file.
+    fn targets(&self) -> &'f [String] {
+        match self {
+            Self::Alias(target) => std::slice::from_ref(*target),
+            Self::Spread { targets, .. } => targets,
+        }
+    }
+
+    /// Whether `prop`, passed to the declaration, reaches its target.
+    fn reaches(&self, prop: &str) -> bool {
         match self {
             Self::Alias(_) => true,
             Self::Spread { named, .. } => !named.iter().any(|name| name == prop),
@@ -2820,6 +2864,9 @@ fn run_with_system_floor(
         configs: FxHashMap::default(),
         custom_props: FxHashMap::default(),
     };
+    // Each component's system props, without the names its variants and
+    // states claim: the props a lost render really loses.
+    let mut system_props_by_id: FxHashMap<String, FxHashSet<String>> = FxHashMap::default();
     for component_id in &sorted_ids {
         let Some((component_css, _, _, active_props, _, custom_configs, _)) =
             evaluated.get(component_id)
@@ -2849,6 +2896,16 @@ fn run_with_system_floor(
         let mut all_props: FxHashSet<String> = FxHashSet::default();
         if let Some(props) = active_props {
             all_props.extend(props.iter().cloned());
+            let claimed: FxHashSet<&str> = component_css
+                .variants
+                .iter()
+                .map(|vc| vc.prop.as_str())
+                .chain(component_css.states.iter().map(|(name, _)| name.as_str()))
+                .collect();
+            system_props_by_id.insert(
+                component_id.clone(),
+                props.iter().filter(|prop| !claimed.contains(prop.as_str())).cloned().collect(),
+            );
         }
         if let Some(cc) = custom_configs {
             all_props.extend(cc.keys().cloned());
@@ -3011,9 +3068,10 @@ fn run_with_system_floor(
                 .get_or_insert_with(|| global_lookup.clone())
                 .publish(name, &ids, &usage_sources);
         }
-        let extracted = |file: &str, name: &str| {
-            !resolve_usage_identity(file, name, files, inputs, &evaluated_ids, &ids_by_binding)
-                .is_empty()
+        let takes_system_prop = |file: &str, name: &str, prop: &str| {
+            resolve_declared_identity(file, name, files, inputs, &evaluated_ids)
+                .iter()
+                .any(|id| system_props_by_id.get(id).is_some_and(|props| props.contains(prop)))
         };
         diagnostics.extend(unattributed_system_props(
             path,
@@ -3021,7 +3079,7 @@ fn run_with_system_floor(
             &unattributed_imports,
             files,
             inputs,
-            &extracted,
+            &takes_system_prop,
         ));
         let lookup = file_lookup.as_ref().unwrap_or(&global_lookup);
 
@@ -6216,9 +6274,12 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         let warning = warnings[0];
         assert_eq!(warning.severity.as_deref(), Some("warn"));
         assert_eq!(warning.file, "app.tsx");
-        for named in ["app.tsx", "<Button>", "Button in wrapper.tsx", "marginInlineStart"] {
+        assert_eq!(warning.component, "Button");
+        for named in ["Button in wrapper.tsx", "marginInlineStart"] {
             assert!(warning.message.contains(named), "missing {named}: {}", warning.message);
         }
+        // The printed line already leads with the file and the tag.
+        assert!(!warning.message.contains("app.tsx"), "{}", warning.message);
     }
 
     #[test]
@@ -6283,6 +6344,61 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
                 ("app.tsx", app.as_str()),
             ]);
             assert_eq!(unattributed(&out).len(), usize::from(warns), "{wrapper}: {:?}", out.diagnostics);
+        }
+    }
+
+    /// A spread reaches the recipe, but only props it takes as system props
+    /// are lost: a variant prop, or a system prop it does not enable, works or
+    /// was never styling.
+    #[test]
+    fn spread_wrappers_warn_only_for_system_props_their_recipe_takes() {
+        for (recipe, usage, warns) in [
+            (
+                "export const ButtonRecipe = ds.variant({ prop: 'size', variants: { sm: {}, lg: {} } }).system({ space: true }).asElement('button');",
+                "<Button size=\"sm\" />",
+                false,
+            ),
+            (
+                "export const ButtonRecipe = ds.styles({}).system({ space: true }).asElement('button');",
+                "<Button size=\"sm\" />",
+                false,
+            ),
+            (
+                "export const ButtonRecipe = ds.styles({}).system({ space: true }).asElement('button');",
+                "<Button size=\"sm\" marginInlineStart={8} />",
+                true,
+            ),
+        ] {
+            let app = format!("import {{ Button }} from './wrapper';\nexport const App = () => {usage};\n");
+            let out = analyze_with_logical_space(&[
+                ("recipe.tsx", recipe),
+                (
+                    "wrapper.tsx",
+                    "import { ButtonRecipe } from './recipe';\nexport const Button = (props) => <ButtonRecipe {...props} />;\n",
+                ),
+                ("app.tsx", app.as_str()),
+            ]);
+            let warnings = unattributed(&out);
+            assert_eq!(warnings.len(), usize::from(warns), "{recipe} {usage}: {:?}", out.diagnostics);
+            assert!(warnings.iter().all(|w| !w.message.contains("size")), "{:?}", warnings);
+        }
+    }
+
+    /// A wrapper's own `Box`, local or from a package, is not the extracted
+    /// `Box` elsewhere with the same name.
+    #[test]
+    fn spread_targets_resolve_through_the_wrapper_file_not_by_name() {
+        let recipe = "export const Box = ds.styles({}).system({ space: true }).asElement('div');\n";
+        for wrapper in [
+            "import { Box } from '@mui/material';\nexport const Button = (props) => <Box {...props} />;\n",
+            "const Box = (props) => <div {...props} />;\nexport const Button = (props) => <Box {...props} />;\n",
+        ] {
+            let out = analyze_with_logical_space(&[
+                ("recipe.tsx", recipe),
+                ("wrapper.tsx", wrapper),
+                ("app.tsx", "import { Button } from './wrapper';\nexport const App = () => <Button marginInlineStart={8} />;\n"),
+            ]);
+            assert!(unattributed(&out).is_empty(), "{wrapper}: {:?}", out.diagnostics);
         }
     }
 
