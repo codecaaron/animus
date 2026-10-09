@@ -109,17 +109,28 @@ type NegateKeys<T> = T extends number
       : never
   : never;
 
+/** A keyword with `!important`, which CSS accepts after any declared value. */
+type Important<Value> = Value extends string ? `${Value} !important` : never;
+
 // `& string` drops a declaration prop's absent property; intersecting with
 // `keyof PropertyTypes` instead expands the key union against itself.
+// A non-strict value may carry `!important`; a strict one keeps to its tokens
+// and bare keywords, the set strict extraction admits. The suffix is a separate
+// member over the closed keywords: branching the whole type on `IncludeGlobals`
+// overflows (TS2590) where a whole system is compared, as `from()` does.
 export type PropertyValues<
   Property extends SystemProp,
   IncludeGlobals = false,
-> = Exclude<
-  PropertyTypes<
-    IncludeGlobals extends true ? (string & {}) | 0 : never
-  >[Property['property'] & string],
-  IncludeGlobals extends true ? never : object | any[]
->;
+> =
+  | Exclude<
+      PropertyTypes<
+        IncludeGlobals extends true ? (string & {}) | 0 : never
+      >[Property['property'] & string],
+      IncludeGlobals extends true ? never : object | any[]
+    >
+  | (IncludeGlobals extends true
+      ? Important<PropertyTypes<never>[Property['property'] & string]>
+      : never);
 
 type NegativeOf<
   Config extends SystemProp,
@@ -298,7 +309,7 @@ type KnownUnderscoreKey = [PublishedAliasKeys] extends [never]
 
 type PassThroughProp<K extends keyof PropertyTypes> = K extends 'animationName'
   ? ResponsiveProp<KeyframeRef<string> | PropertyTypes[K]>
-  : ResponsiveProp<PropertyTypes[K]>;
+  : ResponsiveProp<PropertyTypes[K] | Important<PropertyTypes<never>[K]>>;
 
 type UnderscoreBlockMembers<Config extends Record<string, SystemProp>> = {
   [K in KnownUnderscoreKey]?: ThemedBlockBody<Config>;

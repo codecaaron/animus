@@ -37,6 +37,8 @@ const _testTransform = createTransform('testTransform', (v) => `${v}px`);
 ds.styles({ inlineSize: 50 });
 // `cornerShape` is typed, though the pinned csstype predates it.
 ds.styles({ cornerShape: 'squircle' });
+// Keyword values accept `!important`.
+ds.styles({ visibility: 'hidden !important' });
 
 const DivBox = ds.styles({ display: 'flex' }).asElement('div');
 const BtnBox = ds.styles({ display: 'flex' }).asElement('button');
