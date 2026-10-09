@@ -12,6 +12,7 @@ import {
   type DynamicPropConfig,
   resolveClasses,
   type SystemPropMap,
+  withUniqueSystemPropNames,
 } from './resolveClasses';
 
 interface ComponentConfig extends ClassResolverConfig {}
@@ -217,10 +218,11 @@ function renderElement(
 export function createComponent(
   element: ElementType,
   className: string,
-  config: ComponentConfig,
+  componentConfig: ComponentConfig,
   systemPropMap?: SystemPropMap,
   dynamicPropConfig?: DynamicPropConfig
 ): AnimusComponent {
+  const config = withUniqueSystemPropNames(componentConfig);
   const variantProps = config.variants ? Object.keys(config.variants) : [];
   const stateProps = config.states || [];
   const systemPropNames = config.systemPropNames || [];

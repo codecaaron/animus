@@ -3,6 +3,7 @@ import {
   type DynamicPropConfig,
   resolveClasses,
   type SystemPropMap,
+  withUniqueSystemPropNames,
 } from './resolveClasses.js';
 
 export interface ClassResolverAttributes {
@@ -27,10 +28,11 @@ function serializeDynamicStyle(style: Record<string, string>): string {
 
 export function createClassResolver(
   className: string,
-  config: ClassResolverConfig,
+  resolverConfig: ClassResolverConfig,
   systemPropMap?: SystemPropMap,
   dynamicPropConfig?: DynamicPropConfig
 ): ClassResolver {
+  const config = withUniqueSystemPropNames(resolverConfig);
   const resolveAttributes = (
     props?: Record<string, unknown>
   ): ClassResolverAttributes => {
