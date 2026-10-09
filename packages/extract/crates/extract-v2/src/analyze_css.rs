@@ -1625,8 +1625,25 @@ fn namespace_member_ids(
         .into_iter()
         .filter_map(|tag| {
             let (namespace, name) = tag.rsplit_once('.')?;
-            let module = namespace_path_module(file, ff, namespace, files, inputs)?;
-            let ids = export_ids(&module, name.to_string(), false, files, inputs, evaluated_ids);
+            let ids = match namespace_path_module(file, ff, namespace, files, inputs) {
+                Some(module) => {
+                    export_ids(&module, name.to_string(), false, files, inputs, evaluated_ids)
+                }
+                // `ui.sub.Card.Body`: a slot of a family the namespace exports.
+                None => {
+                    let (namespace, family) = namespace.rsplit_once('.')?;
+                    let module = namespace_path_module(file, ff, namespace, files, inputs)?;
+                    let (declaring, exported, declared) =
+                        declared_export(&module, family.to_string(), files, inputs)?;
+                    exported_family_slots(&declaring, &exported, &declared, files)
+                        .into_iter()
+                        .filter(|(slot, _)| slot == name)
+                        .flat_map(|(_, binding)| {
+                            resolve_identity(&declaring, binding, files, inputs, evaluated_ids, None)
+                        })
+                        .collect()
+                }
+            };
             (!ids.is_empty()).then(|| (tag.to_string(), ids))
         })
         .collect()
@@ -1758,14 +1775,29 @@ fn export_ids(
     inputs: &CssInputs,
     evaluated_ids: &FxHashSet<String>,
 ) -> Vec<String> {
-    let Some((declaring, exported)) =
-        crate::family_members::follow_exports(module.to_string(), name, files, inputs)
-    else {
+    let Some((declaring, exported, declared)) = declared_export(module, name, files, inputs) else {
         return Vec::new();
     };
-    let Some(ff) = files.get(&declaring) else {
-        return Vec::new();
-    };
+    let mut ids = resolve_identity(&declaring, &declared, files, inputs, evaluated_ids, None);
+    if slots {
+        for (_, slot) in exported_family_slots(&declaring, &exported, &declared, files) {
+            ids.extend(resolve_identity(&declaring, slot, files, inputs, evaluated_ids, None));
+        }
+    }
+    ids
+}
+
+/// Where `module`'s export `name` is declared: the declaring file, the
+/// name it exports there, and the local binding it declares.
+fn declared_export(
+    module: &str,
+    name: String,
+    files: &BTreeMap<String, FileFacts>,
+    inputs: &CssInputs,
+) -> Option<(String, String, String)> {
+    let (declaring, exported) =
+        crate::family_members::follow_exports(module.to_string(), name, files, inputs)?;
+    let ff = files.get(&declaring)?;
     let declared = ff
         .exports
         .iter()
@@ -1773,19 +1805,27 @@ fn export_ids(
         .and_then(|e| e.local.clone())
         .or_else(|| ff.default_export_binding.clone().filter(|_| exported == "default"))
         .unwrap_or_else(|| exported.clone());
-    let mut ids = resolve_identity(&declaring, &declared, files, inputs, evaluated_ids, None);
-    if slots {
-        let families = ff.compose.iter().filter(|family| {
-            family.family_binding.as_deref() == Some(declared.as_str())
+    Some((declaring, exported, declared))
+}
+
+/// The (slot, binding) pairs of the compose family `declaring` declares as
+/// `declared` and exports as `exported`.
+fn exported_family_slots<'f>(
+    declaring: &str,
+    exported: &str,
+    declared: &str,
+    files: &'f BTreeMap<String, FileFacts>,
+) -> Vec<&'f (String, String)> {
+    files
+        .get(declaring)
+        .into_iter()
+        .flat_map(|ff| &ff.compose)
+        .filter(|family| {
+            family.family_binding.as_deref() == Some(declared)
                 || (exported == "default" && family.default_export)
-        });
-        for family in families {
-            for (_, slot) in &family.slots {
-                ids.extend(resolve_identity(&declaring, slot, files, inputs, evaluated_ids, None));
-            }
-        }
-    }
-    ids
+        })
+        .flat_map(|family| &family.slots)
+        .collect()
 }
 
 /// The module a dotted namespace path in `file` names (`ui`, `ui.sub`):
@@ -7004,6 +7044,29 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             kept(cycle, "export const Big = () => <ui.again.sub.R size=\"lg\" />;"),
             (vec!["sm", "lg"], vec!["active"])
         );
+    }
+
+    /// A compose family reached through a nested namespace resolves its
+    /// slot tags too (`<ui.sub.Card.Root>`).
+    #[test]
+    fn family_slots_resolve_through_nested_namespaces() {
+        let family = format!("{RECIPE}export const Card = compose({{ Root: R }}, {{ name: 'Card' }});\n");
+        for (index, tag) in [
+            ("export * as sub from './r';\n", "ui.sub.Card.Root"),
+            ("import * as sub from './r';\nexport { sub };\n", "ui.sub.Card.Root"),
+            ("export * from './r';\n", "ui.Card.Root"),
+        ] {
+            let app = format!(
+                "import {{ R }} from './r';\nimport * as ui from './index';\n\
+                 export const Big = () => <{tag} size=\"lg\" />;\n\
+                 export const App = () => <R size=\"sm\" active />;\n"
+            );
+            assert_eq!(
+                kept_options(&[("r.tsx", family.as_str()), ("index.ts", index), ("app.tsx", app.as_str())]),
+                (vec!["sm", "lg"], vec!["active"]),
+                "{index}{tag}"
+            );
+        }
     }
 
     /// A namespace object used as a value hands over every component its
