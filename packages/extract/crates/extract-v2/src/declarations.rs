@@ -9,7 +9,8 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use crate::theme::{camel_to_kebab, FlatTheme, PropConfig, PropConfigMap};
+use crate::css::css_property_name;
+use crate::theme::{FlatTheme, PropConfig, PropConfigMap};
 
 pub const DECLARATIONS_KIND: &str = "declarations";
 
@@ -172,7 +173,7 @@ fn css_members(names: &[String], label: &str) -> Result<Vec<DeclarationMember>, 
         if name.starts_with("--") {
             return Err(format!("{label}: member \"{name}\" is not a CSS property name."));
         }
-        let css_property = camel_to_kebab(name);
+        let css_property = css_property_name(name);
         if members.iter().any(|member| member.css_property == css_property) {
             return Err(format!("{label}: member '{name}' is listed more than once"));
         }
@@ -464,8 +465,8 @@ impl<'a> DeclarationNames<'a> {
 
     fn scope(&self) -> String {
         match self.identity {
-            Some(identity) => format!("{}-{}", identity, crate::css::camel_to_kebab(self.prop)),
-            None => crate::css::camel_to_kebab(self.prop),
+            Some(identity) => format!("{}-{}", identity, crate::css::hyphenated(self.prop)),
+            None => crate::css::hyphenated(self.prop),
         }
     }
 

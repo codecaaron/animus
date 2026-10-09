@@ -124,6 +124,15 @@ describe('dynamic prop unit fallback', () => {
     ).toEqual({ '--animus-width': '12px' });
   });
 
+  test('numeric value on a custom property stays unit-less', () => {
+    expect(
+      styleFor(
+        { width: 2 },
+        { width: entry({ varName: '--animus-level', property: '--level' }) }
+      )
+    ).toEqual({ '--animus-level': '2' });
+  });
+
   test('kebab-case property spelling resolves identically', () => {
     expect(
       styleFor(
