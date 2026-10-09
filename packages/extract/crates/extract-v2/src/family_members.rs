@@ -5,11 +5,12 @@
 //! stay apart.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::rc::Rc;
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::analyze_css::{resolve_import_source, CssInputs};
-use crate::facts::FileFacts;
+use crate::analyze_css::{declared_export, namespace_path_module, resolve_import_source, CssInputs};
+use crate::facts::{FacadeEntry, FileFacts};
 
 /// Every compose family, keyed by the names its module gives it.
 pub(crate) struct FamilyIndex {
@@ -142,6 +143,183 @@ impl FamilyIndex {
     /// The only family bound to `binding` anywhere in the analysis.
     fn only(&self, binding: &str) -> Option<usize> {
         self.by_binding.get(binding).copied().flatten()
+    }
+}
+
+/// An object whose members a member tag reads.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum Object {
+    Family(usize),
+    /// A facade: (module, binding) of its declaration.
+    Facade(String, String),
+}
+
+/// An object's members once it is built: each member's component, `None`
+/// for a value that names none. An open table may also hold members no
+/// write the analysis reads names.
+#[derive(Default)]
+struct MemberTable {
+    members: BTreeMap<String, Option<String>>,
+    open: bool,
+}
+
+/// Traces a member tag written through an object the family index does not
+/// resolve through (an object of components, a facade copying a compose
+/// family, `const Nav = { ...Family, Item }`, or an alias of a family or
+/// facade) to the component that member names when the object is built.
+pub(crate) struct ObjectMembers<'f> {
+    files: &'f BTreeMap<String, FileFacts>,
+    inputs: &'f CssInputs,
+    families: &'f FamilyIndex,
+    /// The one component a binding of a module names, if any.
+    component: &'f dyn Fn(&str, &str) -> Option<String>,
+    objects: FxHashMap<(String, String), Option<Object>>,
+    tables: FxHashMap<Object, Rc<MemberTable>>,
+    building: FxHashSet<Object>,
+}
+
+impl<'f> ObjectMembers<'f> {
+    pub(crate) fn new(
+        files: &'f BTreeMap<String, FileFacts>,
+        inputs: &'f CssInputs,
+        families: &'f FamilyIndex,
+        component: &'f dyn Fn(&str, &str) -> Option<String>,
+    ) -> Self {
+        Self {
+            files,
+            inputs,
+            families,
+            component,
+            objects: FxHashMap::default(),
+            tables: FxHashMap::default(),
+            building: FxHashSet::default(),
+        }
+    }
+
+    /// The component `tag`, written in `file`, names: `Nav.Root` through a
+    /// binding of the file, `ui.Nav.Root` and `ui.sub.Nav.Root` through a
+    /// namespace.
+    pub(crate) fn traced(&mut self, file: &str, tag: &str) -> Option<String> {
+        let files = self.files;
+        let (path, slot) = tag.rsplit_once('.')?;
+        let object = match path.rsplit_once('.') {
+            Some((namespace, name)) => {
+                let module = namespace_path_module(file, files.get(file)?, namespace, files, self.inputs)?;
+                self.exported_object(&module, name)?
+            }
+            None => self.local_object(file, path)?,
+        };
+        self.table(&object).members.get(slot)?.clone()
+    }
+
+    /// The object `name` holds in `module`: a family or facade it declares,
+    /// one a `const` alias names, or one it imports.
+    fn local_object(&mut self, module: &str, name: &str) -> Option<Object> {
+        let key = (module.to_string(), name.to_string());
+        if let Some(found) = self.objects.get(&key) {
+            return found.clone();
+        }
+        // A cycle of aliases and imports holds nothing.
+        self.objects.insert(key.clone(), None);
+        let found = self.resolve_local(module, name);
+        self.objects.insert(key, found.clone());
+        found
+    }
+
+    fn resolve_local(&mut self, module: &str, name: &str) -> Option<Object> {
+        let files = self.files;
+        let ff = files.get(module)?;
+        if let Some(&id) = self.families.locals.get(&(module.to_string(), name.to_string())) {
+            return Some(Object::Family(id));
+        }
+        if ff.facades.contains_key(name) {
+            return Some(Object::Facade(module.to_string(), name.to_string()));
+        }
+        if let Some(target) = ff.aliases.get(name) {
+            return self.local_object(module, target);
+        }
+        let import = ff.imports.iter().find(|import| import.local == name)?;
+        let source = resolve_import_source(module, &import.source, files, self.inputs)?;
+        self.exported_object(&source, &import.imported)
+    }
+
+    /// The object `module` exports as `name`, followed through re-exports
+    /// and barrels.
+    fn exported_object(&mut self, module: &str, name: &str) -> Option<Object> {
+        let (declaring, exported, declared) =
+            declared_export(module, name.to_string(), self.files, self.inputs)?;
+        if let Some(&id) = self.families.exports.get(&(declaring.clone(), exported)) {
+            return Some(Object::Family(id));
+        }
+        self.local_object(&declaring, &declared)
+    }
+
+    fn table(&mut self, object: &Object) -> Rc<MemberTable> {
+        if let Some(table) = self.tables.get(object) {
+            return Rc::clone(table);
+        }
+        let table = match object {
+            Object::Family(id) => MemberTable {
+                members: self.families.members[*id]
+                    .iter()
+                    .map(|(slot, component)| (slot.clone(), Some(component.clone())))
+                    .collect(),
+                open: false,
+            },
+            Object::Facade(module, binding) => {
+                self.building.insert(object.clone());
+                let table = self.build(module, binding);
+                self.building.remove(object);
+                table
+            }
+        };
+        let table = Rc::new(table);
+        self.tables.insert(object.clone(), Rc::clone(&table));
+        table
+    }
+
+    /// A facade's members after each of its writes in source order: a later
+    /// write replaces an earlier one, and one that may set any member leaves
+    /// none known.
+    fn build(&mut self, module: &str, binding: &str) -> MemberTable {
+        let files = self.files;
+        let mut table = MemberTable::default();
+        let Some(entries) = files.get(module).and_then(|ff| ff.facades.get(binding)) else {
+            return table;
+        };
+        for entry in entries {
+            match entry {
+                FacadeEntry::Copy(name) => match self.local_object(module, name) {
+                    Some(source) if !self.building.contains(&source) => {
+                        let source = self.table(&source);
+                        if source.open {
+                            table = MemberTable { open: true, ..MemberTable::default() };
+                        }
+                        table.members.extend(source.members.iter().map(|(k, v)| (k.clone(), v.clone())));
+                    }
+                    // A source the analysis cannot read, or one that copies
+                    // this object back, may set any member.
+                    _ => table = MemberTable { open: true, ..MemberTable::default() },
+                },
+                FacadeEntry::Member { key, binding, member } => {
+                    let component = match member {
+                        Some(member) => match self.local_object(module, binding) {
+                            Some(source) if !self.building.contains(&source) => {
+                                self.table(&source).members.get(member).cloned().flatten()
+                            }
+                            _ => None,
+                        },
+                        None => (self.component)(module, binding),
+                    };
+                    table.members.insert(key.clone(), component);
+                }
+                FacadeEntry::Other(key) => {
+                    table.members.insert(key.clone(), None);
+                }
+                FacadeEntry::Unknown => table = MemberTable { open: true, ..MemberTable::default() },
+            }
+        }
+        table
     }
 }
 
