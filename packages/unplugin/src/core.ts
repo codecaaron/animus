@@ -205,6 +205,14 @@ export const unpluginFactory: UnpluginFactory<
     meta.framework !== 'webpack' &&
     meta.framework !== 'rspack';
 
+  // Rollup, Rolldown, esbuild and Vite leave an `import(expr)` they cannot
+  // read unbundled; webpack and Rspack bundle it as a directory context.
+  const unbundledComputedImports =
+    meta.framework === 'rollup' ||
+    meta.framework === 'rolldown' ||
+    meta.framework === 'esbuild' ||
+    meta.framework === 'vite';
+
   async function startPipeline(): Promise<void> {
     signalPipelineStarted();
     try {
@@ -224,7 +232,10 @@ export const unpluginFactory: UnpluginFactory<
     await drivePipeline(state, async () => {
       const mode = effectiveMode();
       state.mode = mode;
-      const session = new ExtractionSession({ ...options, mode });
+      const session = new ExtractionSession(
+        { ...options, mode },
+        { unbundledComputedImports }
+      );
       activeSession = session;
       session.driverLabel = 'animus-unplugin';
       session.rootDir = root;

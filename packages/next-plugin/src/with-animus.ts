@@ -425,7 +425,11 @@ async function analyzeForTurbopack(
   const { mode } = resolveMode(options.mode, () =>
     development ? 'development' : 'production'
   );
-  const session = new ExtractionSession({ ...options, mode });
+  // Turbopack leaves an `import(expr)` it cannot read unbundled.
+  const session = new ExtractionSession(
+    { ...options, mode },
+    { unbundledComputedImports: true }
+  );
   // A replaced session's watcher would keep the root claimed for it.
   liveTurbopackSession?.close();
   liveTurbopackWatcher?.close();
