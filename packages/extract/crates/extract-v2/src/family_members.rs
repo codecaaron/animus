@@ -9,7 +9,9 @@ use std::rc::Rc;
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::analyze_css::{declared_export, namespace_path_module, resolve_import_source, CssInputs};
+use crate::analyze_css::{
+    declared_export, loaded_modules, namespace_path_module, resolve_import_source, CssInputs,
+};
 use crate::facts::{FacadeEntry, FileFacts};
 
 /// Every compose family, keyed by the names its module gives it.
@@ -25,6 +27,8 @@ pub(crate) struct FamilyIndex {
     by_binding: FxHashMap<String, Option<usize>>,
     /// Per family, each slot name with the component it renders.
     members: Vec<Vec<(String, String)>>,
+    /// Per family, whether it may hold members `members` does not list.
+    open: Vec<bool>,
 }
 
 impl FamilyIndex {
@@ -39,6 +43,7 @@ impl FamilyIndex {
             exports: FxHashMap::default(),
             by_binding: FxHashMap::default(),
             members: Vec::new(),
+            open: Vec::new(),
         };
         for (file, ff) in files {
             for family in &ff.compose {
@@ -50,6 +55,7 @@ impl FamilyIndex {
                         .map(|(slot, binding)| (slot.clone(), slot_component(file, binding)))
                         .collect(),
                 );
+                index.open.push(family.open);
                 if let Some(binding) = &family.family_binding {
                     index.locals.insert((file.clone(), binding.clone()), id);
                     index
@@ -154,19 +160,44 @@ enum Object {
     Facade(String, String),
 }
 
-/// An object's members once it is built: each member's component, `None`
-/// for a value that names none. An open table may also hold members no
-/// write the analysis reads names.
+/// What one member of an object holds once the object is built.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Member {
+    /// A value that names no component.
+    Other,
+    /// The component the member names; nothing the analysis sees can have
+    /// changed the object since.
+    Stable(String),
+    /// The component the member named when the object was built, and the
+    /// use that may have changed the object since, as a clause.
+    Unstable(String, String),
+}
+
+impl Member {
+    fn component(&self) -> Option<&String> {
+        match self {
+            Self::Other => None,
+            Self::Stable(component) | Self::Unstable(component, _) => Some(component),
+        }
+    }
+}
+
+/// An object's members once it is built. An open table may also hold
+/// members no write the analysis reads names.
 #[derive(Default)]
 struct MemberTable {
-    members: BTreeMap<String, Option<String>>,
+    members: BTreeMap<String, Member>,
     open: bool,
 }
 
-/// Traces a member tag written through an object the family index does not
-/// resolve through (an object of components, a facade copying a compose
-/// family, `const Nav = { ...Family, Item }`, or an alias of a family or
-/// facade) to the component that member names when the object is built.
+/// Member tags written through an object the family index does not resolve
+/// through: an object of components, a facade copying a compose family
+/// (`const Nav = { ...Family, Item }`), or an alias of a family or facade.
+/// Each member is a snapshot of what the object held when built, stable
+/// while nothing in the analysed modules can have changed that object or a
+/// source it copied since: no member write, method call or hand-off to code
+/// the analysis does not follow, through any binding of it, and no runtime
+/// load or namespace re-export of a module exporting it.
 pub(crate) struct ObjectMembers<'f> {
     files: &'f BTreeMap<String, FileFacts>,
     inputs: &'f CssInputs,
@@ -176,6 +207,10 @@ pub(crate) struct ObjectMembers<'f> {
     objects: FxHashMap<(String, String), Option<Object>>,
     tables: FxHashMap<Object, Rc<MemberTable>>,
     building: FxHashSet<Object>,
+    exported: FxHashMap<String, Rc<[Object]>>,
+    /// Each object a use in the analysed modules may change, with the
+    /// first such use; swept once, on the first question.
+    unstable: Option<FxHashMap<Object, String>>,
 }
 
 impl<'f> ObjectMembers<'f> {
@@ -193,23 +228,38 @@ impl<'f> ObjectMembers<'f> {
             objects: FxHashMap::default(),
             tables: FxHashMap::default(),
             building: FxHashSet::default(),
+            exported: FxHashMap::default(),
+            unstable: None,
         }
     }
 
-    /// The component `tag`, written in `file`, names: `Nav.Root` through a
-    /// binding of the file, `ui.Nav.Root` and `ui.sub.Nav.Root` through a
-    /// namespace.
-    pub(crate) fn traced(&mut self, file: &str, tag: &str) -> Option<String> {
-        let files = self.files;
+    /// What `tag`, written in `file`, reads: `Nav.Root` through a binding of
+    /// the file, `ui.Nav.Root` and `ui.sub.Nav.Root` through a namespace.
+    pub(crate) fn member(&mut self, file: &str, tag: &str) -> Option<Member> {
         let (path, slot) = tag.rsplit_once('.')?;
-        let object = match path.rsplit_once('.') {
+        let object = self.object_at(file, path)?;
+        self.table(&object).members.get(slot).cloned()
+    }
+
+    /// The components an escaping `name` hands over: every member of the
+    /// object it names, or the one member it reads.
+    pub(crate) fn escaped_components(&mut self, file: &str, name: &str) -> Vec<String> {
+        if let Some(object) = self.object_at(file, name) {
+            return self.table(&object).members.values().filter_map(Member::component).cloned().collect();
+        }
+        self.member(file, name).as_ref().and_then(Member::component).cloned().into_iter().collect()
+    }
+
+    /// The object a binding of `file` or a namespace path names.
+    fn object_at(&mut self, file: &str, path: &str) -> Option<Object> {
+        let files = self.files;
+        match path.rsplit_once('.') {
             Some((namespace, name)) => {
                 let module = namespace_path_module(file, files.get(file)?, namespace, files, self.inputs)?;
-                self.exported_object(&module, name)?
+                self.exported_object(&module, name)
             }
-            None => self.local_object(file, path)?,
-        };
-        self.table(&object).members.get(slot)?.clone()
+            None => self.local_object(file, path),
+        }
     }
 
     /// The object `name` holds in `module`: a family or facade it declares,
@@ -254,17 +304,31 @@ impl<'f> ObjectMembers<'f> {
         self.local_object(&declaring, &declared)
     }
 
+    /// Every object `module` exports, through `export *` too.
+    fn exported_objects(&mut self, module: &str) -> Rc<[Object]> {
+        if let Some(objects) = self.exported.get(module) {
+            return Rc::clone(objects);
+        }
+        let files = self.files;
+        let mut names = module_export_names(module, files, self.inputs);
+        // `export default compose(…)` binds no name to list.
+        names.insert("default".to_string());
+        let objects: Rc<[Object]> = names.iter().filter_map(|name| self.exported_object(module, name)).collect();
+        self.exported.insert(module.to_string(), Rc::clone(&objects));
+        objects
+    }
+
     fn table(&mut self, object: &Object) -> Rc<MemberTable> {
         if let Some(table) = self.tables.get(object) {
             return Rc::clone(table);
         }
-        let table = match object {
+        let mut table = match object {
             Object::Family(id) => MemberTable {
                 members: self.families.members[*id]
                     .iter()
-                    .map(|(slot, component)| (slot.clone(), Some(component.clone())))
+                    .map(|(slot, component)| (slot.clone(), Member::Stable(component.clone())))
                     .collect(),
-                open: false,
+                open: self.families.open[*id],
             },
             Object::Facade(module, binding) => {
                 self.building.insert(object.clone());
@@ -273,6 +337,15 @@ impl<'f> ObjectMembers<'f> {
                 table
             }
         };
+        // What changed the object may also have added members.
+        if let Some(reason) = self.instability(object) {
+            table.open = true;
+            for member in table.members.values_mut() {
+                if let Member::Stable(component) = member {
+                    *member = Member::Unstable(std::mem::take(component), reason.clone());
+                }
+            }
+        }
         let table = Rc::new(table);
         self.tables.insert(object.clone(), Rc::clone(&table));
         table
@@ -280,7 +353,7 @@ impl<'f> ObjectMembers<'f> {
 
     /// A facade's members after each of its writes in source order: a later
     /// write replaces an earlier one, and one that may set any member leaves
-    /// none known.
+    /// none known. A copied member keeps its source's verdict.
     fn build(&mut self, module: &str, binding: &str) -> MemberTable {
         let files = self.files;
         let mut table = MemberTable::default();
@@ -302,24 +375,139 @@ impl<'f> ObjectMembers<'f> {
                     _ => table = MemberTable { open: true, ..MemberTable::default() },
                 },
                 FacadeEntry::Member { key, binding, member } => {
-                    let component = match member {
+                    let value = match member {
                         Some(member) => match self.local_object(module, binding) {
                             Some(source) if !self.building.contains(&source) => {
-                                self.table(&source).members.get(member).cloned().flatten()
+                                self.table(&source).members.get(member).cloned()
                             }
                             _ => None,
                         },
-                        None => (self.component)(module, binding),
+                        None => (self.component)(module, binding).map(Member::Stable),
                     };
-                    table.members.insert(key.clone(), component);
+                    table.members.insert(key.clone(), value.unwrap_or(Member::Other));
                 }
-                FacadeEntry::Other(key) => {
-                    table.members.insert(key.clone(), None);
+                FacadeEntry::Other(key) | FacadeEntry::Code(Some(key)) => {
+                    table.members.insert(key.clone(), Member::Other);
                 }
-                FacadeEntry::Unknown => table = MemberTable { open: true, ..MemberTable::default() },
+                FacadeEntry::Unknown | FacadeEntry::Code(None) => {
+                    table = MemberTable { open: true, ..MemberTable::default() };
+                }
             }
         }
         table
+    }
+
+    /// The first use in the analysed modules that may change `object`, said
+    /// as a clause, or `None` when there is none.
+    fn instability(&mut self, object: &Object) -> Option<String> {
+        if self.unstable.is_none() {
+            let swept = self.sweep();
+            self.unstable = Some(swept);
+        }
+        if let Some(reason) = self.unstable.as_ref().and_then(|found| found.get(object)) {
+            return Some(reason.clone());
+        }
+        let Object::Facade(module, binding) = object else { return None };
+        let code = self.files[module].facades[binding].iter().any(|entry| matches!(entry, FacadeEntry::Code(_)));
+        code.then(|| {
+            format!("{binding} in {module} has a method or accessor, which runs with the object as `this`")
+        })
+    }
+
+    /// Every object a use in the analysed modules may change, each with the
+    /// first such use in module and source order: a use of a binding that
+    /// holds it, a namespace re-export of a module exporting it, or a
+    /// runtime load of one.
+    fn sweep(&mut self) -> FxHashMap<Object, String> {
+        let files = self.files;
+        let inputs = self.inputs;
+        let mut found: FxHashMap<Object, String> = FxHashMap::default();
+        let mut by_name: Option<FxHashMap<String, Vec<Object>>> = None;
+        for (module, ff) in files {
+            for (name, used) in &ff.unsafe_object_uses {
+                let line = used.line.map_or(String::new(), |line| format!(" on line {line}"));
+                let reason = format!("{name} {} in {module}{line}", used.what);
+                let held: Vec<Object> = match name.split_once('.') {
+                    // A member of a namespace import.
+                    Some((namespace, member)) => ff
+                        .namespace_imports
+                        .get(namespace)
+                        .and_then(|spec| resolve_import_source(module, spec, files, inputs))
+                        .and_then(|target| self.exported_object(&target, member))
+                        .into_iter()
+                        .collect(),
+                    None => match ff.namespace_imports.get(name) {
+                        Some(spec) => resolve_import_source(module, spec, files, inputs)
+                            .map(|target| self.exported_objects(&target).to_vec())
+                            .unwrap_or_default(),
+                        None => match self.unresolved_import(module, ff, name) {
+                            // An import the analysis cannot follow may be any
+                            // object its name names.
+                            Some(imported) => by_name
+                                .get_or_insert_with(|| self.objects_by_name())
+                                .get(imported)
+                                .cloned()
+                                .unwrap_or_default(),
+                            None => self.local_object(module, name).into_iter().collect(),
+                        },
+                    },
+                };
+                for object in held {
+                    found.entry(object).or_insert_with(|| reason.clone());
+                }
+            }
+            for (name, spec) in &ff.namespace_exports {
+                let Some(target) = resolve_import_source(module, spec, files, inputs) else {
+                    continue;
+                };
+                let reason = format!("{module} re-exports {target} as the namespace {name}");
+                for object in self.exported_objects(&target).iter() {
+                    found.entry(object.clone()).or_insert_with(|| reason.clone());
+                }
+            }
+            for load in &ff.module_loads {
+                for target in loaded_modules(module, load, files, inputs) {
+                    let reason = format!("{module} loads {target} at runtime on line {}", load.line);
+                    for object in self.exported_objects(target).iter() {
+                        found.entry(object.clone()).or_insert_with(|| reason.clone());
+                    }
+                }
+            }
+        }
+        found
+    }
+
+    /// The name an import binding of `module` imports, when its source is
+    /// no analysed module; a default import is named by its local binding.
+    fn unresolved_import<'n>(&self, module: &str, ff: &'n FileFacts, local: &str) -> Option<&'n str> {
+        let import = ff.imports.iter().find(|import| import.local == local)?;
+        if resolve_import_source(module, &import.source, self.files, self.inputs).is_some() {
+            return None;
+        }
+        Some(if import.imported == "default" { &import.local } else { &import.imported })
+    }
+
+    /// Every object, keyed by each name a module declares or exports it as.
+    fn objects_by_name(&mut self) -> FxHashMap<String, Vec<Object>> {
+        let files = self.files;
+        let mut by_name: FxHashMap<String, Vec<Object>> = FxHashMap::default();
+        for (module, ff) in files {
+            let declared = ff
+                .facades
+                .keys()
+                .chain(ff.aliases.keys())
+                .chain(ff.compose.iter().filter_map(|family| family.family_binding.as_ref()));
+            let exported = ff.exports.iter().filter(|export| export.source.is_none()).map(|export| &export.exported);
+            for name in declared.chain(exported) {
+                if let Some(object) = self.exported_object(module, name).or_else(|| self.local_object(module, name)) {
+                    let objects = by_name.entry(name.clone()).or_default();
+                    if !objects.contains(&object) {
+                        objects.push(object);
+                    }
+                }
+            }
+        }
+        by_name
     }
 }
 
