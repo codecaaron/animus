@@ -14,3 +14,19 @@ export const createConfig = (overrides?: Partial<UserConfig>) =>
     sourcemap: process.env.ANIMUS_BUILD_SOURCEMAP === '1',
     ...overrides,
   });
+
+// The JavaScript build, then a declaration-only build of the same entries.
+// Bundled declarations import each other with explicit `.js` specifiers, so
+// they resolve under NodeNext. The second build is separate because the
+// declaration plugin turns on source maps for every chunk it emits, and the
+// JavaScript ships without them.
+export const createConfigWithDeclarations = (
+  overrides?: Partial<UserConfig>
+) => [
+  createConfig(overrides),
+  createConfig({
+    ...overrides,
+    clean: false,
+    dts: { emitDtsOnly: true, tsconfig: 'tsconfig.build.json' },
+  }),
+];
