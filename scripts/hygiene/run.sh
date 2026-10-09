@@ -241,13 +241,17 @@ run_layer_a() {
   # per observed diagnostic as a best-effort audit signal. False-positive
   # receipts are noise; missing receipts would be corruption — the trade
   # is biased toward signal preservation.
+  #
+  # no-console's suggestion deletes the call. The cascade keeps console calls,
+  # so the rule sits out this layer: no fix and no receipt.
+  local layer_a=("${OXLINT[@]}" -A no-console)
   local oxlint_json=""
   if [ "$SCOPE" = "changed" ]; then
-    oxlint_json="$("${OXLINT[@]}" --format=json "${FILES[@]}" 2>/dev/null || true)"
-    "${OXLINT[@]}" --fix-suggestions "${FILES[@]}" >/dev/null 2>&1 || true
+    oxlint_json="$("${layer_a[@]}" --format=json "${FILES[@]}" 2>/dev/null || true)"
+    "${layer_a[@]}" --fix-suggestions "${FILES[@]}" >/dev/null 2>&1 || true
   else
-    oxlint_json="$("${OXLINT[@]}" --format=json 2>/dev/null || true)"
-    "${OXLINT[@]}" --fix-suggestions >/dev/null 2>&1 || true
+    oxlint_json="$("${layer_a[@]}" --format=json 2>/dev/null || true)"
+    "${layer_a[@]}" --fix-suggestions >/dev/null 2>&1 || true
   fi
   if [ -n "$oxlint_json" ]; then
     printf '%s' "$oxlint_json" | bun run "$ROOT/scripts/hygiene/_emit-oxlint-receipts.ts" || true
