@@ -18,7 +18,11 @@ describe('admitted props', () => {
       gap: { '8': 'animus-u-gap' },
       cols: { '2': 'animus-u-cols' },
     };
-    const props = { cols: 2, gap: 8, alignItems: 'center' };
+    const props: Record<string, unknown> = {
+      cols: 2,
+      gap: 8,
+      alignItems: 'center',
+    };
     const classes = 'animus-Box animus-u-items animus-u-gap animus-u-cols';
 
     const Box = createComponent('div', 'animus-Box', config, systemPropMap);
