@@ -21,6 +21,9 @@ dist
 .wrangler/
 .react-router/
 
+# Animus build artifacts: session trees and CLI output
+.animus/
+
 # misc
 .DS_Store
 

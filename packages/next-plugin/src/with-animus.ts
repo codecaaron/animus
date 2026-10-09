@@ -259,6 +259,10 @@ export function withAnimus(
         config.resolve.alias[ANIMUS_CSS_MODULE_ID] = stylesPath(sessionDir);
         // `resolve.alias` does not handle URI schemes, so `virtual:` requests
         // are rewritten here; external packages redirect to source entries.
+        // The stylesheet id is rewritten too: a persistent resolve cache keys
+        // a request without its alias target, so the alias alone resolves to
+        // an earlier build's session stylesheet. The alias stays for resolves
+        // that bypass the module factory.
         const sessionSystemPropsPath = systemPropsPath(sessionDir);
         config.plugins.push({
           apply(compiler: {
@@ -289,7 +293,10 @@ export function withAnimus(
                     if (resolveData.request === 'virtual:animus/system-props') {
                       resolveData.request = sessionSystemPropsPath;
                     }
-                    if (resolveData.request === 'virtual:animus/styles.css') {
+                    if (
+                      resolveData.request === 'virtual:animus/styles.css' ||
+                      resolveData.request === ANIMUS_CSS_MODULE_ID
+                    ) {
                       resolveData.request = stylesPath(sessionDir);
                     }
                     const entries = plugin.getExternalSourceEntries();
