@@ -49,11 +49,77 @@ export function createPropertyNames(
 
 const NAME_CHAR = /[\w-]/;
 
+/** A name read from CSS: the index after it, and the name with its escapes
+ *  decoded. */
+export interface ReadName {
+  end: number;
+  name: string;
+}
+
+/**
+ * The name starting at `from`, read as CSS tokenizes an identifier: ASCII
+ * letters, digits, `-` and `_`, every non-ASCII code point, and escapes.
+ */
+export function readCustomPropertyName(css: string, from: number): ReadName {
+  let end = from;
+  let name = '';
+  while (end < css.length) {
+    if (isNameChar(css[end])) {
+      name += css[end];
+      end += 1;
+      continue;
+    }
+    const escape = escapeAt(css, end);
+    if (escape === null) break;
+    name += escape.codePoint;
+    end += escape.length;
+  }
+  return { end, name };
+}
+
+/** The code point an escape stands for, and the escape's length. */
+interface Escape {
+  codePoint: string;
+  length: number;
+}
+
+/** A valid escape at `at`: up to six hex digits and one following
+ *  whitespace, or any other code point but a newline. */
+function escapeAt(css: string, at: number): Escape | null {
+  if (css[at] !== '\\') return null;
+  const next = css.codePointAt(at + 1);
+  if (next === undefined || next === 0x0a || next === 0x0d || next === 0x0c) {
+    return null;
+  }
+  const digits = /^[0-9a-fA-F]{1,6}/.exec(css.slice(at + 1, at + 7))?.[0];
+  if (digits === undefined) {
+    return {
+      codePoint: String.fromCodePoint(next),
+      length: 1 + String.fromCodePoint(next).length,
+    };
+  }
+  const after = css.slice(at + 1 + digits.length);
+  const space = after.startsWith('\r\n')
+    ? 2
+    : /^[ \t\n\r\f]/.test(after)
+      ? 1
+      : 0;
+  const value = parseInt(digits, 16);
+  const valid =
+    value !== 0 && value <= 0x10ffff && (value < 0xd800 || value > 0xdfff);
+  return {
+    codePoint: String.fromCodePoint(valid ? value : 0xfffd),
+    length: 1 + digits.length + space,
+  };
+}
+
 /**
  * Gives every custom-property token that names a managed property its final
  * name, in one pass: declaration keys, `var()` reads at any depth (fallbacks
  * included), `@property` names, transition-property lists and style queries.
- * Quoted strings, `url()` and comments are copied unchanged.
+ * A name is read whole, escapes decoded, so an undeclared name that starts
+ * with a managed one is never renamed in part. Quoted strings, `url()` and
+ * comments are copied unchanged.
  */
 export function renameCustomProperties(
   css: string,
@@ -77,13 +143,11 @@ export function renameCustomProperties(
       out += css.slice(i, end);
       i = end;
     } else if (css.startsWith('--', i) && !isNameChar(css[i - 1])) {
-      let end = i + 2;
-      while (end < css.length && NAME_CHAR.test(css[end])) end += 1;
-      const spelling = css.slice(i + 2, end);
-      const identity = names.identity(spelling);
+      const { end, name } = readCustomPropertyName(css, i + 2);
+      const identity = names.identity(name);
       const final =
         identity === undefined ? undefined : names.finalName(identity);
-      out += `--${final ?? spelling}`;
+      out += final === undefined ? css.slice(i, end) : `--${final}`;
       i = end;
     } else {
       out += c;
@@ -93,8 +157,9 @@ export function renameCustomProperties(
   return out;
 }
 
+/** A name code point, or a UTF-16 unit of a non-ASCII one. */
 function isNameChar(c: string | undefined): boolean {
-  return c !== undefined && NAME_CHAR.test(c);
+  return c !== undefined && (NAME_CHAR.test(c) || c.charCodeAt(0) >= 0x80);
 }
 
 function closingQuote(css: string, open: number): number {
