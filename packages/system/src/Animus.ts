@@ -138,7 +138,9 @@ export class AnimusWithAll<
     return createClassResolver('', config);
   }
 
-  _buildComponentConfig() {
+  // The inferred return prints `variants: … | undefined`, which fails
+  // `asClass()`'s receiver under `exactOptionalPropertyTypes`.
+  _buildComponentConfig(): ClassResolverConfig {
     assertDisjointStylingNames(
       this.variants as Record<string, VariantConfig>,
       Object.keys(this.statesConfig),
