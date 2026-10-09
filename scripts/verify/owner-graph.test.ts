@@ -497,6 +497,7 @@ fi
     );
     chmodSync(join(fakeBin, 'vp'), 0o755);
 
+    const PREFIXED_OWNERS = ['@animus-ui/next-app', '@animus-ui/vite-app'];
     expect(owners.map((owner) => owner.manifest.name).sort()).toEqual([
       '@animus-ui/next-app',
       '@animus-ui/next16-app',
@@ -518,6 +519,10 @@ fi
         expect(scripts['verify:dry-run'], owner.manifest.name).toBeDefined();
       } else {
         expect(scripts['verify:dry-run'], owner.manifest.name).toBeUndefined();
+      }
+      // These owners build a prefixed variant (prefixed-variant/).
+      if (PREFIXED_OWNERS.includes(owner.manifest.name)) {
+        expect(scripts['verify:prefixed'], owner.manifest.name).toBeDefined();
       }
 
       writeFileSync(callLog, '');

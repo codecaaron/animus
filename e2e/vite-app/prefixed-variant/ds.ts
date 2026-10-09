@@ -3,6 +3,8 @@
 import { createSystem, createTheme } from '@animus-ui/system';
 import { color, layout, transitions } from '@animus-ui/system/groups';
 
+import type { ConditionsOf } from '@animus-ui/system';
+
 export const theme = createTheme()
   .addBreakpoints({ sm: 768 })
   .addColors({ ink: '#111', paper: '#fff' })
@@ -11,6 +13,10 @@ export const theme = createTheme()
     { colors: ['tone'], sizes: ['cap'] },
     { tone: { syntax: '<color>', inherits: true, initialValue: 'transparent' } }
   )
+  .addDeclarationScale({
+    name: 'looks',
+    values: { loud: { color: 'var(--tone)' } },
+  })
   .build();
 
 export type PrefixedTheme = typeof theme;
@@ -23,5 +29,10 @@ export const ds = createSystem()
   .addGroup('surface', color)
   .addGroup('box', layout)
   .addGroup('motion', transitions)
+  .addConditions({ _toned: '@container style(--tone: blue)' })
   .build()
   .seal();
+
+declare module '@animus-ui/system' {
+  interface Conditions extends Record<ConditionsOf<typeof ds>, true> {}
+}

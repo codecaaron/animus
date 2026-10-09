@@ -111,7 +111,10 @@ function hasSourceThemeManifests(system: SystemConfig): boolean {
 }
 
 /** Systems whose load diagnostics were surfaced: each loaded system reports
- *  them once, not again on every analysis and hot update. */
+ *  them once, not again on every analysis and hot update. The set is per
+ *  process. Next's webpack compilers share one analysis in one process, but
+ *  its build worker and Turbopack builds analyze in two processes, which
+ *  repeat every diagnostic alike, component ones included. */
 const surfacedSystems = new WeakSet<SystemConfig>();
 
 /** The loaded system's own diagnostics, the first time it is analyzed. A

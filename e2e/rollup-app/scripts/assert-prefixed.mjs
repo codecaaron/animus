@@ -19,6 +19,12 @@ const EXPECTED = [
   '--acme-cap:40rem',
   '--acme-tone:var(--acme-color-ink)',
   '--acme-cap:var(--animus-cap-size)',
+  // A condition alias, a runtime keyword on the currentVar prop, and a
+  // declaration-scale record value.
+  'style(--acme-tone:blue)',
+  '--acme-cap:3px',
+  '--acme-tone:inherit',
+  '-look--color:var(--acme-tone)',
 ];
 /** A declared name the prefix should have renamed. */
 const DECLARED = /(?<![\w-])--(?:tone|cap)(?![\w-])/;
@@ -28,6 +34,8 @@ const PREFIXED = /--acme-(?:tone|cap)(?![\w-])/g;
 const RUNTIME_EXPECTED = [
   /property["'`]?:["'`]--acme-cap["'`]/,
   /\bcap["'`]?:["'`]var\(--acme-cap\)["'`]/,
+  /currentVar["'`]?:["'`]--acme-tone["'`]/,
+  /\bcolor["'`]?:["'`]var\(--acme-tone\)["'`]/,
 ];
 const RUNTIME_DECLARED = /["'`]--(?:tone|cap)["'`]/;
 
