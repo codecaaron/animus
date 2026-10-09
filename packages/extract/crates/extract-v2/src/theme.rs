@@ -754,18 +754,56 @@ fn resolve_color_family_pass_through(
 }
 
 /// Whether a prop with `current_var` also writes `value` to it: a value that
-/// reads the variable itself, with or without a fallback, would make it
-/// cyclic, so it leaves it alone. `var` matches in any case and the name with
+/// reads the variable directly, with or without a fallback, would make it
+/// cyclic, so it leaves it alone. A read inside another `var()`'s fallback is
+/// not direct, so it still writes. `var` matches in any case and the name with
 /// any CSS whitespace or comments around it; the name itself is
-/// case-sensitive. The runtime resolver keeps an identical predicate.
+/// case-sensitive. Comments and strings read nothing. The runtime resolver
+/// keeps an identical predicate.
 pub fn writes_current_var(value: &str, current_var: &str) -> bool {
-    // ASCII lowering keeps every byte offset, so a match indexes `value`.
-    let lowered = value.to_ascii_lowercase();
-    !lowered.match_indices("var(").any(|(at, read)| {
-        skip_css_space(&value[at + read.len()..])
-            .strip_prefix(current_var)
-            .is_some_and(|after| matches!(skip_css_space(after).chars().next(), Some(')' | ',')))
-    })
+    let bytes = value.as_bytes();
+    // Per open parenthesis: whether it opens a `var()`, and whether that
+    // `var()` has reached its fallback.
+    let mut open: Vec<(bool, bool)> = Vec::new();
+    let mut at = 0;
+    while at < bytes.len() {
+        match bytes[at] {
+            b'/' if bytes.get(at + 1) == Some(&b'*') => {
+                at = value[at + 2..].find("*/").map_or(bytes.len(), |end| at + 2 + end + 2);
+                continue;
+            }
+            quote @ (b'"' | b'\'') => {
+                at += 1;
+                while at < bytes.len() && bytes[at] != quote {
+                    at += if bytes[at] == b'\\' { 2 } else { 1 };
+                }
+            }
+            b'(' => {
+                let var = at >= 3 && bytes[at - 3..at].eq_ignore_ascii_case(b"var");
+                let in_fallback = open.iter().any(|&(var, fallback)| var && fallback);
+                if var
+                    && !in_fallback
+                    && skip_css_space(&value[at + 1..])
+                        .strip_prefix(current_var)
+                        .is_some_and(|after| matches!(skip_css_space(after).chars().next(), Some(')' | ',')))
+                {
+                    return false;
+                }
+                open.push((var, false));
+            }
+            b',' => {
+                if let Some((true, fallback)) = open.last_mut() {
+                    *fallback = true;
+                }
+            }
+            b')' => {
+                open.pop();
+            }
+            _ => {}
+        }
+        at += 1;
+    }
+    true
 }
 
 /// `text` after its leading CSS whitespace (space, tab, line feed, carriage
@@ -1785,6 +1823,15 @@ mod tests {
             ("var(--color-ink)", true),                                        // 'ink'
             ("#0af", true),
             ("var(--current-bg-alt)", true),
+            ("var(--Current-bg)", true),
+            ("var(--other, var(--current-bg))", true),
+            ("VAR(--other, VAR(--current-bg))", true),
+            ("var(--other, calc(var(--current-bg) + 1px))", true),
+            ("var(--current-bg, var(--other))", false),
+            ("var(--other, var(--current-bg)) var(--current-bg)", false),
+            ("calc(var(--other, 1px) + var(--current-bg))", false),
+            ("var(--other, \"(\") var(--current-bg)", false),
+            ("/* var(--current-bg) */ red", true),
         ] {
             assert_eq!(writes_current_var(resolved, "--current-bg"), writes, "{resolved}");
         }

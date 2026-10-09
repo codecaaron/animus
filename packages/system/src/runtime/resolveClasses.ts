@@ -458,23 +458,44 @@ function warnTransformThrow(
 }
 
 /**
- * Whether `resolved` reads `currentVar`, with or without a fallback. `var`
- * matches in any case and the name with any CSS whitespace or comments around
- * it; the name itself is case-sensitive. The extractor's static path skips
- * its `currentVar` write by the same predicate.
+ * Whether `resolved` reads `currentVar` directly, with or without a fallback;
+ * a read inside another `var()`'s fallback is not direct. `var` matches in
+ * any case and the name with any CSS whitespace or comments around it; the
+ * name itself is case-sensitive. Comments and strings read nothing. The
+ * extractor's static path skips its `currentVar` write by the same predicate.
  */
 function readsCurrentVar(resolved: string, currentVar: string): boolean {
-  // ASCII lowering keeps every offset, so a match indexes `resolved`.
-  const lowered = resolved.replace(/[A-Z]/g, (letter) => letter.toLowerCase());
-  for (
-    let at = lowered.indexOf('var(');
-    at !== -1;
-    at = lowered.indexOf('var(', at + 1)
-  ) {
-    const name = skipCssSpace(resolved.slice(at + 'var('.length));
-    if (!name.startsWith(currentVar)) continue;
-    const next = skipCssSpace(name.slice(currentVar.length))[0];
-    if (next === ')' || next === ',') return true;
+  // Per open parenthesis: whether it opens a `var()`, and whether that
+  // `var()` has reached its fallback.
+  const open: { isVar: boolean; fallback: boolean }[] = [];
+  for (let at = 0; at < resolved.length; at += 1) {
+    const char = resolved[at];
+    if (char === '/' && resolved[at + 1] === '*') {
+      const end = resolved.indexOf('*/', at + 2);
+      at = end === -1 ? resolved.length : end + 1;
+    } else if (char === '"' || char === "'") {
+      at += 1;
+      while (at < resolved.length && resolved[at] !== char) {
+        at += resolved[at] === '\\' ? 2 : 1;
+      }
+    } else if (char === '(') {
+      const isVar =
+        at >= 3 && resolved.slice(at - 3, at).toLowerCase() === 'var';
+      const inFallback = open.some((frame) => frame.isVar && frame.fallback);
+      if (isVar && !inFallback) {
+        const name = skipCssSpace(resolved.slice(at + 1));
+        const next = name.startsWith(currentVar)
+          ? skipCssSpace(name.slice(currentVar.length))[0]
+          : undefined;
+        if (next === ')' || next === ',') return true;
+      }
+      open.push({ isVar, fallback: false });
+    } else if (char === ',') {
+      const top = open.at(-1);
+      if (top?.isVar) top.fallback = true;
+    } else if (char === ')') {
+      open.pop();
+    }
   }
   return false;
 }

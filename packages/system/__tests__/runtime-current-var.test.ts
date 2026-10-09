@@ -41,6 +41,15 @@ describe('a runtime value of a prop with currentVar', () => {
     ['var(--color-ink)', true], // 'ink'
     ['#0af', true],
     ['var(--current-bg-alt)', true],
+    ['var(--Current-bg)', true],
+    ['var(--other, var(--current-bg))', true],
+    ['VAR(--other, VAR(--current-bg))', true],
+    ['var(--other, calc(var(--current-bg) + 1px))', true],
+    ['var(--current-bg, var(--other))', false],
+    ['var(--other, var(--current-bg)) var(--current-bg)', false],
+    ['calc(var(--other, 1px) + var(--current-bg))', false],
+    ['var(--other, "(") var(--current-bg)', false],
+    ['/* var(--current-bg) */ red', true],
   ])('%s writes currentVar: %s', (resolved, writes) => {
     expect(resolve({ bg: resolved })).toEqual({
       class: `animus-box-abc ${writes ? 'animus-dyn-bg' : 'animus-dyn-bg--keep'}`,
