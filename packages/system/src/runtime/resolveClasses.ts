@@ -83,16 +83,10 @@ export type DynamicPropConfig = Record<
   ValueDynamicPropConfig | DeclarationConfig
 >;
 
-import {
-  componentValues,
-  decodedIdentifier,
-  importantPriority,
-  isUnitlessProperty,
-  tokenize,
-  variableReads,
-} from '@animus-ui/properties';
+import { isUnitlessProperty } from '@animus-ui/properties';
 
 import { IS_DEV } from './is-dev';
+import { readsVariable, trailingPriority } from './value-scan';
 
 declare const __ANIMUS_DEV__: boolean | undefined;
 import { recordWitness } from './witness';
@@ -384,7 +378,7 @@ function warnPrunedSlot(
   const servedByClass = (bp: string, value: unknown) => {
     if (dc.kind === 'declarations' || !responsive || typeof value !== 'string')
       return false;
-    const priority = importantPriority(value);
+    const priority = trailingPriority(value);
     return (
       !!priority &&
       (priority.spelling === 'important' ||
@@ -511,6 +505,48 @@ function warnIgnoredImportant(
   }
 }
 
+const warnedUnitless = new Set<string>();
+
+/**
+ * A number reaching a slot that only custom properties read, with no
+ * transform, stays unitless, as at build time; reported once per prop. Zero
+ * is a length without a unit, and a scale key is not written as is.
+ */
+function warnUnitlessCustomProperty(
+  baseClassName: string,
+  propName: string,
+  propValue: unknown,
+  dc: ValueDynamicPropConfig
+): void {
+  if (!IS_DEV) return;
+  const properties = slotProperties(dc);
+  if (
+    dc.transform ||
+    dc.transformId ||
+    dc.transformName ||
+    !isCustomOnly(properties)
+  ) {
+    return;
+  }
+  const number = responsiveEntries(propValue)[1]
+    .map(([, value]) => value)
+    .find(
+      (value) =>
+        typeof value === 'number' &&
+        Number.isFinite(value) &&
+        value !== 0 &&
+        dc.scaleValues?.[String(value)] == null
+    );
+  if (number === undefined) return;
+  const dedupeKey = `${baseClassName}|${propName}`;
+  if (warnedUnitless.has(dedupeKey)) return;
+  warnedUnitless.add(dedupeKey);
+  // oxlint-disable-next-line no-console -- intentional runtime diagnostic
+  console.warn(
+    `[animus:unit] ${baseClassName}: prop '${propName}' writes the number ${String(number)} to ${properties.join(', ')} without a unit — a custom property has no unit context, so the number stays unitless; give the value a unit, or bind a transform that adds one`
+  );
+}
+
 const warnedThrows = new Set<string>();
 const warnedStrictMisses = new Set<string>();
 
@@ -586,26 +622,12 @@ function warnTransformThrow(
 }
 
 /**
- * Whether `resolved` reads `currentVar` through a `var()` at any depth, its
- * fallbacks included: a function token whose decoded name is `var` in any
- * case, with the decoded variable name as its first argument. Comments,
- * quoted strings and `url()` read nothing. The extractor's static path skips
- * its `currentVar` write by the same predicate.
- */
-function readsCurrentVar(resolved: string, currentVar: string): boolean {
-  if (!resolved.includes('(')) return false;
-  const destination = decodedIdentifier(currentVar);
-  return variableReads(componentValues(tokenize(resolved))).some(
-    (read) => read.name === destination
-  );
-}
-
-/**
  * A value that reads the prop's own `currentVar` takes the slot that leaves
- * it alone, since writing it would make the variable cyclic.
+ * it alone, since writing it would make the variable cyclic. The extractor's
+ * static path skips its `currentVar` write by the same predicate.
  */
 function slotClassFor(dc: ValueDynamicPropConfig, resolved: string): string {
-  return dc.currentVar !== undefined && readsCurrentVar(resolved, dc.currentVar)
+  return dc.currentVar !== undefined && readsVariable(resolved, dc.currentVar)
     ? `${dc.slotClass}--keep`
     : dc.slotClass;
 }
@@ -639,7 +661,7 @@ function applyDynamicProp(
     // The authored text, when its priority cannot reach the slot.
     let ignored: string | undefined;
     const priority =
-      typeof authored === 'string' ? importantPriority(authored) : undefined;
+      typeof authored === 'string' ? trailingPriority(authored) : undefined;
     if (
       typeof authored === 'string' &&
       priority &&
@@ -665,7 +687,7 @@ function applyDynamicProp(
     }
     if (ignored !== undefined) {
       ignoredImportant(ignored);
-      const end = importantPriority(resolved)?.end;
+      const end = trailingPriority(resolved)?.end;
       resolved = end === undefined ? resolved : resolved.slice(0, end);
     }
     const slotClass = slotClassFor(dc, resolved);
@@ -884,6 +906,14 @@ export function resolveClasses(
                 dc,
                 propClasses,
                 typed
+              );
+            }
+            if (dc.kind !== 'declarations') {
+              warnUnitlessCustomProperty(
+                baseClassName,
+                propName,
+                propValue,
+                dc
               );
             }
           } else {

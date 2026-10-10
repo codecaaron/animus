@@ -127,9 +127,12 @@ export type {
   SelectorAliasProps,
   SystemProp,
   SystemProps,
+  ThemedCSSInputProps,
+  ThemedCSSInputPropMap,
   ThemedCSSPropMap,
   ThemedCSSProps,
   ThemedScale,
+  ThemedVariantModel,
   ThemedScaleValue,
   VariantConfig,
 } from './types/config';

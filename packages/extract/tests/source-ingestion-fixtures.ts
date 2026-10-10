@@ -12,6 +12,28 @@ import {
 
 export type FactFile = ExtractFactsResult['files'][string];
 
+/** A system module's `import x from` and `import { a as b } from` bindings,
+ *  as the native parser reports them: discovery trusts a parsed system
+ *  file's imports, an empty list included. */
+export function systemImportFacts(source: string): FactFile['imports'] {
+  const imports: FactFile['imports'] = [];
+  for (const [, named, local, specifier] of source.matchAll(
+    /import\s+(?:\{([^}]*)\}|([A-Za-z_$][\w$]*))\s+from\s+['"]([^'"]+)['"]/g
+  )) {
+    if (local) {
+      imports.push({ local, imported: 'default', source: specifier });
+      continue;
+    }
+    for (const part of named.split(',')) {
+      const [imported, alias] = part.trim().split(/\s+as\s+/);
+      if (imported) {
+        imports.push({ local: alias ?? imported, imported, source: specifier });
+      }
+    }
+  }
+  return imports;
+}
+
 export function emptyFacts(path: string): FactFile {
   return {
     path,

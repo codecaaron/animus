@@ -931,7 +931,7 @@ fn write_style_rule(output: &mut String, selectors: &[String], rule: &StyleRule,
 /// A group's declarations by the authored key that wrote each last. A group
 /// one key wrote stays whole; one that several keys share splits, so each
 /// writer's declarations keep that writer's slot.
-fn supplied_parts<'a>(
+pub(crate) fn supplied_parts<'a>(
     declarations: &'a [CssDeclaration],
     suppliers: &'a Suppliers,
 ) -> Vec<(Cow<'a, [CssDeclaration]>, Option<&'a AuthoredOrigin>)> {
@@ -956,7 +956,7 @@ fn supplied_parts<'a>(
 /// order. In each source block, the rules its selector and at-rule keys
 /// produced trade the slots they fill by default, sorted by their keys'
 /// authored positions. Declarations and breakpoints keep their slots.
-fn authored_emission_order(origins: &[Option<&AuthoredOrigin>]) -> Vec<usize> {
+pub(crate) fn authored_emission_order(origins: &[Option<&AuthoredOrigin>]) -> Vec<usize> {
     let mut order: Vec<usize> = (0..origins.len()).collect();
     let blocks: BTreeSet<usize> = origins.iter().flatten().map(|origin| origin.block).collect();
     for block in blocks {

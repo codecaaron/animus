@@ -3,7 +3,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use oxc::ast::ast::{CommentKind, Expression, ObjectExpression, Program};
+use oxc::ast::ast::{CommentKind, Expression, ObjectExpression, ObjectPropertyKind, Program, PropertyKey};
+use oxc::span::GetSpan;
 use serde::Serialize;
 use serde_json::Value;
 
@@ -61,6 +62,10 @@ pub struct StageFacts {
     /// text as written.
     #[serde(skip)]
     pub skipped_sources: Vec<SkippedSource>,
+    /// Each key of the stage's object literals whose block the theme
+    /// resolver may drop, as written.
+    #[serde(skip)]
+    pub block_keys: Vec<KeySource>,
 }
 
 /// A skipped value's start offset and source text, keyed by its skip.
@@ -72,7 +77,133 @@ pub struct SkippedSource {
     pub text: String,
 }
 
+/// A property key's start offset, its whole property as written, and the
+/// keys of the objects that hold it, outermost first.
+#[derive(Debug, Clone)]
+pub struct KeySource {
+    pub key: String,
+    pub start: u32,
+    pub text: String,
+    pub path: Vec<String>,
+}
+
+impl KeySource {
+    /// `prop`, when the theme resolver may drop its block: an unsupported
+    /// at-rule, or a selector or at-rule key, raw or an alias, whose value is
+    /// not an object literal.
+    fn block_key(prop: &oxc::ast::ast::ObjectProperty<'_>, source: &str, path: &[String]) -> Option<Self> {
+        let key = match &prop.key {
+            PropertyKey::StringLiteral(literal) if !prop.computed => literal.value.as_str(),
+            PropertyKey::StaticIdentifier(identifier) if !prop.computed => identifier.name.as_str(),
+            _ => return None,
+        };
+        let unsupported = key.starts_with('@') && crate::theme::condition_from_raw_key(key).is_none();
+        let block_key = key.starts_with(['@', '_', ':']) || crate::selector_subject::has_subject(key);
+        let block = matches!(chain_walk::unwrap_type_assertions(&prop.value), Expression::ObjectExpression(_));
+        if unsupported || (block_key && !block) { Self::of(prop, key, source, path) } else { None }
+    }
+
+    fn of(prop: &oxc::ast::ast::ObjectProperty<'_>, key: &str, source: &str, path: &[String]) -> Option<Self> {
+        let text = source.get(prop.span.start as usize..prop.span.end as usize)?;
+        Some(Self { key: key.to_string(), start: prop.key.span().start, text: text.to_string(), path: path.to_vec() })
+    }
+}
+
+/// Every property of the object literals each named top-level `const`
+/// builds, keyed by the declaration's binding, as written: where the global
+/// blocks those declarations declare are located. A name an `export { local
+/// as name }` gives a declaration finds it by its local binding.
+pub fn declaration_keys(program: &Program<'_>, source: &str, names: &BTreeSet<String>) -> BTreeMap<String, Vec<KeySource>> {
+    use oxc::ast::ast::{BindingPattern, Declaration, Statement, VariableDeclaration};
+    let mut wanted: BTreeMap<String, String> = names.iter().map(|name| (name.clone(), name.clone())).collect();
+    for statement in &program.body {
+        let Statement::ExportNamedDeclaration(export) = statement else { continue };
+        for specifier in &export.specifiers {
+            let exported = specifier.exported.name().to_string();
+            if names.contains(&exported) {
+                wanted.insert(specifier.local.name().to_string(), exported);
+            }
+        }
+    }
+    fn walk(expr: &Expression<'_>, source: &str, path: &mut Vec<String>, found: &mut Vec<KeySource>) {
+        match chain_walk::unwrap_type_assertions(expr) {
+            Expression::ObjectExpression(obj) => {
+                for prop in &obj.properties {
+                    let ObjectPropertyKind::ObjectProperty(prop) = prop else { continue };
+                    let key = match &prop.key {
+                        PropertyKey::StringLiteral(literal) if !prop.computed => Some(literal.value.as_str()),
+                        PropertyKey::StaticIdentifier(identifier) if !prop.computed => Some(identifier.name.as_str()),
+                        _ => None,
+                    };
+                    if let Some(found_key) = key.and_then(|key| KeySource::of(prop, key, source, path)) {
+                        found.push(found_key);
+                    }
+                    path.push(key.unwrap_or_default().to_string());
+                    walk(&prop.value, source, path, found);
+                    path.pop();
+                }
+            }
+            Expression::CallExpression(call) => {
+                for argument in &call.arguments {
+                    if let Some(argument) = argument.as_expression() {
+                        walk(argument, source, path, found);
+                    }
+                }
+            }
+            Expression::ArrayExpression(array) => {
+                for element in &array.elements {
+                    if let Some(element) = element.as_expression() {
+                        walk(element, source, path, found);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut keys = BTreeMap::new();
+    let mut declare = |declaration: &VariableDeclaration<'_>| {
+        for declarator in &declaration.declarations {
+            let (BindingPattern::BindingIdentifier(binding), Some(init)) = (&declarator.id, &declarator.init) else {
+                continue;
+            };
+            if let Some(name) = wanted.get(binding.name.as_str()) {
+                let mut found = Vec::new();
+                walk(init, source, &mut Vec::new(), &mut found);
+                keys.insert(name.clone(), found);
+            }
+        }
+    };
+    for statement in &program.body {
+        match statement {
+            Statement::VariableDeclaration(declaration) => declare(declaration),
+            Statement::ExportNamedDeclaration(export) => {
+                if let Some(Declaration::VariableDeclaration(declaration)) = &export.declaration {
+                    declare(declaration);
+                }
+            }
+            _ => {}
+        }
+    }
+    keys
+}
+
 impl StageFacts {
+    /// Records the keys of `obj`, and of the blocks it nests, whose block the
+    /// theme resolver may drop (`KeySource::block_key`). An unsupported
+    /// at-rule's own block is not read.
+    fn record_block_keys(&mut self, obj: &ObjectExpression<'_>, source: &str, path: &mut Vec<String>) {
+        for prop in &obj.properties {
+            let ObjectPropertyKind::ObjectProperty(prop) = prop else { continue };
+            if let Some(found) = KeySource::block_key(prop, source, path) {
+                self.block_keys.push(found);
+            } else if let Expression::ObjectExpression(nested) = chain_walk::unwrap_type_assertions(&prop.value) {
+                path.push(prop.key.static_name().map(|name| name.to_string()).unwrap_or_default());
+                self.record_block_keys(nested, source, path);
+                path.pop();
+            }
+        }
+    }
+
     /// Records a skip, with its source when the evaluator located it.
     fn record_skip(&mut self, skip: eval::SkippedProperty, source: &str) {
         if let Some(text) = skip.span.and_then(|(start, end)| source.get(start as usize..end as usize)) {
@@ -297,6 +428,11 @@ pub struct FileFacts {
     /// built from (`const ds = bundle.seal()` → `bundle`), assertion-peeled.
     #[serde(skip)]
     pub declaration_roots: BTreeMap<String, String>,
+    /// The properties of each top-level declaration that declares a
+    /// registered global block, by its binding (`declaration_keys`), which
+    /// the engine fills for the module a block names as its source.
+    #[serde(skip)]
+    pub global_keys: BTreeMap<String, Vec<KeySource>>,
     /// Top-level `const X = { key: Ident }` objects: static key → identifier,
     /// only for keys no later spread, computed key, other property, or
     /// top-level statement write in this file (`X.key =`, `X[k] =`,
@@ -371,6 +507,10 @@ pub struct FileFacts {
     /// Top-level `const`s that hold elements, by binding.
     #[serde(skip)]
     pub(crate) element_consts: BTreeMap<String, crate::usage_facts::ElementConst>,
+    /// Component elements that hand their children and props to their
+    /// receiver.
+    #[serde(skip)]
+    pub(crate) opaque_tags: Vec<crate::usage_facts::OpaqueTag>,
     /// Extracted createTransform() declarations: serialized with the facts
     /// for probes, and the source of their bail diagnostics. They are never
     /// registered with the evaluator.
@@ -381,6 +521,10 @@ pub struct FileFacts {
     #[serde(skip)]
     pub(crate) captured_transform_bindings: BTreeSet<(String, String)>,
     pub parse_diagnostics: Vec<String>,
+    /// 1-based `[line, column]` of each `createSystem(…)` call no binding
+    /// resolves: a system file's root that can only fail where it loads.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub unbound_create_system_calls: Vec<(usize, usize)>,
     /// The parser stopped at an unrecoverable error and yielded no chains,
     /// imports or exports: these facts describe nothing of the file.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
@@ -1017,8 +1161,15 @@ pub(crate) fn extract_file_facts_from_static_maps(
                     dropped_transforms: Vec::new(),
                     dropped_configs: Vec::new(),
                     skipped_sources: Vec::new(),
+                    block_keys: Vec::new(),
                 };
                 let key = &stage.arg_span;
+                if let Some(obj) = object_index.get(key) {
+                    facts.record_block_keys(obj, source, &mut Vec::new());
+                }
+                if let Some(obj) = stage.second_arg_span.and_then(|span| object_index.get(&span)) {
+                    facts.record_block_keys(obj, source, &mut Vec::new());
+                }
                 if stage.method == "variant" {
                     match object_index.get(key) {
                         Some(obj) => match eval::parse_variant_arg(obj, Some(&statics_fx)) {
@@ -1234,6 +1385,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
         direct_eval,
         opaque_calls,
         element_consts,
+        opaque_tags,
     } = crate::usage_facts::collect_enriched_usage(
         program,
         &usage_statics_fx,
@@ -1267,6 +1419,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
         assigned_aliases: const_initializers.assigned,
         props_forwarding: crate::usage_facts::collect_props_forwarding(program),
         declaration_roots: const_initializers.roots,
+        global_keys: BTreeMap::new(),
         object_members: const_initializers.objects,
         facades: const_initializers.facades,
         unsafe_object_uses,
@@ -1298,7 +1451,12 @@ pub(crate) fn extract_file_facts_from_static_maps(
         direct_eval,
         opaque_calls,
         element_consts,
+        opaque_tags,
         parse_diagnostics: ast.diagnostics.clone(),
+        unbound_create_system_calls: crate::usage_facts::unbound_create_system_calls(program)
+            .into_iter()
+            .map(|span| line_column(source, span.start))
+            .collect(),
         parse_panicked: ast.panicked,
     }
 }
@@ -1314,6 +1472,29 @@ mod tests {
         let facts = extract_file_facts(&ast);
         assert_eq!(counter.load(std::sync::atomic::Ordering::SeqCst), 1);
         facts
+    }
+
+    #[test]
+    fn records_only_create_system_calls_no_binding_resolves() {
+        let calls = |source: &str| facts_for(source).unbound_create_system_calls;
+        // A bare call, at its callee.
+        assert_eq!(calls("export const ds = createSystem().build();"), vec![(1, 19)]);
+        // An escaped spelling names the same identifier.
+        assert_eq!(calls(r"export const ds = create\u0053ystem().build();"), vec![(1, 19)]);
+        // A comment or string spelling it is no call, and an alias is bound.
+        assert!(calls(
+            "import { createSystem as makeSystem } from '@animus-ui/system';\n\
+             // createSystem()\nconst s = 'createSystem()';\n\
+             export const ds = makeSystem().build();"
+        )
+        .is_empty());
+        // A parameter, a declaration and an import each bind the name.
+        assert!(calls("function build(createSystem) { return createSystem().build(); }").is_empty());
+        assert!(calls("function createSystem() {}\nexport const ds = createSystem();").is_empty());
+        assert!(calls(
+            "import { createSystem } from '@animus-ui/system';\nexport const ds = createSystem();"
+        )
+        .is_empty());
     }
 
     #[test]

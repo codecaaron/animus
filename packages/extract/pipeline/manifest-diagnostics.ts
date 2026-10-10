@@ -48,6 +48,19 @@ function droppedSuffix(diagnostic: ManifestDiagnostic): string {
     : '';
 }
 
+/** The record's code, when its message does not already quote it. */
+function codeSuffix(diagnostic: ManifestDiagnostic): string {
+  return diagnostic.code && !diagnostic.message.includes(diagnostic.code)
+    ? ` [${diagnostic.code}]`
+    : '';
+}
+
+/** A warn-kind record's line after its mark:
+ *  `file:line:column: component: message [code]`. */
+export function warnLine(diagnostic: ManifestDiagnostic): string {
+  return `${locationOf(diagnostic)}: ${diagnostic.component}: ${diagnostic.message}${droppedSuffix(diagnostic)}${codeSuffix(diagnostic)}`;
+}
+
 /** Stable code for selector forms with no substitutable subject; the
  *  extraction engine mints the same string. */
 export const SELECTOR_UNSUPPORTED_SUBJECT =
@@ -284,6 +297,12 @@ export const KIT_SYSTEM_NOT_INCLUDED = 'animus.kit.system-not-included';
  *  Animus's factory, so it is no root. */
 export const UNPROVEN_ROOT_BINDING = 'animus.discovery.unproven-root-binding';
 
+/** A system file calls `createSystem` with no import or local binding. The
+ *  system loader evaluates the file without auto-imports, where the name is
+ *  undefined, so the call is no root. */
+export const UNIMPORTED_CREATE_SYSTEM =
+  'animus.discovery.unimported-create-system';
+
 /** What a skipped source file costs: the analysis never sees what it
  *  renders. */
 export const SKIPPED_SOURCE_COST =
@@ -380,11 +399,6 @@ export const PROPERTY_FALLBACK_SELF_REFERENCE =
  *  computed-value time. */
 export const PROPERTY_CURRENT_VAR_CYCLE = 'animus.property.current-var-cycle';
 
-/** A prefix renamed contextual variables without `prefixContextualVars`, so
- *  their declared names no longer resolve. */
-export const PREFIX_CONTEXTUAL_VARS_UNPREFIXED =
-  'animus.prefix.contextual-vars-unprefixed';
-
 /** Under `prefixContextualVars`, a final name that collides with a runtime
  *  transport variable or a theme variable of the same spelling. */
 export const PREFIX_NAME_CONFLICT = 'animus.prefix.name-conflict';
@@ -415,6 +429,7 @@ const DIAGNOSTIC_SEVERITY: ReadonlyMap<string, DiagnosticSeverity> = new Map([
   [KIT_UNSUPPORTED_FORMAT, 'error'],
   [KIT_STALE_DESCRIPTOR, 'warn'],
   [UNPROVEN_ROOT_BINDING, 'warn'],
+  [UNIMPORTED_CREATE_SYSTEM, 'warn'],
   [VOCABULARY_COLLISION, 'warn'],
   [VOCABULARY_LEGACY_VERB, 'warn'],
   [INVALID_PROPERTY_REGISTRATION, 'error'],
@@ -424,7 +439,6 @@ const DIAGNOSTIC_SEVERITY: ReadonlyMap<string, DiagnosticSeverity> = new Map([
   [PROPERTY_SELF_REFERENCE, 'warn'],
   [PROPERTY_FALLBACK_SELF_REFERENCE, 'warn'],
   [PROPERTY_CURRENT_VAR_CYCLE, 'warn'],
-  [PREFIX_CONTEXTUAL_VARS_UNPREFIXED, 'warn'],
   [PREFIX_NAME_CONFLICT, 'error'],
   [PROPERTY_LEGACY_TOKEN_COLLISION, 'warn'],
   [PROPERTY_TOKEN_COLLISION, 'error'],
@@ -501,7 +515,6 @@ export function systemLoadDiagnostics(
     SystemConfig,
     | 'vocabularyWitnessesJson'
     | 'invalidPropertyRegistrations'
-    | 'legacyPrefixedContextualVars'
     | 'prefixNameConflicts'
     | 'scalesJson'
     | 'propertyRecordsJson'
@@ -517,20 +530,6 @@ export function systemLoadDiagnostics(
       severity: severityFor(INVALID_PROPERTY_REGISTRATION),
     })
   );
-  const prefixed = system.legacyPrefixedContextualVars ?? [];
-  const unprefixed: ManifestDiagnostic[] =
-    prefixed.length === 0
-      ? []
-      : [
-          {
-            file: 'system',
-            component: 'prefix',
-            kind: 'warn',
-            message: `the prefix renames the contextual variables ${prefixed.join(', ')}, but their declared names are still read and written as written, so scale reads of them fail and their writes miss. Set prefixContextualVars: true to resolve them under the prefix (${PREFIX_CONTEXTUAL_VARS_UNPREFIXED})`,
-            code: PREFIX_CONTEXTUAL_VARS_UNPREFIXED,
-            severity: severityFor(PREFIX_CONTEXTUAL_VARS_UNPREFIXED),
-          },
-        ];
   // A conflict leaves the emitted names ambiguous, so it is an error in
   // every mode, never a warning.
   const conflicts = (system.prefixNameConflicts ?? []).map(
@@ -549,7 +548,6 @@ export function systemLoadDiagnostics(
   return [
     ...vocabularyWitnessDiagnostics(system.vocabularyWitnessesJson),
     ...registrations,
-    ...unprefixed,
     ...conflicts,
     ...tokenCollisionDiagnostics(system),
   ];
@@ -633,16 +631,13 @@ export function surfaceManifestDiagnostics(
     const mark = level === 'info' ? 'ℹ' : '⚠';
     const message = `${diagnostic.message}${droppedSuffix(diagnostic)}`;
     if (diagnostic.kind === 'bail') {
-      line = `${mark} ${locatedPrefix(diagnostic)}${diagnostic.component} not extracted: ${message}`;
+      line = `${mark} ${locatedPrefix(diagnostic)}${diagnostic.component} not extracted: ${message}${codeSuffix(diagnostic)}`;
     } else if (diagnostic.kind === 'skip') {
-      line = `${mark} ${locatedPrefix(diagnostic)}${diagnostic.component}: skipped ${message}`;
+      line = `${mark} ${locatedPrefix(diagnostic)}${diagnostic.component}: skipped ${message}${codeSuffix(diagnostic)}`;
     } else if (diagnostic.kind === 'warn' || diagnostic.kind === 'error') {
-      line = `${mark} ${locationOf(diagnostic)}: ${diagnostic.component}: ${message}`;
+      line = `${mark} ${warnLine(diagnostic)}`;
     }
     if (line === null) continue;
-    if (diagnostic.code && !diagnostic.message.includes(diagnostic.code)) {
-      line += ` [${diagnostic.code}]`;
-    }
     if (level === 'info') {
       policy.info?.(line);
       continue;

@@ -11,7 +11,6 @@ import {
   importedKitDiagnostics,
   firstOwners,
   isDeletedSource,
-  noKitFilesDiagnostics,
   surfaceManifestDiagnostics,
   unreadableSourceDiagnostic,
   validateLayerOrder,
@@ -19,7 +18,7 @@ import {
 import { readFileSync } from 'fs';
 import { basename, relative } from 'path';
 
-import type { PluginContext } from './context';
+import type { DiscoveredSources, PluginContext } from './context';
 import type { ManifestDiagnostic } from '@animus-ui/extract/pipeline';
 
 /**
@@ -59,139 +58,25 @@ export async function runBuildStart(
     );
   }
 
-  t0 = performance.now();
-  // Refresh in case `options` was mutated between server lifecycles.
-  ctx.excludeMatcher = createExcludeMatcher(ctx.options.exclude);
-  const excludePatterns = ctx.excludeMatcher;
-  ctx.extensionsSet = new Set(ctx.options.extensions ?? DEFAULT_EXTENSIONS);
-  const filePaths = discoverFiles(
-    ctx.rootDir,
-    ctx.rootDir,
-    excludePatterns,
-    ctx.extensionsSet
-  );
-
-  // Adaptation happens once, after local and external discovery establish
-  // the complete resolver index.
-  const rawEntries: Array<{
-    path: string;
-    source: string;
-    hash?: string;
-  }> = [];
-  // A configured file that cannot be read is lost input: error severity fails
-  // a strict build, and the analysis prunes nothing it might render.
-  const ingestionFailures: ManifestDiagnostic[] = [];
-  for (const filePath of filePaths) {
-    const relPath = relative(ctx.rootDir, filePath);
-    let source: string;
-    try {
-      source = readFileSync(filePath, 'utf-8');
-    } catch (err) {
-      if (!isDeletedSource(err)) {
-        ingestionFailures.push(unreadableSourceDiagnostic(relPath, err));
-      }
-      continue;
-    }
-    const hash = !ctx.isProd ? contentHash(source) : undefined;
-    rawEntries.push({ path: relPath, source, hash });
+  const discovered = await discoverSources(ctx, resolveSpecifier);
+  // The system's imports and its packages' manifests decide discovery, so a
+  // development system reload repeats it. Discovery decides the files; a
+  // cached file keeps the source the hot path last read.
+  if (!ctx.isProd) {
+    ctx.rediscoverSources = async () => {
+      const rediscovered = await discoverSources(ctx, resolveSpecifier);
+      return {
+        ...rediscovered,
+        rawEntries: rediscovered.rawEntries.map((entry) => {
+          const cached = ctx.fileCache.get(entry.path);
+          return cached ? { path: entry.path, ...cached } : entry;
+        }),
+      };
+    };
   }
-
-  const localFileCount = rawEntries.length;
-  const discoveryDiagnostics: ManifestDiagnostic[] = [];
-  const packageSpecifiers = await extractSystemFilePackages(
-    ctx.resolvedSystemPath!,
-    engineModuleParser(ctx.engineApi()),
-    (diagnostic) => discoveryDiagnostics.push(diagnostic),
-    resolveSpecifier
-  );
-  discoveryDiagnostics.push(
-    ...importedKitDiagnostics(
-      rawEntries,
-      ctx.engineApi(),
-      ctx.rootDir,
-      packageSpecifiers
-    )
-  );
-
-  ctx.externalSourceEntries.clear();
-
-  // Shared traversal; resolution and hash policy stay bundler-specific.
-  const collected = await collectExternalPackageSources({
-    specifiers: packageSpecifiers,
-    resolveSpecifier,
-    rootDir: ctx.rootDir,
-    extensionsSet: ctx.extensionsSet,
-    hasEntry: (relPath) => rawEntries.some((entry) => entry.path === relPath),
-    onUnreadable: (relPath, err) => {
-      if (!isDeletedSource(err)) {
-        ingestionFailures.push(unreadableSourceDiagnostic(relPath, err));
-      }
-    },
-  });
-  ctx.ingestionFailureDiagnostics = ingestionFailures;
-  // `verify` reports an empty kit through the structural self-check.
-  surfaceManifestDiagnostics(
-    {
-      diagnostics: [
-        ...discoveryDiagnostics,
-        ...collected.diagnostics,
-        ...(ctx.options.verify
-          ? []
-          : noKitFilesDiagnostics(collected.outcomes)),
-      ],
-    },
-    (message) => ctx.warn(message),
-    // An error-severity discovery diagnostic fails a strict build.
-    {
-      levels: ctx.options.diagnostics,
-      strict: ctx.options.strict,
-      reportErrors: ctx.reportErrors(),
-    }
-  );
-
-  ctx.packageMap = collected.packageMap;
-  ctx.externalPackageOutcomes = collected.outcomes;
-  ctx.kitDescriptors = collected.kitDescriptors;
-  ctx.externalDirOwners = firstOwners(collected.dirOwnerSets);
-  ctx.externalFileOwners = collected.fileOwners;
-  ctx.enforceIncludeResolution();
-  for (const [specifier, srcEntry] of collected.sourceEntries) {
-    ctx.externalSourceEntries.set(specifier, srcEntry);
-  }
-  ctx.externalSourceSideEffects = collected.sourceEntrySideEffects;
-  for (const entry of collected.entries) {
-    const hash = !ctx.isProd ? contentHash(entry.source) : undefined;
-    rawEntries.push({ path: entry.path, source: entry.source, hash });
-  }
-
-  ctx.externalPackageDirs = collected.packageDirs;
-  ctx.externalLinkedDirs = collected.linkedDirs;
-  // The earlier registration points both run before this assignment, so
-  // external dirs must register here or they are never watched.
-  ctx.registerSystemWatchPaths();
-
-  const packageFileCount = rawEntries.length - localFileCount;
-  ctx.log(
-    `Discovered ${rawEntries.length} files (${packageFileCount} from packages) (${Math.round(performance.now() - t0)}ms)`
-  );
 
   t0 = performance.now();
-  await ctx.analyzeIngested({
-    rawEntries,
-    // Seed before the parse and analysis gates: a failed non-strict
-    // buildStart must leave HMR the full corpus, not one assembled from the
-    // first edit.
-    afterIngestion: (accepted) => {
-      if (!ctx.isProd) {
-        ctx.mutateFileCache((cache) => {
-          cache.clear();
-          for (const entry of accepted.originalEntries) {
-            cache.set(entry.path, { hash: entry.hash, source: entry.source });
-          }
-        });
-      }
-    },
-  });
+  await ctx.analyzeIngested(discovered);
 
   // Vite's CSS pipeline resolves `__VITE_ASSET__` markers to hashed names
   // before the stylesheet is hashed, so the CSS hash reflects the final URL.
@@ -286,4 +171,137 @@ export async function runBuildStart(
   if (ctx.options.verify) {
     ctx.runSelfVerify();
   }
+}
+
+/** Local and external discovery, publishing the package state on `ctx`, and
+ *  the analysis input it yields. */
+async function discoverSources(
+  ctx: PluginContext,
+  resolveSpecifier: (specifier: string) => Promise<string | null>
+): Promise<DiscoveredSources> {
+  const t0 = performance.now();
+  // Refresh in case `options` was mutated between server lifecycles.
+  ctx.excludeMatcher = createExcludeMatcher(ctx.options.exclude);
+  const excludePatterns = ctx.excludeMatcher;
+  ctx.extensionsSet = new Set(ctx.options.extensions ?? DEFAULT_EXTENSIONS);
+  const filePaths = discoverFiles(
+    ctx.rootDir,
+    ctx.rootDir,
+    excludePatterns,
+    ctx.extensionsSet
+  );
+
+  // Adaptation happens once, after local and external discovery establish
+  // the complete resolver index.
+  const rawEntries: Array<{
+    path: string;
+    source: string;
+    hash?: string;
+  }> = [];
+  // A configured file that cannot be read is lost input: error severity fails
+  // a strict build, and the analysis prunes nothing it might render.
+  const ingestionFailures: ManifestDiagnostic[] = [];
+  for (const filePath of filePaths) {
+    const relPath = relative(ctx.rootDir, filePath);
+    let source: string;
+    try {
+      source = readFileSync(filePath, 'utf-8');
+    } catch (err) {
+      if (!isDeletedSource(err)) {
+        ingestionFailures.push(unreadableSourceDiagnostic(relPath, err));
+      }
+      continue;
+    }
+    const hash = !ctx.isProd ? contentHash(source) : undefined;
+    rawEntries.push({ path: relPath, source, hash });
+  }
+
+  const localFileCount = rawEntries.length;
+  const discoveryDiagnostics: ManifestDiagnostic[] = [];
+  const packageSpecifiers = await extractSystemFilePackages(
+    ctx.resolvedSystemPath!,
+    engineModuleParser(ctx.engineApi()),
+    (diagnostic) => discoveryDiagnostics.push(diagnostic),
+    resolveSpecifier
+  );
+  discoveryDiagnostics.push(
+    ...importedKitDiagnostics(
+      rawEntries,
+      ctx.engineApi(),
+      ctx.rootDir,
+      packageSpecifiers
+    )
+  );
+
+  ctx.externalSourceEntries.clear();
+
+  // Shared traversal; resolution and hash policy stay bundler-specific.
+  const collected = await collectExternalPackageSources({
+    specifiers: packageSpecifiers,
+    resolveSpecifier,
+    rootDir: ctx.rootDir,
+    extensionsSet: ctx.extensionsSet,
+    hasEntry: (relPath) => rawEntries.some((entry) => entry.path === relPath),
+    onUnreadable: (relPath, err) => {
+      if (!isDeletedSource(err)) {
+        ingestionFailures.push(unreadableSourceDiagnostic(relPath, err));
+      }
+    },
+  });
+  ctx.ingestionFailureDiagnostics = ingestionFailures;
+  surfaceManifestDiagnostics(
+    {
+      diagnostics: [...discoveryDiagnostics, ...collected.diagnostics],
+    },
+    (message) => ctx.warn(message),
+    // An error-severity discovery diagnostic fails a strict build.
+    {
+      levels: ctx.options.diagnostics,
+      strict: ctx.options.strict,
+      reportErrors: ctx.reportErrors(),
+    }
+  );
+
+  ctx.packageMap = collected.packageMap;
+  ctx.externalPackageOutcomes = collected.outcomes;
+  ctx.kitDescriptors = collected.kitDescriptors;
+  ctx.externalDirOwners = firstOwners(collected.dirOwnerSets);
+  ctx.externalFileOwners = collected.fileOwners;
+  ctx.enforceIncludeResolution();
+  for (const [specifier, srcEntry] of collected.sourceEntries) {
+    ctx.externalSourceEntries.set(specifier, srcEntry);
+  }
+  ctx.externalSourceSideEffects = collected.sourceEntrySideEffects;
+  for (const entry of collected.entries) {
+    const hash = !ctx.isProd ? contentHash(entry.source) : undefined;
+    rawEntries.push({ path: entry.path, source: entry.source, hash });
+  }
+
+  ctx.externalPackageDirs = collected.packageDirs;
+  ctx.externalLinkedDirs = collected.linkedDirs;
+  // The earlier registration points both run before this assignment, so
+  // external dirs must register here or they are never watched.
+  ctx.registerSystemWatchPaths();
+
+  const packageFileCount = rawEntries.length - localFileCount;
+  ctx.log(
+    `Discovered ${rawEntries.length} files (${packageFileCount} from packages) (${Math.round(performance.now() - t0)}ms)`
+  );
+
+  return {
+    rawEntries,
+    // Seed before the parse and analysis gates: a failed non-strict
+    // buildStart must leave HMR the full corpus, not one assembled from the
+    // first edit.
+    afterIngestion: (accepted) => {
+      if (!ctx.isProd) {
+        ctx.mutateFileCache((cache) => {
+          cache.clear();
+          for (const entry of accepted.originalEntries) {
+            cache.set(entry.path, { hash: entry.hash, source: entry.source });
+          }
+        });
+      }
+    },
+  };
 }

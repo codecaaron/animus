@@ -74,6 +74,9 @@ pub struct EngineOptions {
     /// `{ skippedSources, unbundledComputedImports, packageDirs }`, each
     /// optional.
     pub analysis_context_json: Option<String>,
+    /// Under a prefix, each name the theme generates and its final name,
+    /// without `--`: authored component styles take the final names.
+    pub generated_names_json: Option<String>,
 }
 
 struct ResolvedOptions {
@@ -247,6 +250,9 @@ impl ExtractEngine {
             .set_transform_sources(o.transform_sources_json.as_deref())
             .map_err(napi::Error::from_reason)?;
         css_inputs.set_transform_provenance(o.transform_provenance_json.as_deref());
+        css_inputs
+            .set_generated_names(o.generated_names_json.as_deref())
+            .map_err(napi::Error::from_reason)?;
         Ok(ExtractEngine {
             opts: ResolvedOptions {
                 prefix: o.prefix.unwrap_or_else(|| "animus".to_string()),
@@ -488,6 +494,17 @@ impl ExtractEngine {
             references.add(&ast.path, ast.program(), imports, exports);
         }
 
+        // The declarations each module declares a registered global block
+        // with, whose keys locate the block's diagnostics.
+        let mut global_declarations: rustc_hash::FxHashMap<&str, std::collections::BTreeSet<String>> =
+            rustc_hash::FxHashMap::default();
+        if let Some(serde_json::Value::Object(blocks)) = &self.opts.css_inputs.global_style_blocks {
+            for block in blocks.values() {
+                let Some(source) = block.get("source").and_then(serde_json::Value::as_str) else { continue };
+                let Some(declared_by) = block.get("sourceExport").and_then(serde_json::Value::as_str) else { continue };
+                global_declarations.entry(source).or_default().insert(declared_by.to_string());
+            }
+        }
         let empty = rustc_hash::FxHashMap::default();
         for ast in store.iter() {
             self.order.push(ast.path.clone());
@@ -499,18 +516,19 @@ impl ExtractEngine {
             let local_usage_statics = complete_statics_by_file
                 .get(&ast.path)
                 .expect("Pass A must record complete local statics for every file");
-            self.facts.insert(
-                ast.path.clone(),
-                facts::extract_file_facts_from_static_maps(
-                    ast,
-                    &self.opts.prefix,
-                    local_statics,
-                    local_usage_statics,
-                    extra,
-                    usage_extra,
-                    &references,
-                ),
+            let mut file_facts = facts::extract_file_facts_from_static_maps(
+                ast,
+                &self.opts.prefix,
+                local_statics,
+                local_usage_statics,
+                extra,
+                usage_extra,
+                &references,
             );
+            if let Some(names) = global_declarations.get(ast.path.as_str()) {
+                file_facts.global_keys = facts::declaration_keys(ast.program(), ast.source(), names);
+            }
+            self.facts.insert(ast.path.clone(), file_facts);
             self.sources
                 .insert(ast.path.clone(), ast.source().to_string());
         }
