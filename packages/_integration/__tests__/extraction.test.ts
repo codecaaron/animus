@@ -960,6 +960,70 @@ export const App = () => <Card />;
   ).toThrow(/9 error diagnostic/);
 });
 
+test('a registered keyframes frame given no block, and a block nested in a frame, are reported and fail a strict build', () => {
+  const { manifest } = runPipeline(
+    [
+      {
+        path: 'fade.tsx',
+        source: `import { ds } from '../setup';
+export const Box = ds.styles({ animationName: 'fade' }).asElement('div');
+export const App = () => <Box />;
+`,
+      },
+    ],
+    {
+      inputs: {
+        keyframesJson: JSON.stringify({
+          motion: {
+            fade: {
+              name: 'fade',
+              frames: {
+                from: { opacity: 0, '&:hover': { opacity: 0.5 } },
+                '50%': 'x',
+                to: { opacity: 1 },
+              },
+            },
+          },
+        }),
+      },
+    }
+  );
+  expect(manifest.sheets.global.replace(/\s+/g, ' ')).toContain(
+    '@keyframes fade { from { opacity: 0; } to { opacity: 1; } }'
+  );
+  const reported = manifest.diagnostics
+    .filter((d: ManifestDiagnostic) => d.code?.startsWith('animus.style.'))
+    .map((d: ManifestDiagnostic) => [
+      d.code,
+      d.file,
+      d.component,
+      d.kind,
+      d.severity,
+      d.dropped,
+    ]);
+  expect(reported).toEqual([
+    [
+      'animus.style.at-rule-selector-nesting',
+      'system',
+      "keyframes 'fade'",
+      'warn',
+      'error',
+      '"&:hover": {"opacity":0.5}',
+    ],
+    [
+      'animus.style.non-block-value',
+      'system',
+      "keyframes 'fade'",
+      'warn',
+      'error',
+      '"50%": "x"',
+    ],
+  ]);
+  expect(() =>
+    surfaceManifestDiagnostics(manifest, () => {}, { strict: true })
+  ).toThrow(/2 error diagnostic/);
+});
+
 describe('!important shorthand', () => {
   test('a trailing ! emits the CSS of !important', () => {
     const css = (value: string) =>
