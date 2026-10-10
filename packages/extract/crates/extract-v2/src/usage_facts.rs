@@ -754,6 +754,46 @@ pub enum LoadTarget {
     Unknown,
 }
 
+/// One call's module loads, with its line and its spelling.
+fn module_loads_at(
+    source: &str,
+    span: oxc::span::Span,
+    targets: Vec<LoadTarget>,
+    dynamic_import: bool,
+) -> Vec<ModuleLoad> {
+    if targets.is_empty() {
+        return Vec::new();
+    }
+    let line = source[..span.start as usize].matches('\n').count() + 1;
+    let call = source[span.start as usize..span.end as usize]
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    targets
+        .into_iter()
+        .map(|target| ModuleLoad { target, dynamic_import, line, call: call.clone() })
+        .collect()
+}
+
+/// Every module load in `program`, as usage records them: `import()` and
+/// `require()` of any specifier, `require.context`, `import.meta.glob`.
+pub(crate) fn runtime_loads(program: &Program<'_>, source: &str) -> Vec<ModuleLoad> {
+    struct Loads<'s>(&'s str, Vec<ModuleLoad>);
+    impl<'a> Visit<'a> for Loads<'_> {
+        fn visit_import_expression(&mut self, import: &oxc::ast::ast::ImportExpression<'a>) {
+            self.1.extend(module_loads_at(self.0, import.span, vec![load_of(&import.source)], true));
+            oxc::ast_visit::walk::walk_import_expression(self, import);
+        }
+        fn visit_call_expression(&mut self, call: &CallExpression<'a>) {
+            self.1.extend(module_loads_at(self.0, call.span, call_loads(call), false));
+            oxc::ast_visit::walk::walk_call_expression(self, call);
+        }
+    }
+    let mut loads = Loads(source, Vec::new());
+    loads.visit_program(program);
+    loads.1
+}
+
 /// The modules a specifier expression can name.
 fn load_of(specifier: &Expression<'_>) -> LoadTarget {
     match specifier.get_inner_expression() {
@@ -4029,20 +4069,7 @@ impl<'a> FactCollector<'a, '_> {
         let (Some(loads), Some(clones)) = (&mut self.module_loads, &self.clones) else {
             return;
         };
-        if targets.is_empty() {
-            return;
-        }
-        let line = clones.source[..span.start as usize].matches('\n').count() + 1;
-        let call = clones.source[span.start as usize..span.end as usize]
-            .split_whitespace()
-            .collect::<Vec<_>>()
-            .join(" ");
-        loads.extend(targets.into_iter().map(|target| ModuleLoad {
-            target,
-            dynamic_import,
-            line,
-            call: call.clone(),
-        }));
+        loads.extend(module_loads_at(clones.source, span, targets, dynamic_import));
     }
 
     /// A `cloneElement` call: its overrides count for the cloned element's

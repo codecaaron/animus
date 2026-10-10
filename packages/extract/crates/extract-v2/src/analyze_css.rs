@@ -2630,10 +2630,10 @@ fn member_path_ids(
 /// unless the host says its bundler leaves it unbundled (Vite, Rollup,
 /// Turbopack), in which case it loads code outside the bundle and reaches
 /// no analysed module.
-pub(crate) fn loaded_modules<'f>(
+pub(crate) fn loaded_modules<'f, T>(
     file: &str,
     load: &crate::usage_facts::ModuleLoad,
-    files: &'f BTreeMap<String, FileFacts>,
+    files: &'f BTreeMap<String, T>,
     inputs: &CssInputs,
 ) -> Vec<&'f String> {
     use crate::usage_facts::LoadTarget;
@@ -2697,10 +2697,10 @@ pub(crate) fn loaded_modules<'f>(
 /// which also covers absolute file keys; an alias is expanded. A prefix into
 /// an analysed package names that package's modules, or every module when
 /// its directory is unknown, and one into any other package names none.
-fn modules_under<'f>(
+fn modules_under<'f, T>(
     file: &str,
     prefix: &str,
-    files: &'f BTreeMap<String, FileFacts>,
+    files: &'f BTreeMap<String, T>,
     inputs: &CssInputs,
     keep: impl Fn(&str) -> bool,
 ) -> Vec<&'f String> {

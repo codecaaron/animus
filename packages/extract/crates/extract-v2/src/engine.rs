@@ -314,33 +314,6 @@ fn chase_export<T>(
     None
 }
 
-/// The modules a file loads at runtime by a literal specifier:
-/// `import('./x')` and `require('./x')`.
-fn literal_module_loads(program: &oxc::ast::ast::Program<'_>) -> Vec<String> {
-    use oxc::ast::ast::{Argument, CallExpression, Expression, ImportExpression};
-    use oxc::ast_visit::Visit;
-    struct Loads(Vec<String>);
-    impl<'a> Visit<'a> for Loads {
-        fn visit_import_expression(&mut self, import: &ImportExpression<'a>) {
-            if let Expression::StringLiteral(literal) = &import.source {
-                self.0.push(literal.value.to_string());
-            }
-            oxc::ast_visit::walk::walk_import_expression(self, import);
-        }
-        fn visit_call_expression(&mut self, call: &CallExpression<'a>) {
-            if call.callee.is_specific_id("require") {
-                if let Some(Argument::StringLiteral(literal)) = call.arguments.first() {
-                    self.0.push(literal.value.to_string());
-                }
-            }
-            oxc::ast_visit::walk::walk_call_expression(self, call);
-        }
-    }
-    let mut loads = Loads(Vec::new());
-    loads.visit_program(program);
-    loads.0
-}
-
 /// Each `export function` and `export default function` declaration, as the
 /// export facts a callee's resolution follows; module export facts list
 /// variables and specifiers only.
@@ -385,7 +358,8 @@ struct StyleModule {
     facts: crate::usage_facts::StyleObjectFacts,
     namespace_imports: BTreeMap<String, String>,
     namespace_exports: BTreeMap<String, String>,
-    loads: Vec<String>,
+    /// Every module load, as usage records them.
+    loads: Vec<crate::usage_facts::ModuleLoad>,
 }
 
 /// Each module-scope static that a use anywhere in the analysis may change
@@ -541,15 +515,30 @@ fn unstable_style_statics(
                 unstable.entry(target).or_insert(reason);
             }
         }
-        let reexports = module
-            .namespace_exports
-            .iter()
-            .map(|(name, spec)| (spec, format!("as the namespace {name}")));
-        let loads = module.loads.iter().map(|spec| (spec, "at runtime".to_string()));
-        for (spec, how) in reexports.chain(loads) {
-            let Some(target) = analyze_css::resolve_import_source(file, spec, files, inputs) else {
-                continue;
+        let reexports = module.namespace_exports.iter().filter_map(|(name, spec)| {
+            let target = analyze_css::resolve_import_source(file, spec, files, inputs)?;
+            Some((target, format!("as the namespace {name}")))
+        });
+        // A load by any specifier reaches every module it can name; one whose
+        // specifier cannot be read reaches every module, unless the host
+        // leaves such an `import()` unbundled.
+        let loads = module.loads.iter().flat_map(|load| {
+            use crate::usage_facts::LoadTarget;
+            let unreadable = match &load.target {
+                LoadTarget::Unknown => true,
+                LoadTarget::Prefix(prefix) => prefix.is_empty(),
+                _ => false,
             };
+            let reached: Vec<String> = if !unreadable {
+                analyze_css::loaded_modules(file, load, files, inputs).into_iter().cloned().collect()
+            } else if load.dynamic_import && inputs.analysis_context.unbundled_computed_imports {
+                Vec::new()
+            } else {
+                files.keys().cloned().collect()
+            };
+            reached.into_iter().map(|target| (target, "at runtime".to_string()))
+        });
+        for (target, how) in reexports.chain(loads) {
             let reason = format!("{file} hands on {target} {how}");
             for export in every_export(&target) {
                 unstable.entry(export).or_insert_with(|| reason.clone());
@@ -742,7 +731,7 @@ impl ExtractEngine {
                     facts,
                     namespace_imports,
                     namespace_exports: crate::usage_facts::collect_namespace_exports(module),
-                    loads: literal_module_loads(program),
+                    loads: crate::usage_facts::runtime_loads(program, ast.source()),
                 },
             );
         }
@@ -1321,6 +1310,45 @@ mod tests {
             .as_str()
             .unwrap()
             .to_string()
+    }
+
+    /// Contract: a style constant a module may change after loading its
+    /// module at runtime refuses its style reads, whatever spells the load:
+    /// a string, a template or concatenation, `require`, `import.meta.glob`,
+    /// or a specifier the analysis cannot read, which may reach any module.
+    #[test]
+    fn a_style_constant_any_runtime_load_reaches_refuses_its_reads() {
+        let styles = "export const STYLE = { color: 'red' };\n";
+        let app = "import { STYLE } from './styles';\n\
+                   export const Box = ds.styles({ ...STYLE }).asElement('div');\n\
+                   export const App = () => <Box />;\n";
+        let mutate = "(m) => { m.STYLE.color = 'blue'; }";
+        let cases = [
+            ("none", "export const load = () => null;\n".to_string(), false),
+            ("string", format!("export const load = () => import('./styles').then({mutate});\n"), true),
+            ("template", format!("export const load = () => import(`./styles`).then({mutate});\n"), true),
+            ("require", format!("export const load = (name) => ({mutate})(require(`./${{name}}`));\n"), true),
+            (
+                "glob",
+                format!("const modules = import.meta.glob('./styles.ts');\nexport const load = () => modules['./styles.ts']().then({mutate});\n"),
+                true,
+            ),
+            ("unread", format!("export const load = (name) => import(name).then({mutate});\n"), true),
+        ];
+        for (name, loader, refused) in cases {
+            let mut engine = ExtractEngine::new(None).unwrap();
+            let files = serde_json::json!([
+                { "path": "styles.ts", "source": styles },
+                { "path": "app.tsx", "source": app },
+                { "path": "loader.ts", "source": loader },
+            ]);
+            let out: serde_json::Value = serde_json::from_str(&engine.analyze(files.to_string()).unwrap()).unwrap();
+            let refusal = out["diagnostics"].as_array().unwrap().iter().any(|diagnostic| {
+                diagnostic["component"] == "Box"
+                    && diagnostic["message"].as_str().unwrap_or_default().contains("loader.ts hands on styles.ts at runtime")
+            });
+            assert_eq!(refusal, refused, "{name}: {}", out["diagnostics"]);
+        }
     }
 
     #[test]
