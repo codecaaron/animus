@@ -421,13 +421,11 @@ pub struct ConditionedGroup {
 
 /// Where an authored selector or at-rule key placed a group: the
 /// `resolve_styles` call that resolved it and, per nesting level, the key's
-/// slot among its object's selector and at-rule keys.
+/// authored position in its object.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuthoredOrigin {
     pub block: usize,
     pub path: Vec<usize>,
-    /// A raw selector or at-rule key lies on the path.
-    pub raw: bool,
 }
 
 /// The authored keys a group's declarations came from, each with the
@@ -525,7 +523,7 @@ impl NestFrame {
         Self { block, ..Self::default() }
     }
 
-    fn with_selector(&self, inner_raw: &str, slot: KeySlot) -> Self {
+    fn with_selector(&self, inner_raw: &str, slot: usize) -> Self {
         let composed = match &self.selector {
             Some(outer) => compose_selectors(outer, inner_raw),
             None => normalize_pseudo_selector(inner_raw),
@@ -539,7 +537,7 @@ impl NestFrame {
         }
     }
 
-    fn with_condition(&self, condition: Condition, order: ConditionEmitOrder, slot: KeySlot) -> Self {
+    fn with_condition(&self, condition: Condition, order: ConditionEmitOrder, slot: usize) -> Self {
         let mut conditions = self.conditions.clone();
         conditions.push(condition);
         Self {
@@ -551,50 +549,17 @@ impl NestFrame {
         }
     }
 
-    fn nested_origin(&self, slot: KeySlot) -> AuthoredOrigin {
+    fn nested_origin(&self, slot: usize) -> AuthoredOrigin {
         let mut path = self.origin.as_ref().map_or_else(Vec::new, |origin| origin.path.clone());
-        path.push(slot.index);
-        AuthoredOrigin {
-            block: self.block,
-            path,
-            raw: slot.raw || self.origin.as_ref().is_some_and(|origin| origin.raw),
-        }
+        path.push(slot);
+        AuthoredOrigin { block: self.block, path }
     }
 }
 
-/// A selector or at-rule key's emission slot within its object.
-#[derive(Clone, Copy, Default)]
-struct KeySlot {
-    index: usize,
-    raw: bool,
-}
-
-/// Each selector and at-rule key's slot: a raw key keeps its authored
-/// position, and the aliases take the aliases' positions in their
-/// established ranking, selector aliases before condition aliases.
-fn key_slots<'a>(obj: &'a Map<String, Value>, ctx: &ResolveContext) -> FxHashMap<&'a str, KeySlot> {
-    let mut slots = FxHashMap::default();
-    let mut aliases: Vec<(usize, (u8, u32), &str)> = Vec::new();
-    for (index, (key, value)) in obj.iter().enumerate() {
-        if !value.is_object() {
-            continue;
-        }
-        if let Some(selector) = ctx.selector_aliases.get(key) {
-            aliases.push((index, (0, crate::css::pseudo_sort_order(&normalize_pseudo_selector(selector))), key));
-        } else if let Some(alias) = ctx.condition_aliases.get(key) {
-            aliases.push((index, (1, alias.order), key));
-        } else if !key.starts_with('_')
-            && (crate::selector_subject::has_subject(key) || key.starts_with(':') || key.starts_with('@'))
-        {
-            slots.insert(key.as_str(), KeySlot { index, raw: true });
-        }
-    }
-    let positions: Vec<usize> = aliases.iter().map(|(index, _, _)| *index).collect();
-    aliases.sort_by_key(|(index, rank, _)| (*rank, *index));
-    for (index, (_, _, key)) in positions.into_iter().zip(aliases) {
-        slots.insert(key, KeySlot { index, raw: false });
-    }
-    slots
+/// Each key's authored position in its object: the slot a selector or
+/// at-rule key's rules keep, raw or an alias.
+fn key_slots(obj: &Map<String, Value>) -> FxHashMap<&str, usize> {
+    obj.keys().enumerate().map(|(index, key)| (key.as_str(), index)).collect()
 }
 
 /// Each `resolve_styles` call is one source block: only its own groups trade
@@ -692,7 +657,7 @@ pub fn resolve_styles(
 
     let entries = cascade_order(obj, ctx.config);
     record_shared_properties(obj, &entries, ctx);
-    let slots = key_slots(obj, ctx);
+    let slots = key_slots(obj);
     let slot = |key: &str| slots.get(key).copied().unwrap_or_default();
     let root = NestFrame::root(NEXT_SOURCE_BLOCK.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
 
@@ -786,7 +751,7 @@ fn resolve_block_entries(
 ) {
     let entries = cascade_order(obj, ctx.config);
     record_shared_properties(obj, &entries, ctx);
-    let slots = key_slots(obj, ctx);
+    let slots = key_slots(obj);
     let slot = |key: &str| slots.get(key).copied().unwrap_or_default();
 
     // This block's own declarations must precede its children's groups, or

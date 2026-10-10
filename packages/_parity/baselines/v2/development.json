@@ -1,8 +1,8 @@
 {
-  "corpusSha256": "fcbf88aba94840f3174347541e76afbf310dd399d29c45489e7ba63635f4c5d2",
+  "corpusSha256": "f6424859e2263f9104b2f16d8f6c278b3e277523f101db254367c8c758312b45",
   "engine": "v2",
   "mode": "development",
-  "refreshIntent": "semantic-class-identity-20261010",
+  "refreshIntent": "aliases-keep-authored-order-20261010",
   "surfaceSchemaSha256": "43eb1265e97aab8497c11ca05e8a4159a6d4f4b69a6837a704e1d96fa75eb108",
   "units": {
     "extract-all": {
@@ -991,9 +991,9 @@
     },
     "parity/condition-builtin-order.tsx": {
       "code": {
-        "condition-builtin-order.tsx": "import { createComponent } from '@animus-ui/system';\nimport 'virtual:animus/styles.css';\n// Built-in `_osDark` and user-band `_motionReduce` in one style object: they\n// are authored user-first because emission must sort by registry order.\nimport { ds } from '../test-system';\n\nexport const OrderProbe = createComponent('div', 'animus-OrderProbe-ca42ff82', {});\nexport const App = () => <OrderProbe />;\n\n"
+        "condition-builtin-order.tsx": "import { createComponent } from '@animus-ui/system';\nimport 'virtual:animus/styles.css';\n// Built-in `_osDark` and user-band `_motionReduce` in one style object,\n// authored user-first: they emit in authored order, not by registry order.\nimport { ds } from '../test-system';\n\nexport const OrderProbe = createComponent('div', 'animus-OrderProbe-ca42ff82', {});\nexport const App = () => <OrderProbe />;\n\n"
       },
-      "css": "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-base {\n  .animus-OrderProbe-ca42ff82 {\n    padding: 0.5rem;\n  }\n  @media (prefers-color-scheme: dark) {\n    .animus-OrderProbe-ca42ff82 {\n      color-scheme: dark;\n    }\n  }\n  @media (prefers-reduced-motion: reduce) {\n    .animus-OrderProbe-ca42ff82 {\n      transition: none;\n    }\n  }\n}\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer composed {\n  }\n}\n\n",
+      "css": "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-base {\n  .animus-OrderProbe-ca42ff82 {\n    padding: 0.5rem;\n  }\n  @media (prefers-reduced-motion: reduce) {\n    .animus-OrderProbe-ca42ff82 {\n      transition: none;\n    }\n  }\n  @media (prefers-color-scheme: dark) {\n    .animus-OrderProbe-ca42ff82 {\n      color-scheme: dark;\n    }\n  }\n}\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer composed {\n  }\n}\n\n",
       "diagnostics": [],
       "hasComponents": {
         "condition-builtin-order.tsx": true
@@ -1002,10 +1002,10 @@
         "componentFragmentKeys": [
           "condition-builtin-order.tsx::OrderProbe"
         ],
-        "componentFragmentsJson": "{\"condition-builtin-order.tsx::OrderProbe\":{\"base\":\"  .animus-OrderProbe-ca42ff82 {\\n    padding: 0.5rem;\\n  }\\n  @media (prefers-color-scheme: dark) {\\n    .animus-OrderProbe-ca42ff82 {\\n      color-scheme: dark;\\n    }\\n  }\\n  @media (prefers-reduced-motion: reduce) {\\n    .animus-OrderProbe-ca42ff82 {\\n      transition: none;\\n    }\\n  }\\n\"}}",
+        "componentFragmentsJson": "{\"condition-builtin-order.tsx::OrderProbe\":{\"base\":\"  .animus-OrderProbe-ca42ff82 {\\n    padding: 0.5rem;\\n  }\\n  @media (prefers-reduced-motion: reduce) {\\n    .animus-OrderProbe-ca42ff82 {\\n      transition: none;\\n    }\\n  }\\n  @media (prefers-color-scheme: dark) {\\n    .animus-OrderProbe-ca42ff82 {\\n      color-scheme: dark;\\n    }\\n  }\\n\"}}",
         "dynamicPropsJson": "{}",
         "reverseProvenanceEdges": [],
-        "sheetsJson": "{\"base\":\"@layer anm-base {\\n  .animus-OrderProbe-ca42ff82 {\\n    padding: 0.5rem;\\n  }\\n  @media (prefers-color-scheme: dark) {\\n    .animus-OrderProbe-ca42ff82 {\\n      color-scheme: dark;\\n    }\\n  }\\n  @media (prefers-reduced-motion: reduce) {\\n    .animus-OrderProbe-ca42ff82 {\\n      transition: none;\\n    }\\n  }\\n}\\n\",\"compounds\":\"\",\"custom\":\"\",\"declaration\":\"@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\\n\",\"global\":\"@layer anm-global {\\nbody {\\n  font-family: {fonts.base};\\n  margin: 0;\\n}\\n@keyframes anm-ember {\\n  0% {\\n    opacity: 0;\\n  }\\n  100% {\\n    opacity: 1;\\n  }\\n}\\n}\\n\",\"states\":\"\",\"system\":\"\",\"variants\":\"@layer anm-variants {\\n  @layer standalone, composed;\\n  @layer composed {\\n  }\\n}\\n\"}",
+        "sheetsJson": "{\"base\":\"@layer anm-base {\\n  .animus-OrderProbe-ca42ff82 {\\n    padding: 0.5rem;\\n  }\\n  @media (prefers-reduced-motion: reduce) {\\n    .animus-OrderProbe-ca42ff82 {\\n      transition: none;\\n    }\\n  }\\n  @media (prefers-color-scheme: dark) {\\n    .animus-OrderProbe-ca42ff82 {\\n      color-scheme: dark;\\n    }\\n  }\\n}\\n\",\"compounds\":\"\",\"custom\":\"\",\"declaration\":\"@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\\n\",\"global\":\"@layer anm-global {\\nbody {\\n  font-family: {fonts.base};\\n  margin: 0;\\n}\\n@keyframes anm-ember {\\n  0% {\\n    opacity: 0;\\n  }\\n  100% {\\n    opacity: 1;\\n  }\\n}\\n}\\n\",\"states\":\"\",\"system\":\"\",\"variants\":\"@layer anm-variants {\\n  @layer standalone, composed;\\n  @layer composed {\\n  }\\n}\\n\"}",
         "systemPropMapJson": "{}"
       },
       "parseCount": 1

@@ -823,8 +823,8 @@ enum StyleRule<'a> {
 
 /// A style block's rules for each of `selectors`: its own declarations, its
 /// selector groups ranked, its breakpoints by width, then its conditions,
-/// except that the rules of raw selector and at-rule keys keep their authored
-/// order (`authored_emission_order`).
+/// except that the rules of its selector and at-rule keys, raw or aliases,
+/// keep their authored order (`authored_emission_order`).
 fn write_style_rules(
     output: &mut String,
     selectors: &[String],
@@ -917,14 +917,14 @@ fn write_style_rule(output: &mut String, selectors: &[String], rule: &StyleRule,
 }
 
 /// A group's declarations by the authored key that wrote each last. A group
-/// stays whole unless a raw key shares it with another key: it then splits, so
-/// each writer's declarations keep that writer's authored slot.
+/// one key wrote stays whole; one that several keys share splits, so each
+/// writer's declarations keep that writer's slot.
 fn supplied_parts<'a>(
     declarations: &'a [CssDeclaration],
     suppliers: &'a Suppliers,
 ) -> Vec<(Cow<'a, [CssDeclaration]>, Option<&'a AuthoredOrigin>)> {
     let writers = &suppliers.0;
-    if writers.len() < 2 || !writers.iter().any(|(origin, _)| origin.raw) {
+    if writers.len() < 2 {
         return vec![(Cow::Borrowed(declarations), writers.first().map(|(origin, _)| origin))];
     }
     let writer = |d: &CssDeclaration| {
@@ -941,31 +941,20 @@ fn supplied_parts<'a>(
 }
 
 /// The order a block's rules are written in, as indexes into their default
-/// order. In each source block that holds a raw selector or at-rule key, the
-/// rules its keys produced trade the slots they fill by default, sorted by
-/// their keys' slot paths: a raw key's own authored position, and for aliases
-/// the aliases' positions in their ranking. Declarations and breakpoints keep
-/// their slots. Rules from aliases alone then retake their default order, so
-/// a block without raw keys is written exactly as before.
+/// order. In each source block, the rules its selector and at-rule keys
+/// produced trade the slots they fill by default, sorted by their keys'
+/// authored positions. Declarations and breakpoints keep their slots.
 fn authored_emission_order(origins: &[Option<&AuthoredOrigin>]) -> Vec<usize> {
     let mut order: Vec<usize> = (0..origins.len()).collect();
-    let raw_blocks: BTreeSet<usize> =
-        origins.iter().flatten().filter(|origin| origin.raw).map(|origin| origin.block).collect();
-    for block in raw_blocks {
+    let blocks: BTreeSet<usize> = origins.iter().flatten().map(|origin| origin.block).collect();
+    for block in blocks {
         let slots: Vec<usize> =
             (0..origins.len()).filter(|&i| origins[i].is_some_and(|origin| origin.block == block)).collect();
-        let mut ranked = slots.clone();
-        ranked.sort_by(|&a, &b| origins[a].map(|o| &o.path).cmp(&origins[b].map(|o| &o.path)));
-        for (&slot, &rule) in slots.iter().zip(&ranked) {
+        let mut by_path = slots.clone();
+        by_path.sort_by(|&a, &b| origins[a].map(|o| &o.path).cmp(&origins[b].map(|o| &o.path)));
+        for (&slot, &rule) in slots.iter().zip(&by_path) {
             order[slot] = rule;
         }
-    }
-    let alias_only = |rule: usize| origins[rule].is_some_and(|origin| !origin.raw);
-    let positions: Vec<usize> = (0..order.len()).filter(|&p| alias_only(order[p])).collect();
-    let mut alias_rules: Vec<usize> = positions.iter().map(|&p| order[p]).collect();
-    alias_rules.sort_unstable();
-    for (position, rule) in positions.into_iter().zip(alias_rules) {
-        order[position] = rule;
     }
     order
 }
