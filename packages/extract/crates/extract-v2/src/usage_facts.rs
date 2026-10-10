@@ -944,10 +944,19 @@ fn opaque_calls(program: &Program<'_>, scoping: &Scoping) -> (Vec<OpaqueCall>, B
         in_parameter: 0,
         parameters: FxHashSet::default(),
         consts: FxHashMap::default(),
+        functions: FxHashMap::default(),
+        default_export: None,
         calls: Vec::new(),
     };
     for statement in &program.body {
         scan.top = top_level_names(statement);
+        if let Statement::ExportDefaultDeclaration(export) = statement {
+            if let Some(expression) = export.declaration.as_expression() {
+                let mut reads = ArgumentReads::default();
+                collect_reads(scoping, expression, &mut reads);
+                scan.default_export = Some(reads);
+            }
+        }
         scan.visit_statement(statement);
     }
     let calls = scan
@@ -966,17 +975,21 @@ fn opaque_calls(program: &Program<'_>, scoping: &Scoping) -> (Vec<OpaqueCall>, B
             })
         })
         .collect();
+    // Top-level values, functions included, that hold or return elements:
+    // code outside the analysis can call a function it receives.
     let mut element_consts = BTreeMap::new();
-    for (symbol, init) in &scan.consts {
-        if init.function || scoping.symbol_scope_id(*symbol) != scoping.root_scope_id() {
-            continue;
-        }
-        let closed = scan.closure(&init.reads);
+    let top_level = scan
+        .consts
+        .iter()
+        .map(|(symbol, init)| (*symbol, &init.reads))
+        .chain(scan.functions.iter().map(|(symbol, reads)| (*symbol, reads)))
+        .filter(|(symbol, _)| scoping.symbol_scope_id(*symbol) == scoping.root_scope_id())
+        .map(|(symbol, reads)| (scoping.symbol_name(symbol).to_string(), reads))
+        .chain(scan.default_export.as_ref().map(|reads| ("default".to_string(), reads)));
+    for (name, reads) in top_level {
+        let closed = scan.closure(reads);
         if !closed.tags.is_empty() || !closed.imports.is_empty() {
-            element_consts.insert(
-                scoping.symbol_name(*symbol).to_string(),
-                ElementConst { tags: closed.tags, imports: closed.imports },
-            );
+            element_consts.insert(name, ElementConst { tags: closed.tags, imports: closed.imports });
         }
     }
     (calls, element_consts)
@@ -1065,6 +1078,19 @@ impl<'a> Visit<'a> for ReadCollector<'_, '_> {
     }
 }
 
+/// The bindings a pattern declares.
+#[derive(Default)]
+struct BindingNames(Vec<SymbolId>);
+
+impl<'a> Visit<'a> for BindingNames {
+    fn visit_binding_identifier(&mut self, id: &oxc::ast::ast::BindingIdentifier<'a>) {
+        self.0.extend(id.symbol_id.get());
+    }
+
+    // A default value is read, not declared.
+    fn visit_expression(&mut self, _expression: &Expression<'a>) {}
+}
+
 /// A `const` initializer: what it reads, and whether it is a function.
 struct ConstInit {
     reads: ArgumentReads,
@@ -1091,6 +1117,10 @@ struct OpaqueCallScan<'s> {
     in_parameter: usize,
     parameters: FxHashSet<SymbolId>,
     consts: FxHashMap<SymbolId, ConstInit>,
+    /// What each function declaration's body reads.
+    functions: FxHashMap<SymbolId, ArgumentReads>,
+    /// What a default-exported expression reads.
+    default_export: Option<ArgumentReads>,
     calls: Vec<(CalleeRoot, ArgumentReads, Vec<String>)>,
 }
 
@@ -1142,7 +1172,10 @@ impl OpaqueCallScan<'_> {
         }
     }
 
-    /// `reads`, with every `const` it names followed to what that reads.
+    /// `reads`, with every `const` and function declaration it names
+    /// followed to what that reads: a function a call receives can be
+    /// called, and return its elements. A parameter counts only when data
+    /// reaches it, never through a function's own body.
     fn closure(&self, reads: &ArgumentReads) -> ClosedReads {
         let mut closed = ClosedReads {
             tags: reads.tags.clone(),
@@ -1150,22 +1183,25 @@ impl OpaqueCallScan<'_> {
             ..ClosedReads::default()
         };
         let mut seen: FxHashSet<SymbolId> = FxHashSet::default();
-        let mut pending: Vec<SymbolId> = reads.symbols.iter().copied().collect();
-        while let Some(symbol) = pending.pop() {
+        let mut pending: Vec<(SymbolId, bool)> = reads.symbols.iter().map(|symbol| (*symbol, false)).collect();
+        while let Some((symbol, in_function)) = pending.pop() {
             if !seen.insert(symbol) {
                 continue;
             }
-            closed.reads_parameter |= self.parameters.contains(&symbol);
+            closed.reads_parameter |= !in_function && self.parameters.contains(&symbol);
             match self.sources.get(&symbol) {
                 Some(source) if REACT_MODULES.contains(source) => {}
                 Some(_) => closed.imports.push(self.scoping.symbol_name(symbol).to_string()),
                 None => {}
             }
-            if let Some(init) = self.consts.get(&symbol).filter(|init| !init.function) {
-                closed.tags.extend(init.reads.tags.iter().cloned());
-                closed.unknown_global |= init.reads.unknown_global;
-                pending.extend(init.reads.symbols.iter().copied());
-            }
+            let (next, function) = match (self.consts.get(&symbol), self.functions.get(&symbol)) {
+                (Some(init), _) => (&init.reads, init.function),
+                (None, Some(reads)) => (reads, true),
+                (None, None) => continue,
+            };
+            closed.tags.extend(next.tags.iter().cloned());
+            closed.unknown_global |= next.unknown_global;
+            pending.extend(next.symbols.iter().map(|symbol| (*symbol, in_function || function)));
         }
         closed.imports.sort();
         closed
@@ -1223,18 +1259,34 @@ impl<'a> Visit<'a> for OpaqueCallScan<'_> {
     }
 
     fn visit_variable_declarator(&mut self, declarator: &oxc::ast::ast::VariableDeclarator<'a>) {
-        if let (oxc::ast::ast::BindingPattern::BindingIdentifier(id), Some(init)) = (&declarator.id, &declarator.init) {
-            if let Some(symbol) = id.symbol_id.get().filter(|symbol| !self.scoping.symbol_is_mutated(*symbol)) {
-                let mut reads = ArgumentReads::default();
-                collect_reads(self.scoping, init, &mut reads);
-                let function = matches!(
+        if let Some(init) = &declarator.init {
+            // A destructured binding may hold any part of what the
+            // initializer reads.
+            let mut names = BindingNames::default();
+            names.visit_binding_pattern(&declarator.id);
+            let function = matches!(declarator.id, oxc::ast::ast::BindingPattern::BindingIdentifier(_))
+                && matches!(
                     crate::chain_walk::unwrap_type_assertions(init),
                     Expression::ArrowFunctionExpression(_) | Expression::FunctionExpression(_)
                 );
+            for symbol in names.0.into_iter().filter(|symbol| !self.scoping.symbol_is_mutated(*symbol)) {
+                let mut reads = ArgumentReads::default();
+                collect_reads(self.scoping, init, &mut reads);
                 self.consts.insert(symbol, ConstInit { reads, function });
             }
         }
         oxc::ast_visit::walk::walk_variable_declarator(self, declarator);
+    }
+
+    fn visit_function(&mut self, function: &oxc::ast::ast::Function<'a>, flags: oxc::syntax::scope::ScopeFlags) {
+        if let (Some(id), Some(body)) = (&function.id, &function.body) {
+            if let Some(symbol) = id.symbol_id.get() {
+                let mut reads = ArgumentReads::default();
+                ReadCollector { scoping: self.scoping, reads: &mut reads }.visit_function_body(body);
+                self.functions.insert(symbol, reads);
+            }
+        }
+        oxc::ast_visit::walk::walk_function(self, function, flags);
     }
 
     fn visit_call_expression(&mut self, call: &CallExpression<'a>) {
