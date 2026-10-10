@@ -18,6 +18,7 @@ import {
   KIT_SYSTEM_NOT_INCLUDED,
   KIT_WITHOUT_SOURCE_CONDITION,
   severityFor,
+  UNIMPORTED_CREATE_SYSTEM,
   UNPROVEN_ROOT_BINDING,
 } from './manifest-diagnostics';
 import { isEngineTransformExtension } from './mdx-preprocessor';
@@ -1101,8 +1102,9 @@ const NAMESPACE_IMPORT =
  * `import()` of a module. A binding named `createSystem` shown to be
  * something else is no root. One whose identity discovery cannot follow
  * keeps the admission spelling gave it, so a resolution limit never drops a
- * kit. Both are reported. The bare name also anchors, as a global, unless
- * the file binds it.
+ * kit. Both are reported. A call of the bare name, which the file neither
+ * imports nor declares, is no root: the system loader evaluates the file
+ * without auto-imports, where the name is undefined. It is reported once.
  */
 async function systemRoots(
   systemFilePath: string,
@@ -1243,7 +1245,18 @@ async function systemRoots(
     /\b(?:function\*?|class)\s+createSystem\b|\b(?:const|let|var)\s+createSystem\b/.test(
       source
     );
-  if (!bindsName && !declaresName) roots.add('createSystem');
+  const bareCall = /(?<![a-zA-Z0-9_$.])createSystem\s*\(/.exec(source);
+  if (!bindsName && !declaresName && bareCall) {
+    following.report?.({
+      file: systemFilePath,
+      component: 'createSystem',
+      kind: 'warn',
+      message: `'createSystem' is called with no import or local binding, so it is not read as a system root: the system loader evaluates this file without auto-imports, where the name is undefined — import createSystem from '@animus-ui/system'`,
+      code: UNIMPORTED_CREATE_SYSTEM,
+      severity: severityFor(UNIMPORTED_CREATE_SYSTEM),
+      ...locationIn(source, bareCall.index),
+    });
+  }
   return roots;
 }
 

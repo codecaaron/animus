@@ -284,6 +284,12 @@ export const KIT_SYSTEM_NOT_INCLUDED = 'animus.kit.system-not-included';
  *  Animus's factory, so it is no root. */
 export const UNPROVEN_ROOT_BINDING = 'animus.discovery.unproven-root-binding';
 
+/** A system file calls `createSystem` with no import or local binding. The
+ *  system loader evaluates the file without auto-imports, where the name is
+ *  undefined, so the call is no root. */
+export const UNIMPORTED_CREATE_SYSTEM =
+  'animus.discovery.unimported-create-system';
+
 /** What a skipped source file costs: the analysis never sees what it
  *  renders. */
 export const SKIPPED_SOURCE_COST =
@@ -415,6 +421,7 @@ const DIAGNOSTIC_SEVERITY: ReadonlyMap<string, DiagnosticSeverity> = new Map([
   [KIT_UNSUPPORTED_FORMAT, 'error'],
   [KIT_STALE_DESCRIPTOR, 'warn'],
   [UNPROVEN_ROOT_BINDING, 'warn'],
+  [UNIMPORTED_CREATE_SYSTEM, 'warn'],
   [VOCABULARY_COLLISION, 'warn'],
   [VOCABULARY_LEGACY_VERB, 'warn'],
   [INVALID_PROPERTY_REGISTRATION, 'error'],

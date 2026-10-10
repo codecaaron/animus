@@ -596,7 +596,7 @@ describe('extractSystemFilePackages chain-scan tolerance', () => {
 });
 
 describe('extractSystemFilePackages root bindings', () => {
-  test('reads a binding as a root by its followed identity, keeping spelling when it cannot be followed', async () => {
+  test('reads a binding as a root by its followed identity, keeping spelling when it cannot be followed, and reports an unimported call instead', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'discover-roots-'));
     const files = {
       'animus.ts': `export { createSystem as makeSystem } from '@animus-ui/system';`,
@@ -611,6 +611,11 @@ describe('extractSystemFilePackages root bindings', () => {
         `export const a = makeSystem().extend(kitA).build();`,
         `export const b = createSystem().extend(kitB);`,
         `export const c = cs().extend(kitC).build();`,
+      ].join('\n'),
+      // No import and no local binding: undefined where the loader runs.
+      'bare.ts': [
+        `import { ds as kitD } from '@acme/d';`,
+        `export const d = createSystem().extend(kitD).build();`,
       ].join('\n'),
     };
     const animus: ModuleRecord = {
@@ -643,19 +648,29 @@ describe('extractSystemFilePackages root bindings', () => {
       ['animus.ts', animus],
       ['factory.ts', { imports: [], exports: [] }],
       ['ds.ts', system],
+      [
+        'bare.ts',
+        {
+          imports: [{ local: 'kitD', imported: 'ds', source: '@acme/d' }],
+          exports: [],
+        },
+      ],
     ]);
     for (const [name, contents] of Object.entries(files)) {
       writeFileSync(join(dir, name), contents, 'utf-8');
     }
     const diagnostics: ManifestDiagnostic[] = [];
 
-    try {
-      const pkgs = await extractSystemFilePackages(
-        join(dir, 'ds.ts'),
+    const discover = (file: string) =>
+      extractSystemFilePackages(
+        join(dir, file),
         (_source, path) => records.get(basename(path)) ?? null,
         (diagnostic) => diagnostics.push(diagnostic),
         () => null
       );
+
+    try {
+      const pkgs = await discover('ds.ts');
       // The lookalike is shown to be another function; the unresolved
       // package cannot be followed, so its import keeps spelling's root.
       expect(pkgs).toEqual(['@acme/a', '@acme/c']);
@@ -673,6 +688,19 @@ describe('extractSystemFilePackages root bindings', () => {
           severity: 'warn',
           line: 3,
           column: 26,
+        },
+      ]);
+
+      // A bare call is no root, and it is reported once at the call.
+      diagnostics.length = 0;
+      expect(await discover('bare.ts')).toEqual([]);
+      expect(diagnostics).toMatchObject([
+        {
+          component: 'createSystem',
+          code: 'animus.discovery.unimported-create-system',
+          severity: 'warn',
+          line: 2,
+          column: 18,
         },
       ]);
     } finally {
