@@ -528,6 +528,7 @@ pub(crate) const DIAGNOSTIC_CODES: &[(&str, &str)] = &[
     (STATIC_CSS_INVALID_SHAPE, "warn"),
     (crate::theme::UNRECOGNIZED_STYLE_KEY, "warn"),
     (crate::theme::KEYS_SHARE_PROPERTY, "warn"),
+    (crate::theme::UNITLESS_CUSTOM_PROPERTY, "warn"),
     (CLASS_NAME_WHITESPACE, "warn"),
     (INVALID_OPACITY_MODIFIER, "warn"),
     (UNSUPPORTED_OBJECT_MEMBER, "warn"),
@@ -1202,6 +1203,9 @@ fn dropped_style_key(
              it a value or an object of breakpoint keys{}",
             element_hint(key)
         ),
+        DroppedStyleKey::UnitlessCustomProperty { prop, value, properties } => {
+            return unitless_custom_property(file, component, prop, value, properties);
+        }
         DroppedStyleKey::UnrecognizedKey(key) => format!(
             "style key '{key}' is not a prop, selector, alias or supported at-rule, {not_emitted}{}",
             element_hint(key)
@@ -1211,6 +1215,22 @@ fn dropped_style_key(
         }
     };
     diagnostic(file, component, "warn", message, Some(crate::theme::UNRECOGNIZED_STYLE_KEY))
+}
+
+/// A number a prop writes unitless to its custom properties.
+fn unitless_custom_property(file: &str, component: &str, prop: &str, value: &Value, properties: &[String]) -> CssDiagnostic {
+    diagnostic(
+        file,
+        component,
+        "warn",
+        format!(
+            "prop '{prop}' writes the number {value} to {} without a unit: a custom property has no unit \
+             context, so the number stays unitless — give the value a unit, or bind a transform that adds one",
+            properties.join(", ")
+        ),
+        Some(crate::theme::UNITLESS_CUSTOM_PROPERTY),
+    )
+    .dropping(&value.to_string())
 }
 
 /// Two keys of one block on one CSS property, naming the one that takes
@@ -5205,6 +5225,12 @@ fn run_with_system_floor(
         }
         if prop_config.is_some_and(|prop_config| !extracts_configured_value(prop_config, value, &resolve_ctx)) {
             return None;
+        }
+        if let Some(prop_config) = prop_config {
+            let usage_ctx = ResolveContext { config, ..resolve_ctx };
+            if let Some(number) = crate::theme::unitless_custom_number(prop_name, prop_config, value, &usage_ctx) {
+                diagnostics.push(unitless_custom_property(file, component, prop_name, &number, prop_config.css_properties()));
+            }
         }
         // An alias that names no token is reported here, at its usage, and
         // its declaration is dropped from the class, as in a style object.
