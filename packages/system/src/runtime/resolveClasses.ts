@@ -693,6 +693,22 @@ function withoutAbsentBreakpoints(value: unknown): unknown {
   return present.length > 0 ? Object.fromEntries(present) : undefined;
 }
 
+/**
+ * The config with each admitted prop named once, at its first position. An
+ * extracted config lists every admitted group's props, and groups can share
+ * one, as flexbox and grid share `alignItems`.
+ */
+export function withUniqueSystemPropNames(
+  config: ClassResolverConfig
+): ClassResolverConfig {
+  const names = config.systemPropNames;
+  if (!names) return config;
+  const unique = [...new Set(names)];
+  return unique.length === names.length
+    ? config
+    : { ...config, systemPropNames: unique };
+}
+
 export function resolveClasses(
   baseClassName: string,
   props: Record<string, any>,
