@@ -57,6 +57,34 @@ pub struct StageFacts {
     /// directly (also present in `skipped`) or in a const config.
     #[serde(skip)]
     pub dropped_configs: Vec<(String, String)>,
+    /// Where each skip in `skipped` the evaluator located sits, and its
+    /// text as written.
+    #[serde(skip)]
+    pub skipped_sources: Vec<SkippedSource>,
+}
+
+/// A skipped value's start offset and source text, keyed by its skip.
+#[derive(Debug, Clone)]
+pub struct SkippedSource {
+    pub key: String,
+    pub reason: String,
+    pub start: u32,
+    pub text: String,
+}
+
+impl StageFacts {
+    /// Records a skip, with its source when the evaluator located it.
+    fn record_skip(&mut self, skip: eval::SkippedProperty, source: &str) {
+        if let Some(text) = skip.span.and_then(|(start, end)| source.get(start as usize..end as usize)) {
+            self.skipped_sources.push(SkippedSource {
+                key: skip.key.clone(),
+                reason: skip.reason.clone(),
+                start: skip.span.map_or(0, |(start, _)| start),
+                text: text.to_string(),
+            });
+        }
+        self.skipped.push((skip.key, skip.reason));
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -978,6 +1006,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
                     config_identifier: None,
                     dropped_transforms: Vec::new(),
                     dropped_configs: Vec::new(),
+                    skipped_sources: Vec::new(),
                 };
                 let key = &stage.arg_span;
                 if stage.method == "variant" {
@@ -992,8 +1021,9 @@ pub(crate) fn extract_file_facts_from_static_maps(
                                 });
                                 let lost = eval::take_lost_values(&mut value);
                                 facts.value = Some(value);
-                                facts.skipped =
-                                    skips.into_iter().map(|s| (s.key, s.reason)).collect();
+                                for skip in skips {
+                                    facts.record_skip(skip, source);
+                                }
                                 facts.skipped.extend(lost);
                             }
                             Err(bail) => {
@@ -1088,7 +1118,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
                                         _ => {}
                                     }
                                 }
-                                facts.skipped.push((skip.key, skip.reason));
+                                facts.record_skip(skip, source);
                             }
                             facts.value = value;
                             if let Some(value) = facts.value.as_mut() {
@@ -1128,9 +1158,9 @@ pub(crate) fn extract_file_facts_from_static_maps(
                                     Ok((mut v, skips, _captures)) => {
                                         let lost = eval::take_lost_values(&mut v);
                                         facts.second_value = Some(v);
-                                        facts
-                                            .skipped
-                                            .extend(skips.into_iter().map(|s| (s.key, s.reason)));
+                                        for skip in skips {
+                                            facts.record_skip(skip, source);
+                                        }
                                         facts.skipped.extend(lost);
                                     }
                                     Err(bail) => {
