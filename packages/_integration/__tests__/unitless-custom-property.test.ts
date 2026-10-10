@@ -117,7 +117,10 @@ export const Measured = ({ lines }: { lines: number }) => <Text lineClamp={lines
       (d: ManifestDiagnostic) =>
         d.code === 'animus.props.unitless-custom-property'
     )
-    .map((d: ManifestDiagnostic) => [d.component, d.message.split(' writes')[0]]);
+    .map((d: ManifestDiagnostic) => [
+      d.component,
+      d.message.split(' writes')[0],
+    ]);
   expect(warned).toEqual([['Text', "prop 'indent'"]]);
 
   const replacement: string =
