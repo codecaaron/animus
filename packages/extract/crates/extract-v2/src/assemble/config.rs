@@ -2,16 +2,80 @@
 //! JavaScript expressions. Key order and the `[].concat(...)` group list are
 //! compared byte-for-byte downstream.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use serde_json::{json, Map, Value};
 
 use crate::facts::ChainFacts;
 use crate::ids::class_name_for;
+use crate::theme::PropConfigMap;
 
 use super::{AssembleError, ReplacementPayload};
+
+/// The names a config lists after its groups' own: the system props no group
+/// covers, and the custom props, sorted.
+fn extra_prop_names(p: &ReplacementPayload, group_registry: &FxHashMap<String, Vec<String>>) -> Vec<String> {
+    let group_covered: FxHashSet<&String> =
+        p.system_group_names.iter().filter_map(|g| group_registry.get(g)).flatten().collect();
+    let mut names: BTreeSet<String> =
+        p.system_prop_names.iter().filter(|prop| !group_covered.contains(prop)).cloned().collect();
+    names.extend(p.custom_prop_class_map.iter().flat_map(|cpm| cpm.keys().cloned()));
+    names.extend(p.custom_dynamic_config.iter().flat_map(|cdc| cdc.keys().cloned()));
+    names.into_iter().collect()
+}
+
+/// The order the runtime walks a config's `systemPropNames` in, each name at
+/// its first position: its groups' lists, then the other names.
+fn prop_walk(p: &ReplacementPayload, group_registry: &FxHashMap<String, Vec<String>>) -> Vec<String> {
+    let names: Vec<String> = if p.system_group_names.is_empty() {
+        p.system_prop_names.clone()
+    } else {
+        let groups = p.system_group_names.iter().filter_map(|g| group_registry.get(g)).flatten().cloned();
+        groups.chain(extra_prop_names(p, group_registry)).collect()
+    };
+    let mut seen = FxHashSet::default();
+    names.into_iter().filter(|name| seen.insert(name.clone())).collect()
+}
+
+/// When one element sets two system props that write one CSS property, the
+/// prop later in `systemPropNames` takes effect: the runtime skips each prop
+/// a later set prop supersedes. A later prop supersedes one when it writes
+/// every property that one writes, its current variable included; a partial
+/// overlap keeps both, and the stylesheet's order decides, as it does for a
+/// shorthand and its longhand. Custom and declaration props take no part.
+pub(crate) fn superseded_props(
+    p: &ReplacementPayload,
+    group_registry: &FxHashMap<String, Vec<String>>,
+    config: &PropConfigMap,
+) -> BTreeMap<String, Vec<String>> {
+    let custom = |name: &str| {
+        p.custom_prop_class_map.as_ref().is_some_and(|cpm| cpm.contains_key(name))
+            || p.custom_dynamic_config.as_ref().is_some_and(|cdc| cdc.contains_key(name))
+    };
+    let writes: Vec<(String, BTreeSet<&str>)> = prop_walk(p, group_registry)
+        .into_iter()
+        .filter(|name| !custom(name))
+        .filter_map(|name| {
+            let prop = config.get(&name).filter(|prop| prop.declaration_binding().is_none())?;
+            let properties = prop.css_properties().iter().map(String::as_str).chain(prop.current_var.as_deref());
+            Some((name, properties.collect()))
+        })
+        .collect();
+    let mut superseded = BTreeMap::new();
+    for (index, (name, properties)) in writes.iter().enumerate() {
+        let later: Vec<String> = writes[index + 1..]
+            .iter()
+            .filter(|(_, later)| properties.is_subset(later))
+            .map(|(later, _)| later.clone())
+            .collect();
+        if !later.is_empty() {
+            superseded.insert(name.clone(), later);
+        }
+    }
+    superseded
+}
 
 /// Runtime-config JSON for the facts-derivable subset. Compound conditions
 /// are sorted; keys are emitted variants, compounds, states.
@@ -132,30 +196,9 @@ pub(super) fn build_config(
             .iter()
             .map(|g| format!("systemPropGroups.{}", g))
             .collect();
-        let mut extra_names: rustc_hash::FxHashSet<String> = rustc_hash::FxHashSet::default();
-        if !p.system_prop_names.is_empty() {
-            let group_covered: rustc_hash::FxHashSet<String> = p
-                .system_group_names
-                .iter()
-                .filter_map(|g| group_registry.get(g))
-                .flat_map(|props| props.iter().cloned())
-                .collect();
-            for prop in &p.system_prop_names {
-                if !group_covered.contains(prop) {
-                    extra_names.insert(prop.clone());
-                }
-            }
-        }
-        if let Some(ref cpm) = p.custom_prop_class_map {
-            extra_names.extend(cpm.keys().cloned());
-        }
-        if let Some(ref cdc) = p.custom_dynamic_config {
-            extra_names.extend(cdc.keys().cloned());
-        }
+        let extra_names = extra_prop_names(p, group_registry);
         if !extra_names.is_empty() {
-            let mut sorted: Vec<String> = extra_names.into_iter().collect();
-            sorted.sort();
-            concat_parts.push(json!(sorted).to_string());
+            concat_parts.push(json!(extra_names).to_string());
         }
         config.insert(
             "systemPropNames",
@@ -163,6 +206,10 @@ pub(super) fn build_config(
         );
     } else if !p.system_prop_names.is_empty() {
         config.insert("systemPropNames", json!(p.system_prop_names));
+    }
+
+    if !p.superseded_by.is_empty() {
+        config.insert("supersededBy", json!(p.superseded_by));
     }
 
     if let Some(ref cpm) = p.custom_prop_class_map {

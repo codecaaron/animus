@@ -5657,24 +5657,25 @@ fn run_with_system_floor(
             None
         };
 
-        replacement_configs.insert(
-            component_id.clone(),
-            crate::assemble::ReplacementPayload {
-                system_prop_names: all_prop_names,
-                system_group_names: group_names.clone(),
-                has_dynamic_props,
-                custom_prop_class_map,
-                custom_dynamic_config: per_component_custom_dynamic.get(component_id).cloned(),
-                typed_custom_props,
-                reads_typed_system_props,
-                merged_config,
-                drops_parent_reference: parent_callbacks.get(component_id).is_some_and(|inherited| {
-                    !inherited.iter().any(|prop| {
-                        custom_dynamic_by_id.get(component_id).is_some_and(|delivered| delivered.contains(prop))
-                    })
-                }),
-            },
-        );
+        let mut payload = crate::assemble::ReplacementPayload {
+            system_prop_names: all_prop_names,
+            system_group_names: group_names.clone(),
+            has_dynamic_props,
+            custom_prop_class_map,
+            custom_dynamic_config: per_component_custom_dynamic.get(component_id).cloned(),
+            typed_custom_props,
+            reads_typed_system_props,
+            merged_config,
+            drops_parent_reference: parent_callbacks.get(component_id).is_some_and(|inherited| {
+                !inherited.iter().any(|prop| {
+                    custom_dynamic_by_id.get(component_id).is_some_and(|delivered| delivered.contains(prop))
+                })
+            }),
+            superseded_by: BTreeMap::new(),
+        };
+        payload.superseded_by =
+            crate::assemble::superseded_props(&payload, &inputs.group_registry, &inputs.config);
+        replacement_configs.insert(component_id.clone(), payload);
     }
 
     let variant_configs_for_ledger: VariantConfigMap = usage_sources

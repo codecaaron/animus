@@ -20,6 +20,11 @@ export interface ClassResolverConfig {
   /** System props bound to a configured transform, whose `systemPropMap`
    *  keys are `typedValueKey`s. */
   typedSystemProps?: readonly string[];
+  /** System prop → the props later in `systemPropNames` that write every
+   *  property it writes. Of props that one element sets on one CSS
+   *  property, the later-defined takes effect, so a superseded prop applies
+   *  no class and no slot value. */
+  supersededBy?: Record<string, readonly string[]>;
 }
 
 export type SystemPropMap = Record<string, Record<string, string>>;
@@ -608,10 +613,10 @@ function applyDynamicProp(
   }
   for (const [cls, varName, resolved] of staged) {
     if (varName !== undefined && resolved !== undefined) {
-      // Props on one CSS property share a slot variable, and props apply in
-      // definition order: a later-defined prop's write replaces an earlier
-      // one's, and the earlier class reading the variable (this class, or
-      // its `--keep` twin) leaves with it.
+      // A component's custom props on one CSS property can share a slot
+      // variable (a system prop's share is superseded before it applies):
+      // the later write replaces the earlier, and the earlier class reading
+      // the variable (this class, or its `--keep` twin) leaves with it.
       if (varName in dynStyle) {
         const keep = `${dc.slotClass}--keep`;
         const twin = cls.startsWith(keep)
@@ -712,11 +717,18 @@ export function resolveClasses(
 
   const systemPropNames = config.systemPropNames || [];
   if (systemPropNames.length > 0) {
-    const { customPropMap, customDynamicConfig } = config;
+    const { customPropMap, customDynamicConfig, supersededBy } = config;
 
     for (const propName of systemPropNames) {
       const propValue = withoutAbsentBreakpoints(props[propName]);
       if (propValue == null) continue;
+      if (
+        supersededBy?.[propName]?.some(
+          (later) => withoutAbsentBreakpoints(props[later]) != null
+        )
+      ) {
+        continue;
+      }
 
       const key = serializeValueKey(propValue);
       // A custom prop resolves only through its own config, so a same-named
