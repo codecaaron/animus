@@ -27,6 +27,8 @@ export interface EngineApi {
   loadSystemModule: (...args: unknown[]) => any;
   /** Parse-only native fact extraction used to prepare adapted sources. */
   extractFacts?: (filesJson: string) => string;
+  /** The engine's code-to-severity table, as JSON. */
+  diagnosticCodes?: () => string;
   analyzeProject: (
     filesJson: string,
     scalesJson: string,
@@ -137,6 +139,7 @@ export function createV2EngineApi(deps: V2EngineAdapterDeps): () => EngineApi {
       loadSystemModule: (...args: unknown[]) =>
         native.loadSystemModule(...args),
       extractFacts: (filesJson) => native.extractFacts(filesJson),
+      diagnosticCodes: () => native.diagnosticCodes(),
       analyzeProject: (
         filesJsonRaw,
         scalesJson,

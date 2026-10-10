@@ -3,6 +3,7 @@ import {
   buildSystemPropsModule,
   contentHash,
   createExcludeMatcher,
+  DiagnosticFailure,
   createV2EngineApi,
   DEFAULT_EXTENSIONS,
   clearEngineCache,
@@ -499,10 +500,12 @@ export class PluginContext {
         warn: (m) => this.warn(m),
         info: (m) => this.log(m),
         strict: this.options.strict,
+        diagnostics: this.options.diagnostics,
         extraDiagnostics: ingestionFailures,
       });
     } catch (e) {
-      if (this.options.strict) {
+      // A diagnostic at `error` level fails as a strict failure does.
+      if (this.options.strict || e instanceof DiagnosticFailure) {
         throw new Error(`[animus-extract] analyzeProject failed: ${e}`, {
           cause: e,
         });

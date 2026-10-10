@@ -3,6 +3,9 @@
  * default exclusions, and mode authority cannot drift per driver.
  */
 
+import { DIAGNOSTIC_LEVELS } from './manifest-diagnostics';
+
+import type { DiagnosticLevels } from './manifest-diagnostics';
 import type { StaticCssConfig } from './static-css';
 
 export const DRIVER_NAMESPACES = ['vite', 'next', 'cli'] as const;
@@ -56,6 +59,11 @@ export interface AnimusCoreOptions {
    *  classified unsupported Animus declarations — fail the build instead of
    *  warning. Omitted or `false` warns. */
   strict?: boolean;
+  /** Each `animus.*` code's level, by exact code or a prefix ending in `.*`
+   *  (`'animus.style.*'`): `'off'`, `'info'`, `'warn'` or `'error'`, which
+   *  fails the build. An exact code beats the longest matching prefix, and
+   *  an entry beats `strict` and the code's own severity. */
+  diagnostics?: DiagnosticLevels;
   /** `true` logs phase checkpoints, summaries and timing; `'trace'` also logs
    *  one line per item (pruned option, transformed file, HMR decision).
    *  `ANIMUS_DEBUG=1` or `ANIMUS_DEBUG=trace` raises it from the environment. */
@@ -90,6 +98,7 @@ export const CORE_OPTION_KEYS: ReadonlySet<string> = new Set([
   'exclude',
   'extensions',
   'strict',
+  'diagnostics',
   'verbose',
   'prefix',
   'prefixContextualVars',
@@ -176,7 +185,7 @@ export function assertKnownOptionKeys<Value>(
   }
 }
 
-type CoreOptionValue = string | boolean | readonly string[];
+type CoreOptionValue = string | boolean | readonly string[] | DiagnosticLevels;
 
 /**
  * Options are foreign JS, so a boxed `String`/`Boolean` must not pass: a
@@ -195,6 +204,12 @@ const isVerbose = (value: unknown): value is boolean | 'trace' =>
 
 const isStringArray = (value: unknown): value is readonly string[] =>
   Array.isArray(value) && value.every(isString);
+
+const isDiagnosticLevels = (value: unknown): value is DiagnosticLevels =>
+  Object.prototype.toString.call(value) === '[object Object]' &&
+  Object.values(Object(value)).every(
+    (level) => isString(level) && DIAGNOSTIC_LEVELS.has(level)
+  );
 
 const isStringOrStringArray = (
   value: unknown
@@ -222,6 +237,11 @@ const CORE_VALUE_GATES: ReadonlyArray<{
     expected: 'an array of string extensions',
   },
   { key: 'strict', ok: isBoolean, expected: 'a boolean' },
+  {
+    key: 'diagnostics',
+    ok: isDiagnosticLevels,
+    expected: "an object mapping codes to 'off', 'info', 'warn' or 'error'",
+  },
   { key: 'verbose', ok: isVerbose, expected: "a boolean or 'trace'" },
   { key: 'minify', ok: isBoolean, expected: 'a boolean' },
   { key: 'prefix', ok: isString, expected: 'a string' },

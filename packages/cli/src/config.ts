@@ -3,6 +3,7 @@ import {
   assertKnownOptionKeys,
   assertNoRetiredEngineSelection,
   createExcludeMatcher,
+  DIAGNOSTIC_LEVELS,
   resolveMode,
 } from '@animus-ui/extract/pipeline';
 import { ANIMUS_ARTIFACT_DIR } from '@animus-ui/extract/session';
@@ -13,6 +14,8 @@ import { pathToFileURL } from 'url';
 import type {
   AnimusCoreOptions,
   AnimusMode,
+  DiagnosticLevel,
+  DiagnosticLevels,
   OptionProvenance,
   StaticCssComponentOverride,
   StaticCssConfig,
@@ -193,6 +196,17 @@ function configStaticCss(value: ConfigValue): StaticCssConfig | undefined {
   );
 }
 
+/** The shared validator has already rejected a non-level value. */
+function configDiagnostics(value: ConfigValue): DiagnosticLevels | undefined {
+  if (!isConfigRecord(value)) return undefined;
+  return Object.fromEntries(
+    Object.entries(value).filter(
+      (entry): entry is [string, DiagnosticLevel] =>
+        isConfigString(entry[1]) && DIAGNOSTIC_LEVELS.has(entry[1])
+    )
+  );
+}
+
 function parseLoadedCliConfig(raw: ConfigRecord): LoadedCliConfig {
   // This projection drops `engine`, so without this gate a config asking
   // for the retired v1 engine would silently run v2.
@@ -219,6 +233,7 @@ function parseLoadedCliConfig(raw: ConfigRecord): LoadedCliConfig {
         ? raw.extensions
         : undefined,
       strict: isConfigBoolean(raw.strict) ? raw.strict : undefined,
+      diagnostics: configDiagnostics(raw.diagnostics),
       verbose:
         isConfigBoolean(raw.verbose) || raw.verbose === 'trace'
           ? raw.verbose
@@ -394,6 +409,7 @@ export async function resolveCliConfig(
     exclude: excludeIsExplicit ? exclude : undefined,
     extensions: pick('extensions', undefined),
     strict: pick('strict', flags.strict),
+    diagnostics: pick('diagnostics', undefined),
     verbose: pick('verbose', flags.verbose),
     prefix: pick('prefix', undefined),
     prefixContextualVars: pick('prefixContextualVars', undefined),
@@ -442,6 +458,7 @@ export function projectResolvedConfig(config: ResolvedCliConfig) {
     mode: config.mode,
     system: config.options.system,
     strict: config.options.strict ?? false,
+    diagnostics: config.options.diagnostics ?? null,
     verbose: config.options.verbose ?? false,
     targets: config.options.targets ?? null,
     minify: config.options.minify ?? null,

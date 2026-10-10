@@ -130,7 +130,8 @@ export async function runBuildStart(
           : noKitFilesDiagnostics(collected.outcomes)),
       ],
     },
-    (message) => ctx.warn(message)
+    (message) => ctx.warn(message),
+    { levels: ctx.options.diagnostics }
   );
 
   ctx.packageMap = collected.packageMap;

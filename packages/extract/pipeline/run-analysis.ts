@@ -1,6 +1,8 @@
 import { buildAnalyzeProjectArgs } from './analyze-project-args';
 import {
   collectSelectorAliasDiagnostics,
+  effectiveLevel,
+  knownDiagnosticCodes,
   surfaceManifestDiagnostics,
   systemLoadDiagnostics,
 } from './manifest-diagnostics';
@@ -8,7 +10,10 @@ import { checkCustomProperties } from './property-diagnostics';
 import { applyUnitFallback } from './unit-fallback';
 
 import type { AnalyzeProjectInputs } from './analyze-project-args';
-import type { ManifestDiagnostic } from './manifest-diagnostics';
+import type {
+  DiagnosticLevels,
+  ManifestDiagnostic,
+} from './manifest-diagnostics';
 import type { ProjectManifest } from './manifest-schema';
 import type { SystemConfig } from './system-config';
 
@@ -151,14 +156,16 @@ const surfacedSystems = new WeakSet<SystemConfig>();
  *  strict error keeps failing every analysis until the system changes. */
 function systemDiagnostics(
   system: SystemConfig,
-  strict: boolean | undefined
+  strict: boolean | undefined,
+  levels: DiagnosticLevels | undefined
 ): ManifestDiagnostic[] {
   const diagnostics = [
     ...collectSelectorAliasDiagnostics(system.selectorAliasesJson),
     ...systemLoadDiagnostics(system),
   ];
-  const blocking =
-    strict === true && diagnostics.some((d) => d.severity === 'error');
+  const blocking = diagnostics.some(
+    (d) => effectiveLevel(d, { strict, levels }) === 'error'
+  );
   if (surfacedSystems.has(system) && !blocking) return [];
   surfacedSystems.add(system);
   return diagnostics;
@@ -176,9 +183,11 @@ export function runProjectAnalysis(
     /** Receives info-severity diagnostics; pass a verbose-tier logger. */
     info?: (message: string) => void;
     strict?: boolean;
+    /** The host's `diagnostics` option. */
+    diagnostics?: DiagnosticLevels;
   }
 ): ProjectAnalysisResult {
-  const { analyzeProject } = engineApi();
+  const { analyzeProject, diagnosticCodes } = engineApi();
 
   let t = performance.now();
   const inputs = buildAnalysisInputs(opts);
@@ -212,8 +221,12 @@ export function runProjectAnalysis(
   surfaceManifestDiagnostics(manifest, opts.warn, {
     strict: opts.strict,
     info: opts.info,
+    levels: opts.diagnostics,
+    knownCodes: opts.diagnostics
+      ? knownDiagnosticCodes(diagnosticCodes?.())
+      : undefined,
     prepend: [
-      ...systemDiagnostics(opts.system, opts.strict),
+      ...systemDiagnostics(opts.system, opts.strict, opts.diagnostics),
       ...propertyDiagnostics,
       ...(opts.extraDiagnostics ?? []),
     ],

@@ -166,8 +166,14 @@ export type {
   ManifestSheets,
   ProjectManifest,
 } from './manifest-schema';
-export type { ManifestDiagnostic } from './manifest-diagnostics';
+export type {
+  DiagnosticLevel,
+  DiagnosticLevels,
+  ManifestDiagnostic,
+} from './manifest-diagnostics';
 export {
+  DIAGNOSTIC_LEVELS,
+  DiagnosticFailure,
   INVALID_PROPERTY_REGISTRATION,
   isUnresolvedParentDrop,
   surfaceManifestDiagnostics,

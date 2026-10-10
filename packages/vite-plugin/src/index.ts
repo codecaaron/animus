@@ -12,7 +12,10 @@ import { buildIndexHtmlTags } from './index-html';
 import { transformSource } from './transform';
 import { loadVirtualModule, resolveVirtualId } from './virtual-modules';
 
-import type { StaticCssConfig } from '@animus-ui/extract/pipeline';
+import type {
+  DiagnosticLevels,
+  StaticCssConfig,
+} from '@animus-ui/extract/pipeline';
 import type { Plugin } from 'vite';
 
 export { discoverFiles } from '@animus-ui/extract/pipeline';
@@ -41,6 +44,13 @@ export interface AnimusExtractOptions {
    * Omitted or `false` warns.
    */
   strict?: boolean;
+  /**
+   * Each `animus.*` code's level, by exact code or a prefix ending in `.*`
+   * (`'animus.style.*'`): `'off'`, `'info'`, `'warn'` or `'error'`, which
+   * fails the build. An exact code beats the longest matching prefix, and an
+   * entry beats `strict` and the code's own severity.
+   */
+  diagnostics?: DiagnosticLevels;
   /**
    * Run a structural self-check at the end of `buildStart`; failures throw
    * under `strict`, otherwise warn.
