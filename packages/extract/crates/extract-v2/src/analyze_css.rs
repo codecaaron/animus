@@ -6190,11 +6190,17 @@ fn run_with_system_floor(
             }
         }
         // An exported alias renders in other modules, where only one the
-        // analysis follows is the binding it holds.
+        // analysis follows is the binding it holds; a default export, however
+        // spelled, is what a framework or entry renders by itself.
         for alias in ff.aliases.keys().chain(ff.assigned_aliases.keys()) {
-            let exported = ff.default_export_binding.as_deref() == Some(alias)
-                || ff.exports.iter().any(|e| e.source.is_none() && e.local.as_deref() == Some(alias));
-            if exported && followed_alias(ff, alias).is_none() {
+            let exported_as: Vec<&str> = ff
+                .exports
+                .iter()
+                .filter(|e| e.source.is_none() && e.local.as_deref() == Some(alias))
+                .map(|e| e.exported.as_str())
+                .collect();
+            let default = ff.default_export_binding.as_deref() == Some(alias) || exported_as.contains(&"default");
+            if default || (!exported_as.is_empty() && followed_alias(ff, alias).is_none()) {
                 names.push(alias);
             }
         }
@@ -10970,6 +10976,11 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             ),
             (
                 format!("{RECIPE}export default R;\n"),
+                "import B from './r';\nexport const Other = () => <B size=\"lg\" />;\n",
+            ),
+            // A default export, however spelled, renders where nothing follows.
+            (
+                format!("{RECIPE}const B = R;\nexport {{ B as default }};\n"),
                 "import B from './r';\nexport const Other = () => <B size=\"lg\" />;\n",
             ),
             // The module writes to the alias, which it may no longer hold.
