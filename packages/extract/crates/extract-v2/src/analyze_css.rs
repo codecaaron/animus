@@ -3703,6 +3703,10 @@ fn opaque_delivery(
             || call.callee_imports.iter().any(|import| outside(file, ff, import, forwarding))
     };
     let tag_opaque = |file: &str, ff: &FileFacts, tag: &crate::usage_facts::OpaqueTag, forwarding: &FxHashSet<(String, String)>| {
+        use crate::usage_facts::TagOrigin;
+        if matches!(tag.origin, TagOrigin::Nested | TagOrigin::Undeclared) {
+            return true;
+        }
         let ids = receiver_ids(file, ff, &tag.tag);
         if !ids.is_empty() {
             return tag.polymorphic || !ids.iter().all(|id| renders_in_place(id));
@@ -5591,9 +5595,13 @@ fn run_with_system_floor(
     // An element handed to code outside the analysis renders with options
     // and props no analysed use shows, so it opens as an escape does.
     // A receiver is known through its file's declarations, imports and
-    // members only (`<Family.Root>`), never by a bare name elsewhere.
+    // members only (`<Family.Root>`), never by a bare name elsewhere; a
+    // member, only through the binding its object proves it holds.
     let receiver_ids = |path: &str, ff: &FileFacts, tag: &str| {
-        let mut ids = resolve_declared_identity(path, tag, files, inputs, &evaluated_ids);
+        let mut ids = match tag.contains('.') {
+            true => Vec::new(),
+            false => resolve_declared_identity(path, tag, files, inputs, &evaluated_ids),
+        };
         ids.extend(member_bindings.get(path).and_then(|members| members.get(tag)).cloned());
         ids.extend(member_path_ids(path, ff, tag, false, files, inputs, &evaluated_ids));
         ids
@@ -9244,7 +9252,9 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
     /// ordinary component that passes its children on, or a polymorphic
     /// Animus receiver. An element rendered in place, through such a
     /// wrapper or inside an Animus element or an ordinary component, stays
-    /// pruned.
+    /// pruned. A receiver is that Animus element only through its own
+    /// binding: a parameter, or an object member, that shares a declared
+    /// component's name is unknown.
     #[test]
     fn elements_code_outside_the_analysis_receives_keep_every_option() {
         let every = (vec!["sm", "md", "lg"], vec!["active", "busy"]);
@@ -9256,6 +9266,8 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             ("import { Slot } from 'ui-lib';\nconst W = (p) => <R {...p} />;\nexport const S = () => <Slot><W size=\"sm\" /></Slot>;", &every),
             ("import { Slot } from 'ui-lib';\nfunction Card({ children }) { return <Slot>{children}</Slot>; }\nexport const S = () => <Card><R size=\"sm\" /></Card>;", &every),
             ("const Box = ds.styles({}).asElement('section');\nexport const S = ({ X }) => <Box as={X}><R size=\"sm\" /></Box>;", &every),
+            ("const Box = ds.styles({}).asElement('section');\nexport const S = ({ Box }) => <Box><R size=\"sm\" /></Box>;", &every),
+            ("const Root = ds.styles({}).asElement('section');\nexport const S = ({ Family }) => <Family.Root><R size=\"sm\" /></Family.Root>;", &every),
             ("const W = (p) => <R {...p} />;\nexport const S = () => <W size=\"sm\" />;", &pruned),
             ("function Card({ children }) { return <section>{children}</section>; }\nexport const S = () => <Card><R size=\"sm\" /></Card>;", &pruned),
             ("const Box = ds.styles({}).asElement('section');\nexport const S = () => <Box><R size=\"sm\" /></Box>;", &pruned),
@@ -9263,6 +9275,15 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         for (setup, want) in cases {
             let app = format!("import {{ R }} from './r';\n{setup}\nexport const App = () => <R size=\"sm\" active />;\n");
             assert_eq!(&kept_options(&[("r.tsx", RECIPE), ("app.tsx", app.as_str())]), want, "{setup}");
+        }
+        let app = "import { R } from './r';\nimport { Family } from './receivers';\n\
+                   export const S = () => <Family.Root><R size=\"sm\" active /></Family.Root>;\n";
+        for (receivers, want) in [
+            ("import { Slot } from 'ui-lib';\nconst Root = ds.styles({}).asElement('section');\nexport const Family = { Root: Slot };\n", &every),
+            ("const Root = ds.styles({}).asElement('section');\nexport const Family = compose({ Root }, { name: 'Family' });\n", &pruned),
+        ] {
+            let entries = [("r.tsx", RECIPE), ("receivers.tsx", receivers), ("app.tsx", app)];
+            assert_eq!(&kept_options(&entries), want, "{receivers}");
         }
     }
 

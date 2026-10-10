@@ -558,12 +558,15 @@ pub(crate) struct EnrichedUsage {
 }
 
 /// A component element that hands its children and props to its receiver,
-/// which may clone them: the tag as written, whether the element can
-/// render something other than its tag (`as`, `asChild` or a spread), and
-/// what its attributes and children carry, read as a call's arguments are.
+/// which may clone them: the tag as written, where its first name is bound,
+/// whether the element can render something other than its tag (`as`,
+/// `asChild` or a spread), and what its attributes and children carry, read
+/// as a call's arguments are.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct OpaqueTag {
     pub tag: String,
+    /// A parameter or local never names the module's binding of that name.
+    pub origin: TagOrigin,
     pub polymorphic: bool,
     pub tags: BTreeSet<String>,
     pub imported_args: Vec<String>,
@@ -1004,9 +1007,16 @@ fn opaque_calls(
     let tags = scan
         .tag_calls
         .iter()
-        .filter_map(|(tag, polymorphic, reads, top)| {
+        .filter_map(|(tag, origin, polymorphic, reads, top)| {
             let (tags, imported_args, forwards_from) = scan.delivery(reads, top)?;
-            Some(OpaqueTag { tag: tag.clone(), polymorphic: *polymorphic, tags, imported_args, forwards_from })
+            Some(OpaqueTag {
+                tag: tag.clone(),
+                origin: *origin,
+                polymorphic: *polymorphic,
+                tags,
+                imported_args,
+                forwards_from,
+            })
         })
         .collect();
     // Top-level values, functions included, that hold or return elements:
@@ -1160,7 +1170,7 @@ struct OpaqueCallScan<'s> {
     calls: Vec<(CalleeRoot, ArgumentReads, Vec<String>)>,
     /// Component elements: the tag, whether it is polymorphic, and what its
     /// attributes and children read.
-    tag_calls: Vec<(String, bool, ArgumentReads, Vec<String>)>,
+    tag_calls: Vec<(String, TagOrigin, bool, ArgumentReads, Vec<String>)>,
 }
 
 impl OpaqueCallScan<'_> {
@@ -1400,7 +1410,9 @@ impl<'a> Visit<'a> for OpaqueCallScan<'_> {
             }
             _ => None,
         };
-        if let Some((tag, _)) = named.filter(|(_, root)| !root.is_some_and(|root| self.is_react(root))) {
+        if let Some((tag, root)) = named.filter(|(_, root)| !root.is_some_and(|root| self.is_react(root))) {
+            // `this.X` is bound nowhere the module declares.
+            let origin = root.map_or(TagOrigin::Nested, |root| tag_origin(self.scoping, root));
             let polymorphic = opening.attributes.iter().any(|attribute| match attribute {
                 JSXAttributeItem::SpreadAttribute(_) => true,
                 JSXAttributeItem::Attribute(attribute) => {
@@ -1415,7 +1427,7 @@ impl<'a> Visit<'a> for OpaqueCallScan<'_> {
             for child in &element.children {
                 collector.visit_jsx_child(child);
             }
-            self.tag_calls.push((tag, polymorphic, reads, self.top.clone()));
+            self.tag_calls.push((tag, origin, polymorphic, reads, self.top.clone()));
         }
         oxc::ast_visit::walk::walk_jsx_element(self, element);
     }
