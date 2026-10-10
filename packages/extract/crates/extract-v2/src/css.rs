@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::declarations::{breakpoint_of, record_key, DeclarationBinding, DeclarationNames};
-use crate::theme::{ConditionedGroup, CssDeclaration, PropConfig, PropConfigMap, ResolveContext, ResolvedStyles, TransformFailure, TransformFailureSink, first_top_level_branch, is_responsive_value, resolve_styles, split_top_level_commas, unresolved_alias_spans};
+use crate::theme::{ConditionedGroup, CssDeclaration, PropConfigMap, ResolveContext, ResolvedStyles, TransformFailure, TransformFailureSink, first_top_level_branch, is_responsive_value, resolve_styles, split_top_level_commas, unresolved_alias_spans};
 
 /// The unitless property names and the style-key vendor prefixes of
 /// `@animus-ui/properties`, written by `packages/extract/scripts/property-table.ts`.
@@ -1350,53 +1350,9 @@ fn intern_utility_class(
     Some(entry.0.clone())
 }
 
-/// The CSS-wide keywords a runtime value can carry. Through a dynamic slot a
-/// keyword would act on the inline variable, not on the property.
+/// The CSS-wide keywords, which a literal value applies to its property as
+/// written: no transform sees one.
 pub const CSS_WIDE_KEYWORDS: [&str; 5] = ["initial", "inherit", "unset", "revert", "revert-layer"];
-
-/// Gives a runtime-delivered prop one class per CSS-wide keyword, at the base
-/// and at each breakpoint, holding what a static write of the keyword
-/// declares: the bare keyword, which no transform sees. A keyword the static
-/// path leaves to the runtime (`admits` says no) gets no class, so the
-/// runtime resolves it as it resolves a static write. The keys are the
-/// ones a static write takes, and a class a static write already maps is
-/// kept, so runtime and static keywords select one class.
-#[allow(clippy::too_many_arguments)]
-fn add_keyword_classes(
-    prop_name: &str,
-    scale: &BTreeMap<String, Value>,
-    breakpoints: &BreakpointMap,
-    ctx: &ResolveContext,
-    admits: &mut dyn FnMut(&Value) -> bool,
-    seen: &mut FxHashMap<String, (String, ResolvedStyles)>,
-    class_map: &mut UtilityClassMap,
-    class_prefix: &str,
-    namespace: &str,
-) {
-    let key = value_key(ctx.config.get(prop_name).is_some_and(PropConfig::keys_typed));
-    // No usage wrote these keywords, so nothing is reported against one.
-    let quiet = ResolveContext { transform_failures: None, token_misses: None, dropped_keys: None, ..*ctx };
-    let classes = class_map.entry(prop_name.to_string()).or_default();
-    for keyword in CSS_WIDE_KEYWORDS {
-        // A scale key spelled like a keyword reaches the slot, which reads the
-        // scale, as a static write of it does.
-        if scale.contains_key(keyword) {
-            continue;
-        }
-        let at_breakpoints = breakpoints.breakpoints.keys().map(|bp| serde_json::json!({ bp: keyword }));
-        for value in std::iter::once(Value::from(keyword)).chain(at_breakpoints) {
-            if let std::collections::hash_map::Entry::Vacant(slot) = classes.entry(key(&value)) {
-                if !admits(&value) {
-                    continue;
-                }
-                let styles = resolve_styles(&serde_json::json!({ prop_name: value }), &quiet, true);
-                if let Some(class_name) = intern_utility_class(styles, seen, class_prefix, namespace) {
-                    slot.insert(class_name);
-                }
-            }
-        }
-    }
-}
 
 /// Rule kinds within one condition of a layer: declaration consuming rules
 /// precede atomic rules, so a same-condition atomic outranks a declaration.
@@ -1588,30 +1544,6 @@ impl ResolvedUtilities {
         !self.declarations.props.is_empty()
     }
 
-    /// Keyword classes for the props whose values arrive at runtime, each with
-    /// its runtime scale; `admits` is the static path's admission of a value.
-    pub fn add_runtime_keyword_classes<'a>(
-        &mut self,
-        props: impl IntoIterator<Item = (&'a str, &'a BTreeMap<String, Value>)>,
-        breakpoints: &BreakpointMap,
-        ctx: &ResolveContext,
-        mut admits: impl FnMut(&str, &Value) -> bool,
-    ) {
-        for (prop_name, scale) in props {
-            add_keyword_classes(
-                prop_name,
-                scale,
-                breakpoints,
-                ctx,
-                &mut |value| admits(prop_name, value),
-                &mut self.seen,
-                &mut self.class_map,
-                &self.class_prefix,
-                SYSTEM_UTILITY_NAMESPACE,
-            );
-        }
-    }
-
     /// `runtime_declarations` are the declaration props with a runtime slot,
     /// whose consuming rules render whether or not a literal binds a key.
     pub fn render(
@@ -1741,39 +1673,6 @@ impl ResolvedCustomUtilities {
 
     pub fn has_declarations(&self) -> bool {
         !self.declarations.props.is_empty()
-    }
-
-    /// Keyword classes for `owner`'s props whose values arrive at runtime,
-    /// each with its runtime scale, resolved through `config`, the owner's
-    /// own; `admits` is the static path's admission of a value.
-    #[allow(clippy::too_many_arguments)]
-    pub fn add_runtime_keyword_classes<'a>(
-        &mut self,
-        owner: &str,
-        config: &PropConfigMap,
-        props: impl IntoIterator<Item = (&'a str, &'a BTreeMap<String, Value>)>,
-        breakpoints: &BreakpointMap,
-        ctx: &ResolveContext,
-        mut admits: impl FnMut(&str, &Value) -> bool,
-    ) {
-        let owner_ctx = ResolveContext { config, ..*ctx };
-        let classes = self.class_map.entry(owner.to_string()).or_default();
-        for (prop_name, scale) in props {
-            add_keyword_classes(
-                prop_name,
-                scale,
-                breakpoints,
-                &owner_ctx,
-                &mut |value| admits(prop_name, value),
-                &mut self.seen,
-                classes,
-                &self.class_prefix,
-                CUSTOM_UTILITY_NAMESPACE,
-            );
-            if config.get(prop_name).is_some_and(PropConfig::keys_typed) {
-                self.typed.entry(owner.to_string()).or_default().insert(prop_name.to_string());
-            }
-        }
     }
 
     pub fn render(
@@ -2518,149 +2417,6 @@ mod tests {
         assert!(out.class_map["a.tsx::A"]["p"].contains_key("8"));
         assert!(out.css.contains("@layer anm-custom {"));
         assert!(!out.css.contains("@layer anm-system {"));
-    }
-
-    fn keyword_config() -> PropConfigMap {
-        let mut config = utility_config();
-        let mut px = config["p"].clone();
-        px.properties = vec!["paddingLeft".to_string(), "paddingRight".to_string()];
-        config.insert("px".to_string(), px);
-        let mut bg = config["display"].clone();
-        bg.property = "backgroundColor".to_string();
-        bg.current_var = Some("--current-bg".to_string());
-        config.insert("bg".to_string(), bg);
-        let mut sized = config["display"].clone();
-        sized.property = "width".to_string();
-        sized.transform_fn_source = Some("(v) => v * 2".to_string());
-        config.insert("sized".to_string(), sized);
-        config
-    }
-
-    fn rule_of<'a>(css: &'a str, class: &str) -> &'a str {
-        let start = css.find(&format!(".{class} {{")).unwrap_or_else(|| panic!("no rule for {class}:\n{css}"));
-        let end = css[start..].find('}').unwrap();
-        &css[start..start + end]
-    }
-
-    #[test]
-    fn runtime_keyword_classes_hold_the_direct_declaration() {
-        let bp = test_breakpoints();
-        let tc = TestUtilCtx::new(keyword_config(), utility_theme(), &bp);
-        let mut resolved = resolve_utility_classes(&[], &tc.ctx(), "animus");
-        resolved.add_runtime_keyword_classes(["p", "px", "bg", "sized"].map(|p| (p, &NO_SCALE)), &bp, &tc.ctx(), |_, _| true);
-        let out = resolved.render(&bp, None, &[]);
-
-        for keyword in CSS_WIDE_KEYWORDS {
-            let class = &out.class_map["p"][keyword];
-            assert!(class.starts_with("animus-u-"), "{class}");
-            assert_eq!(rule_of(&out.css, class).matches(':').count(), 1, "{}", rule_of(&out.css, class));
-            assert!(rule_of(&out.css, class).contains(&format!("padding: {keyword};")));
-        }
-        let px = rule_of(&out.css, &out.class_map["px"]["inherit"]);
-        assert!(px.contains("padding-left: inherit;") && px.contains("padding-right: inherit;"), "{px}");
-        let bg = rule_of(&out.css, &out.class_map["bg"]["revert-layer"]);
-        assert!(bg.contains("background-color: revert-layer;") && bg.contains("--current-bg: revert-layer;"), "{bg}");
-        // A bound transform never sees the keyword, and the key is typed.
-        let sized = rule_of(&out.css, &out.class_map["sized"]["\"unset\""]);
-        assert!(sized.contains("width: unset;"), "{sized}");
-        assert!(!out.class_map["sized"].contains_key("unset"));
-        assert!(!out.css.contains("-moz-initial"));
-    }
-
-    #[test]
-    fn runtime_keyword_classes_cover_every_breakpoint() {
-        let bp = test_breakpoints();
-        let tc = TestUtilCtx::new(keyword_config(), utility_theme(), &bp);
-        let mut resolved = resolve_utility_classes(&[], &tc.ctx(), "animus");
-        resolved.add_runtime_keyword_classes([("p", &NO_SCALE), ("sized", &NO_SCALE)], &bp, &tc.ctx(), |_, _| true);
-        let out = resolved.render(&bp, None, &[]);
-
-        for (breakpoint, px) in [("xs", 480), ("sm", 768), ("md", 1024), ("lg", 1200), ("xl", 1440)] {
-            for keyword in CSS_WIDE_KEYWORDS {
-                let class = &out.class_map["p"][&format!("{breakpoint}:{keyword}")];
-                let media = format!("@media (min-width: {px}px) {{\n    .{class} {{\n      padding: {keyword};");
-                assert!(out.css.contains(&media), "{media}\n{}", out.css);
-            }
-            let typed = format!("{{\"{breakpoint}\":\"inherit\"}}");
-            assert!(out.class_map["sized"].contains_key(&typed), "{typed}");
-        }
-        assert_eq!(out.class_map["p"].len(), CSS_WIDE_KEYWORDS.len() * 6);
-    }
-
-    #[test]
-    fn runtime_keyword_classes_reuse_and_keep_static_classes() {
-        let bp = test_breakpoints();
-        let tc = TestUtilCtx::new(keyword_config(), utility_theme(), &bp);
-        let usages = vec![
-            UtilityInput { prop_name: "p".to_string(), value: json!("inherit") },
-            UtilityInput { prop_name: "p".to_string(), value: json!({ "md": "initial" }) },
-        ];
-        let statics = resolve_utility_classes(&usages, &tc.ctx(), "animus").render(&bp, None, &[]);
-        let mut resolved = resolve_utility_classes(&usages, &tc.ctx(), "animus");
-        resolved.add_runtime_keyword_classes([("p", &NO_SCALE)], &bp, &tc.ctx(), |_, _| true);
-        let out = resolved.render(&bp, None, &[]);
-
-        assert_eq!(out.class_map["p"]["inherit"], statics.class_map["p"]["inherit"]);
-        assert_eq!(out.class_map["p"]["md:initial"], statics.class_map["p"]["md:initial"]);
-        let class = &out.class_map["p"]["inherit"];
-        assert_eq!(out.css.matches(&format!(".{class} {{")).count(), 1);
-    }
-
-    static NO_SCALE: std::collections::BTreeMap<String, Value> = std::collections::BTreeMap::new();
-
-    /// A runtime value spelled like a scale key reaches the slot, which reads
-    /// the scale, as a static write of it does.
-    #[test]
-    fn a_scale_key_spelled_like_a_keyword_keeps_its_scale_value() {
-        let bp = test_breakpoints();
-        let tc = TestUtilCtx::new(keyword_config(), utility_theme(), &bp);
-        let scale: std::collections::BTreeMap<String, Value> =
-            [("inherit".to_string(), json!("3px")), ("4".to_string(), json!("0.25rem"))].into_iter().collect();
-        let mut resolved = resolve_utility_classes(&[], &tc.ctx(), "animus");
-        resolved.add_runtime_keyword_classes([("p", &scale)], &bp, &tc.ctx(), |_, _| true);
-        let out = resolved.render(&bp, None, &[]);
-
-        let p = &out.class_map["p"];
-        assert!(!p.contains_key("inherit") && !p.contains_key("md:inherit"), "{p:?}");
-        assert!(p.contains_key("initial") && p.contains_key("md:unset"), "{p:?}");
-        assert!(!out.css.contains("padding: inherit"), "{}", out.css);
-    }
-
-    #[test]
-    fn runtime_keyword_classes_never_replace_a_static_class() {
-        let bp = test_breakpoints();
-        let mut tc = TestUtilCtx::new(keyword_config(), utility_theme(), &bp);
-        tc.theme.insert("space.inherit".to_string(), "3px".to_string());
-        let usages = vec![UtilityInput { prop_name: "p".to_string(), value: json!("inherit") }];
-        let mut resolved = resolve_utility_classes(&usages, &tc.ctx(), "animus");
-        resolved.add_runtime_keyword_classes([("p", &NO_SCALE)], &bp, &tc.ctx(), |_, _| true);
-        let out = resolved.render(&bp, None, &[]);
-
-        assert!(rule_of(&out.css, &out.class_map["p"]["inherit"]).contains("padding: 3px;"));
-    }
-
-    #[test]
-    fn custom_runtime_keyword_classes_live_in_the_custom_layer() {
-        let bp = test_breakpoints();
-        let tc = TestUtilCtx::new(keyword_config(), utility_theme(), &bp);
-        let configs: FxHashMap<&str, &PropConfigMap> = [("a.tsx::A", &tc.config)].into_iter().collect();
-        let mut resolved = resolve_custom_prop_classes(&[], &configs, &tc.ctx(), "animus", |_, _| {});
-        resolved.add_runtime_keyword_classes(
-            "a.tsx::A",
-            &tc.config,
-            [("p", &NO_SCALE), ("sized", &NO_SCALE)],
-            &bp,
-            &tc.ctx(),
-            |_, _| true,
-        );
-        let out = resolved.render(&bp, None, &[]);
-
-        let class = &out.class_map["a.tsx::A"]["p"]["inherit"];
-        assert!(class.starts_with("animus-uc-"), "{class}");
-        assert!(out.css.contains("@layer anm-custom {") && !out.css.contains("@layer anm-system {"));
-        assert!(out.class_map["a.tsx::A"]["sized"].contains_key("\"inherit\""));
-        assert!(out.typed["a.tsx::A"].contains("sized"));
-        assert!(!out.typed["a.tsx::A"].contains("p"));
     }
 
     #[test]

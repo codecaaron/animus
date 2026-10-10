@@ -18,7 +18,7 @@ pub(crate) use usage::{
     classify_jsx_attribute_as_variant_value, create_element_props, is_component_like_identifier,
     jsx_member_path,
 };
-pub(crate) use value_eval::eval_jsx_attribute_value;
+pub(crate) use value_eval::{eval_jsx_attribute_value, eval_property_key};
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct SystemPropUsage {

@@ -250,16 +250,6 @@ function isAdmittedWithoutToken(
   );
 }
 
-/** A CSS-wide keyword is a cascade instruction, not a value: no transform
- *  sees it, and through an inline variable it would act on the variable. */
-const CSS_WIDE_KEYWORDS: ReadonlySet<unknown> = new Set([
-  'initial',
-  'inherit',
-  'unset',
-  'revert',
-  'revert-layer',
-]);
-
 function resolveEntry(
   value: unknown,
   dc: DynamicEntryConfig
@@ -286,9 +276,7 @@ function resolveEntry(
   }
   const input = scaleResolved ?? value;
   let transformed: unknown = input;
-  // A scale key spelled like a keyword resolved above, as a token.
-  const keyword = scaleResolved == null && CSS_WIDE_KEYWORDS.has(value);
-  if (dc.transform && !keyword) {
+  if (dc.transform) {
     try {
       transformed = dc.transform(input as string | number);
     } catch (cause) {
@@ -557,8 +545,7 @@ function slotClassFor(dc: ValueDynamicPropConfig, resolved: string): string {
 /**
  * Resolution is staged so a drop is atomic: one entry that misses a strict
  * scale, or one transform that throws or returns an invalid result, leaves
- * `classes` and `dynStyle` untouched. A responsive entry that is a CSS-wide
- * keyword takes the class extraction emits for it at that breakpoint.
+ * `classes` and `dynStyle` untouched.
  *
  * A slot is a CSS variable, which cannot carry `!important`. A literal that
  * carries it, at a breakpoint, takes the class extraction emits for every
@@ -601,14 +588,6 @@ function applyDynamicProp(
         value = `${authored.slice(0, priority.end)} !important`;
       }
     }
-    const keywordClass =
-      responsive && CSS_WIDE_KEYWORDS.has(value)
-        ? lookup(bp, value)
-        : undefined;
-    if (keywordClass) {
-      staged.push([keywordClass]);
-      continue;
-    }
     let resolved = resolveEntry(value, dc);
     if (typeof resolved !== 'string') {
       return 'entry' in resolved && responsive
@@ -619,13 +598,6 @@ function applyDynamicProp(
       ignoredImportant(ignored);
       const end = importantPriority(resolved)?.end;
       resolved = end === undefined ? resolved : resolved.slice(0, end);
-      const bareKeyword = CSS_WIDE_KEYWORDS.has(resolved)
-        ? lookup(bp, resolved)
-        : undefined;
-      if (bareKeyword) {
-        staged.push([bareKeyword]);
-        continue;
-      }
     }
     const slotClass = slotClassFor(dc, resolved);
     staged.push(
