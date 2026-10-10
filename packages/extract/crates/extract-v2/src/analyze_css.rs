@@ -459,6 +459,9 @@ const COMPOSE_UNRESOLVABLE_SLOT: &str = "animus.compose.unresolvable-slot";
 /// Source-proven unsupported Animus declarations. Each code is `error`
 /// severity: a warning by default, fatal only under explicit strictness.
 const UNSUPPORTED_MEMBER_PARENT: &str = "animus.extension.unsupported-member-parent";
+/// Components whose extensions extraction cannot order: a cycle, or a chain
+/// through a binding its module declares by more than one chain.
+const EXTENSION_CYCLE: &str = "animus.extension.cycle";
 const UNSUPPORTED_EXTEND_ARGUMENTS: &str = "animus.extension.unsupported-arguments";
 const UNSUPPORTED_VARIANT_CONFIG_REFERENCE: &str = "animus.variant.unsupported-config-reference";
 const STAGE_EVALUATION_FAILED: &str = "animus.chain.stage-evaluation-failed";
@@ -550,6 +553,7 @@ pub(crate) const DIAGNOSTIC_CODES: &[(&str, &str)] = &[
     (crate::eval::KEYFRAMES_UNREGISTERED_REFERENCE, "warn"),
     (COMPOSE_UNRESOLVABLE_SLOT, "error"),
     (UNSUPPORTED_MEMBER_PARENT, "error"),
+    (EXTENSION_CYCLE, "error"),
     (UNSUPPORTED_EXTEND_ARGUMENTS, "error"),
     (UNSUPPORTED_VARIANT_CONFIG_REFERENCE, "error"),
     (STAGE_EVALUATION_FAILED, "error"),
@@ -5087,6 +5091,7 @@ fn sorted_resolvable_component_ids(
     files: &BTreeMap<String, FileFacts>,
     parent_map: &FxHashMap<String, String>,
     unresolvable_extensions: &FxHashSet<String>,
+    diagnostics: &mut Vec<CssDiagnostic>,
 ) -> Vec<String> {
     let mut all_component_ids: Vec<String> = files
         .iter()
@@ -5114,6 +5119,9 @@ fn sorted_resolvable_component_ids(
     match topological_sort(&nodes) {
         TopoResult::Sorted(order) => order,
         TopoResult::Cycle(cycle_ids) => {
+            // A binding declared by more than one chain is one id, listed once.
+            let unique: BTreeSet<&String> = cycle_ids.iter().collect();
+            diagnostics.extend(unique.into_iter().map(|id| extension_cycle_bail(id, files, parent_map)));
             let cycle_set: FxHashSet<&String> = cycle_ids.iter().collect();
             all_component_ids
                 .into_iter()
@@ -5121,6 +5129,52 @@ fn sorted_resolvable_component_ids(
                 .collect()
         }
     }
+}
+
+/// The bail for a component extraction cannot order: its extension chain
+/// reaches a binding its module declares by more than one chain, whose
+/// components a binding-keyed parent cannot tell apart, or it runs in a
+/// cycle. Each is named, and none of those components is extracted.
+fn extension_cycle_bail(
+    id: &str,
+    files: &BTreeMap<String, FileFacts>,
+    parent_map: &FxHashMap<String, String>,
+) -> CssDiagnostic {
+    let split = |id: &str| id.rsplit_once("::").map_or((String::new(), id.to_string()), |(f, b)| (f.to_string(), b.to_string()));
+    let rebound = |id: &str| {
+        let (file, binding) = split(id);
+        files.get(&file).is_some_and(|ff| {
+            ff.chains.iter().filter(|chain| chain.descriptor.binding == binding).count() > 1
+        })
+    };
+    // The parents from `id`, until one repeats: every unsorted component
+    // reaches a cycle.
+    let mut path: Vec<String> = vec![id.to_string()];
+    while let Some(parent) = parent_map.get(path.last().map(String::as_str).unwrap_or_default()) {
+        let repeated = path.contains(parent);
+        path.push(parent.clone());
+        if repeated {
+            break;
+        }
+    }
+    let names: Vec<String> = path.iter().map(|id| format!("'{}'", split(id).1)).collect();
+    let (file, binding) = split(id);
+    let message = match path.iter().find(|id| rebound(id)) {
+        Some(rebound_id) => format!(
+            "'{binding}' extends through {}, and '{}' is declared by more than one chain in {}; \
+             extraction keys components by binding and cannot order them, so this component is not \
+             extracted — give each component its own binding",
+            names.join(" → "),
+            split(rebound_id).1,
+            split(rebound_id).0,
+        ),
+        None => format!(
+            "'{binding}' extends through {}, an extension cycle, so this component is not extracted — \
+             a component can only extend one built before it",
+            names.join(" → ")
+        ),
+    };
+    diagnostic(&file, &binding, "bail", message, Some(EXTENSION_CYCLE))
 }
 
 /// An error diagnostic held until reconciliation decides what ships: emitting
@@ -5514,7 +5568,7 @@ fn run_with_system_floor(
         }
     }
 
-    let sorted_ids = sorted_resolvable_component_ids(files, &parent_map, &unresolvable_extensions);
+    let sorted_ids = sorted_resolvable_component_ids(files, &parent_map, &unresolvable_extensions, &mut diagnostics);
 
     let mut chain_lookup: FxHashMap<&str, (&str, usize)> = FxHashMap::default();
     for (file_path, ff) in files {
@@ -8169,9 +8223,41 @@ mod tests {
         let unresolvable_extensions = FxHashSet::from_iter(["skip.tsx::Skip".to_string()]);
 
         assert_eq!(
-            sorted_resolvable_component_ids(&files, &parent_map, &unresolvable_extensions),
+            sorted_resolvable_component_ids(&files, &parent_map, &unresolvable_extensions, &mut Vec::new()),
             vec!["base.tsx::Base", "child.tsx::Child"]
         );
+    }
+
+    /// Contract: extraction never drops a component silently over its
+    /// extensions. A component on an extension cycle, or extending through a
+    /// binding its module declares by more than one chain (`var A = …; const
+    /// B = A.extend()…; var A = B.extend()…`), bails with
+    /// `animus.extension.cycle` naming the bindings; other components still
+    /// extract.
+    #[test]
+    fn unorderable_extensions_bail_with_a_named_diagnostic() {
+        let rebound = "var A = ds.styles({ color: 'red' }).asElement('div');\n\
+                       const B = A.extend().styles({ color: 'green' }).asElement('div');\n\
+                       var A = B.extend().styles({ color: 'blue' }).asElement('div');\n\
+                       export const App = () => <><A /><B /></>;\n";
+        let a = "import { D } from './d';\nexport const C = D.extend().styles({ color: 'red' }).asElement('div');\n";
+        let d = "import { C } from './c';\nexport const D = C.extend().styles({ color: 'blue' }).asElement('div');\n\
+                 export const Kept = ds.styles({ color: 'green' }).asElement('div');\n\
+                 export const App = () => <><C /><D /><Kept /></>;\n";
+        let files = [("rebound.tsx", rebound), ("c.tsx", a), ("d.tsx", d)];
+        let output = analyze(&files, &test_inputs());
+        let mut bails: Vec<(String, String, String)> = output
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.code.as_deref() == Some("animus.extension.cycle"))
+            .map(|diagnostic| (diagnostic.file.clone(), diagnostic.component.clone(), diagnostic.message.clone()))
+            .collect();
+        bails.sort();
+        let named: Vec<(&str, &str)> = bails.iter().map(|(file, component, _)| (file.as_str(), component.as_str())).collect();
+        assert_eq!(named, [("c.tsx", "C"), ("d.tsx", "D"), ("rebound.tsx", "A"), ("rebound.tsx", "B")]);
+        assert!(bails[0].2.contains("'C' → 'D' → 'C'") && bails[0].2.contains("an extension cycle"), "{}", bails[0].2);
+        assert!(bails[2].2.contains("'A' is declared by more than one chain in rebound.tsx"), "{}", bails[2].2);
+        assert!(output.css.contains("color: green"), "{}", output.css);
     }
 
     #[test]
@@ -8212,7 +8298,7 @@ mod tests {
         ]);
 
         assert_eq!(
-            sorted_resolvable_component_ids(&files, &parent_map, &FxHashSet::default()),
+            sorted_resolvable_component_ids(&files, &parent_map, &FxHashSet::default(), &mut Vec::new()),
             vec!["survivors.tsx::A", "survivors.tsx::Z"]
         );
     }

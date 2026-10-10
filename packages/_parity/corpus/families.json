@@ -78,7 +78,7 @@
       "parity/cyclic-extension"
     ],
     "expectedVerdict": "identical",
-    "note": "Extension cycle handling (project_analyzer cycle path) \u2014 no dedicated fixture existed before this corpus."
+    "note": "An extension cycle bails each of its components with animus.extension.cycle naming the cycle\u2019s bindings; the committed v2 surface records those diagnostics, and the components stay unextracted."
   },
   {
     "family": "duplicate-compose-modules",
