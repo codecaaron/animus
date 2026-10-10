@@ -49,14 +49,25 @@ type PropValue<V> =
     };
 
 // A strict scale on a map: its keys, the property's keywords, and the
-// values every strict prop admits.
+// values every strict prop admits, zero as a string or a number among them.
 export type _StrictMapScale = Assert<
   Equal<
     Props['gutter'],
-    | PropValue<'tight' | 'roomy' | 'normal' | '0' | CssWide | ContainerUnit>
+    | PropValue<
+        'tight' | 'roomy' | 'normal' | '0' | 0 | CssWide | ContainerUnit
+      >
     | undefined
   >
 >;
+
+// A style input checks a value without TS inferring from it, and what the
+// builder stores keeps the value's whole domain: zero included, never `never`.
+const _styled = ds.styles({ p: 0 });
+type StoredP = Single<(typeof _styled)['baseStyles']['p']>;
+export type _StoredStyle = [
+  Assert<Equal<IsNever<StoredP>, false>>,
+  Assert<Equal<Extract<StoredP, 0 | '0'>, 0 | '0'>>,
+];
 
 // A strict theme scale stays closed; a loose one is open to raw CSS.
 export type _Openness = [
