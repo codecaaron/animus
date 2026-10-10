@@ -12,7 +12,7 @@ use oxc::ast::ast::{
 };
 use oxc::ast_visit::Visit;
 
-use super::value_eval::eval_jsx_attribute_value;
+use super::value_eval::{eval_jsx_attribute_value, eval_static_expression};
 use super::{DynamicPropUsage, PropValueResult, SystemPropUsage, UsageResidueSite};
 
 #[derive(Debug, Clone, Default)]
@@ -321,6 +321,25 @@ impl<'a, 'b> Visit<'a> for UsageScanner<'a, 'b> {
                 };
 
                 if let Some(binding) = resolved {
+                    if let Some(props) = self.component_props.get(&binding) {
+                        for (prop_name, value) in create_element_literals(call.arguments.get(1)) {
+                            if !props.contains(&prop_name) {
+                                continue;
+                            }
+                            let dedup_key = format!(
+                                "{}:{}",
+                                prop_name,
+                                serde_json::to_string(&value).unwrap_or_else(|_| "null".to_string())
+                            );
+                            if self.seen.insert(dedup_key) {
+                                self.result.system_prop_usages.push(SystemPropUsage {
+                                    prop_name,
+                                    value,
+                                    binding: binding.clone(),
+                                });
+                            }
+                        }
+                    }
                     if let Some(config) = self.component_configs.get(&binding) {
                         match create_element_props(call.arguments.get(1)) {
                             None if self.fully_open.insert(binding.clone()) => {
@@ -404,6 +423,35 @@ pub(crate) fn create_element_props(argument: Option<&Argument<'_>>) -> Option<Ve
             .collect(),
         Some(_) => None,
     }
+}
+
+/// The literal values a `createElement` props object writes: a string,
+/// number or object of them, with nullish breakpoints left out as at
+/// runtime. A spread or computed key leaves the object unread.
+pub(crate) fn create_element_literals(argument: Option<&Argument<'_>>) -> Vec<(String, serde_json::Value)> {
+    use oxc::ast::ast::ObjectPropertyKind;
+    let Some(Argument::ObjectExpression(object)) = argument else {
+        return Vec::new();
+    };
+    if object.properties.iter().any(|property| !matches!(property, ObjectPropertyKind::ObjectProperty(p) if !p.computed)) {
+        return Vec::new();
+    }
+    object
+        .properties
+        .iter()
+        .filter_map(|property| {
+            let ObjectPropertyKind::ObjectProperty(p) = property else { return None };
+            let key = p.key.static_name()?.to_string();
+            let mut value = eval_static_expression(&p.value)?;
+            if let serde_json::Value::Object(entries) = &mut value {
+                entries.retain(|_, entry| !entry.is_null());
+                if entries.is_empty() {
+                    return None;
+                }
+            }
+            (!value.is_null()).then_some((key, value))
+        })
+        .collect()
 }
 
 /// Classify a present JSX attribute value for variant tracking: a string
