@@ -7,6 +7,9 @@ export interface PrefixedSystemArtifacts {
   themeJson?: string;
   contextualVarsJson?: string;
   declarationScalesJson?: string;
+  /** Each generated name and its final name, without `--`, for the names
+   *  authors write in component styles. */
+  generatedNamesJson?: string;
 }
 
 /**
@@ -65,6 +68,11 @@ export function applyPrefix(
   };
   if (themeJson) result.themeJson = renameTokenValues(themeJson, rename);
   if (contextualVarsJson) result.contextualVarsJson = contextualVarsJson;
+  if (generated.length > 0) {
+    result.generatedNamesJson = JSON.stringify(
+      Object.fromEntries(generated.map((name) => [name, `${prefix}-${name}`]))
+    );
+  }
   if (declarationScalesJson) {
     result.declarationScalesJson = renameDeclarationRecords(
       declarationScalesJson,
@@ -87,6 +95,8 @@ export interface PropertyNameArtifacts {
 export interface ResolvedPropertyNames extends PropertyNameArtifacts {
   contextualProperties: string[];
   nameConflicts: PrefixNameConflict[];
+  /** Each name the theme generates and its final name, without `--`. */
+  generatedNamesJson: string | null;
 }
 
 /** A final name the prefix cannot give without a collision. */
@@ -179,7 +189,25 @@ export function applyPropertyNames(
     contextualProperties: [...new Set(declared)].map(
       (name) => `--${managed.finalName(name) ?? name}`
     ),
+    generatedNamesJson: generatedNamesJson(
+      themeDefined.filter((name) => !declared.includes(name)),
+      managed
+    ),
   };
+}
+
+/** The generated names' final names, for authored component styles. */
+function generatedNamesJson(
+  names: readonly string[],
+  managed: ReturnType<typeof createPropertyNames>
+): string | null {
+  const entries = [...new Set(names)].flatMap((name) => {
+    const final = managed.finalName(name);
+    return final === undefined ? [] : [[name, final] as const];
+  });
+  return entries.length === 0
+    ? null
+    : JSON.stringify(Object.fromEntries(entries));
 }
 
 /** A custom property the theme's CSS defines or registers. */

@@ -50,6 +50,9 @@ export interface SystemConfig {
   contextualProperties?: string[];
   /** Final names that would collide under `prefixContextualVars`. */
   prefixNameConflicts?: PrefixNameConflict[];
+  /** Under a prefix, each name the theme generates and its final name,
+   *  without `--`: the extractor renames those names in authored styles. */
+  generatedNamesJson?: string;
 }
 
 /**
@@ -85,6 +88,7 @@ export function loadSystemConfig(
   ).flat();
   let contextualProperties = declaredNames.map((name) => `--${name}`);
   let prefixNameConflicts: PrefixNameConflict[] = [];
+  let generatedNamesJson: string | null | undefined;
   if (opts.prefix && opts.prefixContextualVars) {
     const resolved = applyPropertyNames(opts.prefix, {
       variableMapJson,
@@ -100,6 +104,7 @@ export function loadSystemConfig(
     contextualProperties = resolved.contextualProperties;
     prefixNameConflicts = resolved.nameConflicts;
     declarationScalesJson = resolved.declarationScalesJson;
+    generatedNamesJson = resolved.generatedNamesJson;
   } else if (opts.prefix) {
     // Contextual variables keep their declared names; only the names Animus
     // generates take the prefix.
@@ -118,6 +123,7 @@ export function loadSystemConfig(
     if (prefixed.declarationScalesJson) {
       declarationScalesJson = prefixed.declarationScalesJson;
     }
+    generatedNamesJson = prefixed.generatedNamesJson;
   }
 
   const system: SystemConfig = {
@@ -149,5 +155,6 @@ export function loadSystemConfig(
   if (prefixNameConflicts.length > 0) {
     system.prefixNameConflicts = prefixNameConflicts;
   }
+  if (generatedNamesJson) system.generatedNamesJson = generatedNamesJson;
   return system;
 }

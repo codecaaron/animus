@@ -67,6 +67,7 @@ export const Card = ds
     '--edge': 'var(--tone, var(--cap, 1px))',
     '--other': 'var(--other, 2px)',
     marginTop: 'var(--dialog-title-margin, {space.t-spacing-2})',
+    paddingTop: 'var(--authored, var(--space-t-spacing-2, 4px))',
     transition: '--tone 1s',
     '@container style(--tone: dark)': { '--cap': '2px' },
   })
@@ -131,6 +132,8 @@ describe('contextual variables under a prefix', () => {
       'style(--acme-tone: dark)',
       '--acme-cap: 2px',
       '--acme-cap: 40rem',
+      // A generated name written in a style takes the prefix too.
+      'padding-top: var(--authored, var(--acme-space-t-spacing-2, 4px))',
     ]) {
       expect(result.componentCss).toContain(expected);
     }
@@ -165,6 +168,9 @@ describe('contextual variables under a prefix', () => {
       // An authored name keeps its spelling; the theme variable in its
       // fallback takes the prefix.
       'margin-top: var(--dialog-title-margin, var(--acme-space-t-spacing-2))',
+      // A generated name written in a style takes the prefix, wherever it
+      // appears; an authored name stays as written.
+      'padding-top: var(--authored, var(--acme-space-t-spacing-2, 4px))',
     ]) {
       expect(result.componentCss).toContain(expected);
     }

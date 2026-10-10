@@ -77,6 +77,21 @@ impl ContextualVarsMap {
             self.finals.insert(var.name.clone(), var.var.clone());
         }
         self.by_scale.insert(scale, vars);
+        self.rebuild_aliases();
+    }
+
+    /// Names the theme generates under a prefix, with their final names: an
+    /// authored read or write of one emits its final name, as a contextual
+    /// variable's does. A declared contextual variable keeps its own entry,
+    /// and no generated name joins a scale.
+    pub fn add_generated(&mut self, generated: FxHashMap<String, String>) {
+        for (name, final_name) in generated {
+            self.finals.entry(name).or_insert(final_name);
+        }
+        self.rebuild_aliases();
+    }
+
+    fn rebuild_aliases(&mut self) {
         self.aliases = self
             .finals
             .iter()

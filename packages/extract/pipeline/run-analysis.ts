@@ -130,6 +130,11 @@ export function buildAnalysisInputs(
   if (opts.system.declarationScalesJson) {
     inputs.declarationScalesJson = opts.system.declarationScalesJson;
   }
+  // Present only under a prefix, so an unprefixed system's inputs are
+  // unchanged.
+  if (opts.system.generatedNamesJson) {
+    inputs.generatedNamesJson = opts.system.generatedNamesJson;
+  }
   // Present only when the host knows something, for the same reason.
   const context = opts.analysisContext;
   if (
