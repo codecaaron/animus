@@ -9816,10 +9816,13 @@ export const App = ({ n }) => <Box bgImage={n} texture={n} />;
         let both = "() => <><Outer /><Parts.Root /><Box p={8} /></>";
         let barrel = |source| [("barrel.ts", source)];
         let f = [("f.tsx", "import { createElement } from 'react';\nexport function F({ as }) { return createElement(as ?? 'span', {}); }\n")];
+        let host = ("h.tsx", "import { createElement } from 'react';\nexport function H({ as, ...props }) { return createElement(as ?? 'span', props); }\n");
+        let h_star_as = [host, ("barrel.ts", "export * as ns from './h';\n")];
+        let h_import_export = [host, ("barrel.ts", "import * as ns from './h';\nexport { ns };\n")];
         // The function module's additions, the app, any further files and the
         // slots left.
         type Case<'a> = (&'a str, &'a str, &'a [(&'a str, &'a str)], &'a [&'a str]);
-        let cases: [Case; 20] = [
+        let cases: [Case; 22] = [
             ("", "() => <><Outer /><Parts.Root><div /></Parts.Root><Box p={8} /></>", &[], &[]),
             ("", "() => <><Outer as=\"span\" /><Parts.Root as=\"section\" /><Box p={8} /></>", &[], &[]),
             ("", "({ X }) => <><Outer as={X} /><Box p={8} /></>", &[], &["p"]),
@@ -9844,6 +9847,9 @@ export const App = ({ n }) => <Box bgImage={n} texture={n} />;
             ("", "() => <><Outer /><Parts.Root /><F /><Box p={8} /></>;\nimport { F } from './f';\nconsume(require('./f'))", &f, &["p"]),
             ("", "() => <><Outer /><Parts.Root /><Box p={8} /></>;\nimport('./barrel').then(consume)", &barrel("export { El } from './el';\n"), &["p"]),
             ("", "() => <><Outer /><Parts.Root /><Box p={8} /></>;\nimport('./barrel').then(consume)", &barrel("import { El } from './el';\nexport { El };\n"), &["p"]),
+            // A namespace re-exported, however spelled.
+            ("", "() => <><Outer /><Parts.Root /><H /><Box p={8} /></>;\nimport { H } from './h';\nimport('./barrel').then(consume)", &h_star_as, &["p"]),
+            ("", "() => <><Outer /><Parts.Root /><H /><Box p={8} /></>;\nimport { H } from './h';\nimport('./barrel').then(consume)", &h_import_export, &["p"]),
             // A default export, however spelled.
             ("export { El as default };\n", both, &[], &["p"]),
             ("", both, &barrel("export { El as default } from './el';\n"), &["p"]),

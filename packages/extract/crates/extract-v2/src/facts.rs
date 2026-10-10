@@ -403,7 +403,8 @@ pub struct FileFacts {
     /// Sources of `export * from '…'`.
     #[serde(skip)]
     pub star_exports: Vec<String>,
-    /// `export * as name from '…'`: name → source.
+    /// Each module namespace exported by name, `export * as name from '…'`
+    /// or an exported namespace import: name → source.
     #[serde(skip)]
     pub(crate) namespace_exports: BTreeMap<String, String>,
     /// The identifier `export default X;` names.
