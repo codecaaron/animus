@@ -365,6 +365,9 @@ pub struct FileFacts {
     /// by name.
     #[serde(skip)]
     pub(crate) direct_eval: bool,
+    /// Calls that may hand an element or a parameter to code outside React.
+    #[serde(skip)]
+    pub(crate) opaque_calls: Vec<crate::usage_facts::OpaqueCall>,
     /// Extracted createTransform() declarations: serialized with the facts
     /// for probes, and the source of their bail diagnostics. They are never
     /// registered with the evaluator.
@@ -1226,6 +1229,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
         unsafe_object_uses,
         ordinary_components,
         direct_eval,
+        opaque_calls,
     } = crate::usage_facts::collect_enriched_usage(
         program,
         &usage_statics_fx,
@@ -1288,6 +1292,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
         module_loads,
         ordinary_components,
         direct_eval,
+        opaque_calls,
         parse_diagnostics: ast.diagnostics.clone(),
         parse_panicked: ast.panicked,
     }

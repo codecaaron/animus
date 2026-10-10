@@ -549,6 +549,26 @@ pub(crate) struct EnrichedUsage {
     pub ordinary_components: BTreeSet<String>,
     /// See `FileFacts::direct_eval`.
     pub direct_eval: bool,
+    /// See `FileFacts::opaque_calls`.
+    pub opaque_calls: Vec<OpaqueCall>,
+}
+
+/// A call that may hand an element to code outside React: what its callee
+/// starts from, the component tags its arguments can carry, and the
+/// top-level bindings whose parameters an argument reads.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct OpaqueCall {
+    /// An import or a top-level binding of the module, with the member a
+    /// namespace import's call names (`lib.enhance`); `None` for a global
+    /// outside the built-ins, which is never analysed.
+    pub callee: Option<String>,
+    /// Component tags in the arguments, and in the `const` initializers
+    /// they name.
+    pub tags: BTreeSet<String>,
+    /// The enclosing top-level binding (and `default` for a default
+    /// export) when an argument reads one of its parameters, directly or
+    /// through a `const` that does.
+    pub forwards_from: Vec<String>,
 }
 
 /// A use of a binding that holds an object which may change the object's
@@ -859,6 +879,7 @@ pub(crate) fn collect_enriched_usage(
         Some(scoping) => unsafe_object_uses(program, scoping, object_consts),
         None => BTreeMap::new(),
     };
+    let opaque_calls = origins.map(|scoping| opaque_calls(program, scoping)).unwrap_or_default();
     EnrichedUsage {
         usage,
         confined,
@@ -868,6 +889,231 @@ pub(crate) fn collect_enriched_usage(
         unsafe_object_uses,
         ordinary_components,
         direct_eval,
+        opaque_calls,
+    }
+}
+
+/// React's own modules: their functions render or clone elements only as
+/// usage facts record.
+const REACT_MODULES: [&str; 6] =
+    ["react", "react-dom", "react-dom/client", "react-dom/server", "react/jsx-runtime", "react/jsx-dev-runtime"];
+
+/// Globals whose calls never change an element's props.
+const BUILTIN_GLOBALS: [&str; 30] = [
+    "Array", "Boolean", "Date", "Error", "JSON", "Map", "Math", "Number", "Object", "Promise", "Reflect",
+    "RegExp", "Set", "String", "Symbol", "WeakMap", "WeakSet", "cancelAnimationFrame", "clearInterval",
+    "clearTimeout", "console", "decodeURIComponent", "encodeURIComponent", "isFinite", "isNaN", "parseFloat",
+    "parseInt", "queueMicrotask", "requestAnimationFrame", "setTimeout",
+];
+
+/// The calls in `program` that can hand an element or a parameter to code
+/// the analysis may not follow: every call except React's, a built-in
+/// global's, and one on a value a function body declares.
+fn opaque_calls(program: &Program<'_>, scoping: &Scoping) -> Vec<OpaqueCall> {
+    let mut sources: FxHashMap<SymbolId, &str> = FxHashMap::default();
+    for statement in &program.body {
+        let Statement::ImportDeclaration(import) = statement else { continue };
+        for specifier in import.specifiers.iter().flatten() {
+            if let Some(symbol) = specifier.local().symbol_id.get() {
+                sources.insert(symbol, import.source.value.as_str());
+            }
+        }
+    }
+    let mut scan = OpaqueCallScan {
+        scoping,
+        sources,
+        top: Vec::new(),
+        in_parameter: 0,
+        parameters: FxHashSet::default(),
+        consts: FxHashMap::default(),
+        calls: Vec::new(),
+    };
+    for statement in &program.body {
+        scan.top = top_level_names(statement);
+        scan.visit_statement(statement);
+    }
+    let reads_parameter = |reads: &ArgumentReads| {
+        reads.symbols.iter().any(|symbol| {
+            scan.parameters.contains(symbol)
+                || scan.consts.get(symbol).is_some_and(|init| init.symbols.iter().any(|s| scan.parameters.contains(s)))
+        })
+    };
+    scan.calls
+        .iter()
+        .filter_map(|(callee, reads, top)| {
+            let mut tags = reads.tags.clone();
+            for init in reads.symbols.iter().filter_map(|symbol| scan.consts.get(symbol)) {
+                tags.extend(init.tags.iter().cloned());
+            }
+            let forwards_from = if reads_parameter(reads) { top.clone() } else { Vec::new() };
+            (!tags.is_empty() || !forwards_from.is_empty()).then(|| OpaqueCall {
+                callee: callee.clone(),
+                tags,
+                forwards_from,
+            })
+        })
+        .collect()
+}
+
+/// The names a top-level statement binds, for parameter forwarding: a
+/// function, class or simple `const`, and `default` for a default export.
+fn top_level_names(statement: &Statement<'_>) -> Vec<String> {
+    use oxc::ast::ast::{BindingPattern, Declaration, ExportDefaultDeclarationKind};
+    let declaration = match statement {
+        Statement::ExportNamedDeclaration(export) => export.declaration.as_ref(),
+        Statement::ExportDefaultDeclaration(export) => {
+            let id = match &export.declaration {
+                ExportDefaultDeclarationKind::FunctionDeclaration(function) => function.id.as_ref(),
+                ExportDefaultDeclarationKind::ClassDeclaration(class) => class.id.as_ref(),
+                _ => None,
+            };
+            return id.map(|id| id.name.to_string()).into_iter().chain(["default".to_string()]).collect();
+        }
+        statement => statement.as_declaration(),
+    };
+    match declaration {
+        Some(Declaration::FunctionDeclaration(function)) => function.id.iter().map(|id| id.name.to_string()).collect(),
+        Some(Declaration::ClassDeclaration(class)) => class.id.iter().map(|id| id.name.to_string()).collect(),
+        Some(Declaration::VariableDeclaration(variables)) => variables
+            .declarations
+            .iter()
+            .filter_map(|declarator| match &declarator.id {
+                BindingPattern::BindingIdentifier(id) => Some(id.name.to_string()),
+                _ => None,
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// What an argument, or a `const` initializer, reads: the component tags
+/// of its elements and the bindings it names.
+#[derive(Default)]
+struct ArgumentReads {
+    tags: BTreeSet<String>,
+    symbols: FxHashSet<SymbolId>,
+}
+
+/// Adds what `expression` reads to `reads`.
+fn collect_reads(scoping: &Scoping, expression: &Expression<'_>, reads: &mut ArgumentReads) {
+    ReadCollector { scoping, reads }.visit_expression(expression);
+}
+
+struct ReadCollector<'s, 'r> {
+    scoping: &'s Scoping,
+    reads: &'r mut ArgumentReads,
+}
+
+impl<'a> Visit<'a> for ReadCollector<'_, '_> {
+    fn visit_jsx_opening_element(&mut self, elem: &JSXOpeningElement<'a>) {
+        match &elem.name {
+            JSXElementName::IdentifierReference(id) => {
+                self.reads.tags.insert(id.name.to_string());
+            }
+            JSXElementName::MemberExpression(member) => self.reads.tags.extend(jsx_member_path(member)),
+            _ => {}
+        }
+        oxc::ast_visit::walk::walk_jsx_opening_element(self, elem);
+    }
+
+    fn visit_identifier_reference(&mut self, ident: &IdentifierReference<'a>) {
+        let symbol = ident.reference_id.get().and_then(|id| self.scoping.get_reference(id).symbol_id());
+        self.reads.symbols.extend(symbol);
+    }
+}
+
+struct OpaqueCallScan<'s> {
+    scoping: &'s Scoping,
+    /// Import binding → module specifier.
+    sources: FxHashMap<SymbolId, &'s str>,
+    /// The names the enclosing top-level statement binds.
+    top: Vec<String>,
+    in_parameter: usize,
+    parameters: FxHashSet<SymbolId>,
+    consts: FxHashMap<SymbolId, ArgumentReads>,
+    calls: Vec<(Option<String>, ArgumentReads, Vec<String>)>,
+}
+
+impl OpaqueCallScan<'_> {
+    /// What a call's callee starts from, or `None` when the call cannot
+    /// reach code outside React: a React import, a built-in global, or a
+    /// value a function body declares, which analysed code supplies.
+    fn callee(&self, callee: &Expression<'_>) -> Option<Option<String>> {
+        let (root, member) = callee_root(callee)?;
+        let Some(symbol) = root.reference_id.get().and_then(|id| self.scoping.get_reference(id).symbol_id()) else {
+            return (!BUILTIN_GLOBALS.contains(&root.name.as_str())).then_some(None);
+        };
+        match self.sources.get(&symbol) {
+            Some(source) if REACT_MODULES.contains(source) => None,
+            Some(_) => Some(Some(match member {
+                Some(member) => format!("{}.{member}", root.name),
+                None => root.name.to_string(),
+            })),
+            None => (self.scoping.symbol_scope_id(symbol) == self.scoping.root_scope_id())
+                .then(|| Some(root.name.to_string())),
+        }
+    }
+}
+
+/// The identifier a callee starts from, through members and calls, and the
+/// member named directly on it.
+fn callee_root<'b, 'a>(callee: &'b Expression<'a>) -> Option<(&'b IdentifierReference<'a>, Option<&'b str>)> {
+    match crate::chain_walk::unwrap_type_assertions(callee) {
+        Expression::Identifier(id) => Some((id, None)),
+        Expression::StaticMemberExpression(member) => match &member.object {
+            Expression::Identifier(id) => Some((id, Some(member.property.name.as_str()))),
+            object => callee_root(object),
+        },
+        Expression::ComputedMemberExpression(member) => callee_root(&member.object).map(|(root, _)| (root, None)),
+        Expression::CallExpression(call) => callee_root(&call.callee).map(|(root, _)| (root, None)),
+        Expression::ChainExpression(chain) => chain.expression.as_member_expression().and_then(|member| {
+            callee_root(member.object()).map(|(root, _)| (root, None))
+        }),
+        _ => None,
+    }
+}
+
+impl<'a> Visit<'a> for OpaqueCallScan<'_> {
+    fn visit_formal_parameter(&mut self, parameter: &oxc::ast::ast::FormalParameter<'a>) {
+        self.in_parameter += 1;
+        oxc::ast_visit::walk::walk_formal_parameter(self, parameter);
+        self.in_parameter -= 1;
+    }
+
+    fn visit_binding_identifier(&mut self, id: &oxc::ast::ast::BindingIdentifier<'a>) {
+        if self.in_parameter > 0 {
+            self.parameters.extend(id.symbol_id.get());
+        }
+    }
+
+    fn visit_variable_declarator(&mut self, declarator: &oxc::ast::ast::VariableDeclarator<'a>) {
+        if let (oxc::ast::ast::BindingPattern::BindingIdentifier(id), Some(init)) =
+            (&declarator.id, &declarator.init)
+        {
+            if let Some(symbol) = id.symbol_id.get().filter(|symbol| !self.scoping.symbol_is_mutated(*symbol)) {
+                let mut reads = ArgumentReads::default();
+                collect_reads(self.scoping, init, &mut reads);
+                self.consts.insert(symbol, reads);
+            }
+        }
+        oxc::ast_visit::walk::walk_variable_declarator(self, declarator);
+    }
+
+    fn visit_call_expression(&mut self, call: &CallExpression<'a>) {
+        if !call.arguments.is_empty() {
+            if let Some(callee) = self.callee(&call.callee) {
+                let mut reads = ArgumentReads::default();
+                for argument in &call.arguments {
+                    if let Some(expression) = argument.as_expression() {
+                        collect_reads(self.scoping, expression, &mut reads);
+                    } else if let Argument::SpreadElement(spread) = argument {
+                        collect_reads(self.scoping, &spread.argument, &mut reads);
+                    }
+                }
+                self.calls.push((callee, reads, self.top.clone()));
+            }
+        }
+        oxc::ast_visit::walk::walk_call_expression(self, call);
     }
 }
 
