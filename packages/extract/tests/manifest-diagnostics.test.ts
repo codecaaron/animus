@@ -276,6 +276,22 @@ describe('surfaceManifestDiagnostics levels', () => {
     expect(demoted).toEqual([
       '⚠ system: --tone: conflict [animus.prefix.name-conflict]',
     ]);
+
+    // Raised to error, a record with no line keeps the subject its warning
+    // line names.
+    const kit: ManifestDiagnostic = {
+      file: '@acme/kit',
+      component: 'kit',
+      kind: 'warn',
+      message: 'resolved, but discovery found none of its files',
+      code: 'animus.discovery.no-kit-files',
+      severity: 'warn',
+    };
+    expect(() =>
+      surfaceManifestDiagnostics({ diagnostics: [kit] }, () => {}, {
+        levels: { 'animus.discovery.no-kit-files': 'error' },
+      })
+    ).toThrow(/animus\.discovery\.no-kit-files — @acme\/kit: kit: resolved/);
   });
 });
 
