@@ -1,7 +1,8 @@
 //! The module specifiers a file needs at run time, for the kit publication
-//! check: every import, re-export and literal `import()` that survives type
-//! stripping. A type-only import or export, or one whose every named
-//! specifier is a type, is erased before anything loads, so it needs nothing.
+//! check: every import, re-export and literal `import()` (a string, or a
+//! template with no expressions) that survives type stripping. A type-only
+//! import or export, or one whose every named specifier is a type, is erased
+//! before anything loads, so it needs nothing.
 
 use oxc::ast::ast::{
     ExportNamedDeclaration, Expression, ImportDeclarationSpecifier, ImportExpression,
@@ -13,8 +14,15 @@ struct DynamicImports(Vec<String>);
 
 impl<'a> Visit<'a> for DynamicImports {
     fn visit_import_expression(&mut self, import: &ImportExpression<'a>) {
-        if let Expression::StringLiteral(literal) = &import.source {
-            self.0.push(literal.value.to_string());
+        match &import.source {
+            Expression::StringLiteral(literal) => self.0.push(literal.value.to_string()),
+            // A template with no expressions names one module, as a string does.
+            Expression::TemplateLiteral(template) if template.expressions.is_empty() => {
+                if let Some(cooked) = template.quasis.first().and_then(|quasi| quasi.value.cooked) {
+                    self.0.push(cooked.to_string());
+                }
+            }
+            _ => {}
         }
         oxc::ast_visit::walk::walk_import_expression(self, import);
     }

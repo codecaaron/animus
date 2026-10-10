@@ -6,6 +6,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { kitPublicationFailures } from '../pipeline/kit-publication';
 import { probeEnginePrerequisites } from './engine-prerequisites';
 
+import type { JsonValue } from '../pipeline/tsconfig-paths';
+
 const prerequisites = probeEnginePrerequisites();
 const suite = prerequisites.ok ? describe : describe.skip;
 
@@ -16,27 +18,44 @@ afterEach(() => {
   }
 });
 
+interface KitManifest {
+  name: string;
+  version: string;
+  type: string;
+  files?: string[];
+  exports: JsonValue;
+  dependencies: Record<string, string>;
+}
+
 /** A source kit whose `animus` target imports a palette, by `palette`, and
- *  a type from an undeclared package, which type stripping erases. */
-function kit(files: string[], palette: string): string {
-  const root = mkdtempSync(join(tmpdir(), 'animus-kit-publication-'));
-  roots.push(root);
+ *  a type from an undeclared package, which type stripping erases. `files`
+ *  null publishes by `.npmignore`; `edit` changes the manifest or a file. */
+function kit(
+  files: string[] | null,
+  palette: string,
+  edit?: (
+    manifest: KitManifest,
+    write: (path: string, contents: string) => void
+  ) => void
+): string {
+  // One level down, so a file outside the package stays in the scratch dir.
+  const scratch = mkdtempSync(join(tmpdir(), 'animus-kit-publication-'));
+  roots.push(scratch);
+  const root = join(scratch, 'kit');
   const write = (path: string, contents: string) => {
     mkdirSync(dirname(join(root, path)), { recursive: true });
     writeFileSync(join(root, path), contents);
   };
-  write(
-    'package.json',
-    JSON.stringify({
-      name: '@acme/kit',
-      type: 'module',
-      files,
-      exports: {
-        '.': { animus: './src/index.ts', import: './dist/index.js' },
-      },
-      dependencies: { '@animus-ui/system': '1' },
-    })
-  );
+  const manifest: KitManifest = {
+    name: '@acme/kit',
+    version: '1.0.0',
+    type: 'module',
+    exports: {
+      '.': { animus: './src/index.ts', import: './dist/index.js' },
+    },
+    dependencies: { '@animus-ui/system': '1' },
+  };
+  if (files !== null) manifest.files = files;
   write(
     'src/index.ts',
     [
@@ -51,6 +70,8 @@ function kit(files: string[], palette: string): string {
   write('src/lazy.ts', 'export const lazy = 1;');
   write('helpers/palette.ts', 'export const palette = {};');
   write('dist/index.js', 'export const system = {};');
+  edit?.(manifest, write);
+  write('package.json', JSON.stringify(manifest));
   return root;
 }
 
@@ -103,6 +124,66 @@ suite('kit publication', () => {
       )
     ).toEqual([
       "src/index.ts: import '@acme/workspace-theme' names the package @acme/workspace-theme, which package.json does not declare in dependencies, peerDependencies or optionalDependencies",
+    ]);
+
+    // npm's own rules decide what publishes: `.npmignore`, and brace globs.
+    expect(
+      kitPublicationFailures(
+        kit(null, '../helpers/palette', (_, write) =>
+          write('.npmignore', 'helpers/\n')
+        ),
+        engine
+      )
+    ).toEqual([
+      "src/index.ts: import '../helpers/palette' resolves to helpers/palette.ts, which is not in the published files",
+    ]);
+    expect(
+      kitPublicationFailures(
+        kit(['src/**/*.{ts,tsx}', 'helpers', 'dist'], '../helpers/palette'),
+        engine
+      )
+    ).toEqual([]);
+    // A relative import must stay in the package.
+    expect(
+      kitPublicationFailures(
+        kit(null, '../../outside', (_, write) =>
+          write('../outside.ts', 'export const palette = {};')
+        ),
+        engine
+      )
+    ).toEqual([
+      "src/index.ts: import '../../outside' resolves to ../outside.ts, outside the package",
+    ]);
+    // A template `import()` with no expressions names its module.
+    expect(
+      kitPublicationFailures(
+        kit(['src', 'dist'], '../helpers/palette', (_, write) =>
+          write(
+            'src/parts.ts',
+            'export const part = import(`../helpers/lazy`);'
+          )
+        ),
+        engine
+      )
+    ).toEqual([
+      "src/index.ts: import '../helpers/palette' resolves to helpers/palette.ts, which is not in the published files",
+      "src/parts.ts: import '../helpers/lazy' resolves to no file in the package",
+    ]);
+    // A nested or pattern `animus` target is checked as an exact one is.
+    expect(
+      kitPublicationFailures(
+        kit(['src', 'helpers', 'dist'], '../helpers/palette', (manifest) => {
+          manifest.exports = {
+            '.': { animus: './src/index.ts', import: './dist/index.js' },
+            './extra': { browser: { animus: './src/missing.ts' } },
+            './parts/*': { animus: './src/parts/*.ts' },
+          };
+        }),
+        engine
+      )
+    ).toEqual([
+      'package.json: the "animus" target of exports["./extra"], ./src/missing.ts, does not exist in the package',
+      'package.json: the "animus" target of exports["./parts/*"], ./src/parts/*.ts, matches no file in the package',
     ]);
   });
 });

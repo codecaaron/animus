@@ -135,7 +135,7 @@ function readPackageManifest(pkgRoot: string): JsonValue | null {
 
 /** Each `exports` subpath and its value; a bare target or condition object
  *  is the `.` entry. */
-function exportsSubpaths(
+export function exportsSubpaths(
   manifest: JsonValue | null
 ): Array<[string, JsonValue]> {
   const exports = isJsonBlock(manifest) ? manifest.exports : undefined;

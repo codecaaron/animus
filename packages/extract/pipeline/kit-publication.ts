@@ -1,11 +1,12 @@
-import { readFileSync, statSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { isBuiltin } from 'node:module';
-import { extname, join, relative, sep } from 'node:path';
+import { extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
-import { globToRegExp } from './core-options';
 import {
   bareSpecifierPackageName,
-  readKitSourceCondition,
+  exportsSubpaths,
+  KIT_SOURCE_CONDITION,
 } from './discover-packages';
 import { parseInternalWire } from './internal-wire';
 import { relativeSourceCandidates } from './source-ingestion';
@@ -30,10 +31,6 @@ const CODE_EXTENSIONS = new Set([
   '.cjs',
 ]);
 
-/** Files npm publishes whatever `files` lists. */
-const ALWAYS_PUBLISHED =
-  /^(?:package\.json|readme(?:\.[^/]*)?|licen[cs]e(?:\.[^/]*)?|copying(?:\.[^/]*)?)$/i;
-
 const isFile = (path: string): boolean => {
   try {
     return statSync(path).isFile();
@@ -44,55 +41,124 @@ const isFile = (path: string): boolean => {
 
 const posixPath = (path: string) => path.split(sep).join('/');
 
+/** The files `npm pack` publishes, or why npm could not list them. */
+type PublishedFiles =
+  | { kind: 'listed'; files: Set<string> }
+  | { kind: 'failed'; reason: string };
+
 /**
- * Whether npm publishes a package-relative file, from the manifest's `files`
- * list: an exact file, a directory and everything under it, or a glob, with
- * `!` entries excluding. Without a `files` list, npm publishes every file;
- * `.npmignore` and `.gitignore` are not read here.
+ * The package-relative files `npm pack` publishes, read with npm's own rules
+ * (`files`, `.npmignore`, `.gitignore` and the files npm always includes)
+ * through a dry run that runs no scripts and needs no network.
  */
-export function publishedFiles(
-  manifest: JsonValue
-): (packageRelative: string) => boolean {
-  const files =
-    isJsonBlock(manifest) && Array.isArray(manifest.files)
-      ? manifest.files.filter(isJsonString)
-      : null;
-  const main =
-    isJsonBlock(manifest) && isJsonString(manifest.main)
-      ? posixPath(manifest.main).replace(/^\.\//, '')
-      : null;
-  const entries = (files ?? []).map((entry) => {
-    const negated = entry.startsWith('!');
-    const pattern = posixPath(negated ? entry.slice(1) : entry)
-      .replace(/^\.\//, '')
-      .replace(/\/+$/, '');
-    return { negated, pattern, glob: globToRegExp(pattern) };
-  });
-  const matches = (path: string, pattern: string, glob: RegExp) => {
-    const segments = path.split('/');
-    // A match on the file, or on a directory above it, publishes the file.
-    return segments.some((_, index) => {
-      const prefix = segments.slice(0, index + 1).join('/');
-      return prefix === pattern || glob.test(prefix);
-    });
-  };
-  return (packageRelative) => {
-    const path = posixPath(packageRelative);
-    if (path.split('/').includes('node_modules')) return false;
-    if (ALWAYS_PUBLISHED.test(path) || path === main) return true;
-    if (files === null) return true;
-    let published = false;
-    for (const { negated, pattern, glob } of entries) {
-      if (matches(path, pattern, glob)) published = !negated;
+function npmPublishedFiles(pkgRoot: string): PublishedFiles {
+  const windows = process.platform === 'win32';
+  const run = spawnSync(
+    windows ? 'npm.cmd' : 'npm',
+    ['pack', '--dry-run', '--json', '--ignore-scripts'],
+    {
+      cwd: pkgRoot,
+      encoding: 'utf-8',
+      shell: windows,
+      env: { ...process.env, npm_config_update_notifier: 'false' },
     }
-    return published;
+  );
+  if (run.error || run.status !== 0) {
+    return {
+      kind: 'failed',
+      reason: `npm pack --dry-run could not list the published files: ${String(run.error ?? run.stderr.trim())}`,
+    };
+  }
+  let output: JsonValue;
+  try {
+    output = JSON.parse(run.stdout);
+  } catch (error) {
+    return {
+      kind: 'failed',
+      reason: `npm pack --dry-run printed no JSON: ${String(error)}`,
+    };
+  }
+  const pack = Array.isArray(output) ? output[0] : undefined;
+  const files = isJsonBlock(pack) ? pack.files : undefined;
+  if (!Array.isArray(files)) {
+    return {
+      kind: 'failed',
+      reason: 'npm pack --dry-run printed no file list',
+    };
+  }
+  return {
+    kind: 'listed',
+    files: new Set(
+      files.flatMap((file) =>
+        isJsonBlock(file) && isJsonString(file.path)
+          ? [posixPath(file.path)]
+          : []
+      )
+    ),
   };
+}
+
+/** Each `animus` target in the manifest's `exports`, at any depth of
+ *  conditions or fallback arrays, with its subpath; and each `animus` value
+ *  the check cannot read as a target. */
+interface AnimusTargets {
+  targets: Array<[subpath: string, target: string]>;
+  unreadable: Array<[subpath: string, value: string]>;
+}
+
+function animusTargets(manifest: JsonValue): AnimusTargets {
+  const targets: Array<[string, string]> = [];
+  const unreadable: Array<[string, string]> = [];
+  const visit = (subpath: string, value: JsonValue, underAnimus: boolean) => {
+    if (isJsonString(value)) {
+      if (underAnimus) targets.push([subpath, value]);
+    } else if (Array.isArray(value)) {
+      for (const entry of value) visit(subpath, entry, underAnimus);
+    } else if (isJsonBlock(value)) {
+      for (const [key, entry] of Object.entries(value)) {
+        visit(subpath, entry, underAnimus || key === KIT_SOURCE_CONDITION);
+      }
+    } else if (underAnimus && value !== null) {
+      unreadable.push([subpath, JSON.stringify(value)]);
+    }
+  };
+  for (const [subpath, value] of exportsSubpaths(manifest)) {
+    visit(subpath, value, false);
+  }
+  return { targets, unreadable };
+}
+
+/** Every file in the package outside `node_modules` and `.git`,
+ *  package-relative. */
+function packageFiles(pkgRoot: string, dir = ''): string[] {
+  return readdirSync(join(pkgRoot, dir), { withFileTypes: true }).flatMap(
+    (entry) => {
+      const path = dir === '' ? entry.name : `${dir}/${entry.name}`;
+      if (entry.isDirectory()) {
+        return entry.name === 'node_modules' || entry.name === '.git'
+          ? []
+          : packageFiles(pkgRoot, path);
+      }
+      return entry.isFile() ? [path] : [];
+    }
+  );
+}
+
+/** A `*` target pattern as a matcher of package-relative files. */
+function targetPattern(target: string): RegExp {
+  const body = posixPath(target)
+    .replace(/^\.\//, '')
+    .split('*')
+    .map((part) => part.replace(/[.+?^${}()|[\]\\]/g, '\\$&'))
+    .join('.+');
+  return new RegExp(`^${body}$`);
 }
 
 /**
  * Why the kit at `pkgRoot` would fail an installed consumer: each `animus`
- * source target, and each file its relative imports reach, must be among
- * the published files, and each bare package import a declared dependency.
+ * source target, at any condition depth or as a pattern, and each file its
+ * relative imports reach, must be in the package and among the files `npm
+ * pack` publishes, and each bare package import a declared dependency.
  * Each line names the file, the import and the cause; none means the
  * published source is complete.
  */
@@ -106,8 +172,8 @@ export function kitPublicationFailures(
   } catch (error) {
     return [`package.json: cannot be read: ${String(error)}`];
   }
-  const condition = readKitSourceCondition(pkgRoot);
-  if (condition === null) return [];
+  const { targets, unreadable } = animusTargets(manifest);
+  if (targets.length === 0 && unreadable.length === 0) return [];
   const { moduleSpecifiers } = engine;
   if (moduleSpecifiers === undefined) {
     throw new Error(
@@ -115,7 +181,12 @@ export function kitPublicationFailures(
     );
   }
 
-  const published = publishedFiles(manifest);
+  const publication = npmPublishedFiles(pkgRoot);
+  if (publication.kind === 'failed') {
+    return [`package.json: ${publication.reason}`];
+  }
+  const published = (packageRelative: string) =>
+    publication.files.has(packageRelative);
   const declared = new Set(
     ['dependencies', 'peerDependencies', 'optionalDependencies'].flatMap(
       (field) => {
@@ -128,20 +199,48 @@ export function kitPublicationFailures(
     isJsonBlock(manifest) && isJsonString(manifest.name) ? manifest.name : null;
   const failures: string[] = [];
   const rel = (file: string) => posixPath(relative(pkgRoot, file));
+  const outside = (relPath: string) =>
+    relPath.startsWith('../') || isAbsolute(relPath);
 
-  for (const [subpath, target] of condition.invalid) {
+  for (const [subpath, value] of unreadable) {
     failures.push(
-      `package.json: the "animus" target of exports["${subpath}"], ${target}, does not exist in the package`
+      `package.json: exports["${subpath}"] has an "animus" value, ${value}, that is no target path`
     );
   }
   const queue: string[] = [];
-  for (const [subpath, file] of condition.entries) {
-    if (published(rel(file))) {
-      queue.push(file);
+  const admit = (subpath: string, relPath: string) => {
+    if (published(relPath)) {
+      queue.push(resolve(pkgRoot, relPath));
     } else {
       failures.push(
-        `package.json: the "animus" target of exports["${subpath}"], ${rel(file)}, is not in the published files`
+        `package.json: the "animus" target of exports["${subpath}"], ${relPath}, is not in the published files`
       );
+    }
+  };
+  let files: string[] | null = null;
+  for (const [subpath, target] of targets) {
+    const relPath = rel(resolve(pkgRoot, target));
+    if (outside(relPath)) {
+      failures.push(
+        `package.json: the "animus" target of exports["${subpath}"], ${target}, is outside the package`
+      );
+    } else if (target.includes('*')) {
+      // A pattern names every file it matches, and each must publish.
+      files ??= packageFiles(pkgRoot);
+      const pattern = targetPattern(target);
+      const matched = files.filter((file) => pattern.test(file));
+      if (matched.length === 0) {
+        failures.push(
+          `package.json: the "animus" target of exports["${subpath}"], ${target}, matches no file in the package`
+        );
+      }
+      for (const file of matched) admit(subpath, file);
+    } else if (!isFile(resolve(pkgRoot, target))) {
+      failures.push(
+        `package.json: the "animus" target of exports["${subpath}"], ${target}, does not exist in the package`
+      );
+    } else {
+      admit(subpath, relPath);
     }
   }
 
@@ -163,6 +262,10 @@ export function kitPublicationFailures(
         if (target === undefined) {
           failures.push(
             `${rel(file)}: import '${specifier}' resolves to no file in the package`
+          );
+        } else if (outside(rel(target))) {
+          failures.push(
+            `${rel(file)}: import '${specifier}' resolves to ${rel(target)}, outside the package`
           );
         } else if (!published(rel(target))) {
           failures.push(
