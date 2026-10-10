@@ -241,6 +241,46 @@ impl<'f> ObjectMembers<'f> {
         self.table(&object).members.get(slot).cloned()
     }
 
+    /// What `tag`, written in `file`, renders when it names a facade built
+    /// with `Object.assign(T, …)`. The call returns the object `T` holds, so
+    /// `<X>` renders it whatever is written onto it later: `T`'s component,
+    /// stable unless `T` is a member of an object that may have changed
+    /// before the facade was built.
+    pub(crate) fn root(&mut self, file: &str, tag: &str) -> Option<Member> {
+        let Object::Facade(module, binding) = self.object_at(file, tag)? else { return None };
+        let target = self.files.get(&module)?.assigned_targets.get(&binding)?.clone();
+        match target.contains('.') {
+            true => self.member(&module, &target),
+            false => (self.component)(&module, &target).map(Member::Stable),
+        }
+    }
+
+    /// The assigned facades built onto what `name`, used in `module`, names:
+    /// a binding or member path of the module (`Root`, `Fam.Root`), or one it
+    /// imports.
+    fn facades_on(&self, module: &str, ff: &FileFacts, name: &str) -> Vec<Object> {
+        let (root, rest) = name.split_once('.').map_or((name, None), |(root, rest)| (root, Some(rest)));
+        let declared = match ff.imports.iter().find(|import| import.local == root) {
+            Some(import) => resolve_import_source(module, &import.source, self.files, self.inputs)
+                .and_then(|source| declared_export(&source, import.imported.clone(), self.files, self.inputs))
+                .map(|(declaring, _, binding)| (declaring, binding)),
+            None => Some((module.to_string(), root.to_string())),
+        };
+        let Some((declaring, binding)) = declared else { return Vec::new() };
+        let target = match rest {
+            Some(rest) => format!("{binding}.{rest}"),
+            None => binding,
+        };
+        self.files.get(&declaring).map_or_else(Vec::new, |declared| {
+            declared
+                .assigned_targets
+                .iter()
+                .filter(|(_, other)| **other == target)
+                .map(|(facade, _)| Object::Facade(declaring.clone(), facade.clone()))
+                .collect()
+        })
+    }
+
     /// The components an escaping `name` hands over: every member of the
     /// object it names, or the one member it reads.
     pub(crate) fn escaped_components(&mut self, file: &str, name: &str) -> Vec<String> {
@@ -408,7 +448,21 @@ impl<'f> ObjectMembers<'f> {
             return Some(reason.clone());
         }
         let Object::Facade(module, binding) = object else { return None };
-        let code = self.files[module].facades[binding].iter().any(|entry| matches!(entry, FacadeEntry::Code(_)));
+        // A facade built onto an object (`Object.assign(Root, …)`) is that
+        // object, which another write may change.
+        let ff = &self.files[module];
+        if let Some(target) = ff.assigned_targets.get(binding) {
+            let root = target.split('.').next().unwrap_or(target);
+            if ff.imports.iter().any(|import| import.local == root) || ff.namespace_imports.contains_key(root) {
+                return Some(format!(
+                    "{binding} in {module} is built onto {target}, which the module imports, so another module may change it"
+                ));
+            }
+            if ff.assigned_targets.values().filter(|other| *other == target).count() > 1 {
+                return Some(format!("{target} in {module} is the target of more than one Object.assign()"));
+            }
+        }
+        let code = ff.facades[binding].iter().any(|entry| matches!(entry, FacadeEntry::Code(_)));
         code.then(|| {
             format!("{binding} in {module} has a method or accessor, which runs with the object as `this`")
         })
@@ -452,7 +506,8 @@ impl<'f> ObjectMembers<'f> {
                         },
                     },
                 };
-                for object in held {
+                // A write to an assigned facade's target changes the facade.
+                for object in held.into_iter().chain(self.facades_on(module, ff, name)) {
                     found.entry(object).or_insert_with(|| reason.clone());
                 }
             }

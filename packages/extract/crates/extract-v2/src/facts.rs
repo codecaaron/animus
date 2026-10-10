@@ -290,6 +290,11 @@ pub struct FileFacts {
     /// identity does not follow them.
     #[serde(skip)]
     pub assigned_aliases: BTreeMap<String, String>,
+    /// Top-level `const X = Object.assign(T, …)` facades whose target `T` is
+    /// a binding or a member path of one (`Root`, `Fam.Root`): X → T. X is
+    /// T itself, with the sources' members written onto it.
+    #[serde(skip)]
+    pub(crate) assigned_targets: BTreeMap<String, String>,
     /// Top-level function components that spread their props into a tag.
     #[serde(skip)]
     pub props_forwarding: BTreeMap<String, crate::usage_facts::PropsForwarding>,
@@ -528,6 +533,7 @@ fn expression_root(expr: &Expression<'_>) -> Option<String> {
 struct ConstInitializerFacts {
     aliases: BTreeMap<String, String>,
     assigned: BTreeMap<String, String>,
+    targets: BTreeMap<String, String>,
     roots: BTreeMap<String, String>,
     objects: BTreeMap<String, BTreeMap<String, String>>,
     facades: BTreeMap<String, Vec<FacadeEntry>>,
@@ -585,16 +591,19 @@ fn facade_entries(init: &Expression<'_>) -> Option<Vec<FacadeEntry>> {
             Some(entries)
         }
         Expression::CallExpression(call) if is_object_assign(&call.callee) => {
-            let Expression::ObjectExpression(target) =
-                crate::chain_walk::unwrap_type_assertions(call.arguments.first()?.as_expression()?)
-            else {
-                return None;
-            };
-            if accessor_or_prototype(target) {
-                return None;
-            }
             let mut entries = Vec::new();
-            literal_entries(target, &mut entries);
+            // A component target, `Object.assign(Root, …)`, holds only what
+            // the sources write; its own members are not followed.
+            match crate::chain_walk::unwrap_type_assertions(call.arguments.first()?.as_expression()?) {
+                Expression::ObjectExpression(target) => {
+                    if accessor_or_prototype(target) {
+                        return None;
+                    }
+                    literal_entries(target, &mut entries);
+                }
+                target if member_path(target).is_some() => {}
+                _ => return None,
+            }
             for argument in call.arguments.iter().skip(1) {
                 match argument.as_expression().map(crate::chain_walk::unwrap_type_assertions) {
                     Some(Expression::Identifier(id)) => entries.push(FacadeEntry::Copy(id.name.to_string())),
@@ -653,6 +662,29 @@ fn literal_entries(object: &ObjectExpression<'_>, entries: &mut Vec<FacadeEntry>
             None => FacadeEntry::Other(key),
         });
     }
+}
+
+/// A binding, or a static member path of one, as written: `Root`,
+/// `Fam.Root`.
+fn member_path(expression: &Expression<'_>) -> Option<String> {
+    match crate::chain_walk::unwrap_type_assertions(expression) {
+        Expression::Identifier(id) => Some(id.name.to_string()),
+        Expression::StaticMemberExpression(member) => {
+            Some(format!("{}.{}", member_path(&member.object)?, member.property.name))
+        }
+        _ => None,
+    }
+}
+
+/// `T` in `Object.assign(T, …)` when it is a binding or a member path of one.
+fn assigned_target(init: &Expression<'_>) -> Option<String> {
+    let Expression::CallExpression(call) = crate::chain_walk::unwrap_type_assertions(init) else {
+        return None;
+    };
+    if !is_object_assign(&call.callee) {
+        return None;
+    }
+    member_path(call.arguments.first()?.as_expression()?)
 }
 
 /// `Y` in `Object.assign(Y, …)`.
@@ -726,6 +758,7 @@ fn collect_const_initializers(program: &Program<'_>) -> ConstInitializerFacts {
             if let Some(target) = object_assign_target(init) {
                 facts.assigned.insert(name.to_string(), target.to_string());
             }
+            let target = assigned_target(init);
             if let Some(root) = expression_root(init) {
                 facts.roots.insert(name.to_string(), root);
             }
@@ -736,11 +769,15 @@ fn collect_const_initializers(program: &Program<'_>) -> ConstInitializerFacts {
             if matches!(crate::chain_walk::unwrap_type_assertions(init), Expression::ObjectExpression(_)) {
                 facts.objects.insert(name.to_string(), identifier_members(&entries));
             }
-            if entries
-                .iter()
-                .any(|entry| matches!(entry, FacadeEntry::Copy(_) | FacadeEntry::Member { .. }))
+            if target.is_some()
+                || entries
+                    .iter()
+                    .any(|entry| matches!(entry, FacadeEntry::Copy(_) | FacadeEntry::Member { .. }))
             {
                 facts.facades.insert(name.to_string(), entries);
+            }
+            if let Some(target) = target {
+                facts.targets.insert(name.to_string(), target);
             }
         }
     };
@@ -1227,6 +1264,9 @@ pub(crate) fn extract_file_facts_from_static_maps(
         .chain(compose.iter().filter_map(|family| Some((family.family_binding.as_deref()?, false))))
         .chain(const_initializers.facades.keys().map(|name| (name.as_str(), true)))
         .collect();
+    // Assigned facades' targets (`Root`, `Fam.Root`): a write to one after
+    // the facade is built changes the facade too.
+    let assigned_targets: BTreeSet<&str> = const_initializers.targets.values().map(String::as_str).collect();
     let crate::usage_facts::EnrichedUsage {
         usage: usage_enriched,
         confined: confined_components,
@@ -1244,6 +1284,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
         &descriptors,
         &exports,
         &object_consts,
+        &assigned_targets,
     );
 
     let compose_callees_in_use = compose_callees_referenced_outside(program, &compose);
@@ -1269,6 +1310,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
         compose_callees_in_use,
         aliases: const_initializers.aliases,
         assigned_aliases: const_initializers.assigned,
+        assigned_targets: const_initializers.targets,
         props_forwarding: crate::usage_facts::collect_props_forwarding(program),
         declaration_roots: const_initializers.roots,
         object_members: const_initializers.objects,
