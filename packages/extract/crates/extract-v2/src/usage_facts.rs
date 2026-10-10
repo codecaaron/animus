@@ -2413,6 +2413,61 @@ fn runs_as_method<'b, 'a: 'b>(span: oxc::span::Span, ancestors: &mut impl Iterat
     }
 }
 
+/// Whether the value read at `span` stays where it is read: tested,
+/// compared, typed or interpolated into a template, or read for a field it
+/// neither writes nor runs. Anywhere else (a call's argument or receiver,
+/// an assignment, a return, an object or array, a spread, a JSX attribute or
+/// child) it can be handed on, and changed.
+fn stays_put<'b, 'a: 'b>(span: oxc::span::Span, ancestors: &mut impl Iterator<Item = &'b AstKind<'a>>) -> bool {
+    use oxc::syntax::operator::UnaryOperator;
+    let (current, parent) = peel_wrappers(span, ancestors);
+    match parent {
+        Some(AstKind::StaticMemberExpression(member)) if member.object.span() == current => {
+            field_read(member.span, ancestors)
+        }
+        Some(AstKind::ComputedMemberExpression(member)) if member.object.span() == current => {
+            field_read(member.span, ancestors)
+        }
+        Some(AstKind::IfStatement(statement)) => statement.test.span() == current,
+        Some(AstKind::WhileStatement(statement)) => statement.test.span() == current,
+        Some(AstKind::DoWhileStatement(statement)) => statement.test.span() == current,
+        Some(AstKind::ForStatement(statement)) => statement.test.as_ref().is_some_and(|test| test.span() == current),
+        Some(AstKind::ConditionalExpression(conditional)) => conditional.test.span() == current,
+        Some(AstKind::SwitchStatement(statement)) => statement.discriminant.span() == current,
+        Some(AstKind::SwitchCase(_) | AstKind::ExpressionStatement(_)) => true,
+        // Either operand can be the expression's value.
+        Some(AstKind::LogicalExpression(logical)) => stays_put(logical.span, ancestors),
+        Some(AstKind::UnaryExpression(unary)) => {
+            matches!(unary.operator, UnaryOperator::Typeof | UnaryOperator::LogicalNot | UnaryOperator::Void)
+        }
+        Some(AstKind::BinaryExpression(binary)) => binary.operator.is_equality() || binary.operator.is_compare(),
+        Some(AstKind::TemplateLiteral(_)) => !matches!(ancestors.next(), Some(AstKind::TaggedTemplateExpression(_))),
+        _ => false,
+    }
+}
+
+/// A field of the value read at `span`, at any depth: it stays put unless it
+/// is written, deleted or run with the value as `this`.
+fn field_read<'b, 'a: 'b>(span: oxc::span::Span, ancestors: &mut impl Iterator<Item = &'b AstKind<'a>>) -> bool {
+    use oxc::syntax::operator::UnaryOperator;
+    let (current, parent) = peel_wrappers(span, ancestors);
+    match parent {
+        Some(AstKind::StaticMemberExpression(member)) if member.object.span() == current => {
+            field_read(member.span, ancestors)
+        }
+        Some(AstKind::ComputedMemberExpression(member)) if member.object.span() == current => {
+            field_read(member.span, ancestors)
+        }
+        Some(AstKind::CallExpression(call)) => call.callee.span() != current,
+        Some(AstKind::NewExpression(call)) => call.callee.span() != current,
+        Some(AstKind::TaggedTemplateExpression(tagged)) => tagged.tag.span() != current,
+        Some(AstKind::AssignmentExpression(assignment)) => assignment.left.span() != current,
+        Some(AstKind::UpdateExpression(_)) => false,
+        Some(AstKind::UnaryExpression(unary)) => unary.operator != UnaryOperator::Delete,
+        _ => true,
+    }
+}
+
 /// Parentheses and type syntax erased at runtime: the expression inside is
 /// what an enclosing node uses.
 fn is_erased_wrapper(kind: &AstKind<'_>) -> bool {
@@ -2610,6 +2665,10 @@ pub struct SpreadWrapper {
     /// (`const Code = { Header: CodeHeader }`): a `<Code.Header>` render is
     /// one of its renders.
     pub held: usize,
+    /// Keys of its props the body reads where the value can be handed on or
+    /// changed (`f(props.p)`): a value the spread forwards there may change
+    /// after a render wrote it.
+    pub handed_on: BTreeSet<String>,
 }
 
 /// A forwarding-element attribute whose whole value is a named prop
@@ -2813,6 +2872,7 @@ fn spread_wrappers(
         passed: FxHashMap::default(),
         targeted: FxHashMap::default(),
         held: FxHashMap::default(),
+        handed_on: FxHashMap::default(),
         ancestors: Vec::new(),
     };
     for (index, candidate) in candidates.iter().enumerate() {
@@ -2860,6 +2920,7 @@ fn spread_wrappers(
                     passed,
                     targeted: scan.targeted.get(&index).copied().unwrap_or_default(),
                     held: scan.held.get(&index).copied().unwrap_or_default(),
+                    handed_on: scan.handed_on.remove(&index).unwrap_or_default(),
                 },
             ))
         })
@@ -2899,6 +2960,9 @@ struct WrapperScan<'a, 's> {
     targeted: FxHashMap<usize, usize>,
     /// Candidate index → top-level object literal members that hold it.
     held: FxHashMap<usize, usize>,
+    /// Candidate index → keys of its props read where the value can be
+    /// handed on or changed.
+    handed_on: FxHashMap<usize, BTreeSet<String>>,
     ancestors: Vec<AstKind<'a>>,
 }
 
@@ -3031,12 +3095,18 @@ impl<'a> Visit<'a> for WrapperScan<'a, '_> {
                 }
             }
             // A read of one member (`props.title`), never written, and never
-            // run with the props as `this`.
+            // run with the props as `this`; one that can hand its value on is
+            // recorded.
             Some(AstKind::StaticMemberExpression(member))
                 if member.object.span() == ident.span
                     && !reference.flags().is_member_write_target()
                     && !reference.is_write()
-                    && !runs_as_method(member.span, &mut ancestors) => {}
+                    && !runs_as_method(member.span, &mut ancestors) =>
+            {
+                if !stays_put(member.span, &mut self.ancestors.iter().rev().skip(1)) {
+                    self.handed_on.entry(index).or_default().insert(member.property.name.to_string());
+                }
+            }
             _ => {
                 self.invalid.insert(index);
             }

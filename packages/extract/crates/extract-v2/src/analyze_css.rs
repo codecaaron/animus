@@ -2917,15 +2917,17 @@ type WrapperTargets = (Vec<(String, Vec<String>)>, crate::usage_facts::WrapperPr
 /// path to them, grouped by the props that path drops. A wrapper that
 /// forwards to a component-like tag that resolves to nothing, or that sits
 /// in a cycle, is left out: its elements stay open and its renders stay
-/// uncertain. So is one `.asComponent()` takes unless each such call builds
+/// uncertain. So is one whose body can hand on a prop a component it reaches
+/// styles from (`styles_from`), which may change after a render wrote it,
+/// and one `.asComponent()` takes unless each such call builds
 /// an evaluated component of this module; otherwise those components'
 /// renders reach its targets too (`Forward`).
 fn spread_wrapper_targets(
     file: &str,
     ff: &FileFacts,
-    files: &BTreeMap<String, FileFacts>,
-    inputs: &CssInputs,
+    (files, inputs): (&BTreeMap<String, FileFacts>, &CssInputs),
     evaluated_ids: &FxHashSet<String>,
+    styles_from: &dyn Fn(&str, &str) -> bool,
 ) -> WrapperTargets {
     use std::collections::BTreeSet;
     /// What a wrapper's renders reach: the props each path drops → the
@@ -2942,6 +2944,7 @@ fn spread_wrapper_targets(
         files: &'s BTreeMap<String, FileFacts>,
         inputs: &'s CssInputs,
         evaluated_ids: &'s FxHashSet<String>,
+        styles_from: &'s dyn Fn(&str, &str) -> bool,
         /// Each element by its opening-element span.
         elements: FxHashMap<(u32, u32), &'s UsageFact>,
         /// `None` while a wrapper resolves: meeting it again is a cycle.
@@ -3009,7 +3012,12 @@ fn spread_wrapper_targets(
                     None => element_settles,
                 });
             }
-            let result = (complete && !paths.is_empty()).then(|| Reach {
+            // A prop the body can hand on may change after a render wrote it.
+            let handed_on = paths
+                .values()
+                .flatten()
+                .any(|id| wrapper.handed_on.iter().any(|key| (self.styles_from)(id, key)));
+            let result = (complete && !handed_on && !paths.is_empty()).then(|| Reach {
                 paths,
                 settled: settled.unwrap_or_default(),
             });
@@ -3028,6 +3036,7 @@ fn spread_wrapper_targets(
         files,
         inputs,
         evaluated_ids,
+        styles_from,
         elements: usage
             .iter()
             .filter_map(|fact| match fact {
@@ -6150,9 +6159,19 @@ fn run_with_system_floor(
     let mut wrapper_targets_by_file: FxHashMap<String, FxHashMap<String, Vec<String>>> = FxHashMap::default();
     // Each module's spread wrappers, read where they are declared and where
     // a member tag renders one an object holds.
+    // A key a component styles from: a system or custom prop, a variant or
+    // a state.
+    let styles_from = |id: &str, key: &str| {
+        evaluated.get(id).is_some_and(|(css, _, _, active_props, _, custom_configs, _)| {
+            active_props.iter().flatten().any(|prop| prop == key)
+                || css.variants.iter().any(|variant| variant.prop == key)
+                || css.states.iter().any(|(state, _)| state == key)
+                || custom_configs.iter().any(|configs| configs.contains_key(key))
+        })
+    };
     let all_wrappers: FxHashMap<&String, WrapperTargets> = files
         .iter()
-        .map(|(path, ff)| (path, spread_wrapper_targets(path, ff, files, inputs, &evaluated_ids)))
+        .map(|(path, ff)| (path, spread_wrapper_targets(path, ff, (files, inputs), &evaluated_ids, &styles_from)))
         .collect();
     let held_ids = |module: &String, wrapper: &str| {
         all_wrappers
@@ -11664,6 +11683,43 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
                 let app = format!("import {{ createElement }} from 'react';\n{wrapper}\nexport const App = () => {render};");
                 let (sizes, states, _) = wrapper_kept(&app);
                 assert_eq!((sizes, states), (vec!["sm", "md", "lg"], vec!["active", "busy"]), "{wrapper} {render}");
+            }
+        }
+        // A wrapper whose body can hand on a prop its target styles from
+        // keeps the prop's slot: the value may change after the render wrote
+        // it. A read that stays put, or a handed-on prop no target styles
+        // from, leaves the wrapper followed.
+        let kit = "export const Box = ds.styles({}).system({ space: true }).asElement('div');\n";
+        let slot = |body: &str, render: &str| {
+            let app = format!(
+                "import {{ createElement }} from 'react';\nimport {{ Box }} from './kit';\n\
+                 const Wrap = (props) => {{ {body} return <Box {{...props}} />; }};\n\
+                 export const App = ({{ mutate, fallback, invoke }}) => {render};\n"
+            );
+            analyze(&[("kit.tsx", kit), ("app.tsx", app.as_str())], &test_inputs()).dynamic_props.contains_key("p")
+        };
+        let renders = ["<Wrap p={{ _: 8 }} mutate={mutate} />", "createElement(Wrap, { p: { _: 8 }, mutate })"];
+        for body in [
+            "const f = props.mutate; f(props.p);",
+            "(0, props.mutate)(props.p);",
+            "(props.mutate || fallback)(props.p);",
+            "const { fn } = props.mutate; fn(props.p);",
+            "Reflect.apply(props.mutate, props.p, []);",
+            "props.mutate.call(props.p);",
+            "props.mutate.apply(props.p, []);",
+            "props.mutate.bind(props.p)();",
+            "invoke(props.mutate, props.p);",
+        ] {
+            for render in renders {
+                assert!(slot(body, render), "{body} {render}");
+            }
+        }
+        for body in [
+            "if (props.p && typeof props.p === 'object' && `${props.p}` !== props.p._) {}",
+            "const f = props.mutate; f(props.onPress);",
+        ] {
+            for render in renders {
+                assert!(!slot(body, render), "{body} {render}");
             }
         }
         // A spread at the render opens the target.
