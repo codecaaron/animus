@@ -466,6 +466,7 @@ pub(crate) const DIAGNOSTIC_CODES: &[(&str, &str)] = &[
     (STATIC_CSS_UNKNOWN_NAME, "warn"),
     (STATIC_CSS_INVALID_SHAPE, "warn"),
     (crate::theme::UNRECOGNIZED_STYLE_KEY, "warn"),
+    (crate::theme::KEYS_SHARE_PROPERTY, "warn"),
     (CLASS_NAME_WHITESPACE, "warn"),
     (INVALID_OPACITY_MODIFIER, "warn"),
     (UNSUPPORTED_OBJECT_MEMBER, "warn"),
@@ -1142,8 +1143,44 @@ fn dropped_style_key(
             "style key '{key}' is not a prop, selector, alias or supported at-rule, {not_emitted}{}",
             element_hint(key)
         ),
+        DroppedStyleKey::SharedProperty { overridden, winner, property, rule } => {
+            return keys_share_property(file, component, (overridden, winner, property, *rule), inheritors);
+        }
     };
     diagnostic(file, component, "warn", message, Some(crate::theme::UNRECOGNIZED_STYLE_KEY))
+}
+
+/// Two keys of one block on one CSS property, naming the one that takes
+/// effect and why; the cascade rule itself is unchanged.
+fn keys_share_property(
+    file: &str,
+    component: &str,
+    (overridden, winner, property, rule): (&str, &str, &str, crate::theme::CascadeRule),
+    inheritors: &[&str],
+) -> CssDiagnostic {
+    use crate::theme::CascadeRule;
+    // A longhand after its shorthand is a deliberate override; keys on equal
+    // properties set one property twice.
+    let why = match rule {
+        CascadeRule::LonghandAfterShorthand => "a longhand follows its shorthand in any key order",
+        CascadeRule::AuthoredOrder => "the later key wins — remove the key you do not mean",
+        CascadeRule::PropRank => "the extractor orders it after the other — remove the key you do not mean",
+    };
+    let inherited = match inheritors {
+        [] => String::new(),
+        [one] => format!(", here and in {one}, which inherits it"),
+        _ => format!(", here and in {}, which inherit it", inheritors.join(", ")),
+    };
+    diagnostic(
+        file,
+        component,
+        "warn",
+        format!(
+            "style keys '{overridden}' and '{winner}' both set {property}, and only '{winner}' takes effect there{inherited}: \
+             {why}"
+        ),
+        Some(crate::theme::KEYS_SHARE_PROPERTY),
+    )
 }
 
 /// A `.props()` custom prop of a proven Animus chain whose whole config
@@ -7408,6 +7445,59 @@ export const App = ({ n }) => <Box bgImage={n} texture={n} />;
         let manifest = serde_json::to_string(&out.dynamic_props).unwrap();
         assert!(!manifest.contains("animus-asset:"), "{manifest}");
         assert!(!out.components["a.tsx::Box"].replacement.contains("animus-asset:"));
+    }
+
+    /// Two keys of one block on one CSS property at one condition warn once,
+    /// naming the one that takes effect; the cascade rule is unchanged.
+    #[test]
+    fn two_keys_on_one_property_warn_naming_the_one_that_takes_effect() {
+        let mut inputs = CssInputs::from_json(
+            None,
+            None,
+            None,
+            Some(r#"{"p": {"property": "padding"}, "padding": {"property": "padding"}, "m": {"property": "margin"}}"#),
+            Some(r#"{"probe": ["p", "padding", "m"]}"#),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            false,
+        )
+        .unwrap();
+        inputs.theme.insert("breakpoints.sm".into(), "480".into());
+        let source = "export const Box = ds.styles({ padding: '1px', p: '2px', '&:hover': { marginTop: '3px', m: '4px' } }).asElement('div');\n\
+             export const Quiet = ds.styles({ p: { sm: '8px' }, padding: '1px', '&:focus': { paddingTop: '2px' } }).asElement('span');\n\
+             export const App = () => <><Box /><Quiet /></>;\n";
+        let out = analyze(&[("a.tsx", source)], &inputs);
+        let warnings: Vec<(&str, &str)> = out
+            .diagnostics
+            .iter()
+            .filter(|d| d.code.as_deref() == Some(crate::theme::KEYS_SHARE_PROPERTY))
+            .map(|d| (d.component.as_str(), d.message.as_str()))
+            .collect();
+        assert_eq!(
+            warnings,
+            [
+                (
+                    "Box",
+                    "style keys 'padding' and 'p' both set padding, and only 'p' takes effect there: the later key \
+                     wins — remove the key you do not mean"
+                ),
+                (
+                    "Box",
+                    "style keys 'm' and 'marginTop' both set margin-top, and only 'marginTop' takes effect there: \
+                     a longhand follows its shorthand in any key order"
+                ),
+            ]
+        );
+        // The rule itself stands: the alias written later, and the longhand.
+        let base = out.sheets.base.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(base.contains("padding: 1px; padding: 2px;"), "{base}");
+        assert!(base.contains("margin: 4px; margin-top: 3px;"), "{base}");
     }
 
     #[test]
