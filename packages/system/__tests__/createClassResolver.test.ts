@@ -211,7 +211,7 @@ describe('createClassResolver', () => {
     });
   });
 
-  it('returns the dynamic style as an object when asked, and as a string by default', () => {
+  it("returns React-named props, joining the caller's className and style", () => {
     const resolver = createClassResolver(
       'animus-text-abc',
       { systemPropNames: ['p', 'lineClamp'] },
@@ -229,18 +229,31 @@ describe('createClassResolver', () => {
         },
       }
     );
-    const props = { p: '13px', lineClamp: 2 };
+    const classes =
+      'animus-text-abc animus-dyn-p animus-dyn-line-clamp_Text_abc';
 
-    expect(resolver.attrs(props, { styleAs: 'object' })).toEqual({
-      class: 'animus-text-abc animus-dyn-p animus-dyn-line-clamp_Text_abc',
+    expect(resolver.props({ p: '13px', lineClamp: 2 })).toEqual({
+      className: classes,
       style: { '--animus-p': '13px', '--animus-line-clamp_Text_abc': '2' },
     });
-    expect(resolver.attrs(props).style).toBe(
-      '--animus-p: 13px; --animus-line-clamp_Text_abc: 2'
-    );
-    expect(resolver.attrs({}, { styleAs: 'object' })).not.toHaveProperty(
-      'style'
-    );
+    expect(
+      resolver.props({
+        p: '13px',
+        lineClamp: 2,
+        className: 'caller',
+        style: { '--animus-p': '1px', color: 'red' },
+      })
+    ).toEqual({
+      className: `${classes} caller`,
+      style: {
+        '--animus-p': '1px',
+        '--animus-line-clamp_Text_abc': '2',
+        color: 'red',
+      },
+    });
+    expect(resolver.props({ style: {} })).toEqual({
+      className: 'animus-text-abc',
+    });
   });
 
   it('omits style when no dynamic CSS variables are resolved', () => {

@@ -5,6 +5,6 @@
 export {
   type ClassResolver,
   type ClassResolverAttributes,
-  type ClassResolverObjectAttributes,
+  type ClassResolverProps,
   createClassResolver,
 } from './runtime/createClassResolver.js';
