@@ -3617,20 +3617,24 @@ fn names_react_pass_through(ff: &FileFacts, tag: &str, origin: Option<TagOrigin>
 }
 
 /// Whether every tag that leaves usage identity uncertain still lets usage
-/// prove where each extracted component renders and with what props: an
-/// ordinary component an analysed module declares, whose body is analysed
-/// and whose `cloneElement` calls are clone facts, while a component it
-/// renders through a prop has already escaped; or one of React's
-/// pass-through components. A parameter, an alias usage cannot follow, a
-/// name that resolved to no component, any other unanalysed import, or an
-/// ordinary component that passes its parameters to code outside the
-/// analysis (`forwarding`) may be an extracted component, or clone props
-/// into the elements it receives.
+/// prove where each extracted component renders and with what props. A tag
+/// matters in two ways: it may be one of our components, rendered with
+/// props usage cannot see, or it may receive our elements and clone props
+/// into them. A receiver blocks nothing here, because the components whose
+/// elements it receives open (`opaque_delivery`); so a tag that can only
+/// receive leaves usage proven: an ordinary component an analysed module
+/// declares, whose body is analysed; one of React's pass-through
+/// components; or an import, or a member of one, from a package extraction
+/// does not analyse, which cannot be a component extraction declared. A
+/// `createElement` call on any receiver but React's still blocks, since
+/// what it passes is not followed as delivered. A parameter, an alias usage cannot follow, a name that resolved to no
+/// component, a relative or aliased import extraction cannot read (an
+/// excluded file may render our components) or any other declaration may
+/// be one of our components, so it blocks every component.
 fn uncertainty_leaves_usage_proven(
     sites: &[(&String, UncertainIdentity)],
     files: &BTreeMap<String, FileFacts>,
     inputs: &CssInputs,
-    forwarding: &FxHashSet<(String, String)>,
 ) -> bool {
     // Each element of an ordinary component is a site; classify each tag once.
     let mut classified: FxHashSet<(&str, &str, Option<TagOrigin>)> = FxHashSet::default();
@@ -3641,14 +3645,44 @@ fn uncertainty_leaves_usage_proven(
         let Some(tag) = site.tag.as_deref() else {
             return false;
         };
-        let forwards = || {
-            resolve_declaration(file, ff, tag, files, inputs)
-                .is_some_and(|(declaring, binding, _)| forwarding.contains(&(declaring, binding)))
-        };
+        // Children a `createElement` call passes reach its receiver without
+        // the element delivery that opens what a JSX receiver gets, so only
+        // React's pass-through components leave them proven.
+        if site.create_element {
+            return names_react_pass_through(ff, tag, site.origin);
+        }
         !classified.insert((file.as_str(), tag, site.origin))
             || names_react_pass_through(ff, tag, site.origin)
-            || (uncertain_tag_reason(file, ff, tag, site.origin, files, inputs).0 == TagClass::Ordinary && !forwards())
+            || imported_from_outside(file, ff, tag, site.origin, files, inputs)
+            || uncertain_tag_reason(file, ff, tag, site.origin, files, inputs).0 == TagClass::Ordinary
     })
+}
+
+/// Whether `tag`, or the binding it is a member of, is imported from a
+/// package extraction does not analyse: a bare specifier no path alias
+/// names.
+fn imported_from_outside(
+    file: &str,
+    ff: &FileFacts,
+    tag: &str,
+    origin: Option<TagOrigin>,
+    files: &BTreeMap<String, FileFacts>,
+    inputs: &CssInputs,
+) -> bool {
+    let root = tag.split('.').next().unwrap_or(tag);
+    let source = ff
+        .imports
+        .iter()
+        .find(|import| import.local == root)
+        .map(|import| &import.source)
+        .or_else(|| ff.namespace_imports.get(root));
+    origin == Some(TagOrigin::Import)
+        && source.is_some_and(|source| {
+            !source.starts_with('.')
+                && !source.starts_with('/')
+                && expand_alias(source, &inputs.path_aliases).is_none()
+                && resolve_import_source(file, source, files, inputs).is_none()
+        })
 }
 
 /// What a tag usage cannot match to an Animus component is, as far as the
@@ -3946,8 +3980,7 @@ fn proven_slot_conditions(
 /// analysis, which may clone runtime props or other options into an element
 /// it receives: the components whose elements reach such code (directly,
 /// through `const`s or another module's `const`s, or through a private
-/// wrapper that spreads its props into them), and the top-level functions,
-/// as `(file, binding)`, that pass a parameter to it.
+/// wrapper that spreads its props into them).
 ///
 /// A callee reaches outside the analysis when it is a global outside the
 /// built-ins, an import the analysis does not resolve, a value built from
@@ -3964,7 +3997,7 @@ fn opaque_delivery(
     wrapper_targets: &FxHashMap<String, FxHashMap<String, Vec<String>>>,
     receiver_ids: impl Fn(&str, &FileFacts, &str) -> Vec<String>,
     renders_in_place: impl Fn(&str) -> bool,
-) -> (std::collections::BTreeSet<String>, FxHashSet<(String, String)>) {
+) -> std::collections::BTreeSet<String> {
     // The declaration `name` (`lib.enhance` for a namespace import's
     // member) names from `file`, or `None` outside the analysis.
     let declaration = |file: &str, ff: &FileFacts, name: &str| {
@@ -4065,15 +4098,13 @@ fn opaque_delivery(
         }
     }
     // A private wrapper that spreads its props into components delivers them.
-    let delivered = tags
-        .iter()
+    tags.iter()
         .flat_map(|(file, tag)| {
             resolve_usage_identity(file, tag, files, inputs, evaluated_ids, ids_by_binding).into_iter().chain(
                 wrapper_targets.get(file).and_then(|wrappers| wrappers.get(tag)).into_iter().flatten().cloned(),
             )
         })
-        .collect();
-    (delivered, forwarding)
+        .collect()
 }
 
 /// The evaluated components whose every use the analysis proves, keyed by
@@ -5940,7 +5971,7 @@ fn run_with_system_floor(
         ids.extend(member_path_ids(path, ff, tag, false, files, inputs, &evaluated_ids));
         ids
     };
-    let (delivered_ids, forwarding) = opaque_delivery(
+    let delivered_ids = opaque_delivery(
         files,
         inputs,
         &evaluated_ids,
@@ -6129,7 +6160,7 @@ fn run_with_system_floor(
     let usage_complete = inputs.analysis_context.skipped_sources.is_empty()
         && !files.values().any(|ff| ff.direct_eval)
         && (!identity_policy.uncertain
-            || uncertainty_leaves_usage_proven(&uncertain_identities, files, inputs, &forwarding));
+            || uncertainty_leaves_usage_proven(&uncertain_identities, files, inputs));
     let project_uses = usage_complete
         .then(|| {
             let unproven: std::collections::BTreeSet<String> =
@@ -8570,6 +8601,35 @@ export const App = ({ n }) => <Box bgImage={n} texture={n} />;
         let mut dev = test_inputs();
         dev.dev_mode = true;
         assert_eq!(slots("import { Box } from './kit';\nexport const App = () => <Box p={8} />;\n", &dev), ["p"]);
+    }
+
+    /// An identity-uncertain tag blocks only what it can reach. A tag that
+    /// can only receive our elements (an import from an unanalysed package,
+    /// a member of one, or an ordinary component that passes its children
+    /// to one) opens just the components whose elements it receives; a tag
+    /// that may be one of our components (a parameter, a relative import
+    /// extraction cannot read), or a `createElement` receiver, whose children
+    /// are not followed as delivered, still blocks every component.
+    #[test]
+    fn uncertain_tags_block_only_what_they_can_reach() {
+        let kit = "export const Box = ds.system({ space: true }).asElement('div');\n";
+        let slots = |app: &str| {
+            let app = format!("import {{ Box }} from './kit';\n{app}");
+            let out = analyze(&[("kit.tsx", kit), ("app.tsx", &app)], &test_inputs());
+            out.dynamic_props.keys().cloned().collect::<Vec<_>>()
+        };
+        let cases: [(&str, &[&str]); 7] = [
+            ("import { Slot } from 'ui-lib';\nexport const App = () => <><Slot><div /></Slot><Box p={8} /></>;\n", &[]),
+            ("import * as Dialog from 'ui-lib/dialog';\nexport const App = () => <><Dialog.Root><div /></Dialog.Root><Box p={8} /></>;\n", &[]),
+            ("import { Slot } from 'ui-lib';\nfunction Card({ children }) { return <Slot>{children}</Slot>; }\nexport const App = () => <><Card><div /></Card><Box p={8} /></>;\n", &[]),
+            ("import { Slot } from 'ui-lib';\nexport const App = () => <><Slot><Box p={8} /></Slot><Box p={8} /></>;\n", &["p"]),
+            ("export const App = ({ As }) => <><As /><Box p={8} /></>;\n", &["p"]),
+            ("import { Mystery } from './external';\nexport const App = () => <><Mystery /><Box p={8} /></>;\n", &["p"]),
+            ("import { createElement } from 'react';\nimport { Slot } from 'ui-lib';\nexport const App = () => <><Slot><div /></Slot>{createElement(Slot, null, <Box p={8} />)}</>;\n", &["p"]),
+        ];
+        for (app, want) in cases {
+            assert_eq!(slots(app), want, "{app}");
+        }
     }
 
     /// A direct `createElement` call on an extracted component records the
