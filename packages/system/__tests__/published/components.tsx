@@ -4,9 +4,12 @@ import type {
   ComponentPropsWithRef,
   ComponentPropsWithoutRef,
   ForwardRefExoticComponent,
+  ReactNode,
   RefAttributes,
   RefObject,
 } from 'react';
+
+import { compose } from '@animus-ui/system';
 
 import { ds } from './kit';
 
@@ -96,6 +99,57 @@ export const rejected = (
     <Badge label="hi" tone="loud" />
     {/* @ts-expect-error — its props are closed */}
     <Badge label="hi" notAProp={1} />
+  </>
+);
+
+// A target's own className type reaches its wrapper, since the runtime hands a
+// callback through: one of Base UI's shape takes a callback of its state. A
+// target without a callback, or without className, and an element take a
+// string.
+interface ToggleState {
+  pressed: boolean;
+}
+interface ToggleProps {
+  className?: string | ((state: ToggleState) => string | undefined) | undefined;
+  children?: ReactNode;
+}
+declare const Toggle: ForwardRefExoticComponent<
+  ToggleProps & RefAttributes<HTMLButtonElement>
+>;
+const Chip = ds.styles({ display: 'inline-flex' }).asComponent(Toggle);
+const Chips = compose({ Root: Button, Chip }, { shared: { size: true } });
+const Bare = ds
+  .styles({})
+  .asComponent((props: { label: string }) => <span>{props.label}</span>);
+
+export type _TargetClassName = [
+  Assert<
+    Equal<
+      ComponentProps<typeof Chip>['className'],
+      string | ((state: ToggleState) => string | undefined) | undefined
+    >
+  >,
+  Assert<
+    Equal<
+      ComponentProps<typeof Chips.Chip>['className'],
+      string | ((state: ToggleState) => string | undefined) | undefined
+    >
+  >,
+  Assert<Equal<BadgeProps['className'], string | undefined>>,
+  Assert<Equal<ComponentProps<typeof Bare>['className'], string | undefined>>,
+  Assert<Equal<ButtonProps['className'], string | undefined>>,
+];
+
+export const classNames = (
+  <>
+    <Chip className={(state) => (state.pressed ? 'on' : undefined)} />
+    <Chip className={maybeClass} />
+    {/* @ts-expect-error — the callback gets the target's own state */}
+    <Chip className={(state) => (state.open ? 'on' : undefined)} />
+    {/* @ts-expect-error — a target without a callback takes a string */}
+    <Badge label="hi" className={() => 'on'} />
+    {/* @ts-expect-error — and so does an element */}
+    <Button className={() => 'on'} />
   </>
 );
 

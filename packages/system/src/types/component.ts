@@ -226,6 +226,17 @@ type DistributiveOmit<T, K extends PropertyKey> = T extends unknown
   : never;
 
 /**
+ * The target's own `className` type, which can be a callback of its state:
+ * the runtime hands a callback through. A target without one takes a string.
+ * `undefined` reads as absent, since the target always gets Animus's classes.
+ */
+type TargetClassName<P> = P extends { className?: infer T }
+  ? unknown extends T
+    ? string | undefined
+    : T | undefined
+  : string | undefined;
+
+/**
  * The wrapped component's own props, with its ref, then exactly what the
  * builder admitted: the active groups' props, variants, states and custom
  * props. Managed keys are removed from the wrapped component's props first —
@@ -250,7 +261,7 @@ type AnimusWrappedConsumerProps<
   StateProps<S> &
   CustomPropValues<CP> &
   SelectorAliasProps<ResolvedGroupProps<PR, GR, AG>> & {
-    className?: string | undefined;
+    className?: TargetClassName<ComponentPropsWithRef<C>>;
     children?: ReactNode;
   };
 
@@ -304,13 +315,14 @@ export type SharedConfig<Slots extends Record<string, unknown>> = {
   [K in RootVariantKeys<Slots>]?: true;
 };
 
+/**
+ * An Animus slot's props already carry its `className`, which can be its
+ * target's callback; any other component's take a string.
+ */
 type SealedProps<C> = C extends {
   readonly [ConsumerProps]: infer P;
 }
-  ? Omit<P, 'extend'> & {
-      className?: string | undefined;
-      children?: ReactNode;
-    }
+  ? Omit<P, 'extend'> & { children?: ReactNode }
   : C extends ForwardRefExoticComponent<infer P>
     ? Omit<P, 'extend'> & {
         className?: string | undefined;
