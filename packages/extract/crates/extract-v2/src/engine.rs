@@ -102,6 +102,39 @@ struct ReplacementImportNeeds {
     effect_imports: std::collections::BTreeMap<(u32, u32), String>,
 }
 
+/// An unregistered keyframe reference declared in a kit's compiled output,
+/// where a bundler can rename a collection's export, names the fix: the kit's
+/// source condition, through which its registered keyframes resolve.
+fn name_compiled_kit_fix(
+    diagnostic: &mut analyze_css::CssDiagnostic,
+    compiled_declarations: &rustc_hash::FxHashMap<(String, String), String>,
+    output_dirs: &[String],
+) {
+    let code = crate::eval::KEYFRAMES_UNREGISTERED_REFERENCE;
+    if diagnostic.code.as_deref() != Some(code) {
+        return;
+    }
+    let Some(base) = diagnostic
+        .message
+        .split_once("member expression '")
+        .and_then(|(_, rest)| rest.split_once('.'))
+        .map(|(base, _)| base.to_string())
+    else {
+        return;
+    };
+    let declared_in = match compiled_declarations.get(&(diagnostic.file.clone(), base.clone())) {
+        Some(file) => file.clone(),
+        None if analyze_css::is_external_file(&diagnostic.file, output_dirs) => diagnostic.file.clone(),
+        None => return,
+    };
+    let Some(advice) = diagnostic.message.strip_suffix(&format!(" ({code})")) else {
+        return;
+    };
+    diagnostic.message = format!(
+        "{advice}; '{base}' is declared in {declared_in}, a kit's compiled output, where a bundler can rename a collection's export — publish the kit with an \"animus\" export condition naming its source, through which its keyframes resolve ({code})"
+    );
+}
+
 /// Declaration spans of staged builders the replaced module no longer
 /// needs: every reference is a chain that continued into the builder and
 /// was extracted, or a builder dropped before it. A kept declaration of an
@@ -810,6 +843,11 @@ impl ExtractEngine {
             String,
             rustc_hash::FxHashMap<String, serde_json::Value>,
         > = std::collections::BTreeMap::new();
+        let output_dirs = &self.opts.css_inputs.analysis_context.output_dirs;
+        // Each unregistered import, by file and local, whose declaration is
+        // in a kit's compiled output: the file declaring it.
+        let mut compiled_declarations: rustc_hash::FxHashMap<(String, String), String> =
+            rustc_hash::FxHashMap::default();
         for (path, (imports, exports)) in &imports_by_file {
             let mut extra = rustc_hash::FxHashMap::default();
             let mut usage_extra = rustc_hash::FxHashMap::default();
@@ -837,6 +875,8 @@ impl ExtractEngine {
                 if let Some(kf) = keyframes_registry.get(&resolved_name) {
                     extra.insert(imp.local.clone(), kf.clone());
                     usage_extra.insert(imp.local.clone(), kf.clone());
+                } else if crate::analyze_css::is_external_file(&resolved_file, output_dirs) {
+                    compiled_declarations.insert((path.clone(), imp.local.clone()), resolved_file);
                 }
             }
             for exp in exports {
@@ -914,6 +954,7 @@ impl ExtractEngine {
             if let Some(source) = self.sources.get(&diagnostic.file) {
                 diagnostic.locate(source);
             }
+            name_compiled_kit_fix(diagnostic, &compiled_declarations, output_dirs);
         }
         let cross = cross_file::resolve_cross_file(&self.facts, css.member_bindings.clone());
         let out = serde_json::to_string(&AnalyzeResult {
@@ -2113,6 +2154,59 @@ export const App = () => <Box tone="red" />;
             global_sheet.contains("@keyframes animus-kf-abc123"),
             "registered-but-unreferenced collections currently emit dead CSS: {global_sheet}"
         );
+    }
+
+    /// A kit read from its compiled output can rename a collection's export,
+    /// so its unregistered references name the kit's source condition; a
+    /// project's own do not.
+    #[test]
+    fn an_unregistered_reference_into_a_kits_compiled_output_names_its_source_condition() {
+        let mut engine = ExtractEngine::new(Some(EngineOptions {
+            keyframes_json: Some(
+                r#"{"feedbackMotion":{"loaderDot":{"name":"animus-kf-honfj9","frames":{"from":{"opacity":0},"to":{"opacity":1}}}}}"#
+                    .to_string(),
+            ),
+            package_resolution_json: Some(r#"{"@kit/ds":"node_modules/@kit/ds/dist/index.js"}"#.to_string()),
+            analysis_context_json: Some(
+                r#"{"packageDirs":["node_modules/@kit/ds/dist"],"outputDirs":["node_modules/@kit/ds/dist"]}"#.to_string(),
+            ),
+            ..Default::default()
+        }))
+        .unwrap();
+        let manifest: serde_json::Value = serde_json::from_str(
+            &engine
+                .analyze(
+                    serde_json::json!([
+                        { "path": "node_modules/@kit/ds/dist/chunk.js", "source": "const feedbackMotion = createKeyframes({ loaderDot: { from: { opacity: 0 }, to: { opacity: 1 } } });\nconst Spinner = ds.styles({ animationName: feedbackMotion.loaderDot }).asElement('i');\nexport { feedbackMotion as n, Spinner as s };\n" },
+                        { "path": "node_modules/@kit/ds/dist/index.js", "source": "import { n as feedbackMotion, s as Spinner } from './chunk.js';\nexport { feedbackMotion, Spinner };\n" },
+                        { "path": "motion.ts", "source": "export const localMotion = createKeyframes({ loaderDot: { from: { opacity: 0 }, to: { opacity: 1 } } });\n" },
+                        { "path": "a.tsx", "source": "import { feedbackMotion, Spinner } from '@kit/ds';\nimport { localMotion } from './motion';\nexport const LoaderDot = ds.styles({ animationName: feedbackMotion.loaderDot }).asElement('span');\nexport const Local = ds.styles({ animationName: localMotion.loaderDot }).asElement('span');\nexport const App = () => <><LoaderDot /><Local /><Spinner /></>;\n" }
+                    ])
+                    .to_string(),
+                )
+                .unwrap(),
+        )
+        .unwrap();
+        let messages: std::collections::BTreeMap<&str, &str> = manifest["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|d| d["code"] == crate::eval::KEYFRAMES_UNREGISTERED_REFERENCE)
+            .map(|d| (d["component"].as_str().unwrap(), d["message"].as_str().unwrap()))
+            .collect();
+        assert_eq!(messages.keys().copied().collect::<Vec<_>>(), ["LoaderDot", "Local", "Spinner"], "{manifest}");
+        for component in ["LoaderDot", "Spinner"] {
+            let message = messages[component];
+            assert!(
+                message.contains("'feedbackMotion' is declared in node_modules/@kit/ds/dist/chunk.js, a kit's compiled output"),
+                "{message}"
+            );
+            assert!(
+                message.contains(r#"publish the kit with an "animus" export condition naming its source"#),
+                "{message}"
+            );
+        }
+        assert!(!messages["Local"].contains("compiled output"), "{}", messages["Local"]);
     }
 
     #[test]

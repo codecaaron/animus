@@ -154,6 +154,17 @@ suite('kit publication', () => {
     ).toEqual([
       "src/index.ts: import '../../outside' resolves to ../outside.ts, outside the package",
     ]);
+    // A build's artifacts inside the package ship unless npm leaves them out.
+    const artifacts = (files: string[] | null) => {
+      const root = kit(files, '../helpers/palette', (_, write) =>
+        write('.animus/styles.css', '')
+      );
+      return kitPublicationFailures(root, engine, join(root, '.animus'));
+    };
+    expect(artifacts(null)).toEqual([
+      '.animus/: npm pack would publish this build-artifact directory (1 files) — add ".animus/" to .npmignore or .gitignore, or list the published files in package.json "files"',
+    ]);
+    expect(artifacts(['src', 'helpers', 'dist'])).toEqual([]);
     // A template `import()` with no expressions names its module.
     expect(
       kitPublicationFailures(

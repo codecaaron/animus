@@ -279,6 +279,7 @@ async function discoverSources(
 
   ctx.externalPackageDirs = collected.packageDirs;
   ctx.externalLinkedDirs = collected.linkedDirs;
+  ctx.externalOutputDirs = collected.outputDirs;
   // The earlier registration points both run before this assignment, so
   // external dirs must register here or they are never watched.
   ctx.registerSystemWatchPaths();

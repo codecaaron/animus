@@ -1486,7 +1486,10 @@
         "button.tsx": "import { createComponent } from '@animus-ui/system';\nimport 'virtual:animus/styles.css';\nimport { ds } from '../test-system';\n\nexport const Button = createComponent('button', 'animus-Button-48cce891', {});\n\n"
       },
       "css": "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-base {\n  .animus-Button-48cce891 {\n    padding-left: 0.5rem;\n    padding-right: 0.5rem;\n    display: inline-flex;\n  }\n}\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer composed {\n  }\n}\n\n",
-      "diagnostics": [],
+      "diagnostics": [
+        "app.tsx|warn|<Button>|<Button> is a parameter or a binding inside a function, so the component it holds is chosen at runtime; extraction counts a tag it cannot match to an Animus component as unknown, so every extracted component is kept and none is removed as unused",
+        "usage|warn|whole-component removal|off for this build: 1 tag in 1 file cannot be matched to an Animus component (1 parameter or binding inside a function), for example <Button> in app.tsx. Extraction counts such a tag as unknown, so no extracted component is removed as unused. ANIMUS_DEBUG=1, or the host's verbose option, lists each tag with its file and line"
+      ],
       "hasComponents": {
         "app.tsx": false,
         "button.tsx": true

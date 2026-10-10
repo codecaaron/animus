@@ -6,6 +6,7 @@ import {
   type ClassResolver,
   createClassResolver,
 } from './runtime/createClassResolver';
+import { uncompiledDefinition } from './runtime/uncompiled';
 import {
   AbstractParser,
   CompoundEntry,
@@ -97,7 +98,10 @@ export class AnimusWithAll<
   }
 
   asElement<El extends keyof JSX.IntrinsicElements>(component: El) {
-    const config = this._buildComponentConfig();
+    const config = {
+      ...this._buildComponentConfig(),
+      uncompiled: uncompiledDefinition(`<${component}>`),
+    };
     const Component = createComponent(component, '', config);
     const extendFn = this.extend.bind(this);
     return Object.assign(Component, {
@@ -117,7 +121,12 @@ export class AnimusWithAll<
   // The constraint stays the fixed `ComponentType<any>`: an inferred `P` in
   // `C extends ComponentType<P>` silently stops checking the argument.
   asComponent<C extends ComponentType<any>>(AsComponent: C) {
-    const config = this._buildComponentConfig();
+    const config = {
+      ...this._buildComponentConfig(),
+      uncompiled: uncompiledDefinition(
+        `a component wrapping ${AsComponent.displayName || AsComponent.name || 'an anonymous component'}`
+      ),
+    };
     const Component = createComponent(AsComponent as any, '', config);
     const extendFn = this.extend.bind(this);
     return Object.assign(Component, {
@@ -137,7 +146,10 @@ export class AnimusWithAll<
   asClass<This extends { _buildComponentConfig(): ClassResolverConfig }>(
     this: This
   ): ClassResolver<BuilderClassProps<This>> {
-    const config = this._buildComponentConfig();
+    const config = {
+      ...this._buildComponentConfig(),
+      uncompiled: uncompiledDefinition('a class resolver'),
+    };
     return createClassResolver('', config);
   }
 

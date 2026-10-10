@@ -62,9 +62,19 @@ pub struct AttrFact {
     /// `write_conditions`.
     #[serde(skip)]
     pub conditions: Option<BTreeSet<String>>,
+    /// Written by only some branches of a spread of listed object literals
+    /// (`{...(c ? { type: 'a' } : {})}`), so the element may leave it out.
+    #[serde(skip)]
+    pub optional: bool,
 }
 
 impl AttrFact {
+    /// Whether the element always sets the prop to this value itself: no
+    /// spread after it can replace it, and no branch leaves it out.
+    pub(crate) fn settles(&self, index: usize, spread: Option<usize>) -> bool {
+        !self.optional && spread.is_none_or(|before| index >= before)
+    }
+
     /// Every value the attribute can write, when they are known: its
     /// static value, or the finite values a runtime value is proven to take.
     pub(crate) fn proven_values(&self) -> Option<impl Iterator<Item = &Value>> {
@@ -91,6 +101,10 @@ pub enum TagOrigin {
     TopLevel,
     /// A parameter, or a binding inside a function or block.
     Nested,
+    /// A binding compiled MDX destructures from the components a provider
+    /// supplies (`const { Card } = _components`): matched by name, as a
+    /// provider-scope component is.
+    Provided,
     /// No binding in the file: a global, or nothing.
     Undeclared,
 }
@@ -859,6 +873,7 @@ pub(crate) fn collect_enriched_usage(
         }),
         module_loads: Some(Vec::new()),
         origins,
+        provided: provided_components(program),
     };
     collector.visit_program(program);
     let module_loads = collector.module_loads.take().unwrap_or_default();
@@ -925,7 +940,9 @@ pub(crate) fn collect_enriched_usage(
         }
         _ => BTreeMap::new(),
     };
-    let unsafe_object_uses = match &scoping {
+    // Read through the scopes every module builds, so a module with no
+    // import or chain still records what may change its objects.
+    let unsafe_object_uses = match origins {
         Some(scoping) => unsafe_object_uses(program, scoping, object_consts, assigned_targets),
         None => BTreeMap::new(),
     };
@@ -1273,6 +1290,9 @@ impl OpaqueCallScan<'_> {
         let mut seen: FxHashSet<SymbolId> = FxHashSet::default();
         let mut entered: FxHashSet<oxc::semantic::ScopeId> = FxHashSet::default();
         let mut parameters: Vec<SymbolId> = Vec::new();
+        // A binding the walk does not follow (`let held; held = children`)
+        // may hold anything a parameter does.
+        let mut unresolved = false;
         let mut pending: Vec<SymbolId> = reads.symbols.iter().copied().collect();
         while let Some(symbol) = pending.pop() {
             if !seen.insert(symbol) {
@@ -1289,15 +1309,18 @@ impl OpaqueCallScan<'_> {
             let (next, function) = match (self.consts.get(&symbol), self.functions.get(&symbol)) {
                 (Some(init), _) => (&init.reads, init.function),
                 (None, Some((reads, scope))) => (reads, Some(*scope)),
-                (None, None) => continue,
+                (None, None) => {
+                    unresolved |= !self.parameters.contains(&symbol) && !self.sources.contains_key(&symbol);
+                    continue;
+                }
             };
             entered.extend(function);
             closed.tags.extend(next.tags.iter().cloned());
             closed.unknown_global |= next.unknown_global;
             pending.extend(next.symbols.iter().copied());
         }
-        closed.reads_parameter =
-            parameters.iter().any(|parameter| !entered.contains(&self.scoping.symbol_scope_id(*parameter)));
+        closed.reads_parameter = unresolved
+            || parameters.iter().any(|parameter| !entered.contains(&self.scoping.symbol_scope_id(*parameter)));
         closed.imports.sort();
         closed
     }
@@ -2495,6 +2518,13 @@ pub struct SpreadWrapper {
     pub forwarding: Vec<Forwarding>,
     /// Attributes of those elements that pass a named prop on.
     pub passed: Vec<PassThrough>,
+    /// How many `.asComponent(W)` calls hand it to a component, which then
+    /// renders it with the props its own renders forward.
+    pub targeted: usize,
+    /// How many members of top-level `const` object literals hold it
+    /// (`const Code = { Header: CodeHeader }`): a `<Code.Header>` render is
+    /// one of its renders.
+    pub held: usize,
 }
 
 /// A forwarding-element attribute whose whole value is a named prop
@@ -2675,9 +2705,11 @@ fn spread_wrapper_candidates<'b, 'a>(program: &'b Program<'a>) -> Vec<WrapperCan
 }
 
 /// The candidates that survive every reference check, with their forwarding
-/// elements. A wrapper binding may be used only as a JSX tag name, and is
-/// never reassigned; its spread parameter may be used only as a whole JSX
-/// spread argument or a read of one of its members that is no call.
+/// elements. A wrapper binding may be used only as a JSX tag name, as the
+/// one argument of an `.asComponent()` call, or as a member of a top-level
+/// `const` object literal, and is never reassigned; its
+/// spread parameter may be used only as a whole JSX spread argument or a
+/// read of one of its members that is no call.
 fn spread_wrappers(
     program: &Program<'_>,
     scoping: &Scoping,
@@ -2691,6 +2723,8 @@ fn spread_wrappers(
         invalid: FxHashSet::default(),
         forwarding: FxHashMap::default(),
         passed: FxHashMap::default(),
+        targeted: FxHashMap::default(),
+        held: FxHashMap::default(),
         ancestors: Vec::new(),
     };
     for (index, candidate) in candidates.iter().enumerate() {
@@ -2736,10 +2770,27 @@ fn spread_wrappers(
                     named: candidate.named.into_iter().map(|prop| prop.key).collect(),
                     forwarding,
                     passed,
+                    targeted: scan.targeted.get(&index).copied().unwrap_or_default(),
+                    held: scan.held.get(&index).copied().unwrap_or_default(),
                 },
             ))
         })
         .collect()
+}
+
+/// Whether the object property just left is a member of an object literal
+/// that initializes a top-level `const`. `ancestors` runs from the
+/// property's parent out.
+fn initializes_top_level_object<'b, 'a: 'b>(ancestors: &mut impl Iterator<Item = &'b AstKind<'a>>) -> bool {
+    let Some(AstKind::ObjectExpression(object)) = ancestors.next() else {
+        return false;
+    };
+    let initializes = matches!(ancestors.next(), Some(AstKind::VariableDeclarator(declarator))
+        if declarator.init.as_ref().is_some_and(|init| init.span() == object.span));
+    initializes
+        && matches!(ancestors.next(), Some(AstKind::VariableDeclaration(declaration))
+            if declaration.kind == oxc::ast::ast::VariableDeclarationKind::Const)
+        && matches!(ancestors.next(), Some(AstKind::Program(_) | AstKind::ExportNamedDeclaration(_)))
 }
 
 struct WrapperScan<'a, 's> {
@@ -2754,6 +2805,10 @@ struct WrapperScan<'a, 's> {
     forwarding: FxHashMap<usize, Vec<Forwarding>>,
     /// Attributes whose whole value is a named prop, on any element.
     passed: FxHashMap<usize, Vec<PassThrough>>,
+    /// Candidate index → `.asComponent()` calls that take it.
+    targeted: FxHashMap<usize, usize>,
+    /// Candidate index → top-level object literal members that hold it.
+    held: FxHashMap<usize, usize>,
     ancestors: Vec<AstKind<'a>>,
 }
 
@@ -2797,12 +2852,27 @@ impl<'a> Visit<'a> for WrapperScan<'a, '_> {
             if !reference.is_value() {
                 return;
             }
-            let tag = matches!(
-                ancestors.next(),
-                Some(AstKind::JSXOpeningElement(_) | AstKind::JSXClosingElement(_))
-            );
-            if !tag {
-                self.invalid.insert(index);
+            match ancestors.next() {
+                Some(AstKind::JSXOpeningElement(_) | AstKind::JSXClosingElement(_)) => {}
+                Some(AstKind::CallExpression(call))
+                    if call.arguments.len() == 1
+                        && call.arguments[0].span() == ident.span
+                        && matches!(&call.callee, Expression::StaticMemberExpression(member)
+                            if member.property.name == "asComponent") =>
+                {
+                    *self.targeted.entry(index).or_default() += 1;
+                }
+                Some(AstKind::ObjectProperty(property))
+                    if property.value.span() == ident.span
+                        && property.kind == oxc::ast::ast::PropertyKind::Init
+                        && !property.computed
+                        && initializes_top_level_object(&mut ancestors) =>
+                {
+                    *self.held.entry(index).or_default() += 1;
+                }
+                _ => {
+                    self.invalid.insert(index);
+                }
             }
             return;
         }
@@ -3148,6 +3218,8 @@ struct FactCollector<'a, 's> {
     /// Enriched collection only: the values a parameter's literal-union type
     /// annotation admits.
     finite_params: FxHashMap<SymbolId, FiniteSet>,
+    /// Enriched collection only: see `TagOrigin::Provided`.
+    provided: FxHashSet<SymbolId>,
 }
 
 /// `cloneElement` calls, resolved once the walk has seen every `const`
@@ -3185,12 +3257,32 @@ impl<'a> FactCollector<'a, '_> {
             }
             _ => return,
         };
-        let origin = self.origins.zip(root).map(|(scoping, root)| tag_origin(scoping, root));
+        let origin = root.and_then(|root| self.origin_of(root));
         let mut attrs = Vec::new();
         let mut spread = None;
         for attr_item in &elem.attributes {
-            if matches!(attr_item, JSXAttributeItem::SpreadAttribute(_)) {
-                spread = Some(attrs.len());
+            if let JSXAttributeItem::SpreadAttribute(spread_attribute) = attr_item {
+                // A spread of object literals with listed literal entries
+                // writes those entries, on the branches that hold them.
+                match self.enrich.then(|| listed_spread(&spread_attribute.argument, self.origins)).flatten() {
+                    Some(entries) => attrs.extend(entries.into_iter().map(|(name, value)| AttrFact {
+                        variant_class: match &value {
+                            Value::String(class) => class.clone(),
+                            _ => "__dynamic__".to_string(),
+                        },
+                        conditions: (!value.is_object()).then(|| BTreeSet::from([BASE_CONDITION.to_string()])),
+                        name,
+                        static_value: Some(value),
+                        enumerable_values: Vec::new(),
+                        dynamic: false,
+                        dynamic_kind: None,
+                        dynamic_span: None,
+                        skip: false,
+                        literal: true,
+                        optional: true,
+                    })),
+                    None => spread = Some(attrs.len()),
+                }
             }
             if let JSXAttributeItem::Attribute(attr) = attr_item {
                 let JSXAttributeName::Identifier(id) = &attr.name else {
@@ -3331,6 +3423,7 @@ impl<'a> FactCollector<'a, '_> {
                     variant_class: classify_jsx_attribute_as_variant_value(&attr.value),
                     literal,
                     conditions,
+                    optional: false,
                 });
             }
         }
@@ -3341,6 +3434,64 @@ impl<'a> FactCollector<'a, '_> {
             span: (elem.span.start, elem.span.end),
             origin,
         });
+    }
+}
+
+/// The entries a spread argument writes when every branch it can take is an
+/// object literal of literal values under static keys, or nothing (`null`,
+/// a boolean, an absent value): `{...(c ? { type: 'a' } : {})}`. A nullish
+/// entry is left out, as at runtime. `None` for any other argument.
+fn listed_spread(expression: &Expression<'_>, origins: Option<&Scoping>) -> Option<Vec<(String, Value)>> {
+    use oxc::ast::ast::{ObjectPropertyKind, PropertyKind};
+    use oxc::syntax::operator::LogicalOperator;
+    let expression = crate::chain_walk::unwrap_type_assertions(expression);
+    if is_absent(expression, origins) {
+        return Some(Vec::new());
+    }
+    match expression {
+        Expression::NullLiteral(_) | Expression::BooleanLiteral(_) => Some(Vec::new()),
+        Expression::ObjectExpression(object) => {
+            let mut entries = Vec::new();
+            for property in &object.properties {
+                let ObjectPropertyKind::ObjectProperty(property) = property else { return None };
+                if property.kind != PropertyKind::Init || property.computed || property.method {
+                    return None;
+                }
+                let key = eval_property_key(&property.key)?;
+                if key == "__proto__" {
+                    return None;
+                }
+                let value = eval_static_expression(&property.value)?;
+                let value = match value {
+                    Value::Null => continue,
+                    Value::Object(mut breakpoints) => {
+                        breakpoints.retain(|_, entry| !entry.is_null());
+                        if breakpoints.is_empty() {
+                            continue;
+                        }
+                        Value::Object(breakpoints)
+                    }
+                    value => value,
+                };
+                entries.push((key, value));
+            }
+            Some(entries)
+        }
+        Expression::ConditionalExpression(conditional) => {
+            let mut entries = listed_spread(&conditional.consequent, origins)?;
+            entries.extend(listed_spread(&conditional.alternate, origins)?);
+            Some(entries)
+        }
+        // A falsy left side spreads nothing.
+        Expression::LogicalExpression(logical) if logical.operator == LogicalOperator::And => {
+            listed_spread(&logical.right, origins)
+        }
+        Expression::LogicalExpression(logical) => {
+            let mut entries = listed_spread(&logical.left, origins)?;
+            entries.extend(listed_spread(&logical.right, origins)?);
+            Some(entries)
+        }
+        _ => None,
     }
 }
 
@@ -3380,6 +3531,16 @@ fn truthy(value: &Value) -> bool {
 }
 
 impl FactCollector<'_, '_> {
+    /// Where `root` is bound, as the file's scopes tell it.
+    fn origin_of(&self, root: &IdentifierReference<'_>) -> Option<TagOrigin> {
+        let scoping = self.origins?;
+        let symbol = root.reference_id.get().and_then(|id| scoping.get_reference(id).symbol_id());
+        Some(match tag_origin(scoping, root) {
+            TagOrigin::Nested if symbol.is_some_and(|symbol| self.provided.contains(&symbol)) => TagOrigin::Provided,
+            origin => origin,
+        })
+    }
+
     /// The values `expression` can take, when they are proven few: an
     /// explicitly absent value, a string or number literal, a `const` one
     /// named directly (imported ones included), a parameter whose type
@@ -3696,7 +3857,7 @@ impl<'a, 's> Visit<'a> for FactCollector<'a, 's> {
                     literals: create_element_literals(call.arguments.get(1), self.origins),
                     clone: false,
                     at: call.span.start,
-                    origin: self.origins.zip(root).map(|(scoping, root)| tag_origin(scoping, root)),
+                    origin: root.and_then(|root| self.origin_of(root)),
                 });
             }
         } else if self.react.calls(&call.callee, "cloneElement") {
@@ -4053,6 +4214,7 @@ pub fn collect_usage_facts(program: &Program<'_>) -> Vec<UsageFact> {
         module_loads: None,
         origins: None,
         finite_params: FxHashMap::default(),
+        provided: FxHashSet::default(),
     };
     collector.visit_program(program);
     collector.finish()
@@ -4296,8 +4458,12 @@ fn push_unique(values: &mut Vec<Value>, value: Value) {
 
 fn resolve_tag<'m>(
     tag: &'m TagFact,
+    origin: Option<TagOrigin>,
     member_expr_bindings: &'m FxHashMap<String, String>,
 ) -> Option<(&'m str, Option<String>)> {
+    if bound_elsewhere(matches!(tag, TagFact::Member(_)), origin) {
+        return None;
+    }
     match tag {
         TagFact::Ident(name) => Some((name.as_str(), None)),
         TagFact::Member(key) => member_expr_bindings
@@ -4306,10 +4472,36 @@ fn resolve_tag<'m>(
     }
 }
 
+/// The bindings compiled MDX destructures from its provider's components:
+/// `const { Card } = _components`.
+fn provided_components(program: &Program<'_>) -> FxHashSet<SymbolId> {
+    struct Provided(FxHashSet<SymbolId>);
+    impl<'a> Visit<'a> for Provided {
+        fn visit_variable_declarator(&mut self, declarator: &oxc::ast::ast::VariableDeclarator<'a>) {
+            let from_components = matches!(&declarator.init, Some(Expression::Identifier(id)) if id.name == "_components");
+            if let (true, oxc::ast::ast::BindingPattern::ObjectPattern(_)) = (from_components, &declarator.id) {
+                self.0.extend(declarator.id.get_binding_identifiers().iter().filter_map(|id| id.symbol_id.get()));
+            }
+            oxc::ast_visit::walk::walk_variable_declarator(self, declarator);
+        }
+    }
+    let mut provided = Provided(FxHashSet::default());
+    provided.visit_program(program);
+    provided.0
+}
+
+/// Whether a tag's first name is bound where the module's own bindings do
+/// not reach: a parameter or local of the name, or, for a member path, no
+/// binding at all. Such a tag never names the module's component of that
+/// name.
+fn bound_elsewhere(member: bool, origin: Option<TagOrigin>) -> bool {
+    matches!(origin, Some(TagOrigin::Nested)) || (member && matches!(origin, Some(TagOrigin::Undeclared)))
+}
+
 /// How a file's spread wrappers stand in for their targets in the filters:
 /// each wrapper tag is published as its targets, and these say what its
 /// renders and forwarding elements contribute.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct WrapperProxies {
     /// Wrapper tag → one lookup key per path to its targets, with the props
     /// that path drops. A render records once per path, so a prop one path
@@ -4318,6 +4510,12 @@ pub struct WrapperProxies {
     /// Opening-element spans of forwarding elements: their spread carries
     /// exactly the wrapper's renders, so it opens nothing itself.
     pub forwarding: FxHashSet<(u32, u32)>,
+    /// Opening-element spans of the forwarding elements of a wrapper that
+    /// `.asComponent()` takes: their spread carries what the component's
+    /// renders forward, which the project proof derives (`Forward`), so it
+    /// opens nothing itself. Only the proof reads that relation; everything
+    /// else counts the spread as open.
+    pub derived: FxHashSet<(u32, u32)>,
     /// Wrapper tag → props every element it forwards to sets itself, where
     /// no render can replace them: those elements record them, so a render
     /// that leaves them out keeps no default for them.
@@ -4336,7 +4534,7 @@ impl WrapperProxies {
     /// path for a wrapper, else under `tag_name` with every prop.
     fn lookups<'p>(&'p self, tag: &TagFact, tag_name: &'p str) -> Vec<Lookup<'p>> {
         match tag {
-            TagFact::Ident(name) if self.paths.contains_key(name) => self.paths[name]
+            TagFact::Ident(name) | TagFact::Member(name) if self.paths.contains_key(name) => self.paths[name]
                 .iter()
                 .map(|(key, dropped)| (key.as_str(), Some(dropped)))
                 .collect(),
@@ -4366,7 +4564,7 @@ pub(crate) fn passed_values(
         let mut settled = false;
         for (index, attr) in attrs.iter().enumerate().filter(|(_, attr)| attr.name == key) {
             values.insert(attr.variant_class.as_str());
-            settled |= spread.is_none_or(|before| index >= before);
+            settled |= attr.settles(index, *spread);
         }
         if !settled {
             values.insert(match spread {
@@ -4391,10 +4589,10 @@ pub fn filter_custom_prop_scan(
     let mut dynamic_results = Vec::new();
 
     for fact in facts {
-        let UsageFact::Element { tag, attrs, .. } = fact else {
+        let UsageFact::Element { tag, attrs, origin, .. } = fact else {
             continue;
         };
-        let Some((tag_name, resolved_binding)) = resolve_tag(tag, member_expr_bindings) else {
+        let Some((tag_name, resolved_binding)) = resolve_tag(tag, *origin, member_expr_bindings) else {
             continue;
         };
         for (tag_name, dropped) in proxies.lookups(tag, tag_name) {
@@ -4478,10 +4676,11 @@ pub fn uncertain_custom_renders(
         }
         let binding = match fact {
             UsageFact::Element { span, .. } if proxies.forwarding.contains(span) => continue,
-            UsageFact::Element { tag, spread: Some(_), .. } => match resolve_tag(tag, member_expr_bindings) {
+            UsageFact::Element { tag, spread: Some(_), origin, .. } => match resolve_tag(tag, *origin, member_expr_bindings) {
                 Some((binding, _)) => binding,
                 None => continue,
             },
+            UsageFact::CreateElement { member, origin, .. } if bound_elsewhere(member.is_some(), *origin) => continue,
             UsageFact::CreateElement { ident: Some(name), .. } => name.as_str(),
             UsageFact::CreateElement { member: Some(key), .. } => match member_expr_bindings.get(key) {
                 Some(binding) => binding.as_str(),
@@ -4565,10 +4764,12 @@ pub fn filter_usage_scan(
                         at: span.0,
                     });
                 };
-                let Some((tag_name, resolved_binding)) = resolve_tag(tag, member_expr_bindings)
+                let Some((tag_name, resolved_binding)) = resolve_tag(tag, *origin, member_expr_bindings)
                 else {
-                    if let TagFact::Member(path) = tag {
-                        uncertain(&mut result, path);
+                    match tag {
+                        TagFact::Member(path) => uncertain(&mut result, path),
+                        TagFact::Ident(name) if is_component_like_identifier(name) => uncertain(&mut result, name),
+                        TagFact::Ident(_) => {}
                     }
                     continue;
                 };
@@ -4586,7 +4787,7 @@ pub fn filter_usage_scan(
                     }
                     let binding = resolved_binding.clone().unwrap_or_else(|| tag_name.to_string());
                     result.rendered_components.insert(binding.clone());
-                    if spread.is_some() {
+                    if spread.is_some() && !proxies.forwarding.contains(span) && !proxies.derived.contains(span) {
                         result.open_components.insert(binding.clone());
                     }
 
@@ -4615,7 +4816,7 @@ pub fn filter_usage_scan(
                             Some(values) => result.written_props.extend(values.map(|value| write(Some(value.clone())))),
                             None => result.written_props.push(write(None)),
                         }
-                        let settled = spread.is_none_or(|before| index >= before);
+                        let settled = attr.settles(index, *spread);
                         if let Some(props) = active_props {
                             if props.contains(&attr.name) {
                                 // A custom prop's static values belong to the custom
@@ -4732,7 +4933,10 @@ pub fn filter_usage_scan(
                         at: *at,
                     });
                 };
-                let resolved: Option<String> = if let Some(name) = ident {
+                let resolved: Option<String> = if bound_elsewhere(member.is_some(), *origin) {
+                    uncertain(&mut result, ident.as_ref().or(member.as_ref()));
+                    None
+                } else if let Some(name) = ident {
                     if component_props.contains_key(name.as_str())
                         || component_configs.contains_key(name.as_str())
                     {
