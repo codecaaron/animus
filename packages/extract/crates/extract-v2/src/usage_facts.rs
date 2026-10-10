@@ -1043,7 +1043,7 @@ pub(crate) fn collect_enriched_usage(
             if !wrapper_candidates.is_empty()
                 && !scoping.root_unresolved_references().contains_key("eval") =>
         {
-            spread_wrappers(program, scoping, &react, wrapper_candidates)
+            spread_wrappers(program, scoping, wrapper_candidates)
         }
         _ => BTreeMap::new(),
     };
@@ -2910,20 +2910,17 @@ fn spread_wrapper_candidates<'b, 'a>(program: &'b Program<'a>) -> Vec<WrapperCan
 
 /// The candidates that survive every reference check, with their forwarding
 /// elements. A wrapper binding may be used only as a JSX tag name, as the
-/// first argument of a `createElement` call usage records, as the one
-/// argument of an `.asComponent()` call, or as a member of a top-level
+/// one argument of an `.asComponent()` call, or as a member of a top-level
 /// `const` object literal, and is never reassigned; its
 /// spread parameter may be used only as a whole JSX spread argument or a
 /// read of one of its members that is no call.
 fn spread_wrappers(
     program: &Program<'_>,
     scoping: &Scoping,
-    react: &ReactNames,
     candidates: Vec<WrapperCandidate<'_, '_>>,
 ) -> BTreeMap<String, SpreadWrapper> {
     let mut scan = WrapperScan {
         scoping,
-        react,
         bindings: FxHashMap::default(),
         spreads: FxHashMap::default(),
         named: FxHashMap::default(),
@@ -3004,8 +3001,6 @@ fn initializes_top_level_object<'b, 'a: 'b>(ancestors: &mut impl Iterator<Item =
 
 struct WrapperScan<'a, 's> {
     scoping: &'s Scoping,
-    /// What the fact collector reads as React's `createElement`.
-    react: &'s ReactNames,
     /// Wrapper binding symbol → candidate index.
     bindings: FxHashMap<SymbolId, usize>,
     /// Spread parameter symbol → candidate index.
@@ -3068,10 +3063,6 @@ impl<'a> Visit<'a> for WrapperScan<'a, '_> {
             }
             match ancestors.next() {
                 Some(AstKind::JSXOpeningElement(_) | AstKind::JSXClosingElement(_)) => {}
-                // A render whose props usage records, as it does an element's.
-                Some(AstKind::CallExpression(call))
-                    if call.arguments.first().is_some_and(|first| first.span() == ident.span)
-                        && self.react.calls(&call.callee, "createElement") => {}
                 Some(AstKind::CallExpression(call))
                     if call.arguments.len() == 1
                         && call.arguments[0].span() == ident.span
@@ -3163,7 +3154,21 @@ impl<'a> Visit<'a> for WrapperScan<'a, '_> {
                     && !reference.is_write()
                     && !runs_as_method(member.span, &mut ancestors) =>
             {
-                if !stays_put(member.span, &mut self.ancestors.iter().rev().skip(1)) {
+                // A read inside a function the body declares (a closure, a
+                // method) runs wherever that function goes, so it hands the
+                // value on too.
+                let declared = self.scoping.symbol_span(symbol);
+                let nested = self
+                    .ancestors
+                    .iter()
+                    .rev()
+                    .find_map(|kind| match kind {
+                        AstKind::Function(function) => Some(function.params.span),
+                        AstKind::ArrowFunctionExpression(arrow) => Some(arrow.params.span),
+                        _ => None,
+                    })
+                    .is_some_and(|params| !(params.start <= declared.start && declared.end <= params.end));
+                if nested || !stays_put(member.span, &mut self.ancestors.iter().rev().skip(1)) {
                     self.handed_on.entry(index).or_default().insert(member.property.name.to_string());
                 }
             }
@@ -5270,21 +5275,6 @@ pub(crate) fn passed_values(
 ) -> Vec<String> {
     let mut values = BTreeSet::new();
     for fact in facts {
-        // A `createElement` render passes what its props object lists, or
-        // anything when usage cannot read it.
-        if let UsageFact::CreateElement { ident: Some(tag), props, clone: false, .. } = fact {
-            if tag == wrapper {
-                let mut listed = props.iter().flatten().filter(|(name, _)| name == key).peekable();
-                if listed.peek().is_none() {
-                    values.insert(match props {
-                        Some(_) => default.unwrap_or("__default__"),
-                        None => "__dynamic__",
-                    });
-                }
-                values.extend(listed.map(|(_, class)| class.as_str()));
-            }
-            continue;
-        }
         let UsageFact::Element { tag: TagFact::Ident(tag), attrs, spread, .. } = fact else {
             continue;
         };
@@ -5669,46 +5659,34 @@ pub fn filter_usage_scan(
                         at: *at,
                     });
                 };
-                // A wrapper render records once per path to its targets, as
-                // its elements do; a clone keeps the element's own lookup.
-                let wrapper = ident
-                    .as_ref()
-                    .filter(|_| !*clone)
-                    .and_then(|name| Some((proxies.paths.get(name)?, proxies.settled.get(name))));
-                let resolved: Vec<(String, Option<&FxHashSet<String>>)> = if bound_elsewhere(member.is_some(), *origin) {
+                let resolved: Option<String> = if bound_elsewhere(member.is_some(), *origin) {
                     uncertain(&mut result, ident.as_ref().or(member.as_ref()));
-                    Vec::new()
-                } else if let Some((paths, _)) = wrapper {
-                    paths.iter().map(|(key, dropped)| (key.clone(), Some(dropped))).collect()
+                    None
                 } else if let Some(name) = ident {
                     if component_props.contains_key(name.as_str())
                         || component_configs.contains_key(name.as_str())
                     {
-                        vec![(name.clone(), None)]
+                        Some(name.clone())
                     } else {
                         uncertain(&mut result, Some(name));
-                        Vec::new()
+                        None
                     }
                 } else if let Some(key) = member {
                     let resolved = member_expr_bindings.get(key).cloned();
                     if resolved.is_none() {
                         uncertain(&mut result, Some(key));
                     }
-                    resolved.map(|binding| (binding, None)).into_iter().collect()
+                    resolved
                 } else {
-                    Vec::new()
+                    None
                 };
-                if resolved.is_empty() && *identity_uncertain {
-                    uncertain(&mut result, None);
-                }
-                for (binding, dropped) in resolved {
-                    let reaches = |prop: &String| !dropped.is_some_and(|dropped| dropped.contains(prop));
+                if let Some(binding) = resolved {
                     // A props object usage reads in full writes what it lists,
                     // and through a rest only what that rest can carry.
                     match writes.as_ref().filter(|_| !*clone) {
                         Some(writes) => {
                             let active = component_props.get(binding.as_str());
-                            for (prop, literal, conditions) in writes.props.iter().filter(|(prop, ..)| reaches(prop)) {
+                            for (prop, literal, conditions) in &writes.props {
                                 result.written_props.push(WrittenProp {
                                     binding: binding.clone(),
                                     prop: prop.clone(),
@@ -5735,7 +5713,7 @@ pub fn filter_usage_scan(
                     // JSX attribute's do.
                     if let Some(active) = component_props.get(binding.as_str()) {
                         let custom = custom_props.get(binding.as_str());
-                        for (prop_name, value) in literals.iter().filter(|(prop, _)| reaches(prop)) {
+                        for (prop_name, value) in literals {
                             if !active.contains(prop_name) || custom.is_some_and(|c| c.contains(prop_name)) {
                                 continue;
                             }
@@ -5754,10 +5732,7 @@ pub fn filter_usage_scan(
                     }
                     if let Some(config) = component_configs.get(&binding) {
                         let mut written: FxHashSet<&str> = FxHashSet::default();
-                        if let Some((_, Some(settled))) = wrapper {
-                            written.extend(settled.iter().map(String::as_str));
-                        }
-                        for (key, class) in props.iter().flatten().filter(|(key, _)| reaches(key)) {
+                        for (key, class) in props.iter().flatten() {
                             if config.variants.contains_key(key) {
                                 written.insert(key);
                                 result.variant_usages.push(VariantUsage {
@@ -5788,6 +5763,8 @@ pub fn filter_usage_scan(
                         }
                     }
                     result.rendered_components.insert(binding);
+                } else if *identity_uncertain {
+                    uncertain(&mut result, None);
                 }
             }
             // Overrides usage can list reach every component that declares
