@@ -6,7 +6,7 @@ use oxc::ast::ast::{
     Program, PropertyKey, PropertyKind, Statement, UnaryOperator, VariableDeclarationKind,
 };
 use oxc::span::{GetSpan, Span};
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use serde_json::{Map, Value};
 
 #[derive(Debug)]
@@ -86,6 +86,9 @@ fn eval_object_expr_scoped(
     let mut map = Map::new();
     let mut skipped = Vec::new();
     let mut captured = Vec::new();
+    // Keys a spread overwrote with a lost value: each keeps its position
+    // until a later known write fills it, and is dropped if none does.
+    let mut tombstones = FxHashSet::default();
 
     for prop_kind in &obj.properties {
         match prop_kind {
@@ -93,11 +96,11 @@ fn eval_object_expr_scoped(
                 if prop.kind != PropertyKind::Init {
                     return Err(BailError::new("getter/setter in style object"));
                 }
-                if prop.computed {
-                    return Err(BailError::new("computed property key in style object"));
-                }
-
-                let key = eval_property_key(&prop.key)?;
+                let key = if prop.computed {
+                    computed_key(&prop.key, static_values)?
+                } else {
+                    eval_property_key(&prop.key)?
+                };
                 // Eligibility is inherited by nested blocks, so only positions under
                 // `animationName`/`animation` mint the unregistered-reference code.
                 // `animation` is in because the shorthand can embed a keyframe name;
@@ -147,6 +150,7 @@ fn eval_object_expr_scoped(
                                 cap.key = format!("{}.{}", key, cap.key);
                                 captured.push(cap);
                             }
+                            tombstones.remove(&key);
                             map.insert(key, value);
                         }
                         Err(bail) => {
@@ -168,6 +172,7 @@ fn eval_object_expr_scoped(
                     eligible,
                 ) {
                     Ok(value) => {
+                        tombstones.remove(&key);
                         map.insert(key, value);
                     }
                     Err(bail) => {
@@ -180,13 +185,129 @@ fn eval_object_expr_scoped(
                     }
                 }
             }
-            ObjectPropertyKind::SpreadProperty(_) => {
-                return Err(BailError::new("spread element in style object"));
+            ObjectPropertyKind::SpreadProperty(spread) => {
+                // A stable static object spreads in authored order: a later
+                // key overrides an earlier one and keeps its first position.
+                // A lost key overrides too, so no earlier value stands for it.
+                let mut spread_value = static_object_at(&spread.argument, static_values)?;
+                for (mut path, reason) in take_lost_segments(&mut spread_value) {
+                    let key = path.pop().unwrap_or_default();
+                    if path.is_empty() {
+                        map.insert(key.clone(), Value::Null);
+                        tombstones.insert(key.clone());
+                    }
+                    skipped.push(SkippedProperty {
+                        key,
+                        reason,
+                        parent: (!path.is_empty()).then(|| path.join(".")),
+                        span: span_of(spread.span),
+                    });
+                }
+                if let Value::Object(entries) = spread_value {
+                    for (key, value) in entries {
+                        tombstones.remove(&key);
+                        map.insert(key, value);
+                    }
+                }
             }
         }
     }
 
+    map.retain(|key, _| !tombstones.contains(key));
     Ok((Value::Object(map), skipped, captured))
+}
+
+/// A computed key whose value is a constant string: a string or an
+/// expression-free template literal, or a static binding or member that
+/// holds a string. A key read from a lost value bails with its reason.
+fn computed_key(
+    key: &PropertyKey<'_>,
+    static_values: Option<&FxHashMap<String, Value>>,
+) -> Result<String, BailError> {
+    let unsupported = || BailError::new("computed property key in style object");
+    let expr = key.as_expression().ok_or_else(unsupported)?;
+    match crate::chain_walk::unwrap_type_assertions(expr) {
+        Expression::StringLiteral(lit) => Ok(lit.value.to_string()),
+        Expression::TemplateLiteral(tpl) if tpl.expressions.is_empty() => tpl
+            .quasis
+            .first()
+            .and_then(|quasi| quasi.value.cooked)
+            .map(|cooked| cooked.to_string())
+            .ok_or_else(unsupported),
+        other => {
+            let statics = static_values.ok_or_else(unsupported)?;
+            if let Some(reason) = lost_path_reason(other, statics) {
+                return Err(BailError::new(format!("computed property key in style object — {reason}")));
+            }
+            match static_path_value(other, statics) {
+                Some(Value::String(text)) => Ok(text.clone()),
+                _ => Err(unsupported()),
+            }
+        }
+    }
+}
+
+/// The static value an identifier, or a member path from one, names:
+/// `preset`, `presets.pixel`, `presets['pixel']`. `None` for anything else,
+/// and for a member a lost-value marker stands in for.
+pub(crate) fn static_path_value<'v>(
+    expr: &Expression<'_>,
+    static_values: &'v FxHashMap<String, Value>,
+) -> Option<&'v Value> {
+    match crate::chain_walk::unwrap_type_assertions(expr) {
+        Expression::Identifier(ident) => static_values
+            .get(ident.name.as_str())
+            .filter(|value| asset_function(value).is_none()),
+        Expression::StaticMemberExpression(member) => {
+            let parent = static_path_value(&member.object, static_values)?;
+            lost_value_reason(parent).is_none().then_some(())?;
+            parent
+                .as_object()?
+                .get(member.property.name.as_str())
+                .filter(|value| lost_value_reason(value).is_none())
+        }
+        Expression::ComputedMemberExpression(member) => {
+            let key = match crate::chain_walk::unwrap_type_assertions(&member.expression) {
+                Expression::StringLiteral(lit) => lit.value.to_string(),
+                other => static_path_value(other, static_values)?.as_str()?.to_string(),
+            };
+            let parent = static_path_value(&member.object, static_values)?;
+            lost_value_reason(parent).is_none().then_some(())?;
+            parent.as_object()?.get(&key).filter(|value| lost_value_reason(value).is_none())
+        }
+        _ => None,
+    }
+}
+
+/// The reason of the lost-value marker an identifier or member path meets.
+fn lost_path_reason<'v>(expr: &Expression<'_>, static_values: &'v FxHashMap<String, Value>) -> Option<&'v str> {
+    match crate::chain_walk::unwrap_type_assertions(expr) {
+        Expression::Identifier(ident) => lost_value_reason(static_values.get(ident.name.as_str())?),
+        Expression::StaticMemberExpression(member) => lost_path_reason(&member.object, static_values).or_else(|| {
+            let parent = static_path_value(&member.object, static_values)?;
+            lost_value_reason(parent.get(member.property.name.as_str())?)
+        }),
+        Expression::ComputedMemberExpression(member) => lost_path_reason(&member.object, static_values)
+            .or_else(|| lost_path_reason(&member.expression, static_values)),
+        _ => None,
+    }
+}
+
+/// The static object a spread argument names, or why it names none. An
+/// object whose stability the analysis could not prove is a marker naming
+/// the use that makes it unstable.
+fn static_object_at(
+    expr: &Expression<'_>,
+    static_values: Option<&FxHashMap<String, Value>>,
+) -> Result<Value, BailError> {
+    if let Some(reason) = static_values.and_then(|sv| lost_path_reason(expr, sv)) {
+        return Err(BailError::new(format!("spread of {reason}")));
+    }
+    match static_values.and_then(|sv| static_path_value(expr, sv)) {
+        Some(value) if value.is_object() => Ok(value.clone()),
+        Some(_) => Err(BailError::new("spread of a static value that is no object")),
+        None => Err(BailError::new("spread element in style object")),
+    }
 }
 
 fn eval_property_key(key: &PropertyKey<'_>) -> Result<String, BailError> {
@@ -289,7 +410,7 @@ fn eval_expression_scoped(
         Expression::Identifier(ident) => {
             if let Some(sv) = static_values {
                 if let Some(val) = sv.get(ident.name.as_str()).filter(|val| asset_function(val).is_none()) {
-                    return Ok(val.clone());
+                    return Ok(held_value(val).clone());
                 }
             }
             Err(BailError::new("variable reference (non-static)"))
@@ -304,16 +425,21 @@ fn eval_expression_scoped(
             Err(BailError::new("tagged template (non-static)"))
         }
         Expression::StaticMemberExpression(member) => {
-            if let Some(sv) = static_values {
-                if let Expression::Identifier(ident) = &member.object {
-                    if let Some(Value::Object(map)) = sv.get(ident.name.as_str()) {
-                        if let Some(val) = map
-                            .get(member.property.name.as_str())
-                            .filter(|val| lost_value_reason(val).is_none())
-                        {
-                            return Ok(val.clone());
-                        }
-                    }
+            // One member of a binding reads its held value; deeper paths do not.
+            let held = match (static_values, &member.object) {
+                (Some(sv), Expression::Identifier(ident)) => sv
+                    .get(ident.name.as_str())
+                    .map(held_value)
+                    .and_then(|value| value.get(member.property.name.as_str()))
+                    .filter(|value| lost_value_reason(value).is_none()),
+                _ => None,
+            };
+            if let Some(val) = held.or_else(|| static_values.and_then(|sv| static_path_value(expr, sv))) {
+                return Ok(val.clone());
+            }
+            if !matches!(member.object, Expression::Identifier(_)) {
+                if let Some(reason) = static_values.and_then(|sv| lost_path_reason(expr, sv)) {
+                    return Err(BailError::new(format!("member expression (non-static) — {reason}")));
                 }
             }
             Err(BailError::new(member_expression_skip_reason(
@@ -323,9 +449,13 @@ fn eval_expression_scoped(
                 keyframes_eligible,
             )))
         }
-        Expression::ComputedMemberExpression(_) => {
-            Err(BailError::new("member expression (non-static)"))
-        }
+        Expression::ComputedMemberExpression(_) => static_values
+            .and_then(|sv| static_path_value(expr, sv))
+            .cloned()
+            .ok_or_else(|| match static_values.and_then(|sv| lost_path_reason(expr, sv)) {
+                Some(reason) => BailError::new(format!("member expression (non-static) — {reason}")),
+                None => BailError::new("member expression (non-static)"),
+            }),
 
         _ => Err(BailError::new("unsupported expression type")),
     }
@@ -348,6 +478,9 @@ fn member_expression_skip_reason(
         return format!("{named} — evaluated without extraction-time statics");
     };
     match sv.get(base) {
+        Some(value) if lost_value_reason(value).is_some() => {
+            format!("{named} — {}", lost_value_reason(value).unwrap_or_default())
+        }
         Some(Value::Object(_)) => format!(
             "{named} — '{base}' is a registered collection with no '{property}' member"
         ),
@@ -601,37 +734,66 @@ fn collect_static_values_impl(
             };
 
             if let Some(init) = &declarator.init {
-                let init = crate::chain_walk::unwrap_type_assertions(init);
-                let mut dummy_skips = Vec::new();
-                match init {
-                    Expression::ObjectExpression(obj) => {
-                        if let Ok((mut val, skips, captures)) = eval_object_expr_scoped(obj, Some(&assets), false) {
-                            if !require_complete {
-                                let lost = LostValueSource {
-                                    obj,
-                                    name: &name,
-                                    undefined_bound,
-                                };
-                                mark_lost_values(&mut val, &lost, &skips, &captures);
-                                values.insert(name, val);
-                            } else if skips.is_empty() && captures.is_empty() {
-                                values.insert(name, val);
-                            }
-                        }
-                    }
-                    _ => {
-                        if let Ok(val) = eval_expression_with_statics(init, &mut dummy_skips, Some(&assets)) {
-                            if !require_complete || dummy_skips.is_empty() {
-                                values.insert(name, val);
-                            }
-                        }
-                    }
+                // Style values read earlier consts, as source order runs them;
+                // JSX usage values keep reading literals only.
+                let scope = if require_complete { &assets } else { &values };
+                if let Some(val) = const_value(init, &name, scope, require_complete, undefined_bound) {
+                    values.insert(name, val);
                 }
             }
         }
     }
 
     values
+}
+
+/// A const initializer's static value, reading `scope`.
+fn const_value(
+    init: &Expression<'_>,
+    name: &str,
+    scope: &FxHashMap<String, Value>,
+    require_complete: bool,
+    undefined_bound: bool,
+) -> Option<Value> {
+    match crate::chain_walk::unwrap_type_assertions(init) {
+        Expression::ObjectExpression(obj) => {
+            let (mut val, skips, captures) = eval_object_expr_scoped(obj, Some(scope), false).ok()?;
+            if !require_complete {
+                mark_lost_values(&mut val, &LostValueSource { obj, name, undefined_bound }, &skips, &captures);
+                Some(val)
+            } else {
+                (skips.is_empty() && captures.is_empty()).then_some(val)
+            }
+        }
+        init => {
+            let mut skips = Vec::new();
+            let val = eval_expression_with_statics(init, &mut skips, Some(scope)).ok()?;
+            (!require_complete || skips.is_empty()).then_some(val)
+        }
+    }
+}
+
+/// The style value of module-scope const `name` when its initializer reads
+/// no other const, as every style value was read before const initializers
+/// read earlier consts. `None` when that initializer has no static value
+/// then: a spread, member or computed key of another const.
+pub(crate) fn pre_read_static(program: &Program<'_>, name: &str, in_package: bool) -> Option<Value> {
+    let declarator = program.body.iter().find_map(|stmt| {
+        let decl = match stmt {
+            Statement::VariableDeclaration(decl) => decl,
+            Statement::ExportNamedDeclaration(export) => match &export.declaration {
+                Some(Declaration::VariableDeclaration(decl)) => decl,
+                _ => return None,
+            },
+            _ => return None,
+        };
+        (decl.kind == VariableDeclarationKind::Const).then_some(())?;
+        decl.declarations.iter().find(|declarator| {
+            matches!(&declarator.id, oxc::ast::ast::BindingPattern::BindingIdentifier(ident) if ident.name == name)
+        })
+    })?;
+    let assets = asset_bindings(program, in_package);
+    const_value(declarator.init.as_ref()?, name, &assets, false, module_binds(program, "undefined"))
 }
 
 /// Marks a value a const object cannot carry statically — a skipped key or
@@ -707,8 +869,56 @@ fn mark_lost_value(
     }
 }
 
-fn lost_value_reason(value: &Value) -> Option<&str> {
+/// A marker that stands in for a static value no reader may use, saying why.
+pub(crate) fn lost_marker(reason: String) -> Value {
+    let mut marker = Map::new();
+    marker.insert(LOST_VALUE.to_string(), Value::String(reason));
+    Value::Object(marker)
+}
+
+/// Set on a marker for a const object whose stability the analysis could
+/// not prove, holding its value.
+const HELD_VALUE: &str = "$animus.held";
+
+/// A lost marker that still holds `value`, the binding's `pre_read_static`
+/// value: a spread, a computed key or a member path below the first member
+/// refuses with `reason`, while the reads extraction made before the
+/// stability analysis (the binding by name, or one member of it as a value)
+/// take `value` through `held_value`.
+pub(crate) fn held_marker(reason: String, value: Value) -> Value {
+    let mut marker = lost_marker(reason);
+    if let Some(entries) = marker.as_object_mut() {
+        entries.insert(HELD_VALUE.to_string(), value);
+    }
+    marker
+}
+
+/// The value a held marker holds, or `value` itself.
+pub(crate) fn held_value(value: &Value) -> &Value {
+    match value.as_object() {
+        Some(entries) if entries.contains_key(LOST_VALUE) => entries.get(HELD_VALUE).unwrap_or(value),
+        _ => value,
+    }
+}
+
+/// Why a static value is no usable value, when a marker stands in for it.
+pub(crate) fn lost_value_reason(value: &Value) -> Option<&str> {
     value.as_object()?.get(LOST_VALUE)?.as_str()
+}
+
+/// The static value a dotted path from a binding names, through members
+/// no marker stands in for; the last step may be a marker, so a reader can
+/// report it.
+pub(crate) fn static_path<'v>(statics: &'v FxHashMap<String, Value>, path: &str) -> Option<&'v Value> {
+    let mut segments = path.split('.');
+    let mut current = statics.get(segments.next()?)?;
+    for segment in segments {
+        if lost_value_reason(current).is_some() {
+            return Some(current);
+        }
+        current = current.as_object()?.get(segment)?;
+    }
+    Some(current)
 }
 
 /// Among a file's static values, a local bound to `@animus-ui/system`'s
@@ -871,21 +1081,26 @@ pub(crate) fn take_lost_custom_props(value: &mut Value) -> LostCustomProps {
 /// returning each lost property, as a dotted path, with its reason. A
 /// captured inline `transform` is removed without a skip.
 pub(crate) fn take_lost_values(value: &mut Value) -> Vec<(String, String)> {
+    take_lost_segments(value)
+        .into_iter()
+        .map(|(path, reason)| (path.join("."), reason))
+        .collect()
+}
+
+/// `take_lost_values` with each path as its key segments, since a selector
+/// key can itself contain a dot.
+fn take_lost_segments(value: &mut Value) -> Vec<(Vec<String>, String)> {
     let mut lost = Vec::new();
-    collect_lost_values(value, "", &mut lost);
+    collect_lost_values(value, &[], &mut lost);
     lost
 }
 
-fn collect_lost_values(value: &mut Value, path: &str, lost: &mut Vec<(String, String)>) {
+fn collect_lost_values(value: &mut Value, path: &[String], lost: &mut Vec<(Vec<String>, String)>) {
     match value {
         Value::Object(map) => {
             let keys: Vec<String> = map.keys().cloned().collect();
             for key in keys {
-                let at = if path.is_empty() {
-                    key.clone()
-                } else {
-                    format!("{path}.{key}")
-                };
+                let at = [path, std::slice::from_ref(&key)].concat();
                 let Some(child) = map.get_mut(&key) else {
                     continue;
                 };
