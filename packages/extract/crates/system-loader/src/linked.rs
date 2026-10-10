@@ -1,11 +1,13 @@
 //! Module graphs with an import cycle, which the topological bundle cannot
-//! order. Each module still evaluates once, in Node's order: depth first from
-//! the entry, each module after the modules it imports, in source order. A
-//! module in a cycle is linked before any module of its cycle evaluates: its
-//! exports become getters over its own bindings, so function declarations
-//! are readable at once and `let`, `const` and `class` bindings throw until
-//! they are initialized, and each import from another module reads that
-//! module's exports when it runs, as a live binding does.
+//! order, evaluate as Node evaluates them. Every module's export object
+//! exists first. Each module is then linked: its exports become getters over
+//! its own bindings, so a function declaration is readable at once and a
+//! `let`, `const` or `class` binding throws until it is initialized, and each
+//! name `export *` brings in is resolved now, as Node resolves it. Modules
+//! then evaluate once each, depth first from the entry, each after the
+//! modules it imports in source order. Every import reads the exporting
+//! module when it runs, as a live binding does. An import of a name its
+//! module does not export, or exports ambiguously, fails the load.
 
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
@@ -20,133 +22,99 @@ use oxc::span::{GetSpan, SourceType};
 
 use super::{collect_declaration_export_names, js_quoted, module_export_name, stub_key};
 
-/// Defines each export of `source` the target lacks as a getter reading
-/// `source`, for `export * from`.
-pub(crate) const STAR_HELPER: &str = "const __star = (target, source) => { if (!source) return; \
-for (const key of Object.keys(source)) { if (key !== 'default' && \
-!Object.prototype.hasOwnProperty.call(target, key)) Object.defineProperty(target, key, \
-{ enumerable: true, get: () => source[key] }); } };\n";
-
-/// Evaluation order and the cycles a cyclic graph holds.
-pub(crate) struct CyclicOrder {
-    /// Every module, each after the modules it imports unless they are in
-    /// its cycle: depth-first post-order from the entry, then any module
-    /// not reached, in path order.
-    pub order: Vec<String>,
-    /// Each cycle's modules in path order, a module importing itself
-    /// included.
-    pub cycles: Vec<Vec<String>>,
-}
-
 fn source_type(path: &str) -> SourceType {
     SourceType::from_path(Path::new(path))
         .unwrap_or_else(|_| SourceType::mjs())
         .with_module(true)
 }
 
-/// The modules `path` imports or re-exports from, in source order.
-fn requests(
-    path: &str,
-    source: &str,
-    specifier_map: &HashMap<(String, String), String>,
-    source_map: &HashMap<String, String>,
-) -> Vec<String> {
-    let allocator = Allocator::default();
-    let ParserReturn { program, .. } = Parser::new(&allocator, source, source_type(path)).parse();
-    program
-        .body
-        .iter()
-        .filter_map(|stmt| match stmt {
-            Statement::ImportDeclaration(decl) => Some(decl.source.value.as_str()),
-            Statement::ExportNamedDeclaration(decl) => decl.source.as_ref().map(|s| s.value.as_str()),
-            Statement::ExportAllDeclaration(decl) => Some(decl.source.value.as_str()),
-            _ => None,
-        })
-        .filter_map(|spec| specifier_map.get(&(path.to_string(), spec.to_string())))
-        .filter(|target| source_map.contains_key(target.as_str()))
+/// The registry key a specifier of `path` names: a module's canonical path,
+/// or a stub's key.
+fn module_key(path: &str, spec: &str, specifier_map: &HashMap<(String, String), String>) -> String {
+    specifier_map
+        .get(&(path.to_string(), spec.to_string()))
         .cloned()
-        .collect()
+        .unwrap_or_else(|| stub_key(spec))
 }
 
-pub(crate) fn cyclic_order(
+/// The read of export `name` of the module registered as `key`.
+fn export_read(key: &str, name: &str) -> String {
+    format!("__modules['{}']['{}']", js_quoted(key), js_quoted(name))
+}
+
+/// Every module in evaluation order: depth-first post-order from the entry,
+/// following imports and re-exports in source order, then any module not
+/// reached, in path order.
+pub(crate) fn evaluation_order(
     specifier_map: &HashMap<(String, String), String>,
     source_map: &HashMap<String, String>,
     entry_path: &str,
-) -> CyclicOrder {
+) -> Vec<String> {
+    let requests = |path: &str| -> Vec<String> {
+        let allocator = Allocator::default();
+        let ParserReturn { program, .. } =
+            Parser::new(&allocator, &source_map[path], source_type(path)).parse();
+        program
+            .body
+            .iter()
+            .filter_map(|stmt| match stmt {
+                Statement::ImportDeclaration(decl) => Some(decl.source.value.as_str()),
+                Statement::ExportNamedDeclaration(decl) => decl.source.as_ref().map(|s| s.value.as_str()),
+                Statement::ExportAllDeclaration(decl) => Some(decl.source.value.as_str()),
+                _ => None,
+            })
+            .map(|spec| module_key(path, spec, specifier_map))
+            .filter(|target| source_map.contains_key(target))
+            .collect()
+    };
     let mut paths: Vec<&String> = source_map.keys().collect();
     paths.sort();
-    let edges: HashMap<&str, Vec<String>> = paths
-        .iter()
-        .map(|path| (path.as_str(), requests(path, &source_map[*path], specifier_map, source_map)))
-        .collect();
-
-    // Iterative depth-first post-order, so a deep graph cannot overflow.
-    let post_order = |roots: &mut dyn Iterator<Item = &str>, next: &dyn Fn(&str) -> Vec<String>| {
-        let mut seen: HashSet<String> = HashSet::new();
-        let mut out: Vec<String> = Vec::new();
-        for root in roots {
-            if !seen.insert(root.to_string()) {
-                continue;
-            }
-            let mut stack: Vec<(String, Vec<String>, usize)> = vec![(root.to_string(), next(root), 0)];
-            while let Some((node, children, index)) = stack.last_mut() {
-                if let Some(child) = children.get(*index).cloned() {
-                    *index += 1;
-                    if seen.insert(child.clone()) {
-                        let grandchildren = next(&child);
-                        stack.push((child, grandchildren, 0));
-                    }
-                } else {
-                    out.push(node.clone());
-                    stack.pop();
-                }
-            }
-        }
-        out
-    };
-
-    let forward = |node: &str| edges.get(node).cloned().unwrap_or_default();
-    let mut roots = std::iter::once(entry_path).chain(paths.iter().map(|path| path.as_str()));
-    let order = post_order(&mut roots, &forward);
-
-    // Kosaraju: modules a reverse walk reaches from each, in reverse finish
-    // order, share its cycle.
-    let mut reverse: HashMap<&str, Vec<String>> = HashMap::new();
-    for (from, targets) in &edges {
-        for target in targets {
-            reverse.entry(target.as_str()).or_default().push(from.to_string());
-        }
-    }
-    for sources in reverse.values_mut() {
-        sources.sort();
-    }
-    let backward = |node: &str| reverse.get(node).cloned().unwrap_or_default();
-    let mut assigned: HashSet<String> = HashSet::new();
-    let mut cycles: Vec<Vec<String>> = Vec::new();
-    for node in order.iter().rev() {
-        if assigned.contains(node) {
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut order: Vec<String> = Vec::new();
+    // Iterative, so a deep graph cannot overflow the stack.
+    for root in std::iter::once(entry_path).chain(paths.iter().map(|path| path.as_str())) {
+        if !source_map.contains_key(root) || !seen.insert(root.to_string()) {
             continue;
         }
-        let mut component: Vec<String> = post_order(&mut std::iter::once(node.as_str()), &|n: &str| {
-            backward(n).into_iter().filter(|m| !assigned.contains(m)).collect()
-        });
-        assigned.extend(component.iter().cloned());
-        let self_import = edges.get(node.as_str()).is_some_and(|targets| targets.contains(node));
-        if component.len() > 1 || self_import {
-            component.sort();
-            cycles.push(component);
+        let mut stack: Vec<(String, Vec<String>, usize)> = vec![(root.to_string(), requests(root), 0)];
+        while let Some((node, children, index)) = stack.last_mut() {
+            if let Some(child) = children.get(*index).cloned() {
+                *index += 1;
+                if seen.insert(child.clone()) {
+                    let grandchildren = requests(&child);
+                    stack.push((child, grandchildren, 0));
+                }
+            } else {
+                order.push(node.clone());
+                stack.pop();
+            }
         }
     }
-    cycles.sort();
-    CyclicOrder { order, cycles }
+    order
 }
 
-/// A module of a cycle, rewritten for linking.
+/// What one of a module's own export names reads.
+pub(crate) enum ExportTarget {
+    /// A binding the module declares.
+    Local(String),
+    /// Export `name` of the module registered as `from`: a re-export, or an
+    /// export of an imported binding.
+    Indirect { from: String, name: String },
+    /// The namespace of the module registered as `from`.
+    Namespace { from: String },
+}
+
+/// A module of a cyclic graph, rewritten for linking.
 pub(crate) struct LinkedModule {
-    /// Getter definitions of its exports on `__exports`.
-    pub link: String,
-    /// Require literals of its `export * from` modules.
+    /// Its own export names, in source order.
+    pub exports: Vec<(String, ExportTarget)>,
+    /// The modules its `export *` declarations name, in source order.
     pub stars: Vec<String>,
+    /// Each named or default import: its module and the name.
+    pub imports: Vec<(String, String)>,
+    /// Statements that run at link time, before the export getters: each
+    /// namespace import's binding, and an anonymous default function's name.
+    pub link: String,
     /// Its code with imports and export syntax removed and each read of an
     /// imported binding reading the exporting module.
     pub body: String,
@@ -168,112 +136,135 @@ pub(crate) fn rewrite_module_for_linking(
         Parser::new(&allocator, source, source_type(canonical_path)).parse();
     let semantic = SemanticBuilder::new().with_build_nodes(true).build(&program).semantic;
     let scoping = semantic.scoping();
-    let require_literal = |spec: &str| {
-        js_quoted(
-            &specifier_map
-                .get(&(canonical_path.to_string(), spec.to_string()))
-                .cloned()
-                .unwrap_or_else(|| stub_key(spec)),
-        )
-    };
+    let key = |spec: &str| module_key(canonical_path, spec, specifier_map);
 
     let mut edits: Vec<Edit> = Vec::new();
     let mut removed: Vec<(usize, usize)> = Vec::new();
     // Each imported binding, by symbol, as the read of its module's export.
     let mut imported = HashMap::new();
-    let mut imported_by_name: HashMap<String, String> = HashMap::new();
-    let mut getters: Vec<(String, String)> = Vec::new();
-    let mut stars: Vec<String> = Vec::new();
-    let mut remove = |edits: &mut Vec<Edit>, start: u32, end: u32, text: String| {
+    let mut imported_by_name: HashMap<String, (String, String)> = HashMap::new();
+    let mut module = LinkedModule {
+        exports: Vec::new(),
+        stars: Vec::new(),
+        imports: Vec::new(),
+        link: String::new(),
+        body: String::new(),
+    };
+    let mut local_exports: Vec<(String, String)> = Vec::new();
+    let mut remove = |edits: &mut Vec<Edit>, start: u32, end: u32| {
         removed.push((start as usize, end as usize));
-        edits.push(Edit { start: start as usize, end: end as usize, text });
+        edits.push(Edit { start: start as usize, end: end as usize, text: String::new() });
     };
 
     for stmt in &program.body {
         match stmt {
             Statement::ImportDeclaration(decl) => {
-                let literal = require_literal(&decl.source.value);
-                let mut text = String::new();
+                let from = key(&decl.source.value);
                 for specifier in decl.specifiers.iter().flatten() {
-                    let export = match specifier {
+                    let name = match specifier {
                         ImportDeclarationSpecifier::ImportSpecifier(named) => module_export_name(&named.imported),
                         ImportDeclarationSpecifier::ImportDefaultSpecifier(_) => "default".to_string(),
                         ImportDeclarationSpecifier::ImportNamespaceSpecifier(namespace) => {
-                            let _ = write!(text, "const {} = __require('{}');", namespace.local.name, literal);
+                            let _ = writeln!(
+                                module.link,
+                                "const {} = __modules['{}'];",
+                                namespace.local.name,
+                                js_quoted(&from)
+                            );
                             continue;
                         }
                     };
+                    let local = specifier.local();
+                    module.imports.push((from.clone(), name.clone()));
+                    imported_by_name.insert(local.name.to_string(), (from.clone(), name.clone()));
                     // `(0, …)`: a read in any expression position, and a call
                     // through it gets no `this`, as an imported function's does.
-                    let read = format!("(0, __require('{}')['{}'])", literal, js_quoted(&export));
-                    let local = specifier.local();
-                    imported_by_name.insert(local.name.to_string(), read.clone());
-                    imported.insert(local.symbol_id(), read);
+                    imported.insert(local.symbol_id(), format!("(0, {})", export_read(&from, &name)));
                 }
-                remove(&mut edits, decl.span.start, decl.span.end, text);
+                remove(&mut edits, decl.span.start, decl.span.end);
             }
             Statement::ExportNamedDeclaration(decl) => {
                 if let Some(source_literal) = &decl.source {
-                    let literal = require_literal(&source_literal.value);
+                    let from = key(&source_literal.value);
                     for es in &decl.specifiers {
-                        getters.push((
+                        module.exports.push((
                             module_export_name(&es.exported),
-                            format!("__require('{}')['{}']", literal, js_quoted(&module_export_name(&es.local))),
+                            ExportTarget::Indirect { from: from.clone(), name: module_export_name(&es.local) },
                         ));
                     }
-                    remove(&mut edits, decl.span.start, decl.span.end, String::new());
+                    remove(&mut edits, decl.span.start, decl.span.end);
                 } else if let Some(declaration) = &decl.declaration {
                     edits.push(Edit {
                         start: decl.span.start as usize,
                         end: declaration.span().start as usize,
                         text: String::new(),
                     });
-                    let mut names = Vec::new();
-                    collect_declaration_export_names(declaration, &mut names);
-                    getters.extend(names);
+                    collect_declaration_export_names(declaration, &mut local_exports);
                 } else {
                     for es in &decl.specifiers {
-                        getters.push((module_export_name(&es.exported), module_export_name(&es.local)));
+                        local_exports.push((module_export_name(&es.exported), module_export_name(&es.local)));
                     }
-                    remove(&mut edits, decl.span.start, decl.span.end, String::new());
+                    remove(&mut edits, decl.span.start, decl.span.end);
                 }
             }
             Statement::ExportDefaultDeclaration(decl) => {
                 let start = decl.declaration.span().start;
-                let named = match &decl.declaration {
-                    ExportDefaultDeclarationKind::FunctionDeclaration(function) => function.id.as_ref(),
-                    ExportDefaultDeclarationKind::ClassDeclaration(class) => class.id.as_ref(),
-                    _ => None,
-                };
-                if let Some(id) = named {
-                    edits.push(Edit { start: decl.span.start as usize, end: start as usize, text: String::new() });
-                    getters.push(("default".to_string(), id.name.to_string()));
-                } else {
-                    edits.push(Edit {
-                        start: decl.span.start as usize,
-                        end: start as usize,
-                        text: "const __default = ".to_string(),
-                    });
-                    if matches!(
-                        decl.declaration,
-                        ExportDefaultDeclarationKind::FunctionDeclaration(_)
-                            | ExportDefaultDeclarationKind::ClassDeclaration(_)
-                    ) {
-                        edits.push(Edit { start: decl.span.end as usize, end: decl.span.end as usize, text: ";".to_string() });
+                let prefix = Edit { start: decl.span.start as usize, end: start as usize, text: String::new() };
+                match &decl.declaration {
+                    ExportDefaultDeclarationKind::FunctionDeclaration(function) => match &function.id {
+                        Some(id) => local_exports.push(("default".to_string(), id.name.to_string())),
+                        // Still a hoisted declaration, under a name of its own.
+                        None => {
+                            edits.push(Edit {
+                                start: function.params.span.start as usize,
+                                end: function.params.span.start as usize,
+                                text: " __default".to_string(),
+                            });
+                            module.link.push_str(
+                                "Object.defineProperty(__default, 'name', { value: 'default', configurable: true });\n",
+                            );
+                            local_exports.push(("default".to_string(), "__default".to_string()));
+                        }
+                    },
+                    ExportDefaultDeclarationKind::ClassDeclaration(class) if class.id.is_some() => {
+                        let id = class.id.as_ref().map(|id| id.name.to_string()).unwrap_or_default();
+                        local_exports.push(("default".to_string(), id));
                     }
-                    getters.push(("default".to_string(), "__default".to_string()));
+                    kind => {
+                        edits.push(Edit { text: "const __default = ".to_string(), ..prefix });
+                        if matches!(kind, ExportDefaultDeclarationKind::ClassDeclaration(_)) {
+                            edits.push(Edit {
+                                start: decl.span.end as usize,
+                                end: decl.span.end as usize,
+                                text: ";".to_string(),
+                            });
+                        }
+                        local_exports.push(("default".to_string(), "__default".to_string()));
+                        continue;
+                    }
                 }
+                edits.push(prefix);
             }
             Statement::ExportAllDeclaration(decl) => {
-                let literal = require_literal(&decl.source.value);
+                let from = key(&decl.source.value);
                 match &decl.exported {
-                    Some(exported) => getters.push((module_export_name(exported), format!("__require('{}')", literal))),
-                    None => stars.push(literal),
+                    Some(exported) => {
+                        module.exports.push((module_export_name(exported), ExportTarget::Namespace { from }))
+                    }
+                    None => module.stars.push(from),
                 }
-                remove(&mut edits, decl.span.start, decl.span.end, String::new());
+                remove(&mut edits, decl.span.start, decl.span.end);
             }
             _ => {}
         }
+    }
+    // An export of an imported binding re-exports that module's export.
+    for (exported, local) in local_exports {
+        let target = match imported_by_name.get(&local) {
+            Some((from, name)) => ExportTarget::Indirect { from: from.clone(), name: name.clone() },
+            None => ExportTarget::Local(local),
+        };
+        module.exports.push((exported, target));
     }
 
     for (&symbol, read) in &imported {
@@ -303,16 +294,137 @@ pub(crate) fn rewrite_module_for_linking(
     for edit in &edits {
         body.replace_range(edit.start..edit.end, &edit.text);
     }
+    module.body = body;
+    Ok(module)
+}
 
-    let mut link = String::new();
-    for (exported, local) in &getters {
-        let read = imported_by_name.get(local).cloned().unwrap_or_else(|| local.clone());
-        let _ = writeln!(
-            link,
-            "Object.defineProperty(__exports, '{}', {{ enumerable: true, get: () => {} }});",
-            js_quoted(exported),
-            read
-        );
+/// How a module's export name resolves, as Node's ResolveExport finds it.
+#[derive(Clone, PartialEq, Eq)]
+enum Resolution {
+    /// The binding it reads: a module and a name, or a module's namespace.
+    Found(String),
+    Missing,
+    Ambiguous,
+}
+
+/// Static resolution of the export names of a cyclic graph's modules.
+pub(crate) struct Linker<'a> {
+    pub modules: &'a HashMap<String, LinkedModule>,
+    /// Stub modules and the names each exports besides `default`.
+    pub stubs: &'a HashMap<String, HashSet<String>>,
+}
+
+impl Linker<'_> {
+    fn resolve(&self, module: &str, name: &str, set: &mut HashSet<(String, String)>) -> Resolution {
+        if let Some(names) = self.stubs.get(module) {
+            return if name == "default" || names.contains(name) {
+                Resolution::Found(format!("{module}\0{name}"))
+            } else {
+                Resolution::Missing
+            };
+        }
+        let Some(linked) = self.modules.get(module) else {
+            return Resolution::Missing;
+        };
+        // A circular request resolves to nothing, as in Node.
+        if !set.insert((module.to_string(), name.to_string())) {
+            return Resolution::Missing;
+        }
+        if let Some((_, target)) = linked.exports.iter().find(|(exported, _)| exported == name) {
+            return match target {
+                ExportTarget::Local(local) => Resolution::Found(format!("{module}\0{local}")),
+                ExportTarget::Indirect { from, name } => self.resolve(from, name, set),
+                ExportTarget::Namespace { from } => Resolution::Found(format!("{from}\0*")),
+            };
+        }
+        if name == "default" {
+            return Resolution::Missing;
+        }
+        let mut found = Resolution::Missing;
+        for star in &linked.stars {
+            match self.resolve(star, name, set) {
+                Resolution::Ambiguous => return Resolution::Ambiguous,
+                Resolution::Missing => {}
+                resolution if found == Resolution::Missing => found = resolution,
+                resolution if resolution != found => return Resolution::Ambiguous,
+                _ => {}
+            }
+        }
+        found
     }
-    Ok(LinkedModule { link, stars, body })
+
+    fn exported_names(&self, module: &str, visited: &mut HashSet<String>, names: &mut Vec<String>) {
+        if !visited.insert(module.to_string()) {
+            return;
+        }
+        if let Some(stub) = self.stubs.get(module) {
+            let mut stub_names: Vec<&String> = stub.iter().collect();
+            stub_names.sort();
+            names.extend(stub_names.into_iter().cloned());
+            return;
+        }
+        let Some(linked) = self.modules.get(module) else { return };
+        names.extend(linked.exports.iter().map(|(exported, _)| exported.clone()));
+        for star in &linked.stars {
+            let mut star_names = Vec::new();
+            self.exported_names(star, visited, &mut star_names);
+            names.extend(star_names.into_iter().filter(|name| name != "default"));
+        }
+    }
+
+    /// The getters `module`'s export object gets at link time: each export
+    /// name and the expression its getter returns. A name `export *` brings
+    /// in reads the star module that supplies it; an ambiguous one is left
+    /// out, as Node leaves it out of the namespace.
+    pub fn getters(&self, module: &str) -> Vec<(String, String)> {
+        let linked = &self.modules[module];
+        let mut getters: Vec<(String, String)> = linked
+            .exports
+            .iter()
+            .map(|(exported, target)| {
+                let read = match target {
+                    ExportTarget::Local(local) => local.clone(),
+                    ExportTarget::Indirect { from, name } => export_read(from, name),
+                    ExportTarget::Namespace { from } => format!("__modules['{}']", js_quoted(from)),
+                };
+                (exported.clone(), read)
+            })
+            .collect();
+        let mut names = Vec::new();
+        self.exported_names(module, &mut HashSet::new(), &mut names);
+        let mut seen: HashSet<String> = getters.iter().map(|(name, _)| name.clone()).collect();
+        for name in names {
+            if !seen.insert(name.clone()) {
+                continue;
+            }
+            if !matches!(self.resolve(module, &name, &mut HashSet::new()), Resolution::Found(_)) {
+                continue;
+            }
+            let supplier = linked
+                .stars
+                .iter()
+                .find(|star| matches!(self.resolve(star, &name, &mut HashSet::new()), Resolution::Found(_)));
+            if let Some(star) = supplier {
+                getters.push((name.clone(), export_read(star, &name)));
+            }
+        }
+        getters
+    }
+
+    /// Fails as Node fails to link: an import of a name its module does not
+    /// export, or exports ambiguously through `export *`.
+    pub fn check_imports(&self, module: &str) -> Result<(), String> {
+        for (from, name) in &self.modules[module].imports {
+            let problem = match self.resolve(from, name, &mut HashSet::new()) {
+                Resolution::Found(_) => continue,
+                Resolution::Missing => "does not export it",
+                Resolution::Ambiguous => "exports it ambiguously through `export *`",
+            };
+            return Err(format!(
+                "module '{module}' imports '{name}' from '{from}', which {problem}; the system loader \
+                 links this cyclic module graph as Node does, and Node rejects this import too"
+            ));
+        }
+        Ok(())
+    }
 }

@@ -1129,6 +1129,7 @@ fn build_bundle(
             return build_linked_bundle(
                 specifier_map,
                 source_map,
+                stub_exports,
                 entry_path,
                 bundle,
                 marker_offsets,
@@ -1193,79 +1194,68 @@ fn push_module_iife(
 }
 
 /// The bundle of a graph with an import cycle (see `linked`), after the
-/// stub modules `bundle` already holds. A module outside every cycle keeps
-/// its IIFE, since everything it imports has evaluated when it runs. Each
-/// cycle is linked before the first of its modules evaluates: its modules'
-/// export objects exist, and each module runs to its `yield` to define its
-/// getters; each then finishes in evaluation order.
+/// stub modules `bundle` already holds. Every module's export object exists
+/// first; each module is then a generator that runs to its `yield` to link,
+/// defining its namespace imports and its export getters; then each finishes
+/// in evaluation order.
 fn build_linked_bundle(
     specifier_map: &HashMap<(String, String), String>,
     source_map: &HashMap<String, String>,
+    stub_exports: &HashMap<String, HashSet<String>>,
     entry_path: &str,
     mut bundle: String,
     mut marker_offsets: Vec<(usize, String)>,
     stub_specifiers: Vec<String>,
 ) -> Result<(String, BundleLayout), String> {
-    let linked::CyclicOrder { order, cycles } = linked::cyclic_order(specifier_map, source_map, entry_path);
-    let cycle_of: HashMap<&str, usize> = cycles
-        .iter()
-        .enumerate()
-        .flat_map(|(index, cycle)| cycle.iter().map(move |module| (module.as_str(), index)))
-        .collect();
-    let generators: HashMap<&str, String> = cycles
-        .iter()
-        .flatten()
-        .enumerate()
-        .map(|(index, module)| (module.as_str(), format!("__linked{index}")))
-        .collect();
+    let order = linked::evaluation_order(specifier_map, source_map, entry_path);
+    let mut paths: Vec<&String> = source_map.keys().collect();
+    paths.sort();
+    let mut modules: HashMap<String, linked::LinkedModule> = HashMap::with_capacity(paths.len());
+    for path in &paths {
+        let module = linked::rewrite_module_for_linking(&source_map[*path], path, specifier_map)?;
+        modules.insert((*path).clone(), module);
+    }
+    let linker = linked::Linker { modules: &modules, stubs: stub_exports };
+    for path in &paths {
+        linker.check_imports(path)?;
+    }
+    let generators: HashMap<&str, String> =
+        paths.iter().enumerate().map(|(index, path)| (path.as_str(), format!("__linked{index}"))).collect();
     let generator = |module: &str| &generators[module];
-    bundle.push_str(linked::STAR_HELPER);
-    bundle.push('\n');
 
-    let mut module_spans = Vec::with_capacity(order.len());
-    let mut linked_cycles: HashSet<usize> = HashSet::new();
-    for module_path in &order {
-        let Some(&cycle) = cycle_of.get(module_path.as_str()) else {
-            push_module_iife(
-                &mut bundle,
-                &mut marker_offsets,
-                &mut module_spans,
-                module_path,
-                source_map,
-                specifier_map,
-            )?;
-            continue;
-        };
-        if linked_cycles.insert(cycle) {
-            for member in &cycles[cycle] {
-                let _ = writeln!(bundle, "__modules['{}'] = {{}};", js_quoted(member));
-            }
-            for member in &cycles[cycle] {
-                let member_source = source_map
-                    .get(member)
-                    .ok_or_else(|| format!("module '{}' not found in source_map", member))?;
-                let module = linked::rewrite_module_for_linking(member_source, member, specifier_map)?;
-                marker_offsets.push((bundle.len(), member.clone()));
-                let _ = writeln!(bundle, "{}{}", MODULE_MARKER_PREFIX, member);
-                let _ = writeln!(
-                    bundle,
-                    "const {} = (function*(){{ const __exports = __modules['{}'];",
-                    generator(member),
-                    js_quoted(member)
-                );
-                bundle.push_str(&module.link);
-                bundle.push_str("yield;\n");
-                for star in &module.stars {
-                    let _ = writeln!(bundle, "__star(__exports, __require('{}'));", star);
-                }
-                let start = bundle.len();
-                bundle.push_str(&module.body);
-                module_spans.push((start, bundle.len(), member.clone()));
-                bundle.push_str("\n})();\n");
-                let _ = writeln!(bundle, "{}.next();\n", generator(member));
-            }
+    for path in &paths {
+        let _ = writeln!(bundle, "__modules['{}'] = {{}};", js_quoted(path));
+    }
+    bundle.push('\n');
+    let mut module_spans = Vec::with_capacity(paths.len());
+    for path in &paths {
+        let module = &modules[*path];
+        marker_offsets.push((bundle.len(), (*path).clone()));
+        let _ = writeln!(bundle, "{}{}", MODULE_MARKER_PREFIX, path);
+        let _ = writeln!(
+            bundle,
+            "const {} = (function*(){{ const __exports = __modules['{}'];",
+            generator(path),
+            js_quoted(path)
+        );
+        bundle.push_str(&module.link);
+        for (name, read) in linker.getters(path) {
+            let _ = writeln!(
+                bundle,
+                "Object.defineProperty(__exports, '{}', {{ enumerable: true, get: () => {} }});",
+                js_quoted(&name),
+                read
+            );
         }
-        let _ = writeln!(bundle, "{}.next();", generator(module_path));
+        bundle.push_str("yield;\n");
+        let start = bundle.len();
+        bundle.push_str(&module.body);
+        module_spans.push((start, bundle.len(), (*path).clone()));
+        bundle.push_str("\n})();\n");
+        let _ = writeln!(bundle, "{}.next();\n", generator(path));
+    }
+    for path in &order {
+        let _ = writeln!(bundle, "{}.next();", generator(path));
     }
 
     let module_starts = offsets_to_line_numbers(&bundle, marker_offsets);
@@ -2576,45 +2566,90 @@ export const ds = tokens;
         );
     }
 
-    /// Contract: a system whose module graph has an import cycle loads with
-    /// Node's semantics: each module evaluates once, after the modules it
-    /// imports outside its cycle; a hoisted function is callable before its
-    /// module evaluates, and an import reads the exporting binding live.
+    /// Contract: a system whose module graph has an import cycle loads as
+    /// Node loads it. Each module evaluates once, after the modules it imports
+    /// outside its cycle. A hoisted function, an anonymous default function,
+    /// a namespace import and a name `export *` brings in are all readable
+    /// before their module evaluates, and every import, including one from
+    /// outside the cycle, reads the exporting binding live. An import of a
+    /// name the module does not export fails the load, naming both modules.
     #[test]
     fn cyclic_module_graph_evaluates_with_node_semantics() {
-        let dir = scratch_dir("cyclic-esm");
-        write_fixture(
-            &dir.join("a.js"),
-            "import { describe, hello } from './b.js';\n\
-             export let count = 0;\n\
-             count += 1;\n\
-             export const greeting = hello();\n\
-             export class Day { constructor(n) { this.n = n; } label() { return describe(this); } }\n",
-        );
-        write_fixture(
-            &dir.join("b.js"),
-            "import { Day, count } from './a.js';\n\
-             export function hello() { return 'hello'; }\n\
-             export function describe(day) { return 'day-' + day.n + '-' + count; }\n\
-             export const make = (n) => new Day(n);\n",
-        );
-        let entry = dir.join("entry.ts");
-        write_fixture(
-            &entry,
-            &format!(
-                "import {{ make }} from './b.js';\n\
-                 import {{ greeting }} from './a.js';\n\
-                 const label = make(3).label();\n\
-                 export const ds = {{ toConfig: () => ({{ propConfig: JSON.stringify({{ label, greeting }}), groupRegistry: '{{}}' }}), getVocabularyRecord: () => ({{ version: 1, keyframes: [], globalStyles: [], collisions: [] }}) }};\n\
-                 {FIXTURE_THEME}"
+        const PROTOCOL: &str = "export const ds = { toConfig: () => ({ propConfig: JSON.stringify(data), groupRegistry: '{}' }), \
+             getVocabularyRecord: () => ({ version: 1, keyframes: [], globalStyles: [], collisions: [] }) };\n\
+             export const theme = { serialize: () => ({ scalesJson: '{}', variableMapJson: '{}', variableCss: '', contextualVarsJson: '{}' }) };\n";
+        /// A case's name, its modules, and the loaded propConfig or a part
+        /// of the load's error.
+        type Case<'a> = (&'a str, &'a [(&'a str, &'a str)], Result<&'a str, &'a str>);
+        let cases: [Case; 6] = [
+            (
+                "hoisted-live",
+                &[
+                    ("a", "import { describe, hello } from './b.js';\nexport let count = 0;\ncount += 1;\nexport const greeting = hello();\nexport class Day { constructor(n) { this.n = n; } label() { return describe(this); } }\n"),
+                    ("b", "import { Day, count } from './a.js';\nexport function hello() { return 'hello'; }\nexport function describe(day) { return 'day-' + day.n + '-' + count; }\nexport const make = (n) => new Day(n);\n"),
+                    ("entry", "import { make } from './b.js';\nimport { greeting } from './a.js';\nconst data = { label: make(3).label(), greeting };\n"),
+                ],
+                Ok(r#"{"label":"day-3-1","greeting":"hello"}"#),
             ),
-        );
-
-        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &[]);
-        let _ = fs::remove_dir_all(&dir);
-
-        let config = result.expect("a cyclic module graph must load");
-        assert_eq!(config.prop_config, r#"{"label":"day-3-1","greeting":"hello"}"#);
+            (
+                "namespace-link",
+                &[
+                    ("entry", "import * as ns from './b.js';\nexport function get() { return ns.value; }\nconst data = { got: ns.got };\n"),
+                    ("b", "import { get } from './entry.js';\nexport const value = 2;\nexport const got = get();\n"),
+                ],
+                Ok(r#"{"got":2}"#),
+            ),
+            (
+                "anonymous-default",
+                &[
+                    ("entry", "import { got } from './b.js';\nexport default function () { return 6; }\nconst data = { got };\n"),
+                    ("b", "import get from './entry.js';\nexport const got = get();\n"),
+                ],
+                Ok(r#"{"got":6}"#),
+            ),
+            (
+                "star-link",
+                &[
+                    ("entry", "export * from './b.js';\nimport { seen } from './b.js';\nconst data = { seen };\n"),
+                    ("b", "import { value as view } from './entry.js';\nexport const value = 7;\nexport const seen = view;\n"),
+                ],
+                Ok(r#"{"seen":7}"#),
+            ),
+            (
+                "outside-live",
+                &[
+                    ("a", "import { ready } from './b.js';\nexport let count = 0;\nexport function bump() { count++; }\nexport const isReady = () => ready;\n"),
+                    ("b", "import { bump } from './a.js';\nexport const ready = typeof bump === 'function';\n"),
+                    ("entry", "import { count, bump } from './a.js';\nbump();\nconst data = { count };\n"),
+                ],
+                Ok(r#"{"count":1}"#),
+            ),
+            (
+                "missing-import",
+                &[
+                    ("entry", "import { nope } from './b.js';\nconst data = { nope };\n"),
+                    ("b", "import './entry.js';\nexport const value = 1;\n"),
+                ],
+                Err("imports 'nope' from"),
+            ),
+        ];
+        for (name, files, expected) in cases {
+            let dir = scratch_dir(&format!("cyclic-{name}"));
+            for (file, source) in files {
+                let source = if *file == "entry" { format!("{source}{PROTOCOL}") } else { source.to_string() };
+                write_fixture(&dir.join(format!("{file}.js")), &source);
+            }
+            let entry = dir.join("entry.js");
+            let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &[]);
+            let _ = fs::remove_dir_all(&dir);
+            match expected {
+                Ok(config) => assert_eq!(result.map(|loaded| loaded.prop_config).as_deref(), Ok(config), "{name}"),
+                Err(message) => {
+                    let error = result.err().unwrap_or_default();
+                    assert!(error.contains(message) && error.contains("entry.js"), "{name}: {error}");
+                }
+            }
+        }
     }
 
     #[test]
