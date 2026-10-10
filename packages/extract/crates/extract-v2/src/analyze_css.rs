@@ -1901,6 +1901,9 @@ fn is_css_keyword_value(value: &str) -> bool {
 struct CandidateWalk<'a> {
     scale_names: &'a FxHashMap<String, String>,
     theme: &'a FlatTheme,
+    /// The consumer's tokens and contextual variables by name: a bare value
+    /// that names one is reported as an unresolved token value instead.
+    tokens: &'a FxHashMap<String, Vec<String>>,
     file: &'a str,
     component: &'a str,
 }
@@ -1910,7 +1913,7 @@ fn record_external_candidates_in_decls(
     decls: &[CssDeclaration],
     diagnostics: &mut Vec<CssDiagnostic>,
 ) {
-    let CandidateWalk { scale_names, theme, file, component } = *walk;
+    let CandidateWalk { scale_names, theme, tokens: known, file, component } = *walk;
     for d in decls {
         if d.property.starts_with("--") {
             continue;
@@ -1925,7 +1928,7 @@ fn record_external_candidates_in_decls(
             let Some(scale) = scale_names.get(&d.property) else {
                 continue;
             };
-            if !is_scale_key_shaped_value(&d.value) || is_css_keyword_value(&d.value) {
+            if !is_scale_key_shaped_value(&d.value) || is_css_keyword_value(&d.value) || known.contains_key(&d.value) {
                 continue;
             }
             let synthesized = format!("{}.{}", scale, d.value);
@@ -5678,6 +5681,7 @@ fn run_with_system_floor(
                         &CandidateWalk {
                             scale_names: &scale_names,
                             theme: &inputs.theme,
+                            tokens: &theme_tokens,
                             file: file_path,
                             component: &chain.descriptor.binding,
                         },
@@ -8350,20 +8354,24 @@ mod tests {
     #[test]
     fn token_names_in_an_included_package_report_as_in_its_own_build() {
         let source = "export const chipContent = ds.styles({ paddingLeft: 't-spacing-1', scrollPaddingLeft: 't-spacing-1' }).asClass();\n";
-        let reported = |path: &str| {
+        // Every diagnostic for the file, by code and first clause.
+        let reported = |path: &str, source: &str| {
             let out = analyze(&[(path, source)], &kit_spacing_inputs());
-            let mut warned: Vec<_> = out
+            let mut all: Vec<_> = out
                 .diagnostics
                 .iter()
-                .filter(|d| d.code.as_deref() == Some(TOKEN_SHAPED_VALUE))
-                .map(|d| d.message.split(" — ").next().unwrap_or_default().to_string())
+                .map(|d| (d.code.clone(), d.message.split(" — ").next().unwrap_or_default().to_string()))
                 .collect();
-            warned.sort();
-            warned
+            all.sort();
+            all
         };
-        let own = reported("src/Chip.tsx");
+        let own = reported("src/Chip.tsx", source);
         assert_eq!(own.len(), 2, "both longhands name a token: {own:?}");
-        assert_eq!(reported("kit/src/Chip.tsx"), own, "a consuming app reports what the kit's build does");
+        assert!(own.iter().all(|(code, _)| code.as_deref() == Some(TOKEN_SHAPED_VALUE)), "{own:?}");
+        assert_eq!(reported("kit/src/Chip.tsx", source), own, "a consuming app reports what the kit's build does, once");
+        // A name the consumer does not know stays an external candidate alone.
+        let unknown = reported("kit/src/Chip.tsx", "export const chipContent = ds.styles({ paddingLeft: 'unseen' }).asClass();\n");
+        assert!(matches!(unknown.as_slice(), [(Some(code), _)] if code == EXTERNAL_TOKEN_CANDIDATE), "{unknown:?}");
     }
 
     #[test]
