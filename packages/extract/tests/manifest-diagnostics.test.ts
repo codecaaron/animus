@@ -164,7 +164,7 @@ describe('surfaceManifestDiagnostics strict policy', () => {
 });
 
 describe('surfaceManifestDiagnostics levels', () => {
-  it('sets each code by exact entry, else longest prefix, over strict and the default', () => {
+  it('sets each code by exact entry, else longest prefix, else kind, over strict and the default', () => {
     const record = (code: string, severity = 'warn'): ManifestDiagnostic => ({
       file: 'src/a.tsx',
       component: 'A',
@@ -179,13 +179,26 @@ describe('surfaceManifestDiagnostics levels', () => {
       'animus.style.unrecognized-key': 'warn',
       'animus.chain.*': 'info',
       'animus.styel.typo': 'warn',
+      'kind:bail': 'off',
+      'kind:skp': 'warn',
     };
     const knownCodes = new Set([
       'animus.usage.identity-uncertain',
       'animus.style.unrecognized-key',
       'animus.style.other',
       'animus.chain.skipped-value',
+      'animus.chain.stage-evaluation-failed',
     ]);
+    const bail = (component: string, code?: string): ManifestDiagnostic => {
+      const diagnostic: ManifestDiagnostic = {
+        file: 'src/a.tsx',
+        component,
+        kind: 'bail',
+        message: `dropped ${component}`,
+      };
+      if (code !== undefined) diagnostic.code = code;
+      return diagnostic;
+    };
     const warned: string[] = [];
     const informed: string[] = [];
     const surface = () =>
@@ -196,6 +209,8 @@ describe('surfaceManifestDiagnostics levels', () => {
             record('animus.style.unrecognized-key', 'error'),
             record('animus.style.other'),
             record('animus.chain.skipped-value'),
+            bail('B'),
+            bail('C', 'animus.chain.stage-evaluation-failed'),
           ],
         },
         (m) => warned.push(m),
@@ -217,9 +232,17 @@ describe('surfaceManifestDiagnostics levels', () => {
     expect(
       warned.filter((m) => m.includes('animus.style.unrecognized-key'))
     ).toHaveLength(2);
-    expect(informed).toHaveLength(2);
+    expect(informed).toHaveLength(4);
     expect(informed[0]).toMatch(/^ℹ src\/a\.tsx: A: reported animus\.chain/);
+    // A kind key selects records with no code; a code's prefix beats it.
+    expect(warned.some((m) => m.includes('B not extracted'))).toBe(false);
+    expect(informed).toContainEqual(
+      expect.stringMatching(/^ℹ C not extracted: dropped C/)
+    );
     // An unknown key warns once, however often the build analyzes.
+    expect(warned.filter((m) => m.includes("'kind:skp'"))).toEqual([
+      "⚠ diagnostics option: 'kind:skp' names no diagnostic kind — use kind:bail, kind:skip or kind:warn",
+    ]);
     expect(warned.filter((m) => m.includes("'animus.styel.typo'"))).toEqual([
       "⚠ diagnostics option: 'animus.styel.typo' matches no Animus diagnostic code — check its spelling (a code the system package mints at run time is known only once it is reported)",
     ]);

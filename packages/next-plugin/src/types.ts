@@ -17,10 +17,11 @@ export interface AnimusNextOptions {
    *  warning. Omitted or `false` warns. */
   strict?: boolean;
   /**
-   * Each `animus.*` code's level, by exact code or a prefix ending in `.*`
-   * (`'animus.style.*'`): `'off'`, `'info'`, `'warn'` or `'error'`, which
-   * fails the build. An exact code beats the longest matching prefix, and an
-   * entry beats `strict` and the code's own severity.
+   * Each `animus.*` code's level, by exact code, by a prefix ending in `.*`
+   * (`'animus.style.*'`), or by kind (`'kind:bail'`, `'kind:skip'`,
+   * `'kind:warn'`): `'off'`, `'info'`, `'warn'` or `'error'`, which fails the
+   * build. An exact code beats the longest matching prefix, which beats a
+   * kind, and an entry beats `strict` and the code's own severity.
    */
   diagnostics?: DiagnosticLevels;
   /** Project-root-relative path of the one file that receives the stylesheet

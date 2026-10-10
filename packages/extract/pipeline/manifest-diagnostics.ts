@@ -89,7 +89,8 @@ export interface DiagnosticPolicy {
  *  fails the build as a strict failure does. */
 export type DiagnosticLevel = 'off' | 'info' | 'warn' | 'error';
 
-/** Levels by exact code, or by a prefix ending in `.*` (`animus.style.*`). */
+/** Levels by exact code, by a prefix ending in `.*` (`animus.style.*`), or
+ *  by kind (`kind:bail`, `kind:skip`, `kind:warn`). */
 export type DiagnosticLevels = Readonly<Record<string, DiagnosticLevel>>;
 
 export const DIAGNOSTIC_LEVELS: ReadonlySet<string> = new Set([
@@ -99,23 +100,32 @@ export const DIAGNOSTIC_LEVELS: ReadonlySet<string> = new Set([
   'error',
 ]);
 
-/** The level `levels` sets for `code`: its exact entry, else the entry of
- *  the longest prefix it starts with. */
+/** A key that selects every record of a kind: `kind:bail`, `kind:skip` or
+ *  `kind:warn`. */
+const KIND_KEY = 'kind:';
+const DIAGNOSTIC_KINDS: ReadonlySet<string> = new Set(['bail', 'skip', 'warn']);
+
+/** The level `levels` sets for a record: its code's exact entry, else the
+ *  entry of the longest prefix its code starts with, else its kind's. */
 function levelFor(
-  code: string | undefined,
+  { code, kind }: Pick<ManifestDiagnostic, 'code' | 'kind'>,
   levels: DiagnosticLevels | undefined
 ): DiagnosticLevel | undefined {
-  if (code === undefined || levels === undefined) return undefined;
-  if (Object.hasOwn(levels, code)) return levels[code];
-  let longest: { length: number; level: DiagnosticLevel } | undefined;
-  for (const [key, level] of Object.entries(levels)) {
-    if (!key.endsWith('.*')) continue;
-    const prefix = key.slice(0, -1);
-    if (code.startsWith(prefix) && prefix.length > (longest?.length ?? -1)) {
-      longest = { length: prefix.length, level };
+  if (levels === undefined) return undefined;
+  if (code !== undefined) {
+    if (Object.hasOwn(levels, code)) return levels[code];
+    let longest: { length: number; level: DiagnosticLevel } | undefined;
+    for (const [key, level] of Object.entries(levels)) {
+      if (!key.endsWith('.*')) continue;
+      const prefix = key.slice(0, -1);
+      if (code.startsWith(prefix) && prefix.length > (longest?.length ?? -1)) {
+        longest = { length: prefix.length, level };
+      }
     }
+    if (longest) return longest.level;
   }
-  return longest?.level;
+  const kindKey = `${KIND_KEY}${kind}`;
+  return Object.hasOwn(levels, kindKey) ? levels[kindKey] : undefined;
 }
 
 /** The level a record prints at: the option's entry for its code, else
@@ -124,7 +134,7 @@ export function effectiveLevel(
   diagnostic: ManifestDiagnostic,
   policy: Pick<DiagnosticPolicy, 'levels' | 'strict'>
 ): DiagnosticLevel {
-  const level = levelFor(diagnostic.code, policy.levels);
+  const level = levelFor(diagnostic, policy.levels);
   if (level !== undefined) return level;
   if (diagnostic.severity === 'info') return 'info';
   return policy.strict && diagnostic.severity === 'error' ? 'error' : 'warn';
@@ -158,6 +168,9 @@ function unknownDiagnosticKeys(
   known: ReadonlySet<string>
 ): string[] {
   return Object.keys(levels).filter((key) => {
+    if (key.startsWith(KIND_KEY)) {
+      return !DIAGNOSTIC_KINDS.has(key.slice(KIND_KEY.length));
+    }
     if (!key.endsWith('.*')) return !known.has(key);
     const prefix = key.slice(0, -1);
     return ![...known].some((code) => code.startsWith(prefix));
@@ -573,7 +586,9 @@ export function surfaceManifestDiagnostics(
     checkedLevels.add(policy.levels);
     for (const key of unknownDiagnosticKeys(policy.levels, policy.knownCodes)) {
       warn(
-        `⚠ diagnostics option: '${key}' matches no Animus diagnostic code — check its spelling (a code the system package mints at run time is known only once it is reported)`
+        key.startsWith(KIND_KEY)
+          ? `⚠ diagnostics option: '${key}' names no diagnostic kind — use kind:bail, kind:skip or kind:warn`
+          : `⚠ diagnostics option: '${key}' matches no Animus diagnostic code — check its spelling (a code the system package mints at run time is known only once it is reported)`
       );
     }
   }
