@@ -427,7 +427,8 @@ pub struct FileFacts {
     /// T itself, with the sources' members written onto it.
     #[serde(skip)]
     pub(crate) assigned_targets: BTreeMap<String, String>,
-    /// Top-level function components that spread their props into a tag.
+    /// Top-level function components that spread their props into a tag,
+    /// and those a top-level object literal holds, as `X.key`.
     #[serde(skip)]
     pub props_forwarding: BTreeMap<String, crate::usage_facts::PropsForwarding>,
     /// Top-level `const` declarations → the identifier their initializer is
@@ -907,7 +908,12 @@ fn object_member_chains(name: &str, init: &Expression<'_>, chains: &mut Vec<chai
 /// Top-level `const` initializer facts: bare-identifier aliases, each
 /// declaration's root identifier, and object literals' identifier members.
 /// `let`/`var` are excluded: a mutable binding carries no static guarantee.
-fn collect_const_initializers(program: &Program<'_>) -> ConstInitializerFacts {
+/// An object literal holding a function component that forwards its props
+/// (`X.key` in `props_forwarding`) is a facade too.
+fn collect_const_initializers(
+    program: &Program<'_>,
+    props_forwarding: &BTreeMap<String, crate::usage_facts::PropsForwarding>,
+) -> ConstInitializerFacts {
     use oxc::ast::ast::{Declaration, Statement, VariableDeclarationKind};
     let mut facts = ConstInitializerFacts::default();
     // `Object.assign` is the built-in only where the module binds no `Object`.
@@ -940,9 +946,11 @@ fn collect_const_initializers(program: &Program<'_>) -> ConstInitializerFacts {
                 facts.objects.insert(name.to_string(), identifier_members(&entries));
             }
             if target.is_some()
-                || entries
-                    .iter()
-                    .any(|entry| matches!(entry, FacadeEntry::Copy(_) | FacadeEntry::Member { .. }))
+                || entries.iter().any(|entry| match entry {
+                    FacadeEntry::Copy(_) | FacadeEntry::Member { .. } => true,
+                    FacadeEntry::Other(key) => props_forwarding.contains_key(&format!("{name}.{key}")),
+                    _ => false,
+                })
             {
                 facts.facades.insert(name.to_string(), entries);
             }
@@ -1221,7 +1229,8 @@ pub(crate) fn extract_file_facts_from_static_maps(
     let walked = chain_walk::walk_program_facts(program);
     let member_parent_extensions = walked.member_parents;
     let walked_chains = walked.chains;
-    let const_initializers = collect_const_initializers(program);
+    let props_forwarding = crate::usage_facts::collect_props_forwarding(program);
+    let const_initializers = collect_const_initializers(program, &props_forwarding);
     let imports = collect_import_facts(ast.module_record());
     let create_transform_locals: rustc_hash::FxHashSet<String> = imports
         .iter()
@@ -1524,7 +1533,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
         aliases: const_initializers.aliases,
         assigned_aliases: const_initializers.assigned,
         assigned_targets: const_initializers.targets,
-        props_forwarding: crate::usage_facts::collect_props_forwarding(program),
+        props_forwarding,
         declaration_roots: const_initializers.roots,
         global_keys: BTreeMap::new(),
         object_members: const_initializers.objects,
