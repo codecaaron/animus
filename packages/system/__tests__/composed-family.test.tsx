@@ -385,6 +385,64 @@ describe('createComposedFamilyWithContext()', () => {
     expect(rootNode?.tagName.toLowerCase()).toBe('div');
   });
 
+  it('an asChild Root renders its child with its classes, refs and context, in both forms', () => {
+    const families: Record<string, ForwardRefExoticComponent<any>>[] = [
+      composeWithContext({ Root, Control }, { shared: { size: true } }),
+      createComposedFamilyWithContext(
+        { Root, Control },
+        { name: 'Card', sharedKeys: ['size'] }
+      ),
+    ];
+    for (const Family of families) {
+      const rootRef = createRef<HTMLElement>();
+      const childRef = createRef<HTMLElement>();
+      const container = document.createElement('div');
+      document.body.appendChild(container);
+      const root = createRoot(container);
+
+      flushSync(() => {
+        root.render(
+          createElement(
+            Family.Root,
+            { asChild: true, size: 'lg', ref: rootRef },
+            createElement(
+              'fieldset',
+              { className: 'own', ref: childRef },
+              createElement(Family.Control)
+            )
+          )
+        );
+      });
+      const fieldset = container.querySelector('fieldset');
+      expect(container.firstElementChild).toBe(fieldset);
+      expect(fieldset?.className).toMatch(/--size-lg own$/);
+      expect(fieldset?.querySelector('input')?.className).toContain(
+        '--size-lg'
+      );
+      expect(rootRef.current).toBe(fieldset);
+      expect(childRef.current).toBe(fieldset);
+
+      flushSync(() => {
+        root.render(
+          createElement(
+            Family.Root,
+            { size: 'lg' },
+            createElement(Family.Control)
+          )
+        );
+      });
+      const div = container.firstElementChild;
+      expect(div?.tagName).toBe('DIV');
+      expect(div?.className).toContain('--size-lg');
+      expect(div?.querySelector('input')?.className).toContain('--size-lg');
+      expect(childRef.current).toBeNull();
+
+      flushSync(() => root.unmount());
+      expect(rootRef.current).toBeNull();
+      container.remove();
+    }
+  });
+
   it('throws when no "Root" slot is present (matches composeWithContext)', () => {
     expect(() =>
       createComposedFamilyWithContext(
