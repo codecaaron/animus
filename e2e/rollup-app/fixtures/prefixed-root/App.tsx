@@ -1,5 +1,8 @@
 import { Card } from './Card';
 
+// Wide parameter types, so each runtime value travels through its runtime
+// config: a literal-union annotation would prove the value and select its
+// static class instead.
 export const App = ({
   size,
   tone,
@@ -7,7 +10,7 @@ export const App = ({
 }: {
   size: string;
   tone: string;
-  look: 'loud';
+  look: string;
 }) => (
   <>
     <Card capSize="dialog" tint="ink" look="loud">
