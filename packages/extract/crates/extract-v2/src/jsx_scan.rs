@@ -11,14 +11,14 @@ mod value_eval;
 pub use compose::{compose_callees_referenced_outside, scan_compose_calls, ComposeFamilyInfo};
 pub use system_props::scan_jsx;
 pub use usage::{
-    scan_jsx_usage, ComponentUsageConfig, StateUsage, UsageScanResult, VariantUsage,
+    scan_jsx_usage, ComponentUsageConfig, StateUsage, UsageScanResult, VariantUsage, WrittenProp,
 };
 
 pub(crate) use usage::{
     classify_jsx_attribute_as_variant_value, create_element_props, is_component_like_identifier,
     jsx_member_path,
 };
-pub(crate) use value_eval::{eval_jsx_attribute_value, eval_property_key};
+pub(crate) use value_eval::{eval_jsx_attribute_value, eval_property_key, eval_static_expression, make_json_number};
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct SystemPropUsage {
