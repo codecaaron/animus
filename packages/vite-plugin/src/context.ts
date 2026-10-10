@@ -404,7 +404,14 @@ export class PluginContext {
    *  the server or watch keeps running. Only a build fails on them. */
   reportErrors(): ((message: string) => void) | undefined {
     if (!this.development) return undefined;
-    return (message) => (this.logger ?? console).error(message);
+    // Every reported line carries `[animus]`, as the warn sink's do;
+    // `[animus:verify]` keeps its own mark.
+    return (message) =>
+      (this.logger ?? console).error(
+        /^\[animus(?::verify)?\] /.test(message)
+          ? message
+          : `[animus] ${message.replace(/^\[animus-extract\] /, '')}`
+      );
   }
 
   /** A build-strictness check that failed: a build throws `message`, and
