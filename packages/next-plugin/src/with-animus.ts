@@ -358,6 +358,7 @@ export function withAnimus(
               loader: actualLoaderPath,
               options: {
                 strict: options.strict,
+                development: context.dev === true,
                 cssImportTarget: options.cssImportTarget,
               },
             },

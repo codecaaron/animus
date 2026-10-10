@@ -190,12 +190,15 @@ export const UNSUBSTITUTED_ASSET_CODE =
   'animus.asset.unsubstituted-placeholder';
 
 /** A placeholder in emitted CSS is a broken URL in the browser: it fails a
- *  strict build and warns otherwise. */
+ *  strict build, strict development reports it, and it warns otherwise. */
 export function reportSurvivingAssetPlaceholders(
   css: string,
   report: {
     strict?: boolean;
     warn: (message: string) => void;
+    /** Development's error sink: under `strict`, the message is reported
+     *  here instead of thrown. */
+    reportErrors?: (message: string) => void;
     prefix: string;
     /** Where the text goes; emitted CSS unless named. */
     surface?: string;
@@ -204,8 +207,12 @@ export function reportSurvivingAssetPlaceholders(
   const specifiers = placeholdersInAssetCalls(css);
   if (specifiers.length === 0) return;
   const message = `${report.prefix} asset() placeholders reached ${report.surface ?? 'emitted CSS'} unsubstituted: ${specifiers.join(', ')} (${UNSUBSTITUTED_ASSET_CODE})`;
-  if (report.strict) throw new Error(message);
-  report.warn(message);
+  if (!report.strict) {
+    report.warn(message);
+    return;
+  }
+  if (!report.reportErrors) throw new Error(message);
+  report.reportErrors(message);
 }
 
 /**

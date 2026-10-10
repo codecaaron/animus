@@ -60,8 +60,12 @@ export interface AnimusExtractOptions {
   extensions?: string[];
   /**
    * Error-severity diagnostics — lost configured inputs and classified
-   * unsupported Animus declarations — fail a build instead of warning, and
-   * the dev server reports them and keeps running. Omitted or `false` warns.
+   * unsupported Animus declarations — and failed checks, such as an
+   * unresolved include or `asset()` specifier or a failed `verify`
+   * self-check, fail a build instead of warning. The dev server reports them
+   * and keeps running; a system that fails to load at startup, or a first
+   * analysis that throws, still stops it, since nothing exists to serve.
+   * Omitted or `false` warns.
    */
   strict?: boolean;
   /**

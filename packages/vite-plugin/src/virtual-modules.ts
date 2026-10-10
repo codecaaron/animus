@@ -71,6 +71,7 @@ export function loadVirtualModule(
     reportSurvivingAssetPlaceholders(css, {
       strict: ctx.options.strict,
       warn: (message) => ctx.warn(message),
+      reportErrors: ctx.reportErrors(),
       prefix: '[animus-extract]',
     });
     return css;

@@ -217,11 +217,10 @@ export async function transformSource(
     return { code: outputCode, map: null };
   } catch (e) {
     if (ctx.options.strict) {
-      throw new Error(`[animus-extract] Failed to transform ${id}: ${e}`, {
-        cause: e,
-      });
+      ctx.strictFailure(`[animus-extract] Failed to transform ${id}: ${e}`, e);
+    } else {
+      console.warn(`[animus-extract] Failed to transform ${id}:`, e);
     }
-    console.warn(`[animus-extract] Failed to transform ${id}:`, e);
     // Non-strict serves the raw source, which for an extracted file is the
     // fallback the barrier catches — recorded before returning.
     ctx.recordFallbackState(relativePath, true);

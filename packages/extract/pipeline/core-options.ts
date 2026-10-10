@@ -56,9 +56,10 @@ export interface AnimusCoreOptions {
   /** File extensions to scan; replaces the default list entirely. */
   extensions?: string[];
   /** When true, error-severity diagnostics — lost configured inputs and
-   *  classified unsupported Animus declarations — fail a build instead of
-   *  warning, and development reports them and keeps running. Omitted or
-   *  `false` warns. */
+   *  classified unsupported Animus declarations — and failed checks, such as
+   *  an unresolved include or `asset()` specifier, fail a build instead of
+   *  warning. Development reports them and keeps running, except where
+   *  nothing exists to serve yet. Omitted or `false` warns. */
   strict?: boolean;
   /** Each `animus.*` code's level, by exact code, by a prefix ending in `.*`
    *  (`'animus.style.*'`), or by kind (`'kind:bail'`, `'kind:skip'`,
