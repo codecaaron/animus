@@ -4,11 +4,10 @@ import { config } from '../fixtures/setup';
 import { analyzeProject } from './run-pipeline';
 
 /**
- * Raw selector and at-rule keys keep their authored order, so the last
- * authored of two equal-specificity rules wins; selector and condition
- * aliases keep their established ranking, in the slots aliases take. A raw
- * key and an alias that name one selector split by the key that wrote each
- * declaration.
+ * Selector and at-rule keys keep their authored order, raw keys and selector
+ * and condition aliases alike, so the last authored of two equal-specificity
+ * rules wins. A raw key and an alias that name one selector split by the key
+ * that wrote each declaration.
  */
 const source = `import { ds } from './setup';
 export const Row = ds.styles({
@@ -24,10 +23,16 @@ export const Chip = ds.styles({
   _disabled: { opacity: 0.5 },
   _hover: { opacity: 1 },
 }).asElement('span');
-export const App = () => <><Row /><Chip /></>;`;
+export const Badge = ds.styles({
+  _print: { opacity: 1 },
+  _hover: { opacity: 0.8 },
+  _motionReduce: { opacity: 0.9 },
+}).asElement('em');
+export const App = () => <><Row /><Chip /><Badge /></>;`;
 const manifest = JSON.parse(
   analyzeProject(JSON.stringify([{ path: 'fixtures/raw-order.tsx', source }]), {
     selectorAliasesJson: config.selectorAliases,
+    conditionAliasesJson: config.conditionAliases,
   })
 );
 const baseSheet: string = manifest.sheets.base.replace(/\s+/g, ' ');
@@ -51,21 +56,26 @@ const rulesOf = (binding: string) => {
     );
 };
 
-test('raw keys keep their authored order, and aliases their ranking', () => {
+test('raw keys and aliases keep their authored order together', () => {
   expect(rulesOf('Row')).toEqual([
     'cursor: default;',
     '[data-accent="danger"] cursor: help;',
-    ':hover outline: none;',
+    ':disabled opacity: 0.5;',
     ':hover cursor: pointer;',
     '@media print cursor: auto;',
-    ':disabled opacity: 0.5;',
+    ':hover outline: none;',
     '[data-disabled] cursor: not-allowed;',
   ]);
 });
 
-test('aliases alone keep their ranking whatever their authored order', () => {
+test('selector and condition aliases alone keep their authored order, not a registered rank', () => {
   expect(rulesOf('Chip')).toEqual([
-    ':hover opacity: 1;',
     ':disabled opacity: 0.5;',
+    ':hover opacity: 1;',
+  ]);
+  expect(rulesOf('Badge')).toEqual([
+    '@media print opacity: 1;',
+    ':hover opacity: 0.8;',
+    '@media (prefers-reduced-motion: reduce) opacity: 0.9;',
   ]);
 });

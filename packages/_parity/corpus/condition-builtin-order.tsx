@@ -1,5 +1,5 @@
-// Built-in `_osDark` and user-band `_motionReduce` in one style object: they
-// are authored user-first because emission must sort by registry order.
+// Built-in `_osDark` and user-band `_motionReduce` in one style object,
+// authored user-first: they emit in authored order, not by registry order.
 import { ds } from '../test-system';
 
 export const OrderProbe = ds
