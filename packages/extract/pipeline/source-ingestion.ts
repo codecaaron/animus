@@ -718,12 +718,16 @@ export interface SourceIngestorHost {
   prefix: string;
   strict(): boolean;
   warn(message: string): void;
+  /** Development's error sink: under `strict`, a fatal diagnostic is
+   *  reported here instead of thrown, and its original is quarantined. */
+  reportErrors?(): ((message: string) => void) | undefined;
 }
 
 export interface SourceIngestor {
   ingest(entries: readonly RawSourceEntry[]): Promise<SourceIngestionResult>;
-  /** Returns originals to quarantine. Fatal diagnostics throw under strict,
-   *  else warn once per (original, message); advisory ones never quarantine. */
+  /** Returns originals to quarantine. Fatal diagnostics throw under strict
+   *  (strict development reports them), else warn once per (original,
+   *  message); advisory ones never quarantine. */
   surfaceDiagnostics(
     diagnostics: readonly SourceIngestionDiagnostic[]
   ): Set<string>;
@@ -759,7 +763,8 @@ export function createSourceIngestor(host: SourceIngestorHost): SourceIngestor {
         fatal.map((diagnostic) => diagnostic.originalPath)
       );
       if (diagnostics.length === 0) return invalidOriginals;
-      if (host.strict() && fatal.length > 0) {
+      const reportError = host.strict() ? host.reportErrors?.() : undefined;
+      if (host.strict() && fatal.length > 0 && !reportError) {
         const lines = fatal.map(
           (diagnostic) =>
             `${diagnostic.code} ${diagnostic.originalPath}: ${diagnostic.message} (${SKIPPED_SOURCE_COST})`
@@ -778,7 +783,8 @@ export function createSourceIngestor(host: SourceIngestorHost): SourceIngestor {
         }
         if (warned.has(line)) continue;
         warned.add(line);
-        host.warn(`${host.prefix} ${line}`);
+        if (reportError && skipped) reportError(`${host.prefix} ${line}`);
+        else host.warn(`${host.prefix} ${line}`);
       }
       return invalidOriginals;
     },

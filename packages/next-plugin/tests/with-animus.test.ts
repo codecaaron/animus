@@ -209,6 +209,7 @@ describe('withAnimus', () => {
 
     expect(config?.module?.rules?.[0]?.use?.[0]?.options).toEqual({
       strict: true,
+      development: false,
       cssImportTarget: 'src/app/[locale]/layout.tsx',
     });
   });

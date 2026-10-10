@@ -27,17 +27,31 @@ export { discoverFiles } from '@animus-ui/extract/pipeline';
  *  the redirect names; its own dependencies, which that source imports as
  *  a browser would, are prebundled in its place (`kit > dependency`). A
  *  linked kit is source to Vite already. */
-function sourceKitOptimizeDeps(
-  rootDir: string
-): { exclude: string[]; include: string[] } | undefined {
+interface SourceKitConfig {
+  optimizeDeps: { exclude: string[]; include: string[] };
+  ssr?: { noExternal: string[] };
+}
+
+function sourceKitConfig(
+  rootDir: string,
+  serving: boolean
+): SourceKitConfig | undefined {
   const kits = sourceKitDependencies(rootDir).filter((kit) => kit.installed);
   if (kits.length === 0) return undefined;
-  return {
-    exclude: kits.map((kit) => kit.name),
-    include: kits.flatMap((kit) =>
-      kit.dependencies.map((dependency) => `${kit.name} > ${dependency}`)
-    ),
+  const names = kits.map((kit) => kit.name);
+  const config: SourceKitConfig = {
+    optimizeDeps: {
+      exclude: names,
+      include: kits.flatMap((kit) =>
+        kit.dependencies.map((dependency) => `${kit.name} > ${dependency}`)
+      ),
+    },
   };
+  // Dev SSR externalizes an installed package and loads its runtime dist,
+  // so the server renders what the client, served the source, does not.
+  // A build already reads the source.
+  if (serving) config.ssr = { noExternal: names };
+  return config;
 }
 
 export interface AnimusExtractOptions {
@@ -60,8 +74,12 @@ export interface AnimusExtractOptions {
   extensions?: string[];
   /**
    * Error-severity diagnostics — lost configured inputs and classified
-   * unsupported Animus declarations — fail a build instead of warning, and
-   * the dev server reports them and keeps running. Omitted or `false` warns.
+   * unsupported Animus declarations — and failed checks, such as an
+   * unresolved include or `asset()` specifier or a failed `verify`
+   * self-check, fail a build instead of warning. The dev server reports them
+   * and keeps running; a system that fails to load at startup, or a first
+   * analysis that throws, still stops it, since nothing exists to serve.
+   * Omitted or `false` warns.
    */
   strict?: boolean;
   /**
@@ -160,10 +178,11 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
         env.command === 'build' ? 'production' : 'development'
       );
       const define = { __ANIMUS_DEV__: mode === 'development' };
-      const optimizeDeps = sourceKitOptimizeDeps(
-        resolve(userConfig.root ?? process.cwd())
+      const kits = sourceKitConfig(
+        resolve(userConfig.root ?? process.cwd()),
+        env.command === 'serve'
       );
-      return optimizeDeps ? { define, optimizeDeps } : { define };
+      return kits ? { define, ...kits } : { define };
     },
 
     configureServer(server) {

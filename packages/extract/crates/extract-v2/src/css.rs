@@ -919,7 +919,7 @@ fn write_style_rule(output: &mut String, selectors: &[String], rule: &StyleRule,
 /// A group's declarations by the authored key that wrote each last. A group
 /// one key wrote stays whole; one that several keys share splits, so each
 /// writer's declarations keep that writer's slot.
-fn supplied_parts<'a>(
+pub(crate) fn supplied_parts<'a>(
     declarations: &'a [CssDeclaration],
     suppliers: &'a Suppliers,
 ) -> Vec<(Cow<'a, [CssDeclaration]>, Option<&'a AuthoredOrigin>)> {
@@ -944,7 +944,7 @@ fn supplied_parts<'a>(
 /// order. In each source block, the rules its selector and at-rule keys
 /// produced trade the slots they fill by default, sorted by their keys'
 /// authored positions. Declarations and breakpoints keep their slots.
-fn authored_emission_order(origins: &[Option<&AuthoredOrigin>]) -> Vec<usize> {
+pub(crate) fn authored_emission_order(origins: &[Option<&AuthoredOrigin>]) -> Vec<usize> {
     let mut order: Vec<usize> = (0..origins.len()).collect();
     let blocks: BTreeSet<usize> = origins.iter().flatten().map(|origin| origin.block).collect();
     for block in blocks {
@@ -1833,9 +1833,20 @@ pub(crate) fn unit_fallback_rewrites(value: &str, css_property: &str) -> bool {
 
 use crate::dynamic_meta::DynamicPropMeta;
 
+/// The conditions each slot variable's rules serve: `_` for the base and a
+/// breakpoint's name for its own. A variable without an entry serves every
+/// condition.
+pub type SlotConditions = HashMap<String, BTreeSet<String>>;
+
+/// Whether the rules of slot variable `var` serve `condition`.
+fn slot_serves(conditions: &SlotConditions, var: &str, condition: &str) -> bool {
+    conditions.get(var).is_none_or(|served| served.contains(condition))
+}
+
 pub fn build_variable_slot_entries(
     dynamic_props: &HashMap<String, DynamicPropMeta>,
     breakpoints: &BreakpointMap,
+    conditions: &SlotConditions,
 ) -> Vec<(String, ResolvedStyles, String)> {
     let mut entries = Vec::new();
 
@@ -1849,6 +1860,7 @@ pub fn build_variable_slot_entries(
         if !rendered.insert(meta.slot_class.as_str()) {
             continue;
         }
+        let serves = |condition: &str| slot_serves(conditions, &meta.var_name, condition);
         let css_property = css_property_name(&meta.property);
         let declarations = |var: &str, write_current_var: bool| {
             let value = format!("var({var})");
@@ -1874,16 +1886,18 @@ pub fn build_variable_slot_entries(
         };
 
         for (slot_class, write_current_var) in slots {
-            let styles = ResolvedStyles {
-                declarations: declarations(&meta.var_name, *write_current_var),
-                pseudo_selectors: vec![],
-                conditioned: vec![],
-            };
-            entries.push((slot_class.clone(), styles, css_property.clone()));
+            if serves(crate::usage_facts::BASE_CONDITION) {
+                let styles = ResolvedStyles {
+                    declarations: declarations(&meta.var_name, *write_current_var),
+                    pseudo_selectors: vec![],
+                    conditioned: vec![],
+                };
+                entries.push((slot_class.clone(), styles, css_property.clone()));
+            }
 
             // One class per breakpoint: the runtime applies only the breakpoints
             // the callsite provides, so unset ones cannot leak into the cascade.
-            for (bp_name, _) in &sorted_bps {
+            for (bp_name, _) in sorted_bps.iter().filter(|(bp_name, _)| serves(bp_name)) {
                 let bp_var = breakpoint_var(&meta.var_name, bp_name);
                 let bp_styles = ResolvedStyles {
                     declarations: vec![],
@@ -1916,11 +1930,15 @@ fn breakpoint_var(var_name: &str, breakpoint: &str) -> String {
 pub fn slot_property_registrations<'a>(
     metas: impl IntoIterator<Item = &'a DynamicPropMeta>,
     breakpoints: &BreakpointMap,
+    conditions: &SlotConditions,
 ) -> String {
     let mut names = BTreeSet::new();
     for meta in metas.into_iter().filter_map(DynamicPropMeta::value) {
-        names.insert(meta.var_name.clone());
-        for bp_name in breakpoints.breakpoints.keys() {
+        let serves = |condition: &str| slot_serves(conditions, &meta.var_name, condition);
+        if serves(crate::usage_facts::BASE_CONDITION) {
+            names.insert(meta.var_name.clone());
+        }
+        for bp_name in breakpoints.breakpoints.keys().filter(|bp_name| serves(bp_name)) {
             names.insert(breakpoint_var(&meta.var_name, bp_name));
         }
     }
@@ -2528,6 +2546,7 @@ mod tests {
                 transform_fn_source: None,
                 scale_values: std::collections::BTreeMap::new(),
                 current_var: current_var.map(str::to_string),
+                production_conditions: None,
             }),
         );
         dynamic_props
@@ -2544,7 +2563,7 @@ mod tests {
 
     #[test]
     fn a_current_var_slot_writes_it_and_has_a_slot_that_leaves_it_alone() {
-        let entries = build_variable_slot_entries(&slot_meta(Some("--current-bg")), &test_breakpoints());
+        let entries = build_variable_slot_entries(&slot_meta(Some("--current-bg")), &test_breakpoints(), &SlotConditions::default());
         let by_class: HashMap<&str, Vec<(String, String)>> =
             entries.iter().map(|(class, styles, _)| (class.as_str(), declarations_of(styles))).collect();
         let decl = |p: &str, v: &str| (p.to_string(), v.to_string());
@@ -2564,7 +2583,7 @@ mod tests {
 
     #[test]
     fn a_slot_without_current_var_is_unchanged() {
-        let entries = build_variable_slot_entries(&slot_meta(None), &test_breakpoints());
+        let entries = build_variable_slot_entries(&slot_meta(None), &test_breakpoints(), &SlotConditions::default());
         assert_eq!(entries.len(), 6);
         assert!(entries.iter().all(|(class, styles, _)| !class.contains("--keep")
             && declarations_of(styles).iter().all(|(property, _)| property == "background-color")));
@@ -2588,10 +2607,11 @@ mod tests {
                 transform_fn_source: None,
                 scale_values: std::collections::BTreeMap::new(),
                 current_var: None,
+                production_conditions: None,
             }),
         );
         let bp = test_breakpoints();
-        let entries = build_variable_slot_entries(&dynamic_props, &bp);
+        let entries = build_variable_slot_entries(&dynamic_props, &bp, &SlotConditions::default());
         assert_eq!(entries.len(), 6);
         assert_eq!(entries[0].0, "animus-dyn-p");
         assert_eq!(entries[0].1.declarations[0].property, "padding");
@@ -2628,10 +2648,11 @@ mod tests {
                 transform_fn_source: None,
                 scale_values: std::collections::BTreeMap::new(),
                 current_var: None,
+                production_conditions: None,
             }),
         );
         let bp = test_breakpoints();
-        let entries = build_variable_slot_entries(&dynamic_props, &bp);
+        let entries = build_variable_slot_entries(&dynamic_props, &bp, &SlotConditions::default());
         assert_eq!(entries.len(), 6);
         assert_eq!(entries[0].1.declarations.len(), 2);
         assert_eq!(entries[0].1.declarations[0].property, "padding-left");
@@ -2646,7 +2667,7 @@ mod tests {
     fn variable_slot_empty_dynamic_props() {
         let dynamic_props: HashMap<String, DynamicPropMeta> = HashMap::new();
         let bp = test_breakpoints();
-        let entries = build_variable_slot_entries(&dynamic_props, &bp);
+        let entries = build_variable_slot_entries(&dynamic_props, &bp, &SlotConditions::default());
         assert!(entries.is_empty());
     }
 
@@ -2668,11 +2689,12 @@ mod tests {
                 transform_fn_source: None,
                 scale_values: std::collections::BTreeMap::new(),
                 current_var: None,
+                production_conditions: None,
             }),
         );
         let bp = test_breakpoints();
         let tc = TestUtilCtx::new(utility_config(), utility_theme(), &bp);
-        let slots = build_variable_slot_entries(&dynamic_props, &bp);
+        let slots = build_variable_slot_entries(&dynamic_props, &bp, &SlotConditions::default());
         let usages = vec![UtilityInput { prop_name: "p".to_string(), value: json!(8) }];
         let out = resolve_utility_classes(&usages, &tc.ctx(), "animus").render(&bp, Some(slots), &[]);
         assert!(out.css.contains("animus-dyn-p"));

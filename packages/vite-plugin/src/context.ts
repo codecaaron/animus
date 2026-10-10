@@ -170,6 +170,8 @@ export class PluginContext {
   logger: Logger | null = null;
 
   system: SystemConfig = emptySystemConfig();
+  /** Whether a system has loaded, so a failed reload has one to keep. */
+  private systemLoaded = false;
 
   lcssTargets: LightningTargets = {};
 
@@ -233,6 +235,7 @@ export class PluginContext {
     prefix: '[animus-extract]',
     strict: () => !!this.options.strict,
     warn: (message: string) => this.warn(message),
+    reportErrors: () => this.reportErrors(),
   });
 
   rawExtensionFallbacks = new Set<string>();
@@ -401,11 +404,29 @@ export class PluginContext {
    *  the server or watch keeps running. Only a build fails on them. */
   reportErrors(): ((message: string) => void) | undefined {
     if (!this.development) return undefined;
-    return (message) => (this.logger ?? console).error(message);
+    // Every reported line carries `[animus]`, as the warn sink's do;
+    // `[animus:verify]` keeps its own mark.
+    return (message) =>
+      (this.logger ?? console).error(
+        /^\[animus(?::verify)?\] /.test(message)
+          ? message
+          : `[animus] ${message.replace(/^\[animus-extract\] /, '')}`
+      );
+  }
+
+  /** A build-strictness check that failed: a build throws `message`, and
+   *  development reports it at error level and takes the non-strict path. */
+  strictFailure(message: string, cause?: unknown): void {
+    const report = this.reportErrors();
+    if (!report) {
+      throw new Error(message, cause === undefined ? undefined : { cause });
+    }
+    report(message);
   }
 
   /** Load the system into `this.system`. On failure the previous config is
-   *  kept; strict mode throws instead. */
+   *  kept; strict mode throws instead, and strict development reports the
+   *  failure once a system has loaded, since there is one to keep. */
   loadSystem(): void {
     this.resolvedSystemPath = resolve(this.rootDir, this.options.system);
     // The entry is always a member, even before any successful load or when
@@ -444,12 +465,14 @@ export class PluginContext {
       this.systemDependencyKeys = keys;
       this.systemDependencyPaths = deps;
       this.registerSystemWatchPaths();
+      this.systemLoaded = true;
     } catch (e) {
       if (this.options.strict) {
-        throw new Error(
-          `[animus-extract] Failed to load system from ${this.resolvedSystemPath}: ${e}`,
-          { cause: e }
-        );
+        const message = `[animus-extract] Failed to load system from ${this.resolvedSystemPath}: ${e}`;
+        // No system to keep: development stops at startup as a build does.
+        if (!this.systemLoaded) throw new Error(message, { cause: e });
+        this.strictFailure(message, e);
+        return;
       }
       console.warn(
         `[animus-extract] Failed to load system from ${this.resolvedSystemPath}:`,
@@ -523,12 +546,19 @@ export class PluginContext {
         kitDescriptors: this.kitDescriptors,
       });
     } catch (e) {
+      const message = `[animus-extract] analyzeProject failed: ${e}`;
       // A diagnostic at `error` level fails a build as a strict failure
       // does; a dev server reports it instead and never reaches here.
-      if (this.options.strict || e instanceof DiagnosticFailure) {
-        throw new Error(`[animus-extract] analyzeProject failed: ${e}`, {
-          cause: e,
-        });
+      if (e instanceof DiagnosticFailure) {
+        throw new Error(message, { cause: e });
+      }
+      if (this.options.strict) {
+        // Nothing published to keep: development stops as a build does.
+        if (this.storedManifest === null) {
+          throw new Error(message, { cause: e });
+        }
+        this.strictFailure(message, e);
+        return false;
       }
       console.warn('[animus-extract] analyzeProject failed:', e);
       return false;
@@ -538,6 +568,7 @@ export class PluginContext {
     reportSurvivingAssetPlaceholders(generatedModuleCode(result.manifest), {
       strict: this.options.strict,
       warn: (message) => this.warn(message),
+      reportErrors: this.reportErrors(),
       prefix: '[animus-extract]',
       surface: 'generated runtime modules',
     });
@@ -718,10 +749,8 @@ export class PluginContext {
   }
 
   assetFallback(specifier: string, message: string, cause?: unknown): void {
-    if (this.options.strict) {
-      throw new Error(message, cause === undefined ? undefined : { cause });
-    }
-    this.warn(message);
+    if (this.options.strict) this.strictFailure(message, cause);
+    else this.warn(message);
     this.assetUrlBySpecifier.set(specifier, specifier);
     this.assetResolutionFailures.add(specifier);
   }
@@ -885,17 +914,16 @@ export class PluginContext {
   }
 
   /** An unresolvable `.includes()` specifier or a stale dist entry under an
-   *  extended package warns, and fails the build under `strict`. */
+   *  extended package warns, and fails the build under `strict` (strict
+   *  development reports it). */
   enforceIncludeResolution(): void {
     for (const message of [
       unresolvableIncludesMessage(this.externalPackageOutcomes),
       staleDistIncludesMessage(this.externalPackageOutcomes),
     ]) {
       if (message === null) continue;
-      if (this.options.strict) {
-        throw new Error(message);
-      }
-      this.warn(message);
+      if (this.options.strict) this.strictFailure(message);
+      else this.warn(message);
     }
   }
 
@@ -908,6 +936,7 @@ export class PluginContext {
       strict: this.options.strict,
       prefix: '[animus-extract]',
       warn: (message: string) => this.warn(message),
+      reportErrors: this.reportErrors(),
     });
   }
 
@@ -925,7 +954,8 @@ export class PluginContext {
     for (const message of failures) {
       const line = `[animus:verify] ${message}`;
       if (this.options.strict) {
-        throw new Error(line);
+        this.strictFailure(line);
+        continue;
       }
       if (this.logger) {
         this.logger.warn(line, { timestamp: true });

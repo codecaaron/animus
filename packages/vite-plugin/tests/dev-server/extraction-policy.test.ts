@@ -100,3 +100,51 @@ suite.each([
     expect(adapter.hotErrors!()).toEqual([]);
   });
 });
+
+// A failed build-strictness check, not a diagnostic: development reports it
+// and keeps publishing, as it does an error-level diagnostic.
+suite('development with strictness and an unresolved asset() specifier', () => {
+  let fixture: DevFixture;
+  let adapter: DevServerAdapter;
+
+  beforeAll(async () => {
+    fixture = createDevFixture();
+    adapter = createViteDevAdapter({ strict: true });
+    await adapter.start(fixture.root);
+  });
+
+  afterAll(async () => {
+    await adapter?.close();
+    fixture?.dispose();
+  });
+
+  it('the specifier is reported as an error and the server keeps publishing', async () => {
+    const hero = `import { ds } from './ds';
+
+export const Hero = ds
+  .styles({ backgroundImage: "url('animus-asset:@acme/missing.png')" })
+  .asElement('section');
+`;
+    fixture.write('src/Hero.ts', hero);
+
+    const line = await until(
+      () =>
+        adapter.trace!().find(
+          (entry) =>
+            entry.includes('log.error') &&
+            entry.includes('unresolvable asset() specifier: @acme/missing.png')
+        ) ?? false,
+      {
+        what: 'a log.error line naming the unresolved specifier',
+        reassert: () => fixture.write('src/Hero.ts', hero),
+        describe: () => renderTrace(adapter),
+      }
+    );
+    expect(line).toContain('@acme/missing.png');
+
+    await createWatcherBarrier(fixture.writeSentinel, adapter.read, () =>
+      renderTrace(adapter)
+    )();
+    expect(adapter.hotErrors!()).toEqual([]);
+  });
+});

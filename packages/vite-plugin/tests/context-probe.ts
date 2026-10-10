@@ -150,6 +150,7 @@ export function makeContextProbe<Overrides extends ContextProbeOverrides>(
     publishSourceIngestion: PluginContext.prototype.publishSourceIngestion,
     enforceExternalTokenContracts:
       PluginContext.prototype.enforceExternalTokenContracts,
+    reportErrors: PluginContext.prototype.reportErrors,
     invalidateExtractedModules() {
       probe.extractedInvalidations++;
     },
