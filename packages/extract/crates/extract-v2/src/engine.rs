@@ -493,9 +493,9 @@ impl ExtractEngine {
         let mut global_declarations: rustc_hash::FxHashMap<&str, std::collections::BTreeSet<String>> =
             rustc_hash::FxHashMap::default();
         if let Some(serde_json::Value::Object(blocks)) = &self.opts.css_inputs.global_style_blocks {
-            for (name, block) in blocks {
+            for block in blocks.values() {
                 let Some(source) = block.get("source").and_then(serde_json::Value::as_str) else { continue };
-                let declared_by = block.get("sourceExport").and_then(serde_json::Value::as_str).unwrap_or(name);
+                let Some(declared_by) = block.get("sourceExport").and_then(serde_json::Value::as_str) else { continue };
                 global_declarations.entry(source).or_default().insert(declared_by.to_string());
             }
         }

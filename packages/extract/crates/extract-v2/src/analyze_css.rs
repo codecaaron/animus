@@ -6143,10 +6143,10 @@ fn run_with_system_floor(
         // Each block's reports name its registration key and the module that
         // declares it; without one, the loaded system stands in.
         // A block's keys are located in its own declaration in the module
-        // that declares it, when the analysis read that module; each location
-        // is claimed once.
+        // that declares it, when the loader named that declaration and the
+        // analysis read the module; each location is claimed once.
         let mut declared_keys: FxHashMap<(String, String), Vec<&crate::facts::KeySource>> = FxHashMap::default();
-        let mut attribute = |name: &str, source: Option<&str>, declared_by: &str| {
+        let mut attribute = |name: &str, source: Option<&str>, declared_by: Option<&str>| {
             let file = source.unwrap_or("system");
             let component = format!("global '{name}'");
             drain_transform_failures(
@@ -6158,13 +6158,17 @@ fn run_with_system_floor(
                 &mut deferred_errors,
             );
             drain_strict_token_misses(&token_misses, file, &component, &mut diagnostics);
-            let keys = declared_keys.entry((file.to_string(), declared_by.to_string())).or_insert_with(|| {
-                files
-                    .get(file)
-                    .and_then(|ff| ff.global_keys.get(declared_by))
-                    .map(|keys| keys.iter().collect())
-                    .unwrap_or_default()
-            });
+            let mut undeclared = Vec::new();
+            let keys = match declared_by {
+                Some(declared_by) => declared_keys.entry((file.to_string(), declared_by.to_string())).or_insert_with(|| {
+                    files
+                        .get(file)
+                        .and_then(|ff| ff.global_keys.get(declared_by))
+                        .map(|keys| keys.iter().collect())
+                        .unwrap_or_default()
+                }),
+                None => &mut undeclared,
+            };
             drain_dropped_style_keys(&dropped_keys, file, &component, &[], keys, &mut diagnostics);
         };
         let css = crate::theme::resolve_global_blocks(blocks, &resolve_ctx, false, &mut attribute);

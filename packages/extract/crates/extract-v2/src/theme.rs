@@ -2074,14 +2074,18 @@ pub fn resolve_unlayered_global_blocks(blocks: &Value, ctx: &ResolveContext) -> 
     resolve_global_blocks(blocks, ctx, true, &mut |_, _, _| {})
 }
 
+/// Called with a global block's registration key, declaring module and
+/// declaring binding once the block has resolved.
+pub type AfterGlobalBlock<'a> = dyn FnMut(&str, Option<&str>, Option<&str>) + 'a;
+
 /// Resolves the layered (`unlayered: false`) or unlayered blocks, calling
-/// `after_block` with each block's key and declaring module once it has
-/// resolved, so what its resolution reported can be attributed to it.
+/// `after_block` after each, so what its resolution reported can be
+/// attributed to it.
 pub fn resolve_global_blocks(
     blocks: &Value,
     ctx: &ResolveContext,
     unlayered: bool,
-    after_block: &mut dyn FnMut(&str, Option<&str>, &str),
+    after_block: &mut AfterGlobalBlock<'_>,
 ) -> String {
     let block_map = match blocks.as_object() {
         Some(o) => o,
@@ -2091,7 +2095,8 @@ pub fn resolve_global_blocks(
     let mut parts: Vec<String> = Vec::new();
     for (name, block) in block_map {
         // `sourceExport` names the declaration in `source` that declares the
-        // block; without it, the registration name stands in.
+        // block; the registration name is no binding, so without it the block
+        // has no declaration.
         let (styles, faces, block_unlayered, source, declared_by) = match block.as_object() {
             Some(obj)
                 if obj.get("styles").map(|s| s.is_object()).unwrap_or(false)
@@ -2104,10 +2109,10 @@ pub fn resolve_global_blocks(
                     obj.get("fontFaces"),
                     obj.get("unlayered") == Some(&Value::Bool(true)),
                     obj.get("source").and_then(Value::as_str),
-                    obj.get("sourceExport").and_then(Value::as_str).unwrap_or(name),
+                    obj.get("sourceExport").and_then(Value::as_str),
                 )
             }
-            _ => (block, None, false, None, name.as_str()),
+            _ => (block, None, false, None, None),
         };
         if block_unlayered != unlayered {
             continue;

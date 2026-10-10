@@ -669,7 +669,14 @@ export const reset = { __brand: 'GlobalStyleBlock', styles: { html: { '@scope (.
         globalStyleBlocksJson: JSON.stringify({
           reset: {
             source: 'globals.ts',
+            sourceExport: 'reset',
             styles: { html: { '@scope (.x)': { opacity: 0 } } },
+          },
+          // No exporting binding names its declaration, so it is not located,
+          // though a declaration in its module shares its registration name.
+          unrelated: {
+            source: 'globals.ts',
+            styles: { body: { '@scope (.x)': { opacity: 1 } } },
           },
         }),
       },
@@ -724,12 +731,20 @@ export const reset = { __brand: 'GlobalStyleBlock', styles: { html: { '@scope (.
       'error',
       "'@scope (&)': { cursor: 'wait' }",
     ],
+    [
+      'globals.ts',
+      undefined,
+      undefined,
+      'warn',
+      'error',
+      '"@scope (.x)": {"opacity":1}',
+    ],
     ['globals.ts', 2, 71, 'warn', 'error', "'@scope (.x)': { opacity: 0 }"],
   ]);
   expect(() => surfaceManifestDiagnostics(manifest, () => {})).not.toThrow();
   expect(() =>
     surfaceManifestDiagnostics(manifest, () => {}, { strict: true })
-  ).toThrow(/5 error diagnostic/);
+  ).toThrow(/6 error diagnostic/);
 });
 
 describe('!important shorthand', () => {
