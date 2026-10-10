@@ -199,6 +199,17 @@ fn resolve_exports_entry(
         format!("./{}", key)
     };
 
+    // With no `.` keys, as Node reads it, `exports` is the root's target and
+    // exports nothing else.
+    let has_subpaths = exports
+        .as_object()
+        .is_some_and(|map| map.keys().any(|key| key.starts_with('.')));
+    if !has_subpaths {
+        return (lookup_key == ".")
+            .then(|| resolve_condition_value(exports, source, conditions))
+            .flatten();
+    }
+
     // An exact key answers alone: a declared key whose target resolves to
     // nothing is a blocked subpath, not an invitation to try the patterns.
     if let Some(entry) = exports.get(&lookup_key) {
@@ -3509,6 +3520,17 @@ export const ds = tokens;
     fn split_specifier_unscoped() {
         assert_eq!(split_specifier("lodash"), ("lodash", ""));
         assert_eq!(split_specifier("lodash/fp"), ("lodash", "/fp"));
+    }
+
+    /// Contract: as in Node, `exports` with no `.` keys is the root's target,
+    /// a conditions object or a string, and exports no other subpath.
+    #[test]
+    fn exports_without_subpath_keys_resolve_the_root() {
+        let conditions = serde_json::json!({ "import": "./a.js", "default": "./b.js" });
+        assert_eq!(resolve_exports_entry(&conditions, ".", false, &[]), Some("./a.js".to_string()));
+        assert_eq!(resolve_exports_entry(&conditions, "/a.js", false, &[]), None);
+        let string = serde_json::json!("./index.js");
+        assert_eq!(resolve_exports_entry(&string, ".", false, &[]), Some("./index.js".to_string()));
     }
 
     #[test]
