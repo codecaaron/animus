@@ -145,6 +145,7 @@ const Zeroes = ds
       scale: { 1: '1fr', 2: '1fr 1fr' },
     },
     opacity: { property: 'opacity', scale: { faint: '0.4' } },
+    leading: { property: 'lineHeight', scale: { tight: '1.1' } },
     textDecoration: {
       property: 'textDecoration',
       scale: { none: 'none', underline: 'underline' },
@@ -168,6 +169,8 @@ export const zeroLengths = (
     <Zeroes opacity={0} />
     {/* @ts-expect-error — the string zero */}
     <Zeroes opacity="0" />
+    {/* @ts-expect-error — a size-like name that takes no length */}
+    <Zeroes leading={0} />
     {/* @ts-expect-error — a text-decoration shorthand is no single length */}
     <Zeroes textDecoration={0} />
     {/* @ts-expect-error — the string zero */}

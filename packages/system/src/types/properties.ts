@@ -61,9 +61,11 @@ type SizeValues =
   | `${number}${'px' | 'rem' | 'vh' | 'vw' | 'vmax' | 'vmin' | '%'}`
   | `calc(${any})`;
 
-type SizeGlobals = {
+// A strict prop (`Overrides` of `never`) takes no length of csstype's own,
+// so a size-like name inherits no zero: zero is a strict admission.
+type SizeGlobals<Overrides> = {
   [K in Extract<keyof AnimusCSSProperties, SizeProperties>]?:
-    | AnimusCSSProperties[K]
+    | AnimusCSSProperties<Overrides>[K]
     | SizeValues
     | (number & {});
 };
@@ -82,10 +84,10 @@ export interface PropertyTypes<Overrides = (string & {}) | 0>
   extends
     Omit<
       AnimusCSSProperties<Overrides>,
-      keyof ColorGlobals | keyof SizeGlobals | 'fontSize'
+      keyof ColorGlobals | keyof SizeGlobals<Overrides> | 'fontSize'
     >,
     ColorGlobals,
-    SizeGlobals,
+    SizeGlobals<Overrides>,
     FontSizeGlobals<Overrides> {
   none?: never;
   [key: `--${string}`]: (string & {}) | number | undefined;
