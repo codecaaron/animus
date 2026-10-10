@@ -18,7 +18,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::chain_walk::{ChainDescriptor, TerminalKind};
 use crate::jsx_scan::{
-    classify_jsx_attribute_as_variant_value, create_element_props, eval_jsx_attribute_value, eval_property_key,
+    classify_jsx_attribute_as_variant_value, create_element_literals, create_element_props, eval_jsx_attribute_value, eval_property_key,
     eval_static_expression, make_json_number,
     is_component_like_identifier, jsx_member_path, ComponentUsageConfig, CustomPropScanResult,
     DynamicExpressionKind, DynamicPropUsage, PropValueResult, StateUsage, SystemPropUsage,
@@ -136,6 +136,10 @@ pub enum UsageFact {
         /// classification; `None` when it can deliver unknown props.
         #[serde(skip)]
         props: Option<Vec<(String, String)>>,
+        /// The literal values among those props, as a JSX attribute's
+        /// static value reads them.
+        #[serde(skip)]
+        literals: Vec<(String, Value)>,
         /// A `cloneElement` of an element of this component: `props` are
         /// its overrides, and the element's own props are recorded where
         /// it is written.
@@ -2940,6 +2944,7 @@ impl<'a, 's> Visit<'a> for FactCollector<'a, 's> {
                     member,
                     identity_uncertain,
                     props: create_element_props(call.arguments.get(1)),
+                    literals: create_element_literals(call.arguments.get(1), self.origins),
                     clone: false,
                     at: call.span.start,
                     origin: self.origins.zip(root).map(|(scoping, root)| tag_origin(scoping, root)),
@@ -3063,6 +3068,7 @@ fn clone_of(tag: TagFact, props: Option<Vec<(String, String)>>, at: u32) -> Opti
         member,
         identity_uncertain: false,
         props,
+        literals: Vec::new(),
         clone: true,
         at,
         origin: None,
@@ -3352,7 +3358,7 @@ fn evaluate_with_statics(
 /// Whether `expression` is an explicit `undefined`: `void 0`, or the global
 /// `undefined`, which no binding shadows. Without scoping a reference cannot
 /// be told from a shadowing binding, so it is not one.
-fn is_absent(expression: &Expression<'_>, scoping: Option<&Scoping>) -> bool {
+pub(crate) fn is_absent(expression: &Expression<'_>, scoping: Option<&Scoping>) -> bool {
     let shadowed = match crate::chain_walk::unwrap_type_assertions(expression) {
         Expression::Identifier(ident) => !scoping.is_some_and(|scoping| {
             ident.reference_id.get().is_some_and(|reference| scoping.get_reference(reference).symbol_id().is_none())
@@ -3963,6 +3969,7 @@ pub fn filter_usage_scan(
                 member,
                 identity_uncertain,
                 props,
+                literals,
                 clone,
                 at,
                 origin,
@@ -3996,6 +4003,27 @@ pub fn filter_usage_scan(
                 };
                 if let Some(binding) = resolved {
                     result.open_components.insert(binding.clone());
+                    // Literal system props take their static classes as a
+                    // JSX attribute's do; the open component keeps its slots.
+                    if let Some(active) = component_props.get(binding.as_str()) {
+                        let custom = custom_props.get(binding.as_str());
+                        for (prop_name, value) in literals {
+                            if !active.contains(prop_name) || custom.is_some_and(|c| c.contains(prop_name)) {
+                                continue;
+                            }
+                            let dedup_key = format!(
+                                "{prop_name}:{}",
+                                serde_json::to_string(value).unwrap_or_else(|_| "null".to_string())
+                            );
+                            if seen.insert(dedup_key) {
+                                result.system_prop_usages.push(SystemPropUsage {
+                                    prop_name: prop_name.clone(),
+                                    value: value.clone(),
+                                    binding: binding.clone(),
+                                });
+                            }
+                        }
+                    }
                     if let Some(config) = component_configs.get(&binding) {
                         let mut written: FxHashSet<&str> = FxHashSet::default();
                         for (key, class) in props.iter().flatten() {

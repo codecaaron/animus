@@ -460,6 +460,11 @@ const UNATTRIBUTED_SYSTEM_PROPS: &str = "animus.usage.unattributed-system-props"
 /// element usage cannot name, from a value it cannot list, are not tracked,
 /// so options only they set can be pruned.
 const UNTRACKED_CLONE_PROPS: &str = "animus.usage.untracked-clone-props";
+/// A warning, never escalated: a `createElement` call on an extracted
+/// component passes props extraction cannot read (a value, a spread or a
+/// computed key), so their system props take no static class; the runtime
+/// slot still applies them.
+const UNREAD_CREATE_ELEMENT_PROPS: &str = "animus.usage.unread-create-element-props";
 /// A warning: one runtime module load opens more components than
 /// `WIDE_MODULE_LOAD_LIMIT`, so the user can see why pruning stopped.
 const WIDE_MODULE_LOAD: &str = "animus.usage.wide-module-load";
@@ -524,6 +529,7 @@ pub(crate) const DIAGNOSTIC_CODES: &[(&str, &str)] = &[
     (TRANSFORM_INVALID_RESULT, "error"),
     (UNATTRIBUTED_SYSTEM_PROPS, "warn"),
     (UNTRACKED_CLONE_PROPS, "warn"),
+    (UNREAD_CREATE_ELEMENT_PROPS, "warn"),
     (WIDE_MODULE_LOAD, "warn"),
     (IDENTITY_UNCERTAIN, "warn"),
     (IDENTITY_UNCERTAIN_TAG, "info"),
@@ -3240,6 +3246,38 @@ fn untracked_clone_props(file: &str, ff: &FileFacts) -> Vec<CssDiagnostic> {
         .collect()
 }
 
+/// One warning per `createElement` call on an extracted component (one
+/// `renders` names, through a module-scope binding: a parameter or local of
+/// the same name is another value) whose props usage cannot read.
+fn unread_create_element_props(file: &str, ff: &FileFacts, renders: impl Fn(&UsageFact) -> bool) -> Vec<CssDiagnostic> {
+    ff.usage_for_analysis()
+        .iter()
+        .filter_map(|fact| match fact {
+            UsageFact::CreateElement { ident, member, props: None, clone: false, at, origin, .. }
+                if matches!(origin, Some(crate::usage_facts::TagOrigin::Import | crate::usage_facts::TagOrigin::TopLevel))
+                    && renders(fact) =>
+            {
+                let component = ident.as_deref().or(member.as_deref()).unwrap_or_default();
+                Some(
+                    diagnostic(
+                        file,
+                        component,
+                        "warn",
+                        format!(
+                            "createElement({component}, …) passes props extraction cannot read, so their \
+                             system props take no static class; the runtime slot still applies them — \
+                             write the props as an object literal with plain keys"
+                        ),
+                        Some(UNREAD_CREATE_ELEMENT_PROPS),
+                    )
+                    .at(*at),
+                )
+            }
+            _ => None,
+        })
+        .collect()
+}
+
 /// What left one file's usage scan unable to tell which component it renders.
 enum UncertainIdentity {
     Tag(crate::usage_facts::UncertainTag),
@@ -5537,6 +5575,11 @@ fn run_with_system_floor(
         ));
         diagnostics.extend(untracked_clone_props(path, ff));
         let lookup = file_lookup.as_ref().unwrap_or(&global_lookup);
+        diagnostics.extend(unread_create_element_props(path, ff, |fact| match fact {
+            UsageFact::CreateElement { ident: Some(name), .. } => lookup.props.contains_key(name.as_str()),
+            UsageFact::CreateElement { member: Some(key), .. } => member_expr_bindings.contains_key(key),
+            _ => false,
+        }));
 
         let mut usage_result = crate::usage_facts::filter_usage_scan(
             ff.usage_for_analysis(),
@@ -8386,6 +8429,45 @@ export const App = ({ n }) => <Box bgImage={n} texture={n} />;
         let mut dev = test_inputs();
         dev.dev_mode = true;
         assert_eq!(slots("import { Box } from './kit';\nexport const App = () => <Box p={8} />;\n", &dev), ["p"]);
+    }
+
+    /// A direct `createElement` call on an extracted component records the
+    /// literal system props JSX records for the same element, so they take
+    /// static classes, through parentheses and type-only wrappers and past an
+    /// absent breakpoint; props usage cannot read get a coded warning, never
+    /// a parameter that shares the component's name.
+    #[test]
+    fn create_element_records_literal_system_props_as_jsx_does() {
+        let kit = "export const Box = ds.system({ space: true }).asElement('div');\n";
+        let analyzed = |app: &str| {
+            let app = format!("import {{ Box }} from './kit';\nimport {{ createElement }} from 'react';\n{app}");
+            analyze(&[("kit.tsx", kit), ("app.tsx", &app)], &test_inputs())
+        };
+        let keys = |out: &CssOutput| out.system_prop_map.get("p").map(|map| map.keys().cloned().collect::<Vec<_>>());
+        let unread = |out: &CssOutput| {
+            out.diagnostics.iter().filter(|d| d.code.as_deref() == Some(UNREAD_CREATE_ELEMENT_PROPS)).count()
+        };
+        for (call, jsx) in [
+            ("createElement(Box, { p: 8 })", "<Box p={8} />"),
+            ("createElement(Box, { p: { _: 8, sm: 16 } })", "<Box p={{ _: 8, sm: 16 }} />"),
+            ("React.createElement(Box, { p: 8, id: 'a' })", "<Box p={8} id=\"a\" />"),
+            ("createElement(Box, { p: { _: 8, md: undefined, sm: 16 } })", "<Box p={{ _: 8, md: undefined, sm: 16 }} />"),
+            ("createElement(Box, ({ p: 8 }))", "<Box p={8} />"),
+            ("createElement(Box, ({ p: 8 } as const))", "<Box p={8} />"),
+            ("createElement(Box, ({ p: 8 } satisfies Record<string, number>))", "<Box p={8} />"),
+        ] {
+            let by_call = analyzed(&format!("export const App = () => {call};\n"));
+            let by_jsx = analyzed(&format!("export const App = () => {jsx};\n"));
+            assert_eq!(keys(&by_call), keys(&by_jsx), "{call}");
+            assert!(keys(&by_call).is_some(), "{call}");
+            assert_eq!(unread(&by_call), 0, "{call}");
+        }
+        for call in ["createElement(Box, props)", "createElement(Box, { ...props, p: 8 })"] {
+            let out = analyzed(&format!("export const App = (props) => {call};\n"));
+            assert_eq!(unread(&out), 1, "{call}");
+        }
+        let shadowed = analyzed("export const App = ({ Box, props }) => createElement(Box, props);\n");
+        assert_eq!(unread(&shadowed), 0);
     }
 
     #[test]
