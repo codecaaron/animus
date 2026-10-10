@@ -3564,12 +3564,22 @@ fn rest_parameters(program: &Program<'_>, scoping: &Scoping) -> FxHashMap<Symbol
             }
             let mut ancestors = self.ancestors.iter().rev();
             let (current, parent) = peel_wrappers(ident.span, &mut ancestors);
+            // A copy of its own keys into an object literal or props, or a
+            // static member read that nothing calls: any call through a
+            // member, or an iterating spread, runs code with the rest as
+            // its receiver.
             let read = match parent {
-                Some(AstKind::SpreadElement(_) | AstKind::JSXSpreadAttribute(_)) => true,
-                Some(AstKind::StaticMemberExpression(member)) => {
-                    member.object.span() == current
-                        && !reference.flags().is_member_write_target()
-                        && !matches!(ancestors.next(), Some(AstKind::CallExpression(call)) if call.callee.span() == member.span)
+                Some(AstKind::SpreadElement(_)) => matches!(ancestors.next(), Some(AstKind::ObjectExpression(_))),
+                Some(AstKind::JSXSpreadAttribute(_)) => true,
+                Some(AstKind::StaticMemberExpression(member)) if member.object.span() == current => {
+                    let (member_current, member_parent) = peel_wrappers(member.span, &mut ancestors);
+                    !reference.flags().is_member_write_target()
+                        && !matches!(member_parent,
+                            Some(AstKind::CallExpression(call)) if call.callee.span() == member_current)
+                        && !matches!(member_parent,
+                            Some(AstKind::NewExpression(call)) if call.callee.span() == member_current)
+                        && !matches!(member_parent,
+                            Some(AstKind::TaggedTemplateExpression(tagged)) if tagged.tag.span() == member_current)
                 }
                 _ => false,
             };

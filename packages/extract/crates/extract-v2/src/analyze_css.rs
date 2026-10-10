@@ -9658,18 +9658,34 @@ export const App = ({ n }) => <Box bgImage={n} texture={n} />;
         }
         // A rest that took `as` out cannot hand an `.asComponent()` target
         // the `as` that chooses its element.
-        let el = "import { createElement } from 'react';\nimport { Base } from './kit';\n\
-                  function El({ as, ...props }) { if (as) return createElement(as, props); return <label {...props} />; }\n\
-                  export const Outer = Base.extend().asComponent(El);\n\
-                  function Root({ as, asChild, ...props }) { return createElement(Outer, { ...props, asChild: true }); }\n\
-                  export const Parts = { Root };\n";
-        for (app, want) in [
-            ("() => <><Parts.Root as=\"div\" /><Box p={8} /></>", &[][..]),
-            ("({ X }) => <><Outer as={X} /><Parts.Root /><Box p={8} /></>", &["p"][..]),
+        let el = |reads: &str| {
+            format!(
+                "import {{ createElement }} from 'react';\nimport {{ Base }} from './kit';\n\
+                 function El({{ as, ...props }}) {{ if (as) return createElement(as, props); return <label {{...props}} />; }}\n\
+                 export const Outer = Base.extend().asComponent(El);\n\
+                 function Root({{ as, asChild, ...props }}) {{ {reads}return createElement(Outer, {{ ...props, asChild: true }}); }}\n\
+                 export const Parts = {{ Root }};\n"
+            )
+        };
+        let rendered = "() => <><Parts.Root as=\"div\" /><Box p={8} /></>";
+        for (reads, app, want) in [
+            ("", rendered, &[][..]),
+            ("", "({ X }) => <><Outer as={X} /><Parts.Root /><Box p={8} /></>", &["p"][..]),
+            ("const id = props.id;\n", rendered, &[][..]),
+            // A call through a member, however wrapped, or an iterating
+            // spread runs code with the rest as its receiver, which may write
+            // `as` into it.
+            ("(props.mutate)();\n", rendered, &["p"][..]),
+            ("(props.mutate as any)();\n", rendered, &["p"][..]),
+            ("props.mutate!();\n", rendered, &["p"][..]),
+            ("props.mutate``;\n", rendered, &["p"][..]),
+            ("[...props];\n", rendered, &["p"][..]),
+            ("consume(...props);\n", rendered, &["p"][..]),
         ] {
+            let el = el(reads);
             let app = format!("import {{ Box }} from './kit';\nimport {{ Parts, Outer }} from './el';\nexport const App = {app};\n");
-            let out = analyze(&[("kit.tsx", kit), ("el.tsx", el), ("app.tsx", app.as_str())], &test_inputs());
-            assert_eq!(out.dynamic_props.keys().collect::<Vec<_>>(), want, "{app}");
+            let out = analyze(&[("kit.tsx", kit), ("el.tsx", el.as_str()), ("app.tsx", app.as_str())], &test_inputs());
+            assert_eq!(out.dynamic_props.keys().collect::<Vec<_>>(), want, "{reads}{app}");
         }
     }
 
