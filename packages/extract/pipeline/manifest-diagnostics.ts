@@ -21,6 +21,8 @@ export type ManifestDiagnostic = {
   /** 1-based line and column in `file`, where the engine located the record. */
   line?: number;
   column?: number;
+  /** The dropped key or expression as written, bounded in length. */
+  dropped?: string;
 };
 
 /** `file`, then its line and column where the record has them. */
@@ -30,6 +32,19 @@ function locationOf(diagnostic: ManifestDiagnostic): string {
     return `${diagnostic.file}:${diagnostic.line}`;
   }
   return `${diagnostic.file}:${diagnostic.line}:${diagnostic.column}`;
+}
+
+/** A located record's `file:line:column: `; nothing for one without a line,
+ *  whose message names its file. */
+function locatedPrefix(diagnostic: ManifestDiagnostic): string {
+  return diagnostic.line === undefined ? '' : `${locationOf(diagnostic)}: `;
+}
+
+/** What the record dropped, when its message does not already quote it. */
+function droppedSuffix(diagnostic: ManifestDiagnostic): string {
+  return diagnostic.dropped && !diagnostic.message.includes(diagnostic.dropped)
+    ? ` — dropped: ${diagnostic.dropped}`
+    : '';
 }
 
 /** Stable code for selector forms with no substitutable subject; the
@@ -441,13 +456,14 @@ export function surfaceManifestDiagnostics(
     : (manifest.diagnostics ?? []);
   for (const diagnostic of diagnostics) {
     let line: string | null = null;
+    const message = `${diagnostic.message}${droppedSuffix(diagnostic)}`;
     if (diagnostic.kind === 'bail') {
-      line = `⚠ ${diagnostic.component} not extracted: ${diagnostic.message}`;
+      line = `⚠ ${locatedPrefix(diagnostic)}${diagnostic.component} not extracted: ${message}`;
     } else if (diagnostic.kind === 'skip') {
-      line = `⚠ ${diagnostic.component}: skipped ${diagnostic.message}`;
+      line = `⚠ ${locatedPrefix(diagnostic)}${diagnostic.component}: skipped ${message}`;
     } else if (diagnostic.kind === 'warn') {
       const mark = diagnostic.severity === 'info' ? 'ℹ' : '⚠';
-      line = `${mark} ${locationOf(diagnostic)}: ${diagnostic.component}: ${diagnostic.message}`;
+      line = `${mark} ${locationOf(diagnostic)}: ${diagnostic.component}: ${message}`;
     }
     if (line === null) continue;
     if (diagnostic.code && !diagnostic.message.includes(diagnostic.code)) {
@@ -459,7 +475,7 @@ export function surfaceManifestDiagnostics(
     }
     if (policy.strict && diagnostic.severity === 'error') {
       errors.push(
-        `${diagnostic.code ?? 'error'} — ${diagnostic.component}: ${diagnostic.message}`
+        `${diagnostic.code ?? 'error'} — ${locatedPrefix(diagnostic)}${diagnostic.component}: ${message}`
       );
       continue;
     }
