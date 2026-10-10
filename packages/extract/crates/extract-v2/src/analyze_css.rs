@@ -528,6 +528,7 @@ pub(crate) const DIAGNOSTIC_CODES: &[(&str, &str)] = &[
     (STATIC_CSS_INVALID_SHAPE, "warn"),
     (crate::theme::UNRECOGNIZED_STYLE_KEY, "warn"),
     (crate::theme::KEYS_SHARE_PROPERTY, "warn"),
+    (crate::theme::UNSUPPORTED_AT_RULE, "error"),
     (CLASS_NAME_WHITESPACE, "warn"),
     (INVALID_OPACITY_MODIFIER, "warn"),
     (UNSUPPORTED_OBJECT_MEMBER, "warn"),
@@ -1158,17 +1159,30 @@ fn drain_strict_token_misses(
 }
 
 /// `inheritors` are the components that extend `component`, which inherit
-/// each key it drops in a variant option.
+/// each key it drops in a variant option; `at_rules` are where the
+/// component's unsupported at-rule keys are written, each claimed once.
 fn drain_dropped_style_keys(
     sink: &crate::theme::DroppedStyleKeySink,
     file: &str,
     component: &str,
     inheritors: &[&str],
+    at_rules: &mut Vec<&crate::facts::KeySource>,
     diagnostics: &mut Vec<CssDiagnostic>,
 ) {
     for dropped in sink.borrow_mut().drain(..) {
         let inheritors = if dropped.variant_origin.is_some() { inheritors } else { &[] };
-        diagnostics.push(dropped_style_key(file, component, &dropped.dropped, inheritors));
+        let record = dropped_style_key(file, component, &dropped.dropped, inheritors);
+        let crate::theme::DroppedStyleKey::UnsupportedAtRule { key, block } = &dropped.dropped else {
+            diagnostics.push(record);
+            continue;
+        };
+        diagnostics.push(match at_rules.iter().position(|source| source.key == *key) {
+            Some(index) => {
+                let source = at_rules.remove(index);
+                record.at(source.start).dropping(&source.text)
+            }
+            None => record.dropping(&format!("{}: {block}", serde_json::to_string(key).unwrap_or_default())),
+        });
     }
 }
 
@@ -1206,6 +1220,14 @@ fn dropped_style_key(
             "style key '{key}' is not a prop, selector, alias or supported at-rule, {not_emitted}{}",
             element_hint(key)
         ),
+        DroppedStyleKey::UnsupportedAtRule { key, .. } => {
+            let message = format!(
+                "style key '{key}' is an at-rule extraction does not support, {not_emitted} — \
+                 extraction supports @media, @container and @supports; fix the at-rule's name, or \
+                 write the block in a stylesheet of its own"
+            );
+            return diagnostic(file, component, "warn", message, Some(crate::theme::UNSUPPORTED_AT_RULE));
+        }
         DroppedStyleKey::SharedProperty { overridden, winner, property, rule } => {
             return keys_share_property(file, component, (overridden, winner, property, *rule), inheritors);
         }
@@ -4381,7 +4403,15 @@ fn run_with_system_floor(
         } else {
             vec![]
         };
-        drain_dropped_style_keys(&dropped_keys, file_path, &chain.descriptor.binding, &inheritors, &mut diagnostics);
+        let mut at_rules: Vec<_> = chain.stages.iter().flat_map(|stage| &stage.unsupported_at_rules).collect();
+        drain_dropped_style_keys(
+            &dropped_keys,
+            file_path,
+            &chain.descriptor.binding,
+            &inheritors,
+            &mut at_rules,
+            &mut diagnostics,
+        );
         match result {
             Ok(out) => {
                 let mut component_css = out.component_css;
@@ -6112,7 +6142,11 @@ fn run_with_system_floor(
     let (global_css_raw, unlayered_global_css) = if let Some(blocks) = &inputs.global_style_blocks {
         // Each block's reports name its registration key and the module that
         // declares it; without one, the loaded system stands in.
-        let mut attribute = |name: &str, source: Option<&str>| {
+        // A block's keys are located in its own declaration in the module
+        // that declares it, when the analysis read that module; each location
+        // is claimed once.
+        let mut declared_keys: FxHashMap<(String, String), Vec<&crate::facts::KeySource>> = FxHashMap::default();
+        let mut attribute = |name: &str, source: Option<&str>, declared_by: &str| {
             let file = source.unwrap_or("system");
             let component = format!("global '{name}'");
             drain_transform_failures(
@@ -6124,7 +6158,14 @@ fn run_with_system_floor(
                 &mut deferred_errors,
             );
             drain_strict_token_misses(&token_misses, file, &component, &mut diagnostics);
-            drain_dropped_style_keys(&dropped_keys, file, &component, &[], &mut diagnostics);
+            let keys = declared_keys.entry((file.to_string(), declared_by.to_string())).or_insert_with(|| {
+                files
+                    .get(file)
+                    .and_then(|ff| ff.global_keys.get(declared_by))
+                    .map(|keys| keys.iter().collect())
+                    .unwrap_or_default()
+            });
+            drain_dropped_style_keys(&dropped_keys, file, &component, &[], keys, &mut diagnostics);
         };
         let css = crate::theme::resolve_global_blocks(blocks, &resolve_ctx, false, &mut attribute);
         let unlayered = crate::theme::resolve_global_blocks(blocks, &resolve_ctx, true, &mut attribute);

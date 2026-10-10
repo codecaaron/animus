@@ -488,6 +488,17 @@ impl ExtractEngine {
             references.add(&ast.path, ast.program(), imports, exports);
         }
 
+        // The declarations each module declares a registered global block
+        // with, whose keys locate the block's diagnostics.
+        let mut global_declarations: rustc_hash::FxHashMap<&str, std::collections::BTreeSet<String>> =
+            rustc_hash::FxHashMap::default();
+        if let Some(serde_json::Value::Object(blocks)) = &self.opts.css_inputs.global_style_blocks {
+            for (name, block) in blocks {
+                let Some(source) = block.get("source").and_then(serde_json::Value::as_str) else { continue };
+                let declared_by = block.get("sourceExport").and_then(serde_json::Value::as_str).unwrap_or(name);
+                global_declarations.entry(source).or_default().insert(declared_by.to_string());
+            }
+        }
         let empty = rustc_hash::FxHashMap::default();
         for ast in store.iter() {
             self.order.push(ast.path.clone());
@@ -499,18 +510,19 @@ impl ExtractEngine {
             let local_usage_statics = complete_statics_by_file
                 .get(&ast.path)
                 .expect("Pass A must record complete local statics for every file");
-            self.facts.insert(
-                ast.path.clone(),
-                facts::extract_file_facts_from_static_maps(
-                    ast,
-                    &self.opts.prefix,
-                    local_statics,
-                    local_usage_statics,
-                    extra,
-                    usage_extra,
-                    &references,
-                ),
+            let mut file_facts = facts::extract_file_facts_from_static_maps(
+                ast,
+                &self.opts.prefix,
+                local_statics,
+                local_usage_statics,
+                extra,
+                usage_extra,
+                &references,
             );
+            if let Some(names) = global_declarations.get(ast.path.as_str()) {
+                file_facts.global_keys = facts::declaration_keys(ast.program(), ast.source(), names);
+            }
+            self.facts.insert(ast.path.clone(), file_facts);
             self.sources
                 .insert(ast.path.clone(), ast.source().to_string());
         }

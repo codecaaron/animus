@@ -317,6 +317,10 @@ pub const UNRECOGNIZED_STYLE_KEY: &str = "animus.style.unrecognized-key";
 /// Two keys of one style block that set one CSS property at one condition.
 pub const KEYS_SHARE_PROPERTY: &str = "animus.style.keys-share-property";
 
+/// A style-object at-rule key other than `@media`, `@container` and
+/// `@supports`, whose block is not emitted.
+pub const UNSUPPORTED_AT_RULE: &str = "animus.style.unsupported-at-rule";
+
 /// A style-object key given an object that resolves to nothing.
 #[derive(Debug, Clone, PartialEq)]
 pub enum DroppedStyleKey {
@@ -326,6 +330,9 @@ pub enum DroppedStyleKey {
     NonResponsiveObject(String),
     /// Any other key, such as an HTML element name written without `&`.
     UnrecognizedKey(String),
+    /// An at-rule other than `@media`, `@container` and `@supports`, with
+    /// the block it holds.
+    UnsupportedAtRule { key: String, block: Value },
     /// Two keys of one block set `property` at one condition with a result
     /// worth knowing, and only `winner`, the later in cascade order, takes
     /// effect there.
@@ -350,7 +357,10 @@ impl DroppedStyleKey {
     /// The key as written; for two keys, the one that takes effect.
     pub fn key(&self) -> &str {
         match self {
-            Self::UnregisteredAlias(key) | Self::NonResponsiveObject(key) | Self::UnrecognizedKey(key) => key,
+            Self::UnregisteredAlias(key)
+            | Self::NonResponsiveObject(key)
+            | Self::UnrecognizedKey(key)
+            | Self::UnsupportedAtRule { key, .. } => key,
             Self::SharedProperty { winner, .. } => winner,
         }
     }
@@ -690,16 +700,7 @@ pub fn resolve_styles(
             continue;
         }
 
-        if crate::selector_subject::has_subject(key) || key.starts_with(':') {
-            if let Some(nested_obj) = value.as_object() {
-                let frame = root.with_selector(key, slot(key));
-                resolve_block_entries(
-                    nested_obj, ctx, &frame, auto_content, false, &mut result, &mut raw_condition_index,
-                );
-            }
-            continue;
-        }
-
+        // Before selectors: an at-rule's prelude can hold `&`, as `@scope (&)`.
         if key.starts_with('@') {
             if let Some(condition) = condition_from_raw_key(&ctx.contextual_vars.rename_authored(key)) {
                 let idx = raw_condition_index;
@@ -710,6 +711,18 @@ pub fn resolve_styles(
                         nested_obj, ctx, &frame, auto_content, false, &mut result, &mut raw_condition_index,
                     );
                 }
+            } else {
+                record_dropped_key(ctx, DroppedStyleKey::UnsupportedAtRule { key: key.clone(), block: value.clone() });
+            }
+            continue;
+        }
+
+        if crate::selector_subject::has_subject(key) || key.starts_with(':') {
+            if let Some(nested_obj) = value.as_object() {
+                let frame = root.with_selector(key, slot(key));
+                resolve_block_entries(
+                    nested_obj, ctx, &frame, auto_content, false, &mut result, &mut raw_condition_index,
+                );
             }
             continue;
         }
@@ -787,16 +800,6 @@ fn resolve_block_entries(
             continue;
         }
 
-        if crate::selector_subject::has_subject(key) || key.starts_with(':') {
-            if let Some(nested_obj) = value.as_object() {
-                let child = frame.with_selector(key, slot(key));
-                resolve_block_entries(
-                    nested_obj, ctx, &child, auto_content, false, result, raw_condition_index,
-                );
-            }
-            continue;
-        }
-
         if key.starts_with('@') {
             if let Some(condition) = condition_from_raw_key(&ctx.contextual_vars.rename_authored(key)) {
                 let idx = *raw_condition_index;
@@ -807,6 +810,18 @@ fn resolve_block_entries(
                         nested_obj, ctx, &child, auto_content, false, result, raw_condition_index,
                     );
                 }
+            } else {
+                record_dropped_key(ctx, DroppedStyleKey::UnsupportedAtRule { key: key.clone(), block: value.clone() });
+            }
+            continue;
+        }
+
+        if crate::selector_subject::has_subject(key) || key.starts_with(':') {
+            if let Some(nested_obj) = value.as_object() {
+                let child = frame.with_selector(key, slot(key));
+                resolve_block_entries(
+                    nested_obj, ctx, &child, auto_content, false, result, raw_condition_index,
+                );
             }
             continue;
         }
@@ -2050,13 +2065,13 @@ pub fn resolve_all_global_blocks(
     blocks: &Value,
     ctx: &ResolveContext,
 ) -> String {
-    resolve_global_blocks(blocks, ctx, false, &mut |_, _| {})
+    resolve_global_blocks(blocks, ctx, false, &mut |_, _, _| {})
 }
 
 /// The global blocks registered `unlayered`, which emit outside every
 /// cascade layer, in registration order.
 pub fn resolve_unlayered_global_blocks(blocks: &Value, ctx: &ResolveContext) -> String {
-    resolve_global_blocks(blocks, ctx, true, &mut |_, _| {})
+    resolve_global_blocks(blocks, ctx, true, &mut |_, _, _| {})
 }
 
 /// Resolves the layered (`unlayered: false`) or unlayered blocks, calling
@@ -2066,7 +2081,7 @@ pub fn resolve_global_blocks(
     blocks: &Value,
     ctx: &ResolveContext,
     unlayered: bool,
-    after_block: &mut dyn FnMut(&str, Option<&str>),
+    after_block: &mut dyn FnMut(&str, Option<&str>, &str),
 ) -> String {
     let block_map = match blocks.as_object() {
         Some(o) => o,
@@ -2075,21 +2090,24 @@ pub fn resolve_global_blocks(
 
     let mut parts: Vec<String> = Vec::new();
     for (name, block) in block_map {
-        let (styles, faces, block_unlayered, source) = match block.as_object() {
+        // `sourceExport` names the declaration in `source` that declares the
+        // block; without it, the registration name stands in.
+        let (styles, faces, block_unlayered, source, declared_by) = match block.as_object() {
             Some(obj)
                 if obj.get("styles").map(|s| s.is_object()).unwrap_or(false)
-                    && obj
-                        .keys()
-                        .all(|k| k == "styles" || k == "fontFaces" || k == "unlayered" || k == "source") =>
+                    && obj.keys().all(|k| {
+                        k == "styles" || k == "fontFaces" || k == "unlayered" || k == "source" || k == "sourceExport"
+                    }) =>
             {
                 (
                     obj.get("styles").unwrap(),
                     obj.get("fontFaces"),
                     obj.get("unlayered") == Some(&Value::Bool(true)),
                     obj.get("source").and_then(Value::as_str),
+                    obj.get("sourceExport").and_then(Value::as_str).unwrap_or(name),
                 )
             }
-            _ => (block, None, false, None),
+            _ => (block, None, false, None, name.as_str()),
         };
         if block_unlayered != unlayered {
             continue;
@@ -2104,7 +2122,7 @@ pub fn resolve_global_blocks(
         if !css.is_empty() {
             parts.push(css);
         }
-        after_block(name, source);
+        after_block(name, source, declared_by);
     }
 
     parts.join("\n\n")
