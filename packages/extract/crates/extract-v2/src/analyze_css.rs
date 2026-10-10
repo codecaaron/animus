@@ -8888,6 +8888,33 @@ export const App = ({ n }) => <Box bgImage={n} texture={n} />;
         assert_eq!(unread(&shadowed), 0);
     }
 
+    /// A tag whose first name a parameter or local binds is not the module's
+    /// binding of that name: `({ Fam }) => <Fam.Root p={n} />` may render
+    /// any component, so its runtime value keeps every component's slot,
+    /// where the imported `Fam.Root` would carry it to a component that
+    /// takes no `p`.
+    #[test]
+    fn tags_resolve_through_their_root_binding() {
+        let kit = "export const Plain = ds.styles({ display: 'flex' }).asElement('div');\n\
+                   export const Other = ds.system({ space: true }).asElement('div');\n\
+                   export const Fam = compose({ Root: Plain }, { name: 'Fam' });\n";
+        let cases: [(&str, &[&str]); 5] = [
+            ("({ Fam, n }) => <Fam.Root p={n} />", &["p"]),
+            ("({ n }) => { const Fam = pick(); return <Fam.Root p={n} />; }", &["p"]),
+            ("({ Plain, n }) => <Plain p={n} />", &["p"]),
+            ("({ Fam, n }) => createElement(Fam.Root, { p: n })", &["p"]),
+            ("({ n }) => <Fam.Root p={n} />", &[]),
+        ];
+        for (app, want) in cases {
+            let app = format!(
+                "import {{ Fam, Plain, Other }} from './kit';\nimport {{ createElement }} from 'react';\n\
+                 export const App = {app};\nexport const B = () => <Other p={{8}} />;\n"
+            );
+            let out = analyze(&[("kit.tsx", kit), ("app.tsx", app.as_str())], &test_inputs());
+            assert_eq!(out.dynamic_props.keys().collect::<Vec<_>>(), want, "{app}");
+        }
+    }
+
     #[test]
     fn slots_serve_only_the_conditions_known_value_shapes_write() {
         let kit = "export const Box = ds.system({ space: true }).props({ tone: { property: 'color' } }).asElement('div');\n";

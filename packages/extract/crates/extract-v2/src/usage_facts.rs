@@ -3676,14 +3676,26 @@ fn push_unique(values: &mut Vec<Value>, value: Value) {
 
 fn resolve_tag<'m>(
     tag: &'m TagFact,
+    origin: Option<TagOrigin>,
     member_expr_bindings: &'m FxHashMap<String, String>,
 ) -> Option<(&'m str, Option<String>)> {
+    if bound_elsewhere(matches!(tag, TagFact::Member(_)), origin) {
+        return None;
+    }
     match tag {
         TagFact::Ident(name) => Some((name.as_str(), None)),
         TagFact::Member(key) => member_expr_bindings
             .get(key)
             .map(|b| (b.as_str(), Some(b.clone()))),
     }
+}
+
+/// Whether a tag's first name is bound where the module's own bindings do
+/// not reach: a parameter or local of the name, or, for a member path, no
+/// binding at all. Such a tag never names the module's component of that
+/// name.
+fn bound_elsewhere(member: bool, origin: Option<TagOrigin>) -> bool {
+    matches!(origin, Some(TagOrigin::Nested)) || (member && matches!(origin, Some(TagOrigin::Undeclared)))
 }
 
 /// How a file's spread wrappers stand in for their targets in the filters:
@@ -3777,10 +3789,10 @@ pub fn filter_custom_prop_scan(
     let mut dynamic_results = Vec::new();
 
     for fact in facts {
-        let UsageFact::Element { tag, attrs, .. } = fact else {
+        let UsageFact::Element { tag, attrs, origin, .. } = fact else {
             continue;
         };
-        let Some((tag_name, resolved_binding)) = resolve_tag(tag, member_expr_bindings) else {
+        let Some((tag_name, resolved_binding)) = resolve_tag(tag, *origin, member_expr_bindings) else {
             continue;
         };
         for (tag_name, dropped) in proxies.lookups(tag, tag_name) {
@@ -3864,10 +3876,11 @@ pub fn uncertain_custom_renders(
         }
         let binding = match fact {
             UsageFact::Element { span, .. } if proxies.forwarding.contains(span) => continue,
-            UsageFact::Element { tag, spread: Some(_), .. } => match resolve_tag(tag, member_expr_bindings) {
+            UsageFact::Element { tag, spread: Some(_), origin, .. } => match resolve_tag(tag, *origin, member_expr_bindings) {
                 Some((binding, _)) => binding,
                 None => continue,
             },
+            UsageFact::CreateElement { member, origin, .. } if bound_elsewhere(member.is_some(), *origin) => continue,
             UsageFact::CreateElement { ident: Some(name), .. } => name.as_str(),
             UsageFact::CreateElement { member: Some(key), .. } => match member_expr_bindings.get(key) {
                 Some(binding) => binding.as_str(),
@@ -3951,10 +3964,12 @@ pub fn filter_usage_scan(
                         at: span.0,
                     });
                 };
-                let Some((tag_name, resolved_binding)) = resolve_tag(tag, member_expr_bindings)
+                let Some((tag_name, resolved_binding)) = resolve_tag(tag, *origin, member_expr_bindings)
                 else {
-                    if let TagFact::Member(path) = tag {
-                        uncertain(&mut result, path);
+                    match tag {
+                        TagFact::Member(path) => uncertain(&mut result, path),
+                        TagFact::Ident(name) if is_component_like_identifier(name) => uncertain(&mut result, name),
+                        TagFact::Ident(_) => {}
                     }
                     continue;
                 };
@@ -4118,7 +4133,10 @@ pub fn filter_usage_scan(
                         at: *at,
                     });
                 };
-                let resolved: Option<String> = if let Some(name) = ident {
+                let resolved: Option<String> = if bound_elsewhere(member.is_some(), *origin) {
+                    uncertain(&mut result, ident.as_ref().or(member.as_ref()));
+                    None
+                } else if let Some(name) = ident {
                     if component_props.contains_key(name.as_str())
                         || component_configs.contains_key(name.as_str())
                     {
