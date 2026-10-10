@@ -375,6 +375,29 @@ impl<'f> ObjectMembers<'f> {
         found
     }
 
+    /// What `tag`, written in `file`, reads from an object nothing may have
+    /// changed since it was built: the module naming the value, the binding
+    /// the object's last write of the key names, and the member read from it
+    /// (`Trigger: ArkMenu.Trigger`).
+    pub(crate) fn member_entry(&mut self, file: &str, tag: &str) -> Option<(String, String, Option<String>)> {
+        let (path, key) = tag.rsplit_once('.')?;
+        let object = self.object_at(file, path)?;
+        let Object::Facade(module, binding) = &object else { return None };
+        let last = self.files.get(module)?.facades.get(binding)?.iter().rev().find(|entry| match entry {
+            FacadeEntry::Member { key: set, .. }
+            | FacadeEntry::Other(set)
+            | FacadeEntry::Written { key: set, .. }
+            | FacadeEntry::Code(Some(set)) => set == key,
+            FacadeEntry::Copy(_) | FacadeEntry::Unknown | FacadeEntry::Code(None) => true,
+        })?;
+        let FacadeEntry::Member { binding, member, .. } = last else { return None };
+        let entry = (module.clone(), binding.clone(), member.clone());
+        if self.table(&object).open || self.instability(&object).is_some() {
+            return None;
+        }
+        Some(entry)
+    }
+
     /// The components an escaping `name` hands over: every member of the
     /// object it names, or the one member it reads.
     pub(crate) fn escaped_components(&mut self, file: &str, name: &str) -> Vec<String> {
