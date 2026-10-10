@@ -25,6 +25,9 @@ export interface ClassResolverConfig {
    *  property, the later-defined takes effect, so a superseded prop applies
    *  no class and no slot value. */
   supersededBy?: Record<string, readonly string[]>;
+  /** Set only by a builder terminal that ran without Animus compiling it:
+   *  what each render of the component reports. */
+  uncompiled?: UncompiledDefinition | undefined;
 }
 
 export type SystemPropMap = Record<string, Record<string, string>>;
@@ -87,6 +90,8 @@ import { isUnitlessProperty } from '@animus-ui/properties';
 
 import { IS_DEV } from './is-dev';
 import { readsVariable, trailingPriority } from './value-scan';
+
+import type { UncompiledDefinition } from './uncompiled';
 
 declare const __ANIMUS_DEV__: boolean | undefined;
 import { recordWitness } from './witness';
