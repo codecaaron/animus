@@ -940,7 +940,9 @@ pub(crate) fn collect_enriched_usage(
         }
         _ => BTreeMap::new(),
     };
-    let unsafe_object_uses = match &scoping {
+    // Read through the scopes every module builds, so a module with no
+    // import or chain still records what may change its objects.
+    let unsafe_object_uses = match origins {
         Some(scoping) => unsafe_object_uses(program, scoping, object_consts, assigned_targets),
         None => BTreeMap::new(),
     };

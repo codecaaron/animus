@@ -9027,9 +9027,10 @@ export const App = ({ n }) => <Box bgImage={n} texture={n} />;
     /// A member tag that names an ordinary function component a stable
     /// object holds (`<Dialog.Root>` for `const Dialog = { Root }`) is that
     /// component: it leaves usage proven, and its children stay in place
-    /// unless it passes them to code outside the analysis. A member the
-    /// object may no longer hold, one built by a call, or a parameter that
-    /// shares the object's name still blocks.
+    /// unless it passes them to code outside the analysis, children a local
+    /// takes by assignment included. A member the object may no longer hold
+    /// (in any module), one built by a call, or a parameter that shares the
+    /// object's name still blocks.
     #[test]
     fn ordinary_family_members_leave_usage_proven() {
         let kit = "export const Box = ds.system({ space: true }).asElement('div');\n";
@@ -9054,6 +9055,15 @@ export const App = ({ n }) => <Box bgImage={n} texture={n} />;
             let app = format!("import {{ Box }} from './kit';\nimport {{ Dialog }} from './fam';\nexport const App = {app};\n");
             let out = analyze(&[("kit.tsx", kit), ("fam.tsx", family.as_str()), ("app.tsx", app.as_str())], &test_inputs());
             assert_eq!(out.dynamic_props.keys().collect::<Vec<_>>(), want, "{more}{app}");
+        }
+        // A module with no import still records what may change its object.
+        let plain = "function Root({ children }) { return <section>{children}</section>; }\nexport const Dialog = { Root };\n";
+        for more in ["consume(Dialog);\n", "delete Dialog.Root;\nrestore(Dialog);\n"] {
+            let family = format!("{plain}{more}");
+            let app = "import { Box } from './kit';\nimport { Dialog } from './fam';\n\
+                       export const App = () => <Dialog.Root><Box p={8} /></Dialog.Root>;\n";
+            let out = analyze(&[("kit.tsx", kit), ("fam.tsx", family.as_str()), ("app.tsx", app)], &test_inputs());
+            assert_eq!(out.dynamic_props.keys().collect::<Vec<_>>(), ["p"], "{more}");
         }
     }
 
