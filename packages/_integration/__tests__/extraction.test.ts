@@ -641,8 +641,11 @@ export const App = () => <Box />;
 `,
         },
       ]).css;
+    // Each spelling is a definition of its own, so it names its own class.
+    const rules = (value: string) =>
+      css(value).replace(/animus-Box-[0-9a-f]{8}/g, 'animus-Box');
     expect(css('hidden!')).toContain('visibility: hidden !important');
-    expect(css('hidden!')).toBe(css('hidden !important'));
+    expect(rules('hidden!')).toBe(rules('hidden !important'));
   });
 
   test('a value resolves through its scale before its priority', () => {

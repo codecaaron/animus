@@ -47,6 +47,7 @@ import type {
   AssetSheets,
   ExcludeMatcher,
   ExternalPackageOutcome,
+  KitDescriptorRecord,
   ManifestDiagnostic,
   ManifestSheets,
   ProjectAnalysisResult,
@@ -275,6 +276,8 @@ export class PluginContext {
   assetPassComplete = false;
 
   externalPackageDirs: string[] = [];
+  /** Those whose package is linked rather than installed. */
+  externalLinkedDirs: string[] = [];
 
   externalDirOwners: Record<string, string> = {};
 
@@ -287,6 +290,8 @@ export class PluginContext {
   externalSourceEntries = new Map<string, string>();
 
   externalPackageOutcomes: ExternalPackageOutcome[] = [];
+  /** The analysed kits' descriptors, from the last discovery. */
+  kitDescriptors: KitDescriptorRecord[] = [];
   /** Configured files buildStart or a late rediscovery could not read.
    *  Later analyses read no files themselves, so they replay these until the
    *  file is read into the cache or deleted. */
@@ -505,6 +510,9 @@ export class PluginContext {
           packageDirs: this.externalPackageDirs.map((dir) =>
             relative(this.rootDir, dir)
           ),
+          linkedDirs: this.externalLinkedDirs.map((dir) =>
+            relative(this.rootDir, dir)
+          ),
         },
         warn: (m) => this.warn(m),
         info: (m) => this.log(m),
@@ -512,6 +520,7 @@ export class PluginContext {
         diagnostics: this.options.diagnostics,
         reportErrors: this.reportErrors(),
         extraDiagnostics: ingestionFailures,
+        kitDescriptors: this.kitDescriptors,
       });
     } catch (e) {
       // A diagnostic at `error` level fails a build as a strict failure

@@ -34,6 +34,9 @@ pub enum AssembleError {
 /// entry exists per pipeline survivor; a chain without one is not replaced.
 #[derive(Debug, Clone, Default)]
 pub struct ReplacementPayload {
+    /// The class name the analysis gave the component; absent, the binding's
+    /// location names it.
+    pub class_name: Option<String>,
     /// Sorted, deduped union of active system props and custom prop names.
     pub system_prop_names: Vec<String>,
     /// Sorted active group names.
@@ -70,6 +73,18 @@ pub struct MergedChainConfig {
     pub state_names: Vec<String>,
 }
 
+/// The component's class name: the analysis's, or its binding's location's.
+pub(crate) fn component_class_name(
+    filename: &str,
+    binding: &str,
+    prefix: &str,
+    payload: Option<&ReplacementPayload>,
+) -> String {
+    payload
+        .and_then(|p| p.class_name.clone())
+        .unwrap_or_else(|| class_name_for(filename, binding, prefix))
+}
+
 /// Build the replacement call text for one chain.
 pub fn generate_replacement(
     filename: &str,
@@ -79,7 +94,7 @@ pub fn generate_replacement(
     group_registry: &FxHashMap<String, Vec<String>>,
 ) -> Result<String, AssembleError> {
     let d = &chain.descriptor;
-    let class_name = class_name_for(filename, &d.binding, prefix);
+    let class_name = component_class_name(filename, &d.binding, prefix, payload);
     let config = build_config(filename, &d.binding, chain, prefix, payload, group_registry)?;
     let has_system_props = payload.is_some_and(|p| !p.system_prop_names.is_empty());
     let has_dynamic_props = payload.is_some_and(|p| p.has_dynamic_props);

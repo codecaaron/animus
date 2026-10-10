@@ -104,7 +104,7 @@ bun run build:v2:debug        # debug NAPI
 ## Key Design Decisions
 
 - **Per-property skip model:** a non-static value (identifier, call, ternary) skips THAT PROPERTY only and continues; skipped props become dynamic prop candidates. Graceful degradation, not all-or-nothing bail.
-- **Stable class names:** from `filename::binding` hash, NOT from style values — editing a style value doesn't change the class name (critical for HMR).
+- **Class names:** in production, and for installed kits in development, from the system and definition fingerprints, so copies of one definition share a class. In development, a project's own files and linked kits are named from the `filename::binding` hash, NOT from style values, so editing a style value keeps the class (critical for HMR).
 - **Two AST passes per file:** one for chain walking, one for JSX scanning (different traversals).
 - **Parse-once engine:** `ExtractEngine.analyze()` parses each file once and retains facts+sources on the handle; `clearCache()` resets.
 

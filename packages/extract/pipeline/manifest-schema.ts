@@ -17,6 +17,8 @@ export interface ManifestComponentDescriptor {
   tag: string;
   replacement: string;
   system_prop_names: string[];
+  /** The definition's fingerprint, which its location takes no part in. */
+  definition_fingerprint: string;
 }
 
 export interface ManifestSheets {
@@ -133,6 +135,8 @@ export interface ProjectManifest {
    *  `system_prop_map` keys keep the authored value's type. */
   typed_system_props: string[];
   component_fragments: Record<string, ManifestComponentSheets>;
+  /** The fingerprint of the system the analysis ran with. */
+  system_fingerprint: string;
   /** parent component id → child component ids. */
   reverse_provenance: Record<string, string[]>;
   /** component id (`file::binding`) → descriptor. */

@@ -334,6 +334,13 @@ export function noKitFilesDiagnostics(
     }));
 }
 
+/** A kit's descriptor declares a format this Animus does not read. */
+export const KIT_UNSUPPORTED_FORMAT = 'animus.kit.unsupported-format';
+
+/** A kit's descriptor records a definition its shipped source no longer
+ *  declares. */
+export const KIT_STALE_DESCRIPTOR = 'animus.kit.stale-descriptor';
+
 /** The collision entry code minted by the system package's merge. */
 export const VOCABULARY_COLLISION = 'animus.vocabulary.collision';
 
@@ -405,6 +412,8 @@ const DIAGNOSTIC_SEVERITY: ReadonlyMap<string, DiagnosticSeverity> = new Map([
   [KIT_WITHOUT_SOURCE_CONDITION, 'warn'],
   [INVALID_KIT_SOURCE_CONDITION, 'error'],
   [KIT_SYSTEM_NOT_INCLUDED, 'error'],
+  [KIT_UNSUPPORTED_FORMAT, 'error'],
+  [KIT_STALE_DESCRIPTOR, 'warn'],
   [UNPROVEN_ROOT_BINDING, 'warn'],
   [VOCABULARY_COLLISION, 'warn'],
   [VOCABULARY_LEGACY_VERB, 'warn'],

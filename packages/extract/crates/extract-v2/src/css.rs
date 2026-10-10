@@ -364,8 +364,14 @@ pub fn generate_css_sheets_ordered(
     breakpoints: &BreakpointMap,
 ) -> (CssSheets, CssFragmentStore) {
     let mut fragments = CssFragmentStore::new();
+    // Copies of one definition share a class and prune alike: the first
+    // writes their CSS.
+    let mut written: FxHashSet<&str> = FxHashSet::default();
 
     for (id, component) in components {
+        if !written.insert(component.class_name.as_str()) {
+            continue;
+        }
         if let Some(base) = &component.base {
             let mut frag = String::with_capacity(512);
             write_rule_block(&mut frag, &component.class_name, base, breakpoints);

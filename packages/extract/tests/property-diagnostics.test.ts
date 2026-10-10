@@ -318,6 +318,7 @@ describe('owner lookup', () => {
       terminal: 'asElement',
       tag: 'div',
       system_prop_names: [],
+      definition_fingerprint: '',
       get class_name() {
         reads += 1;
         return 'animus-A';

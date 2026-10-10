@@ -16,6 +16,54 @@ pub struct UsageLedger {
     pub state_usage: FxHashMap<String, FxHashSet<String>>,
 }
 
+/// Copies of one definition share their usage: each keeps what any copy's
+/// usage keeps, so every copy prunes to the same CSS, which is written once.
+/// A kept copy with no usage for an axis or for its states keeps all of it,
+/// so the pool does too; a copy pruning eliminates takes no part. `groups`
+/// are the component ids of each definition.
+pub fn pool_shared_usage<'a>(
+    ledger: &mut UsageLedger,
+    groups: impl IntoIterator<Item = Vec<&'a str>>,
+    parent_components: &FxHashSet<String>,
+) {
+    for ids in groups.into_iter().filter(|ids| ids.len() > 1) {
+        let rendered = ids.iter().any(|id| ledger.rendered_components.contains(*id));
+        let kept: Vec<&str> = ids
+            .iter()
+            .copied()
+            .filter(|id| ledger.rendered_components.contains(*id) || parent_components.contains(*id))
+            .collect();
+        if kept.is_empty() {
+            continue;
+        }
+        let variant_usage: Option<Vec<_>> = kept.iter().map(|id| ledger.variant_usage.get(*id)).collect();
+        let variants = variant_usage.map(|usage| {
+            let mut pooled: FxHashMap<String, FxHashSet<String>> = FxHashMap::default();
+            for (prop, options) in usage.iter().flat_map(|axes| axes.iter()) {
+                if usage.iter().all(|axes| axes.contains_key(prop)) {
+                    pooled.entry(prop.clone()).or_default().extend(options.iter().cloned());
+                }
+            }
+            pooled
+        });
+        let state_usage: Option<Vec<_>> = kept.iter().map(|id| ledger.state_usage.get(*id)).collect();
+        let states = state_usage.map(|usage| usage.into_iter().flatten().cloned().collect::<FxHashSet<String>>());
+        for id in ids {
+            if rendered {
+                ledger.rendered_components.insert(id.to_string());
+            }
+            match &variants {
+                Some(pooled) => ledger.variant_usage.insert(id.to_string(), pooled.clone()),
+                None => ledger.variant_usage.remove(id),
+            };
+            match &states {
+                Some(pooled) => ledger.state_usage.insert(id.to_string(), pooled.clone()),
+                None => ledger.state_usage.remove(id),
+            };
+        }
+    }
+}
+
 pub fn build_ledger(
     all_results: &[UsageScanResult],
     variant_configs: &VariantConfigMap,

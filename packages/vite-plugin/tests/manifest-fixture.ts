@@ -52,6 +52,7 @@ export function makeManifest(
     admitted_transforms: {},
     typed_system_props: [],
     component_fragments: {},
+    system_fingerprint: '',
     reverse_provenance: {},
     components: {},
     files: {},
@@ -73,5 +74,6 @@ export function makeComponent(
     tag: 'div',
     replacement,
     system_prop_names: [],
+    definition_fingerprint: '',
   };
 }
