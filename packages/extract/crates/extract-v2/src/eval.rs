@@ -410,7 +410,7 @@ fn eval_expression_scoped(
         Expression::Identifier(ident) => {
             if let Some(sv) = static_values {
                 if let Some(val) = sv.get(ident.name.as_str()).filter(|val| asset_function(val).is_none()) {
-                    return Ok(val.clone());
+                    return Ok(held_value(val).clone());
                 }
             }
             Err(BailError::new("variable reference (non-static)"))
@@ -425,7 +425,16 @@ fn eval_expression_scoped(
             Err(BailError::new("tagged template (non-static)"))
         }
         Expression::StaticMemberExpression(member) => {
-            if let Some(val) = static_values.and_then(|sv| static_path_value(expr, sv)) {
+            // One member of a binding reads its held value; deeper paths do not.
+            let held = match (static_values, &member.object) {
+                (Some(sv), Expression::Identifier(ident)) => sv
+                    .get(ident.name.as_str())
+                    .map(held_value)
+                    .and_then(|value| value.get(member.property.name.as_str()))
+                    .filter(|value| lost_value_reason(value).is_none()),
+                _ => None,
+            };
+            if let Some(val) = held.or_else(|| static_values.and_then(|sv| static_path_value(expr, sv))) {
                 return Ok(val.clone());
             }
             Err(BailError::new(member_expression_skip_reason(
@@ -831,6 +840,30 @@ pub(crate) fn lost_marker(reason: String) -> Value {
     let mut marker = Map::new();
     marker.insert(LOST_VALUE.to_string(), Value::String(reason));
     Value::Object(marker)
+}
+
+/// Set on a marker for a const object whose stability the analysis could
+/// not prove, holding its value.
+const HELD_VALUE: &str = "$animus.held";
+
+/// A lost marker that still holds `value`: a spread, a computed key or a
+/// member path below the first member refuses with `reason`, while the reads
+/// extraction made before the stability analysis (the binding by name, or
+/// one member of it as a value) take `value` through `held_value`.
+pub(crate) fn held_marker(reason: String, value: Value) -> Value {
+    let mut marker = lost_marker(reason);
+    if let Some(entries) = marker.as_object_mut() {
+        entries.insert(HELD_VALUE.to_string(), value);
+    }
+    marker
+}
+
+/// The value a held marker holds, or `value` itself.
+pub(crate) fn held_value(value: &Value) -> &Value {
+    match value.as_object() {
+        Some(entries) if entries.contains_key(LOST_VALUE) => entries.get(HELD_VALUE).unwrap_or(value),
+        _ => value,
+    }
 }
 
 /// Why a static value is no usable value, when a marker stands in for it.

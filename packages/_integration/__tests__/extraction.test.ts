@@ -1064,7 +1064,8 @@ describe('stable constant style objects', () => {
   // a constant computed key extracts exactly as the same styles written
   // inline; a key the spread overwrites with a value the extractor lost is
   // dropped, keeping its position for a later known write; an object some
-  // use may change refuses with that use named.
+  // use may change refuses those reads with that use named, and still
+  // extracts when read by name, as before they existed.
   test('extract like inline styles, and an escaped object refuses', () => {
     const source = (name: string, styles: string, prelude = '') => ({
       path: `fixtures/${name}.tsx`,
@@ -1115,17 +1116,16 @@ export const Use${name} = () => <${name} />;`,
     assertNoUnresolvedTokens(lost.css);
     expect(body(lost.css, 'Lost')).toBe(body(written.css, 'Written'));
 
-    const escaped = runPipeline([
-      source(
-        'Escaped',
-        'preset',
-        "declare function decorate(o: object): void;\nconst preset = { cursor: 'pointer' };\ndecorate(preset);"
-      ),
-    ]);
+    const prelude =
+      "declare function decorate(o: object): void;\nconst preset = { cursor: 'pointer' };\ndecorate(preset);";
+    const escaped = runPipeline([source('Escaped', '{ ...preset }', prelude)]);
     assertNoUnresolvedTokens(escaped.css);
     expect(body(escaped.css, 'Escaped')).toBeUndefined();
     expect(JSON.stringify(escaped.manifest.diagnostics)).toContain(
       'preset is passed to decorate() in fixtures/Escaped.tsx on line 4'
     );
+    const named = runPipeline([source('Named', 'preset', prelude)]);
+    assertNoUnresolvedTokens(named.css);
+    expect(body(named.css, 'Named')).toBe('.C {\n    cursor: pointer;\n  }');
   });
 });

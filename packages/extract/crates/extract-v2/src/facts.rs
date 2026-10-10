@@ -1290,7 +1290,11 @@ pub(crate) fn extract_file_facts_from_static_maps(
                             }
                         }
                         None => match identifier_index.get(key) {
-                            Some(name) => match eval::static_path(&statics_fx, name) {
+                            // A stage argument by name reads its held value; a
+                            // member path does not.
+                            Some(name) => match eval::static_path(&statics_fx, name)
+                                .map(|v| if name.contains('.') { v } else { eval::held_value(v) })
+                            {
                                 Some(v) => match eval::lost_value_reason(v) {
                                     Some(reason) => Err(reason.to_string()),
                                     None => Ok((Some(v.clone()), Vec::new(), Vec::new())),
@@ -1492,7 +1496,8 @@ pub(crate) fn extract_file_facts_from_static_maps(
         // Serialized facts carry no lost-value markers.
         statics: statics_fx
             .into_iter()
-            .map(|(name, mut value)| {
+            .map(|(name, value)| {
+                let mut value = eval::held_value(&value).clone();
                 eval::strip_lost_values(&mut value);
                 (name, value)
             })

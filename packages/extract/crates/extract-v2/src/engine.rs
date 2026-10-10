@@ -785,7 +785,7 @@ impl ExtractEngine {
             &mut readings_of,
         ) {
             if let Some(value) = statics_by_file.get_mut(&file).and_then(|statics| statics.get_mut(&local)) {
-                *value = crate::eval::lost_marker(reason);
+                *value = crate::eval::held_marker(reason, std::mem::take(value));
             }
         }
 
