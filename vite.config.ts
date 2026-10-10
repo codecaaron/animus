@@ -27,6 +27,7 @@ const typescriptTestTargets = [
   'packages/extract/tests/path-aliases.test.ts',
   'packages/extract/tests/post-process-css.test.ts',
   'packages/extract/tests/property-names.test.ts',
+  'packages/extract/tests/property-table.test.ts',
   'packages/extract/tests/replacement-plans.test.ts',
   'packages/extract/tests/resolve-asset.test.ts',
   'packages/extract/tests/source-identity.test.ts',

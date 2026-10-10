@@ -15,19 +15,27 @@ use serde_json::Value;
 use crate::declarations::{breakpoint_of, record_key, DeclarationBinding, DeclarationNames};
 use crate::theme::{AuthoredOrigin, Condition, ConditionedGroup, CssDeclaration, PropConfigMap, ResolveContext, ResolvedStyles, SelectorGroup, Suppliers, TransformFailure, TransformFailureSink, first_top_level_branch, is_responsive_value, resolve_styles, split_top_level_commas, unresolved_alias_spans};
 
-/// The unitless property names and the style-key vendor prefixes of
-/// `@animus-ui/properties`, written by `packages/extract/scripts/property-table.ts`.
+/// The unitless property names, the style-key vendor prefixes and the
+/// single-length properties of `@animus-ui/properties`, written by
+/// `packages/extract/scripts/property-table.ts`.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PropertyTable {
     unitless: FxHashSet<String>,
     vendor_prefixes: Vec<(String, String)>,
+    zero_lengths: FxHashSet<String>,
 }
 
 static PROPERTY_TABLE: LazyLock<PropertyTable> = LazyLock::new(|| {
     serde_json::from_str(include_str!("property_table.json"))
         .expect("property_table.json is generated valid JSON")
 });
+
+/// Whether a strict scale on `property`, a style key, admits zero beside its
+/// keys: only where the property's value is a single length.
+pub(crate) fn is_zero_length_property(property: &str) -> bool {
+    PROPERTY_TABLE.zero_lengths.contains(property)
+}
 
 /// The CSS property a style key names: a custom property
 /// (`--leadingVisual-size`) exactly as written, a vendor-prefixed key

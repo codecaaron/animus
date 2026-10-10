@@ -786,6 +786,31 @@ describe('strict scale miss', () => {
     expect(res.dynamicStyle).toBeUndefined();
   });
 
+  test('zero is admitted only where the property takes a single length', () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const style = (p: string | number, property: string) =>
+      resolveClasses(
+        'animus-S-zero1',
+        { p },
+        config(),
+        undefined,
+        dyn({ property, scaleValues: { 4: '1rem' } })
+      ).dynamicStyle;
+    for (const property of ['margin', 'padding', 'gap']) {
+      expect(style(0, property), property).toEqual({ '--animus-p': '0px' });
+      expect(style('0', property), property).toEqual({ '--animus-p': '0' });
+    }
+    for (const property of [
+      'gridTemplateRows',
+      'gridTemplateColumns',
+      'opacity',
+      'textDecoration',
+    ]) {
+      expect(style(0, property), property).toBeUndefined();
+      expect(style('0', property), property).toBeUndefined();
+    }
+  });
+
   test('loose and empty scales keep raw values', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const style = (overrides: Partial<ValuePropConfig>) =>

@@ -86,7 +86,10 @@ export type DynamicPropConfig = Record<
   ValueDynamicPropConfig | DeclarationConfig
 >;
 
-import { isUnitlessProperty } from '@animus-ui/properties';
+import {
+  isUnitlessProperty,
+  isZeroLengthProperty,
+} from '@animus-ui/properties';
 
 import { IS_DEV } from './is-dev';
 import { readsVariable, trailingPriority } from './value-scan';
@@ -249,19 +252,21 @@ const SIZE_PROPERTY =
   /^(?:left|right|top|bottom|inset|width|height)$|(?:Width|Height|-width|-height)$/;
 
 /**
- * Values a strict prop's public type admits beside its tokens: zero, the
- * keywords extraction lists for its property, container units, token
- * references, and the lengths size properties take. Must stay in step with
- * the extractor's rule.
+ * Values a strict prop's public type admits beside its tokens: zero on a
+ * property whose value is a single length, the keywords extraction lists for
+ * its property, container units, token references, and the lengths size
+ * properties take. Must stay in step with the extractor's rule.
  */
 function isAdmittedWithoutToken(
   value: unknown,
   dc: Pick<DynamicEntryConfig, 'property' | 'keywords'>
 ): boolean {
-  if (typeof value === 'number') return value === 0;
+  const zeroLength =
+    dc.property !== undefined && isZeroLengthProperty(dc.property);
+  if (typeof value === 'number') return value === 0 && zeroLength;
   if (typeof value !== 'string') return true;
   return (
-    value === '0' ||
+    (value === '0' && zeroLength) ||
     dc.keywords?.includes(value) === true ||
     value.includes('{') ||
     CONTAINER_UNIT.test(value) ||

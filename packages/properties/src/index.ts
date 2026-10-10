@@ -1,6 +1,11 @@
 export { SHORTHAND_PROPERTIES } from './shorthands';
 export { isUnitlessProperty, UNITLESS_PROPERTIES } from './unitless';
 export {
+  isZeroLengthProperty,
+  ZERO_LENGTH_PROPERTIES,
+  type ZeroLengthProperty,
+} from './zero-lengths';
+export {
   componentValues,
   decodedIdentifier,
   identifierAt,
