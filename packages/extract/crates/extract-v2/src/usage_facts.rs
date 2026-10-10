@@ -889,6 +889,7 @@ pub(crate) fn collect_enriched_usage(
         }),
         module_loads: Some(Vec::new()),
         member_reads: FxHashMap::default(),
+        whole_imports: FxHashSet::default(),
         origins,
         provided: provided_components(program),
         rests: origins.map(|scoping| rest_parameters(program, scoping)).unwrap_or_default(),
@@ -3258,8 +3259,10 @@ struct FactCollector<'a, 's> {
     /// Enriched collection only: the modules the file loads at runtime.
     module_loads: Option<Vec<ModuleLoad>>,
     /// The members read from an `import()`'s result, by the import's start,
-    /// recorded before the import itself is visited.
+    /// recorded before the import itself is visited; an import whose result
+    /// is used any other way is in `whole_imports`.
     member_reads: FxHashMap<u32, Vec<String>>,
+    whole_imports: FxHashSet<u32>,
     /// Enriched collection only: the scopes a tag's origin is read from.
     origins: Option<&'s Scoping>,
     /// Enriched collection only: the values a parameter's literal-union type
@@ -3904,59 +3907,84 @@ fn awaited_import<'b, 'a>(expression: &'b Expression<'a>) -> Option<&'b oxc::ast
     }
 }
 
-/// The keys an object pattern takes, when every key is static and it has no
-/// rest.
-fn pattern_members(object: &oxc::ast::ast::ObjectPattern<'_>) -> Option<Vec<String>> {
-    if object.rest.is_some() {
-        return None;
-    }
-    object.properties.iter().map(|property| property.key.static_name().map(|key| key.to_string())).collect()
-}
-
-/// The members a `.then` callback reads from the module it receives: the
-/// keys its parameter pattern takes, or the static members its body reads
-/// from its parameter, when the body uses the parameter no other way.
-fn callback_members(argument: &Argument<'_>) -> Option<Vec<String>> {
-    use oxc::ast::ast::BindingPattern;
-    let (params, body) = match argument.as_expression()?.get_inner_expression() {
-        Expression::ArrowFunctionExpression(arrow) => (&arrow.params, &*arrow.body),
-        Expression::FunctionExpression(function) => {
-            // `arguments` holds the module under any parameter name.
-            let body = function.body.as_deref()?;
-            let mut arguments = MemberReads { name: "arguments", members: Vec::new(), escaped: false };
-            arguments.visit_function_body(body);
-            if arguments.escaped || !arguments.members.is_empty() {
-                return None;
-            }
-            (&function.params, body)
-        }
-        _ => return None,
-    };
-    let Some(parameter) = params.items.first() else { return Some(Vec::new()) };
-    match &parameter.pattern {
-        BindingPattern::ObjectPattern(object) => pattern_members(object),
-        BindingPattern::BindingIdentifier(id) => {
-            let mut reads = MemberReads { name: id.name.as_str(), members: Vec::new(), escaped: false };
-            reads.visit_function_body(body);
-            (!reads.escaped).then_some(reads.members)
-        }
+/// The static member `expression` reads, through parentheses, type
+/// wrappers and an optional chain.
+fn static_member<'b, 'a>(expression: &'b Expression<'a>) -> Option<&'b oxc::ast::ast::StaticMemberExpression<'a>> {
+    match expression.get_inner_expression() {
+        Expression::StaticMemberExpression(member) => Some(member),
+        Expression::ChainExpression(chain) => match &chain.expression {
+            oxc::ast::ast::ChainElement::StaticMemberExpression(member) => Some(member),
+            _ => None,
+        },
         _ => None,
     }
 }
 
-/// The static members read from `name`; any other use of the name escapes.
-/// An inner binding that shadows it counts as it would, which can only
-/// widen what is handed on.
+/// The keys an object pattern takes, when each is a static key bound to a
+/// plain name, with no default, nesting or rest.
+fn plain_pattern_members(object: &oxc::ast::ast::ObjectPattern<'_>) -> Option<Vec<String>> {
+    if object.rest.is_some() {
+        return None;
+    }
+    object
+        .properties
+        .iter()
+        .map(|property| {
+            let plain = !property.computed && matches!(property.value, oxc::ast::ast::BindingPattern::BindingIdentifier(_));
+            plain.then(|| property.key.static_name().map(|key| key.to_string())).flatten()
+        })
+        .collect()
+}
+
+/// The members a `.then` callback reads from the module it receives, when
+/// it can do nothing else with it: exactly one parameter, a plain name or
+/// an object pattern of plain keys, with no default or rest; a body with no
+/// `eval` or `arguments`; and every use of a named parameter a static member
+/// read that no call, `new` or tag takes. Anything else is `None`, and the
+/// module is handed on whole.
+fn callback_members(argument: &Argument<'_>) -> Option<Vec<String>> {
+    use oxc::ast::ast::BindingPattern;
+    let (params, body) = match argument.as_expression()?.get_inner_expression() {
+        Expression::ArrowFunctionExpression(arrow) => (&arrow.params, &*arrow.body),
+        Expression::FunctionExpression(function) => (&function.params, function.body.as_deref()?),
+        _ => return None,
+    };
+    let [parameter] = params.items.as_slice() else { return None };
+    if params.rest.is_some() || parameter.initializer.is_some() {
+        return None;
+    }
+    let mut reads = MemberReads { name: None, members: Vec::new(), escaped: false };
+    match &parameter.pattern {
+        BindingPattern::BindingIdentifier(id) => reads.name = Some(id.name.as_str()),
+        BindingPattern::ObjectPattern(object) => reads.members = plain_pattern_members(object)?,
+        _ => return None,
+    }
+    reads.visit_function_body(body);
+    (!reads.escaped).then_some(reads.members)
+}
+
+/// The static members a callback reads from its parameter `name`. Any other
+/// use of the name, a member that a call, `new` or tag takes, and any use of
+/// `eval` or `arguments` escapes. An inner binding that shadows the name
+/// counts as it would, which can only widen what is handed on.
 struct MemberReads<'n> {
-    name: &'n str,
+    name: Option<&'n str>,
     members: Vec<String>,
     escaped: bool,
+}
+
+impl MemberReads<'_> {
+    fn reads_parameter(&self, expression: &Expression<'_>) -> bool {
+        static_member(expression).is_some_and(|member| {
+            matches!(member.object.get_inner_expression(), Expression::Identifier(object) if Some(object.name.as_str()) == self.name)
+        })
+    }
 }
 
 impl<'a> Visit<'a> for MemberReads<'_> {
     fn visit_static_member_expression(&mut self, member: &oxc::ast::ast::StaticMemberExpression<'a>) {
         match member.object.get_inner_expression() {
-            Expression::Identifier(object) if object.name == self.name => {
+            Expression::Identifier(object) if Some(object.name.as_str()) == self.name => {
                 let property = member.property.name.to_string();
                 if !self.members.contains(&property) {
                     self.members.push(property);
@@ -3966,8 +3994,24 @@ impl<'a> Visit<'a> for MemberReads<'_> {
         }
     }
 
+    fn visit_call_expression(&mut self, call: &CallExpression<'a>) {
+        self.escaped |= self.reads_parameter(&call.callee);
+        oxc::ast_visit::walk::walk_call_expression(self, call);
+    }
+
+    fn visit_new_expression(&mut self, new: &oxc::ast::ast::NewExpression<'a>) {
+        self.escaped |= self.reads_parameter(&new.callee);
+        oxc::ast_visit::walk::walk_new_expression(self, new);
+    }
+
+    fn visit_tagged_template_expression(&mut self, tagged: &oxc::ast::ast::TaggedTemplateExpression<'a>) {
+        self.escaped |= self.reads_parameter(&tagged.tag);
+        oxc::ast_visit::walk::walk_tagged_template_expression(self, tagged);
+    }
+
     fn visit_identifier_reference(&mut self, reference: &oxc::ast::ast::IdentifierReference<'a>) {
-        if reference.name == self.name {
+        let name = reference.name.as_str();
+        if Some(name) == self.name || name == "eval" || name == "arguments" {
             self.escaped = true;
         }
     }
@@ -4006,38 +4050,65 @@ impl<'a, 's> Visit<'a> for FactCollector<'a, 's> {
         if let (Some(import), oxc::ast::ast::BindingPattern::ObjectPattern(object)) =
             (declarator.init.as_ref().and_then(awaited_import), &declarator.id)
         {
-            if let Some(members) = pattern_members(object) {
-                self.member_reads.insert(import.span.start, members);
+            match plain_pattern_members(object) {
+                Some(members) => {
+                    self.member_reads.insert(import.span.start, members);
+                }
+                None => {
+                    self.whole_imports.insert(import.span.start);
+                }
             }
         }
         oxc::ast_visit::walk::walk_variable_declarator(self, declarator);
     }
 
     fn visit_static_member_expression(&mut self, member: &oxc::ast::ast::StaticMemberExpression<'a>) {
-        // `(await import(…)).X` reads `X` alone.
+        // `(await import(…)).X` reads `X` alone, unless a call, `new` or tag
+        // takes it, with the module as `this`.
         if let Some(import) = awaited_import(&member.object) {
-            self.member_reads.insert(import.span.start, vec![member.property.name.to_string()]);
+            if !self.whole_imports.contains(&import.span.start) {
+                self.member_reads.entry(import.span.start).or_default().push(member.property.name.to_string());
+            }
         }
         oxc::ast_visit::walk::walk_static_member_expression(self, member);
     }
 
+    fn visit_new_expression(&mut self, new: &oxc::ast::ast::NewExpression<'a>) {
+        self.invoked(&new.callee);
+        oxc::ast_visit::walk::walk_new_expression(self, new);
+    }
+
+    fn visit_tagged_template_expression(&mut self, tagged: &oxc::ast::ast::TaggedTemplateExpression<'a>) {
+        self.invoked(&tagged.tag);
+        oxc::ast_visit::walk::walk_tagged_template_expression(self, tagged);
+    }
+
     fn visit_import_expression(&mut self, import: &oxc::ast::ast::ImportExpression<'a>) {
-        let members = self.member_reads.remove(&import.span.start);
+        let members = self
+            .member_reads
+            .remove(&import.span.start)
+            .filter(|_| !self.whole_imports.contains(&import.span.start));
         self.record_loads(import.span, vec![load_of(&import.source)], true, members);
         oxc::ast_visit::walk::walk_import_expression(self, import);
     }
 
     fn visit_call_expression(&mut self, call: &CallExpression<'a>) {
         // `import(…).then((m) => m.X)` reads `X` alone.
-        if let Expression::StaticMemberExpression(then) = &call.callee {
+        if let Some(then) = static_member(&call.callee) {
             if let (Expression::ImportExpression(import), "then") =
                 (then.object.get_inner_expression(), then.property.name.as_str())
             {
-                if let Some(members) = call.arguments.first().and_then(callback_members) {
-                    self.member_reads.insert(import.span.start, members);
+                match call.arguments.first().and_then(callback_members) {
+                    Some(members) => {
+                        self.member_reads.insert(import.span.start, members);
+                    }
+                    None => {
+                        self.whole_imports.insert(import.span.start);
+                    }
                 }
             }
         }
+        self.invoked(&call.callee);
         self.record_loads(call.span, call_loads(call), false, None);
         if self.react.calls(&call.callee, "createElement") {
             if let Some(first_arg) = call.arguments.first() {
@@ -4075,6 +4146,15 @@ impl<'a, 's> Visit<'a> for FactCollector<'a, 's> {
 }
 
 impl<'a> FactCollector<'a, '_> {
+    /// A callee, constructor or tag that is a member of an awaited
+    /// `import()`'s result takes the module as `this`, so the module is
+    /// handed on whole.
+    fn invoked(&mut self, callee: &Expression<'a>) {
+        if let Some(import) = static_member(callee).and_then(|member| awaited_import(&member.object)) {
+            self.whole_imports.insert(import.span.start);
+        }
+    }
+
     /// Records one call's module loads with its line and spelling.
     fn record_loads(
         &mut self,
@@ -4860,6 +4940,7 @@ pub fn collect_usage_facts(program: &Program<'_>) -> Vec<UsageFact> {
         clones: None,
         module_loads: None,
         member_reads: FxHashMap::default(),
+        whole_imports: FxHashSet::default(),
         origins: None,
         finite_params: FxHashMap::default(),
         provided: FxHashSet::default(),

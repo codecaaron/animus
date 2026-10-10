@@ -693,7 +693,7 @@ impl<'f> ObjectMembers<'f> {
             for load in &ff.module_loads {
                 for target in loaded_modules(module, load, files, inputs) {
                     let reason = format!("{module} loads {target} at runtime on line {}", load.line);
-                    let objects = match &load.members {
+                    let objects = match crate::analyze_css::handed_members(target, load, files, self.inputs) {
                         Some(members) => self.member_objects(target, members),
                         None => self.exported_objects(target),
                     };

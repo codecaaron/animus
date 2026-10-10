@@ -2555,6 +2555,28 @@ fn member_path_ids(
 /// unless the host says its bundler leaves it unbundled (Vite, Rollup,
 /// Turbopack), in which case it loads code outside the bundle and reaches
 /// no analysed module.
+/// The members a load hands on from `module` it loads, when it reads only
+/// those and each is safe to hand on alone: a name `module` does not export,
+/// or one that resolves to a declaration and is no namespace. `None` hands
+/// on the whole module.
+pub(crate) fn handed_members<'l>(
+    module: &str,
+    load: &'l crate::usage_facts::ModuleLoad,
+    files: &BTreeMap<String, FileFacts>,
+    inputs: &CssInputs,
+) -> Option<&'l [String]> {
+    let members = load.members.as_deref()?;
+    let exported = crate::family_members::module_export_names(module, files, inputs);
+    members
+        .iter()
+        .all(|member| {
+            !exported.contains(member)
+                || (crate::family_members::namespace_export(module.to_string(), member.clone(), files, inputs).is_none()
+                    && declared_export(module, member.clone(), files, inputs).is_some())
+        })
+        .then_some(members)
+}
+
 pub(crate) fn loaded_modules<'f>(
     file: &str,
     load: &crate::usage_facts::ModuleLoad,
@@ -6407,7 +6429,7 @@ fn run_with_system_floor(
         for load in &ff.module_loads {
             let opened = sites.entry((load.line, load.call.as_str())).or_default();
             for module in loaded_modules(path, load, files, inputs) {
-                match &load.members {
+                match handed_members(module, load, files, inputs) {
                     Some(members) => {
                         opened.extend(exported_component_ids(module, Some(members), files, inputs, &evaluated_ids));
                     }
@@ -11874,6 +11896,41 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
                 ("loader.tsx", loader),
             ]);
             assert_eq!(!unattributed(&out).is_empty(), warns, "{loader}{:?}", out.diagnostics);
+        }
+        // Each loader renders nothing of `Hidden`, whose `hot` option stays
+        // only while the load may hand it on.
+        let editor = "export const CodeEditor = ds.styles({ color: 'blue' }).asElement('div');\n\
+                      export const Hidden = ds.styles({ color: 'lime' }).variant({ prop: 'tone', defaultVariant: 'cold', variants: { cold: { color: 'green' }, hot: { color: 'fuchsia' } } }).asElement('span');\n\
+                      export function pick() { return this.Hidden; }\n";
+        let app = "import { CodeEditor } from './editor';\nexport const App = () => <CodeEditor />;\n";
+        let then = |callback: &str| format!("import('./editor').then({callback});\n");
+        // The loader, what the editor adds, an extra module, and whether
+        // `Hidden` is handed on.
+        type Case<'a> = (String, &'a str, Option<(&'a str, &'a str)>, bool);
+        let cases: Vec<Case> = vec![
+            (then("(m) => m.CodeEditor"), "", None, false),
+            (then("(m) => consume(m)"), "", None, true),
+            (then("(...args) => consume(args[0].Hidden)"), "", None, true),
+            (then("function (...args) { return consume(args[0].Hidden); }"), "", None, true),
+            (then("(m, x = consume(m.Hidden)) => m.CodeEditor"), "", None, true),
+            (then("function ({ Missing = consume(arguments[0].Hidden) }) { return Missing; }"), "", None, true),
+            (then("(m) => { eval('consume(m.Hidden)'); return m.CodeEditor; }"), "", None, true),
+            (then("function ({ CodeEditor }) { eval('consume(arguments[0].Hidden)'); return CodeEditor; }"), "", None, true),
+            (then("(m) => consume(m.pick())"), "", None, true),
+            (then("(m) => consume(m.pick?.())"), "", None, true),
+            (then("(m) => consume(m.pick`x`)"), "", None, true),
+            ("export async function f() { return consume((await import('./editor')).pick()); }\n".into(), "", None, true),
+            (then("(m) => consume(m.self)"), "export * as self from './editor';\n", None, true),
+            (then("(m) => consume(m.sub)"), "export * as sub from './cycle';\n", Some(("cycle.tsx", "export * as back from './editor';\n")), true),
+            (then("(m) => consume(m.default)"), "export { Hidden as default };\n", None, true),
+            ("import('./namespace').then((m) => consume(m.sub));\n".into(), "", Some(("namespace.tsx", "export * as sub from './editor';\n")), true),
+        ];
+        for (loader, more, extra, kept) in cases {
+            let editor = format!("{editor}{more}");
+            let mut files = vec![("editor.tsx", editor.as_str()), ("app.tsx", app), ("loader.tsx", loader.as_str())];
+            files.extend(extra);
+            let out = analyze(&files, &test_inputs());
+            assert_eq!(out.css.contains("fuchsia"), kept, "{loader}{more}");
         }
     }
 
