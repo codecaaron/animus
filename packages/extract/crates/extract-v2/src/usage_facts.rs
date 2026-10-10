@@ -231,6 +231,9 @@ pub struct ForwardRoute {
     pub named: Vec<String>,
     /// The tags that receive the spread, as written (`Recipe`, `Ns.Item`).
     pub targets: Vec<String>,
+    /// The spread is of what a call the props are passed to returns, which
+    /// may or may not carry a given prop.
+    pub derived: bool,
 }
 
 /// Top-level function components, plain or inside `forwardRef`/`memo`,
@@ -347,17 +350,17 @@ fn props_forwarding(function: ComponentFunction<'_, '_>) -> Option<PropsForwardi
         _ => return None,
     };
     let mut routes = Vec::new();
-    let mut route = |named: Vec<String>, spread: &str| {
+    let mut route = |named: Vec<String>, spread: &str, derived: bool| {
         let mut scan = SpreadTargets {
             spread,
             targets: Vec::new(),
         };
         scan.visit_function_body(function.body);
         if !scan.targets.is_empty() {
-            routes.push(ForwardRoute { named, targets: scan.targets });
+            routes.push(ForwardRoute { named, targets: scan.targets, derived });
         }
     };
-    route(named.clone(), &spread);
+    route(named.clone(), &spread, false);
     // `const { a, ...rest } = props` in the body, then `{...rest}`: neither
     // the props the parameter names nor the ones the body names reach the
     // tags `rest` is spread into.
@@ -366,20 +369,18 @@ fn props_forwarding(function: ComponentFunction<'_, '_>) -> Option<PropsForwardi
     // may carry any of them.
     for statement in &function.body.statements {
         for (body_named, rest) in destructured_rests(statement, &spread) {
-            route(named.iter().cloned().chain(body_named).collect(), &rest);
+            route(named.iter().cloned().chain(body_named).collect(), &rest, false);
         }
         for derived in call_results(statement, &spread) {
-            route(named.clone(), &derived);
+            route(named.clone(), &derived, true);
         }
     }
     (!routes.is_empty()).then_some(PropsForwarding { routes })
 }
 
 /// The names a statement binds to what a call taking `props` as an argument
-/// returns: the whole result, or each element or property value a pattern
-/// takes from it, and its rest.
+/// returns: every name its pattern binds, through defaults and nesting.
 fn call_results(statement: &Statement<'_>, props: &str) -> Vec<String> {
-    use oxc::ast::ast::BindingPattern;
     let Statement::VariableDeclaration(declaration) = statement else { return Vec::new() };
     let mut names = Vec::new();
     for declarator in &declaration.declarations {
@@ -395,25 +396,34 @@ fn call_results(statement: &Statement<'_>, props: &str) -> Vec<String> {
         if !takes_props {
             continue;
         }
-        let bound: Vec<&BindingPattern<'_>> = match &declarator.id {
-            pattern @ BindingPattern::BindingIdentifier(_) => vec![pattern],
-            BindingPattern::ArrayPattern(array) => {
-                array.elements.iter().flatten().chain(array.rest.as_ref().map(|rest| &rest.argument)).collect()
-            }
-            BindingPattern::ObjectPattern(object) => object
-                .properties
-                .iter()
-                .map(|property| &property.value)
-                .chain(object.rest.as_ref().map(|rest| &rest.argument))
-                .collect(),
-            BindingPattern::AssignmentPattern(_) => Vec::new(),
-        };
-        names.extend(bound.into_iter().filter_map(|pattern| match pattern {
-            BindingPattern::BindingIdentifier(id) => Some(id.name.to_string()),
-            _ => None,
-        }));
+        bound_names(&declarator.id, &mut names);
     }
     names
+}
+
+/// Every name a binding pattern binds, through defaults, nesting and rests.
+fn bound_names(pattern: &oxc::ast::ast::BindingPattern<'_>, names: &mut Vec<String>) {
+    use oxc::ast::ast::BindingPattern;
+    match pattern {
+        BindingPattern::BindingIdentifier(id) => names.push(id.name.to_string()),
+        BindingPattern::AssignmentPattern(assignment) => bound_names(&assignment.left, names),
+        BindingPattern::ArrayPattern(array) => {
+            for element in array.elements.iter().flatten() {
+                bound_names(element, names);
+            }
+            if let Some(rest) = &array.rest {
+                bound_names(&rest.argument, names);
+            }
+        }
+        BindingPattern::ObjectPattern(object) => {
+            for property in &object.properties {
+                bound_names(&property.value, names);
+            }
+            if let Some(rest) = &object.rest {
+                bound_names(&rest.argument, names);
+            }
+        }
+    }
 }
 
 /// `{ a, b, ...rest }`: the keys it names and its rest binding.
