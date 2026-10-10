@@ -2460,7 +2460,7 @@ fn resolve_identity(
                     }
                 }
                 // `export const A = S`: A is S.
-                if let Some(target) = followed_alias(ff, &terminal_name) {
+                if let Some(target) = followed_alias(files, inputs, &terminal_file, &terminal_name) {
                     terminal_name = target.to_string();
                     continue;
                 }
@@ -2483,11 +2483,64 @@ fn resolve_identity(
 }
 
 /// The binding a module-scope `const` alias (`const A = S`, with or without
-/// a type annotation) holds, when nothing the module does may change the
-/// alias: then a use of the alias, in any module, is a use of `S`.
-fn followed_alias<'f>(ff: &'f FileFacts, alias: &str) -> Option<&'f str> {
+/// a type annotation) in `file` holds, when nothing may change what it
+/// holds: then a use of the alias, in any module, is a use of `S`. No module
+/// may write a member of, or hand on, the alias, an alias it holds on the
+/// way (`const a = S; const A = a`) or the binding the chain ends at, nor
+/// may any module that imports the alias, by name, through a barrel or as a
+/// namespace member.
+fn followed_alias<'f>(
+    files: &'f BTreeMap<String, FileFacts>,
+    inputs: &CssInputs,
+    file: &str,
+    alias: &str,
+) -> Option<&'f str> {
+    let ff = files.get(file)?;
     let target = ff.aliases.get(alias)?;
-    (!ff.unsafe_object_uses.contains_key(alias)).then_some(target.as_str())
+    // Whether a module writes a member of `name` or hands it on.
+    let touched = |ff: &FileFacts, name: &str| {
+        ff.unsafe_object_uses.contains_key(name)
+            || ff.value_escapes.iter().any(|escape| escape.strip_prefix(name).is_some_and(|rest| rest.starts_with('.')))
+    };
+    let mut hop = alias;
+    let mut seen: FxHashSet<&str> = FxHashSet::default();
+    loop {
+        if !seen.insert(hop) || touched(ff, hop) {
+            return None;
+        }
+        match ff.aliases.get(hop) {
+            Some(next) => hop = next,
+            None => break,
+        }
+    }
+    if let Some((declaring, binding, _)) = resolve_declaration(file, ff, hop, files, inputs) {
+        if (declaring.as_str(), binding.as_str()) != (file, hop) && files.get(&declaring).is_some_and(|dff| touched(dff, &binding)) {
+            return None;
+        }
+    }
+    let names_alias = |declaration: Option<(String, String)>| {
+        declaration.is_some_and(|(declaring, binding)| declaring == file && binding == alias)
+    };
+    for (path, other) in files {
+        let imported = other.imports.iter().any(|import| {
+            touched(other, &import.local)
+                && names_alias(
+                    resolve_declaration(path, other, &import.local, files, inputs)
+                        .map(|(declaring, binding, _)| (declaring, binding)),
+                )
+        });
+        let namespaced = other.unsafe_object_uses.keys().chain(&other.value_escapes).any(|used| {
+            let mut segments = used.splitn(3, '.');
+            let (Some(namespace), Some(member)) = (segments.next(), segments.next()) else { return false };
+            let Some(module) = namespace_path_module(path, other, namespace, files, inputs) else { return false };
+            let (declaring, binding, _, _) = module_declaration(module, member, files, inputs);
+            names_alias(Some((declaring, binding)))
+        });
+        if imported || namespaced {
+            return None;
+        }
+    }
+    Some(target.as_str())
 }
 
 /// Every member tag a file writes, as a JSX tag or a `createElement` type.
@@ -6499,7 +6552,7 @@ fn run_with_system_floor(
                 .map(|e| e.exported.as_str())
                 .collect();
             let default = ff.default_export_binding.as_deref() == Some(alias) || exported_as.contains(&"default");
-            if default || (!exported_as.is_empty() && followed_alias(ff, alias).is_none()) {
+            if default || (!exported_as.is_empty() && followed_alias(files, inputs, path, alias).is_none()) {
                 names.push(alias);
             }
         }
@@ -11372,6 +11425,24 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             (
                 format!("{RECIPE}const B = R;\nexport {{ B as default }};\n"),
                 "import B from './r';\nexport const Other = () => <B size=\"lg\" />;\n",
+            ),
+            // A barrel re-exports the alias as its default.
+            (format!("{RECIPE}export const B = R;\n"), "export { B as default } from './r';\n"),
+            // A module that imports the alias writes a member of it, which is
+            // a member of its target.
+            (
+                format!("{RECIPE}export const B = R;\n"),
+                "import { B } from './r';\nB.render = globalThis.Slot;\nexport const Other = () => <B size=\"lg\" />;\n",
+            ),
+            // The target's own module writes a member of it.
+            (
+                format!("{RECIPE}R.render = globalThis.Slot;\nexport const B = R;\n"),
+                "import { B } from './r';\nexport const Other = () => <B size=\"lg\" />;\n",
+            ),
+            // An alias on the way is handed on.
+            (
+                format!("{RECIPE}const b = R;\nexport const B = b;\nconsume(b);\n"),
+                "import { B } from './r';\nexport const Other = () => <B size=\"lg\" />;\n",
             ),
             // The module writes to the alias, which it may no longer hold.
             (
