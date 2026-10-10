@@ -6775,7 +6775,10 @@ fn run_with_system_floor(
         (String::new(), String::new())
     };
     let keyframes_css_raw = if let Some(blocks) = &inputs.keyframes_blocks {
-        let css = crate::theme::resolve_all_keyframes_blocks(blocks, &resolve_ctx);
+        let css = crate::theme::resolve_all_keyframes_blocks(blocks, &resolve_ctx, &mut |name| {
+            let component = format!("keyframes '{name}'");
+            drain_dropped_style_keys(&dropped_keys, "system", &component, &[], &mut Vec::new(), &mut diagnostics);
+        });
         drain_transform_failures(
             &transform_failures,
             "",
