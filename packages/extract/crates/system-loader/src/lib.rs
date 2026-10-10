@@ -251,28 +251,46 @@ fn resolve_exports_pattern(
 /// With `source`, a kit's `animus` condition, its original source, which
 /// discovery redirects every host to, comes first. Otherwise the first key,
 /// in the object's order as Node and the host match it, that is one of the
-/// host's `conditions`, `import` or `default` and resolves.
+/// host's `conditions`, `import` or `default` and resolves; a matched `null`
+/// blocks the export.
 fn resolve_condition_value(
     value: &serde_json::Value,
     source: bool,
     conditions: &[String],
 ) -> Option<String> {
+    match condition_target(value, source, conditions) {
+        Target::Found(target) => Some(target),
+        Target::Blocked | Target::Unmatched => None,
+    }
+}
+
+/// A conditional target as Node resolves it: a matched `null` blocks
+/// resolution, while a nested object that matches no condition lets the
+/// next key try.
+enum Target {
+    Found(String),
+    Blocked,
+    Unmatched,
+}
+
+fn condition_target(value: &serde_json::Value, source: bool, conditions: &[String]) -> Target {
     match value {
-        serde_json::Value::String(s) => Some(s.clone()),
+        serde_json::Value::String(s) => Target::Found(s.clone()),
+        serde_json::Value::Null => Target::Blocked,
         serde_json::Value::Object(obj) => {
             let animus = obj.get("animus").filter(|_| source);
+            let matched = obj.iter().filter(|(key, _)| {
+                matches!(key.as_str(), "import" | "default")
+                    || conditions.iter().any(|condition| condition == *key)
+            });
             animus
-                .and_then(|value| resolve_condition_value(value, source, conditions))
-                .or_else(|| {
-                    obj.iter()
-                        .filter(|(key, _)| {
-                            matches!(key.as_str(), "import" | "default")
-                                || conditions.iter().any(|condition| condition == *key)
-                        })
-                        .find_map(|(_, value)| resolve_condition_value(value, source, conditions))
-                })
+                .into_iter()
+                .chain(matched.map(|(_, value)| value))
+                .map(|value| condition_target(value, source, conditions))
+                .find(|target| !matches!(target, Target::Unmatched))
+                .unwrap_or(Target::Unmatched)
         }
-        _ => None,
+        _ => Target::Unmatched,
     }
 }
 
@@ -2675,7 +2693,8 @@ export const ds = tokens;
             &kit.join("package.json"),
             r#"{"exports": {
                 "./system": {"source": "./src/system.ts", "import": "./dist/system.mjs"},
-                "./ordered": {"import": "./dist/system.mjs", "development": "./src/system.ts"}
+                "./ordered": {"import": "./dist/system.mjs", "development": "./src/system.ts"},
+                "./blocked": {"development": null, "import": "./dist/system.mjs"}
             }}"#,
         );
         let module = |gray: &str| {
@@ -2690,6 +2709,7 @@ export const ds = tokens;
         write_fixture(&kit.join("dist/system.mjs"), &module("dist"));
         write_fixture(&dir.join("system.ts"), "export * from '@probe/kit/system';\n");
         write_fixture(&dir.join("ordered.ts"), "export * from '@probe/kit/ordered';\n");
+        write_fixture(&dir.join("blocked.ts"), "export * from '@probe/kit/blocked';\n");
         let load = |entry: &str, conditions: &[&str]| {
             let conditions: Vec<String> = conditions.iter().map(|c| c.to_string()).collect();
             load_system_module(&dir.join(entry).to_string_lossy(), &dir.to_string_lossy(), None, &conditions)
@@ -2698,6 +2718,7 @@ export const ds = tokens;
         let source = load("system.ts", &["source", "development"]);
         let default = load("system.ts", &[]);
         let ordered = load("ordered.ts", &["development"]);
+        let blocked = load("blocked.ts", &["development"]);
         let manifest = fs::canonicalize(kit.join("package.json")).expect("canonical manifest");
         let _ = fs::remove_dir_all(&dir);
 
@@ -2714,6 +2735,7 @@ export const ds = tokens;
             r#"{"gray":"dist"}"#,
             "`import` precedes `development` in the object, so it wins"
         );
+        assert!(blocked.is_err(), "a matched `null` blocks the export, as in Node");
     }
 
     #[test]
