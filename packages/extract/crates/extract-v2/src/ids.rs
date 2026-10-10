@@ -120,6 +120,27 @@ pub fn name_scope(binding: &str, class_name: &str) -> String {
     format!("{}{}", crate::css::binding_segment(binding), class_suffix(class_name))
 }
 
+/// Each component's name scope, in order: copies of one definition take the
+/// scope of the least binding among them, so they share their prop names,
+/// whatever order the files come in. Two definitions under one binding keep
+/// apart, as their class names do.
+pub fn name_scopes(definitions: &[(&str, &str)], class_names: &[String]) -> Vec<String> {
+    let mut least: rustc_hash::FxHashMap<&str, (&str, &str)> = Default::default();
+    for ((binding, identity), class_name) in definitions.iter().zip(class_names) {
+        let held = least.entry(identity).or_insert((binding, class_name));
+        if *binding < held.0 {
+            *held = (binding, class_name);
+        }
+    }
+    definitions
+        .iter()
+        .map(|(_, identity)| {
+            let (binding, class_name) = least[identity];
+            name_scope(binding, class_name)
+        })
+        .collect()
+}
+
 /// A file of an installed package, whose source never changes in place:
 /// under no root the host classifies as linked, and installed by the path
 /// alone otherwise.

@@ -5390,20 +5390,24 @@ fn run_with_system_floor(
         definition_fingerprints.insert(component_id.clone(), definition);
         identities.push((component_id, chain.descriptor.binding.as_str(), identity));
     }
-    let class_names: FxHashMap<&String, String> = identities
-        .iter()
-        .map(|(id, _, _)| *id)
-        .zip(crate::ids::class_names(
-            &identities.iter().map(|(_, binding, identity)| (*binding, identity.as_str())).collect::<Vec<_>>(),
-            class_prefix,
-        ))
-        .collect();
+    let definitions: Vec<(&str, &str)> =
+        identities.iter().map(|(_, binding, identity)| (*binding, identity.as_str())).collect();
+    let ordered_class_names = crate::ids::class_names(&definitions, class_prefix);
+    // Production copies share their prop names; development names each
+    // component's by its own binding, an installed kit's too.
+    let scopes = match inputs.dev_mode {
+        true => definitions
+            .iter()
+            .zip(&ordered_class_names)
+            .map(|((binding, _), class_name)| crate::ids::name_scope(binding, class_name))
+            .collect(),
+        false => crate::ids::name_scopes(&definitions, &ordered_class_names),
+    };
+    let name_scopes: FxHashMap<&String, String> = identities.iter().map(|(id, _, _)| *id).zip(scopes).collect();
+    let class_names: FxHashMap<&String, String> =
+        identities.iter().map(|(id, _, _)| *id).zip(ordered_class_names).collect();
     let identity_of: FxHashMap<&str, &str> =
         identities.iter().map(|(id, _, identity)| (id.as_str(), identity.as_str())).collect();
-    let name_scopes: FxHashMap<&String, String> = identities
-        .iter()
-        .map(|(id, binding, _)| (*id, crate::ids::name_scope(binding, &class_names[id])))
-        .collect();
 
     for component_id in &sorted_ids {
         let Some((file_path, chain_idx)) = chain_lookup.get(component_id.as_str()) else {
@@ -9776,6 +9780,40 @@ export const App = ({ n }) => <Box bgImage={n} texture={n} />;
             }
             assert_eq!(analyze(&files, &test_inputs()).dynamic_props.keys().collect::<Vec<_>>(), want, "{in_kit}{other}");
         }
+    }
+
+    #[test]
+    fn identical_definitions_share_a_slot_under_any_binding() {
+        let copy = |binding: &str| {
+            format!("export const {binding} = ds.props({{ tone: {{ property: 'color' }} }}).asElement('span');\n")
+        };
+        let (text, span) = (copy("Text"), copy("Span"));
+        let other = "export const Span = ds.props({ tone: { property: 'fill' } }).asElement('span');\n";
+        let app = "import { Text } from './text';\nimport { Span } from './span';\nimport { Span as Other } from './other';\n\
+                   export const App = ({ n }) => <><Text tone={`${n}`} /><Span tone={`${n}`} /><Other tone={`${n}`} /></>;\n";
+        let registered = |files: &[(&str, &str)]| {
+            let out = analyze(files, &test_inputs());
+            out.sheets.global.lines().filter(|line| line.starts_with("@property --animus-tone_")).map(str::to_string).collect::<Vec<_>>()
+        };
+        let forward = registered(&[("text.tsx", &text), ("span.tsx", &span), ("other.tsx", other), ("app.tsx", app)]);
+        let backward = registered(&[("app.tsx", app), ("other.tsx", other), ("span.tsx", &span), ("text.tsx", &text)]);
+        assert_eq!(forward.len(), 2, "copies share one registration, the other definition keeps its own: {forward:?}");
+        assert_eq!(forward, backward, "names follow no file order");
+        // Development names each component's props by its own binding, an
+        // installed kit's too, as before copies shared.
+        let mut development = test_inputs();
+        development.dev_mode = true;
+        let installed = "import { Text } from '../node_modules/kit-a/text';\nimport { Span } from '../node_modules/kit-b/span';\n\
+                         export const App = ({ n }) => <><Text tone={`${n}`} /><Span tone={`${n}`} /></>;\n";
+        let out = analyze(
+            &[("node_modules/kit-a/text.tsx", &text), ("node_modules/kit-b/span.tsx", &span), ("src/app.tsx", installed)],
+            &development,
+        );
+        let names: Vec<_> = ["tone_Text_", "tone_Span_"]
+            .iter()
+            .map(|name| out.sheets.global.lines().any(|line| line.starts_with(&format!("@property --animus-{name}"))))
+            .collect();
+        assert_eq!(names, [true, true], "{}", out.sheets.global);
     }
 
     #[test]
