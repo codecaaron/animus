@@ -1,3 +1,7 @@
+import {
+  engineModuleParser,
+  withUnimportedCreateSystemHint,
+} from './discover-packages';
 import { parseInternalWire } from './internal-wire';
 import {
   applyPrefix,
@@ -59,6 +63,25 @@ export interface SystemConfig {
   legacyPrefixedContextualVars?: string[];
 }
 
+/** The loader's evaluation of the system file. A failure that an
+ *  unimported `createSystem` call explains leads with that warning. */
+function loadSystemModule(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  engine: any,
+  systemPath: string,
+  rootDir: string
+) {
+  try {
+    return engine.loadSystemModule(systemPath, rootDir);
+  } catch (error) {
+    throw withUnimportedCreateSystemHint(
+      error,
+      systemPath,
+      engineModuleParser(engine)
+    );
+  }
+}
+
 /**
  * Load and normalize a SystemInstance; `prefix` namespaces every CSS
  * variable name. Error handling stays at the call site.
@@ -73,8 +96,7 @@ export function loadSystemConfig(
     prefixContextualVars?: boolean;
   }
 ): SystemConfig {
-  const { loadSystemModule } = engineApi();
-  const config = loadSystemModule(opts.systemPath, opts.rootDir);
+  const config = loadSystemModule(engineApi(), opts.systemPath, opts.rootDir);
 
   let scalesJson: string = config.scalesJson;
   let variableMapJson: string = config.variableMapJson;

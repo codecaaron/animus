@@ -1150,11 +1150,9 @@ async function systemRoots(
     });
   };
 
-  let bindsName = false;
   for (const binding of imports) {
     const named =
       binding.imported === 'createSystem' || binding.local === 'createSystem';
-    if (binding.local === 'createSystem') bindsName = true;
     if (named) {
       const statement = new RegExp(
         `\\bimport\\b[^;]*?\\bfrom\\s*['"]${escapeRegExp(binding.source)}['"]`,
@@ -1219,18 +1217,12 @@ async function systemRoots(
       why: `it is destructured from '${initializer}', which is not a module namespace`,
     });
   };
-  for (const match of source.matchAll(
-    /\b(?:const|let|var)\s*\{([^}]*)\}\s*=\s*([^;\n]+)/g
-  )) {
+  for (const match of source.matchAll(DESTRUCTURE)) {
     const [whole, pattern, initializer] = match;
     for (const property of pattern.split(',')) {
-      const binding =
-        /^\s*createSystem\s*(?::\s*([a-zA-Z_$][a-zA-Z0-9_$]*))?\s*(?:=[\s\S]*)?$/.exec(
-          property
-        );
+      const binding = DESTRUCTURED_CREATE_SYSTEM.exec(property);
       if (!binding) continue;
       const local = binding[1] ?? 'createSystem';
-      if (local === 'createSystem') bindsName = true;
       // Spelling read an unrenamed destructured `createSystem` as a root.
       admit(
         local,
@@ -1241,23 +1233,77 @@ async function systemRoots(
     }
   }
 
-  const declaresName =
+  const unimported = unimportedCreateSystemCall(
+    systemFilePath,
+    source,
+    imports
+  );
+  if (unimported) following.report?.(unimported);
+  return roots;
+}
+
+const DESTRUCTURE = /\b(?:const|let|var)\s*\{([^}]*)\}\s*=\s*([^;\n]+)/g;
+/** A destructured `createSystem` property, with its rename if any. */
+const DESTRUCTURED_CREATE_SYSTEM =
+  /^\s*createSystem\s*(?::\s*([a-zA-Z_$][a-zA-Z0-9_$]*))?\s*(?:=[\s\S]*)?$/;
+
+/** The warning for a call of `createSystem` that the system file neither
+ *  imports, destructures nor declares; null when there is none. */
+export function unimportedCreateSystemCall(
+  systemFilePath: string,
+  source: string,
+  imports: readonly ExtractImportFact[]
+): ManifestDiagnostic | null {
+  const call = /(?<![a-zA-Z0-9_$.])createSystem\s*\(/.exec(source);
+  if (!call || imports.some((binding) => binding.local === 'createSystem')) {
+    return null;
+  }
+  for (const [, pattern] of source.matchAll(DESTRUCTURE)) {
+    for (const property of pattern.split(',')) {
+      const binding = DESTRUCTURED_CREATE_SYSTEM.exec(property);
+      if (binding && (binding[1] ?? 'createSystem') === 'createSystem') {
+        return null;
+      }
+    }
+  }
+  if (
     /\b(?:function\*?|class)\s+createSystem\b|\b(?:const|let|var)\s+createSystem\b/.test(
       source
-    );
-  const bareCall = /(?<![a-zA-Z0-9_$.])createSystem\s*\(/.exec(source);
-  if (!bindsName && !declaresName && bareCall) {
-    following.report?.({
-      file: systemFilePath,
-      component: 'createSystem',
-      kind: 'warn',
-      message: `'createSystem' is called with no import or local binding, so it is not read as a system root: the system loader evaluates this file without auto-imports, where the name is undefined — import createSystem from '@animus-ui/system'`,
-      code: UNIMPORTED_CREATE_SYSTEM,
-      severity: severityFor(UNIMPORTED_CREATE_SYSTEM),
-      ...locationIn(source, bareCall.index),
-    });
+    )
+  ) {
+    return null;
   }
-  return roots;
+  return {
+    file: systemFilePath,
+    component: 'createSystem',
+    kind: 'warn',
+    message: `'createSystem' is called with no import or local binding, so it is not read as a system root: the system loader evaluates this file without auto-imports, where the name is undefined — import createSystem from '@animus-ui/system'`,
+    code: UNIMPORTED_CREATE_SYSTEM,
+    severity: severityFor(UNIMPORTED_CREATE_SYSTEM),
+    ...locationIn(source, call.index),
+  };
+}
+
+/** A system load error led by the unimported-call warning, when the system
+ *  file calls `createSystem` with no binding, so every host names the fix. */
+export function withUnimportedCreateSystemHint<Thrown>(
+  error: Thrown,
+  systemFilePath: string,
+  parseModule: ModuleParser | undefined
+): Thrown | Error {
+  let source: string;
+  try {
+    source = readFileSync(systemFilePath, 'utf-8');
+  } catch {
+    return error;
+  }
+  const imports = parseModule?.(source, systemFilePath)?.imports ?? [];
+  const call = unimportedCreateSystemCall(systemFilePath, source, imports);
+  if (!call) return error;
+  return new Error(
+    `${call.file}:${call.line}:${call.column}: ${call.component}: ${call.message} [${call.code}]\n${String(error)}`,
+    { cause: error }
+  );
 }
 
 /** A pattern matching a call of any of `callees` as a whole name, or null
