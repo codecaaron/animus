@@ -2401,6 +2401,18 @@ fn top_level_write(span: oxc::span::Span, ancestors: &[AstKind<'_>]) -> bool {
         && matches!(statement.next(), Some(AstKind::Program(_)))
 }
 
+/// Whether the member read at `span` runs with its object as `this`: the
+/// callee of a call or `new`, or a tagged template's tag, through erased
+/// wrappers and optional chains: `(props.render)()` runs it as a method.
+fn runs_as_method<'b, 'a: 'b>(span: oxc::span::Span, ancestors: &mut impl Iterator<Item = &'b AstKind<'a>>) -> bool {
+    match peel_wrappers(span, ancestors) {
+        (current, Some(AstKind::CallExpression(call))) => call.callee.span() == current,
+        (current, Some(AstKind::NewExpression(call))) => call.callee.span() == current,
+        (current, Some(AstKind::TaggedTemplateExpression(tagged))) => tagged.tag.span() == current,
+        _ => false,
+    }
+}
+
 /// Parentheses and type syntax erased at runtime: the expression inside is
 /// what an enclosing node uses.
 fn is_erased_wrapper(kind: &AstKind<'_>) -> bool {
@@ -3018,13 +3030,13 @@ impl<'a> Visit<'a> for WrapperScan<'a, '_> {
                         .push(((element.span.start, element.span.end), tag));
                 }
             }
-            // A read of one member (`props.title`), never written or called.
+            // A read of one member (`props.title`), never written, and never
+            // run with the props as `this`.
             Some(AstKind::StaticMemberExpression(member))
                 if member.object.span() == ident.span
                     && !reference.flags().is_member_write_target()
                     && !reference.is_write()
-                    && !matches!(ancestors.next(), Some(AstKind::CallExpression(call))
-                        if call.callee.span() == member.span) => {}
+                    && !runs_as_method(member.span, &mut ancestors) => {}
             _ => {
                 self.invalid.insert(index);
             }

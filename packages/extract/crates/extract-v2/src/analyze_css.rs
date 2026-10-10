@@ -3361,16 +3361,16 @@ fn untraced_member_system_props(
     let mut reported: FxHashSet<(&str, Vec<&str>)> = FxHashSet::default();
     let mut warnings = Vec::new();
     for render in tag_renders(ff, inputs) {
-        let TagRender { tag, member, call: false, mut props, at, .. } = render else {
-            continue;
-        };
+        let TagRender { tag, member, call, mut props, at, .. } = render;
         if member_expr_bindings.contains_key(tag) || props.is_empty() {
             continue;
         }
         // A member tag, or a facade's own tag (`<X>` for `X = Object.assign(T, …)`).
+        // An element or a `createElement` call of a bound member warns; an
+        // unstable object's member warns for an element only.
         let read = if member { objects.member(file, tag) } else { objects.root(file, tag) };
         let (component, reason) = match read {
-            Some(Member::Unstable(component, reason)) => (component, reason),
+            Some(Member::Unstable(component, reason)) if !call => (component, reason),
             Some(Member::Bound { module, binding }) if member => {
                 if let Some((declaration_file, declaration, lost)) =
                     lost_through_binding(&module, &binding, files, inputs)
@@ -11641,6 +11641,9 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             "const Button = (props) => { const p = props; return <R {...p} />; };",
             "const Button = (props) => { const { size, ...r } = props; return <R {...r} />; };",
             "const Button = (props) => { props.render(); return <R {...props} />; };",
+            "const Button = (props) => { (props.render)(); return <R {...props} />; };",
+            "const Button = (props) => { props.render``; return <R {...props} />; };",
+            "const Button = (props) => { (props.render as any)(); return <R {...props} />; };",
             "const memo = (f) => f;\nconst Button = memo((props) => <R {...props} />);",
             "const Button = observer((props) => <R {...props} />);",
             "const Button = (props) => <R {...props} />;\nexport const Slotted = () => <Slot as={Button} />;",
@@ -11656,9 +11659,12 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             "const Button = (props = { size: 'lg' }) => <R {...props} />;",
             "const Button = (props) => <R {...props} />;\neval('');",
         ] {
-            let app = format!("{wrapper}\nexport const App = () => <Button size=\"sm\" active />;");
-            let (sizes, states, _) = wrapper_kept(&app);
-            assert_eq!((sizes, states), (vec!["sm", "md", "lg"], vec!["active", "busy"]), "{wrapper}");
+            // Rendered as an element, or by `createElement`.
+            for render in ["<Button size=\"sm\" active />", "createElement(Button, { size: 'sm', active: true })"] {
+                let app = format!("import {{ createElement }} from 'react';\n{wrapper}\nexport const App = () => {render};");
+                let (sizes, states, _) = wrapper_kept(&app);
+                assert_eq!((sizes, states), (vec!["sm", "md", "lg"], vec!["active", "busy"]), "{wrapper} {render}");
+            }
         }
         // A spread at the render opens the target.
         let (sizes, _, _) = wrapper_kept(
@@ -11901,16 +11907,24 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             assert_eq!(warned, expected, "{module}{app}: {:?}", out.diagnostics);
         }
         let held = "import { Box } from './recipe';\nexport const Facade = { Item: (props) => <Box {...props} /> };\n";
-        let app = "import { Facade } from './barrel';\nexport const App = () => <Facade.Item marginInlineStart={8} />;\n";
-        let out = analyze_with_logical_space(&[
-            ("recipe.tsx", recipe),
-            ("held.tsx", held),
-            ("barrel.ts", "export * from './held';\n"),
-            ("app.tsx", app),
-        ]);
-        let warned: Vec<_> = unattributed(&out).iter().map(|d| (d.file.as_str(), d.offset, d.dropped.as_deref())).collect();
-        let at = app.find("<Facade.Item").unwrap() as u32;
-        assert_eq!(warned, [("app.tsx", Some(at), Some("marginInlineStart"))], "{:?}", out.diagnostics);
+        // As an element, or by `createElement`.
+        for (render, site) in [
+            ("<Facade.Item marginInlineStart={8} />", "<Facade.Item"),
+            ("createElement(Facade.Item, { marginInlineStart: 8 })", "createElement(Facade.Item"),
+        ] {
+            let app = format!(
+                "import {{ createElement }} from 'react';\nimport {{ Facade }} from './barrel';\nexport const App = () => {render};\n"
+            );
+            let out = analyze_with_logical_space(&[
+                ("recipe.tsx", recipe),
+                ("held.tsx", held),
+                ("barrel.ts", "export * from './held';\n"),
+                ("app.tsx", app.as_str()),
+            ]);
+            let warned: Vec<_> = unattributed(&out).iter().map(|d| (d.file.as_str(), d.offset, d.dropped.as_deref())).collect();
+            let at = app.find(site).unwrap() as u32;
+            assert_eq!(warned, [("app.tsx", Some(at), Some("marginInlineStart"))], "{render}: {:?}", out.diagnostics);
+        }
     }
 
     #[test]
