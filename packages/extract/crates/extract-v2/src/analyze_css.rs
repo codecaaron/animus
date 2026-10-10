@@ -113,7 +113,9 @@ pub struct CssInputs {
     /// FNV-1a over each input that can change a component's declarations or
     /// runtime metadata, in canonical JSON: with the class prefix, the
     /// system's fingerprint. Global blocks, which emit outside component
-    /// classes, take no part; keyframes take part by name only.
+    /// classes, take no part; keyframes take part by name only; the numeric
+    /// registrations, which change only warnings and the slot's
+    /// `declaredNumeric`, take none.
     pub system_hash: u64,
 }
 
@@ -291,19 +293,15 @@ impl CssInputs {
         };
         let records: Vec<PropertyRecord> =
             serde_json::from_str(json).map_err(|e| format!("EngineOptions.propertyRecordsJson: {e}"))?;
-        let mut numeric: Vec<String> = records
+        // Beside the system hash, not in it: the set changes only warnings
+        // and runtime metadata, never a class name or a declaration.
+        self.numeric_properties = records
             .into_iter()
             .filter(|record| {
                 record.registered && matches!(record.syntax.as_deref().map(str::trim), Some("<integer>" | "<number>"))
             })
             .map(|record| format!("--{}", record.name))
             .collect();
-        if numeric.is_empty() {
-            return Ok(());
-        }
-        numeric.sort();
-        self.system_hash = crate::ids::fnv1a_json(self.system_hash, &numeric);
-        self.numeric_properties = numeric.into_iter().collect();
         Ok(())
     }
 

@@ -214,10 +214,11 @@ impl PropConfig {
         self.css_properties().iter().all(|property| property.starts_with("--"))
     }
 
-    /// Whether every property the prop sets is a custom property registered
-    /// with a numeric syntax, so a number needs no unit.
+    /// Whether every property the prop sets, its `current_var` included, is
+    /// a custom property registered with a numeric syntax, so a number needs
+    /// no unit.
     pub fn declares_numeric(&self, numeric: &FxHashSet<String>) -> bool {
-        self.css_properties().iter().all(|property| numeric.contains(property))
+        self.css_properties().iter().chain(&self.current_var).all(|property| numeric.contains(property))
     }
 
     /// The bound definition's registry key and readable name.
