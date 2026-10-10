@@ -17,11 +17,9 @@ const EXPECTED = [
   '--acme-cap:40rem',
   '--acme-tone:var(--acme-color-ink)',
   '--acme-cap:var(--animus-cap-size_',
-  // A condition alias, a runtime keyword on the currentVar prop, and a
-  // declaration-scale record value.
+  // A condition alias and a declaration-scale record value.
   'style(--acme-tone:blue)',
   '--acme-cap:3px',
-  '--acme-tone:inherit',
   '-color_:var(--acme-tone)',
 ];
 /** A declared name the prefix should have renamed. */

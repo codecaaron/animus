@@ -4762,20 +4762,11 @@ fn run_with_system_floor(
             value: value.clone(),
         })
     };
-    // The same admission for a runtime keyword, which no usage wrote and so
-    // reports nothing.
-    let admits_keyword = |config: &PropConfig, prop_name: &str, value: &Value| {
-        strict_token_miss_of(prop_name, config, value, &resolve_ctx).is_none()
-            && extracts_configured_value(config, value, &resolve_ctx)
-    };
 
     let mut all_utility_inputs: Vec<UtilityInput> = Vec::new();
     let mut all_custom_inputs: Vec<(String, UtilityInput)> = Vec::new();
     let mut attempted_callbacks: FxHashSet<String> = FxHashSet::default();
     let mut all_custom_dynamic_usages: Vec<DynamicPropUsage> = Vec::new();
-    // Custom props a JSX attribute value or explicit retention delivers at
-    // runtime, unlike spreads and forwarding, which also keep a slot.
-    let mut observed_custom_dynamic_usages: Vec<DynamicPropUsage> = Vec::new();
     let mut all_usage_results: Vec<UsageScanResult> = Vec::new();
     let mut usage_residue: Vec<UsageResidueRecord> = Vec::new();
     let mut identity_policy = UsageIdentityPolicy::default();
@@ -4927,17 +4918,16 @@ fn run_with_system_floor(
                 member_expr_bindings,
                 &proxies,
             );
-            let mut uncertain_renders = crate::usage_facts::uncertain_custom_renders(
-                ff.usage_for_analysis(),
-                &lookup.custom_props,
-                member_expr_bindings,
-                &proxies,
-            );
+            custom_scan
+                .dynamic_usages
+                .extend(crate::usage_facts::uncertain_custom_renders(
+                    ff.usage_for_analysis(),
+                    &lookup.custom_props,
+                    member_expr_bindings,
+                    &proxies,
+                ));
             identity_policy
                 .attribute_dynamic_usages(&mut custom_scan.dynamic_usages, &lookup.attribution);
-            identity_policy.attribute_dynamic_usages(&mut uncertain_renders, &lookup.attribution);
-            observed_custom_dynamic_usages.extend(custom_scan.dynamic_usages.iter().cloned());
-            custom_scan.dynamic_usages.extend(uncertain_renders);
             for usage in &custom_scan.static_usages {
                 // An ambiguous binding names every component it may render.
                 for owner in identity_policy.resolve_all(&usage.binding, &lookup.attribution) {
@@ -5209,12 +5199,10 @@ fn run_with_system_floor(
         }
         for usage in &injection.custom_dynamic {
             for component_id in ids_by_binding.get(&usage.binding).into_iter().flatten() {
-                let usage = DynamicPropUsage {
+                all_custom_dynamic_usages.push(DynamicPropUsage {
                     prop_name: usage.prop_name.clone(),
                     binding: component_id.clone(),
-                };
-                observed_custom_dynamic_usages.push(usage.clone());
-                all_custom_dynamic_usages.push(usage);
+                });
             }
         }
         all_usage_results.push(expand_forced_scan(injection.scan, &ids_by_binding));
@@ -5260,7 +5248,7 @@ fn run_with_system_floor(
         identity_policy.uncertain,
     );
     let confined_uses = confined_uses(files, &chain_lookup, &evaluated_ids);
-    let mut utility_classes = resolve_utility_classes(&all_utility_inputs, &resolve_ctx, class_prefix);
+    let utility_classes = resolve_utility_classes(&all_utility_inputs, &resolve_ctx, class_prefix);
     // A system prop keeps its slot while any component it is active on can
     // receive a value without a utility class; a same-named custom prop takes
     // that component's values instead.
@@ -5281,7 +5269,7 @@ fn run_with_system_floor(
             }
             active_system_prop_names.into_iter().partition(|prop| !uncovered.contains(prop))
         } else {
-            (FxHashSet::default(), detected_dynamic_prop_names.clone())
+            (FxHashSet::default(), detected_dynamic_prop_names)
         };
 
     let typed_system_props = utility_classes.typed_props().clone();
@@ -5308,20 +5296,6 @@ fn run_with_system_floor(
             );
         }
     }
-    // Keyword classes go only to props a JSX value reaches at runtime; a
-    // slot the floor alone keeps, or one fed by spreads, forwarding or
-    // aliases, still carries a keyword through its variable.
-    utility_classes.add_runtime_keyword_classes(
-        dynamic_props
-            .iter()
-            .filter(|(name, _)| detected_dynamic_prop_names.contains(*name))
-            .filter_map(|(name, meta)| Some((name.as_str(), &meta.value()?.scale_values))),
-        &breakpoints,
-        &resolve_ctx,
-        |prop_name, value| {
-            inputs.config.get(prop_name).is_some_and(|config| admits_keyword(config, prop_name, value))
-        },
-    );
     let slot_entries = if !dynamic_props.is_empty() {
         Some(build_variable_slot_entries(&dynamic_props, &breakpoints))
     } else {
@@ -5378,7 +5352,7 @@ fn run_with_system_floor(
             deferred_errors.extend(deferred.into_iter().map(|entry| DeferredComponentError { once: true, ..entry }));
         }
     };
-    let mut custom_classes = resolve_custom_prop_classes(
+    let custom_classes = resolve_custom_prop_classes(
         &all_custom_inputs,
         &custom_configs_by_id,
         &resolve_ctx,
@@ -5392,10 +5366,6 @@ fn run_with_system_floor(
             .entry(dyn_usage.binding.clone())
             .or_default()
             .insert(dyn_usage.prop_name.clone());
-    }
-    let mut observed_custom_dynamic: FxHashMap<String, FxHashSet<String>> = FxHashMap::default();
-    for usage in &observed_custom_dynamic_usages {
-        observed_custom_dynamic.entry(usage.binding.clone()).or_default().insert(usage.prop_name.clone());
     }
     // A callback prop, inline or naming a configured definition, keeps its
     // slot (and an inline callback its delivery) unless its component is
@@ -5507,23 +5477,6 @@ fn run_with_system_floor(
                 );
             }
         }
-        let observed = observed_custom_dynamic.get(component_id);
-        custom_classes.add_runtime_keyword_classes(
-            component_id,
-            cc,
-            component_dynamic
-                .iter()
-                .filter(|(name, _)| observed.is_some_and(|props| props.contains(*name)))
-                .filter_map(|(name, meta)| Some((name.as_str(), &meta.value()?.scale_values))),
-            &breakpoints,
-            &resolve_ctx,
-            |prop_name, value| {
-                cc.get(prop_name).is_some_and(|config| {
-                    admits_keyword(config, prop_name, value)
-                        && extracts_custom_value(config, value, &evaluator, &mut attempted_callbacks, &resolve_ctx)
-                })
-            },
-        );
         if !component_dynamic.is_empty() {
             all_custom_slot_entries.extend(build_variable_slot_entries(
                 &component_dynamic,
@@ -7397,69 +7350,17 @@ export const App = ({ n }) => <Box bgImage={n} texture={n} />;
     }
 
     #[test]
-    fn observed_runtime_props_select_direct_keyword_classes() {
-        let source = r#"export const Box = ds
-  .props({ gap: { property: 'columnGap' }, edge: { property: 'rowGap' } })
-  .system({ space: true })
-  .asElement('div');
-export const App = ({ n, rest }) => <><Box p={n} gap={n} /><Box {...rest} /></>;
-"#;
-        let mut inputs = test_inputs();
-        let mut margin = inputs.config["p"].clone();
-        margin.property = "margin".to_string();
-        inputs.config.insert("m".to_string(), margin);
-        let out = analyze(&[("a.tsx", source)], &inputs);
-        let rule = |css: &str, class: &str| {
-            css.split(&format!(".{class} {{")).nth(1).and_then(|rule| rule.split('}').next()).unwrap_or_default().to_string()
-        };
+    fn only_literal_css_wide_keywords_produce_keyword_css() {
+        let source = "export const Box = ds.system({ space: true }).asElement('div');\n\
+                      export const App = ({ n }) => <><Box p={n} /><Box p=\"inherit\" /></>;\n";
+        let out = analyze(&[("a.tsx", source)], &test_inputs());
         let p = &out.system_prop_map["p"];
-        assert!(rule(&out.sheets.system, &p["inherit"]).contains("padding: inherit;"), "{}", out.sheets.system);
-        assert!(rule(&out.sheets.system, &p["sm:revert-layer"]).contains("padding: revert-layer;"), "{}", out.sheets.system);
-        let gap = custom_classes(&out, "a.tsx::Box", "gap");
-        assert!(rule(&out.sheets.custom, &gap["unset"]).contains("column-gap: unset;"), "{}", out.sheets.custom);
-        assert!(gap.contains_key("sm:initial"), "{gap:?}");
-        // A slot only the floor or a spread keeps carries keywords through its
-        // variable, as before.
-        assert!(out.dynamic_props.contains_key("m") && !out.system_prop_map.contains_key("m"), "{:?}", out.system_prop_map);
-        let payload = &out.replacement_configs["a.tsx::Box"];
-        assert!(payload.custom_dynamic_config.as_ref().unwrap().contains_key("edge"));
-        assert!(custom_classes(&out, "a.tsx::Box", "edge").is_empty());
-    }
-
-    /// A runtime keyword declares what a static write of it declares, at the
-    /// base and every breakpoint, whether or not a static write exists; no
-    /// transform sees a CSS-wide keyword on either path.
-    #[test]
-    fn runtime_keywords_declare_what_a_static_write_declares() {
-        let to_px = "(v) => `${v}px`";
-        let mut inputs = test_inputs();
-        inputs.config.insert(
-            "w".into(),
-            serde_json::from_str(r#"{"property": "width", "transform": "toPx", "transformId": "toPx@system.w"}"#)
-                .unwrap(),
-        );
-        inputs.set_transform_sources(Some(&serde_json::json!({ "toPx@system.w": to_px }).to_string())).unwrap();
-        inputs.group_registry.insert("sizing".into(), vec!["w".into()]);
-        let classes_of = |statics: &str| {
-            let source = format!(
-                "export const Box = ds.props({{ cw: {{ property: 'height', transform: {to_px} }} }}).system({{ sizing: true }}).asElement('div');\n\
-                 export const App = ({{ n }}) => <><Box w={{n}} cw={{n}} />{statics}</>;\n"
-            );
-            let out = analyze(&[("a.tsx", &source)], &inputs);
-            let rule = |css: &str, class: &str| {
-                css.split(&format!(".{class} {{")).nth(1).and_then(|rule| rule.split('}').next()).unwrap_or_default().to_string()
-            };
-            let mut found = Vec::new();
-            for key in ["\"initial\"", "{\"sm\":\"initial\"}"] {
-                let w = &out.system_prop_map["w"][key];
-                assert!(rule(&out.sheets.system, w).contains("width: initial;"), "{key}\n{}", out.sheets.system);
-                let cw = &custom_classes(&out, "a.tsx::Box", "cw")[key];
-                assert!(rule(&out.sheets.custom, cw).contains("height: initial;"), "{key}\n{}", out.sheets.custom);
-                found.push((w.clone(), cw.clone()));
-            }
-            found
-        };
-        assert_eq!(classes_of(""), classes_of(r#"<Box w="initial" cw="initial" />"#));
+        assert_eq!(p.keys().collect::<Vec<_>>(), ["inherit"], "{p:?}");
+        assert!(out.sheets.system.contains("padding: inherit;"), "{}", out.sheets.system);
+        for keyword in ["initial", "unset", "revert;", "revert-layer"] {
+            assert!(!out.sheets.system.contains(&format!("padding: {keyword}")), "{}", out.sheets.system);
+        }
+        assert!(out.dynamic_props.contains_key("p"));
     }
 
     #[test]
