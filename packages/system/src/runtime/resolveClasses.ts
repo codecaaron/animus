@@ -607,10 +607,22 @@ function applyDynamicProp(
     );
   }
   for (const [cls, varName, resolved] of staged) {
-    classes.push(cls);
     if (varName !== undefined && resolved !== undefined) {
+      // Props on one CSS property share a slot variable, and props apply in
+      // definition order: a later-defined prop's write replaces an earlier
+      // one's, and the earlier class reading the variable (this class, or
+      // its `--keep` twin) leaves with it.
+      if (varName in dynStyle) {
+        const keep = `${dc.slotClass}--keep`;
+        const twin = cls.startsWith(keep)
+          ? dc.slotClass + cls.slice(keep.length)
+          : keep + cls.slice(dc.slotClass.length);
+        const at = classes.indexOf(cls);
+        classes.splice(at >= 0 ? at : classes.indexOf(twin), 1);
+      }
       dynStyle[varName] = resolved;
     }
+    classes.push(cls);
   }
   return null;
 }

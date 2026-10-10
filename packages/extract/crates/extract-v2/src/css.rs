@@ -1801,8 +1801,13 @@ pub fn build_variable_slot_entries(
     let mut sorted_bps: Vec<(&String, &u32)> = breakpoints.breakpoints.iter().collect();
     sorted_bps.sort_by_key(|(_, px)| *px);
 
-    // A declaration prop's consuming rules render in the declaration band.
+    // A declaration prop's consuming rules render in the declaration band,
+    // and props sharing a slot (`share_slots`) render it once.
+    let mut rendered = FxHashSet::default();
     for meta in dynamic_props.values().filter_map(DynamicPropMeta::value) {
+        if !rendered.insert(meta.slot_class.as_str()) {
+            continue;
+        }
         let css_property = css_property_name(&meta.property);
         let declarations = |var: &str, write_current_var: bool| {
             let value = format!("var({var})");
