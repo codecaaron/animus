@@ -2980,8 +2980,7 @@ fn spread_wrapper_targets(
                             .iter()
                             .enumerate()
                             .filter(|(index, attr)| {
-                                spread.is_none_or(|before| *index >= before)
-                                    || named.contains(&attr.name)
+                                attr.settles(*index, *spread) || (!attr.optional && named.contains(&attr.name))
                             })
                             .map(|(_, attr)| attr.name.clone())
                             .collect(),
@@ -8962,6 +8961,37 @@ export const App = ({ n }) => <Box bgImage={n} texture={n} />;
         }
         let shadowed = analyzed("export const App = ({ Box, props }) => createElement(Box, props);\n");
         assert_eq!(unread(&shadowed), 0);
+    }
+
+    /// A spread whose every branch is an object literal of literal entries,
+    /// or nothing (`{...(c ? { p: 8 } : {})}`), writes those entries on the
+    /// branches that hold them: they take static classes, and the prop keeps
+    /// its default where a branch leaves it out. Any other spread writes
+    /// anything.
+    #[test]
+    fn listed_spreads_write_the_entries_their_branches_hold() {
+        let kit = "export const Box = ds.system({ space: true }).asElement('div');\n";
+        let cases: [(&str, &[&str]); 6] = [
+            ("<Box {...(c ? { p: 8 } : {})} />", &[]),
+            ("<Box {...(c && { p: 8 })} />", &[]),
+            ("<Box {...(c ? { p: 8 } : null)} />", &[]),
+            ("<Box {...(c ? { p: n } : {})} />", &["p"]),
+            ("<Box {...(c ? o : {})} />", &["p"]),
+            ("<Box {...(c || 'abc')} />", &["p"]),
+        ];
+        for (render, want) in cases {
+            let app = format!("import {{ Box }} from './kit';\nexport const App = ({{ c, n, o }}) => {render};\n");
+            let out = analyze(&[("kit.tsx", kit), ("app.tsx", &app)], &test_inputs());
+            assert_eq!(out.dynamic_props.keys().collect::<Vec<_>>(), want, "{render}");
+        }
+        for (render, sizes) in [
+            ("<R {...(c ? { size: 'lg' } : {})} />", vec!["md", "lg"]),
+            ("<R size=\"sm\" {...(c ? { size: 'lg' } : {})} />", vec!["sm", "lg"]),
+            ("<R {...(c ? o : {})} />", vec!["sm", "md", "lg"]),
+        ] {
+            let app = format!("import {{ R }} from './r';\nexport const App = ({{ c, o }}) => {render};\n");
+            assert_eq!(kept_options(&[("r.tsx", RECIPE), ("app.tsx", app.as_str())]).0, sizes, "{render}");
+        }
     }
 
     #[test]

@@ -62,9 +62,19 @@ pub struct AttrFact {
     /// `write_conditions`.
     #[serde(skip)]
     pub conditions: Option<BTreeSet<String>>,
+    /// Written by only some branches of a spread of listed object literals
+    /// (`{...(c ? { type: 'a' } : {})}`), so the element may leave it out.
+    #[serde(skip)]
+    pub optional: bool,
 }
 
 impl AttrFact {
+    /// Whether the element always sets the prop to this value itself: no
+    /// spread after it can replace it, and no branch leaves it out.
+    pub(crate) fn settles(&self, index: usize, spread: Option<usize>) -> bool {
+        !self.optional && spread.is_none_or(|before| index >= before)
+    }
+
     /// Every value the attribute can write, when they are known: its
     /// static value, or the finite values a runtime value is proven to take.
     pub(crate) fn proven_values(&self) -> Option<impl Iterator<Item = &Value>> {
@@ -2601,8 +2611,28 @@ impl<'a> FactCollector<'a, '_> {
         let mut attrs = Vec::new();
         let mut spread = None;
         for attr_item in &elem.attributes {
-            if matches!(attr_item, JSXAttributeItem::SpreadAttribute(_)) {
-                spread = Some(attrs.len());
+            if let JSXAttributeItem::SpreadAttribute(spread_attribute) = attr_item {
+                // A spread of object literals with listed literal entries
+                // writes those entries, on the branches that hold them.
+                match self.enrich.then(|| listed_spread(&spread_attribute.argument, self.origins)).flatten() {
+                    Some(entries) => attrs.extend(entries.into_iter().map(|(name, value)| AttrFact {
+                        variant_class: match &value {
+                            Value::String(class) => class.clone(),
+                            _ => "__dynamic__".to_string(),
+                        },
+                        conditions: (!value.is_object()).then(|| BTreeSet::from([BASE_CONDITION.to_string()])),
+                        name,
+                        static_value: Some(value),
+                        enumerable_values: Vec::new(),
+                        dynamic: false,
+                        dynamic_kind: None,
+                        dynamic_span: None,
+                        skip: false,
+                        literal: true,
+                        optional: true,
+                    })),
+                    None => spread = Some(attrs.len()),
+                }
             }
             if let JSXAttributeItem::Attribute(attr) = attr_item {
                 let JSXAttributeName::Identifier(id) = &attr.name else {
@@ -2743,6 +2773,7 @@ impl<'a> FactCollector<'a, '_> {
                     variant_class: classify_jsx_attribute_as_variant_value(&attr.value),
                     literal,
                     conditions,
+                    optional: false,
                 });
             }
         }
@@ -2753,6 +2784,64 @@ impl<'a> FactCollector<'a, '_> {
             span: (elem.span.start, elem.span.end),
             origin,
         });
+    }
+}
+
+/// The entries a spread argument writes when every branch it can take is an
+/// object literal of literal values under static keys, or nothing (`null`,
+/// a boolean, an absent value): `{...(c ? { type: 'a' } : {})}`. A nullish
+/// entry is left out, as at runtime. `None` for any other argument.
+fn listed_spread(expression: &Expression<'_>, origins: Option<&Scoping>) -> Option<Vec<(String, Value)>> {
+    use oxc::ast::ast::{ObjectPropertyKind, PropertyKind};
+    use oxc::syntax::operator::LogicalOperator;
+    let expression = crate::chain_walk::unwrap_type_assertions(expression);
+    if is_absent(expression, origins) {
+        return Some(Vec::new());
+    }
+    match expression {
+        Expression::NullLiteral(_) | Expression::BooleanLiteral(_) => Some(Vec::new()),
+        Expression::ObjectExpression(object) => {
+            let mut entries = Vec::new();
+            for property in &object.properties {
+                let ObjectPropertyKind::ObjectProperty(property) = property else { return None };
+                if property.kind != PropertyKind::Init || property.computed || property.method {
+                    return None;
+                }
+                let key = eval_property_key(&property.key)?;
+                if key == "__proto__" {
+                    return None;
+                }
+                let value = eval_static_expression(&property.value)?;
+                let value = match value {
+                    Value::Null => continue,
+                    Value::Object(mut breakpoints) => {
+                        breakpoints.retain(|_, entry| !entry.is_null());
+                        if breakpoints.is_empty() {
+                            continue;
+                        }
+                        Value::Object(breakpoints)
+                    }
+                    value => value,
+                };
+                entries.push((key, value));
+            }
+            Some(entries)
+        }
+        Expression::ConditionalExpression(conditional) => {
+            let mut entries = listed_spread(&conditional.consequent, origins)?;
+            entries.extend(listed_spread(&conditional.alternate, origins)?);
+            Some(entries)
+        }
+        // A falsy left side spreads nothing.
+        Expression::LogicalExpression(logical) if logical.operator == LogicalOperator::And => {
+            listed_spread(&logical.right, origins)
+        }
+        Expression::LogicalExpression(logical) => {
+            let mut entries = listed_spread(&logical.left, origins)?;
+            entries.extend(listed_spread(&logical.right, origins)?);
+            Some(entries)
+        }
+        _ => None,
     }
 }
 
@@ -3784,7 +3873,7 @@ pub(crate) fn passed_values(
         let mut settled = false;
         for (index, attr) in attrs.iter().enumerate().filter(|(_, attr)| attr.name == key) {
             values.insert(attr.variant_class.as_str());
-            settled |= spread.is_none_or(|before| index >= before);
+            settled |= attr.settles(index, *spread);
         }
         if !settled {
             values.insert(match spread {
@@ -4033,7 +4122,7 @@ pub fn filter_usage_scan(
                             Some(values) => result.written_props.extend(values.map(|value| write(Some(value.clone())))),
                             None => result.written_props.push(write(None)),
                         }
-                        let settled = spread.is_none_or(|before| index >= before);
+                        let settled = attr.settles(index, *spread);
                         if let Some(props) = active_props {
                             if props.contains(&attr.name) {
                                 // A custom prop's static values belong to the custom
