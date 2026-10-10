@@ -5925,19 +5925,24 @@ fn run_with_system_floor(
     }
 
     let (global_css_raw, unlayered_global_css) = if let Some(blocks) = &inputs.global_style_blocks {
-        let css = crate::theme::resolve_all_global_blocks(blocks, &resolve_ctx);
-        let unlayered = crate::theme::resolve_unlayered_global_blocks(blocks, &resolve_ctx);
-        // Global blocks come from system config, not a resolved source file.
-        drain_transform_failures(
-            &transform_failures,
-            "",
-            None,
-            None,
-            &mut diagnostics,
-            &mut deferred_errors,
-        );
-        drain_strict_token_misses(&token_misses, "system", "system", &mut diagnostics);
-        drain_dropped_style_keys(&dropped_keys, "system", "system", &mut diagnostics);
+        // Each block's reports name its registration key and the module that
+        // declares it; without one, the loaded system stands in.
+        let mut attribute = |name: &str, source: Option<&str>| {
+            let file = source.unwrap_or("system");
+            let component = format!("global '{name}'");
+            drain_transform_failures(
+                &transform_failures,
+                file,
+                Some(&component),
+                None,
+                &mut diagnostics,
+                &mut deferred_errors,
+            );
+            drain_strict_token_misses(&token_misses, file, &component, &mut diagnostics);
+            drain_dropped_style_keys(&dropped_keys, file, &component, &mut diagnostics);
+        };
+        let css = crate::theme::resolve_global_blocks(blocks, &resolve_ctx, false, &mut attribute);
+        let unlayered = crate::theme::resolve_global_blocks(blocks, &resolve_ctx, true, &mut attribute);
         (css, unlayered)
     } else {
         (String::new(), String::new())

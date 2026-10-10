@@ -1783,31 +1783,46 @@ pub fn resolve_all_global_blocks(
     blocks: &Value,
     ctx: &ResolveContext,
 ) -> String {
-    resolve_global_blocks(blocks, ctx, false)
+    resolve_global_blocks(blocks, ctx, false, &mut |_, _| {})
 }
 
 /// The global blocks registered `unlayered`, which emit outside every
 /// cascade layer, in registration order.
 pub fn resolve_unlayered_global_blocks(blocks: &Value, ctx: &ResolveContext) -> String {
-    resolve_global_blocks(blocks, ctx, true)
+    resolve_global_blocks(blocks, ctx, true, &mut |_, _| {})
 }
 
-fn resolve_global_blocks(blocks: &Value, ctx: &ResolveContext, unlayered: bool) -> String {
+/// Resolves the layered (`unlayered: false`) or unlayered blocks, calling
+/// `after_block` with each block's key and declaring module once it has
+/// resolved, so what its resolution reported can be attributed to it.
+pub fn resolve_global_blocks(
+    blocks: &Value,
+    ctx: &ResolveContext,
+    unlayered: bool,
+    after_block: &mut dyn FnMut(&str, Option<&str>),
+) -> String {
     let block_map = match blocks.as_object() {
         Some(o) => o,
         None => return String::new(),
     };
 
     let mut parts: Vec<String> = Vec::new();
-    for (_name, block) in block_map {
-        let (styles, faces, block_unlayered) = match block.as_object() {
+    for (name, block) in block_map {
+        let (styles, faces, block_unlayered, source) = match block.as_object() {
             Some(obj)
                 if obj.get("styles").map(|s| s.is_object()).unwrap_or(false)
-                    && obj.keys().all(|k| k == "styles" || k == "fontFaces" || k == "unlayered") =>
+                    && obj
+                        .keys()
+                        .all(|k| k == "styles" || k == "fontFaces" || k == "unlayered" || k == "source") =>
             {
-                (obj.get("styles").unwrap(), obj.get("fontFaces"), obj.get("unlayered") == Some(&Value::Bool(true)))
+                (
+                    obj.get("styles").unwrap(),
+                    obj.get("fontFaces"),
+                    obj.get("unlayered") == Some(&Value::Bool(true)),
+                    obj.get("source").and_then(Value::as_str),
+                )
             }
-            _ => (block, None, false),
+            _ => (block, None, false, None),
         };
         if block_unlayered != unlayered {
             continue;
@@ -1822,6 +1837,7 @@ fn resolve_global_blocks(blocks: &Value, ctx: &ResolveContext, unlayered: bool) 
         if !css.is_empty() {
             parts.push(css);
         }
+        after_block(name, source);
     }
 
     parts.join("\n\n")
