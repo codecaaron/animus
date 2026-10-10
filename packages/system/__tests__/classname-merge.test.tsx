@@ -1,4 +1,8 @@
-import { type CSSProperties, createElement } from 'react';
+import {
+  type CSSProperties,
+  createElement,
+  type ForwardRefExoticComponent,
+} from 'react';
 
 import { renderToStaticMarkup, renderToString } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
@@ -40,55 +44,67 @@ describe('consumer className on the normal render path', () => {
 describe('consumer className and style callbacks on a component target', () => {
   it('reach the target, run with its state and merge as plain values do', () => {
     type State = { open: boolean };
-    const resolve = <T,>(value: T | ((state: State) => T), state: State) =>
-      typeof value === 'function'
-        ? (value as (state: State) => T)(state)
-        : value;
-    // Calls a callback with its own state, as Base UI's components do.
-    function Target({
-      className,
-      style,
-    }: {
-      className?: string | ((state: State) => string);
-      style?: CSSProperties | ((state: State) => CSSProperties);
+    type Style = CSSProperties & { [name: `--${string}`]: string };
+    // Calls both callbacks with its own state, as Base UI's components do.
+    function CallbackTarget(props: {
+      className: (state: State) => string;
+      style: (state: State) => Style;
     }) {
       const state = { open: true };
       return createElement('div', {
-        className: resolve(className, state),
-        style: resolve(style, state),
+        className: props.className(state),
+        style: props.style(state),
       });
     }
-    const Chip = createComponent(
-      Target,
-      'animus-Chip',
-      { systemPropNames: ['maxW'] },
-      {},
-      {
-        maxW: {
-          varName: '--max-w',
-          slotClass: 'animus-dyn-max-w',
-          property: 'max-width',
-        },
-      }
-    );
-    const render = (props: Record<string, unknown>) => {
-      const chipProps: Record<string, unknown> = { maxW: '120px', ...props };
-      return renderToStaticMarkup(createElement(Chip, chipProps));
+    function PlainTarget(props: { className: string; style: Style }) {
+      return createElement('div', props);
+    }
+    const dynamicPropConfig = {
+      maxW: {
+        varName: '--max-w',
+        slotClass: 'animus-dyn-max-w',
+        property: 'max-width',
+      },
     };
+    const config = { systemPropNames: ['maxW'] };
+    const CallbackChip: ForwardRefExoticComponent<any> = createComponent(
+      CallbackTarget,
+      'animus-Chip',
+      config,
+      {},
+      dynamicPropConfig
+    );
+    const PlainChip: ForwardRefExoticComponent<any> = createComponent(
+      PlainTarget,
+      'animus-Chip',
+      config,
+      {},
+      dynamicPropConfig
+    );
 
+    // The caller's style sets the slot's own variable: Animus's value wins.
     const html =
       '<div class="animus-Chip animus-dyn-max-w is-open" style="opacity:1;--max-w:120px"></div>';
     expect(
-      render({
-        className: (state: State) => (state.open ? 'is-open' : 'is-closed'),
-        style: (state: State) => ({
-          opacity: state.open ? 1 : 0.5,
-          '--max-w': '1px',
-        }),
-      })
+      renderToStaticMarkup(
+        createElement(CallbackChip, {
+          maxW: '120px',
+          className: (state: State) => (state.open ? 'is-open' : 'is-closed'),
+          style: (state: State) => ({
+            opacity: state.open ? 1 : 0.5,
+            '--max-w': '1px',
+          }),
+        })
+      )
     ).toBe(html);
     expect(
-      render({ className: 'is-open', style: { opacity: 1, '--max-w': '1px' } })
+      renderToStaticMarkup(
+        createElement(PlainChip, {
+          maxW: '120px',
+          className: 'is-open',
+          style: { opacity: 1, '--max-w': '1px' },
+        })
+      )
     ).toBe(html);
   });
 });
