@@ -6010,7 +6010,13 @@
     ],
     "emptyCells": ["hide", "show"],
     "fieldSizing": ["content", "fixed"],
-    "fill": ["currentColor", "transparent"],
+    "fill": [
+      "context-fill",
+      "context-stroke",
+      "currentColor",
+      "none",
+      "transparent"
+    ],
     "fillRule": ["evenodd", "nonzero"],
     "filter": ["none"],
     "flex": [
@@ -7319,7 +7325,13 @@
       "spell-out"
     ],
     "stopColor": ["currentColor", "transparent"],
-    "stroke": ["currentColor", "transparent"],
+    "stroke": [
+      "context-fill",
+      "context-stroke",
+      "currentColor",
+      "none",
+      "transparent"
+    ],
     "strokeColor": ["currentColor", "transparent"],
     "strokeDasharray": ["none"],
     "strokeLinecap": ["butt", "round", "square"],
