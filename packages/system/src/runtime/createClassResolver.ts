@@ -5,6 +5,7 @@ import {
   type SystemPropMap,
   withUniqueSystemPropNames,
 } from './resolveClasses.js';
+import { reportUncompiledRender } from './uncompiled.js';
 
 export interface ClassResolverAttributes {
   class: string;
@@ -36,6 +37,7 @@ export function createClassResolver(
   const resolveAttributes = (
     props?: Record<string, unknown>
   ): ClassResolverAttributes => {
+    reportUncompiledRender(config.uncompiled, undefined);
     const { classes, dynamicStyle } = resolveClasses(
       className,
       props || {},
@@ -54,14 +56,16 @@ export function createClassResolver(
 
   // The string form runs per render: resolve classes directly rather than
   // building (and discarding) the attributes object and its style string.
-  const resolver = (props?: Record<string, unknown>): string =>
-    resolveClasses(
+  const resolver = (props?: Record<string, unknown>): string => {
+    reportUncompiledRender(config.uncompiled, undefined);
+    return resolveClasses(
       className,
       props || {},
       config,
       systemPropMap,
       dynamicPropConfig
     ).classes.join(' ');
+  };
 
   return Object.assign(resolver, { attrs: resolveAttributes });
 }

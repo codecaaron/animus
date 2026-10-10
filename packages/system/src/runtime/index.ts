@@ -14,6 +14,7 @@ import {
   type SystemPropMap,
   withUniqueSystemPropNames,
 } from './resolveClasses';
+import { reportUncompiledRender } from './uncompiled';
 
 interface ComponentConfig extends ClassResolverConfig {}
 
@@ -252,6 +253,10 @@ export function createComponent(
 
   const Component = forwardRef(
     (props: Record<string, any>, ref: ForwardedRef<any>) => {
+      reportUncompiledRender(
+        config.uncompiled,
+        Component.displayName || undefined
+      );
       const { classes, dynamicStyle } = resolveClasses(
         className,
         props,
