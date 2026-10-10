@@ -27,6 +27,7 @@ import {
   enforceExternalTokenContracts,
   excludeCollectedPackages,
   extractSystemFilePackages,
+  importedKitPackages,
   findPackageRoot,
   findSheetAssetSpecifiers,
   firstOwners,
@@ -961,7 +962,7 @@ export class ExtractionSession {
     // seam); the traversal and ingest below are the shared collector.
     t = this.now();
     const discoveryDiagnostics: ManifestDiagnostic[] = [];
-    const packageNames = await extractSystemFilePackages(
+    const systemPackages = await extractSystemFilePackages(
       resolvedSystemPath,
       engineModuleParser(engineApi()),
       (diagnostic) => discoveryDiagnostics.push(diagnostic),
@@ -970,6 +971,10 @@ export class ExtractionSession {
         return entry ? resolve(rootDir, entry) : null;
       }
     );
+    const packageNames = [
+      ...systemPackages,
+      ...importedKitPackages(rawEntries, engineApi(), rootDir, systemPackages),
+    ];
     const preResolved = resolvePackagesByName(rootDir, packageNames);
 
     // Raw content hashes of every walked external file, keyed by absolute
@@ -1013,6 +1018,7 @@ export class ExtractionSession {
       {
         diagnostics: [
           ...discoveryDiagnostics,
+          ...collected.diagnostics,
           ...(this.selfCheckReportsEmptyKits
             ? []
             : noKitFilesDiagnostics(collected.outcomes)),

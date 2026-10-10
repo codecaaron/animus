@@ -6,6 +6,7 @@ import {
   isPathWithinRoot,
   readTsconfigAliasPairs,
   resolveMode,
+  sourceKitDependencies,
 } from '@animus-ui/extract/pipeline';
 import {
   ExtractionSession,
@@ -182,8 +183,9 @@ export function withAnimus(
   }
 
   return <Config extends NextOwnedConfig>(
-    nextConfig: NextConfigInput<Config>
+    authoredConfig: NextConfigInput<Config>
   ): WebpackNextConfig<Config> | TurbopackNextConfig<Config> => {
+    const nextConfig = withSourceKits(authoredConfig, process.cwd());
     if (resolveTurbopackMode(options)) {
       return turbopackConfig(nextConfig, options);
     }
@@ -383,6 +385,23 @@ export function bindTurbopackWatchDeathReport(
         'no longer extracted; restart the dev server'
     );
   };
+}
+
+/** The config with the source kits the app depends on added to
+ *  `transpilePackages`. The kit redirect points both bundles at a kit's
+ *  source, but Next's server keeps an installed package external, and so
+ *  loads its runtime entry, unless the package is transpiled; transpiling
+ *  also compiles its TypeScript source. */
+function withSourceKits<Config extends NextOwnedConfig>(
+  nextConfig: NextConfigInput<Config>,
+  rootDir: string
+): NextConfigInput<Config> {
+  const declared = nextConfig.transpilePackages ?? [];
+  const kits = sourceKitDependencies(rootDir).filter(
+    (name) => !declared.includes(name)
+  );
+  if (kits.length === 0) return nextConfig;
+  return { ...nextConfig, transpilePackages: [...declared, ...kits] };
 }
 
 function turbopackConfig<Config extends NextOwnedConfig>(

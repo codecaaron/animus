@@ -91,7 +91,8 @@ pub fn strip_typescript_module(source: &str, file_path: &str) -> Result<String, 
 }
 
 /// Resolve a bare specifier to an absolute file path.
-/// Resolution chain: `exports` (the `import` condition) → `module` → `main`.
+/// Resolution chain: `exports` (a kit's `animus` source condition, else the
+/// `import` condition) → `module` → `main`.
 pub fn resolve_bare_specifier(specifier: &str, from_dir: &str) -> Result<String, String> {
     let (pkg_name, subpath) = split_specifier(specifier);
 
@@ -107,10 +108,14 @@ pub fn resolve_bare_specifier(specifier: &str, from_dir: &str) -> Result<String,
 
     if let Some(exports) = pkg_json.get("exports") {
         let export_key = if subpath.is_empty() { "." } else { subpath };
-        if let Some(resolved) = resolve_exports_entry(exports, export_key) {
-            let abs_path = pkg_dir.join(&resolved);
-            if abs_path.exists() {
-                return Ok(abs_path.to_string_lossy().to_string());
+        // A missing source target, which discovery reports, falls back to
+        // the runtime entry.
+        for source in [true, false] {
+            if let Some(resolved) = resolve_exports_entry(exports, export_key, source) {
+                let abs_path = pkg_dir.join(&resolved);
+                if abs_path.exists() {
+                    return Ok(abs_path.to_string_lossy().to_string());
+                }
             }
         }
     }
@@ -172,7 +177,7 @@ fn find_package_json(pkg_name: &str, start_dir: &str) -> Result<PathBuf, String>
     ))
 }
 
-fn resolve_exports_entry(exports: &serde_json::Value, key: &str) -> Option<String> {
+fn resolve_exports_entry(exports: &serde_json::Value, key: &str, source: bool) -> Option<String> {
     let lookup_key = if key == "." {
         ".".to_string()
     } else if key.starts_with("./") {
@@ -186,10 +191,10 @@ fn resolve_exports_entry(exports: &serde_json::Value, key: &str) -> Option<Strin
     // An exact key answers alone: a declared key whose target resolves to
     // nothing is a blocked subpath, not an invitation to try the patterns.
     if let Some(entry) = exports.get(&lookup_key) {
-        return resolve_condition_value(entry);
+        return resolve_condition_value(entry, source);
     }
 
-    resolve_exports_pattern(exports.as_object()?, &lookup_key)
+    resolve_exports_pattern(exports.as_object()?, &lookup_key, source)
 }
 
 /// Node's pattern specificity: the longest literal prefix before `*` wins,
@@ -197,6 +202,7 @@ fn resolve_exports_entry(exports: &serde_json::Value, key: &str) -> Option<Strin
 fn resolve_exports_pattern(
     exports: &serde_json::Map<String, serde_json::Value>,
     lookup_key: &str,
+    source: bool,
 ) -> Option<String> {
     let mut best: Option<(&str, &str, &serde_json::Value)> = None;
 
@@ -227,20 +233,18 @@ fn resolve_exports_pattern(
 
     let (prefix, suffix, value) = best?;
     let matched = &lookup_key[prefix.len()..lookup_key.len() - suffix.len()];
-    Some(resolve_condition_value(value)?.replace('*', matched))
+    Some(resolve_condition_value(value, source)?.replace('*', matched))
 }
 
-fn resolve_condition_value(value: &serde_json::Value) -> Option<String> {
+/// With `source`, a kit's `animus` condition, its original source, which
+/// discovery redirects every host to, comes before `import` and `default`.
+fn resolve_condition_value(value: &serde_json::Value, source: bool) -> Option<String> {
     match value {
         serde_json::Value::String(s) => Some(s.clone()),
         serde_json::Value::Object(obj) => {
-            if let Some(import_val) = obj.get("import") {
-                return resolve_condition_value(import_val);
-            }
-            if let Some(default_val) = obj.get("default") {
-                return resolve_condition_value(default_val);
-            }
-            None
+            let conditions: &[&str] = if source { &["animus", "import", "default"] } else { &["import", "default"] };
+            let value = conditions.iter().find_map(|condition| obj.get(*condition))?;
+            resolve_condition_value(value, source)
         }
         _ => None,
     }
@@ -3397,11 +3401,11 @@ export const ds = tokens;
             "./groups": "./dist/groups/index.js"
         });
         assert_eq!(
-            resolve_exports_entry(&exports, "."),
+            resolve_exports_entry(&exports, ".", true),
             Some("./dist/index.js".to_string())
         );
         assert_eq!(
-            resolve_exports_entry(&exports, "/groups"),
+            resolve_exports_entry(&exports, "/groups", true),
             Some("./dist/groups/index.js".to_string())
         );
     }
@@ -3416,15 +3420,29 @@ export const ds = tokens;
             "./runtime": {
                 "import": "./dist/runtime.js",
                 "default": "./dist/runtime.cjs"
+            },
+            "./system": {
+                "types": "./dist/system.d.ts",
+                "animus": "./src/system.ts",
+                "import": "./dist/system.js"
             }
         });
         assert_eq!(
-            resolve_exports_entry(&exports, "."),
+            resolve_exports_entry(&exports, ".", true),
             Some("./dist/index.js".to_string())
         );
         assert_eq!(
-            resolve_exports_entry(&exports, "/runtime"),
+            resolve_exports_entry(&exports, "/runtime", true),
             Some("./dist/runtime.js".to_string())
+        );
+        // A kit's source condition comes first; without it, the runtime entry.
+        assert_eq!(
+            resolve_exports_entry(&exports, "/system", true),
+            Some("./src/system.ts".to_string())
+        );
+        assert_eq!(
+            resolve_exports_entry(&exports, "/system", false),
+            Some("./dist/system.js".to_string())
         );
     }
 
@@ -3446,17 +3464,17 @@ export const ds = tokens;
         });
 
         assert_eq!(
-            resolve_exports_entry(&exports, "/field"),
+            resolve_exports_entry(&exports, "/field", true),
             Some("./dist/components/field/index.js".to_string()),
             "a `./*` pattern must substitute the matched subpath"
         );
         // An exact key still wins over the pattern that would also match it.
         assert_eq!(
-            resolve_exports_entry(&exports, "/factory"),
+            resolve_exports_entry(&exports, "/factory", true),
             Some("./dist/components/factory.js".to_string())
         );
         assert_eq!(
-            resolve_exports_entry(&exports, "."),
+            resolve_exports_entry(&exports, ".", true),
             Some("./dist/index.js".to_string())
         );
     }
@@ -3470,15 +3488,15 @@ export const ds = tokens;
         });
 
         assert_eq!(
-            resolve_exports_entry(&exports, "/thing"),
+            resolve_exports_entry(&exports, "/thing", true),
             Some("./dist/thing.js".to_string())
         );
         assert_eq!(
-            resolve_exports_entry(&exports, "/lib/thing"),
+            resolve_exports_entry(&exports, "/lib/thing", true),
             Some("./dist/lib/thing.js".to_string())
         );
         assert_eq!(
-            resolve_exports_entry(&exports, "/lib/thing.css"),
+            resolve_exports_entry(&exports, "/lib/thing.css", true),
             Some("./dist/lib/thing.css".to_string())
         );
     }
@@ -3489,7 +3507,7 @@ export const ds = tokens;
             ".": "./dist/index.js",
             "./groups": "./dist/groups/index.js"
         });
-        assert_eq!(resolve_exports_entry(&exports, "/missing"), None);
+        assert_eq!(resolve_exports_entry(&exports, "/missing", true), None);
     }
 
     #[test]

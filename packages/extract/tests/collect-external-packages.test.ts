@@ -1,4 +1,12 @@
-import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  utimesSync,
+  writeFileSync,
+} from 'fs';
 import { tmpdir } from 'os';
 import { join, relative } from 'path';
 import { afterEach, describe, expect, test } from 'vitest';
@@ -7,9 +15,11 @@ import {
   collectExternalPackageSources,
   excludeCollectedPackages,
   firstOwners,
+  importedKitPackages,
   staleDistIncludesMessage,
   unresolvableIncludesMessage,
 } from '../pipeline/discover-packages';
+import { KIT_WITHOUT_SOURCE_CONDITION } from '../pipeline/manifest-diagnostics';
 
 const tempRoots: string[] = [];
 
@@ -596,5 +606,107 @@ describe('collectExternalPackageSources', () => {
         { specifier: '@x/empty', outcome: 'empty', fileCount: 0 },
       ])
     ).toBeNull();
+  });
+
+  test('a kit names its source through the animus export condition, and app imports find kits too', async () => {
+    const root = realpathSync(makeRoot());
+    const kit = (
+      base: string,
+      exports: Record<string, Record<string, string>>,
+      files: Record<string, string>
+    ): string => {
+      makePackage(base, files);
+      writeFileSync(join(base, 'package.json'), JSON.stringify({ exports }));
+      return base;
+    };
+    const installed = kit(
+      join(root, 'node_modules', '@acme', 'installed'),
+      {
+        '.': {
+          types: './dist/index.d.ts',
+          animus: './authoring/index.ts',
+          import: './dist/index.mjs',
+        },
+        './system': {
+          animus: './authoring/system.ts',
+          import: './dist/system.mjs',
+        },
+      },
+      {
+        'authoring/index.ts': 'export * from "./parts/card";',
+        'authoring/parts/card.tsx': 'export const Card = 1;',
+        'authoring/system.ts': 'export const system = 1;',
+        'dist/index.mjs': 'export const Card = 2;',
+        'dist/system.mjs': 'export const system = 2;',
+      }
+    );
+    // Linked from outside node_modules, with no runtime build to resolve.
+    const linked = kit(
+      join(root, 'kits', 'linked'),
+      { '.': { animus: './src/index.ts' } },
+      { 'src/index.ts': 'export const Badge = 1;' }
+    );
+    symlinkSync(linked, join(root, 'node_modules', '@acme', 'linked'), 'dir');
+    const legacy = makePackage(join(root, 'node_modules', '@acme', 'legacy'), {
+      'src/index.ts': 'export const Old = 1;',
+    });
+
+    // The system extends two kits; the app imports a third.
+    const imports = [
+      '@acme/installed',
+      '@acme/linked',
+      '@acme/legacy',
+      'react',
+    ];
+    const engine = {
+      extractFacts: () =>
+        JSON.stringify({
+          parseCount: 1,
+          files: {
+            'src/App.tsx': {
+              parsePanicked: false,
+              imports: imports.map((source) => ({
+                local: 'x',
+                imported: 'x',
+                source,
+              })),
+              exports: [],
+            },
+          },
+        }),
+    };
+    const systemKits = ['@acme/installed/system', '@acme/legacy'];
+    const app = [{ path: 'src/App.tsx', source: '' }];
+    expect(importedKitPackages(app, engine, root, systemKits)).toEqual([
+      '@acme/linked',
+    ]);
+
+    const result = await collect(root, {
+      '@acme/installed/system': join(installed, 'dist', 'system.mjs'),
+      '@acme/legacy': join(legacy, 'dist', 'index.mjs'),
+      '@acme/linked': null,
+    });
+
+    expect(Object.fromEntries(result.sourceEntries)).toEqual({
+      '@acme/installed': join(installed, 'authoring', 'index.ts'),
+      '@acme/installed/system': join(installed, 'authoring', 'system.ts'),
+      '@acme/legacy': join(legacy, 'src', 'index.ts'),
+      '@acme/linked': join(linked, 'src', 'index.ts'),
+    });
+    expect(result.entries.map((e) => e.path).sort()).toEqual([
+      'kits/linked/src/index.ts',
+      'node_modules/@acme/installed/authoring/index.ts',
+      'node_modules/@acme/installed/authoring/parts/card.tsx',
+      'node_modules/@acme/installed/authoring/system.ts',
+      'node_modules/@acme/legacy/src/index.ts',
+    ]);
+    expect(result.outcomes.map((o) => o.outcome)).toEqual([
+      'resolved',
+      'resolved',
+      'resolved',
+    ]);
+    expect(result.diagnostics.map((d) => [d.file, d.code])).toEqual([
+      ['@acme/legacy', KIT_WITHOUT_SOURCE_CONDITION],
+    ]);
   });
 });

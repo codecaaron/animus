@@ -8,6 +8,7 @@ import {
   discoverFiles,
   engineModuleParser,
   extractSystemFilePackages,
+  importedKitPackages,
   firstOwners,
   isDeletedSource,
   noKitFilesDiagnostics,
@@ -97,12 +98,21 @@ export async function runBuildStart(
 
   const localFileCount = rawEntries.length;
   const discoveryDiagnostics: ManifestDiagnostic[] = [];
-  const packageSpecifiers = await extractSystemFilePackages(
+  const systemPackages = await extractSystemFilePackages(
     ctx.resolvedSystemPath!,
     engineModuleParser(ctx.engineApi()),
     (diagnostic) => discoveryDiagnostics.push(diagnostic),
     resolveSpecifier
   );
+  const packageSpecifiers = [
+    ...systemPackages,
+    ...importedKitPackages(
+      rawEntries,
+      ctx.engineApi(),
+      ctx.rootDir,
+      systemPackages
+    ),
+  ];
 
   ctx.externalSourceEntries.clear();
 
@@ -125,6 +135,7 @@ export async function runBuildStart(
     {
       diagnostics: [
         ...discoveryDiagnostics,
+        ...collected.diagnostics,
         ...(ctx.options.verify
           ? []
           : noKitFilesDiagnostics(collected.outcomes)),
