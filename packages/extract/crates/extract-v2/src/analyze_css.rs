@@ -3674,6 +3674,7 @@ fn uncertainty_leaves_usage_proven(
     files: &BTreeMap<String, FileFacts>,
     inputs: &CssInputs,
 ) -> bool {
+    let unstable_contexts = &unstable_contexts(files, inputs);
     // Each element of an ordinary component is a site; classify each tag once.
     let mut classified: FxHashSet<(&str, &str, Option<TagOrigin>)> = FxHashSet::default();
     sites.iter().all(|(file, site)| {
@@ -3692,7 +3693,7 @@ fn uncertainty_leaves_usage_proven(
         !classified.insert((file.as_str(), tag, site.origin))
             || names_react_pass_through(ff, tag, site.origin)
             || imported_from_outside(file, ff, tag, site.origin, files, inputs)
-            || names_context_provider(file, ff, tag, site.origin, files, inputs)
+            || names_context_provider(file, ff, tag, site.origin, files, inputs, unstable_contexts)
             || uncertain_tag_reason(file, ff, tag, site.origin, files, inputs).0 == TagClass::Ordinary
     })
 }
@@ -3708,12 +3709,31 @@ fn names_context_provider(
     origin: Option<TagOrigin>,
     files: &BTreeMap<String, FileFacts>,
     inputs: &CssInputs,
+    unstable: &FxHashSet<(String, String)>,
 ) -> bool {
     let Some((root, "Provider")) = tag.split_once('.') else { return false };
     matches!(origin, Some(TagOrigin::Import | TagOrigin::TopLevel))
         && resolve_declaration(file, ff, root, files, inputs).is_some_and(|(declaring, binding, _)| {
             files.get(&declaring).is_some_and(|declared| declared.context_consts.contains(&binding))
+                && !unstable.contains(&(declaring, binding))
         })
+}
+
+/// The contexts some use in any analysed module may change: a member write
+/// or delete, a hand-off to code other than React's context readers. Their
+/// `Provider` is not proven to be React's.
+fn unstable_contexts(files: &BTreeMap<String, FileFacts>, inputs: &CssInputs) -> FxHashSet<(String, String)> {
+    let mut unstable = FxHashSet::default();
+    for (path, ff) in files {
+        for name in ff.unsafe_object_uses.keys() {
+            let root = name.split('.').next().unwrap_or(name);
+            let Some((declaring, binding, _)) = resolve_declaration(path, ff, root, files, inputs) else { continue };
+            if files.get(&declaring).is_some_and(|declared| declared.context_consts.contains(&binding)) {
+                unstable.insert((declaring, binding));
+            }
+        }
+    }
+    unstable
 }
 
 /// Whether `tag`, or the binding it is a member of, is imported from a
@@ -4064,6 +4084,7 @@ fn opaque_delivery(
     receiver_ids: impl Fn(&str, &FileFacts, &str) -> Vec<String>,
     renders_in_place: impl Fn(&str) -> bool,
 ) -> std::collections::BTreeSet<String> {
+    let unstable_contexts = unstable_contexts(files, inputs);
     // The declaration `name` (`lib.enhance` for a namespace import's
     // member) names from `file`, or `None` outside the analysis.
     let declaration = |file: &str, ff: &FileFacts, name: &str| {
@@ -4090,7 +4111,7 @@ fn opaque_delivery(
         if matches!(tag.origin, TagOrigin::Nested | TagOrigin::Provided | TagOrigin::Undeclared) {
             return true;
         }
-        if names_context_provider(file, ff, &tag.tag, Some(tag.origin), files, inputs) {
+        if names_context_provider(file, ff, &tag.tag, Some(tag.origin), files, inputs, &unstable_contexts) {
             return false;
         }
         let ids = receiver_ids(file, ff, &tag.tag);
@@ -9026,7 +9047,8 @@ export const App = ({ n }) => <Box bgImage={n} texture={n} />;
     /// The `Provider` of a context React's `createContext` builds as a
     /// module-scope `const` renders its children in place: it leaves usage
     /// proven, in its module or through an import. A context built another
-    /// way, one a parameter shadows, or its `Consumer` still blocks.
+    /// way, one something may change, one a parameter shadows, or its
+    /// `Consumer` still blocks.
     #[test]
     fn context_providers_leave_usage_proven() {
         let kit = "export const Box = ds.system({ space: true }).asElement('div');\n";
@@ -9058,11 +9080,29 @@ export const App = ({ n }) => <Box bgImage={n} texture={n} />;
             format!("{fake}export const Made = React.createContext(0);\n"),
             format!("import {{ x }} from 'somewhere';\n{fake}export const Made = React.createContext(0);\n"),
             "export const Made = React.createContext(0);\n".to_string(),
+            "import React from 'react';\nReact.createContext = pick;\nexport const Made = React.createContext(0);\n".to_string(),
         ] {
             let app = "import { Box } from './kit';\nimport { Made } from './made';\n\
                        export const App = () => <><Made.Provider value={1}><div /></Made.Provider><Box p={8} /></>;\n";
             let out = analyze(&[("kit.tsx", kit), ("made.tsx", made.as_str()), ("app.tsx", app)], &test_inputs());
             assert_eq!(out.dynamic_props.keys().collect::<Vec<_>>(), ["p"], "{made}");
+        }
+        // A context something may change is not proven to hold React's
+        // `Provider`; React's context readers change nothing.
+        let read = "import { useContext } from 'react';\nimport { Shared } from './contexts';\n\
+                    export const useShared = () => useContext(Shared);\n";
+        for (more, want) in [
+            ("export const useOwn = () => useContext(Shared);\n", &[][..]),
+            ("Shared.Provider = pick();\n", &["p"][..]),
+            ("Shared['Provider'] = pick();\n", &["p"][..]),
+            ("delete Shared.Provider;\nrestore(Shared);\n", &["p"][..]),
+            ("consume(Shared);\n", &["p"][..]),
+        ] {
+            let contexts = format!("import {{ createContext, useContext }} from 'react';\nexport const Shared = createContext(null);\n{more}");
+            let app = "import { Box } from './kit';\nimport { Shared } from './contexts';\n\
+                       export const App = () => <Shared.Provider value={1}><Box p={8} /></Shared.Provider>;\n";
+            let files = [("kit.tsx", kit), ("contexts.tsx", contexts.as_str()), ("read.tsx", read), ("app.tsx", app)];
+            assert_eq!(analyze(&files, &test_inputs()).dynamic_props.keys().collect::<Vec<_>>(), want, "{more}");
         }
     }
 

@@ -932,8 +932,15 @@ pub(crate) fn collect_enriched_usage(
         }
         _ => BTreeMap::new(),
     };
+    let context_consts =
+        origins.map_or_else(BTreeSet::new, |scoping| context_consts(program, scoping, &ReactImports::of(program, scoping)));
+    // A context is watched as an object too: its `Provider` must stay React's.
+    let mut watched = object_consts.clone();
+    for context in &context_consts {
+        watched.entry(context.as_str()).or_insert(false);
+    }
     let unsafe_object_uses = match &scoping {
-        Some(scoping) => unsafe_object_uses(program, scoping, object_consts, assigned_targets),
+        Some(scoping) => unsafe_object_uses(program, scoping, &watched, assigned_targets),
         None => BTreeMap::new(),
     };
     let (opaque_calls, opaque_tags, element_consts) =
@@ -946,9 +953,7 @@ pub(crate) fn collect_enriched_usage(
         module_loads,
         unsafe_object_uses,
         ordinary_components,
-        context_consts: origins.map_or_else(BTreeSet::new, |scoping| {
-            context_consts(program, scoping, &ReactImports::of(program))
-        }),
+        context_consts,
         direct_eval,
         opaque_calls,
         element_consts,
@@ -1552,6 +1557,7 @@ fn unsafe_object_uses(
         candidates,
         // A module-scope `Object` is not the global one.
         global_object: scoping.get_root_binding("Object".into()).is_none(),
+        react: ReactImports::of(program, scoping),
         uses: BTreeMap::new(),
         ancestors: Vec::new(),
     };
@@ -1571,6 +1577,8 @@ struct ObjectUseScan<'a, 's> {
     source: &'s str,
     candidates: FxHashMap<SymbolId, ObjectBinding>,
     global_object: bool,
+    /// React's own functions, whose context readers change nothing.
+    react: ReactImports,
     uses: BTreeMap<String, ObjectUse>,
     ancestors: Vec<AstKind<'a>>,
 }
@@ -1592,6 +1600,15 @@ impl<'a> Visit<'a> for ObjectUseScan<'a, '_> {
         let Some(binding) = self.candidates.get(&symbol) else { return };
         if !reference.is_value() {
             return;
+        }
+        // React's `useContext` and `use` read the context they receive.
+        let mut ancestors = self.ancestors.iter().rev();
+        if let (current, Some(AstKind::CallExpression(call))) = peel_wrappers(ident.span, &mut ancestors) {
+            let read = call.arguments.first().map(GetSpan::span) == Some(current)
+                && self.react.calls(self.scoping, &call.callee, &["useContext", "use"]);
+            if read {
+                return;
+            }
         }
         // An assigned facade's target below the binding, watched as an object
         // of its own under its path.
@@ -3321,7 +3338,7 @@ struct ReactImports {
 }
 
 impl ReactImports {
-    fn of(program: &Program<'_>) -> Self {
+    fn of(program: &Program<'_>, scoping: &Scoping) -> Self {
         let mut imports = Self { functions: FxHashMap::default(), namespaces: FxHashSet::default() };
         for statement in &program.body {
             let Statement::ImportDeclaration(import) = statement else { continue };
@@ -3341,6 +3358,43 @@ impl ReactImports {
                 }
             }
         }
+        // A namespace the module writes a member of (`React.createContext =
+        // …`) no longer holds React's functions.
+        struct Written<'s> {
+            scoping: &'s Scoping,
+            namespaces: &'s FxHashSet<SymbolId>,
+            written: FxHashSet<SymbolId>,
+        }
+        impl<'a> Visit<'a> for Written<'_> {
+            fn visit_simple_assignment_target(&mut self, target: &oxc::ast::ast::SimpleAssignmentTarget<'a>) {
+                if let Some(member) = target.as_member_expression() {
+                    if let Expression::Identifier(object) = member.object() {
+                        let symbol = object.reference_id.get().and_then(|id| self.scoping.get_reference(id).symbol_id());
+                        if let Some(symbol) = symbol.filter(|symbol| self.namespaces.contains(symbol)) {
+                            self.written.insert(symbol);
+                        }
+                    }
+                }
+                oxc::ast_visit::walk::walk_simple_assignment_target(self, target);
+            }
+            fn visit_unary_expression(&mut self, unary: &oxc::ast::ast::UnaryExpression<'a>) {
+                if unary.operator == oxc::syntax::operator::UnaryOperator::Delete {
+                    if let Some(member) = unary.argument.as_member_expression() {
+                        if let Expression::Identifier(object) = member.object() {
+                            let symbol = object.reference_id.get().and_then(|id| self.scoping.get_reference(id).symbol_id());
+                            if let Some(symbol) = symbol.filter(|symbol| self.namespaces.contains(symbol)) {
+                                self.written.insert(symbol);
+                            }
+                        }
+                    }
+                }
+                oxc::ast_visit::walk::walk_unary_expression(self, unary);
+            }
+        }
+        let mut written = Written { scoping, namespaces: &imports.namespaces, written: FxHashSet::default() };
+        written.visit_program(program);
+        let written = written.written;
+        imports.namespaces.retain(|symbol| !written.contains(symbol));
         imports
     }
 
