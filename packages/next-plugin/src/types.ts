@@ -13,9 +13,10 @@ export interface AnimusNextOptions {
    *  `['.ts','.tsx','.js','.jsx','.mdx']`. `.mdx` needs `@mdx-js/mdx`. */
   extensions?: string[];
   /** When true, error-severity diagnostics — lost configured inputs and
-   *  classified unsupported Animus declarations — fail a build instead of
-   *  warning, and `next dev` reports them and keeps running. Omitted or
-   *  `false` warns. */
+   *  classified unsupported Animus declarations — and failed checks, such as
+   *  an unresolved include or `asset()` specifier or a failed module
+   *  transform, fail a build instead of warning. `next dev` reports them and
+   *  keeps running. Omitted or `false` warns. */
   strict?: boolean;
   /**
    * Each `animus.*` code's level, by exact code, by a prefix ending in `.*`

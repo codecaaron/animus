@@ -139,6 +139,9 @@ export function enforceExternalTokenContracts(opts: {
   /** Host log prefix, e.g. `[animus-extract]`. */
   prefix: string;
   warn: (message: string) => void;
+  /** Development's error sink: under `strict`, the messages are reported
+   *  here instead of thrown. */
+  reportErrors?: (message: string) => void;
 }): void {
   const manifestsJson = opts.sourceThemeManifestsJson ?? '';
   const cached = indexCache.get(opts.dirOwners);
@@ -159,8 +162,11 @@ export function enforceExternalTokenContracts(opts: {
     sourceTokens,
   });
   if (messages.length === 0) return;
-  if (opts.strict) {
-    throw new Error(`${opts.prefix} ${messages.join('\n')}`);
+  if (!opts.strict) {
+    for (const message of messages) opts.warn(message);
+    return;
   }
-  for (const message of messages) opts.warn(message);
+  const message = `${opts.prefix} ${messages.join('\n')}`;
+  if (!opts.reportErrors) throw new Error(message);
+  opts.reportErrors(message);
 }
