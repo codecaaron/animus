@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::declarations::{breakpoint_of, record_key, DeclarationBinding, DeclarationNames};
-use crate::theme::{ConditionedGroup, CssDeclaration, PropConfig, PropConfigMap, ResolveContext, ResolvedStyles, TransformFailure, TransformFailureSink, first_top_level_branch, is_responsive_value, resolve_styles, split_top_level_commas};
+use crate::theme::{ConditionedGroup, CssDeclaration, PropConfig, PropConfigMap, ResolveContext, ResolvedStyles, TransformFailure, TransformFailureSink, first_top_level_branch, is_responsive_value, resolve_styles, split_top_level_commas, unresolved_alias_spans};
 
 /// The unitless property names and the style-key vendor prefixes of
 /// `@animus-ui/properties`, written by `packages/extract/scripts/property-table.ts`.
@@ -1308,7 +1308,10 @@ fn add_utility_class(
     let style_obj = serde_json::json!({ &usage.prop_name: usage.value.clone() });
     // A usage value is no style block, so it reports no dropped key.
     let usage_ctx = ResolveContext { dropped_keys: None, ..*ctx };
-    let resolved = resolve_styles(&style_obj, &usage_ctx, true);
+    let mut resolved = resolve_styles(&style_obj, &usage_ctx, true);
+    // An alias that names no token was reported at the usage; its
+    // declaration is dropped, as in a style object.
+    resolved.retain_declarations(|declaration| unresolved_alias_spans(&declaration.value).is_empty());
 
     debug_assert!(
         resolved
