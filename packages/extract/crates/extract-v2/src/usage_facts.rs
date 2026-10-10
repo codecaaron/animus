@@ -554,6 +554,24 @@ pub(crate) struct EnrichedUsage {
     pub opaque_calls: Vec<OpaqueCall>,
     /// See `FileFacts::element_consts`.
     pub element_consts: BTreeMap<String, ElementConst>,
+    /// See `FileFacts::opaque_tags`.
+    pub opaque_tags: Vec<OpaqueTag>,
+}
+
+/// A component element that hands its children and props to its receiver,
+/// which may clone them: the tag as written, where its first name is bound,
+/// whether the element can render something other than its tag (`as`,
+/// `asChild` or a spread), and what its attributes and children carry, read
+/// as a call's arguments are.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct OpaqueTag {
+    pub tag: String,
+    /// A parameter or local never names the module's binding of that name.
+    pub origin: TagOrigin,
+    pub polymorphic: bool,
+    pub tags: BTreeSet<String>,
+    pub imported_args: Vec<String>,
+    pub forwards_from: Vec<String>,
 }
 
 /// A call that may hand an element to code outside React: what its callee
@@ -896,7 +914,8 @@ pub(crate) fn collect_enriched_usage(
         Some(scoping) => unsafe_object_uses(program, scoping, object_consts),
         None => BTreeMap::new(),
     };
-    let (opaque_calls, element_consts) = origins.map(|scoping| opaque_calls(program, scoping)).unwrap_or_default();
+    let (opaque_calls, opaque_tags, element_consts) =
+        origins.map(|scoping| opaque_calls(program, scoping)).unwrap_or_default();
     EnrichedUsage {
         usage,
         confined,
@@ -908,6 +927,7 @@ pub(crate) fn collect_enriched_usage(
         direct_eval,
         opaque_calls,
         element_consts,
+        opaque_tags,
     }
 }
 
@@ -928,7 +948,10 @@ const BUILTIN_GLOBALS: [&str; 33] = [
 /// a parameter to code the analysis may not follow (every one except
 /// React's, a built-in global's, and one on a value a function body
 /// declares), and the top-level `const`s that hold elements.
-fn opaque_calls(program: &Program<'_>, scoping: &Scoping) -> (Vec<OpaqueCall>, BTreeMap<String, ElementConst>) {
+fn opaque_calls(
+    program: &Program<'_>,
+    scoping: &Scoping,
+) -> (Vec<OpaqueCall>, Vec<OpaqueTag>, BTreeMap<String, ElementConst>) {
     let mut sources: FxHashMap<SymbolId, &str> = FxHashMap::default();
     for statement in &program.body {
         let Statement::ImportDeclaration(import) = statement else { continue };
@@ -948,6 +971,7 @@ fn opaque_calls(program: &Program<'_>, scoping: &Scoping) -> (Vec<OpaqueCall>, B
         functions: FxHashMap::default(),
         default_export: None,
         calls: Vec::new(),
+        tag_calls: Vec::new(),
     };
     for statement in &program.body {
         scan.top = top_level_names(statement);
@@ -976,14 +1000,22 @@ fn opaque_calls(program: &Program<'_>, scoping: &Scoping) -> (Vec<OpaqueCall>, B
         .calls
         .iter()
         .filter_map(|(root, reads, top)| {
+            let (tags, imported_args, forwards_from) = scan.delivery(reads, top)?;
             let (callee, callee_imports) = scan.callee(root);
-            let closed = scan.closure(reads);
-            let forwards_from = if closed.reads_parameter { top.clone() } else { Vec::new() };
-            (!closed.tags.is_empty() || !closed.imports.is_empty() || !forwards_from.is_empty()).then_some(OpaqueCall {
-                callee,
-                callee_imports,
-                tags: closed.tags,
-                imported_args: closed.imports,
+            Some(OpaqueCall { callee, callee_imports, tags, imported_args, forwards_from })
+        })
+        .collect();
+    let tags = scan
+        .tag_calls
+        .iter()
+        .filter_map(|(tag, origin, polymorphic, reads, top)| {
+            let (tags, imported_args, forwards_from) = scan.delivery(reads, top)?;
+            Some(OpaqueTag {
+                tag: tag.clone(),
+                origin: *origin,
+                polymorphic: *polymorphic,
+                tags,
+                imported_args,
                 forwards_from,
             })
         })
@@ -1005,7 +1037,7 @@ fn opaque_calls(program: &Program<'_>, scoping: &Scoping) -> (Vec<OpaqueCall>, B
             element_consts.insert(name, ElementConst { tags: closed.tags, imports: closed.imports });
         }
     }
-    (calls, element_consts)
+    (calls, tags, element_consts)
 }
 
 /// The names a top-level statement binds, for parameter forwarding: a
@@ -1137,6 +1169,9 @@ struct OpaqueCallScan<'s> {
     /// What a default-exported expression reads.
     default_export: Option<ArgumentReads>,
     calls: Vec<(CalleeRoot, ArgumentReads, Vec<String>)>,
+    /// Component elements: the tag, whether it is polymorphic, and what its
+    /// attributes and children read.
+    tag_calls: Vec<(String, TagOrigin, bool, ArgumentReads, Vec<String>)>,
 }
 
 impl OpaqueCallScan<'_> {
@@ -1147,11 +1182,13 @@ impl OpaqueCallScan<'_> {
         // A callee rooted in no identifier (`[1].map`) is a value the
         // analysed code builds.
         let (root, member) = callee_root(callee)?;
+        if self.is_react(root) {
+            return None;
+        }
         let Some(symbol) = root.reference_id.get().and_then(|id| self.scoping.get_reference(id).symbol_id()) else {
             return (!BUILTIN_GLOBALS.contains(&root.name.as_str())).then_some(CalleeRoot::Unknown);
         };
         match self.sources.get(&symbol) {
-            Some(source) if REACT_MODULES.contains(source) => None,
             Some(_) => Some(CalleeRoot::Import(match member {
                 Some(member) => format!("{}.{member}", root.name),
                 None => root.name.to_string(),
@@ -1184,6 +1221,26 @@ impl OpaqueCallScan<'_> {
                     None => (None, Vec::new()),
                 }
             }
+        }
+    }
+
+    /// What arguments reading `reads` deliver, followed through `const`s:
+    /// element tags, imports that may hold more, and the enclosing
+    /// top-level bindings (`top`) when a parameter of theirs reaches them;
+    /// `None` when they deliver nothing.
+    fn delivery(&self, reads: &ArgumentReads, top: &[String]) -> Option<(BTreeSet<String>, Vec<String>, Vec<String>)> {
+        let closed = self.closure(reads);
+        let forwards_from = if closed.reads_parameter { top.to_vec() } else { Vec::new() };
+        (!closed.tags.is_empty() || !closed.imports.is_empty() || !forwards_from.is_empty())
+            .then_some((closed.tags, closed.imports, forwards_from))
+    }
+
+    /// Whether `root` names React: an import from one of its modules, or
+    /// an unbound `React`, as `ReactNames` reads it.
+    fn is_react(&self, root: &IdentifierReference<'_>) -> bool {
+        match root.reference_id.get().and_then(|id| self.scoping.get_reference(id).symbol_id()) {
+            Some(symbol) => self.sources.get(&symbol).is_some_and(|source| REACT_MODULES.contains(source)),
+            None => root.name == "React",
         }
     }
 
@@ -1341,6 +1398,39 @@ impl<'a> Visit<'a> for OpaqueCallScan<'_> {
     fn visit_new_expression(&mut self, new: &oxc::ast::ast::NewExpression<'a>) {
         self.record(&new.callee, &new.arguments);
         oxc::ast_visit::walk::walk_new_expression(self, new);
+    }
+
+    fn visit_jsx_element(&mut self, element: &oxc::ast::ast::JSXElement<'a>) {
+        let opening = &element.opening_element;
+        // A host element renders its children in place, and React's own
+        // components are known.
+        let named = match &opening.name {
+            JSXElementName::IdentifierReference(id) => Some((id.name.to_string(), Some(&**id))),
+            JSXElementName::MemberExpression(member) => {
+                jsx_member_path(member).map(|path| (path, jsx_member_root(member)))
+            }
+            _ => None,
+        };
+        if let Some((tag, root)) = named.filter(|(_, root)| !root.is_some_and(|root| self.is_react(root))) {
+            // `this.X` is bound nowhere the module declares.
+            let origin = root.map_or(TagOrigin::Nested, |root| tag_origin(self.scoping, root));
+            let polymorphic = opening.attributes.iter().any(|attribute| match attribute {
+                JSXAttributeItem::SpreadAttribute(_) => true,
+                JSXAttributeItem::Attribute(attribute) => {
+                    matches!(&attribute.name, JSXAttributeName::Identifier(name) if name.name == "as" || name.name == "asChild")
+                }
+            });
+            let mut reads = ArgumentReads::default();
+            let mut collector = ReadCollector { scoping: self.scoping, reads: &mut reads };
+            for attribute in &opening.attributes {
+                collector.visit_jsx_attribute_item(attribute);
+            }
+            for child in &element.children {
+                collector.visit_jsx_child(child);
+            }
+            self.tag_calls.push((tag, origin, polymorphic, reads, self.top.clone()));
+        }
+        oxc::ast_visit::walk::walk_jsx_element(self, element);
     }
 }
 

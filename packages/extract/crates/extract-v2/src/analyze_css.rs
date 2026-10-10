@@ -3789,51 +3789,83 @@ fn proven_slot_conditions(
     slots.into_iter().filter_map(|(slot, conditions)| Some((slot, conditions.filter(|c| !c.is_empty())?))).collect()
 }
 
-/// What calls can hand to code outside the analysis, which may clone runtime
-/// props into an element it receives: the components whose elements such a
-/// call's arguments carry, directly, through `const`s or through another
-/// module's `const`s, and the top-level functions, as `(file, binding)`,
-/// that pass a parameter to such a call. A callee reaches outside the
-/// analysis when it is a global outside the built-ins, an import the
-/// analysis does not resolve, a value built from either, or a function that
-/// forwards a parameter to such a call.
+/// What calls and component elements can hand to code outside the
+/// analysis, which may clone runtime props or other options into an element
+/// it receives: the components whose elements reach such code (directly,
+/// through `const`s or another module's `const`s, or through a private
+/// wrapper that spreads its props into them), and the top-level functions,
+/// as `(file, binding)`, that pass a parameter to it.
+///
+/// A callee reaches outside the analysis when it is a global outside the
+/// built-ins, an import the analysis does not resolve, a value built from
+/// either, or a function that forwards a parameter to such code. A
+/// component element hands its children and props to its receiver, which
+/// keeps them in place only when it is an Animus component that renders an
+/// element and the element cannot render another one (`as`, `asChild` or a
+/// spread), or an ordinary component that forwards nothing outside.
 fn opaque_delivery(
     files: &BTreeMap<String, FileFacts>,
     inputs: &CssInputs,
     evaluated_ids: &FxHashSet<String>,
     ids_by_binding: &IdsByBinding,
+    wrapper_targets: &FxHashMap<String, FxHashMap<String, Vec<String>>>,
+    receiver_ids: impl Fn(&str, &FileFacts, &str) -> Vec<String>,
+    renders_in_place: impl Fn(&str) -> bool,
 ) -> (std::collections::BTreeSet<String>, FxHashSet<(String, String)>) {
-    // Whether `name` (`lib.enhance` for a namespace import's member) leaves
-    // the analysis from `file`.
-    let outside = |file: &str, ff: &FileFacts, name: &str, forwarding: &FxHashSet<(String, String)>| {
+    // The declaration `name` (`lib.enhance` for a namespace import's
+    // member) names from `file`, or `None` outside the analysis.
+    let declaration = |file: &str, ff: &FileFacts, name: &str| {
         let (root, member) = match name.split_once('.') {
             Some((root, member)) => (root, Some(member)),
             None => (name, None),
         };
-        let declaration = match (ff.namespace_imports.get(root), member) {
+        match (ff.namespace_imports.get(root), member) {
             (Some(source), Some(member)) => resolve_export(file, source, member, files, inputs),
-            (Some(source), None) => {
-                return resolve_import_source(file, source, files, inputs).is_none();
-            }
+            (Some(source), None) => resolve_import_source(file, source, files, inputs)
+                .map(|module| (module, String::new(), false)),
             (None, _) => resolve_declaration(file, ff, root, files, inputs),
-        };
-        declaration.is_none_or(|(declaring, binding, _)| forwarding.contains(&(declaring, binding)))
+        }
     };
-    let opaque = |file: &str, ff: &FileFacts, call: &crate::usage_facts::OpaqueCall, forwarding: &FxHashSet<(String, String)>| {
+    let outside = |file: &str, ff: &FileFacts, name: &str, forwarding: &FxHashSet<(String, String)>| {
+        declaration(file, ff, name).is_none_or(|(declaring, binding, _)| forwarding.contains(&(declaring, binding)))
+    };
+    let call_opaque = |file: &str, ff: &FileFacts, call: &crate::usage_facts::OpaqueCall, forwarding: &FxHashSet<(String, String)>| {
         call.callee.as_deref().is_none_or(|callee| outside(file, ff, callee, forwarding))
             || call.callee_imports.iter().any(|import| outside(file, ff, import, forwarding))
+    };
+    let tag_opaque = |file: &str, ff: &FileFacts, tag: &crate::usage_facts::OpaqueTag, forwarding: &FxHashSet<(String, String)>| {
+        use crate::usage_facts::TagOrigin;
+        if matches!(tag.origin, TagOrigin::Nested | TagOrigin::Undeclared) {
+            return true;
+        }
+        let ids = receiver_ids(file, ff, &tag.tag);
+        if !ids.is_empty() {
+            return tag.polymorphic || !ids.iter().all(|id| renders_in_place(id));
+        }
+        let ordinary = declaration(file, ff, &tag.tag).filter(|(declaring, binding, _)| {
+            files.get(declaring).is_some_and(|declared| declared.ordinary_components.contains(binding))
+        });
+        ordinary.is_none_or(|(declaring, binding, _)| tag.polymorphic || forwarding.contains(&(declaring, binding)))
     };
     let mut forwarding: FxHashSet<(String, String)> = FxHashSet::default();
     loop {
         let mut grew = false;
         for (path, ff) in files {
-            for call in &ff.opaque_calls {
-                let fresh: Vec<&String> =
-                    call.forwards_from.iter().filter(|name| !forwarding.contains(&(path.clone(), (*name).clone()))).collect();
-                if !fresh.is_empty() && opaque(path, ff, call, &forwarding) {
-                    forwarding.extend(fresh.into_iter().map(|name| (path.clone(), name.clone())));
-                    grew = true;
-                }
+            let forwards = ff
+                .opaque_calls
+                .iter()
+                .filter(|call| !call.forwards_from.is_empty() && call_opaque(path, ff, call, &forwarding))
+                .flat_map(|call| &call.forwards_from)
+                .chain(
+                    ff.opaque_tags
+                        .iter()
+                        .filter(|tag| !tag.forwards_from.is_empty() && tag_opaque(path, ff, tag, &forwarding))
+                        .flat_map(|tag| &tag.forwards_from),
+                )
+                .map(|name| (path.clone(), name.clone()))
+                .collect::<Vec<_>>();
+            for key in forwards {
+                grew |= forwarding.insert(key);
             }
         }
         if !grew {
@@ -3845,9 +3877,13 @@ fn opaque_delivery(
     let mut tags: Vec<(String, String)> = Vec::new();
     let mut imports: Vec<(String, String)> = Vec::new();
     for (path, ff) in files {
-        for call in ff.opaque_calls.iter().filter(|call| opaque(path, ff, call, &forwarding)) {
+        for call in ff.opaque_calls.iter().filter(|call| call_opaque(path, ff, call, &forwarding)) {
             tags.extend(call.tags.iter().map(|tag| (path.clone(), tag.clone())));
             imports.extend(call.imported_args.iter().map(|import| (path.clone(), import.clone())));
+        }
+        for tag in ff.opaque_tags.iter().filter(|tag| tag_opaque(path, ff, tag, &forwarding)) {
+            tags.extend(tag.tags.iter().map(|inner| (path.clone(), inner.clone())));
+            imports.extend(tag.imported_args.iter().map(|import| (path.clone(), import.clone())));
         }
     }
     let mut followed: FxHashSet<(String, String)> = FxHashSet::default();
@@ -3875,9 +3911,14 @@ fn opaque_delivery(
             imports.extend(held.imports.iter().map(|import| (declaring.clone(), import.clone())));
         }
     }
+    // A private wrapper that spreads its props into components delivers them.
     let delivered = tags
         .iter()
-        .flat_map(|(file, tag)| resolve_usage_identity(file, tag, files, inputs, evaluated_ids, ids_by_binding))
+        .flat_map(|(file, tag)| {
+            resolve_usage_identity(file, tag, files, inputs, evaluated_ids, ids_by_binding).into_iter().chain(
+                wrapper_targets.get(file).and_then(|wrappers| wrappers.get(tag)).into_iter().flatten().cloned(),
+            )
+        })
         .collect();
     (delivered, forwarding)
 }
@@ -5384,6 +5425,8 @@ fn run_with_system_floor(
     let mut all_usage_results: Vec<UsageScanResult> = Vec::new();
     let mut usage_residue: Vec<UsageResidueRecord> = Vec::new();
     let mut identity_policy = UsageIdentityPolicy::default();
+    // Each file's private spread wrappers → the components they render.
+    let mut wrapper_targets_by_file: FxHashMap<String, FxHashMap<String, Vec<String>>> = FxHashMap::default();
     let mut uncertain_identities: Vec<(&String, UncertainIdentity)> = Vec::new();
 
     for path in order {
@@ -5447,6 +5490,7 @@ fn run_with_system_floor(
         // A spread wrapper's renders stand in for its targets' renders.
         let (wrapper_targets, proxies) =
             spread_wrapper_targets(path, ff, files, inputs, &evaluated_ids);
+        wrapper_targets_by_file.insert(path.clone(), wrapper_targets.iter().cloned().collect());
         for (wrapper, ids) in &wrapper_targets {
             file_lookup
                 .get_or_insert_with(|| global_lookup.clone())
@@ -5695,6 +5739,30 @@ fn run_with_system_floor(
             ));
         }
     }
+    // An element handed to code outside the analysis renders with options
+    // and props no analysed use shows, so it opens as an escape does.
+    // A receiver is known through its file's declarations, imports and
+    // members only (`<Family.Root>`), never by a bare name elsewhere; a
+    // member, only through the binding its object proves it holds.
+    let receiver_ids = |path: &str, ff: &FileFacts, tag: &str| {
+        let mut ids = match tag.contains('.') {
+            true => Vec::new(),
+            false => resolve_declared_identity(path, tag, files, inputs, &evaluated_ids),
+        };
+        ids.extend(member_bindings.get(path).and_then(|members| members.get(tag)).cloned());
+        ids.extend(member_path_ids(path, ff, tag, false, files, inputs, &evaluated_ids));
+        ids
+    };
+    let (delivered_ids, forwarding) = opaque_delivery(
+        files,
+        inputs,
+        &evaluated_ids,
+        &ids_by_binding,
+        &wrapper_targets_by_file,
+        receiver_ids,
+        |id| evaluated.get(id).is_some_and(|(_, _, terminal, ..)| *terminal == TerminalKind::AsElement),
+    );
+    escaped_ids.extend(delivered_ids);
     let mut opened_usage = UsageScanResult::default();
     for component_id in &escaped_ids {
         let Some((component_css, _, _, _, _, custom_configs, _)) = evaluated.get(component_id)
@@ -5871,7 +5939,6 @@ fn run_with_system_floor(
     // modules. Otherwise only a component its own module confines is proven.
     // An element a call hands outside the analysis, and every component
     // staticCss forces, renders with props no analysed use shows.
-    let (delivered_ids, forwarding) = opaque_delivery(files, inputs, &evaluated_ids, &ids_by_binding);
     let usage_complete = inputs.analysis_context.skipped_sources.is_empty()
         && !files.values().any(|ff| ff.direct_eval)
         && (!identity_policy.uncertain
@@ -5879,7 +5946,7 @@ fn run_with_system_floor(
     let project_uses = usage_complete
         .then(|| {
             let unproven: std::collections::BTreeSet<String> =
-                escaped_ids.iter().chain(&delivered_ids).chain(&forced_ids).cloned().collect();
+                escaped_ids.iter().chain(&forced_ids).cloned().collect();
             project_confined_uses(
                 &all_usage_results,
                 evaluated.iter().map(|(id, (_, _, terminal, _, _, _, _))| (id, *terminal == TerminalKind::AsClass)),
@@ -9340,6 +9407,48 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         assert_eq!(kept_options(&[("r.tsx", RECIPE), ("app.tsx", app)]), (vec!["sm"], vec!["active"]));
     }
 
+    /// Code outside the analysis can clone any option into an element it
+    /// receives, so each component whose element reaches it keeps every
+    /// option: through an opaque call, an unknown receiver's children, a
+    /// private wrapper that spreads its props into the component, an
+    /// ordinary component that passes its children on, or a polymorphic
+    /// Animus receiver. An element rendered in place, through such a
+    /// wrapper or inside an Animus element or an ordinary component, stays
+    /// pruned. A receiver is that Animus element only through its own
+    /// binding: a parameter, or an object member, that shares a declared
+    /// component's name is unknown.
+    #[test]
+    fn elements_code_outside_the_analysis_receives_keep_every_option() {
+        let every = (vec!["sm", "md", "lg"], vec!["active", "busy"]);
+        let pruned = (vec!["sm"], vec!["active"]);
+        let cases = [
+            ("import { decorate } from 'ui-lib';\nexport const Big = () => decorate(<R size=\"sm\" />);", &every),
+            ("import { Slot } from 'ui-lib';\nexport const S = () => <Slot><R size=\"sm\" /></Slot>;", &every),
+            ("import { decorate } from 'ui-lib';\nconst W = (p) => <R {...p} />;\nexport const Big = () => decorate(<W size=\"sm\" />);", &every),
+            ("import { Slot } from 'ui-lib';\nconst W = (p) => <R {...p} />;\nexport const S = () => <Slot><W size=\"sm\" /></Slot>;", &every),
+            ("import { Slot } from 'ui-lib';\nfunction Card({ children }) { return <Slot>{children}</Slot>; }\nexport const S = () => <Card><R size=\"sm\" /></Card>;", &every),
+            ("const Box = ds.styles({}).asElement('section');\nexport const S = ({ X }) => <Box as={X}><R size=\"sm\" /></Box>;", &every),
+            ("const Box = ds.styles({}).asElement('section');\nexport const S = ({ Box }) => <Box><R size=\"sm\" /></Box>;", &every),
+            ("const Root = ds.styles({}).asElement('section');\nexport const S = ({ Family }) => <Family.Root><R size=\"sm\" /></Family.Root>;", &every),
+            ("const W = (p) => <R {...p} />;\nexport const S = () => <W size=\"sm\" />;", &pruned),
+            ("function Card({ children }) { return <section>{children}</section>; }\nexport const S = () => <Card><R size=\"sm\" /></Card>;", &pruned),
+            ("const Box = ds.styles({}).asElement('section');\nexport const S = () => <Box><R size=\"sm\" /></Box>;", &pruned),
+        ];
+        for (setup, want) in cases {
+            let app = format!("import {{ R }} from './r';\n{setup}\nexport const App = () => <R size=\"sm\" active />;\n");
+            assert_eq!(&kept_options(&[("r.tsx", RECIPE), ("app.tsx", app.as_str())]), want, "{setup}");
+        }
+        let app = "import { R } from './r';\nimport { Family } from './receivers';\n\
+                   export const S = () => <Family.Root><R size=\"sm\" active /></Family.Root>;\n";
+        for (receivers, want) in [
+            ("import { Slot } from 'ui-lib';\nconst Root = ds.styles({}).asElement('section');\nexport const Family = { Root: Slot };\n", &every),
+            ("const Root = ds.styles({}).asElement('section');\nexport const Family = compose({ Root }, { name: 'Family' });\n", &pruned),
+        ] {
+            let entries = [("r.tsx", RECIPE), ("receivers.tsx", receivers), ("app.tsx", app)];
+            assert_eq!(&kept_options(&entries), want, "{receivers}");
+        }
+    }
+
     /// A namespace re-exported as `export * as sub` or as an imported
     /// namespace exported again reaches its components: member tags at any
     /// depth record usage, and a value use of an enclosing namespace, or of a
@@ -12007,7 +12116,8 @@ export const App = () => <main><Card inl={10} shut={10} tone="lg">text</Card></m
             ("", "export const App = () => <Frame header={<div><Card inl={10} /></div>} />;\n", both),
             ("", "export const App = () => <List render={(i) => <li><Card inl={10} /></li>} />;\n", both),
             ("", "export const App = () => <Frame {...{ header: <div><Card inl={10} /></div> }} />;\n", both),
-            ("", "export const App = ({ n }) => <Frame><div><Card inl={n} /></div></Frame>;\n", inl),
+            // So does an element an unknown receiver's children hold, through a host element.
+            ("", "export const App = ({ n }) => <Frame><div><Card inl={n} /></div></Frame>;\n", both),
             // Literal keys must be the runtime's: digits JavaScript prints the same way.
             ("", "export const App = () => <><Card inl={0.000005} /></>;\n", inl),
             ("", "export const App = () => <><Card inl={0.000001} /></>;\n", inl),

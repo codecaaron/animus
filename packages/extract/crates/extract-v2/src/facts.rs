@@ -507,6 +507,10 @@ pub struct FileFacts {
     /// Top-level `const`s that hold elements, by binding.
     #[serde(skip)]
     pub(crate) element_consts: BTreeMap<String, crate::usage_facts::ElementConst>,
+    /// Component elements that hand their children and props to their
+    /// receiver.
+    #[serde(skip)]
+    pub(crate) opaque_tags: Vec<crate::usage_facts::OpaqueTag>,
     /// Extracted createTransform() declarations: serialized with the facts
     /// for probes, and the source of their bail diagnostics. They are never
     /// registered with the evaluator.
@@ -1381,6 +1385,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
         direct_eval,
         opaque_calls,
         element_consts,
+        opaque_tags,
     } = crate::usage_facts::collect_enriched_usage(
         program,
         &usage_statics_fx,
@@ -1446,6 +1451,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
         direct_eval,
         opaque_calls,
         element_consts,
+        opaque_tags,
         parse_diagnostics: ast.diagnostics.clone(),
         unbound_create_system_calls: crate::usage_facts::unbound_create_system_calls(program)
             .into_iter()
