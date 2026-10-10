@@ -8089,7 +8089,7 @@ export const App = ({ n }) => <Box bgImage={n} texture={n} />;
             let out = analyze(&[("kit.tsx", kit), ("app.tsx", app)], inputs);
             out.dynamic_props.keys().cloned().collect::<Vec<_>>()
         };
-        let cases: [(&str, &[&str]); 20] = [
+        let cases: [(&str, &[&str]); 25] = [
             ("export const App = () => <Box p={8} />;\n", &[]),
             ("export const App = ({ n }) => <Box p={n} />;\n", &["p"]),
             // A spread, an escape or a component chosen at runtime leaves a
@@ -8118,6 +8118,13 @@ export const App = ({ n }) => <Box bgImage={n} texture={n} />;
             ("import { useRender } from '@base-ui/react';\nexport const App = ({ props }) => { const el = <Box p={8} />; const opts = { render: el, props }; return useRender(opts); };\n", &["p"]),
             ("import { useRender } from '@base-ui/react';\nfunction Button(props) { const r = props.render; const opts = { render: r }; return useRender(opts); }\nexport const App = () => <Button render={<Box p={8} />} />;\n", &["p"]),
             ("import { Widget } from 'ui-lib';\nexport const App = () => { new Widget(<Box p={8} />); return null; };\n", &["p"]),
+            // A render function the call receives can return the element, and
+            // a value built through a function reads what that function reads.
+            ("import { enhance } from 'ui-lib';\nconst renderIcon = () => <Box p={8} />;\nexport const App = () => <div>{enhance(renderIcon)}</div>;\n", &["p"]),
+            ("import { useRender } from '@base-ui/react';\nexport const App = ({ props }) => { const render = () => <Box p={8} />; return useRender({ render, props }); };\n", &["p"]),
+            ("import { enhance } from 'ui-lib';\nfunction renderIcon() { return <Box p={8} />; }\nexport const App = () => <div>{enhance(renderIcon)}</div>;\n", &["p"]),
+            ("import * as lib from 'ui-lib';\nfunction getEnhance() { return lib.enhance; }\nconst enhance = getEnhance();\nexport const App = () => <div>{enhance(<Box p={8} />)}</div>;\n", &["p"]),
+            ("import { enhance } from 'ui-lib';\nconst icons = { a: <Box p={8} /> };\nconst { a } = icons;\nexport const App = () => <div>{enhance(a)}</div>;\n", &["p"]),
             // React's own calls and calls on the module's values stay proven.
             ("import { useMemo } from 'react';\nexport const App = () => useMemo(() => <Box p={8} />, []);\n", &[]),
             ("const items = [1, 2];\nexport const App = () => <>{items.map((i) => <Box key={i} p={8} />)}</>;\n", &[]),
@@ -8126,11 +8133,15 @@ export const App = ({ n }) => <Box bgImage={n} texture={n} />;
             let app = format!("import {{ Box }} from './kit';\n{app}");
             assert_eq!(slots(&app, &test_inputs()), want, "{app}");
         }
-        // An element another module's `const` holds.
-        let els = "import { Box } from './kit';\nexport const icon = <Box p={8} />;\n";
-        let app = "import { icon } from './els';\nimport { enhance } from 'ui-lib';\nexport const App = () => <div>{enhance(icon)}</div>;\n";
-        let out = analyze(&[("kit.tsx", kit), ("els.tsx", els), ("app.tsx", app)], &test_inputs());
-        assert_eq!(out.dynamic_props.keys().collect::<Vec<_>>(), ["p"]);
+        // An element another module's `const` or default export holds.
+        for (els, import) in [
+            ("import { Box } from './kit';\nexport const icon = <Box p={8} />;\n", "import { icon } from './els';"),
+            ("import { Box } from './kit';\nexport default <Box p={8} />;\n", "import icon from './els';"),
+        ] {
+            let app = format!("{import}\nimport {{ enhance }} from 'ui-lib';\nexport const App = () => <div>{{enhance(icon)}}</div>;\n");
+            let out = analyze(&[("kit.tsx", kit), ("els.tsx", els), ("app.tsx", &app)], &test_inputs());
+            assert_eq!(out.dynamic_props.keys().collect::<Vec<_>>(), ["p"], "{els}");
+        }
         let mut dev = test_inputs();
         dev.dev_mode = true;
         assert_eq!(slots("import { Box } from './kit';\nexport const App = () => <Box p={8} />;\n", &dev), ["p"]);
