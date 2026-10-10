@@ -2793,18 +2793,23 @@ fn relative_prefix(from_file: &str, prefix: &str) -> String {
 /// namespace (`export * as sub from '…'`) exports in turn.
 fn exported_component_ids(
     module: &str,
+    members: Option<&[String]>,
     files: &BTreeMap<String, FileFacts>,
     inputs: &CssInputs,
     evaluated_ids: &FxHashSet<String>,
 ) -> Vec<String> {
     let mut ids = Vec::new();
+    let top = module.to_string();
     let mut modules = vec![module.to_string()];
     let mut seen: FxHashSet<String> = FxHashSet::default();
     while let Some(module) = modules.pop() {
         if !seen.insert(module.clone()) {
             continue;
         }
-        for name in crate::family_members::module_export_names(&module, files, inputs) {
+        // Only the members read from the loaded module itself; a namespace
+        // among them hands on its whole module.
+        let read = |name: &String| module != top || members.is_none_or(|members| members.contains(name));
+        for name in crate::family_members::module_export_names(&module, files, inputs).into_iter().filter(read) {
             let namespace =
                 crate::family_members::namespace_export(module.clone(), name.clone(), files, inputs);
             match namespace {
@@ -6402,10 +6407,17 @@ fn run_with_system_floor(
         for load in &ff.module_loads {
             let opened = sites.entry((load.line, load.call.as_str())).or_default();
             for module in loaded_modules(path, load, files, inputs) {
-                let ids = exports_by_module.entry(module).or_insert_with(|| {
-                    exported_component_ids(module, files, inputs, &evaluated_ids)
-                });
-                opened.extend(ids.iter().cloned());
+                match &load.members {
+                    Some(members) => {
+                        opened.extend(exported_component_ids(module, Some(members), files, inputs, &evaluated_ids));
+                    }
+                    None => {
+                        let ids = exports_by_module.entry(module).or_insert_with(|| {
+                            exported_component_ids(module, None, files, inputs, &evaluated_ids)
+                        });
+                        opened.extend(ids.iter().cloned());
+                    }
+                }
             }
         }
         for ((line, call), opened) in sites {
@@ -6458,7 +6470,7 @@ fn run_with_system_floor(
             // a member of one at any depth (`ui.sub.X`) that component.
             match namespace_path_module(path, ff, name, files, inputs) {
                 Some(module) => {
-                    escaped_ids.extend(exported_component_ids(&module, files, inputs, &evaluated_ids));
+                    escaped_ids.extend(exported_component_ids(&module, None, files, inputs, &evaluated_ids));
                 }
                 None => escaped_ids.extend(member_path_ids(
                     path,
@@ -11836,6 +11848,32 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
                 .into_iter()
                 .collect();
             assert_eq!(warned, expected, "{module}{app}: {:?}", out.diagnostics);
+        }
+    }
+
+    /// A module loaded at runtime hands on only the members its result is
+    /// read for, through `.then` or destructuring; a result that escapes
+    /// whole hands on every export, so a family it re-exports is unproven.
+    #[test]
+    fn dynamic_import_member_reads_hand_on_only_those_members() {
+        let recipe = "export const Box = ds.styles({}).system({ space: true }).asElement('div');\n";
+        let code = "import { Box } from './recipe';\nexport const Code = { Root: Box };\n";
+        let editor = "export { Code } from './code';\nexport const CodeEditor = () => null;\n";
+        let app = "import { Code } from './code';\nexport const App = () => <Code.Root marginInlineStart={8} />;\n";
+        let cases = [
+            ("export const Lazy = lazy(() => import('./editor').then((module) => ({ default: module.CodeEditor })));\n", false),
+            ("export async function load() { const { CodeEditor } = await import('./editor'); return CodeEditor; }\n", false),
+            ("export const Lazy = lazy(() => import('./editor').then((module) => consume(module)));\n", true),
+        ];
+        for (loader, warns) in cases {
+            let out = analyze_with_logical_space(&[
+                ("recipe.tsx", recipe),
+                ("code.tsx", code),
+                ("editor.tsx", editor),
+                ("app.tsx", app),
+                ("loader.tsx", loader),
+            ]);
+            assert_eq!(!unattributed(&out).is_empty(), warns, "{loader}{:?}", out.diagnostics);
         }
     }
 

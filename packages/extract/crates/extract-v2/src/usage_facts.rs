@@ -665,6 +665,10 @@ pub struct ModuleLoad {
     pub target: LoadTarget,
     /// An `import()`: some hosts leave an unreadable one unbundled.
     pub dynamic_import: bool,
+    /// The members of the loaded module its caller reads, when it reads
+    /// nothing else: `import(…).then((m) => m.X)`, `const { X } = await
+    /// import(…)`. `None` when the module escapes whole.
+    pub members: Option<Vec<String>>,
     /// The call's line and spelling, for the warning when it opens many
     /// components.
     pub line: usize,
@@ -884,6 +888,7 @@ pub(crate) fn collect_enriched_usage(
             pending: Vec::new(),
         }),
         module_loads: Some(Vec::new()),
+        member_reads: FxHashMap::default(),
         origins,
         provided: provided_components(program),
         rests: origins.map(|scoping| rest_parameters(program, scoping)).unwrap_or_default(),
@@ -3252,6 +3257,9 @@ struct FactCollector<'a, 's> {
     clones: Option<CloneScan<'a, 's>>,
     /// Enriched collection only: the modules the file loads at runtime.
     module_loads: Option<Vec<ModuleLoad>>,
+    /// The members read from an `import()`'s result, by the import's start,
+    /// recorded before the import itself is visited.
+    member_reads: FxHashMap<u32, Vec<String>>,
     /// Enriched collection only: the scopes a tag's origin is read from.
     origins: Option<&'s Scoping>,
     /// Enriched collection only: the values a parameter's literal-union type
@@ -3887,6 +3895,84 @@ impl<'a> Visit<'a> for ParameterScan<'_> {
     }
 }
 
+/// The `import()` an `await` takes, through parentheses and type wrappers.
+fn awaited_import<'b, 'a>(expression: &'b Expression<'a>) -> Option<&'b oxc::ast::ast::ImportExpression<'a>> {
+    let Expression::AwaitExpression(awaited) = expression.get_inner_expression() else { return None };
+    match awaited.argument.get_inner_expression() {
+        Expression::ImportExpression(import) => Some(import),
+        _ => None,
+    }
+}
+
+/// The keys an object pattern takes, when every key is static and it has no
+/// rest.
+fn pattern_members(object: &oxc::ast::ast::ObjectPattern<'_>) -> Option<Vec<String>> {
+    if object.rest.is_some() {
+        return None;
+    }
+    object.properties.iter().map(|property| property.key.static_name().map(|key| key.to_string())).collect()
+}
+
+/// The members a `.then` callback reads from the module it receives: the
+/// keys its parameter pattern takes, or the static members its body reads
+/// from its parameter, when the body uses the parameter no other way.
+fn callback_members(argument: &Argument<'_>) -> Option<Vec<String>> {
+    use oxc::ast::ast::BindingPattern;
+    let (params, body) = match argument.as_expression()?.get_inner_expression() {
+        Expression::ArrowFunctionExpression(arrow) => (&arrow.params, &*arrow.body),
+        Expression::FunctionExpression(function) => {
+            // `arguments` holds the module under any parameter name.
+            let body = function.body.as_deref()?;
+            let mut arguments = MemberReads { name: "arguments", members: Vec::new(), escaped: false };
+            arguments.visit_function_body(body);
+            if arguments.escaped || !arguments.members.is_empty() {
+                return None;
+            }
+            (&function.params, body)
+        }
+        _ => return None,
+    };
+    let Some(parameter) = params.items.first() else { return Some(Vec::new()) };
+    match &parameter.pattern {
+        BindingPattern::ObjectPattern(object) => pattern_members(object),
+        BindingPattern::BindingIdentifier(id) => {
+            let mut reads = MemberReads { name: id.name.as_str(), members: Vec::new(), escaped: false };
+            reads.visit_function_body(body);
+            (!reads.escaped).then_some(reads.members)
+        }
+        _ => None,
+    }
+}
+
+/// The static members read from `name`; any other use of the name escapes.
+/// An inner binding that shadows it counts as it would, which can only
+/// widen what is handed on.
+struct MemberReads<'n> {
+    name: &'n str,
+    members: Vec<String>,
+    escaped: bool,
+}
+
+impl<'a> Visit<'a> for MemberReads<'_> {
+    fn visit_static_member_expression(&mut self, member: &oxc::ast::ast::StaticMemberExpression<'a>) {
+        match member.object.get_inner_expression() {
+            Expression::Identifier(object) if object.name == self.name => {
+                let property = member.property.name.to_string();
+                if !self.members.contains(&property) {
+                    self.members.push(property);
+                }
+            }
+            _ => oxc::ast_visit::walk::walk_static_member_expression(self, member),
+        }
+    }
+
+    fn visit_identifier_reference(&mut self, reference: &oxc::ast::ast::IdentifierReference<'a>) {
+        if reference.name == self.name {
+            self.escaped = true;
+        }
+    }
+}
+
 /// A string or number literal default.
 fn literal_value(expression: &Expression<'_>) -> Option<Value> {
     eval_static_expression(expression).filter(is_class_value)
@@ -3916,16 +4002,43 @@ impl<'a, 's> Visit<'a> for FactCollector<'a, 's> {
                 }
             }
         }
+        // `const { X } = await import(…)` reads `X` alone.
+        if let (Some(import), oxc::ast::ast::BindingPattern::ObjectPattern(object)) =
+            (declarator.init.as_ref().and_then(awaited_import), &declarator.id)
+        {
+            if let Some(members) = pattern_members(object) {
+                self.member_reads.insert(import.span.start, members);
+            }
+        }
         oxc::ast_visit::walk::walk_variable_declarator(self, declarator);
     }
 
+    fn visit_static_member_expression(&mut self, member: &oxc::ast::ast::StaticMemberExpression<'a>) {
+        // `(await import(…)).X` reads `X` alone.
+        if let Some(import) = awaited_import(&member.object) {
+            self.member_reads.insert(import.span.start, vec![member.property.name.to_string()]);
+        }
+        oxc::ast_visit::walk::walk_static_member_expression(self, member);
+    }
+
     fn visit_import_expression(&mut self, import: &oxc::ast::ast::ImportExpression<'a>) {
-        self.record_loads(import.span, vec![load_of(&import.source)], true);
+        let members = self.member_reads.remove(&import.span.start);
+        self.record_loads(import.span, vec![load_of(&import.source)], true, members);
         oxc::ast_visit::walk::walk_import_expression(self, import);
     }
 
     fn visit_call_expression(&mut self, call: &CallExpression<'a>) {
-        self.record_loads(call.span, call_loads(call), false);
+        // `import(…).then((m) => m.X)` reads `X` alone.
+        if let Expression::StaticMemberExpression(then) = &call.callee {
+            if let (Expression::ImportExpression(import), "then") =
+                (then.object.get_inner_expression(), then.property.name.as_str())
+            {
+                if let Some(members) = call.arguments.first().and_then(callback_members) {
+                    self.member_reads.insert(import.span.start, members);
+                }
+            }
+        }
+        self.record_loads(call.span, call_loads(call), false, None);
         if self.react.calls(&call.callee, "createElement") {
             if let Some(first_arg) = call.arguments.first() {
                 let (ident, member, identity_uncertain) = match first_arg {
@@ -3963,7 +4076,13 @@ impl<'a, 's> Visit<'a> for FactCollector<'a, 's> {
 
 impl<'a> FactCollector<'a, '_> {
     /// Records one call's module loads with its line and spelling.
-    fn record_loads(&mut self, span: oxc::span::Span, targets: Vec<LoadTarget>, dynamic_import: bool) {
+    fn record_loads(
+        &mut self,
+        span: oxc::span::Span,
+        targets: Vec<LoadTarget>,
+        dynamic_import: bool,
+        members: Option<Vec<String>>,
+    ) {
         let (Some(loads), Some(clones)) = (&mut self.module_loads, &self.clones) else {
             return;
         };
@@ -3978,6 +4097,7 @@ impl<'a> FactCollector<'a, '_> {
         loads.extend(targets.into_iter().map(|target| ModuleLoad {
             target,
             dynamic_import,
+            members: members.clone(),
             line,
             call: call.clone(),
         }));
@@ -4739,6 +4859,7 @@ pub fn collect_usage_facts(program: &Program<'_>) -> Vec<UsageFact> {
         react: ReactNames::by_name(),
         clones: None,
         module_loads: None,
+        member_reads: FxHashMap::default(),
         origins: None,
         finite_params: FxHashMap::default(),
         provided: FxHashSet::default(),
