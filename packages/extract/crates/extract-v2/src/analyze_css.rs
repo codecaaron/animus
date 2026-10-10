@@ -7398,7 +7398,8 @@ export const App = ({ n }) => <Box bgImage={n} texture={n} />;
     fn no_runtime_asset_leaves_the_global_sheet_alone() {
         let source = "export const Box = ds.system({ space: true }).asElement('div');\nexport const App = ({ n }) => <Box p={n} />;\n";
         let out = analyze(&[("a.tsx", source)], &test_inputs());
-        assert_eq!(out.sheets.global, "");
+        // Only the slot variables' registrations lead it; no asset rule follows.
+        assert!(out.sheets.global.lines().all(|line| line.starts_with("@property --animus-p_")), "{}", out.sheets.global);
     }
 
     #[test]
