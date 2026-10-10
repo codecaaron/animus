@@ -25,8 +25,8 @@ export const HoverCard = ds
   })
   .asElement('div');
 
-// Spread of a stable const object — extracts as if its properties were
-// written inline, in authored order.
+// Spread element — structural bail, entire object fails.
+// This component should NOT be extracted at all.
 const baseStyles = { display: 'flex' };
 export const SpreadComponent = ds
   .styles({
