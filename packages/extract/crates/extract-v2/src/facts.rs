@@ -552,9 +552,11 @@ pub(crate) enum FacadeEntry {
         binding: String,
         member: Option<String>,
     },
-    /// `key` set to a value no binding names: a literal, a call, a later
-    /// `X.key = …`.
+    /// `key` set to a value no binding names: a literal or a call.
     Other(String),
+    /// A later top-level `X.key = …`, on `line`: the member holds whatever
+    /// it sets.
+    Written { key: String, line: usize },
     /// A method, accessor or function value, by key when it has a static
     /// one: it runs with the object as `this` and can change its members.
     Code(Option<String>),
@@ -574,7 +576,7 @@ fn sets_prototype(p: &oxc::ast::ast::ObjectProperty<'_>) -> bool {
 /// …)`, or `None` for any other initializer. `Object.assign` sets each member
 /// on its target, so a target with accessors or a prototype key lets any
 /// copied member go elsewhere.
-fn facade_entries(init: &Expression<'_>) -> Option<Vec<FacadeEntry>> {
+fn facade_entries(init: &Expression<'_>, native_object: bool) -> Option<Vec<FacadeEntry>> {
     use oxc::ast::ast::PropertyKind;
     let accessor_or_prototype = |object: &ObjectExpression<'_>| {
         object.properties.iter().any(|property| match property {
@@ -590,7 +592,7 @@ fn facade_entries(init: &Expression<'_>) -> Option<Vec<FacadeEntry>> {
             literal_entries(object, &mut entries);
             Some(entries)
         }
-        Expression::CallExpression(call) if is_object_assign(&call.callee) => {
+        Expression::CallExpression(call) if native_object && is_object_assign(&call.callee) => {
             let mut entries = Vec::new();
             // A component target, `Object.assign(Root, …)`, holds only what
             // the sources write; its own members are not followed.
@@ -742,6 +744,8 @@ fn object_member_chains(name: &str, init: &Expression<'_>, chains: &mut Vec<chai
 fn collect_const_initializers(program: &Program<'_>) -> ConstInitializerFacts {
     use oxc::ast::ast::{Declaration, Statement, VariableDeclarationKind};
     let mut facts = ConstInitializerFacts::default();
+    // `Object.assign` is the built-in only where the module binds no `Object`.
+    let native_object = !crate::eval::module_binds(program, "Object");
     let mut record = |decl: &oxc::ast::ast::VariableDeclaration<'_>| {
         if decl.kind != VariableDeclarationKind::Const {
             return;
@@ -755,15 +759,15 @@ fn collect_const_initializers(program: &Program<'_>) -> ConstInitializerFacts {
             {
                 facts.aliases.insert(name.to_string(), target.name.to_string());
             }
-            if let Some(target) = object_assign_target(init) {
+            if let Some(target) = object_assign_target(init).filter(|_| native_object) {
                 facts.assigned.insert(name.to_string(), target.to_string());
             }
-            let target = assigned_target(init);
+            let target = assigned_target(init).filter(|_| native_object);
             if let Some(root) = expression_root(init) {
                 facts.roots.insert(name.to_string(), root);
             }
             object_member_chains(&name, init, &mut facts.chains);
-            let Some(entries) = facade_entries(init) else {
+            let Some(entries) = facade_entries(init, native_object) else {
                 continue;
             };
             if matches!(crate::chain_walk::unwrap_type_assertions(init), Expression::ObjectExpression(_)) {
@@ -793,6 +797,21 @@ fn collect_const_initializers(program: &Program<'_>) -> ConstInitializerFacts {
         }
     }
     invalidate_top_level_writes(program, &mut facts.objects, &mut facts.facades);
+    // Each target by the object it holds: `Alias` for `const Alias = Root`,
+    // and a facade built onto `Root`, are `Root`.
+    let canonical = |path: &str| {
+        let (root, rest) = path.split_once('.').map_or((path, None), |(root, rest)| (root, Some(rest)));
+        let mut current = root;
+        let mut seen = BTreeSet::new();
+        while let Some(next) = facts.aliases.get(current).or_else(|| facts.assigned.get(current)) {
+            if !seen.insert(current) {
+                return path.to_string();
+            }
+            current = next;
+        }
+        rest.map_or_else(|| current.to_string(), |rest| format!("{current}.{rest}"))
+    };
+    facts.targets = facts.targets.iter().map(|(name, target)| (name.clone(), canonical(target))).collect();
     facts
 }
 
@@ -806,7 +825,10 @@ fn identifier_members(entries: &[FacadeEntry]) -> BTreeMap<String, String> {
             FacadeEntry::Member { key, binding, member: None } => {
                 members.insert(key.clone(), binding.clone());
             }
-            FacadeEntry::Member { key, .. } | FacadeEntry::Other(key) | FacadeEntry::Code(Some(key)) => {
+            FacadeEntry::Member { key, .. }
+            | FacadeEntry::Other(key)
+            | FacadeEntry::Written { key, .. }
+            | FacadeEntry::Code(Some(key)) => {
                 members.remove(key);
             }
             FacadeEntry::Copy(_) | FacadeEntry::Unknown | FacadeEntry::Code(None) => members.clear(),
@@ -842,7 +864,11 @@ fn invalidate_top_level_writes(
     facades: &mut BTreeMap<String, Vec<FacadeEntry>>,
 ) {
     use oxc::ast::ast::{AssignmentTarget, Statement};
-    let mut write = |object: Option<&str>, key: Option<&str>| {
+    let line = |span: oxc::span::Span| {
+        let start = (span.start as usize).min(program.source_text.len());
+        program.source_text[..start].matches('\n').count() + 1
+    };
+    let mut write = |object: Option<&str>, key: Option<&str>, line: usize| {
         let Some(object) = object else { return };
         if let Some(members) = objects.get_mut(object) {
             match key {
@@ -853,7 +879,7 @@ fn invalidate_top_level_writes(
             }
         }
         if let Some(entries) = facades.get_mut(object) {
-            entries.push(key.map_or(FacadeEntry::Unknown, |key| FacadeEntry::Other(key.to_string())));
+            entries.push(key.map_or(FacadeEntry::Unknown, |key| FacadeEntry::Written { key: key.to_string(), line }));
         }
     };
     for stmt in &program.body {
@@ -863,16 +889,16 @@ fn invalidate_top_level_writes(
         match crate::chain_walk::unwrap_type_assertions(&statement.expression) {
             Expression::AssignmentExpression(assignment) => match &assignment.left {
                 AssignmentTarget::StaticMemberExpression(member) => {
-                    write(written_object(&member.object), Some(member.property.name.as_str()));
+                    write(written_object(&member.object), Some(member.property.name.as_str()), line(statement.span));
                 }
                 AssignmentTarget::ComputedMemberExpression(member) => {
-                    write(written_object(&member.object), None);
+                    write(written_object(&member.object), None, line(statement.span));
                 }
                 _ => {}
             },
             Expression::CallExpression(call) if is_object_assign(&call.callee) => {
                 let target = call.arguments.first().and_then(|arg| arg.as_expression());
-                write(target.and_then(written_object), None);
+                write(target.and_then(written_object), None, line(statement.span));
             }
             _ => {}
         }

@@ -10213,7 +10213,9 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
 
     /// `Object.assign(Root, { Row })` renders as `Root`, so a facade whose
     /// members mutation evidence proves keeps both tags' static props; an
-    /// unproven facade keeps its root and warns once for the member.
+    /// unproven facade keeps its root and warns once for the member. Two
+    /// spellings of one target are one target, and an `Object` the module
+    /// binds is not the built-in.
     #[test]
     fn assigned_callable_facades_keep_attribution_or_warn_per_use() {
         let parts = "const Root = ds.system({ space: true }).asElement('section');\n\
@@ -10247,6 +10249,8 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             "export const RecordTable = Object.assign(Root, { Root, Row });\nRoot.Row = Root;\n".to_string(),
             format!("{compose}export const RecordTable = Object.assign(Fam.Root, {{ Row: Fam.Row }});\nexport const Other = Object.assign(Fam.Root, {{ Row: Fam.Root }});\n"),
             format!("{compose}export const RecordTable = Object.assign(Fam.Root, {{ Row: Fam.Row }});\nregister(Fam.Root);\n"),
+            "const Alias = Root;\nexport const RecordTable = Object.assign(Root, { Root, Row });\nconst Other = Object.assign(Alias, { Row: Root });\n".to_string(),
+            "export const RecordTable = Object.assign(Root, { Root, Row });\nRecordTable.Row = Root;\n".to_string(),
         ] {
             for out in run(&facade) {
                 assert_eq!(keys(&out), ["8"], "{facade}");
@@ -10254,6 +10258,10 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
                 assert_eq!(warnings.len(), 1, "{facade}: {:?}", out.diagnostics);
                 assert_eq!(warnings[0].component, "RecordTable.Row", "{facade}");
             }
+        }
+        let shadowed = "const Object = { assign: () => Row };\nexport const RecordTable = Object.assign(Root, { Root, Row });\n";
+        for out in run(shadowed) {
+            assert!(keys(&out).is_empty(), "{:?}", out.system_prop_map);
         }
     }
 

@@ -429,6 +429,18 @@ impl<'f> ObjectMembers<'f> {
                 FacadeEntry::Other(key) | FacadeEntry::Code(Some(key)) => {
                     table.members.insert(key.clone(), Member::Other);
                 }
+                // The write replaces a component the member named with a value
+                // the analysis does not follow.
+                FacadeEntry::Written { key, line } => {
+                    let written = match table.members.get(key).and_then(Member::component) {
+                        Some(component) => Member::Unstable(
+                            component.clone(),
+                            format!("{binding} has its member {key} assigned in {module} on line {line}"),
+                        ),
+                        None => Member::Other,
+                    };
+                    table.members.insert(key.clone(), written);
+                }
                 FacadeEntry::Unknown | FacadeEntry::Code(None) => {
                     table = MemberTable { open: true, ..MemberTable::default() };
                 }
