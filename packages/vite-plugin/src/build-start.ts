@@ -19,7 +19,7 @@ import {
 import { readFileSync } from 'fs';
 import { basename, relative } from 'path';
 
-import type { PluginContext } from './context';
+import type { DiscoveredSources, PluginContext } from './context';
 import type { ManifestDiagnostic } from '@animus-ui/extract/pipeline';
 
 /**
@@ -59,7 +59,118 @@ export async function runBuildStart(
     );
   }
 
+  const discovered = await discoverSources(ctx, resolveSpecifier);
+  // The system's imports and its packages' manifests decide discovery, so a
+  // development system reload repeats it.
+  if (!ctx.isProd) {
+    ctx.rediscoverSources = () => discoverSources(ctx, resolveSpecifier);
+  }
+
   t0 = performance.now();
+  await ctx.analyzeIngested(discovered);
+
+  // Vite's CSS pipeline resolves `__VITE_ASSET__` markers to hashed names
+  // before the stylesheet is hashed, so the CSS hash reflects the final URL.
+  const assetSpecifiers = ctx.sheetAssetSpecifiers();
+  for (const specifier of assetSpecifiers) {
+    const resolvedPath = await resolveSpecifier(specifier);
+    if (!resolvedPath) {
+      ctx.assetFallback(
+        specifier,
+        `[animus-extract] unresolvable asset() specifier: ${specifier}`
+      );
+      continue;
+    }
+    if (emitAsset) {
+      try {
+        const referenceId = emitAsset(
+          basename(resolvedPath),
+          readFileSync(resolvedPath)
+        );
+        ctx.assetUrlBySpecifier.set(
+          specifier,
+          `__VITE_ASSET__${referenceId}__`
+        );
+      } catch (err) {
+        ctx.assetFallback(
+          specifier,
+          `[animus-extract] failed to emit asset() specifier ${specifier}: ${String(err)}`,
+          err
+        );
+      }
+    } else {
+      ctx.assetUrlBySpecifier.set(specifier, ctx.devFsUrl(resolvedPath));
+    }
+  }
+  ctx.substituteSheets();
+  // From here on, runAnalysis owns late-appearing specifiers (dev resets).
+  ctx.assetPassComplete = true;
+
+  if (ctx.storedManifest) {
+    const report = ctx.storedManifest.report;
+    ctx.log(
+      `Extracted ${report.components_extracted}/${report.components_total} components (${Math.round(performance.now() - t0)}ms)`
+    );
+    ctx.log(
+      `Reconciliation: ${report.components_extracted} kept, ${report.variants_eliminated} variants pruned, ${report.states_eliminated} states pruned`
+    );
+
+    for (const d of report.eliminated_details) {
+      if (d.kind === 'component') {
+        ctx.warn(`⚠ ${d.component} eliminated: ${d.reason}`);
+      } else if (d.kind === 'prospective_component' && !ctx.emissionProd) {
+        // A production build reports prospective entries only while a skipped
+        // source holds pruning off, so this build keeps the component.
+        ctx.warn(
+          `⚠ ${d.component} would be eliminated in production: ${d.reason}`
+        );
+      } else if (d.kind === 'variant') {
+        ctx.trace(`${d.component} variant '${d.name}' pruned: ${d.reason}`);
+      } else if (d.kind === 'state') {
+        ctx.trace(`${d.component} state '${d.name}' pruned: ${d.reason}`);
+      }
+    }
+
+    ctx.log(
+      `CSS: ${ctx.resolvedComponentCss.length} bytes (${Object.keys(ctx.storedManifest.components).length} components)`
+    );
+
+    if (!ctx.isProd && ctx.storedSheets) {
+      const staticCss = assembleStylesheet({
+        layers: ctx.options.layers,
+        variableCss: ctx.variableCss,
+        globalCss: ctx.globalCss,
+      });
+      const staticSize = staticCss.length;
+      const componentSize = ctx.resolvedComponentCss.length;
+      ctx.log(
+        `Delivery: split mode — static ${staticSize} bytes, components ${componentSize} bytes (adopted stylesheet)`
+      );
+    } else {
+      ctx.log('Delivery: single file mode (production)');
+    }
+  }
+
+  const { declaration } = assembleStylesheet({
+    layers: ctx.options.layers,
+    variableCss: '',
+    globalCss: '',
+    split: true,
+  });
+  ctx.layerDeclaration = declaration;
+
+  if (ctx.options.verify) {
+    ctx.runSelfVerify();
+  }
+}
+
+/** Local and external discovery, publishing the package state on `ctx`, and
+ *  the analysis input it yields. */
+async function discoverSources(
+  ctx: PluginContext,
+  resolveSpecifier: (specifier: string) => Promise<string | null>
+): Promise<DiscoveredSources> {
+  const t0 = performance.now();
   // Refresh in case `options` was mutated between server lifecycles.
   ctx.excludeMatcher = createExcludeMatcher(ctx.options.exclude);
   const excludePatterns = ctx.excludeMatcher;
@@ -175,8 +286,7 @@ export async function runBuildStart(
     `Discovered ${rawEntries.length} files (${packageFileCount} from packages) (${Math.round(performance.now() - t0)}ms)`
   );
 
-  t0 = performance.now();
-  await ctx.analyzeIngested({
+  return {
     rawEntries,
     // Seed before the parse and analysis gates: a failed non-strict
     // buildStart must leave HMR the full corpus, not one assembled from the
@@ -191,99 +301,5 @@ export async function runBuildStart(
         });
       }
     },
-  });
-
-  // Vite's CSS pipeline resolves `__VITE_ASSET__` markers to hashed names
-  // before the stylesheet is hashed, so the CSS hash reflects the final URL.
-  const assetSpecifiers = ctx.sheetAssetSpecifiers();
-  for (const specifier of assetSpecifiers) {
-    const resolvedPath = await resolveSpecifier(specifier);
-    if (!resolvedPath) {
-      ctx.assetFallback(
-        specifier,
-        `[animus-extract] unresolvable asset() specifier: ${specifier}`
-      );
-      continue;
-    }
-    if (emitAsset) {
-      try {
-        const referenceId = emitAsset(
-          basename(resolvedPath),
-          readFileSync(resolvedPath)
-        );
-        ctx.assetUrlBySpecifier.set(
-          specifier,
-          `__VITE_ASSET__${referenceId}__`
-        );
-      } catch (err) {
-        ctx.assetFallback(
-          specifier,
-          `[animus-extract] failed to emit asset() specifier ${specifier}: ${String(err)}`,
-          err
-        );
-      }
-    } else {
-      ctx.assetUrlBySpecifier.set(specifier, ctx.devFsUrl(resolvedPath));
-    }
-  }
-  ctx.substituteSheets();
-  // From here on, runAnalysis owns late-appearing specifiers (dev resets).
-  ctx.assetPassComplete = true;
-
-  if (ctx.storedManifest) {
-    const report = ctx.storedManifest.report;
-    ctx.log(
-      `Extracted ${report.components_extracted}/${report.components_total} components (${Math.round(performance.now() - t0)}ms)`
-    );
-    ctx.log(
-      `Reconciliation: ${report.components_extracted} kept, ${report.variants_eliminated} variants pruned, ${report.states_eliminated} states pruned`
-    );
-
-    for (const d of report.eliminated_details) {
-      if (d.kind === 'component') {
-        ctx.warn(`⚠ ${d.component} eliminated: ${d.reason}`);
-      } else if (d.kind === 'prospective_component' && !ctx.emissionProd) {
-        // A production build reports prospective entries only while a skipped
-        // source holds pruning off, so this build keeps the component.
-        ctx.warn(
-          `⚠ ${d.component} would be eliminated in production: ${d.reason}`
-        );
-      } else if (d.kind === 'variant') {
-        ctx.trace(`${d.component} variant '${d.name}' pruned: ${d.reason}`);
-      } else if (d.kind === 'state') {
-        ctx.trace(`${d.component} state '${d.name}' pruned: ${d.reason}`);
-      }
-    }
-
-    ctx.log(
-      `CSS: ${ctx.resolvedComponentCss.length} bytes (${Object.keys(ctx.storedManifest.components).length} components)`
-    );
-
-    if (!ctx.isProd && ctx.storedSheets) {
-      const staticCss = assembleStylesheet({
-        layers: ctx.options.layers,
-        variableCss: ctx.variableCss,
-        globalCss: ctx.globalCss,
-      });
-      const staticSize = staticCss.length;
-      const componentSize = ctx.resolvedComponentCss.length;
-      ctx.log(
-        `Delivery: split mode — static ${staticSize} bytes, components ${componentSize} bytes (adopted stylesheet)`
-      );
-    } else {
-      ctx.log('Delivery: single file mode (production)');
-    }
-  }
-
-  const { declaration } = assembleStylesheet({
-    layers: ctx.options.layers,
-    variableCss: '',
-    globalCss: '',
-    split: true,
-  });
-  ctx.layerDeclaration = declaration;
-
-  if (ctx.options.verify) {
-    ctx.runSelfVerify();
-  }
+  };
 }

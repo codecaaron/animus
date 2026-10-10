@@ -98,8 +98,9 @@ pub struct NapiSystemConfig {
     /// Vocabulary witnesses as a JSON array of coded entries; hosts surface
     /// each as a diagnostic keyed by its `code`. Absent when there are none.
     pub vocabulary_witnesses: Option<String>,
-    /// Canonical absolute paths of every module evaluated for the system,
-    /// sorted; the entry is included, runtime stubs are not.
+    /// Canonical absolute paths of every module evaluated for the system, and
+    /// of each `package.json` that selected one, sorted; the entry is
+    /// included, runtime stubs are not.
     pub dependencies: Vec<String>,
     /// Per-module built-theme token manifests, shaped
     /// `{ modulePath: { exportName: [token paths] } }`. Absent when none exist.
@@ -111,11 +112,13 @@ pub fn load_system_module(
     system_path: String,
     root_dir: String,
     export_name: Option<String>,
+    conditions: Option<Vec<String>>,
 ) -> napi::Result<NapiSystemConfig> {
     let config = animus_system_loader::load_system_module(
         &system_path,
         &root_dir,
         export_name.as_deref(),
+        conditions.as_deref().unwrap_or_default(),
     )
     .map_err(napi::Error::from_reason)?;
 

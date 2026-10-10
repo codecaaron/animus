@@ -71,10 +71,18 @@ export function loadSystemConfig(
     rootDir: string;
     prefix?: string;
     prefixContextualVars?: boolean;
+    /** The host's export conditions, in its order; the loader tries them
+     *  with `import` and `default`. */
+    conditions?: readonly string[];
   }
 ): SystemConfig {
   const { loadSystemModule } = engineApi();
-  const config = loadSystemModule(opts.systemPath, opts.rootDir);
+  const config = loadSystemModule(
+    opts.systemPath,
+    opts.rootDir,
+    undefined,
+    opts.conditions
+  );
 
   let scalesJson: string = config.scalesJson;
   let variableMapJson: string = config.variableMapJson;
