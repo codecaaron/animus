@@ -146,8 +146,10 @@ try {
   );
   check('recovered publication self-verifies', selfVerifies(outDir));
 
-  // These assertions must hold on the abandoned-drain path: a second SIGINT
-  // that killed the process would strand `lock.json` and block the next run.
+  // One SIGINT, sent while a cycle is in flight, drains it before the claims
+  // go. A second signal is not sent: once the drain finishes the listeners
+  // are gone, and a second SIGINT ends the process by the signal itself. The
+  // CLI's unit test of the shutdown signals pins the abandoned drain.
   writeFileSync(widgetPath, widgetSource('#0ff0ff'));
   try {
     await until(
@@ -159,15 +161,14 @@ try {
       5_000
     );
   } catch {
-    // The cycle finished first: the drain is short and the second signal
-    // below lands after a clean exit. Every assertion still holds.
+    // The cycle finished first: the drain is short. Every assertion still
+    // holds.
   }
   run.signal('SIGINT');
   await until(
     () => run.stderr.includes('watch shutdown starting reason=SIGINT'),
     'the shutdown acknowledgement'
   );
-  run.signal('SIGINT');
   const { code } = await run.exit();
   check('SIGINT exits 130', code === 130, `got ${code}`);
   check(
