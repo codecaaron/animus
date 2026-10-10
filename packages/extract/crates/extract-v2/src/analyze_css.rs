@@ -3114,13 +3114,11 @@ fn untracked_clone_props(file: &str, ff: &FileFacts) -> Vec<CssDiagnostic> {
                 file,
                 call,
                 "warn",
-                format!(
-                    "line {line}: props passed through {call} are not tracked, so variant \
-                     and state options only they set can be pruned from production CSS — \
-                     write the override keys literally, as in \
-                     cloneElement(child, {{ size: 'lg' }}), or keep those options with \
-                     staticCss.components"
-                ),
+                "props passed through this call are not tracked, so variant and state options only \
+                 they set can be pruned from production CSS — write the override keys literally, as \
+                 in cloneElement(child, { size: 'lg' }), or keep those options with \
+                 staticCss.components"
+                    .to_string(),
                 Some(UNTRACKED_CLONE_PROPS),
             )
             .on_line(*line)),
@@ -5491,7 +5489,7 @@ fn run_with_system_floor(
                     call,
                     "warn",
                     format!(
-                        "line {line}: {call} can load {} components, so each keeps every \
+                        "this call can load {} components, so each keeps every \
                          variant and state option it declares — write the specifier \
                          literally so only what it loads keeps its options",
                         opened.len()
@@ -9477,14 +9475,17 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         assert_eq!(kept_sizes(&run(require, true, None), "src/r.tsx::R"), vec!["sm", "md", "lg"]);
         let many: String = (0..20).map(|i| sized(&format!("C{i}"))).collect();
         let out = run(import, false, Some(&many));
-        let warnings: Vec<&str> = out
+        let warnings: Vec<(Option<u32>, &str, &str)> = out
             .diagnostics
             .iter()
             .filter(|d| d.code.as_deref() == Some(WIDE_MODULE_LOAD))
-            .map(|d| d.message.as_str())
+            .map(|d| (d.line, d.component.as_str(), d.message.as_str()))
             .collect();
         assert_eq!(warnings.len(), 1, "{warnings:#?}");
-        assert!(warnings[0].starts_with("line 1: import(name) can load 21 components"), "{warnings:#?}");
+        // The location carries the line and the component the call, so the
+        // message names neither again.
+        assert_eq!((warnings[0].0, warnings[0].1), (Some(1), "import(name)"), "{warnings:#?}");
+        assert!(warnings[0].2.starts_with("this call can load 21 components"), "{warnings:#?}");
     }
 
     /// Tags usage cannot match to an Animus component give a production
@@ -9814,16 +9815,14 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
                 ("app.tsx", "cloneElement(child, …)", "warn"),
             ]
         );
-        let lines: Vec<bool> = ["line 4:", "line 6:"]
+        // Each is located at its call's line, which its message does not repeat.
+        let lines: Vec<(Option<u32>, bool)> = out
+            .diagnostics
             .iter()
-            .map(|line| {
-                out.diagnostics
-                    .iter()
-                    .filter(|d| d.code.as_deref() == Some(UNTRACKED_CLONE_PROPS))
-                    .any(|d| d.message.starts_with(line))
-            })
+            .filter(|d| d.code.as_deref() == Some(UNTRACKED_CLONE_PROPS))
+            .map(|d| (d.line, d.message.starts_with("props passed through this call")))
             .collect();
-        assert_eq!(lines, vec![true, true]);
+        assert_eq!(lines, vec![(Some(4), true), (Some(6), true)]);
         let class = class_of(&out, "r.tsx::R");
         assert!(!out.css.contains(&format!(".{class}--size-md")), "nothing is opened");
     }
