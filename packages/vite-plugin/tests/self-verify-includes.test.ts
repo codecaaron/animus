@@ -52,7 +52,7 @@ describe('self-verify: external package include outcomes', () => {
     ctx.runSelfVerify();
 
     expect(warnings).toEqual([
-      "[animus:verify] include '@x/ds' resolved but discovered no component sources",
+      "[animus:verify] include '@x/ds' resolved but discovered no component sources [animus.discovery.no-kit-files]",
     ]);
   });
 });
