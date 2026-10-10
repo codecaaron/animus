@@ -1,4 +1,7 @@
-import type { StaticCssConfig } from '@animus-ui/extract/pipeline';
+import type {
+  DiagnosticLevels,
+  StaticCssConfig,
+} from '@animus-ui/extract/pipeline';
 
 export interface AnimusNextOptions {
   /** Path to a module exporting a SystemInstance from `@animus-ui/system`. */
@@ -13,6 +16,13 @@ export interface AnimusNextOptions {
    *  classified unsupported Animus declarations — fail the build instead of
    *  warning. Omitted or `false` warns. */
   strict?: boolean;
+  /**
+   * Each `animus.*` code's level, by exact code or a prefix ending in `.*`
+   * (`'animus.style.*'`): `'off'`, `'info'`, `'warn'` or `'error'`, which
+   * fails the build. An exact code beats the longest matching prefix, and an
+   * entry beats `strict` and the code's own severity.
+   */
+  diagnostics?: DiagnosticLevels;
   /** Project-root-relative path of the one file that receives the stylesheet
    *  import; replaces the `app/layout.*` / `pages/_app.*` detection. */
   cssImportTarget?: string;

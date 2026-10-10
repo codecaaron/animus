@@ -1018,7 +1018,8 @@ export class ExtractionSession {
             : noKitFilesDiagnostics(collected.outcomes)),
         ],
       },
-      (message) => this.warn(message)
+      (message) => this.warn(message),
+      { levels: this.options.diagnostics }
     );
     const unresolvableMessage = unresolvableIncludesMessage(collected.outcomes);
     if (unresolvableMessage !== null) {
@@ -1457,6 +1458,7 @@ export class ExtractionSession {
       warn: (message) => this.warn(message),
       info: (message) => this.log(message),
       strict: this.options.strict,
+      diagnostics: this.options.diagnostics,
       extraDiagnostics: this.ingestionFailureDiagnostics,
     });
 

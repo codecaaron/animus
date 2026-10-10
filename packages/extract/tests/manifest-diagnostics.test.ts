@@ -14,7 +14,10 @@ import {
 import { runProjectAnalysis } from '../pipeline/run-analysis';
 import { loadSystemConfig } from '../pipeline/system-config';
 
-import type { ManifestDiagnostic } from '../pipeline/manifest-diagnostics';
+import type {
+  DiagnosticLevels,
+  ManifestDiagnostic,
+} from '../pipeline/manifest-diagnostics';
 
 const errorDiagnostic: ManifestDiagnostic = {
   file: 'a.tsx',
@@ -156,6 +159,69 @@ describe('surfaceManifestDiagnostics strict policy', () => {
     expect(warned).toEqual([
       "⚠ src/A.tsx:7:21: Wide not extracted: chain dropped: parent 'Kit.Box' is a member of local object 'Kit'",
       "⚠ src/A.tsx:11:61: Skipping: skipped [skip] Skipping: property '&:hover' — spread element in style object — dropped: ...transition",
+    ]);
+  });
+});
+
+describe('surfaceManifestDiagnostics levels', () => {
+  it('sets each code by exact entry, else longest prefix, over strict and the default', () => {
+    const record = (code: string, severity = 'warn'): ManifestDiagnostic => ({
+      file: 'src/a.tsx',
+      component: 'A',
+      kind: 'warn',
+      message: `reported ${code}`,
+      code,
+      severity,
+    });
+    const levels: DiagnosticLevels = {
+      'animus.usage.identity-uncertain': 'off',
+      'animus.style.*': 'error',
+      'animus.style.unrecognized-key': 'warn',
+      'animus.chain.*': 'info',
+      'animus.styel.typo': 'warn',
+    };
+    const knownCodes = new Set([
+      'animus.usage.identity-uncertain',
+      'animus.style.unrecognized-key',
+      'animus.style.other',
+      'animus.chain.skipped-value',
+    ]);
+    const warned: string[] = [];
+    const informed: string[] = [];
+    const surface = () =>
+      surfaceManifestDiagnostics(
+        {
+          diagnostics: [
+            record('animus.usage.identity-uncertain'),
+            record('animus.style.unrecognized-key', 'error'),
+            record('animus.style.other'),
+            record('animus.chain.skipped-value'),
+          ],
+        },
+        (m) => warned.push(m),
+        {
+          strict: true,
+          levels,
+          knownCodes,
+          info: (m) => informed.push(m),
+        }
+      );
+
+    // A prefix's `error` fails a warn-severity code; the exact `warn` keeps
+    // an error-severity code from failing under strict.
+    expect(surface).toThrow(
+      /strict: 1 error diagnostic\(s\):\nanimus\.style\.other — /
+    );
+    expect(surface).toThrow(/^(?![\s\S]*unrecognized-key)/);
+    expect(warned.filter((m) => m.includes('identity-uncertain'))).toEqual([]);
+    expect(
+      warned.filter((m) => m.includes('animus.style.unrecognized-key'))
+    ).toHaveLength(2);
+    expect(informed).toHaveLength(2);
+    expect(informed[0]).toMatch(/^ℹ src\/a\.tsx: A: reported animus\.chain/);
+    // An unknown key warns once, however often the build analyzes.
+    expect(warned.filter((m) => m.includes("'animus.styel.typo'"))).toEqual([
+      "⚠ diagnostics option: 'animus.styel.typo' matches no Animus diagnostic code — check its spelling (a code the system package mints at run time is known only once it is reported)",
     ]);
   });
 });
