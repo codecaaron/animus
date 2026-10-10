@@ -437,6 +437,11 @@ fn eval_expression_scoped(
             if let Some(val) = held.or_else(|| static_values.and_then(|sv| static_path_value(expr, sv))) {
                 return Ok(val.clone());
             }
+            if !matches!(member.object, Expression::Identifier(_)) {
+                if let Some(reason) = static_values.and_then(|sv| lost_path_reason(expr, sv)) {
+                    return Err(BailError::new(format!("member expression (non-static) — {reason}")));
+                }
+            }
             Err(BailError::new(member_expression_skip_reason(
                 &member.object,
                 member.property.name.as_str(),
@@ -447,7 +452,10 @@ fn eval_expression_scoped(
         Expression::ComputedMemberExpression(_) => static_values
             .and_then(|sv| static_path_value(expr, sv))
             .cloned()
-            .ok_or_else(|| BailError::new("member expression (non-static)")),
+            .ok_or_else(|| match static_values.and_then(|sv| lost_path_reason(expr, sv)) {
+                Some(reason) => BailError::new(format!("member expression (non-static) — {reason}")),
+                None => BailError::new("member expression (non-static)"),
+            }),
 
         _ => Err(BailError::new("unsupported expression type")),
     }
@@ -726,40 +734,66 @@ fn collect_static_values_impl(
             };
 
             if let Some(init) = &declarator.init {
-                let init = crate::chain_walk::unwrap_type_assertions(init);
-                let mut dummy_skips = Vec::new();
                 // Style values read earlier consts, as source order runs them;
                 // JSX usage values keep reading literals only.
                 let scope = if require_complete { &assets } else { &values };
-                match init {
-                    Expression::ObjectExpression(obj) => {
-                        if let Ok((mut val, skips, captures)) = eval_object_expr_scoped(obj, Some(scope), false) {
-                            if !require_complete {
-                                let lost = LostValueSource {
-                                    obj,
-                                    name: &name,
-                                    undefined_bound,
-                                };
-                                mark_lost_values(&mut val, &lost, &skips, &captures);
-                                values.insert(name, val);
-                            } else if skips.is_empty() && captures.is_empty() {
-                                values.insert(name, val);
-                            }
-                        }
-                    }
-                    _ => {
-                        if let Ok(val) = eval_expression_with_statics(init, &mut dummy_skips, Some(scope)) {
-                            if !require_complete || dummy_skips.is_empty() {
-                                values.insert(name, val);
-                            }
-                        }
-                    }
+                if let Some(val) = const_value(init, &name, scope, require_complete, undefined_bound) {
+                    values.insert(name, val);
                 }
             }
         }
     }
 
     values
+}
+
+/// A const initializer's static value, reading `scope`.
+fn const_value(
+    init: &Expression<'_>,
+    name: &str,
+    scope: &FxHashMap<String, Value>,
+    require_complete: bool,
+    undefined_bound: bool,
+) -> Option<Value> {
+    match crate::chain_walk::unwrap_type_assertions(init) {
+        Expression::ObjectExpression(obj) => {
+            let (mut val, skips, captures) = eval_object_expr_scoped(obj, Some(scope), false).ok()?;
+            if !require_complete {
+                mark_lost_values(&mut val, &LostValueSource { obj, name, undefined_bound }, &skips, &captures);
+                Some(val)
+            } else {
+                (skips.is_empty() && captures.is_empty()).then_some(val)
+            }
+        }
+        init => {
+            let mut skips = Vec::new();
+            let val = eval_expression_with_statics(init, &mut skips, Some(scope)).ok()?;
+            (!require_complete || skips.is_empty()).then_some(val)
+        }
+    }
+}
+
+/// The style value of module-scope const `name` when its initializer reads
+/// no other const, as every style value was read before const initializers
+/// read earlier consts. `None` when that initializer has no static value
+/// then: a spread, member or computed key of another const.
+pub(crate) fn pre_read_static(program: &Program<'_>, name: &str, in_package: bool) -> Option<Value> {
+    let declarator = program.body.iter().find_map(|stmt| {
+        let decl = match stmt {
+            Statement::VariableDeclaration(decl) => decl,
+            Statement::ExportNamedDeclaration(export) => match &export.declaration {
+                Some(Declaration::VariableDeclaration(decl)) => decl,
+                _ => return None,
+            },
+            _ => return None,
+        };
+        (decl.kind == VariableDeclarationKind::Const).then_some(())?;
+        decl.declarations.iter().find(|declarator| {
+            matches!(&declarator.id, oxc::ast::ast::BindingPattern::BindingIdentifier(ident) if ident.name == name)
+        })
+    })?;
+    let assets = asset_bindings(program, in_package);
+    const_value(declarator.init.as_ref()?, name, &assets, false, module_binds(program, "undefined"))
 }
 
 /// Marks a value a const object cannot carry statically — a skipped key or
@@ -846,10 +880,11 @@ pub(crate) fn lost_marker(reason: String) -> Value {
 /// not prove, holding its value.
 const HELD_VALUE: &str = "$animus.held";
 
-/// A lost marker that still holds `value`: a spread, a computed key or a
-/// member path below the first member refuses with `reason`, while the reads
-/// extraction made before the stability analysis (the binding by name, or
-/// one member of it as a value) take `value` through `held_value`.
+/// A lost marker that still holds `value`, the binding's `pre_read_static`
+/// value: a spread, a computed key or a member path below the first member
+/// refuses with `reason`, while the reads extraction made before the
+/// stability analysis (the binding by name, or one member of it as a value)
+/// take `value` through `held_value`.
 pub(crate) fn held_marker(reason: String, value: Value) -> Value {
     let mut marker = lost_marker(reason);
     if let Some(entries) = marker.as_object_mut() {

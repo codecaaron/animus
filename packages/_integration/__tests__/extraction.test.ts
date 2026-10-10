@@ -1127,5 +1127,13 @@ export const Use${name} = () => <${name} />;`,
     const named = runPipeline([source('Named', 'preset', prelude)]);
     assertNoUnresolvedTokens(named.css);
     expect(body(named.css, 'Named')).toBe('.C {\n    cursor: pointer;\n  }');
+    const copied = runPipeline([
+      source('Copied', 'copy', `${prelude}\nconst copy = { ...preset };`),
+    ]);
+    assertNoUnresolvedTokens(copied.css);
+    expect(body(copied.css, 'Copied')).toBeUndefined();
+    expect(JSON.stringify(copied.manifest.diagnostics)).toContain(
+      'copy reads preset, and preset is passed to decorate()'
+    );
   });
 });

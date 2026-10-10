@@ -785,7 +785,15 @@ impl ExtractEngine {
             &mut readings_of,
         ) {
             if let Some(value) = statics_by_file.get_mut(&file).and_then(|statics| statics.get_mut(&local)) {
-                *value = crate::eval::held_marker(reason, std::mem::take(value));
+                // Only a value the binding had before const initializers read
+                // other consts stays held; one derived from them refuses.
+                let in_package = crate::analyze_css::is_external_file(&file, &self.opts.css_inputs.external_dirs);
+                *value = match programs.get(file.as_str()).and_then(|program| {
+                    crate::eval::pre_read_static(program, &local, in_package)
+                }) {
+                    Some(held) => crate::eval::held_marker(reason, held),
+                    None => crate::eval::lost_marker(reason),
+                };
             }
         }
 
