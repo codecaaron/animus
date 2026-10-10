@@ -648,9 +648,10 @@ export function surfaceManifestDiagnostics(
       continue;
     }
     if (level === 'error') {
-      // A hard error's message does not name its file, so it keeps it.
+      // The error line names what the warning line names: a warn- or
+      // error-kind record's file, with or without a line.
       const subject =
-        diagnostic.kind === 'error'
+        diagnostic.kind === 'warn' || diagnostic.kind === 'error'
           ? `${locationOf(diagnostic)}: `
           : locatedPrefix(diagnostic);
       errors.add(
