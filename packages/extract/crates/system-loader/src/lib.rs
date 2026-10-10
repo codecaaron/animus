@@ -1217,7 +1217,7 @@ fn build_linked_bundle(
     }
     let linker = linked::Linker { modules: &modules, stubs: stub_exports };
     for path in &paths {
-        linker.check_imports(path)?;
+        linker.check_links(path)?;
     }
     let generators: HashMap<&str, String> =
         paths.iter().enumerate().map(|(index, path)| (path.as_str(), format!("__linked{index}"))).collect();
@@ -2571,8 +2571,10 @@ export const ds = tokens;
     /// outside its cycle. A hoisted function, an anonymous default function,
     /// a namespace import and a name `export *` brings in are all readable
     /// before their module evaluates, and every import, including one from
-    /// outside the cycle, reads the exporting binding live. An import of a
-    /// name the module does not export fails the load, naming both modules.
+    /// outside the cycle, reads the exporting binding live, `export *`
+    /// included when star exports form a cycle. An import of a name the
+    /// module does not export, or a re-export that resolves to no binding or
+    /// ambiguously, fails the load, naming the module.
     #[test]
     fn cyclic_module_graph_evaluates_with_node_semantics() {
         const PROTOCOL: &str = "export const ds = { toConfig: () => ({ propConfig: JSON.stringify(data), groupRegistry: '{}' }), \
@@ -2581,7 +2583,7 @@ export const ds = tokens;
         /// A case's name, its modules, and the loaded propConfig or a part
         /// of the load's error.
         type Case<'a> = (&'a str, &'a [(&'a str, &'a str)], Result<&'a str, &'a str>);
-        let cases: [Case; 6] = [
+        let cases: [Case; 10] = [
             (
                 "hoisted-live",
                 &[
@@ -2625,12 +2627,52 @@ export const ds = tokens;
                 Ok(r#"{"count":1}"#),
             ),
             (
+                "cyclic-star-static",
+                &[
+                    ("a", "export * from './b.js';\nexport * from './c.js';\n"),
+                    ("b", "export * from './a.js';\n"),
+                    ("c", "export const value = 7;\n"),
+                    ("entry", "import { value } from './a.js';\nconst data = { value };\n"),
+                ],
+                Ok(r#"{"value":7}"#),
+            ),
+            (
+                "cyclic-star-live",
+                &[
+                    ("a", "export * from './b.js';\nexport * from './c.js';\n"),
+                    ("b", "export * from './a.js';\n"),
+                    ("c", "export let value = 7;\nexport function bump() { value++; }\n"),
+                    ("entry", "import { value, bump } from './a.js';\nbump();\nconst data = { value };\n"),
+                ],
+                Ok(r#"{"value":8}"#),
+            ),
+            (
                 "missing-import",
                 &[
                     ("entry", "import { nope } from './b.js';\nconst data = { nope };\n"),
                     ("b", "import './entry.js';\nexport const value = 1;\n"),
                 ],
-                Err("imports 'nope' from"),
+                Err("entry.js' imports 'nope' from"),
+            ),
+            (
+                "missing-indirect-export",
+                &[
+                    ("a", "import './b.js';\nexport { absent } from './b.js';\n"),
+                    ("b", "import './a.js';\n"),
+                    ("entry", "import * as ns from './a.js';\nconst data = { absent: ns.absent };\n"),
+                ],
+                Err("a.js' re-exports 'absent', which resolves to no binding"),
+            ),
+            (
+                "ambiguous-indirect-export",
+                &[
+                    ("a", "import './b.js';\nexport { shared } from './b.js';\n"),
+                    ("b", "import './a.js';\nexport * from './c.js';\nexport * from './d.js';\n"),
+                    ("c", "export const shared = 1;\n"),
+                    ("d", "export const shared = 2;\n"),
+                    ("entry", "import * as ns from './a.js';\nconst data = { shared: ns.shared };\n"),
+                ],
+                Err("a.js' re-exports 'shared', which resolves it ambiguously"),
             ),
         ];
         for (name, files, expected) in cases {
@@ -2646,7 +2688,7 @@ export const ds = tokens;
                 Ok(config) => assert_eq!(result.map(|loaded| loaded.prop_config).as_deref(), Ok(config), "{name}"),
                 Err(message) => {
                     let error = result.err().unwrap_or_default();
-                    assert!(error.contains(message) && error.contains("entry.js"), "{name}: {error}");
+                    assert!(error.contains(message), "{name}: {error}");
                 }
             }
         }

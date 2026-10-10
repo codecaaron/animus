@@ -301,8 +301,10 @@ pub(crate) fn rewrite_module_for_linking(
 /// How a module's export name resolves, as Node's ResolveExport finds it.
 #[derive(Clone, PartialEq, Eq)]
 enum Resolution {
-    /// The binding it reads: a module and a name, or a module's namespace.
-    Found(String),
+    /// The binding it reads: its identity (a module and its local binding,
+    /// a module's namespace, or a stub's property), which ambiguity compares,
+    /// and the expression that reads it directly.
+    Found { binding: String, read: String },
     Missing,
     Ambiguous,
 }
@@ -310,18 +312,15 @@ enum Resolution {
 /// Static resolution of the export names of a cyclic graph's modules.
 pub(crate) struct Linker<'a> {
     pub modules: &'a HashMap<String, LinkedModule>,
-    /// Stub modules and the names each exports besides `default`.
+    /// Stub modules: placeholders whose exports are not known, so any name
+    /// resolves to the stub's property, as it reads outside a cycle.
     pub stubs: &'a HashMap<String, HashSet<String>>,
 }
 
 impl Linker<'_> {
     fn resolve(&self, module: &str, name: &str, set: &mut HashSet<(String, String)>) -> Resolution {
-        if let Some(names) = self.stubs.get(module) {
-            return if name == "default" || names.contains(name) {
-                Resolution::Found(format!("{module}\0{name}"))
-            } else {
-                Resolution::Missing
-            };
+        if self.stubs.contains_key(module) {
+            return Resolution::Found { binding: format!("{module}\0{name}"), read: export_read(module, name) };
         }
         let Some(linked) = self.modules.get(module) else {
             return Resolution::Missing;
@@ -332,9 +331,15 @@ impl Linker<'_> {
         }
         if let Some((_, target)) = linked.exports.iter().find(|(exported, _)| exported == name) {
             return match target {
-                ExportTarget::Local(local) => Resolution::Found(format!("{module}\0{local}")),
+                // The defining module's own getter reads the binding itself.
+                ExportTarget::Local(local) => {
+                    Resolution::Found { binding: format!("{module}\0{local}"), read: export_read(module, name) }
+                }
                 ExportTarget::Indirect { from, name } => self.resolve(from, name, set),
-                ExportTarget::Namespace { from } => Resolution::Found(format!("{from}\0*")),
+                ExportTarget::Namespace { from } => Resolution::Found {
+                    binding: format!("{from}\0*"),
+                    read: format!("__modules['{}']", js_quoted(from)),
+                },
             };
         }
         if name == "default" {
@@ -346,8 +351,11 @@ impl Linker<'_> {
                 Resolution::Ambiguous => return Resolution::Ambiguous,
                 Resolution::Missing => {}
                 resolution if found == Resolution::Missing => found = resolution,
-                resolution if resolution != found => return Resolution::Ambiguous,
-                _ => {}
+                Resolution::Found { binding, .. } => {
+                    if !matches!(&found, Resolution::Found { binding: first, .. } if *first == binding) {
+                        return Resolution::Ambiguous;
+                    }
+                }
             }
         }
         found
@@ -373,56 +381,58 @@ impl Linker<'_> {
     }
 
     /// The getters `module`'s export object gets at link time: each export
-    /// name and the expression its getter returns. A name `export *` brings
-    /// in reads the star module that supplies it; an ambiguous one is left
-    /// out, as Node leaves it out of the namespace.
+    /// name and the expression its getter returns. A local export reads its
+    /// binding; every other name, re-exported or brought in by `export *`,
+    /// reads the binding it resolves to directly, never through another
+    /// module's forwarding getter. An ambiguous star name is left out, as
+    /// Node leaves it out of the namespace.
     pub fn getters(&self, module: &str) -> Vec<(String, String)> {
-        let linked = &self.modules[module];
-        let mut getters: Vec<(String, String)> = linked
-            .exports
-            .iter()
-            .map(|(exported, target)| {
-                let read = match target {
-                    ExportTarget::Local(local) => local.clone(),
-                    ExportTarget::Indirect { from, name } => export_read(from, name),
-                    ExportTarget::Namespace { from } => format!("__modules['{}']", js_quoted(from)),
-                };
-                (exported.clone(), read)
-            })
-            .collect();
         let mut names = Vec::new();
         self.exported_names(module, &mut HashSet::new(), &mut names);
-        let mut seen: HashSet<String> = getters.iter().map(|(name, _)| name.clone()).collect();
+        let locals: HashMap<&str, &str> = self.modules[module]
+            .exports
+            .iter()
+            .filter_map(|(exported, target)| match target {
+                ExportTarget::Local(local) => Some((exported.as_str(), local.as_str())),
+                _ => None,
+            })
+            .collect();
+        let mut seen: HashSet<String> = HashSet::new();
+        let mut getters = Vec::new();
         for name in names {
             if !seen.insert(name.clone()) {
                 continue;
             }
-            if !matches!(self.resolve(module, &name, &mut HashSet::new()), Resolution::Found(_)) {
-                continue;
-            }
-            let supplier = linked
-                .stars
-                .iter()
-                .find(|star| matches!(self.resolve(star, &name, &mut HashSet::new()), Resolution::Found(_)));
-            if let Some(star) = supplier {
-                getters.push((name.clone(), export_read(star, &name)));
+            if let Some(local) = locals.get(name.as_str()) {
+                getters.push((name, local.to_string()));
+            } else if let Resolution::Found { read, .. } = self.resolve(module, &name, &mut HashSet::new()) {
+                getters.push((name, read));
             }
         }
         getters
     }
 
     /// Fails as Node fails to link: an import of a name its module does not
-    /// export, or exports ambiguously through `export *`.
-    pub fn check_imports(&self, module: &str) -> Result<(), String> {
-        for (from, name) in &self.modules[module].imports {
+    /// export, or exports ambiguously through `export *`, and a re-export
+    /// (`export { x } from`) that does not resolve.
+    pub fn check_links(&self, module: &str) -> Result<(), String> {
+        let linked = &self.modules[module];
+        let reexports = linked.exports.iter().filter_map(|(exported, target)| match target {
+            ExportTarget::Indirect { .. } => Some(("re-exports", exported.as_str(), module)),
+            _ => None,
+        });
+        let imports = linked.imports.iter().map(|(from, name)| ("imports", name.as_str(), from.as_str()));
+        for (verb, name, from) in imports.chain(reexports) {
             let problem = match self.resolve(from, name, &mut HashSet::new()) {
-                Resolution::Found(_) => continue,
-                Resolution::Missing => "does not export it",
-                Resolution::Ambiguous => "exports it ambiguously through `export *`",
+                Resolution::Found { .. } => continue,
+                Resolution::Missing if verb == "re-exports" => "which resolves to no binding",
+                Resolution::Missing => "which does not export it",
+                Resolution::Ambiguous => "which resolves it ambiguously through `export *`",
             };
+            let target = if verb == "re-exports" { String::new() } else { format!(" from '{from}'") };
             return Err(format!(
-                "module '{module}' imports '{name}' from '{from}', which {problem}; the system loader \
-                 links this cyclic module graph as Node does, and Node rejects this import too"
+                "module '{module}' {verb} '{name}'{target}, {problem}; the system loader links this cyclic \
+                 module graph as Node does, and Node rejects this too"
             ));
         }
         Ok(())
