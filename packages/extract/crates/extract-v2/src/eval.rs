@@ -6,7 +6,7 @@ use oxc::ast::ast::{
     Program, PropertyKey, PropertyKind, Statement, UnaryOperator, VariableDeclarationKind,
 };
 use oxc::span::{GetSpan, Span};
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use serde_json::{Map, Value};
 
 #[derive(Debug)]
@@ -86,6 +86,9 @@ fn eval_object_expr_scoped(
     let mut map = Map::new();
     let mut skipped = Vec::new();
     let mut captured = Vec::new();
+    // Keys a spread overwrote with a lost value: each keeps its position
+    // until a later known write fills it, and is dropped if none does.
+    let mut tombstones = FxHashSet::default();
 
     for prop_kind in &obj.properties {
         match prop_kind {
@@ -147,6 +150,7 @@ fn eval_object_expr_scoped(
                                 cap.key = format!("{}.{}", key, cap.key);
                                 captured.push(cap);
                             }
+                            tombstones.remove(&key);
                             map.insert(key, value);
                         }
                         Err(bail) => {
@@ -168,6 +172,7 @@ fn eval_object_expr_scoped(
                     eligible,
                 ) {
                     Ok(value) => {
+                        tombstones.remove(&key);
                         map.insert(key, value);
                     }
                     Err(bail) => {
@@ -185,23 +190,22 @@ fn eval_object_expr_scoped(
                 // key overrides an earlier one and keeps its first position.
                 // A lost key overrides too, so no earlier value stands for it.
                 let mut spread_value = static_object_at(&spread.argument, static_values)?;
-                for (path, reason) in take_lost_values(&mut spread_value) {
-                    let (parent, key) = match path.rsplit_once('.') {
-                        Some((parent, key)) => (Some(parent.to_string()), key.to_string()),
-                        None => {
-                            map.shift_remove(&path);
-                            (None, path)
-                        }
-                    };
+                for (mut path, reason) in take_lost_segments(&mut spread_value) {
+                    let key = path.pop().unwrap_or_default();
+                    if path.is_empty() {
+                        map.insert(key.clone(), Value::Null);
+                        tombstones.insert(key.clone());
+                    }
                     skipped.push(SkippedProperty {
                         key,
                         reason,
-                        parent,
+                        parent: (!path.is_empty()).then(|| path.join(".")),
                         span: span_of(spread.span),
                     });
                 }
                 if let Value::Object(entries) = spread_value {
                     for (key, value) in entries {
+                        tombstones.remove(&key);
                         map.insert(key, value);
                     }
                 }
@@ -209,6 +213,7 @@ fn eval_object_expr_scoped(
         }
     }
 
+    map.retain(|key, _| !tombstones.contains(key));
     Ok((Value::Object(map), skipped, captured))
 }
 
@@ -1008,21 +1013,26 @@ pub(crate) fn take_lost_custom_props(value: &mut Value) -> LostCustomProps {
 /// returning each lost property, as a dotted path, with its reason. A
 /// captured inline `transform` is removed without a skip.
 pub(crate) fn take_lost_values(value: &mut Value) -> Vec<(String, String)> {
+    take_lost_segments(value)
+        .into_iter()
+        .map(|(path, reason)| (path.join("."), reason))
+        .collect()
+}
+
+/// `take_lost_values` with each path as its key segments, since a selector
+/// key can itself contain a dot.
+fn take_lost_segments(value: &mut Value) -> Vec<(Vec<String>, String)> {
     let mut lost = Vec::new();
-    collect_lost_values(value, "", &mut lost);
+    collect_lost_values(value, &[], &mut lost);
     lost
 }
 
-fn collect_lost_values(value: &mut Value, path: &str, lost: &mut Vec<(String, String)>) {
+fn collect_lost_values(value: &mut Value, path: &[String], lost: &mut Vec<(Vec<String>, String)>) {
     match value {
         Value::Object(map) => {
             let keys: Vec<String> = map.keys().cloned().collect();
             for key in keys {
-                let at = if path.is_empty() {
-                    key.clone()
-                } else {
-                    format!("{path}.{key}")
-                };
+                let at = [path, std::slice::from_ref(&key)].concat();
                 let Some(child) = map.get_mut(&key) else {
                     continue;
                 };

@@ -1062,7 +1062,9 @@ export const App = () => <Box />;
 describe('stable constant style objects', () => {
   // Contract: a stable const object read through a spread, a member path or
   // a constant computed key extracts exactly as the same styles written
-  // inline; an object some use may change refuses with that use named.
+  // inline; a key the spread overwrites with a value the extractor lost is
+  // dropped, keeping its position for a later known write; an object some
+  // use may change refuses with that use named.
   test('extract like inline styles, and an escaped object refuses', () => {
     const source = (name: string, styles: string, prelude = '') => ({
       path: `fixtures/${name}.tsx`,
@@ -1074,7 +1076,7 @@ export const Use${name} = () => <${name} />;`,
     const body = (css: string, name: string) =>
       css
         .match(
-          new RegExp(`\\.animus-${name}-[\\w-]+(:hover)?\\s*\\{[^}]*\\}`, 'g')
+          new RegExp(`\\.animus-${name}-[\\w-]+[^\\s{]*\\s*\\{[^}]*\\}`, 'g')
         )
         ?.map((rule) => rule.replace(/\.animus-\w+-[\w-]+/, '.C'))
         .join('\n');
@@ -1095,6 +1097,23 @@ export const Use${name} = () => <${name} />;`,
     ]);
     assertNoUnresolvedTokens(constant.css);
     expect(body(constant.css, 'Const')).toBe(body(inline.css, 'Inline'));
+
+    const written = runPipeline([
+      source(
+        'Written',
+        "{ '&:hover': { opacity: 0.3 }, '&[data-x]': { opacity: 0.2 } }"
+      ),
+    ]);
+    assertNoUnresolvedTokens(written.css);
+    const lost = runPipeline([
+      source(
+        'Lost',
+        "{ '&:hover': { opacity: 0.1 }, '&.active': { opacity: 0.1 }, '&[data-x]': { opacity: 0.2 }, ...preset, '&:hover': { opacity: 0.3 } }",
+        "declare function unread(): object;\nconst preset = { '&:hover': unread(), '&.active': unread() };"
+      ),
+    ]);
+    assertNoUnresolvedTokens(lost.css);
+    expect(body(lost.css, 'Lost')).toBe(body(written.css, 'Written'));
 
     const escaped = runPipeline([
       source(
