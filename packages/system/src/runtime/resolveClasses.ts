@@ -426,7 +426,9 @@ function applyVariantClasses(
       classes.push(
         `${baseClassName}--${prop}-${isDefault ? 'default' : value}`
       );
-      recordWitness(baseClassName, prop, value, 'static');
+      if (typeof __ANIMUS_DEV__ === 'boolean' ? __ANIMUS_DEV__ : IS_DEV) {
+        recordWitness(baseClassName, prop, value, 'static');
+      }
     }
   }
 }
@@ -468,7 +470,9 @@ function applyStateClasses(
     if (props[state]) {
       classes.push(`${baseClassName}--${state}`);
       activeStates.push(state);
-      recordWitness(baseClassName, state, 'true', 'static');
+      if (typeof __ANIMUS_DEV__ === 'boolean' ? __ANIMUS_DEV__ : IS_DEV) {
+        recordWitness(baseClassName, state, 'true', 'static');
+      }
     }
   }
 }
@@ -874,7 +878,8 @@ export function resolveClasses(
 
       if (found) {
         classes.push(...found);
-        recordWitness(baseClassName, propName, key, 'static');
+        if (typeof __ANIMUS_DEV__ === 'boolean' ? __ANIMUS_DEV__ : IS_DEV)
+          recordWitness(baseClassName, propName, key, 'static');
       } else {
         const dc = customOwned
           ? customDynamicConfig?.[propName]
@@ -894,15 +899,19 @@ export function resolveClasses(
                   dc,
                   propClasses,
                   typed,
-                  (value) =>
-                    warnIgnoredImportant(baseClassName, propName, value)
+                  (value) => {
+                    if (
+                      typeof __ANIMUS_DEV__ === 'boolean'
+                        ? __ANIMUS_DEV__
+                        : IS_DEV
+                    )
+                      warnIgnoredImportant(baseClassName, propName, value);
+                  }
                 );
           if (failure === null) {
             dynStyle = staged;
-            recordWitness(baseClassName, propName, key, 'dynamic');
-            // The define token tested in place lets a minifier drop the
-            // warning from a production bundle.
             if (typeof __ANIMUS_DEV__ === 'boolean' ? __ANIMUS_DEV__ : IS_DEV) {
+              recordWitness(baseClassName, propName, key, 'dynamic');
               warnPrunedSlot(
                 baseClassName,
                 propName,
@@ -912,16 +921,18 @@ export function resolveClasses(
                 propClasses,
                 typed
               );
+              if (dc.kind !== 'declarations') {
+                warnUnitlessCustomProperty(
+                  baseClassName,
+                  propName,
+                  propValue,
+                  dc
+                );
+              }
             }
-            if (dc.kind !== 'declarations') {
-              warnUnitlessCustomProperty(
-                baseClassName,
-                propName,
-                propValue,
-                dc
-              );
-            }
-          } else {
+          } else if (
+            typeof __ANIMUS_DEV__ === 'boolean' ? __ANIMUS_DEV__ : IS_DEV
+          ) {
             if ('shape' in failure) {
               warnInvalidTransformResult(
                 baseClassName,
@@ -941,7 +952,9 @@ export function resolveClasses(
             }
             recordWitness(baseClassName, propName, key, 'drop');
           }
-        } else {
+        } else if (
+          typeof __ANIMUS_DEV__ === 'boolean' ? __ANIMUS_DEV__ : IS_DEV
+        ) {
           warnDroppedValue(baseClassName, propName, key, customOwned);
           recordWitness(baseClassName, propName, key, 'drop');
         }
