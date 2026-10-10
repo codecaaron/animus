@@ -558,6 +558,29 @@ export const App = ({ tint }) => <div {...tinted.attrs({ tint })} />;
   });
 });
 
+test('a JSX token literal on a transformed prop resolves as in a style object', () => {
+  const { manifest, css } = runPipeline(
+    [
+      {
+        path: 'jsx-token-literal.tsx',
+        source: `import { ds } from '../setup';
+const Box = ds.styles({ display: 'block' }).system({ layout: true }).asElement('div');
+export const App = () => <><Box height="{space.16}" /><Box height="{space.nope}" /></>;
+`,
+      },
+    ],
+    { inputs: { transformSourcesJson: config.transformSources } }
+  );
+  expect(css).toMatch(/\.animus-u-\w+ \{\s*height: 1rem;/);
+  expect(css).not.toContain('{space.nope}');
+  expect(manifest.diagnostics).toContainEqual(
+    expect.objectContaining({
+      component: 'Box',
+      code: 'animus.style.unresolved-token-alias',
+    })
+  );
+});
+
 describe('!important shorthand', () => {
   test('a trailing ! emits the CSS of !important', () => {
     const css = (value: string) =>

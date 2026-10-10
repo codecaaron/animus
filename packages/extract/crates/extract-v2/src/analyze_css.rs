@@ -32,7 +32,8 @@ use crate::reconcile::{build_ledger, identify_prospective_eliminations, reconcil
 use crate::theme::{
     ConditionAliasesMap, ContextualVarsMap, CssDeclaration, FlatTheme, PropConfig, PropConfigMap,
     ResolveContext, ResolvedStyles, SelectorAliasesMap, StrictTokenMiss, StrictTokenMissSink,
-    TransformFailure, TransformFailureSink, VariableMap, extracts_callback_value, extracts_configured_value, skips_transforms, strict_token_miss_of,
+    TransformFailure, TransformFailureSink, VariableMap, extracts_callback_value, extracts_configured_value, resolve_styles, skips_transforms, strict_token_miss_of,
+    unresolved_alias_spans, writes_token_reference,
 };
 use crate::transforms::CallbackDefinition;
 use crate::usage_facts::{is_animus_system_specifier, TagFact, TagOrigin, UsageFact, UsageResidueRecord};
@@ -1231,30 +1232,6 @@ fn unsupported_namespace_root(
     })
 }
 
-/// Brace spans surviving resolution are unresolved token aliases: the resolver
-/// passes them through verbatim and resolved values never contain braces.
-fn unresolved_alias_spans(value: &str) -> Vec<String> {
-    if !value.contains('{') {
-        return Vec::new();
-    }
-    let mut spans = Vec::new();
-    let bytes = value.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        // '{' and '}' are ASCII; UTF-8 continuation bytes can't collide.
-        if bytes[i] == b'{' {
-            if let Some(rel) = value[i + 1..].find('}') {
-                let end = i + 1 + rel;
-                spans.push(value[i..=end].to_string());
-                i = end + 1;
-                continue;
-            }
-        }
-        i += 1;
-    }
-    spans
-}
-
 fn shed_unresolved_alias_decls(
     decls: &mut Vec<CssDeclaration>,
     scale_check: &ScaleCheck<'_>,
@@ -1268,19 +1245,22 @@ fn shed_unresolved_alias_decls(
             warn_token_shaped_value(d, scale_check, file, component, diagnostics);
             return true;
         }
-        let aliases = spans.join(", ");
-        diagnostics.push(
-            diagnostic(
-                file,
-                component,
-                "warn",
-                format!("unresolvable token alias {aliases} in '{}' — declaration dropped", d.property),
-                Some(UNRESOLVED_TOKEN_ALIAS),
-            )
-            .dropping(&aliases),
-        );
+        diagnostics.push(unresolved_token_alias(file, component, d, &spans));
         false
     });
+}
+
+/// A declaration dropped for the token aliases in it that name no token.
+fn unresolved_token_alias(file: &str, component: &str, declaration: &CssDeclaration, spans: &[String]) -> CssDiagnostic {
+    let aliases = spans.join(", ");
+    diagnostic(
+        file,
+        component,
+        "warn",
+        format!("unresolvable token alias {aliases} in '{}' — declaration dropped", declaration.property),
+        Some(UNRESOLVED_TOKEN_ALIAS),
+    )
+    .dropping(&aliases)
 }
 
 /// Properties whose values legitimately carry dotted bare identifiers, so a
@@ -4735,6 +4715,24 @@ fn run_with_system_floor(
         }
         if prop_config.is_some_and(|prop_config| !extracts_configured_value(prop_config, value, &resolve_ctx)) {
             return None;
+        }
+        // An alias that names no token is reported here, at its usage, and
+        // its declaration is dropped from the class, as in a style object.
+        if writes_token_reference(value) {
+            let quiet = ResolveContext {
+                config,
+                transform_failures: None,
+                token_misses: None,
+                dropped_keys: None,
+                ..resolve_ctx
+            };
+            let resolved = resolve_styles(&serde_json::json!({ prop_name: value }), &quiet, true);
+            for declaration in resolved.all_declarations() {
+                let spans = unresolved_alias_spans(&declaration.value);
+                if !spans.is_empty() {
+                    diagnostics.push(unresolved_token_alias(file, component, declaration, &spans));
+                }
+            }
         }
         Some(UtilityInput {
             prop_name: prop_name.to_string(),

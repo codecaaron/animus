@@ -388,6 +388,25 @@ pub struct ResolvedStyles {
 }
 
 impl ResolvedStyles {
+    /// Every declaration, in each group.
+    pub fn all_declarations(&self) -> impl Iterator<Item = &CssDeclaration> {
+        self.declarations
+            .iter()
+            .chain(self.pseudo_selectors.iter().flat_map(|(_, decls)| decls))
+            .chain(self.conditioned.iter().flat_map(|group| &group.declarations))
+    }
+
+    /// Keeps, in each group, the declarations `keep` admits.
+    pub fn retain_declarations(&mut self, mut keep: impl FnMut(&CssDeclaration) -> bool) {
+        self.declarations.retain(&mut keep);
+        for (_, decls) in &mut self.pseudo_selectors {
+            decls.retain(&mut keep);
+        }
+        for group in &mut self.conditioned {
+            group.declarations.retain(&mut keep);
+        }
+    }
+
     pub fn breakpoint_groups(&self) -> impl Iterator<Item = (&String, &Vec<CssDeclaration>)> {
         self.conditioned.iter().filter_map(|g| match (g.conditions.as_slice(), &g.selector) {
             ([Condition::Breakpoint(bp)], None) => Some((bp, &g.declarations)),
@@ -1121,8 +1140,9 @@ pub(crate) fn skips_transforms(config: &PropConfig, value: &Value, ctx: &Resolve
 /// whole value stays on the runtime path. An isolated evaluation can exhaust
 /// its budget or read the host, and extraction or its CSS post-processing
 /// can rewrite a string result the runtime applies verbatim, such as a bare
-/// number or token syntax. A throw or an invalid result keeps its build-time
-/// policy.
+/// number or token syntax the callback produced. A token reference written
+/// in the value resolves as it does in a style object. A throw or an invalid
+/// result keeps its build-time policy.
 pub(crate) fn extracts_callback_value(
     config: &PropConfig,
     key: &str,
@@ -1151,7 +1171,7 @@ pub(crate) fn extracts_callback_value(
         }
         let input = token.as_ref().map_or(entry, |(token, _)| token);
         match evaluator.evaluate_callback(key, name, input) {
-            Ok(scalar) => scalar.numeric || !rewritten(entry, &scalar.css),
+            Ok(scalar) => scalar.numeric || writes_token_reference(entry) || !rewritten(entry, &scalar.css),
             Err(EvalError::Unevaluable) => false,
             Err(_) => true,
         }
@@ -1161,6 +1181,15 @@ pub(crate) fn extracts_callback_value(
             entries.values().all(evaluated)
         }
         _ => evaluated(value),
+    }
+}
+
+/// Whether `value`, or an entry of a responsive one, writes a token reference.
+pub(crate) fn writes_token_reference(value: &Value) -> bool {
+    match value {
+        Value::String(text) => text.contains('{'),
+        Value::Object(entries) => entries.values().any(writes_token_reference),
+        _ => false,
     }
 }
 
@@ -1398,6 +1427,30 @@ fn negate_css_value(val: &str) -> String {
     } else {
         format!("-{}", val.strip_prefix('+').unwrap_or(val))
     }
+}
+
+/// Brace spans surviving resolution are unresolved token aliases: the resolver
+/// passes them through verbatim and resolved values never contain braces.
+pub fn unresolved_alias_spans(value: &str) -> Vec<String> {
+    if !value.contains('{') {
+        return Vec::new();
+    }
+    let mut spans = Vec::new();
+    let bytes = value.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        // '{' and '}' are ASCII; UTF-8 continuation bytes can't collide.
+        if bytes[i] == b'{' {
+            if let Some(rel) = value[i + 1..].find('}') {
+                let end = i + 1 + rel;
+                spans.push(value[i..=end].to_string());
+                i = end + 1;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    spans
 }
 
 fn resolve_token_aliases(
