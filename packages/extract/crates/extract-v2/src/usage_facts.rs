@@ -577,6 +577,12 @@ pub(crate) struct EnrichedUsage {
     pub ordinary_components: BTreeSet<String>,
     /// See `FileFacts::context_consts`.
     pub context_consts: BTreeSet<String>,
+    /// See `FileFacts::prop_tags`.
+    pub prop_tags: Vec<PropTag>,
+    /// See `FileFacts::name_uses`.
+    pub name_uses: BTreeMap<String, NameUses>,
+    /// See `FileFacts::namespace_member_uses`.
+    pub namespace_member_uses: BTreeMap<String, NameUses>,
     /// See `FileFacts::direct_eval`.
     pub direct_eval: bool,
     /// See `FileFacts::opaque_calls`.
@@ -957,6 +963,8 @@ pub(crate) fn collect_enriched_usage(
     };
     let (opaque_calls, opaque_tags, element_consts) =
         origins.map(|scoping| opaque_calls(program, scoping)).unwrap_or_default();
+    let (prop_tags, name_uses, namespace_member_uses) =
+        origins.map(|scoping| prop_tags_and_uses(program, scoping, &react)).unwrap_or_default();
     EnrichedUsage {
         usage,
         confined,
@@ -966,6 +974,9 @@ pub(crate) fn collect_enriched_usage(
         unsafe_object_uses,
         ordinary_components,
         context_consts,
+        prop_tags,
+        name_uses,
+        namespace_member_uses,
         direct_eval,
         opaque_calls,
         element_consts,
@@ -3424,6 +3435,224 @@ fn tag_origin(scoping: &Scoping, name: &IdentifierReference<'_>) -> TagOrigin {
         Some(symbol) if scoping.symbol_flags(symbol).is_import() => TagOrigin::Import,
         Some(_) => TagOrigin::TopLevel,
     }
+}
+
+/// A tag whose type a function's own prop chooses at runtime: `<As>` or
+/// `createElement(as, …)` for `function F({ as })`, also `as ?? 'label'`.
+/// `at` is the tag's or call's start, as the usage scan records the site.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PropTag {
+    pub at: u32,
+    /// The top-level function whose prop it is.
+    pub function: String,
+    pub prop: String,
+}
+
+/// How a module refers to one of its top-level or imported names: as the
+/// one argument of `.asComponent()`, as a JSX tag, as a member of a
+/// top-level `const` object literal, or any other way. An export of the
+/// name counts as none of them.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct NameUses {
+    pub as_component: usize,
+    pub jsx: usize,
+    pub held: usize,
+    pub other: usize,
+}
+
+/// The tags in `program` whose type a top-level function's destructured
+/// prop chooses (`PropTag`), and how the module uses each module-scope
+/// name, and each member of a namespace import (`ns.X`).
+fn prop_tags_and_uses(
+    program: &Program<'_>,
+    scoping: &Scoping,
+    react: &ReactNames,
+) -> (Vec<PropTag>, BTreeMap<String, NameUses>, BTreeMap<String, NameUses>) {
+    use oxc::ast::ast::{BindingPattern, Declaration};
+    // Each prop binding a top-level function destructures from its first
+    // parameter, with the function and the prop it names.
+    let mut props: FxHashMap<SymbolId, (String, String)> = FxHashMap::default();
+    let mut add = |name: &str, params: &oxc::ast::ast::FormalParameters<'_>| {
+        let Some(BindingPattern::ObjectPattern(pattern)) = params.items.first().map(|param| &param.pattern) else {
+            return;
+        };
+        for property in &pattern.properties {
+            let Some(key) = property.key.static_name().filter(|_| !property.computed) else { continue };
+            let binding = match &property.value {
+                BindingPattern::BindingIdentifier(binding) => binding,
+                // An omitted prop takes its default, which must name a host
+                // element as well.
+                BindingPattern::AssignmentPattern(assignment) => match &assignment.left {
+                    BindingPattern::BindingIdentifier(binding)
+                        if matches!(
+                            crate::chain_walk::unwrap_type_assertions(&assignment.right),
+                            Expression::StringLiteral(_)
+                        ) =>
+                    {
+                        binding
+                    }
+                    _ => continue,
+                },
+                _ => continue,
+            };
+            if let Some(symbol) = binding.symbol_id.get().filter(|symbol| !scoping.symbol_is_mutated(*symbol)) {
+                props.insert(symbol, (name.to_string(), key.to_string()));
+            }
+        }
+    };
+    for statement in &program.body {
+        let declaration = match statement {
+            Statement::ExportNamedDeclaration(export) => export.declaration.as_ref(),
+            other => other.as_declaration(),
+        };
+        match declaration {
+            Some(Declaration::FunctionDeclaration(function)) => {
+                if let Some(id) = &function.id {
+                    add(&id.name, &function.params);
+                }
+            }
+            Some(Declaration::VariableDeclaration(declaration)) => {
+                for declarator in &declaration.declarations {
+                    let (Some(name), Some(init)) = (declarator.id.get_identifier_name(), &declarator.init) else {
+                        continue;
+                    };
+                    match crate::chain_walk::unwrap_type_assertions(init) {
+                        Expression::ArrowFunctionExpression(arrow) => add(&name, &arrow.params),
+                        Expression::FunctionExpression(function) => add(&name, &function.params),
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    struct Scan<'a, 's> {
+        scoping: &'s Scoping,
+        react: &'s ReactNames,
+        props: &'s FxHashMap<SymbolId, (String, String)>,
+        namespaces: FxHashSet<SymbolId>,
+        tags: Vec<PropTag>,
+        uses: BTreeMap<String, NameUses>,
+        members: BTreeMap<String, NameUses>,
+        ancestors: Vec<AstKind<'a>>,
+    }
+    impl Scan<'_, '_> {
+        fn prop(&self, expression: &Expression<'_>) -> Option<(String, String)> {
+            let Expression::Identifier(id) = crate::chain_walk::unwrap_type_assertions(expression) else {
+                return None;
+            };
+            let symbol = id.reference_id.get().and_then(|id| self.scoping.get_reference(id).symbol_id())?;
+            self.props.get(&symbol).cloned()
+        }
+    }
+    /// How the expression at `span` is used; `ancestors` runs from its
+    /// parent out.
+    fn count<'b, 'a: 'b>(span: oxc::span::Span, mut ancestors: impl Iterator<Item = &'b AstKind<'a>>, uses: &mut NameUses) {
+        let (current, parent) = peel_wrappers(span, &mut ancestors);
+        match parent {
+            Some(AstKind::JSXOpeningElement(_) | AstKind::JSXClosingElement(_) | AstKind::JSXMemberExpression(_)) => {
+                uses.jsx += 1;
+            }
+            Some(AstKind::ExportSpecifier(_)) => {}
+            Some(AstKind::CallExpression(call))
+                if call.arguments.len() == 1
+                    && call.arguments[0].span() == current
+                    && matches!(&call.callee, Expression::StaticMemberExpression(member)
+                        if member.property.name == "asComponent") =>
+            {
+                uses.as_component += 1;
+            }
+            Some(AstKind::ObjectProperty(property))
+                if property.value.span() == current
+                    && property.kind == oxc::ast::ast::PropertyKind::Init
+                    && !property.computed
+                    && initializes_top_level_object(&mut ancestors) =>
+            {
+                uses.held += 1;
+            }
+            _ => uses.other += 1,
+        }
+    }
+    impl<'a> Visit<'a> for Scan<'a, '_> {
+        fn enter_node(&mut self, kind: AstKind<'a>) {
+            self.ancestors.push(kind);
+        }
+        fn leave_node(&mut self, _kind: AstKind<'a>) {
+            self.ancestors.pop();
+        }
+        fn visit_call_expression(&mut self, call: &CallExpression<'a>) {
+            if self.react.calls(&call.callee, "createElement") {
+                let target = call.arguments.first().and_then(Argument::as_expression);
+                let chosen = target.and_then(|target| match crate::chain_walk::unwrap_type_assertions(target) {
+                    Expression::LogicalExpression(logical)
+                        if !logical.operator.is_and()
+                            && matches!(crate::chain_walk::unwrap_type_assertions(&logical.right), Expression::StringLiteral(_)) =>
+                    {
+                        self.prop(&logical.left)
+                    }
+                    target => self.prop(target),
+                });
+                if let Some((function, prop)) = chosen {
+                    self.tags.push(PropTag { at: call.span.start, function, prop });
+                }
+            }
+            oxc::ast_visit::walk::walk_call_expression(self, call);
+        }
+        fn visit_jsx_opening_element(&mut self, element: &oxc::ast::ast::JSXOpeningElement<'a>) {
+            if let JSXElementName::IdentifierReference(id) = &element.name {
+                let symbol = id.reference_id.get().and_then(|id| self.scoping.get_reference(id).symbol_id());
+                if let Some((function, prop)) = symbol.and_then(|symbol| self.props.get(&symbol)).cloned() {
+                    self.tags.push(PropTag { at: element.span.start, function, prop });
+                }
+            }
+            oxc::ast_visit::walk::walk_jsx_opening_element(self, element);
+        }
+        fn visit_identifier_reference(&mut self, ident: &IdentifierReference<'a>) {
+            let Some(reference) = ident.reference_id.get().map(|id| self.scoping.get_reference(id)) else { return };
+            let Some(symbol) = reference.symbol_id() else { return };
+            if !reference.is_value() || self.scoping.symbol_scope_id(symbol) != self.scoping.root_scope_id() {
+                return;
+            }
+            let name = self.scoping.symbol_name(symbol).to_string();
+            let mut ancestors = self.ancestors.iter().rev();
+            if !self.namespaces.contains(&symbol) {
+                count(ident.span, ancestors, self.uses.entry(name).or_default());
+                return;
+            }
+            // `ns.X`: the member is the name used.
+            let (current, parent) = peel_wrappers(ident.span, &mut ancestors);
+            match parent {
+                Some(AstKind::StaticMemberExpression(member)) if member.object.span() == current => {
+                    let key = format!("{name}.{}", member.property.name);
+                    count(member.span, ancestors, self.members.entry(key).or_default());
+                }
+                _ => self.uses.entry(name).or_default().other += 1,
+            }
+        }
+    }
+    let namespaces = program
+        .body
+        .iter()
+        .filter_map(|statement| match statement {
+            Statement::ImportDeclaration(import) => Some(import),
+            _ => None,
+        })
+        .flat_map(|import| import.specifiers.iter().flatten())
+        .filter(|specifier| matches!(specifier, ImportDeclarationSpecifier::ImportNamespaceSpecifier(_)))
+        .filter_map(|specifier| specifier.local().symbol_id.get())
+        .collect();
+    let mut scan = Scan {
+        scoping,
+        react,
+        props: &props,
+        namespaces,
+        tags: Vec::new(),
+        uses: BTreeMap::new(),
+        members: BTreeMap::new(),
+        ancestors: Vec::new(),
+    };
+    scan.visit_program(program);
+    (scan.tags, scan.uses, scan.members)
 }
 
 /// React's functions and namespaces a module imports, by the symbol each

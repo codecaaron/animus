@@ -294,13 +294,8 @@ impl<'f> ObjectMembers<'f> {
     /// key, nothing later sets the key, and nothing may have changed the
     /// object since.
     pub(crate) fn held_wrapper(&mut self, file: &str, tag: &str) -> Option<(String, String)> {
-        let (path, key) = tag.rsplit_once('.')?;
-        let object = self.object_at(file, path)?;
-        let held = self.holds(&object, key)?;
-        if self.table(&object).open || self.instability(&object).is_some() {
-            return None;
-        }
-        Some(held)
+        let (module, wrapper, None) = self.member_entry(file, tag)? else { return None };
+        is_held_wrapper(self.files.get(&module)?, &wrapper).then_some((module, wrapper))
     }
 
     /// What `object` holds at `key`, as its last write of the key set it: the
@@ -344,12 +339,7 @@ impl<'f> ObjectMembers<'f> {
     /// names it, through an import too, and nothing may have changed the
     /// object since.
     pub(crate) fn ordinary_member(&mut self, file: &str, tag: &str) -> Option<(String, String)> {
-        let (path, key) = tag.rsplit_once('.')?;
-        let object = self.object_at(file, path)?;
-        let (module, binding) = self.member_binding(&object, key)?;
-        if self.table(&object).open || self.instability(&object).is_some() {
-            return None;
-        }
+        let (module, binding, None) = self.member_entry(file, tag)? else { return None };
         let ff = self.files.get(&module)?;
         let (declaring, declared, _) = resolve_declaration(&module, ff, &binding, self.files, self.inputs)?;
         self.files.get(&declaring)?.ordinary_components.contains(&declared).then_some((declaring, declared))
@@ -378,6 +368,21 @@ impl<'f> ObjectMembers<'f> {
         }
         let Some((path, key)) = name.rsplit_once('.') else { return Vec::new() };
         self.object_at(file, path).and_then(|object| self.holds(&object, key)).into_iter().collect()
+    }
+
+    /// The facade `name`, written in `file`, names: its module and binding.
+    pub(crate) fn facade_at(&mut self, file: &str, name: &str) -> Option<(String, String)> {
+        match self.object_at(file, name)? {
+            Object::Facade(module, binding) => Some((module, binding)),
+            Object::Family(_) => None,
+        }
+    }
+
+    /// Whether nothing may have changed the facade `binding` of `module`
+    /// since it was built.
+    pub(crate) fn facade_stable(&mut self, module: &str, binding: &str) -> bool {
+        let object = Object::Facade(module.to_string(), binding.to_string());
+        !self.table(&object).open && self.instability(&object).is_none()
     }
 
     /// The held wrappers some render of which no member tag shows: those of
