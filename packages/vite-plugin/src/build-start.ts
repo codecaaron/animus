@@ -129,15 +129,12 @@ export async function runBuildStart(
     },
   });
   ctx.ingestionFailureDiagnostics = ingestionFailures;
-  // `verify` reports an empty kit through the structural self-check.
   surfaceManifestDiagnostics(
     {
       diagnostics: [
         ...discoveryDiagnostics,
         ...collected.diagnostics,
-        ...(ctx.options.verify
-          ? []
-          : noKitFilesDiagnostics(collected.outcomes)),
+        ...noKitFilesDiagnostics(collected.outcomes),
       ],
     },
     (message) => ctx.warn(message),
