@@ -3703,7 +3703,8 @@ fn bounded_prop_tags(
         };
         Some((declaring, binding))
     };
-    // Whether `module` is `declaring`, or re-exports from it at any depth.
+    // Whether `module` is `declaring`, or re-exports from it at any depth:
+    // `export … from`, or an import it exports again (`export { F }`).
     let reexports_from = |module: &String, declaring: &String| {
         let mut seen: FxHashSet<String> = FxHashSet::default();
         let mut pending = vec![module.clone()];
@@ -3715,12 +3716,17 @@ fn bounded_prop_tags(
                 continue;
             }
             let Some(ff) = files.get(&next) else { continue };
+            let exported_imports = ff.imports.iter().filter(|import| {
+                ff.default_export_binding.as_ref() == Some(&import.local)
+                    || ff.exports.iter().any(|export| export.source.is_none() && export.local.as_ref() == Some(&import.local))
+            });
             let sources = ff
                 .exports
                 .iter()
                 .filter_map(|export| export.source.as_ref())
                 .chain(&ff.star_exports)
-                .chain(ff.namespace_exports.values());
+                .chain(ff.namespace_exports.values())
+                .chain(exported_imports.map(|import| &import.source));
             pending.extend(sources.filter_map(|source| resolve_import_source(&next, source, files, inputs)));
         }
         false
@@ -3898,12 +3904,7 @@ fn bounded_prop_tags(
                     }
                     UsageFact::CreateElement { ident, member, .. } => {
                         let named = ident.as_ref().or(member.as_ref());
-                        let renders = named.is_some_and(|named| {
-                            declared(path, ff, named).as_ref() == Some(&target)
-                                || ordinary_members.get(&(path.clone(), named.clone())) == Some(&target)
-                                || namespace_declared(path, ff, named).as_ref() == Some(&target)
-                        });
-                        if renders {
+                        if named.is_some_and(|named| names_target(path, named)) {
                             return false;
                         }
                     }
@@ -9580,7 +9581,7 @@ export const App = ({ n }) => <Box bgImage={n} texture={n} />;
         // The function module's additions, the app, any further files and the
         // slots left.
         type Case<'a> = (&'a str, &'a str, &'a [(&'a str, &'a str)], &'a [&'a str]);
-        let cases: [Case; 19] = [
+        let cases: [Case; 20] = [
             ("", "() => <><Outer /><Parts.Root><div /></Parts.Root><Box p={8} /></>", &[], &[]),
             ("", "() => <><Outer as=\"span\" /><Parts.Root as=\"section\" /><Box p={8} /></>", &[], &[]),
             ("", "({ X }) => <><Outer as={X} /><Box p={8} /></>", &[], &["p"]),
@@ -9604,6 +9605,7 @@ export const App = ({ n }) => <Box bgImage={n} texture={n} />;
             ("", "() => <><Outer /><Parts.Root /><F /><Box p={8} /></>;\nimport { F } from './f';\nimport('./f').then(consume)", &f, &["p"]),
             ("", "() => <><Outer /><Parts.Root /><F /><Box p={8} /></>;\nimport { F } from './f';\nconsume(require('./f'))", &f, &["p"]),
             ("", "() => <><Outer /><Parts.Root /><Box p={8} /></>;\nimport('./barrel').then(consume)", &barrel("export { El } from './el';\n"), &["p"]),
+            ("", "() => <><Outer /><Parts.Root /><Box p={8} /></>;\nimport('./barrel').then(consume)", &barrel("import { El } from './el';\nexport { El };\n"), &["p"]),
             // A default export, however spelled.
             ("export { El as default };\n", both, &[], &["p"]),
             ("", both, &barrel("export { El as default } from './el';\n"), &["p"]),
