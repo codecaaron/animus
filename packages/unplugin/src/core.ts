@@ -178,10 +178,11 @@ interface EsbuildOptionsLike {
   absWorkingDir?: string;
   write?: boolean;
   define?: Record<string, string>;
+  conditions?: string[];
 }
 
 interface WebpackLikeCompiler {
-  options: { mode?: string };
+  options: { mode?: string; resolve?: { conditionNames?: string[] } };
   /** Set once `watch()` starts, before the first compilation. */
   watchMode?: boolean;
   webpack?: {
@@ -242,6 +243,9 @@ export const unpluginFactory: UnpluginFactory<
    *  so its author says so with the `watch` option. */
   let watching = (): boolean => modeOracle === 'development';
   let esbuildOptions: EsbuildOptionsLike | null = null;
+  /** The bundler's export conditions, in its order, for the system loader;
+   *  Rollup exposes none. */
+  let hostConditions: readonly string[] = [];
   /** Hooks can fire before buildStart (webpack's make taps run
    *  concurrently), so joiners await this before awaiting the pipeline. */
   let signalPipelineStarted!: () => void;
@@ -303,6 +307,7 @@ export const unpluginFactory: UnpluginFactory<
       session.development = watching();
       session.driverLabel = 'animus-unplugin';
       session.rootDir = root;
+      session.conditions = hostConditions;
       session.systemPropsModuleId = TURBOPACK_SYSTEM_PROPS_ID;
       const aliasPairs = readTsconfigAliasPairs(root);
       const builtAliases = buildPathAliasesJson(aliasPairs, root);
@@ -546,6 +551,7 @@ export const unpluginFactory: UnpluginFactory<
     esbuild: {
       config(buildOptions) {
         esbuildOptions = buildOptions;
+        hostConditions = buildOptions.conditions ?? [];
         watching = () => watch;
         buildOptions.define = {
           ...buildOptions.define,
@@ -579,6 +585,10 @@ export const unpluginFactory: UnpluginFactory<
   function wireWebpackLike(compiler: WebpackLikeCompiler): void {
     modeOracle =
       compiler.options.mode === 'development' ? 'development' : 'production';
+    // `...`, the bundler's own defaults, names no condition.
+    hostConditions = (compiler.options.resolve?.conditionNames ?? []).filter(
+      (name) => name !== '...'
+    );
     watching = () => compiler.watchMode === true;
     const DefinePlugin =
       compiler.webpack?.DefinePlugin ?? compiler.rspack?.DefinePlugin;

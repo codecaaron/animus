@@ -116,12 +116,14 @@ type NegateKeys<T> = T extends number
 
 // `& string` drops a declaration prop's absent property; intersecting with
 // `keyof PropertyTypes` instead expands the key union against itself.
+// Raw values take any number where the property takes a length, as
+// extraction and the runtime write it with px.
 export type PropertyValues<
   Property extends SystemProp,
   IncludeGlobals = false,
 > = Exclude<
   PropertyTypes<
-    IncludeGlobals extends true ? (string & {}) | 0 : never
+    IncludeGlobals extends true ? (string & {}) | number : never
   >[Property['property'] & string],
   IncludeGlobals extends true ? never : object | any[]
 >;
@@ -133,11 +135,12 @@ type NegativeOf<
 
 /**
  * What a strict scale admits beside its keys and keywords, as strict
- * extraction and the runtime do: the string zero on a property that takes a
- * length, and a reference to one of the scale's own tokens. A non-strict scale
- * already admits both through its raw values. The numeric zero waits: adding
- * a number to every length prop overflows the union TS builds when checking
- * keyframe frames against a large prop registry (TS2590).
+ * extraction and the runtime do: zero, as a string or a number, on a property
+ * that takes a length, and a reference to one of the scale's own tokens. A
+ * non-strict scale already admits them through its raw values. The authored
+ * style inputs check values through `ThemedCSSInputProps`, whose leaves TS
+ * does not infer from, so the numeric zero does not overflow the unions TS
+ * builds when inferring a style record against a large prop registry (TS2590).
  */
 type StrictAdmissions<
   Config extends SystemProp,
@@ -147,7 +150,7 @@ type StrictAdmissions<
 > = Strict extends true
   ? never
   :
-      | (0 extends PropertyValues<Config, true> ? '0' : never)
+      | (0 extends PropertyValues<Config, true> ? '0' | 0 : never)
       | (ScaleName extends string
           ? `{${ScaleName}.${Extract<Keys, string | number>}}`
           : never);
@@ -362,6 +365,59 @@ export type ThemedCSSPropMap<
   Config extends Record<string, SystemProp>,
 > = {
   [K in keyof Props]?: ThemedCSSProps<Props[K], Config>;
+};
+
+/**
+ * What an authored style input accepts: `ThemedCSSProps` key for key, with
+ * each registered and raw value wrapped in `NoInfer`, so TS checks a value
+ * against its domain without inferring from it. A generic wrapper types its
+ * style parameter with this, and what it stores or returns with
+ * `ThemedCSSProps`.
+ */
+export type ThemedCSSInputProps<
+  Props,
+  Config extends Record<string, SystemProp>,
+> = {
+  [K in keyof Props]?: K extends keyof Config
+    ? NoInfer<ThemedScale<Config[K]>>
+    : K extends RawSelectorKey
+      ? ThemedBlockBody<Config>
+      : K extends RawAtRuleKey
+        ? ThemedBlockBody<Config>
+        : K extends KnownUnderscoreKey
+          ? ThemedBlockBody<Config>
+          : K extends keyof PropertyTypes
+            ? NoInfer<PassThroughProp<K>>
+            : K extends `_${string}`
+              ? UnknownConditionAlias<K & string>
+              : K extends `@${string}`
+                ? UnknownAtRule<K & string>
+                : Omit<PropertyTypes, keyof Config> & {
+                    [P in keyof Config]?: ThemedScale<Config[P]>;
+                  };
+};
+
+/** `ThemedCSSPropMap`'s input counterpart: a style input per key. */
+export type ThemedCSSInputPropMap<
+  Props,
+  Config extends Record<string, SystemProp>,
+> = {
+  [K in keyof Props]?: ThemedCSSInputProps<Props[K], Config>;
+};
+
+/** A variant's options as stored: its `base` and `variants` as checked
+ *  style models, and every other field as written. */
+export type ThemedVariantModel<
+  Options,
+  Base,
+  Props,
+  Config extends Record<string, SystemProp>,
+> = {
+  [K in keyof Options]: K extends 'base'
+    ? ThemedCSSProps<Base, Config>
+    : K extends 'variants'
+      ? ThemedCSSPropMap<Props, Config>
+      : Options[K];
 };
 
 export interface VariantConfig {

@@ -43,6 +43,7 @@ pub mod facts;
 pub(crate) mod family_members;
 pub mod ids;
 pub mod jsx_scan;
+pub mod module_specifiers;
 pub mod usage_facts;
 pub mod chain_walk;
 pub mod css;
@@ -98,8 +99,9 @@ pub struct NapiSystemConfig {
     /// Vocabulary witnesses as a JSON array of coded entries; hosts surface
     /// each as a diagnostic keyed by its `code`. Absent when there are none.
     pub vocabulary_witnesses: Option<String>,
-    /// Canonical absolute paths of every module evaluated for the system,
-    /// sorted; the entry is included, runtime stubs are not.
+    /// Canonical absolute paths of every module evaluated for the system, and
+    /// of each `package.json` that selected one, sorted; the entry is
+    /// included, runtime stubs are not.
     pub dependencies: Vec<String>,
     /// Per-module built-theme token manifests, shaped
     /// `{ modulePath: { exportName: [token paths] } }`. Absent when none exist.
@@ -111,11 +113,13 @@ pub fn load_system_module(
     system_path: String,
     root_dir: String,
     export_name: Option<String>,
+    conditions: Option<Vec<String>>,
 ) -> napi::Result<NapiSystemConfig> {
     let config = animus_system_loader::load_system_module(
         &system_path,
         &root_dir,
         export_name.as_deref(),
+        conditions.as_deref().unwrap_or_default(),
     )
     .map_err(napi::Error::from_reason)?;
 
@@ -198,6 +202,30 @@ pub fn discover_chains(file_entries_json: String) -> napi::Result<String> {
 struct FactsResult {
     files: BTreeMap<String, facts::FileFacts>,
     parse_count: usize,
+}
+
+/// Each file's run-time module specifiers, for the kit publication check:
+/// imports, re-exports and literal `import()` calls that survive type
+/// stripping. `{ "files": { path: [specifier, …] } }`.
+#[napi]
+pub fn module_specifiers(file_entries_json: String) -> napi::Result<String> {
+    let entries: Vec<InputEntry> = serde_json::from_str(&file_entries_json)
+        .map_err(|e| napi::Error::from_reason(format!("invalid file entries JSON: {e}")))?;
+    let store = ast_store::AstStore::build(
+        entries
+            .into_iter()
+            .map(|e| ast_store::FileEntry {
+                path: e.path,
+                source: e.source,
+            })
+            .collect(),
+    );
+    let files: BTreeMap<String, Vec<String>> = store
+        .iter()
+        .map(|ast| (ast.path.clone(), module_specifiers::runtime_specifiers(ast.program())))
+        .collect();
+    serde_json::to_string(&serde_json::json!({ "files": files }))
+        .map_err(|e| napi::Error::from_reason(format!("serialize failed: {e}")))
 }
 
 /// Full per-file fact extraction, one parse per file. The store and its

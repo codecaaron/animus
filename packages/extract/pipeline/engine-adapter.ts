@@ -27,6 +27,8 @@ export interface EngineApi {
   loadSystemModule: (...args: unknown[]) => any;
   /** Parse-only native fact extraction used to prepare adapted sources. */
   extractFacts?: (filesJson: string) => string;
+  /** Each file's run-time module specifiers, for the kit publication check. */
+  moduleSpecifiers?: (filesJson: string) => string;
   /** The engine's code-to-severity table, as JSON. */
   diagnosticCodes?: () => string;
   analyzeProject: (
@@ -50,7 +52,8 @@ export interface EngineApi {
     transformSourcesJson: string | null,
     transformProvenanceJson?: string | null,
     declarationScalesJson?: string,
-    analysisContextJson?: string
+    analysisContextJson?: string,
+    generatedNamesJson?: string
   ) => string;
   transformFile: (
     source: string,
@@ -102,6 +105,7 @@ interface V2ExtractEngineConfig {
   transformProvenanceJson?: string;
   declarationScalesJson?: string;
   analysisContextJson?: string;
+  generatedNamesJson?: string;
   devMode: boolean;
 }
 
@@ -139,6 +143,7 @@ export function createV2EngineApi(deps: V2EngineAdapterDeps): () => EngineApi {
       loadSystemModule: (...args: unknown[]) =>
         native.loadSystemModule(...args),
       extractFacts: (filesJson) => native.extractFacts(filesJson),
+      moduleSpecifiers: (filesJson) => native.moduleSpecifiers(filesJson),
       diagnosticCodes: () => native.diagnosticCodes(),
       analyzeProject: (
         filesJsonRaw,
@@ -161,7 +166,8 @@ export function createV2EngineApi(deps: V2EngineAdapterDeps): () => EngineApi {
         transformSourcesJson,
         transformProvenanceJson,
         declarationScalesJson,
-        analysisContextJson
+        analysisContextJson,
+        generatedNamesJson
       ) => {
         const filesJson = deps.rehydrateFilesJson
           ? deps.rehydrateFilesJson(filesJsonRaw)
@@ -209,6 +215,7 @@ export function createV2EngineApi(deps: V2EngineAdapterDeps): () => EngineApi {
           transformProvenanceJson: transformProvenanceJson ?? undefined,
           declarationScalesJson,
           analysisContextJson,
+          generatedNamesJson,
           devMode,
         };
         // SAFETY: `native` is the loaded engine module, whose generated

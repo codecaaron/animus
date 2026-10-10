@@ -49,14 +49,25 @@ type PropValue<V> =
     };
 
 // A strict scale on a map: its keys, the property's keywords, and the
-// values every strict prop admits.
+// values every strict prop admits, zero as a string or a number among them.
 export type _StrictMapScale = Assert<
   Equal<
     Props['gutter'],
-    | PropValue<'tight' | 'roomy' | 'normal' | '0' | CssWide | ContainerUnit>
+    | PropValue<
+        'tight' | 'roomy' | 'normal' | '0' | 0 | CssWide | ContainerUnit
+      >
     | undefined
   >
 >;
+
+// A style input checks a value without TS inferring from it, and what the
+// builder stores keeps the value's whole domain: zero included, never `never`.
+const _styled = ds.styles({ p: 0 });
+type StoredP = Single<(typeof _styled)['baseStyles']['p']>;
+export type _StoredStyle = [
+  Assert<Equal<IsNever<StoredP>, false>>,
+  Assert<Equal<Extract<StoredP, 0 | '0'>, 0 | '0'>>,
+];
 
 // A strict theme scale stays closed; a loose one is open to raw CSS.
 export type _Openness = [
@@ -97,6 +108,26 @@ export const accepted = (
     <Box p={4} m={-8} bg="ink" color="{colors.paper}" />
     <Box p={{ _: 4, sm: 8, xl: 16 }} gutter={{ _: 'tight', md: 'roomy' }} />
     <Box inset="3px" />
+  </>
+);
+
+// A component's padding props: a loose or unscaled one takes any number, as
+// extraction and the runtime write it in px; a strict one keeps to its scale.
+const Card = ds
+  .styles({})
+  .props({
+    pad: { property: 'padding', scale: 'space', strict: false },
+    bare: { property: 'padding' },
+    tight: { property: 'padding', scale: { page: '24px' }, strict: true },
+  })
+  .asElement('div');
+
+export const numericLengths = (
+  <>
+    <Card pad={13} bare={13} tight="page" />
+    <Card pad={{ _: 13, md: 2.5 }} bare={{ _: 2.5 }} />
+    {/* @ts-expect-error — a strict scale still rejects a number it lacks */}
+    <Card tight={13} />
   </>
 );
 

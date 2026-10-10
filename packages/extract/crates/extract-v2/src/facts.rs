@@ -3,7 +3,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use oxc::ast::ast::{CommentKind, Expression, ObjectExpression, Program};
+use oxc::ast::ast::{CommentKind, Expression, ObjectExpression, ObjectPropertyKind, Program, PropertyKey};
+use oxc::span::GetSpan;
 use serde::Serialize;
 use serde_json::Value;
 
@@ -61,6 +62,10 @@ pub struct StageFacts {
     /// text as written.
     #[serde(skip)]
     pub skipped_sources: Vec<SkippedSource>,
+    /// Each key of the stage's object literals whose block the theme
+    /// resolver may drop, as written.
+    #[serde(skip)]
+    pub block_keys: Vec<KeySource>,
 }
 
 /// A skipped value's start offset and source text, keyed by its skip.
@@ -72,7 +77,133 @@ pub struct SkippedSource {
     pub text: String,
 }
 
+/// A property key's start offset, its whole property as written, and the
+/// keys of the objects that hold it, outermost first.
+#[derive(Debug, Clone)]
+pub struct KeySource {
+    pub key: String,
+    pub start: u32,
+    pub text: String,
+    pub path: Vec<String>,
+}
+
+impl KeySource {
+    /// `prop`, when the theme resolver may drop its block: an unsupported
+    /// at-rule, or a selector or at-rule key, raw or an alias, whose value is
+    /// not an object literal.
+    fn block_key(prop: &oxc::ast::ast::ObjectProperty<'_>, source: &str, path: &[String]) -> Option<Self> {
+        let key = match &prop.key {
+            PropertyKey::StringLiteral(literal) if !prop.computed => literal.value.as_str(),
+            PropertyKey::StaticIdentifier(identifier) if !prop.computed => identifier.name.as_str(),
+            _ => return None,
+        };
+        let unsupported = key.starts_with('@') && crate::theme::condition_from_raw_key(key).is_none();
+        let block_key = key.starts_with(['@', '_', ':']) || crate::selector_subject::has_subject(key);
+        let block = matches!(chain_walk::unwrap_type_assertions(&prop.value), Expression::ObjectExpression(_));
+        if unsupported || (block_key && !block) { Self::of(prop, key, source, path) } else { None }
+    }
+
+    fn of(prop: &oxc::ast::ast::ObjectProperty<'_>, key: &str, source: &str, path: &[String]) -> Option<Self> {
+        let text = source.get(prop.span.start as usize..prop.span.end as usize)?;
+        Some(Self { key: key.to_string(), start: prop.key.span().start, text: text.to_string(), path: path.to_vec() })
+    }
+}
+
+/// Every property of the object literals each named top-level `const`
+/// builds, keyed by the declaration's binding, as written: where the global
+/// blocks those declarations declare are located. A name an `export { local
+/// as name }` gives a declaration finds it by its local binding.
+pub fn declaration_keys(program: &Program<'_>, source: &str, names: &BTreeSet<String>) -> BTreeMap<String, Vec<KeySource>> {
+    use oxc::ast::ast::{BindingPattern, Declaration, Statement, VariableDeclaration};
+    let mut wanted: BTreeMap<String, String> = names.iter().map(|name| (name.clone(), name.clone())).collect();
+    for statement in &program.body {
+        let Statement::ExportNamedDeclaration(export) = statement else { continue };
+        for specifier in &export.specifiers {
+            let exported = specifier.exported.name().to_string();
+            if names.contains(&exported) {
+                wanted.insert(specifier.local.name().to_string(), exported);
+            }
+        }
+    }
+    fn walk(expr: &Expression<'_>, source: &str, path: &mut Vec<String>, found: &mut Vec<KeySource>) {
+        match chain_walk::unwrap_type_assertions(expr) {
+            Expression::ObjectExpression(obj) => {
+                for prop in &obj.properties {
+                    let ObjectPropertyKind::ObjectProperty(prop) = prop else { continue };
+                    let key = match &prop.key {
+                        PropertyKey::StringLiteral(literal) if !prop.computed => Some(literal.value.as_str()),
+                        PropertyKey::StaticIdentifier(identifier) if !prop.computed => Some(identifier.name.as_str()),
+                        _ => None,
+                    };
+                    if let Some(found_key) = key.and_then(|key| KeySource::of(prop, key, source, path)) {
+                        found.push(found_key);
+                    }
+                    path.push(key.unwrap_or_default().to_string());
+                    walk(&prop.value, source, path, found);
+                    path.pop();
+                }
+            }
+            Expression::CallExpression(call) => {
+                for argument in &call.arguments {
+                    if let Some(argument) = argument.as_expression() {
+                        walk(argument, source, path, found);
+                    }
+                }
+            }
+            Expression::ArrayExpression(array) => {
+                for element in &array.elements {
+                    if let Some(element) = element.as_expression() {
+                        walk(element, source, path, found);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut keys = BTreeMap::new();
+    let mut declare = |declaration: &VariableDeclaration<'_>| {
+        for declarator in &declaration.declarations {
+            let (BindingPattern::BindingIdentifier(binding), Some(init)) = (&declarator.id, &declarator.init) else {
+                continue;
+            };
+            if let Some(name) = wanted.get(binding.name.as_str()) {
+                let mut found = Vec::new();
+                walk(init, source, &mut Vec::new(), &mut found);
+                keys.insert(name.clone(), found);
+            }
+        }
+    };
+    for statement in &program.body {
+        match statement {
+            Statement::VariableDeclaration(declaration) => declare(declaration),
+            Statement::ExportNamedDeclaration(export) => {
+                if let Some(Declaration::VariableDeclaration(declaration)) = &export.declaration {
+                    declare(declaration);
+                }
+            }
+            _ => {}
+        }
+    }
+    keys
+}
+
 impl StageFacts {
+    /// Records the keys of `obj`, and of the blocks it nests, whose block the
+    /// theme resolver may drop (`KeySource::block_key`). An unsupported
+    /// at-rule's own block is not read.
+    fn record_block_keys(&mut self, obj: &ObjectExpression<'_>, source: &str, path: &mut Vec<String>) {
+        for prop in &obj.properties {
+            let ObjectPropertyKind::ObjectProperty(prop) = prop else { continue };
+            if let Some(found) = KeySource::block_key(prop, source, path) {
+                self.block_keys.push(found);
+            } else if let Expression::ObjectExpression(nested) = chain_walk::unwrap_type_assertions(&prop.value) {
+                path.push(prop.key.static_name().map(|name| name.to_string()).unwrap_or_default());
+                self.record_block_keys(nested, source, path);
+                path.pop();
+            }
+        }
+    }
+
     /// Records a skip, with its source when the evaluator located it.
     fn record_skip(&mut self, skip: eval::SkippedProperty, source: &str) {
         if let Some(text) = skip.span.and_then(|(start, end)| source.get(start as usize..end as usize)) {
@@ -302,6 +433,11 @@ pub struct FileFacts {
     /// built from (`const ds = bundle.seal()` → `bundle`), assertion-peeled.
     #[serde(skip)]
     pub declaration_roots: BTreeMap<String, String>,
+    /// The properties of each top-level declaration that declares a
+    /// registered global block, by its binding (`declaration_keys`), which
+    /// the engine fills for the module a block names as its source.
+    #[serde(skip)]
+    pub global_keys: BTreeMap<String, Vec<KeySource>>,
     /// Top-level `const X = { key: Ident }` objects: static key → identifier,
     /// only for keys no later spread, computed key, other property, or
     /// top-level statement write in this file (`X.key =`, `X[k] =`,
@@ -376,6 +512,10 @@ pub struct FileFacts {
     /// Top-level `const`s that hold elements, by binding.
     #[serde(skip)]
     pub(crate) element_consts: BTreeMap<String, crate::usage_facts::ElementConst>,
+    /// Component elements that hand their children and props to their
+    /// receiver.
+    #[serde(skip)]
+    pub(crate) opaque_tags: Vec<crate::usage_facts::OpaqueTag>,
     /// Extracted createTransform() declarations: serialized with the facts
     /// for probes, and the source of their bail diagnostics. They are never
     /// registered with the evaluator.
@@ -999,7 +1139,7 @@ pub fn extract_file_facts_enriched_with_usage_statics(
     let program = ast.program();
     let local_statics = eval::collect_static_values(program);
     let local_usage_statics = eval::collect_complete_static_values(program);
-    let imports = collect_import_facts(program);
+    let imports = collect_import_facts(ast.module_record());
     let exports = crate::usage_facts::collect_export_facts(program);
     let inputs = crate::analyze_css::CssInputs::default();
     // Alone, a module resolves only its own bindings.
@@ -1056,7 +1196,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
     let member_parent_extensions = walked.member_parents;
     let walked_chains = walked.chains;
     let const_initializers = collect_const_initializers(program);
-    let imports = collect_import_facts(program);
+    let imports = collect_import_facts(ast.module_record());
     let create_transform_locals: rustc_hash::FxHashSet<String> = imports
         .iter()
         .filter(|imp| imp.imported == "createTransform")
@@ -1084,8 +1224,15 @@ pub(crate) fn extract_file_facts_from_static_maps(
                     dropped_transforms: Vec::new(),
                     dropped_configs: Vec::new(),
                     skipped_sources: Vec::new(),
+                    block_keys: Vec::new(),
                 };
                 let key = &stage.arg_span;
+                if let Some(obj) = object_index.get(key) {
+                    facts.record_block_keys(obj, source, &mut Vec::new());
+                }
+                if let Some(obj) = stage.second_arg_span.and_then(|span| object_index.get(&span)) {
+                    facts.record_block_keys(obj, source, &mut Vec::new());
+                }
                 if stage.method == "variant" {
                     match object_index.get(key) {
                         Some(obj) => match eval::parse_variant_arg(obj, Some(&statics_fx)) {
@@ -1304,8 +1451,10 @@ pub(crate) fn extract_file_facts_from_static_maps(
         direct_eval,
         opaque_calls,
         element_consts,
+        opaque_tags,
     } = crate::usage_facts::collect_enriched_usage(
         program,
+        ast.module_record(),
         &usage_statics_fx,
         &descriptors,
         &exports,
@@ -1330,8 +1479,8 @@ pub(crate) fn extract_file_facts_from_static_maps(
         usage,
         usage_enriched: Some(usage_enriched),
         compose,
-        star_exports: crate::usage_facts::collect_star_exports(program),
-        namespace_exports: crate::usage_facts::collect_namespace_exports(program),
+        star_exports: crate::usage_facts::collect_star_exports(ast.module_record()),
+        namespace_exports: crate::usage_facts::collect_namespace_exports(ast.module_record()),
         default_export_binding: crate::usage_facts::collect_default_export_binding(program),
         compose_callees_in_use,
         aliases: const_initializers.aliases,
@@ -1339,13 +1488,14 @@ pub(crate) fn extract_file_facts_from_static_maps(
         assigned_targets: const_initializers.targets,
         props_forwarding: crate::usage_facts::collect_props_forwarding(program),
         declaration_roots: const_initializers.roots,
+        global_keys: BTreeMap::new(),
         object_members: const_initializers.objects,
         facades: const_initializers.facades,
         unsafe_object_uses,
         member_parent_extensions,
         member_rooted_chains: walked.member_rooted,
         object_member_chains: const_initializers.chains,
-        namespace_imports: crate::usage_facts::collect_namespace_imports(program),
+        namespace_imports: crate::usage_facts::collect_namespace_imports(ast.module_record()),
         default_export_chain: walked
             .default_export
             .map(|start| default_export_chain(program, source, start)),
@@ -1370,6 +1520,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
         direct_eval,
         opaque_calls,
         element_consts,
+        opaque_tags,
         parse_diagnostics: ast.diagnostics.clone(),
         unbound_create_system_calls: crate::usage_facts::unbound_create_system_calls(program)
             .into_iter()

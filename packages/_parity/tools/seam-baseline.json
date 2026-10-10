@@ -120,7 +120,7 @@
     ]
   },
   "reject-inline-object": {
-    "css": "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer composed {\n  }\n}\n\n@layer anm-custom {\n  .animus-dyn-zap_dfd00606 {\n    width: var(--animus-zap_dfd00606);\n  }\n}\n\n",
+    "css": "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer composed {\n  }\n}\n\n@layer anm-custom {\n  .animus-dyn-zap_C_dfd00606 {\n    width: var(--animus-zap_C_dfd00606);\n  }\n}\n\n",
     "diagnostics": [
       {
         "code": "animus.transform.invalid-result",

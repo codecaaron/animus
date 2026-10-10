@@ -89,30 +89,35 @@ pub fn semantic_identity(system: &str, definition: &str) -> String {
 }
 
 /// The class name of each `(binding, identity)`, in order: `{prefix}-{binding}-{8 hex}`,
-/// or the full 16 hex for every identity whose 8-hex suffix another identity
-/// also takes, whatever its binding, so two definitions never share a class
-/// or a prop's name.
+/// or the full 16 hex for every identity whose 8-hex name another identity
+/// under the same binding also takes, so two definitions never share a class.
 pub fn class_names(definitions: &[(&str, &str)], prefix: &str) -> Vec<String> {
-    let mut identities_by_suffix: rustc_hash::FxHashMap<String, rustc_hash::FxHashSet<&str>> = Default::default();
-    for (_, identity) in definitions {
-        identities_by_suffix.entry(content_hash(identity)).or_default().insert(identity);
+    let mut identities_by_name: rustc_hash::FxHashMap<String, rustc_hash::FxHashSet<&str>> = Default::default();
+    for (binding, identity) in definitions {
+        identities_by_name.entry(make_class_name(binding, identity, prefix)).or_default().insert(identity);
     }
     definitions
         .iter()
         .map(|(binding, identity)| {
-            if identities_by_suffix[&content_hash(identity)].len() > 1 {
+            let name = make_class_name(binding, identity, prefix);
+            if identities_by_name[&name].len() > 1 {
                 format!("{prefix}-{binding}-{}", fingerprint(fnv1a(FNV_OFFSET, identity)))
             } else {
-                make_class_name(binding, identity, prefix)
+                name
             }
         })
         .collect()
 }
 
-/// A class name's whole suffix, 8 or 16 hex: the names a component's props
-/// take carry it, so they never collide where the classes do not.
+/// A class name's whole suffix, 8 or 16 hex.
 pub fn class_suffix(class_name: &str) -> &str {
     class_name.rsplit('-').next().unwrap_or(class_name)
+}
+
+/// What a component's prop names end with: its binding, then its class's
+/// whole suffix, so they never collide where the classes do not.
+pub fn name_scope(binding: &str, class_name: &str) -> String {
+    format!("{}{}", crate::css::binding_segment(binding), class_suffix(class_name))
 }
 
 /// A file of an installed package, whose source never changes in place:
@@ -131,7 +136,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn definitions_whose_short_suffixes_collide_take_distinct_full_suffixes() {
+    fn only_definitions_whose_short_names_collide_take_full_suffixes() {
         // Two identities whose 8-hex suffixes collide.
         let mut by_suffix: rustc_hash::FxHashMap<String, String> = Default::default();
         let (first, second) = (0u32..)
@@ -148,17 +153,17 @@ mod tests {
             })
             .expect("a 32-bit suffix collides within 2^32 identities");
         assert_eq!(make_class_name("Button", &first, "animus"), make_class_name("Button", &second, "animus"));
-        let suffixes = |definitions: &[(&str, &str)]| -> Vec<String> {
-            class_names(definitions, "animus").iter().map(|name| class_suffix(name).to_string()).collect()
-        };
-        let across = suffixes(&[("Button", &first), ("Card", &second)]);
-        assert_ne!(across[0], across[1], "different definitions never share a suffix, whatever their bindings");
+        let across = class_names(&[("Button", &first), ("Card", &second)], "animus");
+        assert_eq!(
+            across,
+            [make_class_name("Button", &first, "animus"), make_class_name("Card", &second, "animus")],
+            "suffixes that collide under different bindings keep 8 hex"
+        );
+        assert_ne!(name_scope("Button", &across[0]), name_scope("Card", &across[1]), "their props' names differ by binding");
         let names = class_names(&[("Button", &first), ("Card", "system:other"), ("Button", &second), ("Button", &first)], "animus");
         assert_ne!(names[0], names[2], "different definitions never share a class");
         assert_eq!(names[0], names[3], "copies of one definition share theirs");
         assert!(class_suffix(&names[0]).len() == 16 && class_suffix(&names[2]).len() == 16);
         assert_eq!(names[1], make_class_name("Card", "system:other", "animus"));
-        let shared = suffixes(&[("Button", &first), ("Card", &first), ("Card", &second)]);
-        assert_eq!(shared[0], shared[1], "one definition under two bindings keeps one suffix");
     }
 }

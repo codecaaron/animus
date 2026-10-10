@@ -135,7 +135,11 @@ type PluginAliasMap = NonNullable<
 
 function createCompiler(
   root: string,
-  extras: { name?: string; alias?: PluginAliasMap } = {}
+  extras: {
+    name?: string;
+    alias?: PluginAliasMap;
+    conditionNames?: string[];
+  } = {}
 ) {
   const runHandlers: AsyncHandler[] = [];
   const watchRunHandlers: AsyncHandler[] = [];
@@ -165,7 +169,10 @@ function createCompiler(
       },
     },
     context: root,
-    options: { name: extras.name, resolve: { alias: extras.alias } },
+    options: {
+      name: extras.name,
+      resolve: { alias: extras.alias, conditionNames: extras.conditionNames },
+    },
     webpack: {
       Compilation: { PROCESS_ASSETS_STAGE_ADDITIONAL: -100 },
       sources: { RawSource: FakeRawSource },
@@ -336,7 +343,11 @@ describe('production run (full pipeline)', () => {
       '@sys': join(root, 'src', 'system.ts'),
       '.animus/styles.css': join(root, '.animus', 'styles.css'),
     };
-    const { compiler, runHandlers } = createCompiler(root, { alias });
+    // `...` is webpack's defaults, which name no condition of their own.
+    const { compiler, runHandlers } = createCompiler(root, {
+      alias,
+      conditionNames: ['source', '...'],
+    });
     const plugin = new AnimusWebpackPlugin(OPTIONS);
     applyPlugin(plugin, compiler);
 
@@ -346,7 +357,9 @@ describe('production run (full pipeline)', () => {
     expect(mocks.loadSystemModule).toHaveBeenCalledTimes(1);
     expect(mocks.loadSystemModule).toHaveBeenCalledWith(
       join(root, 'src', 'system.ts'),
-      root
+      root,
+      undefined,
+      ['source']
     );
     expect(mocks.analyzeProject).toHaveBeenCalledTimes(1);
 

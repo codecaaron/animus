@@ -42,8 +42,10 @@ pub const SELECTOR_UNSUPPORTED_SUBJECT: &str = "animus.selector.unsupported-subj
 
 pub const KEYFRAMES_UNREGISTERED_REFERENCE: &str = "animus.keyframes.unregistered-reference";
 
+/// A selector key whose `&` lies only in quoted text. An at-rule key is no
+/// selector, even with `&` in its prelude.
 pub(crate) fn unsupported_selector_key(key: &str) -> bool {
-    key.contains('&') && !crate::selector_subject::has_subject(key)
+    !key.starts_with('@') && key.contains('&') && !crate::selector_subject::has_subject(key)
 }
 
 fn unsupported_selector_skip(key: &str, span: Span) -> SkippedProperty {
@@ -1741,6 +1743,7 @@ const Component = { gap: GAP };"#;
         assert!(!unsupported_selector_key("& + &"));
         assert!(!unsupported_selector_key("color"));
         assert!(!unsupported_selector_key("_hover"));
+        assert!(!unsupported_selector_key(r#"@scope ([data-x="&"])"#));
     }
 
     #[test]

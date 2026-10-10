@@ -1,3 +1,5 @@
+import { tokenize } from '@animus-ui/properties';
+
 import { parseInternalWire } from './internal-wire';
 import { createPropertyNames, renameCustomProperties } from './property-names';
 
@@ -6,61 +8,79 @@ export interface PrefixedSystemArtifacts {
   variableCss: string;
   themeJson?: string;
   contextualVarsJson?: string;
+  declarationScalesJson?: string;
+  /** Each generated name and its final name, without `--`, for the names
+   *  authors write in component styles. */
+  generatedNamesJson?: string;
 }
 
-/** Prefix variable references without changing their matching rules. */
-export function prefixVariableReferences(
-  prefix: string,
-  value: string
-): string {
-  if (!prefix) return value;
-  return value.replace(/var\(--([a-zA-Z][\w-]*)\)/g, `var(--${prefix}-$1)`);
-}
-
+/**
+ * The prefix without `prefixContextualVars`: every name Animus generates (a
+ * variable the theme's map or variable CSS defines) takes `--${prefix}-`
+ * wherever it is defined, registered or read, `var()` fallbacks at any depth
+ * included. Every other name stays as written: each declared contextual
+ * variable, and any custom property an author writes.
+ */
 export function applyPrefix(
   prefix: string,
   variableMapJson: string,
   variableCss: string,
   themeJson?: string,
-  contextualVarsJson?: string
+  contextualVarsJson?: string,
+  declarationScalesJson?: string
 ): PrefixedSystemArtifacts {
-  if (!prefix)
-    return { variableMapJson, variableCss, themeJson, contextualVarsJson };
-
-  const map: Record<string, string> = JSON.parse(variableMapJson);
-  const prefixed: Record<string, string> = {};
-  for (const [key, varName] of Object.entries(map)) {
-    prefixed[key] = varName.startsWith('--')
-      ? `--${prefix}-${varName.slice(2)}`
-      : varName;
+  if (!prefix) {
+    return {
+      variableMapJson,
+      variableCss,
+      themeJson,
+      contextualVarsJson,
+      declarationScalesJson,
+    };
   }
 
-  let css = variableCss;
-  css = css.replace(/--([a-zA-Z][\w-]*)\s*:/g, `--${prefix}-$1:`);
-  css = prefixVariableReferences(prefix, css);
-  css = css.replace(
-    /@property(\s+)--([a-zA-Z][\w-]*)/g,
-    `@property$1--${prefix}-$2`
+  const contextual = new Set(
+    contextualVarsJson
+      ? Object.values(
+          parseInternalWire<Record<string, string[]>>(
+            contextualVarsJson,
+            "contextualVarsJson (the theme's contextual variable names)"
+          )
+        ).flat()
+      : []
   );
+  const variableMap = parseInternalWire<Record<string, string>>(
+    variableMapJson,
+    "variableMapJson (the theme's token variables)"
+  );
+  const generated = [
+    ...Object.values(variableMap).map((name) => name.replace(/^--/, '')),
+    ...themeDefinitions(variableCss),
+  ].filter((name) => !contextual.has(name));
+  const names = createPropertyNames([], prefix, generated);
+  const rename = (value: string) => renameCustomProperties(value, names);
 
   const result: PrefixedSystemArtifacts = {
-    variableMapJson: JSON.stringify(prefixed),
-    variableCss: css,
+    variableMapJson: JSON.stringify(
+      Object.fromEntries(
+        Object.entries(variableMap).map(([key, name]) => [key, rename(name)])
+      )
+    ),
+    variableCss: rename(variableCss),
   };
-
-  if (themeJson) {
-    result.themeJson = prefixVariableReferences(prefix, themeJson);
+  if (themeJson) result.themeJson = renameTokenValues(themeJson, rename);
+  if (contextualVarsJson) result.contextualVarsJson = contextualVarsJson;
+  if (generated.length > 0) {
+    result.generatedNamesJson = JSON.stringify(
+      Object.fromEntries(generated.map((name) => [name, `${prefix}-${name}`]))
+    );
   }
-
-  if (contextualVarsJson) {
-    const ctxVars: Record<string, string[]> = JSON.parse(contextualVarsJson);
-    const prefixedCtx: Record<string, string[]> = {};
-    for (const [scale, names] of Object.entries(ctxVars)) {
-      prefixedCtx[scale] = names.map((name) => `${prefix}-${name}`);
-    }
-    result.contextualVarsJson = JSON.stringify(prefixedCtx);
+  if (declarationScalesJson) {
+    result.declarationScalesJson = renameDeclarationRecords(
+      declarationScalesJson,
+      rename
+    );
   }
-
   return result;
 }
 
@@ -77,6 +97,8 @@ export interface PropertyNameArtifacts {
 export interface ResolvedPropertyNames extends PropertyNameArtifacts {
   contextualProperties: string[];
   nameConflicts: PrefixNameConflict[];
+  /** Each name the theme generates and its final name, without `--`. */
+  generatedNamesJson: string | null;
 }
 
 /** A final name the prefix cannot give without a collision. */
@@ -122,7 +144,7 @@ export function applyPropertyNames(
   );
   const themeDefined = [
     ...Object.values(variableMap).map((name) => name.replace(/^--/, '')),
-    ...[...artifacts.variableCss.matchAll(THEME_DEFINITION)].map((m) => m[1]),
+    ...themeDefinitions(artifacts.variableCss),
   ];
   const managed = createPropertyNames(declared, prefix, themeDefined);
   const nameConflicts: PrefixNameConflict[] = [
@@ -169,11 +191,47 @@ export function applyPropertyNames(
     contextualProperties: [...new Set(declared)].map(
       (name) => `--${managed.finalName(name) ?? name}`
     ),
+    generatedNamesJson: generatedNamesJson(
+      themeDefined.filter((name) => !declared.includes(name)),
+      managed
+    ),
   };
 }
 
-/** A custom property the theme's CSS defines or registers. */
-const THEME_DEFINITION = /(?:@property\s+|(?:^|[\s;{]))--([\w-]+)(?=\s*[:{])/g;
+/** The generated names' final names, for authored component styles. */
+function generatedNamesJson(
+  names: readonly string[],
+  managed: ReturnType<typeof createPropertyNames>
+): string | null {
+  const entries = [...new Set(names)].flatMap((name) => {
+    const final = managed.finalName(name);
+    return final === undefined ? [] : [[name, final] as const];
+  });
+  return entries.length === 0
+    ? null
+    : JSON.stringify(Object.fromEntries(entries));
+}
+
+/** The custom properties the theme's CSS declares or `@property` registers,
+ *  read as CSS tokenizes it: a name in a string or comment defines nothing. */
+function themeDefinitions(variableCss: string): string[] {
+  const tokens = tokenize(variableCss).filter(
+    (token) => token.type !== 'whitespace'
+  );
+  return tokens.flatMap((token, index) => {
+    if (token.type !== 'ident' || !token.value.startsWith('--')) return [];
+    const previous = tokens[index - 1];
+    const declared =
+      (previous === undefined ||
+        previous.type === '{' ||
+        previous.type === ';') &&
+      tokens[index + 1]?.type === ':';
+    const registered =
+      previous?.type === 'at-keyword' &&
+      previous.value.toLowerCase() === 'property';
+    return declared || registered ? [token.value.slice(2)] : [];
+  });
+}
 
 /** Renames inside the token map's values. */
 function renameTokenValues(

@@ -505,6 +505,48 @@ function warnIgnoredImportant(
   }
 }
 
+const warnedUnitless = new Set<string>();
+
+/**
+ * A number reaching a slot that only custom properties read, with no
+ * transform, stays unitless, as at build time; reported once per prop. Zero
+ * is a length without a unit, and a scale key is not written as is.
+ */
+function warnUnitlessCustomProperty(
+  baseClassName: string,
+  propName: string,
+  propValue: unknown,
+  dc: ValueDynamicPropConfig
+): void {
+  if (!IS_DEV) return;
+  const properties = slotProperties(dc);
+  if (
+    dc.transform ||
+    dc.transformId ||
+    dc.transformName ||
+    !isCustomOnly(properties)
+  ) {
+    return;
+  }
+  const number = responsiveEntries(propValue)[1]
+    .map(([, value]) => value)
+    .find(
+      (value) =>
+        typeof value === 'number' &&
+        Number.isFinite(value) &&
+        value !== 0 &&
+        dc.scaleValues?.[String(value)] == null
+    );
+  if (number === undefined) return;
+  const dedupeKey = `${baseClassName}|${propName}`;
+  if (warnedUnitless.has(dedupeKey)) return;
+  warnedUnitless.add(dedupeKey);
+  // oxlint-disable-next-line no-console -- intentional runtime diagnostic
+  console.warn(
+    `[animus:unit] ${baseClassName}: prop '${propName}' writes the number ${String(number)} to ${properties.join(', ')} without a unit — a custom property has no unit context, so the number stays unitless; give the value a unit, or bind a transform that adds one`
+  );
+}
+
 const warnedThrows = new Set<string>();
 const warnedStrictMisses = new Set<string>();
 
@@ -864,6 +906,14 @@ export function resolveClasses(
                 dc,
                 propClasses,
                 typed
+              );
+            }
+            if (dc.kind !== 'declarations') {
+              warnUnitlessCustomProperty(
+                baseClassName,
+                propName,
+                propValue,
+                dc
               );
             }
           } else {

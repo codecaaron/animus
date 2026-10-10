@@ -6,11 +6,7 @@ import {
 } from './discover-packages';
 import { parseInternalWire } from './internal-wire';
 import { warnLine } from './manifest-diagnostics';
-import {
-  applyPrefix,
-  applyPropertyNames,
-  prefixVariableReferences,
-} from './prefix';
+import { applyPrefix, applyPropertyNames } from './prefix';
 import { splitInvalidPropertyRegistrations } from './property-registrations';
 
 import type { EngineApi } from './engine-adapter';
@@ -62,9 +58,9 @@ export interface SystemConfig {
   contextualProperties?: string[];
   /** Final names that would collide under `prefixContextualVars`. */
   prefixNameConflicts?: PrefixNameConflict[];
-  /** Contextual variables a prefix renamed without `prefixContextualVars`,
-   *  so their declared names no longer resolve. */
-  legacyPrefixedContextualVars?: string[];
+  /** Under a prefix, each name the theme generates and its final name,
+   *  without `--`: the extractor renames those names in authored styles. */
+  generatedNamesJson?: string;
 }
 
 /** The loader's evaluation of the system file. A failure on a file that
@@ -73,10 +69,11 @@ export interface SystemConfig {
 function evaluateSystemModule(
   engine: Pick<EngineApi, 'loadSystemModule' | 'extractFacts'>,
   systemPath: string,
-  rootDir: string
+  rootDir: string,
+  conditions: readonly string[] | undefined
 ) {
   try {
-    return engine.loadSystemModule(systemPath, rootDir);
+    return engine.loadSystemModule(systemPath, rootDir, undefined, conditions);
   } catch (error) {
     let source: string;
     try {
@@ -103,12 +100,16 @@ export function loadSystemConfig(
     rootDir: string;
     prefix?: string;
     prefixContextualVars?: boolean;
+    /** The host's export conditions, in its order; the loader tries them
+     *  with `import` and `default`. */
+    conditions?: readonly string[];
   }
 ): SystemConfig {
   const config = evaluateSystemModule(
     engineApi(),
     opts.systemPath,
-    opts.rootDir
+    opts.rootDir,
+    opts.conditions
   );
 
   let scalesJson: string = config.scalesJson;
@@ -126,8 +127,8 @@ export function loadSystemConfig(
     )
   ).flat();
   let contextualProperties = declaredNames.map((name) => `--${name}`);
-  let legacyPrefixedContextualVars: string[] = [];
   let prefixNameConflicts: PrefixNameConflict[] = [];
+  let generatedNamesJson: string | null | undefined;
   if (opts.prefix && opts.prefixContextualVars) {
     const resolved = applyPropertyNames(opts.prefix, {
       variableMapJson,
@@ -143,31 +144,26 @@ export function loadSystemConfig(
     contextualProperties = resolved.contextualProperties;
     prefixNameConflicts = resolved.nameConflicts;
     declarationScalesJson = resolved.declarationScalesJson;
+    generatedNamesJson = resolved.generatedNamesJson;
   } else if (opts.prefix) {
-    legacyPrefixedContextualVars = declaredNames;
-    contextualProperties = declaredNames.map(
-      (name) => `--${opts.prefix}-${name}`
-    );
+    // Contextual variables keep their declared names; only the names Animus
+    // generates take the prefix.
     const prefixed = applyPrefix(
       opts.prefix,
       variableMapJson,
       variableCss,
       scalesJson,
-      contextualVarsJson || undefined
+      contextualVarsJson || undefined,
+      declarationScalesJson || undefined
     );
     variableMapJson = prefixed.variableMapJson;
     variableCss = prefixed.variableCss;
     if (prefixed.themeJson) scalesJson = prefixed.themeJson;
-    if (prefixed.contextualVarsJson) {
-      contextualVarsJson = prefixed.contextualVarsJson;
-    }
     // Records hold resolved `var()` references, rewritten like scale values.
-    if (declarationScalesJson) {
-      declarationScalesJson = prefixVariableReferences(
-        opts.prefix,
-        declarationScalesJson
-      );
+    if (prefixed.declarationScalesJson) {
+      declarationScalesJson = prefixed.declarationScalesJson;
     }
+    generatedNamesJson = prefixed.generatedNamesJson;
   }
 
   const system: SystemConfig = {
@@ -199,10 +195,6 @@ export function loadSystemConfig(
   if (prefixNameConflicts.length > 0) {
     system.prefixNameConflicts = prefixNameConflicts;
   }
-  if (legacyPrefixedContextualVars.length > 0) {
-    system.legacyPrefixedContextualVars = [
-      ...new Set(legacyPrefixedContextualVars),
-    ];
-  }
+  if (generatedNamesJson) system.generatedNamesJson = generatedNamesJson;
   return system;
 }

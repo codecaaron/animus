@@ -10,6 +10,7 @@ use oxc::ast_visit::Visit;
 use oxc::semantic::{Scoping, SemanticBuilder, SymbolFlags, SymbolId};
 use oxc::span::Span;
 use oxc::span::GetSpan;
+use oxc::syntax::module_record::{ExportExportName, ImportImportName, ModuleRecord};
 use rustc_hash::{FxHashMap, FxHashSet};
 use serde::Serialize;
 use serde_json::Value;
@@ -17,7 +18,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::chain_walk::{ChainDescriptor, TerminalKind};
 use crate::jsx_scan::{
-    classify_jsx_attribute_as_variant_value, create_element_props, eval_jsx_attribute_value, eval_property_key,
+    classify_jsx_attribute_as_variant_value, create_element_literals, create_element_props, eval_jsx_attribute_value, eval_property_key,
     eval_static_expression, make_json_number,
     is_component_like_identifier, jsx_member_path, ComponentUsageConfig, CustomPropScanResult,
     DynamicExpressionKind, DynamicPropUsage, PropValueResult, StateUsage, SystemPropUsage,
@@ -135,6 +136,10 @@ pub enum UsageFact {
         /// classification; `None` when it can deliver unknown props.
         #[serde(skip)]
         props: Option<Vec<(String, String)>>,
+        /// The literal values among those props, as a JSX attribute's
+        /// static value reads them.
+        #[serde(skip)]
+        literals: Vec<(String, Value)>,
         /// A `cloneElement` of an element of this component: `props` are
         /// its overrides, and the element's own props are recorded where
         /// it is written.
@@ -179,22 +184,16 @@ pub(crate) fn is_animus_system_specifier(spec: &str) -> bool {
     spec == "@animus-ui/system" || spec.starts_with("@animus-ui/system/")
 }
 
-/// Namespace imports (`import * as ns from 'x'`) from top-level
-/// statements: local name → specifier. Kept apart from `ImportFact`, whose
-/// consumers resolve `local` as a named binding.
-pub fn collect_namespace_imports(program: &Program<'_>) -> std::collections::BTreeMap<String, String> {
-    let mut namespaces = std::collections::BTreeMap::new();
-    for stmt in &program.body {
-        let Statement::ImportDeclaration(import) = stmt else {
-            continue;
-        };
-        for spec in import.specifiers.iter().flatten() {
-            if let ImportDeclarationSpecifier::ImportNamespaceSpecifier(ns) = spec {
-                namespaces.insert(ns.local.name.to_string(), import.source.value.to_string());
-            }
-        }
-    }
-    namespaces
+/// Namespace imports (`import * as ns from 'x'`): local name → specifier.
+/// Kept apart from `ImportFact`, whose consumers resolve `local` as a named
+/// binding.
+pub fn collect_namespace_imports(module: &ModuleRecord<'_>) -> std::collections::BTreeMap<String, String> {
+    module
+        .import_entries
+        .iter()
+        .filter(|entry| entry.import_name.is_namespace_object())
+        .map(|entry| (entry.local_name.name.to_string(), entry.module_request.name.to_string()))
+        .collect()
 }
 
 /// A top-level function component that forwards its props by spread:
@@ -369,41 +368,28 @@ impl<'a> Visit<'a> for SpreadTargets<'_> {
     }
 }
 
-/// Collect import facts from top-level statements.
-pub fn collect_import_facts(program: &Program<'_>) -> Vec<ImportFact> {
-    let mut out = Vec::new();
-    for stmt in &program.body {
-        if let Statement::ImportDeclaration(import) = stmt {
-            let source = import.source.value.to_string();
-            let declaration = (import.span.start, import.span.end);
-            if let Some(specifiers) = &import.specifiers {
-                for spec in specifiers {
-                    match spec {
-                        ImportDeclarationSpecifier::ImportSpecifier(named) => {
-                            out.push(ImportFact {
-                                local: named.local.name.to_string(),
-                                imported: named.imported.name().to_string(),
-                                source: source.clone(),
-                                declaration,
-                            });
-                        }
-                        // `imported` is "default" for a default import, so
-                        // the parent dangles and the child stands alone.
-                        ImportDeclarationSpecifier::ImportDefaultSpecifier(def) => {
-                            out.push(ImportFact {
-                                local: def.local.name.to_string(),
-                                imported: "default".to_string(),
-                                source: source.clone(),
-                                declaration,
-                            });
-                        }
-                        ImportDeclarationSpecifier::ImportNamespaceSpecifier(_) => {}
-                    }
-                }
-            }
-        }
-    }
-    out
+/// A module's named and default imports, from the parser's record of its
+/// top-level import declarations, type-only ones included.
+pub fn collect_import_facts(module: &ModuleRecord<'_>) -> Vec<ImportFact> {
+    module
+        .import_entries
+        .iter()
+        .filter_map(|entry| {
+            let imported = match &entry.import_name {
+                ImportImportName::Name(name) => name.name.to_string(),
+                // `imported` is "default" for a default import, so the parent
+                // dangles and the child stands alone.
+                ImportImportName::Default(_) => "default".to_string(),
+                ImportImportName::NamespaceObject => return None,
+            };
+            Some(ImportFact {
+                local: entry.local_name.name.to_string(),
+                imported,
+                source: entry.module_request.name.to_string(),
+                declaration: (entry.statement_span.start, entry.statement_span.end),
+            })
+        })
+        .collect()
 }
 
 /// Per-file named-export fact; feeds static enrichment and re-export
@@ -422,7 +408,8 @@ pub struct ExportFact {
     pub original: Option<String>,
 }
 
-/// The identifier `export default X;` names, if any.
+/// The identifier `export default X;` names, if any, through type
+/// assertions, which the parser's module record does not see through.
 pub fn collect_default_export_binding(program: &Program<'_>) -> Option<String> {
     program.body.iter().find_map(|stmt| match stmt {
         Statement::ExportDefaultDeclaration(export) => match export
@@ -438,57 +425,42 @@ pub fn collect_default_export_binding(program: &Program<'_>) -> Option<String> {
 }
 
 /// The local names of a file's named and default imports.
-fn named_import_locals(program: &Program<'_>) -> BTreeSet<String> {
-    let mut locals = BTreeSet::new();
-    for stmt in &program.body {
-        let Statement::ImportDeclaration(import) = stmt else {
-            continue;
-        };
-        for specifier in import.specifiers.iter().flatten() {
-            match specifier {
-                ImportDeclarationSpecifier::ImportSpecifier(named) => {
-                    locals.insert(named.local.name.to_string());
-                }
-                ImportDeclarationSpecifier::ImportDefaultSpecifier(default) => {
-                    locals.insert(default.local.name.to_string());
-                }
-                ImportDeclarationSpecifier::ImportNamespaceSpecifier(_) => {}
-            }
-        }
-    }
-    locals
+fn named_import_locals(module: &ModuleRecord<'_>) -> BTreeSet<String> {
+    module
+        .import_entries
+        .iter()
+        .filter(|entry| !entry.import_name.is_namespace_object())
+        .map(|entry| entry.local_name.name.to_string())
+        .collect()
 }
 
-/// `export * as name from '…'`: name → source.
-pub fn collect_namespace_exports(program: &Program<'_>) -> BTreeMap<String, String> {
-    program
-        .body
+/// `export * as name from '…'`: name → source. The parser records these
+/// among the indirect exports.
+pub fn collect_namespace_exports(module: &ModuleRecord<'_>) -> BTreeMap<String, String> {
+    module
+        .indirect_export_entries
         .iter()
-        .filter_map(|stmt| match stmt {
-            Statement::ExportAllDeclaration(export) => export
-                .exported
-                .as_ref()
-                .map(|name| (name.name().to_string(), export.source.value.to_string())),
+        .filter(|entry| entry.import_name.is_all())
+        .filter_map(|entry| match (&entry.export_name, &entry.module_request) {
+            (ExportExportName::Name(name), Some(source)) => Some((name.name.to_string(), source.name.to_string())),
             _ => None,
         })
         .collect()
 }
 
 /// The sources of `export * from '…'`, which re-export every named export.
-pub fn collect_star_exports(program: &Program<'_>) -> Vec<String> {
-    program
-        .body
+pub fn collect_star_exports(module: &ModuleRecord<'_>) -> Vec<String> {
+    module
+        .star_export_entries
         .iter()
-        .filter_map(|stmt| match stmt {
-            Statement::ExportAllDeclaration(export) if export.exported.is_none() => {
-                Some(export.source.value.to_string())
-            }
-            _ => None,
-        })
+        .filter_map(|entry| entry.module_request.as_ref().map(|source| source.name.to_string()))
         .collect()
 }
 
-/// Collect export facts from top-level statements.
+/// Collect export facts from top-level statements. Walked rather than read
+/// from the parser's module record, which files `export { a }` of an
+/// imported `a` as a re-export from `a`'s module, and lists function, class
+/// and destructured exports that these facts leave out.
 pub fn collect_export_facts(program: &Program<'_>) -> Vec<ExportFact> {
     use oxc::ast::ast::Declaration;
     let mut out = Vec::new();
@@ -554,6 +526,24 @@ pub(crate) struct EnrichedUsage {
     pub opaque_calls: Vec<OpaqueCall>,
     /// See `FileFacts::element_consts`.
     pub element_consts: BTreeMap<String, ElementConst>,
+    /// See `FileFacts::opaque_tags`.
+    pub opaque_tags: Vec<OpaqueTag>,
+}
+
+/// A component element that hands its children and props to its receiver,
+/// which may clone them: the tag as written, where its first name is bound,
+/// whether the element can render something other than its tag (`as`,
+/// `asChild` or a spread), and what its attributes and children carry, read
+/// as a call's arguments are.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct OpaqueTag {
+    pub tag: String,
+    /// A parameter or local never names the module's binding of that name.
+    pub origin: TagOrigin,
+    pub polymorphic: bool,
+    pub tags: BTreeSet<String>,
+    pub imported_args: Vec<String>,
+    pub forwards_from: Vec<String>,
 }
 
 /// A call that may hand an element to code outside React: what its callee
@@ -772,6 +762,7 @@ fn call_loads(call: &CallExpression<'_>) -> Vec<LoadTarget> {
 
 pub(crate) fn collect_enriched_usage(
     program: &Program<'_>,
+    module: &ModuleRecord<'_>,
     static_values: &FxHashMap<String, Value>,
     chains: &[&ChainDescriptor],
     exports: &[ExportFact],
@@ -864,8 +855,8 @@ pub(crate) fn collect_enriched_usage(
                 scoping,
                 chains,
                 react: &react,
-                namespaces: collect_namespace_imports(program).into_keys().collect(),
-                imports: named_import_locals(program),
+                namespaces: collect_namespace_imports(module).into_keys().collect(),
+                imports: named_import_locals(module),
                 escapes: BTreeSet::new(),
                 ancestors: Vec::new(),
             };
@@ -897,7 +888,8 @@ pub(crate) fn collect_enriched_usage(
         Some(scoping) => unsafe_object_uses(program, scoping, object_consts, assigned_targets),
         None => BTreeMap::new(),
     };
-    let (opaque_calls, element_consts) = origins.map(|scoping| opaque_calls(program, scoping)).unwrap_or_default();
+    let (opaque_calls, opaque_tags, element_consts) =
+        origins.map(|scoping| opaque_calls(program, scoping)).unwrap_or_default();
     EnrichedUsage {
         usage,
         confined,
@@ -909,6 +901,7 @@ pub(crate) fn collect_enriched_usage(
         direct_eval,
         opaque_calls,
         element_consts,
+        opaque_tags,
     }
 }
 
@@ -929,7 +922,10 @@ const BUILTIN_GLOBALS: [&str; 33] = [
 /// a parameter to code the analysis may not follow (every one except
 /// React's, a built-in global's, and one on a value a function body
 /// declares), and the top-level `const`s that hold elements.
-fn opaque_calls(program: &Program<'_>, scoping: &Scoping) -> (Vec<OpaqueCall>, BTreeMap<String, ElementConst>) {
+fn opaque_calls(
+    program: &Program<'_>,
+    scoping: &Scoping,
+) -> (Vec<OpaqueCall>, Vec<OpaqueTag>, BTreeMap<String, ElementConst>) {
     let mut sources: FxHashMap<SymbolId, &str> = FxHashMap::default();
     for statement in &program.body {
         let Statement::ImportDeclaration(import) = statement else { continue };
@@ -949,6 +945,7 @@ fn opaque_calls(program: &Program<'_>, scoping: &Scoping) -> (Vec<OpaqueCall>, B
         functions: FxHashMap::default(),
         default_export: None,
         calls: Vec::new(),
+        tag_calls: Vec::new(),
     };
     for statement in &program.body {
         scan.top = top_level_names(statement);
@@ -977,14 +974,22 @@ fn opaque_calls(program: &Program<'_>, scoping: &Scoping) -> (Vec<OpaqueCall>, B
         .calls
         .iter()
         .filter_map(|(root, reads, top)| {
+            let (tags, imported_args, forwards_from) = scan.delivery(reads, top)?;
             let (callee, callee_imports) = scan.callee(root);
-            let closed = scan.closure(reads);
-            let forwards_from = if closed.reads_parameter { top.clone() } else { Vec::new() };
-            (!closed.tags.is_empty() || !closed.imports.is_empty() || !forwards_from.is_empty()).then_some(OpaqueCall {
-                callee,
-                callee_imports,
-                tags: closed.tags,
-                imported_args: closed.imports,
+            Some(OpaqueCall { callee, callee_imports, tags, imported_args, forwards_from })
+        })
+        .collect();
+    let tags = scan
+        .tag_calls
+        .iter()
+        .filter_map(|(tag, origin, polymorphic, reads, top)| {
+            let (tags, imported_args, forwards_from) = scan.delivery(reads, top)?;
+            Some(OpaqueTag {
+                tag: tag.clone(),
+                origin: *origin,
+                polymorphic: *polymorphic,
+                tags,
+                imported_args,
                 forwards_from,
             })
         })
@@ -1006,7 +1011,7 @@ fn opaque_calls(program: &Program<'_>, scoping: &Scoping) -> (Vec<OpaqueCall>, B
             element_consts.insert(name, ElementConst { tags: closed.tags, imports: closed.imports });
         }
     }
-    (calls, element_consts)
+    (calls, tags, element_consts)
 }
 
 /// The names a top-level statement binds, for parameter forwarding: a
@@ -1138,6 +1143,9 @@ struct OpaqueCallScan<'s> {
     /// What a default-exported expression reads.
     default_export: Option<ArgumentReads>,
     calls: Vec<(CalleeRoot, ArgumentReads, Vec<String>)>,
+    /// Component elements: the tag, whether it is polymorphic, and what its
+    /// attributes and children read.
+    tag_calls: Vec<(String, TagOrigin, bool, ArgumentReads, Vec<String>)>,
 }
 
 impl OpaqueCallScan<'_> {
@@ -1148,11 +1156,13 @@ impl OpaqueCallScan<'_> {
         // A callee rooted in no identifier (`[1].map`) is a value the
         // analysed code builds.
         let (root, member) = callee_root(callee)?;
+        if self.is_react(root) {
+            return None;
+        }
         let Some(symbol) = root.reference_id.get().and_then(|id| self.scoping.get_reference(id).symbol_id()) else {
             return (!BUILTIN_GLOBALS.contains(&root.name.as_str())).then_some(CalleeRoot::Unknown);
         };
         match self.sources.get(&symbol) {
-            Some(source) if REACT_MODULES.contains(source) => None,
             Some(_) => Some(CalleeRoot::Import(match member {
                 Some(member) => format!("{}.{member}", root.name),
                 None => root.name.to_string(),
@@ -1185,6 +1195,26 @@ impl OpaqueCallScan<'_> {
                     None => (None, Vec::new()),
                 }
             }
+        }
+    }
+
+    /// What arguments reading `reads` deliver, followed through `const`s:
+    /// element tags, imports that may hold more, and the enclosing
+    /// top-level bindings (`top`) when a parameter of theirs reaches them;
+    /// `None` when they deliver nothing.
+    fn delivery(&self, reads: &ArgumentReads, top: &[String]) -> Option<(BTreeSet<String>, Vec<String>, Vec<String>)> {
+        let closed = self.closure(reads);
+        let forwards_from = if closed.reads_parameter { top.to_vec() } else { Vec::new() };
+        (!closed.tags.is_empty() || !closed.imports.is_empty() || !forwards_from.is_empty())
+            .then_some((closed.tags, closed.imports, forwards_from))
+    }
+
+    /// Whether `root` names React: an import from one of its modules, or
+    /// an unbound `React`, as `ReactNames` reads it.
+    fn is_react(&self, root: &IdentifierReference<'_>) -> bool {
+        match root.reference_id.get().and_then(|id| self.scoping.get_reference(id).symbol_id()) {
+            Some(symbol) => self.sources.get(&symbol).is_some_and(|source| REACT_MODULES.contains(source)),
+            None => root.name == "React",
         }
     }
 
@@ -1342,6 +1372,39 @@ impl<'a> Visit<'a> for OpaqueCallScan<'_> {
     fn visit_new_expression(&mut self, new: &oxc::ast::ast::NewExpression<'a>) {
         self.record(&new.callee, &new.arguments);
         oxc::ast_visit::walk::walk_new_expression(self, new);
+    }
+
+    fn visit_jsx_element(&mut self, element: &oxc::ast::ast::JSXElement<'a>) {
+        let opening = &element.opening_element;
+        // A host element renders its children in place, and React's own
+        // components are known.
+        let named = match &opening.name {
+            JSXElementName::IdentifierReference(id) => Some((id.name.to_string(), Some(&**id))),
+            JSXElementName::MemberExpression(member) => {
+                jsx_member_path(member).map(|path| (path, jsx_member_root(member)))
+            }
+            _ => None,
+        };
+        if let Some((tag, root)) = named.filter(|(_, root)| !root.is_some_and(|root| self.is_react(root))) {
+            // `this.X` is bound nowhere the module declares.
+            let origin = root.map_or(TagOrigin::Nested, |root| tag_origin(self.scoping, root));
+            let polymorphic = opening.attributes.iter().any(|attribute| match attribute {
+                JSXAttributeItem::SpreadAttribute(_) => true,
+                JSXAttributeItem::Attribute(attribute) => {
+                    matches!(&attribute.name, JSXAttributeName::Identifier(name) if name.name == "as" || name.name == "asChild")
+                }
+            });
+            let mut reads = ArgumentReads::default();
+            let mut collector = ReadCollector { scoping: self.scoping, reads: &mut reads };
+            for attribute in &opening.attributes {
+                collector.visit_jsx_attribute_item(attribute);
+            }
+            for child in &element.children {
+                collector.visit_jsx_child(child);
+            }
+            self.tag_calls.push((tag, origin, polymorphic, reads, self.top.clone()));
+        }
+        oxc::ast_visit::walk::walk_jsx_element(self, element);
     }
 }
 
@@ -2954,6 +3017,7 @@ impl<'a, 's> Visit<'a> for FactCollector<'a, 's> {
                     member,
                     identity_uncertain,
                     props: create_element_props(call.arguments.get(1)),
+                    literals: create_element_literals(call.arguments.get(1), self.origins),
                     clone: false,
                     at: call.span.start,
                     origin: self.origins.zip(root).map(|(scoping, root)| tag_origin(scoping, root)),
@@ -3077,6 +3141,7 @@ fn clone_of(tag: TagFact, props: Option<Vec<(String, String)>>, at: u32) -> Opti
         member,
         identity_uncertain: false,
         props,
+        literals: Vec::new(),
         clone: true,
         at,
         origin: None,
@@ -3319,9 +3384,10 @@ pub fn collect_usage_facts(program: &Program<'_>) -> Vec<UsageFact> {
 
 pub fn collect_usage_facts_with_statics(
     program: &Program<'_>,
+    module: &ModuleRecord<'_>,
     static_values: &FxHashMap<String, Value>,
 ) -> Vec<UsageFact> {
-    collect_enriched_usage(program, static_values, &[], &[], &BTreeMap::new(), &BTreeSet::new()).usage
+    collect_enriched_usage(program, module, static_values, &[], &[], &BTreeMap::new(), &BTreeSet::new()).usage
 }
 
 fn attribute_expression<'a, 'b>(
@@ -3365,7 +3431,7 @@ fn evaluate_with_statics(
 /// Whether `expression` is an explicit `undefined`: `void 0`, or the global
 /// `undefined`, which no binding shadows. Without scoping a reference cannot
 /// be told from a shadowing binding, so it is not one.
-fn is_absent(expression: &Expression<'_>, scoping: Option<&Scoping>) -> bool {
+pub(crate) fn is_absent(expression: &Expression<'_>, scoping: Option<&Scoping>) -> bool {
     let shadowed = match crate::chain_walk::unwrap_type_assertions(expression) {
         Expression::Identifier(ident) => !scoping.is_some_and(|scoping| {
             ident.reference_id.get().is_some_and(|reference| scoping.get_reference(reference).symbol_id().is_none())
@@ -3976,6 +4042,7 @@ pub fn filter_usage_scan(
                 member,
                 identity_uncertain,
                 props,
+                literals,
                 clone,
                 at,
                 origin,
@@ -4009,6 +4076,27 @@ pub fn filter_usage_scan(
                 };
                 if let Some(binding) = resolved {
                     result.open_components.insert(binding.clone());
+                    // Literal system props take their static classes as a
+                    // JSX attribute's do; the open component keeps its slots.
+                    if let Some(active) = component_props.get(binding.as_str()) {
+                        let custom = custom_props.get(binding.as_str());
+                        for (prop_name, value) in literals {
+                            if !active.contains(prop_name) || custom.is_some_and(|c| c.contains(prop_name)) {
+                                continue;
+                            }
+                            let dedup_key = format!(
+                                "{prop_name}:{}",
+                                serde_json::to_string(value).unwrap_or_else(|_| "null".to_string())
+                            );
+                            if seen.insert(dedup_key) {
+                                result.system_prop_usages.push(SystemPropUsage {
+                                    prop_name: prop_name.clone(),
+                                    value: value.clone(),
+                                    binding: binding.clone(),
+                                });
+                            }
+                        }
+                    }
                     if let Some(config) = component_configs.get(&binding) {
                         let mut written: FxHashSet<&str> = FxHashSet::default();
                         for (key, class) in props.iter().flatten() {
@@ -4246,7 +4334,7 @@ mod tests {
         let ast = parse(source);
         let program = ast.program();
         let statics = crate::eval::collect_complete_static_values(program);
-        let facts = collect_usage_facts_with_statics(program, &statics);
+        let facts = collect_usage_facts_with_statics(program, ast.module_record(), &statics);
         filter_usage_scan(
             &facts,
             &props(&[("Box", &["p", "display", "mt"])]),
@@ -4525,7 +4613,7 @@ mod tests {
         let ast = parse(source);
         let statics = crate::eval::collect_complete_static_values(ast.program());
         let raw = collect_usage_facts(ast.program());
-        let enriched = collect_usage_facts_with_statics(ast.program(), &statics);
+        let enriched = collect_usage_facts_with_statics(ast.program(), ast.module_record(), &statics);
 
         for (label, facts) in [("raw", raw), ("enriched", enriched)] {
             let filtered = filter_usage_scan(

@@ -74,7 +74,7 @@ pub(crate) fn hyphenated(s: &str) -> String {
 /// bytes (`a-b` → `--612d62_`).
 pub fn slot_segment(name: &str) -> String {
     let mut segment = String::with_capacity(name.len() + 4);
-    if name.starts_with(|ch: char| ch.is_ascii_alphabetic()) && name.chars().all(|ch| ch.is_ascii_alphanumeric()) {
+    if is_plain_name(name) {
         for ch in name.chars() {
             if ch.is_ascii_uppercase() {
                 segment.push('-');
@@ -89,6 +89,18 @@ pub fn slot_segment(name: &str) -> String {
     }
     segment.push('_');
     segment
+}
+
+/// A component's binding as the slot-name segment after its prop's: as
+/// written when it is ASCII letters and digits (`Button` → `Button_`), and
+/// otherwise as `slot_segment` writes such a name (`Track$1` →
+/// `--547261636b2431_`).
+pub fn binding_segment(binding: &str) -> String {
+    if is_plain_name(binding) { format!("{binding}_") } else { slot_segment(binding) }
+}
+
+fn is_plain_name(name: &str) -> bool {
+    name.starts_with(|ch: char| ch.is_ascii_alphabetic()) && name.chars().all(|ch| ch.is_ascii_alphanumeric())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
