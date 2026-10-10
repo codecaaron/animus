@@ -593,7 +593,7 @@ describe('extractSystemFilePackages chain-scan tolerance', () => {
 describe('extractSystemFilePackages root bindings', () => {
   test('admits a root only when its binding resolves to Animus createSystem', () => {
     const dir = mkdtempSync(join(tmpdir(), 'discover-roots-'));
-    const files: Record<string, string> = {
+    const files = {
       'animus.ts': `export { createSystem as makeSystem } from '@animus-ui/system';`,
       'factory.ts': `export function createSystem() { return { extend: (k) => k }; }`,
       'ds.ts': [
@@ -605,33 +605,35 @@ describe('extractSystemFilePackages root bindings', () => {
         `export const b = createSystem().extend(kitB);`,
       ].join('\n'),
     };
-    const records: Record<string, ModuleRecord> = {
-      'animus.ts': {
-        imports: [],
-        exports: [
-          {
-            exported: 'makeSystem',
-            local: null,
-            source: '@animus-ui/system',
-            original: 'createSystem',
-          },
-        ],
-      },
-      'factory.ts': { imports: [], exports: [] },
-      'ds.ts': {
-        imports: [
-          { local: 'makeSystem', imported: 'makeSystem', source: './animus' },
-          {
-            local: 'createSystem',
-            imported: 'createSystem',
-            source: './factory',
-          },
-          { local: 'kitA', imported: 'ds', source: '@acme/a' },
-          { local: 'kitB', imported: 'ds', source: '@acme/b' },
-        ],
-        exports: [],
-      },
+    const animus: ModuleRecord = {
+      imports: [],
+      exports: [
+        {
+          exported: 'makeSystem',
+          local: null,
+          source: '@animus-ui/system',
+          original: 'createSystem',
+        },
+      ],
     };
+    const system: ModuleRecord = {
+      imports: [
+        { local: 'makeSystem', imported: 'makeSystem', source: './animus' },
+        {
+          local: 'createSystem',
+          imported: 'createSystem',
+          source: './factory',
+        },
+        { local: 'kitA', imported: 'ds', source: '@acme/a' },
+        { local: 'kitB', imported: 'ds', source: '@acme/b' },
+      ],
+      exports: [],
+    };
+    const records = new Map([
+      ['animus.ts', animus],
+      ['factory.ts', { imports: [], exports: [] }],
+      ['ds.ts', system],
+    ]);
     for (const [name, contents] of Object.entries(files)) {
       writeFileSync(join(dir, name), contents, 'utf-8');
     }
@@ -640,7 +642,7 @@ describe('extractSystemFilePackages root bindings', () => {
     try {
       const pkgs = extractSystemFilePackages(
         join(dir, 'ds.ts'),
-        (_source, path) => records[basename(path)] ?? null,
+        (_source, path) => records.get(basename(path)) ?? null,
         (diagnostic) => diagnostics.push(diagnostic)
       );
       expect(pkgs).toEqual(['@acme/a']);
