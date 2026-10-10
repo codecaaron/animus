@@ -15,12 +15,14 @@ import { createRequire } from 'module';
 import { tmpdir } from 'os';
 import { dirname, join, relative, sep } from 'path';
 
+import { systemPropsPath } from '../../../extract/session/session-paths';
 import { getReplacementEpoch } from '../../../extract/session/singleton';
 import {
   buildManifest,
   makeComponent,
   SYSTEM_CONFIG,
 } from '../../../extract/tests/session/session-fixtures';
+import { AnimusWebpackPlugin } from '../../src/plugin';
 
 import type { ReplacementPlan } from '../../../extract/tests/session/session-fixtures';
 import type { JsonValue } from '@animus-ui/assertions';
@@ -435,9 +437,51 @@ interface HarnessWebpackConfig {
   plugins: object[];
 }
 
+interface VirtualResolveData {
+  request: string;
+}
+
+interface VirtualResolveCompiler {
+  hooks: {
+    normalModuleFactory: {
+      tap(
+        name: string,
+        fn: (nmf: {
+          hooks: {
+            beforeResolve: {
+              tap(name: string, fn: (data: VirtualResolveData) => void): void;
+            };
+          };
+        }) => void
+      ): void;
+    };
+  };
+}
+
+/** `withAnimus` resolves the transforms' `virtual:animus/system-props`
+ *  import to the plugin session's module. The harness installs the plugin
+ *  alone, so it resolves the id the same way, once the plugin's session has
+ *  its root. */
+function resolveVirtualSystemProps(plugin: AnimusWebpackPlugin) {
+  return {
+    apply(compiler: VirtualResolveCompiler) {
+      compiler.hooks.normalModuleFactory.tap('HarnessVirtualResolve', (nmf) => {
+        nmf.hooks.beforeResolve.tap('HarnessVirtualResolve', (data) => {
+          if (data.request === 'virtual:animus/system-props') {
+            data.request = systemPropsPath(plugin.sessionDir);
+          }
+        });
+      });
+    },
+  };
+}
+
 export function buildHarnessWebpackConfig(
   args: HarnessWebpackConfigArguments
 ): HarnessWebpackConfig {
+  const animus = args.plugins.find(
+    (plugin) => plugin instanceof AnimusWebpackPlugin
+  );
   const config: HarnessWebpackConfig = {
     mode: 'development',
     context: args.root,
@@ -450,7 +494,10 @@ export function buildHarnessWebpackConfig(
         { test: args.rulesTest ?? /src[\\/].*\.js$/, use: [args.shimPath] },
       ],
     },
-    plugins: args.plugins,
+    plugins:
+      animus instanceof AnimusWebpackPlugin
+        ? [...args.plugins, resolveVirtualSystemProps(animus)]
+        : args.plugins,
   };
   if (args.resolve !== undefined) config.resolve = args.resolve;
   return config;
