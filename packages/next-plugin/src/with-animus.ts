@@ -4,7 +4,7 @@ import {
   buildPathAliasesJson,
   isEngineTransformExtension,
   isPathWithinRoot,
-  kitSourceModuleSideEffects,
+  keepsKitSourceEffects,
   readTsconfigAliasPairs,
   resolveMode,
   sourceKitDependencies,
@@ -344,8 +344,10 @@ export function withAnimus(
                     const resource = resolveData.createData?.resource;
                     if (
                       resource !== undefined &&
-                      isExternalPackageFile(resource) &&
-                      kitSourceModuleSideEffects(resource) === true
+                      keepsKitSourceEffects(
+                        resource,
+                        plugin.getExternalPackageDirs()
+                      )
                     ) {
                       settings.sideEffects = true;
                     }

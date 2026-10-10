@@ -4,7 +4,7 @@ import {
   ENGINE_TRANSFORM_EXTENSIONS,
   isEngineTransformExtension,
   isPathWithinRoot,
-  kitSourceModuleSideEffects,
+  keepsKitSourceEffects,
   readTsconfigAliasPairs,
 } from '@animus-ui/extract/pipeline';
 import {
@@ -169,18 +169,6 @@ export function transformWithEngine(
   return result.hasComponents ? result.code : null;
 }
 
-/** Whether a module under a discovered kit's source must stay
- *  side-effectful, whatever the package's list says of its own path. */
-function keepsKitSourceEffects(
-  filePath: string,
-  state: Pick<HostState, 'externalPackageDirs'>
-): boolean {
-  return (
-    state.externalPackageDirs.some((dir) => isPathWithinRoot(dir, filePath)) &&
-    kitSourceModuleSideEffects(filePath) === true
-  );
-}
-
 /** Whether esbuild's `external` option names `specifier`: exactly, as the
  *  package a subpath belongs to, or through a `*` wildcard. */
 function isEsbuildExternal(
@@ -241,6 +229,7 @@ interface RspackLikeCompiler extends WebpackLikeCompiler {
     module: {
       rules: Array<{
         test: (resource: string) => boolean;
+        issuer?: (issuer: string) => boolean;
         sideEffects: boolean;
       }>;
     };
@@ -504,9 +493,14 @@ export const unpluginFactory: UnpluginFactory<
         // the bundler's own plugin context, which resolves.
         if (!canResolve(this)) return null;
         const resolved = await this.resolve(id, importer, { skipSelf: true });
+        // An external resolution stays as another resolver leaves it.
         if (
           resolved === null ||
-          !keepsKitSourceEffects(moduleFilePath(resolved.id), state)
+          resolved.external ||
+          !keepsKitSourceEffects(
+            moduleFilePath(resolved.id),
+            state.externalPackageDirs
+          )
         ) {
           return null;
         }
@@ -671,13 +665,20 @@ export const unpluginFactory: UnpluginFactory<
             kind: args.kind,
             pluginData: KIT_SOURCE_RESOLVE,
           });
+          // An external resolution stays as another resolver leaves it.
           if (
             resolved.errors.length > 0 ||
-            !keepsKitSourceEffects(resolved.path, state)
+            resolved.external ||
+            !keepsKitSourceEffects(resolved.path, state.externalPackageDirs)
           ) {
             return undefined;
           }
-          return { path: resolved.path, sideEffects: true };
+          return {
+            path: resolved.path,
+            namespace: resolved.namespace,
+            suffix: resolved.suffix,
+            sideEffects: true,
+          };
         });
         build.onResolve({ filter: /^[^./\0]/ }, async (args) => {
           if (args.path.startsWith('animus:')) return undefined;
@@ -723,20 +724,24 @@ export const unpluginFactory: UnpluginFactory<
     };
     compiler.options.module.rules.push(
       {
-        // A kit source module the package's list may misclassify stays
-        // side-effectful unless it is a pure redirect target.
-        test: (resource: string) => {
-          const redirected = classification(resource);
-          return (
-            redirected === true ||
-            (redirected === undefined && keepsKitSourceEffects(resource, state))
-          );
-        },
+        test: (resource: string) => classification(resource) === true,
         sideEffects: true,
       },
       {
         test: (resource: string) => classification(resource) === false,
         sideEffects: false,
+      },
+      // Last, so it wins: a kit module's own import of a source module the
+      // package's list may misread keeps its effects, even where a pure
+      // redirect reaches the same file from the application.
+      {
+        test: (resource: string) =>
+          keepsKitSourceEffects(resource, state.externalPackageDirs),
+        issuer: (issuer: string) =>
+          state.externalPackageDirs.some((dir) =>
+            isPathWithinRoot(dir, issuer)
+          ),
+        sideEffects: true,
       }
     );
   }
@@ -757,7 +762,10 @@ export const unpluginFactory: UnpluginFactory<
         ) {
           createData.settings.sideEffects = sideEffects;
         } else if (
-          keepsKitSourceEffects(moduleFilePath(createData.resource), state)
+          keepsKitSourceEffects(
+            moduleFilePath(createData.resource),
+            state.externalPackageDirs
+          )
         ) {
           createData.settings.sideEffects = true;
         }

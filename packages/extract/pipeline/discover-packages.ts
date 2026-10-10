@@ -266,13 +266,47 @@ export function fileSideEffects(absFile: string): boolean | undefined {
 
 /** Whether a `sideEffects` glob can name a code file: a last segment with
  *  no extension can name any file, and an extension with glob syntax or of
- *  a script can name code; `*.css` cannot. */
+ *  a script can name code; `*.css` cannot. Brace alternatives are each read,
+ *  and braces this reading cannot expand count as naming code. */
 function globNamesCode(glob: string): boolean {
-  const last = glob.split('/').at(-1) ?? '';
-  const dot = last.lastIndexOf('.');
-  if (dot === -1) return true;
-  const extension = last.slice(dot + 1);
-  return /[*?{[]/.test(extension) || /^[cm]?[jt]sx?$/.test(extension);
+  const alternatives = expandBraces(glob);
+  if (alternatives === null) return true;
+  return alternatives.some((alternative) => {
+    const last = alternative.split('/').at(-1) ?? '';
+    const dot = last.lastIndexOf('.');
+    if (dot === -1) return true;
+    const extension = last.slice(dot + 1);
+    return /[*?[]/.test(extension) || /^[cm]?[jt]sx?$/.test(extension);
+  });
+}
+
+/** Every alternative a glob's `{a,b}` groups spell, nested groups included;
+ *  null when its braces do not balance. */
+function expandBraces(glob: string): string[] | null {
+  const open = glob.indexOf('{');
+  if (open === -1) return glob.includes('}') ? null : [glob];
+  let depth = 0;
+  const commas: number[] = [];
+  for (let at = open; at < glob.length; at++) {
+    if (glob[at] === '{') depth++;
+    else if (glob[at] === ',' && depth === 1) commas.push(at);
+    else if (glob[at] === '}' && --depth === 0) {
+      const bounds = [open, ...commas, at];
+      const rest = expandBraces(glob.slice(at + 1));
+      if (rest === null) return null;
+      const expanded: string[] = [];
+      for (let i = 0; i < bounds.length - 1; i++) {
+        const inner = expandBraces(glob.slice(bounds[i] + 1, bounds[i + 1]));
+        if (inner === null) return null;
+        for (const middle of inner) {
+          for (const tail of rest)
+            expanded.push(glob.slice(0, open) + middle + tail);
+        }
+      }
+      return expanded;
+    }
+  }
+  return null;
 }
 
 /**
@@ -289,6 +323,20 @@ export function kitSourceModuleSideEffects(absFile: string): true | undefined {
   return field.some((glob) => isJsonString(glob) && globNamesCode(glob))
     ? true
     : undefined;
+}
+
+/** Whether a host keeps the module at `file` side-effectful: it lies under
+ *  one of the discovered kit source directories, and its package's list
+ *  could misread it (see `kitSourceModuleSideEffects`). A host asks this of
+ *  the resolved module, never of its importer alone. */
+export function keepsKitSourceEffects(
+  file: string,
+  kitDirs: readonly string[]
+): boolean {
+  return (
+    kitDirs.some((dir) => isPathWithinRoot(dir, file)) &&
+    kitSourceModuleSideEffects(file) === true
+  );
 }
 
 function matchesSideEffects(

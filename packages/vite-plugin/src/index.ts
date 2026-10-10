@@ -2,7 +2,7 @@ import {
   assertKnownOptionKeys,
   assertNoRetiredEngineSelection,
   isPathWithinRoot,
-  kitSourceModuleSideEffects,
+  keepsKitSourceEffects,
   resolveMode,
   sourceKitDependencies,
 } from '@animus-ui/extract/pipeline';
@@ -231,9 +231,15 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
         return null;
       }
       const resolved = await this.resolve(id, importer, { skipSelf: true });
+      // The module it reaches must itself be kit source; an external
+      // resolution stays as another resolver leaves it.
       if (
         resolved === null ||
-        kitSourceModuleSideEffects(resolved.id.split('?')[0]) !== true
+        resolved.external ||
+        !keepsKitSourceEffects(
+          resolved.id.split('?')[0],
+          ctx.externalPackageDirs
+        )
       ) {
         return null;
       }
