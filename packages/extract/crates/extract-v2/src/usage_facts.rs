@@ -1860,6 +1860,9 @@ pub struct SpreadWrapper {
     pub forwarding: Vec<Forwarding>,
     /// Attributes of those elements that pass a named prop on.
     pub passed: Vec<PassThrough>,
+    /// How many `.asComponent(W)` calls hand it to a component, which then
+    /// renders it with the props its own renders forward.
+    pub targeted: usize,
 }
 
 /// A forwarding-element attribute whose whole value is a named prop
@@ -2040,9 +2043,10 @@ fn spread_wrapper_candidates<'b, 'a>(program: &'b Program<'a>) -> Vec<WrapperCan
 }
 
 /// The candidates that survive every reference check, with their forwarding
-/// elements. A wrapper binding may be used only as a JSX tag name, and is
-/// never reassigned; its spread parameter may be used only as a whole JSX
-/// spread argument or a read of one of its members that is no call.
+/// elements. A wrapper binding may be used only as a JSX tag name or as the
+/// one argument of an `.asComponent()` call, and is never reassigned; its
+/// spread parameter may be used only as a whole JSX spread argument or a
+/// read of one of its members that is no call.
 fn spread_wrappers(
     program: &Program<'_>,
     scoping: &Scoping,
@@ -2056,6 +2060,7 @@ fn spread_wrappers(
         invalid: FxHashSet::default(),
         forwarding: FxHashMap::default(),
         passed: FxHashMap::default(),
+        targeted: FxHashMap::default(),
         ancestors: Vec::new(),
     };
     for (index, candidate) in candidates.iter().enumerate() {
@@ -2101,6 +2106,7 @@ fn spread_wrappers(
                     named: candidate.named.into_iter().map(|prop| prop.key).collect(),
                     forwarding,
                     passed,
+                    targeted: scan.targeted.get(&index).copied().unwrap_or_default(),
                 },
             ))
         })
@@ -2119,6 +2125,8 @@ struct WrapperScan<'a, 's> {
     forwarding: FxHashMap<usize, Vec<Forwarding>>,
     /// Attributes whose whole value is a named prop, on any element.
     passed: FxHashMap<usize, Vec<PassThrough>>,
+    /// Candidate index → `.asComponent()` calls that take it.
+    targeted: FxHashMap<usize, usize>,
     ancestors: Vec<AstKind<'a>>,
 }
 
@@ -2162,12 +2170,19 @@ impl<'a> Visit<'a> for WrapperScan<'a, '_> {
             if !reference.is_value() {
                 return;
             }
-            let tag = matches!(
-                ancestors.next(),
-                Some(AstKind::JSXOpeningElement(_) | AstKind::JSXClosingElement(_))
-            );
-            if !tag {
-                self.invalid.insert(index);
+            match ancestors.next() {
+                Some(AstKind::JSXOpeningElement(_) | AstKind::JSXClosingElement(_)) => {}
+                Some(AstKind::CallExpression(call))
+                    if call.arguments.len() == 1
+                        && call.arguments[0].span() == ident.span
+                        && matches!(&call.callee, Expression::StaticMemberExpression(member)
+                            if member.property.name == "asComponent") =>
+                {
+                    *self.targeted.entry(index).or_default() += 1;
+                }
+                _ => {
+                    self.invalid.insert(index);
+                }
             }
             return;
         }
@@ -3683,6 +3698,12 @@ pub struct WrapperProxies {
     /// Opening-element spans of forwarding elements: their spread carries
     /// exactly the wrapper's renders, so it opens nothing itself.
     pub forwarding: FxHashSet<(u32, u32)>,
+    /// Opening-element spans of the forwarding elements of a wrapper that
+    /// `.asComponent()` takes: their spread carries what the component's
+    /// renders forward, which the project proof derives (`Forward`), so it
+    /// opens nothing itself. Only the proof reads that relation; everything
+    /// else counts the spread as open.
+    pub derived: FxHashSet<(u32, u32)>,
     /// Wrapper tag → props every element it forwards to sets itself, where
     /// no render can replace them: those elements record them, so a render
     /// that leaves them out keeps no default for them.
@@ -3951,7 +3972,7 @@ pub fn filter_usage_scan(
                     }
                     let binding = resolved_binding.clone().unwrap_or_else(|| tag_name.to_string());
                     result.rendered_components.insert(binding.clone());
-                    if spread.is_some() {
+                    if spread.is_some() && !proxies.forwarding.contains(span) && !proxies.derived.contains(span) {
                         result.open_components.insert(binding.clone());
                     }
 
