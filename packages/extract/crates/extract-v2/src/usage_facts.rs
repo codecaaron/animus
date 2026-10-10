@@ -566,8 +566,8 @@ pub(crate) fn collect_root_imports(program: &Program<'_>, roots: &FxHashSet<&str
 /// it has an effect of its own, and the modules it loads.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct ModuleEffects {
-    /// A bare import (`import './x.css'`), or a top-level statement other
-    /// than an import, export or declaration.
+    /// A bare import (`import './x.css'`), or a top-level statement that may
+    /// do more than declare inert values (`inert_expression`).
     pub own: bool,
     /// The specifiers of every import and re-export that loads a module at
     /// runtime: all but `import type` and `export type`.
@@ -576,6 +576,9 @@ pub(crate) struct ModuleEffects {
 
 pub(crate) fn collect_module_effects(program: &Program<'_>) -> ModuleEffects {
     let mut effects = ModuleEffects::default();
+    // Bindings that hold an Animus builder: imports from `@animus-ui/system`,
+    // then each binding a builder chain initializes.
+    let mut builders: FxHashSet<String> = FxHashSet::default();
     for stmt in &program.body {
         match stmt {
             Statement::ImportDeclaration(import) => {
@@ -584,10 +587,18 @@ pub(crate) fn collect_module_effects(program: &Program<'_>) -> ModuleEffects {
                 }
                 effects.own |= import.specifiers.as_ref().is_none_or(|specifiers| specifiers.is_empty());
                 effects.loads.push(import.source.value.to_string());
+                if is_animus_system_specifier(&import.source.value) {
+                    builders.extend(
+                        import.specifiers.iter().flatten().map(|specifier| specifier.local().name.to_string()),
+                    );
+                }
             }
             Statement::ExportNamedDeclaration(export) => {
                 if let Some(source) = export.source.as_ref().filter(|_| !export.export_kind.is_type()) {
                     effects.loads.push(source.value.to_string());
+                }
+                if let Some(declaration) = &export.declaration {
+                    effects.own |= !inert_declaration(declaration, &mut builders);
                 }
             }
             Statement::ExportAllDeclaration(export) => {
@@ -595,20 +606,161 @@ pub(crate) fn collect_module_effects(program: &Program<'_>) -> ModuleEffects {
                     effects.loads.push(export.source.value.to_string());
                 }
             }
-            Statement::ExportDefaultDeclaration(_)
-            | Statement::VariableDeclaration(_)
-            | Statement::FunctionDeclaration(_)
-            | Statement::ClassDeclaration(_)
-            | Statement::TSTypeAliasDeclaration(_)
-            | Statement::TSInterfaceDeclaration(_)
-            | Statement::TSEnumDeclaration(_)
-            | Statement::TSModuleDeclaration(_)
-            | Statement::TSGlobalDeclaration(_)
-            | Statement::EmptyStatement(_) => {}
-            _ => effects.own = true,
+            Statement::ExportDefaultDeclaration(export) => {
+                use oxc::ast::ast::ExportDefaultDeclarationKind as Kind;
+                effects.own |= !match &export.declaration {
+                    Kind::FunctionDeclaration(_) | Kind::TSInterfaceDeclaration(_) => true,
+                    Kind::ClassDeclaration(class) => inert_class(class, &builders),
+                    kind => kind.as_expression().is_some_and(|expression| inert_expression(expression, &builders)),
+                };
+            }
+            Statement::EmptyStatement(_) => {}
+            stmt => match stmt.as_declaration() {
+                Some(declaration) => effects.own |= !inert_declaration(declaration, &mut builders),
+                None => effects.own = true,
+            },
         }
     }
     effects
+}
+
+/// Whether evaluating a top-level declaration does no more than bind inert
+/// values; a binding a builder chain initializes joins `builders`.
+fn inert_declaration(declaration: &oxc::ast::ast::Declaration<'_>, builders: &mut FxHashSet<String>) -> bool {
+    use oxc::ast::ast::{BindingPattern, Declaration, VariableDeclarationKind};
+    match declaration {
+        Declaration::VariableDeclaration(variables) => {
+            if matches!(variables.kind, VariableDeclarationKind::Using | VariableDeclarationKind::AwaitUsing) {
+                return false;
+            }
+            variables.declarations.iter().all(|declarator| {
+                let Some(init) = &declarator.init else {
+                    return matches!(declarator.id, BindingPattern::BindingIdentifier(_));
+                };
+                let BindingPattern::BindingIdentifier(id) = &declarator.id else {
+                    return false;
+                };
+                if builder_chain(init, builders) {
+                    builders.insert(id.name.to_string());
+                    return true;
+                }
+                inert_expression(init, builders)
+            })
+        }
+        Declaration::FunctionDeclaration(_)
+        | Declaration::TSTypeAliasDeclaration(_)
+        | Declaration::TSInterfaceDeclaration(_)
+        | Declaration::TSGlobalDeclaration(_) => true,
+        // `import x = require('…')` loads a module.
+        Declaration::TSImportEqualsDeclaration(_) => false,
+        Declaration::ClassDeclaration(class) => inert_class(class, builders),
+        Declaration::TSEnumDeclaration(enumeration) => enumeration
+            .body
+            .members
+            .iter()
+            .all(|member| member.initializer.as_ref().is_none_or(|init| inert_expression(init, builders))),
+        // A namespace with values runs its body; an ambient one declares types.
+        Declaration::TSModuleDeclaration(module) => module.declare,
+    }
+}
+
+/// A class whose definition runs no code: no decorators, static blocks, or
+/// static values and computed keys that are not inert.
+fn inert_class(class: &oxc::ast::ast::Class<'_>, builders: &FxHashSet<String>) -> bool {
+    use oxc::ast::ast::{ClassElement, PropertyKey};
+    let key_inert = |key: &PropertyKey<'_>, computed: bool| {
+        !computed || key.as_expression().is_some_and(|key| inert_expression(key, builders))
+    };
+    class.decorators.is_empty()
+        && class.super_class.as_ref().is_none_or(|super_class| inert_expression(super_class, builders))
+        && class.body.body.iter().all(|element| match element {
+            ClassElement::StaticBlock(_) => false,
+            ClassElement::MethodDefinition(method) => {
+                method.decorators.is_empty() && key_inert(&method.key, method.computed)
+            }
+            ClassElement::PropertyDefinition(property) => {
+                property.decorators.is_empty()
+                    && key_inert(&property.key, property.computed)
+                    && (!property.r#static
+                        || property.value.as_ref().is_none_or(|value| inert_expression(value, builders)))
+            }
+            ClassElement::AccessorProperty(property) => {
+                property.decorators.is_empty()
+                    && key_inert(&property.key, property.computed)
+                    && (!property.r#static
+                        || property.value.as_ref().is_none_or(|value| inert_expression(value, builders)))
+            }
+            ClassElement::TSIndexSignature(_) => true,
+        })
+}
+
+/// An expression whose evaluation runs no code of its own: a literal, an
+/// identifier read, an object or array of inert values, a function, an
+/// inert class, or an Animus builder chain with inert arguments.
+fn inert_expression(expression: &Expression<'_>, builders: &FxHashSet<String>) -> bool {
+    use oxc::ast::ast::{ArrayExpressionElement, ObjectPropertyKind, UnaryOperator};
+    match expression.without_parentheses().get_inner_expression() {
+        Expression::BooleanLiteral(_)
+        | Expression::NullLiteral(_)
+        | Expression::NumericLiteral(_)
+        | Expression::BigIntLiteral(_)
+        | Expression::StringLiteral(_)
+        | Expression::RegExpLiteral(_)
+        | Expression::Identifier(_)
+        | Expression::FunctionExpression(_)
+        | Expression::ArrowFunctionExpression(_) => true,
+        Expression::TemplateLiteral(template) => {
+            template.expressions.iter().all(|expression| inert_expression(expression, builders))
+        }
+        Expression::UnaryExpression(unary) => match unary.operator {
+            UnaryOperator::UnaryNegation | UnaryOperator::UnaryPlus | UnaryOperator::BitwiseNot => matches!(
+                unary.argument.get_inner_expression(),
+                Expression::NumericLiteral(_) | Expression::BigIntLiteral(_)
+            ),
+            UnaryOperator::LogicalNot | UnaryOperator::Typeof | UnaryOperator::Void => {
+                inert_expression(&unary.argument, builders)
+            }
+            UnaryOperator::Delete => false,
+        },
+        Expression::ArrayExpression(array) => array.elements.iter().all(|element| match element {
+            ArrayExpressionElement::SpreadElement(_) => false,
+            ArrayExpressionElement::Elision(_) => true,
+            element => element.as_expression().is_some_and(|value| inert_expression(value, builders)),
+        }),
+        Expression::ObjectExpression(object) => object.properties.iter().all(|property| match property {
+            ObjectPropertyKind::SpreadProperty(_) => false,
+            ObjectPropertyKind::ObjectProperty(property) => {
+                (!property.computed
+                    || property.key.as_expression().is_some_and(|key| inert_expression(key, builders)))
+                    && inert_expression(&property.value, builders)
+            }
+        }),
+        Expression::ClassExpression(class) => inert_class(class, builders),
+        expression => builder_chain(expression, builders),
+    }
+}
+
+/// A call chain on an Animus builder, `createSystem().addScale(…).build()`
+/// or `bundle.createGlobalStyles({…})`, whose every argument is inert.
+fn builder_chain(expression: &Expression<'_>, builders: &FxHashSet<String>) -> bool {
+    let Expression::CallExpression(call) = expression.without_parentheses().get_inner_expression() else {
+        return false;
+    };
+    let arguments_inert = call
+        .arguments
+        .iter()
+        .all(|argument| argument.as_expression().is_some_and(|argument| inert_expression(argument, builders)));
+    let receiver_is_builder = |object: &Expression<'_>| match object.without_parentheses().get_inner_expression() {
+        Expression::Identifier(id) => builders.contains(id.name.as_str()),
+        object => builder_chain(object, builders),
+    };
+    arguments_inert
+        && !call.optional
+        && match call.callee.without_parentheses().get_inner_expression() {
+            Expression::Identifier(id) => builders.contains(id.name.as_str()),
+            Expression::StaticMemberExpression(member) => !member.optional && receiver_is_builder(&member.object),
+            _ => false,
+        }
 }
 
 /// Per-file named-export fact; feeds static enrichment and re-export

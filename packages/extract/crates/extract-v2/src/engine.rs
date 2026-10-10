@@ -170,8 +170,9 @@ fn dead_staged_builders(
 }
 
 /// The analysed modules whose evaluation provably does nothing but declare
-/// and export: no effect of their own, and every module they load is one too
-/// or an `@animus-ui/system` module, whose package declares no side effects.
+/// inert values and export them (`collect_module_effects`), and every module
+/// they load is one too or an `@animus-ui/system` module, whose package
+/// declares no side effects.
 /// A module that loads anything else, such as a stylesheet or an unanalysed
 /// package, is not.
 fn effect_free_modules(
@@ -211,7 +212,8 @@ fn effect_free_modules(
 /// an import, so its module, the whole system builder, would still load. A
 /// declaration left with no value specifier goes whole. An import of a module
 /// that may have effects of its own stays as written (`effect_free_modules`),
-/// as does one the transform keeps for its module's effects.
+/// as does one the transform keeps for its module's effects, and every import
+/// of a module that calls eval directly.
 fn unread_root_imports(
     path: &str,
     source: &str,
@@ -230,7 +232,8 @@ fn unread_root_imports(
         })
         .map(|chain| chain.descriptor.root.as_str())
         .collect();
-    if roots.is_empty() || file_facts.root_imports.is_empty() {
+    // A direct eval can read any binding of the module by name.
+    if roots.is_empty() || file_facts.root_imports.is_empty() || file_facts.direct_eval {
         return Vec::new();
     }
     let Some(named) = replacement_reads(path, replacements) else {
@@ -1478,39 +1481,73 @@ mod tests {
 
     /// Contract: the transform drops an imported chain root once no code it
     /// leaves reads it and its module provably has no effects, and the whole
-    /// import when no value specifier is left; a root still read, or one from
-    /// a module with an effect such as a stylesheet import, keeps its import.
+    /// import when no value specifier is left. A root still read keeps its
+    /// import, as does one whose module, or a module it loads, may run code
+    /// beyond declaring inert values and Animus builder chains, and every
+    /// import of a module that calls eval directly.
     #[test]
     fn transform_drops_imports_of_roots_only_replaced_chains_read() {
         let mut engine = ExtractEngine::new(None).unwrap();
         let files = [
-            ("system.ts", "import { createSystem } from '@animus-ui/system';\nexport const system = createSystem();\nexport const theme = {};\n"),
+            (
+                "system.ts",
+                "import { createSystem } from '@animus-ui/system';\n\
+                 const bundle = createSystem().addScale('space', { 1: '4px', 2: -2 });\n\
+                 export const system = bundle.build();\n\
+                 export const theme = { space: [1, 2], unit: () => 'px' };\n",
+            ),
             ("other.ts", "export const ds = {};\nexport type Theme = {};\n"),
             ("kept.ts", "export default {};\n"),
             ("styled.ts", "import './x.css';\nexport const styled = {};\n"),
+            ("audited.ts", "export const audited = {};\nexport const audit = record();\n"),
+            ("statics.ts", "export const statics = {};\nexport class Counter { static runs = record(); }\n"),
+            ("defaulted.ts", "export const defaulted = {};\nexport default record();\n"),
+            ("initialized.ts", "export const value = record();\n"),
+            ("transitive.ts", "import { value } from './initialized';\nexport const transitive = { value };\n"),
             (
                 "app.tsx",
                 "import { system, theme } from './system';\n\
                  import { ds, type Theme } from './other';\n\
                  import kept from './kept';\n\
                  import { styled } from './styled';\n\
+                 import { audited } from './audited';\n\
+                 import { statics } from './statics';\n\
+                 import { defaulted } from './defaulted';\n\
+                 import { transitive } from './transitive';\n\
                  export const Box = system.styles({ p: 4 }).asElement('div');\n\
                  export const Card = ds.styles({ m: 2 }).asElement('div');\n\
                  export const Other = kept.styles({ m: 1 }).asElement('div');\n\
                  export const Styled = styled.styles({ m: 3 }).asElement('div');\n\
+                 export const Audited = audited.styles({ m: 4 }).asElement('div');\n\
+                 export const Statics = statics.styles({ m: 5 }).asElement('div');\n\
+                 export const Defaulted = defaulted.styles({ m: 6 }).asElement('div');\n\
+                 export const Transitive = transitive.styles({ m: 7 }).asElement('div');\n\
                  export const read = () => [kept, theme];\n",
+            ),
+            (
+                "evaluated.tsx",
+                "import { system } from './system';\n\
+                 export const Box = system.styles({ p: 1 }).asElement('div');\n\
+                 export const read = () => eval('system');\n",
             ),
         ];
         let entries: Vec<_> = files.iter().map(|(path, source)| serde_json::json!({ "path": path, "source": source })).collect();
         engine.analyze(serde_json::Value::Array(entries).to_string()).unwrap();
-        let result: serde_json::Value =
-            serde_json::from_str(&engine.transform_file("app.tsx".to_string()).unwrap()).unwrap();
-        let code = result["code"].as_str().unwrap();
+        let mut transform = |path: &str| -> String {
+            let result: serde_json::Value =
+                serde_json::from_str(&engine.transform_file(path.to_string()).unwrap()).unwrap();
+            result["code"].as_str().unwrap().to_string()
+        };
+        let code = transform("app.tsx");
         assert!(code.contains("import { theme } from './system';"), "{code}");
         assert!(!code.contains("'./other'"), "{code}");
         assert!(code.contains("import kept from './kept';"), "{code}");
-        assert!(code.contains("import { styled } from './styled';"), "{code}");
+        for kept in ["styled", "audited", "statics", "defaulted", "transitive"] {
+            assert!(code.contains(&format!("import {{ {kept} }} from './{kept}';")), "{kept}: {code}");
+        }
         assert!(!code.contains(".styles("), "{code}");
+        let code = transform("evaluated.tsx");
+        assert!(code.contains("import { system } from './system';"), "{code}");
     }
 
     #[test]
