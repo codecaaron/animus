@@ -6430,7 +6430,15 @@ fn run_with_system_floor(
     }
     for (path, ff) in files {
         let mut names: Vec<&str> = Vec::new();
-        for name in &ff.value_escapes {
+        // A default export spelled as a specifier (`export { R as default }`)
+        // is what a framework or entry renders by itself, as `export default
+        // R` is.
+        let default_specifiers = ff
+            .exports
+            .iter()
+            .filter(|export| export.exported == "default" && export.source.is_none())
+            .filter_map(|export| export.local.as_ref());
+        for name in ff.value_escapes.iter().chain(default_specifiers) {
             names.push(name);
             // A class resolver has no component members, so a path through
             // one (`resolver.attrs`, `resolver.attrs.call`) is the resolver
@@ -6489,6 +6497,17 @@ fn run_with_system_floor(
                 names.push(alias);
             }
         }
+        // So is a name a barrel re-exports as its default (`export { R as
+        // default } from './r'`); a re-exported default is the source's own.
+        for export in ff.exports.iter().filter(|export| export.exported == "default") {
+            let (Some(source), Some(original)) = (&export.source, &export.original) else { continue };
+            if original == "default" {
+                continue;
+            }
+            if let Some((declaring, binding, _)) = resolve_export(path, source, original, files, inputs) {
+                escaped_ids.extend(resolve_declared_identity(&declaring, &binding, files, inputs, &evaluated_ids));
+            }
+        }
         // Through the file's own declarations and imports only: an outside
         // package's `R` never opens a project component named `R`.
         for name in names {
@@ -6539,6 +6558,19 @@ fn run_with_system_floor(
         ids.extend(member_path_ids(path, ff, tag, false, files, inputs, &evaluated_ids));
         ids
     };
+    // A component object some module writes a member of (`R.render = Slot`)
+    // or hands on may no longer render its children in place: each name
+    // or path a module hands on or changes, and each object along it.
+    let mut changed_ids: FxHashSet<String> = FxHashSet::default();
+    for (path, ff) in files {
+        for used in ff.value_escapes.iter().chain(ff.unsafe_object_uses.keys()) {
+            let prefixes = used.match_indices('.').map(|(dot, _)| &used[..dot]).chain(std::iter::once(used.as_str()));
+            for prefix in prefixes {
+                changed_ids.extend(resolve_declared_identity(path, prefix, files, inputs, &evaluated_ids));
+                changed_ids.extend(member_path_ids(path, ff, prefix, false, files, inputs, &evaluated_ids));
+            }
+        }
+    }
     let (delivered_ids, delivered_tags) = opaque_delivery(
         files,
         inputs,
@@ -6547,7 +6579,10 @@ fn run_with_system_floor(
         &wrapper_targets_by_file,
         &ordinary_members,
         receiver_ids,
-        |id| evaluated.get(id).is_some_and(|(_, _, terminal, ..)| *terminal == TerminalKind::AsElement),
+        |id| {
+            !changed_ids.contains(id)
+                && evaluated.get(id).is_some_and(|(_, _, terminal, ..)| *terminal == TerminalKind::AsElement)
+        },
     );
     escaped_ids.extend(delivered_ids);
     // A held wrapper some render of which no member tag shows renders with
@@ -9689,6 +9724,31 @@ export const App = ({ n }) => <Box bgImage={n} texture={n} />;
         }
     }
 
+    /// A component object some module writes a member of, or hands on, may
+    /// render through code usage cannot see, so the elements it receives
+    /// keep their floor.
+    #[test]
+    fn mutated_component_objects_lose_receiver_trust() {
+        let kit = "export const Box = ds.system({ space: true }).asElement('div');\n\
+                   export const R = ds.styles({ display: 'block' }).asElement('div');\n";
+        let render = "import { Box, R } from './kit';\nexport const App = () => <R><Box p={8} /></R>;\n";
+        let cases: [(&str, &str, &[&str]); 5] = [
+            ("", "", &[]),
+            ("R.render = globalThis.Slot;\n", "", &["p"]),
+            ("", "import { R } from './kit';\nR.render = globalThis.Slot;\n", &["p"]),
+            ("", "import * as kit from './kit';\nkit.R.render = globalThis.Slot;\n", &["p"]),
+            ("", "import { R } from './kit';\nconsume(R);\n", &["p"]),
+        ];
+        for (in_kit, other, want) in cases {
+            let kit = format!("{kit}{in_kit}");
+            let mut files = vec![("kit.tsx", kit.as_str()), ("app.tsx", render)];
+            if !other.is_empty() {
+                files.push(("other.tsx", other));
+            }
+            assert_eq!(analyze(&files, &test_inputs()).dynamic_props.keys().collect::<Vec<_>>(), want, "{in_kit}{other}");
+        }
+    }
+
     #[test]
     fn slots_serve_only_the_conditions_known_value_shapes_write() {
         let kit = "export const Box = ds.system({ space: true }).props({ tone: { property: 'color' } }).asElement('div');\n";
@@ -11405,6 +11465,29 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
                 (vec!["sm", "md", "lg"], vec!["active", "busy"]),
                 "{recipe}"
             );
+        }
+    }
+
+    /// A default export, however spelled and wherever re-exported, is what a
+    /// framework or entry renders by itself, so it opens its target.
+    #[test]
+    fn default_export_specifiers_keep_every_option_of_their_target() {
+        let r = format!("{RECIPE}export {{ R as default }};\n");
+        let app = "import { R } from './r';\nexport const App = () => <R size=\"sm\" active />;\n";
+        let cases: [&[(&str, &str)]; 4] = [
+            &[("r.tsx", r.as_str())],
+            &[("r.tsx", RECIPE), ("barrel.ts", "export { R as default } from './r';\n")],
+            &[("r.tsx", RECIPE), ("barrel.ts", "import { R } from './r';\nexport { R as default };\n")],
+            &[
+                ("r.tsx", RECIPE),
+                ("barrel.ts", "export { R as G } from './r';\n"),
+                ("entry.ts", "export { G as default } from './barrel';\n"),
+            ],
+        ];
+        for modules in cases {
+            let mut files = vec![("app.tsx", app)];
+            files.extend(modules);
+            assert_eq!(kept_options(&files), (vec!["sm", "md", "lg"], vec!["active", "busy"]), "{modules:?}");
         }
     }
 
