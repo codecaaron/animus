@@ -100,6 +100,26 @@ export const accepted = (
   </>
 );
 
+// A component's padding props: a loose or unscaled one takes any number, as
+// extraction and the runtime write it in px; a strict one keeps to its scale.
+const Card = ds
+  .styles({})
+  .props({
+    pad: { property: 'padding', scale: 'space', strict: false },
+    bare: { property: 'padding' },
+    tight: { property: 'padding', scale: { page: '24px' }, strict: true },
+  })
+  .asElement('div');
+
+export const numericLengths = (
+  <>
+    <Card pad={13} bare={13} tight="page" />
+    <Card pad={{ _: 13, md: 2.5 }} bare={{ _: 2.5 }} />
+    {/* @ts-expect-error — a strict scale still rejects a number it lacks */}
+    <Card tight={13} />
+  </>
+);
+
 export const rejected = (
   <>
     {/* @ts-expect-error — a strict space scale rejects a raw length */}

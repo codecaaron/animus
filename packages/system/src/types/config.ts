@@ -116,12 +116,14 @@ type NegateKeys<T> = T extends number
 
 // `& string` drops a declaration prop's absent property; intersecting with
 // `keyof PropertyTypes` instead expands the key union against itself.
+// Raw values take any number where the property takes a length, as
+// extraction and the runtime write it with px.
 export type PropertyValues<
   Property extends SystemProp,
   IncludeGlobals = false,
 > = Exclude<
   PropertyTypes<
-    IncludeGlobals extends true ? (string & {}) | 0 : never
+    IncludeGlobals extends true ? (string & {}) | number : never
   >[Property['property'] & string],
   IncludeGlobals extends true ? never : object | any[]
 >;
