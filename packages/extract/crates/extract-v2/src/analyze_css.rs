@@ -4713,6 +4713,10 @@ fn run_with_system_floor(
         .collect();
     let identity_of: FxHashMap<&str, &str> =
         identities.iter().map(|(id, _, identity)| (id.as_str(), identity.as_str())).collect();
+    let name_scopes: FxHashMap<&String, String> = identities
+        .iter()
+        .map(|(id, binding, _)| (*id, crate::ids::name_scope(binding, &class_names[id])))
+        .collect();
 
     for component_id in &sorted_ids {
         let Some((file_path, chain_idx)) = chain_lookup.get(component_id.as_str()) else {
@@ -4752,8 +4756,8 @@ fn run_with_system_floor(
             .and_then(|parent_id| inherited_variant_configs.get(parent_id))
             .map_or(&[][..], Vec::as_slice);
         let merged_chain = inherit_variant_stages(chain, parent_variant_configs);
-        // A component's own declaration props bind under its class's suffix;
-        // an inherited one keeps the suffix of the component that declared it.
+        // A component's own declaration props bind under its name scope; an
+        // inherited one keeps the scope of the component that declared it.
         let result = process_chain_facts(
             merged_chain.as_ref().unwrap_or(chain),
             &resolve_ctx,
@@ -4762,8 +4766,7 @@ fn run_with_system_floor(
         .and_then(|mut out| {
             out.component_css.class_name = class_names[component_id].clone();
             if let Some(own) = out.custom_prop_configs.as_mut() {
-                let suffix = crate::ids::class_suffix(&class_names[component_id]);
-                bind_component_declarations(own, &inputs.declaration_scales, &inputs.theme, suffix)
+                bind_component_declarations(own, &inputs.declaration_scales, &inputs.theme, &name_scopes[component_id])
                     .map_err(|detail| ("props".to_string(), detail))?;
             }
             Ok(out)
@@ -6212,7 +6215,7 @@ fn run_with_system_floor(
     // joined across copies like `slot_conditions`; `None` serves every one.
     let mut production_custom_conditions: HashMap<String, Option<BTreeSet<String>>> = HashMap::new();
     for component_id in &sorted_ids {
-        let Some((component_css, _, _, _, _, custom_configs, _)) = evaluated.get(component_id)
+        let Some((_, _, _, _, _, custom_configs, _)) = evaluated.get(component_id)
         else {
             continue;
         };
@@ -6222,7 +6225,7 @@ fn run_with_system_floor(
         };
         let mut component_dynamic: HashMap<String, DynamicPropMeta> = HashMap::new();
         runtime_custom_declarations.extend(runtime_declarations_of(dynamic_props_for_binding.iter(), cc));
-        let class_hash = crate::ids::class_suffix(&component_css.class_name);
+        let scope = &name_scopes[component_id];
         for prop_name in dynamic_props_for_binding {
             if let Some(prop_config) = cc.get(prop_name) {
                 if let Some(binding) = prop_config.declaration_binding() {
@@ -6232,15 +6235,15 @@ fn run_with_system_floor(
                     );
                     continue;
                 }
-                // The component's hash follows the segment's `_`: its slot
-                // never shares a name with a system prop's or another
+                // The component's name scope follows the segment's `_`: its
+                // slot never shares a name with a system prop's or another
                 // component's.
                 let segment = slot_segment(prop_name);
                 component_dynamic.insert(
                     prop_name.clone(),
                     DynamicPropMeta::new(
-                        format!("--{class_prefix}-{segment}{class_hash}"),
-                        format!("{class_prefix}-dyn-{segment}{class_hash}"),
+                        format!("--{class_prefix}-{segment}{scope}"),
+                        format!("{class_prefix}-dyn-{segment}{scope}"),
                         prop_config,
                         &inputs.theme,
                         &inputs.contextual_vars,
@@ -8408,10 +8411,10 @@ export const App = ({ n }) => <Box bgImage={n} texture={n} />;
             ("export const App = ({ n }) => <Box p={`${n}px`} />;\n", &["p_"]),
             ("export const App = ({ c, n }) => <Box p={c ? 8 : `${n}px`} />;\n", &["p_"]),
             ("export const App = ({ n, m }) => <Box p={{ _: n, sm: m }} />;\n", &["p_", "p_-sm"]),
-            ("export const App = ({ n }) => <Box tone={{ sm: n }} />;\n", &["tone_091638e9-sm"]),
+            ("export const App = ({ n }) => <Box tone={{ sm: n }} />;\n", &["tone_Box_091638e9-sm"]),
             // A value of unknown shape, or a spread, may write any condition.
             ("export const App = ({ c, n }) => <Box p={c ? 8 : n} />;\n", &["p_", "p_-sm"]),
-            ("export const App = ({ n, ...rest }) => <Box {...rest} p={`${n}`} />;\n", &["p_", "p_-sm", "tone_091638e9", "tone_091638e9-sm"]),
+            ("export const App = ({ n, ...rest }) => <Box {...rest} p={`${n}`} />;\n", &["p_", "p_-sm", "tone_Box_091638e9", "tone_Box_091638e9-sm"]),
             // So may a clone's override, whatever the element writes.
             ("import { cloneElement } from 'react';\nfunction Wrap({ children, n }) { return cloneElement(children, { p: n }); }\nexport const App = ({ m, n }) => <Wrap n={n}><Box p={`${m}px`} /></Wrap>;\n", &["p_", "p_-sm"]),
         ];
@@ -8423,7 +8426,7 @@ export const App = ({ n }) => <Box bgImage={n} texture={n} />;
         forced.static_css =
             Some(crate::forced_usage::StaticCssConfig::parse(r#"{"components":{"Box":{"dynamicProps":["tone"]}}}"#).unwrap());
         let app = "export const App = ({ n }) => <Box tone={`${n}`} />;\n";
-        assert_eq!(slots(app, &forced), ["p_", "p_-sm", "tone_091638e9", "tone_091638e9-sm"]);
+        assert_eq!(slots(app, &forced), ["p_", "p_-sm", "tone_Box_091638e9", "tone_Box_091638e9-sm"]);
     }
 
     #[test]

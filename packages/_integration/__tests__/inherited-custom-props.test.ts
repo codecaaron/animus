@@ -193,14 +193,17 @@ describe('custom props inherited through extend()', () => {
 
   const render = (binding: keyof Levels, props: ProbeProps) => {
     const html = renderToString(createElement(components[binding], props));
-    // Each level's slot variables end in its own component hash; the
-    // values are what the levels share.
+    // Each level's slot variables end in its own binding and component
+    // hash; the values are what the levels share.
     const style = Object.fromEntries(
       (/style="([^"]*)"/.exec(html)?.[1] ?? '')
         .split(';')
         .filter(Boolean)
         .map((declaration) => declaration.split(':'))
-        .map(([name, value]) => [name.replace(/_[0-9a-f]{8}$/, '_'), value])
+        .map(([name, value]) => [
+          name.replace(/_[A-Za-z0-9]+_[0-9a-f]{8}$/, '_'),
+          value,
+        ])
     );
     return { html, style };
   };
