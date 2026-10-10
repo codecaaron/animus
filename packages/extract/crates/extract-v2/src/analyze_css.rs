@@ -21,7 +21,7 @@ use crate::css::{
     CssFragmentStore, CssSheets, UtilityInput, VariantCss,
 };
 use crate::declarations::{bind_component_declarations, check_surface_overlap, DeclarationBinding, DeclarationScales};
-use crate::dynamic_meta::DynamicPropMeta;
+use crate::dynamic_meta::{share_slots, DynamicPropMeta};
 use crate::evaluator::{EvalError, TransformEvaluator};
 use crate::facts::FileFacts;
 use crate::jsx_scan::{
@@ -5341,6 +5341,7 @@ fn run_with_system_floor(
             );
         }
     }
+    share_slots(&mut dynamic_props);
     let slot_entries = if !dynamic_props.is_empty() {
         Some(build_variable_slot_entries(&dynamic_props, &breakpoints))
     } else {
@@ -5523,6 +5524,7 @@ fn run_with_system_floor(
             }
         }
         if !component_dynamic.is_empty() {
+            share_slots(&mut component_dynamic);
             all_custom_slot_entries.extend(build_variable_slot_entries(
                 &component_dynamic,
                 &breakpoints,

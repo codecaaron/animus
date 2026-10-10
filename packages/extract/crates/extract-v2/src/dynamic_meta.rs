@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use serde::Serialize;
 use serde_json::Value;
@@ -111,6 +111,50 @@ impl DynamicPropMeta {
         match self {
             Self::Value(meta) => Some(meta),
             Self::Declarations(_) => None,
+        }
+    }
+}
+
+impl ValuePropMeta {
+    /// What a slot rule depends on: the properties it writes, the current
+    /// variable it also sets, and the transform the runtime applies first.
+    fn slot_key(&self) -> (&[String], Option<&str>, [Option<&str>; 3]) {
+        let destination = if self.properties.is_empty() {
+            std::slice::from_ref(&self.property)
+        } else {
+            &self.properties
+        };
+        let transform = [
+            self.transform_name.as_deref(),
+            self.transform_id.as_deref(),
+            self.transform_fn_source.as_deref(),
+        ];
+        (destination, self.current_var.as_deref(), transform)
+    }
+}
+
+/// Props alike in what a slot rule depends on share one slot variable and
+/// rule, as `h` and `height` do: each takes the slot of the first by name.
+/// The runtime resolves a value through the prop's own metadata, and of two
+/// writes to one element the later-defined prop's wins.
+pub fn share_slots(metas: &mut HashMap<String, DynamicPropMeta>) {
+    let mut props: Vec<&String> = metas.keys().collect();
+    props.sort();
+    let mut slots: HashMap<_, (&str, &str)> = HashMap::new();
+    let mut shared: Vec<(String, String, String)> = Vec::new();
+    for prop in props {
+        let Some(meta) = metas[prop].value() else { continue };
+        let (var_name, slot_class) = *slots
+            .entry(meta.slot_key())
+            .or_insert((meta.var_name.as_str(), meta.slot_class.as_str()));
+        if var_name != meta.var_name {
+            shared.push((prop.clone(), var_name.to_string(), slot_class.to_string()));
+        }
+    }
+    for (prop, var_name, slot_class) in shared {
+        if let Some(DynamicPropMeta::Value(meta)) = metas.get_mut(&prop) {
+            meta.var_name = var_name;
+            meta.slot_class = slot_class;
         }
     }
 }
