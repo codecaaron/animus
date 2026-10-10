@@ -10995,7 +10995,13 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
                 "{recipe}"
             );
         }
-        for alias in ["export const B = R;\n", "export const B: typeof R = R;\n", "export { R as B };\n"] {
+        for alias in [
+            "export const B = R;\n",
+            "export const B: typeof R = R;\n",
+            "export { R as B };\n",
+            // Its module renders it, which changes nothing it holds.
+            "import { createElement } from 'react';\nexport const B = R;\nexport const Own = () => createElement(B, { size: 'sm' });\n",
+        ] {
             let recipe = format!("{RECIPE}{alias}");
             let consumer = "import { B } from './r';\nexport const Other = () => <B size=\"lg\" />;\n";
             assert_eq!(
