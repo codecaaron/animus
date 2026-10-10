@@ -2485,62 +2485,66 @@ fn resolve_identity(
 /// The binding a module-scope `const` alias (`const A = S`, with or without
 /// a type annotation) in `file` holds, when nothing may change what it
 /// holds: then a use of the alias, in any module, is a use of `S`. No module
-/// may write a member of, or hand on, the alias, an alias it holds on the
-/// way (`const a = S; const A = a`) or the binding the chain ends at, nor
-/// may any module that imports the alias, by name, through a barrel or as a
-/// namespace member.
+/// may write a member of, or hand on, any name for the object the alias
+/// holds: the alias, an alias on the way, the binding the chain ends at, or
+/// an import, local alias or namespace member of any of them.
 fn followed_alias<'f>(
     files: &'f BTreeMap<String, FileFacts>,
     inputs: &CssInputs,
     file: &str,
     alias: &str,
 ) -> Option<&'f str> {
-    let ff = files.get(file)?;
-    let target = ff.aliases.get(alias)?;
-    // Whether a module writes a member of `name` or hands it on.
-    let touched = |ff: &FileFacts, name: &str| {
-        ff.unsafe_object_uses.contains_key(name)
-            || ff.value_escapes.iter().any(|escape| escape.strip_prefix(name).is_some_and(|rest| rest.starts_with('.')))
-    };
-    let mut hop = alias;
-    let mut seen: FxHashSet<&str> = FxHashSet::default();
-    loop {
-        if !seen.insert(hop) || touched(ff, hop) {
-            return None;
-        }
-        match ff.aliases.get(hop) {
-            Some(next) => hop = next,
-            None => break,
-        }
-    }
-    if let Some((declaring, binding, _)) = resolve_declaration(file, ff, hop, files, inputs) {
-        if (declaring.as_str(), binding.as_str()) != (file, hop) && files.get(&declaring).is_some_and(|dff| touched(dff, &binding)) {
-            return None;
-        }
-    }
-    let names_alias = |declaration: Option<(String, String)>| {
-        declaration.is_some_and(|(declaring, binding)| declaring == file && binding == alias)
-    };
-    for (path, other) in files {
-        let imported = other.imports.iter().any(|import| {
-            touched(other, &import.local)
-                && names_alias(
-                    resolve_declaration(path, other, &import.local, files, inputs)
-                        .map(|(declaring, binding, _)| (declaring, binding)),
-                )
-        });
-        let namespaced = other.unsafe_object_uses.keys().chain(&other.value_escapes).any(|used| {
-            let mut segments = used.splitn(3, '.');
-            let (Some(namespace), Some(member)) = (segments.next(), segments.next()) else { return false };
-            let Some(module) = namespace_path_module(path, other, namespace, files, inputs) else { return false };
-            let (declaring, binding, _, _) = module_declaration(module, member, files, inputs);
-            names_alias(Some((declaring, binding)))
-        });
-        if imported || namespaced {
-            return None;
+    let target = files.get(file)?.aliases.get(alias)?;
+    let object = held_object(files, inputs, file, alias)?;
+    for (path, ff) in files {
+        for used in ff.value_escapes.iter().chain(ff.unsafe_object_uses.keys()) {
+            let mut prefixes = used.match_indices('.').map(|(dot, _)| &used[..dot]).chain(std::iter::once(used.as_str()));
+            if prefixes.any(|prefix| held_object(files, inputs, path, prefix).as_ref() == Some(&object)) {
+                return None;
+            }
         }
     }
     Some(target.as_str())
+}
+
+/// The declaration of the object a name in `file` holds (`ns.sub.X` for a
+/// namespace member), through local aliases, imports, barrels and the
+/// aliases of each module it reaches.
+fn held_object(
+    files: &BTreeMap<String, FileFacts>,
+    inputs: &CssInputs,
+    file: &str,
+    name: &str,
+) -> Option<(String, String)> {
+    let ff = files.get(file)?;
+    let (mut module, mut binding) = match name.rsplit_once('.') {
+        Some((namespace, member)) => {
+            let module = namespace_path_module(file, ff, namespace, files, inputs)?;
+            let (declaring, binding, _, _) = module_declaration(module, member, files, inputs);
+            (declaring, binding)
+        }
+        None => (file.to_string(), name.to_string()),
+    };
+    let mut seen: FxHashSet<(String, String)> = FxHashSet::default();
+    while seen.insert((module.clone(), binding.clone())) {
+        let Some(mff) = files.get(&module) else { break };
+        let held = resolve_alias_terminal(&module, &binding, files);
+        if held != binding {
+            binding = held.to_string();
+            continue;
+        }
+        match resolve_declaration(&module, mff, &binding, files, inputs) {
+            Some((declaring, declared, _)) if (declaring.as_str(), declared.as_str()) != (module.as_str(), binding.as_str()) => {
+                binding = match declared.as_str() {
+                    "default" => files.get(&declaring).and_then(|dff| dff.default_export_binding.clone()).unwrap_or(declared),
+                    _ => declared,
+                };
+                module = declaring;
+            }
+            _ => break,
+        }
+    }
+    Some((module, binding))
 }
 
 /// Every member tag a file writes, as a JSX tag or a `createElement` type.
@@ -11485,6 +11489,16 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
                 format!("{RECIPE}const b = R;\nexport const B = b;\nconsume(b);\n"),
                 "import { B } from './r';\nexport const Other = () => <B size=\"lg\" />;\n",
             ),
+            // An importer writes a member of the alias through its own alias.
+            (
+                format!("{RECIPE}export const B = R;\n"),
+                "import { B } from './r';\nconst b = B;\nb.render = globalThis.Slot;\nexport const Other = () => <B size=\"lg\" />;\n",
+            ),
+            // An importer writes a member of the target under another name.
+            (
+                format!("{RECIPE}export const B = R;\n"),
+                "import { B, R as X } from './r';\nX.render = globalThis.Slot;\nexport const Other = () => <B size=\"lg\" />;\n",
+            ),
             // The module writes to the alias, which it may no longer hold.
             (
                 format!("{RECIPE}export const B = R;\nB.extra = 1;\n"),
@@ -11497,6 +11511,18 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
                 "{recipe}"
             );
         }
+        // An importer writes a member of the alias through a nested namespace.
+        let recipe = format!("{RECIPE}export const B = R;\n");
+        let nested = "import * as lib from './barrel';\nlib.nested.B.render = globalThis.Slot;\nexport const Other = () => <lib.nested.B size=\"lg\" />;\n";
+        assert_eq!(
+            kept_options(&[
+                ("r.tsx", recipe.as_str()),
+                ("barrel.ts", "export * as nested from './r';\n"),
+                ("app.tsx", app),
+                ("other.tsx", nested),
+            ]),
+            (vec!["sm", "md", "lg"], vec!["active", "busy"]),
+        );
         for alias in [
             "export const B = R;\n",
             "export const B: typeof R = R;\n",
