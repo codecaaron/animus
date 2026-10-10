@@ -19,6 +19,7 @@ import {
   severityFor,
   UNPROVEN_ROOT_BINDING,
 } from './manifest-diagnostics';
+import { isEngineTransformExtension } from './mdx-preprocessor';
 import { isPathWithinRoot } from './source-identity';
 import { relativeSourceCandidates } from './source-ingestion';
 import { isJsonBlock, isJsonString } from './tsconfig-paths';
@@ -684,7 +685,9 @@ function isPackageSpecifier(specifier: string): boolean {
  * declares the kit source condition, with no kit the system extends
  * (`systemKits`) in that package. One app build has exactly one system, and
  * every kit's system is part of it, so such a kit is not extracted against
- * a system it was not built for. One batch parse reads every file's imports.
+ * a system it was not built for. One batch parse reads the imports of every
+ * file the engine parses as it is; an adapted source (`.svelte`, `.mdx`)
+ * reaches the engine only as its generated children.
  */
 export function importedKitDiagnostics(
   files: ReadonlyArray<{ path: string; source: string }>,
@@ -693,12 +696,13 @@ export function importedKitDiagnostics(
   systemKits: readonly string[]
 ): ManifestDiagnostic[] {
   const { extractFacts } = engine;
-  if (!extractFacts || files.length === 0) return [];
+  const parsed = files.filter(({ path }) => isEngineTransformExtension(path));
+  if (!extractFacts || parsed.length === 0) return [];
   let facts: ExtractFactsResult;
   try {
     facts = parseInternalWire<ExtractFactsResult>(
       extractFacts(
-        JSON.stringify(files.map(({ path, source }) => ({ path, source })))
+        JSON.stringify(parsed.map(({ path, source }) => ({ path, source })))
       ),
       'extractFacts'
     );
