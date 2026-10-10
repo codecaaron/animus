@@ -22,6 +22,7 @@ export type AnalyzeProjectArgs = [
   declarationScalesJson?: string,
   analysisContextJson?: string,
   generatedNamesJson?: string,
+  propertyRecordsJson?: string,
 ];
 
 /** @internal */
@@ -54,6 +55,9 @@ export interface AnalyzeProjectInputs {
   /** Present only under a prefix: each generated name and its final name,
    *  renamed in authored component styles. */
   generatedNamesJson?: string;
+  /** Present only for a theme with declared properties: a prop writing only
+   *  ones registered with a numeric syntax takes a number without a unit. */
+  propertyRecordsJson?: string;
 }
 
 /** @internal */
@@ -87,6 +91,7 @@ export function buildAnalyzeProjectArgs(
     inputs.declarationScalesJson,
     inputs.analysisContextJson,
     inputs.generatedNamesJson,
+    inputs.propertyRecordsJson,
   ];
   const last = tail.findLastIndex((slot) => slot !== undefined && slot !== '');
   for (const slot of tail.slice(0, last + 1)) {

@@ -77,6 +77,10 @@ pub struct EngineOptions {
     /// Under a prefix, each name the theme generates and its final name,
     /// without `--`: authored component styles take the final names.
     pub generated_names_json: Option<String>,
+    /// The theme's property records (`name`, `syntax`, `registered`, …): a
+    /// prop that writes only properties registered with a numeric syntax
+    /// takes a number without a unit.
+    pub property_records_json: Option<String>,
 }
 
 struct ResolvedOptions {
@@ -623,6 +627,9 @@ impl ExtractEngine {
         css_inputs.set_transform_provenance(o.transform_provenance_json.as_deref());
         css_inputs
             .set_generated_names(o.generated_names_json.as_deref())
+            .map_err(napi::Error::from_reason)?;
+        css_inputs
+            .set_property_records(o.property_records_json.as_deref())
             .map_err(napi::Error::from_reason)?;
         Ok(ExtractEngine {
             opts: ResolvedOptions {
@@ -1286,6 +1293,7 @@ mod tests {
             scale_values: BTreeMap::new(),
             current_var: None,
             production_conditions: None,
+            declared_numeric: false,
         })
     }
 

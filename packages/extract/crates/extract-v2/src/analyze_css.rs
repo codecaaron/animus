@@ -106,10 +106,16 @@ pub struct CssInputs {
     /// component props alike.
     pub declaration_scales: DeclarationScales,
     pub dev_mode: bool,
+    /// The custom properties the theme registers with a numeric syntax,
+    /// `<integer>` or `<number>`, with `--`: a number written to one needs
+    /// no unit.
+    pub numeric_properties: FxHashSet<String>,
     /// FNV-1a over each input that can change a component's declarations or
     /// runtime metadata, in canonical JSON: with the class prefix, the
     /// system's fingerprint. Global blocks, which emit outside component
-    /// classes, take no part; keyframes take part by name only.
+    /// classes, take no part; keyframes take part by name only; the numeric
+    /// registrations, which change only warnings and the slot's
+    /// `declaredNumeric`, take none.
     pub system_hash: u64,
 }
 
@@ -267,8 +273,36 @@ impl CssInputs {
             external_dirs: parse("externalDirsJson", external_dirs_json)?,
             analysis_context: AnalysisContext::default(),
             dev_mode,
+            numeric_properties: FxHashSet::default(),
             system_hash,
         })
+    }
+
+    /// Reads the theme's property records for the custom properties it
+    /// registers with a numeric syntax. Only a theme with one folds them
+    /// into the system's fingerprint.
+    pub fn set_property_records(&mut self, json: Option<&str>) -> Result<(), String> {
+        #[derive(serde::Deserialize)]
+        struct PropertyRecord {
+            name: String,
+            syntax: Option<String>,
+            registered: bool,
+        }
+        let Some(json) = json.map(str::trim).filter(|s| !s.is_empty() && *s != "null") else {
+            return Ok(());
+        };
+        let records: Vec<PropertyRecord> =
+            serde_json::from_str(json).map_err(|e| format!("EngineOptions.propertyRecordsJson: {e}"))?;
+        // Beside the system hash, not in it: the set changes only warnings
+        // and runtime metadata, never a class name or a declaration.
+        self.numeric_properties = records
+            .into_iter()
+            .filter(|record| {
+                record.registered && matches!(record.syntax.as_deref().map(str::trim), Some("<integer>" | "<number>"))
+            })
+            .map(|record| format!("--{}", record.name))
+            .collect();
+        Ok(())
     }
 
     /// Binds the configuration's declaration props to the theme's declaration
@@ -1314,7 +1348,9 @@ fn unitless_custom_property(file: &str, component: &str, prop: &str, value: &Val
         "warn",
         format!(
             "prop '{prop}' writes the number {value} to {} without a unit: a custom property has no unit \
-             context, so the number stays unitless — give the value a unit, or bind a transform that adds one",
+             context, so the number stays unitless — give the value a unit or bind a transform that adds one; \
+             to keep it unitless, bind `transform: (value) => value`, or register the property with the \
+             syntax '<integer>' or '<number>'",
             properties.join(", ")
         ),
         Some(crate::theme::UNITLESS_CUSTOM_PROPERTY),
@@ -5418,6 +5454,7 @@ fn run_with_system_floor(
         transform_failures: Some(&transform_failures),
         token_misses: Some(&token_misses),
         dropped_keys: Some(&dropped_keys),
+        numeric_properties: Some(&inputs.numeric_properties),
     };
 
     let mut parent_map: FxHashMap<String, String> = FxHashMap::default();
@@ -7066,6 +7103,7 @@ fn run_with_system_floor(
                     prop_config,
                     &inputs.theme,
                     &inputs.contextual_vars,
+                    &inputs.numeric_properties,
                 ),
             );
         }
@@ -7287,6 +7325,7 @@ fn run_with_system_floor(
                         prop_config,
                         &inputs.theme,
                         &inputs.contextual_vars,
+                        &inputs.numeric_properties,
                     ),
                 );
             }

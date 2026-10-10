@@ -214,6 +214,13 @@ impl PropConfig {
         self.css_properties().iter().all(|property| property.starts_with("--"))
     }
 
+    /// Whether every property the prop sets, its `current_var` included, is
+    /// a custom property registered with a numeric syntax, so a number needs
+    /// no unit.
+    pub fn declares_numeric(&self, numeric: &FxHashSet<String>) -> bool {
+        self.css_properties().iter().chain(&self.current_var).all(|property| numeric.contains(property))
+    }
+
     /// The bound definition's registry key and readable name.
     pub fn bound_definition(&self) -> Option<(&str, &str)> {
         Some((self.transform_id.as_deref()?, self.transform.as_deref()?))
@@ -415,6 +422,8 @@ pub struct ResolveContext<'a> {
     pub transform_failures: Option<&'a TransformFailureSink>,
     pub token_misses: Option<&'a StrictTokenMissSink>,
     pub dropped_keys: Option<&'a DroppedStyleKeySink>,
+    /// The custom properties the theme registers with a numeric syntax.
+    pub numeric_properties: Option<&'a FxHashSet<String>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -963,15 +972,17 @@ fn record_unitless_number(key: &str, value: &Value, ctx: &ResolveContext) {
 }
 
 /// The first number of `value`, or of its breakpoints, that a prop writing
-/// only custom properties, with no transform, emits as written: no unit
-/// context applies, so it stays unitless. Zero is a length without a unit,
+/// only custom properties, with no transform and not all registered with a
+/// numeric syntax, emits as written: no unit context applies, so it stays
+/// unitless. Zero is a length without a unit,
 /// and a key of the prop's scale writes that key's value, whatever it is.
 pub(crate) fn unitless_custom_number(prop_name: &str, prop: &PropConfig, value: &Value, ctx: &ResolveContext) -> Option<Value> {
     let transforms = prop.transform.is_some()
         || prop.transform_id.is_some()
         || prop.transform_fn_source.is_some()
         || prop.callback.is_some();
-    if !prop.custom_only() || transforms || prop.declaration_binding().is_some() {
+    let declared = ctx.numeric_properties.is_some_and(|numeric| prop.declares_numeric(numeric));
+    if !prop.custom_only() || transforms || declared || prop.declaration_binding().is_some() {
         return None;
     }
     let entries: Vec<&Value> = match value {
@@ -2742,6 +2753,7 @@ mod tests {
                 transform_failures: None,
                 token_misses: None,
                 dropped_keys: None,
+                numeric_properties: None,
             }
         }
     }

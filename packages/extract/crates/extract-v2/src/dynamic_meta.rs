@@ -46,6 +46,10 @@ pub struct ValuePropMeta {
     /// See `DynamicPropMeta::set_production_conditions`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub production_conditions: Option<Vec<String>>,
+    /// Every property the prop writes is registered with a numeric syntax,
+    /// so a number needs no unit and the development runtime does not warn.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub declared_numeric: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -68,6 +72,7 @@ impl DynamicPropMeta {
         config: &PropConfig,
         theme: &FlatTheme,
         contextual_vars: &ContextualVarsMap,
+        numeric_properties: &rustc_hash::FxHashSet<String>,
     ) -> Self {
         let strict = is_strict_scale(config, theme);
         Self::Value(ValuePropMeta {
@@ -95,6 +100,7 @@ impl DynamicPropMeta {
                 .as_deref()
                 .map(|current_var| contextual_vars.emitted_property(current_var).into_owned()),
             production_conditions: None,
+            declared_numeric: config.declares_numeric(numeric_properties),
         })
     }
 
@@ -244,7 +250,7 @@ mod tests {
         .unwrap();
         let theme: FlatTheme = [("colors.red".to_string(), "#f00".to_string())].into_iter().collect();
         let contextual_vars: ContextualVarsMap = serde_json::from_str(contextual_vars).unwrap();
-        let meta = DynamicPropMeta::new("--animus-tint".into(), "animus-dyn-tint".into(), &config, &theme, &contextual_vars);
+        let meta = DynamicPropMeta::new("--animus-tint".into(), "animus-dyn-tint".into(), &config, &theme, &contextual_vars, &Default::default());
         meta.value().unwrap().clone()
     }
 

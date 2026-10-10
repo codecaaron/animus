@@ -55,6 +55,9 @@ interface ValueDynamicPropConfig {
    * production build keeps this prop's slot, empty when it keeps none.
    */
   productionConditions?: readonly string[];
+  /** Every property the slot writes is registered with a numeric syntax,
+   *  `<integer>` or `<number>`, so a number needs no unit. */
+  declaredNumeric?: boolean;
   kind?: never;
 }
 
@@ -524,7 +527,8 @@ const warnedUnitless = new Set<string>();
 /**
  * A number reaching a slot that only custom properties read, with no
  * transform, stays unitless, as at build time; reported once per prop. Zero
- * is a length without a unit, and a scale key is not written as is.
+ * is a length without a unit, a scale key is not written as is, and a slot
+ * whose properties are all registered with a numeric syntax takes a number.
  */
 function warnUnitlessCustomProperty(
   baseClassName: string,
@@ -538,6 +542,7 @@ function warnUnitlessCustomProperty(
     dc.transform ||
     dc.transformId ||
     dc.transformName ||
+    dc.declaredNumeric ||
     !isCustomOnly(properties)
   ) {
     return;
@@ -557,7 +562,7 @@ function warnUnitlessCustomProperty(
   warnedUnitless.add(dedupeKey);
   // oxlint-disable-next-line no-console -- intentional runtime diagnostic
   console.warn(
-    `[animus:unit] ${baseClassName}: prop '${propName}' writes the number ${String(number)} to ${properties.join(', ')} without a unit — a custom property has no unit context, so the number stays unitless; give the value a unit, or bind a transform that adds one`
+    `[animus:unit] ${baseClassName}: prop '${propName}' writes the number ${String(number)} to ${properties.join(', ')} without a unit — a custom property has no unit context, so the number stays unitless; give the value a unit or bind a transform that adds one; to keep it unitless, bind \`transform: (value) => value\`, or register the property with the syntax '<integer>' or '<number>'`
   );
 }
 

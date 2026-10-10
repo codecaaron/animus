@@ -89,6 +89,7 @@ mod tests {
             scale_values: serde_json::from_value(scale_values).unwrap(),
             current_var: None,
             production_conditions: None,
+            declared_numeric: false,
         })
     }
 
