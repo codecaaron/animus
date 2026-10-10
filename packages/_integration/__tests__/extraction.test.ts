@@ -581,6 +581,24 @@ export const App = () => <><Box height="{space.16}" /><Box height="{space.nope}"
   );
 });
 
+test('fill and stroke take SVG paint keywords, and a misspelt one still misses', () => {
+  const { manifest, css } = runPipeline([
+    {
+      path: 'paint-keywords.tsx',
+      source: `import { ds } from '../setup';
+export const Ring = ds.styles({ fill: 'none', stroke: 'context-stroke' }).asElement('svg');
+export const Miss = ds.styles({ fill: 'nonee' }).asElement('svg');
+export const App = () => <><Ring /><Miss /></>;
+`,
+    },
+  ]);
+  expect(css).toMatch(/fill: none;\s*stroke: context-stroke;/);
+  const reported = manifest.diagnostics.map(
+    (d: { component: string; code?: string }) => [d.component, d.code]
+  );
+  expect(reported).toEqual([['Miss', 'animus.props.strict-token-miss']]);
+});
+
 describe('!important shorthand', () => {
   test('a trailing ! emits the CSS of !important', () => {
     const css = (value: string) =>

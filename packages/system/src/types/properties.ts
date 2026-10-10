@@ -31,11 +31,15 @@ type AnimusCSSProperties<Overrides = (string & {}) | 0> =
 
 type ColorProperties = 'color' | `${string}Color` | 'fill' | 'stroke';
 
+/** The keywords SVG `<paint>` takes beside a colour, for `fill` and `stroke`. */
+type PaintKeywords = 'none' | 'context-fill' | 'context-stroke';
+
 type ColorGlobals = {
   [K in Extract<keyof AnimusCSSProperties, ColorProperties>]?:
     | Globals
     | 'currentColor'
     | 'transparent'
+    | (K extends 'fill' | 'stroke' ? PaintKeywords : never)
     | (string & {});
 };
 
