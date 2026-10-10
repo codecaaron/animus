@@ -1712,12 +1712,15 @@ fn extract_vocabulary_record<'js>(
     let block = distinct(matches);
     if (block.length > 1) block = distinct(matches.filter((candidate) => candidate.key === entry.name));
     if (block.length !== 1) return undefined;
-    return matches.find((candidate) => candidate.block === block[0]).path;
+    return matches.find((candidate) => candidate.block === block[0]);
   };
   const blockOf = (entry) => {
     const block = Object.assign({ styles: entry.styles, fontFaces: entry.fontFaces || [] }, entry.unlayered === true ? { unlayered: true } : {});
-    const source = sourceOf(entry);
-    if (source !== undefined) block.source = source;
+    const declaring = sourceOf(entry);
+    if (declaring !== undefined) {
+      block.source = declaring.path;
+      block.sourceExport = declaring.key;
+    }
     return block;
   };
   return JSON.stringify({
@@ -2904,6 +2907,7 @@ export const ds = tokens;
         )
         .expect("global style blocks JSON parses");
         assert_eq!(blocks["docsResources"]["source"], "styles/resources.ts", "{blocks}");
+        assert_eq!(blocks["docsResources"]["sourceExport"], "docsResources", "{blocks}");
         assert!(blocks["inline"].get("source").is_none(), "{blocks}");
     }
 
