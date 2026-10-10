@@ -1818,7 +1818,7 @@ export const App = () => <Box tone="red" />;
                     { "path": "kit.tsx", "source": "export const Kit = ds.props({ lift: { property: 'top', transform: (v) => `${v}px` } }).asElement('div');\n" },
                     {
                         "path": "a.tsx",
-                        "source": "import './poly';\nimport { shift } from './cb'\nimport { kept } from './kept';\nimport { Kit } from './kit';\nconst Card = ds.props({ s: { property: 'minWidth', transform: shift } }).asElement('div');\nconst Kid = Kit.extend().asElement('i');\nexport const Live = ds.props({ k: { property: 'minHeight', transform: kept } }).asElement('div');\nexport const App = () => <><Card s={10} /><Kid lift={10} /></>;\n",
+                        "source": "import './poly';\nimport { shift } from './cb'\nimport { kept } from './kept';\nimport { Kit } from './kit';\nconst Card = ds.props({ s: { property: 'minWidth', transform: shift } }).asElement('div');\nconst Kid = Kit.extend().asElement('i');\nexport const Live = ds.props({ k: { property: 'minHeight', transform: kept } }).asElement('div');\nexport const App = ({ n }) => <><Card s={10} /><Kid lift={10} /><Live k={n} /></>;\n",
                     },
                 ])
                 .to_string(),

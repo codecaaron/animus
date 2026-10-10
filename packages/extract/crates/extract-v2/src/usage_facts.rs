@@ -19,7 +19,7 @@ use crate::jsx_scan::{
     classify_jsx_attribute_as_variant_value, create_element_props, eval_jsx_attribute_value, eval_property_key,
     is_component_like_identifier, jsx_member_path, ComponentUsageConfig, CustomPropScanResult,
     DynamicExpressionKind, DynamicPropUsage, PropValueResult, StateUsage, SystemPropUsage,
-    UsageResidueSite, UsageScanResult, UsageSpan, VariantUsage,
+    UsageResidueSite, UsageScanResult, UsageSpan, VariantUsage, WrittenProp,
 };
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -50,6 +50,9 @@ pub struct AttrFact {
     pub skip: bool,
     /// Variant classification: a literal string or `"__dynamic__"`.
     pub variant_class: String,
+    /// The attribute's syntax is a literal: `static_value` needs no statics.
+    #[serde(skip)]
+    pub literal: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -529,6 +532,8 @@ pub(crate) struct EnrichedUsage {
     pub unsafe_object_uses: BTreeMap<String, ObjectUse>,
     /// See `FileFacts::ordinary_components`.
     pub ordinary_components: BTreeSet<String>,
+    /// See `FileFacts::direct_eval`.
+    pub direct_eval: bool,
 }
 
 /// A use of a binding that holds an object which may change the object's
@@ -770,6 +775,8 @@ pub(crate) fn collect_enriched_usage(
     let ordinary_components = origins
         .map(|scoping| ordinary_components(program, scoping))
         .unwrap_or_default();
+    // Without scopes a direct `eval` cannot be ruled out.
+    let direct_eval = origins.is_none_or(|scoping| scoping.root_unresolved_references().contains_key("eval"));
     let confined = match &scoping {
         // Direct eval can read any binding by name.
         Some(scoping) if !scoping.root_unresolved_references().contains_key("eval") => {
@@ -839,6 +846,7 @@ pub(crate) fn collect_enriched_usage(
         module_loads,
         unsafe_object_uses,
         ordinary_components,
+        direct_eval,
     }
 }
 
@@ -1891,6 +1899,7 @@ impl<'a> FactCollector<'a, '_> {
                         }
                         PropValueResult::Skip => (None, false, None, None, true),
                     };
+                let mut literal = static_value.is_some();
                 let mut enumerable_values = Vec::new();
                 if dynamic && self.enrich {
                     if let Some(expression) = attribute_expression(&attr.value) {
@@ -1952,6 +1961,8 @@ impl<'a> FactCollector<'a, '_> {
                             if let Some(value) =
                                 without_absent_entries(object, self.static_values, self.scoping, self.origins)
                             {
+                                literal = without_absent_entries(object, &FxHashMap::default(), None, self.origins)
+                                    .is_some();
                                 static_value = Some(value);
                                 dynamic = false;
                                 dynamic_kind = None;
@@ -1984,6 +1995,7 @@ impl<'a> FactCollector<'a, '_> {
                     dynamic_span,
                     skip,
                     variant_class: classify_jsx_attribute_as_variant_value(&attr.value),
+                    literal,
                 });
             }
         }
@@ -2884,6 +2896,9 @@ pub fn filter_usage_scan(
                     }
                     let binding = resolved_binding.clone().unwrap_or_else(|| tag_name.to_string());
                     result.rendered_components.insert(binding.clone());
+                    if spread.is_some() {
+                        result.open_components.insert(binding.clone());
+                    }
 
                     let active_props = component_props.get(tag_name);
                     let custom = custom_props.get(tag_name);
@@ -2900,6 +2915,11 @@ pub fn filter_usage_scan(
                         if dropped.is_some_and(|dropped| dropped.contains(&attr.name)) {
                             continue;
                         }
+                        result.written_props.push(WrittenProp {
+                            binding: binding.clone(),
+                            prop: attr.name.clone(),
+                            literal: attr.static_value.clone().filter(|_| attr.literal && !attr.dynamic),
+                        });
                         let settled = spread.is_none_or(|before| index >= before);
                         if let Some(props) = active_props {
                             if props.contains(&attr.name) {
@@ -3035,6 +3055,7 @@ pub fn filter_usage_scan(
                     None
                 };
                 if let Some(binding) = resolved {
+                    result.open_components.insert(binding.clone());
                     if let Some(config) = component_configs.get(&binding) {
                         let mut written: FxHashSet<&str> = FxHashSet::default();
                         for (key, class) in props.iter().flatten() {
@@ -3075,6 +3096,7 @@ pub fn filter_usage_scan(
             // Overrides usage can list reach every component that declares
             // them; the warning covers the ones it cannot.
             UsageFact::CloneUnknown { props: Some(props), .. } => {
+                result.cloned_props.extend(props.iter().map(|(key, _)| key.clone()));
                 let mut bindings: Vec<&String> = component_configs.keys().collect();
                 bindings.sort_unstable();
                 for binding in bindings {
@@ -3096,7 +3118,7 @@ pub fn filter_usage_scan(
                     }
                 }
             }
-            UsageFact::CloneUnknown { props: None, .. } => {}
+            UsageFact::CloneUnknown { props: None, .. } => result.unlisted_clone = true,
         }
     }
 

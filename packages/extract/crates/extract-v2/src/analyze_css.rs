@@ -3296,6 +3296,56 @@ fn first_site_of(ff: &FileFacts, name: &str) -> Option<(bool, Option<TagOrigin>,
     })
 }
 
+/// React's own components that render their children unchanged.
+const REACT_PASS_THROUGH: [&str; 5] = ["Activity", "Fragment", "Profiler", "StrictMode", "Suspense"];
+
+/// Whether `tag` names one of React's pass-through components, proven by
+/// its import from `react` or `react/jsx-runtime`, as a named import or a
+/// member of the default or namespace import.
+fn names_react_pass_through(ff: &FileFacts, tag: &str, origin: Option<TagOrigin>) -> bool {
+    let from_react = |source: &str| source == "react" || source == "react/jsx-runtime";
+    if origin != Some(TagOrigin::Import) {
+        return false;
+    }
+    match tag.split_once('.') {
+        None => ff.imports.iter().any(|import| {
+            import.local == tag && from_react(&import.source) && REACT_PASS_THROUGH.contains(&import.imported.as_str())
+        }),
+        Some((root, member)) => {
+            REACT_PASS_THROUGH.contains(&member)
+                && (ff.namespace_imports.get(root).is_some_and(|source| from_react(source))
+                    || ff.imports.iter().any(|import| {
+                        import.local == root && import.imported == "default" && from_react(&import.source)
+                    }))
+        }
+    }
+}
+
+/// Whether every tag that leaves usage identity uncertain still lets usage
+/// prove where each extracted component renders and with what props: an
+/// ordinary component an analysed module declares, whose body is analysed
+/// and whose `cloneElement` calls are clone facts, while a component it
+/// renders through a prop has already escaped; or one of React's
+/// pass-through components. A parameter, an alias usage cannot follow or
+/// any other unanalysed import may be an extracted component, or clone
+/// props into the elements it receives.
+fn uncertainty_leaves_usage_proven(
+    sites: &[(&String, UncertainIdentity)],
+    files: &BTreeMap<String, FileFacts>,
+    inputs: &CssInputs,
+) -> bool {
+    sites.iter().all(|(file, site)| {
+        let (UncertainIdentity::Tag(site), Some(ff)) = (site, files.get(*file)) else {
+            return false;
+        };
+        let Some(tag) = site.tag.as_deref() else {
+            return false;
+        };
+        names_react_pass_through(ff, tag, site.origin)
+            || uncertain_tag_reason(file, ff, tag, site.origin, files, inputs).0 == TagClass::Ordinary
+    })
+}
+
 /// What a tag usage cannot match to an Animus component is, as far as the
 /// file's scopes and the analysed declarations prove it.
 fn uncertain_tag_reason(
@@ -3533,6 +3583,45 @@ impl ConfinedUse {
     }
 }
 
+/// The evaluated components whose every use the analysis proves, keyed by
+/// id and read from the elements of every module. None escapes as a value,
+/// takes a spread, renders through `createElement` or `cloneElement`, or is
+/// a class resolver, which takes any props; a prop an unnamed element's
+/// clone overrides counts as a runtime value on each. `None` when such a
+/// clone's overrides cannot be listed.
+fn project_confined_uses<'a>(
+    results: &[UsageScanResult],
+    components: impl Iterator<Item = (&'a String, bool)>,
+    escaped_ids: &std::collections::BTreeSet<String>,
+) -> Option<FxHashMap<String, ConfinedUse>> {
+    if results.iter().any(|result| result.unlisted_clone) {
+        return None;
+    }
+    let open: FxHashSet<&String> = results.iter().flat_map(|result| &result.open_components).collect();
+    let cloned: FxHashSet<String> = results.iter().flat_map(|result| result.cloned_props.iter().cloned()).collect();
+    let mut uses: FxHashMap<String, ConfinedUse> = components
+        .filter(|(id, class_resolver)| !class_resolver && !escaped_ids.contains(*id) && !open.contains(id))
+        .map(|(id, _)| (id.clone(), ConfinedUse { runtime_props: cloned.clone(), ..Default::default() }))
+        .collect();
+    for result in results {
+        for written in &result.written_props {
+            let Some(confined) = uses.get_mut(&written.binding) else { continue };
+            match &written.literal {
+                Some(value) => confined.static_values.entry(written.prop.clone()).or_default().push(value.clone()),
+                None => {
+                    confined.runtime_props.insert(written.prop.clone());
+                }
+            }
+        }
+        for usage in &result.dynamic_prop_usages {
+            if let Some(confined) = uses.get_mut(&usage.binding) {
+                confined.runtime_props.insert(usage.prop_name.clone());
+            }
+        }
+    }
+    Some(uses)
+}
+
 /// The evaluated components whose module confines them, keyed by id.
 fn confined_uses(
     files: &BTreeMap<String, FileFacts>,
@@ -3676,6 +3765,17 @@ impl UsageIdentityPolicy {
                 self.rendered_ids.insert(id.clone());
                 result.rendered_components.insert(id);
             }
+        }
+
+        let written_props = std::mem::take(&mut result.written_props);
+        for written in written_props {
+            for binding in self.resolve_all(&written.binding, attribution) {
+                result.written_props.push(crate::jsx_scan::WrittenProp { binding, ..written.clone() });
+            }
+        }
+        let open = std::mem::take(&mut result.open_components);
+        for key in open {
+            result.open_components.extend(self.resolve_all(&key, attribution));
         }
     }
 
@@ -5445,7 +5545,26 @@ fn run_with_system_floor(
         &reachable_ids,
         identity_policy.uncertain,
     );
-    let confined_uses = confined_uses(files, &chain_lookup, &evaluated_ids);
+    // Where the analysis is complete enough to remove an unrendered
+    // component, it also proves every use of the rest, across modules.
+    // Otherwise only a component its own module confines is proven.
+    // A direct `eval` can read any binding by name.
+    let every_use_proven = !inputs.dev_mode
+        && inputs.analysis_context.skipped_sources.is_empty()
+        && (!identity_policy.uncertain
+            || (identity_policy.unattributed.is_empty()
+                && uncertainty_leaves_usage_proven(&uncertain_identities, files, inputs)))
+        && !files.values().any(|ff| ff.direct_eval);
+    let confined_uses = every_use_proven
+        .then(|| {
+            project_confined_uses(
+                &all_usage_results,
+                evaluated.iter().map(|(id, (_, _, terminal, _, _, _, _))| (id, *terminal == TerminalKind::AsClass)),
+                &escaped_ids,
+            )
+        })
+        .flatten()
+        .unwrap_or_else(|| confined_uses(files, &chain_lookup, &evaluated_ids));
     let utility_classes = resolve_utility_classes(&all_utility_inputs, &resolve_ctx, class_prefix);
     // A system prop keeps its slot while any component it is active on can
     // receive a value without a utility class; a same-named custom prop takes
@@ -7160,7 +7279,7 @@ mod tests {
         let out = analyze(
             &[(
                 "a.tsx",
-                "export const Box = ds.system({ space: true }).asElement('div');\nexport const Grid = ds.system({ space: true, display: true }).asElement('div');\nexport const App = () => <><Box p={8} /><Grid display=\"flex\" /></>;\n",
+                "export const Box = ds.system({ space: true }).asElement('div');\nexport const Grid = ds.system({ space: true, display: true }).asElement('div');\nexport const App = (rest) => <><Box {...rest} p={8} /><Grid {...rest} display=\"flex\" /></>;\n",
             )],
             &inputs,
         );
@@ -7196,7 +7315,7 @@ mod tests {
         let out = analyze(
             &[(
                 "a.tsx",
-                "export const Used = ds.system({ space: true }).asElement('div');\nexport const Unused = ds.system({ display: true }).asElement('div');\nexport const App = () => <Used />;\n",
+                "export const Used = ds.system({ space: true }).asElement('div');\nexport const Unused = ds.system({ display: true }).asElement('div');\nexport const App = (rest) => <Used {...rest} />;\n",
             )],
             &test_inputs(),
         );
@@ -7215,7 +7334,7 @@ mod tests {
                 ),
                 (
                     "app.tsx",
-                    "import { Box as Renamed } from './components';\nexport const App = ({ value }) => <Renamed size=\"sm\" active tone={value} />;\n",
+                    "import { Box as Renamed } from './components';\nexport const App = ({ value }) => <Renamed size=\"sm\" active tone={value} p={value} />;\n",
                 ),
             ],
             &test_inputs(),
@@ -7341,6 +7460,8 @@ mod tests {
     #[test]
     fn total_floor_reachability_retains_parent_as_class_and_compose_slots() {
         let mut inputs = test_inputs();
+        // An unseen source leaves usage unproven, so the floor holds.
+        inputs.analysis_context.skipped_sources = vec!["unseen.tsx".into()];
         inputs.config.insert(
             "m".into(),
             serde_json::from_str(r#"{"property":"margin","scale":"space"}"#).unwrap(),
@@ -7397,8 +7518,11 @@ mod tests {
     #[test]
     fn total_floor_static_invariance() {
         let source = "export const Box = ds.system({ space: true }).asElement('div');\nexport const App = () => <Box p={8} />;\n";
-        let legacy = analyze_with_total_system_floor(&[("a.tsx", source)], &test_inputs(), false);
-        let floor = analyze_with_total_system_floor(&[("a.tsx", source)], &test_inputs(), true);
+        // An unseen source leaves usage unproven, so the floor holds.
+        let mut inputs = test_inputs();
+        inputs.analysis_context.skipped_sources = vec!["unseen.tsx".into()];
+        let legacy = analyze_with_total_system_floor(&[("a.tsx", source)], &inputs, false);
+        let floor = analyze_with_total_system_floor(&[("a.tsx", source)], &inputs, true);
 
         assert_eq!(floor.system_prop_map, legacy.system_prop_map);
         assert_eq!(
@@ -7661,6 +7785,38 @@ export const App = ({ n }) => <Box bgImage={n} texture={n} />;
         // The nullish breakpoints are absent, so the value takes the class
         // `{ _: 8 }` takes.
         assert_eq!(out.system_prop_map["p"].keys().collect::<Vec<_>>(), ["_:8"]);
+    }
+
+    #[test]
+    fn slots_follow_the_usage_a_complete_analysis_proves_across_modules() {
+        let kit = "export const Box = ds.system({ space: true }).asElement('div');\n";
+        let slots = |app: &str, inputs: &CssInputs| {
+            let out = analyze(&[("kit.tsx", kit), ("app.tsx", app)], inputs);
+            out.dynamic_props.keys().cloned().collect::<Vec<_>>()
+        };
+        let cases: [(&str, &[&str]); 9] = [
+            ("export const App = () => <Box p={8} />;\n", &[]),
+            ("export const App = ({ n }) => <Box p={n} />;\n", &["p"]),
+            // A spread, an escape or a component chosen at runtime leaves a
+            // use unproven, and an unanalysed receiver may clone props in.
+            ("export const App = (rest) => <Box {...rest} />;\n", &["p"]),
+            ("export const list = [Box];\nexport const App = () => <Box p={8} />;\n", &["p"]),
+            ("export const App = ({ As }) => <As><Box p={8} /></As>;\n", &["p"]),
+            ("import { Slot } from 'ui-lib';\nexport const App = () => <Slot><Box p={8} /></Slot>;\n", &["p"]),
+            // An analysed ordinary component and React's pass-through
+            // components leave every use proven.
+            ("function Card({ children }) { return <div>{children}</div>; }\nexport const App = () => <Card><Box p={8} /></Card>;\n", &[]),
+            ("import { StrictMode } from 'react';\nexport const App = () => <StrictMode><Box p={8} /></StrictMode>;\n", &[]),
+            // React's names count only through an import from React.
+            ("import { StrictMode } from 'ui-lib';\nexport const App = () => <StrictMode><Box p={8} /></StrictMode>;\n", &["p"]),
+        ];
+        for (app, want) in cases {
+            let app = format!("import {{ Box }} from './kit';\n{app}");
+            assert_eq!(slots(&app, &test_inputs()), want, "{app}");
+        }
+        let mut dev = test_inputs();
+        dev.dev_mode = true;
+        assert_eq!(slots("import { Box } from './kit';\nexport const App = () => <Box p={8} />;\n", &dev), ["p"]);
     }
 
     #[test]
@@ -11250,19 +11406,22 @@ export const App = () => <main><Card inl={10} shut={10} tone="lg">text</Card></m
         let both: &[&str] = &["idle", "inl"];
         let inl: &[&str] = &["inl"];
         let none: &[&str] = &[];
+        // A complete analysis proves an exported component's uses across
+        // modules, and an element returned, mapped or written in a host
+        // element's attribute, where nothing can clone props into it.
         let cases: [(&str, &str, &[&str]); 27] = [
-            ("export ", "export const App = () => <><Card inl={10} /></>;\n", both),
-            ("", "export { Card };\nexport const App = () => <><Card inl={10} /></>;\n", both),
+            ("export ", "export const App = () => <><Card inl={10} /></>;\n", none),
+            ("", "export { Card };\nexport const App = () => <><Card inl={10} /></>;\n", none),
             ("", "export default Card;\n", both),
             ("", "export const App = () => <><Card inl={10} /></>;\nexport const Alias = Card;\n", both),
             ("", "export const App = () => createElement(Card, { inl: 10 });\n", both),
             ("", "export const App = () => <><Card inl={10} /></>;\nexport const peek = () => eval('Card');\n", both),
-            ("", "export const App = () => <Card inl={10} />;\n", both),
+            ("", "export const App = () => <Card inl={10} />;\n", none),
             ("", "export const App = () => <Layout><Card inl={10} /></Layout>;\n", both),
-            ("", "export const App = () => <ul>{[1].map((n) => <Card key={n} inl={10} />)}</ul>;\n", both),
-            ("", "export const App = () => <div title={<Card inl={10} />} />;\n", both),
+            ("", "export const App = () => <ul>{[1].map((n) => <Card key={n} inl={10} />)}</ul>;\n", none),
+            ("", "export const App = () => <div title={<Card inl={10} />} />;\n", none),
             ("", "export const App = (p) => <><Card inl={10} {...p} /></>;\n", both),
-            ("", "export const App = () => <><Card inl={-10} /></>;\nexport const Box = Card.extend().asElement('span');\n", both),
+            ("", "export const App = () => <><Card inl={-10} /></>;\nexport const Box = Card.extend().asElement('span');\n", none),
             ("", "export const App = (p) => <><Card inl={p.n} /></>;\n", inl),
             ("", "export const App = ({ on }) => <section>{on ? <Card inl={10} /> : (<Card inl={10}><span><Card inl={10} /></span></Card>)}</section>;\nexport const Loose = ({ n }) => <><Card inl={n} /></>;\n", inl),
             ("", "export const App = () => <><Card inl={1e21} /></>;\n", inl),
@@ -11306,7 +11465,7 @@ export const Over = Base.extend()
   .props({ k: { property: 'minHeight', transform: (v) => `${v * 7}px` } })
   .asElement('span');
 const Kid = Kit.extend().asElement('i');
-export const App = () => <><Quiet inl={10} /><Base k={10} /><Kid lift={10} /></>;
+export const App = ({ n }) => <><Quiet inl={10} /><Base k={10} /><Kid lift={10} /><Grand inl={n} /><Over k={n} /></>;
 "#;
         let kit = "export const Kit = ds.props({ lift: { property: 'top', transform: (v) => `${v}px` } }).asElement('div');\n";
         let out = analyze(&[("kit.tsx", kit), ("a.tsx", source)], &test_inputs());
@@ -11380,12 +11539,13 @@ export const App = () => <><Quiet inl={10} /><Base k={10} /><Kid lift={10} /></>
         assert!(!out.css.contains("-dyn-wide") && !out.css.contains("-dyn-inset"), "{}", out.css);
         assert!(!out.components["a.tsx::Frame"].replacement.contains("dynamicPropConfig"));
 
+        // A complete analysis proves an exported component's uses as well.
         let exported = analyze(
             &[("a.tsx", declare("export { Frame };\n", render).as_str())],
             &split_group_inputs(),
         );
-        assert_eq!(exported.dynamic_props.keys().collect::<Vec<_>>(), ["inset", "tall", "wide"]);
-        assert_eq!(exported.admitted_transforms.len(), 2);
+        assert_eq!(exported.dynamic_props.keys().collect::<Vec<_>>(), ["tall"]);
+        assert_eq!(exported.admitted_transforms.keys().collect::<Vec<_>>(), ["double@system.wide"]);
 
         let dynamic = analyze(
             &[("a.tsx", declare("", "export const App = ({ n }) => <><Frame wide={n} inset={3} /></>;\n").as_str())],
@@ -11443,7 +11603,7 @@ export const App = () => <><Quiet inl={10} /><Base k={10} /><Kid lift={10} /></>
         let props = "{ e: { property: 'left', transform: 'host' }, n: { property: 'top', transform: 'nstr' }, u: { property: 'right', transform: 'unit' } }";
         let source = format!(
             "export const Card = ds.props({props}).asElement('div');\nconst Conf = ds.props({props}).asElement('div');\n\
-             export const Kid = Card.extend().asElement('div');\n\
+             export const Kid = Card.extend().asElement('div');\nexport const open = [Card, Kid];\n\
              export const App = () => <><Card e={{3}} n={{2}} u={{4}} /><Conf e={{3}} n={{2}} u={{4}} /><Kid e={{3}} n={{2}} u={{4}} /></>;\n"
         );
         let out = analyze(&[("a.tsx", source.as_str())], &inputs);
