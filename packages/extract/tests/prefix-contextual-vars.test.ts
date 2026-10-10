@@ -4,7 +4,6 @@ import { join } from 'path';
 import { describe, expect, it } from 'vitest';
 
 import { createV2EngineApi } from '../pipeline/engine-adapter';
-import { PREFIX_CONTEXTUAL_VARS_UNPREFIXED } from '../pipeline/manifest-diagnostics';
 import { runProjectAnalysis } from '../pipeline/run-analysis';
 import { loadSystemConfig } from '../pipeline/system-config';
 
@@ -147,10 +146,24 @@ describe('contextual variables under a prefix', () => {
     expect(prefixed.codes).toContain('Miss: animus.props.strict-token-miss');
   });
 
-  it('without the option, keep the legacy path and name the option', () => {
-    const { result, warned } = analyze('acme');
-    expect(result.componentCss).toContain('--tone: red');
-    expect(result.componentCss).not.toContain('caret-color: var(--acme-tone)');
-    expect(warned.join('\n')).toContain(PREFIX_CONTEXTUAL_VARS_UNPREFIXED);
+  it('without the option, keep their declared names where they are read and written', () => {
+    const { system, result, warned } = analyze('acme');
+    expect(system.variableCss).toContain('@property --tone {');
+    // The names Animus generates still take the prefix.
+    expect(system.variableCss).toContain('--acme-color-red:');
+    for (const expected of [
+      'background-color: var(--tone)',
+      'caret-color: var(--tone)',
+      '--tone: red',
+      '--edge: var(--tone, var(--cap, 1px))',
+      'transition: --tone 1s',
+      'style(--tone: dark)',
+      '--cap: 2px',
+      '--cap: 40rem',
+    ]) {
+      expect(result.componentCss).toContain(expected);
+    }
+    expect(result.componentCss).not.toMatch(/--acme-(?:tone|cap)\b/);
+    expect(warned.join('\n')).not.toContain('animus.prefix.');
   });
 });

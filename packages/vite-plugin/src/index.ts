@@ -98,7 +98,9 @@ export interface AnimusExtractOptions {
    * selects production for `build` and development elsewhere.
    */
   mode?: 'development' | 'production';
-  /** Namespace prefix for CSS variables and class names. */
+  /** Namespace prefix for the names Animus generates: theme token
+   *  variables, classes and slots. Contextual variables keep their declared
+   *  names unless `prefixContextualVars` is set. */
   prefix?: string;
   /** With `prefix` set, contextual variables take the prefixed name
    *  everywhere Animus emits them, while authors keep writing the declared

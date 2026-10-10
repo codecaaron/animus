@@ -156,7 +156,7 @@ describe('applyPrefix', () => {
     expect(result.themeJson).toBeUndefined();
   });
 
-  test('prefixes contextual variable names', () => {
+  test('keeps contextual variable names and prefixes token variables', () => {
     const variableMapJson = JSON.stringify({
       'colors.primary': '--color-primary',
     });
@@ -173,9 +173,12 @@ describe('applyPrefix', () => {
       contextualVarsJson
     );
 
-    expect(result.contextualVarsJson).toBeDefined();
-    const ctx = JSON.parse(result.contextualVarsJson!);
-    expect(ctx.colors).toEqual(['acme-current-bg', 'acme-current-text']);
+    // Contextual variables keep their declared names; the token variable
+    // Animus generates takes the prefix.
+    expect(result.contextualVarsJson).toBe(contextualVarsJson);
+    expect(JSON.parse(result.variableMapJson)).toEqual({
+      'colors.primary': '--acme-color-primary',
+    });
   });
 
   test('returns contextualVarsJson unchanged when prefix is empty', () => {

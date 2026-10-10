@@ -380,11 +380,6 @@ export const PROPERTY_FALLBACK_SELF_REFERENCE =
  *  computed-value time. */
 export const PROPERTY_CURRENT_VAR_CYCLE = 'animus.property.current-var-cycle';
 
-/** A prefix renamed contextual variables without `prefixContextualVars`, so
- *  their declared names no longer resolve. */
-export const PREFIX_CONTEXTUAL_VARS_UNPREFIXED =
-  'animus.prefix.contextual-vars-unprefixed';
-
 /** Under `prefixContextualVars`, a final name that collides with a runtime
  *  transport variable or a theme variable of the same spelling. */
 export const PREFIX_NAME_CONFLICT = 'animus.prefix.name-conflict';
@@ -424,7 +419,6 @@ const DIAGNOSTIC_SEVERITY: ReadonlyMap<string, DiagnosticSeverity> = new Map([
   [PROPERTY_SELF_REFERENCE, 'warn'],
   [PROPERTY_FALLBACK_SELF_REFERENCE, 'warn'],
   [PROPERTY_CURRENT_VAR_CYCLE, 'warn'],
-  [PREFIX_CONTEXTUAL_VARS_UNPREFIXED, 'warn'],
   [PREFIX_NAME_CONFLICT, 'error'],
   [PROPERTY_LEGACY_TOKEN_COLLISION, 'warn'],
   [PROPERTY_TOKEN_COLLISION, 'error'],
@@ -501,7 +495,6 @@ export function systemLoadDiagnostics(
     SystemConfig,
     | 'vocabularyWitnessesJson'
     | 'invalidPropertyRegistrations'
-    | 'legacyPrefixedContextualVars'
     | 'prefixNameConflicts'
     | 'scalesJson'
     | 'propertyRecordsJson'
@@ -517,20 +510,6 @@ export function systemLoadDiagnostics(
       severity: severityFor(INVALID_PROPERTY_REGISTRATION),
     })
   );
-  const prefixed = system.legacyPrefixedContextualVars ?? [];
-  const unprefixed: ManifestDiagnostic[] =
-    prefixed.length === 0
-      ? []
-      : [
-          {
-            file: 'system',
-            component: 'prefix',
-            kind: 'warn',
-            message: `the prefix renames the contextual variables ${prefixed.join(', ')}, but their declared names are still read and written as written, so scale reads of them fail and their writes miss. Set prefixContextualVars: true to resolve them under the prefix (${PREFIX_CONTEXTUAL_VARS_UNPREFIXED})`,
-            code: PREFIX_CONTEXTUAL_VARS_UNPREFIXED,
-            severity: severityFor(PREFIX_CONTEXTUAL_VARS_UNPREFIXED),
-          },
-        ];
   // A conflict leaves the emitted names ambiguous, so it is an error in
   // every mode, never a warning.
   const conflicts = (system.prefixNameConflicts ?? []).map(
@@ -549,7 +528,6 @@ export function systemLoadDiagnostics(
   return [
     ...vocabularyWitnessDiagnostics(system.vocabularyWitnessesJson),
     ...registrations,
-    ...unprefixed,
     ...conflicts,
     ...tokenCollisionDiagnostics(system),
   ];
