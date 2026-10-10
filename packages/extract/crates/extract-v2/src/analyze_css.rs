@@ -826,7 +826,7 @@ fn classify_parent(
 /// Where a name visible in `file_path` is declared: the landing file, the
 /// declarator binding there, and whether that file declares it itself.
 /// None when the name's import source is outside the analyzed set.
-fn resolve_declaration(
+pub(crate) fn resolve_declaration(
     file_path: &str,
     ff: &FileFacts,
     name: &str,
@@ -2984,8 +2984,7 @@ fn spread_wrapper_targets(
                             .iter()
                             .enumerate()
                             .filter(|(index, attr)| {
-                                spread.is_none_or(|before| *index >= before)
-                                    || named.contains(&attr.name)
+                                attr.settles(*index, *spread) || (!attr.optional && named.contains(&attr.name))
                             })
                             .map(|(_, attr)| attr.name.clone())
                             .collect(),
@@ -3660,7 +3659,8 @@ fn names_react_pass_through(ff: &FileFacts, tag: &str, origin: Option<TagOrigin>
 /// into them. A receiver blocks nothing here, because the components whose
 /// elements it receives open (`opaque_delivery`); so a tag that can only
 /// receive leaves usage proven: an ordinary component an analysed module
-/// declares, whose body is analysed; one of React's pass-through
+/// declares, named directly or as the member a stable object holds
+/// (`<Dialog.Root>`), whose body is analysed; one of React's pass-through
 /// components, or a context's `Provider`; or an import, or a member of one,
 /// from a package extraction does not analyse, which cannot be a component
 /// extraction declared. A `createElement` call on any receiver but React's
@@ -3673,6 +3673,7 @@ fn uncertainty_leaves_usage_proven(
     sites: &[(&String, UncertainIdentity)],
     files: &BTreeMap<String, FileFacts>,
     inputs: &CssInputs,
+    ordinary_members: &FxHashMap<(String, String), (String, String)>,
 ) -> bool {
     let unstable_contexts = &unstable_contexts(files, inputs);
     // Each element of an ordinary component is a site; classify each tag once.
@@ -3695,6 +3696,9 @@ fn uncertainty_leaves_usage_proven(
             || imported_from_outside(file, ff, tag, site.origin, files, inputs)
             || names_context_provider(file, ff, tag, site.origin, files, inputs, unstable_contexts)
             || uncertain_tag_reason(file, ff, tag, site.origin, files, inputs).0 == TagClass::Ordinary
+            // The module's binding, never a parameter or local of the name.
+            || (matches!(site.origin, Some(TagOrigin::Import | TagOrigin::TopLevel))
+                && ordinary_members.contains_key(&(file.to_string(), tag.to_string())))
     })
 }
 
@@ -4075,12 +4079,14 @@ fn proven_slot_conditions(
 /// keeps them in place only when it is an Animus component that renders an
 /// element and the element cannot render another one (`as`, `asChild` or a
 /// spread), or an ordinary component that forwards nothing outside.
+#[allow(clippy::too_many_arguments)]
 fn opaque_delivery(
     files: &BTreeMap<String, FileFacts>,
     inputs: &CssInputs,
     evaluated_ids: &FxHashSet<String>,
     ids_by_binding: &IdsByBinding,
     wrapper_targets: &FxHashMap<String, FxHashMap<String, Vec<String>>>,
+    ordinary_members: &FxHashMap<(String, String), (String, String)>,
     receiver_ids: impl Fn(&str, &FileFacts, &str) -> Vec<String>,
     renders_in_place: impl Fn(&str) -> bool,
 ) -> std::collections::BTreeSet<String> {
@@ -4118,10 +4124,14 @@ fn opaque_delivery(
         if !ids.is_empty() {
             return tag.polymorphic || !ids.iter().all(|id| renders_in_place(id));
         }
-        let ordinary = declaration(file, ff, &tag.tag).filter(|(declaring, binding, _)| {
-            files.get(declaring).is_some_and(|declared| declared.ordinary_components.contains(binding))
-        });
-        ordinary.is_none_or(|(declaring, binding, _)| tag.polymorphic || forwarding.contains(&(declaring, binding)))
+        // An ordinary component, named directly or as an object's member.
+        let ordinary = declaration(file, ff, &tag.tag)
+            .filter(|(declaring, binding, _)| {
+                files.get(declaring).is_some_and(|declared| declared.ordinary_components.contains(binding))
+            })
+            .map(|(declaring, binding, _)| (declaring, binding))
+            .or_else(|| ordinary_members.get(&(file.to_string(), tag.tag.clone())).cloned());
+        ordinary.is_none_or(|(declaring, binding)| tag.polymorphic || forwarding.contains(&(declaring, binding)))
     };
     let mut forwarding: FxHashSet<(String, String)> = FxHashSet::default();
     loop {
@@ -6184,6 +6194,16 @@ fn run_with_system_floor(
     }
     // An element handed to code outside the analysis renders with options
     // and props no analysed use shows, so it opens as an escape does.
+    // Each member tag a module writes that names an ordinary function
+    // component an object holds (`<Dialog.Root>`), with its declaration.
+    let mut ordinary_members: FxHashMap<(String, String), (String, String)> = FxHashMap::default();
+    for (path, ff) in files {
+        for tag in written_member_tags(ff) {
+            if let Some(declared) = object_members.ordinary_member(path, tag) {
+                ordinary_members.insert((path.clone(), tag.to_string()), declared);
+            }
+        }
+    }
     // A receiver is known through its file's declarations, imports and
     // members only (`<Family.Root>`), never by a bare name elsewhere; a
     // member, only through the binding its object proves it holds.
@@ -6202,6 +6222,7 @@ fn run_with_system_floor(
         &evaluated_ids,
         &ids_by_binding,
         &wrapper_targets_by_file,
+        &ordinary_members,
         receiver_ids,
         |id| evaluated.get(id).is_some_and(|(_, _, terminal, ..)| *terminal == TerminalKind::AsElement),
     );
@@ -6390,7 +6411,7 @@ fn run_with_system_floor(
     let usage_complete = inputs.analysis_context.skipped_sources.is_empty()
         && !files.values().any(|ff| ff.direct_eval)
         && (!identity_policy.uncertain
-            || uncertainty_leaves_usage_proven(&uncertain_identities, files, inputs));
+            || uncertainty_leaves_usage_proven(&uncertain_identities, files, inputs, &ordinary_members));
     let project_uses = usage_complete
         .then(|| {
             let unproven: std::collections::BTreeSet<String> =
@@ -9015,6 +9036,80 @@ export const App = ({ n }) => <Box bgImage={n} texture={n} />;
         }
         let shadowed = analyzed("export const App = ({ Box, props }) => createElement(Box, props);\n");
         assert_eq!(unread(&shadowed), 0);
+    }
+
+    /// A spread whose every branch is an object literal of literal entries,
+    /// or nothing (`{...(c ? { p: 8 } : {})}`), writes those entries on the
+    /// branches that hold them: they take static classes, and the prop keeps
+    /// its default where a branch leaves it out. Any other spread writes
+    /// anything.
+    #[test]
+    fn listed_spreads_write_the_entries_their_branches_hold() {
+        let kit = "export const Box = ds.system({ space: true }).asElement('div');\n";
+        let cases: [(&str, &[&str]); 6] = [
+            ("<Box {...(c ? { p: 8 } : {})} />", &[]),
+            ("<Box {...(c && { p: 8 })} />", &[]),
+            ("<Box {...(c ? { p: 8 } : null)} />", &[]),
+            ("<Box {...(c ? { p: n } : {})} />", &["p"]),
+            ("<Box {...(c ? o : {})} />", &["p"]),
+            ("<Box {...(c || 'abc')} />", &["p"]),
+        ];
+        for (render, want) in cases {
+            let app = format!("import {{ Box }} from './kit';\nexport const App = ({{ c, n, o }}) => {render};\n");
+            let out = analyze(&[("kit.tsx", kit), ("app.tsx", &app)], &test_inputs());
+            assert_eq!(out.dynamic_props.keys().collect::<Vec<_>>(), want, "{render}");
+        }
+        for (render, sizes) in [
+            ("<R {...(c ? { size: 'lg' } : {})} />", vec!["md", "lg"]),
+            ("<R size=\"sm\" {...(c ? { size: 'lg' } : {})} />", vec!["sm", "lg"]),
+            ("<R {...(c ? o : {})} />", vec!["sm", "md", "lg"]),
+        ] {
+            let app = format!("import {{ R }} from './r';\nexport const App = ({{ c, o }}) => {render};\n");
+            assert_eq!(kept_options(&[("r.tsx", RECIPE), ("app.tsx", app.as_str())]).0, sizes, "{render}");
+        }
+    }
+
+    /// A member tag that names an ordinary function component a stable
+    /// object holds (`<Dialog.Root>` for `const Dialog = { Root }`) is that
+    /// component: it leaves usage proven, and its children stay in place
+    /// unless it passes them to code outside the analysis, children a local
+    /// takes by assignment included. A member the object may no longer hold
+    /// (in any module), one built by a call, or a parameter that shares the
+    /// object's name still blocks.
+    #[test]
+    fn ordinary_family_members_leave_usage_proven() {
+        let kit = "export const Box = ds.system({ space: true }).asElement('div');\n";
+        let family = "import { Slot } from 'ui-lib';\n\
+                      function Root({ children }) { return <section>{children}</section>; }\n\
+                      function Pass({ children }) { return <Slot>{children}</Slot>; }\n\
+                      function Held({ children }) { let held; held = children; return <Slot>{held}</Slot>; }\n\
+                      export const Dialog = { Root, Pass, Held, Made: memo(Root) };\n";
+        let cases: [(&str, &str, &[&str]); 8] = [
+            ("", "() => <><Dialog.Root /><Box p={8} /></>", &[]),
+            ("", "() => <Dialog.Root><Box p={8} /></Dialog.Root>", &[]),
+            ("", "() => <><Dialog.Pass><div /></Dialog.Pass><Box p={8} /></>", &[]),
+            ("", "() => <><Dialog.Pass><Box p={8} /></Dialog.Pass><Box p={8} /></>", &["p"]),
+            // Children a local takes by assignment may still be passed on.
+            ("", "() => <><Dialog.Held><Box p={8} /></Dialog.Held><Box p={8} /></>", &["p"]),
+            ("", "() => <><Dialog.Made /><Box p={8} /></>", &["p"]),
+            ("", "({ Dialog }) => <><Dialog.Root /><Box p={8} /></>", &["p"]),
+            ("Dialog.Root = maybe;\n", "() => <><Dialog.Root /><Box p={8} /></>", &["p"]),
+        ];
+        for (more, app, want) in cases {
+            let family = format!("{family}{more}");
+            let app = format!("import {{ Box }} from './kit';\nimport {{ Dialog }} from './fam';\nexport const App = {app};\n");
+            let out = analyze(&[("kit.tsx", kit), ("fam.tsx", family.as_str()), ("app.tsx", app.as_str())], &test_inputs());
+            assert_eq!(out.dynamic_props.keys().collect::<Vec<_>>(), want, "{more}{app}");
+        }
+        // A module with no import still records what may change its object.
+        let plain = "function Root({ children }) { return <section>{children}</section>; }\nexport const Dialog = { Root };\n";
+        for more in ["consume(Dialog);\n", "delete Dialog.Root;\nrestore(Dialog);\n"] {
+            let family = format!("{plain}{more}");
+            let app = "import { Box } from './kit';\nimport { Dialog } from './fam';\n\
+                       export const App = () => <Dialog.Root><Box p={8} /></Dialog.Root>;\n";
+            let out = analyze(&[("kit.tsx", kit), ("fam.tsx", family.as_str()), ("app.tsx", app)], &test_inputs());
+            assert_eq!(out.dynamic_props.keys().collect::<Vec<_>>(), ["p"], "{more}");
+        }
     }
 
     /// A tag whose first name a parameter or local binds is not the module's
