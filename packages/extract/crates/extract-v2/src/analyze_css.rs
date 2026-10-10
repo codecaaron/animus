@@ -1361,8 +1361,9 @@ fn unsupported_props_config(
         "warn",
         format!(
             "custom prop '{prop}' in {file} was dropped ({reason}), so it is not extracted \
-             as a styling prop — write its config as an object literal of static values \
-             inside .props(), without spreads, calls or unresolved references"
+             as a styling prop — write its config inside .props() as an object literal of \
+             static values; a spread or a reference must name a const object nothing \
+             changes, and calls are not read"
         ),
         Some(UNSUPPORTED_PROPS_CONFIG),
     )

@@ -290,10 +290,14 @@ export async function runBuild(
     if (flags.kit) {
       // A local build reads the workspace; an installed consumer reads only
       // the published files and declared dependencies.
-      const failures = kitPublicationFailures(config.root, engineApi());
+      const failures = kitPublicationFailures(
+        config.root,
+        engineApi(),
+        config.outDir
+      );
       if (failures.length > 0) {
         throw new ExtractionFailure(
-          `the kit's published source is incomplete, so an installed consumer would fail:\n${failures.map((line) => `  - ${line}`).join('\n')}`
+          `the kit is not ready to publish: an installed consumer would fail on missing source, or receive this build's artifacts:\n${failures.map((line) => `  - ${line}`).join('\n')}`
         );
       }
       err(`kit descriptor → ${writeKitDescriptor(config.root)}`);
