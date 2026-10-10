@@ -329,6 +329,7 @@ pub fn build_forced_injection(
                 prop_name: prop.clone(),
                 value: value.clone(),
                 binding: STATIC_CSS_SOURCE.to_string(),
+                uses: Vec::new(),
             });
             out.utility_values.push((prop.clone(), value.clone()));
         }

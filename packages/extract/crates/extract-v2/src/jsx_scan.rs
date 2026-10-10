@@ -26,6 +26,32 @@ pub struct SystemPropUsage {
     pub value: Value,
     #[allow(dead_code)]
     pub binding: String,
+    /// Each use that writes the value: its byte offset and the binding it
+    /// renders.
+    pub uses: Vec<(u32, String)>,
+}
+
+/// Records a written value once per key, with every use that writes it
+/// once: both branches of `{...(c ? { p: 1 } : { p: 1 })}` are one use.
+pub(crate) fn record_written(
+    usages: &mut Vec<SystemPropUsage>,
+    recorded: &mut rustc_hash::FxHashMap<String, usize>,
+    key: String,
+    at: u32,
+    usage: SystemPropUsage,
+) {
+    match recorded.entry(key) {
+        std::collections::hash_map::Entry::Occupied(index) => {
+            let uses = &mut usages[*index.get()].uses;
+            if !uses.iter().any(|(written, binding)| *written == at && *binding == usage.binding) {
+                uses.push((at, usage.binding));
+            }
+        }
+        std::collections::hash_map::Entry::Vacant(slot) => {
+            slot.insert(usages.len());
+            usages.push(SystemPropUsage { uses: vec![(at, usage.binding.clone())], ..usage });
+        }
+    }
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
