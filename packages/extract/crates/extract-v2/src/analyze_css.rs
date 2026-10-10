@@ -3691,6 +3691,8 @@ fn bounded_prop_tags(
     object_members: &mut crate::family_members::ObjectMembers<'_>,
 ) -> FxHashSet<(String, u32)> {
     let open: FxHashSet<&String> = results.iter().flat_map(|result| &result.open_components).collect();
+    let open_except: Vec<&(String, std::collections::BTreeSet<String>)> =
+        results.iter().flat_map(|result| &result.open_except).collect();
     let rendered: FxHashSet<&String> = results.iter().flat_map(|result| &result.rendered_components).collect();
     let cloned: FxHashSet<&String> = results.iter().flat_map(|result| &result.cloned_props).collect();
     // The declaration a module's name or default import resolves to, through
@@ -3744,6 +3746,7 @@ fn bounded_prop_tags(
     let outer_bounded = |outer: &String, prop: &str| {
         !unproven.contains(outer)
             && !open.contains(outer)
+            && open_except.iter().all(|(id, excluded)| id != outer || excluded.contains(prop))
             && !cloned.iter().any(|cloned| *cloned == prop)
             && !forwards.iter().any(|forward| forward.inner.contains(outer))
             && results.iter().flat_map(|result| &result.written_props).all(|written| {
@@ -4583,7 +4586,11 @@ fn project_confined_uses<'a>(
     if results.iter().any(|result| result.unlisted_clone) {
         return None;
     }
-    let open: FxHashSet<&String> = results.iter().flat_map(|result| &result.open_components).collect();
+    // A rest a `createElement` spreads may carry any prop it does not exclude.
+    let open: FxHashSet<&String> = results
+        .iter()
+        .flat_map(|result| result.open_components.iter().chain(result.open_except.iter().map(|(id, _)| id)))
+        .collect();
     // A clone's override may take any shape.
     let cloned: FxHashMap<String, Option<BTreeSet<String>>> =
         results.iter().flat_map(|result| result.cloned_props.iter().map(|prop| (prop.clone(), None))).collect();
@@ -4784,6 +4791,12 @@ impl UsageIdentityPolicy {
         let open = std::mem::take(&mut result.open_components);
         for key in open {
             result.open_components.extend(self.resolve_all(&key, attribution));
+        }
+        let open_except = std::mem::take(&mut result.open_except);
+        for (key, excluded) in open_except {
+            for id in self.resolve_all(&key, attribution) {
+                result.open_except.push((id, excluded.clone()));
+            }
         }
     }
 
@@ -9654,6 +9667,60 @@ export const App = ({ n }) => <Box bgImage={n} texture={n} />;
             let mut files = vec![("kit.tsx", kit), ("el.tsx", el.as_str()), ("outer.tsx", outer), ("app.tsx", app.as_str())];
             files.extend(extra);
             assert_eq!(analyze(&files, &test_inputs()).dynamic_props.keys().collect::<Vec<_>>(), want, "{more}{app}");
+        }
+    }
+
+    /// A `createElement` props object usage reads in full writes what it
+    /// lists, as JSX attributes do, and no longer opens its component; one
+    /// that spreads a rest parameter may write anything but the keys that
+    /// rest leaves out. Any other props argument, or a rest something may
+    /// add to, keeps the component open.
+    #[test]
+    fn create_element_props_read_in_full_confine_their_component() {
+        let kit = "export const Box = ds.system({ space: true }).asElement('div');\n\
+                   export const Base = ds.styles({ display: 'block' }).asElement('div');\n";
+        let cases: [(&str, &[&str]); 5] = [
+            ("export const App = () => createElement(Box, { p: 8 });", &[]),
+            ("export const App = ({ n }) => createElement(Box, { p: n });", &["p"]),
+            ("export const App = ({ props }) => createElement(Box, props);", &["p"]),
+            ("function F({ as, ...rest }) { return createElement(Box, { ...rest, id: 'x' }); }\nexport const App = () => <F p={8} />;", &["p"]),
+            ("function F({ as, ...rest }) { rest.p = 1; return createElement(Box, { ...rest }); }\nexport const App = () => <F />;", &["p"]),
+        ];
+        for (app, want) in cases {
+            let app = format!("import {{ Box }} from './kit';\nimport {{ createElement }} from 'react';\n{app}\n");
+            let out = analyze(&[("kit.tsx", kit), ("app.tsx", app.as_str())], &test_inputs());
+            assert_eq!(out.dynamic_props.keys().collect::<Vec<_>>(), want, "{app}");
+        }
+        // A rest that took `as` out cannot hand an `.asComponent()` target
+        // the `as` that chooses its element.
+        let el = |reads: &str| {
+            format!(
+                "import {{ createElement }} from 'react';\nimport {{ Base }} from './kit';\n\
+                 function El({{ as, ...props }}) {{ if (as) return createElement(as, props); return <label {{...props}} />; }}\n\
+                 export const Outer = Base.extend().asComponent(El);\n\
+                 function Root({{ as, asChild, ...props }}) {{ {reads}return createElement(Outer, {{ ...props, asChild: true }}); }}\n\
+                 export const Parts = {{ Root }};\n"
+            )
+        };
+        let rendered = "() => <><Parts.Root as=\"div\" /><Box p={8} /></>";
+        for (reads, app, want) in [
+            ("", rendered, &[][..]),
+            ("", "({ X }) => <><Outer as={X} /><Parts.Root /><Box p={8} /></>", &["p"][..]),
+            ("const id = props.id;\n", rendered, &[][..]),
+            // A call through a member, however wrapped, or an iterating
+            // spread runs code with the rest as its receiver, which may write
+            // `as` into it.
+            ("(props.mutate)();\n", rendered, &["p"][..]),
+            ("(props.mutate as any)();\n", rendered, &["p"][..]),
+            ("props.mutate!();\n", rendered, &["p"][..]),
+            ("props.mutate``;\n", rendered, &["p"][..]),
+            ("[...props];\n", rendered, &["p"][..]),
+            ("consume(...props);\n", rendered, &["p"][..]),
+        ] {
+            let el = el(reads);
+            let app = format!("import {{ Box }} from './kit';\nimport {{ Parts, Outer }} from './el';\nexport const App = {app};\n");
+            let out = analyze(&[("kit.tsx", kit), ("el.tsx", el.as_str()), ("app.tsx", app.as_str())], &test_inputs());
+            assert_eq!(out.dynamic_props.keys().collect::<Vec<_>>(), want, "{reads}{app}");
         }
     }
 
