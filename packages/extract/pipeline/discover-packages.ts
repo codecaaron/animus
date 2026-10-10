@@ -12,6 +12,7 @@ import {
 import { globToRegExp } from './core-options';
 import { discoverFiles } from './discover-files';
 import { parseInternalWire } from './internal-wire';
+import { readKitDescriptor } from './kit-descriptor';
 import {
   INVALID_KIT_SOURCE_CONDITION,
   KIT_SYSTEM_NOT_INCLUDED,
@@ -25,6 +26,7 @@ import { relativeSourceCandidates } from './source-ingestion';
 import { isJsonBlock, isJsonString } from './tsconfig-paths';
 
 import type { EngineApi } from './engine-adapter';
+import type { KitDescriptorRecord } from './kit-descriptor';
 import type { ManifestDiagnostic } from './manifest-diagnostics';
 import type {
   ExtractExportFact,
@@ -336,6 +338,10 @@ export interface CollectedExternalPackages {
   sourceEntrySideEffects: Map<string, boolean>;
   /** Absolute directories for bundler loader allowlisting. */
   packageDirs: string[];
+  /** Those of `packageDirs` whose package is linked rather than installed:
+   *  its real path is outside `node_modules`, so its source can change in
+   *  place. */
+  linkedDirs: string[];
   /** Absolute package dir → every declared specifier that claimed it, in
    *  declaration order. `firstOwners` derives the single-value view. */
   dirOwnerSets: Record<string, string[]>;
@@ -349,6 +355,8 @@ export interface CollectedExternalPackages {
   /** A kit without the source condition, and a condition entry whose target
    *  is missing or outside its package. */
   diagnostics: ManifestDiagnostic[];
+  /** Each resolved package's kit descriptor, once per package root. */
+  kitDescriptors: KitDescriptorRecord[];
 }
 
 export async function collectExternalPackageSources(opts: {
@@ -407,6 +415,7 @@ export async function collectExternalPackageSources(opts: {
     );
   };
   const packageDirs: string[] = [];
+  const linkedDirs: string[] = [];
   const dirOwnerSets: Record<string, string[]> = {};
   const dirExtensions: Record<string, string[]> = {};
   const fileOwners: Record<string, string> = {};
@@ -441,6 +450,8 @@ export async function collectExternalPackageSources(opts: {
   const diagnostics: ManifestDiagnostic[] = [];
   const reportedPackages = new Set<string>();
 
+  const kitDescriptors: KitDescriptorRecord[] = [];
+  const describedRoots = new Set<string>();
   for (const specifier of specifiers) {
     let absEntry: string | null;
     try {
@@ -480,6 +491,13 @@ export async function collectExternalPackageSources(opts: {
       continue;
     }
 
+    const realRoot = realPath(pkgRoot);
+    if (!describedRoots.has(realRoot)) {
+      describedRoots.add(realRoot);
+      const described = readKitDescriptor(pkgRoot, rootDir);
+      if (described) kitDescriptors.push(described);
+    }
+    const linked = !isInstalledPackage(pkgRoot);
     const srcDir = join(pkgRoot, 'src');
     let fileCount = 0;
     let staleDist = false;
@@ -504,6 +522,7 @@ export async function collectExternalPackageSources(opts: {
       packageMap[specifier] ??= relative(rootDir, absEntry);
       if (condition.root) {
         packageDirs.push(condition.root);
+        if (linked) linkedDirs.push(condition.root);
         claimDir(condition.root, specifier);
         dirExtensions[condition.root] = [...extensionsSet];
         onPackageResolved?.(specifier, condition.root);
@@ -513,6 +532,7 @@ export async function collectExternalPackageSources(opts: {
       }
     } else if (existsSync(srcDir)) {
       packageDirs.push(srcDir);
+      if (linked) linkedDirs.push(srcDir);
       claimDir(srcDir, specifier);
       dirExtensions[srcDir] = [...extensionsSet];
       onPackageResolved?.(specifier, srcDir);
@@ -554,9 +574,7 @@ export async function collectExternalPackageSources(opts: {
 
       const pkgFiles = walkPackageSources(srcDir, extensionsSet);
 
-      staleDist =
-        !isInstalledPackage(pkgRoot) &&
-        distEntryIsStale(absEntry, srcDir, pkgFiles);
+      staleDist = linked && distEntryIsStale(absEntry, srcDir, pkgFiles);
 
       for (const pkgFile of pkgFiles) {
         if (ingest(pkgFile, specifier)) fileCount++;
@@ -564,6 +582,7 @@ export async function collectExternalPackageSources(opts: {
     } else {
       const outputDir = dirname(absEntry);
       packageDirs.push(outputDir);
+      if (linked) linkedDirs.push(outputDir);
       claimDir(outputDir, specifier);
       onPackageResolved?.(specifier, outputDir);
       const relPath = relative(rootDir, absEntry);
@@ -618,11 +637,13 @@ export async function collectExternalPackageSources(opts: {
     sourceEntries,
     sourceEntrySideEffects,
     packageDirs,
+    linkedDirs,
     dirOwnerSets,
     dirExtensions,
     fileOwners,
     outcomes,
     diagnostics,
+    kitDescriptors,
   };
 }
 
@@ -843,11 +864,20 @@ export function excludeCollectedPackages(
     packageDirs: collected.packageDirs.filter(
       (dir) => !rejectedDirs.includes(dir)
     ),
+    linkedDirs: collected.linkedDirs.filter(
+      (dir) => !rejectedDirs.includes(dir)
+    ),
     dirOwnerSets,
     dirExtensions,
     fileOwners,
     outcomes: collected.outcomes,
     diagnostics: collected.diagnostics,
+    kitDescriptors: collected.kitDescriptors.filter(
+      (record) =>
+        !rejectedDirs.some((dir) =>
+          isPathWithinRoot(resolve(rootDir, record.packageRoot), dir)
+        )
+    ),
   };
 }
 

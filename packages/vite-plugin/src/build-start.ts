@@ -147,6 +147,7 @@ export async function runBuildStart(
 
   ctx.packageMap = collected.packageMap;
   ctx.externalPackageOutcomes = collected.outcomes;
+  ctx.kitDescriptors = collected.kitDescriptors;
   ctx.externalDirOwners = firstOwners(collected.dirOwnerSets);
   ctx.externalFileOwners = collected.fileOwners;
   ctx.enforceIncludeResolution();
@@ -160,6 +161,7 @@ export async function runBuildStart(
   }
 
   ctx.externalPackageDirs = collected.packageDirs;
+  ctx.externalLinkedDirs = collected.linkedDirs;
   // The earlier registration points both run before this assignment, so
   // external dirs must register here or they are never watched.
   ctx.registerSystemWatchPaths();

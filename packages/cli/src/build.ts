@@ -1,5 +1,7 @@
 import {
+  buildKitDescriptor,
   buildPathAliasesJson,
+  KIT_DESCRIPTOR_FILE,
   readTsconfigAliasPairs,
   runStructuralSelfCheck,
 } from '@animus-ui/extract/pipeline';
@@ -12,8 +14,8 @@ import {
   getSharedCss,
   getSharedSystemProps,
 } from '@animus-ui/extract/session';
-import { existsSync, rmSync } from 'fs';
-import { relative, resolve } from 'path';
+import { existsSync, rmSync, writeFileSync } from 'fs';
+import { join, relative, resolve } from 'path';
 
 import { installShutdownSignals } from './signals';
 import {
@@ -231,8 +233,28 @@ export function reportDiscoveryOutcomes(
   }
 }
 
+export interface BuildFlags {
+  /** Also write the kit descriptor at the root. */
+  kit?: boolean;
+}
+
+/** Writes the analysed kit's descriptor at the root, from the manifest the
+ *  build published. */
+function writeKitDescriptor(root: string): string {
+  // SAFETY: the session's own `analyze()` output, which `ProjectManifest`
+  // mirrors; anything that is not JSON throws here.
+  const manifest = JSON.parse(getManifestJson() ?? '') as ProjectManifest;
+  const path = join(root, KIT_DESCRIPTOR_FILE);
+  writeFileSync(
+    path,
+    `${JSON.stringify(buildKitDescriptor(manifest), null, 2)}\n`
+  );
+  return path;
+}
+
 export async function runBuild(
-  config: ResolvedCliConfig
+  config: ResolvedCliConfig,
+  flags: BuildFlags = {}
 ): Promise<BuildResult> {
   const { outDir } = config;
 
@@ -265,6 +287,9 @@ export async function runBuild(
       config,
       session
     );
+    if (flags.kit) {
+      err(`kit descriptor → ${writeKitDescriptor(config.root)}`);
+    }
 
     reportDiscoveryOutcomes(config, session);
 

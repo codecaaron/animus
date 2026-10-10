@@ -1,4 +1,5 @@
 import { buildAnalyzeProjectArgs } from './analyze-project-args';
+import { kitDescriptorDiagnostics } from './kit-descriptor';
 import {
   collectSelectorAliasDiagnostics,
   effectiveLevel,
@@ -10,6 +11,7 @@ import { checkCustomProperties } from './property-diagnostics';
 import { applyUnitFallback } from './unit-fallback';
 
 import type { AnalyzeProjectInputs } from './analyze-project-args';
+import type { KitDescriptorRecord } from './kit-descriptor';
 import type {
   DiagnosticLevels,
   ManifestDiagnostic,
@@ -49,14 +51,16 @@ export interface AnalysisOptions {
   /** rootDir-relative external package dirs (external-token candidates). */
   externalDirs?: string[];
   devMode: boolean;
-  /** What the host knows about renders the analysis cannot see. */
+  /** What the host knows that the analysis cannot see. */
   analysisContext?: AnalysisContext;
   /** Diagnostics gathered outside analysis, surfaced through the same
    *  policy point as the manifest's own. */
   extraDiagnostics?: import('./manifest-diagnostics').ManifestDiagnostic[];
+  /** The analysed kits' descriptors, which discovery read. */
+  kitDescriptors?: readonly KitDescriptorRecord[];
 }
 
-/** What a host knows about renders the analysis cannot see. */
+/** What a host knows that the analysis cannot see. */
 export interface AnalysisContext {
   /** rootDir-relative sources ingestion skipped. Their renders are unseen,
    *  so nothing is pruned while any is skipped, and an error from an option
@@ -69,6 +73,9 @@ export interface AnalysisContext {
   /** rootDir-relative directories of the analysed packages: a load into
    *  one reaches only its modules. */
   packageDirs?: string[];
+  /** Those of them whose package is linked rather than installed, so
+   *  development names their files where they are defined. */
+  linkedDirs?: string[];
 }
 
 /**
@@ -134,6 +141,7 @@ export function buildAnalysisInputs(
       skippedSources: context.skippedSources ?? [],
       unbundledComputedImports: context.unbundledComputedImports ?? false,
       packageDirs: context.packageDirs ?? [],
+      linkedDirs: context.linkedDirs ?? [],
     });
   }
   return inputs;
@@ -203,13 +211,22 @@ export function runProjectAnalysis(
   // SAFETY: `manifestJson` is this call's own `analyzeProject` return value,
   // the serde output `ProjectManifest` mirrors. Unparseable JSON throws.
   const manifest = JSON.parse(manifestJson) as ProjectManifest;
-  // The system's errors join the manifest's on every analysis, so each host
-  // refuses to publish whatever the build's strictness.
+  // The system's errors, and a kit descriptor's this Animus cannot read,
+  // join the manifest's on every analysis, so each host refuses to publish
+  // whatever the build's strictness.
   const systemErrors = systemLoadDiagnostics(opts.system).filter(
     (diagnostic) => diagnostic.kind === 'error'
   );
-  if (systemErrors.length > 0) {
-    manifest.diagnostics = [...systemErrors, ...(manifest.diagnostics ?? [])];
+  const kitDiagnostics = kitDescriptorDiagnostics(
+    opts.kitDescriptors ?? [],
+    manifest
+  );
+  if (systemErrors.length > 0 || kitDiagnostics.length > 0) {
+    manifest.diagnostics = [
+      ...systemErrors,
+      ...kitDiagnostics,
+      ...(manifest.diagnostics ?? []),
+    ];
   }
   const componentCss = applyUnitFallback(manifest.css);
   const propertyDiagnostics = checkCustomProperties({

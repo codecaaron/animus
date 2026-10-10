@@ -37,6 +37,7 @@ struct AnalyzeResult<'a> {
     admitted_transforms: &'a std::collections::BTreeMap<String, String>,
     typed_system_props: &'a [String],
     component_fragments: &'a std::collections::BTreeMap<String, crate::css::PerComponentSheets>,
+    system_fingerprint: &'a str,
     reverse_provenance: &'a std::collections::BTreeMap<String, Vec<String>>,
     components: &'a std::collections::BTreeMap<String, analyze_css::ComponentDescriptor>,
     files: &'a std::collections::BTreeMap<String, Vec<String>>,
@@ -245,8 +246,7 @@ impl ExtractEngine {
         css_inputs
             .set_transform_sources(o.transform_sources_json.as_deref())
             .map_err(napi::Error::from_reason)?;
-        css_inputs.transform_provenance =
-            crate::transforms::TransformProvenance::from_json(o.transform_provenance_json.as_deref());
+        css_inputs.set_transform_provenance(o.transform_provenance_json.as_deref());
         Ok(ExtractEngine {
             opts: ResolvedOptions {
                 prefix: o.prefix.unwrap_or_else(|| "animus".to_string()),
@@ -545,6 +545,7 @@ impl ExtractEngine {
             admitted_transforms: &css.admitted_transforms,
             typed_system_props: &css.typed_system_props,
             component_fragments: &css.component_fragments,
+            system_fingerprint: &css.system_fingerprint,
             reverse_provenance: &css.reverse_provenance,
             components: &css.components,
             files: &css.files_map,

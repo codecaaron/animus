@@ -45,6 +45,8 @@ Options:
   --targets <query>   Browserslist query for CSS lowering
   --strict            Fail on inputs that could not be read or resolved,
                       and on classified unsupported Animus declarations
+  --kit               build only: also write the kit descriptor, animus.json,
+                      at the root, for the kit to export as ./animus.json
   --fail-on-degraded  watch only: exit 3 instead of running with unwatched
                       roots (degradation is otherwise reported and tolerated)
   --verbose           Verbose logging (stderr): phase checkpoints,
@@ -115,6 +117,7 @@ export async function main(
         strict: { type: 'boolean' },
         verbose: { type: 'boolean' },
         trace: { type: 'boolean' },
+        kit: { type: 'boolean' },
         'fail-on-degraded': { type: 'boolean' },
         'print-config': { type: 'boolean' },
         help: { type: 'boolean' },
@@ -177,7 +180,7 @@ export async function main(
     }
 
     if (command === 'build') {
-      await runBuild(config);
+      await runBuild(config, { kit: values.kit === true });
       process.exitCode = EXIT_OK;
       return;
     }

@@ -106,9 +106,37 @@ pub struct CssInputs {
     /// component props alike.
     pub declaration_scales: DeclarationScales,
     pub dev_mode: bool,
+    /// FNV-1a over each input that can change a component's declarations or
+    /// runtime metadata, in canonical JSON: with the class prefix, the
+    /// system's fingerprint. Global blocks, which emit outside component
+    /// classes, take no part; keyframes take part by name only.
+    pub system_hash: u64,
 }
 
-/// What the host knows about renders the analysis cannot see.
+/// `hash` continued with `json` in canonical form, then a separator; JSON
+/// that does not parse continues as written.
+fn fold_system_input(hash: u64, json: Option<&str>) -> u64 {
+    let hash = match json.map(serde_json::from_str::<Value>) {
+        Some(Ok(value)) => crate::ids::fnv1a_json(hash, &value),
+        Some(Err(_)) => crate::ids::fnv1a(hash, json.unwrap_or_default()),
+        None => hash,
+    };
+    crate::ids::fnv1a(hash, "\u{0}")
+}
+
+/// Each keyframes collection's export and key, and the name its CSS takes.
+fn keyframe_names(blocks: Option<&Value>) -> Vec<(&str, &str, Option<&str>)> {
+    let collections = blocks.and_then(Value::as_object).into_iter().flatten();
+    collections
+        .flat_map(|(export, collection)| {
+            collection.as_object().into_iter().flatten().map(move |(key, block)| {
+                (export.as_str(), key.as_str(), block.get("name").and_then(Value::as_str))
+            })
+        })
+        .collect()
+}
+
+/// What the host knows that the analysis cannot see.
 #[derive(Debug, Default, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct AnalysisContext {
@@ -123,6 +151,10 @@ pub struct AnalysisContext {
     /// The analysed packages' directories, relative to rootDir: a load into
     /// one reaches only its modules.
     pub package_dirs: Vec<String>,
+    /// Those of them whose package is linked rather than installed, spelled
+    /// as their files are keyed: development names their files where they
+    /// are defined, whatever the path spells.
+    pub linked_dirs: Vec<String>,
 }
 
 impl CssInputs {
@@ -189,6 +221,19 @@ impl CssInputs {
                 }
             }
         };
+        let keyframes_blocks = parse_opt_value("keyframesJson", keyframes_json)?;
+        let system_hash = [
+            config_json,
+            group_registry_json,
+            theme_json,
+            variable_map_json,
+            contextual_vars_json,
+            selector_aliases_json,
+            condition_aliases_json,
+        ]
+        .into_iter()
+        .fold(crate::ids::FNV_OFFSET, fold_system_input);
+        let system_hash = crate::ids::fnv1a_json(system_hash, &keyframe_names(keyframes_blocks.as_ref()));
         let mut config = parse("configJson", config_json)?;
         crate::theme::key_unidentified_transforms(&mut config);
         let prop_order = parse::<serde_json::Map<String, Value>>("configJson", config_json)?
@@ -209,7 +254,7 @@ impl CssInputs {
                 "globalStyleBlocksJson",
                 global_style_blocks_json,
             )?,
-            keyframes_blocks: parse_opt_value("keyframesJson", keyframes_json)?,
+            keyframes_blocks,
             package_map: parse("packageResolutionJson", package_resolution_json)?,
             path_aliases,
             static_css,
@@ -219,6 +264,7 @@ impl CssInputs {
             external_dirs: parse("externalDirsJson", external_dirs_json)?,
             analysis_context: AnalysisContext::default(),
             dev_mode,
+            system_hash,
         })
     }
 
@@ -227,7 +273,13 @@ impl CssInputs {
     pub fn bind_declarations(&mut self, json: Option<&str>) -> Result<(), String> {
         self.declaration_scales =
             crate::declarations::bind_declaration_props(&mut self.config, json, &self.theme)?;
+        self.system_hash = fold_system_input(self.system_hash, json);
         Ok(())
+    }
+
+    /// The system's fingerprint under a class prefix.
+    pub fn system_fingerprint(&self, class_prefix: &str) -> String {
+        crate::ids::fingerprint(crate::ids::fnv1a(self.system_hash, class_prefix))
     }
 
     pub fn set_transform_sources(&mut self, json: Option<&str>) -> Result<(), String> {
@@ -237,7 +289,13 @@ impl CssInputs {
             Some(s) => serde_json::from_str(s)
                 .map_err(|e| format!("EngineOptions.transformSourcesJson: invalid JSON — {e}"))?,
         };
+        self.system_hash = fold_system_input(self.system_hash, json);
         Ok(())
+    }
+
+    pub fn set_transform_provenance(&mut self, json: Option<&str>) {
+        self.transform_provenance = crate::transforms::TransformProvenance::from_json(json);
+        self.system_hash = fold_system_input(self.system_hash, json);
     }
 }
 
@@ -252,6 +310,9 @@ pub struct ComponentDescriptor {
     pub tag: String,
     pub replacement: String,
     pub system_prop_names: Vec<String>,
+    /// The component's definition fingerprint, which its location takes no
+    /// part in.
+    pub definition_fingerprint: String,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -526,6 +587,8 @@ pub struct CssOutput {
     pub system_prop_map: BTreeMap<String, BTreeMap<String, String>>,
     pub dynamic_props: BTreeMap<String, DynamicPropMeta>,
     pub component_fragments: BTreeMap<String, crate::css::PerComponentSheets>,
+    /// The fingerprint of the system the analysis ran with.
+    pub system_fingerprint: String,
     /// parent id → direct child ids.
     pub reverse_provenance: BTreeMap<String, Vec<String>>,
     /// component id → descriptor, for evaluated survivors only.
@@ -4172,6 +4235,42 @@ fn run_with_system_floor(
     // An extension's callback props it reads from its parent's component.
     let mut parent_callbacks: FxHashMap<String, FxHashSet<String>> = FxHashMap::default();
     let mut inherited_variant_configs: FxHashMap<String, VariantConfigs> = FxHashMap::default();
+    // The system and the definition name a production class, and an
+    // installed kit's in development too, since its source never changes in
+    // place; elsewhere, development names it by where it is defined, so an
+    // edit keeps its class. Parents come first in `sorted_ids`, so each
+    // extension's fingerprint reads its parent's.
+    let system_fingerprint = inputs.system_fingerprint(class_prefix);
+    let mut definition_fingerprints: FxHashMap<String, String> = FxHashMap::default();
+    let mut identities: Vec<(&String, &str, String)> = Vec::new();
+    for component_id in &sorted_ids {
+        let Some((file_path, chain_idx)) = chain_lookup.get(component_id.as_str()) else {
+            continue;
+        };
+        let chain = &files[*file_path].chains[*chain_idx];
+        if chain.fatal_error.is_some() {
+            continue;
+        }
+        let parent = parent_map.get(component_id).and_then(|parent| definition_fingerprints.get(parent));
+        let definition = crate::ids::definition_fingerprint(&chain.stages, parent.map(String::as_str));
+        let identity = if !inputs.dev_mode || crate::ids::is_installed_file(file_path, &inputs.analysis_context.linked_dirs) {
+            crate::ids::semantic_identity(&system_fingerprint, &definition)
+        } else {
+            component_id.clone()
+        };
+        definition_fingerprints.insert(component_id.clone(), definition);
+        identities.push((component_id, chain.descriptor.binding.as_str(), identity));
+    }
+    let class_names: FxHashMap<&String, String> = identities
+        .iter()
+        .map(|(id, _, _)| *id)
+        .zip(crate::ids::class_names(
+            &identities.iter().map(|(_, binding, identity)| (*binding, identity.as_str())).collect::<Vec<_>>(),
+            class_prefix,
+        ))
+        .collect();
+    let identity_of: FxHashMap<&str, &str> =
+        identities.iter().map(|(id, _, identity)| (id.as_str(), identity.as_str())).collect();
 
     for component_id in &sorted_ids {
         let Some((file_path, chain_idx)) = chain_lookup.get(component_id.as_str()) else {
@@ -4211,16 +4310,18 @@ fn run_with_system_floor(
             .and_then(|parent_id| inherited_variant_configs.get(parent_id))
             .map_or(&[][..], Vec::as_slice);
         let merged_chain = inherit_variant_stages(chain, parent_variant_configs);
-        // A component's own declaration props bind under its identity; an
-        // inherited one keeps the identity of the component that declared it.
+        // A component's own declaration props bind under its class's suffix;
+        // an inherited one keeps the suffix of the component that declared it.
         let result = process_chain_facts(
             merged_chain.as_ref().unwrap_or(chain),
             &resolve_ctx,
             &inputs.group_registry,
         )
         .and_then(|mut out| {
+            out.component_css.class_name = class_names[component_id].clone();
             if let Some(own) = out.custom_prop_configs.as_mut() {
-                bind_component_declarations(own, &inputs.declaration_scales, &inputs.theme, component_id)
+                let suffix = crate::ids::class_suffix(&class_names[component_id]);
+                bind_component_declarations(own, &inputs.declaration_scales, &inputs.theme, suffix)
                     .map_err(|detail| ("props".to_string(), detail))?;
             }
             Ok(out)
@@ -5533,6 +5634,9 @@ fn run_with_system_floor(
         FxHashMap::default();
     let mut runtime_custom_declarations: Vec<(String, Arc<DeclarationBinding>)> = Vec::new();
     let mut all_custom_slot_entries: Vec<(String, ResolvedStyles, String)> = Vec::new();
+    // Copies of one definition share their slots, so each slot's rules are
+    // written once, whichever copies read it.
+    let mut written_slots: FxHashSet<String> = FxHashSet::default();
     for component_id in &sorted_ids {
         let Some((component_css, _, _, _, _, custom_configs, _)) = evaluated.get(component_id)
         else {
@@ -5544,12 +5648,7 @@ fn run_with_system_floor(
         };
         let mut component_dynamic: HashMap<String, DynamicPropMeta> = HashMap::new();
         runtime_custom_declarations.extend(runtime_declarations_of(dynamic_props_for_binding.iter(), cc));
-        let class_hash = component_css
-            .class_name
-            .rsplit('-')
-            .next()
-            .unwrap_or(&component_css.class_name);
-        let hash8 = &class_hash[..class_hash.len().min(8)];
+        let class_hash = crate::ids::class_suffix(&component_css.class_name);
         for prop_name in dynamic_props_for_binding {
             if let Some(prop_config) = cc.get(prop_name) {
                 if let Some(binding) = prop_config.declaration_binding() {
@@ -5566,8 +5665,8 @@ fn run_with_system_floor(
                 component_dynamic.insert(
                     prop_name.clone(),
                     DynamicPropMeta::new(
-                        format!("--{class_prefix}-{segment}{hash8}"),
-                        format!("{class_prefix}-dyn-{segment}{hash8}"),
+                        format!("--{class_prefix}-{segment}{class_hash}"),
+                        format!("{class_prefix}-dyn-{segment}{class_hash}"),
                         prop_config,
                         &inputs.theme,
                         &inputs.contextual_vars,
@@ -5577,10 +5676,11 @@ fn run_with_system_floor(
         }
         if !component_dynamic.is_empty() {
             share_slots(&mut component_dynamic);
-            all_custom_slot_entries.extend(build_variable_slot_entries(
-                &component_dynamic,
-                &breakpoints,
-            ));
+            all_custom_slot_entries.extend(
+                build_variable_slot_entries(&component_dynamic, &breakpoints)
+                    .into_iter()
+                    .filter(|(slot_class, _, _)| written_slots.insert(slot_class.clone())),
+            );
             per_component_custom_dynamic.insert(component_id.clone(), component_dynamic);
         }
     }
@@ -5710,6 +5810,7 @@ fn run_with_system_floor(
         };
 
         let mut payload = crate::assemble::ReplacementPayload {
+            class_name: Some(evaluated[component_id].0.class_name.clone()),
             system_prop_names: all_prop_names,
             system_group_names: group_names.clone(),
             has_dynamic_props,
@@ -5836,6 +5937,13 @@ fn run_with_system_floor(
         .collect();
 
     let parent_ids: FxHashSet<String> = parent_map.values().cloned().collect();
+    // Copies share their usage: one class, and one full identity, so a short
+    // name two definitions would take never pools them.
+    let mut copies: FxHashMap<(&str, &str), Vec<&str>> = FxHashMap::default();
+    for (id, css) in &reconciled_components {
+        copies.entry((css.class_name.as_str(), identity_of[id.as_str()])).or_default().push(id.as_str());
+    }
+    crate::reconcile::pool_shared_usage(&mut usage_ledger, copies.into_values(), &parent_ids);
 
     // A skipped source may render any option, so nothing is pruned. The
     // pruned result still tells which options its errors come from.
@@ -5888,6 +5996,7 @@ fn run_with_system_floor(
             .map(|(id, (css, _, _, _, _, _, _))| (id.as_str(), css.class_name.as_str()))
             .collect();
         let mut family_refs: Vec<ComposeFamilyRef> = Vec::new();
+        let mut composed: FxHashSet<(&str, &str, &[String])> = FxHashSet::default();
         for (family_file, family) in &compose_families {
             let Some(root_class) = resolve_compose_slot_class(
                 family_file,
@@ -5927,6 +6036,9 @@ fn run_with_system_floor(
                     ),
                 }
             }
+            // A child composed under a root on the same shared keys writes the
+            // same rules in any family, whatever its slot or local name: once.
+            child_slots.retain(|(_, class)| composed.insert((root_class, *class, family.shared_keys.as_slice())));
             if child_slots.is_empty() {
                 continue;
             }
@@ -6102,11 +6214,14 @@ fn run_with_system_floor(
         dynamic_props.into_iter().collect();
     let mut component_fragments: BTreeMap<String, crate::css::PerComponentSheets> =
         fragments.to_per_component_map().into_iter().collect();
-    // Composed rules belong to the child slot they style.
-    let id_by_class: FxHashMap<&str, &str> = evaluated
-        .iter()
-        .map(|(id, (css, _, _, _, _, _, _))| (css.class_name.as_str(), id.as_str()))
-        .collect();
+    // Composed rules belong to the child slot they style; a shared class's,
+    // like its other rules, to its first copy.
+    let mut id_by_class: FxHashMap<&str, &str> = FxHashMap::default();
+    for id in &sorted_ids {
+        if let Some((css, _, _, _, _, _, _)) = evaluated.get(id) {
+            id_by_class.entry(css.class_name.as_str()).or_insert(id.as_str());
+        }
+    }
     for (child_class, rules) in &composed_variants {
         if let Some(id) = id_by_class.get(child_class) {
             let fragment = component_fragments.entry(id.to_string()).or_default();
@@ -6157,6 +6272,7 @@ fn run_with_system_floor(
                 system_prop_names: payload
                     .map(|p| p.system_prop_names.clone())
                     .unwrap_or_default(),
+                definition_fingerprint: definition_fingerprints[component_id].clone(),
             },
         );
         files_map
@@ -6192,6 +6308,7 @@ fn run_with_system_floor(
         system_prop_map,
         dynamic_props: dynamic_props_sorted,
         component_fragments,
+        system_fingerprint,
         reverse_provenance,
         components,
         files_map,
@@ -8373,11 +8490,11 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             .clone()
     }
 
-    fn slot_family_source(family: &str, root: &str, body: &str) -> String {
+    fn slot_family_source(family: &str, root: &str, body: &str, display: &str, padding: u32) -> String {
         format!(
-            "export const {root} = ds.styles({{ display: 'flex' }}).asElement('div');\n\
+            "export const {root} = ds.styles({{ display: '{display}' }}).asElement('div');\n\
              export const {body} = ds\n\
-               .variant({{ prop: 'size', variants: {{ sm: {{ p: 8 }} }} }})\n\
+               .variant({{ prop: 'size', variants: {{ sm: {{ p: {padding} }} }} }})\n\
                .asElement('div');\n\
              export const {family} = compose({{ Root: {root}, Body: {body} }}, \
                {{ name: '{family}', shared: {{ size: true }} }});\n\
@@ -8387,9 +8504,10 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
 
     #[test]
     fn compose_slots_resolve_per_file_not_by_bare_binding_name() {
-        // Two files define the same local recipe names.
-        let one = slot_family_source("One", "Root", "Body");
-        let two = slot_family_source("Two", "Root", "Body");
+        // Two files define the same local recipe names, with definitions of
+        // their own: identical ones would share their classes.
+        let one = slot_family_source("One", "Root", "Body", "flex", 8);
+        let two = slot_family_source("Two", "Root", "Body", "grid", 16);
         let out = analyze(
             &[("one.tsx", one.as_str()), ("two.tsx", two.as_str())],
             &test_inputs(),
