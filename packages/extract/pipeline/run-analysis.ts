@@ -193,6 +193,8 @@ export function runProjectAnalysis(
     strict?: boolean;
     /** The host's `diagnostics` option. */
     diagnostics?: DiagnosticLevels;
+    /** A development session's error sink (`DiagnosticPolicy.reportErrors`). */
+    reportErrors?: (message: string) => void;
   }
 ): ProjectAnalysisResult {
   const { analyzeProject, diagnosticCodes } = engineApi();
@@ -212,8 +214,8 @@ export function runProjectAnalysis(
   // the serde output `ProjectManifest` mirrors. Unparseable JSON throws.
   const manifest = JSON.parse(manifestJson) as ProjectManifest;
   // The system's errors, and a kit descriptor's this Animus cannot read,
-  // join the manifest's on every analysis, so each host refuses to publish
-  // whatever the build's strictness.
+  // join the manifest's on every analysis, so a build fails on them whatever
+  // its strictness, and development reports them.
   const systemErrors = systemLoadDiagnostics(opts.system).filter(
     (diagnostic) => diagnostic.kind === 'error'
   );
@@ -238,6 +240,7 @@ export function runProjectAnalysis(
   surfaceManifestDiagnostics(manifest, opts.warn, {
     strict: opts.strict,
     info: opts.info,
+    reportErrors: opts.reportErrors,
     levels: opts.diagnostics,
     knownCodes: opts.diagnostics
       ? knownDiagnosticCodes(diagnosticCodes?.())

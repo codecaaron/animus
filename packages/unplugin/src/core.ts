@@ -1,5 +1,6 @@
 import {
   buildPathAliasesJson,
+  DiagnosticFailure,
   ENGINE_TRANSFORM_EXTENSIONS,
   isEngineTransformExtension,
   isPathWithinRoot,
@@ -181,6 +182,8 @@ interface EsbuildOptionsLike {
 
 interface WebpackLikeCompiler {
   options: { mode?: string };
+  /** Set once `watch()` starts, before the first compilation. */
+  watchMode?: boolean;
   webpack?: {
     DefinePlugin?: new (defs: Record<string, string>) => WebpackLikeApplied;
   };
@@ -222,13 +225,22 @@ interface WebpackLikeApplied {
 
 const PLUGIN_NAME = 'animus-host';
 
+const ESBUILD_WATCH_HINT =
+  'If this is an esbuild watch or serve context, pass watch: true to the Animus esbuild plugin.';
+
 export const unpluginFactory: UnpluginFactory<
   AnimusUnpluginOptions | undefined
 > = (rawOptions, meta) => {
-  const { root, options } = resolveHostOptions(rawOptions);
+  const { root, options, watch } = resolveHostOptions(rawOptions);
   const state = createHostState();
   let activeSession: ExtractionSession | null = null;
   let modeOracle: AnimusMode | null = null;
+  /** Whether the host is watching, where an error-level diagnostic reports
+   *  and the pipeline still publishes. Only a build fails on one. Rollup's
+   *  oracle is its watch mode; webpack's is its `mode`, so it reads
+   *  `watchMode` instead, and Vite reads its command. esbuild gives neither,
+   *  so its author says so with the `watch` option. */
+  let watching = (): boolean => modeOracle === 'development';
   let esbuildOptions: EsbuildOptionsLike | null = null;
   /** Hooks can fire before buildStart (webpack's make taps run
    *  concurrently), so joiners await this before awaiting the pipeline. */
@@ -259,6 +271,17 @@ export const unpluginFactory: UnpluginFactory<
       await runClaimedPipeline();
     } catch (error) {
       releaseClaim();
+      // esbuild cannot tell a watch from a build: the author who meant a
+      // watch learns the option from the failure.
+      if (
+        meta.framework === 'esbuild' &&
+        !watch &&
+        error instanceof DiagnosticFailure
+      ) {
+        throw new Error(`${String(error)}\n${ESBUILD_WATCH_HINT}`, {
+          cause: error,
+        });
+      }
       throw error;
     }
   }
@@ -277,6 +300,7 @@ export const unpluginFactory: UnpluginFactory<
         { unbundledComputedImports }
       );
       activeSession = session;
+      session.development = watching();
       session.driverLabel = 'animus-unplugin';
       session.rootDir = root;
       session.systemPropsModuleId = TURBOPACK_SYSTEM_PROPS_ID;
@@ -484,6 +508,16 @@ export const unpluginFactory: UnpluginFactory<
       }
     },
 
+    vite: {
+      // Vite runs the normalized buildStart, so its own signals decide:
+      // serving or `build.watch` runs another turn.
+      configResolved(config: { command: string; build: { watch?: unknown } }) {
+        const serving =
+          config.command === 'serve' || Boolean(config.build.watch);
+        watching = () => serving;
+      },
+    },
+
     rollup: {
       // unplugin runs this instead of the normalized buildStart.
       async buildStart() {
@@ -512,6 +546,7 @@ export const unpluginFactory: UnpluginFactory<
     esbuild: {
       config(buildOptions) {
         esbuildOptions = buildOptions;
+        watching = () => watch;
         buildOptions.define = {
           ...buildOptions.define,
           __ANIMUS_DEV__: JSON.stringify(effectiveMode() === 'development'),
@@ -544,6 +579,7 @@ export const unpluginFactory: UnpluginFactory<
   function wireWebpackLike(compiler: WebpackLikeCompiler): void {
     modeOracle =
       compiler.options.mode === 'development' ? 'development' : 'production';
+    watching = () => compiler.watchMode === true;
     const DefinePlugin =
       compiler.webpack?.DefinePlugin ?? compiler.rspack?.DefinePlugin;
     if (!DefinePlugin) {

@@ -14,7 +14,6 @@ import { basename, extname, isAbsolute, join, relative, resolve } from 'path';
 
 import {
   assembleStylesheet,
-  assertNoErrorDiagnostics,
   buildSystemPropsModule,
   clearEngineCache,
   collectExternalPackageSources,
@@ -231,6 +230,10 @@ export class ExtractionSession {
   /** Whether the host's structural self-check reports an empty kit, so
    *  discovery leaves its warning out. */
   selfCheckReportsEmptyKits = false;
+  /** Whether this session serves development (a watch), where an error-level
+   *  diagnostic is reported and the session keeps running. Only a build
+   *  fails on one. */
+  development = false;
 
   /** Absolute directory prefixes for external packages (loader allowlist). */
   externalPackageDirs: string[] = [];
@@ -394,6 +397,10 @@ export class ExtractionSession {
 
   private warn(msg: string): void {
     console.warn(`[animus] ${msg}`);
+  }
+
+  private reportErrors(): ((message: string) => void) | undefined {
+    return this.development ? (message) => console.error(message) : undefined;
   }
 
   private now(): number {
@@ -1030,7 +1037,11 @@ export class ExtractionSession {
       },
       (message) => this.warn(message),
       // An error-severity discovery diagnostic fails a strict build.
-      { levels: this.options.diagnostics, strict: this.options.strict }
+      {
+        levels: this.options.diagnostics,
+        strict: this.options.strict,
+        reportErrors: this.reportErrors(),
+      }
     );
     const unresolvableMessage = unresolvableIncludesMessage(collected.outcomes);
     if (unresolvableMessage !== null) {
@@ -1469,19 +1480,18 @@ export class ExtractionSession {
     };
 
     this.writeAnalysisStatus('analyzing', pending);
+    // An error-level diagnostic, a hard error included, throws here in a
+    // build, before any stylesheet is assembled: no partial generation.
     const result = runProjectAnalysis(engineApi, {
       ...analysisOptions,
       warn: (message) => this.warn(message),
       info: (message) => this.log(message),
       strict: this.options.strict,
       diagnostics: this.options.diagnostics,
+      reportErrors: this.reportErrors(),
       extraDiagnostics: this.ingestionFailureDiagnostics,
       kitDescriptors: this.kitDescriptors,
     });
-
-    // Throws on any error diagnostic in EVERY mode, before token contracts
-    // and before any stylesheet is assembled — no partial generation.
-    assertNoErrorDiagnostics(result.manifest?.diagnostics);
 
     enforceExternalTokenContracts({
       diagnostics: result.manifest?.diagnostics,

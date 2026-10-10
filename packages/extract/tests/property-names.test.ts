@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
 import { createV2EngineApi } from '../pipeline/engine-adapter';
-import { assertNoErrorDiagnostics } from '../pipeline/error-diagnostics';
 import {
   PREFIX_NAME_CONFLICT,
   PROPERTY_UNREGISTERED_ANIMATION,
@@ -255,8 +254,8 @@ describe('system load under a prefix', () => {
     );
     expect(conflicts(shadowed)).toEqual([['--acme-tone', 'error']]);
 
-    // An error in every mode: each analysis carries it in the manifest, which
-    // every host checks before publishing, strict or not.
+    // An error in every mode: each analysis carries it in the manifest and
+    // reports it, which fails a build, strict or not.
     const analysis = () =>
       runProjectAnalysis(
         () => ({
@@ -277,16 +276,19 @@ describe('system load under a prefix', () => {
           devMode: false,
           strict: false,
           warn: () => {},
+          reportErrors: (message) => reported.push(message),
         }
       ).manifest.diagnostics;
+    const reported: string[] = [];
     for (const diagnostics of [analysis(), analysis()]) {
       expect(diagnostics.map((d) => [d.code, d.kind])).toEqual([
         [PREFIX_NAME_CONFLICT, 'error'],
       ]);
-      expect(() => assertNoErrorDiagnostics(diagnostics)).toThrow(
-        /--acme-tone \(system\)/
-      );
     }
+    expect(reported).toHaveLength(2);
+    expect(reported[1]).toMatch(
+      /animus\.prefix\.name-conflict — system: --acme-tone:/
+    );
   });
 
   it('names the option when a prefix meets contextual variables without it', () => {

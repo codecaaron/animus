@@ -142,7 +142,11 @@ export async function runBuildStart(
     },
     (message) => ctx.warn(message),
     // An error-severity discovery diagnostic fails a strict build.
-    { levels: ctx.options.diagnostics, strict: ctx.options.strict }
+    {
+      levels: ctx.options.diagnostics,
+      strict: ctx.options.strict,
+      reportErrors: ctx.reportErrors(),
+    }
   );
 
   ctx.packageMap = collected.packageMap;

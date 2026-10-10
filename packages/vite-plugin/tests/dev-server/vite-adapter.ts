@@ -67,7 +67,10 @@ function reserveHmrPort(): Promise<number> {
 }
 
 /** Plugin options a dev server varies; omitted fields keep the plugin defaults. */
-export type ViteDevPluginOptions = Pick<AnimusExtractOptions, 'strict'>;
+export type ViteDevPluginOptions = Pick<
+  AnimusExtractOptions,
+  'strict' | 'diagnostics'
+>;
 
 export function createViteDevAdapter(
   pluginOptions: ViteDevPluginOptions = {}

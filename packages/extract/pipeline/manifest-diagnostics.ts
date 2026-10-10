@@ -82,6 +82,10 @@ export interface DiagnosticPolicy {
   /** The codes this build knows. With `levels`, a key that matches none of
    *  them warns once. */
   knownCodes?: ReadonlySet<string>;
+  /** A development session's error sink: the error-level diagnostics are
+   *  reported here instead of thrown, and the session keeps running. Only a
+   *  build fails on them. */
+  reportErrors?: (message: string) => void;
 }
 
 /** What the `diagnostics` option sets a code to, like an ESLint rule level:
@@ -89,7 +93,8 @@ export interface DiagnosticPolicy {
  *  fails the build as a strict failure does. */
 export type DiagnosticLevel = 'off' | 'info' | 'warn' | 'error';
 
-/** Levels by exact code, or by a prefix ending in `.*` (`animus.style.*`). */
+/** Levels by exact code, by a prefix ending in `.*` (`animus.style.*`), or
+ *  by kind (`kind:bail`, `kind:skip`, `kind:warn`, `kind:error`). */
 export type DiagnosticLevels = Readonly<Record<string, DiagnosticLevel>>;
 
 export const DIAGNOSTIC_LEVELS: ReadonlySet<string> = new Set([
@@ -99,13 +104,23 @@ export const DIAGNOSTIC_LEVELS: ReadonlySet<string> = new Set([
   'error',
 ]);
 
+/** A key that selects every record of a kind: `kind:bail`, `kind:skip`,
+ *  `kind:warn` or `kind:error`. */
+const KIND_KEY = 'kind:';
+const DIAGNOSTIC_KINDS: ReadonlySet<string> = new Set([
+  'bail',
+  'skip',
+  'warn',
+  'error',
+]);
+
 /** The level `levels` sets for `code`: its exact entry, else the entry of
  *  the longest prefix it starts with. */
-function levelFor(
+function codeLevel(
   code: string | undefined,
-  levels: DiagnosticLevels | undefined
+  levels: DiagnosticLevels
 ): DiagnosticLevel | undefined {
-  if (code === undefined || levels === undefined) return undefined;
+  if (code === undefined) return undefined;
   if (Object.hasOwn(levels, code)) return levels[code];
   let longest: { length: number; level: DiagnosticLevel } | undefined;
   for (const [key, level] of Object.entries(levels)) {
@@ -118,14 +133,29 @@ function levelFor(
   return longest?.level;
 }
 
+/** The level `levels` sets for a record: its code's level, else its kind's. */
+function levelFor(
+  { code, kind }: Pick<ManifestDiagnostic, 'code' | 'kind'>,
+  levels: DiagnosticLevels | undefined
+): DiagnosticLevel | undefined {
+  if (levels === undefined) return undefined;
+  const kindKey = `${KIND_KEY}${kind}`;
+  return (
+    codeLevel(code, levels) ??
+    (Object.hasOwn(levels, kindKey) ? levels[kindKey] : undefined)
+  );
+}
+
 /** The level a record prints at: the option's entry for its code, else
- *  `error` for an error-severity record under `strict`, else its own. */
+ *  `error` for a hard error (an `error`-kind record) or an error-severity
+ *  record under `strict`, else its own. */
 export function effectiveLevel(
   diagnostic: ManifestDiagnostic,
   policy: Pick<DiagnosticPolicy, 'levels' | 'strict'>
 ): DiagnosticLevel {
-  const level = levelFor(diagnostic.code, policy.levels);
+  const level = levelFor(diagnostic, policy.levels);
   if (level !== undefined) return level;
+  if (diagnostic.kind === 'error') return 'error';
   if (diagnostic.severity === 'info') return 'info';
   return policy.strict && diagnostic.severity === 'error' ? 'error' : 'warn';
 }
@@ -158,6 +188,9 @@ function unknownDiagnosticKeys(
   known: ReadonlySet<string>
 ): string[] {
   return Object.keys(levels).filter((key) => {
+    if (key.startsWith(KIND_KEY)) {
+      return !DIAGNOSTIC_KINDS.has(key.slice(KIND_KEY.length));
+    }
     if (!key.endsWith('.*')) return !known.has(key);
     const prefix = key.slice(0, -1);
     return ![...known].some((code) => code.startsWith(prefix));
@@ -570,19 +603,23 @@ function tokenCollisionDiagnostics(
 
 /**
  * The single strict-escalation policy point for both extraction plugins:
- * error-severity diagnostics throw together under `strict`, else warn.
+ * error-severity diagnostics throw together under `strict`, else warn. A
+ * development session reports them through `reportErrors` instead.
  */
 export function surfaceManifestDiagnostics(
   manifest: { diagnostics?: ManifestDiagnostic[] },
   warn: (message: string) => void,
   policy: DiagnosticPolicy = {}
 ): void {
-  const errors: string[] = [];
+  // A Set: a system's hard error arrives both prepended and in the manifest.
+  const errors = new Set<string>();
   if (policy.levels && policy.knownCodes && !checkedLevels.has(policy.levels)) {
     checkedLevels.add(policy.levels);
     for (const key of unknownDiagnosticKeys(policy.levels, policy.knownCodes)) {
       warn(
-        `⚠ diagnostics option: '${key}' matches no Animus diagnostic code — check its spelling (a code the system package mints at run time is known only once it is reported)`
+        key.startsWith(KIND_KEY)
+          ? `⚠ diagnostics option: '${key}' names no diagnostic kind — use kind:bail, kind:skip, kind:warn or kind:error`
+          : `⚠ diagnostics option: '${key}' matches no Animus diagnostic code — check its spelling (a code the system package mints at run time is known only once it is reported)`
       );
     }
   }
@@ -599,7 +636,7 @@ export function surfaceManifestDiagnostics(
       line = `${mark} ${locatedPrefix(diagnostic)}${diagnostic.component} not extracted: ${message}`;
     } else if (diagnostic.kind === 'skip') {
       line = `${mark} ${locatedPrefix(diagnostic)}${diagnostic.component}: skipped ${message}`;
-    } else if (diagnostic.kind === 'warn') {
+    } else if (diagnostic.kind === 'warn' || diagnostic.kind === 'error') {
       line = `${mark} ${locationOf(diagnostic)}: ${diagnostic.component}: ${message}`;
     }
     if (line === null) continue;
@@ -611,16 +648,23 @@ export function surfaceManifestDiagnostics(
       continue;
     }
     if (level === 'error') {
-      errors.push(
-        `${diagnostic.code ?? 'error'} — ${locatedPrefix(diagnostic)}${diagnostic.component}: ${message}`
+      // A hard error's message does not name its file, so it keeps it.
+      const subject =
+        diagnostic.kind === 'error'
+          ? `${locationOf(diagnostic)}: `
+          : locatedPrefix(diagnostic);
+      errors.add(
+        `${diagnostic.code ?? 'error'} — ${subject}${diagnostic.component}: ${message}`
       );
       continue;
     }
     warn(line);
   }
-  if (errors.length > 0) {
-    throw new DiagnosticFailure(
-      `[animus] strict: ${errors.length} error diagnostic(s):\n${errors.join('\n')}`
-    );
+  if (errors.size === 0) return;
+  const message = `[animus] strict: ${errors.size} error diagnostic(s):\n${[...errors].join('\n')}`;
+  if (policy.reportErrors) {
+    policy.reportErrors(message);
+    return;
   }
+  throw new DiagnosticFailure(message);
 }

@@ -23,15 +23,13 @@ const scratch = join(lane, 'fixtures', `.watch-scratch-${process.pid}`);
 const outDir = join(scratch, '.animus');
 const widgetPath = join(scratch, 'src', 'Widget.tsx');
 
-const widgetSource = (
-  backgroundColor,
-  { glow = false } = {}
-) => `import { ds } from './ds';
+const systemPath = join(scratch, 'src', 'ds.ts');
+const widgetSource = (backgroundColor) => `import { ds } from './ds';
 
 export const Widget = ds
   .styles({
     padding: '8px',
-    backgroundColor: '${backgroundColor}',${glow ? "\n    glow: '0 0 4px red'," : ''}
+    backgroundColor: '${backgroundColor}',
   })
   .asElement('div');
 
@@ -104,8 +102,15 @@ try {
 
   const commitLastGood = readCommit();
   const stylesLastGood = readFileSync(join(outDir, 'styles.css'), 'utf-8');
-  await editUntil(
-    widgetSource('#bada55', { glow: true }),
+  // A system that throws while it loads fails the cycle in every mode; an
+  // error-level diagnostic would only be reported, since this is a watch.
+  const systemSource = readFileSync(systemPath, 'utf-8');
+  await mutateUntil(
+    () =>
+      writeFileSync(
+        systemPath,
+        `${systemSource}\nthrow new Error('broken system');\n`
+      ),
     () => run.stderr.includes('watch cycle failed'),
     'the per-cycle failure report'
   );
@@ -131,6 +136,7 @@ try {
     failedStatus.ready === true
   );
 
+  writeFileSync(systemPath, systemSource);
   await editUntil(
     widgetSource('#c0ffee'),
     () =>

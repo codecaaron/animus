@@ -56,13 +56,16 @@ export interface AnimusCoreOptions {
   /** File extensions to scan; replaces the default list entirely. */
   extensions?: string[];
   /** When true, error-severity diagnostics — lost configured inputs and
-   *  classified unsupported Animus declarations — fail the build instead of
-   *  warning. Omitted or `false` warns. */
+   *  classified unsupported Animus declarations — fail a build instead of
+   *  warning, and development reports them and keeps running. Omitted or
+   *  `false` warns. */
   strict?: boolean;
-  /** Each `animus.*` code's level, by exact code or a prefix ending in `.*`
-   *  (`'animus.style.*'`): `'off'`, `'info'`, `'warn'` or `'error'`, which
-   *  fails the build. An exact code beats the longest matching prefix, and
-   *  an entry beats `strict` and the code's own severity. */
+  /** Each `animus.*` code's level, by exact code, by a prefix ending in `.*`
+   *  (`'animus.style.*'`), or by kind (`'kind:bail'`, `'kind:skip'`,
+   *  `'kind:warn'`, `'kind:error'`): `'off'`, `'info'`, `'warn'` or
+   *  `'error'`, which fails a build and is reported in development, which
+   *  keeps running. An exact code beats the longest matching prefix, which
+   *  beats a kind, and an entry beats `strict` and the code's own severity. */
   diagnostics?: DiagnosticLevels;
   /** `true` logs phase checkpoints, summaries and timing; `'trace'` also logs
    *  one line per item (pruned option, transformed file, HMR decision).
