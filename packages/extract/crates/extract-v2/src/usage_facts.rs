@@ -3628,8 +3628,17 @@ fn prop_tags_and_uses(
             let Some(key) = property.key.static_name().filter(|_| !property.computed) else { continue };
             let binding = match &property.value {
                 BindingPattern::BindingIdentifier(binding) => binding,
+                // An omitted prop takes its default, which must name a host
+                // element as well.
                 BindingPattern::AssignmentPattern(assignment) => match &assignment.left {
-                    BindingPattern::BindingIdentifier(binding) => binding,
+                    BindingPattern::BindingIdentifier(binding)
+                        if matches!(
+                            crate::chain_walk::unwrap_type_assertions(&assignment.right),
+                            Expression::StringLiteral(_)
+                        ) =>
+                    {
+                        binding
+                    }
                     _ => continue,
                 },
                 _ => continue,
