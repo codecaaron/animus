@@ -4,6 +4,7 @@ import {
   buildPathAliasesJson,
   isEngineTransformExtension,
   isPathWithinRoot,
+  keepsKitSourceEffects,
   readTsconfigAliasPairs,
   resolveMode,
   sourceKitDependencies,
@@ -327,14 +328,28 @@ export function withAnimus(
                 );
                 // Webpack would classify the source entry by its own path
                 // against the package's `sideEffects`, so the classification
-                // of the entry it replaces is set as a rule's would be.
+                // of the entry it replaces is set as a rule's would be. A
+                // kit's other source modules stay side-effectful when that
+                // reading could drop a listed effect.
                 nmf.hooks.afterResolve.tap(
                   'AnimusVirtualResolve',
                   (resolveData) => {
                     const sideEffects = redirectSideEffects.get(resolveData);
                     const settings = resolveData.createData?.settings;
-                    if (sideEffects !== undefined && settings) {
+                    if (!settings) return;
+                    if (sideEffects !== undefined) {
                       settings.sideEffects = sideEffects;
+                      return;
+                    }
+                    const resource = resolveData.createData?.resource;
+                    if (
+                      resource !== undefined &&
+                      keepsKitSourceEffects(
+                        resource,
+                        plugin.getExternalPackageDirs()
+                      )
+                    ) {
+                      settings.sideEffects = true;
                     }
                   }
                 );
@@ -375,7 +390,7 @@ export function withAnimus(
 /** The part of webpack's resolve data the kit redirect reads and writes. */
 interface KitResolveData {
   request: string;
-  createData?: { settings?: { sideEffects?: boolean } };
+  createData?: { resource?: string; settings?: { sideEffects?: boolean } };
 }
 
 export function bindTurbopackWatchDeathReport(

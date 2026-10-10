@@ -144,8 +144,9 @@ describe('buildTurbopackConfig', () => {
 describe('turbopackSideEffectsLimits', () => {
   // Contract: Turbopack has no per-module setting, so it reports each
   // redirect whose source the package's `sideEffects` classify otherwise
-  // than the entry the redirect replaces.
-  test('reports a redirect whose source Turbopack would classify otherwise', () => {
+  // than the entry the redirect replaces, and each kit whose list names
+  // shipped code it reads against the kit's source modules.
+  test('reports a redirect, and a kit, whose source Turbopack would misclassify', () => {
     const root = mkdtempSync(join(tmpdir(), 'animus-turbopack-side-effects-'));
     try {
       const kit = join(root, 'kit');
@@ -165,11 +166,14 @@ describe('turbopackSideEffectsLimits', () => {
 
       const lines = turbopackSideEffectsLimits(root, entries, declared);
 
-      expect(lines).toHaveLength(1);
+      expect(lines).toHaveLength(2);
       expect(lines[0]).toContain(
         'cannot carry the "sideEffects" of @acme/kit/register to its source kit/src/register.ts'
       );
       expect(lines[0]).toContain('Turbopack can drop its side effects');
+      expect(lines[1]).toContain(
+        'cannot keep the source modules of kit side-effectful'
+      );
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
