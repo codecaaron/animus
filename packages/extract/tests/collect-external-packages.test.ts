@@ -673,7 +673,7 @@ describe('collectExternalPackageSources', () => {
     const requireOnly = kit(
       join(root, 'node_modules', '@acme', 'require-only'),
       {
-        '.': './src/index.ts',
+        '.': { import: './src/index.ts' },
         './part': { require: './dist/index.cjs' },
       },
       {
