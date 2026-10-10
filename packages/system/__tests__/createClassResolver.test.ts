@@ -211,6 +211,38 @@ describe('createClassResolver', () => {
     });
   });
 
+  it('returns the dynamic style as an object when asked, and as a string by default', () => {
+    const resolver = createClassResolver(
+      'animus-text-abc',
+      { systemPropNames: ['p', 'lineClamp'] },
+      undefined,
+      {
+        p: {
+          varName: '--animus-p',
+          slotClass: 'animus-dyn-p',
+          property: 'padding',
+        },
+        lineClamp: {
+          varName: '--animus-line-clamp_Text_abc',
+          slotClass: 'animus-dyn-line-clamp_Text_abc',
+          property: 'WebkitLineClamp',
+        },
+      }
+    );
+    const props = { p: '13px', lineClamp: 2 };
+
+    expect(resolver.attrs(props, { styleAs: 'object' })).toEqual({
+      class: 'animus-text-abc animus-dyn-p animus-dyn-line-clamp_Text_abc',
+      style: { '--animus-p': '13px', '--animus-line-clamp_Text_abc': '2' },
+    });
+    expect(resolver.attrs(props).style).toBe(
+      '--animus-p: 13px; --animus-line-clamp_Text_abc: 2'
+    );
+    expect(resolver.attrs({}, { styleAs: 'object' })).not.toHaveProperty(
+      'style'
+    );
+  });
+
   it('omits style when no dynamic CSS variables are resolved', () => {
     const resolver = createClassResolver('animus-card-abc', {});
     const dynamicResolver = createClassResolver(

@@ -12,12 +12,29 @@ export interface ClassResolverAttributes {
 }
 
 /**
+ * `attrs()` with `{ styleAs: 'object' }`: the dynamic style as an object of
+ * custom properties, which a style prop such as React's takes as it is.
+ */
+export interface ClassResolverObjectAttributes {
+  class: string;
+  style?: Record<string, string>;
+}
+
+/**
  * Input defaults to an open record; a builder's `asClass()` narrows it to the
- * props the builder admitted.
+ * props the builder admitted. `attrs()` returns the dynamic style as a CSS
+ * string unless asked for an object.
  */
 export interface ClassResolver<Props extends object = Record<string, unknown>> {
   (props?: Props): string;
-  attrs(props?: Props): ClassResolverAttributes;
+  attrs(
+    props: Props | undefined,
+    options: { styleAs: 'object' }
+  ): ClassResolverObjectAttributes;
+  attrs(
+    props?: Props,
+    options?: { styleAs?: 'string' }
+  ): ClassResolverAttributes;
 }
 
 function serializeDynamicStyle(style: Record<string, string>): string {
@@ -34,8 +51,9 @@ export function createClassResolver(
 ): ClassResolver {
   const config = withUniqueSystemPropNames(resolverConfig);
   const resolveAttributes = (
-    props?: Record<string, unknown>
-  ): ClassResolverAttributes => {
+    props?: Record<string, unknown>,
+    options?: { styleAs?: 'string' | 'object' }
+  ): ClassResolverAttributes | ClassResolverObjectAttributes => {
     const { classes, dynamicStyle } = resolveClasses(
       className,
       props || {},
@@ -43,11 +61,13 @@ export function createClassResolver(
       systemPropMap,
       dynamicPropConfig
     );
-    const attributes: ClassResolverAttributes = {
-      class: classes.join(' '),
-    };
+    const attributes: ClassResolverAttributes | ClassResolverObjectAttributes =
+      { class: classes.join(' ') };
     if (dynamicStyle && Object.keys(dynamicStyle).length > 0) {
-      attributes.style = serializeDynamicStyle(dynamicStyle);
+      attributes.style =
+        options?.styleAs === 'object'
+          ? dynamicStyle
+          : serializeDynamicStyle(dynamicStyle);
     }
     return attributes;
   };
@@ -63,5 +83,7 @@ export function createClassResolver(
       dynamicPropConfig
     ).classes.join(' ');
 
-  return Object.assign(resolver, { attrs: resolveAttributes });
+  return Object.assign(resolver, {
+    attrs: resolveAttributes as ClassResolver['attrs'],
+  });
 }
