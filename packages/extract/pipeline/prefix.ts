@@ -1,3 +1,5 @@
+import { tokenize } from '@animus-ui/properties';
+
 import { parseInternalWire } from './internal-wire';
 import { createPropertyNames, renameCustomProperties } from './property-names';
 
@@ -53,7 +55,7 @@ export function applyPrefix(
   );
   const generated = [
     ...Object.values(variableMap).map((name) => name.replace(/^--/, '')),
-    ...[...variableCss.matchAll(THEME_DEFINITION)].map((m) => m[1]),
+    ...themeDefinitions(variableCss),
   ].filter((name) => !contextual.has(name));
   const names = createPropertyNames([], prefix, generated);
   const rename = (value: string) => renameCustomProperties(value, names);
@@ -142,7 +144,7 @@ export function applyPropertyNames(
   );
   const themeDefined = [
     ...Object.values(variableMap).map((name) => name.replace(/^--/, '')),
-    ...[...artifacts.variableCss.matchAll(THEME_DEFINITION)].map((m) => m[1]),
+    ...themeDefinitions(artifacts.variableCss),
   ];
   const managed = createPropertyNames(declared, prefix, themeDefined);
   const nameConflicts: PrefixNameConflict[] = [
@@ -210,8 +212,26 @@ function generatedNamesJson(
     : JSON.stringify(Object.fromEntries(entries));
 }
 
-/** A custom property the theme's CSS defines or registers. */
-const THEME_DEFINITION = /(?:@property\s+|(?:^|[\s;{]))--([\w-]+)(?=\s*[:{])/g;
+/** The custom properties the theme's CSS declares or `@property` registers,
+ *  read as CSS tokenizes it: a name in a string or comment defines nothing. */
+function themeDefinitions(variableCss: string): string[] {
+  const tokens = tokenize(variableCss).filter(
+    (token) => token.type !== 'whitespace'
+  );
+  return tokens.flatMap((token, index) => {
+    if (token.type !== 'ident' || !token.value.startsWith('--')) return [];
+    const previous = tokens[index - 1];
+    const declared =
+      (previous === undefined ||
+        previous.type === '{' ||
+        previous.type === ';') &&
+      tokens[index + 1]?.type === ':';
+    const registered =
+      previous?.type === 'at-keyword' &&
+      previous.value.toLowerCase() === 'property';
+    return declared || registered ? [token.value.slice(2)] : [];
+  });
+}
 
 /** Renames inside the token map's values. */
 function renameTokenValues(
