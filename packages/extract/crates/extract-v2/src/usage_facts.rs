@@ -53,6 +53,10 @@ pub struct AttrFact {
     /// The attribute's syntax is a literal: `static_value` needs no statics.
     #[serde(skip)]
     pub literal: bool,
+    /// For a value that is not a literal, the conditions it can write: see
+    /// `write_conditions`.
+    #[serde(skip)]
+    pub conditions: Option<BTreeSet<String>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1986,6 +1990,11 @@ impl<'a> FactCollector<'a, '_> {
                         continue;
                     }
                 }
+                // A value only statics resolve may be an object changed since.
+                let conditions = match &static_value {
+                    Some(value) if !dynamic => (!value.is_object()).then(|| BTreeSet::from([BASE_CONDITION.to_string()])),
+                    _ => written.and_then(|expression| write_conditions(expression, self.origins)),
+                };
                 attrs.push(AttrFact {
                     name: id.name.to_string(),
                     static_value,
@@ -1996,6 +2005,7 @@ impl<'a> FactCollector<'a, '_> {
                     skip,
                     variant_class: classify_jsx_attribute_as_variant_value(&attr.value),
                     literal,
+                    conditions,
                 });
             }
         }
@@ -2484,6 +2494,63 @@ fn is_absent(expression: &Expression<'_>, scoping: Option<&Scoping>) -> bool {
     crate::eval::is_absent_value(expression, shadowed)
 }
 
+/// The condition a scalar value, or a responsive object's `_`, writes.
+pub(crate) const BASE_CONDITION: &str = "_";
+
+/// The conditions a runtime value can write, when its shape is known: a
+/// value that cannot be an object (a template, a binary or unary
+/// expression, a primitive literal) writes the base, `_`; an object literal
+/// with static keys writes those keys, its explicitly absent entries
+/// excepted; a conditional or logical expression writes what its operands
+/// write. `None` for any other value, which may be any object.
+fn write_conditions(expression: &Expression<'_>, origins: Option<&Scoping>) -> Option<BTreeSet<String>> {
+    use oxc::ast::ast::{ObjectPropertyKind, PropertyKind};
+    use oxc::syntax::operator::UnaryOperator;
+    let expression = crate::chain_walk::unwrap_type_assertions(expression);
+    if is_absent(expression, origins) || matches!(expression, Expression::NullLiteral(_)) {
+        return Some(BTreeSet::new());
+    }
+    match expression {
+        Expression::StringLiteral(_)
+        | Expression::NumericLiteral(_)
+        | Expression::BooleanLiteral(_)
+        | Expression::BigIntLiteral(_)
+        | Expression::TemplateLiteral(_)
+        | Expression::BinaryExpression(_) => Some(BTreeSet::from([BASE_CONDITION.to_string()])),
+        Expression::UnaryExpression(unary) if unary.operator != UnaryOperator::Void => {
+            Some(BTreeSet::from([BASE_CONDITION.to_string()]))
+        }
+        Expression::ConditionalExpression(conditional) => {
+            let mut conditions = write_conditions(&conditional.consequent, origins)?;
+            conditions.extend(write_conditions(&conditional.alternate, origins)?);
+            Some(conditions)
+        }
+        Expression::LogicalExpression(logical) => {
+            let mut conditions = write_conditions(&logical.left, origins)?;
+            conditions.extend(write_conditions(&logical.right, origins)?);
+            Some(conditions)
+        }
+        Expression::ObjectExpression(object) => {
+            let mut conditions = BTreeSet::new();
+            for property in &object.properties {
+                let ObjectPropertyKind::ObjectProperty(property) = property else {
+                    return None;
+                };
+                if property.kind != PropertyKind::Init || property.computed {
+                    return None;
+                }
+                let value = crate::chain_walk::unwrap_type_assertions(&property.value);
+                if is_absent(value, origins) || matches!(value, Expression::NullLiteral(_)) {
+                    continue;
+                }
+                conditions.insert(eval_property_key(&property.key)?);
+            }
+            Some(conditions)
+        }
+        _ => None,
+    }
+}
+
 /// A responsive object holding an explicit `undefined` entry, evaluated
 /// without it; `None` when another entry does not evaluate statically.
 /// `origins` tells the global `undefined` from a shadowing binding.
@@ -2919,6 +2986,7 @@ pub fn filter_usage_scan(
                             binding: binding.clone(),
                             prop: attr.name.clone(),
                             literal: attr.static_value.clone().filter(|_| attr.literal && !attr.dynamic),
+                            conditions: attr.conditions.clone(),
                         });
                         let settled = spread.is_none_or(|before| index >= before);
                         if let Some(props) = active_props {

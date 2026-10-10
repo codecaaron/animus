@@ -1,7 +1,7 @@
 //! Project-level CSS orchestration over retained facts: extension provenance,
 //! chain evaluation, usage reconciliation, and `@layer` CSS generation.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt::Write as _;
 use std::sync::Arc;
 
@@ -3572,6 +3572,10 @@ struct ConfinedUse {
     /// Props with an attribute value that is not a literal.
     runtime_props: FxHashSet<String>,
     static_values: FxHashMap<String, Vec<Value>>,
+    /// Where every use is proven, the conditions each runtime prop's values
+    /// write; `None` when one value's shape is unknown. A runtime prop
+    /// without an entry arrives another way, in any shape.
+    runtime_conditions: FxHashMap<String, Option<BTreeSet<String>>>,
 }
 
 impl ConfinedUse {
@@ -3581,6 +3585,59 @@ impl ConfinedUse {
             && !self.runtime_props.contains(prop)
             && self.static_values.get(prop).is_none_or(|values| values.iter().all(has_class))
     }
+
+    /// The conditions the values of `prop` that reach its slot write: its
+    /// runtime values', and those of literals without a class (`has_class`).
+    /// `None` when one of them can write any condition.
+    fn slot_conditions(&self, prop: &str, has_class: impl Fn(&Value) -> bool) -> Option<BTreeSet<String>> {
+        if self.spread {
+            return None;
+        }
+        let mut conditions = match self.runtime_props.contains(prop) {
+            true => self.runtime_conditions.get(prop).cloned().flatten()?,
+            false => BTreeSet::new(),
+        };
+        for value in self.static_values.get(prop).into_iter().flatten().filter(|value| !has_class(value)) {
+            match value {
+                Value::Object(entries) => conditions.extend(entries.keys().cloned()),
+                _ => {
+                    conditions.insert(crate::usage_facts::BASE_CONDITION.to_string());
+                }
+            }
+        }
+        Some(conditions)
+    }
+
+    /// Records a runtime value of `prop` that writes `conditions`.
+    fn write(&mut self, prop: &str, conditions: Option<BTreeSet<String>>) {
+        self.runtime_props.insert(prop.to_string());
+        let entry = self.runtime_conditions.entry(prop.to_string()).or_insert_with(|| Some(BTreeSet::new()));
+        match (entry, conditions) {
+            (Some(known), Some(conditions)) => known.extend(conditions),
+            (entry, _) => *entry = None,
+        }
+    }
+}
+
+/// The slot conditions of each value slot in `metas`, where every use is
+/// proven: the union of the conditions `conditions_of` gives each prop the
+/// slot serves. A slot keeps every condition when one prop's are unknown,
+/// or when nothing proven reaches it, as with a forced runtime value.
+fn proven_slot_conditions(
+    metas: &HashMap<String, DynamicPropMeta>,
+    mut conditions_of: impl FnMut(&str) -> Option<BTreeSet<String>>,
+) -> crate::css::SlotConditions {
+    let mut slots: HashMap<String, Option<BTreeSet<String>>> = HashMap::new();
+    for (prop, meta) in metas {
+        let Some(meta) = meta.value() else { continue };
+        let conditions = conditions_of(prop);
+        let entry = slots.entry(meta.var_name.clone()).or_insert_with(|| Some(BTreeSet::new()));
+        match (entry, conditions) {
+            (Some(known), Some(conditions)) => known.extend(conditions),
+            (entry, _) => *entry = None,
+        }
+    }
+    slots.into_iter().filter_map(|(slot, conditions)| Some((slot, conditions.filter(|c| !c.is_empty())?))).collect()
 }
 
 /// The evaluated components whose every use the analysis proves, keyed by
@@ -3608,9 +3665,7 @@ fn project_confined_uses<'a>(
             let Some(confined) = uses.get_mut(&written.binding) else { continue };
             match &written.literal {
                 Some(value) => confined.static_values.entry(written.prop.clone()).or_default().push(value.clone()),
-                None => {
-                    confined.runtime_props.insert(written.prop.clone());
-                }
+                None => confined.write(&written.prop, written.conditions.clone()),
             }
         }
         for usage in &result.dynamic_prop_usages {
@@ -5614,8 +5669,28 @@ fn run_with_system_floor(
         }
     }
     share_slots(&mut dynamic_props);
+    // Where every use is proven, a slot serves only the conditions some
+    // value reaching it writes.
+    let mut slot_conditions = crate::css::SlotConditions::new();
+    if every_use_proven {
+        slot_conditions = proven_slot_conditions(&dynamic_props, |prop| {
+            let mut conditions = BTreeSet::new();
+            for (component_id, (_, _, _, active_props, _, custom_configs, _)) in &evaluated {
+                let active = active_props.as_ref().is_some_and(|props| props.contains(prop));
+                if !active || custom_configs.as_ref().is_some_and(|configs| configs.contains_key(prop)) {
+                    continue;
+                }
+                conditions.extend(
+                    confined_uses
+                        .get(component_id)?
+                        .slot_conditions(prop, |value| utility_classes.has_class(prop, value))?,
+                );
+            }
+            Some(conditions)
+        });
+    }
     let slot_entries = if !dynamic_props.is_empty() {
-        Some(build_variable_slot_entries(&dynamic_props, &breakpoints))
+        Some(build_variable_slot_entries(&dynamic_props, &breakpoints, &slot_conditions))
     } else {
         None
     };
@@ -5756,6 +5831,7 @@ fn run_with_system_floor(
     // Copies of one definition share their slots, so each slot's rules are
     // written once, whichever copies read it.
     let mut written_slots: FxHashSet<String> = FxHashSet::default();
+    let mut custom_slot_vars: FxHashSet<String> = FxHashSet::default();
     for component_id in &sorted_ids {
         let Some((component_css, _, _, _, _, custom_configs, _)) = evaluated.get(component_id)
         else {
@@ -5795,8 +5871,29 @@ fn run_with_system_floor(
         }
         if !component_dynamic.is_empty() {
             share_slots(&mut component_dynamic);
+            if every_use_proven {
+                let confined = confined_uses.get(component_id.as_str());
+                let proven = proven_slot_conditions(&component_dynamic, |prop| {
+                    confined?.slot_conditions(prop, |value| custom_classes.has_class(component_id, prop, value))
+                });
+                // Definitions alike share a slot: it serves the union of
+                // their conditions, or every condition when one's are unknown.
+                for meta in component_dynamic.values().filter_map(DynamicPropMeta::value) {
+                    let conditions = proven.get(&meta.var_name).cloned();
+                    if custom_slot_vars.insert(meta.var_name.clone()) {
+                        slot_conditions.extend(conditions.map(|conditions| (meta.var_name.clone(), conditions)));
+                    } else if let Some(known) = slot_conditions.get_mut(&meta.var_name) {
+                        match conditions {
+                            Some(conditions) => known.extend(conditions),
+                            None => {
+                                slot_conditions.remove(&meta.var_name);
+                            }
+                        }
+                    }
+                }
+            }
             all_custom_slot_entries.extend(
-                build_variable_slot_entries(&component_dynamic, &breakpoints)
+                build_variable_slot_entries(&component_dynamic, &breakpoints, &slot_conditions)
                     .into_iter()
                     .filter(|(slot_class, _, _)| written_slots.insert(slot_class.clone())),
             );
@@ -6301,6 +6398,7 @@ fn run_with_system_floor(
     let slot_registrations = slot_property_registrations(
         dynamic_props.values().chain(per_component_custom_dynamic.values().flat_map(|metas| metas.values())),
         &breakpoints,
+        &slot_conditions,
     );
     sheets.global.insert_str(0, &slot_registrations);
 
@@ -7817,6 +7915,39 @@ export const App = ({ n }) => <Box bgImage={n} texture={n} />;
         let mut dev = test_inputs();
         dev.dev_mode = true;
         assert_eq!(slots("import { Box } from './kit';\nexport const App = () => <Box p={8} />;\n", &dev), ["p"]);
+    }
+
+    #[test]
+    fn slots_serve_only_the_conditions_known_value_shapes_write() {
+        let kit = "export const Box = ds.system({ space: true }).props({ tone: { property: 'color' } }).asElement('div');\n";
+        // The slot rules and registered variables each render emits.
+        let slots = |app: &str| {
+            let app = format!("import {{ Box }} from './kit';\n{app}");
+            let out = analyze(&[("kit.tsx", kit), ("app.tsx", &app)], &test_inputs());
+            let css = format!("{}{}", out.sheets.system, out.sheets.custom);
+            let mut rules: Vec<String> = css
+                .split(".animus-dyn-")
+                .skip(1)
+                .map(|rule| rule.split([' ', '{']).next().unwrap().to_string())
+                .collect();
+            rules.dedup();
+            let registered = out.sheets.global.lines().filter(|line| line.starts_with("@property --animus-")).count();
+            assert_eq!(registered, rules.len(), "{app}");
+            rules
+        };
+        let cases: [(&str, &[&str]); 6] = [
+            // A scalar writes the base; an object literal, its keys.
+            ("export const App = ({ n }) => <Box p={`${n}px`} />;\n", &["p_"]),
+            ("export const App = ({ c, n }) => <Box p={c ? 8 : `${n}px`} />;\n", &["p_"]),
+            ("export const App = ({ n, m }) => <Box p={{ _: n, sm: m }} />;\n", &["p_", "p_-sm"]),
+            ("export const App = ({ n }) => <Box tone={{ sm: n }} />;\n", &["tone_091638e9-sm"]),
+            // A value of unknown shape, or a spread, may write any condition.
+            ("export const App = ({ c, n }) => <Box p={c ? 8 : n} />;\n", &["p_", "p_-sm"]),
+            ("export const App = ({ n, ...rest }) => <Box {...rest} p={`${n}`} />;\n", &["p_", "p_-sm", "tone_091638e9", "tone_091638e9-sm"]),
+        ];
+        for (app, want) in cases {
+            assert_eq!(slots(app), want, "{app}");
+        }
     }
 
     #[test]

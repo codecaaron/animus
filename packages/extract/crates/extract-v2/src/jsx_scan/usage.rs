@@ -78,6 +78,9 @@ pub struct WrittenProp {
     pub binding: String,
     pub prop: String,
     pub literal: Option<serde_json::Value>,
+    /// For any other value, the conditions it can write (`_` for the base
+    /// and breakpoint names); `None` when its shape is unknown.
+    pub conditions: Option<std::collections::BTreeSet<String>>,
 }
 
 pub(crate) fn is_component_like_identifier(name: &str) -> bool {
