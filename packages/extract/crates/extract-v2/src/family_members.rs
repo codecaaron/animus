@@ -284,6 +284,92 @@ impl<'f> ObjectMembers<'f> {
         })
     }
 
+    /// The private spread wrapper `tag`, written in `file`, renders, with
+    /// the module declaring it: the object's own initializer holds it at that
+    /// key, nothing later sets the key, and nothing may have changed the
+    /// object since.
+    pub(crate) fn held_wrapper(&mut self, file: &str, tag: &str) -> Option<(String, String)> {
+        let (path, key) = tag.rsplit_once('.')?;
+        let object = self.object_at(file, path)?;
+        let held = self.holds(&object, key)?;
+        if self.table(&object).open || self.instability(&object).is_some() {
+            return None;
+        }
+        Some(held)
+    }
+
+    /// The wrapper `object` holds at `key`, as its last write of the key set
+    /// it.
+    fn holds(&self, object: &Object, key: &str) -> Option<(String, String)> {
+        let Object::Facade(module, binding) = object else { return None };
+        let ff = self.files.get(module)?;
+        let last = ff.facades.get(binding)?.iter().rev().find(|entry| match entry {
+            FacadeEntry::Member { key: set, .. }
+            | FacadeEntry::Other(set)
+            | FacadeEntry::Written { key: set, .. }
+            | FacadeEntry::Code(Some(set)) => set == key,
+            FacadeEntry::Copy(_) | FacadeEntry::Unknown | FacadeEntry::Code(None) => true,
+        })?;
+        match last {
+            FacadeEntry::Member { binding: wrapper, member: None, .. }
+                if ff.spread_wrappers.get(wrapper).is_some_and(|held| held.held > 0) =>
+            {
+                Some((module.clone(), wrapper.clone()))
+            }
+            _ => None,
+        }
+    }
+
+    /// Every wrapper `object`'s initializer holds, whatever came later.
+    fn wrappers_of(&self, object: &Object) -> Vec<(String, String)> {
+        let Object::Facade(module, binding) = object else { return Vec::new() };
+        let Some(ff) = self.files.get(module) else { return Vec::new() };
+        let held = |entry: &FacadeEntry| match entry {
+            FacadeEntry::Member { binding: wrapper, member: None, .. }
+                if ff.spread_wrappers.get(wrapper).is_some_and(|held| held.held > 0) =>
+            {
+                Some((module.clone(), wrapper.clone()))
+            }
+            _ => None,
+        };
+        ff.facades.get(binding).into_iter().flatten().filter_map(held).collect()
+    }
+
+    /// The held wrappers an escaping `name` hands over: each one the object
+    /// it names holds, or the one member it reads.
+    pub(crate) fn escaped_wrappers(&mut self, file: &str, name: &str) -> Vec<(String, String)> {
+        if let Some(object) = self.object_at(file, name) {
+            return self.wrappers_of(&object);
+        }
+        let Some((path, key)) = name.rsplit_once('.') else { return Vec::new() };
+        self.object_at(file, path).and_then(|object| self.holds(&object, key)).into_iter().collect()
+    }
+
+    /// The held wrappers some render of which no member tag shows: those of
+    /// an object something may have changed, and of an object another one
+    /// copies (`{ ...Code }`), whose members render them too.
+    pub(crate) fn unproven_wrappers(&mut self) -> Vec<(String, String)> {
+        let files = self.files;
+        let mut found = Vec::new();
+        for (module, ff) in files {
+            for (binding, entries) in &ff.facades {
+                let object = Object::Facade(module.clone(), binding.clone());
+                let wrappers = self.wrappers_of(&object);
+                if !wrappers.is_empty() && (self.table(&object).open || self.instability(&object).is_some()) {
+                    found.extend(wrappers);
+                }
+                for entry in entries {
+                    if let FacadeEntry::Copy(name) = entry {
+                        if let Some(source) = self.local_object(module, name) {
+                            found.extend(self.wrappers_of(&source));
+                        }
+                    }
+                }
+            }
+        }
+        found
+    }
+
     /// The components an escaping `name` hands over: every member of the
     /// object it names, or the one member it reads.
     pub(crate) fn escaped_components(&mut self, file: &str, name: &str) -> Vec<String> {
