@@ -282,6 +282,18 @@ impl CssInputs {
         crate::ids::fingerprint(crate::ids::fnv1a(self.system_hash, class_prefix))
     }
 
+    /// Merges the prefix's generated names into the authored-name map.
+    pub fn set_generated_names(&mut self, json: Option<&str>) -> Result<(), String> {
+        let Some(json) = json.map(str::trim).filter(|s| !s.is_empty() && *s != "null") else {
+            return Ok(());
+        };
+        let generated: FxHashMap<String, String> =
+            serde_json::from_str(json).map_err(|e| format!("EngineOptions.generatedNamesJson: {e}"))?;
+        self.contextual_vars.add_generated(generated);
+        self.system_hash = fold_system_input(self.system_hash, Some(json));
+        Ok(())
+    }
+
     pub fn set_transform_sources(&mut self, json: Option<&str>) -> Result<(), String> {
         self.transform_sources = match json {
             None => FxHashMap::default(),

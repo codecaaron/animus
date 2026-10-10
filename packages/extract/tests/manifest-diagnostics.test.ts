@@ -501,7 +501,7 @@ describe('invalid @property registrations', () => {
       { systemPath: 'ds.ts', rootDir: '/', prefix: 'acme' }
     );
     expect(system.propertyRecordsJson).toBe(records);
-    expect(system.contextualVarsJson).toBe('{"colors":["acme-tone"]}');
+    expect(system.contextualVarsJson).toBe('{"colors":["tone"]}');
   });
 
   it('reports authored names and prefixes only the kept rules', () => {

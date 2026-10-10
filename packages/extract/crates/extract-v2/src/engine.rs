@@ -74,6 +74,9 @@ pub struct EngineOptions {
     /// `{ skippedSources, unbundledComputedImports, packageDirs }`, each
     /// optional.
     pub analysis_context_json: Option<String>,
+    /// Under a prefix, each name the theme generates and its final name,
+    /// without `--`: authored component styles take the final names.
+    pub generated_names_json: Option<String>,
 }
 
 struct ResolvedOptions {
@@ -247,6 +250,9 @@ impl ExtractEngine {
             .set_transform_sources(o.transform_sources_json.as_deref())
             .map_err(napi::Error::from_reason)?;
         css_inputs.set_transform_provenance(o.transform_provenance_json.as_deref());
+        css_inputs
+            .set_generated_names(o.generated_names_json.as_deref())
+            .map_err(napi::Error::from_reason)?;
         Ok(ExtractEngine {
             opts: ResolvedOptions {
                 prefix: o.prefix.unwrap_or_else(|| "animus".to_string()),

@@ -72,7 +72,9 @@ export interface AnimusCoreOptions {
    *  one line per item (pruned option, transformed file, HMR decision).
    *  `ANIMUS_DEBUG=1` or `ANIMUS_DEBUG=trace` raises it from the environment. */
   verbose?: boolean | 'trace';
-  /** Namespace prefix for CSS variables and class names. */
+  /** Namespace prefix for the names Animus generates: theme token
+   *  variables, classes and slots. Contextual variables keep their declared
+   *  names unless `prefixContextualVars` is set. */
   prefix?: string;
   /** With `prefix` set, contextual variables take the prefixed name
    *  everywhere Animus emits them, while authors keep writing the declared

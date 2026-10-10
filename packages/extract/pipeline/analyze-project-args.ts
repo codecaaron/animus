@@ -21,6 +21,7 @@ export type AnalyzeProjectArgs = [
   transformProvenanceJson: string | null,
   declarationScalesJson?: string,
   analysisContextJson?: string,
+  generatedNamesJson?: string,
 ];
 
 /** @internal */
@@ -50,6 +51,9 @@ export interface AnalyzeProjectInputs {
   /** Present only when the host knows about renders the analysis cannot
    *  see (`AnalysisContext`); absence means it knows nothing. */
   analysisContextJson?: string;
+  /** Present only under a prefix: each generated name and its final name,
+   *  renamed in authored component styles. */
+  generatedNamesJson?: string;
 }
 
 /** @internal */
@@ -79,9 +83,14 @@ export function buildAnalyzeProjectArgs(
   ];
   // Each sent only when present, so the slots of a run without them are
   // unchanged; the context's slot follows the scales' slot.
-  if (inputs.declarationScalesJson || inputs.analysisContextJson) {
-    args.push(inputs.declarationScalesJson);
+  const tail = [
+    inputs.declarationScalesJson,
+    inputs.analysisContextJson,
+    inputs.generatedNamesJson,
+  ];
+  const last = tail.findLastIndex((slot) => slot !== undefined && slot !== '');
+  for (const slot of tail.slice(0, last + 1)) {
+    args.push(slot || undefined);
   }
-  if (inputs.analysisContextJson) args.push(inputs.analysisContextJson);
   return args;
 }
