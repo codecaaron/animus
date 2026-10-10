@@ -1682,11 +1682,45 @@ fn extract_vocabulary_record<'js>(
   const globalStyles = Array.isArray(record.globalStyles) ? record.globalStyles : [];
   const collisions = Array.isArray(record.collisions) ? record.collisions : [];
   const legacyVerbs = Array.isArray(record.legacyVerbs) ? record.legacyVerbs : [];
+  // Registration copies a block's styles, so its declaring module is found by
+  // content: the module exporting a block with the same styles, the export
+  // named like the registration breaking a tie between distinct blocks. A
+  // module registers after the modules it imports, so the first exporter of
+  // a block declares it.
+  const exported = [];
+  for (const path in __modules) {
+    const ns = __modules[path];
+    if (!ns || typeof ns !== 'object') continue;
+    for (const key of Object.keys(ns)) {
+      try {
+        const v = ns[key];
+        if (v && typeof v === 'object' && v.__brand === 'GlobalStyleBlock' && v.styles && typeof v.styles === 'object') {
+          exported.push({ path, key, block: v, json: JSON.stringify(v.styles) });
+        }
+      } catch (_e) {}
+    }
+  }
+  const sourceOf = (entry) => {
+    let json;
+    try { json = JSON.stringify(entry.styles); } catch (_e) { return undefined; }
+    const matches = exported.filter((candidate) => candidate.json === json);
+    const distinct = (list) => [...new Set(list.map((candidate) => candidate.block))];
+    let block = distinct(matches);
+    if (block.length > 1) block = distinct(matches.filter((candidate) => candidate.key === entry.name));
+    if (block.length !== 1) return undefined;
+    return matches.find((candidate) => candidate.block === block[0]).path;
+  };
+  const blockOf = (entry) => {
+    const block = Object.assign({ styles: entry.styles, fontFaces: entry.fontFaces || [] }, entry.unlayered === true ? { unlayered: true } : {});
+    const source = sourceOf(entry);
+    if (source !== undefined) block.source = source;
+    return block;
+  };
   return JSON.stringify({
     keyframeCount: keyframes.length,
     keyframes: Object.fromEntries(keyframes.map((entry) => [entry.name, entry.frames])),
     globalStyleCount: globalStyles.length,
-    globalStyles: Object.fromEntries(globalStyles.map((entry) => [entry.name, Object.assign({ styles: entry.styles, fontFaces: entry.fontFaces || [] }, entry.unlayered === true ? { unlayered: true } : {})])),
+    globalStyles: Object.fromEntries(globalStyles.map((entry) => [entry.name, blockOf(entry)])),
     witnesses: collisions.concat(legacyVerbs),
   });
 })()"#;
@@ -1765,12 +1799,34 @@ pub fn load_system_module(
 
     let (bundle, layout) = build_bundle(&specifier_map, &source_map, &stub_exports, &entry_path)?;
     let mut config = execute_bundle(&bundle, &layout, &entry_path, export_name)?;
+    config.global_style_blocks = config
+        .global_style_blocks
+        .map(|blocks| sources_relative_to(&blocks, root_dir));
 
     let mut dependencies: Vec<String> = source_map.keys().cloned().collect();
     dependencies.sort();
     config.dependencies = dependencies;
 
     Ok(config)
+}
+
+/// Each global style block's declaring `source` module, relative to the root
+/// when it lies under it, so diagnostics name it as they name source files.
+fn sources_relative_to(blocks: &str, root_dir: &str) -> String {
+    let Ok(mut parsed) = serde_json::from_str::<serde_json::Value>(blocks) else {
+        return blocks.to_string();
+    };
+    let root = fs::canonicalize(root_dir).unwrap_or_else(|_| PathBuf::from(root_dir));
+    if let Some(map) = parsed.as_object_mut() {
+        for block in map.values_mut() {
+            let Some(source) = block.get_mut("source") else { continue };
+            let Some(path) = source.as_str() else { continue };
+            if let Ok(relative) = Path::new(path).strip_prefix(&root) {
+                *source = serde_json::Value::String(relative.to_string_lossy().replace('\\', "/"));
+            }
+        }
+    }
+    serde_json::to_string(&parsed).unwrap_or_else(|_| blocks.to_string())
 }
 
 #[cfg(test)]
@@ -2803,6 +2859,48 @@ export const ds = tokens;
             blocks.contains("animus-asset:@acme/tokens/fonts/inter.woff2"),
             "placeholder must survive serialization verbatim: {blocks}"
         );
+    }
+
+    #[test]
+    fn global_style_blocks_name_their_declaring_module() {
+        let dir = scratch_dir("global-block-source");
+        let entry = dir.join("entry.ts");
+        write_fixture(
+            &dir.join("styles/resources.ts"),
+            "export const docsResources = {\n\
+               __brand: 'GlobalStyleBlock',\n\
+               styles: { body: { fontFamily: 'Mona Sans' } },\n\
+             };\n",
+        );
+        // The entry re-exports the block, and registration copies styles, as
+        // the system builder does; an inline block is exported by no module.
+        write_fixture(
+            &entry,
+            "import { docsResources } from './styles/resources';\n\
+             export { docsResources };\n\
+             const inline = { __brand: 'GlobalStyleBlock', styles: { main: { margin: 0 } } };\n\
+             const copied = (block) => Object.fromEntries(Object.entries(block.styles).map(([key, body]) => [key, { ...body }]));\n\
+             export const tokens = {\n\
+               serialize: () => ({\n\
+                 scalesJson: '{}',\n\
+                 variableMapJson: '{}',\n\
+                 variableCss: '',\n\
+                 contextualVarsJson: '{}',\n\
+               }),\n\
+             };\n\
+             export const system = { toConfig: () => ({ propConfig: '{}', groupRegistry: '{}' }), getVocabularyRecord: () => ({ version: 1, keyframes: [], globalStyles: [{ name: 'docsResources', styles: copied(docsResources) }, { name: 'inline', styles: copied(inline) }], collisions: [], legacyVerbs: [] }) };\n",
+        );
+
+        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None);
+        let _ = fs::remove_dir_all(&dir);
+
+        let config = result.expect("system with registered globals must load");
+        let blocks: serde_json::Value = serde_json::from_str(
+            &config.global_style_blocks.expect("registered globals must be serialized"),
+        )
+        .expect("global style blocks JSON parses");
+        assert_eq!(blocks["docsResources"]["source"], "styles/resources.ts", "{blocks}");
+        assert!(blocks["inline"].get("source").is_none(), "{blocks}");
     }
 
     #[test]
