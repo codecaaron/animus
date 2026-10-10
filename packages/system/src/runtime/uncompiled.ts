@@ -4,7 +4,10 @@ import { IS_DEV } from './is-dev';
  * What rendering a component that Animus did not compile does: nothing, a
  * console warning once per component, or a thrown error on every render.
  * Without compilation its classes are empty and no CSS exists for it.
- * Production stays silent until the project owner chooses its level.
+ * Production stays silent until the project owner chooses its level, and its
+ * bundles carry no report: the calls in `createComponent` and
+ * `createClassResolver` test the define token in place, which a minifier
+ * removes. A production level changes this line and lifts those guards.
  */
 export const UNCOMPILED_RENDER: 'off' | 'warn' | 'error' = IS_DEV
   ? 'warn'
@@ -85,7 +88,20 @@ function declaringModule(stack: string | undefined): string | undefined {
   return frames[2];
 }
 
-/** The installed package a path lies in, as `node_modules` names it. */
+/**
+ * The installed package a path lies in, as `node_modules` names it, or as
+ * Vite's dependency optimizer names the file it bundles the package into:
+ * `@scope/name/sub` becomes `.vite/deps/@scope_name_sub.js`, a `.` becomes
+ * `__`, and a shared chunk names no package.
+ */
 function packageOf(path: string): string | undefined {
-  return /\/node_modules\/((?:@[^/]+\/)?[^/.][^/]*)\//.exec(path)?.[1];
+  const installed = /\/node_modules\/((?:@[^/]+\/)?[^/.][^/]*)\//.exec(path);
+  if (installed) return installed[1];
+  const optimized =
+    /\/node_modules\/\.vite\/deps(?:_[^/]*)?\/([^/?#:]+?)\.m?js\b/.exec(
+      path
+    )?.[1];
+  if (!optimized || optimized.startsWith('chunk-')) return undefined;
+  const flat = optimized.replace(/__/g, '.');
+  return /^(@[^_]+_)?[^_]+/.exec(flat)?.[0].replace('_', '/');
 }

@@ -7,6 +7,7 @@ import type {
 } from 'react';
 import { Children, cloneElement, createElement, forwardRef } from 'react';
 
+import { IS_DEV } from './is-dev';
 import {
   type ClassResolverConfig,
   type DynamicPropConfig,
@@ -15,6 +16,8 @@ import {
   withUniqueSystemPropNames,
 } from './resolveClasses';
 import { reportUncompiledRender } from './uncompiled';
+
+declare const __ANIMUS_DEV__: boolean | undefined;
 
 interface ComponentConfig extends ClassResolverConfig {}
 
@@ -253,10 +256,14 @@ export function createComponent(
 
   const Component = forwardRef(
     (props: Record<string, any>, ref: ForwardedRef<any>) => {
-      reportUncompiledRender(
-        config.uncompiled,
-        Component.displayName || undefined
-      );
+      // The define token tested in place lets a minifier drop the report
+      // from a production bundle.
+      if (typeof __ANIMUS_DEV__ === 'boolean' ? __ANIMUS_DEV__ : IS_DEV) {
+        reportUncompiledRender(
+          config.uncompiled,
+          Component.displayName || undefined
+        );
+      }
       const { classes, dynamicStyle } = resolveClasses(
         className,
         props,
