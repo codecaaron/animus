@@ -3108,7 +3108,9 @@ pub fn filter_usage_scan(
 /// parameter binds in any enclosing scope. The system loader evaluates a
 /// system file without auto-imports, so the name is undefined there.
 pub(crate) fn unbound_create_system_calls(program: &Program<'_>) -> Vec<Span> {
-    if !program.source_text.contains("createSystem") {
+    // A `\u` escape can spell the name, as `create\u0053ystem`.
+    let text = program.source_text;
+    if !text.contains("createSystem") && !text.contains("\\u") {
         return Vec::new();
     }
     let scoping = SemanticBuilder::new().build(program).semantic.into_scoping();

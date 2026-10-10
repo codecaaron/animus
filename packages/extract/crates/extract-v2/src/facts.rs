@@ -1313,6 +1313,8 @@ mod tests {
         let calls = |source: &str| facts_for(source).unbound_create_system_calls;
         // A bare call, at its callee.
         assert_eq!(calls("export const ds = createSystem().build();"), vec![(1, 19)]);
+        // An escaped spelling names the same identifier.
+        assert_eq!(calls(r"export const ds = create\u0053ystem().build();"), vec![(1, 19)]);
         // A comment or string spelling it is no call, and an alias is bound.
         assert!(calls(
             "import { createSystem as makeSystem } from '@animus-ui/system';\n\
