@@ -3464,7 +3464,8 @@ fn names_react_pass_through(ff: &FileFacts, tag: &str, origin: Option<TagOrigin>
 /// declares, whose body is analysed; one of React's pass-through
 /// components; or an import, or a member of one, from a package extraction
 /// does not analyse, which cannot be a component extraction declared. A
-/// parameter, an alias usage cannot follow, a name that resolved to no
+/// `createElement` call on any receiver but React's still blocks, since
+/// what it passes is not followed as delivered. A parameter, an alias usage cannot follow, a name that resolved to no
 /// component, a relative or aliased import extraction cannot read (an
 /// excluded file may render our components) or any other declaration may
 /// be one of our components, so it blocks every component.
@@ -3482,6 +3483,12 @@ fn uncertainty_leaves_usage_proven(
         let Some(tag) = site.tag.as_deref() else {
             return false;
         };
+        // Children a `createElement` call passes reach its receiver without
+        // the element delivery that opens what a JSX receiver gets, so only
+        // React's pass-through components leave them proven.
+        if site.create_element {
+            return names_react_pass_through(ff, tag, site.origin);
+        }
         !classified.insert((file.as_str(), tag, site.origin))
             || names_react_pass_through(ff, tag, site.origin)
             || imported_from_outside(file, ff, tag, site.origin, files, inputs)
@@ -8411,7 +8418,8 @@ export const App = ({ n }) => <Box bgImage={n} texture={n} />;
     /// a member of one, or an ordinary component that passes its children
     /// to one) opens just the components whose elements it receives; a tag
     /// that may be one of our components (a parameter, a relative import
-    /// extraction cannot read) still blocks every component.
+    /// extraction cannot read), or a `createElement` receiver, whose children
+    /// are not followed as delivered, still blocks every component.
     #[test]
     fn uncertain_tags_block_only_what_they_can_reach() {
         let kit = "export const Box = ds.system({ space: true }).asElement('div');\n";
@@ -8420,13 +8428,14 @@ export const App = ({ n }) => <Box bgImage={n} texture={n} />;
             let out = analyze(&[("kit.tsx", kit), ("app.tsx", &app)], &test_inputs());
             out.dynamic_props.keys().cloned().collect::<Vec<_>>()
         };
-        let cases: [(&str, &[&str]); 6] = [
+        let cases: [(&str, &[&str]); 7] = [
             ("import { Slot } from 'ui-lib';\nexport const App = () => <><Slot><div /></Slot><Box p={8} /></>;\n", &[]),
             ("import * as Dialog from 'ui-lib/dialog';\nexport const App = () => <><Dialog.Root><div /></Dialog.Root><Box p={8} /></>;\n", &[]),
             ("import { Slot } from 'ui-lib';\nfunction Card({ children }) { return <Slot>{children}</Slot>; }\nexport const App = () => <><Card><div /></Card><Box p={8} /></>;\n", &[]),
             ("import { Slot } from 'ui-lib';\nexport const App = () => <><Slot><Box p={8} /></Slot><Box p={8} /></>;\n", &["p"]),
             ("export const App = ({ As }) => <><As /><Box p={8} /></>;\n", &["p"]),
             ("import { Mystery } from './external';\nexport const App = () => <><Mystery /><Box p={8} /></>;\n", &["p"]),
+            ("import { createElement } from 'react';\nimport { Slot } from 'ui-lib';\nexport const App = () => <><Slot><div /></Slot>{createElement(Slot, null, <Box p={8} />)}</>;\n", &["p"]),
         ];
         for (app, want) in cases {
             assert_eq!(slots(app), want, "{app}");
