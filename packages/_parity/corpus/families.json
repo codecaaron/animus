@@ -46,7 +46,7 @@
       "parity/shadowed-local"
     ],
     "expectedVerdict": "identical",
-    "note": "The committed v2 surface preserves the witnessed name-based shadowing behavior. A future symbol-resolution correction requires an exact registered baseline refresh."
+    "note": "A local that shadows an imported component resolves through its own binding: the committed v2 surface reports the tag as identity-uncertain instead of matching the import by name."
   },
   {
     "family": "multiline-import",

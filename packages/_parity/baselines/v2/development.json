@@ -2,7 +2,7 @@
   "corpusSha256": "d5b1547f8b184ce2f7ad5f30a2a2388216b6ab30c70dbcf3667c03d1a09b3293",
   "engine": "v2",
   "mode": "development",
-  "refreshIntent": "package-receivers-leave-usage-proven-20261010",
+  "refreshIntent": "tags-resolve-through-their-root-binding-20261010",
   "surfaceSchemaSha256": "43eb1265e97aab8497c11ca05e8a4159a6d4f4b69a6837a704e1d96fa75eb108",
   "units": {
     "extract-all": {
