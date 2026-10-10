@@ -1838,7 +1838,7 @@ pub fn build_variable_slot_entries(
             // One class per breakpoint: the runtime applies only the breakpoints
             // the callsite provides, so unset ones cannot leak into the cascade.
             for (bp_name, _) in &sorted_bps {
-                let bp_var = format!("{}-{}", meta.var_name, bp_name);
+                let bp_var = breakpoint_var(&meta.var_name, bp_name);
                 let bp_styles = ResolvedStyles {
                     declarations: vec![],
                     pseudo_selectors: vec![],
@@ -1853,6 +1853,32 @@ pub fn build_variable_slot_entries(
     }
 
     entries
+}
+
+/// The variable a slot's breakpoint class reads, and the runtime writes.
+fn breakpoint_var(var_name: &str, breakpoint: &str) -> String {
+    format!("{var_name}-{breakpoint}")
+}
+
+/// `@property` rules registering every variable a value slot reads, its base
+/// and each breakpoint's, as non-inheriting: a parent's runtime value never
+/// reaches a descendant, and recalculation skips them. Each reader is the
+/// slot's own rule, on the element that carries both its class and the
+/// inline variable. A declaration prop's member variables, which a
+/// descendant reads, and a `current_var` stay unregistered. A browser
+/// without `@property` ignores the rules and inherits as before.
+pub fn slot_property_registrations<'a>(
+    metas: impl IntoIterator<Item = &'a DynamicPropMeta>,
+    breakpoints: &BreakpointMap,
+) -> String {
+    let mut names = BTreeSet::new();
+    for meta in metas.into_iter().filter_map(DynamicPropMeta::value) {
+        names.insert(meta.var_name.clone());
+        for bp_name in breakpoints.breakpoints.keys() {
+            names.insert(breakpoint_var(&meta.var_name, bp_name));
+        }
+    }
+    names.iter().map(|name| format!("@property {name} {{ syntax: \"*\"; inherits: false; }}\n")).collect()
 }
 
 #[cfg(test)]
