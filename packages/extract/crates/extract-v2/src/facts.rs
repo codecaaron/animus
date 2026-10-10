@@ -77,19 +77,21 @@ pub struct SkippedSource {
     pub text: String,
 }
 
-/// A property key's start offset, and its whole property as written.
+/// A property key's start offset, its whole property as written, and the
+/// keys of the objects that hold it, outermost first.
 #[derive(Debug, Clone)]
 pub struct KeySource {
     pub key: String,
     pub start: u32,
     pub text: String,
+    pub path: Vec<String>,
 }
 
 impl KeySource {
     /// `prop`, when the theme resolver may drop its block: an unsupported
     /// at-rule, or a selector or at-rule key, raw or an alias, whose value is
     /// not an object literal.
-    fn block_key(prop: &oxc::ast::ast::ObjectProperty<'_>, source: &str) -> Option<Self> {
+    fn block_key(prop: &oxc::ast::ast::ObjectProperty<'_>, source: &str, path: &[String]) -> Option<Self> {
         let key = match &prop.key {
             PropertyKey::StringLiteral(literal) if !prop.computed => literal.value.as_str(),
             PropertyKey::StaticIdentifier(identifier) if !prop.computed => identifier.name.as_str(),
@@ -98,12 +100,12 @@ impl KeySource {
         let unsupported = key.starts_with('@') && crate::theme::condition_from_raw_key(key).is_none();
         let block_key = key.starts_with(['@', '_', ':']) || crate::selector_subject::has_subject(key);
         let block = matches!(chain_walk::unwrap_type_assertions(&prop.value), Expression::ObjectExpression(_));
-        if unsupported || (block_key && !block) { Self::of(prop, key, source) } else { None }
+        if unsupported || (block_key && !block) { Self::of(prop, key, source, path) } else { None }
     }
 
-    fn of(prop: &oxc::ast::ast::ObjectProperty<'_>, key: &str, source: &str) -> Option<Self> {
+    fn of(prop: &oxc::ast::ast::ObjectProperty<'_>, key: &str, source: &str, path: &[String]) -> Option<Self> {
         let text = source.get(prop.span.start as usize..prop.span.end as usize)?;
-        Some(Self { key: key.to_string(), start: prop.key.span().start, text: text.to_string() })
+        Some(Self { key: key.to_string(), start: prop.key.span().start, text: text.to_string(), path: path.to_vec() })
     }
 }
 
@@ -123,7 +125,7 @@ pub fn declaration_keys(program: &Program<'_>, source: &str, names: &BTreeSet<St
             }
         }
     }
-    fn walk(expr: &Expression<'_>, source: &str, found: &mut Vec<KeySource>) {
+    fn walk(expr: &Expression<'_>, source: &str, path: &mut Vec<String>, found: &mut Vec<KeySource>) {
         match chain_walk::unwrap_type_assertions(expr) {
             Expression::ObjectExpression(obj) => {
                 for prop in &obj.properties {
@@ -133,23 +135,25 @@ pub fn declaration_keys(program: &Program<'_>, source: &str, names: &BTreeSet<St
                         PropertyKey::StaticIdentifier(identifier) if !prop.computed => Some(identifier.name.as_str()),
                         _ => None,
                     };
-                    if let Some(found_key) = key.and_then(|key| KeySource::of(prop, key, source)) {
+                    if let Some(found_key) = key.and_then(|key| KeySource::of(prop, key, source, path)) {
                         found.push(found_key);
                     }
-                    walk(&prop.value, source, found);
+                    path.push(key.unwrap_or_default().to_string());
+                    walk(&prop.value, source, path, found);
+                    path.pop();
                 }
             }
             Expression::CallExpression(call) => {
                 for argument in &call.arguments {
                     if let Some(argument) = argument.as_expression() {
-                        walk(argument, source, found);
+                        walk(argument, source, path, found);
                     }
                 }
             }
             Expression::ArrayExpression(array) => {
                 for element in &array.elements {
                     if let Some(element) = element.as_expression() {
-                        walk(element, source, found);
+                        walk(element, source, path, found);
                     }
                 }
             }
@@ -164,7 +168,7 @@ pub fn declaration_keys(program: &Program<'_>, source: &str, names: &BTreeSet<St
             };
             if let Some(name) = wanted.get(binding.name.as_str()) {
                 let mut found = Vec::new();
-                walk(init, source, &mut found);
+                walk(init, source, &mut Vec::new(), &mut found);
                 keys.insert(name.clone(), found);
             }
         }
@@ -187,13 +191,15 @@ impl StageFacts {
     /// Records the keys of `obj`, and of the blocks it nests, whose block the
     /// theme resolver may drop (`KeySource::block_key`). An unsupported
     /// at-rule's own block is not read.
-    fn record_block_keys(&mut self, obj: &ObjectExpression<'_>, source: &str) {
+    fn record_block_keys(&mut self, obj: &ObjectExpression<'_>, source: &str, path: &mut Vec<String>) {
         for prop in &obj.properties {
             let ObjectPropertyKind::ObjectProperty(prop) = prop else { continue };
-            if let Some(found) = KeySource::block_key(prop, source) {
+            if let Some(found) = KeySource::block_key(prop, source, path) {
                 self.block_keys.push(found);
             } else if let Expression::ObjectExpression(nested) = chain_walk::unwrap_type_assertions(&prop.value) {
-                self.record_block_keys(nested, source);
+                path.push(prop.key.static_name().map(|name| name.to_string()).unwrap_or_default());
+                self.record_block_keys(nested, source, path);
+                path.pop();
             }
         }
     }
@@ -1155,10 +1161,10 @@ pub(crate) fn extract_file_facts_from_static_maps(
                 };
                 let key = &stage.arg_span;
                 if let Some(obj) = object_index.get(key) {
-                    facts.record_block_keys(obj, source);
+                    facts.record_block_keys(obj, source, &mut Vec::new());
                 }
                 if let Some(obj) = stage.second_arg_span.and_then(|span| object_index.get(&span)) {
-                    facts.record_block_keys(obj, source);
+                    facts.record_block_keys(obj, source, &mut Vec::new());
                 }
                 if stage.method == "variant" {
                     match object_index.get(key) {

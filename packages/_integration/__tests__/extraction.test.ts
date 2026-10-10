@@ -829,6 +829,7 @@ export const App = () => <Card />;
     html: 'red',
     '@page': { margin: '1cm', '@top-center': { content: '"x"' } },
     '@keyframes spin': { from: { opacity: 0, '& .a': { color: 'red' } }, to: 'x' },
+    '@keyframes pulse': { from: { from: { opacity: 0 } }, to: { opacity: 1 } },
   },
 };
 `,
@@ -846,8 +847,13 @@ export const App = () => <Card />;
                 from: { opacity: 0, '& .a': { color: 'red' } },
                 to: 'x',
               },
+              '@keyframes pulse': {
+                from: { from: { opacity: 0 } },
+                to: { opacity: 1 },
+              },
             },
             source: 'print.ts',
+            sourceExport: 'print',
           },
         }),
       },
@@ -938,11 +944,20 @@ export const App = () => <Card />;
       'error',
       "to: 'x'",
     ],
+    [
+      'animus.style.at-rule-selector-nesting',
+      "global 'print'",
+      7,
+      35,
+      'warn',
+      'error',
+      'from: { opacity: 0 }',
+    ],
   ]);
   expect(() => surfaceManifestDiagnostics(manifest, () => {})).not.toThrow();
   expect(() =>
     surfaceManifestDiagnostics(manifest, () => {}, { strict: true })
-  ).toThrow(/8 error diagnostic/);
+  ).toThrow(/9 error diagnostic/);
 });
 
 describe('!important shorthand', () => {

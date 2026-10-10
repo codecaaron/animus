@@ -1199,8 +1199,16 @@ fn drain_dropped_style_keys(
                 continue;
             }
         };
+        // Where it is written: the same key, held by objects whose keys end
+        // with the path the resolver knows, the nearest the root first.
         let key = dropped.dropped.key();
-        diagnostics.push(match block_keys.iter().position(|source| source.key == key) {
+        let written = block_keys
+            .iter()
+            .enumerate()
+            .filter(|(_, source)| source.key == key && source.path.ends_with(&dropped.path))
+            .min_by_key(|(_, source)| source.path.len())
+            .map(|(index, _)| index);
+        diagnostics.push(match written {
             Some(index) => {
                 let source = block_keys.remove(index);
                 record.at(source.start).dropping(&source.text)

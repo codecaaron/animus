@@ -391,11 +391,14 @@ impl DroppedStyleKey {
 }
 
 /// A dropped key with the variant axis and option (`None` for its base) it
-/// was resolved under, so an inherited declaration can be told apart.
+/// was resolved under, so an inherited declaration can be told apart, and
+/// the keys of the objects that hold it within its block, outermost first,
+/// where the resolver knows them.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DroppedKey {
     pub dropped: DroppedStyleKey,
     pub variant_origin: Option<(String, Option<String>)>,
+    pub path: Vec<String>,
 }
 
 pub type DroppedStyleKeySink = RefCell<Vec<DroppedKey>>;
@@ -550,6 +553,8 @@ struct NestFrame {
     emit_order: Option<ConditionEmitOrder>,
     block: usize,
     origin: Option<AuthoredOrigin>,
+    /// The authored keys from the block's root to this frame.
+    keys: Vec<String>,
 }
 
 impl NestFrame {
@@ -557,7 +562,7 @@ impl NestFrame {
         Self { block, ..Self::default() }
     }
 
-    fn with_selector(&self, inner_raw: &str, slot: usize) -> Self {
+    fn with_selector(&self, inner_raw: &str, key: &str, slot: usize) -> Self {
         let composed = match &self.selector {
             Some(outer) => compose_selectors(outer, inner_raw),
             None => normalize_pseudo_selector(inner_raw),
@@ -568,10 +573,11 @@ impl NestFrame {
             emit_order: self.emit_order.clone(),
             block: self.block,
             origin: Some(self.nested_origin(slot)),
+            keys: self.nested_keys(key),
         }
     }
 
-    fn with_condition(&self, condition: Condition, order: ConditionEmitOrder, slot: usize) -> Self {
+    fn with_condition(&self, condition: Condition, order: ConditionEmitOrder, key: &str, slot: usize) -> Self {
         let mut conditions = self.conditions.clone();
         conditions.push(condition);
         Self {
@@ -580,7 +586,14 @@ impl NestFrame {
             emit_order: Some(self.emit_order.clone().unwrap_or(order)),
             block: self.block,
             origin: Some(self.nested_origin(slot)),
+            keys: self.nested_keys(key),
         }
+    }
+
+    fn nested_keys(&self, key: &str) -> Vec<String> {
+        let mut keys = self.keys.clone();
+        keys.push(key.to_string());
+        keys
     }
 
     fn nested_origin(&self, slot: usize) -> AuthoredOrigin {
@@ -701,26 +714,27 @@ pub fn resolve_styles(
         if key.starts_with('_') {
             if let Some(alias_selector) = ctx.selector_aliases.get(key) {
                 if let Some(nested_obj) = value.as_object() {
-                    let frame = root.with_selector(alias_selector, slot(key));
+                    let frame = root.with_selector(alias_selector, key, slot(key));
                     let inject = auto_content && (key == "_before" || key == "_after");
                     resolve_block_entries(
                         nested_obj, ctx, &frame, auto_content, inject, &mut result, &mut raw_condition_index,
                     );
                 } else {
-                    record_non_block(ctx, key, value);
+                    record_non_block(ctx, &root.keys, key, value);
                 }
             } else if let Some(cond_alias) = ctx.condition_aliases.get(key) {
                 if let Some(nested_obj) = value.as_object() {
                     let frame = root.with_condition(
                         alias_condition(cond_alias, ctx.contextual_vars),
                         ConditionEmitOrder::Aliased(cond_alias.order),
+                        key,
                         slot(key),
                     );
                     resolve_block_entries(
                         nested_obj, ctx, &frame, auto_content, false, &mut result, &mut raw_condition_index,
                     );
                 } else {
-                    record_non_block(ctx, key, value);
+                    record_non_block(ctx, &root.keys, key, value);
                 }
             } else if writes_styles(value) {
                 record_dropped_key(ctx, DroppedStyleKey::UnregisteredAlias(key.clone()));
@@ -734,27 +748,27 @@ pub fn resolve_styles(
                 let idx = raw_condition_index;
                 raw_condition_index += 1;
                 if let Some(nested_obj) = value.as_object() {
-                    let frame = root.with_condition(condition, ConditionEmitOrder::Raw(idx), slot(key));
+                    let frame = root.with_condition(condition, ConditionEmitOrder::Raw(idx), key, slot(key));
                     resolve_block_entries(
                         nested_obj, ctx, &frame, auto_content, false, &mut result, &mut raw_condition_index,
                     );
                 } else {
-                    record_non_block(ctx, key, value);
+                    record_non_block(ctx, &root.keys, key, value);
                 }
             } else {
-                record_dropped_key(ctx, DroppedStyleKey::UnsupportedAtRule { key: key.clone(), block: value.clone() });
+                record_dropped_key_at(ctx, &root.keys, DroppedStyleKey::UnsupportedAtRule { key: key.clone(), block: value.clone() });
             }
             continue;
         }
 
         if crate::selector_subject::has_subject(key) || key.starts_with(':') {
             if let Some(nested_obj) = value.as_object() {
-                let frame = root.with_selector(key, slot(key));
+                let frame = root.with_selector(key, key, slot(key));
                 resolve_block_entries(
                     nested_obj, ctx, &frame, auto_content, false, &mut result, &mut raw_condition_index,
                 );
             } else {
-                record_non_block(ctx, key, value);
+                record_non_block(ctx, &root.keys, key, value);
             }
             continue;
         }
@@ -810,26 +824,27 @@ fn resolve_block_entries(
         if key.starts_with('_') {
             if let Some(alias_selector) = ctx.selector_aliases.get(key) {
                 if let Some(nested_obj) = value.as_object() {
-                    let child = frame.with_selector(alias_selector, slot(key));
+                    let child = frame.with_selector(alias_selector, key, slot(key));
                     let inject = auto_content && (key == "_before" || key == "_after");
                     resolve_block_entries(
                         nested_obj, ctx, &child, auto_content, inject, result, raw_condition_index,
                     );
                 } else {
-                    record_non_block(ctx, key, value);
+                    record_non_block(ctx, &frame.keys, key, value);
                 }
             } else if let Some(cond_alias) = ctx.condition_aliases.get(key) {
                 if let Some(nested_obj) = value.as_object() {
                     let child = frame.with_condition(
                         alias_condition(cond_alias, ctx.contextual_vars),
                         ConditionEmitOrder::Aliased(cond_alias.order),
+                        key,
                         slot(key),
                     );
                     resolve_block_entries(
                         nested_obj, ctx, &child, auto_content, false, result, raw_condition_index,
                     );
                 } else {
-                    record_non_block(ctx, key, value);
+                    record_non_block(ctx, &frame.keys, key, value);
                 }
             } else if writes_styles(value) {
                 record_dropped_key(ctx, DroppedStyleKey::UnregisteredAlias(key.clone()));
@@ -842,27 +857,27 @@ fn resolve_block_entries(
                 let idx = *raw_condition_index;
                 *raw_condition_index += 1;
                 if let Some(nested_obj) = value.as_object() {
-                    let child = frame.with_condition(condition, ConditionEmitOrder::Raw(idx), slot(key));
+                    let child = frame.with_condition(condition, ConditionEmitOrder::Raw(idx), key, slot(key));
                     resolve_block_entries(
                         nested_obj, ctx, &child, auto_content, false, result, raw_condition_index,
                     );
                 } else {
-                    record_non_block(ctx, key, value);
+                    record_non_block(ctx, &frame.keys, key, value);
                 }
             } else {
-                record_dropped_key(ctx, DroppedStyleKey::UnsupportedAtRule { key: key.clone(), block: value.clone() });
+                record_dropped_key_at(ctx, &frame.keys, DroppedStyleKey::UnsupportedAtRule { key: key.clone(), block: value.clone() });
             }
             continue;
         }
 
         if crate::selector_subject::has_subject(key) || key.starts_with(':') {
             if let Some(nested_obj) = value.as_object() {
-                let child = frame.with_selector(key, slot(key));
+                let child = frame.with_selector(key, key, slot(key));
                 resolve_block_entries(
                     nested_obj, ctx, &child, auto_content, false, result, raw_condition_index,
                 );
             } else {
-                record_non_block(ctx, key, value);
+                record_non_block(ctx, &frame.keys, key, value);
             }
             continue;
         }
@@ -927,8 +942,14 @@ fn resolve_block_entries(
 }
 
 fn record_dropped_key(ctx: &ResolveContext, dropped: DroppedStyleKey) {
+    record_dropped_key_at(ctx, &[], dropped);
+}
+
+/// Records a key dropped from the object that `path`, the keys from its
+/// block's root, leads to.
+fn record_dropped_key_at(ctx: &ResolveContext, path: &[String], dropped: DroppedStyleKey) {
     if let Some(sink) = ctx.dropped_keys {
-        sink.borrow_mut().push(DroppedKey { dropped, variant_origin: None });
+        sink.borrow_mut().push(DroppedKey { dropped, variant_origin: None, path: path.to_vec() });
     }
 }
 
@@ -976,9 +997,9 @@ fn writes_styles(value: &Value) -> bool {
 
 /// A key that needs a block of styles, given a value that writes styles but
 /// is not a block, emits nothing and is reported.
-fn record_non_block(ctx: &ResolveContext, key: &str, value: &Value) {
+fn record_non_block(ctx: &ResolveContext, path: &[String], key: &str, value: &Value) {
     if writes_styles(value) {
-        record_dropped_key(ctx, DroppedStyleKey::NonBlockValue { key: key.to_string(), value: value.clone() });
+        record_dropped_key_at(ctx, path, DroppedStyleKey::NonBlockValue { key: key.to_string(), value: value.clone() });
     }
 }
 
@@ -1128,9 +1149,10 @@ fn resolve_responsive_prop(
 }
 
 /// The declarations of a block that holds declarations only. Under a global
-/// block's top-level at-rule selector, `nesting_under`, each nested block
-/// is reported, since it emits nothing.
-fn resolve_flat_styles(obj: &Map<String, Value>, ctx: &ResolveContext, nesting_under: Option<&str>) -> Vec<CssDeclaration> {
+/// block's top-level at-rule selector, `nesting_under` holds the keys from
+/// that selector to `obj`, and each nested block is reported, since it emits
+/// nothing.
+fn resolve_flat_styles(obj: &Map<String, Value>, ctx: &ResolveContext, nesting_under: Option<&[String]>) -> Vec<CssDeclaration> {
     let entries = cascade_order(obj, ctx.config);
 
     let mut declarations = Vec::new();
@@ -1150,21 +1172,24 @@ fn resolve_flat_styles(obj: &Map<String, Value>, ctx: &ResolveContext, nesting_u
             ctx.transform_evaluator,
             ctx.transform_failures,
         );
-        if let Some(selector) = nesting_under {
-            record_nesting(ctx, selector, key, value, resolved.is_empty() && failures() == failures_before);
+        if let Some(path) = nesting_under {
+            record_nesting(ctx, path, key, value, resolved.is_empty() && failures() == failures_before);
         }
         declarations.extend(resolved);
     }
     declarations
 }
 
-/// A block under a global block's top-level at-rule selector that emitted
-/// nothing, and failed no transform (which reports itself).
-fn record_nesting(ctx: &ResolveContext, selector: &str, key: &str, value: &Value, emitted_nothing: bool) {
+/// A block under a global block's top-level at-rule selector, the first of
+/// `path`, that emitted nothing, and failed no transform (which reports
+/// itself).
+fn record_nesting(ctx: &ResolveContext, path: &[String], key: &str, value: &Value, emitted_nothing: bool) {
     if emitted_nothing && value.is_object() {
-        record_dropped_key(
+        let selector = path.first().cloned().unwrap_or_default();
+        record_dropped_key_at(
             ctx,
-            DroppedStyleKey::AtRuleSelectorNesting { selector: selector.to_string(), key: key.to_string(), block: value.clone() },
+            path,
+            DroppedStyleKey::AtRuleSelectorNesting { selector, key: key.to_string(), block: value.clone() },
         );
     }
 }
@@ -1173,13 +1198,13 @@ fn record_nesting(ctx: &ResolveContext, selector: &str, key: &str, value: &Value
 /// system prop, so no prop's scale, strictness or transform applies and the
 /// keys keep their authored order. Token references resolve as on any key
 /// that names no prop. A nested block is reported under `selector`.
-fn resolve_descriptors(obj: &Map<String, Value>, ctx: &ResolveContext, selector: &str) -> Vec<CssDeclaration> {
+fn resolve_descriptors(obj: &Map<String, Value>, ctx: &ResolveContext, path: &[String]) -> Vec<CssDeclaration> {
     let no_props = PropConfigMap::default();
     obj.iter()
         .flat_map(|(key, value)| {
             let resolved =
                 resolve_single_prop(key, value, &no_props, ctx.theme, ctx.variable_map, ctx.contextual_vars, None, None);
-            record_nesting(ctx, selector, key, value, resolved.is_empty());
+            record_nesting(ctx, path, key, value, resolved.is_empty());
             resolved
         })
         .collect()
@@ -2059,16 +2084,16 @@ pub fn resolve_global_block(
     for (selector, style_obj) in selectors {
         if selector.starts_with("@keyframes") {
             let Some(stops) = style_obj.as_object() else {
-                record_non_block(ctx, selector, style_obj);
+                record_non_block(ctx, &[], selector, style_obj);
                 continue;
             };
             let mut frames: Vec<String> = Vec::new();
             for (pct, frame_styles) in stops {
                 let Some(frame_obj) = frame_styles.as_object() else {
-                    record_non_block(ctx, pct, frame_styles);
+                    record_non_block(ctx, std::slice::from_ref(selector), pct, frame_styles);
                     continue;
                 };
-                let decls = resolve_flat_styles(frame_obj, ctx, Some(selector));
+                let decls = resolve_flat_styles(frame_obj, ctx, Some(&[selector.clone(), pct.clone()]));
                 if !decls.is_empty() {
                     let decl_str: String = decls
                         .iter()
@@ -2085,16 +2110,17 @@ pub fn resolve_global_block(
         }
 
         let Some(style_map) = style_obj.as_object() else {
-            record_non_block(ctx, selector, style_obj);
+            record_non_block(ctx, &[], selector, style_obj);
             continue;
         };
         // An at-rule selector (`@font-face`, `@page`) holds declarations
         // only, as before; a block nested under one is reported.
         if selector.starts_with('@') {
+            let path = std::slice::from_ref(selector);
             let decls = if selector.starts_with("@font-face") {
-                resolve_descriptors(style_map, ctx, selector)
+                resolve_descriptors(style_map, ctx, path)
             } else {
-                resolve_flat_styles(style_map, ctx, Some(selector))
+                resolve_flat_styles(style_map, ctx, Some(path))
             };
             if !decls.is_empty() {
                 rules.push(global_rule(selector, &decls, 0));
@@ -2104,7 +2130,14 @@ pub fn resolve_global_block(
         // The resolver components use: nested `&` selectors, aliases,
         // breakpoints and at-rule conditions, with the global's selector as
         // the subject; `_before`/`_after` gain `content` as on a component.
+        // What the selector's block drops is held by the selector's key.
+        let recorded = ctx.dropped_keys.map_or(0, |sink| sink.borrow().len());
         let resolved = resolve_styles(style_obj, ctx, true);
+        if let Some(sink) = ctx.dropped_keys {
+            for dropped in &mut sink.borrow_mut()[recorded..] {
+                dropped.path.insert(0, selector.clone());
+            }
+        }
         push_global_rules(&mut rules, selector, &resolved, &breakpoints);
     }
 
