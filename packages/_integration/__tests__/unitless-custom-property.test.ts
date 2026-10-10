@@ -12,7 +12,7 @@ import type { ManifestDiagnostic } from '@animus-ui/extract/pipeline';
  * A number reaching a prop that writes only custom properties, with no unit
  * and no transform, keeps its unitless value and warns: at build time for a
  * literal, and in the runtime for a runtime value. Zero, a transformed value
- * and a scale key do not warn.
+ * and a key of the prop's scale do not warn, whatever value the key holds.
  */
 test('a unitless number on a custom-property-only prop warns at build and at runtime, and stays unitless', () => {
   const { manifest, css } = runPipeline([
@@ -23,7 +23,7 @@ export const Panel = ds
   .styles({ display: 'block' })
   .props({
     placeholderHeight: { property: '--placeholder-height' },
-    gapVar: { property: '--gap', scale: { 1: '4px' } },
+    gapVar: { property: '--gap', scale: { 1: 1, 2: '4px' } },
   })
   .asElement('div');
 export const Sized = ds

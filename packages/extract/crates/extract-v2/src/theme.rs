@@ -900,7 +900,7 @@ fn record_unitless_number(key: &str, value: &Value, ctx: &ResolveContext) {
 /// The first number of `value`, or of its breakpoints, that a prop writing
 /// only custom properties, with no transform, emits as written: no unit
 /// context applies, so it stays unitless. Zero is a length without a unit,
-/// and a number a scale resolves is not written as written.
+/// and a key of the prop's scale writes that key's value, whatever it is.
 pub(crate) fn unitless_custom_number(prop_name: &str, prop: &PropConfig, value: &Value, ctx: &ResolveContext) -> Option<Value> {
     let transforms = prop.transform.is_some()
         || prop.transform_id.is_some()
@@ -915,6 +915,9 @@ pub(crate) fn unitless_custom_number(prop_name: &str, prop: &PropConfig, value: 
     };
     entries.into_iter().find_map(|entry| {
         entry.as_f64().filter(|number| *number != 0.0)?;
+        if lookup_scale_token(entry, prop, ctx.theme).is_some() {
+            return None;
+        }
         let bare = value_to_css_string(entry)?;
         let written = resolve_single_prop(prop_name, entry, ctx.config, ctx.theme, ctx.variable_map, ctx.contextual_vars, None, None);
         written.iter().any(|declaration| declaration.value == bare).then(|| entry.clone())
