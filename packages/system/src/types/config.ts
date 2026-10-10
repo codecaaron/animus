@@ -418,8 +418,10 @@ export type ThemedVariantOptions<
   Props,
   Config extends Record<string, SystemProp>,
 > = {
-  prop?: PropName;
-  defaultVariant?: Default;
+  // A producer compiled without exactOptionalPropertyTypes may store an
+  // explicit undefined in either, as its options declared.
+  prop?: PropName | undefined;
+  defaultVariant?: Default | undefined;
   base?: ThemedCSSProps<Base, Config>;
   variants: ThemedCSSPropMap<Props, Config>;
 };
