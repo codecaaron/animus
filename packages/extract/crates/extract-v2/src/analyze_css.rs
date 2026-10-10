@@ -3663,9 +3663,10 @@ fn names_react_pass_through(ff: &FileFacts, tag: &str, origin: Option<TagOrigin>
 /// (`<Dialog.Root>`), whose body is analysed; one of React's pass-through
 /// components, or a context's `Provider`; or an import, or a member of one,
 /// from a package extraction does not analyse, which cannot be a component
-/// extraction declared. A `createElement` call on any receiver but React's
-/// still blocks, since what it passes is not followed as delivered. A
-/// parameter, an alias usage cannot follow, a name that resolved to no
+/// extraction declared, also as the member a stable object holds
+/// (`Trigger: ArkMenu.Trigger`). A `createElement` call on any receiver but
+/// React's still blocks, since what it passes is not followed as delivered.
+/// A parameter, an alias usage cannot follow, a name that resolved to no
 /// component, a relative or aliased import extraction cannot read (an
 /// excluded file may render our components) or any other declaration may
 /// be one of our components, so it blocks every component.
@@ -3674,6 +3675,7 @@ fn uncertainty_leaves_usage_proven(
     files: &BTreeMap<String, FileFacts>,
     inputs: &CssInputs,
     ordinary_members: &FxHashMap<(String, String), (String, String)>,
+    package_members: &FxHashSet<(String, String)>,
 ) -> bool {
     let unstable_contexts = &unstable_contexts(files, inputs);
     // Each element of an ordinary component is a site; classify each tag once.
@@ -3695,6 +3697,9 @@ fn uncertainty_leaves_usage_proven(
             || names_react_pass_through(ff, tag, site.origin)
             || imported_from_outside(file, ff, tag, site.origin, files, inputs)
             || names_context_provider(file, ff, tag, site.origin, files, inputs, unstable_contexts)
+            // The module's binding, never a parameter or local of the name.
+            || (matches!(site.origin, Some(TagOrigin::Import | TagOrigin::TopLevel))
+                && package_members.contains(&(file.to_string(), tag.to_string())))
             || uncertain_tag_reason(file, ff, tag, site.origin, files, inputs).0 == TagClass::Ordinary
             // The module's binding, never a parameter or local of the name.
             || (matches!(site.origin, Some(TagOrigin::Import | TagOrigin::TopLevel))
@@ -6207,6 +6212,20 @@ fn run_with_system_floor(
     // A receiver is known through its file's declarations, imports and
     // members only (`<Family.Root>`), never by a bare name elsewhere; a
     // member, only through the binding its object proves it holds.
+    // Each member tag a module writes that names a component a package
+    // extraction does not analyse, held by a stable object
+    // (`Trigger: ArkMenu.Trigger`): it can only receive our elements.
+    let mut package_members: FxHashSet<(String, String)> = FxHashSet::default();
+    for (path, ff) in files {
+        for tag in written_member_tags(ff) {
+            let Some((module, binding, member)) = object_members.member_entry(path, tag) else { continue };
+            let Some(declaring) = files.get(&module) else { continue };
+            let read = member.map_or_else(|| binding.clone(), |member| format!("{binding}.{member}"));
+            if imported_from_outside(&module, declaring, &read, Some(TagOrigin::Import), files, inputs) {
+                package_members.insert((path.clone(), tag.to_string()));
+            }
+        }
+    }
     let receiver_ids = |path: &str, ff: &FileFacts, tag: &str| {
         let mut ids = match tag.contains('.') {
             true => Vec::new(),
@@ -6411,7 +6430,7 @@ fn run_with_system_floor(
     let usage_complete = inputs.analysis_context.skipped_sources.is_empty()
         && !files.values().any(|ff| ff.direct_eval)
         && (!identity_policy.uncertain
-            || uncertainty_leaves_usage_proven(&uncertain_identities, files, inputs, &ordinary_members));
+            || uncertainty_leaves_usage_proven(&uncertain_identities, files, inputs, &ordinary_members, &package_members));
     let project_uses = usage_complete
         .then(|| {
             let unproven: std::collections::BTreeSet<String> =
@@ -9136,6 +9155,37 @@ export const App = ({ n }) => <Box bgImage={n} texture={n} />;
             );
             let out = analyze(&[("kit.tsx", kit), ("app.tsx", app.as_str())], &test_inputs());
             assert_eq!(out.dynamic_props.keys().collect::<Vec<_>>(), want, "{app}");
+        }
+    }
+
+    /// A member tag that names a component of a package extraction does not
+    /// analyse, held by a stable object (`Trigger: ArkMenu.Trigger`), can
+    /// only receive our elements: it leaves usage proven, and the elements
+    /// it receives open as a package receiver's do. A member the object may
+    /// no longer hold, one from an analysed module, or a parameter sharing
+    /// the object's name still blocks.
+    #[test]
+    fn package_family_members_leave_usage_proven() {
+        let kit = "export const Box = ds.system({ space: true }).asElement('div');\n";
+        let local = "export function Trigger({ children }) { return <button>{children}</button>; }\n";
+        let family = "import { Menu as ArkMenu, Slot } from 'ui-lib';\nimport * as Local from './local';\n\
+                      export const Menu = { Trigger: ArkMenu.Trigger, Item: Slot, Own: Local.Trigger };\n";
+        let cases: [(&str, &str, &[&str]); 6] = [
+            ("", "() => <><Menu.Trigger><div /></Menu.Trigger><Box p={8} /></>", &[]),
+            ("", "() => <><Menu.Item><div /></Menu.Item><Box p={8} /></>", &[]),
+            ("", "() => <><Menu.Trigger><Box p={8} /></Menu.Trigger><Box p={8} /></>", &["p"]),
+            ("", "() => <><Menu.Own><div /></Menu.Own><Box p={8} /></>", &["p"]),
+            ("", "({ Menu }) => <><Menu.Trigger><div /></Menu.Trigger><Box p={8} /></>", &["p"]),
+            ("Menu.Trigger = maybe;\n", "() => <><Menu.Trigger><div /></Menu.Trigger><Box p={8} /></>", &["p"]),
+        ];
+        for (more, app, want) in cases {
+            let family = format!("{family}{more}");
+            let app = format!("import {{ Box }} from './kit';\nimport {{ Menu }} from './fam';\nexport const App = {app};\n");
+            let out = analyze(
+                &[("kit.tsx", kit), ("local.tsx", local), ("fam.tsx", family.as_str()), ("app.tsx", app.as_str())],
+                &test_inputs(),
+            );
+            assert_eq!(out.dynamic_props.keys().collect::<Vec<_>>(), want, "{more}{app}");
         }
     }
 

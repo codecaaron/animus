@@ -303,9 +303,10 @@ impl<'f> ObjectMembers<'f> {
         Some(held)
     }
 
-    /// The binding `object` holds at `key`, with the module that names it,
-    /// as its last write of the key set it.
-    fn member_binding(&self, object: &Object, key: &str) -> Option<(String, String)> {
+    /// What `object` holds at `key`, as its last write of the key set it: the
+    /// module that names the value, the binding, and the member read from it
+    /// (`Trigger: ArkMenu.Trigger`).
+    fn member_read(&self, object: &Object, key: &str) -> Option<(String, String, Option<String>)> {
         let Object::Facade(module, binding) = object else { return None };
         let last = self.files.get(module)?.facades.get(binding)?.iter().rev().find(|entry| match entry {
             FacadeEntry::Member { key: set, .. }
@@ -315,7 +316,16 @@ impl<'f> ObjectMembers<'f> {
             FacadeEntry::Copy(_) | FacadeEntry::Unknown | FacadeEntry::Code(None) => true,
         })?;
         match last {
-            FacadeEntry::Member { binding, member: None, .. } => Some((module.clone(), binding.clone())),
+            FacadeEntry::Member { binding, member, .. } => Some((module.clone(), binding.clone(), member.clone())),
+            _ => None,
+        }
+    }
+
+    /// The binding `object` holds at `key` as a whole, with the module that
+    /// names it.
+    fn member_binding(&self, object: &Object, key: &str) -> Option<(String, String)> {
+        match self.member_read(object, key)? {
+            (module, binding, None) => Some((module, binding)),
             _ => None,
         }
     }
@@ -393,6 +403,20 @@ impl<'f> ObjectMembers<'f> {
             }
         }
         found
+    }
+
+    /// What `tag`, written in `file`, reads from an object nothing may have
+    /// changed since it was built: the module naming the value, the binding
+    /// the object's last write of the key names, and the member read from it
+    /// (`Trigger: ArkMenu.Trigger`).
+    pub(crate) fn member_entry(&mut self, file: &str, tag: &str) -> Option<(String, String, Option<String>)> {
+        let (path, key) = tag.rsplit_once('.')?;
+        let object = self.object_at(file, path)?;
+        let entry = self.member_read(&object, key)?;
+        if self.table(&object).open || self.instability(&object).is_some() {
+            return None;
+        }
+        Some(entry)
     }
 
     /// The components an escaping `name` hands over: every member of the
