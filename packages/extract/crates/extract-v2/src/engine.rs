@@ -914,7 +914,7 @@ mod tests {
         .unwrap();
         let a_source = r#"export const Box = ds.system({ space: true }).asElement("div"); export const A = () => <Box p={spacing} />;"#;
         let b_source =
-            r#"import { Box } from "./a"; export const B = () => <Box p={ok ? 4 : 8} />;"#;
+            r#"import { Box } from "./a"; export const B = () => <><Box p={ok ? 4 : 8} /><Box p={gap} /></>;"#;
         let manifest: serde_json::Value = serde_json::from_str(
             &engine
                 .analyze(
@@ -934,8 +934,9 @@ mod tests {
         assert_eq!(residue[0]["binding"], "Box");
         assert_eq!(residue[0]["prop"], "p");
         assert_eq!(residue[0]["kind"], "identifier");
+        // A conditional of literals is no residue: its classes stand for it.
         assert_eq!(residue[1]["file"], "b.tsx");
-        assert_eq!(residue[1]["kind"], "conditional");
+        assert_eq!(residue[1]["kind"], "identifier");
         assert_eq!(
             &a_source[residue[0]["span"]["start"].as_u64().unwrap() as usize
                 ..residue[0]["span"]["end"].as_u64().unwrap() as usize],
@@ -1635,7 +1636,7 @@ export const App = () => <Box tone="red" />;
         let css = manifest["css"].as_str().unwrap();
         assert!(css.contains(&format!(".{block_class} {{\n    display: block;")));
         assert!(css.contains(&format!(".{none_class} {{\n    display: none;")));
-        assert_eq!(manifest["usageResidue"][0]["kind"], "conditional");
+        assert_eq!(manifest["usageResidue"], serde_json::json!([]));
     }
 
     fn unregistered_keyframe_diagnostics(manifest: &serde_json::Value) -> Vec<String> {

@@ -17,6 +17,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::chain_walk::{ChainDescriptor, TerminalKind};
 use crate::jsx_scan::{
     classify_jsx_attribute_as_variant_value, create_element_props, eval_jsx_attribute_value, eval_property_key,
+    eval_static_expression, make_json_number,
     is_component_like_identifier, jsx_member_path, ComponentUsageConfig, CustomPropScanResult,
     DynamicExpressionKind, DynamicPropUsage, PropValueResult, StateUsage, SystemPropUsage,
     UsageResidueSite, UsageScanResult, UsageSpan, VariantUsage, WrittenProp,
@@ -50,13 +51,23 @@ pub struct AttrFact {
     pub skip: bool,
     /// Variant classification: a literal string or `"__dynamic__"`.
     pub variant_class: String,
-    /// The attribute's syntax is a literal: `static_value` needs no statics.
+    /// Every value the attribute can write is known without statics that
+    /// may name a changed object: `static_value`, or, without one, each of
+    /// `enumerable_values`. See `proven_values`.
     #[serde(skip)]
     pub literal: bool,
     /// For a value that is not a literal, the conditions it can write: see
     /// `write_conditions`.
     #[serde(skip)]
     pub conditions: Option<BTreeSet<String>>,
+}
+
+impl AttrFact {
+    /// Every value the attribute can write, when they are known: its
+    /// static value, or the finite values a runtime value is proven to take.
+    pub(crate) fn proven_values(&self) -> Option<impl Iterator<Item = &Value>> {
+        (self.literal && !self.dynamic).then(|| self.static_value.iter().chain(&self.enumerable_values))
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -758,11 +769,13 @@ pub(crate) fn collect_enriched_usage(
         None => Some(SemanticBuilder::new().build(program).semantic.into_scoping()),
     };
     let origins = scoping.as_ref().or(tag_scoping.as_ref());
+    let finite_params = origins.map(|scoping| literal_union_parameters(program, scoping)).unwrap_or_default();
     let mut collector = FactCollector {
         facts: Vec::new(),
         static_values,
         scoping: scoping.as_ref().filter(|_| !static_values.is_empty()),
         enrich: true,
+        finite_params,
         react: react.clone(),
         clones: Some(CloneScan {
             scoping: scoping.as_ref(),
@@ -1842,6 +1855,9 @@ struct FactCollector<'a, 's> {
     module_loads: Option<Vec<ModuleLoad>>,
     /// Enriched collection only: the scopes a tag's origin is read from.
     origins: Option<&'s Scoping>,
+    /// Enriched collection only: the values a parameter's literal-union type
+    /// annotation admits.
+    finite_params: FxHashMap<SymbolId, FiniteSet>,
 }
 
 /// `cloneElement` calls, resolved once the walk has seen every `const`
@@ -1980,6 +1996,25 @@ impl<'a> FactCollector<'a, '_> {
                             // lose it.
                             important_literals(expression, self.static_values, self.scoping, &mut enumerable_values);
                         }
+                        // A value proven to be one of a few literals takes
+                        // their classes, as written literals do; one statics
+                        // resolved is proven only when no leaf reads an
+                        // object, which may have changed since.
+                        match self.finite_class_values(expression) {
+                            Some(values) if dynamic => {
+                                if values.is_empty() {
+                                    continue;
+                                }
+                                enumerable_values = values;
+                                static_value = None;
+                                dynamic = false;
+                                dynamic_kind = None;
+                                dynamic_span = None;
+                                literal = true;
+                            }
+                            Some(_) => literal = true,
+                            None => {}
+                        }
                     }
                 }
                 // A nullish breakpoint is absent, as at runtime, and a value
@@ -2017,6 +2052,309 @@ impl<'a> FactCollector<'a, '_> {
             origin,
         });
     }
+}
+
+/// The values a runtime value can take, when it is proven to be one of a
+/// few: string and number literals, and whether it may also be absent.
+#[derive(Debug, Clone, Default)]
+struct FiniteSet {
+    values: Vec<Value>,
+    absent: bool,
+}
+
+impl FiniteSet {
+    fn union(mut self, other: FiniteSet) -> FiniteSet {
+        for value in other.values {
+            push_unique(&mut self.values, value);
+        }
+        self.absent |= other.absent;
+        self
+    }
+
+    fn falsy(&self) -> bool {
+        self.absent || self.values.iter().any(|value| !truthy(value))
+    }
+}
+
+/// A string or number, which a class can be keyed by.
+fn is_class_value(value: &Value) -> bool {
+    matches!(value, Value::String(_) | Value::Number(_))
+}
+
+fn truthy(value: &Value) -> bool {
+    match value {
+        Value::String(text) => !text.is_empty(),
+        Value::Number(number) => number.as_f64().is_some_and(|n| n != 0.0 && !n.is_nan()),
+        _ => true,
+    }
+}
+
+impl FactCollector<'_, '_> {
+    /// The values `expression` can take, when they are proven few: an
+    /// explicitly absent value, a string or number literal, a `const` one
+    /// named directly (imported ones included), a parameter whose type
+    /// annotation is a union of literals, and a conditional, `||` or `??` of
+    /// such values.
+    fn finite_set(&self, expression: &Expression<'_>) -> Option<FiniteSet> {
+        let expression = crate::chain_walk::unwrap_type_assertions(expression);
+        if is_absent(expression, self.origins) || matches!(expression, Expression::NullLiteral(_)) {
+            return Some(FiniteSet { values: Vec::new(), absent: true });
+        }
+        match expression {
+            Expression::ConditionalExpression(conditional) => {
+                Some(self.finite_set(&conditional.consequent)?.union(self.finite_set(&conditional.alternate)?))
+            }
+            Expression::LogicalExpression(logical) if logical.operator.is_or() || logical.operator.is_coalesce() => {
+                let left = self.finite_set(&logical.left)?;
+                let right = self.finite_set(&logical.right)?;
+                let reaches_right = match logical.operator.is_or() {
+                    true => left.falsy(),
+                    false => left.absent,
+                };
+                let kept = FiniteSet {
+                    values: match logical.operator.is_or() {
+                        true => left.values.into_iter().filter(truthy).collect(),
+                        false => left.values,
+                    },
+                    absent: false,
+                };
+                Some(if reaches_right { kept.union(right) } else { kept })
+            }
+            Expression::Identifier(ident) => {
+                let symbol = self
+                    .origins
+                    .and_then(|scoping| scoping.get_reference(ident.reference_id.get()?).symbol_id());
+                if let Some(set) = symbol.and_then(|symbol| self.finite_params.get(&symbol)) {
+                    return Some(set.clone());
+                }
+                let value = evaluate_with_statics(expression, self.static_values, self.scoping)?;
+                is_class_value(&value).then(|| FiniteSet { values: vec![value], absent: false })
+            }
+            _ => {
+                let value = eval_static_expression(expression).filter(is_class_value)?;
+                Some(FiniteSet { values: vec![value], absent: false })
+            }
+        }
+    }
+
+    /// The literals whose classes stand for `expression`'s every value: a
+    /// finite set's values, or for an object literal with static keys and
+    /// finite leaves, each leaf value at its breakpoint (`{ sm: 8 }`) or,
+    /// under `_`, bare; the runtime composes those classes. `None` when the
+    /// values are not proven few.
+    fn finite_class_values(&self, expression: &Expression<'_>) -> Option<Vec<Value>> {
+        use oxc::ast::ast::{ObjectPropertyKind, PropertyKind};
+        let expression = crate::chain_walk::unwrap_type_assertions(expression);
+        let Expression::ObjectExpression(object) = expression else {
+            return Some(self.finite_set(expression)?.values);
+        };
+        let mut values = Vec::new();
+        for property in &object.properties {
+            let ObjectPropertyKind::ObjectProperty(property) = property else {
+                return None;
+            };
+            if property.kind != PropertyKind::Init || property.computed {
+                return None;
+            }
+            let key = eval_property_key(&property.key)?;
+            for value in self.finite_set(&property.value)?.values {
+                push_unique(
+                    &mut values,
+                    match key.as_str() {
+                        BASE_CONDITION => value,
+                        _ => serde_json::json!({ key.as_str(): value }),
+                    },
+                );
+            }
+        }
+        Some(values)
+    }
+}
+
+/// Each parameter binding whose type annotation reads, without a type
+/// checker, as a union of string and number literal types: a parameter's
+/// own annotation, or a destructured property's, written inline or through
+/// a type alias or interface the module declares. Its default joins the
+/// values; an optional one may be absent. A binding something writes is
+/// left out.
+fn literal_union_parameters(program: &Program<'_>, scoping: &Scoping) -> FxHashMap<SymbolId, FiniteSet> {
+    use oxc::ast::ast::{Declaration, TSType};
+    let mut scan = ParameterScan {
+        scoping,
+        objects: FxHashMap::default(),
+        unions: FxHashMap::default(),
+        sets: FxHashMap::default(),
+    };
+    for statement in &program.body {
+        let declaration = match statement {
+            Statement::ExportNamedDeclaration(export) => export.declaration.as_ref(),
+            other => other.as_declaration(),
+        };
+        match declaration {
+            Some(Declaration::TSInterfaceDeclaration(interface)) if interface.extends.is_empty() => {
+                if let Some(symbol) = interface.id.symbol_id.get() {
+                    let properties = scan.property_unions(&interface.body.body);
+                    scan.objects.insert(symbol, properties);
+                }
+            }
+            Some(Declaration::TSTypeAliasDeclaration(alias)) if alias.type_parameters.is_none() => {
+                let Some(symbol) = alias.id.symbol_id.get() else { continue };
+                match &alias.type_annotation {
+                    TSType::TSTypeLiteral(literal) => {
+                        let properties = scan.property_unions(&literal.members);
+                        scan.objects.insert(symbol, properties);
+                    }
+                    annotation => {
+                        if let Some(set) = scan.literal_union(annotation) {
+                            scan.unions.insert(symbol, set);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    scan.visit_program(program);
+    scan.sets
+}
+
+struct ParameterScan<'s> {
+    scoping: &'s Scoping,
+    /// The module's interfaces and object type aliases: each property's
+    /// literal union, `None` for another type.
+    objects: FxHashMap<SymbolId, FxHashMap<String, Option<FiniteSet>>>,
+    /// The module's type aliases of a literal union.
+    unions: FxHashMap<SymbolId, FiniteSet>,
+    sets: FxHashMap<SymbolId, FiniteSet>,
+}
+
+impl ParameterScan<'_> {
+    /// The module-level type a reference without type arguments names.
+    fn named(&self, annotation: &oxc::ast::ast::TSType<'_>) -> Option<SymbolId> {
+        use oxc::ast::ast::{TSType, TSTypeName};
+        let TSType::TSTypeReference(reference) = annotation else { return None };
+        let TSTypeName::IdentifierReference(name) = &reference.type_name else { return None };
+        if reference.type_arguments.is_some() {
+            return None;
+        }
+        self.scoping.get_reference(name.reference_id.get()?).symbol_id()
+    }
+
+    /// The values a union of string and number literal types admits, a
+    /// literal-union alias among them; `null` and `undefined` members make
+    /// the value possibly absent.
+    fn literal_union(&self, annotation: &oxc::ast::ast::TSType<'_>) -> Option<FiniteSet> {
+        use oxc::ast::ast::{TSLiteral, TSType};
+        let members: Vec<&TSType<'_>> = match annotation {
+            TSType::TSUnionType(union) => union.types.iter().collect(),
+            other => vec![other],
+        };
+        let mut set = FiniteSet::default();
+        for member in members {
+            match member {
+                TSType::TSUndefinedKeyword(_) | TSType::TSNullKeyword(_) => set.absent = true,
+                TSType::TSLiteralType(literal) => {
+                    let value = match &literal.literal {
+                        TSLiteral::StringLiteral(text) => Value::String(text.value.to_string()),
+                        TSLiteral::NumericLiteral(number) => make_json_number(number.value),
+                        TSLiteral::UnaryExpression(unary)
+                            if unary.operator == oxc::syntax::operator::UnaryOperator::UnaryNegation =>
+                        {
+                            let Expression::NumericLiteral(number) = &unary.argument else { return None };
+                            make_json_number(-number.value)
+                        }
+                        _ => return None,
+                    };
+                    push_unique(&mut set.values, value);
+                }
+                other => set = set.union(self.unions.get(&self.named(other)?)?.clone()),
+            }
+        }
+        (!set.values.is_empty() || set.absent).then_some(set)
+    }
+
+    /// Each property signature's literal union, `None` when it has another type.
+    fn property_unions(&self, members: &[oxc::ast::ast::TSSignature<'_>]) -> FxHashMap<String, Option<FiniteSet>> {
+        use oxc::ast::ast::TSSignature;
+        members
+            .iter()
+            .filter_map(|member| match member {
+                TSSignature::TSPropertySignature(signature) if !signature.computed => {
+                    let set = signature.type_annotation.as_ref().and_then(|annotation| {
+                        let mut set = self.literal_union(&annotation.type_annotation)?;
+                        set.absent |= signature.optional;
+                        Some(set)
+                    });
+                    Some((eval_property_key(&signature.key)?, set))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn record(
+        &mut self,
+        id: &oxc::ast::ast::BindingIdentifier<'_>,
+        set: Option<FiniteSet>,
+        default: Option<&Expression<'_>>,
+    ) {
+        let (Some(mut set), Some(symbol)) = (set, id.symbol_id.get()) else {
+            return;
+        };
+        if self.scoping.get_resolved_references(symbol).any(|reference| reference.is_write()) {
+            return;
+        }
+        if let Some(default) = default {
+            let Some(value) = literal_value(default) else {
+                return;
+            };
+            push_unique(&mut set.values, value);
+        }
+        self.sets.insert(symbol, set);
+    }
+}
+
+impl<'a> Visit<'a> for ParameterScan<'_> {
+    fn visit_formal_parameter(&mut self, parameter: &oxc::ast::ast::FormalParameter<'a>) {
+        use oxc::ast::ast::{BindingPattern, TSType};
+        if let Some(annotation) = parameter.type_annotation.as_ref() {
+            match &parameter.pattern {
+                BindingPattern::BindingIdentifier(id) => {
+                    let set = self.literal_union(&annotation.type_annotation).map(|mut set| {
+                        set.absent |= parameter.optional;
+                        set
+                    });
+                    self.record(id, set, parameter.initializer.as_deref());
+                }
+                BindingPattern::ObjectPattern(object) => {
+                    let properties = match &annotation.type_annotation {
+                        TSType::TSTypeLiteral(literal) => Some(self.property_unions(&literal.members)),
+                        other => self.named(other).and_then(|symbol| self.objects.get(&symbol).cloned()),
+                    };
+                    for property in object.properties.iter().filter(|property| !property.computed) {
+                        let Some(key) = eval_property_key(&property.key) else { continue };
+                        let set = properties.as_ref().and_then(|properties| properties.get(&key).cloned().flatten());
+                        match &property.value {
+                            BindingPattern::BindingIdentifier(id) => self.record(id, set, None),
+                            BindingPattern::AssignmentPattern(assignment) => {
+                                if let BindingPattern::BindingIdentifier(id) = &assignment.left {
+                                    self.record(id, set, Some(&assignment.right));
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        oxc::ast_visit::walk::walk_formal_parameter(self, parameter);
+    }
+}
+
+/// A string or number literal default.
+fn literal_value(expression: &Expression<'_>) -> Option<Value> {
+    eval_static_expression(expression).filter(is_class_value)
 }
 
 impl<'a, 's> Visit<'a> for FactCollector<'a, 's> {
@@ -2431,6 +2769,7 @@ pub fn collect_usage_facts(program: &Program<'_>) -> Vec<UsageFact> {
         clones: None,
         module_loads: None,
         origins: None,
+        finite_params: FxHashMap::default(),
     };
     collector.visit_program(program);
     collector.finish()
@@ -2982,12 +3321,16 @@ pub fn filter_usage_scan(
                         if dropped.is_some_and(|dropped| dropped.contains(&attr.name)) {
                             continue;
                         }
-                        result.written_props.push(WrittenProp {
+                        let write = |literal| WrittenProp {
                             binding: binding.clone(),
                             prop: attr.name.clone(),
-                            literal: attr.static_value.clone().filter(|_| attr.literal && !attr.dynamic),
+                            literal,
                             conditions: attr.conditions.clone(),
-                        });
+                        };
+                        match attr.proven_values() {
+                            Some(values) => result.written_props.extend(values.map(|value| write(Some(value.clone())))),
+                            None => result.written_props.push(write(None)),
+                        }
                         let settled = spread.is_none_or(|before| index >= before);
                         if let Some(props) = active_props {
                             if props.contains(&attr.name) {
@@ -3380,7 +3723,7 @@ mod tests {
     }
 
     #[test]
-    fn enrichment_enumerates_static_conditional_arms_and_keeps_residue() {
+    fn enrichment_enumerates_static_conditional_arms_without_residue() {
         let result = enriched_result(
             r#"
             export const App = () => (
@@ -3399,12 +3742,8 @@ mod tests {
                 ("display".to_string(), r#""none""#.to_string()),
             ]
         );
-        assert_eq!(result.dynamic_prop_usages.len(), 1);
-        assert_eq!(result.residue_sites.len(), 2);
-        assert!(result
-            .residue_sites
-            .iter()
-            .all(|site| site.kind == DynamicExpressionKind::Conditional));
+        assert!(result.dynamic_prop_usages.is_empty());
+        assert!(result.residue_sites.is_empty());
     }
 
     #[test]

@@ -3709,6 +3709,11 @@ fn confined_uses(
                         .entry(attr.name.clone())
                         .or_default()
                         .push(value.clone()),
+                    (None, false) if attr.literal => confined
+                        .static_values
+                        .entry(attr.name.clone())
+                        .or_default()
+                        .extend(attr.enumerable_values.iter().cloned()),
                     _ => {
                         confined.runtime_props.insert(attr.name.clone());
                     }
@@ -7947,6 +7952,45 @@ export const App = ({ n }) => <Box bgImage={n} texture={n} />;
         ];
         for (app, want) in cases {
             assert_eq!(slots(app), want, "{app}");
+        }
+    }
+
+    #[test]
+    fn finite_alternatives_take_static_classes_instead_of_slots() {
+        let kit = "export const Box = ds.system({ space: true }).props({ tone: { property: 'color' } }).asElement('div');\n";
+        // The `p` and `tone` class keys, and the slot rules, each render emits.
+        let emitted = |app: &str| {
+            let app = format!("import {{ Box }} from './kit';\n{app}");
+            let out = analyze(&[("kit.tsx", kit), ("app.tsx", &app)], &test_inputs());
+            let css = format!("{}{}", out.sheets.system, out.sheets.custom);
+            let mut slots: Vec<String> = css
+                .split(".animus-dyn-")
+                .skip(1)
+                .map(|rule| rule.split([' ', '{']).next().unwrap().to_string())
+                .collect();
+            slots.dedup();
+            let mut keys: Vec<String> = out.system_prop_map.get("p").into_iter().flat_map(|map| map.keys().cloned()).collect();
+            let tone = out.replacement_configs["kit.tsx::Box"].custom_prop_class_map.as_ref().and_then(|map| map.get("tone"));
+            keys.extend(tone.into_iter().flat_map(|map| map.keys().cloned()));
+            keys.sort();
+            (keys, slots)
+        };
+        let cases: [(&str, &[&str], &[&str]); 9] = [
+            // Literals, `const`s and literal-union parameters, through
+            // conditionals, `||` and `??`, and object leaves at breakpoints.
+            ("const k = 20;\nexport const App = ({ c }) => <Box p={c ? k : 16} />;\n", &["16", "20"], &[]),
+            ("export const App = ({ c }: { c?: 4 | 0 }) => <Box p={c || 8} />;\n", &["4", "8"], &[]),
+            ("type S = 4 | 8;\ninterface P { s?: S }\nexport const App = ({ s = 2 }: P) => <Box p={s} />;\n", &["2", "4", "8"], &[]),
+            ("export function App(t: 'red' | 'blue') { return <Box tone={t} />; }\n", &["blue", "red"], &[]),
+            ("export const App = ({ c }) => <Box p={{ _: c ? 4 : 8, sm: 16 }} />;\n", &["4", "8", "sm:16"], &[]),
+            // A wide, opaque or reassigned value keeps its slot.
+            ("export const App = ({ c, n }) => <Box p={c ? 8 : n} />;\n", &[], &["p_", "p_-sm"]),
+            ("export const App = ({ s }: { s: number }) => <Box p={s} />;\n", &[], &["p_", "p_-sm"]),
+            ("export const App = ({ s }: { s: 4 | 8 }) => { s = 3; return <Box p={s} />; };\n", &[], &["p_", "p_-sm"]),
+            ("const sizes = { sm: 4 };\nexport const App = ({ c }) => <Box p={c ? sizes.sm : 8} />;\n", &["4", "8"], &["p_", "p_-sm"]),
+        ];
+        for (app, classes, slots) in cases {
+            assert_eq!(emitted(app), (classes.iter().map(|key| key.to_string()).collect(), slots.iter().map(|slot| slot.to_string()).collect()), "{app}");
         }
     }
 

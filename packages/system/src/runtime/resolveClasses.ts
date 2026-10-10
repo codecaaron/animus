@@ -668,6 +668,26 @@ function applyDeclarationProp(
 }
 
 /**
+ * The static classes of a responsive value's entries, when every entry has
+ * one: extraction gives a value proven to be one of a few at each
+ * breakpoint a class per entry, and no slot.
+ */
+function entryClasses(
+  propValue: unknown,
+  literalClass: (value: unknown) => string | undefined
+): string[] | undefined {
+  const [responsive, entries] = responsiveEntries(propValue);
+  if (!responsive || entries.length === 0) return undefined;
+  const found: string[] = [];
+  for (const [bp, value] of entries) {
+    const cls = literalClass(bp === '_' ? value : { [bp]: value });
+    if (!cls) return undefined;
+    found.push(cls);
+  }
+  return found;
+}
+
+/**
  * A responsive value without its nullish breakpoints, so it keys the same
  * static class as the value written without them; `undefined` when none
  * remain, as if the prop were omitted.
@@ -740,11 +760,15 @@ export function resolveClasses(
         ? [customPropMap, config.typedCustomProps]
         : [systemPropMap, config.typedSystemProps];
       const typed = typedProps?.includes(propName) === true;
-      const cls =
-        classMap?.[propName]?.[typed ? typedValueKey(propValue) : key];
+      const literalClass = (value: unknown) =>
+        classMap?.[propName]?.[
+          (typed ? typedValueKey : serializeValueKey)(value)
+        ];
+      const cls = literalClass(propValue);
+      const found = cls ? [cls] : entryClasses(propValue, literalClass);
 
-      if (cls) {
-        classes.push(cls);
+      if (found) {
+        classes.push(...found);
         recordWitness(baseClassName, propName, key, 'static');
       } else {
         const dc = customOwned
@@ -763,10 +787,7 @@ export function resolveClasses(
                   staged,
                   propValue,
                   dc,
-                  (value) =>
-                    classMap?.[propName]?.[
-                      (typed ? typedValueKey : serializeValueKey)(value)
-                    ],
+                  literalClass,
                   (value) =>
                     warnIgnoredImportant(baseClassName, propName, value)
                 );
