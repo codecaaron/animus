@@ -10,7 +10,7 @@ use oxc::ast_visit::Visit;
 use oxc::semantic::{Scoping, SemanticBuilder, SymbolFlags, SymbolId};
 use oxc::span::Span;
 use oxc::span::GetSpan;
-use oxc::syntax::module_record::{ExportExportName, ImportImportName, ModuleRecord};
+use oxc::syntax::module_record::{ExportExportName, ExportLocalName, ImportImportName, ModuleRecord};
 use rustc_hash::{FxHashMap, FxHashSet};
 use serde::Serialize;
 use serde_json::Value;
@@ -587,18 +587,38 @@ fn named_import_locals(module: &ModuleRecord<'_>) -> BTreeSet<String> {
         .collect()
 }
 
-/// `export * as name from '…'`: name → source. The parser records these
-/// among the indirect exports.
+/// Each module namespace a file exports at runtime: name → source. That is
+/// `export * as name from '…'`, which the parser records among the indirect
+/// exports, and an exported namespace import (`import * as ns from '…'` with
+/// `export { ns as name }` or `export default ns`), which it records among
+/// the local exports. A type-only import or export exports nothing.
 pub fn collect_namespace_exports(module: &ModuleRecord<'_>) -> BTreeMap<String, String> {
-    module
+    let namespace_imports: BTreeMap<&str, &str> = module
+        .import_entries
+        .iter()
+        .filter(|entry| entry.import_name.is_namespace_object() && !entry.is_type)
+        .map(|entry| (entry.local_name.name.as_str(), entry.module_request.name.as_str()))
+        .collect();
+    let star_as = module
         .indirect_export_entries
         .iter()
-        .filter(|entry| entry.import_name.is_all())
+        .filter(|entry| entry.import_name.is_all() && !entry.is_type)
         .filter_map(|entry| match (&entry.export_name, &entry.module_request) {
             (ExportExportName::Name(name), Some(source)) => Some((name.name.to_string(), source.name.to_string())),
             _ => None,
-        })
-        .collect()
+        });
+    let exported_imports = module.local_export_entries.iter().filter(|entry| !entry.is_type).filter_map(|entry| {
+        let (exported, local) = match (&entry.export_name, &entry.local_name) {
+            (ExportExportName::Name(name), ExportLocalName::Name(local)) => (name.name.as_str(), local),
+            (ExportExportName::Default(_), ExportLocalName::Default(local) | ExportLocalName::Name(local)) => {
+                ("default", local)
+            }
+            _ => return None,
+        };
+        let source = namespace_imports.get(local.name.as_str())?;
+        Some((exported.to_string(), source.to_string()))
+    });
+    star_as.chain(exported_imports).collect()
 }
 
 /// The sources of `export * from '…'`, which re-export every named export.
