@@ -3037,7 +3037,14 @@ fn spread_wrapper_targets(
             .filter(|chain| chain.descriptor.terminal == TerminalKind::AsComponent && chain.descriptor.tag == *name)
             .map(|chain| resolve_declared_identity(file, &chain.descriptor.binding, files, inputs, evaluated_ids))
             .collect();
-        if outers.len() != wrapper.targeted || outers.iter().any(Vec::is_empty) {
+        // Each object member that holds it is one of this module's facades.
+        let holders = ff
+            .facades
+            .values()
+            .flatten()
+            .filter(|entry| matches!(entry, crate::facts::FacadeEntry::Member { binding, member: None, .. } if binding == name))
+            .count();
+        if outers.len() != wrapper.targeted || holders != wrapper.held || outers.iter().any(Vec::is_empty) {
             continue;
         }
         for (dropped, ids) in &reach.paths {
@@ -3060,8 +3067,9 @@ fn spread_wrapper_targets(
         proxies.paths.insert(name.clone(), lookups);
         proxies.settled.insert(name.clone(), reach.settled);
         let spans = wrapper.forwarding.iter().map(|(span, _)| *span);
-        // A component's renders pass on more than the wrapper's renders show.
-        if wrapper.targeted > 0 {
+        // A component's renders, and member tags elsewhere, pass on more than
+        // the wrapper's renders here show.
+        if wrapper.targeted > 0 || wrapper.held > 0 {
             proxies.derived.extend(spans);
             continue;
         }
@@ -4155,6 +4163,7 @@ const RUNTIME_SET_PROPS: [&str; 3] = ["className", "style", "ref"];
 /// `outer`'s props but its own variant, state and system props and the
 /// ones it sets itself, and `W` passes them on, all but `dropped`. `named`
 /// holds the props `W`'s own pattern takes on this path.
+#[derive(Clone)]
 struct Forward {
     outer: String,
     inner: Vec<String>,
@@ -5738,6 +5747,19 @@ fn run_with_system_floor(
     let mut identity_policy = UsageIdentityPolicy::default();
     // Each file's private spread wrappers → the components they render.
     let mut wrapper_targets_by_file: FxHashMap<String, FxHashMap<String, Vec<String>>> = FxHashMap::default();
+    // Each module's spread wrappers, read where they are declared and where
+    // a member tag renders one an object holds.
+    let all_wrappers: FxHashMap<&String, WrapperTargets> = files
+        .iter()
+        .map(|(path, ff)| (path, spread_wrapper_targets(path, ff, files, inputs, &evaluated_ids)))
+        .collect();
+    let held_ids = |module: &String, wrapper: &str| {
+        all_wrappers
+            .get(module)
+            .and_then(|(published, _, _)| published.iter().find(|(name, _)| name == wrapper))
+            .map(|(_, ids)| ids.clone())
+            .unwrap_or_default()
+    };
     let mut uncertain_identities: Vec<(&String, UncertainIdentity)> = Vec::new();
 
     for path in order {
@@ -5824,8 +5846,7 @@ fn run_with_system_floor(
             }
         }
         // A spread wrapper's renders stand in for its targets' renders.
-        let (wrapper_targets, proxies, file_forwards) =
-            spread_wrapper_targets(path, ff, files, inputs, &evaluated_ids);
+        let (wrapper_targets, mut proxies, file_forwards) = all_wrappers.get(path).cloned().unwrap_or_default();
         wrapper_targets_by_file.insert(path.clone(), wrapper_targets.iter().cloned().collect());
         // The runtime hands the target every prop but the component's own
         // and the ones it sets itself.
@@ -5854,6 +5875,26 @@ fn run_with_system_floor(
             members_with_namespaces
                 .get_or_insert_with(|| member_expr_bindings.clone())
                 .insert(tag.clone(), tag);
+        }
+        // `<Code.Header>` for `const Code = { Header: CodeHeader }` renders the
+        // private wrapper the object holds: one of its renders, per path.
+        for tag in written_member_tags(ff) {
+            let Some((module, wrapper)) = object_members.held_wrapper(path, tag) else { continue };
+            let Some(paths) = all_wrappers.get(&module).and_then(|(_, held, _)| held.paths.get(&wrapper)) else {
+                continue;
+            };
+            let lookup = file_lookup.get_or_insert_with(|| global_lookup.clone());
+            lookup.publish(tag, &held_ids(&module, &wrapper), &usage_sources);
+            let mut lookups = Vec::new();
+            for (index, (key, dropped)) in paths.iter().enumerate() {
+                let held_key = format!("{tag}#{index}");
+                lookup.publish(&held_key, &held_ids(&module, key), &usage_sources);
+                lookups.push((held_key, dropped.clone()));
+            }
+            proxies.paths.insert(tag.to_string(), lookups);
+            members_with_namespaces
+                .get_or_insert_with(|| member_expr_bindings.clone())
+                .insert(tag.to_string(), tag.to_string());
         }
         let member_expr_bindings = members_with_namespaces.as_ref().unwrap_or(member_expr_bindings);
         let component_takes = |id: &str, prop: &str| {
@@ -6060,6 +6101,9 @@ fn run_with_system_floor(
             // An escaping facade or alias hands over its members, and one
             // member of it that component.
             escaped_ids.extend(object_members.escaped_components(path, name));
+            for (module, wrapper) in object_members.escaped_wrappers(path, name) {
+                escaped_ids.extend(held_ids(&module, &wrapper));
+            }
             // An escaping compose family hands over its slots.
             if let Some(members) = member_bindings.get(path) {
                 escaped_ids.extend(
@@ -6117,6 +6161,11 @@ fn run_with_system_floor(
         |id| evaluated.get(id).is_some_and(|(_, _, terminal, ..)| *terminal == TerminalKind::AsElement),
     );
     escaped_ids.extend(delivered_ids);
+    // A held wrapper some render of which no member tag shows renders with
+    // props no analysed use shows.
+    for (module, wrapper) in object_members.unproven_wrappers() {
+        escaped_ids.extend(held_ids(&module, &wrapper));
+    }
     let mut opened_usage = UsageScanResult::default();
     for component_id in &escaped_ids {
         let Some((component_css, _, _, _, _, custom_configs, _)) = evaluated.get(component_id)
@@ -8846,6 +8895,41 @@ export const App = ({ n }) => <Box bgImage={n} texture={n} />;
         ];
         for (app, want) in cases {
             assert_eq!(slots(app), want, "{app}");
+        }
+    }
+
+    /// A private spread wrapper held by a member of an object literal
+    /// (`const Code = { Header }`) renders through `<Code.Header>` in any
+    /// module, so those renders stand in for its renders. Any other route
+    /// to it (the object or the member as a value, a copy of the object, a
+    /// write to it, or the wrapper anywhere else), and a member tag whose
+    /// first name a parameter or local binds, keeps its target's slots.
+    #[test]
+    fn object_held_wrappers_render_through_member_tags() {
+        let kit = "export const Box = ds.system({ space: true }).asElement('div');\n";
+        let family = "import { Box } from './kit';\n\
+                      function Header(props) { return <Box as=\"span\" {...props} />; }\n\
+                      export const Code = { Header };\n";
+        let cases: [(&str, &str, &[&str]); 13] = [
+            ("", "import { Code } from './fam';\nexport const App = () => <Code.Header p={8} />;\n", &[]),
+            // A parameter or local of the object's name is another value.
+            ("", "import { Code } from './fam';\nexport const App = ({ Code }) => <Code.Header p={8} />;\n", &["p"]),
+            ("", "import { Code } from './fam';\nexport const App = () => { const Code = getCode(); return <Code.Header p={8} />; };\n", &["p"]),
+            ("", "import * as ui from './fam';\nexport const App = () => <ui.Code.Header p={8} />;\n", &[]),
+            ("", "import { Code } from './fam';\nexport const App = (rest) => <Code.Header {...rest} />;\n", &["p"]),
+            ("", "import { Code } from './fam';\nexport const App = ({ n }) => <Code.Header p={n} />;\n", &["p"]),
+            ("", "import { Code } from './fam';\nexport const all = Object.values(Code);\n", &["p"]),
+            ("", "import { Code } from './fam';\nexport const H = Code.Header;\n", &["p"]),
+            ("", "import { Code } from './fam';\nexport const More = { ...Code };\n", &["p"]),
+            ("Code.Header = () => null;\n", "import { Code } from './fam';\nexport const App = () => <Code.Header p={8} />;\n", &["p"]),
+            ("register(Code);\n", "import { Code } from './fam';\nexport const App = () => <Code.Header p={8} />;\n", &["p"]),
+            ("export const list = [Header];\n", "import { Code } from './fam';\nexport const App = () => <Code.Header p={8} />;\n", &["p"]),
+            ("export const Other = { Header };\n", "import { Code, Other } from './fam';\nexport const App = ({ n }) => <><Code.Header p={8} /><Other.Header p={n} /></>;\n", &["p"]),
+        ];
+        for (more, app, want) in cases {
+            let family = format!("{family}{more}");
+            let out = analyze(&[("kit.tsx", kit), ("fam.tsx", family.as_str()), ("app.tsx", app)], &test_inputs());
+            assert_eq!(out.dynamic_props.keys().collect::<Vec<_>>(), want, "{more}{app}");
         }
     }
 

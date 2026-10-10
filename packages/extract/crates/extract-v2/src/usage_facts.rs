@@ -1868,6 +1868,10 @@ pub struct SpreadWrapper {
     /// How many `.asComponent(W)` calls hand it to a component, which then
     /// renders it with the props its own renders forward.
     pub targeted: usize,
+    /// How many members of top-level `const` object literals hold it
+    /// (`const Code = { Header: CodeHeader }`): a `<Code.Header>` render is
+    /// one of its renders.
+    pub held: usize,
 }
 
 /// A forwarding-element attribute whose whole value is a named prop
@@ -2048,8 +2052,9 @@ fn spread_wrapper_candidates<'b, 'a>(program: &'b Program<'a>) -> Vec<WrapperCan
 }
 
 /// The candidates that survive every reference check, with their forwarding
-/// elements. A wrapper binding may be used only as a JSX tag name or as the
-/// one argument of an `.asComponent()` call, and is never reassigned; its
+/// elements. A wrapper binding may be used only as a JSX tag name, as the
+/// one argument of an `.asComponent()` call, or as a member of a top-level
+/// `const` object literal, and is never reassigned; its
 /// spread parameter may be used only as a whole JSX spread argument or a
 /// read of one of its members that is no call.
 fn spread_wrappers(
@@ -2066,6 +2071,7 @@ fn spread_wrappers(
         forwarding: FxHashMap::default(),
         passed: FxHashMap::default(),
         targeted: FxHashMap::default(),
+        held: FxHashMap::default(),
         ancestors: Vec::new(),
     };
     for (index, candidate) in candidates.iter().enumerate() {
@@ -2112,10 +2118,26 @@ fn spread_wrappers(
                     forwarding,
                     passed,
                     targeted: scan.targeted.get(&index).copied().unwrap_or_default(),
+                    held: scan.held.get(&index).copied().unwrap_or_default(),
                 },
             ))
         })
         .collect()
+}
+
+/// Whether the object property just left is a member of an object literal
+/// that initializes a top-level `const`. `ancestors` runs from the
+/// property's parent out.
+fn initializes_top_level_object<'b, 'a: 'b>(ancestors: &mut impl Iterator<Item = &'b AstKind<'a>>) -> bool {
+    let Some(AstKind::ObjectExpression(object)) = ancestors.next() else {
+        return false;
+    };
+    let initializes = matches!(ancestors.next(), Some(AstKind::VariableDeclarator(declarator))
+        if declarator.init.as_ref().is_some_and(|init| init.span() == object.span));
+    initializes
+        && matches!(ancestors.next(), Some(AstKind::VariableDeclaration(declaration))
+            if declaration.kind == oxc::ast::ast::VariableDeclarationKind::Const)
+        && matches!(ancestors.next(), Some(AstKind::Program(_) | AstKind::ExportNamedDeclaration(_)))
 }
 
 struct WrapperScan<'a, 's> {
@@ -2132,6 +2154,8 @@ struct WrapperScan<'a, 's> {
     passed: FxHashMap<usize, Vec<PassThrough>>,
     /// Candidate index → `.asComponent()` calls that take it.
     targeted: FxHashMap<usize, usize>,
+    /// Candidate index → top-level object literal members that hold it.
+    held: FxHashMap<usize, usize>,
     ancestors: Vec<AstKind<'a>>,
 }
 
@@ -2184,6 +2208,14 @@ impl<'a> Visit<'a> for WrapperScan<'a, '_> {
                             if member.property.name == "asComponent") =>
                 {
                     *self.targeted.entry(index).or_default() += 1;
+                }
+                Some(AstKind::ObjectProperty(property))
+                    if property.value.span() == ident.span
+                        && property.kind == oxc::ast::ast::PropertyKind::Init
+                        && !property.computed
+                        && initializes_top_level_object(&mut ancestors) =>
+                {
+                    *self.held.entry(index).or_default() += 1;
                 }
                 _ => {
                     self.invalid.insert(index);
@@ -3737,7 +3769,7 @@ fn bound_elsewhere(member: bool, origin: Option<TagOrigin>) -> bool {
 /// How a file's spread wrappers stand in for their targets in the filters:
 /// each wrapper tag is published as its targets, and these say what its
 /// renders and forwarding elements contribute.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct WrapperProxies {
     /// Wrapper tag → one lookup key per path to its targets, with the props
     /// that path drops. A render records once per path, so a prop one path
@@ -3770,7 +3802,7 @@ impl WrapperProxies {
     /// path for a wrapper, else under `tag_name` with every prop.
     fn lookups<'p>(&'p self, tag: &TagFact, tag_name: &'p str) -> Vec<Lookup<'p>> {
         match tag {
-            TagFact::Ident(name) if self.paths.contains_key(name) => self.paths[name]
+            TagFact::Ident(name) | TagFact::Member(name) if self.paths.contains_key(name) => self.paths[name]
                 .iter()
                 .map(|(key, dropped)| (key.as_str(), Some(dropped)))
                 .collect(),
