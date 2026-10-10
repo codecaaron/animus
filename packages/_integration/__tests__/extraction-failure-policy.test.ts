@@ -339,7 +339,7 @@ describe.each([
     analysis = analyze(devMode);
   });
 
-  test('each source-proven unsupported declaration has one coded, attributed diagnostic', () => {
+  test('each source-proven unsupported declaration has one coded, attributed, located diagnostic', () => {
     for (const expected of CLASSIFIED) {
       const found = forComponent(analysis.diagnostics, expected.component);
       expect(found, expected.component).toHaveLength(1);
@@ -347,6 +347,8 @@ describe.each([
         file: expected.file,
         code: expected.code,
         severity: 'error',
+        line: expect.any(Number),
+        column: expect.any(Number),
       });
       expect(found[0].kind).not.toBe('error');
       expect(found[0].message).toContain(expected.file);

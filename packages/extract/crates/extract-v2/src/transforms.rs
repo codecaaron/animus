@@ -103,6 +103,9 @@ pub struct ExtractedTransform {
     pub diagnostics: Vec<String>,
     /// Whether the transform passed validation (no external refs).
     pub valid: bool,
+    /// Byte offset of the `createTransform(…)` call.
+    #[serde(skip)]
+    pub(crate) start: u32,
 }
 
 /// Scan a parsed program for `createTransform('name', fn)` calls.
@@ -203,6 +206,7 @@ fn try_extract_transform(
                         .to_string(),
                 ],
                 valid: false,
+                start: call.span.start,
             });
         }
     };
@@ -220,6 +224,7 @@ fn try_extract_transform(
                         .to_string(),
                 ],
                 valid: false,
+                start: call.span.start,
             });
         }
     };
@@ -238,6 +243,7 @@ fn try_extract_transform(
                     name
                 )],
                 valid: false,
+                start: call.span.start,
             });
         }
     };
@@ -271,6 +277,7 @@ fn try_extract_transform(
         binding,
         diagnostics,
         valid,
+        start: call.span.start,
     })
 }
 

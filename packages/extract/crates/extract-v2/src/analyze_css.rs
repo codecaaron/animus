@@ -904,6 +904,7 @@ fn unsupported_member_parent_bail(
         ),
         Some(UNSUPPORTED_MEMBER_PARENT),
     )
+    .at(extension.start)
     .dropping(&format!("{}.{}", extension.object, extension.member))
 }
 
@@ -1227,6 +1228,7 @@ fn unsupported_namespace_root(
             ),
             Some(if barrel.is_some() { NAMESPACE_ROOT_THROUGH_BARREL } else { UNSUPPORTED_NAMESPACE_ROOT }),
         )
+        .at(chain.start)
         .dropping(&format!("{}.{}", chain.object, chain.member))
     })
 }
@@ -3992,13 +3994,16 @@ fn run_with_system_floor(
             let reached = |binding: &String| captured.contains(&(t.file.as_str(), binding.as_str()));
             if !t.valid && !t.binding.as_ref().is_some_and(reached) {
                 for diag in &t.diagnostics {
-                    diagnostics.push(diagnostic(
-                        &t.file,
-                        &format!("createTransform('{}')", t.name),
-                        "bail",
-                        diag.clone(),
-                        Some(UNSUPPORTED_TRANSFORM_DECLARATION),
-                    ));
+                    diagnostics.push(
+                        diagnostic(
+                            &t.file,
+                            &format!("createTransform('{}')", t.name),
+                            "bail",
+                            diag.clone(),
+                            Some(UNSUPPORTED_TRANSFORM_DECLARATION),
+                        )
+                        .at(t.start),
+                    );
                 }
             }
         }

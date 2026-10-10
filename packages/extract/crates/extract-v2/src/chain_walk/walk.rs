@@ -405,6 +405,7 @@ fn try_walk_chain(
                 binding,
                 object,
                 member,
+                start: chain_start,
             }));
         }
         ChainRoot::Member { object, member } if !stages.is_empty() => {
@@ -412,6 +413,7 @@ fn try_walk_chain(
                 binding,
                 object,
                 member,
+                start: chain_start,
             }));
         }
         ChainRoot::Member { .. } => return None,
