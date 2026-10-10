@@ -56,9 +56,10 @@ export interface AnimusCoreOptions {
   /** File extensions to scan; replaces the default list entirely. */
   extensions?: string[];
   /** When true, error-severity diagnostics — lost configured inputs and
-   *  classified unsupported Animus declarations — fail a build instead of
-   *  warning, and development reports them and keeps running. Omitted or
-   *  `false` warns. */
+   *  classified unsupported Animus declarations — and failed checks, such as
+   *  an unresolved include or `asset()` specifier, fail a build instead of
+   *  warning. Development reports them and keeps running, except where
+   *  nothing exists to serve yet. Omitted or `false` warns. */
   strict?: boolean;
   /** Each `animus.*` code's level, by exact code, by a prefix ending in `.*`
    *  (`'animus.style.*'`), or by kind (`'kind:bail'`, `'kind:skip'`,
@@ -71,7 +72,9 @@ export interface AnimusCoreOptions {
    *  one line per item (pruned option, transformed file, HMR decision).
    *  `ANIMUS_DEBUG=1` or `ANIMUS_DEBUG=trace` raises it from the environment. */
   verbose?: boolean | 'trace';
-  /** Namespace prefix for CSS variables and class names. */
+  /** Namespace prefix for the names Animus generates: theme token
+   *  variables, classes and slots. Contextual variables keep their declared
+   *  names unless `prefixContextualVars` is set. */
   prefix?: string;
   /** With `prefix` set, contextual variables take the prefixed name
    *  everywhere Animus emits them, while authors keep writing the declared

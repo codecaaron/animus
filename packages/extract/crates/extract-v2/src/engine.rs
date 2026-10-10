@@ -74,6 +74,9 @@ pub struct EngineOptions {
     /// `{ skippedSources, unbundledComputedImports, packageDirs }`, each
     /// optional.
     pub analysis_context_json: Option<String>,
+    /// Under a prefix, each name the theme generates and its final name,
+    /// without `--`: authored component styles take the final names.
+    pub generated_names_json: Option<String>,
 }
 
 struct ResolvedOptions {
@@ -247,6 +250,9 @@ impl ExtractEngine {
             .set_transform_sources(o.transform_sources_json.as_deref())
             .map_err(napi::Error::from_reason)?;
         css_inputs.set_transform_provenance(o.transform_provenance_json.as_deref());
+        css_inputs
+            .set_generated_names(o.generated_names_json.as_deref())
+            .map_err(napi::Error::from_reason)?;
         Ok(ExtractEngine {
             opts: ResolvedOptions {
                 prefix: o.prefix.unwrap_or_else(|| "animus".to_string()),
@@ -863,6 +869,7 @@ mod tests {
             transform_fn_source: transform_fn_source.map(str::to_string),
             scale_values: BTreeMap::new(),
             current_var: None,
+            production_conditions: None,
         })
     }
 
@@ -926,7 +933,7 @@ mod tests {
         .unwrap();
         let a_source = r#"export const Box = ds.system({ space: true }).asElement("div"); export const A = () => <Box p={spacing} />;"#;
         let b_source =
-            r#"import { Box } from "./a"; export const B = () => <Box p={ok ? 4 : 8} />;"#;
+            r#"import { Box } from "./a"; export const B = () => <><Box p={ok ? 4 : 8} /><Box p={gap} /></>;"#;
         let manifest: serde_json::Value = serde_json::from_str(
             &engine
                 .analyze(
@@ -946,8 +953,9 @@ mod tests {
         assert_eq!(residue[0]["binding"], "Box");
         assert_eq!(residue[0]["prop"], "p");
         assert_eq!(residue[0]["kind"], "identifier");
+        // A conditional of literals is no residue: its classes stand for it.
         assert_eq!(residue[1]["file"], "b.tsx");
-        assert_eq!(residue[1]["kind"], "conditional");
+        assert_eq!(residue[1]["kind"], "identifier");
         assert_eq!(
             &a_source[residue[0]["span"]["start"].as_u64().unwrap() as usize
                 ..residue[0]["span"]["end"].as_u64().unwrap() as usize],
@@ -1647,7 +1655,7 @@ export const App = () => <Box tone="red" />;
         let css = manifest["css"].as_str().unwrap();
         assert!(css.contains(&format!(".{block_class} {{\n    display: block;")));
         assert!(css.contains(&format!(".{none_class} {{\n    display: none;")));
-        assert_eq!(manifest["usageResidue"][0]["kind"], "conditional");
+        assert_eq!(manifest["usageResidue"], serde_json::json!([]));
     }
 
     fn unregistered_keyframe_diagnostics(manifest: &serde_json::Value) -> Vec<String> {
@@ -1830,7 +1838,7 @@ export const App = () => <Box tone="red" />;
                     { "path": "kit.tsx", "source": "export const Kit = ds.props({ lift: { property: 'top', transform: (v) => `${v}px` } }).asElement('div');\n" },
                     {
                         "path": "a.tsx",
-                        "source": "import './poly';\nimport { shift } from './cb'\nimport { kept } from './kept';\nimport { Kit } from './kit';\nconst Card = ds.props({ s: { property: 'minWidth', transform: shift } }).asElement('div');\nconst Kid = Kit.extend().asElement('i');\nexport const Live = ds.props({ k: { property: 'minHeight', transform: kept } }).asElement('div');\nexport const App = () => <><Card s={10} /><Kid lift={10} /></>;\n",
+                        "source": "import './poly';\nimport { shift } from './cb'\nimport { kept } from './kept';\nimport { Kit } from './kit';\nconst Card = ds.props({ s: { property: 'minWidth', transform: shift } }).asElement('div');\nconst Kid = Kit.extend().asElement('i');\nexport const Live = ds.props({ k: { property: 'minHeight', transform: kept } }).asElement('div');\nexport const App = ({ n }) => <><Card s={10} /><Kid lift={10} /><Live k={n} /></>;\n",
                     },
                 ])
                 .to_string(),

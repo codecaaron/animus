@@ -90,7 +90,7 @@ fn dynamic_expression(expr: &Expression<'_>) -> PropValueResult {
     }
 }
 
-fn eval_static_expression(expr: &Expression) -> Option<Value> {
+pub(crate) fn eval_static_expression(expr: &Expression) -> Option<Value> {
     match crate::chain_walk::unwrap_type_assertions(expr) {
         Expression::StringLiteral(lit) => Some(Value::String(lit.value.to_string())),
         Expression::NumericLiteral(lit) => Some(make_json_number(lit.value)),
@@ -146,7 +146,7 @@ pub(crate) fn eval_property_key(key: &PropertyKey) -> Option<String> {
     }
 }
 
-fn make_json_number(v: f64) -> Value {
+pub(crate) fn make_json_number(v: f64) -> Value {
     if v.fract() == 0.0 && v.abs() < (i64::MAX as f64) {
         Value::Number(serde_json::Number::from(v as i64))
     } else {

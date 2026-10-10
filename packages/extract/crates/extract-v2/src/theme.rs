@@ -320,6 +320,9 @@ pub const KEYS_SHARE_PROPERTY: &str = "animus.style.keys-share-property";
 /// A style-object at-rule key other than `@media`, `@container` and
 /// `@supports`, whose block is not emitted.
 pub const UNSUPPORTED_AT_RULE: &str = "animus.style.unsupported-at-rule";
+/// A number on a prop that writes only custom properties and binds no
+/// transform: a custom property has no unit context, so it stays unitless.
+pub const UNITLESS_CUSTOM_PROPERTY: &str = "animus.props.unitless-custom-property";
 
 /// A style-object key given an object that resolves to nothing.
 #[derive(Debug, Clone, PartialEq)]
@@ -333,6 +336,10 @@ pub enum DroppedStyleKey {
     /// An at-rule other than `@media`, `@container` and `@supports`, with
     /// the block it holds.
     UnsupportedAtRule { key: String, block: Value },
+    /// A prop that writes only the custom `properties` was given the number
+    /// `value`, which no unit or transform establishes: it is written
+    /// unitless.
+    UnitlessCustomProperty { prop: String, value: Value, properties: Vec<String> },
     /// Two keys of one block set `property` at one condition with a result
     /// worth knowing, and only `winner`, the later in cascade order, takes
     /// effect there.
@@ -360,7 +367,8 @@ impl DroppedStyleKey {
             Self::UnregisteredAlias(key)
             | Self::NonResponsiveObject(key)
             | Self::UnrecognizedKey(key)
-            | Self::UnsupportedAtRule { key, .. } => key,
+            | Self::UnsupportedAtRule { key, .. }
+            | Self::UnitlessCustomProperty { prop: key, .. } => key,
             Self::SharedProperty { winner, .. } => winner,
         }
     }
@@ -730,6 +738,7 @@ pub fn resolve_styles(
         if omit_strict_token_miss(key, value, ctx) {
             continue;
         }
+        record_unitless_number(key, value, ctx);
 
         if is_responsive_value(value, ctx.breakpoint_keys) {
             resolve_responsive_prop(
@@ -829,6 +838,7 @@ fn resolve_block_entries(
         if omit_strict_token_miss(key, value, ctx) {
             continue;
         }
+        record_unitless_number(key, value, ctx);
 
         if is_responsive_value(value, ctx.breakpoint_keys) {
             if let Some(vobj) = value.as_object() {
@@ -861,6 +871,10 @@ fn resolve_block_entries(
 
     if frame.conditions.is_empty() {
         if let Some(sel) = &frame.selector {
+            // A block nested here that names the same selector, such as
+            // `'&': { … }`, follows this block's own rule, so a property it
+            // already wrote keeps its value.
+            let plain_decls = beneath_descendants(&result.pseudo_selectors, sel, plain_decls, frame.origin.as_ref());
             merge_pseudo_selectors(&mut result.pseudo_selectors, sel.clone(), plain_decls, frame.origin.as_ref());
         }
     } else if !plain_decls.is_empty() {
@@ -884,6 +898,42 @@ fn record_dropped_key(ctx: &ResolveContext, dropped: DroppedStyleKey) {
     if let Some(sink) = ctx.dropped_keys {
         sink.borrow_mut().push(DroppedKey { dropped, variant_origin: None });
     }
+}
+
+/// Records, once per key, a number that `key`'s prop writes unitless.
+fn record_unitless_number(key: &str, value: &Value, ctx: &ResolveContext) {
+    let Some(prop) = ctx.config.get(key) else { return };
+    if let Some(number) = unitless_custom_number(key, prop, value, ctx) {
+        let properties = prop.css_properties().to_vec();
+        record_dropped_key(ctx, DroppedStyleKey::UnitlessCustomProperty { prop: key.to_string(), value: number, properties });
+    }
+}
+
+/// The first number of `value`, or of its breakpoints, that a prop writing
+/// only custom properties, with no transform, emits as written: no unit
+/// context applies, so it stays unitless. Zero is a length without a unit,
+/// and a key of the prop's scale writes that key's value, whatever it is.
+pub(crate) fn unitless_custom_number(prop_name: &str, prop: &PropConfig, value: &Value, ctx: &ResolveContext) -> Option<Value> {
+    let transforms = prop.transform.is_some()
+        || prop.transform_id.is_some()
+        || prop.transform_fn_source.is_some()
+        || prop.callback.is_some();
+    if !prop.custom_only() || transforms || prop.declaration_binding().is_some() {
+        return None;
+    }
+    let entries: Vec<&Value> = match value {
+        Value::Object(by_breakpoint) => by_breakpoint.values().collect(),
+        other => vec![other],
+    };
+    entries.into_iter().find_map(|entry| {
+        entry.as_f64().filter(|number| *number != 0.0)?;
+        if lookup_scale_token(entry, prop, ctx.theme).is_some() {
+            return None;
+        }
+        let bare = value_to_css_string(entry)?;
+        let written = resolve_single_prop(prop_name, entry, ctx.config, ctx.theme, ctx.variable_map, ctx.contextual_vars, None, None);
+        written.iter().any(|declaration| declaration.value == bare).then(|| entry.clone())
+    })
 }
 
 /// One non-responsive entry's declarations. An object value that yields
@@ -937,6 +987,29 @@ fn push_nested_breakpoint_group(
             emit_order,
         }),
     }
+}
+
+/// `declarations` without the properties a block nested under `origin`
+/// already wrote to `selector`'s group.
+fn beneath_descendants(
+    pseudo_selectors: &[SelectorGroup],
+    selector: &str,
+    declarations: Vec<CssDeclaration>,
+    origin: Option<&AuthoredOrigin>,
+) -> Vec<CssDeclaration> {
+    let Some(origin) = origin else { return declarations };
+    let Some((_, _, suppliers)) = pseudo_selectors.iter().find(|(s, _, _)| s == selector) else {
+        return declarations;
+    };
+    let nested: FxHashSet<&str> = suppliers
+        .0
+        .iter()
+        .filter(|(writer, _)| {
+            writer.block == origin.block && writer.path.len() > origin.path.len() && writer.path.starts_with(&origin.path)
+        })
+        .flat_map(|(_, properties)| properties.iter().map(String::as_str))
+        .collect();
+    declarations.into_iter().filter(|declaration| !nested.contains(declaration.property.as_str())).collect()
 }
 
 pub fn merge_pseudo_selectors(
@@ -1996,10 +2069,10 @@ fn global_conditioned_rule(preludes: &[String], selector: &str, declarations: &[
     out
 }
 
-/// A global's rules in the order components emit them, except that nested
-/// selectors keep the resolver's order (authored, with a block after the
-/// blocks nested inside it): the base rule, nested selectors, breakpoints by
-/// width, then the other conditions.
+/// A global's rules in the order components emit them: the base rule, then
+/// the rules of its selector and at-rule keys, raw or aliases, in their
+/// authored order, with its plain breakpoints by width in their own slots
+/// (`authored_emission_order`).
 fn push_global_rules(
     rules: &mut Vec<String>,
     selector: &str,
@@ -2016,12 +2089,16 @@ fn push_global_rules(
         Some(inner) => compose_selectors(&branches, inner),
         None => selector.to_string(),
     };
+    // Each rule with the authored key that placed it, in default order.
+    let mut placed: Vec<(String, Option<&AuthoredOrigin>)> = Vec::new();
     if !resolved.declarations.is_empty() {
-        rules.push(global_rule(selector, &resolved.declarations, 0));
+        placed.push((global_rule(selector, &resolved.declarations, 0), None));
     }
-    for (nested, declarations, _) in &resolved.pseudo_selectors {
-        if !declarations.is_empty() {
-            rules.push(global_rule(&subject(&Some(nested.clone())), declarations, 0));
+    for (nested, declarations, suppliers) in &resolved.pseudo_selectors {
+        for (part, origin) in crate::css::supplied_parts(declarations, suppliers) {
+            if !part.is_empty() {
+                placed.push((global_rule(&subject(&Some(nested.clone())), &part, 0), origin));
+            }
         }
     }
     let width = |bp: &str| breakpoints.breakpoints.get(bp).copied().unwrap_or(0);
@@ -2038,14 +2115,22 @@ fn push_global_rules(
         let [Condition::Breakpoint(bp)] = group.conditions.as_slice() else {
             continue;
         };
-        if let (Some(query), false) = (breakpoints.media_query(bp), group.declarations.is_empty()) {
-            rules.push(global_conditioned_rule(&[query], &subject(&group.selector), &group.declarations));
+        let Some(query) = breakpoints.media_query(bp) else {
+            continue;
+        };
+        if group.selector.is_none() {
+            if !group.declarations.is_empty() {
+                placed.push((global_conditioned_rule(&[query], selector, &group.declarations), None));
+            }
+            continue;
+        }
+        for (part, origin) in crate::css::supplied_parts(&group.declarations, &group.suppliers) {
+            if !part.is_empty() {
+                placed.push((global_conditioned_rule(std::slice::from_ref(&query), &subject(&group.selector), &part), origin));
+            }
         }
     }
     for group in resolved.conditioned_emission_order() {
-        if group.declarations.is_empty() {
-            continue;
-        }
         let preludes: Option<Vec<String>> = group
             .conditions
             .iter()
@@ -2054,9 +2139,18 @@ fn push_global_rules(
                 other => other.prelude().map(str::to_string),
             })
             .collect();
-        if let Some(preludes) = preludes.filter(|p| !p.is_empty()) {
-            rules.push(global_conditioned_rule(&preludes, &subject(&group.selector), &group.declarations));
+        let Some(preludes) = preludes.filter(|p| !p.is_empty()) else {
+            continue;
+        };
+        for (part, origin) in crate::css::supplied_parts(&group.declarations, &group.suppliers) {
+            if !part.is_empty() {
+                placed.push((global_conditioned_rule(&preludes, &subject(&group.selector), &part), origin));
+            }
         }
+    }
+    let origins: Vec<Option<&AuthoredOrigin>> = placed.iter().map(|(_, origin)| *origin).collect();
+    for index in crate::css::authored_emission_order(&origins) {
+        rules.push(std::mem::take(&mut placed[index].0));
     }
 }
 

@@ -4,7 +4,6 @@ import { join } from 'path';
 import { describe, expect, it } from 'vitest';
 
 import { createV2EngineApi } from '../pipeline/engine-adapter';
-import { PREFIX_CONTEXTUAL_VARS_UNPREFIXED } from '../pipeline/manifest-diagnostics';
 import { runProjectAnalysis } from '../pipeline/run-analysis';
 import { loadSystemConfig } from '../pipeline/system-config';
 
@@ -43,6 +42,7 @@ const theme = createTheme()
   .addBreakpoints({ sm: 768 })
   .addColors({ red: '#f00', blue: '#00f' })
   .addScale({ name: 'sizes', values: { dialog: '40rem' } })
+  .addScale({ name: 'space', values: { 't-spacing-2': '8px' }, emit: true })
   .declareContextualVars(
     { colors: ['tone'], sizes: ['cap'] },
     {
@@ -66,6 +66,8 @@ export const Card = ds
     '--tone': 'red',
     '--edge': 'var(--tone, var(--cap, 1px))',
     '--other': 'var(--other, 2px)',
+    marginTop: 'var(--dialog-title-margin, {space.t-spacing-2})',
+    paddingTop: 'var(--authored, var(--space-t-spacing-2, 4px))',
     transition: '--tone 1s',
     '@container style(--tone: dark)': { '--cap': '2px' },
   })
@@ -130,6 +132,8 @@ describe('contextual variables under a prefix', () => {
       'style(--acme-tone: dark)',
       '--acme-cap: 2px',
       '--acme-cap: 40rem',
+      // A generated name written in a style takes the prefix too.
+      'padding-top: var(--authored, var(--acme-space-t-spacing-2, 4px))',
     ]) {
       expect(result.componentCss).toContain(expected);
     }
@@ -147,10 +151,30 @@ describe('contextual variables under a prefix', () => {
     expect(prefixed.codes).toContain('Miss: animus.props.strict-token-miss');
   });
 
-  it('without the option, keep the legacy path and name the option', () => {
-    const { result, warned } = analyze('acme');
-    expect(result.componentCss).toContain('--tone: red');
-    expect(result.componentCss).not.toContain('caret-color: var(--acme-tone)');
-    expect(warned.join('\n')).toContain(PREFIX_CONTEXTUAL_VARS_UNPREFIXED);
+  it('without the option, keep their declared names where they are read and written', () => {
+    const { system, result, warned } = analyze('acme');
+    expect(system.variableCss).toContain('@property --tone {');
+    // The names Animus generates still take the prefix.
+    expect(system.variableCss).toContain('--acme-color-red:');
+    for (const expected of [
+      'background-color: var(--tone)',
+      'caret-color: var(--tone)',
+      '--tone: red',
+      '--edge: var(--tone, var(--cap, 1px))',
+      'transition: --tone 1s',
+      'style(--tone: dark)',
+      '--cap: 2px',
+      '--cap: 40rem',
+      // An authored name keeps its spelling; the theme variable in its
+      // fallback takes the prefix.
+      'margin-top: var(--dialog-title-margin, var(--acme-space-t-spacing-2))',
+      // A generated name written in a style takes the prefix, wherever it
+      // appears; an authored name stays as written.
+      'padding-top: var(--authored, var(--acme-space-t-spacing-2, 4px))',
+    ]) {
+      expect(result.componentCss).toContain(expected);
+    }
+    expect(result.componentCss).not.toMatch(/--acme-(?:tone|cap)\b/);
+    expect(warned.join('\n')).not.toContain('animus.prefix.');
   });
 });

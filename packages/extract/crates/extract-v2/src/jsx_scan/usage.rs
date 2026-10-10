@@ -52,6 +52,35 @@ pub struct UsageScanResult {
     /// The tags that set `identity_uncertain`, in fact order.
     #[serde(skip)]
     pub uncertain_tags: Vec<crate::usage_facts::UncertainTag>,
+    /// Each prop a rendered element writes, by component binding: what
+    /// project-wide confinement reads.
+    #[serde(skip)]
+    pub written_props: Vec<WrittenProp>,
+    /// Bindings a use can pass any prop to: an element with a spread, or a
+    /// `createElement` or `cloneElement` render.
+    #[serde(skip)]
+    pub open_components: FxHashSet<String>,
+    /// Props a `cloneElement` of an element usage cannot name overrides,
+    /// on any component.
+    #[serde(skip)]
+    pub cloned_props: FxHashSet<String>,
+    /// A `cloneElement` of an element usage cannot name, whose overrides
+    /// usage cannot list.
+    #[serde(skip)]
+    pub unlisted_clone: bool,
+}
+
+/// A prop an element writes: the value its attribute's syntax spells as a
+/// literal, or `None` for any other value, including one only statics
+/// resolve, which may be a mutable object.
+#[derive(Debug, Clone)]
+pub struct WrittenProp {
+    pub binding: String,
+    pub prop: String,
+    pub literal: Option<serde_json::Value>,
+    /// For any other value, the conditions it can write (`_` for the base
+    /// and breakpoint names); `None` when its shape is unknown.
+    pub conditions: Option<std::collections::BTreeSet<String>>,
 }
 
 pub(crate) fn is_component_like_identifier(name: &str) -> bool {

@@ -54,6 +54,11 @@ export interface EngineOptions {
    * optional.
    */
   analysisContextJson?: string
+  /**
+   * Under a prefix, each name the theme generates and its final name,
+   * without `--`: authored component styles take the final names.
+   */
+  generatedNamesJson?: string
 }
 
 /** Probe identity: proves the binary loads and its oxc linkage parses. */

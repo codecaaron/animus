@@ -5,6 +5,9 @@ import type { ProjectManifest } from '@animus-ui/extract/pipeline';
 
 export interface LoaderPolicyOptions {
   strict?: boolean;
+  /** `next dev`: a strict transform failure reports and delivers the
+   *  source, as a non-strict one does, instead of failing the module. */
+  development?: boolean;
   cssImportTarget?: string;
 }
 
@@ -143,14 +146,19 @@ export function transformWithManifest(args: {
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
 
-    if (opts.strict) {
+    if (opts.strict && !opts.development) {
       throw new Error(
         `[animus-extract] Transform failed for ${filename}: ${msg}`,
         { cause: e }
       );
     }
-
-    console.warn(`[animus-extract] Transform failed for ${filename}:`, msg);
+    if (opts.strict) {
+      console.error(
+        `[animus-extract] Transform failed for ${filename}: ${msg}`
+      );
+    } else {
+      console.warn(`[animus-extract] Transform failed for ${filename}:`, msg);
+    }
     return source;
   }
 }

@@ -13,9 +13,10 @@ export interface AnimusNextOptions {
    *  `['.ts','.tsx','.js','.jsx','.mdx']`. `.mdx` needs `@mdx-js/mdx`. */
   extensions?: string[];
   /** When true, error-severity diagnostics — lost configured inputs and
-   *  classified unsupported Animus declarations — fail a build instead of
-   *  warning, and `next dev` reports them and keeps running. Omitted or
-   *  `false` warns. */
+   *  classified unsupported Animus declarations — and failed checks, such as
+   *  an unresolved include or `asset()` specifier or a failed module
+   *  transform, fail a build instead of warning. `next dev` reports them and
+   *  keeps running. Omitted or `false` warns. */
   strict?: boolean;
   /**
    * Each `animus.*` code's level, by exact code, by a prefix ending in `.*`
@@ -30,7 +31,9 @@ export interface AnimusNextOptions {
    *  import; replaces the `app/layout.*` / `pages/_app.*` detection. */
   cssImportTarget?: string;
   verbose?: boolean | 'trace';
-  /** Namespace prefix for CSS variables and class names. */
+  /** Namespace prefix for the names Animus generates: theme token
+   *  variables, classes and slots. Contextual variables keep their declared
+   *  names unless `prefixContextualVars` is set. */
   prefix?: string;
   /** With `prefix` set, contextual variables take the prefixed name
    *  everywhere Animus emits them, while authors keep writing the declared

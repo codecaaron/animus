@@ -274,6 +274,9 @@ pub(super) fn build_config(
             if let Some(ref current_var) = meta.current_var {
                 fields.insert("currentVar", json!(current_var));
             }
+            if let Some(ref conditions) = meta.production_conditions {
+                fields.insert("productionConditions", json!(conditions));
+            }
             dynamic.insert(prop_name, Field::Object(fields));
         }
         config.insert("customDynamicConfig", Field::Object(dynamic));
@@ -347,6 +350,7 @@ mod tests {
             transform_fn_source: None,
             scale_values: BTreeMap::new(),
             current_var: None,
+            production_conditions: None,
         }
     }
 
@@ -368,6 +372,7 @@ mod tests {
             transform_id: Some("theme.ts#size".into()),
             scale_values: [("sm".to_string(), json!("4px"))].into_iter().collect(),
             current_var: Some("--current-size".into()),
+            production_conditions: None,
             ..value_meta("sized")
         };
         let lifted = ValuePropMeta {
@@ -379,6 +384,7 @@ mod tests {
             slot_class: "animus-dyn-tone".into(),
             member_vars: [("color".to_string(), "--animus-tone-color".to_string())].into_iter().collect(),
             declaration_scale_values: BTreeMap::new(),
+            production_conditions: None,
         };
         let payload = ReplacementPayload {
             system_prop_names: vec!["bg".into(), "p".into()],

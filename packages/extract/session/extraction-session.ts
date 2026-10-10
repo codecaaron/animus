@@ -54,7 +54,6 @@ import {
   unresolvableIncludesMessage,
   walkPackageSources,
   engineModuleParser,
-  noKitFilesDiagnostics,
   surfaceManifestDiagnostics,
 } from '../pipeline/index';
 import {
@@ -227,9 +226,6 @@ export class ExtractionSession {
   /** Whether the analysis-inputs hydration corpus is written to disk. Only
    *  isolated loader workers replay it; an in-process loader reads memory. */
   persistAnalysisInputs = false;
-  /** Whether the host's structural self-check reports an empty kit, so
-   *  discovery leaves its warning out. */
-  selfCheckReportsEmptyKits = false;
   /** Whether this session serves development (a watch), where an error-level
    *  diagnostic is reported and the session keeps running. Only a build
    *  fails on one. */
@@ -303,6 +299,7 @@ export class ExtractionSession {
     prefix: '[animus-next]',
     strict: () => !!this.options.strict,
     warn: (message: string) => this.warn(message),
+    reportErrors: () => this.reportErrors(),
   });
 
   // Membership keys (lexical + canonical) for the system's evaluated module
@@ -401,6 +398,14 @@ export class ExtractionSession {
 
   private reportErrors(): ((message: string) => void) | undefined {
     return this.development ? (message) => console.error(message) : undefined;
+  }
+
+  /** A build-strictness check that failed: a build throws `message`, and
+   *  development reports it at error level and takes the non-strict path. */
+  private strictFailure(message: string): void {
+    const report = this.reportErrors();
+    if (!report) throw new Error(message);
+    report(message);
   }
 
   private now(): number {
@@ -1027,13 +1032,7 @@ export class ExtractionSession {
 
     surfaceManifestDiagnostics(
       {
-        diagnostics: [
-          ...discoveryDiagnostics,
-          ...collected.diagnostics,
-          ...(this.selfCheckReportsEmptyKits
-            ? []
-            : noKitFilesDiagnostics(collected.outcomes)),
-        ],
+        diagnostics: [...discoveryDiagnostics, ...collected.diagnostics],
       },
       (message) => this.warn(message),
       // An error-severity discovery diagnostic fails a strict build.
@@ -1045,19 +1044,15 @@ export class ExtractionSession {
     );
     const unresolvableMessage = unresolvableIncludesMessage(collected.outcomes);
     if (unresolvableMessage !== null) {
-      if (this.options.strict) {
-        throw new Error(unresolvableMessage);
-      }
-      this.warn(unresolvableMessage);
+      if (this.options.strict) this.strictFailure(unresolvableMessage);
+      else this.warn(unresolvableMessage);
     }
     // A stale dist entry rides the same strict/warn seam: merging against it
     // skews registry content away from the discovered sources.
     const staleDistMessage = staleDistIncludesMessage(collected.outcomes);
     if (staleDistMessage !== null) {
-      if (this.options.strict) {
-        throw new Error(staleDistMessage);
-      }
-      this.warn(staleDistMessage);
+      if (this.options.strict) this.strictFailure(staleDistMessage);
+      else this.warn(staleDistMessage);
     }
 
     // A source root on a different volume than the project root is rejected
@@ -1076,10 +1071,12 @@ export class ExtractionSession {
         `root(s) on a different volume than the project root (${rootDir}): ` +
         `${crossVolumeDetails.join('; ')} — cross-volume workspace sources ` +
         `are unsupported; the package(s) are excluded from extraction and watching`;
+      // Strict development reports it on each full pipeline instead.
       if (this.options.strict) {
-        throw new Error(`[${this.driverLabel}] ${message}`);
+        this.strictFailure(`[${this.driverLabel}] ${message}`);
+      } else {
+        this.stickyDiagnostics.set('cross-volume', message);
       }
-      this.stickyDiagnostics.set('cross-volume', message);
     }
     for (const message of this.stickyDiagnostics.values()) {
       this.warn(message);
@@ -1501,6 +1498,7 @@ export class ExtractionSession {
       strict: this.options.strict,
       prefix: `[${this.driverLabel}]`,
       warn: (message: string) => this.warn(message),
+      reportErrors: this.reportErrors(),
     });
 
     bt.jsonSerialize = result.timings.serializeMs;
@@ -1561,11 +1559,13 @@ export class ExtractionSession {
     reportSurvivingAssetPlaceholders(fullCss, {
       strict: this.options.strict,
       warn: (message) => this.warn(message),
+      reportErrors: this.reportErrors(),
       prefix: `[${this.driverLabel}]`,
     });
     reportSurvivingAssetPlaceholders(generatedModuleCode(manifest), {
       strict: this.options.strict,
       warn: (message) => this.warn(message),
+      reportErrors: this.reportErrors(),
       prefix: `[${this.driverLabel}]`,
       surface: 'generated runtime modules',
     });
@@ -2058,9 +2058,11 @@ export class ExtractionSession {
       const resolvedPath = this.resolveAssetSpecifier(specifier);
       if (!resolvedPath) {
         const message = `unresolvable asset() specifier: ${specifier}`;
-        if (this.options.strict)
-          throw new Error(`[${this.driverLabel}] ${message}`);
-        this.warn(message);
+        if (this.options.strict) {
+          this.strictFailure(`[${this.driverLabel}] ${message}`);
+        } else {
+          this.warn(message);
+        }
         urlBySpecifier.set(specifier, specifier);
         continue;
       }

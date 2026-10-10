@@ -7,7 +7,8 @@ use oxc::ast::ast::{
 };
 use oxc::ast::AstKind;
 use oxc::ast_visit::Visit;
-use oxc::semantic::{Scoping, SemanticBuilder, SymbolId};
+use oxc::semantic::{Scoping, SemanticBuilder, SymbolFlags, SymbolId};
+use oxc::span::Span;
 use oxc::span::GetSpan;
 use rustc_hash::{FxHashMap, FxHashSet};
 use serde::Serialize;
@@ -17,9 +18,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::chain_walk::{ChainDescriptor, TerminalKind};
 use crate::jsx_scan::{
     classify_jsx_attribute_as_variant_value, create_element_props, eval_jsx_attribute_value, eval_property_key,
+    eval_static_expression, make_json_number,
     is_component_like_identifier, jsx_member_path, ComponentUsageConfig, CustomPropScanResult,
     DynamicExpressionKind, DynamicPropUsage, PropValueResult, StateUsage, SystemPropUsage,
-    UsageResidueSite, UsageScanResult, UsageSpan, VariantUsage,
+    UsageResidueSite, UsageScanResult, UsageSpan, VariantUsage, WrittenProp,
 };
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -50,6 +52,23 @@ pub struct AttrFact {
     pub skip: bool,
     /// Variant classification: a literal string or `"__dynamic__"`.
     pub variant_class: String,
+    /// Every value the attribute can write is known without statics that
+    /// may name a changed object: `static_value`, or, without one, each of
+    /// `enumerable_values`. See `proven_values`.
+    #[serde(skip)]
+    pub literal: bool,
+    /// For a value that is not a literal, the conditions it can write: see
+    /// `write_conditions`.
+    #[serde(skip)]
+    pub conditions: Option<BTreeSet<String>>,
+}
+
+impl AttrFact {
+    /// Every value the attribute can write, when they are known: its
+    /// static value, or the finite values a runtime value is proven to take.
+    pub(crate) fn proven_values(&self) -> Option<impl Iterator<Item = &Value>> {
+        (self.literal && !self.dynamic).then(|| self.static_value.iter().chain(&self.enumerable_values))
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -64,7 +83,7 @@ pub enum TagFact {
 
 /// Where the name a tag starts with is bound, as the file's own scopes tell
 /// it: for `<ui.Item>`, where `ui` is.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TagOrigin {
     Import,
     /// Any other top-level binding of the file.
@@ -529,6 +548,44 @@ pub(crate) struct EnrichedUsage {
     pub unsafe_object_uses: BTreeMap<String, ObjectUse>,
     /// See `FileFacts::ordinary_components`.
     pub ordinary_components: BTreeSet<String>,
+    /// See `FileFacts::direct_eval`.
+    pub direct_eval: bool,
+    /// See `FileFacts::opaque_calls`.
+    pub opaque_calls: Vec<OpaqueCall>,
+    /// See `FileFacts::element_consts`.
+    pub element_consts: BTreeMap<String, ElementConst>,
+}
+
+/// A call that may hand an element to code outside React: what its callee
+/// starts from, the component tags its arguments can carry, and the
+/// top-level bindings whose parameters an argument reads.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct OpaqueCall {
+    /// An import or a top-level binding of the module, with the member a
+    /// namespace import's call names (`lib.enhance`); `None` for a global
+    /// outside the built-ins, which is never analysed.
+    pub callee: Option<String>,
+    /// The imports a top-level value the call names was built from
+    /// (`const enhance = lib.enhance`): each must stay inside the analysis.
+    pub callee_imports: Vec<String>,
+    /// Component tags in the arguments, and in the `const` initializers
+    /// they name.
+    pub tags: BTreeSet<String>,
+    /// Imports the arguments read, whose declaring modules' `const`s may
+    /// hold elements (see `ElementConst`).
+    pub imported_args: Vec<String>,
+    /// The enclosing top-level binding (and `default` for a default
+    /// export) when an argument reads one of its parameters, directly or
+    /// through a `const` that does.
+    pub forwards_from: Vec<String>,
+}
+
+/// A top-level `const` that holds elements: their component tags, and the
+/// imports outside React it reads, which may hold more.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ElementConst {
+    pub tags: BTreeSet<String>,
+    pub imports: Vec<String>,
 }
 
 /// A use of a binding that holds an object which may change the object's
@@ -749,11 +806,17 @@ pub(crate) fn collect_enriched_usage(
         None => Some(SemanticBuilder::new().build(program).semantic.into_scoping()),
     };
     let origins = scoping.as_ref().or(tag_scoping.as_ref());
+    // Only TypeScript annotates parameters.
+    let finite_params = origins
+        .filter(|_| program.source_type.is_typescript())
+        .map(|scoping| literal_union_parameters(program, scoping))
+        .unwrap_or_default();
     let mut collector = FactCollector {
         facts: Vec::new(),
         static_values,
         scoping: scoping.as_ref().filter(|_| !static_values.is_empty()),
         enrich: true,
+        finite_params,
         react: react.clone(),
         clones: Some(CloneScan {
             scoping: scoping.as_ref(),
@@ -770,9 +833,11 @@ pub(crate) fn collect_enriched_usage(
     let ordinary_components = origins
         .map(|scoping| ordinary_components(program, scoping))
         .unwrap_or_default();
+    // Without scopes a direct `eval` cannot be ruled out.
+    let direct_eval = origins.is_none_or(|scoping| scoping.root_unresolved_references().contains_key("eval"));
     let confined = match &scoping {
         // Direct eval can read any binding by name.
-        Some(scoping) if !scoping.root_unresolved_references().contains_key("eval") => {
+        Some(scoping) if !direct_eval => {
             let mut scan = ConfinementScan {
                 scoping,
                 chains,
@@ -831,6 +896,7 @@ pub(crate) fn collect_enriched_usage(
         Some(scoping) => unsafe_object_uses(program, scoping, object_consts),
         None => BTreeMap::new(),
     };
+    let (opaque_calls, element_consts) = origins.map(|scoping| opaque_calls(program, scoping)).unwrap_or_default();
     EnrichedUsage {
         usage,
         confined,
@@ -839,8 +905,445 @@ pub(crate) fn collect_enriched_usage(
         module_loads,
         unsafe_object_uses,
         ordinary_components,
+        direct_eval,
+        opaque_calls,
+        element_consts,
     }
 }
+
+/// React's own modules: their functions render or clone elements only as
+/// usage facts record.
+const REACT_MODULES: [&str; 6] =
+    ["react", "react-dom", "react-dom/client", "react-dom/server", "react/jsx-runtime", "react/jsx-dev-runtime"];
+
+/// Globals whose calls, and whose values, never change an element's props.
+const BUILTIN_GLOBALS: [&str; 33] = [
+    "Array", "Boolean", "Date", "Error", "Infinity", "JSON", "Map", "Math", "NaN", "Number", "Object", "Promise",
+    "Reflect", "RegExp", "Set", "String", "Symbol", "WeakMap", "WeakSet", "cancelAnimationFrame", "clearInterval",
+    "clearTimeout", "console", "decodeURIComponent", "encodeURIComponent", "isFinite", "isNaN", "parseFloat",
+    "parseInt", "queueMicrotask", "requestAnimationFrame", "setTimeout", "undefined",
+];
+
+/// The calls and `new` expressions in `program` that can hand an element or
+/// a parameter to code the analysis may not follow (every one except
+/// React's, a built-in global's, and one on a value a function body
+/// declares), and the top-level `const`s that hold elements.
+fn opaque_calls(program: &Program<'_>, scoping: &Scoping) -> (Vec<OpaqueCall>, BTreeMap<String, ElementConst>) {
+    let mut sources: FxHashMap<SymbolId, &str> = FxHashMap::default();
+    for statement in &program.body {
+        let Statement::ImportDeclaration(import) = statement else { continue };
+        for specifier in import.specifiers.iter().flatten() {
+            if let Some(symbol) = specifier.local().symbol_id.get() {
+                sources.insert(symbol, import.source.value.as_str());
+            }
+        }
+    }
+    let mut scan = OpaqueCallScan {
+        scoping,
+        sources,
+        top: Vec::new(),
+        in_parameter: 0,
+        parameters: FxHashSet::default(),
+        consts: FxHashMap::default(),
+        functions: FxHashMap::default(),
+        default_export: None,
+        calls: Vec::new(),
+    };
+    for statement in &program.body {
+        scan.top = top_level_names(statement);
+        if let Statement::ExportDefaultDeclaration(export) = statement {
+            use oxc::ast::ast::ExportDefaultDeclarationKind;
+            let mut reads = ArgumentReads::default();
+            let mut collector = ReadCollector { scoping, reads: &mut reads };
+            match &export.declaration {
+                ExportDefaultDeclarationKind::FunctionDeclaration(function) => {
+                    if let Some(body) = &function.body {
+                        collector.visit_function_body(body);
+                    }
+                }
+                ExportDefaultDeclarationKind::ClassDeclaration(class) => collector.visit_class(class),
+                declaration => {
+                    if let Some(expression) = declaration.as_expression() {
+                        collector.visit_expression(expression);
+                    }
+                }
+            }
+            scan.default_export = Some(reads);
+        }
+        scan.visit_statement(statement);
+    }
+    let calls = scan
+        .calls
+        .iter()
+        .filter_map(|(root, reads, top)| {
+            let (callee, callee_imports) = scan.callee(root);
+            let closed = scan.closure(reads);
+            let forwards_from = if closed.reads_parameter { top.clone() } else { Vec::new() };
+            (!closed.tags.is_empty() || !closed.imports.is_empty() || !forwards_from.is_empty()).then_some(OpaqueCall {
+                callee,
+                callee_imports,
+                tags: closed.tags,
+                imported_args: closed.imports,
+                forwards_from,
+            })
+        })
+        .collect();
+    // Top-level values, functions included, that hold or return elements:
+    // code outside the analysis can call a function it receives.
+    let mut element_consts = BTreeMap::new();
+    let top_level = scan
+        .consts
+        .iter()
+        .map(|(symbol, init)| (*symbol, &init.reads))
+        .chain(scan.functions.iter().map(|(symbol, (reads, _))| (*symbol, reads)))
+        .filter(|(symbol, _)| scoping.symbol_scope_id(*symbol) == scoping.root_scope_id())
+        .map(|(symbol, reads)| (scoping.symbol_name(symbol).to_string(), reads))
+        .chain(scan.default_export.as_ref().map(|reads| ("default".to_string(), reads)));
+    for (name, reads) in top_level {
+        let closed = scan.closure(reads);
+        if !closed.tags.is_empty() || !closed.imports.is_empty() {
+            element_consts.insert(name, ElementConst { tags: closed.tags, imports: closed.imports });
+        }
+    }
+    (calls, element_consts)
+}
+
+/// The names a top-level statement binds, for parameter forwarding: a
+/// function, class or simple `const`, and `default` for a default export.
+fn top_level_names(statement: &Statement<'_>) -> Vec<String> {
+    use oxc::ast::ast::{BindingPattern, Declaration, ExportDefaultDeclarationKind};
+    let declaration = match statement {
+        Statement::ExportNamedDeclaration(export) => export.declaration.as_ref(),
+        Statement::ExportDefaultDeclaration(export) => {
+            let id = match &export.declaration {
+                ExportDefaultDeclarationKind::FunctionDeclaration(function) => function.id.as_ref(),
+                ExportDefaultDeclarationKind::ClassDeclaration(class) => class.id.as_ref(),
+                _ => None,
+            };
+            return id.map(|id| id.name.to_string()).into_iter().chain(["default".to_string()]).collect();
+        }
+        statement => statement.as_declaration(),
+    };
+    match declaration {
+        Some(Declaration::FunctionDeclaration(function)) => function.id.iter().map(|id| id.name.to_string()).collect(),
+        Some(Declaration::ClassDeclaration(class)) => class.id.iter().map(|id| id.name.to_string()).collect(),
+        Some(Declaration::VariableDeclaration(variables)) => variables
+            .declarations
+            .iter()
+            .filter_map(|declarator| match &declarator.id {
+                BindingPattern::BindingIdentifier(id) => Some(id.name.to_string()),
+                _ => None,
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// What an expression reads: the component tags of its elements, the
+/// bindings it names, and whether it names a global outside the built-ins.
+#[derive(Default, Clone)]
+struct ArgumentReads {
+    tags: BTreeSet<String>,
+    symbols: FxHashSet<SymbolId>,
+    unknown_global: bool,
+}
+
+/// What an expression reads once every `const` it names is followed:
+/// element tags, the imports outside React it reaches, and whether it
+/// reaches a parameter or a global outside the built-ins.
+#[derive(Default)]
+struct ClosedReads {
+    tags: BTreeSet<String>,
+    imports: Vec<String>,
+    reads_parameter: bool,
+    unknown_global: bool,
+}
+
+/// Adds what `expression` reads to `reads`.
+fn collect_reads(scoping: &Scoping, expression: &Expression<'_>, reads: &mut ArgumentReads) {
+    ReadCollector { scoping, reads }.visit_expression(expression);
+}
+
+struct ReadCollector<'s, 'r> {
+    scoping: &'s Scoping,
+    reads: &'r mut ArgumentReads,
+}
+
+impl<'a> Visit<'a> for ReadCollector<'_, '_> {
+    fn visit_jsx_opening_element(&mut self, elem: &JSXOpeningElement<'a>) {
+        match &elem.name {
+            JSXElementName::IdentifierReference(id) => {
+                self.reads.tags.insert(id.name.to_string());
+            }
+            JSXElementName::MemberExpression(member) => self.reads.tags.extend(jsx_member_path(member)),
+            _ => {}
+        }
+        oxc::ast_visit::walk::walk_jsx_opening_element(self, elem);
+    }
+
+    fn visit_identifier_reference(&mut self, ident: &IdentifierReference<'a>) {
+        match ident.reference_id.get().and_then(|id| self.scoping.get_reference(id).symbol_id()) {
+            Some(symbol) => {
+                self.reads.symbols.insert(symbol);
+            }
+            None => self.reads.unknown_global |= !BUILTIN_GLOBALS.contains(&ident.name.as_str()),
+        }
+    }
+}
+
+/// The bindings a pattern declares.
+#[derive(Default)]
+struct BindingNames(Vec<SymbolId>);
+
+impl<'a> Visit<'a> for BindingNames {
+    fn visit_binding_identifier(&mut self, id: &oxc::ast::ast::BindingIdentifier<'a>) {
+        self.0.extend(id.symbol_id.get());
+    }
+
+    // A default value is read, not declared.
+    fn visit_expression(&mut self, _expression: &Expression<'a>) {}
+}
+
+/// A `const` initializer: what it reads, and whether it is a function.
+struct ConstInit {
+    reads: ArgumentReads,
+    /// The scope of the function the initializer is, whose own parameters
+    /// a call does not forward by calling it.
+    function: Option<oxc::semantic::ScopeId>,
+}
+
+/// What a callee starts from.
+enum CalleeRoot {
+    /// An import outside React, with the member a namespace import's call
+    /// names (`lib.enhance`).
+    Import(String),
+    /// A binding of the module's top level.
+    Module(SymbolId),
+    /// A global outside the built-ins.
+    Unknown,
+}
+
+struct OpaqueCallScan<'s> {
+    scoping: &'s Scoping,
+    /// Import binding → module specifier.
+    sources: FxHashMap<SymbolId, &'s str>,
+    /// The names the enclosing top-level statement binds.
+    top: Vec<String>,
+    in_parameter: usize,
+    parameters: FxHashSet<SymbolId>,
+    consts: FxHashMap<SymbolId, ConstInit>,
+    /// What each function declaration's body reads, and its scope.
+    functions: FxHashMap<SymbolId, (ArgumentReads, oxc::semantic::ScopeId)>,
+    /// What a default-exported expression reads.
+    default_export: Option<ArgumentReads>,
+    calls: Vec<(CalleeRoot, ArgumentReads, Vec<String>)>,
+}
+
+impl OpaqueCallScan<'_> {
+    /// What a call's callee starts from, or `None` when the call cannot
+    /// reach code outside React: a React import, a built-in global, or a
+    /// value a function body declares, which analysed code supplies.
+    fn root(&self, callee: &Expression<'_>) -> Option<CalleeRoot> {
+        // A callee rooted in no identifier (`[1].map`) is a value the
+        // analysed code builds.
+        let (root, member) = callee_root(callee)?;
+        let Some(symbol) = root.reference_id.get().and_then(|id| self.scoping.get_reference(id).symbol_id()) else {
+            return (!BUILTIN_GLOBALS.contains(&root.name.as_str())).then_some(CalleeRoot::Unknown);
+        };
+        match self.sources.get(&symbol) {
+            Some(source) if REACT_MODULES.contains(source) => None,
+            Some(_) => Some(CalleeRoot::Import(match member {
+                Some(member) => format!("{}.{member}", root.name),
+                None => root.name.to_string(),
+            })),
+            None => (self.scoping.symbol_scope_id(symbol) == self.scoping.root_scope_id())
+                .then_some(CalleeRoot::Module(symbol)),
+        }
+    }
+
+    /// The binding a call resolves, `None` when it reaches outside the
+    /// analysis for certain, and the imports a module value it calls was
+    /// built from. A function or class declared at the top level is
+    /// analysed; a value is analysed only through what it reads, and one
+    /// something writes is not followed.
+    fn callee(&self, root: &CalleeRoot) -> (Option<String>, Vec<String>) {
+        match root {
+            CalleeRoot::Unknown => (None, Vec::new()),
+            CalleeRoot::Import(name) => (Some(name.clone()), Vec::new()),
+            CalleeRoot::Module(symbol) => {
+                let name = Some(self.scoping.symbol_name(*symbol).to_string());
+                if self.scoping.symbol_flags(*symbol).intersects(SymbolFlags::Function | SymbolFlags::Class) {
+                    return (name, Vec::new());
+                }
+                match self.consts.get(symbol) {
+                    Some(init) if init.function.is_some() => (name, Vec::new()),
+                    Some(init) => {
+                        let closed = self.closure(&init.reads);
+                        if closed.unknown_global { (None, Vec::new()) } else { (name, closed.imports) }
+                    }
+                    None => (None, Vec::new()),
+                }
+            }
+        }
+    }
+
+    /// `reads`, with every `const`, parameter default and function
+    /// declaration it names followed to what that reads: a function a call
+    /// receives can be called, and return its elements. A followed
+    /// function's own parameters are not forwarded by the call; a parameter
+    /// it captures from an enclosing function is.
+    fn closure(&self, reads: &ArgumentReads) -> ClosedReads {
+        let mut closed = ClosedReads {
+            tags: reads.tags.clone(),
+            unknown_global: reads.unknown_global,
+            ..ClosedReads::default()
+        };
+        let mut seen: FxHashSet<SymbolId> = FxHashSet::default();
+        let mut entered: FxHashSet<oxc::semantic::ScopeId> = FxHashSet::default();
+        let mut parameters: Vec<SymbolId> = Vec::new();
+        let mut pending: Vec<SymbolId> = reads.symbols.iter().copied().collect();
+        while let Some(symbol) = pending.pop() {
+            if !seen.insert(symbol) {
+                continue;
+            }
+            if self.parameters.contains(&symbol) {
+                parameters.push(symbol);
+            }
+            match self.sources.get(&symbol) {
+                Some(source) if REACT_MODULES.contains(source) => {}
+                Some(_) => closed.imports.push(self.scoping.symbol_name(symbol).to_string()),
+                None => {}
+            }
+            let (next, function) = match (self.consts.get(&symbol), self.functions.get(&symbol)) {
+                (Some(init), _) => (&init.reads, init.function),
+                (None, Some((reads, scope))) => (reads, Some(*scope)),
+                (None, None) => continue,
+            };
+            entered.extend(function);
+            closed.tags.extend(next.tags.iter().cloned());
+            closed.unknown_global |= next.unknown_global;
+            pending.extend(next.symbols.iter().copied());
+        }
+        closed.reads_parameter =
+            parameters.iter().any(|parameter| !entered.contains(&self.scoping.symbol_scope_id(*parameter)));
+        closed.imports.sort();
+        closed
+    }
+
+    fn record(&mut self, callee: &Expression<'_>, arguments: &[Argument<'_>]) {
+        if arguments.is_empty() {
+            return;
+        }
+        let Some(root) = self.root(callee) else { return };
+        let mut reads = ArgumentReads::default();
+        for argument in arguments {
+            match argument {
+                Argument::SpreadElement(spread) => collect_reads(self.scoping, &spread.argument, &mut reads),
+                argument => {
+                    if let Some(expression) = argument.as_expression() {
+                        collect_reads(self.scoping, expression, &mut reads);
+                    }
+                }
+            }
+        }
+        self.calls.push((root, reads, self.top.clone()));
+    }
+}
+
+/// The identifier a callee starts from, through members and calls, and the
+/// member named directly on it.
+fn callee_root<'b, 'a>(callee: &'b Expression<'a>) -> Option<(&'b IdentifierReference<'a>, Option<&'b str>)> {
+    match crate::chain_walk::unwrap_type_assertions(callee) {
+        Expression::Identifier(id) => Some((id, None)),
+        Expression::StaticMemberExpression(member) => match &member.object {
+            Expression::Identifier(id) => Some((id, Some(member.property.name.as_str()))),
+            object => callee_root(object),
+        },
+        Expression::ComputedMemberExpression(member) => callee_root(&member.object).map(|(root, _)| (root, None)),
+        Expression::CallExpression(call) => callee_root(&call.callee).map(|(root, _)| (root, None)),
+        Expression::ChainExpression(chain) => chain.expression.as_member_expression().and_then(|member| {
+            callee_root(member.object()).map(|(root, _)| (root, None))
+        }),
+        _ => None,
+    }
+}
+
+impl<'a> Visit<'a> for OpaqueCallScan<'_> {
+    fn visit_formal_parameter(&mut self, parameter: &oxc::ast::ast::FormalParameter<'a>) {
+        // A parameter's default, or a default inside its pattern, is a
+        // value its bindings may hold.
+        let mut reads = ArgumentReads::default();
+        let mut collector = ReadCollector { scoping: self.scoping, reads: &mut reads };
+        collector.visit_binding_pattern(&parameter.pattern);
+        if let Some(initializer) = &parameter.initializer {
+            collector.visit_expression(initializer);
+        }
+        if !reads.tags.is_empty() || !reads.symbols.is_empty() || reads.unknown_global {
+            let mut names = BindingNames::default();
+            names.visit_binding_pattern(&parameter.pattern);
+            for symbol in names.0 {
+                self.consts.insert(symbol, ConstInit { reads: reads.clone(), function: None });
+            }
+        }
+        self.in_parameter += 1;
+        oxc::ast_visit::walk::walk_formal_parameter(self, parameter);
+        self.in_parameter -= 1;
+    }
+
+    fn visit_binding_identifier(&mut self, id: &oxc::ast::ast::BindingIdentifier<'a>) {
+        if self.in_parameter > 0 {
+            self.parameters.extend(id.symbol_id.get());
+        }
+    }
+
+    fn visit_variable_declarator(&mut self, declarator: &oxc::ast::ast::VariableDeclarator<'a>) {
+        if let Some(init) = &declarator.init {
+            // A destructured binding may hold any part of what the
+            // initializer reads, or a default the pattern names.
+            let mut names = BindingNames::default();
+            names.visit_binding_pattern(&declarator.id);
+            let function = match (&declarator.id, crate::chain_walk::unwrap_type_assertions(init)) {
+                (oxc::ast::ast::BindingPattern::BindingIdentifier(_), Expression::ArrowFunctionExpression(arrow)) => {
+                    arrow.scope_id.get()
+                }
+                (oxc::ast::ast::BindingPattern::BindingIdentifier(_), Expression::FunctionExpression(function)) => {
+                    function.scope_id.get()
+                }
+                _ => None,
+            };
+            for symbol in names.0.into_iter().filter(|symbol| !self.scoping.symbol_is_mutated(*symbol)) {
+                let mut reads = ArgumentReads::default();
+                let mut collector = ReadCollector { scoping: self.scoping, reads: &mut reads };
+                collector.visit_expression(init);
+                collector.visit_binding_pattern(&declarator.id);
+                self.consts.insert(symbol, ConstInit { reads, function });
+            }
+        }
+        oxc::ast_visit::walk::walk_variable_declarator(self, declarator);
+    }
+
+    fn visit_function(&mut self, function: &oxc::ast::ast::Function<'a>, flags: oxc::syntax::scope::ScopeFlags) {
+        if let (Some(id), Some(body), Some(scope)) = (&function.id, &function.body, function.scope_id.get()) {
+            if let Some(symbol) = id.symbol_id.get() {
+                let mut reads = ArgumentReads::default();
+                ReadCollector { scoping: self.scoping, reads: &mut reads }.visit_function_body(body);
+                self.functions.insert(symbol, (reads, scope));
+            }
+        }
+        oxc::ast_visit::walk::walk_function(self, function, flags);
+    }
+
+    fn visit_call_expression(&mut self, call: &CallExpression<'a>) {
+        self.record(&call.callee, &call.arguments);
+        oxc::ast_visit::walk::walk_call_expression(self, call);
+    }
+
+    fn visit_new_expression(&mut self, new: &oxc::ast::ast::NewExpression<'a>) {
+        self.record(&new.callee, &new.arguments);
+        oxc::ast_visit::walk::walk_new_expression(self, new);
+    }
+}
+
 
 /// Module-scope bindings that may hold an object: imports, flagged when a
 /// namespace import (only its members can be such an object), and the
@@ -1830,6 +2333,9 @@ struct FactCollector<'a, 's> {
     module_loads: Option<Vec<ModuleLoad>>,
     /// Enriched collection only: the scopes a tag's origin is read from.
     origins: Option<&'s Scoping>,
+    /// Enriched collection only: the values a parameter's literal-union type
+    /// annotation admits.
+    finite_params: FxHashMap<SymbolId, FiniteSet>,
 }
 
 /// `cloneElement` calls, resolved once the walk has seen every `const`
@@ -1891,6 +2397,7 @@ impl<'a> FactCollector<'a, '_> {
                         }
                         PropValueResult::Skip => (None, false, None, None, true),
                     };
+                let mut literal = static_value.is_some();
                 let mut enumerable_values = Vec::new();
                 if dynamic && self.enrich {
                     if let Some(expression) = attribute_expression(&attr.value) {
@@ -1952,6 +2459,8 @@ impl<'a> FactCollector<'a, '_> {
                             if let Some(value) =
                                 without_absent_entries(object, self.static_values, self.scoping, self.origins)
                             {
+                                literal = without_absent_entries(object, &FxHashMap::default(), None, self.origins)
+                                    .is_some();
                                 static_value = Some(value);
                                 dynamic = false;
                                 dynamic_kind = None;
@@ -1965,6 +2474,25 @@ impl<'a> FactCollector<'a, '_> {
                             // lose it.
                             important_literals(expression, self.static_values, self.scoping, &mut enumerable_values);
                         }
+                        // A value proven to be one of a few literals takes
+                        // their classes, as written literals do; one statics
+                        // resolved is proven only when no leaf reads an
+                        // object, which may have changed since.
+                        match self.finite_class_values(expression) {
+                            Some(values) if dynamic => {
+                                if values.is_empty() {
+                                    continue;
+                                }
+                                enumerable_values = values;
+                                static_value = None;
+                                dynamic = false;
+                                dynamic_kind = None;
+                                dynamic_span = None;
+                                literal = true;
+                            }
+                            Some(_) => literal = true,
+                            None => {}
+                        }
                     }
                 }
                 // A nullish breakpoint is absent, as at runtime, and a value
@@ -1975,6 +2503,11 @@ impl<'a> FactCollector<'a, '_> {
                         continue;
                     }
                 }
+                // A value only statics resolve may be an object changed since.
+                let conditions = match &static_value {
+                    Some(value) if !dynamic => (!value.is_object()).then(|| BTreeSet::from([BASE_CONDITION.to_string()])),
+                    _ => written.and_then(|expression| write_conditions(expression, self.origins)),
+                };
                 attrs.push(AttrFact {
                     name: id.name.to_string(),
                     static_value,
@@ -1984,6 +2517,8 @@ impl<'a> FactCollector<'a, '_> {
                     dynamic_span,
                     skip,
                     variant_class: classify_jsx_attribute_as_variant_value(&attr.value),
+                    literal,
+                    conditions,
                 });
             }
         }
@@ -1995,6 +2530,300 @@ impl<'a> FactCollector<'a, '_> {
             origin,
         });
     }
+}
+
+/// The values a runtime value can take, when it is proven to be one of a
+/// few: string and number literals, and whether it may also be absent.
+#[derive(Debug, Clone, Default)]
+struct FiniteSet {
+    values: Vec<Value>,
+    absent: bool,
+}
+
+impl FiniteSet {
+    fn union(mut self, other: FiniteSet) -> FiniteSet {
+        for value in other.values {
+            push_unique(&mut self.values, value);
+        }
+        self.absent |= other.absent;
+        self
+    }
+
+    fn falsy(&self) -> bool {
+        self.absent || self.values.iter().any(|value| !truthy(value))
+    }
+}
+
+/// A string or number, which a class can be keyed by.
+fn is_class_value(value: &Value) -> bool {
+    matches!(value, Value::String(_) | Value::Number(_))
+}
+
+fn truthy(value: &Value) -> bool {
+    match value {
+        Value::String(text) => !text.is_empty(),
+        Value::Number(number) => number.as_f64().is_some_and(|n| n != 0.0 && !n.is_nan()),
+        _ => true,
+    }
+}
+
+impl FactCollector<'_, '_> {
+    /// The values `expression` can take, when they are proven few: an
+    /// explicitly absent value, a string or number literal, a `const` one
+    /// named directly (imported ones included), a parameter whose type
+    /// annotation is a union of literals, and a conditional, `||` or `??` of
+    /// such values.
+    fn finite_set(&self, expression: &Expression<'_>) -> Option<FiniteSet> {
+        let expression = crate::chain_walk::unwrap_type_assertions(expression);
+        if is_absent(expression, self.origins) || matches!(expression, Expression::NullLiteral(_)) {
+            return Some(FiniteSet { values: Vec::new(), absent: true });
+        }
+        match expression {
+            Expression::ConditionalExpression(conditional) => {
+                Some(self.finite_set(&conditional.consequent)?.union(self.finite_set(&conditional.alternate)?))
+            }
+            Expression::LogicalExpression(logical) if logical.operator.is_or() || logical.operator.is_coalesce() => {
+                let left = self.finite_set(&logical.left)?;
+                let right = self.finite_set(&logical.right)?;
+                let (reaches_right, values) = match logical.operator.is_or() {
+                    true => (left.falsy(), left.values.into_iter().filter(truthy).collect()),
+                    false => (left.absent, left.values),
+                };
+                let kept = FiniteSet { values, absent: false };
+                Some(if reaches_right { kept.union(right) } else { kept })
+            }
+            Expression::Identifier(ident) => {
+                let symbol = self
+                    .origins
+                    .and_then(|scoping| scoping.get_reference(ident.reference_id.get()?).symbol_id());
+                if let Some(set) = symbol.and_then(|symbol| self.finite_params.get(&symbol)) {
+                    return Some(set.clone());
+                }
+                let value = evaluate_with_statics(expression, self.static_values, self.scoping)?;
+                is_class_value(&value).then(|| FiniteSet { values: vec![value], absent: false })
+            }
+            _ => Some(FiniteSet { values: vec![literal_value(expression)?], absent: false }),
+        }
+    }
+
+    /// The literals whose classes stand for `expression`'s every value: a
+    /// finite set's values, or for an object literal with static keys and
+    /// finite leaves, each leaf value at its breakpoint (`{ sm: 8 }`) or,
+    /// under `_`, bare; the runtime composes those classes. `None` when the
+    /// values are not proven few.
+    fn finite_class_values(&self, expression: &Expression<'_>) -> Option<Vec<Value>> {
+        use oxc::ast::ast::{ObjectPropertyKind, PropertyKind};
+        let expression = crate::chain_walk::unwrap_type_assertions(expression);
+        let Expression::ObjectExpression(object) = expression else {
+            return Some(self.finite_set(expression)?.values);
+        };
+        let mut values = Vec::new();
+        for property in &object.properties {
+            let ObjectPropertyKind::ObjectProperty(property) = property else {
+                return None;
+            };
+            if property.kind != PropertyKind::Init || property.computed {
+                return None;
+            }
+            let key = eval_property_key(&property.key)?;
+            for value in self.finite_set(&property.value)?.values {
+                push_unique(
+                    &mut values,
+                    match key.as_str() {
+                        BASE_CONDITION => value,
+                        _ => serde_json::json!({ key.as_str(): value }),
+                    },
+                );
+            }
+        }
+        Some(values)
+    }
+}
+
+/// Each parameter binding whose type annotation reads, without a type
+/// checker, as a union of string and number literal types: a parameter's
+/// own annotation, or a destructured property's, written inline or through
+/// a type alias or interface the module declares. Its default joins the
+/// values; an optional one may be absent. A binding something writes is
+/// left out.
+fn literal_union_parameters(program: &Program<'_>, scoping: &Scoping) -> FxHashMap<SymbolId, FiniteSet> {
+    use oxc::ast::ast::{Declaration, TSType};
+    let mut scan = ParameterScan {
+        scoping,
+        objects: FxHashMap::default(),
+        unions: FxHashMap::default(),
+        sets: FxHashMap::default(),
+    };
+    for statement in &program.body {
+        let declaration = match statement {
+            Statement::ExportNamedDeclaration(export) => export.declaration.as_ref(),
+            other => other.as_declaration(),
+        };
+        match declaration {
+            Some(Declaration::TSInterfaceDeclaration(interface)) if interface.extends.is_empty() => {
+                if let Some(symbol) = interface.id.symbol_id.get() {
+                    let properties = scan.property_unions(&interface.body.body);
+                    scan.objects.insert(symbol, properties);
+                }
+            }
+            Some(Declaration::TSTypeAliasDeclaration(alias)) if alias.type_parameters.is_none() => {
+                let Some(symbol) = alias.id.symbol_id.get() else { continue };
+                match &alias.type_annotation {
+                    TSType::TSTypeLiteral(literal) => {
+                        let properties = scan.property_unions(&literal.members);
+                        scan.objects.insert(symbol, properties);
+                    }
+                    annotation => {
+                        if let Some(set) = scan.literal_union(annotation) {
+                            scan.unions.insert(symbol, set);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    scan.visit_program(program);
+    scan.sets
+}
+
+struct ParameterScan<'s> {
+    scoping: &'s Scoping,
+    /// The module's interfaces and object type aliases: each property's
+    /// literal union, `None` for another type.
+    objects: FxHashMap<SymbolId, FxHashMap<String, Option<FiniteSet>>>,
+    /// The module's type aliases of a literal union.
+    unions: FxHashMap<SymbolId, FiniteSet>,
+    sets: FxHashMap<SymbolId, FiniteSet>,
+}
+
+impl ParameterScan<'_> {
+    /// The module-level type a reference without type arguments names.
+    fn named(&self, annotation: &oxc::ast::ast::TSType<'_>) -> Option<SymbolId> {
+        use oxc::ast::ast::{TSType, TSTypeName};
+        let TSType::TSTypeReference(reference) = annotation else { return None };
+        let TSTypeName::IdentifierReference(name) = &reference.type_name else { return None };
+        if reference.type_arguments.is_some() {
+            return None;
+        }
+        self.scoping.get_reference(name.reference_id.get()?).symbol_id()
+    }
+
+    /// The values a union of string and number literal types admits, a
+    /// literal-union alias among them; `null` and `undefined` members make
+    /// the value possibly absent.
+    fn literal_union(&self, annotation: &oxc::ast::ast::TSType<'_>) -> Option<FiniteSet> {
+        use oxc::ast::ast::{TSLiteral, TSType};
+        let members: Vec<&TSType<'_>> = match annotation {
+            TSType::TSUnionType(union) => union.types.iter().collect(),
+            other => vec![other],
+        };
+        let mut set = FiniteSet::default();
+        for member in members {
+            match member {
+                TSType::TSUndefinedKeyword(_) | TSType::TSNullKeyword(_) => set.absent = true,
+                TSType::TSLiteralType(literal) => {
+                    let value = match &literal.literal {
+                        TSLiteral::StringLiteral(text) => Value::String(text.value.to_string()),
+                        TSLiteral::NumericLiteral(number) => make_json_number(number.value),
+                        TSLiteral::UnaryExpression(unary)
+                            if unary.operator == oxc::syntax::operator::UnaryOperator::UnaryNegation =>
+                        {
+                            let Expression::NumericLiteral(number) = &unary.argument else { return None };
+                            make_json_number(-number.value)
+                        }
+                        _ => return None,
+                    };
+                    push_unique(&mut set.values, value);
+                }
+                other => set = set.union(self.unions.get(&self.named(other)?)?.clone()),
+            }
+        }
+        (!set.values.is_empty() || set.absent).then_some(set)
+    }
+
+    /// Each property signature's literal union, `None` when it has another type.
+    fn property_unions(&self, members: &[oxc::ast::ast::TSSignature<'_>]) -> FxHashMap<String, Option<FiniteSet>> {
+        use oxc::ast::ast::TSSignature;
+        members
+            .iter()
+            .filter_map(|member| match member {
+                TSSignature::TSPropertySignature(signature) if !signature.computed => {
+                    let set = signature.type_annotation.as_ref().and_then(|annotation| {
+                        let mut set = self.literal_union(&annotation.type_annotation)?;
+                        set.absent |= signature.optional;
+                        Some(set)
+                    });
+                    Some((eval_property_key(&signature.key)?, set))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn record(
+        &mut self,
+        id: &oxc::ast::ast::BindingIdentifier<'_>,
+        set: Option<FiniteSet>,
+        default: Option<&Expression<'_>>,
+    ) {
+        let (Some(mut set), Some(symbol)) = (set, id.symbol_id.get()) else {
+            return;
+        };
+        if self.scoping.symbol_is_mutated(symbol) {
+            return;
+        }
+        if let Some(default) = default {
+            let Some(value) = literal_value(default) else {
+                return;
+            };
+            push_unique(&mut set.values, value);
+        }
+        self.sets.insert(symbol, set);
+    }
+}
+
+impl<'a> Visit<'a> for ParameterScan<'_> {
+    fn visit_formal_parameter(&mut self, parameter: &oxc::ast::ast::FormalParameter<'a>) {
+        use oxc::ast::ast::{BindingPattern, TSType};
+        if let Some(annotation) = parameter.type_annotation.as_ref() {
+            match &parameter.pattern {
+                BindingPattern::BindingIdentifier(id) => {
+                    let set = self.literal_union(&annotation.type_annotation).map(|mut set| {
+                        set.absent |= parameter.optional;
+                        set
+                    });
+                    self.record(id, set, parameter.initializer.as_deref());
+                }
+                BindingPattern::ObjectPattern(object) => {
+                    let properties = match &annotation.type_annotation {
+                        TSType::TSTypeLiteral(literal) => Some(self.property_unions(&literal.members)),
+                        other => self.named(other).and_then(|symbol| self.objects.get(&symbol).cloned()),
+                    };
+                    for property in object.properties.iter().filter(|property| !property.computed) {
+                        let Some(key) = eval_property_key(&property.key) else { continue };
+                        let set = properties.as_ref().and_then(|properties| properties.get(&key).cloned().flatten());
+                        match &property.value {
+                            BindingPattern::BindingIdentifier(id) => self.record(id, set, None),
+                            BindingPattern::AssignmentPattern(assignment) => {
+                                if let BindingPattern::BindingIdentifier(id) = &assignment.left {
+                                    self.record(id, set, Some(&assignment.right));
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        oxc::ast_visit::walk::walk_formal_parameter(self, parameter);
+    }
+}
+
+/// A string or number literal default.
+fn literal_value(expression: &Expression<'_>) -> Option<Value> {
+    eval_static_expression(expression).filter(is_class_value)
 }
 
 impl<'a, 's> Visit<'a> for FactCollector<'a, 's> {
@@ -2409,6 +3238,7 @@ pub fn collect_usage_facts(program: &Program<'_>) -> Vec<UsageFact> {
         clones: None,
         module_loads: None,
         origins: None,
+        finite_params: FxHashMap::default(),
     };
     collector.visit_program(program);
     collector.finish()
@@ -2470,6 +3300,63 @@ fn is_absent(expression: &Expression<'_>, scoping: Option<&Scoping>) -> bool {
         _ => false,
     };
     crate::eval::is_absent_value(expression, shadowed)
+}
+
+/// The condition a scalar value, or a responsive object's `_`, writes.
+pub(crate) const BASE_CONDITION: &str = "_";
+
+/// The conditions a runtime value can write, when its shape is known: a
+/// value that cannot be an object (a template, a binary or unary
+/// expression, a primitive literal) writes the base, `_`; an object literal
+/// with static keys writes those keys, its explicitly absent entries
+/// excepted; a conditional or logical expression writes what its operands
+/// write. `None` for any other value, which may be any object.
+fn write_conditions(expression: &Expression<'_>, origins: Option<&Scoping>) -> Option<BTreeSet<String>> {
+    use oxc::ast::ast::{ObjectPropertyKind, PropertyKind};
+    use oxc::syntax::operator::UnaryOperator;
+    let expression = crate::chain_walk::unwrap_type_assertions(expression);
+    if is_absent(expression, origins) || matches!(expression, Expression::NullLiteral(_)) {
+        return Some(BTreeSet::new());
+    }
+    match expression {
+        Expression::StringLiteral(_)
+        | Expression::NumericLiteral(_)
+        | Expression::BooleanLiteral(_)
+        | Expression::BigIntLiteral(_)
+        | Expression::TemplateLiteral(_)
+        | Expression::BinaryExpression(_) => Some(BTreeSet::from([BASE_CONDITION.to_string()])),
+        Expression::UnaryExpression(unary) if unary.operator != UnaryOperator::Void => {
+            Some(BTreeSet::from([BASE_CONDITION.to_string()]))
+        }
+        Expression::ConditionalExpression(conditional) => {
+            let mut conditions = write_conditions(&conditional.consequent, origins)?;
+            conditions.extend(write_conditions(&conditional.alternate, origins)?);
+            Some(conditions)
+        }
+        Expression::LogicalExpression(logical) => {
+            let mut conditions = write_conditions(&logical.left, origins)?;
+            conditions.extend(write_conditions(&logical.right, origins)?);
+            Some(conditions)
+        }
+        Expression::ObjectExpression(object) => {
+            let mut conditions = BTreeSet::new();
+            for property in &object.properties {
+                let ObjectPropertyKind::ObjectProperty(property) = property else {
+                    return None;
+                };
+                if property.kind != PropertyKind::Init || property.computed {
+                    return None;
+                }
+                let value = crate::chain_walk::unwrap_type_assertions(&property.value);
+                if is_absent(value, origins) || matches!(value, Expression::NullLiteral(_)) {
+                    continue;
+                }
+                conditions.insert(eval_property_key(&property.key)?);
+            }
+            Some(conditions)
+        }
+        _ => None,
+    }
 }
 
 /// A responsive object holding an explicit `undefined` entry, evaluated
@@ -2884,6 +3771,9 @@ pub fn filter_usage_scan(
                     }
                     let binding = resolved_binding.clone().unwrap_or_else(|| tag_name.to_string());
                     result.rendered_components.insert(binding.clone());
+                    if spread.is_some() {
+                        result.open_components.insert(binding.clone());
+                    }
 
                     let active_props = component_props.get(tag_name);
                     let custom = custom_props.get(tag_name);
@@ -2899,6 +3789,16 @@ pub fn filter_usage_scan(
                     for (index, attr) in attrs.iter().enumerate() {
                         if dropped.is_some_and(|dropped| dropped.contains(&attr.name)) {
                             continue;
+                        }
+                        let write = |literal| WrittenProp {
+                            binding: binding.clone(),
+                            prop: attr.name.clone(),
+                            literal,
+                            conditions: attr.conditions.clone(),
+                        };
+                        match attr.proven_values() {
+                            Some(values) => result.written_props.extend(values.map(|value| write(Some(value.clone())))),
+                            None => result.written_props.push(write(None)),
                         }
                         let settled = spread.is_none_or(|before| index >= before);
                         if let Some(props) = active_props {
@@ -3035,6 +3935,7 @@ pub fn filter_usage_scan(
                     None
                 };
                 if let Some(binding) = resolved {
+                    result.open_components.insert(binding.clone());
                     if let Some(config) = component_configs.get(&binding) {
                         let mut written: FxHashSet<&str> = FxHashSet::default();
                         for (key, class) in props.iter().flatten() {
@@ -3075,6 +3976,7 @@ pub fn filter_usage_scan(
             // Overrides usage can list reach every component that declares
             // them; the warning covers the ones it cannot.
             UsageFact::CloneUnknown { props: Some(props), .. } => {
+                result.cloned_props.extend(props.iter().map(|(key, _)| key.clone()));
                 let mut bindings: Vec<&String> = component_configs.keys().collect();
                 bindings.sort_unstable();
                 for binding in bindings {
@@ -3096,11 +3998,47 @@ pub fn filter_usage_scan(
                     }
                 }
             }
-            UsageFact::CloneUnknown { props: None, .. } => {}
+            UsageFact::CloneUnknown { props: None, .. } => result.unlisted_clone = true,
         }
     }
 
     result
+}
+
+/// Each `createSystem(…)` call whose callee no import, declaration or
+/// parameter binds in any enclosing scope. The system loader evaluates a
+/// system file without auto-imports, so the name is undefined there.
+pub(crate) fn unbound_create_system_calls(program: &Program<'_>) -> Vec<Span> {
+    // A `\u` escape can spell the name, as `create\u0053ystem`.
+    let text = program.source_text;
+    if !text.contains("createSystem") && !text.contains("\\u") {
+        return Vec::new();
+    }
+    let scoping = SemanticBuilder::new().build(program).semantic.into_scoping();
+    if !scoping.root_unresolved_references().contains_key("createSystem") {
+        return Vec::new();
+    }
+    struct UnboundCalls<'s> {
+        scoping: &'s Scoping,
+        spans: Vec<Span>,
+    }
+    impl<'a> Visit<'a> for UnboundCalls<'_> {
+        fn visit_call_expression(&mut self, call: &CallExpression<'a>) {
+            if let Expression::Identifier(ident) = &call.callee {
+                let unbound = ident
+                    .reference_id
+                    .get()
+                    .is_some_and(|id| self.scoping.get_reference(id).symbol_id().is_none());
+                if ident.name == "createSystem" && unbound {
+                    self.spans.push(ident.span);
+                }
+            }
+            oxc::ast_visit::walk::walk_call_expression(self, call);
+        }
+    }
+    let mut calls = UnboundCalls { scoping: &scoping, spans: Vec::new() };
+    calls.visit_program(program);
+    calls.spans
 }
 
 #[cfg(test)]
@@ -3290,7 +4228,7 @@ mod tests {
     }
 
     #[test]
-    fn enrichment_enumerates_static_conditional_arms_and_keeps_residue() {
+    fn enrichment_enumerates_static_conditional_arms_without_residue() {
         let result = enriched_result(
             r#"
             export const App = () => (
@@ -3309,12 +4247,8 @@ mod tests {
                 ("display".to_string(), r#""none""#.to_string()),
             ]
         );
-        assert_eq!(result.dynamic_prop_usages.len(), 1);
-        assert_eq!(result.residue_sites.len(), 2);
-        assert!(result
-            .residue_sites
-            .iter()
-            .all(|site| site.kind == DynamicExpressionKind::Conditional));
+        assert!(result.dynamic_prop_usages.is_empty());
+        assert!(result.residue_sites.is_empty());
     }
 
     #[test]
@@ -3636,3 +4570,4 @@ mod tests {
         );
     }
 }
+

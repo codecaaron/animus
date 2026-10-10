@@ -1,7 +1,7 @@
 //! Project-level CSS orchestration over retained facts: extension provenance,
 //! chain evaluation, usage reconciliation, and `@layer` CSS generation.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt::Write as _;
 use std::sync::Arc;
 
@@ -282,6 +282,18 @@ impl CssInputs {
         crate::ids::fingerprint(crate::ids::fnv1a(self.system_hash, class_prefix))
     }
 
+    /// Merges the prefix's generated names into the authored-name map.
+    pub fn set_generated_names(&mut self, json: Option<&str>) -> Result<(), String> {
+        let Some(json) = json.map(str::trim).filter(|s| !s.is_empty() && *s != "null") else {
+            return Ok(());
+        };
+        let generated: FxHashMap<String, String> =
+            serde_json::from_str(json).map_err(|e| format!("EngineOptions.generatedNamesJson: {e}"))?;
+        self.contextual_vars.add_generated(generated);
+        self.system_hash = fold_system_input(self.system_hash, Some(json));
+        Ok(())
+    }
+
     pub fn set_transform_sources(&mut self, json: Option<&str>) -> Result<(), String> {
         self.transform_sources = match json {
             None => FxHashMap::default(),
@@ -529,6 +541,7 @@ pub(crate) const DIAGNOSTIC_CODES: &[(&str, &str)] = &[
     (crate::theme::UNRECOGNIZED_STYLE_KEY, "warn"),
     (crate::theme::KEYS_SHARE_PROPERTY, "warn"),
     (crate::theme::UNSUPPORTED_AT_RULE, "error"),
+    (crate::theme::UNITLESS_CUSTOM_PROPERTY, "warn"),
     (CLASS_NAME_WHITESPACE, "warn"),
     (INVALID_OPACITY_MODIFIER, "warn"),
     (UNSUPPORTED_OBJECT_MEMBER, "warn"),
@@ -1216,6 +1229,9 @@ fn dropped_style_key(
              it a value or an object of breakpoint keys{}",
             element_hint(key)
         ),
+        DroppedStyleKey::UnitlessCustomProperty { prop, value, properties } => {
+            return unitless_custom_property(file, component, prop, value, properties);
+        }
         DroppedStyleKey::UnrecognizedKey(key) => format!(
             "style key '{key}' is not a prop, selector, alias or supported at-rule, {not_emitted}{}",
             element_hint(key)
@@ -1233,6 +1249,22 @@ fn dropped_style_key(
         }
     };
     diagnostic(file, component, "warn", message, Some(crate::theme::UNRECOGNIZED_STYLE_KEY))
+}
+
+/// A number a prop writes unitless to its custom properties.
+fn unitless_custom_property(file: &str, component: &str, prop: &str, value: &Value, properties: &[String]) -> CssDiagnostic {
+    diagnostic(
+        file,
+        component,
+        "warn",
+        format!(
+            "prop '{prop}' writes the number {value} to {} without a unit: a custom property has no unit \
+             context, so the number stays unitless — give the value a unit, or bind a transform that adds one",
+            properties.join(", ")
+        ),
+        Some(crate::theme::UNITLESS_CUSTOM_PROPERTY),
+    )
+    .dropping(&value.to_string())
 }
 
 /// Two keys of one block on one CSS property, naming the one that takes
@@ -1450,12 +1482,29 @@ const TOKEN_SHAPE_EXEMPT_PROPERTIES: &[&str] = &[
 /// value among them came from a token, so it is no miss.
 type ScaleFamily = FxHashMap<String, FxHashSet<String>>;
 
-/// What a scale-miss warning reads: the scaled properties, and whether the
-/// file is an included package's, whose identifier misses are external
-/// token candidates instead.
+/// What a scale-miss warning reads: the scaled properties, the theme's
+/// tokens by their name within their scale (`primary` → `colors.primary`),
+/// and whether the file is an included package's, whose identifier misses
+/// are external token candidates instead.
 struct ScaleCheck<'a> {
     family: &'a ScaleFamily,
+    tokens: &'a FxHashMap<String, String>,
     external: bool,
+}
+
+/// Each theme token by its complete path and by its name within its scale:
+/// a complete path names its own token, and a name the first by path when
+/// two scales share it.
+fn tokens_by_name(theme: &crate::theme::FlatTheme) -> FxHashMap<String, String> {
+    let mut paths: Vec<&String> = theme.keys().collect();
+    paths.sort();
+    let mut tokens: FxHashMap<String, String> = paths.iter().map(|path| ((*path).clone(), (*path).clone())).collect();
+    for path in paths {
+        if let Some((_, name)) = path.split_once('.') {
+            tokens.entry(name.to_string()).or_insert_with(|| path.clone());
+        }
+    }
+    tokens
 }
 
 fn scale_family_css_properties(config: &PropConfigMap, theme: &crate::theme::FlatTheme) -> ScaleFamily {
@@ -1527,12 +1576,13 @@ fn warn_token_shaped_value(
     component: &str,
     diagnostics: &mut Vec<CssDiagnostic>,
 ) {
-    let Some(literals) = scale_check.family.get(&decl.property) else {
-        return;
-    };
     if decl.property.starts_with("--") || TOKEN_SHAPE_EXEMPT_PROPERTIES.contains(&decl.property.as_str()) {
         return;
     }
+    let Some(literals) = scale_check.family.get(&decl.property) else {
+        warn_unowned_token_value(decl, scale_check, file, component, diagnostics);
+        return;
+    };
     let message = if is_token_shaped_value(&decl.value) {
         format!(
             "token-shaped value '{}' in '{}' did not resolve — likely an unresolved token: \
@@ -1550,6 +1600,34 @@ fn warn_token_shaped_value(
     } else {
         return;
     };
+    diagnostics.push(diagnostic(file, component, "warn", message, Some(TOKEN_SHAPED_VALUE)).dropping(&decl.value));
+}
+
+/// A property no scaled prop writes, so nothing resolves a token there: a
+/// value that names a theme token, dotted or an identifier that is no keyword
+/// of the property, is emitted as authored and reported. Any other value,
+/// dotted or not, carries no theme meaning there and is taken as written.
+fn warn_unowned_token_value(
+    decl: &CssDeclaration,
+    scale_check: &ScaleCheck<'_>,
+    file: &str,
+    component: &str,
+    diagnostics: &mut Vec<CssDiagnostic>,
+) {
+    let Some(path) = scale_check.tokens.get(&decl.value) else {
+        return;
+    };
+    let dotted = is_token_shaped_value(&decl.value);
+    if !dotted
+        && (scale_check.external || !is_unknown_identifier(&decl.property, &decl.value, &FxHashSet::default()))
+    {
+        return;
+    }
+    let message = format!(
+        "value '{}' in '{}' names the token '{path}', but no prop resolves tokens for '{}' — write \
+         '{{{path}}}', or register a prop for the property. The declaration is emitted as authored.",
+        decl.value, decl.property, decl.property
+    );
     diagnostics.push(diagnostic(file, component, "warn", message, Some(TOKEN_SHAPED_VALUE)).dropping(&decl.value));
 }
 
@@ -3116,13 +3194,11 @@ fn untracked_clone_props(file: &str, ff: &FileFacts) -> Vec<CssDiagnostic> {
                 file,
                 call,
                 "warn",
-                format!(
-                    "line {line}: props passed through {call} are not tracked, so variant \
-                     and state options only they set can be pruned from production CSS — \
-                     write the override keys literally, as in \
-                     cloneElement(child, {{ size: 'lg' }}), or keep those options with \
-                     staticCss.components"
-                ),
+                "props passed through this call are not tracked, so variant and state options only \
+                 they set can be pruned from production CSS — write the override keys literally, as \
+                 in cloneElement(child, { size: 'lg' }), or keep those options with \
+                 staticCss.components"
+                    .to_string(),
                 Some(UNTRACKED_CLONE_PROPS),
             )
             .on_line(*line)),
@@ -3315,6 +3391,68 @@ fn first_site_of(ff: &FileFacts, name: &str) -> Option<(bool, Option<TagOrigin>,
             Some((true, *origin, *at))
         }
         _ => None,
+    })
+}
+
+/// React's own components that render their children unchanged.
+const REACT_PASS_THROUGH: [&str; 5] = ["Activity", "Fragment", "Profiler", "StrictMode", "Suspense"];
+
+/// Whether `tag` names one of React's pass-through components, proven by
+/// its import from `react` or `react/jsx-runtime`, as a named import or a
+/// member of the default or namespace import. Unlike `ReactNames`, which an
+/// unbound `React` satisfies so that more escapes are seen, this widens a
+/// proof, so only an import counts.
+fn names_react_pass_through(ff: &FileFacts, tag: &str, origin: Option<TagOrigin>) -> bool {
+    let from_react = |source: &str| source == "react" || source == "react/jsx-runtime";
+    if origin != Some(TagOrigin::Import) {
+        return false;
+    }
+    match tag.split_once('.') {
+        None => ff.imports.iter().any(|import| {
+            import.local == tag && from_react(&import.source) && REACT_PASS_THROUGH.contains(&import.imported.as_str())
+        }),
+        Some((root, member)) => {
+            REACT_PASS_THROUGH.contains(&member)
+                && (ff.namespace_imports.get(root).is_some_and(|source| from_react(source))
+                    || ff.imports.iter().any(|import| {
+                        import.local == root && import.imported == "default" && from_react(&import.source)
+                    }))
+        }
+    }
+}
+
+/// Whether every tag that leaves usage identity uncertain still lets usage
+/// prove where each extracted component renders and with what props: an
+/// ordinary component an analysed module declares, whose body is analysed
+/// and whose `cloneElement` calls are clone facts, while a component it
+/// renders through a prop has already escaped; or one of React's
+/// pass-through components. A parameter, an alias usage cannot follow, a
+/// name that resolved to no component, any other unanalysed import, or an
+/// ordinary component that passes its parameters to code outside the
+/// analysis (`forwarding`) may be an extracted component, or clone props
+/// into the elements it receives.
+fn uncertainty_leaves_usage_proven(
+    sites: &[(&String, UncertainIdentity)],
+    files: &BTreeMap<String, FileFacts>,
+    inputs: &CssInputs,
+    forwarding: &FxHashSet<(String, String)>,
+) -> bool {
+    // Each element of an ordinary component is a site; classify each tag once.
+    let mut classified: FxHashSet<(&str, &str, Option<TagOrigin>)> = FxHashSet::default();
+    sites.iter().all(|(file, site)| {
+        let (UncertainIdentity::Tag(site), Some(ff)) = (site, files.get(*file)) else {
+            return false;
+        };
+        let Some(tag) = site.tag.as_deref() else {
+            return false;
+        };
+        let forwards = || {
+            resolve_declaration(file, ff, tag, files, inputs)
+                .is_some_and(|(declaring, binding, _)| forwarding.contains(&(declaring, binding)))
+        };
+        !classified.insert((file.as_str(), tag, site.origin))
+            || names_react_pass_through(ff, tag, site.origin)
+            || (uncertain_tag_reason(file, ff, tag, site.origin, files, inputs).0 == TagClass::Ordinary && !forwards())
     })
 }
 
@@ -3541,8 +3679,10 @@ impl UsageLookupMaps {
 struct ConfinedUse {
     /// A spread attribute can deliver any prop.
     spread: bool,
-    /// Props with an attribute value that is not a literal.
-    runtime_props: FxHashSet<String>,
+    /// Each prop with a value that is not a literal, and the conditions its
+    /// runtime values write: `None` when one value's shape is unknown.
+    runtime: FxHashMap<String, Option<BTreeSet<String>>>,
+    /// Each prop's distinct literal values.
     static_values: FxHashMap<String, Vec<Value>>,
 }
 
@@ -3550,9 +3690,203 @@ impl ConfinedUse {
     /// Every value `prop` can receive is a literal for which `has_class` holds.
     fn covers(&self, prop: &str, has_class: impl Fn(&Value) -> bool) -> bool {
         !self.spread
-            && !self.runtime_props.contains(prop)
+            && !self.runtime.contains_key(prop)
             && self.static_values.get(prop).is_none_or(|values| values.iter().all(has_class))
     }
+
+    /// The conditions the values of `prop` that reach its slot write: its
+    /// runtime values', and those of literals without a class (`has_class`).
+    /// `None` when one of them can write any condition.
+    fn slot_conditions(&self, prop: &str, has_class: impl Fn(&Value) -> bool) -> Option<BTreeSet<String>> {
+        if self.spread {
+            return None;
+        }
+        let mut conditions = match self.runtime.get(prop) {
+            Some(conditions) => conditions.clone()?,
+            None => BTreeSet::new(),
+        };
+        for value in self.static_values.get(prop).into_iter().flatten().filter(|value| !has_class(value)) {
+            match value {
+                Value::Object(entries) => conditions.extend(entries.keys().cloned()),
+                _ => {
+                    conditions.insert(crate::usage_facts::BASE_CONDITION.to_string());
+                }
+            }
+        }
+        Some(conditions)
+    }
+
+    /// Records a runtime value of `prop` that writes `conditions`, `None`
+    /// when its shape is unknown.
+    fn write(&mut self, prop: &str, conditions: Option<BTreeSet<String>>) {
+        join_conditions(self.runtime.entry(prop.to_string()).or_insert_with(|| Some(BTreeSet::new())), conditions);
+    }
+
+    /// Records a literal value of `prop`.
+    fn receive(&mut self, prop: &str, value: &Value) {
+        let values = self.static_values.entry(prop.to_string()).or_default();
+        if !values.contains(value) {
+            values.push(value.clone());
+        }
+    }
+}
+
+/// Joins `conditions` into `entry`: an unknown set on either side leaves
+/// the union unknown.
+fn join_conditions(entry: &mut Option<BTreeSet<String>>, conditions: Option<BTreeSet<String>>) {
+    match (entry, conditions) {
+        (Some(known), Some(conditions)) => known.extend(conditions),
+        (entry, _) => *entry = None,
+    }
+}
+
+/// The slot conditions of each value slot in `metas`, where every use is
+/// proven: the union of the conditions `conditions_of` gives each prop the
+/// slot serves. A slot keeps every condition when one prop's are unknown,
+/// or when nothing proven reaches it, as with a forced runtime value.
+fn proven_slot_conditions(
+    metas: &HashMap<String, DynamicPropMeta>,
+    mut conditions_of: impl FnMut(&str) -> Option<BTreeSet<String>>,
+) -> crate::css::SlotConditions {
+    let mut slots: HashMap<String, Option<BTreeSet<String>>> = HashMap::new();
+    for (prop, meta) in metas {
+        let Some(meta) = meta.value() else { continue };
+        join_conditions(slots.entry(meta.var_name.clone()).or_insert_with(|| Some(BTreeSet::new())), conditions_of(prop));
+    }
+    slots.into_iter().filter_map(|(slot, conditions)| Some((slot, conditions.filter(|c| !c.is_empty())?))).collect()
+}
+
+/// What calls can hand to code outside the analysis, which may clone runtime
+/// props into an element it receives: the components whose elements such a
+/// call's arguments carry, directly, through `const`s or through another
+/// module's `const`s, and the top-level functions, as `(file, binding)`,
+/// that pass a parameter to such a call. A callee reaches outside the
+/// analysis when it is a global outside the built-ins, an import the
+/// analysis does not resolve, a value built from either, or a function that
+/// forwards a parameter to such a call.
+fn opaque_delivery(
+    files: &BTreeMap<String, FileFacts>,
+    inputs: &CssInputs,
+    evaluated_ids: &FxHashSet<String>,
+    ids_by_binding: &IdsByBinding,
+) -> (std::collections::BTreeSet<String>, FxHashSet<(String, String)>) {
+    // Whether `name` (`lib.enhance` for a namespace import's member) leaves
+    // the analysis from `file`.
+    let outside = |file: &str, ff: &FileFacts, name: &str, forwarding: &FxHashSet<(String, String)>| {
+        let (root, member) = match name.split_once('.') {
+            Some((root, member)) => (root, Some(member)),
+            None => (name, None),
+        };
+        let declaration = match (ff.namespace_imports.get(root), member) {
+            (Some(source), Some(member)) => resolve_export(file, source, member, files, inputs),
+            (Some(source), None) => {
+                return resolve_import_source(file, source, files, inputs).is_none();
+            }
+            (None, _) => resolve_declaration(file, ff, root, files, inputs),
+        };
+        declaration.is_none_or(|(declaring, binding, _)| forwarding.contains(&(declaring, binding)))
+    };
+    let opaque = |file: &str, ff: &FileFacts, call: &crate::usage_facts::OpaqueCall, forwarding: &FxHashSet<(String, String)>| {
+        call.callee.as_deref().is_none_or(|callee| outside(file, ff, callee, forwarding))
+            || call.callee_imports.iter().any(|import| outside(file, ff, import, forwarding))
+    };
+    let mut forwarding: FxHashSet<(String, String)> = FxHashSet::default();
+    loop {
+        let mut grew = false;
+        for (path, ff) in files {
+            for call in &ff.opaque_calls {
+                let fresh: Vec<&String> =
+                    call.forwards_from.iter().filter(|name| !forwarding.contains(&(path.clone(), (*name).clone()))).collect();
+                if !fresh.is_empty() && opaque(path, ff, call, &forwarding) {
+                    forwarding.extend(fresh.into_iter().map(|name| (path.clone(), name.clone())));
+                    grew = true;
+                }
+            }
+        }
+        if !grew {
+            break;
+        }
+    }
+    // Component tags, each with the file that names it, followed through
+    // imported `const`s to the modules that declare them.
+    let mut tags: Vec<(String, String)> = Vec::new();
+    let mut imports: Vec<(String, String)> = Vec::new();
+    for (path, ff) in files {
+        for call in ff.opaque_calls.iter().filter(|call| opaque(path, ff, call, &forwarding)) {
+            tags.extend(call.tags.iter().map(|tag| (path.clone(), tag.clone())));
+            imports.extend(call.imported_args.iter().map(|import| (path.clone(), import.clone())));
+        }
+    }
+    let mut followed: FxHashSet<(String, String)> = FxHashSet::default();
+    while let Some((file, import)) = imports.pop() {
+        if !followed.insert((file.clone(), import.clone())) {
+            continue;
+        }
+        let Some(ff) = files.get(&file) else { continue };
+        // A namespace import reaches every element `const` of its module.
+        let held: Vec<(String, &crate::usage_facts::ElementConst)> = match ff.namespace_imports.get(&import) {
+            Some(source) => resolve_import_source(&file, source, files, inputs)
+                .and_then(|module| Some((module.clone(), files.get(&module)?)))
+                .map(|(module, declaring)| declaring.element_consts.values().map(|held| (module.clone(), held)).collect())
+                .unwrap_or_default(),
+            None => resolve_declaration(&file, ff, &import, files, inputs)
+                .filter(|(declaring, _, _)| *declaring != file)
+                .and_then(|(declaring, binding, _)| {
+                    let held = files.get(&declaring)?.element_consts.get(&binding)?;
+                    Some(vec![(declaring, held)])
+                })
+                .unwrap_or_default(),
+        };
+        for (declaring, held) in held {
+            tags.extend(held.tags.iter().map(|tag| (declaring.clone(), tag.clone())));
+            imports.extend(held.imports.iter().map(|import| (declaring.clone(), import.clone())));
+        }
+    }
+    let delivered = tags
+        .iter()
+        .flat_map(|(file, tag)| resolve_usage_identity(file, tag, files, inputs, evaluated_ids, ids_by_binding))
+        .collect();
+    (delivered, forwarding)
+}
+
+/// The evaluated components whose every use the analysis proves, keyed by
+/// id and read from the elements of every module. None escapes as a value,
+/// takes a spread, renders through `createElement` or `cloneElement`, or is
+/// a class resolver, which takes any props; a prop an unnamed element's
+/// clone overrides counts as a runtime value on each. `None` when such a
+/// clone's overrides cannot be listed.
+fn project_confined_uses<'a>(
+    results: &[UsageScanResult],
+    components: impl Iterator<Item = (&'a String, bool)>,
+    escaped_ids: &std::collections::BTreeSet<String>,
+) -> Option<FxHashMap<String, ConfinedUse>> {
+    if results.iter().any(|result| result.unlisted_clone) {
+        return None;
+    }
+    let open: FxHashSet<&String> = results.iter().flat_map(|result| &result.open_components).collect();
+    // A clone's override may take any shape.
+    let cloned: FxHashMap<String, Option<BTreeSet<String>>> =
+        results.iter().flat_map(|result| result.cloned_props.iter().map(|prop| (prop.clone(), None))).collect();
+    let mut uses: FxHashMap<String, ConfinedUse> = components
+        .filter(|(id, class_resolver)| !class_resolver && !escaped_ids.contains(*id) && !open.contains(id))
+        .map(|(id, _)| (id.clone(), ConfinedUse { runtime: cloned.clone(), ..Default::default() }))
+        .collect();
+    for result in results {
+        for written in &result.written_props {
+            let Some(confined) = uses.get_mut(&written.binding) else { continue };
+            match &written.literal {
+                Some(value) => confined.receive(&written.prop, value),
+                None => confined.write(&written.prop, written.conditions.clone()),
+            }
+        }
+        // Each also has a written prop; one without arrives in any shape.
+        for usage in &result.dynamic_prop_usages {
+            if let Some(confined) = uses.get_mut(&usage.binding) {
+                confined.runtime.entry(usage.prop_name.clone()).or_insert(None);
+            }
+        }
+    }
+    Some(uses)
 }
 
 /// The evaluated components whose module confines them, keyed by id.
@@ -3581,14 +3915,14 @@ fn confined_uses(
             }
             confined.spread |= spread.is_some();
             for attr in attrs {
-                match (&attr.static_value, attr.dynamic) {
-                    (Some(value), false) => confined
-                        .static_values
-                        .entry(attr.name.clone())
-                        .or_default()
-                        .push(value.clone()),
-                    _ => {
-                        confined.runtime_props.insert(attr.name.clone());
+                match attr.proven_values() {
+                    Some(values) => {
+                        for value in values {
+                            confined.receive(&attr.name, value);
+                        }
+                    }
+                    None => {
+                        confined.runtime.insert(attr.name.clone(), None);
                     }
                 }
             }
@@ -3698,6 +4032,17 @@ impl UsageIdentityPolicy {
                 self.rendered_ids.insert(id.clone());
                 result.rendered_components.insert(id);
             }
+        }
+
+        let written_props = std::mem::take(&mut result.written_props);
+        for written in written_props {
+            for binding in self.resolve_all(&written.binding, attribution) {
+                result.written_props.push(crate::jsx_scan::WrittenProp { binding, ..written.clone() });
+            }
+        }
+        let open = std::mem::take(&mut result.open_components);
+        for key in open {
+            result.open_components.extend(self.resolve_all(&key, attribution));
         }
     }
 
@@ -4248,6 +4593,7 @@ fn run_with_system_floor(
     );
     let mut evaluated: FxHashMap<String, EvalEntry> = FxHashMap::default();
     let scale_family_props = scale_family_css_properties(&inputs.config, &inputs.theme);
+    let theme_tokens = tokens_by_name(&inputs.theme);
     let scale_names = if inputs.external_dirs.is_empty() {
         FxHashMap::default()
     } else {
@@ -4550,6 +4896,7 @@ fn run_with_system_floor(
                     &mut component_css,
                     &ScaleCheck {
                         family: &scale_family_props,
+                        tokens: &theme_tokens,
                         external: is_external_file(file_path, &inputs.external_dirs),
                     },
                     file_path,
@@ -4967,6 +5314,12 @@ fn run_with_system_floor(
         if prop_config.is_some_and(|prop_config| !extracts_configured_value(prop_config, value, &resolve_ctx)) {
             return None;
         }
+        if let Some(prop_config) = prop_config {
+            let usage_ctx = ResolveContext { config, ..resolve_ctx };
+            if let Some(number) = crate::theme::unitless_custom_number(prop_name, prop_config, value, &usage_ctx) {
+                diagnostics.push(unitless_custom_property(file, component, prop_name, &number, prop_config.css_properties()));
+            }
+        }
         // An alias that names no token is reported here, at its usage, and
         // its declaration is dropped from the class, as in a style object.
         if writes_token_reference(value) {
@@ -5226,7 +5579,7 @@ fn run_with_system_floor(
                     call,
                     "warn",
                     format!(
-                        "line {line}: {call} can load {} components, so each keeps every \
+                        "this call can load {} components, so each keeps every \
                          variant and state option it declares — write the specifier \
                          literally so only what it loads keeps its options",
                         opened.len()
@@ -5350,6 +5703,9 @@ fn run_with_system_floor(
         ))
     });
 
+    // staticCss renders these components where no analysed use shows their
+    // props: every component it names, its forced dynamic props included.
+    let mut forced_ids: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     let forced_report = if let Some(static_css) = inputs.static_css.as_ref() {
         let known_bindings: FxHashSet<String> = evaluated
             .values()
@@ -5413,6 +5769,7 @@ fn run_with_system_floor(
         for binding in &injection.forced_bindings {
             for component_id in ids_by_binding.get(binding).into_iter().flatten() {
                 identity_policy.include(component_id.clone());
+                forced_ids.insert(component_id.clone());
             }
         }
         for (prop_name, value) in &injection.utility_values {
@@ -5475,26 +5832,72 @@ fn run_with_system_floor(
         &reachable_ids,
         identity_policy.uncertain,
     );
-    let confined_uses = confined_uses(files, &chain_lookup, &evaluated_ids);
+    // Where the analysis sees every source in production, no direct `eval`
+    // can read a binding by name, and every tag it cannot match is one that
+    // cannot hide a use, it proves every use of each component across
+    // modules. Otherwise only a component its own module confines is proven.
+    // An element a call hands outside the analysis, and every component
+    // staticCss forces, renders with props no analysed use shows.
+    let (delivered_ids, forwarding) = opaque_delivery(files, inputs, &evaluated_ids, &ids_by_binding);
+    let usage_complete = inputs.analysis_context.skipped_sources.is_empty()
+        && !files.values().any(|ff| ff.direct_eval)
+        && (!identity_policy.uncertain
+            || uncertainty_leaves_usage_proven(&uncertain_identities, files, inputs, &forwarding));
+    let project_uses = usage_complete
+        .then(|| {
+            let unproven: std::collections::BTreeSet<String> =
+                escaped_ids.iter().chain(&delivered_ids).chain(&forced_ids).cloned().collect();
+            project_confined_uses(
+                &all_usage_results,
+                evaluated.iter().map(|(id, (_, _, terminal, _, _, _, _))| (id, *terminal == TerminalKind::AsClass)),
+                &unproven,
+            )
+        })
+        .flatten();
+    // Development keeps every slot, and records which ones a production
+    // build prunes (`production_uses`), so its runtime can warn when a value
+    // reaches one: such a value arrives in a way the proof missed.
+    let (project_uses, production_uses) =
+        if inputs.dev_mode { (None, project_uses) } else { (project_uses, None) };
+    // Only project-wide uses record the conditions runtime values write.
+    let narrows_slots = project_uses.is_some();
+    let confined_uses = project_uses.unwrap_or_else(|| confined_uses(files, &chain_lookup, &evaluated_ids));
     let utility_classes = resolve_utility_classes(&all_utility_inputs, &resolve_ctx, class_prefix);
     // A system prop keeps its slot while any component it is active on can
     // receive a value without a utility class; a same-named custom prop takes
     // that component's values instead.
-    let (proven_static_props, dynamic_prop_names): (FxHashSet<String>, FxHashSet<String>) =
-        if total_system_floor {
-            let mut uncovered: FxHashSet<&String> = FxHashSet::default();
-            for (component_id, (_, _, _, active_props, _, custom_configs, _)) in &evaluated {
-                let confined = confined_uses.get(component_id);
-                for prop in active_props.iter().flatten() {
-                    let custom = custom_configs.as_ref().is_some_and(|configs| configs.contains_key(prop));
-                    let covered = confined.is_some_and(|confined| {
-                        confined.covers(prop, |value| utility_classes.has_class(prop, value))
-                    });
-                    if !custom && !covered {
-                        uncovered.insert(prop);
-                    }
+    let uncovered_by = |uses: &FxHashMap<String, ConfinedUse>| {
+        let mut uncovered: FxHashSet<&String> = FxHashSet::default();
+        for (component_id, (_, _, _, active_props, _, custom_configs, _)) in &evaluated {
+            let confined = uses.get(component_id);
+            for prop in active_props.iter().flatten() {
+                let custom = custom_configs.as_ref().is_some_and(|configs| configs.contains_key(prop));
+                let covered = confined
+                    .is_some_and(|confined| confined.covers(prop, |value| utility_classes.has_class(prop, value)));
+                if !custom && !covered {
+                    uncovered.insert(prop);
                 }
             }
+        }
+        uncovered
+    };
+    // The conditions the values reaching a system prop's slot write, where
+    // `uses` proves every use.
+    let system_conditions_by = |uses: &FxHashMap<String, ConfinedUse>, prop: &str| {
+        let mut conditions = BTreeSet::new();
+        for (component_id, (_, _, _, active_props, _, custom_configs, _)) in &evaluated {
+            let active = active_props.as_ref().is_some_and(|props| props.contains(prop));
+            if !active || custom_configs.as_ref().is_some_and(|configs| configs.contains_key(prop)) {
+                continue;
+            }
+            conditions
+                .extend(uses.get(component_id)?.slot_conditions(prop, |value| utility_classes.has_class(prop, value))?);
+        }
+        Some(conditions)
+    };
+    let (proven_static_props, dynamic_prop_names): (FxHashSet<String>, FxHashSet<String>) =
+        if total_system_floor {
+            let uncovered = uncovered_by(&confined_uses);
             active_system_prop_names.into_iter().partition(|prop| !uncovered.contains(prop))
         } else {
             (FxHashSet::default(), detected_dynamic_prop_names)
@@ -5525,8 +5928,27 @@ fn run_with_system_floor(
         }
     }
     share_slots(&mut dynamic_props);
+    // Where every use is proven, a slot serves only the conditions some
+    // value reaching it writes.
+    let mut slot_conditions = if narrows_slots {
+        proven_slot_conditions(&dynamic_props, |prop| system_conditions_by(&confined_uses, prop))
+    } else {
+        Default::default()
+    };
+    if let (Some(production), true) = (&production_uses, total_system_floor) {
+        let uncovered = uncovered_by(production);
+        let narrowed = proven_slot_conditions(&dynamic_props, |prop| system_conditions_by(production, prop));
+        for (prop, meta) in dynamic_props.iter_mut() {
+            let conditions = match (uncovered.contains(prop), meta.value()) {
+                (false, _) => Some(Vec::new()),
+                (true, Some(value)) => narrowed.get(&value.var_name).map(|set| set.iter().cloned().collect()),
+                (true, None) => None,
+            };
+            meta.set_production_conditions(conditions);
+        }
+    }
     let slot_entries = if !dynamic_props.is_empty() {
-        Some(build_variable_slot_entries(&dynamic_props, &breakpoints))
+        Some(build_variable_slot_entries(&dynamic_props, &breakpoints, &slot_conditions))
     } else {
         None
     };
@@ -5616,50 +6038,68 @@ fn run_with_system_floor(
             })
         })
     };
+    // Development also decides each prop as a production build would.
+    let mut production_custom_dynamic = production_uses.as_ref().map(|_| custom_dynamic_by_id.clone());
     for (component_id, custom_configs) in &custom_configs_by_id {
         let confined = confined_uses.get(*component_id);
+        let production = production_uses.as_ref().map(|uses| uses.get(*component_id));
         for (prop_name, config) in custom_configs.iter() {
             // The callback-bound props are the ones whose keys are typed.
             if !config.keys_typed() {
                 continue;
             }
             let delivery = config.transform_fn_source.as_deref();
-            let covered = confined.is_some_and(|confined| {
-                confined.covers(prop_name, |value| custom_classes.has_class(component_id, prop_name, value))
-            }) && config.callback.as_ref().is_none_or(|callback| {
-                delivery != Some(callback.definition.source.as_str())
-                    || (admit_callback(&callback.definition, &evaluator, &mut attempted_callbacks)
-                        && !reads_import(callback))
-            });
-            if !covered {
+            let covers = |confined: Option<&ConfinedUse>| {
+                confined.is_some_and(|confined| {
+                    confined.covers(prop_name, |value| custom_classes.has_class(component_id, prop_name, value))
+                })
+            };
+            let mut callback_admitted = || {
+                config.callback.as_ref().is_none_or(|callback| {
+                    delivery != Some(callback.definition.source.as_str())
+                        || (admit_callback(&callback.definition, &evaluator, &mut attempted_callbacks)
+                            && !reads_import(callback))
+                })
+            };
+            if !(covers(confined) && callback_admitted()) {
                 custom_dynamic_by_id
                     .entry(component_id.to_string())
                     .or_default()
                     .insert(prop_name.clone());
+            }
+            if let (Some(production), Some(dynamic)) = (production, production_custom_dynamic.as_mut()) {
+                if !(covers(production) && callback_admitted()) {
+                    dynamic.entry(component_id.to_string()).or_default().insert(prop_name.clone());
+                }
             }
         }
     }
     // An extension reads an inherited callback from its parent's runtime
     // component, so a parent delivers each callback a delivering extension
     // inherits from it; children precede parents in reverse order.
-    for component_id in sorted_ids.iter().rev() {
-        let (Some(parent_id), Some(read_from_parent)) =
-            (parent_map.get(component_id), parent_callbacks.get(component_id))
-        else {
-            continue;
-        };
-        let read: Vec<String> = custom_dynamic_by_id
-            .get(component_id)
-            .into_iter()
-            .flatten()
-            .filter(|prop| read_from_parent.contains(*prop))
-            .cloned()
-            .collect();
-        if !read.is_empty() {
-            custom_dynamic_by_id.entry(parent_id.clone()).or_default().extend(read);
+    let deliver_to_parents = |dynamic: &mut FxHashMap<String, FxHashSet<String>>| {
+        for component_id in sorted_ids.iter().rev() {
+            let (Some(parent_id), Some(read_from_parent)) =
+                (parent_map.get(component_id), parent_callbacks.get(component_id))
+            else {
+                continue;
+            };
+            let read: Vec<String> = dynamic
+                .get(component_id)
+                .into_iter()
+                .flatten()
+                .filter(|prop| read_from_parent.contains(*prop))
+                .cloned()
+                .collect();
+            if !read.is_empty() {
+                dynamic.entry(parent_id.clone()).or_default().extend(read);
+            }
         }
+    };
+    deliver_to_parents(&mut custom_dynamic_by_id);
+    if let Some(dynamic) = production_custom_dynamic.as_mut() {
+        deliver_to_parents(dynamic);
     }
-
     let mut per_component_custom_dynamic: FxHashMap<String, HashMap<String, DynamicPropMeta>> =
         FxHashMap::default();
     let mut runtime_custom_declarations: Vec<(String, Arc<DeclarationBinding>)> = Vec::new();
@@ -5667,6 +6107,10 @@ fn run_with_system_floor(
     // Copies of one definition share their slots, so each slot's rules are
     // written once, whichever copies read it.
     let mut written_slots: FxHashSet<String> = FxHashSet::default();
+    let mut custom_slot_vars: FxHashSet<String> = FxHashSet::default();
+    // Development: each custom slot's conditions in a production build,
+    // joined across copies like `slot_conditions`; `None` serves every one.
+    let mut production_custom_conditions: HashMap<String, Option<BTreeSet<String>>> = HashMap::new();
     for component_id in &sorted_ids {
         let Some((component_css, _, _, _, _, custom_configs, _)) = evaluated.get(component_id)
         else {
@@ -5706,12 +6150,65 @@ fn run_with_system_floor(
         }
         if !component_dynamic.is_empty() {
             share_slots(&mut component_dynamic);
+            if narrows_slots {
+                let confined = confined_uses.get(component_id.as_str());
+                let proven = proven_slot_conditions(&component_dynamic, |prop| {
+                    confined?.slot_conditions(prop, |value| custom_classes.has_class(component_id, prop, value))
+                });
+                // Definitions alike share a slot: it serves the union of
+                // their conditions, or every condition when one's are unknown.
+                for meta in component_dynamic.values().filter_map(DynamicPropMeta::value) {
+                    let conditions = proven.get(&meta.var_name).cloned();
+                    if custom_slot_vars.insert(meta.var_name.clone()) {
+                        slot_conditions.extend(conditions.map(|conditions| (meta.var_name.clone(), conditions)));
+                    } else if let Some(known) = slot_conditions.get_mut(&meta.var_name) {
+                        match conditions {
+                            Some(conditions) => known.extend(conditions),
+                            None => {
+                                slot_conditions.remove(&meta.var_name);
+                            }
+                        }
+                    }
+                }
+            }
+            if let Some(production) = &production_uses {
+                let confined = production.get(component_id.as_str());
+                let proven = proven_slot_conditions(&component_dynamic, |prop| {
+                    confined?.slot_conditions(prop, |value| custom_classes.has_class(component_id, prop, value))
+                });
+                for meta in component_dynamic.values().filter_map(DynamicPropMeta::value) {
+                    let conditions = proven.get(&meta.var_name).cloned();
+                    match production_custom_conditions.get_mut(&meta.var_name) {
+                        None => {
+                            production_custom_conditions.insert(meta.var_name.clone(), conditions);
+                        }
+                        Some(known) => join_conditions(known, conditions),
+                    }
+                }
+            }
             all_custom_slot_entries.extend(
-                build_variable_slot_entries(&component_dynamic, &breakpoints)
+                build_variable_slot_entries(&component_dynamic, &breakpoints, &slot_conditions)
                     .into_iter()
                     .filter(|(slot_class, _, _)| written_slots.insert(slot_class.clone())),
             );
             per_component_custom_dynamic.insert(component_id.clone(), component_dynamic);
+        }
+    }
+    if let Some(production) = &production_custom_dynamic {
+        for (component_id, metas) in per_component_custom_dynamic.iter_mut() {
+            let kept = production.get(component_id);
+            for (prop, meta) in metas.iter_mut() {
+                let conditions = match (kept.is_some_and(|kept| kept.contains(prop)), meta.value()) {
+                    (false, _) => Some(Vec::new()),
+                    (true, Some(value)) => production_custom_conditions
+                        .get(&value.var_name)
+                        .cloned()
+                        .flatten()
+                        .map(|set| set.into_iter().collect()),
+                    (true, None) => None,
+                };
+                meta.set_production_conditions(conditions);
+            }
         }
     }
     // Runtime configs carry scale values to the browser; an asset() among them
@@ -6227,6 +6724,7 @@ fn run_with_system_floor(
     let slot_registrations = slot_property_registrations(
         dynamic_props.values().chain(per_component_custom_dynamic.values().flat_map(|metas| metas.values())),
         &breakpoints,
+        &slot_conditions,
     );
     sheets.global.insert_str(0, &slot_registrations);
 
@@ -7205,7 +7703,7 @@ mod tests {
         let out = analyze(
             &[(
                 "a.tsx",
-                "export const Box = ds.system({ space: true }).asElement('div');\nexport const Grid = ds.system({ space: true, display: true }).asElement('div');\nexport const App = () => <><Box p={8} /><Grid display=\"flex\" /></>;\n",
+                "export const Box = ds.system({ space: true }).asElement('div');\nexport const Grid = ds.system({ space: true, display: true }).asElement('div');\nexport const App = (rest) => <><Box {...rest} p={8} /><Grid {...rest} display=\"flex\" /></>;\n",
             )],
             &inputs,
         );
@@ -7241,7 +7739,7 @@ mod tests {
         let out = analyze(
             &[(
                 "a.tsx",
-                "export const Used = ds.system({ space: true }).asElement('div');\nexport const Unused = ds.system({ display: true }).asElement('div');\nexport const App = () => <Used />;\n",
+                "export const Used = ds.system({ space: true }).asElement('div');\nexport const Unused = ds.system({ display: true }).asElement('div');\nexport const App = (rest) => <Used {...rest} />;\n",
             )],
             &test_inputs(),
         );
@@ -7260,7 +7758,7 @@ mod tests {
                 ),
                 (
                     "app.tsx",
-                    "import { Box as Renamed } from './components';\nexport const App = ({ value }) => <Renamed size=\"sm\" active tone={value} />;\n",
+                    "import { Box as Renamed } from './components';\nexport const App = ({ value }) => <Renamed size=\"sm\" active tone={value} p={value} />;\n",
                 ),
             ],
             &test_inputs(),
@@ -7386,6 +7884,8 @@ mod tests {
     #[test]
     fn total_floor_reachability_retains_parent_as_class_and_compose_slots() {
         let mut inputs = test_inputs();
+        // An unseen source leaves usage unproven, so the floor holds.
+        inputs.analysis_context.skipped_sources = vec!["unseen.tsx".into()];
         inputs.config.insert(
             "m".into(),
             serde_json::from_str(r#"{"property":"margin","scale":"space"}"#).unwrap(),
@@ -7442,8 +7942,11 @@ mod tests {
     #[test]
     fn total_floor_static_invariance() {
         let source = "export const Box = ds.system({ space: true }).asElement('div');\nexport const App = () => <Box p={8} />;\n";
-        let legacy = analyze_with_total_system_floor(&[("a.tsx", source)], &test_inputs(), false);
-        let floor = analyze_with_total_system_floor(&[("a.tsx", source)], &test_inputs(), true);
+        // An unseen source leaves usage unproven, so the floor holds.
+        let mut inputs = test_inputs();
+        inputs.analysis_context.skipped_sources = vec!["unseen.tsx".into()];
+        let legacy = analyze_with_total_system_floor(&[("a.tsx", source)], &inputs, false);
+        let floor = analyze_with_total_system_floor(&[("a.tsx", source)], &inputs, true);
 
         assert_eq!(floor.system_prop_map, legacy.system_prop_map);
         assert_eq!(
@@ -7706,6 +8209,157 @@ export const App = ({ n }) => <Box bgImage={n} texture={n} />;
         // The nullish breakpoints are absent, so the value takes the class
         // `{ _: 8 }` takes.
         assert_eq!(out.system_prop_map["p"].keys().collect::<Vec<_>>(), ["_:8"]);
+    }
+
+    #[test]
+    fn slots_follow_the_usage_a_complete_analysis_proves_across_modules() {
+        let kit = "export const Box = ds.system({ space: true }).asElement('div');\n";
+        let slots = |app: &str, inputs: &CssInputs| {
+            let out = analyze(&[("kit.tsx", kit), ("app.tsx", app)], inputs);
+            out.dynamic_props.keys().cloned().collect::<Vec<_>>()
+        };
+        let cases: [(&str, &[&str]); 29] = [
+            ("export const App = () => <Box p={8} />;\n", &[]),
+            ("export const App = ({ n }) => <Box p={n} />;\n", &["p"]),
+            // A spread, an escape or a component chosen at runtime leaves a
+            // use unproven, and an unanalysed receiver may clone props in.
+            ("export const App = (rest) => <Box {...rest} />;\n", &["p"]),
+            ("export const list = [Box];\nexport const App = () => <Box p={8} />;\n", &["p"]),
+            ("export const App = ({ As }) => <As><Box p={8} /></As>;\n", &["p"]),
+            ("import { Slot } from 'ui-lib';\nexport const App = () => <Slot><Box p={8} /></Slot>;\n", &["p"]),
+            // An analysed ordinary component and React's pass-through
+            // components leave every use proven.
+            ("function Card({ children }) { return <div>{children}</div>; }\nexport const App = () => <Card><Box p={8} /></Card>;\n", &[]),
+            ("import { StrictMode } from 'react';\nexport const App = () => <StrictMode><Box p={8} /></StrictMode>;\n", &[]),
+            // React's names count only through an import from React.
+            ("import { StrictMode } from 'ui-lib';\nexport const App = () => <StrictMode><Box p={8} /></StrictMode>;\n", &["p"]),
+            // Code outside the analysis that receives an element can clone
+            // props into it: an element in such a call's arguments, or a
+            // parameter an ordinary component passes to one.
+            ("import { enhance } from 'ui-lib';\nexport const App = () => <div>{enhance(<Box p={8} />)}</div>;\n", &["p"]),
+            ("import { useRender } from '@base-ui/react';\nexport const App = ({ props }) => useRender({ render: <Box p={8} />, props });\n", &["p"]),
+            ("import { useRender } from '@base-ui/react';\nfunction Button({ render, ...props }) { return useRender({ render, props }); }\nexport const App = () => <Button render={<Box p={8} />} />;\n", &["p"]),
+            // So does a module value built from such code, an element or a
+            // parameter several `const`s away, and a `new` expression.
+            ("import * as lib from 'ui-lib';\nconst enhance = lib.enhance;\nexport const App = () => <div>{enhance(<Box p={8} />)}</div>;\n", &["p"]),
+            ("import { enhance as e } from 'ui-lib';\nconst enhance = e;\nexport const App = () => <div>{enhance(<Box p={8} />)}</div>;\n", &["p"]),
+            ("import { create } from 'ui-lib';\nconst enhance = create();\nexport const App = () => <div>{enhance(<Box p={8} />)}</div>;\n", &["p"]),
+            ("import { useRender } from '@base-ui/react';\nexport const App = ({ props }) => { const el = <Box p={8} />; const opts = { render: el, props }; return useRender(opts); };\n", &["p"]),
+            ("import { useRender } from '@base-ui/react';\nfunction Button(props) { const r = props.render; const opts = { render: r }; return useRender(opts); }\nexport const App = () => <Button render={<Box p={8} />} />;\n", &["p"]),
+            ("import { Widget } from 'ui-lib';\nexport const App = () => { new Widget(<Box p={8} />); return null; };\n", &["p"]),
+            // A render function the call receives can return the element, and
+            // a value built through a function reads what that function reads.
+            ("import { enhance } from 'ui-lib';\nconst renderIcon = () => <Box p={8} />;\nexport const App = () => <div>{enhance(renderIcon)}</div>;\n", &["p"]),
+            ("import { useRender } from '@base-ui/react';\nexport const App = ({ props }) => { const render = () => <Box p={8} />; return useRender({ render, props }); };\n", &["p"]),
+            ("import { enhance } from 'ui-lib';\nfunction renderIcon() { return <Box p={8} />; }\nexport const App = () => <div>{enhance(renderIcon)}</div>;\n", &["p"]),
+            ("import * as lib from 'ui-lib';\nfunction getEnhance() { return lib.enhance; }\nconst enhance = getEnhance();\nexport const App = () => <div>{enhance(<Box p={8} />)}</div>;\n", &["p"]),
+            ("import { enhance } from 'ui-lib';\nconst icons = { a: <Box p={8} /> };\nconst { a } = icons;\nexport const App = () => <div>{enhance(a)}</div>;\n", &["p"]),
+            // A pattern's defaults, and a parameter a function captures.
+            ("import { enhance } from 'ui-lib';\nconst { a = <Box p={8} /> } = {};\nexport const App = () => <div>{enhance(a)}</div>;\n", &["p"]),
+            ("import { enhance } from 'ui-lib';\nconst [a = <Box p={8} />] = [];\nexport const App = () => <div>{enhance(a)}</div>;\n", &["p"]),
+            ("import * as lib from 'ui-lib';\nconst { enhance = lib.enhance } = {};\nexport const App = () => <div>{enhance(<Box p={8} />)}</div>;\n", &["p"]),
+            ("import { enhance } from 'ui-lib';\nfunction Button(props) { const getRender = () => props.render; return enhance(getRender()); }\nexport const App = () => <Button render={<Box p={8} />} />;\n", &["p"]),
+            // React's own calls and calls on the module's values stay proven.
+            ("import { useMemo } from 'react';\nexport const App = () => useMemo(() => <Box p={8} />, []);\n", &[]),
+            ("const items = [1, 2];\nexport const App = () => <>{items.map((i) => <Box key={i} p={8} />)}</>;\n", &[]),
+        ];
+        for (app, want) in cases {
+            let app = format!("import {{ Box }} from './kit';\n{app}");
+            assert_eq!(slots(&app, &test_inputs()), want, "{app}");
+        }
+        // An element another module's `const` or default export holds.
+        for (els, import) in [
+            ("import { Box } from './kit';\nexport const icon = <Box p={8} />;\n", "import { icon } from './els';"),
+            ("import { Box } from './kit';\nexport default <Box p={8} />;\n", "import icon from './els';"),
+            ("import { Box } from './kit';\nexport default function () { return <Box p={8} />; }\n", "import icon from './els';"),
+        ] {
+            let app = format!("{import}\nimport {{ enhance }} from 'ui-lib';\nexport const App = () => <div>{{enhance(icon)}}</div>;\n");
+            let out = analyze(&[("kit.tsx", kit), ("els.tsx", els), ("app.tsx", &app)], &test_inputs());
+            assert_eq!(out.dynamic_props.keys().collect::<Vec<_>>(), ["p"], "{els}");
+        }
+        let mut dev = test_inputs();
+        dev.dev_mode = true;
+        assert_eq!(slots("import { Box } from './kit';\nexport const App = () => <Box p={8} />;\n", &dev), ["p"]);
+    }
+
+    #[test]
+    fn slots_serve_only_the_conditions_known_value_shapes_write() {
+        let kit = "export const Box = ds.system({ space: true }).props({ tone: { property: 'color' } }).asElement('div');\n";
+        // The slot rules and registered variables each render emits.
+        let slots = |app: &str, inputs: &CssInputs| {
+            let app = format!("import {{ Box }} from './kit';\n{app}");
+            let out = analyze(&[("kit.tsx", kit), ("app.tsx", &app)], inputs);
+            let css = format!("{}{}", out.sheets.system, out.sheets.custom);
+            let mut rules: Vec<String> = css
+                .split(".animus-dyn-")
+                .skip(1)
+                .map(|rule| rule.split([' ', '{']).next().unwrap().to_string())
+                .collect();
+            rules.dedup();
+            let registered = out.sheets.global.lines().filter(|line| line.starts_with("@property --animus-")).count();
+            assert_eq!(registered, rules.len(), "{app}");
+            rules
+        };
+        let cases: [(&str, &[&str]); 7] = [
+            // A scalar writes the base; an object literal, its keys.
+            ("export const App = ({ n }) => <Box p={`${n}px`} />;\n", &["p_"]),
+            ("export const App = ({ c, n }) => <Box p={c ? 8 : `${n}px`} />;\n", &["p_"]),
+            ("export const App = ({ n, m }) => <Box p={{ _: n, sm: m }} />;\n", &["p_", "p_-sm"]),
+            ("export const App = ({ n }) => <Box tone={{ sm: n }} />;\n", &["tone_091638e9-sm"]),
+            // A value of unknown shape, or a spread, may write any condition.
+            ("export const App = ({ c, n }) => <Box p={c ? 8 : n} />;\n", &["p_", "p_-sm"]),
+            ("export const App = ({ n, ...rest }) => <Box {...rest} p={`${n}`} />;\n", &["p_", "p_-sm", "tone_091638e9", "tone_091638e9-sm"]),
+            // So may a clone's override, whatever the element writes.
+            ("import { cloneElement } from 'react';\nfunction Wrap({ children, n }) { return cloneElement(children, { p: n }); }\nexport const App = ({ m, n }) => <Wrap n={n}><Box p={`${m}px`} /></Wrap>;\n", &["p_", "p_-sm"]),
+        ];
+        for (app, want) in cases {
+            assert_eq!(slots(app, &test_inputs()), want, "{app}");
+        }
+        // A component staticCss forces renders with values in any shape.
+        let mut forced = test_inputs();
+        forced.static_css =
+            Some(crate::forced_usage::StaticCssConfig::parse(r#"{"components":{"Box":{"dynamicProps":["tone"]}}}"#).unwrap());
+        let app = "export const App = ({ n }) => <Box tone={`${n}`} />;\n";
+        assert_eq!(slots(app, &forced), ["p_", "p_-sm", "tone_091638e9", "tone_091638e9-sm"]);
+    }
+
+    #[test]
+    fn finite_alternatives_take_static_classes_instead_of_slots() {
+        let kit = "export const Box = ds.system({ space: true }).props({ tone: { property: 'color' } }).asElement('div');\n";
+        // The `p` and `tone` class keys, and the slot rules, each render emits.
+        let emitted = |app: &str| {
+            let app = format!("import {{ Box }} from './kit';\n{app}");
+            let out = analyze(&[("kit.tsx", kit), ("app.tsx", &app)], &test_inputs());
+            let css = format!("{}{}", out.sheets.system, out.sheets.custom);
+            let mut slots: Vec<String> = css
+                .split(".animus-dyn-")
+                .skip(1)
+                .map(|rule| rule.split([' ', '{']).next().unwrap().to_string())
+                .collect();
+            slots.dedup();
+            let mut keys: Vec<String> = out.system_prop_map.get("p").into_iter().flat_map(|map| map.keys().cloned()).collect();
+            let tone = out.replacement_configs["kit.tsx::Box"].custom_prop_class_map.as_ref().and_then(|map| map.get("tone"));
+            keys.extend(tone.into_iter().flat_map(|map| map.keys().cloned()));
+            keys.sort();
+            (keys, slots)
+        };
+        let cases: [(&str, &[&str], &[&str]); 9] = [
+            // Literals, `const`s and literal-union parameters, through
+            // conditionals, `||` and `??`, and object leaves at breakpoints.
+            ("const k = 20;\nexport const App = ({ c }) => <Box p={c ? k : 16} />;\n", &["16", "20"], &[]),
+            ("export const App = ({ c }: { c?: 4 | 0 }) => <Box p={c || 8} />;\n", &["4", "8"], &[]),
+            ("type S = 4 | 8;\ninterface P { s?: S }\nexport const App = ({ s = 2 }: P) => <Box p={s} />;\n", &["2", "4", "8"], &[]),
+            ("export function App(t: 'red' | 'blue') { return <Box tone={t} />; }\n", &["blue", "red"], &[]),
+            ("export const App = ({ c }) => <Box p={{ _: c ? 4 : 8, sm: 16 }} />;\n", &["4", "8", "sm:16"], &[]),
+            // A wide, opaque or reassigned value keeps its slot.
+            ("export const App = ({ c, n }) => <Box p={c ? 8 : n} />;\n", &[], &["p_", "p_-sm"]),
+            ("export const App = ({ s }: { s: number }) => <Box p={s} />;\n", &[], &["p_", "p_-sm"]),
+            ("export const App = ({ s }: { s: 4 | 8 }) => { s = 3; return <Box p={s} />; };\n", &[], &["p_", "p_-sm"]),
+            ("const sizes = { sm: 4 };\nexport const App = ({ c }) => <Box p={c ? sizes.sm : 8} />;\n", &["4", "8"], &["p_", "p_-sm"]),
+        ];
+        for (app, classes, slots) in cases {
+            assert_eq!(emitted(app), (classes.iter().map(|key| key.to_string()).collect(), slots.iter().map(|slot| slot.to_string()).collect()), "{app}");
+        }
     }
 
     #[test]
@@ -8926,14 +9580,17 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         assert_eq!(kept_sizes(&run(require, true, None), "src/r.tsx::R"), vec!["sm", "md", "lg"]);
         let many: String = (0..20).map(|i| sized(&format!("C{i}"))).collect();
         let out = run(import, false, Some(&many));
-        let warnings: Vec<&str> = out
+        let warnings: Vec<(Option<u32>, &str, &str)> = out
             .diagnostics
             .iter()
             .filter(|d| d.code.as_deref() == Some(WIDE_MODULE_LOAD))
-            .map(|d| d.message.as_str())
+            .map(|d| (d.line, d.component.as_str(), d.message.as_str()))
             .collect();
         assert_eq!(warnings.len(), 1, "{warnings:#?}");
-        assert!(warnings[0].starts_with("line 1: import(name) can load 21 components"), "{warnings:#?}");
+        // The location carries the line and the component the call, so the
+        // message names neither again.
+        assert_eq!((warnings[0].0, warnings[0].1), (Some(1), "import(name)"), "{warnings:#?}");
+        assert!(warnings[0].2.starts_with("this call can load 21 components"), "{warnings:#?}");
     }
 
     /// Tags usage cannot match to an Animus component give a production
@@ -9263,16 +9920,14 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
                 ("app.tsx", "cloneElement(child, …)", "warn"),
             ]
         );
-        let lines: Vec<bool> = ["line 4:", "line 6:"]
+        // Each is located at its call's line, which its message does not repeat.
+        let lines: Vec<(Option<u32>, bool)> = out
+            .diagnostics
             .iter()
-            .map(|line| {
-                out.diagnostics
-                    .iter()
-                    .filter(|d| d.code.as_deref() == Some(UNTRACKED_CLONE_PROPS))
-                    .any(|d| d.message.starts_with(line))
-            })
+            .filter(|d| d.code.as_deref() == Some(UNTRACKED_CLONE_PROPS))
+            .map(|d| (d.line, d.message.starts_with("props passed through this call")))
             .collect();
-        assert_eq!(lines, vec![true, true]);
+        assert_eq!(lines, vec![(Some(4), true), (Some(6), true)]);
         let class = class_of(&out, "r.tsx::R");
         assert!(!out.css.contains(&format!(".{class}--size-md")), "nothing is opened");
     }
@@ -11295,19 +11950,22 @@ export const App = () => <main><Card inl={10} shut={10} tone="lg">text</Card></m
         let both: &[&str] = &["idle", "inl"];
         let inl: &[&str] = &["inl"];
         let none: &[&str] = &[];
+        // A complete analysis proves an exported component's uses across
+        // modules, and an element returned, mapped or written in a host
+        // element's attribute, where nothing can clone props into it.
         let cases: [(&str, &str, &[&str]); 27] = [
-            ("export ", "export const App = () => <><Card inl={10} /></>;\n", both),
-            ("", "export { Card };\nexport const App = () => <><Card inl={10} /></>;\n", both),
+            ("export ", "export const App = () => <><Card inl={10} /></>;\n", none),
+            ("", "export { Card };\nexport const App = () => <><Card inl={10} /></>;\n", none),
             ("", "export default Card;\n", both),
             ("", "export const App = () => <><Card inl={10} /></>;\nexport const Alias = Card;\n", both),
             ("", "export const App = () => createElement(Card, { inl: 10 });\n", both),
             ("", "export const App = () => <><Card inl={10} /></>;\nexport const peek = () => eval('Card');\n", both),
-            ("", "export const App = () => <Card inl={10} />;\n", both),
+            ("", "export const App = () => <Card inl={10} />;\n", none),
             ("", "export const App = () => <Layout><Card inl={10} /></Layout>;\n", both),
-            ("", "export const App = () => <ul>{[1].map((n) => <Card key={n} inl={10} />)}</ul>;\n", both),
-            ("", "export const App = () => <div title={<Card inl={10} />} />;\n", both),
+            ("", "export const App = () => <ul>{[1].map((n) => <Card key={n} inl={10} />)}</ul>;\n", none),
+            ("", "export const App = () => <div title={<Card inl={10} />} />;\n", none),
             ("", "export const App = (p) => <><Card inl={10} {...p} /></>;\n", both),
-            ("", "export const App = () => <><Card inl={-10} /></>;\nexport const Box = Card.extend().asElement('span');\n", both),
+            ("", "export const App = () => <><Card inl={-10} /></>;\nexport const Box = Card.extend().asElement('span');\n", none),
             ("", "export const App = (p) => <><Card inl={p.n} /></>;\n", inl),
             ("", "export const App = ({ on }) => <section>{on ? <Card inl={10} /> : (<Card inl={10}><span><Card inl={10} /></span></Card>)}</section>;\nexport const Loose = ({ n }) => <><Card inl={n} /></>;\n", inl),
             ("", "export const App = () => <><Card inl={1e21} /></>;\n", inl),
@@ -11351,7 +12009,7 @@ export const Over = Base.extend()
   .props({ k: { property: 'minHeight', transform: (v) => `${v * 7}px` } })
   .asElement('span');
 const Kid = Kit.extend().asElement('i');
-export const App = () => <><Quiet inl={10} /><Base k={10} /><Kid lift={10} /></>;
+export const App = ({ n }) => <><Quiet inl={10} /><Base k={10} /><Kid lift={10} /><Grand inl={n} /><Over k={n} /></>;
 "#;
         let kit = "export const Kit = ds.props({ lift: { property: 'top', transform: (v) => `${v}px` } }).asElement('div');\n";
         let out = analyze(&[("kit.tsx", kit), ("a.tsx", source)], &test_inputs());
@@ -11425,12 +12083,13 @@ export const App = () => <><Quiet inl={10} /><Base k={10} /><Kid lift={10} /></>
         assert!(!out.css.contains("-dyn-wide") && !out.css.contains("-dyn-inset"), "{}", out.css);
         assert!(!out.components["a.tsx::Frame"].replacement.contains("dynamicPropConfig"));
 
+        // A complete analysis proves an exported component's uses as well.
         let exported = analyze(
             &[("a.tsx", declare("export { Frame };\n", render).as_str())],
             &split_group_inputs(),
         );
-        assert_eq!(exported.dynamic_props.keys().collect::<Vec<_>>(), ["inset", "tall", "wide"]);
-        assert_eq!(exported.admitted_transforms.len(), 2);
+        assert_eq!(exported.dynamic_props.keys().collect::<Vec<_>>(), ["tall"]);
+        assert_eq!(exported.admitted_transforms.keys().collect::<Vec<_>>(), ["double@system.wide"]);
 
         let dynamic = analyze(
             &[("a.tsx", declare("", "export const App = ({ n }) => <><Frame wide={n} inset={3} /></>;\n").as_str())],
@@ -11488,7 +12147,7 @@ export const App = () => <><Quiet inl={10} /><Base k={10} /><Kid lift={10} /></>
         let props = "{ e: { property: 'left', transform: 'host' }, n: { property: 'top', transform: 'nstr' }, u: { property: 'right', transform: 'unit' } }";
         let source = format!(
             "export const Card = ds.props({props}).asElement('div');\nconst Conf = ds.props({props}).asElement('div');\n\
-             export const Kid = Card.extend().asElement('div');\n\
+             export const Kid = Card.extend().asElement('div');\nexport const open = [Card, Kid];\n\
              export const App = () => <><Card e={{3}} n={{2}} u={{4}} /><Conf e={{3}} n={{2}} u={{4}} /><Kid e={{3}} n={{2}} u={{4}} /></>;\n"
         );
         let out = analyze(&[("a.tsx", source.as_str())], &inputs);

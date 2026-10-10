@@ -50,6 +50,7 @@ export const Loose = ds.props({ drift: { property: 'left', transform: shift } })
 export const App = ({ n }) => (
   <>
     <Box wide={10} tall={n} thin={n} ring={n} />
+    <Box wide={n} />
     <Tag inset={n} />
     <Loose drift={n} />
   </>
@@ -163,13 +164,22 @@ export const Foreign = ds.props({ x: { property: 'left', transform: foreign } })
 `,
 };
 
+// Runtime values, so each prop keeps its slot and its delivered reference.
+const RENDERS = {
+  path: 'fixtures/local-reference-renders.tsx',
+  source: `import { Declared } from './local-reference-declarations';
+
+export const App = ({ n }) => <Declared a={n} b={n} c={n} d={n} e={n} f={n} g={n} />;
+`,
+};
+
 describe('captured createTransform bindings, callee source and asserted references', () => {
   let manifest: Manifest;
 
   beforeAll(() => {
     clearAnalysisCache();
     manifest = JSON.parse(
-      analyzeProject(JSON.stringify([SYSTEM, DECLARATIONS]))
+      analyzeProject(JSON.stringify([SYSTEM, DECLARATIONS, RENDERS]))
     );
   });
 
