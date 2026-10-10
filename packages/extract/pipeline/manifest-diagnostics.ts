@@ -279,8 +279,8 @@ export const UNREADABLE_SOURCE_FILE = 'animus.ingestion.unreadable-source-file';
 /** A kit the system extends resolved, yet discovery found none of its files. */
 export const NO_KIT_FILES = 'animus.discovery.no-kit-files';
 
-/** A kit with no `animus` export condition: discovery guesses its source
- *  from `src/`. */
+/** A kit with no `animus` export condition whose exports do not all target
+ *  TypeScript source: discovery guesses its source from `src/`. */
 export const KIT_WITHOUT_SOURCE_CONDITION =
   'animus.discovery.kit-without-source-condition';
 
