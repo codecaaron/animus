@@ -48,6 +48,7 @@ import type {
   AssetSheets,
   ExcludeMatcher,
   ExternalPackageOutcome,
+  KitDescriptorRecord,
   ManifestDiagnostic,
   ManifestSheets,
   ProjectAnalysisResult,
@@ -287,6 +288,8 @@ export class PluginContext {
   externalSourceEntries = new Map<string, string>();
 
   externalPackageOutcomes: ExternalPackageOutcome[] = [];
+  /** The analysed kits' descriptors, from the last discovery. */
+  kitDescriptors: KitDescriptorRecord[] = [];
   /** Configured files buildStart or a late rediscovery could not read.
    *  Later analyses read no files themselves, so they replay these until the
    *  file is read into the cache or deleted. */
@@ -507,6 +510,7 @@ export class PluginContext {
         strict: this.options.strict,
         diagnostics: this.options.diagnostics,
         extraDiagnostics: ingestionFailures,
+        kitDescriptors: this.kitDescriptors,
       });
     } catch (e) {
       // A diagnostic at `error` level fails as a strict failure does.

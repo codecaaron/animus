@@ -70,6 +70,13 @@ export {
   unresolvableIncludesMessage,
   walkPackageSources,
 } from './discover-packages';
+export type { KitDescriptor, KitDescriptorRecord } from './kit-descriptor';
+export {
+  buildKitDescriptor,
+  KIT_DESCRIPTOR_FILE,
+  kitDescriptorDiagnostics,
+  readKitDescriptor,
+} from './kit-descriptor';
 export type { ResolvedSourceId, SourceIdentity } from './source-identity';
 export {
   createSourceIdentity,

@@ -12,6 +12,7 @@ import {
 import { globToRegExp } from './core-options';
 import { discoverFiles } from './discover-files';
 import { parseInternalWire } from './internal-wire';
+import { readKitDescriptor } from './kit-descriptor';
 import {
   INVALID_KIT_SOURCE_CONDITION,
   KIT_SYSTEM_NOT_INCLUDED,
@@ -25,6 +26,7 @@ import { relativeSourceCandidates } from './source-ingestion';
 import { isJsonBlock, isJsonString } from './tsconfig-paths';
 
 import type { EngineApi } from './engine-adapter';
+import type { KitDescriptorRecord } from './kit-descriptor';
 import type { ManifestDiagnostic } from './manifest-diagnostics';
 import type {
   ExtractExportFact,
@@ -353,6 +355,8 @@ export interface CollectedExternalPackages {
   /** A kit without the source condition, and a condition entry whose target
    *  is missing or outside its package. */
   diagnostics: ManifestDiagnostic[];
+  /** Each resolved package's kit descriptor, once per package root. */
+  kitDescriptors: KitDescriptorRecord[];
 }
 
 export async function collectExternalPackageSources(opts: {
@@ -446,6 +450,8 @@ export async function collectExternalPackageSources(opts: {
   const diagnostics: ManifestDiagnostic[] = [];
   const reportedPackages = new Set<string>();
 
+  const kitDescriptors: KitDescriptorRecord[] = [];
+  const describedRoots = new Set<string>();
   for (const specifier of specifiers) {
     let absEntry: string | null;
     try {
@@ -485,6 +491,12 @@ export async function collectExternalPackageSources(opts: {
       continue;
     }
 
+    const realRoot = realPath(pkgRoot);
+    if (!describedRoots.has(realRoot)) {
+      describedRoots.add(realRoot);
+      const described = readKitDescriptor(pkgRoot, rootDir);
+      if (described) kitDescriptors.push(described);
+    }
     const linked = !isInstalledPackage(pkgRoot);
     const srcDir = join(pkgRoot, 'src');
     let fileCount = 0;
@@ -631,6 +643,7 @@ export async function collectExternalPackageSources(opts: {
     fileOwners,
     outcomes,
     diagnostics,
+    kitDescriptors,
   };
 }
 
@@ -859,6 +872,12 @@ export function excludeCollectedPackages(
     fileOwners,
     outcomes: collected.outcomes,
     diagnostics: collected.diagnostics,
+    kitDescriptors: collected.kitDescriptors.filter(
+      (record) =>
+        !rejectedDirs.some((dir) =>
+          isPathWithinRoot(resolve(rootDir, record.packageRoot), dir)
+        )
+    ),
   };
 }
 

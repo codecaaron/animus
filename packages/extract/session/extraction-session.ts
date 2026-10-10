@@ -112,6 +112,7 @@ import { logBuildTimings } from './timing';
 import type {
   AnimusCoreOptions,
   ExternalPackageOutcome,
+  KitDescriptorRecord,
 } from '../pipeline/index';
 
 export type SessionOptions = AnimusCoreOptions;
@@ -409,6 +410,8 @@ export class ExtractionSession {
   /** Per-specifier discovery outcomes from the last full collection —
    *  driver-consumed reporting surface (the CLI's summary). */
   lastExternalOutcomes: ExternalPackageOutcome[] = [];
+  /** The analysed kits' descriptors, from the last discovery. */
+  kitDescriptors: KitDescriptorRecord[] = [];
 
   /** Component count of the last published analysis, null before the first —
    *  read by drivers instead of re-parsing the manifest JSON every cycle. */
@@ -1075,6 +1078,7 @@ export class ExtractionSession {
       rejectedSpecifiers,
       rootDir
     );
+    this.kitDescriptors = admitted.kitDescriptors;
 
     try {
       const identity = createSourceIdentity(rootDir);
@@ -1472,6 +1476,7 @@ export class ExtractionSession {
       strict: this.options.strict,
       diagnostics: this.options.diagnostics,
       extraDiagnostics: this.ingestionFailureDiagnostics,
+      kitDescriptors: this.kitDescriptors,
     });
 
     // Throws on any error diagnostic in EVERY mode, before token contracts

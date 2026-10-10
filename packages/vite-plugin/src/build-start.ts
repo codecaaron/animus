@@ -147,6 +147,7 @@ export async function runBuildStart(
 
   ctx.packageMap = collected.packageMap;
   ctx.externalPackageOutcomes = collected.outcomes;
+  ctx.kitDescriptors = collected.kitDescriptors;
   ctx.externalDirOwners = firstOwners(collected.dirOwnerSets);
   ctx.externalFileOwners = collected.fileOwners;
   ctx.enforceIncludeResolution();
