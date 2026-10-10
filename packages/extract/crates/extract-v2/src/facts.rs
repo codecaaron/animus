@@ -1072,7 +1072,7 @@ pub fn extract_file_facts_enriched_with_usage_statics(
     let program = ast.program();
     let local_statics = eval::collect_static_values(program);
     let local_usage_statics = eval::collect_complete_static_values(program);
-    let imports = collect_import_facts(program);
+    let imports = collect_import_facts(ast.module_record());
     let exports = crate::usage_facts::collect_export_facts(program);
     let inputs = crate::analyze_css::CssInputs::default();
     // Alone, a module resolves only its own bindings.
@@ -1129,7 +1129,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
     let member_parent_extensions = walked.member_parents;
     let walked_chains = walked.chains;
     let const_initializers = collect_const_initializers(program);
-    let imports = collect_import_facts(program);
+    let imports = collect_import_facts(ast.module_record());
     let create_transform_locals: rustc_hash::FxHashSet<String> = imports
         .iter()
         .filter(|imp| imp.imported == "createTransform")
@@ -1383,6 +1383,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
         element_consts,
     } = crate::usage_facts::collect_enriched_usage(
         program,
+        ast.module_record(),
         &usage_statics_fx,
         &descriptors,
         &exports,
@@ -1406,8 +1407,8 @@ pub(crate) fn extract_file_facts_from_static_maps(
         usage,
         usage_enriched: Some(usage_enriched),
         compose,
-        star_exports: crate::usage_facts::collect_star_exports(program),
-        namespace_exports: crate::usage_facts::collect_namespace_exports(program),
+        star_exports: crate::usage_facts::collect_star_exports(ast.module_record()),
+        namespace_exports: crate::usage_facts::collect_namespace_exports(ast.module_record()),
         default_export_binding: crate::usage_facts::collect_default_export_binding(program),
         compose_callees_in_use,
         aliases: const_initializers.aliases,
@@ -1421,7 +1422,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
         member_parent_extensions,
         member_rooted_chains: walked.member_rooted,
         object_member_chains: const_initializers.chains,
-        namespace_imports: crate::usage_facts::collect_namespace_imports(program),
+        namespace_imports: crate::usage_facts::collect_namespace_imports(ast.module_record()),
         default_export_chain: walked
             .default_export
             .map(|start| default_export_chain(program, source, start)),

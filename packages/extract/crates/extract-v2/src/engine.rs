@@ -344,7 +344,7 @@ impl ExtractEngine {
             }
             statics_by_file.insert(ast.path.clone(), statics);
             complete_statics_by_file.insert(ast.path.clone(), complete_statics);
-            imports_by_file.insert(ast.path.clone(), (collect_import_facts(program), exports));
+            imports_by_file.insert(ast.path.clone(), (collect_import_facts(ast.module_record()), exports));
             static_exports_by_file.insert(ast.path.clone(), static_exports);
             complete_static_exports_by_file.insert(ast.path.clone(), complete_static_exports);
         }
