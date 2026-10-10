@@ -2,12 +2,14 @@ import {
   buildKitDescriptor,
   buildPathAliasesJson,
   KIT_DESCRIPTOR_FILE,
+  kitPublicationFailures,
   readTsconfigAliasPairs,
   runStructuralSelfCheck,
 } from '@animus-ui/extract/pipeline';
 import {
   ANIMUS_ARTIFACT_DIR,
   collectSessionAssets,
+  engineApi,
   ExtractionSession,
   getAnalyzedHashes,
   getManifestJson,
@@ -288,6 +290,14 @@ export async function runBuild(
       session
     );
     if (flags.kit) {
+      // A local build reads the workspace; an installed consumer reads only
+      // the published files and declared dependencies.
+      const failures = kitPublicationFailures(config.root, engineApi());
+      if (failures.length > 0) {
+        throw new ExtractionFailure(
+          `the kit's published source is incomplete, so an installed consumer would fail:\n${failures.map((line) => `  - ${line}`).join('\n')}`
+        );
+      }
       err(`kit descriptor → ${writeKitDescriptor(config.root)}`);
     }
 

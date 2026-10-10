@@ -67,6 +67,13 @@ export declare function extractFacts(fileEntriesJson: string): string
 
 export declare function loadSystemModule(systemPath: string, rootDir: string, exportName?: string | undefined | null): NapiSystemConfig
 
+/**
+ * Each file's run-time module specifiers, for the kit publication check:
+ * imports, re-exports and literal `import()` calls that survive type
+ * stripping. `{ "files": { path: [specifier, …] } }`.
+ */
+export declare function moduleSpecifiers(fileEntriesJson: string): string
+
 export interface NapiSystemConfig {
   propConfig: string
   groupRegistry: string
