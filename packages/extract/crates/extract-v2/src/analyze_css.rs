@@ -6617,6 +6617,19 @@ fn run_with_system_floor(
         ids.extend(member_path_ids(path, ff, tag, false, files, inputs, &evaluated_ids));
         ids
     };
+    // A component object some module writes a member of (`R.render = Slot`)
+    // or hands on may no longer render its children in place: each name
+    // or path a module hands on or changes, and each object along it.
+    let mut changed_ids: FxHashSet<String> = FxHashSet::default();
+    for (path, ff) in files {
+        for used in ff.value_escapes.iter().chain(ff.unsafe_object_uses.keys()) {
+            let prefixes = used.match_indices('.').map(|(dot, _)| &used[..dot]).chain(std::iter::once(used.as_str()));
+            for prefix in prefixes {
+                changed_ids.extend(resolve_declared_identity(path, prefix, files, inputs, &evaluated_ids));
+                changed_ids.extend(member_path_ids(path, ff, prefix, false, files, inputs, &evaluated_ids));
+            }
+        }
+    }
     let (delivered_ids, delivered_tags) = opaque_delivery(
         files,
         inputs,
@@ -6625,7 +6638,10 @@ fn run_with_system_floor(
         &wrapper_targets_by_file,
         &ordinary_members,
         receiver_ids,
-        |id| evaluated.get(id).is_some_and(|(_, _, terminal, ..)| *terminal == TerminalKind::AsElement),
+        |id| {
+            !changed_ids.contains(id)
+                && evaluated.get(id).is_some_and(|(_, _, terminal, ..)| *terminal == TerminalKind::AsElement)
+        },
     );
     escaped_ids.extend(delivered_ids);
     // A held wrapper some render of which no member tag shows renders with
@@ -9710,6 +9726,31 @@ export const App = ({ n }) => <Box bgImage={n} texture={n} />;
             let mut files = vec![("kit.tsx", kit), ("el.tsx", el.as_str()), ("outer.tsx", outer), ("app.tsx", app.as_str())];
             files.extend(extra);
             assert_eq!(analyze(&files, &test_inputs()).dynamic_props.keys().collect::<Vec<_>>(), want, "{more}{app}");
+        }
+    }
+
+    /// A component object some module writes a member of, or hands on, may
+    /// render through code usage cannot see, so the elements it receives
+    /// keep their floor.
+    #[test]
+    fn mutated_component_objects_lose_receiver_trust() {
+        let kit = "export const Box = ds.system({ space: true }).asElement('div');\n\
+                   export const R = ds.styles({ display: 'block' }).asElement('div');\n";
+        let render = "import { Box, R } from './kit';\nexport const App = () => <R><Box p={8} /></R>;\n";
+        let cases: [(&str, &str, &[&str]); 5] = [
+            ("", "", &[]),
+            ("R.render = globalThis.Slot;\n", "", &["p"]),
+            ("", "import { R } from './kit';\nR.render = globalThis.Slot;\n", &["p"]),
+            ("", "import * as kit from './kit';\nkit.R.render = globalThis.Slot;\n", &["p"]),
+            ("", "import { R } from './kit';\nconsume(R);\n", &["p"]),
+        ];
+        for (in_kit, other, want) in cases {
+            let kit = format!("{kit}{in_kit}");
+            let mut files = vec![("kit.tsx", kit.as_str()), ("app.tsx", render)];
+            if !other.is_empty() {
+                files.push(("other.tsx", other));
+            }
+            assert_eq!(analyze(&files, &test_inputs()).dynamic_props.keys().collect::<Vec<_>>(), want, "{in_kit}{other}");
         }
     }
 
