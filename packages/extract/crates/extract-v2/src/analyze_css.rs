@@ -2459,6 +2459,11 @@ fn resolve_identity(
                         continue;
                     }
                 }
+                // `export const A = S`: A is S.
+                if let Some(target) = followed_alias(files, inputs, &terminal_file, &terminal_name) {
+                    terminal_name = target.to_string();
+                    continue;
+                }
                 let Some(hop) = ff.imports.iter().find(|i| i.local == terminal_name) else {
                     break;
                 };
@@ -2475,6 +2480,256 @@ fn resolve_identity(
         return by_bare_name(&imp.imported);
     }
     by_bare_name(local)
+}
+
+/// The binding a module-scope `const` alias (`const A = S`, with or without
+/// a type annotation) in `file` holds, when nothing may change what it
+/// holds: then a use of the alias, in any module, is a use of `S`. Every
+/// name or member path a module writes a member of or hands on (each prefix
+/// of it) must lead to something else than the object the alias holds,
+/// through any route `Held` follows, and must not be a namespace or object
+/// that may hand that object on; one the analysis cannot ground refuses.
+fn followed_alias<'f>(
+    files: &'f BTreeMap<String, FileFacts>,
+    inputs: &CssInputs,
+    file: &str,
+    alias: &str,
+) -> Option<&'f str> {
+    let target = files.get(file)?.aliases.get(alias)?;
+    let Held::Object(module, binding) = held_object(files, inputs, file, alias) else { return None };
+    let object = (module, binding);
+    for (path, ff) in files {
+        for used in ff.value_escapes.iter().chain(ff.unsafe_object_uses.keys()) {
+            let prefixes = used.match_indices('.').map(|(dot, _)| &used[..dot]).chain(std::iter::once(used.as_str()));
+            for prefix in prefixes {
+                let held = held_object(files, inputs, path, prefix);
+                // What is changed or handed on as a whole may hand on what
+                // it holds.
+                let whole = prefix.len() == used.len();
+                if held.reaches(&object, whole, files, inputs) {
+                    return None;
+                }
+            }
+        }
+    }
+    Some(target.as_str())
+}
+
+/// What a name or member path holds, for the alias proof.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Held {
+    /// The declaration of an object: its module and binding.
+    Object(String, String),
+    /// A module's namespace object.
+    Namespace(String),
+    /// Something outside the analysis, or a value no binding names, which
+    /// cannot be the alias's object itself.
+    Outside,
+    /// A route the analysis cannot follow to a declaration.
+    Ungrounded,
+}
+
+impl Held {
+    /// Whether it is `object`, or, as a whole namespace or object literal
+    /// changed or handed on, may hand `object` on; an ungrounded route may.
+    fn reaches(
+        &self,
+        object: &(String, String),
+        whole: bool,
+        files: &BTreeMap<String, FileFacts>,
+        inputs: &CssInputs,
+    ) -> bool {
+        match self {
+            Held::Object(module, binding) => {
+                (module, binding) == (&object.0, &object.1)
+                    || (whole
+                        && files.get(module).and_then(|ff| ff.facades.get(binding)).is_some_and(|entries| {
+                            entries.iter().any(|entry| match entry {
+                                crate::facts::FacadeEntry::Member { binding: held, member, .. } => {
+                                    let path = member.as_ref().map_or_else(|| held.clone(), |member| format!("{held}.{member}"));
+                                    held_object(files, inputs, module, &path).reaches(object, true, files, inputs)
+                                }
+                                crate::facts::FacadeEntry::Copy(copied) => {
+                                    copied != binding && held_object(files, inputs, module, copied).reaches(object, true, files, inputs)
+                                }
+                                crate::facts::FacadeEntry::Unknown => true,
+                                _ => false,
+                            })
+                        }))
+            }
+            // Every module a namespace may hand on members of.
+            Held::Namespace(module) => whole && namespace_reaches(module, &object.0, files, inputs),
+            Held::Outside => false,
+            Held::Ungrounded => true,
+        }
+    }
+}
+
+/// Whether `module`'s namespace holds members of `declaring`: it is that
+/// module, or re-exports from it at any depth, by `export … from`,
+/// `export *`, `export * as` or an import it exports again.
+fn namespace_reaches(module: &str, declaring: &str, files: &BTreeMap<String, FileFacts>, inputs: &CssInputs) -> bool {
+    let mut seen: FxHashSet<String> = FxHashSet::default();
+    let mut pending = vec![module.to_string()];
+    while let Some(next) = pending.pop() {
+        if next == declaring {
+            return true;
+        }
+        if !seen.insert(next.clone()) {
+            continue;
+        }
+        let Some(ff) = files.get(&next) else { continue };
+        let exported_imports = ff.imports.iter().filter(|import| {
+            ff.default_export_binding.as_ref() == Some(&import.local)
+                || ff.exports.iter().any(|export| export.source.is_none() && export.local.as_ref() == Some(&import.local))
+        });
+        let sources = ff
+            .exports
+            .iter()
+            .filter_map(|export| export.source.as_ref())
+            .chain(&ff.star_exports)
+            .chain(ff.namespace_exports.values())
+            .chain(exported_imports.map(|import| &import.source));
+        pending.extend(sources.filter_map(|source| resolve_import_source(&next, source, files, inputs)));
+    }
+    false
+}
+
+/// What a name or member path (`ns.sub.X`, `Parts.Root`) in `file` holds:
+/// through local aliases, imports, every kind of re-export and barrel,
+/// namespaces and the members of object literals.
+fn held_object(files: &BTreeMap<String, FileFacts>, inputs: &CssInputs, file: &str, name: &str) -> Held {
+    let mut segments = name.split('.');
+    let Some(root) = segments.next() else { return Held::Ungrounded };
+    let mut seen: FxHashSet<(String, String)> = FxHashSet::default();
+    let mut held = local_held(files, inputs, file.to_string(), root.to_string(), &mut seen);
+    for segment in segments {
+        held = match held {
+            Held::Namespace(module) => exported_held(files, inputs, module, segment, false, &mut seen),
+            Held::Object(module, binding) => {
+                let entries = files.get(&module).and_then(|ff| ff.facades.get(&binding));
+                let member = entries.and_then(|entries| {
+                    entries.iter().find_map(|entry| match entry {
+                        crate::facts::FacadeEntry::Member { key, binding: held, member } if key == segment => {
+                            Some(member.as_ref().map_or_else(|| held.clone(), |member| format!("{held}.{member}")))
+                        }
+                        _ => None,
+                    })
+                });
+                match (entries, member) {
+                    (_, Some(path)) => held_object(files, inputs, &module, &path),
+                    // A member of an object literal that may hold anything.
+                    (Some(entries), None)
+                        if entries.iter().any(|entry| {
+                            matches!(entry, crate::facts::FacadeEntry::Copy(_) | crate::facts::FacadeEntry::Unknown)
+                        }) =>
+                    {
+                        Held::Ungrounded
+                    }
+                    // A member of anything else is not an object an alias holds.
+                    _ => Held::Outside,
+                }
+            }
+            other => other,
+        };
+    }
+    held
+}
+
+/// What `binding`, declared or imported in `module`, holds.
+fn local_held(
+    files: &BTreeMap<String, FileFacts>,
+    inputs: &CssInputs,
+    module: String,
+    binding: String,
+    seen: &mut FxHashSet<(String, String)>,
+) -> Held {
+    if !seen.insert((module.clone(), binding.clone())) {
+        return Held::Ungrounded;
+    }
+    let Some(ff) = files.get(&module) else { return Held::Outside };
+    let held = resolve_alias_terminal(&module, &binding, files);
+    if held != binding {
+        return local_held(files, inputs, module.clone(), held.to_string(), seen);
+    }
+    if let Some(import) = ff.imports.iter().find(|import| import.local == binding) {
+        return match resolve_import_source(&module, &import.source, files, inputs) {
+            Some(next) => exported_held(files, inputs, next, &import.imported, false, seen),
+            None => Held::Outside,
+        };
+    }
+    if let Some(source) = ff.namespace_imports.get(&binding) {
+        return resolve_import_source(&module, source, files, inputs).map_or(Held::Outside, Held::Namespace);
+    }
+    Held::Object(module, binding)
+}
+
+/// What `module` exports as `name`. Through `export *` (`via_star`), a
+/// module that neither exports nor declares the name holds nothing, so the
+/// next source is tried.
+fn exported_held(
+    files: &BTreeMap<String, FileFacts>,
+    inputs: &CssInputs,
+    module: String,
+    name: &str,
+    via_star: bool,
+    seen: &mut FxHashSet<(String, String)>,
+) -> Held {
+    if !seen.insert((module.clone(), format!("export {name}"))) {
+        return Held::Ungrounded;
+    }
+    let Some(ff) = files.get(&module) else { return Held::Outside };
+    if let Some(export) = ff.exports.iter().find(|export| export.exported == name) {
+        return match (&export.source, &export.original, &export.local) {
+            (Some(source), Some(original), _) => match resolve_import_source(&module, source, files, inputs) {
+                Some(next) => exported_held(files, inputs, next, original, false, seen),
+                None => Held::Outside,
+            },
+            (None, _, Some(local)) => local_held(files, inputs, module.clone(), local.clone(), seen),
+            _ => Held::Outside,
+        };
+    }
+    if let Some(source) = ff.namespace_exports.get(name) {
+        return resolve_import_source(&module, source, files, inputs).map_or(Held::Outside, Held::Namespace);
+    }
+    // A default that no binding names (`export default f(R)`) reaches an
+    // object only through the names its module hands on, which the proof
+    // checks as their own.
+    if name == "default" {
+        return match &ff.default_export_binding {
+            Some(local) => local_held(files, inputs, module.clone(), local.clone(), seen),
+            None => Held::Outside,
+        };
+    }
+    // A declaration the export facts leave out (`export function F`).
+    let declared = ff.chains.iter().any(|chain| chain.descriptor.binding == name)
+        || ff.aliases.contains_key(name)
+        || ff.assigned_aliases.contains_key(name)
+        || ff.ordinary_components.contains(name)
+        || ff.facades.contains_key(name);
+    if declared {
+        return local_held(files, inputs, module.clone(), name.to_string(), seen);
+    }
+    let mut outside = false;
+    for source in &ff.star_exports {
+        match resolve_import_source(&module, source, files, inputs) {
+            None => outside = true,
+            // A source that neither exports nor declares the name answers
+            // `Ungrounded`; the next one is tried.
+            Some(next) => match exported_held(files, inputs, next, name, true, seen) {
+                Held::Outside => outside = true,
+                Held::Ungrounded => {}
+                held @ (Held::Object(..) | Held::Namespace(_)) => return held,
+            },
+        }
+    }
+    match (outside, via_star) {
+        (true, _) => Held::Outside,
+        // Not here: the caller tries its next `export *` source.
+        (false, true) => Held::Ungrounded,
+        // Any other declaration, which is not an object an alias holds.
+        (false, false) => Held::Object(module, name.to_string()),
+    }
 }
 
 /// Every member tag a file writes, as a JSX tag or a `createElement` type.
@@ -6488,12 +6743,18 @@ fn run_with_system_floor(
                 );
             }
         }
-        // An exported alias renders in other modules, where it is not
-        // followed.
+        // An exported alias renders in other modules, where only one the
+        // analysis follows is the binding it holds; a default export, however
+        // spelled, is what a framework or entry renders by itself.
         for alias in ff.aliases.keys().chain(ff.assigned_aliases.keys()) {
-            let exported = ff.default_export_binding.as_deref() == Some(alias)
-                || ff.exports.iter().any(|e| e.source.is_none() && e.local.as_deref() == Some(alias));
-            if exported {
+            let exported_as: Vec<&str> = ff
+                .exports
+                .iter()
+                .filter(|e| e.source.is_none() && e.local.as_deref() == Some(alias))
+                .map(|e| e.exported.as_str())
+                .collect();
+            let default = ff.default_export_binding.as_deref() == Some(alias) || exported_as.contains(&"default");
+            if default || (!exported_as.is_empty() && followed_alias(files, inputs, path, alias).is_none()) {
                 names.push(alias);
             }
         }
@@ -11441,29 +11702,105 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         assert!(!out.css.contains(&format!(".{class}--size-md")), "nothing is opened");
     }
 
-    /// An alias exported to other modules, or a default export, is rendered
-    /// where usage tracking does not follow it, so it opens its target.
+    /// An alias exported to other modules as a call's result, or a default
+    /// export, is rendered where usage tracking does not follow it, so it
+    /// opens its target. A `const` alias of a binding, typed or not, is that
+    /// binding: its renders elsewhere are the target's.
     #[test]
-    fn exported_aliases_keep_every_option_of_their_target() {
+    fn exported_aliases_keep_every_option_of_their_target_unless_followed() {
+        let app = "import { R } from './r';\nexport const App = () => <R size=\"sm\" active />;\n";
         for (recipe, consumer) in [
             (
                 format!("{RECIPE}export const B = Object.assign(R, {{}});\n"),
                 "import { B } from './r';\nexport const Other = () => <B size=\"lg\" />;\n",
             ),
             (
-                format!("{RECIPE}export const B = R;\n"),
-                "import { B } from './r';\nexport const Other = () => <B size=\"lg\" />;\n",
-            ),
-            (
                 format!("{RECIPE}export default R;\n"),
                 "import B from './r';\nexport const Other = () => <B size=\"lg\" />;\n",
             ),
+            // A default export, however spelled, renders where nothing follows.
+            (
+                format!("{RECIPE}const B = R;\nexport {{ B as default }};\n"),
+                "import B from './r';\nexport const Other = () => <B size=\"lg\" />;\n",
+            ),
+            // A barrel re-exports the alias as its default.
+            (format!("{RECIPE}export const B = R;\n"), "export { B as default } from './r';\n"),
+            // A module that imports the alias writes a member of it, which is
+            // a member of its target.
+            (
+                format!("{RECIPE}export const B = R;\n"),
+                "import { B } from './r';\nB.render = globalThis.Slot;\nexport const Other = () => <B size=\"lg\" />;\n",
+            ),
+            // The target's own module writes a member of it.
+            (
+                format!("{RECIPE}R.render = globalThis.Slot;\nexport const B = R;\n"),
+                "import { B } from './r';\nexport const Other = () => <B size=\"lg\" />;\n",
+            ),
+            // An alias on the way is handed on.
+            (
+                format!("{RECIPE}const b = R;\nexport const B = b;\nconsume(b);\n"),
+                "import { B } from './r';\nexport const Other = () => <B size=\"lg\" />;\n",
+            ),
+            // An importer writes a member of the alias through its own alias.
+            (
+                format!("{RECIPE}export const B = R;\n"),
+                "import { B } from './r';\nconst b = B;\nb.render = globalThis.Slot;\nexport const Other = () => <B size=\"lg\" />;\n",
+            ),
+            // An importer writes a member of the target under another name.
+            (
+                format!("{RECIPE}export const B = R;\n"),
+                "import { B, R as X } from './r';\nX.render = globalThis.Slot;\nexport const Other = () => <B size=\"lg\" />;\n",
+            ),
+            // The module writes to the alias, which it may no longer hold.
+            (
+                format!("{RECIPE}export const B = R;\nB.extra = 1;\n"),
+                "import { B } from './r';\nexport const Other = () => <B size=\"lg\" />;\n",
+            ),
         ] {
-            let app = "import { R } from './r';\nexport const App = () => <R size=\"sm\" active />;\n";
             assert_eq!(
                 kept_options(&[("r.tsx", recipe.as_str()), ("app.tsx", app), ("other.tsx", consumer)]),
                 (vec!["sm", "md", "lg"], vec!["active", "busy"]),
                 "{recipe}"
+            );
+        }
+        // An importer writes a member of the alias through a nested namespace.
+        let recipe = format!("{RECIPE}export const B = R;\n");
+        let nested = "import * as lib from './barrel';\nlib.nested.B.render = globalThis.Slot;\nexport const Other = () => <lib.nested.B size=\"lg\" />;\n";
+        assert_eq!(
+            kept_options(&[
+                ("r.tsx", recipe.as_str()),
+                ("barrel.ts", "export * as nested from './r';\n"),
+                ("app.tsx", app),
+                ("other.tsx", nested),
+            ]),
+            (vec!["sm", "md", "lg"], vec!["active", "busy"]),
+        );
+        // An importer writes a member of the target through an `export *`
+        // barrel, under the name its module exports it as.
+        let recipe = format!("{RECIPE}export {{ R as Original }};\nexport const B = R;\n");
+        let wildcard = "import { B } from './r';\nimport { Original as X } from './barrel';\nX.render = globalThis.Slot;\nexport const Other = () => <B size=\"lg\" />;\n";
+        assert_eq!(
+            kept_options(&[
+                ("r.tsx", recipe.as_str()),
+                ("barrel.ts", "export * from './r';\n"),
+                ("app.tsx", app),
+                ("other.tsx", wildcard),
+            ]),
+            (vec!["sm", "md", "lg"], vec!["active", "busy"]),
+        );
+        for alias in [
+            "export const B = R;\n",
+            "export const B: typeof R = R;\n",
+            "export { R as B };\n",
+            // Its module renders it, which changes nothing it holds.
+            "import { createElement } from 'react';\nexport const B = R;\nexport const Own = () => createElement(B, { size: 'sm' });\n",
+        ] {
+            let recipe = format!("{RECIPE}{alias}");
+            let consumer = "import { B } from './r';\nexport const Other = () => <B size=\"lg\" />;\n";
+            assert_eq!(
+                kept_options(&[("r.tsx", recipe.as_str()), ("app.tsx", app), ("other.tsx", consumer)]),
+                (vec!["sm", "lg"], vec!["active"]),
+                "{alias}"
             );
         }
     }
@@ -11870,26 +12207,28 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
     }
 
     #[test]
-    fn renamed_recipes_warn_but_resolved_assigned_and_outside_tags_do_not() {
+    fn unfollowed_recipes_warn_but_resolved_aliases_and_outside_tags_do_not() {
         let recipe = "const ButtonRecipe = ds.styles({}).system({ space: true }).asElement('button');\n";
-        // `Object.assign(R, …)` returns `R`, so the tag resolves to it.
-        let assigned = format!("{recipe}export const Button = Object.assign(ButtonRecipe, {{ Icon: ButtonRecipe }});\n");
-        let app = "import { Button } from './recipe';\nexport const App = () => <Button marginInlineStart={8} />;\n";
-        let out = analyze_with_logical_space(&[("recipe.tsx", assigned.as_str()), ("app.tsx", app)]);
-        assert!(unattributed(&out).is_empty(), "{:?}", out.diagnostics);
-        assert!(out.system_prop_map.values().any(|map| map.contains_key("8")), "{:?}", out.system_prop_map);
-        for (declaration, tag) in [
-            ("export const Button = ButtonRecipe;", "Button"),
-            (
-                "const Family = compose({ Root: ButtonRecipe }, { name: 'Family' });\nexport const Button = { ...Family };\ndecorate(Button);",
-                "Button.Root",
-            ),
+        // `Object.assign(R, …)` returns `R`, and `const B = R` is `R`, so the
+        // tag resolves to it.
+        for declaration in [
+            "export const Button = Object.assign(ButtonRecipe, { Icon: ButtonRecipe });",
+            "export const Button = ButtonRecipe;",
         ] {
             let source = format!("{recipe}{declaration}\n");
-            let app = format!("import {{ Button }} from './recipe';\nexport const App = () => <{tag} marginInlineStart={{8}} />;\n");
-            let out = analyze_with_logical_space(&[("recipe.tsx", source.as_str()), ("app.tsx", app.as_str())]);
-            assert_eq!(unattributed(&out).len(), 1, "{declaration}: {:?}", out.diagnostics);
+            let app = "import { Button } from './recipe';\nexport const App = () => <Button marginInlineStart={8} />;\n";
+            let out = analyze_with_logical_space(&[("recipe.tsx", source.as_str()), ("app.tsx", app)]);
+            assert!(unattributed(&out).is_empty(), "{declaration}: {:?}", out.diagnostics);
+            assert!(out.system_prop_map.values().any(|map| map.contains_key("8")), "{:?}", out.system_prop_map);
         }
+        // A copy of a family something may change is not followed.
+        let source = format!(
+            "{recipe}const Family = compose({{ Root: ButtonRecipe }}, {{ name: 'Family' }});\n\
+             export const Button = {{ ...Family }};\ndecorate(Button);\n"
+        );
+        let app = "import { Button } from './recipe';\nexport const App = () => <Button.Root marginInlineStart={8} />;\n";
+        let out = analyze_with_logical_space(&[("recipe.tsx", source.as_str()), ("app.tsx", app)]);
+        assert_eq!(unattributed(&out).len(), 1, "{:?}", out.diagnostics);
         let recipe = "export const ButtonRecipe = ds.styles({}).system({ space: true }).asElement('button');\n";
         for app in [
             "import { ButtonRecipe as Button } from './recipe';\nexport const App = () => <Button marginInlineStart={8} />;\n",
@@ -13609,7 +13948,7 @@ export const App = () => <main><Card inl={10} shut={10} tone="lg">text</Card></m
             ("export ", "export const App = () => <><Card inl={10} /></>;\n", none),
             ("", "export { Card };\nexport const App = () => <><Card inl={10} /></>;\n", none),
             ("", "export default Card;\n", both),
-            ("", "export const App = () => <><Card inl={10} /></>;\nexport const Alias = Card;\n", both),
+            ("", "export const App = () => <><Card inl={10} /></>;\nexport const Alias = Card;\n", none),
             ("", "export const App = () => createElement(Card, { inl: 10 });\n", both),
             ("", "export const App = () => <><Card inl={10} /></>;\nexport const peek = () => eval('Card');\n", both),
             ("", "export const App = () => <Card inl={10} />;\n", none),

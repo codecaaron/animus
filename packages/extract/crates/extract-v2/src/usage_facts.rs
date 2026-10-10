@@ -2271,11 +2271,12 @@ impl<'a> Visit<'a> for ObjectUseScan<'a, '_> {
             self.uses.insert(key, ObjectUse { line: Some(line), what });
             return;
         }
-        // React's `useContext` and `use` read the context they receive.
+        // React's `useContext` and `use` read the context they receive, and
+        // its `createElement` renders its type as a JSX tag does.
         let mut ancestors = self.ancestors.iter().rev();
         if let (current, Some(AstKind::CallExpression(call))) = peel_wrappers(ident.span, &mut ancestors) {
             let read = call.arguments.first().map(GetSpan::span) == Some(current)
-                && self.react.calls(self.scoping, &call.callee, &["useContext", "use"]);
+                && self.react.calls(self.scoping, &call.callee, &["useContext", "use", "createElement"]);
             if read {
                 return;
             }
