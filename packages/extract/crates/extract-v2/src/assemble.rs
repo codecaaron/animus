@@ -55,8 +55,8 @@ pub struct ReplacementPayload {
     /// The extension inherits callbacks from its parent but delivers none,
     /// so its replacement no longer names the parent.
     pub drops_parent_reference: bool,
-    /// System prop → the props later in its `systemPropNames` that take
-    /// effect over it when one element sets both (`superseded_props`).
+    /// System prop → the later-defined props that take effect over it when
+    /// one element sets both (`superseded_props`).
     pub superseded_by: BTreeMap<String, Vec<String>>,
 }
 

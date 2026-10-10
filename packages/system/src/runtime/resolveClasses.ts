@@ -20,7 +20,7 @@ export interface ClassResolverConfig {
   /** System props bound to a configured transform, whose `systemPropMap`
    *  keys are `typedValueKey`s. */
   typedSystemProps?: readonly string[];
-  /** System prop → the props later in `systemPropNames` that write every
+  /** System prop → the props the system defines after it that write every
    *  property it writes. Of props that one element sets on one CSS
    *  property, the later-defined takes effect, so a superseded prop applies
    *  no class and no slot value. */

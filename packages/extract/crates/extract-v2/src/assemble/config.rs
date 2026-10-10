@@ -26,8 +26,8 @@ fn extra_prop_names(p: &ReplacementPayload, group_registry: &FxHashMap<String, V
     names.into_iter().collect()
 }
 
-/// The order the runtime walks a config's `systemPropNames` in, each name at
-/// its first position: its groups' lists, then the other names.
+/// A config's `systemPropNames`, each at its first position: its groups'
+/// lists, then the other names.
 fn prop_walk(p: &ReplacementPayload, group_registry: &FxHashMap<String, Vec<String>>) -> Vec<String> {
     let names: Vec<String> = if p.system_group_names.is_empty() {
         p.system_prop_names.clone()
@@ -40,35 +40,39 @@ fn prop_walk(p: &ReplacementPayload, group_registry: &FxHashMap<String, Vec<Stri
 }
 
 /// When one element sets two system props that write one CSS property, the
-/// prop later in `systemPropNames` takes effect: the runtime skips each prop
-/// a later set prop supersedes. A later prop supersedes one when it writes
-/// every property that one writes, its current variable included; a partial
-/// overlap keeps both, and the stylesheet's order decides, as it does for a
-/// shorthand and its longhand. Custom and declaration props take no part.
+/// prop the system defines later takes effect: the runtime skips each prop a
+/// later-defined set prop supersedes, whatever order the config lists them
+/// in (an extension child lists its props sorted). A later prop supersedes
+/// one when it writes every property that one writes, its current variable
+/// included; a partial overlap keeps both, and the stylesheet's order
+/// decides, as it does for a shorthand and its longhand. Custom and
+/// declaration props take no part.
 pub(crate) fn superseded_props(
     p: &ReplacementPayload,
     group_registry: &FxHashMap<String, Vec<String>>,
     config: &PropConfigMap,
+    prop_order: &FxHashMap<String, usize>,
 ) -> BTreeMap<String, Vec<String>> {
     let custom = |name: &str| {
         p.custom_prop_class_map.as_ref().is_some_and(|cpm| cpm.contains_key(name))
             || p.custom_dynamic_config.as_ref().is_some_and(|cdc| cdc.contains_key(name))
     };
-    let writes: Vec<(String, BTreeSet<&str>)> = prop_walk(p, group_registry)
+    let mut writes: Vec<(usize, String, BTreeSet<&str>)> = prop_walk(p, group_registry)
         .into_iter()
         .filter(|name| !custom(name))
         .filter_map(|name| {
             let prop = config.get(&name).filter(|prop| prop.declaration_binding().is_none())?;
             let properties = prop.css_properties().iter().map(String::as_str).chain(prop.current_var.as_deref());
-            Some((name, properties.collect()))
+            Some((*prop_order.get(&name)?, name, properties.collect()))
         })
         .collect();
+    writes.sort_by_key(|(position, ..)| *position);
     let mut superseded = BTreeMap::new();
-    for (index, (name, properties)) in writes.iter().enumerate() {
+    for (index, (_, name, properties)) in writes.iter().enumerate() {
         let later: Vec<String> = writes[index + 1..]
             .iter()
-            .filter(|(_, later)| properties.is_subset(later))
-            .map(|(later, _)| later.clone())
+            .filter(|(_, _, later)| properties.is_subset(later))
+            .map(|(_, later, _)| later.clone())
             .collect();
         if !later.is_empty() {
             superseded.insert(name.clone(), later);

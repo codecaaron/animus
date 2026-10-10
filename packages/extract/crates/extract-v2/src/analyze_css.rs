@@ -82,6 +82,9 @@ pub struct CssInputs {
     pub variable_map: VariableMap,
     pub contextual_vars: ContextualVarsMap,
     pub config: PropConfigMap,
+    /// Each system prop's position in the system's config: the order the
+    /// system defines its props in, which `config` does not keep.
+    pub prop_order: FxHashMap<String, usize>,
     pub group_registry: FxHashMap<String, Vec<String>>,
     pub selector_aliases: SelectorAliasesMap,
     pub condition_aliases: ConditionAliasesMap,
@@ -188,11 +191,17 @@ impl CssInputs {
         };
         let mut config = parse("configJson", config_json)?;
         crate::theme::key_unidentified_transforms(&mut config);
+        let prop_order = parse::<serde_json::Map<String, Value>>("configJson", config_json)?
+            .keys()
+            .enumerate()
+            .map(|(position, prop)| (prop.clone(), position))
+            .collect();
         Ok(CssInputs {
             theme: parse("themeJson", theme_json)?,
             variable_map: parse("variableMapJson", variable_map_json)?,
             contextual_vars: parse("contextualVarsJson", contextual_vars_json)?,
             config,
+            prop_order,
             group_registry: parse("groupRegistryJson", group_registry_json)?,
             selector_aliases: parse("selectorAliasesJson", selector_aliases_json)?,
             condition_aliases: parse("conditionAliasesJson", condition_aliases_json)?,
@@ -5673,8 +5682,12 @@ fn run_with_system_floor(
             }),
             superseded_by: BTreeMap::new(),
         };
-        payload.superseded_by =
-            crate::assemble::superseded_props(&payload, &inputs.group_registry, &inputs.config);
+        payload.superseded_by = crate::assemble::superseded_props(
+            &payload,
+            &inputs.group_registry,
+            &inputs.config,
+            &inputs.prop_order,
+        );
         replacement_configs.insert(component_id.clone(), payload);
     }
 

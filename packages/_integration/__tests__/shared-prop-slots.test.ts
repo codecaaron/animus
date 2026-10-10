@@ -25,6 +25,7 @@ const config = createSystem()
 const path = 'fixtures/shared-slots.tsx';
 const source = `import { ds } from './setup';
 export const Box = ds.system({ probe: true }).asElement('div');
+export const Tall = Box.extend().styles({ display: 'block' }).asElement('section');
 export const App = ({ n }) => (
   <>
     <Box h={n} height={n} rawH={n} />
@@ -41,10 +42,11 @@ const manifest = JSON.parse(
 );
 const css: string = manifest.css;
 const dynamicProps = buildDynamicPropConfig(manifest.dynamic_props);
-const supersededBy = JSON.parse(
-  transformFile(path, source).code.match(/"supersededBy":(\{[^}]*\})/)?.[1] ??
-    'null'
+const code = transformFile(path, source).code;
+const tables = [...code.matchAll(/"supersededBy":(\{[^}]*\})/g)].map(
+  ([, table]) => JSON.parse(table)
 );
+const supersededBy = tables[0];
 const resolve = (props: Record<string, string>) =>
   resolveClasses(
     'animus-Box',
@@ -83,7 +85,11 @@ test('props on one property with one transform share a slot; the later-defined p
 });
 
 test('of literal and runtime props on one property, the later-defined takes effect', () => {
-  expect(supersededBy).toEqual({ height: ['h', 'rawH'], h: ['rawH'] });
+  // The extension lists its props sorted, `height` after `h`, and still
+  // keeps the order the system defines them in.
+  expect(code).toContain('"systemPropNames":["h","height","rawH"]');
+  const table = { height: ['h', 'rawH'], h: ['rawH'] };
+  expect(tables).toEqual([table, table]);
   const [, h10] = resolve({ h: '10px' }).classes;
   const [, h50] = resolve({ h: '50px' }).classes;
   const [, height20] = resolve({ height: '20px' }).classes;
