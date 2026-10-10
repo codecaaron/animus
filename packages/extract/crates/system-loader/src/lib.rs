@@ -3583,22 +3583,30 @@ export const ds = tokens;
         assert!(path.contains("groups"));
     }
 
+    /// A package with no `exports` resolves through `module`, then `main`.
+    /// Its own fixture keeps the case independent of any workspace build.
     #[test]
-    fn resolve_test_ds_fallback() {
-        let workspace_root = workspace_root();
-        let showcase_src = workspace_root.join("packages/showcase/src");
-        let dir_str = showcase_src.to_string_lossy();
-        if !built_artifact_available(
-            &workspace_root.join("packages/test-ds/dist/index.mjs"),
-            "resolve_test_ds_fallback",
-        ) {
-            return;
-        }
+    fn resolve_without_exports_falls_back_to_module_then_main() {
+        let dir = scratch_dir("module-main-fallback");
+        let package = |name: &str, manifest: &str, files: &[&str]| {
+            let root = dir.join("node_modules").join(name);
+            write_fixture(&root.join("package.json"), manifest);
+            for file in files {
+                write_fixture(&root.join(file), "export const x = 1;\n");
+            }
+        };
+        package(
+            "with-module",
+            r#"{"module": "dist/index.mjs", "main": "dist/index.js"}"#,
+            &["dist/index.mjs", "dist/index.js"],
+        );
+        package("main-only", r#"{"main": "dist/index.js"}"#, &["dist/index.js"]);
+        let from = dir.to_string_lossy();
 
-        // @animus-ui/test-ds has NO exports, only module/main
-        let path = resolve_bare_specifier("@animus-ui/test-ds", &dir_str)
-            .expect("built @animus-ui/test-ds package must resolve");
-        assert!(path.contains("dist/index.mjs") || path.contains("dist/index.js"));
+        let module = resolve_bare_specifier("with-module", &from).expect("module resolves");
+        assert!(module.ends_with("with-module/dist/index.mjs"), "{module}");
+        let main = resolve_bare_specifier("main-only", &from).expect("main resolves");
+        assert!(main.ends_with("main-only/dist/index.js"), "{main}");
     }
 
     #[test]
