@@ -93,11 +93,12 @@ fn eval_object_expr_scoped(
                 if prop.kind != PropertyKind::Init {
                     return Err(BailError::new("getter/setter in style object"));
                 }
-                if prop.computed {
-                    return Err(BailError::new("computed property key in style object"));
-                }
-
-                let key = eval_property_key(&prop.key)?;
+                let key = if prop.computed {
+                    computed_key(&prop.key, static_values)
+                        .ok_or_else(|| BailError::new("computed property key in style object"))?
+                } else {
+                    eval_property_key(&prop.key)?
+                };
                 // Eligibility is inherited by nested blocks, so only positions under
                 // `animationName`/`animation` mint the unregistered-reference code.
                 // `animation` is in because the shorthand can embed a keyframe name;
@@ -180,13 +181,102 @@ fn eval_object_expr_scoped(
                     }
                 }
             }
-            ObjectPropertyKind::SpreadProperty(_) => {
-                return Err(BailError::new("spread element in style object"));
+            ObjectPropertyKind::SpreadProperty(spread) => {
+                // A stable static object spreads in authored order: a later
+                // key overrides an earlier one and keeps its first position.
+                let mut spread_value = static_object_at(&spread.argument, static_values)?;
+                for (path, reason) in take_lost_values(&mut spread_value) {
+                    let (parent, key) = match path.rsplit_once('.') {
+                        Some((parent, key)) => (Some(parent.to_string()), key.to_string()),
+                        None => (None, path),
+                    };
+                    skipped.push(SkippedProperty {
+                        key,
+                        reason,
+                        parent,
+                        span: span_of(spread.span),
+                    });
+                }
+                if let Value::Object(entries) = spread_value {
+                    for (key, value) in entries {
+                        map.insert(key, value);
+                    }
+                }
             }
         }
     }
 
     Ok((Value::Object(map), skipped, captured))
+}
+
+/// A computed key whose value is a constant string: a string or an
+/// expression-free template literal, or a static binding or member that
+/// holds a string.
+fn computed_key(
+    key: &PropertyKey<'_>,
+    static_values: Option<&FxHashMap<String, Value>>,
+) -> Option<String> {
+    let expr = key.as_expression()?;
+    match crate::chain_walk::unwrap_type_assertions(expr) {
+        Expression::StringLiteral(lit) => Some(lit.value.to_string()),
+        Expression::TemplateLiteral(tpl) if tpl.expressions.is_empty() => {
+            tpl.quasis.first().and_then(|quasi| quasi.value.cooked).map(|cooked| cooked.to_string())
+        }
+        other => match static_path_value(other, static_values?)? {
+            Value::String(text) => Some(text.clone()),
+            _ => None,
+        },
+    }
+}
+
+/// The static value an identifier, or a member path from one, names:
+/// `preset`, `presets.pixel`, `presets['pixel']`. `None` for anything else,
+/// and for a member a lost-value marker stands in for.
+pub(crate) fn static_path_value<'v>(
+    expr: &Expression<'_>,
+    static_values: &'v FxHashMap<String, Value>,
+) -> Option<&'v Value> {
+    match crate::chain_walk::unwrap_type_assertions(expr) {
+        Expression::Identifier(ident) => static_values
+            .get(ident.name.as_str())
+            .filter(|value| asset_function(value).is_none()),
+        Expression::StaticMemberExpression(member) => {
+            let parent = static_path_value(&member.object, static_values)?;
+            lost_value_reason(parent).is_none().then_some(())?;
+            parent
+                .as_object()?
+                .get(member.property.name.as_str())
+                .filter(|value| lost_value_reason(value).is_none())
+        }
+        Expression::ComputedMemberExpression(member) => {
+            let key = match crate::chain_walk::unwrap_type_assertions(&member.expression) {
+                Expression::StringLiteral(lit) => lit.value.to_string(),
+                other => static_path_value(other, static_values)?.as_str()?.to_string(),
+            };
+            let parent = static_path_value(&member.object, static_values)?;
+            lost_value_reason(parent).is_none().then_some(())?;
+            parent.as_object()?.get(&key).filter(|value| lost_value_reason(value).is_none())
+        }
+        _ => None,
+    }
+}
+
+/// The static object a spread argument names, or why it names none. An
+/// object whose stability the analysis could not prove is a marker naming
+/// the use that makes it unstable.
+fn static_object_at(
+    expr: &Expression<'_>,
+    static_values: Option<&FxHashMap<String, Value>>,
+) -> Result<Value, BailError> {
+    let named = static_values.and_then(|sv| static_path_value(expr, sv));
+    match named {
+        Some(value) => match lost_value_reason(value) {
+            Some(reason) => Err(BailError::new(format!("spread of {reason}"))),
+            None if value.is_object() => Ok(value.clone()),
+            None => Err(BailError::new("spread of a static value that is no object")),
+        },
+        None => Err(BailError::new("spread element in style object")),
+    }
 }
 
 fn eval_property_key(key: &PropertyKey<'_>) -> Result<String, BailError> {
@@ -304,17 +394,8 @@ fn eval_expression_scoped(
             Err(BailError::new("tagged template (non-static)"))
         }
         Expression::StaticMemberExpression(member) => {
-            if let Some(sv) = static_values {
-                if let Expression::Identifier(ident) = &member.object {
-                    if let Some(Value::Object(map)) = sv.get(ident.name.as_str()) {
-                        if let Some(val) = map
-                            .get(member.property.name.as_str())
-                            .filter(|val| lost_value_reason(val).is_none())
-                        {
-                            return Ok(val.clone());
-                        }
-                    }
-                }
+            if let Some(val) = static_values.and_then(|sv| static_path_value(expr, sv)) {
+                return Ok(val.clone());
             }
             Err(BailError::new(member_expression_skip_reason(
                 &member.object,
@@ -323,9 +404,10 @@ fn eval_expression_scoped(
                 keyframes_eligible,
             )))
         }
-        Expression::ComputedMemberExpression(_) => {
-            Err(BailError::new("member expression (non-static)"))
-        }
+        Expression::ComputedMemberExpression(_) => static_values
+            .and_then(|sv| static_path_value(expr, sv))
+            .cloned()
+            .ok_or_else(|| BailError::new("member expression (non-static)")),
 
         _ => Err(BailError::new("unsupported expression type")),
     }
@@ -348,6 +430,9 @@ fn member_expression_skip_reason(
         return format!("{named} — evaluated without extraction-time statics");
     };
     match sv.get(base) {
+        Some(value) if lost_value_reason(value).is_some() => {
+            format!("{named} — {}", lost_value_reason(value).unwrap_or_default())
+        }
         Some(Value::Object(_)) => format!(
             "{named} — '{base}' is a registered collection with no '{property}' member"
         ),
@@ -603,9 +688,12 @@ fn collect_static_values_impl(
             if let Some(init) = &declarator.init {
                 let init = crate::chain_walk::unwrap_type_assertions(init);
                 let mut dummy_skips = Vec::new();
+                // Style values read earlier consts, as source order runs them;
+                // JSX usage values keep reading literals only.
+                let scope = if require_complete { &assets } else { &values };
                 match init {
                     Expression::ObjectExpression(obj) => {
-                        if let Ok((mut val, skips, captures)) = eval_object_expr_scoped(obj, Some(&assets), false) {
+                        if let Ok((mut val, skips, captures)) = eval_object_expr_scoped(obj, Some(scope), false) {
                             if !require_complete {
                                 let lost = LostValueSource {
                                     obj,
@@ -620,7 +708,7 @@ fn collect_static_values_impl(
                         }
                     }
                     _ => {
-                        if let Ok(val) = eval_expression_with_statics(init, &mut dummy_skips, Some(&assets)) {
+                        if let Ok(val) = eval_expression_with_statics(init, &mut dummy_skips, Some(scope)) {
                             if !require_complete || dummy_skips.is_empty() {
                                 values.insert(name, val);
                             }
@@ -707,8 +795,31 @@ fn mark_lost_value(
     }
 }
 
-fn lost_value_reason(value: &Value) -> Option<&str> {
+/// A marker that stands in for a static value no reader may use, saying why.
+pub(crate) fn lost_marker(reason: String) -> Value {
+    let mut marker = Map::new();
+    marker.insert(LOST_VALUE.to_string(), Value::String(reason));
+    Value::Object(marker)
+}
+
+/// Why a static value is no usable value, when a marker stands in for it.
+pub(crate) fn lost_value_reason(value: &Value) -> Option<&str> {
     value.as_object()?.get(LOST_VALUE)?.as_str()
+}
+
+/// The static value a dotted path from a binding names, through members
+/// no marker stands in for; the last step may be a marker, so a reader can
+/// report it.
+pub(crate) fn static_path<'v>(statics: &'v FxHashMap<String, Value>, path: &str) -> Option<&'v Value> {
+    let mut segments = path.split('.');
+    let mut current = statics.get(segments.next()?)?;
+    for segment in segments {
+        if lost_value_reason(current).is_some() {
+            return Some(current);
+        }
+        current = current.as_object()?.get(segment)?;
+    }
+    Some(current)
 }
 
 /// Among a file's static values, a local bound to `@animus-ui/system`'s

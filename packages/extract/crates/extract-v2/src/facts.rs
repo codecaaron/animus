@@ -652,11 +652,17 @@ fn index_identifiers<'a>(expr: &Expression<'a>, index: &mut BTreeMap<(u32, u32),
             }
         }
         Expression::StaticMemberExpression(member) => {
+            // A static member path, as a stage argument names a member of a
+            // static object: `styles(presets.pixel)`.
+            if let Some(path) = member_path(expr) {
+                index.insert((member.span.start, member.span.end), path);
+            }
             index_identifiers(&member.object, index);
         }
         _ => {}
     }
 }
+
 
 /// The identifier an expression is built from, through calls, static
 /// members and assertions: `createSystem().build()` → `createSystem`.
@@ -1273,8 +1279,11 @@ pub(crate) fn extract_file_facts_from_static_maps(
                             }
                         }
                         None => match identifier_index.get(key) {
-                            Some(name) => match statics_fx.get(name) {
-                                Some(v) => Ok((Some(v.clone()), Vec::new(), Vec::new())),
+                            Some(name) => match eval::static_path(&statics_fx, name) {
+                                Some(v) => match eval::lost_value_reason(v) {
+                                    Some(reason) => Err(reason.to_string()),
+                                    None => Ok((Some(v.clone()), Vec::new(), Vec::new())),
+                                },
                                 None => Err(format!(
                                     "identifier '{}' not resolvable to static object",
                                     name

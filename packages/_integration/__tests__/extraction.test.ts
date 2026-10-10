@@ -1058,3 +1058,52 @@ export const App = () => <Box />;
     expect(css).toContain('margin: 0.5rem !important');
   });
 });
+
+describe('stable constant style objects', () => {
+  // Contract: a stable const object read through a spread, a member path or
+  // a constant computed key extracts exactly as the same styles written
+  // inline; an object some use may change refuses with that use named.
+  test('extract like inline styles, and an escaped object refuses', () => {
+    const source = (name: string, styles: string, prelude = '') => ({
+      path: `fixtures/${name}.tsx`,
+      source: `import { ds } from './setup';
+${prelude}
+export const ${name} = ds.styles(${styles}).asElement('div');
+export const Use${name} = () => <${name} />;`,
+    });
+    const body = (css: string, name: string) =>
+      css
+        .match(
+          new RegExp(`\\.animus-${name}-[\\w-]+(:hover)?\\s*\\{[^}]*\\}`, 'g')
+        )
+        ?.map((rule) => rule.replace(/\.animus-\w+-[\w-]+/, '.C'))
+        .join('\n');
+
+    const inline = runPipeline([
+      source(
+        'Inline',
+        "{ display: 'grid', cursor: 'pointer', '--zz-x': '1px', '&:hover': { opacity: 0.5 } }"
+      ),
+    ]);
+    const constant = runPipeline([
+      source(
+        'Const',
+        "{ ...base, display: 'grid', [KEY]: '1px', '&:hover': { ...presets.hover } }",
+        "const KEY = '--zz-x';\nconst base = { display: 'flex', cursor: 'pointer' };\nconst presets = { hover: { opacity: 0.5 } };"
+      ),
+    ]);
+    expect(body(constant.css, 'Const')).toBe(body(inline.css, 'Inline'));
+
+    const escaped = runPipeline([
+      source(
+        'Escaped',
+        'preset',
+        "declare function decorate(o: object): void;\nconst preset = { cursor: 'pointer' };\ndecorate(preset);"
+      ),
+    ]);
+    expect(body(escaped.css, 'Escaped')).toBeUndefined();
+    expect(JSON.stringify(escaped.manifest.diagnostics)).toContain(
+      'preset is passed to decorate() in fixtures/Escaped.tsx on line 4'
+    );
+  });
+});
