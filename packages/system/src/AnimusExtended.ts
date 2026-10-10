@@ -18,7 +18,7 @@ import {
   ThemedCSSPropMap,
   ThemedCSSInputProps,
   ThemedCSSInputPropMap,
-  ThemedVariantModel,
+  ThemedVariantOptions,
   ThemedCSSProps,
   VariantConfig,
 } from './types/config';
@@ -453,8 +453,9 @@ class AnimusExtendedWithVariants<
     base?: ThemedCSSInputProps<Base, PropRegistry>;
     variants: ThemedCSSInputPropMap<Props, PropRegistry>;
   }) {
-    type ModelOptions = ThemedVariantModel<
-      typeof options,
+    type ModelOptions = ThemedVariantOptions<
+      UnadmittedName<PropKey, AdmittedNames<GroupRegistry, ActiveGroups>>,
+      Extract<keyof Props, string> | InheritedOptions<Variants, PropKey>,
       Base,
       Props,
       PropRegistry
@@ -512,8 +513,9 @@ class AnimusExtendedWithBase<
     base?: ThemedCSSInputProps<Base, PropRegistry>;
     variants: ThemedCSSInputPropMap<Props, PropRegistry>;
   }) {
-    type ModelOptions = ThemedVariantModel<
-      typeof options,
+    type ModelOptions = ThemedVariantOptions<
+      UnadmittedName<PropKey, AdmittedNames<GroupRegistry, ActiveGroups>>,
+      Extract<keyof Props, string> | InheritedOptions<Variants, PropKey>,
       Base,
       Props,
       PropRegistry
