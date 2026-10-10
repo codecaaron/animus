@@ -48,6 +48,19 @@ function droppedSuffix(diagnostic: ManifestDiagnostic): string {
     : '';
 }
 
+/** The record's code, when its message does not already quote it. */
+function codeSuffix(diagnostic: ManifestDiagnostic): string {
+  return diagnostic.code && !diagnostic.message.includes(diagnostic.code)
+    ? ` [${diagnostic.code}]`
+    : '';
+}
+
+/** A warn-kind record's line after its mark:
+ *  `file:line:column: component: message [code]`. */
+export function warnLine(diagnostic: ManifestDiagnostic): string {
+  return `${locationOf(diagnostic)}: ${diagnostic.component}: ${diagnostic.message}${droppedSuffix(diagnostic)}${codeSuffix(diagnostic)}`;
+}
+
 /** Stable code for selector forms with no substitutable subject; the
  *  extraction engine mints the same string. */
 export const SELECTOR_UNSUPPORTED_SUBJECT =
@@ -284,6 +297,12 @@ export const KIT_SYSTEM_NOT_INCLUDED = 'animus.kit.system-not-included';
  *  Animus's factory, so it is no root. */
 export const UNPROVEN_ROOT_BINDING = 'animus.discovery.unproven-root-binding';
 
+/** A system file calls `createSystem` with no import or local binding. The
+ *  system loader evaluates the file without auto-imports, where the name is
+ *  undefined, so the call is no root. */
+export const UNIMPORTED_CREATE_SYSTEM =
+  'animus.discovery.unimported-create-system';
+
 /** What a skipped source file costs: the analysis never sees what it
  *  renders. */
 export const SKIPPED_SOURCE_COST =
@@ -410,6 +429,7 @@ const DIAGNOSTIC_SEVERITY: ReadonlyMap<string, DiagnosticSeverity> = new Map([
   [KIT_UNSUPPORTED_FORMAT, 'error'],
   [KIT_STALE_DESCRIPTOR, 'warn'],
   [UNPROVEN_ROOT_BINDING, 'warn'],
+  [UNIMPORTED_CREATE_SYSTEM, 'warn'],
   [VOCABULARY_COLLISION, 'warn'],
   [VOCABULARY_LEGACY_VERB, 'warn'],
   [INVALID_PROPERTY_REGISTRATION, 'error'],
@@ -611,16 +631,13 @@ export function surfaceManifestDiagnostics(
     const mark = level === 'info' ? 'ℹ' : '⚠';
     const message = `${diagnostic.message}${droppedSuffix(diagnostic)}`;
     if (diagnostic.kind === 'bail') {
-      line = `${mark} ${locatedPrefix(diagnostic)}${diagnostic.component} not extracted: ${message}`;
+      line = `${mark} ${locatedPrefix(diagnostic)}${diagnostic.component} not extracted: ${message}${codeSuffix(diagnostic)}`;
     } else if (diagnostic.kind === 'skip') {
-      line = `${mark} ${locatedPrefix(diagnostic)}${diagnostic.component}: skipped ${message}`;
+      line = `${mark} ${locatedPrefix(diagnostic)}${diagnostic.component}: skipped ${message}${codeSuffix(diagnostic)}`;
     } else if (diagnostic.kind === 'warn' || diagnostic.kind === 'error') {
-      line = `${mark} ${locationOf(diagnostic)}: ${diagnostic.component}: ${message}`;
+      line = `${mark} ${warnLine(diagnostic)}`;
     }
     if (line === null) continue;
-    if (diagnostic.code && !diagnostic.message.includes(diagnostic.code)) {
-      line += ` [${diagnostic.code}]`;
-    }
     if (level === 'info') {
       policy.info?.(line);
       continue;

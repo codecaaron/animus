@@ -8,6 +8,7 @@ use oxc::ast::ast::{
 use oxc::ast::AstKind;
 use oxc::ast_visit::Visit;
 use oxc::semantic::{Scoping, SemanticBuilder, SymbolFlags, SymbolId};
+use oxc::span::Span;
 use oxc::span::GetSpan;
 use rustc_hash::{FxHashMap, FxHashSet};
 use serde::Serialize;
@@ -4004,6 +4005,42 @@ pub fn filter_usage_scan(
     result
 }
 
+/// Each `createSystem(…)` call whose callee no import, declaration or
+/// parameter binds in any enclosing scope. The system loader evaluates a
+/// system file without auto-imports, so the name is undefined there.
+pub(crate) fn unbound_create_system_calls(program: &Program<'_>) -> Vec<Span> {
+    // A `\u` escape can spell the name, as `create\u0053ystem`.
+    let text = program.source_text;
+    if !text.contains("createSystem") && !text.contains("\\u") {
+        return Vec::new();
+    }
+    let scoping = SemanticBuilder::new().build(program).semantic.into_scoping();
+    if !scoping.root_unresolved_references().contains_key("createSystem") {
+        return Vec::new();
+    }
+    struct UnboundCalls<'s> {
+        scoping: &'s Scoping,
+        spans: Vec<Span>,
+    }
+    impl<'a> Visit<'a> for UnboundCalls<'_> {
+        fn visit_call_expression(&mut self, call: &CallExpression<'a>) {
+            if let Expression::Identifier(ident) = &call.callee {
+                let unbound = ident
+                    .reference_id
+                    .get()
+                    .is_some_and(|id| self.scoping.get_reference(id).symbol_id().is_none());
+                if ident.name == "createSystem" && unbound {
+                    self.spans.push(ident.span);
+                }
+            }
+            oxc::ast_visit::walk::walk_call_expression(self, call);
+        }
+    }
+    let mut calls = UnboundCalls { scoping: &scoping, spans: Vec::new() };
+    calls.visit_program(program);
+    calls.spans
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4533,3 +4570,4 @@ mod tests {
         );
     }
 }
+

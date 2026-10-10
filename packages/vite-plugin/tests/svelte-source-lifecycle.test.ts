@@ -12,6 +12,7 @@ import { join, relative } from 'node:path';
 import { createLogger } from 'vite';
 import { afterEach, describe, expect, test } from 'vitest';
 
+import { systemImportFacts } from '../../extract/tests/source-ingestion-fixtures';
 import { runBuildStart } from '../src/build-start';
 import { PluginContext } from '../src/context';
 import { handleHotUpdate } from '../src/hmr';
@@ -82,7 +83,9 @@ function factsFor(filesJson: string): string {
                   },
                 ]
               : [],
-            imports: [],
+            imports: /\bds\.ts$/.test(entry.path)
+              ? systemImportFacts(entry.source)
+              : [],
             exports: binding
               ? [
                   {
@@ -204,8 +207,8 @@ function writeProject(root: string, includeExternal: boolean) {
   writeFileSync(
     join(appSrc, 'ds.ts'),
     includeExternal
-      ? `import { kit } from '../../kit/src';\nexport const ds = createSystem({}).extend(kit);\n`
-      : 'export const ds = createSystem({});\n'
+      ? `import { createSystem } from '@animus-ui/system';\nimport { kit } from '../../kit/src';\nexport const ds = createSystem({}).extend(kit);\n`
+      : "import { createSystem } from '@animus-ui/system';\nexport const ds = createSystem({});\n"
   );
   writeFileSync(
     join(appSrc, 'definition.ts'),

@@ -12,6 +12,7 @@ import { join, relative } from 'node:path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 import { contentHash } from '../../pipeline';
+import { systemImportFacts } from '../source-ingestion-fixtures';
 
 const mocks = vi.hoisted(() => ({
   loadSystemModule: vi.fn(),
@@ -90,7 +91,9 @@ function factsFor(filesJson: string): string {
                   },
                 ]
               : [],
-            imports: [],
+            imports: /\bsystem\.ts$/.test(entry.path)
+              ? systemImportFacts(entry.source)
+              : [],
             exports: binding
               ? [
                   {
@@ -133,7 +136,7 @@ function createWorkspace(): Workspace {
   const systemFile = join(appSrc, 'system.ts');
   writeFileSync(
     systemFile,
-    `import kit from '../../kit/src/index.ts';\nexport const system = createSystem({}).extend(kit);\n`
+    `import { createSystem } from '@animus-ui/system';\nimport kit from '../../kit/src/index.ts';\nexport const system = createSystem({}).extend(kit);\n`
   );
   writeFileSync(
     join(appSrc, 'definition.ts'),
@@ -314,7 +317,7 @@ describe('opted-in Svelte source ownership', () => {
     const beforeReset = analyzedSource(childPath);
     writeFileSync(
       workspace.systemFile,
-      `import kit from '../../kit/src/index.ts';\nexport const system = createSystem({}).extend(kit); // reset\n`
+      `import { createSystem } from '@animus-ui/system';\nimport kit from '../../kit/src/index.ts';\nexport const system = createSystem({}).extend(kit); // reset\n`
     );
     await session.handleWatchUpdate({
       modifiedFiles: new Set([workspace.systemFile]),
@@ -359,7 +362,7 @@ describe('opted-in Svelte source ownership', () => {
     );
     writeFileSync(
       workspace.systemFile,
-      `import kit from '../../kit/src/index.ts';\nexport const system = createSystem({}).extend(kit); // failed reset\n`
+      `import { createSystem } from '@animus-ui/system';\nimport kit from '../../kit/src/index.ts';\nexport const system = createSystem({}).extend(kit); // failed reset\n`
     );
 
     await expect(
