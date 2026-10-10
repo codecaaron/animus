@@ -1058,3 +1058,82 @@ export const App = () => <Box />;
     expect(css).toContain('margin: 0.5rem !important');
   });
 });
+
+describe('stable constant style objects', () => {
+  // Contract: a stable const object read through a spread, a member path or
+  // a constant computed key extracts exactly as the same styles written
+  // inline; a key the spread overwrites with a value the extractor lost is
+  // dropped, keeping its position for a later known write; an object some
+  // use may change refuses those reads with that use named, and still
+  // extracts when read by name, as before they existed.
+  test('extract like inline styles, and an escaped object refuses', () => {
+    const source = (name: string, styles: string, prelude = '') => ({
+      path: `fixtures/${name}.tsx`,
+      source: `import { ds } from './setup';
+${prelude}
+export const ${name} = ds.styles(${styles}).asElement('div');
+export const Use${name} = () => <${name} />;`,
+    });
+    const body = (css: string, name: string) =>
+      css
+        .match(
+          new RegExp(`\\.animus-${name}-[\\w-]+[^\\s{]*\\s*\\{[^}]*\\}`, 'g')
+        )
+        ?.map((rule) => rule.replace(/\.animus-\w+-[\w-]+/, '.C'))
+        .join('\n');
+
+    const inline = runPipeline([
+      source(
+        'Inline',
+        "{ display: 'grid', cursor: 'pointer', '--zz-x': '1px', '&:hover': { opacity: 0.5 } }"
+      ),
+    ]);
+    assertNoUnresolvedTokens(inline.css);
+    const constant = runPipeline([
+      source(
+        'Const',
+        "{ ...base, display: 'grid', [KEY]: '1px', '&:hover': { ...presets.hover } }",
+        "const KEY = '--zz-x';\nconst base = { display: 'flex', cursor: 'pointer' };\nconst presets = { hover: { opacity: 0.5 } };"
+      ),
+    ]);
+    assertNoUnresolvedTokens(constant.css);
+    expect(body(constant.css, 'Const')).toBe(body(inline.css, 'Inline'));
+
+    const written = runPipeline([
+      source(
+        'Written',
+        "{ '&:hover': { opacity: 0.3 }, '&[data-x]': { opacity: 0.2 } }"
+      ),
+    ]);
+    assertNoUnresolvedTokens(written.css);
+    const lost = runPipeline([
+      source(
+        'Lost',
+        "{ '&:hover': { opacity: 0.1 }, '&.active': { opacity: 0.1 }, '&[data-x]': { opacity: 0.2 }, ...preset, '&:hover': { opacity: 0.3 } }",
+        "declare function unread(): object;\nconst preset = { '&:hover': unread(), '&.active': unread() };"
+      ),
+    ]);
+    assertNoUnresolvedTokens(lost.css);
+    expect(body(lost.css, 'Lost')).toBe(body(written.css, 'Written'));
+
+    const prelude =
+      "declare function decorate(o: object): void;\nconst preset = { cursor: 'pointer' };\ndecorate(preset);";
+    const escaped = runPipeline([source('Escaped', '{ ...preset }', prelude)]);
+    assertNoUnresolvedTokens(escaped.css);
+    expect(body(escaped.css, 'Escaped')).toBeUndefined();
+    expect(JSON.stringify(escaped.manifest.diagnostics)).toContain(
+      'preset is passed to decorate() in fixtures/Escaped.tsx on line 4'
+    );
+    const named = runPipeline([source('Named', 'preset', prelude)]);
+    assertNoUnresolvedTokens(named.css);
+    expect(body(named.css, 'Named')).toBe('.C {\n    cursor: pointer;\n  }');
+    const copied = runPipeline([
+      source('Copied', 'copy', `${prelude}\nconst copy = { ...preset };`),
+    ]);
+    assertNoUnresolvedTokens(copied.css);
+    expect(body(copied.css, 'Copied')).toBeUndefined();
+    expect(JSON.stringify(copied.manifest.diagnostics)).toContain(
+      'copy reads preset, and preset is passed to decorate()'
+    );
+  });
+});

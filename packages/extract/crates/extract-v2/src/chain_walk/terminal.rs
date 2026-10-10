@@ -70,6 +70,7 @@ fn unwrapped_span(expr: &Expression<'_>, fallback: Span) -> Span {
         Expression::StringLiteral(x) => x.span,
         Expression::TemplateLiteral(x) => x.span,
         Expression::Identifier(x) => x.span,
+        Expression::StaticMemberExpression(x) => x.span,
         Expression::ObjectExpression(x) => x.span,
         Expression::ArrayExpression(x) => x.span,
         Expression::CallExpression(x) => x.span,
