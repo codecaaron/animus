@@ -259,7 +259,24 @@ pub enum DroppedStyleKey {
     UnrecognizedKey(String),
 }
 
-pub type DroppedStyleKeySink = RefCell<Vec<DroppedStyleKey>>;
+impl DroppedStyleKey {
+    /// The key as written.
+    pub fn key(&self) -> &str {
+        match self {
+            Self::UnregisteredAlias(key) | Self::NonResponsiveObject(key) | Self::UnrecognizedKey(key) => key,
+        }
+    }
+}
+
+/// A dropped key with the variant axis and option (`None` for its base) it
+/// was resolved under, so an inherited declaration can be told apart.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DroppedKey {
+    pub dropped: DroppedStyleKey,
+    pub variant_origin: Option<(String, Option<String>)>,
+}
+
+pub type DroppedStyleKeySink = RefCell<Vec<DroppedKey>>;
 
 pub struct ResolveContext<'a> {
     pub config: &'a PropConfigMap,
@@ -670,7 +687,7 @@ fn resolve_block_entries(
 
 fn record_dropped_key(ctx: &ResolveContext, dropped: DroppedStyleKey) {
     if let Some(sink) = ctx.dropped_keys {
-        sink.borrow_mut().push(dropped);
+        sink.borrow_mut().push(DroppedKey { dropped, variant_origin: None });
     }
 }
 

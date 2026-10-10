@@ -9,7 +9,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use serde_json::Value;
 
 use crate::chain_merge::{
-    authors_variant_entry, effective_variant_configs, inherit_custom_configs,
+    authors_variant_entry, authors_variant_key, effective_variant_configs, inherit_custom_configs,
     inherit_variant_stages, topological_sort, ProvenanceNode,
     TopoResult, VariantConfigs,
 };
@@ -1061,6 +1061,18 @@ fn strict_token_miss(file: &str, component: &str, miss: &StrictTokenMiss) -> Css
     .dropping(&authored)
 }
 
+/// Whether `id` extends `ancestor`, directly or through other extensions.
+fn extends(id: &str, ancestor: &str, parent_map: &FxHashMap<String, String>) -> bool {
+    let mut parent = parent_map.get(id);
+    while let Some(current) = parent {
+        if current == ancestor {
+            return true;
+        }
+        parent = parent_map.get(current);
+    }
+    false
+}
+
 fn drain_strict_token_misses(
     sink: &StrictTokenMissSink,
     file: &str,
@@ -1072,20 +1084,35 @@ fn drain_strict_token_misses(
     }
 }
 
+/// `inheritors` are the components that extend `component`, which inherit
+/// each key it drops in a variant option.
 fn drain_dropped_style_keys(
     sink: &crate::theme::DroppedStyleKeySink,
     file: &str,
     component: &str,
+    inheritors: &[&str],
     diagnostics: &mut Vec<CssDiagnostic>,
 ) {
     for dropped in sink.borrow_mut().drain(..) {
-        diagnostics.push(dropped_style_key(file, component, &dropped));
+        let inheritors = if dropped.variant_origin.is_some() { inheritors } else { &[] };
+        diagnostics.push(dropped_style_key(file, component, &dropped.dropped, inheritors));
     }
 }
 
-/// A style key whose block is not emitted, named with the form it needs.
-fn dropped_style_key(file: &str, component: &str, dropped: &crate::theme::DroppedStyleKey) -> CssDiagnostic {
+/// A style key whose block is not emitted, named with the form it needs and
+/// the components that inherit it.
+fn dropped_style_key(
+    file: &str,
+    component: &str,
+    dropped: &crate::theme::DroppedStyleKey,
+    inheritors: &[&str],
+) -> CssDiagnostic {
     use crate::theme::DroppedStyleKey;
+    let not_emitted = match inheritors {
+        [] => "so its block is not emitted".to_string(),
+        [one] => format!("so its block is not emitted here or in {one}, which inherits it"),
+        _ => format!("so its block is not emitted here or in {}, which inherit it", inheritors.join(", ")),
+    };
     // `'& p'` is the fix only for a key spelled like an HTML element.
     let element_hint = |key: &str| {
         let element = key.chars().next().is_some_and(|c| c.is_ascii_lowercase())
@@ -1094,17 +1121,16 @@ fn dropped_style_key(file: &str, component: &str, dropped: &crate::theme::Droppe
     };
     let message = match dropped {
         DroppedStyleKey::UnregisteredAlias(key) => format!(
-            "style key '{key}' is not a registered selector or condition alias, so its block is \
-             not emitted — register the alias in the system, or fix its name"
+            "style key '{key}' is not a registered selector or condition alias, {not_emitted} — \
+             register the alias in the system, or fix its name"
         ),
         DroppedStyleKey::NonResponsiveObject(key) => format!(
-            "prop '{key}' was given an object whose keys are not breakpoints, so its block is \
-             not emitted — give it a value or an object of breakpoint keys{}",
+            "prop '{key}' was given an object whose keys are not breakpoints, {not_emitted} — give \
+             it a value or an object of breakpoint keys{}",
             element_hint(key)
         ),
         DroppedStyleKey::UnrecognizedKey(key) => format!(
-            "style key '{key}' is not a prop, selector, alias or supported at-rule, so its block \
-             is not emitted{}",
+            "style key '{key}' is not a prop, selector, alias or supported at-rule, {not_emitted}{}",
             element_hint(key)
         ),
     };
@@ -4183,7 +4209,26 @@ fn run_with_system_floor(
             &chain.descriptor.binding,
             &mut diagnostics,
         );
-        drain_dropped_style_keys(&dropped_keys, file_path, &chain.descriptor.binding, &mut diagnostics);
+        if merged_chain.is_some() {
+            // A parent option's dropped key was reported at the parent's
+            // declaration, naming this chain among its inheritors.
+            dropped_keys.borrow_mut().retain(|dropped| {
+                dropped.variant_origin.as_ref().is_none_or(|(axis, option)| {
+                    authors_variant_key(chain, axis, option.as_deref(), dropped.dropped.key())
+                })
+            });
+        }
+        let inheritors: Vec<&str> = if dropped_keys.borrow().iter().any(|d| d.variant_origin.is_some()) {
+            sorted_ids
+                .iter()
+                .filter(|id| extends(id, component_id, &parent_map))
+                .filter_map(|id| chain_lookup.get(id.as_str()))
+                .map(|(file, idx)| files[*file].chains[*idx].descriptor.binding.as_str())
+                .collect()
+        } else {
+            vec![]
+        };
+        drain_dropped_style_keys(&dropped_keys, file_path, &chain.descriptor.binding, &inheritors, &mut diagnostics);
         match result {
             Ok(out) => {
                 let mut component_css = out.component_css;
@@ -5955,7 +6000,7 @@ fn run_with_system_floor(
                 &mut deferred_errors,
             );
             drain_strict_token_misses(&token_misses, file, &component, &mut diagnostics);
-            drain_dropped_style_keys(&dropped_keys, file, &component, &mut diagnostics);
+            drain_dropped_style_keys(&dropped_keys, file, &component, &[], &mut diagnostics);
         };
         let css = crate::theme::resolve_global_blocks(blocks, &resolve_ctx, false, &mut attribute);
         let unlayered = crate::theme::resolve_global_blocks(blocks, &resolve_ctx, true, &mut attribute);
