@@ -62,9 +62,19 @@ pub struct AttrFact {
     /// `write_conditions`.
     #[serde(skip)]
     pub conditions: Option<BTreeSet<String>>,
+    /// Written by only some branches of a spread of listed object literals
+    /// (`{...(c ? { type: 'a' } : {})}`), so the element may leave it out.
+    #[serde(skip)]
+    pub optional: bool,
 }
 
 impl AttrFact {
+    /// Whether the element always sets the prop to this value itself: no
+    /// spread after it can replace it, and no branch leaves it out.
+    pub(crate) fn settles(&self, index: usize, spread: Option<usize>) -> bool {
+        !self.optional && spread.is_none_or(|before| index >= before)
+    }
+
     /// Every value the attribute can write, when they are known: its
     /// static value, or the finite values a runtime value is proven to take.
     pub(crate) fn proven_values(&self) -> Option<impl Iterator<Item = &Value>> {
@@ -565,6 +575,8 @@ pub(crate) struct EnrichedUsage {
     pub unsafe_object_uses: BTreeMap<String, ObjectUse>,
     /// See `FileFacts::ordinary_components`.
     pub ordinary_components: BTreeSet<String>,
+    /// See `FileFacts::context_consts`.
+    pub context_consts: BTreeSet<String>,
     /// See `FileFacts::direct_eval`.
     pub direct_eval: bool,
     /// See `FileFacts::opaque_calls`.
@@ -930,8 +942,17 @@ pub(crate) fn collect_enriched_usage(
         }
         _ => BTreeMap::new(),
     };
-    let unsafe_object_uses = match &scoping {
-        Some(scoping) => unsafe_object_uses(program, scoping, object_consts, assigned_targets),
+    let context_consts =
+        origins.map_or_else(BTreeSet::new, |scoping| context_consts(program, scoping, &ReactImports::of(program, scoping)));
+    // A context is watched as an object too: its `Provider` must stay React's.
+    let mut watched = object_consts.clone();
+    for context in &context_consts {
+        watched.entry(context.as_str()).or_insert(false);
+    }
+    // Read through the scopes every module builds, so a module with no
+    // import or chain still records what may change its objects.
+    let unsafe_object_uses = match origins {
+        Some(scoping) => unsafe_object_uses(program, scoping, &watched, assigned_targets),
         None => BTreeMap::new(),
     };
     let (opaque_calls, opaque_tags, element_consts) =
@@ -944,6 +965,7 @@ pub(crate) fn collect_enriched_usage(
         module_loads,
         unsafe_object_uses,
         ordinary_components,
+        context_consts,
         direct_eval,
         opaque_calls,
         element_consts,
@@ -1278,6 +1300,9 @@ impl OpaqueCallScan<'_> {
         let mut seen: FxHashSet<SymbolId> = FxHashSet::default();
         let mut entered: FxHashSet<oxc::semantic::ScopeId> = FxHashSet::default();
         let mut parameters: Vec<SymbolId> = Vec::new();
+        // A binding the walk does not follow (`let held; held = children`)
+        // may hold anything a parameter does.
+        let mut unresolved = false;
         let mut pending: Vec<SymbolId> = reads.symbols.iter().copied().collect();
         while let Some(symbol) = pending.pop() {
             if !seen.insert(symbol) {
@@ -1294,15 +1319,18 @@ impl OpaqueCallScan<'_> {
             let (next, function) = match (self.consts.get(&symbol), self.functions.get(&symbol)) {
                 (Some(init), _) => (&init.reads, init.function),
                 (None, Some((reads, scope))) => (reads, Some(*scope)),
-                (None, None) => continue,
+                (None, None) => {
+                    unresolved |= !self.parameters.contains(&symbol) && !self.sources.contains_key(&symbol);
+                    continue;
+                }
             };
             entered.extend(function);
             closed.tags.extend(next.tags.iter().cloned());
             closed.unknown_global |= next.unknown_global;
             pending.extend(next.symbols.iter().copied());
         }
-        closed.reads_parameter =
-            parameters.iter().any(|parameter| !entered.contains(&self.scoping.symbol_scope_id(*parameter)));
+        closed.reads_parameter = unresolved
+            || parameters.iter().any(|parameter| !entered.contains(&self.scoping.symbol_scope_id(*parameter)));
         closed.imports.sort();
         closed
     }
@@ -1547,6 +1575,7 @@ fn unsafe_object_uses(
         candidates,
         // A module-scope `Object` is not the global one.
         global_object: scoping.get_root_binding("Object".into()).is_none(),
+        react: ReactImports::of(program, scoping),
         uses: BTreeMap::new(),
         ancestors: Vec::new(),
     };
@@ -1566,6 +1595,8 @@ struct ObjectUseScan<'a, 's> {
     source: &'s str,
     candidates: FxHashMap<SymbolId, ObjectBinding>,
     global_object: bool,
+    /// React's own functions, whose context readers change nothing.
+    react: ReactImports,
     uses: BTreeMap<String, ObjectUse>,
     ancestors: Vec<AstKind<'a>>,
 }
@@ -1587,6 +1618,15 @@ impl<'a> Visit<'a> for ObjectUseScan<'a, '_> {
         let Some(binding) = self.candidates.get(&symbol) else { return };
         if !reference.is_value() {
             return;
+        }
+        // React's `useContext` and `use` read the context they receive.
+        let mut ancestors = self.ancestors.iter().rev();
+        if let (current, Some(AstKind::CallExpression(call))) = peel_wrappers(ident.span, &mut ancestors) {
+            let read = call.arguments.first().map(GetSpan::span) == Some(current)
+                && self.react.calls(self.scoping, &call.callee, &["useContext", "use"]);
+            if read {
+                return;
+            }
         }
         // An assigned facade's target below the binding, watched as an object
         // of its own under its path.
@@ -2608,8 +2648,28 @@ impl<'a> FactCollector<'a, '_> {
         let mut attrs = Vec::new();
         let mut spread = None;
         for attr_item in &elem.attributes {
-            if matches!(attr_item, JSXAttributeItem::SpreadAttribute(_)) {
-                spread = Some(attrs.len());
+            if let JSXAttributeItem::SpreadAttribute(spread_attribute) = attr_item {
+                // A spread of object literals with listed literal entries
+                // writes those entries, on the branches that hold them.
+                match self.enrich.then(|| listed_spread(&spread_attribute.argument, self.origins)).flatten() {
+                    Some(entries) => attrs.extend(entries.into_iter().map(|(name, value)| AttrFact {
+                        variant_class: match &value {
+                            Value::String(class) => class.clone(),
+                            _ => "__dynamic__".to_string(),
+                        },
+                        conditions: (!value.is_object()).then(|| BTreeSet::from([BASE_CONDITION.to_string()])),
+                        name,
+                        static_value: Some(value),
+                        enumerable_values: Vec::new(),
+                        dynamic: false,
+                        dynamic_kind: None,
+                        dynamic_span: None,
+                        skip: false,
+                        literal: true,
+                        optional: true,
+                    })),
+                    None => spread = Some(attrs.len()),
+                }
             }
             if let JSXAttributeItem::Attribute(attr) = attr_item {
                 let JSXAttributeName::Identifier(id) = &attr.name else {
@@ -2750,6 +2810,7 @@ impl<'a> FactCollector<'a, '_> {
                     variant_class: classify_jsx_attribute_as_variant_value(&attr.value),
                     literal,
                     conditions,
+                    optional: false,
                 });
             }
         }
@@ -2760,6 +2821,64 @@ impl<'a> FactCollector<'a, '_> {
             span: (elem.span.start, elem.span.end),
             origin,
         });
+    }
+}
+
+/// The entries a spread argument writes when every branch it can take is an
+/// object literal of literal values under static keys, or nothing (`null`,
+/// a boolean, an absent value): `{...(c ? { type: 'a' } : {})}`. A nullish
+/// entry is left out, as at runtime. `None` for any other argument.
+fn listed_spread(expression: &Expression<'_>, origins: Option<&Scoping>) -> Option<Vec<(String, Value)>> {
+    use oxc::ast::ast::{ObjectPropertyKind, PropertyKind};
+    use oxc::syntax::operator::LogicalOperator;
+    let expression = crate::chain_walk::unwrap_type_assertions(expression);
+    if is_absent(expression, origins) {
+        return Some(Vec::new());
+    }
+    match expression {
+        Expression::NullLiteral(_) | Expression::BooleanLiteral(_) => Some(Vec::new()),
+        Expression::ObjectExpression(object) => {
+            let mut entries = Vec::new();
+            for property in &object.properties {
+                let ObjectPropertyKind::ObjectProperty(property) = property else { return None };
+                if property.kind != PropertyKind::Init || property.computed || property.method {
+                    return None;
+                }
+                let key = eval_property_key(&property.key)?;
+                if key == "__proto__" {
+                    return None;
+                }
+                let value = eval_static_expression(&property.value)?;
+                let value = match value {
+                    Value::Null => continue,
+                    Value::Object(mut breakpoints) => {
+                        breakpoints.retain(|_, entry| !entry.is_null());
+                        if breakpoints.is_empty() {
+                            continue;
+                        }
+                        Value::Object(breakpoints)
+                    }
+                    value => value,
+                };
+                entries.push((key, value));
+            }
+            Some(entries)
+        }
+        Expression::ConditionalExpression(conditional) => {
+            let mut entries = listed_spread(&conditional.consequent, origins)?;
+            entries.extend(listed_spread(&conditional.alternate, origins)?);
+            Some(entries)
+        }
+        // A falsy left side spreads nothing.
+        Expression::LogicalExpression(logical) if logical.operator == LogicalOperator::And => {
+            listed_spread(&logical.right, origins)
+        }
+        Expression::LogicalExpression(logical) => {
+            let mut entries = listed_spread(&logical.left, origins)?;
+            entries.extend(listed_spread(&logical.right, origins)?);
+            Some(entries)
+        }
+        _ => None,
     }
 }
 
@@ -3307,6 +3426,123 @@ fn tag_origin(scoping: &Scoping, name: &IdentifierReference<'_>) -> TagOrigin {
     }
 }
 
+/// React's functions and namespaces a module imports, by the symbol each
+/// import binds; a binding of any other origin, an unbound `React`
+/// included, is never React's.
+struct ReactImports {
+    functions: FxHashMap<SymbolId, String>,
+    namespaces: FxHashSet<SymbolId>,
+}
+
+impl ReactImports {
+    fn of(program: &Program<'_>, scoping: &Scoping) -> Self {
+        let mut imports = Self { functions: FxHashMap::default(), namespaces: FxHashSet::default() };
+        for statement in &program.body {
+            let Statement::ImportDeclaration(import) = statement else { continue };
+            if !REACT_RUNTIMES.contains(&import.source.value.as_str()) {
+                continue;
+            }
+            for specifier in import.specifiers.iter().flatten() {
+                let Some(symbol) = specifier.local().symbol_id.get() else { continue };
+                match specifier {
+                    ImportDeclarationSpecifier::ImportSpecifier(named) => {
+                        imports.functions.insert(symbol, named.imported.name().to_string());
+                    }
+                    ImportDeclarationSpecifier::ImportDefaultSpecifier(_)
+                    | ImportDeclarationSpecifier::ImportNamespaceSpecifier(_) => {
+                        imports.namespaces.insert(symbol);
+                    }
+                }
+            }
+        }
+        // A namespace the module writes a member of (`React.createContext =
+        // …`) no longer holds React's functions.
+        struct Written<'s> {
+            scoping: &'s Scoping,
+            namespaces: &'s FxHashSet<SymbolId>,
+            written: FxHashSet<SymbolId>,
+        }
+        impl<'a> Visit<'a> for Written<'_> {
+            fn visit_simple_assignment_target(&mut self, target: &oxc::ast::ast::SimpleAssignmentTarget<'a>) {
+                if let Some(member) = target.as_member_expression() {
+                    if let Expression::Identifier(object) = member.object() {
+                        let symbol = object.reference_id.get().and_then(|id| self.scoping.get_reference(id).symbol_id());
+                        if let Some(symbol) = symbol.filter(|symbol| self.namespaces.contains(symbol)) {
+                            self.written.insert(symbol);
+                        }
+                    }
+                }
+                oxc::ast_visit::walk::walk_simple_assignment_target(self, target);
+            }
+            fn visit_unary_expression(&mut self, unary: &oxc::ast::ast::UnaryExpression<'a>) {
+                if unary.operator == oxc::syntax::operator::UnaryOperator::Delete {
+                    if let Some(member) = unary.argument.as_member_expression() {
+                        if let Expression::Identifier(object) = member.object() {
+                            let symbol = object.reference_id.get().and_then(|id| self.scoping.get_reference(id).symbol_id());
+                            if let Some(symbol) = symbol.filter(|symbol| self.namespaces.contains(symbol)) {
+                                self.written.insert(symbol);
+                            }
+                        }
+                    }
+                }
+                oxc::ast_visit::walk::walk_unary_expression(self, unary);
+            }
+        }
+        let mut written = Written { scoping, namespaces: &imports.namespaces, written: FxHashSet::default() };
+        written.visit_program(program);
+        let written = written.written;
+        imports.namespaces.retain(|symbol| !written.contains(symbol));
+        imports
+    }
+
+    /// Whether `callee` calls one of React's `functions`, named or through a
+    /// React namespace, as the module's scopes resolve it.
+    fn calls(&self, scoping: &Scoping, callee: &Expression<'_>, functions: &[&str]) -> bool {
+        let symbol = |id: &IdentifierReference<'_>| id.reference_id.get().and_then(|id| scoping.get_reference(id).symbol_id());
+        match crate::chain_walk::unwrap_type_assertions(callee) {
+            Expression::Identifier(id) => symbol(id)
+                .and_then(|symbol| self.functions.get(&symbol))
+                .is_some_and(|function| functions.contains(&function.as_str())),
+            Expression::StaticMemberExpression(member) => {
+                functions.contains(&member.property.name.as_str())
+                    && matches!(&member.object, Expression::Identifier(object)
+                        if symbol(object).is_some_and(|symbol| self.namespaces.contains(&symbol)))
+            }
+            _ => false,
+        }
+    }
+}
+
+/// Top-level `const` bindings the runtime's `createContext` builds: their
+/// `Provider` renders its children in place.
+fn context_consts(program: &Program<'_>, scoping: &Scoping, react: &ReactImports) -> BTreeSet<String> {
+    use oxc::ast::ast::{Declaration, VariableDeclarationKind};
+    let mut names = BTreeSet::new();
+    for statement in &program.body {
+        let declaration = match statement {
+            Statement::VariableDeclaration(declaration) => declaration,
+            Statement::ExportNamedDeclaration(export) => match &export.declaration {
+                Some(Declaration::VariableDeclaration(declaration)) => declaration,
+                _ => continue,
+            },
+            _ => continue,
+        };
+        if declaration.kind != VariableDeclarationKind::Const {
+            continue;
+        }
+        for declarator in &declaration.declarations {
+            let built = declarator.init.as_ref().is_some_and(|init| {
+                matches!(crate::chain_walk::unwrap_type_assertions(init),
+                    Expression::CallExpression(call) if react.calls(scoping, &call.callee, &["createContext"]))
+            });
+            if let (true, Some(name)) = (built, declarator.id.get_identifier_name()) {
+                names.insert(name.to_string());
+            }
+        }
+    }
+    names
+}
+
 /// Top-level functions and classes, and `const` bindings of a function or
 /// class expression, that nothing in the file writes: what a tag naming an
 /// ordinary component is proved by. An ordinary default export is also
@@ -3832,7 +4068,7 @@ pub(crate) fn passed_values(
         let mut settled = false;
         for (index, attr) in attrs.iter().enumerate().filter(|(_, attr)| attr.name == key) {
             values.insert(attr.variant_class.as_str());
-            settled |= spread.is_none_or(|before| index >= before);
+            settled |= attr.settles(index, *spread);
         }
         if !settled {
             values.insert(match spread {
@@ -4084,7 +4320,7 @@ pub fn filter_usage_scan(
                             Some(values) => result.written_props.extend(values.map(|value| write(Some(value.clone())))),
                             None => result.written_props.push(write(None)),
                         }
-                        let settled = spread.is_none_or(|before| index >= before);
+                        let settled = attr.settles(index, *spread);
                         if let Some(props) = active_props {
                             if props.contains(&attr.name) {
                                 // A custom prop's static values belong to the custom

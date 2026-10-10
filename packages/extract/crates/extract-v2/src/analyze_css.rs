@@ -826,7 +826,7 @@ fn classify_parent(
 /// Where a name visible in `file_path` is declared: the landing file, the
 /// declarator binding there, and whether that file declares it itself.
 /// None when the name's import source is outside the analyzed set.
-fn resolve_declaration(
+pub(crate) fn resolve_declaration(
     file_path: &str,
     ff: &FileFacts,
     name: &str,
@@ -2984,8 +2984,7 @@ fn spread_wrapper_targets(
                             .iter()
                             .enumerate()
                             .filter(|(index, attr)| {
-                                spread.is_none_or(|before| *index >= before)
-                                    || named.contains(&attr.name)
+                                attr.settles(*index, *spread) || (!attr.optional && named.contains(&attr.name))
                             })
                             .map(|(_, attr)| attr.name.clone())
                             .collect(),
@@ -3660,12 +3659,14 @@ fn names_react_pass_through(ff: &FileFacts, tag: &str, origin: Option<TagOrigin>
 /// into them. A receiver blocks nothing here, because the components whose
 /// elements it receives open (`opaque_delivery`); so a tag that can only
 /// receive leaves usage proven: an ordinary component an analysed module
-/// declares, whose body is analysed; one of React's pass-through
-/// components; or an import, or a member of one, from a package extraction
-/// does not analyse, which cannot be a component extraction declared, also
-/// as the member a stable object holds (`Trigger: ArkMenu.Trigger`). A
-/// `createElement` call on any receiver but React's still blocks, since
-/// what it passes is not followed as delivered. A parameter, an alias usage cannot follow, a name that resolved to no
+/// declares, named directly or as the member a stable object holds
+/// (`<Dialog.Root>`), whose body is analysed; one of React's pass-through
+/// components, or a context's `Provider`; or an import, or a member of one,
+/// from a package extraction does not analyse, which cannot be a component
+/// extraction declared, also as the member a stable object holds
+/// (`Trigger: ArkMenu.Trigger`). A `createElement` call on any receiver but
+/// React's still blocks, since what it passes is not followed as delivered.
+/// A parameter, an alias usage cannot follow, a name that resolved to no
 /// component, a relative or aliased import extraction cannot read (an
 /// excluded file may render our components) or any other declaration may
 /// be one of our components, so it blocks every component.
@@ -3673,8 +3674,10 @@ fn uncertainty_leaves_usage_proven(
     sites: &[(&String, UncertainIdentity)],
     files: &BTreeMap<String, FileFacts>,
     inputs: &CssInputs,
+    ordinary_members: &FxHashMap<(String, String), (String, String)>,
     package_members: &FxHashSet<(String, String)>,
 ) -> bool {
+    let unstable_contexts = &unstable_contexts(files, inputs);
     // Each element of an ordinary component is a site; classify each tag once.
     let mut classified: FxHashSet<(&str, &str, Option<TagOrigin>)> = FxHashSet::default();
     sites.iter().all(|(file, site)| {
@@ -3693,11 +3696,53 @@ fn uncertainty_leaves_usage_proven(
         !classified.insert((file.as_str(), tag, site.origin))
             || names_react_pass_through(ff, tag, site.origin)
             || imported_from_outside(file, ff, tag, site.origin, files, inputs)
+            || names_context_provider(file, ff, tag, site.origin, files, inputs, unstable_contexts)
             // The module's binding, never a parameter or local of the name.
             || (matches!(site.origin, Some(TagOrigin::Import | TagOrigin::TopLevel))
                 && package_members.contains(&(file.to_string(), tag.to_string())))
             || uncertain_tag_reason(file, ff, tag, site.origin, files, inputs).0 == TagClass::Ordinary
+            // The module's binding, never a parameter or local of the name.
+            || (matches!(site.origin, Some(TagOrigin::Import | TagOrigin::TopLevel))
+                && ordinary_members.contains_key(&(file.to_string(), tag.to_string())))
     })
+}
+
+/// Whether `tag` is the `Provider` of a context React's `createContext`
+/// builds as a module-scope `const` (`<ThemeContext.Provider>`), named
+/// through the module's own binding or an import of it: it renders its
+/// children in place.
+fn names_context_provider(
+    file: &str,
+    ff: &FileFacts,
+    tag: &str,
+    origin: Option<TagOrigin>,
+    files: &BTreeMap<String, FileFacts>,
+    inputs: &CssInputs,
+    unstable: &FxHashSet<(String, String)>,
+) -> bool {
+    let Some((root, "Provider")) = tag.split_once('.') else { return false };
+    matches!(origin, Some(TagOrigin::Import | TagOrigin::TopLevel))
+        && resolve_declaration(file, ff, root, files, inputs).is_some_and(|(declaring, binding, _)| {
+            files.get(&declaring).is_some_and(|declared| declared.context_consts.contains(&binding))
+                && !unstable.contains(&(declaring, binding))
+        })
+}
+
+/// The contexts some use in any analysed module may change: a member write
+/// or delete, a hand-off to code other than React's context readers. Their
+/// `Provider` is not proven to be React's.
+fn unstable_contexts(files: &BTreeMap<String, FileFacts>, inputs: &CssInputs) -> FxHashSet<(String, String)> {
+    let mut unstable = FxHashSet::default();
+    for (path, ff) in files {
+        for name in ff.unsafe_object_uses.keys() {
+            let root = name.split('.').next().unwrap_or(name);
+            let Some((declaring, binding, _)) = resolve_declaration(path, ff, root, files, inputs) else { continue };
+            if files.get(&declaring).is_some_and(|declared| declared.context_consts.contains(&binding)) {
+                unstable.insert((declaring, binding));
+            }
+        }
+    }
+    unstable
 }
 
 /// Whether `tag`, or the binding it is a member of, is imported from a
@@ -4039,15 +4084,18 @@ fn proven_slot_conditions(
 /// keeps them in place only when it is an Animus component that renders an
 /// element and the element cannot render another one (`as`, `asChild` or a
 /// spread), or an ordinary component that forwards nothing outside.
+#[allow(clippy::too_many_arguments)]
 fn opaque_delivery(
     files: &BTreeMap<String, FileFacts>,
     inputs: &CssInputs,
     evaluated_ids: &FxHashSet<String>,
     ids_by_binding: &IdsByBinding,
     wrapper_targets: &FxHashMap<String, FxHashMap<String, Vec<String>>>,
+    ordinary_members: &FxHashMap<(String, String), (String, String)>,
     receiver_ids: impl Fn(&str, &FileFacts, &str) -> Vec<String>,
     renders_in_place: impl Fn(&str) -> bool,
 ) -> std::collections::BTreeSet<String> {
+    let unstable_contexts = unstable_contexts(files, inputs);
     // The declaration `name` (`lib.enhance` for a namespace import's
     // member) names from `file`, or `None` outside the analysis.
     let declaration = |file: &str, ff: &FileFacts, name: &str| {
@@ -4074,14 +4122,21 @@ fn opaque_delivery(
         if matches!(tag.origin, TagOrigin::Nested | TagOrigin::Provided | TagOrigin::Undeclared) {
             return true;
         }
+        if names_context_provider(file, ff, &tag.tag, Some(tag.origin), files, inputs, &unstable_contexts) {
+            return false;
+        }
         let ids = receiver_ids(file, ff, &tag.tag);
         if !ids.is_empty() {
             return tag.polymorphic || !ids.iter().all(|id| renders_in_place(id));
         }
-        let ordinary = declaration(file, ff, &tag.tag).filter(|(declaring, binding, _)| {
-            files.get(declaring).is_some_and(|declared| declared.ordinary_components.contains(binding))
-        });
-        ordinary.is_none_or(|(declaring, binding, _)| tag.polymorphic || forwarding.contains(&(declaring, binding)))
+        // An ordinary component, named directly or as an object's member.
+        let ordinary = declaration(file, ff, &tag.tag)
+            .filter(|(declaring, binding, _)| {
+                files.get(declaring).is_some_and(|declared| declared.ordinary_components.contains(binding))
+            })
+            .map(|(declaring, binding, _)| (declaring, binding))
+            .or_else(|| ordinary_members.get(&(file.to_string(), tag.tag.clone())).cloned());
+        ordinary.is_none_or(|(declaring, binding)| tag.polymorphic || forwarding.contains(&(declaring, binding)))
     };
     let mut forwarding: FxHashSet<(String, String)> = FxHashSet::default();
     loop {
@@ -6144,6 +6199,16 @@ fn run_with_system_floor(
     }
     // An element handed to code outside the analysis renders with options
     // and props no analysed use shows, so it opens as an escape does.
+    // Each member tag a module writes that names an ordinary function
+    // component an object holds (`<Dialog.Root>`), with its declaration.
+    let mut ordinary_members: FxHashMap<(String, String), (String, String)> = FxHashMap::default();
+    for (path, ff) in files {
+        for tag in written_member_tags(ff) {
+            if let Some(declared) = object_members.ordinary_member(path, tag) {
+                ordinary_members.insert((path.clone(), tag.to_string()), declared);
+            }
+        }
+    }
     // A receiver is known through its file's declarations, imports and
     // members only (`<Family.Root>`), never by a bare name elsewhere; a
     // member, only through the binding its object proves it holds.
@@ -6176,6 +6241,7 @@ fn run_with_system_floor(
         &evaluated_ids,
         &ids_by_binding,
         &wrapper_targets_by_file,
+        &ordinary_members,
         receiver_ids,
         |id| evaluated.get(id).is_some_and(|(_, _, terminal, ..)| *terminal == TerminalKind::AsElement),
     );
@@ -6364,7 +6430,7 @@ fn run_with_system_floor(
     let usage_complete = inputs.analysis_context.skipped_sources.is_empty()
         && !files.values().any(|ff| ff.direct_eval)
         && (!identity_policy.uncertain
-            || uncertainty_leaves_usage_proven(&uncertain_identities, files, inputs, &package_members));
+            || uncertainty_leaves_usage_proven(&uncertain_identities, files, inputs, &ordinary_members, &package_members));
     let project_uses = usage_complete
         .then(|| {
             let unproven: std::collections::BTreeSet<String> =
@@ -8991,6 +9057,80 @@ export const App = ({ n }) => <Box bgImage={n} texture={n} />;
         assert_eq!(unread(&shadowed), 0);
     }
 
+    /// A spread whose every branch is an object literal of literal entries,
+    /// or nothing (`{...(c ? { p: 8 } : {})}`), writes those entries on the
+    /// branches that hold them: they take static classes, and the prop keeps
+    /// its default where a branch leaves it out. Any other spread writes
+    /// anything.
+    #[test]
+    fn listed_spreads_write_the_entries_their_branches_hold() {
+        let kit = "export const Box = ds.system({ space: true }).asElement('div');\n";
+        let cases: [(&str, &[&str]); 6] = [
+            ("<Box {...(c ? { p: 8 } : {})} />", &[]),
+            ("<Box {...(c && { p: 8 })} />", &[]),
+            ("<Box {...(c ? { p: 8 } : null)} />", &[]),
+            ("<Box {...(c ? { p: n } : {})} />", &["p"]),
+            ("<Box {...(c ? o : {})} />", &["p"]),
+            ("<Box {...(c || 'abc')} />", &["p"]),
+        ];
+        for (render, want) in cases {
+            let app = format!("import {{ Box }} from './kit';\nexport const App = ({{ c, n, o }}) => {render};\n");
+            let out = analyze(&[("kit.tsx", kit), ("app.tsx", &app)], &test_inputs());
+            assert_eq!(out.dynamic_props.keys().collect::<Vec<_>>(), want, "{render}");
+        }
+        for (render, sizes) in [
+            ("<R {...(c ? { size: 'lg' } : {})} />", vec!["md", "lg"]),
+            ("<R size=\"sm\" {...(c ? { size: 'lg' } : {})} />", vec!["sm", "lg"]),
+            ("<R {...(c ? o : {})} />", vec!["sm", "md", "lg"]),
+        ] {
+            let app = format!("import {{ R }} from './r';\nexport const App = ({{ c, o }}) => {render};\n");
+            assert_eq!(kept_options(&[("r.tsx", RECIPE), ("app.tsx", app.as_str())]).0, sizes, "{render}");
+        }
+    }
+
+    /// A member tag that names an ordinary function component a stable
+    /// object holds (`<Dialog.Root>` for `const Dialog = { Root }`) is that
+    /// component: it leaves usage proven, and its children stay in place
+    /// unless it passes them to code outside the analysis, children a local
+    /// takes by assignment included. A member the object may no longer hold
+    /// (in any module), one built by a call, or a parameter that shares the
+    /// object's name still blocks.
+    #[test]
+    fn ordinary_family_members_leave_usage_proven() {
+        let kit = "export const Box = ds.system({ space: true }).asElement('div');\n";
+        let family = "import { Slot } from 'ui-lib';\n\
+                      function Root({ children }) { return <section>{children}</section>; }\n\
+                      function Pass({ children }) { return <Slot>{children}</Slot>; }\n\
+                      function Held({ children }) { let held; held = children; return <Slot>{held}</Slot>; }\n\
+                      export const Dialog = { Root, Pass, Held, Made: memo(Root) };\n";
+        let cases: [(&str, &str, &[&str]); 8] = [
+            ("", "() => <><Dialog.Root /><Box p={8} /></>", &[]),
+            ("", "() => <Dialog.Root><Box p={8} /></Dialog.Root>", &[]),
+            ("", "() => <><Dialog.Pass><div /></Dialog.Pass><Box p={8} /></>", &[]),
+            ("", "() => <><Dialog.Pass><Box p={8} /></Dialog.Pass><Box p={8} /></>", &["p"]),
+            // Children a local takes by assignment may still be passed on.
+            ("", "() => <><Dialog.Held><Box p={8} /></Dialog.Held><Box p={8} /></>", &["p"]),
+            ("", "() => <><Dialog.Made /><Box p={8} /></>", &["p"]),
+            ("", "({ Dialog }) => <><Dialog.Root /><Box p={8} /></>", &["p"]),
+            ("Dialog.Root = maybe;\n", "() => <><Dialog.Root /><Box p={8} /></>", &["p"]),
+        ];
+        for (more, app, want) in cases {
+            let family = format!("{family}{more}");
+            let app = format!("import {{ Box }} from './kit';\nimport {{ Dialog }} from './fam';\nexport const App = {app};\n");
+            let out = analyze(&[("kit.tsx", kit), ("fam.tsx", family.as_str()), ("app.tsx", app.as_str())], &test_inputs());
+            assert_eq!(out.dynamic_props.keys().collect::<Vec<_>>(), want, "{more}{app}");
+        }
+        // A module with no import still records what may change its object.
+        let plain = "function Root({ children }) { return <section>{children}</section>; }\nexport const Dialog = { Root };\n";
+        for more in ["consume(Dialog);\n", "delete Dialog.Root;\nrestore(Dialog);\n"] {
+            let family = format!("{plain}{more}");
+            let app = "import { Box } from './kit';\nimport { Dialog } from './fam';\n\
+                       export const App = () => <Dialog.Root><Box p={8} /></Dialog.Root>;\n";
+            let out = analyze(&[("kit.tsx", kit), ("fam.tsx", family.as_str()), ("app.tsx", app)], &test_inputs());
+            assert_eq!(out.dynamic_props.keys().collect::<Vec<_>>(), ["p"], "{more}");
+        }
+    }
+
     /// A tag whose first name a parameter or local binds is not the module's
     /// binding of that name: `({ Fam }) => <Fam.Root p={n} />` may render
     /// any component, so its runtime value keeps every component's slot,
@@ -9046,6 +9186,68 @@ export const App = ({ n }) => <Box bgImage={n} texture={n} />;
                 &test_inputs(),
             );
             assert_eq!(out.dynamic_props.keys().collect::<Vec<_>>(), want, "{more}{app}");
+        }
+    }
+
+    /// The `Provider` of a context React's `createContext` builds as a
+    /// module-scope `const` renders its children in place: it leaves usage
+    /// proven, in its module or through an import. A context built another
+    /// way, one something may change, one a parameter shadows, or its
+    /// `Consumer` still blocks.
+    #[test]
+    fn context_providers_leave_usage_proven() {
+        let kit = "export const Box = ds.system({ space: true }).asElement('div');\n";
+        let contexts = "import { createContext } from 'react';\nexport const Shared = createContext(null);\n";
+        let cases: [(&str, &str, &[&str]); 7] = [
+            ("import { createContext } from 'react';\nconst Theme = createContext<number>(0);",
+             "() => <><Theme.Provider value={1}><div /></Theme.Provider><Box p={8} /></>", &[]),
+            ("import * as React from 'react';\nconst Theme = React.createContext(0);",
+             "() => <Theme.Provider value={1}><Box p={8} /></Theme.Provider>", &[]),
+            ("import { Shared } from './contexts';",
+             "() => <><Shared.Provider value={1}><div /></Shared.Provider><Box p={8} /></>", &[]),
+            ("const createContext = (v) => ({ Provider: pick(v) });\nconst Theme = createContext(0);",
+             "() => <><Theme.Provider value={1} /><Box p={8} /></>", &["p"]),
+            ("import { createContext } from 'react';\nlet Theme = createContext(0);",
+             "() => <><Theme.Provider value={1} /><Box p={8} /></>", &["p"]),
+            ("import { Shared } from './contexts';",
+             "({ Shared }) => <><Shared.Provider value={1} /><Box p={8} /></>", &["p"]),
+            ("import { Shared } from './contexts';",
+             "() => <><Shared.Consumer>{() => null}</Shared.Consumer><Box p={8} /></>", &["p"]),
+        ];
+        for (setup, app, want) in cases {
+            let app = format!("import {{ Box }} from './kit';\n{setup}\nexport const App = {app};\n");
+            let out = analyze(&[("kit.tsx", kit), ("contexts.tsx", contexts), ("app.tsx", app.as_str())], &test_inputs());
+            assert_eq!(out.dynamic_props.keys().collect::<Vec<_>>(), want, "{app}");
+        }
+        // Only an import binds React: a local or an unbound `React` is not it.
+        let fake = "const React = { createContext: (v) => ({ Provider: pick(v) }) };\n";
+        for made in [
+            format!("{fake}export const Made = React.createContext(0);\n"),
+            format!("import {{ x }} from 'somewhere';\n{fake}export const Made = React.createContext(0);\n"),
+            "export const Made = React.createContext(0);\n".to_string(),
+            "import React from 'react';\nReact.createContext = pick;\nexport const Made = React.createContext(0);\n".to_string(),
+        ] {
+            let app = "import { Box } from './kit';\nimport { Made } from './made';\n\
+                       export const App = () => <><Made.Provider value={1}><div /></Made.Provider><Box p={8} /></>;\n";
+            let out = analyze(&[("kit.tsx", kit), ("made.tsx", made.as_str()), ("app.tsx", app)], &test_inputs());
+            assert_eq!(out.dynamic_props.keys().collect::<Vec<_>>(), ["p"], "{made}");
+        }
+        // A context something may change is not proven to hold React's
+        // `Provider`; React's context readers change nothing.
+        let read = "import { useContext } from 'react';\nimport { Shared } from './contexts';\n\
+                    export const useShared = () => useContext(Shared);\n";
+        for (more, want) in [
+            ("export const useOwn = () => useContext(Shared);\n", &[][..]),
+            ("Shared.Provider = pick();\n", &["p"][..]),
+            ("Shared['Provider'] = pick();\n", &["p"][..]),
+            ("delete Shared.Provider;\nrestore(Shared);\n", &["p"][..]),
+            ("consume(Shared);\n", &["p"][..]),
+        ] {
+            let contexts = format!("import {{ createContext, useContext }} from 'react';\nexport const Shared = createContext(null);\n{more}");
+            let app = "import { Box } from './kit';\nimport { Shared } from './contexts';\n\
+                       export const App = () => <Shared.Provider value={1}><Box p={8} /></Shared.Provider>;\n";
+            let files = [("kit.tsx", kit), ("contexts.tsx", contexts.as_str()), ("read.tsx", read), ("app.tsx", app)];
+            assert_eq!(analyze(&files, &test_inputs()).dynamic_props.keys().collect::<Vec<_>>(), want, "{more}");
         }
     }
 
