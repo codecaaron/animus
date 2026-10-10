@@ -608,7 +608,7 @@ export const App = () => <Box />;
     expect(surface(manifest, undefined).thrown).toBeNull();
     expect(surface(manifest, false).thrown).toBeNull();
     expect(surface(manifest, true).thrown?.message).toContain(
-      "animus.transform.configured-rejected — createTransform('leaky'):"
+      "animus.transform.configured-rejected — system: createTransform('leaky'):"
     );
   });
 });
