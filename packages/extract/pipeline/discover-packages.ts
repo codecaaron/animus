@@ -355,6 +355,9 @@ export interface CollectedExternalPackages {
    *  its real path is outside `node_modules`, so its source can change in
    *  place. */
   linkedDirs: string[];
+  /** Those of `packageDirs` read from their package's compiled output: the
+   *  package declares no source condition and ships no `src/`. */
+  outputDirs: string[];
   /** Absolute package dir → every declared specifier that claimed it, in
    *  declaration order. `firstOwners` derives the single-value view. */
   dirOwnerSets: Record<string, string[]>;
@@ -448,6 +451,7 @@ export async function collectExternalPackageSources(opts: {
   };
   const packageDirs: string[] = [];
   const linkedDirs: string[] = [];
+  const outputDirs: string[] = [];
   const dirOwnerSets: Record<string, string[]> = {};
   const dirExtensions: Record<string, string[]> = {};
   const fileOwners: Record<string, string> = {};
@@ -607,6 +611,7 @@ export async function collectExternalPackageSources(opts: {
       const outputDir = dirname(absEntry);
       packageDirs.push(outputDir);
       if (linked) linkedDirs.push(outputDir);
+      outputDirs.push(outputDir);
       claimDir(outputDir, specifier);
       onPackageResolved?.(specifier, outputDir);
       const relPath = relative(rootDir, absEntry);
@@ -662,6 +667,7 @@ export async function collectExternalPackageSources(opts: {
     sourceEntrySideEffects,
     packageDirs,
     linkedDirs,
+    outputDirs,
     dirOwnerSets,
     dirExtensions,
     fileOwners,
@@ -889,6 +895,9 @@ export function excludeCollectedPackages(
       (dir) => !rejectedDirs.includes(dir)
     ),
     linkedDirs: collected.linkedDirs.filter(
+      (dir) => !rejectedDirs.includes(dir)
+    ),
+    outputDirs: collected.outputDirs.filter(
       (dir) => !rejectedDirs.includes(dir)
     ),
     dirOwnerSets,
