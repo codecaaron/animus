@@ -5386,11 +5386,17 @@ fn run_with_system_floor(
     let definitions: Vec<(&str, &str)> =
         identities.iter().map(|(_, binding, identity)| (*binding, identity.as_str())).collect();
     let ordered_class_names = crate::ids::class_names(&definitions, class_prefix);
-    let name_scopes: FxHashMap<&String, String> = identities
-        .iter()
-        .map(|(id, _, _)| *id)
-        .zip(crate::ids::name_scopes(&definitions, &ordered_class_names))
-        .collect();
+    // Production copies share their prop names; development names each
+    // component's by its own binding, an installed kit's too.
+    let scopes = match inputs.dev_mode {
+        true => definitions
+            .iter()
+            .zip(&ordered_class_names)
+            .map(|((binding, _), class_name)| crate::ids::name_scope(binding, class_name))
+            .collect(),
+        false => crate::ids::name_scopes(&definitions, &ordered_class_names),
+    };
+    let name_scopes: FxHashMap<&String, String> = identities.iter().map(|(id, _, _)| *id).zip(scopes).collect();
     let class_names: FxHashMap<&String, String> =
         identities.iter().map(|(id, _, _)| *id).zip(ordered_class_names).collect();
     let identity_of: FxHashMap<&str, &str> =
@@ -9764,6 +9770,21 @@ export const App = ({ n }) => <Box bgImage={n} texture={n} />;
         let backward = registered(&[("app.tsx", app), ("other.tsx", other), ("span.tsx", &span), ("text.tsx", &text)]);
         assert_eq!(forward.len(), 2, "copies share one registration, the other definition keeps its own: {forward:?}");
         assert_eq!(forward, backward, "names follow no file order");
+        // Development names each component's props by its own binding, an
+        // installed kit's too, as before copies shared.
+        let mut development = test_inputs();
+        development.dev_mode = true;
+        let installed = "import { Text } from '../node_modules/kit-a/text';\nimport { Span } from '../node_modules/kit-b/span';\n\
+                         export const App = ({ n }) => <><Text tone={`${n}`} /><Span tone={`${n}`} /></>;\n";
+        let out = analyze(
+            &[("node_modules/kit-a/text.tsx", &text), ("node_modules/kit-b/span.tsx", &span), ("src/app.tsx", installed)],
+            &development,
+        );
+        let names: Vec<_> = ["tone_Text_", "tone_Span_"]
+            .iter()
+            .map(|name| out.sheets.global.lines().any(|line| line.starts_with(&format!("@property --animus-{name}"))))
+            .collect();
+        assert_eq!(names, [true, true], "{}", out.sheets.global);
     }
 
     #[test]
