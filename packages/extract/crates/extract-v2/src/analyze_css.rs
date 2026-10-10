@@ -6417,7 +6417,15 @@ fn run_with_system_floor(
     }
     for (path, ff) in files {
         let mut names: Vec<&str> = Vec::new();
-        for name in &ff.value_escapes {
+        // A default export spelled as a specifier (`export { R as default }`)
+        // is what a framework or entry renders by itself, as `export default
+        // R` is.
+        let default_specifiers = ff
+            .exports
+            .iter()
+            .filter(|export| export.exported == "default" && export.source.is_none())
+            .filter_map(|export| export.local.as_ref());
+        for name in ff.value_escapes.iter().chain(default_specifiers) {
             names.push(name);
             // A class resolver has no component members, so a path through
             // one (`resolver.attrs`, `resolver.attrs.call`) is the resolver
@@ -6474,6 +6482,17 @@ fn run_with_system_floor(
                 || ff.exports.iter().any(|e| e.source.is_none() && e.local.as_deref() == Some(alias));
             if exported {
                 names.push(alias);
+            }
+        }
+        // So is a name a barrel re-exports as its default (`export { R as
+        // default } from './r'`); a re-exported default is the source's own.
+        for export in ff.exports.iter().filter(|export| export.exported == "default") {
+            let (Some(source), Some(original)) = (&export.source, &export.original) else { continue };
+            if original == "default" {
+                continue;
+            }
+            if let Some((declaring, binding, _)) = resolve_export(path, source, original, files, inputs) {
+                escaped_ids.extend(resolve_declared_identity(&declaring, &binding, files, inputs, &evaluated_ids));
             }
         }
         // Through the file's own declarations and imports only: an outside
@@ -11338,6 +11357,29 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
                 (vec!["sm", "md", "lg"], vec!["active", "busy"]),
                 "{recipe}"
             );
+        }
+    }
+
+    /// A default export, however spelled and wherever re-exported, is what a
+    /// framework or entry renders by itself, so it opens its target.
+    #[test]
+    fn default_export_specifiers_keep_every_option_of_their_target() {
+        let r = format!("{RECIPE}export {{ R as default }};\n");
+        let app = "import { R } from './r';\nexport const App = () => <R size=\"sm\" active />;\n";
+        let cases: [&[(&str, &str)]; 4] = [
+            &[("r.tsx", r.as_str())],
+            &[("r.tsx", RECIPE), ("barrel.ts", "export { R as default } from './r';\n")],
+            &[("r.tsx", RECIPE), ("barrel.ts", "import { R } from './r';\nexport { R as default };\n")],
+            &[
+                ("r.tsx", RECIPE),
+                ("barrel.ts", "export { R as G } from './r';\n"),
+                ("entry.ts", "export { G as default } from './barrel';\n"),
+            ],
+        ];
+        for modules in cases {
+            let mut files = vec![("app.tsx", app)];
+            files.extend(modules);
+            assert_eq!(kept_options(&files), (vec!["sm", "md", "lg"], vec!["active", "busy"]), "{modules:?}");
         }
     }
 
