@@ -12,6 +12,9 @@ export function applyResolvedConfig(
   // Lifecycle signal: HMR ownership, rediscovery, and cache behavior key on
   // the host command, never on the explicit `mode` option.
   ctx.isProd = config.command === 'build';
+  // Serving or watching runs another turn, so an error-level diagnostic is
+  // reported there; only a one-shot build fails on one.
+  ctx.development = !ctx.isProd || Boolean(config.build.watch);
   // Emission signal: explicit `mode` wins over the command signal for the
   // decisions that change emitted bytes — engine devMode and minify default.
   ctx.emissionProd =

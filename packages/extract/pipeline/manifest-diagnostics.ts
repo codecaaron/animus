@@ -82,6 +82,10 @@ export interface DiagnosticPolicy {
   /** The codes this build knows. With `levels`, a key that matches none of
    *  them warns once. */
   knownCodes?: ReadonlySet<string>;
+  /** A development session's error sink: the error-level diagnostics are
+   *  reported here instead of thrown, and the session keeps running. Only a
+   *  build fails on them. */
+  reportErrors?: (message: string) => void;
 }
 
 /** What the `diagnostics` option sets a code to, like an ESLint rule level:
@@ -105,27 +109,36 @@ export const DIAGNOSTIC_LEVELS: ReadonlySet<string> = new Set([
 const KIND_KEY = 'kind:';
 const DIAGNOSTIC_KINDS: ReadonlySet<string> = new Set(['bail', 'skip', 'warn']);
 
-/** The level `levels` sets for a record: its code's exact entry, else the
- *  entry of the longest prefix its code starts with, else its kind's. */
+/** The level `levels` sets for `code`: its exact entry, else the entry of
+ *  the longest prefix it starts with. */
+function codeLevel(
+  code: string | undefined,
+  levels: DiagnosticLevels
+): DiagnosticLevel | undefined {
+  if (code === undefined) return undefined;
+  if (Object.hasOwn(levels, code)) return levels[code];
+  let longest: { length: number; level: DiagnosticLevel } | undefined;
+  for (const [key, level] of Object.entries(levels)) {
+    if (!key.endsWith('.*')) continue;
+    const prefix = key.slice(0, -1);
+    if (code.startsWith(prefix) && prefix.length > (longest?.length ?? -1)) {
+      longest = { length: prefix.length, level };
+    }
+  }
+  return longest?.level;
+}
+
+/** The level `levels` sets for a record: its code's level, else its kind's. */
 function levelFor(
   { code, kind }: Pick<ManifestDiagnostic, 'code' | 'kind'>,
   levels: DiagnosticLevels | undefined
 ): DiagnosticLevel | undefined {
   if (levels === undefined) return undefined;
-  if (code !== undefined) {
-    if (Object.hasOwn(levels, code)) return levels[code];
-    let longest: { length: number; level: DiagnosticLevel } | undefined;
-    for (const [key, level] of Object.entries(levels)) {
-      if (!key.endsWith('.*')) continue;
-      const prefix = key.slice(0, -1);
-      if (code.startsWith(prefix) && prefix.length > (longest?.length ?? -1)) {
-        longest = { length: prefix.length, level };
-      }
-    }
-    if (longest) return longest.level;
-  }
   const kindKey = `${KIND_KEY}${kind}`;
-  return Object.hasOwn(levels, kindKey) ? levels[kindKey] : undefined;
+  return (
+    codeLevel(code, levels) ??
+    (Object.hasOwn(levels, kindKey) ? levels[kindKey] : undefined)
+  );
 }
 
 /** The level a record prints at: the option's entry for its code, else
@@ -574,7 +587,8 @@ function tokenCollisionDiagnostics(
 
 /**
  * The single strict-escalation policy point for both extraction plugins:
- * error-severity diagnostics throw together under `strict`, else warn.
+ * error-severity diagnostics throw together under `strict`, else warn. A
+ * development session reports them through `reportErrors` instead.
  */
 export function surfaceManifestDiagnostics(
   manifest: { diagnostics?: ManifestDiagnostic[] },
@@ -624,9 +638,11 @@ export function surfaceManifestDiagnostics(
     }
     warn(line);
   }
-  if (errors.length > 0) {
-    throw new DiagnosticFailure(
-      `[animus] strict: ${errors.length} error diagnostic(s):\n${errors.join('\n')}`
-    );
+  if (errors.length === 0) return;
+  const message = `[animus] strict: ${errors.length} error diagnostic(s):\n${errors.join('\n')}`;
+  if (policy.reportErrors) {
+    policy.reportErrors(message);
+    return;
   }
+  throw new DiagnosticFailure(message);
 }

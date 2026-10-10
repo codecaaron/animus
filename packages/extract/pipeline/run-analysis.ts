@@ -185,6 +185,8 @@ export function runProjectAnalysis(
     strict?: boolean;
     /** The host's `diagnostics` option. */
     diagnostics?: DiagnosticLevels;
+    /** A development session's error sink (`DiagnosticPolicy.reportErrors`). */
+    reportErrors?: (message: string) => void;
   }
 ): ProjectAnalysisResult {
   const { analyzeProject, diagnosticCodes } = engineApi();
@@ -221,6 +223,7 @@ export function runProjectAnalysis(
   surfaceManifestDiagnostics(manifest, opts.warn, {
     strict: opts.strict,
     info: opts.info,
+    reportErrors: opts.reportErrors,
     levels: opts.diagnostics,
     knownCodes: opts.diagnostics
       ? knownDiagnosticCodes(diagnosticCodes?.())

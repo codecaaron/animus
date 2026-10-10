@@ -128,6 +128,8 @@ export async function runWatch(
   let startup: WatchStartup;
   try {
     const created = createCliSession(config);
+    // An error-level diagnostic reports and the watch keeps running.
+    created.development = true;
     constructed = created;
     // Registered before the first analysis and holding what it observes:
     // the watcher never re-diffs, so an edit in that window never arrives.

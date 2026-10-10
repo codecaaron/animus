@@ -181,6 +181,8 @@ interface EsbuildOptionsLike {
 
 interface WebpackLikeCompiler {
   options: { mode?: string };
+  /** Set once `watch()` starts, before the first compilation. */
+  watchMode?: boolean;
   webpack?: {
     DefinePlugin?: new (defs: Record<string, string>) => WebpackLikeApplied;
   };
@@ -229,6 +231,11 @@ export const unpluginFactory: UnpluginFactory<
   const state = createHostState();
   let activeSession: ExtractionSession | null = null;
   let modeOracle: AnimusMode | null = null;
+  /** Whether the host is watching, where an error-level diagnostic reports
+   *  and the pipeline still publishes. Only a build fails on one. Rollup's
+   *  oracle is its watch mode; webpack's is its `mode`, so it reads
+   *  `watchMode` instead. esbuild gives neither, so it always builds. */
+  let watching = (): boolean => modeOracle === 'development';
   let esbuildOptions: EsbuildOptionsLike | null = null;
   /** Hooks can fire before buildStart (webpack's make taps run
    *  concurrently), so joiners await this before awaiting the pipeline. */
@@ -277,6 +284,7 @@ export const unpluginFactory: UnpluginFactory<
         { unbundledComputedImports }
       );
       activeSession = session;
+      session.development = watching();
       session.driverLabel = 'animus-unplugin';
       session.rootDir = root;
       session.systemPropsModuleId = TURBOPACK_SYSTEM_PROPS_ID;
@@ -544,6 +552,7 @@ export const unpluginFactory: UnpluginFactory<
   function wireWebpackLike(compiler: WebpackLikeCompiler): void {
     modeOracle =
       compiler.options.mode === 'development' ? 'development' : 'production';
+    watching = () => compiler.watchMode === true;
     const DefinePlugin =
       compiler.webpack?.DefinePlugin ?? compiler.rspack?.DefinePlugin;
     if (!DefinePlugin) {

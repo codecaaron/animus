@@ -160,6 +160,9 @@ export class PluginContext {
   readonly staticCssJson: string | null;
 
   isProd = false;
+  /** Serving or watching: an error-level diagnostic reports, and only a
+   *  one-shot build fails on one. */
+  development = false;
   /** Emission mode (the explicit `mode` option wins over the command); feeds
    *  engine devMode and the minify default. Lifecycle stays on `isProd`. */
   emissionProd = false;
@@ -390,6 +393,13 @@ export class PluginContext {
     (this.logger ?? console).warn(`[animus] ${msg}`);
   }
 
+  /** Development's sink for error-level diagnostics: they are reported and
+   *  the server or watch keeps running. Only a build fails on them. */
+  reportErrors(): ((message: string) => void) | undefined {
+    if (!this.development) return undefined;
+    return (message) => (this.logger ?? console).error(message);
+  }
+
   /** Load the system into `this.system`. On failure the previous config is
    *  kept; strict mode throws instead. */
   loadSystem(): void {
@@ -501,10 +511,12 @@ export class PluginContext {
         info: (m) => this.log(m),
         strict: this.options.strict,
         diagnostics: this.options.diagnostics,
+        reportErrors: this.reportErrors(),
         extraDiagnostics: ingestionFailures,
       });
     } catch (e) {
-      // A diagnostic at `error` level fails as a strict failure does.
+      // A diagnostic at `error` level fails a build as a strict failure
+      // does; a dev server reports it instead and never reaches here.
       if (this.options.strict || e instanceof DiagnosticFailure) {
         throw new Error(`[animus-extract] analyzeProject failed: ${e}`, {
           cause: e,

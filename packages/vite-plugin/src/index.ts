@@ -60,16 +60,17 @@ export interface AnimusExtractOptions {
   extensions?: string[];
   /**
    * Error-severity diagnostics — lost configured inputs and classified
-   * unsupported Animus declarations — fail the build instead of warning.
-   * Omitted or `false` warns.
+   * unsupported Animus declarations — fail a build instead of warning, and
+   * the dev server reports them and keeps running. Omitted or `false` warns.
    */
   strict?: boolean;
   /**
    * Each `animus.*` code's level, by exact code, by a prefix ending in `.*`
    * (`'animus.style.*'`), or by kind (`'kind:bail'`, `'kind:skip'`,
-   * `'kind:warn'`): `'off'`, `'info'`, `'warn'` or `'error'`, which fails the
-   * build. An exact code beats the longest matching prefix, which beats a
-   * kind, and an entry beats `strict` and the code's own severity.
+   * `'kind:warn'`): `'off'`, `'info'`, `'warn'` or `'error'`, which fails a
+   * build and is reported by the dev server, which keeps running. An exact
+   * code beats the longest matching prefix, which beats a kind, and an entry
+   * beats `strict` and the code's own severity.
    */
   diagnostics?: DiagnosticLevels;
   /**

@@ -13,15 +13,17 @@ export interface AnimusNextOptions {
    *  `['.ts','.tsx','.js','.jsx','.mdx']`. `.mdx` needs `@mdx-js/mdx`. */
   extensions?: string[];
   /** When true, error-severity diagnostics — lost configured inputs and
-   *  classified unsupported Animus declarations — fail the build instead of
-   *  warning. Omitted or `false` warns. */
+   *  classified unsupported Animus declarations — fail a build instead of
+   *  warning, and `next dev` reports them and keeps running. Omitted or
+   *  `false` warns. */
   strict?: boolean;
   /**
    * Each `animus.*` code's level, by exact code, by a prefix ending in `.*`
    * (`'animus.style.*'`), or by kind (`'kind:bail'`, `'kind:skip'`,
-   * `'kind:warn'`): `'off'`, `'info'`, `'warn'` or `'error'`, which fails the
-   * build. An exact code beats the longest matching prefix, which beats a
-   * kind, and an entry beats `strict` and the code's own severity.
+   * `'kind:warn'`): `'off'`, `'info'`, `'warn'` or `'error'`, which fails a
+   * build and is reported by `next dev`, which keeps running. An exact code
+   * beats the longest matching prefix, which beats a kind, and an entry beats
+   * `strict` and the code's own severity.
    */
   diagnostics?: DiagnosticLevels;
   /** Project-root-relative path of the one file that receives the stylesheet
