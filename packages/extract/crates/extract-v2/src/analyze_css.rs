@@ -3660,25 +3660,37 @@ fn proven_slot_conditions(
 
 /// What calls can hand to code outside the analysis, which may clone runtime
 /// props into an element it receives: the components whose elements such a
-/// call's arguments carry, and the top-level functions, as `(file, binding)`,
-/// that pass a parameter to such a call. A call reaches outside the analysis
-/// when its callee is a global outside the built-ins, an import the analysis
-/// does not resolve, or a function that forwards a parameter to such a call.
+/// call's arguments carry, directly, through `const`s or through another
+/// module's `const`s, and the top-level functions, as `(file, binding)`,
+/// that pass a parameter to such a call. A callee reaches outside the
+/// analysis when it is a global outside the built-ins, an import the
+/// analysis does not resolve, a value built from either, or a function that
+/// forwards a parameter to such a call.
 fn opaque_delivery(
     files: &BTreeMap<String, FileFacts>,
     inputs: &CssInputs,
     evaluated_ids: &FxHashSet<String>,
     ids_by_binding: &IdsByBinding,
 ) -> (std::collections::BTreeSet<String>, FxHashSet<(String, String)>) {
-    let opaque = |file: &str, ff: &FileFacts, callee: Option<&str>, forwarding: &FxHashSet<(String, String)>| {
-        let Some(callee) = callee else { return true };
-        let declaration = match callee.split_once('.') {
-            Some((namespace, member)) if ff.namespace_imports.contains_key(namespace) => {
-                resolve_export(file, &ff.namespace_imports[namespace], member, files, inputs)
+    // Whether `name` (`lib.enhance` for a namespace import's member) leaves
+    // the analysis from `file`.
+    let outside = |file: &str, ff: &FileFacts, name: &str, forwarding: &FxHashSet<(String, String)>| {
+        let (root, member) = match name.split_once('.') {
+            Some((root, member)) => (root, Some(member)),
+            None => (name, None),
+        };
+        let declaration = match (ff.namespace_imports.get(root), member) {
+            (Some(source), Some(member)) => resolve_export(file, source, member, files, inputs),
+            (Some(source), None) => {
+                return resolve_import_source(file, source, files, inputs).is_none();
             }
-            _ => resolve_declaration(file, ff, callee.split('.').next().unwrap_or(callee), files, inputs),
+            (None, _) => resolve_declaration(file, ff, root, files, inputs),
         };
         declaration.is_none_or(|(declaring, binding, _)| forwarding.contains(&(declaring, binding)))
+    };
+    let opaque = |file: &str, ff: &FileFacts, call: &crate::usage_facts::OpaqueCall, forwarding: &FxHashSet<(String, String)>| {
+        call.callee.as_deref().is_none_or(|callee| outside(file, ff, callee, forwarding))
+            || call.callee_imports.iter().any(|import| outside(file, ff, import, forwarding))
     };
     let mut forwarding: FxHashSet<(String, String)> = FxHashSet::default();
     loop {
@@ -3687,7 +3699,7 @@ fn opaque_delivery(
             for call in &ff.opaque_calls {
                 let fresh: Vec<&String> =
                     call.forwards_from.iter().filter(|name| !forwarding.contains(&(path.clone(), (*name).clone()))).collect();
-                if !fresh.is_empty() && opaque(path, ff, call.callee.as_deref(), &forwarding) {
+                if !fresh.is_empty() && opaque(path, ff, call, &forwarding) {
                     forwarding.extend(fresh.into_iter().map(|name| (path.clone(), name.clone())));
                     grew = true;
                 }
@@ -3697,16 +3709,45 @@ fn opaque_delivery(
             break;
         }
     }
-    let mut delivered = std::collections::BTreeSet::new();
+    // Component tags, each with the file that names it, followed through
+    // imported `const`s to the modules that declare them.
+    let mut tags: Vec<(String, String)> = Vec::new();
+    let mut imports: Vec<(String, String)> = Vec::new();
     for (path, ff) in files {
-        for call in ff.opaque_calls.iter().filter(|call| !call.tags.is_empty()) {
-            if opaque(path, ff, call.callee.as_deref(), &forwarding) {
-                for tag in &call.tags {
-                    delivered.extend(resolve_usage_identity(path, tag, files, inputs, evaluated_ids, ids_by_binding));
-                }
-            }
+        for call in ff.opaque_calls.iter().filter(|call| opaque(path, ff, call, &forwarding)) {
+            tags.extend(call.tags.iter().map(|tag| (path.clone(), tag.clone())));
+            imports.extend(call.imported_args.iter().map(|import| (path.clone(), import.clone())));
         }
     }
+    let mut followed: FxHashSet<(String, String)> = FxHashSet::default();
+    while let Some((file, import)) = imports.pop() {
+        if !followed.insert((file.clone(), import.clone())) {
+            continue;
+        }
+        let Some(ff) = files.get(&file) else { continue };
+        // A namespace import reaches every element `const` of its module.
+        let held: Vec<(String, &crate::usage_facts::ElementConst)> = match ff.namespace_imports.get(&import) {
+            Some(source) => resolve_import_source(&file, source, files, inputs)
+                .and_then(|module| Some((module.clone(), files.get(&module)?)))
+                .map(|(module, declaring)| declaring.element_consts.values().map(|held| (module.clone(), held)).collect())
+                .unwrap_or_default(),
+            None => resolve_declaration(&file, ff, &import, files, inputs)
+                .filter(|(declaring, _, _)| *declaring != file)
+                .and_then(|(declaring, binding, _)| {
+                    let held = files.get(&declaring)?.element_consts.get(&binding)?;
+                    Some(vec![(declaring, held)])
+                })
+                .unwrap_or_default(),
+        };
+        for (declaring, held) in held {
+            tags.extend(held.tags.iter().map(|tag| (declaring.clone(), tag.clone())));
+            imports.extend(held.imports.iter().map(|import| (declaring.clone(), import.clone())));
+        }
+    }
+    let delivered = tags
+        .iter()
+        .flat_map(|(file, tag)| resolve_usage_identity(file, tag, files, inputs, evaluated_ids, ids_by_binding))
+        .collect();
     (delivered, forwarding)
 }
 
@@ -7976,7 +8017,7 @@ export const App = ({ n }) => <Box bgImage={n} texture={n} />;
             let out = analyze(&[("kit.tsx", kit), ("app.tsx", app)], inputs);
             out.dynamic_props.keys().cloned().collect::<Vec<_>>()
         };
-        let cases: [(&str, &[&str]); 14] = [
+        let cases: [(&str, &[&str]); 20] = [
             ("export const App = () => <Box p={8} />;\n", &[]),
             ("export const App = ({ n }) => <Box p={n} />;\n", &["p"]),
             // A spread, an escape or a component chosen at runtime leaves a
@@ -7997,6 +8038,14 @@ export const App = ({ n }) => <Box bgImage={n} texture={n} />;
             ("import { enhance } from 'ui-lib';\nexport const App = () => <div>{enhance(<Box p={8} />)}</div>;\n", &["p"]),
             ("import { useRender } from '@base-ui/react';\nexport const App = ({ props }) => useRender({ render: <Box p={8} />, props });\n", &["p"]),
             ("import { useRender } from '@base-ui/react';\nfunction Button({ render, ...props }) { return useRender({ render, props }); }\nexport const App = () => <Button render={<Box p={8} />} />;\n", &["p"]),
+            // So does a module value built from such code, an element or a
+            // parameter several `const`s away, and a `new` expression.
+            ("import * as lib from 'ui-lib';\nconst enhance = lib.enhance;\nexport const App = () => <div>{enhance(<Box p={8} />)}</div>;\n", &["p"]),
+            ("import { enhance as e } from 'ui-lib';\nconst enhance = e;\nexport const App = () => <div>{enhance(<Box p={8} />)}</div>;\n", &["p"]),
+            ("import { create } from 'ui-lib';\nconst enhance = create();\nexport const App = () => <div>{enhance(<Box p={8} />)}</div>;\n", &["p"]),
+            ("import { useRender } from '@base-ui/react';\nexport const App = ({ props }) => { const el = <Box p={8} />; const opts = { render: el, props }; return useRender(opts); };\n", &["p"]),
+            ("import { useRender } from '@base-ui/react';\nfunction Button(props) { const r = props.render; const opts = { render: r }; return useRender(opts); }\nexport const App = () => <Button render={<Box p={8} />} />;\n", &["p"]),
+            ("import { Widget } from 'ui-lib';\nexport const App = () => { new Widget(<Box p={8} />); return null; };\n", &["p"]),
             // React's own calls and calls on the module's values stay proven.
             ("import { useMemo } from 'react';\nexport const App = () => useMemo(() => <Box p={8} />, []);\n", &[]),
             ("const items = [1, 2];\nexport const App = () => <>{items.map((i) => <Box key={i} p={8} />)}</>;\n", &[]),
@@ -8005,6 +8054,11 @@ export const App = ({ n }) => <Box bgImage={n} texture={n} />;
             let app = format!("import {{ Box }} from './kit';\n{app}");
             assert_eq!(slots(&app, &test_inputs()), want, "{app}");
         }
+        // An element another module's `const` holds.
+        let els = "import { Box } from './kit';\nexport const icon = <Box p={8} />;\n";
+        let app = "import { icon } from './els';\nimport { enhance } from 'ui-lib';\nexport const App = () => <div>{enhance(icon)}</div>;\n";
+        let out = analyze(&[("kit.tsx", kit), ("els.tsx", els), ("app.tsx", app)], &test_inputs());
+        assert_eq!(out.dynamic_props.keys().collect::<Vec<_>>(), ["p"]);
         let mut dev = test_inputs();
         dev.dev_mode = true;
         assert_eq!(slots("import { Box } from './kit';\nexport const App = () => <Box p={8} />;\n", &dev), ["p"]);

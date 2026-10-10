@@ -368,6 +368,9 @@ pub struct FileFacts {
     /// Calls that may hand an element or a parameter to code outside React.
     #[serde(skip)]
     pub(crate) opaque_calls: Vec<crate::usage_facts::OpaqueCall>,
+    /// Top-level `const`s that hold elements, by binding.
+    #[serde(skip)]
+    pub(crate) element_consts: BTreeMap<String, crate::usage_facts::ElementConst>,
     /// Extracted createTransform() declarations: serialized with the facts
     /// for probes, and the source of their bail diagnostics. They are never
     /// registered with the evaluator.
@@ -1230,6 +1233,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
         ordinary_components,
         direct_eval,
         opaque_calls,
+        element_consts,
     } = crate::usage_facts::collect_enriched_usage(
         program,
         &usage_statics_fx,
@@ -1293,6 +1297,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
         ordinary_components,
         direct_eval,
         opaque_calls,
+        element_consts,
         parse_diagnostics: ast.diagnostics.clone(),
         parse_panicked: ast.panicked,
     }
