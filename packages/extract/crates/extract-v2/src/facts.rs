@@ -62,10 +62,10 @@ pub struct StageFacts {
     /// text as written.
     #[serde(skip)]
     pub skipped_sources: Vec<SkippedSource>,
-    /// Each at-rule key of the stage's object literals that the theme
-    /// resolver does not support, as written.
+    /// Each key of the stage's object literals whose block the theme
+    /// resolver may drop, as written.
     #[serde(skip)]
-    pub unsupported_at_rules: Vec<KeySource>,
+    pub block_keys: Vec<KeySource>,
 }
 
 /// A skipped value's start offset and source text, keyed by its skip.
@@ -86,14 +86,19 @@ pub struct KeySource {
 }
 
 impl KeySource {
-    /// `prop`, when its key is an at-rule the theme resolver does not support.
-    fn unsupported_at_rule(prop: &oxc::ast::ast::ObjectProperty<'_>, source: &str) -> Option<Self> {
-        let PropertyKey::StringLiteral(literal) = &prop.key else { return None };
-        let key = literal.value.as_str();
-        if prop.computed || !key.starts_with('@') || crate::theme::condition_from_raw_key(key).is_some() {
-            return None;
-        }
-        Self::of(prop, key, source)
+    /// `prop`, when the theme resolver may drop its block: an unsupported
+    /// at-rule, or a selector or at-rule key, raw or an alias, whose value is
+    /// not an object literal.
+    fn block_key(prop: &oxc::ast::ast::ObjectProperty<'_>, source: &str) -> Option<Self> {
+        let key = match &prop.key {
+            PropertyKey::StringLiteral(literal) if !prop.computed => literal.value.as_str(),
+            PropertyKey::StaticIdentifier(identifier) if !prop.computed => identifier.name.as_str(),
+            _ => return None,
+        };
+        let unsupported = key.starts_with('@') && crate::theme::condition_from_raw_key(key).is_none();
+        let block_key = key.starts_with(['@', '_', ':']) || crate::selector_subject::has_subject(key);
+        let block = matches!(chain_walk::unwrap_type_assertions(&prop.value), Expression::ObjectExpression(_));
+        if unsupported || (block_key && !block) { Self::of(prop, key, source) } else { None }
     }
 
     fn of(prop: &oxc::ast::ast::ObjectProperty<'_>, key: &str, source: &str) -> Option<Self> {
@@ -179,15 +184,16 @@ pub fn declaration_keys(program: &Program<'_>, source: &str, names: &BTreeSet<St
 }
 
 impl StageFacts {
-    /// Records the unsupported at-rule keys of `obj` and of the blocks it
-    /// nests; an unsupported at-rule's own block is not read.
-    fn record_unsupported_at_rules(&mut self, obj: &ObjectExpression<'_>, source: &str) {
+    /// Records the keys of `obj`, and of the blocks it nests, whose block the
+    /// theme resolver may drop (`KeySource::block_key`). An unsupported
+    /// at-rule's own block is not read.
+    fn record_block_keys(&mut self, obj: &ObjectExpression<'_>, source: &str) {
         for prop in &obj.properties {
             let ObjectPropertyKind::ObjectProperty(prop) = prop else { continue };
-            if let Some(at_rule) = KeySource::unsupported_at_rule(prop, source) {
-                self.unsupported_at_rules.push(at_rule);
+            if let Some(found) = KeySource::block_key(prop, source) {
+                self.block_keys.push(found);
             } else if let Expression::ObjectExpression(nested) = chain_walk::unwrap_type_assertions(&prop.value) {
-                self.record_unsupported_at_rules(nested, source);
+                self.record_block_keys(nested, source);
             }
         }
     }
@@ -1145,14 +1151,14 @@ pub(crate) fn extract_file_facts_from_static_maps(
                     dropped_transforms: Vec::new(),
                     dropped_configs: Vec::new(),
                     skipped_sources: Vec::new(),
-                    unsupported_at_rules: Vec::new(),
+                    block_keys: Vec::new(),
                 };
                 let key = &stage.arg_span;
                 if let Some(obj) = object_index.get(key) {
-                    facts.record_unsupported_at_rules(obj, source);
+                    facts.record_block_keys(obj, source);
                 }
                 if let Some(obj) = stage.second_arg_span.and_then(|span| object_index.get(&span)) {
-                    facts.record_unsupported_at_rules(obj, source);
+                    facts.record_block_keys(obj, source);
                 }
                 if stage.method == "variant" {
                     match object_index.get(key) {

@@ -542,6 +542,8 @@ pub(crate) const DIAGNOSTIC_CODES: &[(&str, &str)] = &[
     (crate::theme::KEYS_SHARE_PROPERTY, "warn"),
     (crate::theme::UNSUPPORTED_AT_RULE, "error"),
     (crate::theme::UNITLESS_CUSTOM_PROPERTY, "warn"),
+    (crate::theme::NON_BLOCK_VALUE, "error"),
+    (crate::theme::AT_RULE_SELECTOR_NESTING, "error"),
     (CLASS_NAME_WHITESPACE, "warn"),
     (INVALID_OPACITY_MODIFIER, "warn"),
     (UNSUPPORTED_OBJECT_MEMBER, "warn"),
@@ -1172,29 +1174,38 @@ fn drain_strict_token_misses(
 }
 
 /// `inheritors` are the components that extend `component`, which inherit
-/// each key it drops in a variant option; `at_rules` are where the
-/// component's unsupported at-rule keys are written, each claimed once.
+/// each key it drops in a variant option; `block_keys` are where the
+/// component's droppable block keys are written, each claimed once.
 fn drain_dropped_style_keys(
     sink: &crate::theme::DroppedStyleKeySink,
     file: &str,
     component: &str,
     inheritors: &[&str],
-    at_rules: &mut Vec<&crate::facts::KeySource>,
+    block_keys: &mut Vec<&crate::facts::KeySource>,
     diagnostics: &mut Vec<CssDiagnostic>,
 ) {
+    use crate::theme::DroppedStyleKey;
     for dropped in sink.borrow_mut().drain(..) {
         let inheritors = if dropped.variant_origin.is_some() { inheritors } else { &[] };
         let record = dropped_style_key(file, component, &dropped.dropped, inheritors);
-        let crate::theme::DroppedStyleKey::UnsupportedAtRule { key, block } = &dropped.dropped else {
-            diagnostics.push(record);
-            continue;
+        // A block key carries what it held: as written where its source is
+        // known, else as JSON.
+        let held = match &dropped.dropped {
+            DroppedStyleKey::UnsupportedAtRule { block: held, .. }
+            | DroppedStyleKey::NonBlockValue { value: held, .. }
+            | DroppedStyleKey::AtRuleSelectorNesting { block: held, .. } => held,
+            _ => {
+                diagnostics.push(record);
+                continue;
+            }
         };
-        diagnostics.push(match at_rules.iter().position(|source| source.key == *key) {
+        let key = dropped.dropped.key();
+        diagnostics.push(match block_keys.iter().position(|source| source.key == key) {
             Some(index) => {
-                let source = at_rules.remove(index);
+                let source = block_keys.remove(index);
                 record.at(source.start).dropping(&source.text)
             }
-            None => record.dropping(&format!("{}: {block}", serde_json::to_string(key).unwrap_or_default())),
+            None => record.dropping(&format!("{}: {held}", serde_json::to_string(key).unwrap_or_default())),
         });
     }
 }
@@ -1243,6 +1254,20 @@ fn dropped_style_key(
                  write the block in a stylesheet of its own"
             );
             return diagnostic(file, component, "warn", message, Some(crate::theme::UNSUPPORTED_AT_RULE));
+        }
+        DroppedStyleKey::NonBlockValue { key, value } => {
+            let message = format!(
+                "style key '{key}' was given {value}, which is not a block of styles, {not_emitted} — \
+                 give it an object of styles"
+            );
+            return diagnostic(file, component, "warn", message, Some(crate::theme::NON_BLOCK_VALUE));
+        }
+        DroppedStyleKey::AtRuleSelectorNesting { selector, key, .. } => {
+            let message = format!(
+                "the at-rule selector '{selector}' holds declarations only, so the block '{key}' nested \
+                 under it is not emitted — write the block under a selector of its own"
+            );
+            return diagnostic(file, component, "warn", message, Some(crate::theme::AT_RULE_SELECTOR_NESTING));
         }
         DroppedStyleKey::SharedProperty { overridden, winner, property, rule } => {
             return keys_share_property(file, component, (overridden, winner, property, *rule), inheritors);
@@ -4749,13 +4774,13 @@ fn run_with_system_floor(
         } else {
             vec![]
         };
-        let mut at_rules: Vec<_> = chain.stages.iter().flat_map(|stage| &stage.unsupported_at_rules).collect();
+        let mut block_keys: Vec<_> = chain.stages.iter().flat_map(|stage| &stage.block_keys).collect();
         drain_dropped_style_keys(
             &dropped_keys,
             file_path,
             &chain.descriptor.binding,
             &inheritors,
-            &mut at_rules,
+            &mut block_keys,
             &mut diagnostics,
         );
         match result {

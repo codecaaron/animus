@@ -802,6 +802,149 @@ export const reset = { __brand: 'GlobalStyleBlock', styles: { html: { '@scope (.
   ).toThrow(/6 error diagnostic/);
 });
 
+test('a block key given no block, and a block under a global at-rule selector, are reported and fail a strict build', () => {
+  const { manifest } = runPipeline(
+    [
+      {
+        path: 'non-blocks.tsx',
+        source: `import { ds } from '../setup';
+export const Card = ds
+  .styles({
+    display: 'block',
+    '@media (min-width: 1px)': 'red',
+    '&:focus': 'blue',
+    _hover: 'green',
+    _print: 'none',
+    '&[data-off]': null,
+  })
+  .asElement('div');
+export const App = () => <Card />;
+`,
+      },
+      {
+        path: 'print.ts',
+        source: `export const print = {
+  __brand: 'GlobalStyleBlock',
+  styles: {
+    html: 'red',
+    '@page': { margin: '1cm', '@top-center': { content: '"x"' } },
+    '@keyframes spin': { from: { opacity: 0, '& .a': { color: 'red' } }, to: 'x' },
+  },
+};
+`,
+      },
+    ],
+    {
+      inputs: {
+        conditionAliasesJson: config.conditionAliases,
+        globalStyleBlocksJson: JSON.stringify({
+          print: {
+            styles: {
+              html: 'red',
+              '@page': { margin: '1cm', '@top-center': { content: '"x"' } },
+              '@keyframes spin': {
+                from: { opacity: 0, '& .a': { color: 'red' } },
+                to: 'x',
+              },
+            },
+            source: 'print.ts',
+          },
+        }),
+      },
+    }
+  );
+  expect(manifest.sheets.global).toMatch(/@page \{\s*margin: 1cm;\s*\}/);
+  const reported = manifest.diagnostics
+    .filter((d: ManifestDiagnostic) => d.code?.startsWith('animus.style.'))
+    .map((d: ManifestDiagnostic) => [
+      d.code,
+      d.component,
+      d.line,
+      d.column,
+      d.kind,
+      d.severity,
+      d.dropped,
+    ]);
+  expect(reported).toEqual([
+    [
+      'animus.style.non-block-value',
+      'Card',
+      5,
+      5,
+      'warn',
+      'error',
+      "'@media (min-width: 1px)': 'red'",
+    ],
+    [
+      'animus.style.non-block-value',
+      'Card',
+      6,
+      5,
+      'warn',
+      'error',
+      "'&:focus': 'blue'",
+    ],
+    [
+      'animus.style.non-block-value',
+      'Card',
+      7,
+      5,
+      'warn',
+      'error',
+      "_hover: 'green'",
+    ],
+    [
+      'animus.style.non-block-value',
+      'Card',
+      8,
+      5,
+      'warn',
+      'error',
+      "_print: 'none'",
+    ],
+    [
+      'animus.style.non-block-value',
+      "global 'print'",
+      4,
+      5,
+      'warn',
+      'error',
+      "html: 'red'",
+    ],
+    [
+      'animus.style.at-rule-selector-nesting',
+      "global 'print'",
+      5,
+      31,
+      'warn',
+      'error',
+      `'@top-center': { content: '"x"' }`,
+    ],
+    [
+      'animus.style.at-rule-selector-nesting',
+      "global 'print'",
+      6,
+      46,
+      'warn',
+      'error',
+      "'& .a': { color: 'red' }",
+    ],
+    [
+      'animus.style.non-block-value',
+      "global 'print'",
+      6,
+      74,
+      'warn',
+      'error',
+      "to: 'x'",
+    ],
+  ]);
+  expect(() => surfaceManifestDiagnostics(manifest, () => {})).not.toThrow();
+  expect(() =>
+    surfaceManifestDiagnostics(manifest, () => {}, { strict: true })
+  ).toThrow(/8 error diagnostic/);
+});
+
 describe('!important shorthand', () => {
   test('a trailing ! emits the CSS of !important', () => {
     const css = (value: string) =>
