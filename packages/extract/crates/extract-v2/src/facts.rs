@@ -479,6 +479,12 @@ pub struct FileFacts {
     pub(crate) staged_builders: Vec<chain_walk::StagedBuilder>,
     /// Named-import specifiers (alias augmentation inputs).
     pub imports: Vec<ImportFact>,
+    /// Value import declarations that bind the root of a primary chain here.
+    #[serde(skip)]
+    pub(crate) root_imports: Vec<crate::usage_facts::RootImport>,
+    /// What evaluating this module does besides declaring and exporting.
+    #[serde(skip)]
+    pub(crate) module_effects: crate::usage_facts::ModuleEffects,
     /// Named-export facts (re-export following for provenance/statics).
     pub exports: Vec<crate::usage_facts::ExportFact>,
     /// Bindings of extracted components whose every use is a JSX element of
@@ -1500,6 +1506,12 @@ pub(crate) fn extract_file_facts_from_static_maps(
     );
 
     let compose_callees_in_use = compose_callees_referenced_outside(program, &compose);
+    let chain_roots: rustc_hash::FxHashSet<&str> = chains
+        .iter()
+        .filter(|chain| chain.descriptor.extends_from.is_none())
+        .map(|chain| chain.descriptor.root.as_str())
+        .collect();
+    let root_imports = crate::usage_facts::collect_root_imports(program, &chain_roots);
 
     FileFacts {
         path: ast.path.clone(),
@@ -1547,6 +1559,8 @@ pub(crate) fn extract_file_facts_from_static_maps(
             .collect(),
         staged_builders: walked.staged_builders,
         imports,
+        root_imports,
+        module_effects: crate::usage_facts::collect_module_effects(program),
         exports,
         transforms,
         captured_transform_bindings,

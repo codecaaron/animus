@@ -41,6 +41,10 @@ pub struct ChainDescriptor {
     /// The same-module staged builder its root continued into.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub followed_builder: Option<String>,
+    /// The identifier the chain starts from, through staged builders: the
+    /// system a primary chain styles, or the parent an extension extends.
+    #[serde(skip)]
+    pub root: String,
 }
 
 /// A top-level `const` builder chains may continue (see `walk.rs`).

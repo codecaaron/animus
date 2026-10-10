@@ -440,7 +440,7 @@ fn try_walk_chain(
     stages.reverse();
 
     let extends_from = if has_extend_marker {
-        Some(root_identifier)
+        Some(root_identifier.clone())
     } else if !stages.is_empty() {
         // Primary chain: the method pattern suffices, so any root name
         // works (`animus.styles(...)`, custom instances).
@@ -459,6 +459,7 @@ fn try_walk_chain(
         span: (chain_start, chain_end.end),
         extends_from,
         followed_builder,
+        root: root_identifier,
     }))
 }
 

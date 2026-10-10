@@ -511,6 +511,327 @@ pub fn collect_import_facts(module: &ModuleRecord<'_>) -> Vec<ImportFact> {
         .collect()
 }
 
+/// A value import declaration that binds the root of a chain in its
+/// module: what the transform needs to drop the root once no code it
+/// leaves reads it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RootImport {
+    pub source: String,
+    pub declaration: (u32, u32),
+    /// From just after `import` to the source string: the specifiers and
+    /// `from`.
+    pub clause: (u32, u32),
+    pub specifiers: Vec<RootImportSpecifier>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RootImportSpecifier {
+    pub local: String,
+    pub kind: RootImportKind,
+    /// The specifier as written, `type` modifier and alias included.
+    pub span: (u32, u32),
+    /// Every value read of its binding, shadowed same-name reads included,
+    /// so the list never runs short. `None` for a type-only specifier.
+    pub reads: Option<Vec<(u32, u32)>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RootImportKind {
+    Default,
+    Namespace,
+    Named,
+}
+
+/// The value import declarations of `program` that bind one of `roots`.
+pub(crate) fn collect_root_imports(program: &Program<'_>, roots: &FxHashSet<&str>) -> Vec<RootImport> {
+    use oxc::ast::ast::ImportOrExportKind;
+    let declarations: Vec<_> = program
+        .body
+        .iter()
+        .filter_map(|stmt| match stmt {
+            Statement::ImportDeclaration(import) if import.import_kind == ImportOrExportKind::Value => {
+                Some(import)
+            }
+            _ => None,
+        })
+        .filter(|import| {
+            import.specifiers.iter().flatten().any(|specifier| match specifier {
+                ImportDeclarationSpecifier::ImportSpecifier(named) => {
+                    named.import_kind == ImportOrExportKind::Value && roots.contains(named.local.name.as_str())
+                }
+                ImportDeclarationSpecifier::ImportDefaultSpecifier(default) => {
+                    roots.contains(default.local.name.as_str())
+                }
+                ImportDeclarationSpecifier::ImportNamespaceSpecifier(_) => false,
+            })
+        })
+        .collect();
+    if declarations.is_empty() {
+        return Vec::new();
+    }
+
+    /// Value reads by name; type positions read no binding at runtime.
+    struct Reads(FxHashMap<String, Vec<(u32, u32)>>);
+    impl<'a> Visit<'a> for Reads {
+        fn visit_identifier_reference(&mut self, ident: &IdentifierReference<'a>) {
+            if let Some(reads) = self.0.get_mut(ident.name.as_str()) {
+                reads.push((ident.span.start, ident.span.end));
+            }
+        }
+        fn visit_ts_type(&mut self, _: &oxc::ast::ast::TSType<'a>) {}
+    }
+    let mut reads = Reads(FxHashMap::default());
+    for import in &declarations {
+        for specifier in import.specifiers.iter().flatten() {
+            reads.0.insert(specifier.local().name.to_string(), Vec::new());
+        }
+    }
+    reads.visit_program(program);
+
+    declarations
+        .into_iter()
+        .map(|import| RootImport {
+            source: import.source.value.to_string(),
+            declaration: (import.span.start, import.span.end),
+            clause: (import.span.start + "import".len() as u32, import.source.span.start),
+            specifiers: import
+                .specifiers
+                .iter()
+                .flatten()
+                .map(|specifier| {
+                    let local = specifier.local().name.to_string();
+                    let (kind, type_only) = match specifier {
+                        ImportDeclarationSpecifier::ImportSpecifier(named) => {
+                            (RootImportKind::Named, named.import_kind == ImportOrExportKind::Type)
+                        }
+                        ImportDeclarationSpecifier::ImportDefaultSpecifier(_) => (RootImportKind::Default, false),
+                        ImportDeclarationSpecifier::ImportNamespaceSpecifier(_) => {
+                            (RootImportKind::Namespace, false)
+                        }
+                    };
+                    let span = specifier.span();
+                    RootImportSpecifier {
+                        reads: (!type_only).then(|| reads.0.get(&local).cloned().unwrap_or_default()),
+                        local,
+                        kind,
+                        span: (span.start, span.end),
+                    }
+                })
+                .collect(),
+        })
+        .collect()
+}
+
+/// What evaluating a module does besides declaring and exporting: whether
+/// it has an effect of its own, and the modules it loads.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct ModuleEffects {
+    /// A bare import (`import './x.css'`), or a top-level statement that may
+    /// do more than declare inert values (`inert_expression`).
+    pub own: bool,
+    /// The specifiers of every import and re-export that loads a module at
+    /// runtime: all but `import type` and `export type`.
+    pub loads: Vec<String>,
+}
+
+pub(crate) fn collect_module_effects(program: &Program<'_>) -> ModuleEffects {
+    let mut effects = ModuleEffects::default();
+    // Bindings that hold an Animus builder: imports from `@animus-ui/system`,
+    // then each binding a builder chain initializes.
+    let mut builders: FxHashSet<String> = FxHashSet::default();
+    for stmt in &program.body {
+        match stmt {
+            Statement::ImportDeclaration(import) => {
+                if import.import_kind.is_type() {
+                    continue;
+                }
+                effects.own |= import.specifiers.as_ref().is_none_or(|specifiers| specifiers.is_empty());
+                effects.loads.push(import.source.value.to_string());
+                if is_animus_system_specifier(&import.source.value) {
+                    builders.extend(
+                        import.specifiers.iter().flatten().map(|specifier| specifier.local().name.to_string()),
+                    );
+                }
+            }
+            Statement::ExportNamedDeclaration(export) => {
+                if let Some(source) = export.source.as_ref().filter(|_| !export.export_kind.is_type()) {
+                    effects.loads.push(source.value.to_string());
+                }
+                if let Some(declaration) = &export.declaration {
+                    effects.own |= !inert_declaration(declaration, &mut builders);
+                }
+            }
+            Statement::ExportAllDeclaration(export) => {
+                if !export.export_kind.is_type() {
+                    effects.loads.push(export.source.value.to_string());
+                }
+            }
+            Statement::ExportDefaultDeclaration(export) => {
+                use oxc::ast::ast::ExportDefaultDeclarationKind as Kind;
+                effects.own |= !match &export.declaration {
+                    Kind::FunctionDeclaration(_) | Kind::TSInterfaceDeclaration(_) => true,
+                    Kind::ClassDeclaration(class) => inert_class(class, &builders),
+                    kind => kind.as_expression().is_some_and(|expression| inert_expression(expression, &builders)),
+                };
+            }
+            Statement::EmptyStatement(_) => {}
+            stmt => match stmt.as_declaration() {
+                Some(declaration) => effects.own |= !inert_declaration(declaration, &mut builders),
+                None => effects.own = true,
+            },
+        }
+    }
+    effects
+}
+
+/// Whether evaluating a top-level declaration does no more than bind inert
+/// values; a binding a builder chain initializes joins `builders`.
+fn inert_declaration(declaration: &oxc::ast::ast::Declaration<'_>, builders: &mut FxHashSet<String>) -> bool {
+    use oxc::ast::ast::{BindingPattern, Declaration, VariableDeclarationKind};
+    match declaration {
+        Declaration::VariableDeclaration(variables) => {
+            if matches!(variables.kind, VariableDeclarationKind::Using | VariableDeclarationKind::AwaitUsing) {
+                return false;
+            }
+            variables.declarations.iter().all(|declarator| {
+                let Some(init) = &declarator.init else {
+                    return matches!(declarator.id, BindingPattern::BindingIdentifier(_));
+                };
+                let BindingPattern::BindingIdentifier(id) = &declarator.id else {
+                    return false;
+                };
+                if builder_chain(init, builders) {
+                    builders.insert(id.name.to_string());
+                    return true;
+                }
+                inert_expression(init, builders)
+            })
+        }
+        Declaration::FunctionDeclaration(_)
+        | Declaration::TSTypeAliasDeclaration(_)
+        | Declaration::TSInterfaceDeclaration(_)
+        | Declaration::TSGlobalDeclaration(_) => true,
+        // `import x = require('…')` loads a module.
+        Declaration::TSImportEqualsDeclaration(_) => false,
+        Declaration::ClassDeclaration(class) => inert_class(class, builders),
+        Declaration::TSEnumDeclaration(enumeration) => enumeration
+            .body
+            .members
+            .iter()
+            .all(|member| member.initializer.as_ref().is_none_or(|init| inert_expression(init, builders))),
+        // A namespace with values runs its body; an ambient one declares types.
+        Declaration::TSModuleDeclaration(module) => module.declare,
+    }
+}
+
+/// A key that names a property without running code to compute it: a plain
+/// identifier, private name, string or number, never computed, so no value
+/// is converted to a key.
+fn plain_key(key: &oxc::ast::ast::PropertyKey<'_>, computed: bool) -> bool {
+    use oxc::ast::ast::PropertyKey;
+    !computed
+        && matches!(
+            key,
+            PropertyKey::StaticIdentifier(_)
+                | PropertyKey::PrivateIdentifier(_)
+                | PropertyKey::StringLiteral(_)
+                | PropertyKey::NumericLiteral(_)
+        )
+}
+
+/// A class whose definition runs no code and whose members a reader cannot
+/// turn into code: no decorators, static blocks, getters or setters, only
+/// plain keys, and inert static values.
+fn inert_class(class: &oxc::ast::ast::Class<'_>, builders: &FxHashSet<String>) -> bool {
+    use oxc::ast::ast::{ClassElement, MethodDefinitionKind};
+    class.decorators.is_empty()
+        && class.super_class.as_ref().is_none_or(|super_class| inert_expression(super_class, builders))
+        && class.body.body.iter().all(|element| match element {
+            ClassElement::StaticBlock(_) | ClassElement::AccessorProperty(_) => false,
+            ClassElement::MethodDefinition(method) => {
+                method.decorators.is_empty()
+                    && matches!(method.kind, MethodDefinitionKind::Method | MethodDefinitionKind::Constructor)
+                    && plain_key(&method.key, method.computed)
+            }
+            ClassElement::PropertyDefinition(property) => {
+                property.decorators.is_empty()
+                    && plain_key(&property.key, property.computed)
+                    && (!property.r#static
+                        || property.value.as_ref().is_none_or(|value| inert_expression(value, builders)))
+            }
+            ClassElement::TSIndexSignature(_) => true,
+        })
+}
+
+/// An expression whose evaluation runs no code of its own, and whose value no
+/// reader can turn into code: a literal, a template with no substitutions,
+/// an identifier read, an object or array of inert values with plain keys and
+/// no accessors or spreads, a function, an inert class, or an Animus builder
+/// chain whose arguments are all inert by these same rules.
+fn inert_expression(expression: &Expression<'_>, builders: &FxHashSet<String>) -> bool {
+    use oxc::ast::ast::{ArrayExpressionElement, ObjectPropertyKind, PropertyKind, UnaryOperator};
+    match expression.without_parentheses().get_inner_expression() {
+        Expression::BooleanLiteral(_)
+        | Expression::NullLiteral(_)
+        | Expression::NumericLiteral(_)
+        | Expression::BigIntLiteral(_)
+        | Expression::StringLiteral(_)
+        | Expression::RegExpLiteral(_)
+        | Expression::Identifier(_)
+        | Expression::FunctionExpression(_)
+        | Expression::ArrowFunctionExpression(_) => true,
+        Expression::TemplateLiteral(template) => template.expressions.is_empty(),
+        Expression::UnaryExpression(unary) => match unary.operator {
+            UnaryOperator::UnaryNegation | UnaryOperator::UnaryPlus | UnaryOperator::BitwiseNot => matches!(
+                unary.argument.get_inner_expression(),
+                Expression::NumericLiteral(_) | Expression::BigIntLiteral(_)
+            ),
+            UnaryOperator::LogicalNot | UnaryOperator::Typeof | UnaryOperator::Void => {
+                inert_expression(&unary.argument, builders)
+            }
+            UnaryOperator::Delete => false,
+        },
+        Expression::ArrayExpression(array) => array.elements.iter().all(|element| match element {
+            ArrayExpressionElement::SpreadElement(_) => false,
+            ArrayExpressionElement::Elision(_) => true,
+            element => element.as_expression().is_some_and(|value| inert_expression(value, builders)),
+        }),
+        Expression::ObjectExpression(object) => object.properties.iter().all(|property| match property {
+            ObjectPropertyKind::SpreadProperty(_) => false,
+            ObjectPropertyKind::ObjectProperty(property) => {
+                property.kind == PropertyKind::Init
+                    && plain_key(&property.key, property.computed)
+                    && inert_expression(&property.value, builders)
+            }
+        }),
+        Expression::ClassExpression(class) => inert_class(class, builders),
+        expression => builder_chain(expression, builders),
+    }
+}
+
+/// A call chain on an Animus builder, `createSystem().addScale(…).build()`
+/// or `bundle.createGlobalStyles({…})`, whose every argument is inert.
+fn builder_chain(expression: &Expression<'_>, builders: &FxHashSet<String>) -> bool {
+    let Expression::CallExpression(call) = expression.without_parentheses().get_inner_expression() else {
+        return false;
+    };
+    let arguments_inert = call
+        .arguments
+        .iter()
+        .all(|argument| argument.as_expression().is_some_and(|argument| inert_expression(argument, builders)));
+    let receiver_is_builder = |object: &Expression<'_>| match object.without_parentheses().get_inner_expression() {
+        Expression::Identifier(id) => builders.contains(id.name.as_str()),
+        object => builder_chain(object, builders),
+    };
+    arguments_inert
+        && !call.optional
+        && match call.callee.without_parentheses().get_inner_expression() {
+            Expression::Identifier(id) => builders.contains(id.name.as_str()),
+            Expression::StaticMemberExpression(member) => !member.optional && receiver_is_builder(&member.object),
+            _ => false,
+        }
+}
+
 /// Per-file named-export fact; feeds static enrichment and re-export
 /// following.
 #[derive(Debug, Clone, Serialize)]
