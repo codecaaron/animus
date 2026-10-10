@@ -946,7 +946,9 @@ pub(crate) fn collect_enriched_usage(
         module_loads,
         unsafe_object_uses,
         ordinary_components,
-        context_consts: origins.map_or_else(BTreeSet::new, |_| context_consts(program, &react)),
+        context_consts: origins.map_or_else(BTreeSet::new, |scoping| {
+            context_consts(program, scoping, &ReactImports::of(program))
+        }),
         direct_eval,
         opaque_calls,
         element_consts,
@@ -3310,9 +3312,59 @@ fn tag_origin(scoping: &Scoping, name: &IdentifierReference<'_>) -> TagOrigin {
     }
 }
 
+/// React's functions and namespaces a module imports, by the symbol each
+/// import binds; a binding of any other origin, an unbound `React`
+/// included, is never React's.
+struct ReactImports {
+    functions: FxHashMap<SymbolId, String>,
+    namespaces: FxHashSet<SymbolId>,
+}
+
+impl ReactImports {
+    fn of(program: &Program<'_>) -> Self {
+        let mut imports = Self { functions: FxHashMap::default(), namespaces: FxHashSet::default() };
+        for statement in &program.body {
+            let Statement::ImportDeclaration(import) = statement else { continue };
+            if !REACT_RUNTIMES.contains(&import.source.value.as_str()) {
+                continue;
+            }
+            for specifier in import.specifiers.iter().flatten() {
+                let Some(symbol) = specifier.local().symbol_id.get() else { continue };
+                match specifier {
+                    ImportDeclarationSpecifier::ImportSpecifier(named) => {
+                        imports.functions.insert(symbol, named.imported.name().to_string());
+                    }
+                    ImportDeclarationSpecifier::ImportDefaultSpecifier(_)
+                    | ImportDeclarationSpecifier::ImportNamespaceSpecifier(_) => {
+                        imports.namespaces.insert(symbol);
+                    }
+                }
+            }
+        }
+        imports
+    }
+
+    /// Whether `callee` calls one of React's `functions`, named or through a
+    /// React namespace, as the module's scopes resolve it.
+    fn calls(&self, scoping: &Scoping, callee: &Expression<'_>, functions: &[&str]) -> bool {
+        let symbol = |id: &IdentifierReference<'_>| id.reference_id.get().and_then(|id| scoping.get_reference(id).symbol_id());
+        match crate::chain_walk::unwrap_type_assertions(callee) {
+            Expression::Identifier(id) => symbol(id)
+                .and_then(|symbol| self.functions.get(&symbol))
+                .is_some_and(|function| functions.contains(&function.as_str())),
+            Expression::StaticMemberExpression(member) => {
+                functions.contains(&member.property.name.as_str())
+                    && matches!(&member.object, Expression::Identifier(object)
+                        if symbol(object).is_some_and(|symbol| self.namespaces.contains(&symbol)))
+            }
+            _ => false,
+        }
+    }
+}
+
 /// Top-level `const` bindings the runtime's `createContext` builds: their
 /// `Provider` renders its children in place.
-fn context_consts(program: &Program<'_>, react: &ReactNames) -> BTreeSet<String> {
+fn context_consts(program: &Program<'_>, scoping: &Scoping, react: &ReactImports) -> BTreeSet<String> {
     use oxc::ast::ast::{Declaration, VariableDeclarationKind};
     let mut names = BTreeSet::new();
     for statement in &program.body {
@@ -3330,7 +3382,7 @@ fn context_consts(program: &Program<'_>, react: &ReactNames) -> BTreeSet<String>
         for declarator in &declaration.declarations {
             let built = declarator.init.as_ref().is_some_and(|init| {
                 matches!(crate::chain_walk::unwrap_type_assertions(init),
-                    Expression::CallExpression(call) if react.calls(&call.callee, "createContext"))
+                    Expression::CallExpression(call) if react.calls(scoping, &call.callee, &["createContext"]))
             });
             if let (true, Some(name)) = (built, declarator.id.get_identifier_name()) {
                 names.insert(name.to_string());
@@ -3428,8 +3480,6 @@ pub(crate) struct ReactNames {
 
 const REACT_RUNTIMES: [&str; 3] = ["react", "preact", "preact/compat"];
 const ELEMENT_FUNCTIONS: [&str; 2] = ["createElement", "cloneElement"];
-/// The runtime functions read by the name an import binds them to.
-const RUNTIME_FUNCTIONS: [&str; 3] = ["createElement", "cloneElement", "createContext"];
 
 impl ReactNames {
     /// By spelling alone, for facts read without bindings.
@@ -3456,7 +3506,7 @@ impl ReactNames {
                 match specifier {
                     ImportDeclarationSpecifier::ImportSpecifier(named) => {
                         let imported = named.imported.name();
-                        let function = RUNTIME_FUNCTIONS
+                        let function = ELEMENT_FUNCTIONS
                             .iter()
                             .find(|function| **function == imported.as_str());
                         if let Some(function) = function {

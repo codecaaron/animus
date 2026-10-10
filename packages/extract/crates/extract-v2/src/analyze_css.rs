@@ -9052,6 +9052,18 @@ export const App = ({ n }) => <Box bgImage={n} texture={n} />;
             let out = analyze(&[("kit.tsx", kit), ("contexts.tsx", contexts), ("app.tsx", app.as_str())], &test_inputs());
             assert_eq!(out.dynamic_props.keys().collect::<Vec<_>>(), want, "{app}");
         }
+        // Only an import binds React: a local or an unbound `React` is not it.
+        let fake = "const React = { createContext: (v) => ({ Provider: pick(v) }) };\n";
+        for made in [
+            format!("{fake}export const Made = React.createContext(0);\n"),
+            format!("import {{ x }} from 'somewhere';\n{fake}export const Made = React.createContext(0);\n"),
+            "export const Made = React.createContext(0);\n".to_string(),
+        ] {
+            let app = "import { Box } from './kit';\nimport { Made } from './made';\n\
+                       export const App = () => <><Made.Provider value={1}><div /></Made.Provider><Box p={8} /></>;\n";
+            let out = analyze(&[("kit.tsx", kit), ("made.tsx", made.as_str()), ("app.tsx", app)], &test_inputs());
+            assert_eq!(out.dynamic_props.keys().collect::<Vec<_>>(), ["p"], "{made}");
+        }
     }
 
     #[test]
