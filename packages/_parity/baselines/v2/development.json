@@ -2,7 +2,7 @@
   "corpusSha256": "f6424859e2263f9104b2f16d8f6c278b3e277523f101db254367c8c758312b45",
   "engine": "v2",
   "mode": "development",
-  "refreshIntent": "aliases-keep-authored-order-20261010",
+  "refreshIntent": "slots-follow-proven-usage-20261010",
   "surfaceSchemaSha256": "43eb1265e97aab8497c11ca05e8a4159a6d4f4b69a6837a704e1d96fa75eb108",
   "units": {
     "extract-all": {
