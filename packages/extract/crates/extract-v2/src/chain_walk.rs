@@ -63,6 +63,8 @@ pub struct MemberParentExtension {
     pub binding: String,
     pub object: String,
     pub member: String,
+    /// Byte offset where the chain starts.
+    pub start: u32,
 }
 
 /// A call built from chain methods on an identifier that no walked chain
@@ -84,6 +86,8 @@ pub struct MemberRootedChain {
     pub binding: String,
     pub object: String,
     pub member: String,
+    /// Byte offset where the chain starts.
+    pub start: u32,
 }
 
 /// `const Parts = { Base: ds.styles()…terminal }` — a chain written as an
