@@ -91,6 +91,10 @@ pub enum TagOrigin {
     TopLevel,
     /// A parameter, or a binding inside a function or block.
     Nested,
+    /// A binding compiled MDX destructures from the components a provider
+    /// supplies (`const { Card } = _components`): matched by name, as a
+    /// provider-scope component is.
+    Provided,
     /// No binding in the file: a global, or nothing.
     Undeclared,
 }
@@ -859,6 +863,7 @@ pub(crate) fn collect_enriched_usage(
         }),
         module_loads: Some(Vec::new()),
         origins,
+        provided: provided_components(program),
     };
     collector.visit_program(program);
     let module_loads = collector.module_loads.take().unwrap_or_default();
@@ -2528,6 +2533,8 @@ struct FactCollector<'a, 's> {
     /// Enriched collection only: the values a parameter's literal-union type
     /// annotation admits.
     finite_params: FxHashMap<SymbolId, FiniteSet>,
+    /// Enriched collection only: see `TagOrigin::Provided`.
+    provided: FxHashSet<SymbolId>,
 }
 
 /// `cloneElement` calls, resolved once the walk has seen every `const`
@@ -2565,7 +2572,7 @@ impl<'a> FactCollector<'a, '_> {
             }
             _ => return,
         };
-        let origin = self.origins.zip(root).map(|(scoping, root)| tag_origin(scoping, root));
+        let origin = root.and_then(|root| self.origin_of(root));
         let mut attrs = Vec::new();
         let mut spread = None;
         for attr_item in &elem.attributes {
@@ -2760,6 +2767,16 @@ fn truthy(value: &Value) -> bool {
 }
 
 impl FactCollector<'_, '_> {
+    /// Where `root` is bound, as the file's scopes tell it.
+    fn origin_of(&self, root: &IdentifierReference<'_>) -> Option<TagOrigin> {
+        let scoping = self.origins?;
+        let symbol = root.reference_id.get().and_then(|id| scoping.get_reference(id).symbol_id());
+        Some(match tag_origin(scoping, root) {
+            TagOrigin::Nested if symbol.is_some_and(|symbol| self.provided.contains(&symbol)) => TagOrigin::Provided,
+            origin => origin,
+        })
+    }
+
     /// The values `expression` can take, when they are proven few: an
     /// explicitly absent value, a string or number literal, a `const` one
     /// named directly (imported ones included), a parameter whose type
@@ -3076,7 +3093,7 @@ impl<'a, 's> Visit<'a> for FactCollector<'a, 's> {
                     literals: create_element_literals(call.arguments.get(1), self.origins),
                     clone: false,
                     at: call.span.start,
-                    origin: self.origins.zip(root).map(|(scoping, root)| tag_origin(scoping, root)),
+                    origin: root.and_then(|root| self.origin_of(root)),
                 });
             }
         } else if self.react.calls(&call.callee, "cloneElement") {
@@ -3433,6 +3450,7 @@ pub fn collect_usage_facts(program: &Program<'_>) -> Vec<UsageFact> {
         module_loads: None,
         origins: None,
         finite_params: FxHashMap::default(),
+        provided: FxHashSet::default(),
     };
     collector.visit_program(program);
     collector.finish()
@@ -3688,6 +3706,24 @@ fn resolve_tag<'m>(
             .get(key)
             .map(|b| (b.as_str(), Some(b.clone()))),
     }
+}
+
+/// The bindings compiled MDX destructures from its provider's components:
+/// `const { Card } = _components`.
+fn provided_components(program: &Program<'_>) -> FxHashSet<SymbolId> {
+    struct Provided(FxHashSet<SymbolId>);
+    impl<'a> Visit<'a> for Provided {
+        fn visit_variable_declarator(&mut self, declarator: &oxc::ast::ast::VariableDeclarator<'a>) {
+            let from_components = matches!(&declarator.init, Some(Expression::Identifier(id)) if id.name == "_components");
+            if let (true, oxc::ast::ast::BindingPattern::ObjectPattern(_)) = (from_components, &declarator.id) {
+                self.0.extend(declarator.id.get_binding_identifiers().iter().filter_map(|id| id.symbol_id.get()));
+            }
+            oxc::ast_visit::walk::walk_variable_declarator(self, declarator);
+        }
+    }
+    let mut provided = Provided(FxHashSet::default());
+    provided.visit_program(program);
+    provided.0
 }
 
 /// Whether a tag's first name is bound where the module's own bindings do

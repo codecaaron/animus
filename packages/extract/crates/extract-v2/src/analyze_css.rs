@@ -3791,14 +3791,14 @@ fn uncertain_tag_reason(
                     .to_string(),
             )
         }),
-        Some(TagOrigin::Nested) if member => (
+        Some(TagOrigin::Nested | TagOrigin::Provided) if member => (
             TagClass::Member,
             format!(
                 "is a member of '{root}', a parameter or a binding inside a function, so the \
                  component is chosen at runtime"
             ),
         ),
-        Some(TagOrigin::Nested) => (
+        Some(TagOrigin::Nested | TagOrigin::Provided) => (
             TagClass::Nested,
             "is a parameter or a binding inside a function, so the component it holds is \
              chosen at runtime"
@@ -4058,7 +4058,7 @@ fn opaque_delivery(
     };
     let tag_opaque = |file: &str, ff: &FileFacts, tag: &crate::usage_facts::OpaqueTag, forwarding: &FxHashSet<(String, String)>| {
         use crate::usage_facts::TagOrigin;
-        if matches!(tag.origin, TagOrigin::Nested | TagOrigin::Undeclared) {
+        if matches!(tag.origin, TagOrigin::Nested | TagOrigin::Provided | TagOrigin::Undeclared) {
             return true;
         }
         let ids = receiver_ids(file, ff, &tag.tag);
