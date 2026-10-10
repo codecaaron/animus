@@ -10,7 +10,7 @@ use std::rc::Rc;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::analyze_css::{
-    declared_export, loaded_modules, namespace_path_module, resolve_import_source, CssInputs,
+    declared_export, loaded_modules, namespace_path_module, resolve_declaration, resolve_import_source, CssInputs,
 };
 use crate::facts::{FacadeEntry, FileFacts};
 
@@ -185,6 +185,11 @@ impl Member {
     }
 }
 
+/// Whether `binding` is a private spread wrapper that object members hold.
+fn is_held_wrapper(ff: &FileFacts, binding: &str) -> bool {
+    ff.spread_wrappers.get(binding).is_some_and(|wrapper| wrapper.held > 0)
+}
+
 /// An object's members once it is built. An open table may also hold
 /// members no write the analysis reads names.
 #[derive(Default)]
@@ -282,6 +287,141 @@ impl<'f> ObjectMembers<'f> {
                 .map(|(facade, _)| Object::Facade(declaring.clone(), facade.clone()))
                 .collect()
         })
+    }
+
+    /// The private spread wrapper `tag`, written in `file`, renders, with
+    /// the module declaring it: the object's own initializer holds it at that
+    /// key, nothing later sets the key, and nothing may have changed the
+    /// object since.
+    pub(crate) fn held_wrapper(&mut self, file: &str, tag: &str) -> Option<(String, String)> {
+        let (module, wrapper, None) = self.member_entry(file, tag)? else { return None };
+        is_held_wrapper(self.files.get(&module)?, &wrapper).then_some((module, wrapper))
+    }
+
+    /// What `object` holds at `key`, as its last write of the key set it: the
+    /// module that names the value, the binding, and the member read from it
+    /// (`Trigger: ArkMenu.Trigger`).
+    fn member_read(&self, object: &Object, key: &str) -> Option<(String, String, Option<String>)> {
+        let Object::Facade(module, binding) = object else { return None };
+        let last = self.files.get(module)?.facades.get(binding)?.iter().rev().find(|entry| match entry {
+            FacadeEntry::Member { key: set, .. }
+            | FacadeEntry::Other(set)
+            | FacadeEntry::Written { key: set, .. }
+            | FacadeEntry::Code(Some(set)) => set == key,
+            FacadeEntry::Copy(_) | FacadeEntry::Unknown | FacadeEntry::Code(None) => true,
+        })?;
+        match last {
+            FacadeEntry::Member { binding, member, .. } => Some((module.clone(), binding.clone(), member.clone())),
+            _ => None,
+        }
+    }
+
+    /// The binding `object` holds at `key` as a whole, with the module that
+    /// names it.
+    fn member_binding(&self, object: &Object, key: &str) -> Option<(String, String)> {
+        match self.member_read(object, key)? {
+            (module, binding, None) => Some((module, binding)),
+            _ => None,
+        }
+    }
+
+    /// The wrapper `object` holds at `key`, as its last write of the key set
+    /// it.
+    fn holds(&self, object: &Object, key: &str) -> Option<(String, String)> {
+        let (module, wrapper) = self.member_binding(object, key)?;
+        let held = is_held_wrapper(self.files.get(&module)?, &wrapper);
+        held.then_some((module, wrapper))
+    }
+
+    /// The ordinary function component `tag`, written in `file`, renders as
+    /// a member of an object (`<Dialog.Root>` for `const Dialog = { Root }`):
+    /// its declaring module and binding. The object's last write of the key
+    /// names it, through an import too, and nothing may have changed the
+    /// object since.
+    pub(crate) fn ordinary_member(&mut self, file: &str, tag: &str) -> Option<(String, String)> {
+        let (module, binding, None) = self.member_entry(file, tag)? else { return None };
+        let ff = self.files.get(&module)?;
+        let (declaring, declared, _) = resolve_declaration(&module, ff, &binding, self.files, self.inputs)?;
+        self.files.get(&declaring)?.ordinary_components.contains(&declared).then_some((declaring, declared))
+    }
+
+    /// Every wrapper `object`'s initializer holds, whatever came later.
+    fn wrappers_of(&self, object: &Object) -> Vec<(String, String)> {
+        let Object::Facade(module, binding) = object else { return Vec::new() };
+        let Some(ff) = self.files.get(module) else { return Vec::new() };
+        let held = |entry: &FacadeEntry| match entry {
+            FacadeEntry::Member { binding: wrapper, member: None, .. }
+                if is_held_wrapper(ff, wrapper) =>
+            {
+                Some((module.clone(), wrapper.clone()))
+            }
+            _ => None,
+        };
+        ff.facades.get(binding).into_iter().flatten().filter_map(held).collect()
+    }
+
+    /// The held wrappers an escaping `name` hands over: each one the object
+    /// it names holds, or the one member it reads.
+    pub(crate) fn escaped_wrappers(&mut self, file: &str, name: &str) -> Vec<(String, String)> {
+        if let Some(object) = self.object_at(file, name) {
+            return self.wrappers_of(&object);
+        }
+        let Some((path, key)) = name.rsplit_once('.') else { return Vec::new() };
+        self.object_at(file, path).and_then(|object| self.holds(&object, key)).into_iter().collect()
+    }
+
+    /// The facade `name`, written in `file`, names: its module and binding.
+    pub(crate) fn facade_at(&mut self, file: &str, name: &str) -> Option<(String, String)> {
+        match self.object_at(file, name)? {
+            Object::Facade(module, binding) => Some((module, binding)),
+            Object::Family(_) => None,
+        }
+    }
+
+    /// Whether nothing may have changed the facade `binding` of `module`
+    /// since it was built.
+    pub(crate) fn facade_stable(&mut self, module: &str, binding: &str) -> bool {
+        let object = Object::Facade(module.to_string(), binding.to_string());
+        !self.table(&object).open && self.instability(&object).is_none()
+    }
+
+    /// The held wrappers some render of which no member tag shows: those of
+    /// an object something may have changed, and of an object another one
+    /// copies (`{ ...Code }`), whose members render them too.
+    pub(crate) fn unproven_wrappers(&mut self) -> Vec<(String, String)> {
+        let files = self.files;
+        let mut found = Vec::new();
+        for (module, ff) in files {
+            for (binding, entries) in &ff.facades {
+                let object = Object::Facade(module.clone(), binding.clone());
+                let wrappers = self.wrappers_of(&object);
+                if !wrappers.is_empty() && (self.table(&object).open || self.instability(&object).is_some()) {
+                    found.extend(wrappers);
+                }
+                for entry in entries {
+                    if let FacadeEntry::Copy(name) = entry {
+                        if let Some(source) = self.local_object(module, name) {
+                            found.extend(self.wrappers_of(&source));
+                        }
+                    }
+                }
+            }
+        }
+        found
+    }
+
+    /// What `tag`, written in `file`, reads from an object nothing may have
+    /// changed since it was built: the module naming the value, the binding
+    /// the object's last write of the key names, and the member read from it
+    /// (`Trigger: ArkMenu.Trigger`).
+    pub(crate) fn member_entry(&mut self, file: &str, tag: &str) -> Option<(String, String, Option<String>)> {
+        let (path, key) = tag.rsplit_once('.')?;
+        let object = self.object_at(file, path)?;
+        let entry = self.member_read(&object, key)?;
+        if self.table(&object).open || self.instability(&object).is_some() {
+            return None;
+        }
+        Some(entry)
     }
 
     /// The components an escaping `name` hands over: every member of the

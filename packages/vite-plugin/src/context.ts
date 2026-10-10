@@ -293,6 +293,8 @@ export class PluginContext {
   externalPackageDirs: string[] = [];
   /** Those whose package is linked rather than installed. */
   externalLinkedDirs: string[] = [];
+  /** Those read from their package's compiled output. */
+  externalOutputDirs: string[] = [];
 
   externalDirOwners: Record<string, string> = {};
 
@@ -535,6 +537,9 @@ export class PluginContext {
             relative(this.rootDir, dir)
           ),
           linkedDirs: this.externalLinkedDirs.map((dir) =>
+            relative(this.rootDir, dir)
+          ),
+          outputDirs: this.externalOutputDirs.map((dir) =>
             relative(this.rootDir, dir)
           ),
         },

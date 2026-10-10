@@ -389,6 +389,7 @@ pub struct FileFacts {
     pub directive_prologue: Option<DirectivePrologueFact>,
     pub chains: Vec<ChainFacts>,
     /// Same-file static const values (feeds identifier resolution).
+    #[serde(serialize_with = "serialize_statics")]
     pub statics: BTreeMap<String, Value>,
     /// Raw JSX/createElement usage facts, component-agnostic; cross-file
     /// filtering happens later.
@@ -502,6 +503,19 @@ pub struct FileFacts {
     /// one renders an ordinary component, not an Animus one.
     #[serde(skip)]
     pub(crate) ordinary_components: BTreeSet<String>,
+    /// Top-level `const` bindings React's `createContext` builds: a tag
+    /// naming one's `Provider` renders its children in place.
+    #[serde(skip)]
+    pub(crate) context_consts: BTreeSet<String>,
+    /// Tags whose type a top-level function's own prop chooses at runtime.
+    #[serde(skip)]
+    pub(crate) prop_tags: Vec<crate::usage_facts::PropTag>,
+    /// How the module uses each module-scope name it declares or imports.
+    #[serde(skip)]
+    pub(crate) name_uses: BTreeMap<String, crate::usage_facts::NameUses>,
+    /// How the module uses each member of a namespace import (`ns.X`).
+    #[serde(skip)]
+    pub(crate) namespace_member_uses: BTreeMap<String, crate::usage_facts::NameUses>,
     /// The module calls `eval` directly, which can read any of its bindings
     /// by name.
     #[serde(skip)]
@@ -652,11 +666,17 @@ fn index_identifiers<'a>(expr: &Expression<'a>, index: &mut BTreeMap<(u32, u32),
             }
         }
         Expression::StaticMemberExpression(member) => {
+            // A static member path, as a stage argument names a member of a
+            // static object: `styles(presets.pixel)`.
+            if let Some(path) = member_path(expr) {
+                index.insert((member.span.start, member.span.end), path);
+            }
             index_identifiers(&member.object, index);
         }
         _ => {}
     }
 }
+
 
 /// The identifier an expression is built from, through calls, static
 /// members and assertions: `createSystem().build()` → `createSystem`.
@@ -667,6 +687,12 @@ fn expression_root(expr: &Expression<'_>) -> Option<String> {
         Expression::StaticMemberExpression(member) => expression_root(&member.object),
         _ => None,
     }
+}
+
+/// Statics without a binding a lost-value marker stands for whole: its
+/// reason reaches readers in memory, and serialized facts carry no marker.
+fn serialize_statics<S: serde::Serializer>(statics: &BTreeMap<String, Value>, serializer: S) -> Result<S::Ok, S::Error> {
+    serializer.collect_map(statics.iter().filter(|(_, value)| eval::lost_value_reason(value).is_none()))
 }
 
 #[derive(Default)]
@@ -1273,8 +1299,15 @@ pub(crate) fn extract_file_facts_from_static_maps(
                             }
                         }
                         None => match identifier_index.get(key) {
-                            Some(name) => match statics_fx.get(name) {
-                                Some(v) => Ok((Some(v.clone()), Vec::new(), Vec::new())),
+                            // A stage argument by name reads its held value; a
+                            // member path does not.
+                            Some(name) => match eval::static_path(&statics_fx, name)
+                                .map(|v| if name.contains('.') { v } else { eval::held_value(v) })
+                            {
+                                Some(v) => match eval::lost_value_reason(v) {
+                                    Some(reason) => Err(reason.to_string()),
+                                    None => Ok((Some(v.clone()), Vec::new(), Vec::new())),
+                                },
                                 None => Err(format!(
                                     "identifier '{}' not resolvable to static object",
                                     name
@@ -1448,6 +1481,10 @@ pub(crate) fn extract_file_facts_from_static_maps(
         module_loads,
         unsafe_object_uses,
         ordinary_components,
+        context_consts,
+        prop_tags,
+        name_uses,
+        namespace_member_uses,
         direct_eval,
         opaque_calls,
         element_consts,
@@ -1471,7 +1508,8 @@ pub(crate) fn extract_file_facts_from_static_maps(
         // Serialized facts carry no lost-value markers.
         statics: statics_fx
             .into_iter()
-            .map(|(name, mut value)| {
+            .map(|(name, value)| {
+                let mut value = eval::held_value(&value).clone();
                 eval::strip_lost_values(&mut value);
                 (name, value)
             })
@@ -1517,6 +1555,10 @@ pub(crate) fn extract_file_facts_from_static_maps(
         spread_wrappers,
         module_loads,
         ordinary_components,
+        context_consts,
+        prop_tags,
+        name_uses,
+        namespace_member_uses,
         direct_eval,
         opaque_calls,
         element_consts,

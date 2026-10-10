@@ -62,9 +62,19 @@ pub struct AttrFact {
     /// `write_conditions`.
     #[serde(skip)]
     pub conditions: Option<BTreeSet<String>>,
+    /// Written by only some branches of a spread of listed object literals
+    /// (`{...(c ? { type: 'a' } : {})}`), so the element may leave it out.
+    #[serde(skip)]
+    pub optional: bool,
 }
 
 impl AttrFact {
+    /// Whether the element always sets the prop to this value itself: no
+    /// spread after it can replace it, and no branch leaves it out.
+    pub(crate) fn settles(&self, index: usize, spread: Option<usize>) -> bool {
+        !self.optional && spread.is_none_or(|before| index >= before)
+    }
+
     /// Every value the attribute can write, when they are known: its
     /// static value, or the finite values a runtime value is proven to take.
     pub(crate) fn proven_values(&self) -> Option<impl Iterator<Item = &Value>> {
@@ -91,6 +101,10 @@ pub enum TagOrigin {
     TopLevel,
     /// A parameter, or a binding inside a function or block.
     Nested,
+    /// A binding compiled MDX destructures from the components a provider
+    /// supplies (`const { Card } = _components`): matched by name, as a
+    /// provider-scope component is.
+    Provided,
     /// No binding in the file: a global, or nothing.
     Undeclared,
 }
@@ -140,6 +154,10 @@ pub enum UsageFact {
         /// static value reads them.
         #[serde(skip)]
         literals: Vec<(String, Value)>,
+        /// What the props object writes when usage reads all of it; `None`
+        /// when it can deliver props usage cannot list.
+        #[serde(skip)]
+        writes: Option<CreateWrites>,
         /// A `cloneElement` of an element of this component: `props` are
         /// its overrides, and the element's own props are recorded where
         /// it is written.
@@ -561,6 +579,14 @@ pub(crate) struct EnrichedUsage {
     pub unsafe_object_uses: BTreeMap<String, ObjectUse>,
     /// See `FileFacts::ordinary_components`.
     pub ordinary_components: BTreeSet<String>,
+    /// See `FileFacts::context_consts`.
+    pub context_consts: BTreeSet<String>,
+    /// See `FileFacts::prop_tags`.
+    pub prop_tags: Vec<PropTag>,
+    /// See `FileFacts::name_uses`.
+    pub name_uses: BTreeMap<String, NameUses>,
+    /// See `FileFacts::namespace_member_uses`.
+    pub namespace_member_uses: BTreeMap<String, NameUses>,
     /// See `FileFacts::direct_eval`.
     pub direct_eval: bool,
     /// See `FileFacts::opaque_calls`.
@@ -859,6 +885,8 @@ pub(crate) fn collect_enriched_usage(
         }),
         module_loads: Some(Vec::new()),
         origins,
+        provided: provided_components(program),
+        rests: origins.map(|scoping| rest_parameters(program, scoping)).unwrap_or_default(),
     };
     collector.visit_program(program);
     let module_loads = collector.module_loads.take().unwrap_or_default();
@@ -925,12 +953,23 @@ pub(crate) fn collect_enriched_usage(
         }
         _ => BTreeMap::new(),
     };
-    let unsafe_object_uses = match &scoping {
-        Some(scoping) => unsafe_object_uses(program, scoping, object_consts, assigned_targets),
+    let context_consts =
+        origins.map_or_else(BTreeSet::new, |scoping| context_consts(program, scoping, &ReactImports::of(program, scoping)));
+    // A context is watched as an object too: its `Provider` must stay React's.
+    let mut watched = object_consts.clone();
+    for context in &context_consts {
+        watched.entry(context.as_str()).or_insert(false);
+    }
+    // Read through the scopes every module builds, so a module with no
+    // import or chain still records what may change its objects.
+    let unsafe_object_uses = match origins {
+        Some(scoping) => unsafe_object_uses(program, scoping, &watched, assigned_targets),
         None => BTreeMap::new(),
     };
     let (opaque_calls, opaque_tags, element_consts) =
         origins.map(|scoping| opaque_calls(program, scoping)).unwrap_or_default();
+    let (prop_tags, name_uses, namespace_member_uses) =
+        origins.map(|scoping| prop_tags_and_uses(program, scoping, &react)).unwrap_or_default();
     EnrichedUsage {
         usage,
         confined,
@@ -939,6 +978,10 @@ pub(crate) fn collect_enriched_usage(
         module_loads,
         unsafe_object_uses,
         ordinary_components,
+        context_consts,
+        prop_tags,
+        name_uses,
+        namespace_member_uses,
         direct_eval,
         opaque_calls,
         element_consts,
@@ -1273,6 +1316,9 @@ impl OpaqueCallScan<'_> {
         let mut seen: FxHashSet<SymbolId> = FxHashSet::default();
         let mut entered: FxHashSet<oxc::semantic::ScopeId> = FxHashSet::default();
         let mut parameters: Vec<SymbolId> = Vec::new();
+        // A binding the walk does not follow (`let held; held = children`)
+        // may hold anything a parameter does.
+        let mut unresolved = false;
         let mut pending: Vec<SymbolId> = reads.symbols.iter().copied().collect();
         while let Some(symbol) = pending.pop() {
             if !seen.insert(symbol) {
@@ -1289,15 +1335,18 @@ impl OpaqueCallScan<'_> {
             let (next, function) = match (self.consts.get(&symbol), self.functions.get(&symbol)) {
                 (Some(init), _) => (&init.reads, init.function),
                 (None, Some((reads, scope))) => (reads, Some(*scope)),
-                (None, None) => continue,
+                (None, None) => {
+                    unresolved |= !self.parameters.contains(&symbol) && !self.sources.contains_key(&symbol);
+                    continue;
+                }
             };
             entered.extend(function);
             closed.tags.extend(next.tags.iter().cloned());
             closed.unknown_global |= next.unknown_global;
             pending.extend(next.symbols.iter().copied());
         }
-        closed.reads_parameter =
-            parameters.iter().any(|parameter| !entered.contains(&self.scoping.symbol_scope_id(*parameter)));
+        closed.reads_parameter = unresolved
+            || parameters.iter().any(|parameter| !entered.contains(&self.scoping.symbol_scope_id(*parameter)));
         closed.imports.sort();
         closed
     }
@@ -1542,11 +1591,550 @@ fn unsafe_object_uses(
         candidates,
         // A module-scope `Object` is not the global one.
         global_object: scoping.get_root_binding("Object".into()).is_none(),
+        react: ReactImports::of(program, scoping),
         uses: BTreeMap::new(),
         ancestors: Vec::new(),
+        style: false,
+        containers: Vec::new(),
+        statics: None,
+        derives: Vec::new(),
+        handoffs: Vec::new(),
+        flat_reads: Vec::new(),
     };
     scan.visit_program(program);
     scan.uses
+}
+
+/// For static style values: each module-scope `const` object in
+/// `object_consts`, and each import binding, with its first use that may
+/// change the object or hand it to code the extractor does not follow. Unlike
+/// a facade's, a use inside an Animus stage call's argument reads the object,
+/// an alias is such a use, and so is a member handed on or written at any
+/// depth. An object stored in another such `const` object is as stable as
+/// that object.
+pub(crate) fn style_object_uses(
+    program: &Program<'_>,
+    statics: &FxHashMap<String, Value>,
+) -> StyleObjectFacts {
+    let consts: BTreeMap<&str, bool> = statics
+        .iter()
+        .filter(|(_, value)| value.is_object())
+        .map(|(name, _)| (name.as_str(), false))
+        .collect();
+    let scoping = SemanticBuilder::new().build(program).semantic.into_scoping();
+    let candidates = object_bindings(program, &scoping, &consts, &BTreeSet::new());
+    if candidates.is_empty() {
+        return StyleObjectFacts::default();
+    }
+    if scoping.root_unresolved_references().contains_key("eval") {
+        let what = ObjectUse { line: None, what: "can be changed by a direct eval".to_string() };
+        let uses = candidates.into_values().map(|binding| (binding.name, what.clone())).collect();
+        return StyleObjectFacts { uses, ..StyleObjectFacts::default() };
+    }
+    let mut scan = ObjectUseScan {
+        scoping: &scoping,
+        source: program.source_text,
+        candidates,
+        global_object: !binds_anywhere(&scoping, "Object"),
+        react: ReactImports::of(program, &scoping),
+        uses: BTreeMap::new(),
+        ancestors: Vec::new(),
+        style: true,
+        containers: Vec::new(),
+        statics: Some(statics),
+        derives: Vec::new(),
+        handoffs: Vec::new(),
+        flat_reads: Vec::new(),
+    };
+    scan.visit_program(program);
+    StyleObjectFacts {
+        uses: scan.uses,
+        stored: scan.containers,
+        derives: scan.derives,
+        handoffs: scan.handoffs,
+        flat_reads: scan.flat_reads,
+    }
+}
+
+/// Whether any scope of the module binds `name`: a local `Object` anywhere
+/// makes `Object.keys` unprovable by spelling.
+fn binds_anywhere(scoping: &Scoping, name: &str) -> bool {
+    scoping.symbol_names().any(|symbol| symbol == name)
+}
+
+/// Whether a call's callee, by its reference, is a module-scope binding
+/// nothing writes: the function the engine resolves by its name.
+fn fixed_callee(scoping: &Scoping, reference: Option<oxc::semantic::ReferenceId>) -> bool {
+    let Some(symbol) = reference.and_then(|id| scoping.get_reference(id).symbol_id()) else {
+        return false;
+    };
+    scoping.symbol_scope_id(symbol) == scoping.root_scope_id()
+        && !scoping.get_resolved_references(symbol).any(oxc::semantic::Reference::is_write)
+}
+
+/// What `style_object_uses` finds in one module. Instability crosses the
+/// edges in the engine, once it knows each import's own.
+#[derive(Debug, Default)]
+pub(crate) struct StyleObjectFacts {
+    /// Each binding's first unsafe use.
+    pub uses: BTreeMap<String, ObjectUse>,
+    /// (object, the module-scope `const` object it is stored in): the
+    /// object is unstable when its container is.
+    pub stored: Vec<(String, String)>,
+    /// (module-scope `const`, a binding its initializer reads): the `const`
+    /// holds a value read from that binding, unstable when it is.
+    pub derives: Vec<(String, String)>,
+    /// A binding passed whole to a named function: a read when that
+    /// function's parameter only reads it and the binding holds no nested
+    /// object, and otherwise this use.
+    pub handoffs: Vec<Handoff>,
+    /// (binding, use): a use that can hand out the binding's nested
+    /// objects, unsafe unless its values are all primitives.
+    pub flat_reads: Vec<(String, ObjectUse)>,
+}
+
+/// See `StyleObjectFacts::handoffs`.
+#[derive(Debug, Clone)]
+pub(crate) struct Handoff {
+    pub binding: String,
+    pub callee: String,
+    pub index: usize,
+    pub used: ObjectUse,
+}
+
+/// The module-scope `const` whose initializer holds the expression the
+/// ancestors lead out of.
+fn initializing_const(ancestors: &[AstKind<'_>]) -> Option<String> {
+    use oxc::ast::ast::{BindingPattern, VariableDeclarationKind};
+    let at = ancestors.iter().rposition(|kind| matches!(kind, AstKind::VariableDeclarator(_)))?;
+    let AstKind::VariableDeclarator(declarator) = &ancestors[at] else { return None };
+    let BindingPattern::BindingIdentifier(id) = &declarator.id else { return None };
+    let Some(AstKind::VariableDeclaration(declaration)) = ancestors.get(at.checked_sub(1)?) else { return None };
+    let top_level = match ancestors.get(at.checked_sub(2)?) {
+        Some(AstKind::Program(_)) => true,
+        Some(AstKind::ExportNamedDeclaration(_)) => matches!(ancestors.get(at.checked_sub(3)?), Some(AstKind::Program(_))),
+        _ => false,
+    };
+    (top_level && declaration.kind == VariableDeclarationKind::Const).then(|| id.name.to_string())
+}
+
+/// How a style-mode use treats an object binding.
+enum StyleUse {
+    Read,
+    Unsafe(String),
+    /// Stored as a member of the named module-scope `const` object.
+    StoredIn(String),
+    /// Hands on the member at the path (`None` past a computed member):
+    /// unsafe unless that member is no object.
+    MemberHandoff(Option<Vec<String>>, String),
+    /// Passed whole as argument `index` of a call to the function named
+    /// `callee`, by the reference `reference`: a read when the callee is a
+    /// module-scope binding nothing writes and that parameter only reads it.
+    Handoff { callee: String, reference: Option<oxc::semantic::ReferenceId>, index: usize, what: String },
+    /// A read that can hand out a nested object (a spread copy, a
+    /// destructure, `Object.values` or `entries`, an `Object.assign`
+    /// source): safe only while the object's values are all primitives.
+    FlatRead(String),
+}
+
+/// The stage method of a stage call (`.styles(…)` and the other chain
+/// methods) whose argument reads the expression at `span` through object
+/// literals, spreads and member reads only, and whether that call is on a
+/// chain the extractor walks: chain methods out to a terminal that
+/// initializes a module-scope `const`. Anything else on the way, a call or
+/// an assignment above all, is no stage read.
+fn stage_argument(span: Span, ancestors: &[AstKind<'_>]) -> Option<(String, bool)> {
+    let mut rest = ancestors.iter().rev();
+    let mut current = span;
+    loop {
+        match rest.next()? {
+            kind if is_erased_wrapper(kind) => current = kind.span(),
+            AstKind::StaticMemberExpression(member) if member.object.span() == current => current = member.span,
+            AstKind::ComputedMemberExpression(member) if member.object.span() == current => current = member.span,
+            AstKind::ObjectProperty(prop)
+                if prop.value.span() == current || (prop.computed && prop.key.span() == current) =>
+            {
+                current = prop.span;
+            }
+            AstKind::SpreadElement(spread) if spread.argument.span() == current => current = spread.span,
+            AstKind::ObjectExpression(object) => current = object.span,
+            AstKind::CallExpression(call) => {
+                let Expression::StaticMemberExpression(member) = crate::chain_walk::unwrap_type_assertions(&call.callee)
+                else {
+                    return None;
+                };
+                let method = member.property.name.as_str();
+                if !crate::chain_walk::CHAIN_METHODS.contains(&method)
+                    || !call.arguments.iter().any(|arg| arg.span() == current)
+                {
+                    return None;
+                }
+                return Some((method.to_string(), walked_chain_call(call.span, &mut rest)));
+            }
+            _ => return None,
+        }
+    }
+}
+
+/// Whether the chain call at `span` continues through chain methods to a
+/// terminal whose call initializes a module-scope `const`. `ancestors`
+/// runs from the call's parent out.
+fn walked_chain_call<'b, 'a: 'b>(span: Span, ancestors: &mut impl Iterator<Item = &'b AstKind<'a>>) -> bool {
+    let mut current = span;
+    loop {
+        let (call_span, parent) = peel_wrappers(current, ancestors);
+        let Some(AstKind::StaticMemberExpression(member)) = parent else { return false };
+        if member.object.span() != call_span {
+            return false;
+        }
+        let method = member.property.name.as_str();
+        let Some(AstKind::CallExpression(call)) = ancestors.next() else { return false };
+        if call.callee.span() != member.span {
+            return false;
+        }
+        if crate::chain_walk::terminal_kind(method).is_some() {
+            return initializes_top_level_const(call.span, ancestors);
+        }
+        let chain = crate::chain_walk::CHAIN_METHODS.contains(&method) || (method == "extend" && call.arguments.is_empty());
+        if !chain {
+            return false;
+        }
+        current = call.span;
+    }
+}
+
+/// The module-scope `const` whose object-literal initializer holds the
+/// property value or spread at `span`, through nested object literals.
+fn container_const(span: Span, ancestors: &[AstKind<'_>]) -> Option<String> {
+    use oxc::ast::ast::{BindingPattern, VariableDeclarationKind};
+    let mut rest = ancestors.iter().rev();
+    let mut current = span;
+    loop {
+        match rest.next()? {
+            kind if is_erased_wrapper(kind) => current = kind.span(),
+            AstKind::ObjectProperty(prop) if prop.value.span() == current => current = prop.span,
+            AstKind::SpreadElement(spread) if spread.argument.span() == current => current = spread.span,
+            AstKind::ObjectExpression(object) => current = object.span,
+            AstKind::VariableDeclarator(declarator)
+                if declarator.init.as_ref().map(GetSpan::span) == Some(current) =>
+            {
+                let BindingPattern::BindingIdentifier(id) = &declarator.id else { return None };
+                let Some(AstKind::VariableDeclaration(declaration)) = rest.next() else { return None };
+                let top_level = match rest.next() {
+                    Some(AstKind::Program(_)) => true,
+                    Some(AstKind::ExportNamedDeclaration(_)) => matches!(rest.next(), Some(AstKind::Program(_))),
+                    _ => false,
+                };
+                return (top_level && declaration.kind == VariableDeclarationKind::Const)
+                    .then(|| id.name.to_string());
+            }
+            _ => return None,
+        }
+    }
+}
+
+/// See `style_object_uses`: what a use of an object binding at `span` does.
+fn style_object_use(
+    span: Span,
+    ancestors: &[AstKind<'_>],
+    containers: &FxHashSet<String>,
+    global_object: bool,
+) -> StyleUse {
+    if let Some((method, walked)) = stage_argument(span, ancestors) {
+        return if walked {
+            StyleUse::Read
+        } else {
+            StyleUse::Unsafe(format!("is passed to .{method}() on a chain the extractor does not walk"))
+        };
+    }
+    let mut rest = ancestors.iter().rev();
+    let (current, parent) = peel_wrappers(span, &mut rest);
+    match parent {
+        Some(AstKind::VariableDeclarator(declarator))
+            if declarator.init.as_ref().map(GetSpan::span) == Some(current) =>
+        {
+            if matches!(declarator.id, oxc::ast::ast::BindingPattern::ObjectPattern(_)) {
+                StyleUse::FlatRead("is destructured".to_string())
+            } else {
+                StyleUse::Unsafe("is aliased by another binding".to_string())
+            }
+        }
+        // A destructuring assignment reads members, then yields the object.
+        Some(AstKind::AssignmentExpression(assignment))
+            if assignment.right.span() == current
+                && matches!(assignment.left, oxc::ast::ast::AssignmentTarget::ObjectAssignmentTarget(_)) =>
+        {
+            match object_use(assignment.span, rest, false, global_object, false) {
+                Some(what) => StyleUse::Unsafe(what),
+                None => StyleUse::FlatRead("is destructured".to_string()),
+            }
+        }
+        // A copy kept in a module-scope `const` object is as stable as it.
+        Some(AstKind::SpreadElement(spread)) if spread.argument.span() == current => match rest.next() {
+            Some(AstKind::ObjectExpression(_)) => match container_const(span, ancestors) {
+                Some(container) if containers.contains(&container) => StyleUse::StoredIn(container),
+                _ => StyleUse::FlatRead("is spread into a copy".to_string()),
+            },
+            _ => StyleUse::Unsafe("is spread into a call or an array".to_string()),
+        },
+        Some(AstKind::JSXSpreadAttribute(_)) => StyleUse::FlatRead("is spread into props".to_string()),
+        Some(AstKind::ObjectProperty(prop)) if prop.value.span() == current => {
+            match container_const(span, ancestors) {
+                Some(container) if containers.contains(&container) => StyleUse::StoredIn(container),
+                _ => StyleUse::Unsafe("is stored in an object".to_string()),
+            }
+        }
+        Some(AstKind::StaticMemberExpression(_) | AstKind::ComputedMemberExpression(_)) => {
+            // Out through the member chain: a write or hand-off at any depth.
+            let mut outer = current;
+            let mut name = String::new();
+            let mut path: Option<Vec<String>> = Some(Vec::new());
+            let mut parent = parent;
+            loop {
+                match parent {
+                    Some(AstKind::StaticMemberExpression(member)) if member.object.span() == outer => {
+                        name = member.property.name.to_string();
+                        if let Some(path) = path.as_mut() {
+                            path.push(name.clone());
+                        }
+                    }
+                    Some(AstKind::ComputedMemberExpression(member)) if member.object.span() == outer => {
+                        name = "a computed member".to_string();
+                        path = None;
+                    }
+                    _ => break,
+                }
+                let member_span = parent.map(GetSpan::span).unwrap_or(outer);
+                if let Some(what) = member_use(&format!("its member {name}"), member_span, rest.clone()) {
+                    return StyleUse::Unsafe(what);
+                }
+                let (next_outer, next_parent) = peel_wrappers(member_span, &mut rest);
+                outer = next_outer;
+                parent = next_parent;
+            }
+            match parent {
+                Some(AstKind::CallExpression(call)) if call.callee.span() != outer => {
+                    StyleUse::MemberHandoff(path, format!("has its member {name} passed to a call"))
+                }
+                Some(AstKind::VariableDeclarator(declarator))
+                    if declarator.init.as_ref().map(GetSpan::span) == Some(outer) =>
+                {
+                    StyleUse::MemberHandoff(path, format!("has its member {name} assigned to a variable"))
+                }
+                Some(AstKind::AssignmentExpression(assignment)) if assignment.right.span() == outer => {
+                    StyleUse::MemberHandoff(path, format!("has its member {name} assigned to a variable"))
+                }
+                Some(AstKind::ObjectProperty(_) | AstKind::ArrayExpression(_)) => {
+                    StyleUse::MemberHandoff(path, format!("has its member {name} stored in an object"))
+                }
+                // A value only compared, combined, tested or discarded.
+                Some(
+                    AstKind::BinaryExpression(_)
+                    | AstKind::UnaryExpression(_)
+                    | AstKind::TemplateLiteral(_)
+                    | AstKind::ExpressionStatement(_),
+                ) => StyleUse::Read,
+                Some(AstKind::ConditionalExpression(conditional)) if conditional.test.span() == outer => StyleUse::Read,
+                Some(AstKind::IfStatement(statement)) if statement.test.span() == outer => StyleUse::Read,
+                _ => StyleUse::MemberHandoff(
+                    path,
+                    format!("has its member {name} used where the extractor does not follow it"),
+                ),
+            }
+        }
+        Some(AstKind::CallExpression(call)) if call.callee.span() != current => {
+            let index = call.arguments.iter().position(|arg| arg.span() == current);
+            match (crate::chain_walk::unwrap_type_assertions(&call.callee), index) {
+                (Expression::Identifier(callee), Some(index)) => StyleUse::Handoff {
+                    callee: callee.name.to_string(),
+                    reference: callee.reference_id.get(),
+                    index,
+                    what: format!("is passed to {}()", callee.name),
+                },
+                // The global `Object`'s readers: keys only read; values,
+                // entries and an assign source hand out the object's values.
+                (Expression::StaticMemberExpression(member), Some(index))
+                    if global_object && member.object.is_specific_id("Object") =>
+                {
+                    match member.property.name.as_str() {
+                        "keys" | "freeze" => StyleUse::Read,
+                        "values" | "entries" => {
+                            StyleUse::FlatRead(format!("is read by Object.{}()", member.property.name))
+                        }
+                        "assign" if index > 0 => StyleUse::FlatRead("is an Object.assign() source".to_string()),
+                        _ => match object_use(span, ancestors.iter().rev(), true, global_object, false) {
+                            Some(what) => StyleUse::Unsafe(what),
+                            None => StyleUse::Read,
+                        },
+                    }
+                }
+                _ => match object_use(span, ancestors.iter().rev(), true, global_object, false) {
+                    Some(what) => StyleUse::Unsafe(what),
+                    None => StyleUse::Read,
+                },
+            }
+        }
+        _ => match object_use(span, ancestors.iter().rev(), true, global_object, false) {
+            Some(what) => StyleUse::Unsafe(what),
+            None => StyleUse::Read,
+        },
+    }
+}
+
+/// How a function treats the object passed as one of its parameters.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ParamReading {
+    /// Only read in the body, and passed on only to these callees, by
+    /// local name and argument index, which must read it only too.
+    ReadOnly(Vec<(String, usize)>),
+    /// A use that may change the object or hand it to code not followed.
+    Unsafe,
+}
+
+/// For each module-scope function (a declaration, or a `const` arrow or
+/// function expression), how each parameter treats its object: see
+/// `ParamReading`. A destructuring, rest, default or other pattern counts
+/// as unsafe, and so does every parameter of a function something
+/// reassigns.
+pub(crate) fn function_param_readings(program: &Program<'_>) -> BTreeMap<String, Vec<ParamReading>> {
+    use oxc::ast::ast::{BindingPattern, Declaration, ExportDefaultDeclarationKind, FormalParameters};
+    let scoping = SemanticBuilder::new().build(program).semantic.into_scoping();
+    // A function with no body (an ambient `declare function` or an overload
+    // signature) may do anything with its arguments.
+    let mut functions: Vec<(String, &FormalParameters<'_>, bool)> = Vec::new();
+    for stmt in &program.body {
+        let declaration = match stmt {
+            Statement::ExportNamedDeclaration(export) => export.declaration.as_ref(),
+            Statement::ExportDefaultDeclaration(export) => {
+                if let ExportDefaultDeclarationKind::FunctionDeclaration(func) = &export.declaration {
+                    if let Some(id) = &func.id {
+                        functions.push((id.name.to_string(), &func.params, func.body.is_some()));
+                    }
+                }
+                None
+            }
+            other => other.as_declaration(),
+        };
+        match declaration {
+            Some(Declaration::FunctionDeclaration(func)) => {
+                if let Some(id) = &func.id {
+                    functions.push((id.name.to_string(), &func.params, func.body.is_some()));
+                }
+            }
+            Some(Declaration::VariableDeclaration(var)) if var.kind == oxc::ast::ast::VariableDeclarationKind::Const => {
+                for declarator in &var.declarations {
+                    let BindingPattern::BindingIdentifier(id) = &declarator.id else { continue };
+                    match declarator.init.as_ref().map(crate::chain_walk::unwrap_type_assertions) {
+                        Some(Expression::ArrowFunctionExpression(arrow)) => {
+                            functions.push((id.name.to_string(), &arrow.params, true));
+                        }
+                        Some(Expression::FunctionExpression(func)) => {
+                            functions.push((id.name.to_string(), &func.params, func.body.is_some()));
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut readings: BTreeMap<String, Vec<ParamReading>> = BTreeMap::new();
+    let mut params: FxHashMap<SymbolId, (String, usize)> = FxHashMap::default();
+    for (name, formal, has_body) in &functions {
+        if !has_body {
+            // An overload signature never overrides its implementation.
+            readings
+                .entry(name.clone())
+                .or_insert_with(|| vec![ParamReading::Unsafe; formal.items.len() + 1]);
+            continue;
+        }
+        let mut reading = Vec::new();
+        for (index, param) in formal.items.iter().enumerate() {
+            match &param.pattern {
+                BindingPattern::BindingIdentifier(id) => {
+                    if let Some(symbol) = id.symbol_id.get() {
+                        params.insert(symbol, (name.clone(), index));
+                    }
+                    reading.push(ParamReading::ReadOnly(Vec::new()));
+                }
+                _ => reading.push(ParamReading::Unsafe),
+            }
+        }
+        if formal.rest.is_some() {
+            reading.push(ParamReading::Unsafe);
+        }
+        let reassigned = scoping
+            .get_root_binding(name.as_str().into())
+            .is_some_and(|symbol| scoping.get_resolved_references(symbol).any(oxc::semantic::Reference::is_write));
+        if reassigned {
+            reading.iter_mut().for_each(|param| *param = ParamReading::Unsafe);
+        }
+        readings.insert(name.clone(), reading);
+    }
+    if params.is_empty() {
+        return readings;
+    }
+    if scoping.root_unresolved_references().contains_key("eval") {
+        for reading in readings.values_mut() {
+            reading.iter_mut().for_each(|param| *param = ParamReading::Unsafe);
+        }
+        return readings;
+    }
+    let mut scan = ParamScan {
+        scoping: &scoping,
+        params,
+        readings,
+        ancestors: Vec::new(),
+        global_object: !binds_anywhere(&scoping, "Object"),
+    };
+    scan.visit_program(program);
+    scan.readings
+}
+
+/// Visits each value reference to a watched parameter and records how it
+/// treats the object (see `function_param_readings`).
+struct ParamScan<'a, 's> {
+    scoping: &'s Scoping,
+    params: FxHashMap<SymbolId, (String, usize)>,
+    readings: BTreeMap<String, Vec<ParamReading>>,
+    ancestors: Vec<AstKind<'a>>,
+    global_object: bool,
+}
+
+impl<'a> Visit<'a> for ParamScan<'a, '_> {
+    fn enter_node(&mut self, kind: AstKind<'a>) {
+        self.ancestors.push(kind);
+    }
+
+    fn leave_node(&mut self, _kind: AstKind<'a>) {
+        self.ancestors.pop();
+    }
+
+    fn visit_identifier_reference(&mut self, ident: &IdentifierReference<'a>) {
+        let Some(reference) = ident.reference_id.get().map(|id| self.scoping.get_reference(id)) else {
+            return;
+        };
+        if !reference.is_value() {
+            return;
+        }
+        let Some((function, index)) = reference.symbol_id().and_then(|symbol| self.params.get(&symbol)).cloned()
+        else {
+            return;
+        };
+        let Some(slot) = self.readings.get_mut(&function).and_then(|reading| reading.get_mut(index)) else {
+            return;
+        };
+        let ParamReading::ReadOnly(passes) = slot else { return };
+        // The engine hands on only an object whose values are primitives,
+        // so a copy or a member of the parameter holds no object of it.
+        match style_object_use(ident.span, &self.ancestors, &FxHashSet::default(), self.global_object) {
+            StyleUse::Read | StyleUse::FlatRead(_) | StyleUse::MemberHandoff(..) => {}
+            StyleUse::Handoff { callee, reference, index, .. } if fixed_callee(self.scoping, reference) => {
+                passes.push((callee, index));
+            }
+            _ => *slot = ParamReading::Unsafe,
+        }
+    }
 }
 
 /// Visits every value reference to an object binding and records the first
@@ -1561,8 +2149,31 @@ struct ObjectUseScan<'a, 's> {
     source: &'s str,
     candidates: FxHashMap<SymbolId, ObjectBinding>,
     global_object: bool,
+    /// React's own functions, whose context readers change nothing.
+    react: ReactImports,
     uses: BTreeMap<String, ObjectUse>,
     ancestors: Vec<AstKind<'a>>,
+    /// Style-value rules (see `style_object_uses`) instead of a facade's.
+    style: bool,
+    /// (stored object, the `const` object it is stored in).
+    containers: Vec<(String, String)>,
+    /// The module's static values, which say whether a member handed on is
+    /// an object; `None` outside style mode.
+    statics: Option<&'s FxHashMap<String, Value>>,
+    /// See `StyleObjectFacts::derives`.
+    derives: Vec<(String, String)>,
+    /// See `StyleObjectFacts::handoffs`.
+    handoffs: Vec<Handoff>,
+    /// See `StyleObjectFacts::flat_reads`.
+    flat_reads: Vec<(String, ObjectUse)>,
+}
+
+impl ObjectUseScan<'_, '_> {
+    /// The 1-based line `span` starts on.
+    fn line(&self, span: Span) -> usize {
+        let start = (span.start as usize).min(self.source.len());
+        self.source[..start].matches('\n').count() + 1
+    }
 }
 
 impl<'a> Visit<'a> for ObjectUseScan<'a, '_> {
@@ -1582,6 +2193,92 @@ impl<'a> Visit<'a> for ObjectUseScan<'a, '_> {
         let Some(binding) = self.candidates.get(&symbol) else { return };
         if !reference.is_value() {
             return;
+        }
+        if self.style {
+            let (key, what) = if binding.namespace {
+                // A member of a namespace import, as the object it names.
+                let mut rest = self.ancestors.iter().rev();
+                let (span, parent) = peel_wrappers(ident.span, &mut rest);
+                match parent {
+                    Some(AstKind::StaticMemberExpression(member)) if member.object.span() == span => {
+                        let at = self.ancestors.len() - self.ancestors.iter().rev().position(|kind| kind.span() == member.span).map_or(0, |i| i + 1);
+                        let names: FxHashSet<String> = FxHashSet::default();
+                        let key = format!("{}.{}", binding.name, member.property.name);
+                        match style_object_use(member.span, &self.ancestors[..at], &names, self.global_object) {
+                            StyleUse::Read => return,
+                            StyleUse::FlatRead(what) => {
+                                self.flat_reads.push((key, ObjectUse { line: Some(self.line(ident.span)), what }));
+                                return;
+                            }
+                            StyleUse::StoredIn(_) => (key, "is stored in an object".to_string()),
+                            StyleUse::Unsafe(what)
+                            | StyleUse::MemberHandoff(_, what)
+                            | StyleUse::Handoff { what, .. } => (key, what),
+                        }
+                    }
+                    _ => (binding.name.clone(), "is used as a whole namespace".to_string()),
+                }
+            } else {
+                let containers: FxHashSet<String> =
+                    self.candidates.values().filter(|b| !b.namespace).map(|b| b.name.clone()).collect();
+                let derived = initializing_const(&self.ancestors).filter(|name| name != &binding.name);
+                if let Some(derived) = &derived {
+                    self.derives.push((derived.clone(), binding.name.clone()));
+                }
+                match style_object_use(ident.span, &self.ancestors, &containers, self.global_object) {
+                    StyleUse::Read => return,
+                    StyleUse::StoredIn(container) => {
+                        self.containers.push((binding.name.clone(), container));
+                        return;
+                    }
+                    StyleUse::FlatRead(what) => {
+                        self.flat_reads.push((binding.name.clone(), ObjectUse { line: Some(self.line(ident.span)), what }));
+                        return;
+                    }
+                    StyleUse::Unsafe(what) => (binding.name.clone(), what),
+                    StyleUse::Handoff { what, reference, .. } if !fixed_callee(self.scoping, reference) => {
+                        (binding.name.clone(), what)
+                    }
+                    StyleUse::Handoff { callee, index, what, .. } => {
+                        self.handoffs.push(Handoff {
+                            binding: binding.name.clone(),
+                            callee,
+                            index,
+                            used: ObjectUse { line: Some(self.line(ident.span)), what },
+                        });
+                        return;
+                    }
+                    StyleUse::MemberHandoff(path, what) => {
+                        // A primitive member handed on cannot change the object.
+                        let primitive = path.zip(self.statics).and_then(|(path, statics)| {
+                            let mut value = statics.get(&binding.name)?;
+                            for segment in &path {
+                                value = value.get(segment)?;
+                            }
+                            Some(!value.is_object() && !value.is_array())
+                        });
+                        if primitive == Some(true) {
+                            return;
+                        }
+                        (binding.name.clone(), what)
+                    }
+                }
+            };
+            if self.uses.contains_key(&key) {
+                return;
+            }
+            let line = self.line(ident.span);
+            self.uses.insert(key, ObjectUse { line: Some(line), what });
+            return;
+        }
+        // React's `useContext` and `use` read the context they receive.
+        let mut ancestors = self.ancestors.iter().rev();
+        if let (current, Some(AstKind::CallExpression(call))) = peel_wrappers(ident.span, &mut ancestors) {
+            let read = call.arguments.first().map(GetSpan::span) == Some(current)
+                && self.react.calls(self.scoping, &call.callee, &["useContext", "use"]);
+            if read {
+                return;
+            }
         }
         // An assigned facade's target below the binding, watched as an object
         // of its own under its path.
@@ -1863,6 +2560,10 @@ pub struct SpreadWrapper {
     /// How many `.asComponent(W)` calls hand it to a component, which then
     /// renders it with the props its own renders forward.
     pub targeted: usize,
+    /// How many members of top-level `const` object literals hold it
+    /// (`const Code = { Header: CodeHeader }`): a `<Code.Header>` render is
+    /// one of its renders.
+    pub held: usize,
 }
 
 /// A forwarding-element attribute whose whole value is a named prop
@@ -2043,8 +2744,9 @@ fn spread_wrapper_candidates<'b, 'a>(program: &'b Program<'a>) -> Vec<WrapperCan
 }
 
 /// The candidates that survive every reference check, with their forwarding
-/// elements. A wrapper binding may be used only as a JSX tag name or as the
-/// one argument of an `.asComponent()` call, and is never reassigned; its
+/// elements. A wrapper binding may be used only as a JSX tag name, as the
+/// one argument of an `.asComponent()` call, or as a member of a top-level
+/// `const` object literal, and is never reassigned; its
 /// spread parameter may be used only as a whole JSX spread argument or a
 /// read of one of its members that is no call.
 fn spread_wrappers(
@@ -2061,6 +2763,7 @@ fn spread_wrappers(
         forwarding: FxHashMap::default(),
         passed: FxHashMap::default(),
         targeted: FxHashMap::default(),
+        held: FxHashMap::default(),
         ancestors: Vec::new(),
     };
     for (index, candidate) in candidates.iter().enumerate() {
@@ -2107,10 +2810,26 @@ fn spread_wrappers(
                     forwarding,
                     passed,
                     targeted: scan.targeted.get(&index).copied().unwrap_or_default(),
+                    held: scan.held.get(&index).copied().unwrap_or_default(),
                 },
             ))
         })
         .collect()
+}
+
+/// Whether the object property just left is a member of an object literal
+/// that initializes a top-level `const`. `ancestors` runs from the
+/// property's parent out.
+fn initializes_top_level_object<'b, 'a: 'b>(ancestors: &mut impl Iterator<Item = &'b AstKind<'a>>) -> bool {
+    let Some(AstKind::ObjectExpression(object)) = ancestors.next() else {
+        return false;
+    };
+    let initializes = matches!(ancestors.next(), Some(AstKind::VariableDeclarator(declarator))
+        if declarator.init.as_ref().is_some_and(|init| init.span() == object.span));
+    initializes
+        && matches!(ancestors.next(), Some(AstKind::VariableDeclaration(declaration))
+            if declaration.kind == oxc::ast::ast::VariableDeclarationKind::Const)
+        && matches!(ancestors.next(), Some(AstKind::Program(_) | AstKind::ExportNamedDeclaration(_)))
 }
 
 struct WrapperScan<'a, 's> {
@@ -2127,6 +2846,8 @@ struct WrapperScan<'a, 's> {
     passed: FxHashMap<usize, Vec<PassThrough>>,
     /// Candidate index → `.asComponent()` calls that take it.
     targeted: FxHashMap<usize, usize>,
+    /// Candidate index → top-level object literal members that hold it.
+    held: FxHashMap<usize, usize>,
     ancestors: Vec<AstKind<'a>>,
 }
 
@@ -2179,6 +2900,14 @@ impl<'a> Visit<'a> for WrapperScan<'a, '_> {
                             if member.property.name == "asComponent") =>
                 {
                     *self.targeted.entry(index).or_default() += 1;
+                }
+                Some(AstKind::ObjectProperty(property))
+                    if property.value.span() == ident.span
+                        && property.kind == oxc::ast::ast::PropertyKind::Init
+                        && !property.computed
+                        && initializes_top_level_object(&mut ancestors) =>
+                {
+                    *self.held.entry(index).or_default() += 1;
                 }
                 _ => {
                     self.invalid.insert(index);
@@ -2528,6 +3257,11 @@ struct FactCollector<'a, 's> {
     /// Enriched collection only: the values a parameter's literal-union type
     /// annotation admits.
     finite_params: FxHashMap<SymbolId, FiniteSet>,
+    /// Enriched collection only: each rest parameter a `createElement`
+    /// props object may spread, with the keys it can never carry.
+    rests: FxHashMap<SymbolId, BTreeSet<String>>,
+    /// Enriched collection only: see `TagOrigin::Provided`.
+    provided: FxHashSet<SymbolId>,
 }
 
 /// `cloneElement` calls, resolved once the walk has seen every `const`
@@ -2565,12 +3299,32 @@ impl<'a> FactCollector<'a, '_> {
             }
             _ => return,
         };
-        let origin = self.origins.zip(root).map(|(scoping, root)| tag_origin(scoping, root));
+        let origin = root.and_then(|root| self.origin_of(root));
         let mut attrs = Vec::new();
         let mut spread = None;
         for attr_item in &elem.attributes {
-            if matches!(attr_item, JSXAttributeItem::SpreadAttribute(_)) {
-                spread = Some(attrs.len());
+            if let JSXAttributeItem::SpreadAttribute(spread_attribute) = attr_item {
+                // A spread of object literals with listed literal entries
+                // writes those entries, on the branches that hold them.
+                match self.enrich.then(|| listed_spread(&spread_attribute.argument, self.origins)).flatten() {
+                    Some(entries) => attrs.extend(entries.into_iter().map(|(name, value)| AttrFact {
+                        variant_class: match &value {
+                            Value::String(class) => class.clone(),
+                            _ => "__dynamic__".to_string(),
+                        },
+                        conditions: (!value.is_object()).then(|| BTreeSet::from([BASE_CONDITION.to_string()])),
+                        name,
+                        static_value: Some(value),
+                        enumerable_values: Vec::new(),
+                        dynamic: false,
+                        dynamic_kind: None,
+                        dynamic_span: None,
+                        skip: false,
+                        literal: true,
+                        optional: true,
+                    })),
+                    None => spread = Some(attrs.len()),
+                }
             }
             if let JSXAttributeItem::Attribute(attr) = attr_item {
                 let JSXAttributeName::Identifier(id) = &attr.name else {
@@ -2711,6 +3465,7 @@ impl<'a> FactCollector<'a, '_> {
                     variant_class: classify_jsx_attribute_as_variant_value(&attr.value),
                     literal,
                     conditions,
+                    optional: false,
                 });
             }
         }
@@ -2721,6 +3476,64 @@ impl<'a> FactCollector<'a, '_> {
             span: (elem.span.start, elem.span.end),
             origin,
         });
+    }
+}
+
+/// The entries a spread argument writes when every branch it can take is an
+/// object literal of literal values under static keys, or nothing (`null`,
+/// a boolean, an absent value): `{...(c ? { type: 'a' } : {})}`. A nullish
+/// entry is left out, as at runtime. `None` for any other argument.
+fn listed_spread(expression: &Expression<'_>, origins: Option<&Scoping>) -> Option<Vec<(String, Value)>> {
+    use oxc::ast::ast::{ObjectPropertyKind, PropertyKind};
+    use oxc::syntax::operator::LogicalOperator;
+    let expression = crate::chain_walk::unwrap_type_assertions(expression);
+    if is_absent(expression, origins) {
+        return Some(Vec::new());
+    }
+    match expression {
+        Expression::NullLiteral(_) | Expression::BooleanLiteral(_) => Some(Vec::new()),
+        Expression::ObjectExpression(object) => {
+            let mut entries = Vec::new();
+            for property in &object.properties {
+                let ObjectPropertyKind::ObjectProperty(property) = property else { return None };
+                if property.kind != PropertyKind::Init || property.computed || property.method {
+                    return None;
+                }
+                let key = eval_property_key(&property.key)?;
+                if key == "__proto__" {
+                    return None;
+                }
+                let value = eval_static_expression(&property.value)?;
+                let value = match value {
+                    Value::Null => continue,
+                    Value::Object(mut breakpoints) => {
+                        breakpoints.retain(|_, entry| !entry.is_null());
+                        if breakpoints.is_empty() {
+                            continue;
+                        }
+                        Value::Object(breakpoints)
+                    }
+                    value => value,
+                };
+                entries.push((key, value));
+            }
+            Some(entries)
+        }
+        Expression::ConditionalExpression(conditional) => {
+            let mut entries = listed_spread(&conditional.consequent, origins)?;
+            entries.extend(listed_spread(&conditional.alternate, origins)?);
+            Some(entries)
+        }
+        // A falsy left side spreads nothing.
+        Expression::LogicalExpression(logical) if logical.operator == LogicalOperator::And => {
+            listed_spread(&logical.right, origins)
+        }
+        Expression::LogicalExpression(logical) => {
+            let mut entries = listed_spread(&logical.left, origins)?;
+            entries.extend(listed_spread(&logical.right, origins)?);
+            Some(entries)
+        }
+        _ => None,
     }
 }
 
@@ -2760,6 +3573,67 @@ fn truthy(value: &Value) -> bool {
 }
 
 impl FactCollector<'_, '_> {
+    /// What a `createElement` props argument writes, when usage reads all of
+    /// it: no argument, `null` or `undefined`, or an object literal of
+    /// static keys whose only spreads are bounded rest parameters.
+    fn create_writes(&self, argument: Option<&Argument<'_>>) -> Option<CreateWrites> {
+        use oxc::ast::ast::{ObjectPropertyKind, PropertyKind};
+        let scoping = self.origins?;
+        let Some(argument) = argument else { return Some(CreateWrites::default()) };
+        let expression = crate::chain_walk::unwrap_type_assertions(argument.as_expression()?);
+        if matches!(expression, Expression::NullLiteral(_)) || is_absent(expression, self.origins) {
+            return Some(CreateWrites::default());
+        }
+        let Expression::ObjectExpression(object) = expression else { return None };
+        let mut writes = CreateWrites::default();
+        for property in &object.properties {
+            match property {
+                ObjectPropertyKind::ObjectProperty(property) => {
+                    if property.kind != PropertyKind::Init || property.computed || property.method {
+                        return None;
+                    }
+                    let key = eval_property_key(&property.key)?;
+                    if key == "__proto__" {
+                        return None;
+                    }
+                    let value = crate::chain_walk::unwrap_type_assertions(&property.value);
+                    // An explicit `undefined` is an omitted prop, as at runtime.
+                    if is_absent(value, self.origins) {
+                        continue;
+                    }
+                    let write = match eval_static_expression(value) {
+                        Some(literal) => (key, Some(literal), None),
+                        None => (key, None, write_conditions(value, self.origins)),
+                    };
+                    writes.props.push(write);
+                }
+                ObjectPropertyKind::SpreadProperty(spread) => {
+                    let Expression::Identifier(id) = crate::chain_walk::unwrap_type_assertions(&spread.argument) else {
+                        return None;
+                    };
+                    let symbol = id.reference_id.get().and_then(|id| scoping.get_reference(id).symbol_id())?;
+                    let excluded = self.rests.get(&symbol)?;
+                    // Two rests together can carry what either can.
+                    writes.rest_excludes = Some(match writes.rest_excludes.take() {
+                        Some(so_far) => so_far.intersection(excluded).cloned().collect(),
+                        None => excluded.clone(),
+                    });
+                }
+            }
+        }
+        Some(writes)
+    }
+
+    /// Where `root` is bound, as the file's scopes tell it.
+    fn origin_of(&self, root: &IdentifierReference<'_>) -> Option<TagOrigin> {
+        let scoping = self.origins?;
+        let symbol = root.reference_id.get().and_then(|id| scoping.get_reference(id).symbol_id());
+        Some(match tag_origin(scoping, root) {
+            TagOrigin::Nested if symbol.is_some_and(|symbol| self.provided.contains(&symbol)) => TagOrigin::Provided,
+            origin => origin,
+        })
+    }
+
     /// The values `expression` can take, when they are proven few: an
     /// explicitly absent value, a string or number literal, a `const` one
     /// named directly (imported ones included), a parameter whose type
@@ -3074,9 +3948,10 @@ impl<'a, 's> Visit<'a> for FactCollector<'a, 's> {
                     identity_uncertain,
                     props: create_element_props(call.arguments.get(1)),
                     literals: create_element_literals(call.arguments.get(1), self.origins),
+                    writes: self.create_writes(call.arguments.get(1)),
                     clone: false,
                     at: call.span.start,
-                    origin: self.origins.zip(root).map(|(scoping, root)| tag_origin(scoping, root)),
+                    origin: root.and_then(|root| self.origin_of(root)),
                 });
             }
         } else if self.react.calls(&call.callee, "cloneElement") {
@@ -3198,6 +4073,7 @@ fn clone_of(tag: TagFact, props: Option<Vec<(String, String)>>, at: u32) -> Opti
         identity_uncertain: false,
         props,
         literals: Vec::new(),
+        writes: None,
         clone: true,
         at,
         origin: None,
@@ -3256,6 +4132,438 @@ fn tag_origin(scoping: &Scoping, name: &IdentifierReference<'_>) -> TagOrigin {
         Some(symbol) if scoping.symbol_flags(symbol).is_import() => TagOrigin::Import,
         Some(_) => TagOrigin::TopLevel,
     }
+}
+
+/// What a `createElement` props object usage reads in full writes: each
+/// key with its literal, or `None` and the conditions a runtime value
+/// writes; and, when it spreads a rest parameter, the keys that rest can
+/// never carry, any other prop arriving through it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CreateWrites {
+    pub props: Vec<(String, Option<Value>, Option<BTreeSet<String>>)>,
+    pub rest_excludes: Option<BTreeSet<String>>,
+}
+
+/// Each rest parameter (`function F({ as, ...props })`) whose keys usage
+/// can bound: every other key of its pattern is static, and it is only
+/// spread or read through a static member, so nothing adds a key to it.
+/// Mapped to the keys its pattern takes out of it.
+fn rest_parameters(program: &Program<'_>, scoping: &Scoping) -> FxHashMap<SymbolId, BTreeSet<String>> {
+    use oxc::ast::ast::BindingPattern;
+    struct Rests<'a, 's> {
+        scoping: &'s Scoping,
+        rests: FxHashMap<SymbolId, BTreeSet<String>>,
+        invalid: FxHashSet<SymbolId>,
+        ancestors: Vec<AstKind<'a>>,
+    }
+    impl<'a> Rests<'a, '_> {
+        fn params(&mut self, params: &oxc::ast::ast::FormalParameters<'a>) {
+            let Some(BindingPattern::ObjectPattern(pattern)) = params.items.first().map(|param| &param.pattern) else {
+                return;
+            };
+            let Some(rest) = &pattern.rest else { return };
+            let BindingPattern::BindingIdentifier(binding) = &rest.argument else { return };
+            let Some(symbol) = binding.symbol_id.get() else { return };
+            let keys: Option<BTreeSet<String>> = pattern
+                .properties
+                .iter()
+                .map(|property| property.key.static_name().filter(|_| !property.computed).map(|key| key.to_string()))
+                .collect();
+            match keys {
+                Some(keys) if !self.scoping.symbol_is_mutated(symbol) => {
+                    self.rests.insert(symbol, keys);
+                }
+                _ => {}
+            }
+        }
+    }
+    impl<'a> Visit<'a> for Rests<'a, '_> {
+        fn enter_node(&mut self, kind: AstKind<'a>) {
+            self.ancestors.push(kind);
+        }
+        fn leave_node(&mut self, _kind: AstKind<'a>) {
+            self.ancestors.pop();
+        }
+        fn visit_function(&mut self, function: &oxc::ast::ast::Function<'a>, flags: oxc::semantic::ScopeFlags) {
+            self.params(&function.params);
+            oxc::ast_visit::walk::walk_function(self, function, flags);
+        }
+        fn visit_arrow_function_expression(&mut self, arrow: &oxc::ast::ast::ArrowFunctionExpression<'a>) {
+            self.params(&arrow.params);
+            oxc::ast_visit::walk::walk_arrow_function_expression(self, arrow);
+        }
+        fn visit_identifier_reference(&mut self, ident: &IdentifierReference<'a>) {
+            let Some(reference) = ident.reference_id.get().map(|id| self.scoping.get_reference(id)) else { return };
+            let Some(symbol) = reference.symbol_id() else { return };
+            if !self.rests.contains_key(&symbol) {
+                return;
+            }
+            let mut ancestors = self.ancestors.iter().rev();
+            let (current, parent) = peel_wrappers(ident.span, &mut ancestors);
+            // A copy of its own keys into an object literal or props, or a
+            // static member read that nothing calls: any call through a
+            // member, or an iterating spread, runs code with the rest as
+            // its receiver.
+            let read = match parent {
+                Some(AstKind::SpreadElement(_)) => matches!(ancestors.next(), Some(AstKind::ObjectExpression(_))),
+                Some(AstKind::JSXSpreadAttribute(_)) => true,
+                Some(AstKind::StaticMemberExpression(member)) if member.object.span() == current => {
+                    let (member_current, member_parent) = peel_wrappers(member.span, &mut ancestors);
+                    !reference.flags().is_member_write_target()
+                        && !matches!(member_parent,
+                            Some(AstKind::CallExpression(call)) if call.callee.span() == member_current)
+                        && !matches!(member_parent,
+                            Some(AstKind::NewExpression(call)) if call.callee.span() == member_current)
+                        && !matches!(member_parent,
+                            Some(AstKind::TaggedTemplateExpression(tagged)) if tagged.tag.span() == member_current)
+                }
+                _ => false,
+            };
+            if !read {
+                self.invalid.insert(symbol);
+            }
+        }
+    }
+    let mut rests = Rests { scoping, rests: FxHashMap::default(), invalid: FxHashSet::default(), ancestors: Vec::new() };
+    rests.visit_program(program);
+    let invalid = rests.invalid;
+    rests.rests.retain(|symbol, _| !invalid.contains(symbol));
+    rests.rests
+}
+
+/// A tag whose type a function's own prop chooses at runtime: `<As>` or
+/// `createElement(as, …)` for `function F({ as })`, also `as ?? 'label'`.
+/// `at` is the tag's or call's start, as the usage scan records the site.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PropTag {
+    pub at: u32,
+    /// The top-level function whose prop it is.
+    pub function: String,
+    pub prop: String,
+}
+
+/// How a module refers to one of its top-level or imported names: as the
+/// one argument of `.asComponent()`, as a JSX tag, as a member of a
+/// top-level `const` object literal, or any other way. An export of the
+/// name counts as none of them.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct NameUses {
+    pub as_component: usize,
+    pub jsx: usize,
+    pub held: usize,
+    pub other: usize,
+}
+
+/// The tags in `program` whose type a top-level function's destructured
+/// prop chooses (`PropTag`), and how the module uses each module-scope
+/// name, and each member of a namespace import (`ns.X`).
+fn prop_tags_and_uses(
+    program: &Program<'_>,
+    scoping: &Scoping,
+    react: &ReactNames,
+) -> (Vec<PropTag>, BTreeMap<String, NameUses>, BTreeMap<String, NameUses>) {
+    use oxc::ast::ast::{BindingPattern, Declaration};
+    // Each prop binding a top-level function destructures from its first
+    // parameter, with the function and the prop it names.
+    let mut props: FxHashMap<SymbolId, (String, String)> = FxHashMap::default();
+    let mut add = |name: &str, params: &oxc::ast::ast::FormalParameters<'_>| {
+        let Some(BindingPattern::ObjectPattern(pattern)) = params.items.first().map(|param| &param.pattern) else {
+            return;
+        };
+        for property in &pattern.properties {
+            let Some(key) = property.key.static_name().filter(|_| !property.computed) else { continue };
+            let binding = match &property.value {
+                BindingPattern::BindingIdentifier(binding) => binding,
+                // An omitted prop takes its default, which must name a host
+                // element as well.
+                BindingPattern::AssignmentPattern(assignment) => match &assignment.left {
+                    BindingPattern::BindingIdentifier(binding)
+                        if matches!(
+                            crate::chain_walk::unwrap_type_assertions(&assignment.right),
+                            Expression::StringLiteral(_)
+                        ) =>
+                    {
+                        binding
+                    }
+                    _ => continue,
+                },
+                _ => continue,
+            };
+            if let Some(symbol) = binding.symbol_id.get().filter(|symbol| !scoping.symbol_is_mutated(*symbol)) {
+                props.insert(symbol, (name.to_string(), key.to_string()));
+            }
+        }
+    };
+    for statement in &program.body {
+        let declaration = match statement {
+            Statement::ExportNamedDeclaration(export) => export.declaration.as_ref(),
+            other => other.as_declaration(),
+        };
+        match declaration {
+            Some(Declaration::FunctionDeclaration(function)) => {
+                if let Some(id) = &function.id {
+                    add(&id.name, &function.params);
+                }
+            }
+            Some(Declaration::VariableDeclaration(declaration)) => {
+                for declarator in &declaration.declarations {
+                    let (Some(name), Some(init)) = (declarator.id.get_identifier_name(), &declarator.init) else {
+                        continue;
+                    };
+                    match crate::chain_walk::unwrap_type_assertions(init) {
+                        Expression::ArrowFunctionExpression(arrow) => add(&name, &arrow.params),
+                        Expression::FunctionExpression(function) => add(&name, &function.params),
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    struct Scan<'a, 's> {
+        scoping: &'s Scoping,
+        react: &'s ReactNames,
+        props: &'s FxHashMap<SymbolId, (String, String)>,
+        namespaces: FxHashSet<SymbolId>,
+        tags: Vec<PropTag>,
+        uses: BTreeMap<String, NameUses>,
+        members: BTreeMap<String, NameUses>,
+        ancestors: Vec<AstKind<'a>>,
+    }
+    impl Scan<'_, '_> {
+        fn prop(&self, expression: &Expression<'_>) -> Option<(String, String)> {
+            let Expression::Identifier(id) = crate::chain_walk::unwrap_type_assertions(expression) else {
+                return None;
+            };
+            let symbol = id.reference_id.get().and_then(|id| self.scoping.get_reference(id).symbol_id())?;
+            self.props.get(&symbol).cloned()
+        }
+    }
+    /// How the expression at `span` is used; `ancestors` runs from its
+    /// parent out.
+    fn count<'b, 'a: 'b>(span: oxc::span::Span, mut ancestors: impl Iterator<Item = &'b AstKind<'a>>, uses: &mut NameUses) {
+        let (current, parent) = peel_wrappers(span, &mut ancestors);
+        match parent {
+            Some(AstKind::JSXOpeningElement(_) | AstKind::JSXClosingElement(_) | AstKind::JSXMemberExpression(_)) => {
+                uses.jsx += 1;
+            }
+            Some(AstKind::ExportSpecifier(_)) => {}
+            Some(AstKind::CallExpression(call))
+                if call.arguments.len() == 1
+                    && call.arguments[0].span() == current
+                    && matches!(&call.callee, Expression::StaticMemberExpression(member)
+                        if member.property.name == "asComponent") =>
+            {
+                uses.as_component += 1;
+            }
+            Some(AstKind::ObjectProperty(property))
+                if property.value.span() == current
+                    && property.kind == oxc::ast::ast::PropertyKind::Init
+                    && !property.computed
+                    && initializes_top_level_object(&mut ancestors) =>
+            {
+                uses.held += 1;
+            }
+            _ => uses.other += 1,
+        }
+    }
+    impl<'a> Visit<'a> for Scan<'a, '_> {
+        fn enter_node(&mut self, kind: AstKind<'a>) {
+            self.ancestors.push(kind);
+        }
+        fn leave_node(&mut self, _kind: AstKind<'a>) {
+            self.ancestors.pop();
+        }
+        fn visit_call_expression(&mut self, call: &CallExpression<'a>) {
+            if self.react.calls(&call.callee, "createElement") {
+                let target = call.arguments.first().and_then(Argument::as_expression);
+                let chosen = target.and_then(|target| match crate::chain_walk::unwrap_type_assertions(target) {
+                    Expression::LogicalExpression(logical)
+                        if !logical.operator.is_and()
+                            && matches!(crate::chain_walk::unwrap_type_assertions(&logical.right), Expression::StringLiteral(_)) =>
+                    {
+                        self.prop(&logical.left)
+                    }
+                    target => self.prop(target),
+                });
+                if let Some((function, prop)) = chosen {
+                    self.tags.push(PropTag { at: call.span.start, function, prop });
+                }
+            }
+            oxc::ast_visit::walk::walk_call_expression(self, call);
+        }
+        fn visit_jsx_opening_element(&mut self, element: &oxc::ast::ast::JSXOpeningElement<'a>) {
+            if let JSXElementName::IdentifierReference(id) = &element.name {
+                let symbol = id.reference_id.get().and_then(|id| self.scoping.get_reference(id).symbol_id());
+                if let Some((function, prop)) = symbol.and_then(|symbol| self.props.get(&symbol)).cloned() {
+                    self.tags.push(PropTag { at: element.span.start, function, prop });
+                }
+            }
+            oxc::ast_visit::walk::walk_jsx_opening_element(self, element);
+        }
+        fn visit_identifier_reference(&mut self, ident: &IdentifierReference<'a>) {
+            let Some(reference) = ident.reference_id.get().map(|id| self.scoping.get_reference(id)) else { return };
+            let Some(symbol) = reference.symbol_id() else { return };
+            if !reference.is_value() || self.scoping.symbol_scope_id(symbol) != self.scoping.root_scope_id() {
+                return;
+            }
+            let name = self.scoping.symbol_name(symbol).to_string();
+            let mut ancestors = self.ancestors.iter().rev();
+            if !self.namespaces.contains(&symbol) {
+                count(ident.span, ancestors, self.uses.entry(name).or_default());
+                return;
+            }
+            // `ns.X`: the member is the name used.
+            let (current, parent) = peel_wrappers(ident.span, &mut ancestors);
+            match parent {
+                Some(AstKind::StaticMemberExpression(member)) if member.object.span() == current => {
+                    let key = format!("{name}.{}", member.property.name);
+                    count(member.span, ancestors, self.members.entry(key).or_default());
+                }
+                _ => self.uses.entry(name).or_default().other += 1,
+            }
+        }
+    }
+    let namespaces = program
+        .body
+        .iter()
+        .filter_map(|statement| match statement {
+            Statement::ImportDeclaration(import) => Some(import),
+            _ => None,
+        })
+        .flat_map(|import| import.specifiers.iter().flatten())
+        .filter(|specifier| matches!(specifier, ImportDeclarationSpecifier::ImportNamespaceSpecifier(_)))
+        .filter_map(|specifier| specifier.local().symbol_id.get())
+        .collect();
+    let mut scan = Scan {
+        scoping,
+        react,
+        props: &props,
+        namespaces,
+        tags: Vec::new(),
+        uses: BTreeMap::new(),
+        members: BTreeMap::new(),
+        ancestors: Vec::new(),
+    };
+    scan.visit_program(program);
+    (scan.tags, scan.uses, scan.members)
+}
+
+/// React's functions and namespaces a module imports, by the symbol each
+/// import binds; a binding of any other origin, an unbound `React`
+/// included, is never React's.
+struct ReactImports {
+    functions: FxHashMap<SymbolId, String>,
+    namespaces: FxHashSet<SymbolId>,
+}
+
+impl ReactImports {
+    fn of(program: &Program<'_>, scoping: &Scoping) -> Self {
+        let mut imports = Self { functions: FxHashMap::default(), namespaces: FxHashSet::default() };
+        for statement in &program.body {
+            let Statement::ImportDeclaration(import) = statement else { continue };
+            if !REACT_RUNTIMES.contains(&import.source.value.as_str()) {
+                continue;
+            }
+            for specifier in import.specifiers.iter().flatten() {
+                let Some(symbol) = specifier.local().symbol_id.get() else { continue };
+                match specifier {
+                    ImportDeclarationSpecifier::ImportSpecifier(named) => {
+                        imports.functions.insert(symbol, named.imported.name().to_string());
+                    }
+                    ImportDeclarationSpecifier::ImportDefaultSpecifier(_)
+                    | ImportDeclarationSpecifier::ImportNamespaceSpecifier(_) => {
+                        imports.namespaces.insert(symbol);
+                    }
+                }
+            }
+        }
+        // A namespace the module writes a member of (`React.createContext =
+        // …`) no longer holds React's functions.
+        struct Written<'s> {
+            scoping: &'s Scoping,
+            namespaces: &'s FxHashSet<SymbolId>,
+            written: FxHashSet<SymbolId>,
+        }
+        impl<'a> Visit<'a> for Written<'_> {
+            fn visit_simple_assignment_target(&mut self, target: &oxc::ast::ast::SimpleAssignmentTarget<'a>) {
+                if let Some(member) = target.as_member_expression() {
+                    if let Expression::Identifier(object) = member.object() {
+                        let symbol = object.reference_id.get().and_then(|id| self.scoping.get_reference(id).symbol_id());
+                        if let Some(symbol) = symbol.filter(|symbol| self.namespaces.contains(symbol)) {
+                            self.written.insert(symbol);
+                        }
+                    }
+                }
+                oxc::ast_visit::walk::walk_simple_assignment_target(self, target);
+            }
+            fn visit_unary_expression(&mut self, unary: &oxc::ast::ast::UnaryExpression<'a>) {
+                if unary.operator == oxc::syntax::operator::UnaryOperator::Delete {
+                    if let Some(member) = unary.argument.as_member_expression() {
+                        if let Expression::Identifier(object) = member.object() {
+                            let symbol = object.reference_id.get().and_then(|id| self.scoping.get_reference(id).symbol_id());
+                            if let Some(symbol) = symbol.filter(|symbol| self.namespaces.contains(symbol)) {
+                                self.written.insert(symbol);
+                            }
+                        }
+                    }
+                }
+                oxc::ast_visit::walk::walk_unary_expression(self, unary);
+            }
+        }
+        let mut written = Written { scoping, namespaces: &imports.namespaces, written: FxHashSet::default() };
+        written.visit_program(program);
+        let written = written.written;
+        imports.namespaces.retain(|symbol| !written.contains(symbol));
+        imports
+    }
+
+    /// Whether `callee` calls one of React's `functions`, named or through a
+    /// React namespace, as the module's scopes resolve it.
+    fn calls(&self, scoping: &Scoping, callee: &Expression<'_>, functions: &[&str]) -> bool {
+        let symbol = |id: &IdentifierReference<'_>| id.reference_id.get().and_then(|id| scoping.get_reference(id).symbol_id());
+        match crate::chain_walk::unwrap_type_assertions(callee) {
+            Expression::Identifier(id) => symbol(id)
+                .and_then(|symbol| self.functions.get(&symbol))
+                .is_some_and(|function| functions.contains(&function.as_str())),
+            Expression::StaticMemberExpression(member) => {
+                functions.contains(&member.property.name.as_str())
+                    && matches!(&member.object, Expression::Identifier(object)
+                        if symbol(object).is_some_and(|symbol| self.namespaces.contains(&symbol)))
+            }
+            _ => false,
+        }
+    }
+}
+
+/// Top-level `const` bindings the runtime's `createContext` builds: their
+/// `Provider` renders its children in place.
+fn context_consts(program: &Program<'_>, scoping: &Scoping, react: &ReactImports) -> BTreeSet<String> {
+    use oxc::ast::ast::{Declaration, VariableDeclarationKind};
+    let mut names = BTreeSet::new();
+    for statement in &program.body {
+        let declaration = match statement {
+            Statement::VariableDeclaration(declaration) => declaration,
+            Statement::ExportNamedDeclaration(export) => match &export.declaration {
+                Some(Declaration::VariableDeclaration(declaration)) => declaration,
+                _ => continue,
+            },
+            _ => continue,
+        };
+        if declaration.kind != VariableDeclarationKind::Const {
+            continue;
+        }
+        for declarator in &declaration.declarations {
+            let built = declarator.init.as_ref().is_some_and(|init| {
+                matches!(crate::chain_walk::unwrap_type_assertions(init),
+                    Expression::CallExpression(call) if react.calls(scoping, &call.callee, &["createContext"]))
+            });
+            if let (true, Some(name)) = (built, declarator.id.get_identifier_name()) {
+                names.insert(name.to_string());
+            }
+        }
+    }
+    names
 }
 
 /// Top-level functions and classes, and `const` bindings of a function or
@@ -3433,6 +4741,8 @@ pub fn collect_usage_facts(program: &Program<'_>) -> Vec<UsageFact> {
         module_loads: None,
         origins: None,
         finite_params: FxHashMap::default(),
+        provided: FxHashSet::default(),
+        rests: FxHashMap::default(),
     };
     collector.visit_program(program);
     collector.finish()
@@ -3676,8 +4986,12 @@ fn push_unique(values: &mut Vec<Value>, value: Value) {
 
 fn resolve_tag<'m>(
     tag: &'m TagFact,
+    origin: Option<TagOrigin>,
     member_expr_bindings: &'m FxHashMap<String, String>,
 ) -> Option<(&'m str, Option<String>)> {
+    if bound_elsewhere(matches!(tag, TagFact::Member(_)), origin) {
+        return None;
+    }
     match tag {
         TagFact::Ident(name) => Some((name.as_str(), None)),
         TagFact::Member(key) => member_expr_bindings
@@ -3686,10 +5000,36 @@ fn resolve_tag<'m>(
     }
 }
 
+/// The bindings compiled MDX destructures from its provider's components:
+/// `const { Card } = _components`.
+fn provided_components(program: &Program<'_>) -> FxHashSet<SymbolId> {
+    struct Provided(FxHashSet<SymbolId>);
+    impl<'a> Visit<'a> for Provided {
+        fn visit_variable_declarator(&mut self, declarator: &oxc::ast::ast::VariableDeclarator<'a>) {
+            let from_components = matches!(&declarator.init, Some(Expression::Identifier(id)) if id.name == "_components");
+            if let (true, oxc::ast::ast::BindingPattern::ObjectPattern(_)) = (from_components, &declarator.id) {
+                self.0.extend(declarator.id.get_binding_identifiers().iter().filter_map(|id| id.symbol_id.get()));
+            }
+            oxc::ast_visit::walk::walk_variable_declarator(self, declarator);
+        }
+    }
+    let mut provided = Provided(FxHashSet::default());
+    provided.visit_program(program);
+    provided.0
+}
+
+/// Whether a tag's first name is bound where the module's own bindings do
+/// not reach: a parameter or local of the name, or, for a member path, no
+/// binding at all. Such a tag never names the module's component of that
+/// name.
+fn bound_elsewhere(member: bool, origin: Option<TagOrigin>) -> bool {
+    matches!(origin, Some(TagOrigin::Nested)) || (member && matches!(origin, Some(TagOrigin::Undeclared)))
+}
+
 /// How a file's spread wrappers stand in for their targets in the filters:
 /// each wrapper tag is published as its targets, and these say what its
 /// renders and forwarding elements contribute.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct WrapperProxies {
     /// Wrapper tag → one lookup key per path to its targets, with the props
     /// that path drops. A render records once per path, so a prop one path
@@ -3722,7 +5062,7 @@ impl WrapperProxies {
     /// path for a wrapper, else under `tag_name` with every prop.
     fn lookups<'p>(&'p self, tag: &TagFact, tag_name: &'p str) -> Vec<Lookup<'p>> {
         match tag {
-            TagFact::Ident(name) if self.paths.contains_key(name) => self.paths[name]
+            TagFact::Ident(name) | TagFact::Member(name) if self.paths.contains_key(name) => self.paths[name]
                 .iter()
                 .map(|(key, dropped)| (key.as_str(), Some(dropped)))
                 .collect(),
@@ -3752,7 +5092,7 @@ pub(crate) fn passed_values(
         let mut settled = false;
         for (index, attr) in attrs.iter().enumerate().filter(|(_, attr)| attr.name == key) {
             values.insert(attr.variant_class.as_str());
-            settled |= spread.is_none_or(|before| index >= before);
+            settled |= attr.settles(index, *spread);
         }
         if !settled {
             values.insert(match spread {
@@ -3777,10 +5117,10 @@ pub fn filter_custom_prop_scan(
     let mut dynamic_results = Vec::new();
 
     for fact in facts {
-        let UsageFact::Element { tag, attrs, .. } = fact else {
+        let UsageFact::Element { tag, attrs, origin, .. } = fact else {
             continue;
         };
-        let Some((tag_name, resolved_binding)) = resolve_tag(tag, member_expr_bindings) else {
+        let Some((tag_name, resolved_binding)) = resolve_tag(tag, *origin, member_expr_bindings) else {
             continue;
         };
         for (tag_name, dropped) in proxies.lookups(tag, tag_name) {
@@ -3864,10 +5204,11 @@ pub fn uncertain_custom_renders(
         }
         let binding = match fact {
             UsageFact::Element { span, .. } if proxies.forwarding.contains(span) => continue,
-            UsageFact::Element { tag, spread: Some(_), .. } => match resolve_tag(tag, member_expr_bindings) {
+            UsageFact::Element { tag, spread: Some(_), origin, .. } => match resolve_tag(tag, *origin, member_expr_bindings) {
                 Some((binding, _)) => binding,
                 None => continue,
             },
+            UsageFact::CreateElement { member, origin, .. } if bound_elsewhere(member.is_some(), *origin) => continue,
             UsageFact::CreateElement { ident: Some(name), .. } => name.as_str(),
             UsageFact::CreateElement { member: Some(key), .. } => match member_expr_bindings.get(key) {
                 Some(binding) => binding.as_str(),
@@ -3951,10 +5292,12 @@ pub fn filter_usage_scan(
                         at: span.0,
                     });
                 };
-                let Some((tag_name, resolved_binding)) = resolve_tag(tag, member_expr_bindings)
+                let Some((tag_name, resolved_binding)) = resolve_tag(tag, *origin, member_expr_bindings)
                 else {
-                    if let TagFact::Member(path) = tag {
-                        uncertain(&mut result, path);
+                    match tag {
+                        TagFact::Member(path) => uncertain(&mut result, path),
+                        TagFact::Ident(name) if is_component_like_identifier(name) => uncertain(&mut result, name),
+                        TagFact::Ident(_) => {}
                     }
                     continue;
                 };
@@ -4001,7 +5344,7 @@ pub fn filter_usage_scan(
                             Some(values) => result.written_props.extend(values.map(|value| write(Some(value.clone())))),
                             None => result.written_props.push(write(None)),
                         }
-                        let settled = spread.is_none_or(|before| index >= before);
+                        let settled = attr.settles(index, *spread);
                         if let Some(props) = active_props {
                             if props.contains(&attr.name) {
                                 // A custom prop's static values belong to the custom
@@ -4105,6 +5448,7 @@ pub fn filter_usage_scan(
                 identity_uncertain,
                 props,
                 literals,
+                writes,
                 clone,
                 at,
                 origin,
@@ -4118,7 +5462,10 @@ pub fn filter_usage_scan(
                         at: *at,
                     });
                 };
-                let resolved: Option<String> = if let Some(name) = ident {
+                let resolved: Option<String> = if bound_elsewhere(member.is_some(), *origin) {
+                    uncertain(&mut result, ident.as_ref().or(member.as_ref()));
+                    None
+                } else if let Some(name) = ident {
                     if component_props.contains_key(name.as_str())
                         || component_configs.contains_key(name.as_str())
                     {
@@ -4137,9 +5484,36 @@ pub fn filter_usage_scan(
                     None
                 };
                 if let Some(binding) = resolved {
-                    result.open_components.insert(binding.clone());
+                    // A props object usage reads in full writes what it lists,
+                    // and through a rest only what that rest can carry.
+                    match writes.as_ref().filter(|_| !*clone) {
+                        Some(writes) => {
+                            let active = component_props.get(binding.as_str());
+                            for (prop, literal, conditions) in &writes.props {
+                                result.written_props.push(WrittenProp {
+                                    binding: binding.clone(),
+                                    prop: prop.clone(),
+                                    literal: literal.clone(),
+                                    conditions: conditions.clone(),
+                                });
+                                let system = active.is_some_and(|active| active.contains(prop));
+                                if literal.is_none() && system && seen.insert(format!("__dynamic__:{prop}")) {
+                                    result.dynamic_prop_usages.push(DynamicPropUsage {
+                                        prop_name: prop.clone(),
+                                        binding: binding.clone(),
+                                    });
+                                }
+                            }
+                            if let Some(excluded) = &writes.rest_excludes {
+                                result.open_except.push((binding.clone(), excluded.clone()));
+                            }
+                        }
+                        None => {
+                            result.open_components.insert(binding.clone());
+                        }
+                    }
                     // Literal system props take their static classes as a
-                    // JSX attribute's do; the open component keeps its slots.
+                    // JSX attribute's do.
                     if let Some(active) = component_props.get(binding.as_str()) {
                         let custom = custom_props.get(binding.as_str());
                         for (prop_name, value) in literals {

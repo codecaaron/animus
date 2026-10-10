@@ -4,7 +4,11 @@ declare const __ANIMUS_DEV__: boolean | undefined;
 
 /**
  * The define token is tested as the initializer's own conditional, never from
- * inside the fallback: only there can a minifier drop the dev-gated code.
+ * inside the fallback: only there can a minifier fold it. Dev-only work tests
+ * the token in place as well, `typeof __ANIMUS_DEV__ === 'boolean' ?
+ * __ANIMUS_DEV__ : IS_DEV`: esbuild inlines no module-level constant into a
+ * chunk that starts with an import, so a gate on `IS_DEV` alone survives a
+ * production bundle.
  */
 export const IS_DEV =
   typeof __ANIMUS_DEV__ === 'boolean'

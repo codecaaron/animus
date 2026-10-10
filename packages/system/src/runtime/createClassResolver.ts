@@ -1,3 +1,4 @@
+import { IS_DEV } from './is-dev.js';
 import {
   type ClassResolverConfig,
   type DynamicPropConfig,
@@ -5,6 +6,9 @@ import {
   type SystemPropMap,
   withUniqueSystemPropNames,
 } from './resolveClasses.js';
+import { reportUncompiledRender } from './uncompiled.js';
+
+declare const __ANIMUS_DEV__: boolean | undefined;
 
 export interface ClassResolverAttributes {
   class: string;
@@ -54,6 +58,11 @@ export function createClassResolver(
     props?: Record<string, unknown>,
     options?: { styleAs?: 'string' | 'object' }
   ): ClassResolverAttributes | ClassResolverObjectAttributes => {
+    // The define token tested in place lets a minifier drop the report from
+    // a production bundle.
+    if (typeof __ANIMUS_DEV__ === 'boolean' ? __ANIMUS_DEV__ : IS_DEV) {
+      reportUncompiledRender(config.uncompiled, undefined);
+    }
     const { classes, dynamicStyle } = resolveClasses(
       className,
       props || {},
@@ -74,14 +83,18 @@ export function createClassResolver(
 
   // The string form runs per render: resolve classes directly rather than
   // building (and discarding) the attributes object and its style string.
-  const resolver = (props?: Record<string, unknown>): string =>
-    resolveClasses(
+  const resolver = (props?: Record<string, unknown>): string => {
+    if (typeof __ANIMUS_DEV__ === 'boolean' ? __ANIMUS_DEV__ : IS_DEV) {
+      reportUncompiledRender(config.uncompiled, undefined);
+    }
+    return resolveClasses(
       className,
       props || {},
       config,
       systemPropMap,
       dynamicPropConfig
     ).classes.join(' ');
+  };
 
   return Object.assign(resolver, {
     attrs: resolveAttributes as ClassResolver['attrs'],
