@@ -2446,6 +2446,11 @@ fn resolve_identity(
                         continue;
                     }
                 }
+                // `export const A = S`: A is S.
+                if let Some(target) = followed_alias(ff, &terminal_name) {
+                    terminal_name = target.to_string();
+                    continue;
+                }
                 let Some(hop) = ff.imports.iter().find(|i| i.local == terminal_name) else {
                     break;
                 };
@@ -2462,6 +2467,14 @@ fn resolve_identity(
         return by_bare_name(&imp.imported);
     }
     by_bare_name(local)
+}
+
+/// The binding a module-scope `const` alias (`const A = S`, with or without
+/// a type annotation) holds, when nothing the module does may change the
+/// alias: then a use of the alias, in any module, is a use of `S`.
+fn followed_alias<'f>(ff: &'f FileFacts, alias: &str) -> Option<&'f str> {
+    let target = ff.aliases.get(alias)?;
+    (!ff.unsafe_object_uses.contains_key(alias)).then_some(target.as_str())
 }
 
 /// Every member tag a file writes, as a JSX tag or a `createElement` type.
@@ -6176,12 +6189,12 @@ fn run_with_system_floor(
                 );
             }
         }
-        // An exported alias renders in other modules, where it is not
-        // followed.
+        // An exported alias renders in other modules, where only one the
+        // analysis follows is the binding it holds.
         for alias in ff.aliases.keys().chain(ff.assigned_aliases.keys()) {
             let exported = ff.default_export_binding.as_deref() == Some(alias)
                 || ff.exports.iter().any(|e| e.source.is_none() && e.local.as_deref() == Some(alias));
-            if exported {
+            if exported && followed_alias(ff, alias).is_none() {
                 names.push(alias);
             }
         }
@@ -10943,29 +10956,41 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         assert!(!out.css.contains(&format!(".{class}--size-md")), "nothing is opened");
     }
 
-    /// An alias exported to other modules, or a default export, is rendered
-    /// where usage tracking does not follow it, so it opens its target.
+    /// An alias exported to other modules as a call's result, or a default
+    /// export, is rendered where usage tracking does not follow it, so it
+    /// opens its target. A `const` alias of a binding, typed or not, is that
+    /// binding: its renders elsewhere are the target's.
     #[test]
-    fn exported_aliases_keep_every_option_of_their_target() {
+    fn exported_aliases_keep_every_option_of_their_target_unless_followed() {
+        let app = "import { R } from './r';\nexport const App = () => <R size=\"sm\" active />;\n";
         for (recipe, consumer) in [
             (
                 format!("{RECIPE}export const B = Object.assign(R, {{}});\n"),
                 "import { B } from './r';\nexport const Other = () => <B size=\"lg\" />;\n",
             ),
             (
-                format!("{RECIPE}export const B = R;\n"),
-                "import { B } from './r';\nexport const Other = () => <B size=\"lg\" />;\n",
-            ),
-            (
                 format!("{RECIPE}export default R;\n"),
                 "import B from './r';\nexport const Other = () => <B size=\"lg\" />;\n",
             ),
+            // The module writes to the alias, which it may no longer hold.
+            (
+                format!("{RECIPE}export const B = R;\nB.extra = 1;\n"),
+                "import { B } from './r';\nexport const Other = () => <B size=\"lg\" />;\n",
+            ),
         ] {
-            let app = "import { R } from './r';\nexport const App = () => <R size=\"sm\" active />;\n";
             assert_eq!(
                 kept_options(&[("r.tsx", recipe.as_str()), ("app.tsx", app), ("other.tsx", consumer)]),
                 (vec!["sm", "md", "lg"], vec!["active", "busy"]),
                 "{recipe}"
+            );
+        }
+        for alias in ["export const B = R;\n", "export const B: typeof R = R;\n", "export { R as B };\n"] {
+            let recipe = format!("{RECIPE}{alias}");
+            let consumer = "import { B } from './r';\nexport const Other = () => <B size=\"lg\" />;\n";
+            assert_eq!(
+                kept_options(&[("r.tsx", recipe.as_str()), ("app.tsx", app), ("other.tsx", consumer)]),
+                (vec!["sm", "lg"], vec!["active"]),
+                "{alias}"
             );
         }
     }
@@ -11349,26 +11374,28 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
     }
 
     #[test]
-    fn renamed_recipes_warn_but_resolved_assigned_and_outside_tags_do_not() {
+    fn unfollowed_recipes_warn_but_resolved_aliases_and_outside_tags_do_not() {
         let recipe = "const ButtonRecipe = ds.styles({}).system({ space: true }).asElement('button');\n";
-        // `Object.assign(R, …)` returns `R`, so the tag resolves to it.
-        let assigned = format!("{recipe}export const Button = Object.assign(ButtonRecipe, {{ Icon: ButtonRecipe }});\n");
-        let app = "import { Button } from './recipe';\nexport const App = () => <Button marginInlineStart={8} />;\n";
-        let out = analyze_with_logical_space(&[("recipe.tsx", assigned.as_str()), ("app.tsx", app)]);
-        assert!(unattributed(&out).is_empty(), "{:?}", out.diagnostics);
-        assert!(out.system_prop_map.values().any(|map| map.contains_key("8")), "{:?}", out.system_prop_map);
-        for (declaration, tag) in [
-            ("export const Button = ButtonRecipe;", "Button"),
-            (
-                "const Family = compose({ Root: ButtonRecipe }, { name: 'Family' });\nexport const Button = { ...Family };\ndecorate(Button);",
-                "Button.Root",
-            ),
+        // `Object.assign(R, …)` returns `R`, and `const B = R` is `R`, so the
+        // tag resolves to it.
+        for declaration in [
+            "export const Button = Object.assign(ButtonRecipe, { Icon: ButtonRecipe });",
+            "export const Button = ButtonRecipe;",
         ] {
             let source = format!("{recipe}{declaration}\n");
-            let app = format!("import {{ Button }} from './recipe';\nexport const App = () => <{tag} marginInlineStart={{8}} />;\n");
-            let out = analyze_with_logical_space(&[("recipe.tsx", source.as_str()), ("app.tsx", app.as_str())]);
-            assert_eq!(unattributed(&out).len(), 1, "{declaration}: {:?}", out.diagnostics);
+            let app = "import { Button } from './recipe';\nexport const App = () => <Button marginInlineStart={8} />;\n";
+            let out = analyze_with_logical_space(&[("recipe.tsx", source.as_str()), ("app.tsx", app)]);
+            assert!(unattributed(&out).is_empty(), "{declaration}: {:?}", out.diagnostics);
+            assert!(out.system_prop_map.values().any(|map| map.contains_key("8")), "{:?}", out.system_prop_map);
         }
+        // A copy of a family something may change is not followed.
+        let source = format!(
+            "{recipe}const Family = compose({{ Root: ButtonRecipe }}, {{ name: 'Family' }});\n\
+             export const Button = {{ ...Family }};\ndecorate(Button);\n"
+        );
+        let app = "import { Button } from './recipe';\nexport const App = () => <Button.Root marginInlineStart={8} />;\n";
+        let out = analyze_with_logical_space(&[("recipe.tsx", source.as_str()), ("app.tsx", app)]);
+        assert_eq!(unattributed(&out).len(), 1, "{:?}", out.diagnostics);
         let recipe = "export const ButtonRecipe = ds.styles({}).system({ space: true }).asElement('button');\n";
         for app in [
             "import { ButtonRecipe as Button } from './recipe';\nexport const App = () => <Button marginInlineStart={8} />;\n",
@@ -13088,7 +13115,7 @@ export const App = () => <main><Card inl={10} shut={10} tone="lg">text</Card></m
             ("export ", "export const App = () => <><Card inl={10} /></>;\n", none),
             ("", "export { Card };\nexport const App = () => <><Card inl={10} /></>;\n", none),
             ("", "export default Card;\n", both),
-            ("", "export const App = () => <><Card inl={10} /></>;\nexport const Alias = Card;\n", both),
+            ("", "export const App = () => <><Card inl={10} /></>;\nexport const Alias = Card;\n", none),
             ("", "export const App = () => createElement(Card, { inl: 10 });\n", both),
             ("", "export const App = () => <><Card inl={10} /></>;\nexport const peek = () => eval('Card');\n", both),
             ("", "export const App = () => <Card inl={10} />;\n", none),
