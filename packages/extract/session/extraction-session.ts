@@ -237,6 +237,8 @@ export class ExtractionSession {
   externalPackageDirs: string[] = [];
   /** Those whose package is linked rather than installed. */
   externalLinkedDirs: string[] = [];
+  /** Those read from their package's compiled output. */
+  externalOutputDirs: string[] = [];
   /** Absolute package dir → owning specifier (cross-source correlation). */
   private externalDirOwners: Record<string, string> = {};
   /** rootDir-relative external file → owning specifier (correlation join). */
@@ -1132,6 +1134,7 @@ export class ExtractionSession {
 
       this.externalPackageDirs = admitted.packageDirs;
       this.externalLinkedDirs = admitted.linkedDirs;
+      this.externalOutputDirs = admitted.outputDirs;
 
       bt.packageResolve = this.elapsed(t);
 
@@ -1474,6 +1477,9 @@ export class ExtractionSession {
           relative(this.rootDir!, dir)
         ),
         linkedDirs: this.externalLinkedDirs.map((dir) =>
+          relative(this.rootDir!, dir)
+        ),
+        outputDirs: this.externalOutputDirs.map((dir) =>
           relative(this.rootDir!, dir)
         ),
       },

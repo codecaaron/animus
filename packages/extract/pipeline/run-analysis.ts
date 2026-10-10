@@ -76,6 +76,9 @@ export interface AnalysisContext {
   /** Those of them whose package is linked rather than installed, so
    *  development names their files where they are defined. */
   linkedDirs?: string[];
+  /** Those of them read from their package's compiled output, where an
+   *  unregistered keyframe reference names the kit's source condition. */
+  outputDirs?: string[];
 }
 
 /**
@@ -147,6 +150,7 @@ export function buildAnalysisInputs(
       unbundledComputedImports: context.unbundledComputedImports ?? false,
       packageDirs: context.packageDirs ?? [],
       linkedDirs: context.linkedDirs ?? [],
+      outputDirs: context.outputDirs ?? [],
     });
   }
   return inputs;

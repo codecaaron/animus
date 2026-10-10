@@ -25,6 +25,9 @@ export interface ClassResolverConfig {
    *  property, the later-defined takes effect, so a superseded prop applies
    *  no class and no slot value. */
   supersededBy?: Record<string, readonly string[]>;
+  /** Set only by a builder terminal that ran without Animus compiling it:
+   *  what each render of the component reports. */
+  uncompiled?: UncompiledDefinition | undefined;
 }
 
 export type SystemPropMap = Record<string, Record<string, string>>;
@@ -87,6 +90,8 @@ import { isUnitlessProperty } from '@animus-ui/properties';
 
 import { IS_DEV } from './is-dev';
 import { readsVariable, trailingPriority } from './value-scan';
+
+import type { UncompiledDefinition } from './uncompiled';
 
 declare const __ANIMUS_DEV__: boolean | undefined;
 import { recordWitness } from './witness';
@@ -421,7 +426,9 @@ function applyVariantClasses(
       classes.push(
         `${baseClassName}--${prop}-${isDefault ? 'default' : value}`
       );
-      recordWitness(baseClassName, prop, value, 'static');
+      if (typeof __ANIMUS_DEV__ === 'boolean' ? __ANIMUS_DEV__ : IS_DEV) {
+        recordWitness(baseClassName, prop, value, 'static');
+      }
     }
   }
 }
@@ -463,7 +470,9 @@ function applyStateClasses(
     if (props[state]) {
       classes.push(`${baseClassName}--${state}`);
       activeStates.push(state);
-      recordWitness(baseClassName, state, 'true', 'static');
+      if (typeof __ANIMUS_DEV__ === 'boolean' ? __ANIMUS_DEV__ : IS_DEV) {
+        recordWitness(baseClassName, state, 'true', 'static');
+      }
     }
   }
 }
@@ -869,7 +878,8 @@ export function resolveClasses(
 
       if (found) {
         classes.push(...found);
-        recordWitness(baseClassName, propName, key, 'static');
+        if (typeof __ANIMUS_DEV__ === 'boolean' ? __ANIMUS_DEV__ : IS_DEV)
+          recordWitness(baseClassName, propName, key, 'static');
       } else {
         const dc = customOwned
           ? customDynamicConfig?.[propName]
@@ -889,15 +899,19 @@ export function resolveClasses(
                   dc,
                   propClasses,
                   typed,
-                  (value) =>
-                    warnIgnoredImportant(baseClassName, propName, value)
+                  (value) => {
+                    if (
+                      typeof __ANIMUS_DEV__ === 'boolean'
+                        ? __ANIMUS_DEV__
+                        : IS_DEV
+                    )
+                      warnIgnoredImportant(baseClassName, propName, value);
+                  }
                 );
           if (failure === null) {
             dynStyle = staged;
-            recordWitness(baseClassName, propName, key, 'dynamic');
-            // The define token tested in place lets a minifier drop the
-            // warning from a production bundle.
             if (typeof __ANIMUS_DEV__ === 'boolean' ? __ANIMUS_DEV__ : IS_DEV) {
+              recordWitness(baseClassName, propName, key, 'dynamic');
               warnPrunedSlot(
                 baseClassName,
                 propName,
@@ -907,16 +921,18 @@ export function resolveClasses(
                 propClasses,
                 typed
               );
+              if (dc.kind !== 'declarations') {
+                warnUnitlessCustomProperty(
+                  baseClassName,
+                  propName,
+                  propValue,
+                  dc
+                );
+              }
             }
-            if (dc.kind !== 'declarations') {
-              warnUnitlessCustomProperty(
-                baseClassName,
-                propName,
-                propValue,
-                dc
-              );
-            }
-          } else {
+          } else if (
+            typeof __ANIMUS_DEV__ === 'boolean' ? __ANIMUS_DEV__ : IS_DEV
+          ) {
             if ('shape' in failure) {
               warnInvalidTransformResult(
                 baseClassName,
@@ -936,7 +952,9 @@ export function resolveClasses(
             }
             recordWitness(baseClassName, propName, key, 'drop');
           }
-        } else {
+        } else if (
+          typeof __ANIMUS_DEV__ === 'boolean' ? __ANIMUS_DEV__ : IS_DEV
+        ) {
           warnDroppedValue(baseClassName, propName, key, customOwned);
           recordWitness(baseClassName, propName, key, 'drop');
         }

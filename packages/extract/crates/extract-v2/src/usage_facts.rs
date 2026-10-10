@@ -91,6 +91,10 @@ pub enum TagOrigin {
     TopLevel,
     /// A parameter, or a binding inside a function or block.
     Nested,
+    /// A binding compiled MDX destructures from the components a provider
+    /// supplies (`const { Card } = _components`): matched by name, as a
+    /// provider-scope component is.
+    Provided,
     /// No binding in the file: a global, or nothing.
     Undeclared,
 }
@@ -859,6 +863,7 @@ pub(crate) fn collect_enriched_usage(
         }),
         module_loads: Some(Vec::new()),
         origins,
+        provided: provided_components(program),
     };
     collector.visit_program(program);
     let module_loads = collector.module_loads.take().unwrap_or_default();
@@ -2560,6 +2565,8 @@ struct FactCollector<'a, 's> {
     /// Enriched collection only: the values a parameter's literal-union type
     /// annotation admits.
     finite_params: FxHashMap<SymbolId, FiniteSet>,
+    /// Enriched collection only: see `TagOrigin::Provided`.
+    provided: FxHashSet<SymbolId>,
 }
 
 /// `cloneElement` calls, resolved once the walk has seen every `const`
@@ -2597,7 +2604,7 @@ impl<'a> FactCollector<'a, '_> {
             }
             _ => return,
         };
-        let origin = self.origins.zip(root).map(|(scoping, root)| tag_origin(scoping, root));
+        let origin = root.and_then(|root| self.origin_of(root));
         let mut attrs = Vec::new();
         let mut spread = None;
         for attr_item in &elem.attributes {
@@ -2792,6 +2799,16 @@ fn truthy(value: &Value) -> bool {
 }
 
 impl FactCollector<'_, '_> {
+    /// Where `root` is bound, as the file's scopes tell it.
+    fn origin_of(&self, root: &IdentifierReference<'_>) -> Option<TagOrigin> {
+        let scoping = self.origins?;
+        let symbol = root.reference_id.get().and_then(|id| scoping.get_reference(id).symbol_id());
+        Some(match tag_origin(scoping, root) {
+            TagOrigin::Nested if symbol.is_some_and(|symbol| self.provided.contains(&symbol)) => TagOrigin::Provided,
+            origin => origin,
+        })
+    }
+
     /// The values `expression` can take, when they are proven few: an
     /// explicitly absent value, a string or number literal, a `const` one
     /// named directly (imported ones included), a parameter whose type
@@ -3108,7 +3125,7 @@ impl<'a, 's> Visit<'a> for FactCollector<'a, 's> {
                     literals: create_element_literals(call.arguments.get(1), self.origins),
                     clone: false,
                     at: call.span.start,
-                    origin: self.origins.zip(root).map(|(scoping, root)| tag_origin(scoping, root)),
+                    origin: root.and_then(|root| self.origin_of(root)),
                 });
             }
         } else if self.react.calls(&call.callee, "cloneElement") {
@@ -3465,6 +3482,7 @@ pub fn collect_usage_facts(program: &Program<'_>) -> Vec<UsageFact> {
         module_loads: None,
         origins: None,
         finite_params: FxHashMap::default(),
+        provided: FxHashSet::default(),
     };
     collector.visit_program(program);
     collector.finish()
@@ -3708,14 +3726,44 @@ fn push_unique(values: &mut Vec<Value>, value: Value) {
 
 fn resolve_tag<'m>(
     tag: &'m TagFact,
+    origin: Option<TagOrigin>,
     member_expr_bindings: &'m FxHashMap<String, String>,
 ) -> Option<(&'m str, Option<String>)> {
+    if bound_elsewhere(matches!(tag, TagFact::Member(_)), origin) {
+        return None;
+    }
     match tag {
         TagFact::Ident(name) => Some((name.as_str(), None)),
         TagFact::Member(key) => member_expr_bindings
             .get(key)
             .map(|b| (b.as_str(), Some(b.clone()))),
     }
+}
+
+/// The bindings compiled MDX destructures from its provider's components:
+/// `const { Card } = _components`.
+fn provided_components(program: &Program<'_>) -> FxHashSet<SymbolId> {
+    struct Provided(FxHashSet<SymbolId>);
+    impl<'a> Visit<'a> for Provided {
+        fn visit_variable_declarator(&mut self, declarator: &oxc::ast::ast::VariableDeclarator<'a>) {
+            let from_components = matches!(&declarator.init, Some(Expression::Identifier(id)) if id.name == "_components");
+            if let (true, oxc::ast::ast::BindingPattern::ObjectPattern(_)) = (from_components, &declarator.id) {
+                self.0.extend(declarator.id.get_binding_identifiers().iter().filter_map(|id| id.symbol_id.get()));
+            }
+            oxc::ast_visit::walk::walk_variable_declarator(self, declarator);
+        }
+    }
+    let mut provided = Provided(FxHashSet::default());
+    provided.visit_program(program);
+    provided.0
+}
+
+/// Whether a tag's first name is bound where the module's own bindings do
+/// not reach: a parameter or local of the name, or, for a member path, no
+/// binding at all. Such a tag never names the module's component of that
+/// name.
+fn bound_elsewhere(member: bool, origin: Option<TagOrigin>) -> bool {
+    matches!(origin, Some(TagOrigin::Nested)) || (member && matches!(origin, Some(TagOrigin::Undeclared)))
 }
 
 /// How a file's spread wrappers stand in for their targets in the filters:
@@ -3809,10 +3857,10 @@ pub fn filter_custom_prop_scan(
     let mut dynamic_results = Vec::new();
 
     for fact in facts {
-        let UsageFact::Element { tag, attrs, .. } = fact else {
+        let UsageFact::Element { tag, attrs, origin, .. } = fact else {
             continue;
         };
-        let Some((tag_name, resolved_binding)) = resolve_tag(tag, member_expr_bindings) else {
+        let Some((tag_name, resolved_binding)) = resolve_tag(tag, *origin, member_expr_bindings) else {
             continue;
         };
         for (tag_name, dropped) in proxies.lookups(tag, tag_name) {
@@ -3896,10 +3944,11 @@ pub fn uncertain_custom_renders(
         }
         let binding = match fact {
             UsageFact::Element { span, .. } if proxies.forwarding.contains(span) => continue,
-            UsageFact::Element { tag, spread: Some(_), .. } => match resolve_tag(tag, member_expr_bindings) {
+            UsageFact::Element { tag, spread: Some(_), origin, .. } => match resolve_tag(tag, *origin, member_expr_bindings) {
                 Some((binding, _)) => binding,
                 None => continue,
             },
+            UsageFact::CreateElement { member, origin, .. } if bound_elsewhere(member.is_some(), *origin) => continue,
             UsageFact::CreateElement { ident: Some(name), .. } => name.as_str(),
             UsageFact::CreateElement { member: Some(key), .. } => match member_expr_bindings.get(key) {
                 Some(binding) => binding.as_str(),
@@ -3983,10 +4032,12 @@ pub fn filter_usage_scan(
                         at: span.0,
                     });
                 };
-                let Some((tag_name, resolved_binding)) = resolve_tag(tag, member_expr_bindings)
+                let Some((tag_name, resolved_binding)) = resolve_tag(tag, *origin, member_expr_bindings)
                 else {
-                    if let TagFact::Member(path) = tag {
-                        uncertain(&mut result, path);
+                    match tag {
+                        TagFact::Member(path) => uncertain(&mut result, path),
+                        TagFact::Ident(name) if is_component_like_identifier(name) => uncertain(&mut result, name),
+                        TagFact::Ident(_) => {}
                     }
                     continue;
                 };
@@ -4150,7 +4201,10 @@ pub fn filter_usage_scan(
                         at: *at,
                     });
                 };
-                let resolved: Option<String> = if let Some(name) = ident {
+                let resolved: Option<String> = if bound_elsewhere(member.is_some(), *origin) {
+                    uncertain(&mut result, ident.as_ref().or(member.as_ref()));
+                    None
+                } else if let Some(name) = ident {
                     if component_props.contains_key(name.as_str())
                         || component_configs.contains_key(name.as_str())
                     {
