@@ -4723,6 +4723,13 @@ impl UsageIdentityPolicy {
             if let Some(id) = self.resolve_one(&usage.binding, attribution) {
                 usage.binding = id;
             }
+            // Each use names the component it renders; an unattributed one
+            // was recorded above under the shared binding.
+            for (_, binding) in &mut usage.uses {
+                if let Some(id) = attribution.get(binding.as_str()).and_then(|ids| ids.first()) {
+                    *binding = id.clone();
+                }
+            }
         }
     }
 
@@ -6051,21 +6058,24 @@ fn run_with_system_floor(
         })
         .collect();
     // A literal that misses a strict scale gets no class; it is reported at
-    // its usage, which the shared utility stream no longer knows. A value
-    // whose configured transform the runtime would resolve differently gets
-    // no class either: the runtime finds no key and computes it.
+    // each of its `uses`, at its offset and naming the component it renders,
+    // which the shared utility stream no longer knows. A value whose
+    // configured transform the runtime would resolve differently gets no
+    // class either: the runtime finds no key and computes it.
     let admitted_input = |config: &PropConfigMap,
                           file: &str,
                           component: &str,
-                          prop_name: &str,
-                          value: &Value,
+                          (prop_name, value, uses): (&str, &Value, &[(u32, &str)]),
                           diagnostics: &mut Vec<CssDiagnostic>| {
         let prop_config = config.get(prop_name);
         let miss = prop_config.and_then(|prop_config| {
             strict_token_miss_of(prop_name, prop_config, value, &resolve_ctx)
         });
         if let Some(miss) = miss {
-            diagnostics.push(strict_token_miss(file, component, &miss));
+            match uses {
+                [] => diagnostics.push(strict_token_miss(file, component, &miss)),
+                uses => diagnostics.extend(uses.iter().map(|&(at, renders)| strict_token_miss(file, renders, &miss).at(at))),
+            }
             return None;
         }
         if prop_config.is_some_and(|prop_config| !extracts_configured_value(prop_config, value, &resolve_ctx)) {
@@ -6318,12 +6328,12 @@ fn run_with_system_floor(
         );
 
         for usage in &usage_result.system_prop_usages {
+            let uses: Vec<_> = usage.uses.iter().map(|(at, binding)| (*at, binding_of(binding))).collect();
             all_utility_inputs.extend(admitted_input(
                 &inputs.config,
                 path,
                 binding_of(&usage.binding),
-                &usage.prop_name,
-                &usage.value,
+                (&usage.prop_name, &usage.value, &uses),
                 &mut diagnostics,
             ));
         }
@@ -6354,12 +6364,12 @@ fn run_with_system_floor(
                     let Some(prop_config) = config.get(&usage.prop_name) else {
                         continue;
                     };
+                    let uses: Vec<_> = usage.uses.iter().map(|(at, _)| (*at, binding_of(&owner))).collect();
                     let input = admitted_input(
                         config,
                         path,
                         binding_of(&owner),
-                        &usage.prop_name,
-                        &usage.value,
+                        (&usage.prop_name, &usage.value, &uses),
                         &mut diagnostics,
                     );
                     if extracts_custom_value(
@@ -6705,8 +6715,7 @@ fn run_with_system_floor(
                 &inputs.config,
                 crate::forced_usage::STATIC_CSS_SOURCE,
                 crate::forced_usage::STATIC_CSS_SOURCE,
-                prop_name,
-                value,
+                (prop_name, value, &[]),
                 &mut diagnostics,
             ));
         }
@@ -6823,8 +6832,7 @@ fn run_with_system_floor(
                     &inputs.config,
                     "",
                     &forward.outer,
-                    &written.prop,
-                    value,
+                    (&written.prop, value, &[]),
                     &mut Vec::new(),
                 ));
             }
@@ -8658,6 +8666,24 @@ mod tests {
             "{}",
             out.sheets.system
         );
+    }
+
+    #[test]
+    fn strict_token_misses_point_at_each_use() {
+        let mut inputs = test_inputs();
+        inputs.config.get_mut("p").unwrap().strict = Some(true);
+        let source = "export const Box = ds.system({ space: true }).asElement('div');\n\
+                      export const A = () => <Box p={16} />;\n\
+                      export const B = () => <Box m={8} p={16} />;\n";
+        let out = analyze(&[("a.tsx", source)], &inputs);
+        let located: Vec<_> = out
+            .diagnostics
+            .iter()
+            .filter(|d| d.code.as_deref() == Some(STRICT_TOKEN_MISS))
+            .map(|d| d.offset)
+            .collect();
+        let uses: Vec<_> = source.match_indices("p={16}").map(|(at, _)| Some(at as u32)).collect();
+        assert_eq!(located, uses, "{:#?}", out.diagnostics);
     }
 
     #[test]

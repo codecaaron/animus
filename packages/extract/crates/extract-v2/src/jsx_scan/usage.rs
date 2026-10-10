@@ -13,7 +13,7 @@ use oxc::ast::ast::{
 use oxc::ast_visit::Visit;
 
 use super::value_eval::{eval_jsx_attribute_value, eval_property_key, eval_static_expression};
-use super::{DynamicPropUsage, PropValueResult, SystemPropUsage, UsageResidueSite};
+use super::{record_written, DynamicPropUsage, PropValueResult, SystemPropUsage, UsageResidueSite};
 
 #[derive(Debug, Clone, Default)]
 pub struct ComponentUsageConfig {
@@ -103,6 +103,7 @@ pub fn scan_jsx_usage<'a>(
         component_configs,
         member_expr_bindings,
         seen: FxHashSet::default(),
+        recorded: FxHashMap::default(),
         fully_open: FxHashSet::default(),
         result: UsageScanResult::default(),
         _phantom: PhantomData,
@@ -116,6 +117,7 @@ struct UsageScanner<'a, 'b> {
     component_configs: &'b FxHashMap<String, ComponentUsageConfig>,
     member_expr_bindings: &'b FxHashMap<String, String>,
     seen: FxHashSet<String>,
+    recorded: FxHashMap<String, usize>,
     /// Bindings already rendered with every option open.
     fully_open: FxHashSet<String>,
     result: UsageScanResult,
@@ -182,13 +184,18 @@ impl<'a> UsageScanner<'a, '_> {
                                         serde_json::to_string(&value)
                                             .unwrap_or_else(|_| "null".to_string())
                                     );
-                                    if self.seen.insert(dedup_key) {
-                                        self.result.system_prop_usages.push(SystemPropUsage {
+                                    record_written(
+                                        &mut self.result.system_prop_usages,
+                                        &mut self.recorded,
+                                        dedup_key,
+                                        attr.span.start,
+                                        SystemPropUsage {
                                             prop_name: prop_name.to_string(),
                                             value,
                                             binding: binding.clone(),
-                                        });
-                                    }
+                                            uses: Vec::new(),
+                                        },
+                                    );
                                 }
                                 PropValueResult::Dynamic { kind, span } => {
                                     self.result.residue_sites.push(UsageResidueSite {
@@ -335,13 +342,13 @@ impl<'a, 'b> Visit<'a> for UsageScanner<'a, 'b> {
                                 prop_name,
                                 serde_json::to_string(&value).unwrap_or_else(|_| "null".to_string())
                             );
-                            if self.seen.insert(dedup_key) {
-                                self.result.system_prop_usages.push(SystemPropUsage {
-                                    prop_name,
-                                    value,
-                                    binding: binding.clone(),
-                                });
-                            }
+                            record_written(
+                                &mut self.result.system_prop_usages,
+                                &mut self.recorded,
+                                dedup_key,
+                                call.span.start,
+                                SystemPropUsage { prop_name, value, binding: binding.clone(), uses: Vec::new() },
+                            );
                         }
                     }
                     if let Some(config) = self.component_configs.get(&binding) {

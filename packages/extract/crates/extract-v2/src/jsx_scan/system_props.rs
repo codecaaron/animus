@@ -12,7 +12,7 @@ use oxc::ast_visit::Visit;
 
 use super::usage::resolve_jsx_member_expr;
 use super::value_eval::eval_jsx_attribute_value;
-use super::{CustomPropScanResult, DynamicPropUsage, PropValueResult, SystemPropUsage};
+use super::{record_written, CustomPropScanResult, DynamicPropUsage, PropValueResult, SystemPropUsage};
 
 /// Scan JSX for system prop usages. Static usages dedupe on prop and value,
 /// dynamic usages on binding and prop.
@@ -24,7 +24,7 @@ pub fn scan_jsx<'a>(
     let mut scanner = SystemPropScanner {
         component_props,
         member_expr_bindings,
-        seen: FxHashSet::default(),
+        recorded: FxHashMap::default(),
         dynamic_seen: FxHashSet::default(),
         results: Vec::new(),
         dynamic_results: Vec::new(),
@@ -41,7 +41,7 @@ pub fn scan_jsx<'a>(
 struct SystemPropScanner<'a, 'b> {
     component_props: &'b FxHashMap<String, FxHashSet<String>>,
     member_expr_bindings: &'b FxHashMap<String, String>,
-    seen: FxHashSet<String>,
+    recorded: FxHashMap<String, usize>,
     dynamic_seen: FxHashSet<String>,
     results: Vec<SystemPropUsage>,
     dynamic_results: Vec<DynamicPropUsage>,
@@ -94,13 +94,18 @@ impl<'a> SystemPropScanner<'a, '_> {
                                 serde_json::to_string(&value)
                                     .unwrap_or_else(|_| "null".to_string())
                             );
-                            if self.seen.insert(dedup_key) {
-                                self.results.push(SystemPropUsage {
+                            record_written(
+                                &mut self.results,
+                                &mut self.recorded,
+                                dedup_key,
+                                attr.span.start,
+                                SystemPropUsage {
                                     prop_name: prop_name.to_string(),
                                     value,
                                     binding: binding.clone(),
-                                });
-                            }
+                                    uses: Vec::new(),
+                                },
+                            );
                         }
                         PropValueResult::Dynamic { .. } => {
                             let dedup_key = format!("{}::{}", binding, prop_name);

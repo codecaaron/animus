@@ -21,7 +21,7 @@ use crate::jsx_scan::{
     classify_jsx_attribute_as_variant_value, create_element_literals, create_element_props, eval_jsx_attribute_value, eval_property_key,
     eval_static_expression, make_json_number,
     is_component_like_identifier, jsx_member_path, ComponentUsageConfig, CustomPropScanResult,
-    DynamicExpressionKind, DynamicPropUsage, PropValueResult, StateUsage, SystemPropUsage,
+    DynamicExpressionKind, DynamicPropUsage, PropValueResult, StateUsage, SystemPropUsage, record_written,
     UsageResidueSite, UsageScanResult, UsageSpan, VariantUsage, WrittenProp,
 };
 
@@ -66,6 +66,9 @@ pub struct AttrFact {
     /// (`{...(c ? { type: 'a' } : {})}`), so the element may leave it out.
     #[serde(skip)]
     pub optional: bool,
+    /// Byte offset of the attribute, or of the spread that writes it.
+    #[serde(skip)]
+    pub at: u32,
 }
 
 impl AttrFact {
@@ -3322,6 +3325,7 @@ impl<'a> FactCollector<'a, '_> {
                         skip: false,
                         literal: true,
                         optional: true,
+                        at: spread_attribute.span.start,
                     })),
                     None => spread = Some(attrs.len()),
                 }
@@ -3466,6 +3470,7 @@ impl<'a> FactCollector<'a, '_> {
                     literal,
                     conditions,
                     optional: false,
+                    at: attr.span.start,
                 });
             }
         }
@@ -5111,7 +5116,7 @@ pub fn filter_custom_prop_scan(
     member_expr_bindings: &FxHashMap<String, String>,
     proxies: &WrapperProxies,
 ) -> CustomPropScanResult {
-    let mut seen = FxHashSet::default();
+    let mut recorded = FxHashMap::default();
     let mut dynamic_seen = FxHashSet::default();
     let mut results = Vec::new();
     let mut dynamic_results = Vec::new();
@@ -5148,13 +5153,12 @@ pub fn filter_custom_prop_scan(
                         attr.name,
                         serde_json::to_string(value).unwrap_or_else(|_| "null".to_string())
                     );
-                    if seen.insert(dedup_key) {
-                        results.push(SystemPropUsage {
-                            prop_name: attr.name.clone(),
-                            value: value.clone(),
-                            binding: binding.clone(),
-                        });
-                    }
+                    record_written(&mut results, &mut recorded, dedup_key, attr.at, SystemPropUsage {
+                        prop_name: attr.name.clone(),
+                        value: value.clone(),
+                        binding: binding.clone(),
+                        uses: Vec::new(),
+                    });
                 }
                 if attr.dynamic {
                     let dedup_key = format!("{}::{}", binding, attr.name);
@@ -5277,6 +5281,7 @@ pub fn filter_usage_scan(
     proxies: &WrapperProxies,
 ) -> UsageScanResult {
     let mut seen = FxHashSet::default();
+    let mut recorded = FxHashMap::default();
     let mut fully_open = FxHashSet::default();
     let mut result = UsageScanResult::default();
 
@@ -5363,13 +5368,18 @@ pub fn filter_usage_scan(
                                         serde_json::to_string(value)
                                             .unwrap_or_else(|_| "null".to_string())
                                     );
-                                    if seen.insert(dedup_key) {
-                                        result.system_prop_usages.push(SystemPropUsage {
+                                    record_written(
+                                        &mut result.system_prop_usages,
+                                        &mut recorded,
+                                        dedup_key,
+                                        attr.at,
+                                        SystemPropUsage {
                                             prop_name: attr.name.clone(),
                                             value: value.clone(),
                                             binding: binding.clone(),
-                                        });
-                                    }
+                                            uses: Vec::new(),
+                                        },
+                                    );
                                 }
                                 if attr.dynamic {
                                     let kind = attr
@@ -5524,13 +5534,13 @@ pub fn filter_usage_scan(
                                 "{prop_name}:{}",
                                 serde_json::to_string(value).unwrap_or_else(|_| "null".to_string())
                             );
-                            if seen.insert(dedup_key) {
-                                result.system_prop_usages.push(SystemPropUsage {
-                                    prop_name: prop_name.clone(),
-                                    value: value.clone(),
-                                    binding: binding.clone(),
-                                });
-                            }
+                            let usage = SystemPropUsage {
+                                prop_name: prop_name.clone(),
+                                value: value.clone(),
+                                binding: binding.clone(),
+                                uses: Vec::new(),
+                            };
+                            record_written(&mut result.system_prop_usages, &mut recorded, dedup_key, *at, usage);
                         }
                     }
                     if let Some(config) = component_configs.get(&binding) {
