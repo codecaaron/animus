@@ -6422,8 +6422,7 @@ fn run_with_system_floor(
                     ),
                     Some(WIDE_MODULE_LOAD),
                 )
-                .on_line(line)
-                .dropping(call));
+                .on_line(line));
             }
             escaped_ids.extend(opened);
         }
@@ -11089,16 +11088,16 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         assert_eq!(kept_sizes(&run(require, true, None), "src/r.tsx::R"), vec!["sm", "md", "lg"]);
         let many: String = (0..20).map(|i| sized(&format!("C{i}"))).collect();
         let out = run(import, false, Some(&many));
-        let warnings: Vec<(Option<u32>, &str, &str)> = out
+        let warnings: Vec<(Option<u32>, &str, &str, Option<&str>)> = out
             .diagnostics
             .iter()
             .filter(|d| d.code.as_deref() == Some(WIDE_MODULE_LOAD))
-            .map(|d| (d.line, d.component.as_str(), d.message.as_str()))
+            .map(|d| (d.line, d.component.as_str(), d.message.as_str(), d.dropped.as_deref()))
             .collect();
         assert_eq!(warnings.len(), 1, "{warnings:#?}");
         // The location carries the line and the component the call, so the
-        // message names neither again.
-        assert_eq!((warnings[0].0, warnings[0].1), (Some(1), "import(name)"), "{warnings:#?}");
+        // message names neither again; nothing is dropped.
+        assert_eq!((warnings[0].0, warnings[0].1, warnings[0].3), (Some(1), "import(name)", None), "{warnings:#?}");
         assert!(warnings[0].2.starts_with("this call can load 21 components"), "{warnings:#?}");
     }
 
