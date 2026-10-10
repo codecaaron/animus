@@ -573,4 +573,18 @@ export const App = () => <Box />;
     expect(css('hidden!')).toContain('visibility: hidden !important');
     expect(css('hidden!')).toBe(css('hidden !important'));
   });
+
+  test('a value resolves through its scale before its priority', () => {
+    const { css } = runPipeline([
+      {
+        path: 'important-token.tsx',
+        source: `import { ds } from '../setup';
+const Box = ds.styles({ p: '16 !important', m: '8!' }).asElement('div');
+export const App = () => <Box />;
+`,
+      },
+    ]);
+    expect(css).toContain('padding: 1rem !important');
+    expect(css).toContain('margin: 0.5rem !important');
+  });
 });
