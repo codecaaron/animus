@@ -137,7 +137,7 @@ fn eval_static_object(obj: &oxc::ast::ast::ObjectExpression) -> Option<Value> {
     Some(Value::Object(map))
 }
 
-pub(super) fn eval_property_key(key: &PropertyKey) -> Option<String> {
+pub(crate) fn eval_property_key(key: &PropertyKey) -> Option<String> {
     match key {
         PropertyKey::StaticIdentifier(id) => Some(id.name.to_string()),
         PropertyKey::StringLiteral(lit) => Some(lit.value.to_string()),

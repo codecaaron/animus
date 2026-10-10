@@ -7364,6 +7364,21 @@ export const App = ({ n }) => <Box bgImage={n} texture={n} />;
     }
 
     #[test]
+    fn an_explicit_undefined_jsx_prop_is_an_omitted_prop() {
+        let source = "const Box = ds.styles({ display: 'block' })\n\
+                      .variant({ prop: 'size', defaultVariant: 'md', variants: { sm: { gap: '1px' }, md: { gap: '2px' }, lg: { gap: '3px' } } })\n\
+                      .system({ space: true }).asElement('div');\n\
+                      export const App = () => <><Box size={undefined} /><Box p={{ _: 8, sm: undefined, md: null }} /></>;\n";
+        let out = analyze(&[("a.tsx", source)], &test_inputs());
+        // As when `size` is omitted, only the default option is used.
+        assert!(!out.sheets.variants.contains("--size-sm") && !out.sheets.variants.contains("--size-lg"), "{}", out.sheets.variants);
+        assert!(out.sheets.variants.contains("--size-default"), "{}", out.sheets.variants);
+        // The nullish breakpoints are absent, so the value takes the class
+        // `{ _: 8 }` takes.
+        assert_eq!(out.system_prop_map["p"].keys().collect::<Vec<_>>(), ["_:8"]);
+    }
+
+    #[test]
     fn component_callback_lookups_keep_the_authored_value_type() {
         let source = r#"export const Box = ds
   .props({

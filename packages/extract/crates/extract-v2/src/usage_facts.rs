@@ -16,7 +16,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::chain_walk::{ChainDescriptor, TerminalKind};
 use crate::jsx_scan::{
-    classify_jsx_attribute_as_variant_value, create_element_props, eval_jsx_attribute_value,
+    classify_jsx_attribute_as_variant_value, create_element_props, eval_jsx_attribute_value, eval_property_key,
     is_component_like_identifier, jsx_member_path, ComponentUsageConfig, CustomPropScanResult,
     DynamicExpressionKind, DynamicPropUsage, PropValueResult, StateUsage, SystemPropUsage,
     UsageResidueSite, UsageScanResult, UsageSpan, VariantUsage,
@@ -1878,6 +1878,11 @@ impl<'a> FactCollector<'a, '_> {
                 let JSXAttributeName::Identifier(id) = &attr.name else {
                     continue;
                 };
+                let written = attribute_expression(&attr.value).map(crate::chain_walk::unwrap_type_assertions);
+                // An explicit `undefined` is an omitted prop, as at runtime.
+                if written.is_some_and(|expression| is_absent(expression, self.origins)) {
+                    continue;
+                }
                 let (mut static_value, mut dynamic, mut dynamic_kind, mut dynamic_span, skip) =
                     match eval_jsx_attribute_value(&attr.value) {
                         PropValueResult::Static(v) => (Some(v), false, None, None, false),
@@ -1943,6 +1948,16 @@ impl<'a> FactCollector<'a, '_> {
                             }
                             _ => {}
                         }
+                        if let (true, Expression::ObjectExpression(object)) = (dynamic, expression) {
+                            if let Some(value) =
+                                without_absent_entries(object, self.static_values, self.scoping, self.origins)
+                            {
+                                static_value = Some(value);
+                                dynamic = false;
+                                dynamic_kind = None;
+                                dynamic_span = None;
+                            }
+                        }
                         if dynamic {
                             // A runtime slot cannot carry `!important`, so a
                             // literal that carries it takes a static class from
@@ -1950,6 +1965,14 @@ impl<'a> FactCollector<'a, '_> {
                             // lose it.
                             important_literals(expression, self.static_values, self.scoping, &mut enumerable_values);
                         }
+                    }
+                }
+                // A nullish breakpoint is absent, as at runtime, and a value
+                // with no breakpoint left is an omitted prop.
+                if let Some(Value::Object(entries)) = &mut static_value {
+                    entries.retain(|_, entry| !entry.is_null());
+                    if entries.is_empty() {
+                        continue;
                     }
                 }
                 attrs.push(AttrFact {
@@ -2404,7 +2427,8 @@ fn attribute_expression<'a, 'b>(
     let Some(oxc::ast::ast::JSXAttributeValue::ExpressionContainer(container)) = value else {
         return None;
     };
-    Some(container.expression.to_expression())
+    // `{}` holds no expression.
+    container.expression.as_expression()
 }
 
 fn evaluate_with_statics(
@@ -2433,6 +2457,49 @@ fn evaluate_with_statics(
         crate::eval::eval_expression_with_statics(expression, &mut skipped, Some(static_values))
             .ok()?;
     skipped.is_empty().then_some(value)
+}
+
+/// Whether `expression` is an explicit `undefined`: `void 0`, or the global
+/// `undefined`, which no binding shadows. Without scoping a reference cannot
+/// be told from a shadowing binding, so it is not one.
+fn is_absent(expression: &Expression<'_>, scoping: Option<&Scoping>) -> bool {
+    let shadowed = match crate::chain_walk::unwrap_type_assertions(expression) {
+        Expression::Identifier(ident) => !scoping.is_some_and(|scoping| {
+            ident.reference_id.get().is_some_and(|reference| scoping.get_reference(reference).symbol_id().is_none())
+        }),
+        _ => false,
+    };
+    crate::eval::is_absent_value(expression, shadowed)
+}
+
+/// A responsive object holding an explicit `undefined` entry, evaluated
+/// without it; `None` when another entry does not evaluate statically.
+/// `origins` tells the global `undefined` from a shadowing binding.
+fn without_absent_entries(
+    object: &oxc::ast::ast::ObjectExpression<'_>,
+    static_values: &FxHashMap<String, Value>,
+    scoping: Option<&Scoping>,
+    origins: Option<&Scoping>,
+) -> Option<Value> {
+    use oxc::ast::ast::{ObjectPropertyKind, PropertyKind};
+    let properties = object.properties.iter().map(|property| match property {
+        ObjectPropertyKind::ObjectProperty(property) if property.kind == PropertyKind::Init && !property.computed => {
+            Some(property)
+        }
+        _ => None,
+    });
+    let properties: Option<Vec<_>> = properties.collect();
+    let properties = properties?;
+    if !properties.iter().any(|property| is_absent(&property.value, origins)) {
+        return None;
+    }
+    let mut entries = serde_json::Map::new();
+    for property in properties.into_iter().filter(|property| !is_absent(&property.value, origins)) {
+        let key = eval_property_key(&property.key)?;
+        let value = evaluate_with_statics(crate::chain_walk::unwrap_type_assertions(&property.value), static_values, scoping)?;
+        entries.insert(key, value);
+    }
+    Some(Value::Object(entries))
 }
 
 /// Static values are keyed by top-level names, so a reference may use one
