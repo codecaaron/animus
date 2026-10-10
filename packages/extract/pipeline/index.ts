@@ -203,6 +203,7 @@ export {
   isEngineTransformExtension,
   preprocessMdx,
 } from './mdx-preprocessor';
+export { kitPublicationFailures } from './kit-publication';
 export { applyPrefix } from './prefix';
 export type { FilePlanSnapshot } from './replacement-plans';
 export {

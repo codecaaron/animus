@@ -102,7 +102,8 @@ export function resolveAbsolutePathSpecifier(
   return candidates.find(isFile) ?? null;
 }
 
-function bareSpecifierPackageName(specifier: string): string {
+/** The package a bare specifier names: `@scope/name` or `name`. */
+export function bareSpecifierPackageName(specifier: string): string {
   const segments = specifier.split('/');
   return specifier.startsWith('@')
     ? segments.slice(0, 2).join('/')
@@ -136,7 +137,7 @@ function readPackageManifest(pkgRoot: string): JsonValue | null {
 
 /** Each `exports` subpath and its value; a bare target or condition object
  *  is the `.` entry. */
-function exportsSubpaths(
+export function exportsSubpaths(
   manifest: JsonValue | null
 ): Array<[string, JsonValue]> {
   const exports = isJsonBlock(manifest) ? manifest.exports : undefined;

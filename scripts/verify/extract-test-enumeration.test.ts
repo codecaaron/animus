@@ -17,6 +17,7 @@ const SESSION_TESTS_TARGET = 'packages/extract/tests/session';
  */
 const ENGINE_BOUND = new Set([
   'canary.test.ts',
+  'kit-publication.test.ts',
   'property-diagnostics.test.ts',
   'prefix-contextual-vars.test.ts',
   'skipped-sources.test.ts',
