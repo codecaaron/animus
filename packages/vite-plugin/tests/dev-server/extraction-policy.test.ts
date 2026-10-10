@@ -74,7 +74,7 @@ suite.each([
         describe: () => renderTrace(adapter),
       }
     );
-    expect(warning).toContain('⚠ Button not extracted');
+    expect(warning).toMatch(/⚠ src\/Button\.ts:\d+:\d+: Button not extracted/);
     expect(warning).toContain('src/Button.ts');
 
     // A later edit still publishes beside the unsupported declaration.

@@ -95,7 +95,8 @@ export const UntouchedContent = Untouched.Content.extend().styles({ width: '70px
 };
 
 const MEMBER_PARENT_WARNING =
-  "⚠ ShortSelectContent not extracted: chain dropped: parent 'Select.Content' " +
+  '⚠ fixtures/member-child.tsx:2:35: ' +
+  "ShortSelectContent not extracted: chain dropped: parent 'Select.Content' " +
   "is a member of exported object 'Select', and member-parent extension is " +
   'not supported; the declaration in fixtures/member-child.tsx is left ' +
   "untransformed — extend 'SelectContent' from fixtures/member-kit.tsx " +
@@ -175,7 +176,8 @@ describe('extending a member of an exported Animus namespace object', () => {
 
   test('explicit build strictness fails through the shared policy with the same attribution', () => {
     expect(strictFailure()).toContain(
-      'animus.extension.unsupported-member-parent — ShortSelectContent: ' +
+      'animus.extension.unsupported-member-parent — ' +
+        'fixtures/member-child.tsx:2:35: ShortSelectContent: ' +
         "chain dropped: parent 'Select.Content'"
     );
   });

@@ -124,6 +124,40 @@ describe('surfaceManifestDiagnostics strict policy', () => {
     expect(info[0]).toMatch(/^ℹ src\/App\.tsx:12:5: <Card>: /);
     expect(info[1]).toMatch(/^ℹ src\/App\.tsx:12: <Card>: /);
   });
+  it('prints where a bail or skip is located and what it dropped', () => {
+    const warned: string[] = [];
+    surfaceManifestDiagnostics(
+      {
+        diagnostics: [
+          {
+            file: 'src/A.tsx',
+            component: 'Wide',
+            kind: 'bail',
+            message:
+              "chain dropped: parent 'Kit.Box' is a member of local object 'Kit'",
+            line: 7,
+            column: 21,
+            dropped: 'Kit.Box',
+          },
+          {
+            file: 'src/A.tsx',
+            component: 'Skipping',
+            kind: 'skip',
+            message:
+              "[skip] Skipping: property '&:hover' — spread element in style object",
+            line: 11,
+            column: 61,
+            dropped: '...transition',
+          },
+        ],
+      },
+      (m) => warned.push(m)
+    );
+    expect(warned).toEqual([
+      "⚠ src/A.tsx:7:21: Wide not extracted: chain dropped: parent 'Kit.Box' is a member of local object 'Kit'",
+      "⚠ src/A.tsx:11:61: Skipping: skipped [skip] Skipping: property '&:hover' — spread element in style object — dropped: ...transition",
+    ]);
+  });
 });
 
 describe('collectSelectorAliasDiagnostics', () => {
