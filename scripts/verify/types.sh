@@ -54,7 +54,7 @@ check_published() {
   fi
   local failed=0 package fixture
   for package in "$@"; do
-    if ! printf '%s\n' "$listed" | grep -q "/packages/$package/dist/index\.d\.ts$"; then
+    if ! grep -q "/packages/$package/dist/index\.d\.ts$" <<<"$listed"; then
       echo "ERROR: $project on $label did not read packages/$package/dist declarations" >&2
       failed=1
     fi
@@ -65,7 +65,7 @@ check_published() {
   fi
   for fixture in "$(dirname "$project")"/*.ts "$(dirname "$project")"/*.tsx; do
     [ -e "$fixture" ] || continue
-    if ! printf '%s\n' "$listed" | grep -q "/$fixture$"; then
+    if ! grep -q "/$fixture$" <<<"$listed"; then
       echo "ERROR: $project on $label does not compile $fixture" >&2
       failed=1
     fi

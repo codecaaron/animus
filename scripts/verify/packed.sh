@@ -60,7 +60,8 @@ else
 fi
 
 for f in "$STAGING"/tarballs/*.tgz; do
-  if tar -xzOf "$f" package/package.json | grep -q '"workspace:'; then
+  manifest=$(tar -xzOf "$f" package/package.json)
+  if grep -q '"workspace:' <<<"$manifest"; then
     echo "ERROR: $(basename "$f") retains a workspace: specifier." >&2
     exit 1
   fi
