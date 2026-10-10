@@ -180,6 +180,17 @@ interface EsbuildOptionsLike {
   define?: Record<string, string>;
 }
 
+interface RspackLikeCompiler extends WebpackLikeCompiler {
+  options: WebpackLikeCompiler['options'] & {
+    module: {
+      rules: Array<{
+        test: (resource: string) => boolean;
+        sideEffects: boolean;
+      }>;
+    };
+  };
+}
+
 interface WebpackLikeCompiler {
   options: { mode?: string };
   /** Set once `watch()` starts, before the first compilation. */
@@ -423,6 +434,8 @@ export const unpluginFactory: UnpluginFactory<
       ) {
         return null;
       }
+      // esbuild redirects in `esbuild.setup`, where the classification holds.
+      if (meta.framework === 'esbuild') return null;
       await joinPipeline();
       const target = state.kitRedirects.get(id);
       if (target === undefined) return null;
@@ -541,9 +554,26 @@ export const unpluginFactory: UnpluginFactory<
 
     rspack(compiler) {
       wireWebpackLike(compiler);
+      classifyRspackRedirects(compiler);
     },
 
     esbuild: {
+      /** unplugin's esbuild resolve drops `moduleSideEffects` and puts the
+       *  target in its own namespace, where no package classifies it. A
+       *  redirect resolved here stays in the `file` namespace and carries the
+       *  replaced entry's classification. */
+      setup(build) {
+        build.onResolve({ filter: /^[^./\0]/ }, async (args) => {
+          if (args.path.startsWith('animus:')) return undefined;
+          await joinPipeline();
+          const target = state.kitRedirects.get(args.path);
+          if (target === undefined) return undefined;
+          const sideEffects = state.kitSideEffects.get(args.path);
+          return sideEffects === undefined
+            ? { path: target }
+            : { path: target, sideEffects };
+        });
+      },
       config(buildOptions) {
         esbuildOptions = buildOptions;
         watching = () => watch;
@@ -554,6 +584,21 @@ export const unpluginFactory: UnpluginFactory<
       },
     },
   };
+
+  /** Rspack's resolve data carries no rule settings, so a module rule per
+   *  classification marks each redirect target, read when it resolves. */
+  function classifyRspackRedirects(compiler: RspackLikeCompiler): void {
+    const classified = (sideEffects: boolean) => (resource: string) =>
+      [...state.kitRedirects].some(
+        ([specifier, target]) =>
+          target === resource &&
+          state.kitSideEffects.get(specifier) === sideEffects
+      );
+    compiler.options.module.rules.push(
+      { test: classified(true), sideEffects: true },
+      { test: classified(false), sideEffects: false }
+    );
+  }
 
   /** Webpack would classify a redirect target by its own path against the
    *  package's `sideEffects`, so the replaced entry's classification is set

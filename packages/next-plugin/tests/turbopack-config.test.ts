@@ -1,10 +1,14 @@
 import { ENGINE_TRANSFORM_EXTENSIONS } from '@animus-ui/extract/pipeline';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import { describe, expect, test } from 'vitest';
 
 import {
   ANIMUS_TURBOPACK_RULE_GLOB,
   buildTurbopackConfig,
   resolveTurbopackMode,
+  turbopackSideEffectsLimits,
 } from '../src/turbopack-config';
 
 import type { AnimusNextOptions } from '../src/types';
@@ -134,5 +138,40 @@ describe('buildTurbopackConfig', () => {
       '.animus/styles.css': './.animus/sessions/test-session/styles.css',
       '@acme/ds': './packages/ds/src/index.ts',
     });
+  });
+});
+
+describe('turbopackSideEffectsLimits', () => {
+  // Contract: Turbopack has no per-module setting, so it reports each
+  // redirect whose source the package's `sideEffects` classify otherwise
+  // than the entry the redirect replaces.
+  test('reports a redirect whose source Turbopack would classify otherwise', () => {
+    const root = mkdtempSync(join(tmpdir(), 'animus-turbopack-side-effects-'));
+    try {
+      const kit = join(root, 'kit');
+      mkdirSync(join(kit, 'src'), { recursive: true });
+      writeFileSync(
+        join(kit, 'package.json'),
+        JSON.stringify({ sideEffects: ['./dist/register.js'] })
+      );
+      const entries = new Map([
+        ['@acme/kit', join(kit, 'src/index.ts')],
+        ['@acme/kit/register', join(kit, 'src/register.ts')],
+      ]);
+      const declared = new Map([
+        ['@acme/kit', false],
+        ['@acme/kit/register', true],
+      ]);
+
+      const lines = turbopackSideEffectsLimits(root, entries, declared);
+
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toContain(
+        'cannot carry the "sideEffects" of @acme/kit/register to its source kit/src/register.ts'
+      );
+      expect(lines[0]).toContain('Turbopack can drop its side effects');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

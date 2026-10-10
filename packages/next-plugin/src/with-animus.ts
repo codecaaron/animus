@@ -27,6 +27,7 @@ import {
   resolveTurbopackLoaderPath,
   isTurbopackDevelopment,
   resolveTurbopackMode,
+  turbopackSideEffectsLimits,
 } from './turbopack-config';
 
 import type { TurbopackConfigFragment } from './turbopack-config';
@@ -506,6 +507,14 @@ async function analyzeForTurbopack(
     const outcome = startTurbopackWatcher(session, rootDir);
     bindTurbopackWatchDeathReport(outcome, rootDir);
     if (outcome.kind === 'started') liveTurbopackWatcher = outcome.handle;
+  }
+
+  for (const line of turbopackSideEffectsLimits(
+    rootDir,
+    session.externalSourceEntries,
+    session.externalSourceSideEffects
+  )) {
+    console.warn(line);
   }
 
   return buildTurbopackConfig({
