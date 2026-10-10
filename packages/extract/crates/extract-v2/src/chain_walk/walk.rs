@@ -220,6 +220,10 @@ pub fn walk_program_facts(program: &Program<'_>) -> WalkedProgram {
         unwalked.enclosing = statement_binding(stmt);
         unwalked.visit_statement(stmt);
     }
+    let bound = binding_counts(program);
+    for chain in &mut unwalked.found {
+        chain.root_bound_once = bound.get(chain.root.as_str()) == Some(&1);
+    }
     WalkedProgram {
         chains,
         member_parents,
@@ -278,6 +282,7 @@ impl<'a> Visit<'a> for UnwalkedChains {
             methods,
             enclosing: self.enclosing.clone(),
             start: span.start,
+            root_bound_once: false,
         });
         // The spine is this chain; only its arguments can hold another.
         let mut current = Some(call);
@@ -293,6 +298,19 @@ impl<'a> Visit<'a> for UnwalkedChains {
             });
         }
     }
+}
+
+/// How many bindings of each name the program declares, at any depth.
+fn binding_counts(program: &Program<'_>) -> FxHashMap<String, usize> {
+    struct Bindings(FxHashMap<String, usize>);
+    impl<'a> Visit<'a> for Bindings {
+        fn visit_binding_identifier(&mut self, id: &oxc::ast::ast::BindingIdentifier<'a>) {
+            *self.0.entry(id.name.to_string()).or_default() += 1;
+        }
+    }
+    let mut bindings = Bindings(FxHashMap::default());
+    bindings.visit_program(program);
+    bindings.0
 }
 
 /// The root identifier and method names of a call built only from chain

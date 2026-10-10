@@ -1413,7 +1413,9 @@ fn unsupported_default_export(
 }
 
 /// A chain-shaped call no walked chain contains, when its root has proven
-/// Animus origin.
+/// Animus origin. `resolver.props(…)` on an `asClass()` resolver is the
+/// resolver's own method, not the builder step of that name, when the root
+/// is the resolver's binding: one the file binds once.
 fn runtime_builder_reference(
     file: &str,
     site: &crate::facts::UnwalkedChainSite,
@@ -1421,6 +1423,12 @@ fn runtime_builder_reference(
     inputs: &CssInputs,
 ) -> Option<CssDiagnostic> {
     let chain = &site.chain;
+    if chain.methods.first().is_some_and(|method| method == "props")
+        && chain.root_bound_once
+        && holds_class_resolver(file, &chain.root, files, inputs, &mut FxHashSet::default())
+    {
+        return None;
+    }
     has_animus_origin(file, &chain.root, files, inputs, &mut FxHashSet::default()).then(|| {
         let spelling = chain
             .methods
@@ -1440,6 +1448,33 @@ fn runtime_builder_reference(
             Some(RUNTIME_BUILDER_REFERENCE),
         )
     })
+}
+
+/// Whether `name`, as `file` declares or imports it, is a chain ending in
+/// `asClass()`, or a `const` alias of one.
+fn holds_class_resolver(
+    file: &str,
+    name: &str,
+    files: &BTreeMap<String, FileFacts>,
+    inputs: &CssInputs,
+    seen: &mut FxHashSet<(String, String)>,
+) -> bool {
+    if !seen.insert((file.to_string(), name.to_string())) {
+        return false;
+    }
+    let Some((declaring_file, binding, true)) =
+        files.get(file).and_then(|ff| resolve_declaration(file, ff, name, files, inputs))
+    else {
+        return false;
+    };
+    let Some(dff) = files.get(&declaring_file) else { return false };
+    dff.chains
+        .iter()
+        .any(|chain| chain.descriptor.binding == binding && chain.descriptor.terminal == TerminalKind::AsClass)
+        || dff
+            .aliases
+            .get(&binding)
+            .is_some_and(|target| holds_class_resolver(&declaring_file, target, files, inputs, seen))
 }
 
 /// A chain rooted in `ns.member` where `ns` is a namespace import of an
@@ -3304,6 +3339,11 @@ fn lost_props_warning<'u>(
     }
     let listed = props.join(", ");
     let (target, via) = props.iter().find_map(|prop| takes(prop)).unwrap_or_default();
+    // The first hop surely reaches the component, or the name it reaches
+    // the component through.
+    let surely = props.iter().any(|prop| {
+        lost.surely_reaches(prop, |name| Some(name) == via.as_ref() || takes_system_prop(declaration_file, name, prop))
+    });
     if !reported.insert((tag, props)) {
         return None;
     }
@@ -3314,11 +3354,19 @@ fn lost_props_warning<'u>(
         (LostThrough::Alias(_), Some(via)) => format!(
             "an alias of {via} that usage tracking does not follow, which reaches the extracted component {target}"
         ),
-        (LostThrough::Spread(_), None) => format!(
+        (LostThrough::Spread(_), None) if surely => format!(
             "a function component that forwards them by spread to the extracted component {target}"
         ),
-        (LostThrough::Spread(_), Some(via)) => format!(
+        (LostThrough::Spread(_), Some(via)) if surely => format!(
             "a function component that forwards them by spread to {via}, which reaches the extracted component {target}"
+        ),
+        (LostThrough::Spread(_), None) => format!(
+            "a function component that may forward them to the extracted component {target}, \
+             spreading what a call it passes its props to returns"
+        ),
+        (LostThrough::Spread(_), Some(via)) => format!(
+            "a function component that may forward them to {via}, which reaches the extracted \
+             component {target}, spreading what a call it passes its props to returns"
         ),
     };
     Some(
@@ -4238,6 +4286,20 @@ impl<'f> LostThrough<'f> {
         Some(Self::Spread(&forwarding.routes))
     }
 
+    /// Whether `prop`, passed to the declaration, surely reaches a name
+    /// `takes` accepts: through an alias, or a spread of the props or their
+    /// rest, not of what a call returns.
+    fn surely_reaches(&self, prop: &str, takes: impl Fn(&String) -> bool) -> bool {
+        match self {
+            Self::Alias(target) => takes(target),
+            Self::Spread(routes) => routes
+                .iter()
+                .filter(|route| !route.derived && !route.named.iter().any(|name| name == prop))
+                .flat_map(|route| &route.targets)
+                .any(takes),
+        }
+    }
+
     /// The names, read in the declaration's file, that `prop`, passed to the
     /// declaration, reaches.
     fn reaching(&self, prop: &str) -> Vec<&'f String> {
@@ -4768,6 +4830,13 @@ impl UsageIdentityPolicy {
         for usage in usages {
             if let Some(id) = self.resolve_one(&usage.binding, attribution) {
                 usage.binding = id;
+            }
+            // Each use names the component it renders; an unattributed one
+            // was recorded above under the shared binding.
+            for (_, binding) in &mut usage.uses {
+                if let Some(id) = attribution.get(binding.as_str()).and_then(|ids| ids.first()) {
+                    *binding = id.clone();
+                }
             }
         }
     }
@@ -5429,20 +5498,24 @@ fn run_with_system_floor(
         definition_fingerprints.insert(component_id.clone(), definition);
         identities.push((component_id, chain.descriptor.binding.as_str(), identity));
     }
-    let class_names: FxHashMap<&String, String> = identities
-        .iter()
-        .map(|(id, _, _)| *id)
-        .zip(crate::ids::class_names(
-            &identities.iter().map(|(_, binding, identity)| (*binding, identity.as_str())).collect::<Vec<_>>(),
-            class_prefix,
-        ))
-        .collect();
+    let definitions: Vec<(&str, &str)> =
+        identities.iter().map(|(_, binding, identity)| (*binding, identity.as_str())).collect();
+    let ordered_class_names = crate::ids::class_names(&definitions, class_prefix);
+    // Production copies share their prop names; development names each
+    // component's by its own binding, an installed kit's too.
+    let scopes = match inputs.dev_mode {
+        true => definitions
+            .iter()
+            .zip(&ordered_class_names)
+            .map(|((binding, _), class_name)| crate::ids::name_scope(binding, class_name))
+            .collect(),
+        false => crate::ids::name_scopes(&definitions, &ordered_class_names),
+    };
+    let name_scopes: FxHashMap<&String, String> = identities.iter().map(|(id, _, _)| *id).zip(scopes).collect();
+    let class_names: FxHashMap<&String, String> =
+        identities.iter().map(|(id, _, _)| *id).zip(ordered_class_names).collect();
     let identity_of: FxHashMap<&str, &str> =
         identities.iter().map(|(id, _, identity)| (id.as_str(), identity.as_str())).collect();
-    let name_scopes: FxHashMap<&String, String> = identities
-        .iter()
-        .map(|(id, binding, _)| (*id, crate::ids::name_scope(binding, &class_names[id])))
-        .collect();
 
     for component_id in &sorted_ids {
         let Some((file_path, chain_idx)) = chain_lookup.get(component_id.as_str()) else {
@@ -6097,21 +6170,24 @@ fn run_with_system_floor(
         })
         .collect();
     // A literal that misses a strict scale gets no class; it is reported at
-    // its usage, which the shared utility stream no longer knows. A value
-    // whose configured transform the runtime would resolve differently gets
-    // no class either: the runtime finds no key and computes it.
+    // each of its `uses`, at its offset and naming the component it renders,
+    // which the shared utility stream no longer knows. A value whose
+    // configured transform the runtime would resolve differently gets no
+    // class either: the runtime finds no key and computes it.
     let admitted_input = |config: &PropConfigMap,
                           file: &str,
                           component: &str,
-                          prop_name: &str,
-                          value: &Value,
+                          (prop_name, value, uses): (&str, &Value, &[(u32, &str)]),
                           diagnostics: &mut Vec<CssDiagnostic>| {
         let prop_config = config.get(prop_name);
         let miss = prop_config.and_then(|prop_config| {
             strict_token_miss_of(prop_name, prop_config, value, &resolve_ctx)
         });
         if let Some(miss) = miss {
-            diagnostics.push(strict_token_miss(file, component, &miss));
+            match uses {
+                [] => diagnostics.push(strict_token_miss(file, component, &miss)),
+                uses => diagnostics.extend(uses.iter().map(|&(at, renders)| strict_token_miss(file, renders, &miss).at(at))),
+            }
             return None;
         }
         if prop_config.is_some_and(|prop_config| !extracts_configured_value(prop_config, value, &resolve_ctx)) {
@@ -6378,12 +6454,12 @@ fn run_with_system_floor(
         );
 
         for usage in &usage_result.system_prop_usages {
+            let uses: Vec<_> = usage.uses.iter().map(|(at, binding)| (*at, binding_of(binding))).collect();
             all_utility_inputs.extend(admitted_input(
                 &inputs.config,
                 path,
                 binding_of(&usage.binding),
-                &usage.prop_name,
-                &usage.value,
+                (&usage.prop_name, &usage.value, &uses),
                 &mut diagnostics,
             ));
         }
@@ -6414,12 +6490,12 @@ fn run_with_system_floor(
                     let Some(prop_config) = config.get(&usage.prop_name) else {
                         continue;
                     };
+                    let uses: Vec<_> = usage.uses.iter().map(|(at, _)| (*at, binding_of(&owner))).collect();
                     let input = admitted_input(
                         config,
                         path,
                         binding_of(&owner),
-                        &usage.prop_name,
-                        &usage.value,
+                        (&usage.prop_name, &usage.value, &uses),
                         &mut diagnostics,
                     );
                     if extracts_custom_value(
@@ -6482,8 +6558,7 @@ fn run_with_system_floor(
                     ),
                     Some(WIDE_MODULE_LOAD),
                 )
-                .on_line(line)
-                .dropping(call));
+                .on_line(line));
             }
             escaped_ids.extend(opened);
         }
@@ -6765,8 +6840,7 @@ fn run_with_system_floor(
                 &inputs.config,
                 crate::forced_usage::STATIC_CSS_SOURCE,
                 crate::forced_usage::STATIC_CSS_SOURCE,
-                prop_name,
-                value,
+                (prop_name, value, &[]),
                 &mut diagnostics,
             ));
         }
@@ -6883,8 +6957,7 @@ fn run_with_system_floor(
                     &inputs.config,
                     "",
                     &forward.outer,
-                    &written.prop,
-                    value,
+                    (&written.prop, value, &[]),
                     &mut Vec::new(),
                 ));
             }
@@ -8721,6 +8794,27 @@ mod tests {
     }
 
     #[test]
+    fn strict_token_misses_point_at_each_use() {
+        let mut inputs = test_inputs();
+        inputs.config.get_mut("p").unwrap().strict = Some(true);
+        // A spread both of whose branches write one value is one use.
+        let source = "export const Box = ds.system({ space: true }).asElement('div');\n\
+                      export const A = () => <Box p={16} />;\n\
+                      export const B = () => <Box m={8} p={16} />;\n\
+                      export const C = ({ c }) => <Box {...(c ? { p: 999 } : { p: 999 })} />;\n";
+        let out = analyze(&[("a.tsx", source)], &inputs);
+        let located: Vec<_> = out
+            .diagnostics
+            .iter()
+            .filter(|d| d.code.as_deref() == Some(STRICT_TOKEN_MISS))
+            .map(|d| (d.offset, d.dropped.as_deref()))
+            .collect();
+        let mut uses: Vec<_> = source.match_indices("p={16}").map(|(at, _)| (Some(at as u32), Some("16"))).collect();
+        uses.push((source.find("{...(c").map(|at| at as u32), Some("999")));
+        assert_eq!(located, uses, "{:#?}", out.diagnostics);
+    }
+
+    #[test]
     fn total_floor_active_set() {
         let mut inputs = test_inputs();
         inputs.config.insert(
@@ -9807,6 +9901,40 @@ export const App = ({ n }) => <Box bgImage={n} texture={n} />;
             }
             assert_eq!(analyze(&files, &test_inputs()).dynamic_props.keys().collect::<Vec<_>>(), want, "{in_kit}{other}");
         }
+    }
+
+    #[test]
+    fn identical_definitions_share_a_slot_under_any_binding() {
+        let copy = |binding: &str| {
+            format!("export const {binding} = ds.props({{ tone: {{ property: 'color' }} }}).asElement('span');\n")
+        };
+        let (text, span) = (copy("Text"), copy("Span"));
+        let other = "export const Span = ds.props({ tone: { property: 'fill' } }).asElement('span');\n";
+        let app = "import { Text } from './text';\nimport { Span } from './span';\nimport { Span as Other } from './other';\n\
+                   export const App = ({ n }) => <><Text tone={`${n}`} /><Span tone={`${n}`} /><Other tone={`${n}`} /></>;\n";
+        let registered = |files: &[(&str, &str)]| {
+            let out = analyze(files, &test_inputs());
+            out.sheets.global.lines().filter(|line| line.starts_with("@property --animus-tone_")).map(str::to_string).collect::<Vec<_>>()
+        };
+        let forward = registered(&[("text.tsx", &text), ("span.tsx", &span), ("other.tsx", other), ("app.tsx", app)]);
+        let backward = registered(&[("app.tsx", app), ("other.tsx", other), ("span.tsx", &span), ("text.tsx", &text)]);
+        assert_eq!(forward.len(), 2, "copies share one registration, the other definition keeps its own: {forward:?}");
+        assert_eq!(forward, backward, "names follow no file order");
+        // Development names each component's props by its own binding, an
+        // installed kit's too, as before copies shared.
+        let mut development = test_inputs();
+        development.dev_mode = true;
+        let installed = "import { Text } from '../node_modules/kit-a/text';\nimport { Span } from '../node_modules/kit-b/span';\n\
+                         export const App = ({ n }) => <><Text tone={`${n}`} /><Span tone={`${n}`} /></>;\n";
+        let out = analyze(
+            &[("node_modules/kit-a/text.tsx", &text), ("node_modules/kit-b/span.tsx", &span), ("src/app.tsx", installed)],
+            &development,
+        );
+        let names: Vec<_> = ["tone_Text_", "tone_Span_"]
+            .iter()
+            .map(|name| out.sheets.global.lines().any(|line| line.starts_with(&format!("@property --animus-{name}"))))
+            .collect();
+        assert_eq!(names, [true, true], "{}", out.sheets.global);
     }
 
     #[test]
@@ -11149,16 +11277,16 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         assert_eq!(kept_sizes(&run(require, true, None), "src/r.tsx::R"), vec!["sm", "md", "lg"]);
         let many: String = (0..20).map(|i| sized(&format!("C{i}"))).collect();
         let out = run(import, false, Some(&many));
-        let warnings: Vec<(Option<u32>, &str, &str)> = out
+        let warnings: Vec<(Option<u32>, &str, &str, Option<&str>)> = out
             .diagnostics
             .iter()
             .filter(|d| d.code.as_deref() == Some(WIDE_MODULE_LOAD))
-            .map(|d| (d.line, d.component.as_str(), d.message.as_str()))
+            .map(|d| (d.line, d.component.as_str(), d.message.as_str(), d.dropped.as_deref()))
             .collect();
         assert_eq!(warnings.len(), 1, "{warnings:#?}");
         // The location carries the line and the component the call, so the
-        // message names neither again.
-        assert_eq!((warnings[0].0, warnings[0].1), (Some(1), "import(name)"), "{warnings:#?}");
+        // message names neither again; nothing is dropped.
+        assert_eq!((warnings[0].0, warnings[0].1, warnings[0].3), (Some(1), "import(name)", None), "{warnings:#?}");
         assert!(warnings[0].2.starts_with("this call can load 21 components"), "{warnings:#?}");
     }
 
@@ -11885,8 +12013,9 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
     /// use: a wrapper reached through `export *`, one that destructures its
     /// props in its body, a function declaration, one with two rest routes
     /// of which one still carries the prop, one rendered by `createElement`,
-    /// a function component held by a facade object, a same-module wrapper
-    /// of an imported one, the root of an `Object.assign` facade built on a
+    /// a function component held by a facade object, one spreading what a
+    /// call it passes its props to returns, a same-module wrapper of an
+    /// imported one, the root of an `Object.assign` facade built on a
     /// function component, and a function component a facade literal holds
     /// inline. A prop a pattern on every route consumes, and a name a
     /// parameter shadows, warn nothing. A same-module wrapper rendered by
@@ -11902,7 +12031,7 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         let out = analyze_with_logical_space(&[("recipe.tsx", recipe), ("app.tsx", followed)]);
         assert!(out.css.contains("margin-inline-start: 0.5rem;"), "{}", out.css);
         assert!(unattributed(&out).is_empty(), "{:?}", out.diagnostics);
-        let cases: [(&str, &str, &str, Option<&str>); 10] = [
+        let cases: [(&str, &str, &str, Option<&str>); 12] = [
             ("index.ts", "export * from './wrapper';\n", "import { Top } from './index';\nexport const App = () => <Top marginInlineStart={8} />;\n", Some("<Top")),
             (
                 "wrapper.tsx",
@@ -11948,6 +12077,18 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
                 "import { Facade } from './facade';\nexport const App = () => <Facade marginInlineStart={8} />;\n",
                 Some("<Facade"),
             ),
+            (
+                "facade.tsx",
+                "import { Box } from './recipe';\nfunction FieldInput(props) { const [styling, behavior] = splitProps(props, KEYS); return <Box size=\"sm\" {...styling}>{behavior.children}</Box>; }\nexport const Field = { Input: FieldInput };\n",
+                "import { Field } from './facade';\nexport const App = () => <Field.Input marginInlineStart={8} />;\n",
+                Some("<Field.Input"),
+            ),
+            (
+                "wrapper.tsx",
+                "import { Box } from './recipe';\nexport const Top = ({ children, ...props }) => { const styling = pick(props); return <Box {...styling}>{children}</Box>; };\n",
+                rendered,
+                Some("<Top"),
+            ),
         ];
         for (path, module, app, use_site) in cases {
             let mut entries = vec![("recipe.tsx", recipe), (path, module), ("app.tsx", app)];
@@ -11980,6 +12121,26 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             let warned: Vec<_> = unattributed(&out).iter().map(|d| (d.file.as_str(), d.offset, d.dropped.as_deref())).collect();
             let at = app.find(site).unwrap() as u32;
             assert_eq!(warned, [("app.tsx", Some(at), Some("marginInlineStart"))], "{render}: {:?}", out.diagnostics);
+        }
+        // A spread of what a call returns warns that it may forward, for
+        // every name the call's result binds; a spread of the props says
+        // it forwards them.
+        let routes: [(&str, &str); 6] = [
+            ("const [styling = {}] = splitProps(props, KEYS); return <Box {...styling} />;", "may forward"),
+            ("const { styling = {} } = splitProps(props, KEYS); return <Box {...styling} />;", "may forward"),
+            ("const { part: { styling } } = splitProps(props, KEYS); return <Box {...styling} />;", "may forward"),
+            ("const styling = pick(props); return <Box {...styling} />;", "may forward"),
+            ("let styling = pick(props); styling = {}; return <Box {...styling} />;", "may forward"),
+            ("return <Box {...props} />;", "forwards them by spread"),
+        ];
+        for (body, how) in routes {
+            let wrapper = format!(
+                "import {{ Box }} from './recipe';\nconst pick = ({{ marginInlineStart, ...rest }}) => rest;\n\
+                 export const Top = (props) => {{ {body} }};\n"
+            );
+            let out = analyze_with_logical_space(&[("recipe.tsx", recipe), ("wrapper.tsx", &wrapper), ("app.tsx", rendered)]);
+            let messages: Vec<_> = unattributed(&out).iter().map(|d| d.message.as_str()).collect();
+            assert!(matches!(messages.as_slice(), [one] if one.contains(how)), "{body}: {messages:?}");
         }
     }
 

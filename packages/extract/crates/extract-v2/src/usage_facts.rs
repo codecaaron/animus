@@ -21,7 +21,7 @@ use crate::jsx_scan::{
     classify_jsx_attribute_as_variant_value, create_element_literals, create_element_props, eval_jsx_attribute_value, eval_property_key,
     eval_static_expression, make_json_number,
     is_component_like_identifier, jsx_member_path, ComponentUsageConfig, CustomPropScanResult,
-    DynamicExpressionKind, DynamicPropUsage, PropValueResult, StateUsage, SystemPropUsage,
+    DynamicExpressionKind, DynamicPropUsage, PropValueResult, StateUsage, SystemPropUsage, record_written,
     UsageResidueSite, UsageScanResult, UsageSpan, VariantUsage, WrittenProp,
 };
 
@@ -66,6 +66,9 @@ pub struct AttrFact {
     /// (`{...(c ? { type: 'a' } : {})}`), so the element may leave it out.
     #[serde(skip)]
     pub optional: bool,
+    /// Byte offset of the attribute, or of the spread that writes it.
+    #[serde(skip)]
+    pub at: u32,
 }
 
 impl AttrFact {
@@ -231,6 +234,9 @@ pub struct ForwardRoute {
     pub named: Vec<String>,
     /// The tags that receive the spread, as written (`Recipe`, `Ns.Item`).
     pub targets: Vec<String>,
+    /// The spread is of what a call the props are passed to returns, which
+    /// may or may not carry a given prop.
+    pub derived: bool,
 }
 
 /// Top-level function components, plain or inside `forwardRef`/`memo`,
@@ -381,26 +387,80 @@ fn props_forwarding(function: ComponentFunction<'_, '_>) -> Option<PropsForwardi
         _ => return None,
     };
     let mut routes = Vec::new();
-    let mut route = |named: Vec<String>, spread: &str| {
+    let mut route = |named: Vec<String>, spread: &str, derived: bool| {
         let mut scan = SpreadTargets {
             spread,
             targets: Vec::new(),
         };
         scan.visit_function_body(function.body);
         if !scan.targets.is_empty() {
-            routes.push(ForwardRoute { named, targets: scan.targets });
+            routes.push(ForwardRoute { named, targets: scan.targets, derived });
         }
     };
-    route(named.clone(), &spread);
+    route(named.clone(), &spread, false);
     // `const { a, ...rest } = props` in the body, then `{...rest}`: neither
     // the props the parameter names nor the ones the body names reach the
     // tags `rest` is spread into.
+    // `const [styling, behavior] = splitProps(props, KEYS)` or `const
+    // styling = pick(props)`: what a call the props are passed to returns
+    // may carry any of them.
     for statement in &function.body.statements {
         for (body_named, rest) in destructured_rests(statement, &spread) {
-            route(named.iter().cloned().chain(body_named).collect(), &rest);
+            route(named.iter().cloned().chain(body_named).collect(), &rest, false);
+        }
+        for derived in call_results(statement, &spread) {
+            route(named.clone(), &derived, true);
         }
     }
     (!routes.is_empty()).then_some(PropsForwarding { routes })
+}
+
+/// The names a statement binds to what a call taking `props` as an argument
+/// returns: every name its pattern binds, through defaults and nesting.
+fn call_results(statement: &Statement<'_>, props: &str) -> Vec<String> {
+    let Statement::VariableDeclaration(declaration) = statement else { return Vec::new() };
+    let mut names = Vec::new();
+    for declarator in &declaration.declarations {
+        let Some(Expression::CallExpression(call)) =
+            declarator.init.as_ref().map(crate::chain_walk::unwrap_type_assertions)
+        else {
+            continue;
+        };
+        let takes_props = call.arguments.iter().any(|argument| {
+            argument.as_expression().map(crate::chain_walk::unwrap_type_assertions)
+                .is_some_and(|argument| matches!(argument, Expression::Identifier(id) if id.name == props))
+        });
+        if !takes_props {
+            continue;
+        }
+        bound_names(&declarator.id, &mut names);
+    }
+    names
+}
+
+/// Every name a binding pattern binds, through defaults, nesting and rests.
+fn bound_names(pattern: &oxc::ast::ast::BindingPattern<'_>, names: &mut Vec<String>) {
+    use oxc::ast::ast::BindingPattern;
+    match pattern {
+        BindingPattern::BindingIdentifier(id) => names.push(id.name.to_string()),
+        BindingPattern::AssignmentPattern(assignment) => bound_names(&assignment.left, names),
+        BindingPattern::ArrayPattern(array) => {
+            for element in array.elements.iter().flatten() {
+                bound_names(element, names);
+            }
+            if let Some(rest) = &array.rest {
+                bound_names(&rest.argument, names);
+            }
+        }
+        BindingPattern::ObjectPattern(object) => {
+            for property in &object.properties {
+                bound_names(&property.value, names);
+            }
+            if let Some(rest) = &object.rest {
+                bound_names(&rest.argument, names);
+            }
+        }
+    }
 }
 
 /// `{ a, b, ...rest }`: the keys it names and its rest binding.
@@ -3447,6 +3507,7 @@ impl<'a> FactCollector<'a, '_> {
                         skip: false,
                         literal: true,
                         optional: true,
+                        at: spread_attribute.span.start,
                     })),
                     None => spread = Some(attrs.len()),
                 }
@@ -3591,6 +3652,7 @@ impl<'a> FactCollector<'a, '_> {
                     literal,
                     conditions,
                     optional: false,
+                    at: attr.span.start,
                 });
             }
         }
@@ -5251,7 +5313,7 @@ pub fn filter_custom_prop_scan(
     member_expr_bindings: &FxHashMap<String, String>,
     proxies: &WrapperProxies,
 ) -> CustomPropScanResult {
-    let mut seen = FxHashSet::default();
+    let mut recorded = FxHashMap::default();
     let mut dynamic_seen = FxHashSet::default();
     let mut results = Vec::new();
     let mut dynamic_results = Vec::new();
@@ -5288,13 +5350,12 @@ pub fn filter_custom_prop_scan(
                         attr.name,
                         serde_json::to_string(value).unwrap_or_else(|_| "null".to_string())
                     );
-                    if seen.insert(dedup_key) {
-                        results.push(SystemPropUsage {
-                            prop_name: attr.name.clone(),
-                            value: value.clone(),
-                            binding: binding.clone(),
-                        });
-                    }
+                    record_written(&mut results, &mut recorded, dedup_key, attr.at, SystemPropUsage {
+                        prop_name: attr.name.clone(),
+                        value: value.clone(),
+                        binding: binding.clone(),
+                        uses: Vec::new(),
+                    });
                 }
                 if attr.dynamic {
                     let dedup_key = format!("{}::{}", binding, attr.name);
@@ -5417,6 +5478,7 @@ pub fn filter_usage_scan(
     proxies: &WrapperProxies,
 ) -> UsageScanResult {
     let mut seen = FxHashSet::default();
+    let mut recorded = FxHashMap::default();
     let mut fully_open = FxHashSet::default();
     let mut result = UsageScanResult::default();
 
@@ -5503,13 +5565,18 @@ pub fn filter_usage_scan(
                                         serde_json::to_string(value)
                                             .unwrap_or_else(|_| "null".to_string())
                                     );
-                                    if seen.insert(dedup_key) {
-                                        result.system_prop_usages.push(SystemPropUsage {
+                                    record_written(
+                                        &mut result.system_prop_usages,
+                                        &mut recorded,
+                                        dedup_key,
+                                        attr.at,
+                                        SystemPropUsage {
                                             prop_name: attr.name.clone(),
                                             value: value.clone(),
                                             binding: binding.clone(),
-                                        });
-                                    }
+                                            uses: Vec::new(),
+                                        },
+                                    );
                                 }
                                 if attr.dynamic {
                                     let kind = attr
@@ -5676,13 +5743,13 @@ pub fn filter_usage_scan(
                                 "{prop_name}:{}",
                                 serde_json::to_string(value).unwrap_or_else(|_| "null".to_string())
                             );
-                            if seen.insert(dedup_key) {
-                                result.system_prop_usages.push(SystemPropUsage {
-                                    prop_name: prop_name.clone(),
-                                    value: value.clone(),
-                                    binding: binding.clone(),
-                                });
-                            }
+                            let usage = SystemPropUsage {
+                                prop_name: prop_name.clone(),
+                                value: value.clone(),
+                                binding: binding.clone(),
+                                uses: Vec::new(),
+                            };
+                            record_written(&mut result.system_prop_usages, &mut recorded, dedup_key, *at, usage);
                         }
                     }
                     if let Some(config) = component_configs.get(&binding) {

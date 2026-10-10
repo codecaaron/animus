@@ -195,12 +195,46 @@ export function readKitSourceCondition(
   }
   if (condition.entries.length === 0 && condition.invalid.length === 0)
     return null;
-  condition.root = condition.entries.reduce<string | null>(
+  condition.root = sourceRoot(condition.entries);
+  return condition;
+}
+
+/** The deepest directory holding every entry's file. */
+function sourceRoot(entries: Array<[string, string]>): string | null {
+  return entries.reduce<string | null>(
     (root, [, file]) =>
       root === null ? dirname(file) : commonDirectory(root, dirname(file)),
     null
   );
-  return condition;
+}
+
+/** A TypeScript source file; compiled output and declarations are not. */
+const TS_SOURCE = /(?<!\.d)\.[cm]?tsx?$/;
+
+/** A kit with no source condition whose every exact `exports` entry already
+ *  targets TypeScript source in the package under `import` or `default`:
+ *  those targets are its source, as the condition would name them. Null
+ *  when any exact entry has no such target, such as one only `require` or
+ *  `types` reaches, or there is no exact entry. */
+function sourceExportsCondition(pkgRoot: string): KitSourceCondition | null {
+  const entries: Array<[string, string]> = [];
+  for (const [subpath, value] of exportsSubpaths(
+    readPackageManifest(pkgRoot)
+  )) {
+    if (subpath.includes('*')) continue;
+    const target = exportTarget(value);
+    const file = target === null ? null : resolve(pkgRoot, target);
+    if (
+      file === null ||
+      !TS_SOURCE.test(file) ||
+      !isPathWithinRoot(pkgRoot, file) ||
+      !isFile(file)
+    )
+      return null;
+    entries.push([subpath, file]);
+  }
+  if (entries.length === 0) return null;
+  return { entries, invalid: [], root: sourceRoot(entries) };
 }
 
 function commonDirectory(a: string, b: string): string {
@@ -593,7 +627,9 @@ export async function collectExternalPackageSources(opts: {
         ? resolvedRoot
         : locatedRoot || resolvedRoot;
     const condition =
-      packageName && pkgRoot ? readKitSourceCondition(pkgRoot) : null;
+      packageName && pkgRoot
+        ? (readKitSourceCondition(pkgRoot) ?? sourceExportsCondition(pkgRoot))
+        : null;
     const entryKey = packageName && `.${specifier.slice(packageName.length)}`;
     absEntry ??=
       condition?.entries.find(([entry]) => entry === entryKey)?.[1] ?? null;
