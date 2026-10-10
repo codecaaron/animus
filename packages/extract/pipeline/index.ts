@@ -62,7 +62,7 @@ export {
   extractSystemFilePackages,
   findPackageRoot,
   firstOwners,
-  importedKitPackages,
+  importedKitDiagnostics,
   isExcludedPackageRelativePath,
   resolveAbsolutePathSpecifier,
   sourceKitDependencies,

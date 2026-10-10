@@ -15,11 +15,14 @@ import {
   collectExternalPackageSources,
   excludeCollectedPackages,
   firstOwners,
-  importedKitPackages,
+  importedKitDiagnostics,
   staleDistIncludesMessage,
   unresolvableIncludesMessage,
 } from '../pipeline/discover-packages';
-import { KIT_WITHOUT_SOURCE_CONDITION } from '../pipeline/manifest-diagnostics';
+import {
+  KIT_SYSTEM_NOT_INCLUDED,
+  KIT_WITHOUT_SOURCE_CONDITION,
+} from '../pipeline/manifest-diagnostics';
 
 const tempRoots: string[] = [];
 
@@ -608,7 +611,7 @@ describe('collectExternalPackageSources', () => {
     ).toBeNull();
   });
 
-  test('a kit names its source through the animus export condition, and app imports find kits too', async () => {
+  test('a kit names its source through the animus export condition, and an imported kit the system does not include is an error', async () => {
     const root = realpathSync(makeRoot());
     const kit = (
       base: string,
@@ -650,12 +653,18 @@ describe('collectExternalPackageSources', () => {
     const legacy = makePackage(join(root, 'node_modules', '@acme', 'legacy'), {
       'src/index.ts': 'export const Old = 1;',
     });
+    kit(
+      join(root, 'node_modules', '@acme', 'stray'),
+      { '.': { animus: './src/index.ts' } },
+      { 'src/index.ts': 'export const Stray = 1;' }
+    );
 
-    // The system extends two kits; the app imports a third.
+    // The system extends three kits; the app also imports a fourth.
     const imports = [
       '@acme/installed',
       '@acme/linked',
       '@acme/legacy',
+      '@acme/stray',
       'react',
     ];
     const engine = {
@@ -675,10 +684,21 @@ describe('collectExternalPackageSources', () => {
           },
         }),
     };
-    const systemKits = ['@acme/installed/system', '@acme/legacy'];
-    const app = [{ path: 'src/App.tsx', source: '' }];
-    expect(importedKitPackages(app, engine, root, systemKits)).toEqual([
+    const systemKits = [
+      '@acme/installed/system',
+      '@acme/legacy',
       '@acme/linked',
+    ];
+    const app = [{ path: 'src/App.tsx', source: '' }];
+    expect(
+      importedKitDiagnostics(app, engine, root, systemKits).map((d) => [
+        d.file,
+        d.component,
+        d.code,
+        d.severity,
+      ])
+    ).toEqual([
+      ['src/App.tsx', '@acme/stray', KIT_SYSTEM_NOT_INCLUDED, 'error'],
     ]);
 
     const result = await collect(root, {

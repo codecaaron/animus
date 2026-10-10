@@ -27,7 +27,7 @@ import {
   enforceExternalTokenContracts,
   excludeCollectedPackages,
   extractSystemFilePackages,
-  importedKitPackages,
+  importedKitDiagnostics,
   findPackageRoot,
   findSheetAssetSpecifiers,
   firstOwners,
@@ -962,7 +962,7 @@ export class ExtractionSession {
     // seam); the traversal and ingest below are the shared collector.
     t = this.now();
     const discoveryDiagnostics: ManifestDiagnostic[] = [];
-    const systemPackages = await extractSystemFilePackages(
+    const packageNames = await extractSystemFilePackages(
       resolvedSystemPath,
       engineModuleParser(engineApi()),
       (diagnostic) => discoveryDiagnostics.push(diagnostic),
@@ -971,10 +971,9 @@ export class ExtractionSession {
         return entry ? resolve(rootDir, entry) : null;
       }
     );
-    const packageNames = [
-      ...systemPackages,
-      ...importedKitPackages(rawEntries, engineApi(), rootDir, systemPackages),
-    ];
+    discoveryDiagnostics.push(
+      ...importedKitDiagnostics(rawEntries, engineApi(), rootDir, packageNames)
+    );
     const preResolved = resolvePackagesByName(rootDir, packageNames);
 
     // Raw content hashes of every walked external file, keyed by absolute
@@ -1025,7 +1024,8 @@ export class ExtractionSession {
         ],
       },
       (message) => this.warn(message),
-      { levels: this.options.diagnostics }
+      // An error-severity discovery diagnostic fails a strict build.
+      { levels: this.options.diagnostics, strict: this.options.strict }
     );
     const unresolvableMessage = unresolvableIncludesMessage(collected.outcomes);
     if (unresolvableMessage !== null) {

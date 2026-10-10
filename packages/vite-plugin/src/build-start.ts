@@ -8,7 +8,7 @@ import {
   discoverFiles,
   engineModuleParser,
   extractSystemFilePackages,
-  importedKitPackages,
+  importedKitDiagnostics,
   firstOwners,
   isDeletedSource,
   noKitFilesDiagnostics,
@@ -98,21 +98,20 @@ export async function runBuildStart(
 
   const localFileCount = rawEntries.length;
   const discoveryDiagnostics: ManifestDiagnostic[] = [];
-  const systemPackages = await extractSystemFilePackages(
+  const packageSpecifiers = await extractSystemFilePackages(
     ctx.resolvedSystemPath!,
     engineModuleParser(ctx.engineApi()),
     (diagnostic) => discoveryDiagnostics.push(diagnostic),
     resolveSpecifier
   );
-  const packageSpecifiers = [
-    ...systemPackages,
-    ...importedKitPackages(
+  discoveryDiagnostics.push(
+    ...importedKitDiagnostics(
       rawEntries,
       ctx.engineApi(),
       ctx.rootDir,
-      systemPackages
-    ),
-  ];
+      packageSpecifiers
+    )
+  );
 
   ctx.externalSourceEntries.clear();
 
@@ -142,7 +141,8 @@ export async function runBuildStart(
       ],
     },
     (message) => ctx.warn(message),
-    { levels: ctx.options.diagnostics }
+    // An error-severity discovery diagnostic fails a strict build.
+    { levels: ctx.options.diagnostics, strict: ctx.options.strict }
   );
 
   ctx.packageMap = collected.packageMap;

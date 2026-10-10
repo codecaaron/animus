@@ -243,6 +243,10 @@ export const KIT_WITHOUT_SOURCE_CONDITION =
 export const INVALID_KIT_SOURCE_CONDITION =
   'animus.discovery.invalid-source-condition';
 
+/** A kit the application imports whose system the application's system
+ *  does not include: its components are not extracted. */
+export const KIT_SYSTEM_NOT_INCLUDED = 'animus.kit.system-not-included';
+
 /** A system file's `createSystem` binding that discovery could not follow to
  *  Animus's factory, so it is no root. */
 export const UNPROVEN_ROOT_BINDING = 'animus.discovery.unproven-root-binding';
@@ -367,6 +371,7 @@ const DIAGNOSTIC_SEVERITY: ReadonlyMap<string, DiagnosticSeverity> = new Map([
   [NO_KIT_FILES, 'warn'],
   [KIT_WITHOUT_SOURCE_CONDITION, 'warn'],
   [INVALID_KIT_SOURCE_CONDITION, 'error'],
+  [KIT_SYSTEM_NOT_INCLUDED, 'error'],
   [UNPROVEN_ROOT_BINDING, 'warn'],
   [VOCABULARY_COLLISION, 'warn'],
   [VOCABULARY_LEGACY_VERB, 'warn'],

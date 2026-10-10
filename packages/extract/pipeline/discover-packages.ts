@@ -14,6 +14,7 @@ import { discoverFiles } from './discover-files';
 import { parseInternalWire } from './internal-wire';
 import {
   INVALID_KIT_SOURCE_CONDITION,
+  KIT_SYSTEM_NOT_INCLUDED,
   KIT_WITHOUT_SOURCE_CONDITION,
   severityFor,
   UNPROVEN_ROOT_BINDING,
@@ -678,18 +679,19 @@ function isPackageSpecifier(specifier: string): boolean {
 }
 
 /**
- * The packages the application's own `files` import or re-export that
- * declare the kit source condition, by package name: kits discovery reads
- * from source though the system does not extend them. A package `covered`
- * already names (the system's own kits) is left to it. One batch parse
- * reads every file's imports.
+ * An error for each kit the application's own `files` import or re-export
+ * whose system the application's system does not include: a package that
+ * declares the kit source condition, with no kit the system extends
+ * (`systemKits`) in that package. One app build has exactly one system, and
+ * every kit's system is part of it, so such a kit is not extracted against
+ * a system it was not built for. One batch parse reads every file's imports.
  */
-export function importedKitPackages(
+export function importedKitDiagnostics(
   files: ReadonlyArray<{ path: string; source: string }>,
   engine: Pick<EngineApi, 'extractFacts'>,
   rootDir: string,
-  covered: readonly string[]
-): string[] {
+  systemKits: readonly string[]
+): ManifestDiagnostic[] {
   const { extractFacts } = engine;
   if (!extractFacts || files.length === 0) return [];
   let facts: ExtractFactsResult;
@@ -704,11 +706,11 @@ export function importedKitPackages(
     return [];
   }
   const seen = new Set(
-    covered
+    systemKits
       .filter((specifier) => !isAbsolute(specifier))
       .map(bareSpecifierPackageName)
   );
-  const kits: string[] = [];
+  const diagnostics: ManifestDiagnostic[] = [];
   for (const [path, file] of Object.entries(facts.files)) {
     if (file.parsePanicked) continue;
     const specifiers = [
@@ -723,10 +725,19 @@ export function importedKitPackages(
       if (seen.has(name)) continue;
       seen.add(name);
       const pkgRoot = locatePackageRoot(name, dirname(resolve(rootDir, path)));
-      if (pkgRoot && readKitSourceCondition(pkgRoot)) kits.push(name);
+      if (pkgRoot && readKitSourceCondition(pkgRoot)) {
+        diagnostics.push({
+          file: path,
+          component: name,
+          kind: 'warn',
+          message: `the application imports this kit, but its system is not included in the application's system, so its components are not extracted — include the kit's system in the application's system: createSystem().extend(<the kit's system>)`,
+          code: KIT_SYSTEM_NOT_INCLUDED,
+          severity: severityFor(KIT_SYSTEM_NOT_INCLUDED),
+        });
+      }
     }
   }
-  return kits;
+  return diagnostics;
 }
 
 /** A kit without the source condition, warned once, or each condition entry
