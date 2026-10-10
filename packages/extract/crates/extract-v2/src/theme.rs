@@ -317,6 +317,10 @@ pub const UNRECOGNIZED_STYLE_KEY: &str = "animus.style.unrecognized-key";
 /// Two keys of one style block that set one CSS property at one condition.
 pub const KEYS_SHARE_PROPERTY: &str = "animus.style.keys-share-property";
 
+/// A number on a prop that writes only custom properties and binds no
+/// transform: a custom property has no unit context, so it stays unitless.
+pub const UNITLESS_CUSTOM_PROPERTY: &str = "animus.props.unitless-custom-property";
+
 /// A style-object key given an object that resolves to nothing.
 #[derive(Debug, Clone, PartialEq)]
 pub enum DroppedStyleKey {
@@ -326,6 +330,10 @@ pub enum DroppedStyleKey {
     NonResponsiveObject(String),
     /// Any other key, such as an HTML element name written without `&`.
     UnrecognizedKey(String),
+    /// A prop that writes only the custom `properties` was given the number
+    /// `value`, which no unit or transform establishes: it is written
+    /// unitless.
+    UnitlessCustomProperty { prop: String, value: Value, properties: Vec<String> },
     /// Two keys of one block set `property` at one condition with a result
     /// worth knowing, and only `winner`, the later in cascade order, takes
     /// effect there.
@@ -350,7 +358,10 @@ impl DroppedStyleKey {
     /// The key as written; for two keys, the one that takes effect.
     pub fn key(&self) -> &str {
         match self {
-            Self::UnregisteredAlias(key) | Self::NonResponsiveObject(key) | Self::UnrecognizedKey(key) => key,
+            Self::UnregisteredAlias(key)
+            | Self::NonResponsiveObject(key)
+            | Self::UnrecognizedKey(key)
+            | Self::UnitlessCustomProperty { prop: key, .. } => key,
             Self::SharedProperty { winner, .. } => winner,
         }
     }
@@ -717,6 +728,7 @@ pub fn resolve_styles(
         if omit_strict_token_miss(key, value, ctx) {
             continue;
         }
+        record_unitless_number(key, value, ctx);
 
         if is_responsive_value(value, ctx.breakpoint_keys) {
             resolve_responsive_prop(
@@ -814,6 +826,7 @@ fn resolve_block_entries(
         if omit_strict_token_miss(key, value, ctx) {
             continue;
         }
+        record_unitless_number(key, value, ctx);
 
         if is_responsive_value(value, ctx.breakpoint_keys) {
             if let Some(vobj) = value.as_object() {
@@ -873,6 +886,42 @@ fn record_dropped_key(ctx: &ResolveContext, dropped: DroppedStyleKey) {
     if let Some(sink) = ctx.dropped_keys {
         sink.borrow_mut().push(DroppedKey { dropped, variant_origin: None });
     }
+}
+
+/// Records, once per key, a number that `key`'s prop writes unitless.
+fn record_unitless_number(key: &str, value: &Value, ctx: &ResolveContext) {
+    let Some(prop) = ctx.config.get(key) else { return };
+    if let Some(number) = unitless_custom_number(key, prop, value, ctx) {
+        let properties = prop.css_properties().to_vec();
+        record_dropped_key(ctx, DroppedStyleKey::UnitlessCustomProperty { prop: key.to_string(), value: number, properties });
+    }
+}
+
+/// The first number of `value`, or of its breakpoints, that a prop writing
+/// only custom properties, with no transform, emits as written: no unit
+/// context applies, so it stays unitless. Zero is a length without a unit,
+/// and a key of the prop's scale writes that key's value, whatever it is.
+pub(crate) fn unitless_custom_number(prop_name: &str, prop: &PropConfig, value: &Value, ctx: &ResolveContext) -> Option<Value> {
+    let transforms = prop.transform.is_some()
+        || prop.transform_id.is_some()
+        || prop.transform_fn_source.is_some()
+        || prop.callback.is_some();
+    if !prop.custom_only() || transforms || prop.declaration_binding().is_some() {
+        return None;
+    }
+    let entries: Vec<&Value> = match value {
+        Value::Object(by_breakpoint) => by_breakpoint.values().collect(),
+        other => vec![other],
+    };
+    entries.into_iter().find_map(|entry| {
+        entry.as_f64().filter(|number| *number != 0.0)?;
+        if lookup_scale_token(entry, prop, ctx.theme).is_some() {
+            return None;
+        }
+        let bare = value_to_css_string(entry)?;
+        let written = resolve_single_prop(prop_name, entry, ctx.config, ctx.theme, ctx.variable_map, ctx.contextual_vars, None, None);
+        written.iter().any(|declaration| declaration.value == bare).then(|| entry.clone())
+    })
 }
 
 /// One non-responsive entry's declarations. An object value that yields

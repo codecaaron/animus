@@ -540,6 +540,7 @@ pub(crate) const DIAGNOSTIC_CODES: &[(&str, &str)] = &[
     (STATIC_CSS_INVALID_SHAPE, "warn"),
     (crate::theme::UNRECOGNIZED_STYLE_KEY, "warn"),
     (crate::theme::KEYS_SHARE_PROPERTY, "warn"),
+    (crate::theme::UNITLESS_CUSTOM_PROPERTY, "warn"),
     (CLASS_NAME_WHITESPACE, "warn"),
     (INVALID_OPACITY_MODIFIER, "warn"),
     (UNSUPPORTED_OBJECT_MEMBER, "warn"),
@@ -1214,6 +1215,9 @@ fn dropped_style_key(
              it a value or an object of breakpoint keys{}",
             element_hint(key)
         ),
+        DroppedStyleKey::UnitlessCustomProperty { prop, value, properties } => {
+            return unitless_custom_property(file, component, prop, value, properties);
+        }
         DroppedStyleKey::UnrecognizedKey(key) => format!(
             "style key '{key}' is not a prop, selector, alias or supported at-rule, {not_emitted}{}",
             element_hint(key)
@@ -1223,6 +1227,22 @@ fn dropped_style_key(
         }
     };
     diagnostic(file, component, "warn", message, Some(crate::theme::UNRECOGNIZED_STYLE_KEY))
+}
+
+/// A number a prop writes unitless to its custom properties.
+fn unitless_custom_property(file: &str, component: &str, prop: &str, value: &Value, properties: &[String]) -> CssDiagnostic {
+    diagnostic(
+        file,
+        component,
+        "warn",
+        format!(
+            "prop '{prop}' writes the number {value} to {} without a unit: a custom property has no unit \
+             context, so the number stays unitless — give the value a unit, or bind a transform that adds one",
+            properties.join(", ")
+        ),
+        Some(crate::theme::UNITLESS_CUSTOM_PROPERTY),
+    )
+    .dropping(&value.to_string())
 }
 
 /// Two keys of one block on one CSS property, naming the one that takes
@@ -3106,13 +3126,11 @@ fn untracked_clone_props(file: &str, ff: &FileFacts) -> Vec<CssDiagnostic> {
                 file,
                 call,
                 "warn",
-                format!(
-                    "line {line}: props passed through {call} are not tracked, so variant \
-                     and state options only they set can be pruned from production CSS — \
-                     write the override keys literally, as in \
-                     cloneElement(child, {{ size: 'lg' }}), or keep those options with \
-                     staticCss.components"
-                ),
+                "props passed through this call are not tracked, so variant and state options only \
+                 they set can be pruned from production CSS — write the override keys literally, as \
+                 in cloneElement(child, { size: 'lg' }), or keep those options with \
+                 staticCss.components"
+                    .to_string(),
                 Some(UNTRACKED_CLONE_PROPS),
             )
             .on_line(*line)),
@@ -5218,6 +5236,12 @@ fn run_with_system_floor(
         if prop_config.is_some_and(|prop_config| !extracts_configured_value(prop_config, value, &resolve_ctx)) {
             return None;
         }
+        if let Some(prop_config) = prop_config {
+            let usage_ctx = ResolveContext { config, ..resolve_ctx };
+            if let Some(number) = crate::theme::unitless_custom_number(prop_name, prop_config, value, &usage_ctx) {
+                diagnostics.push(unitless_custom_property(file, component, prop_name, &number, prop_config.css_properties()));
+            }
+        }
         // An alias that names no token is reported here, at its usage, and
         // its declaration is dropped from the class, as in a style object.
         if writes_token_reference(value) {
@@ -5477,7 +5501,7 @@ fn run_with_system_floor(
                     call,
                     "warn",
                     format!(
-                        "line {line}: {call} can load {} components, so each keeps every \
+                        "this call can load {} components, so each keeps every \
                          variant and state option it declares — write the specifier \
                          literally so only what it loads keeps its options",
                         opened.len()
@@ -9463,14 +9487,17 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         assert_eq!(kept_sizes(&run(require, true, None), "src/r.tsx::R"), vec!["sm", "md", "lg"]);
         let many: String = (0..20).map(|i| sized(&format!("C{i}"))).collect();
         let out = run(import, false, Some(&many));
-        let warnings: Vec<&str> = out
+        let warnings: Vec<(Option<u32>, &str, &str)> = out
             .diagnostics
             .iter()
             .filter(|d| d.code.as_deref() == Some(WIDE_MODULE_LOAD))
-            .map(|d| d.message.as_str())
+            .map(|d| (d.line, d.component.as_str(), d.message.as_str()))
             .collect();
         assert_eq!(warnings.len(), 1, "{warnings:#?}");
-        assert!(warnings[0].starts_with("line 1: import(name) can load 21 components"), "{warnings:#?}");
+        // The location carries the line and the component the call, so the
+        // message names neither again.
+        assert_eq!((warnings[0].0, warnings[0].1), (Some(1), "import(name)"), "{warnings:#?}");
+        assert!(warnings[0].2.starts_with("this call can load 21 components"), "{warnings:#?}");
     }
 
     /// Tags usage cannot match to an Animus component give a production
@@ -9800,16 +9827,14 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
                 ("app.tsx", "cloneElement(child, …)", "warn"),
             ]
         );
-        let lines: Vec<bool> = ["line 4:", "line 6:"]
+        // Each is located at its call's line, which its message does not repeat.
+        let lines: Vec<(Option<u32>, bool)> = out
+            .diagnostics
             .iter()
-            .map(|line| {
-                out.diagnostics
-                    .iter()
-                    .filter(|d| d.code.as_deref() == Some(UNTRACKED_CLONE_PROPS))
-                    .any(|d| d.message.starts_with(line))
-            })
+            .filter(|d| d.code.as_deref() == Some(UNTRACKED_CLONE_PROPS))
+            .map(|d| (d.line, d.message.starts_with("props passed through this call")))
             .collect();
-        assert_eq!(lines, vec![true, true]);
+        assert_eq!(lines, vec![(Some(4), true), (Some(6), true)]);
         let class = class_of(&out, "r.tsx::R");
         assert!(!out.css.contains(&format!(".{class}--size-md")), "nothing is opened");
     }
