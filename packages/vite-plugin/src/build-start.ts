@@ -61,9 +61,19 @@ export async function runBuildStart(
 
   const discovered = await discoverSources(ctx, resolveSpecifier);
   // The system's imports and its packages' manifests decide discovery, so a
-  // development system reload repeats it.
+  // development system reload repeats it. Discovery decides the files; a
+  // cached file keeps the source the hot path last read.
   if (!ctx.isProd) {
-    ctx.rediscoverSources = () => discoverSources(ctx, resolveSpecifier);
+    ctx.rediscoverSources = async () => {
+      const rediscovered = await discoverSources(ctx, resolveSpecifier);
+      return {
+        ...rediscovered,
+        rawEntries: rediscovered.rawEntries.map((entry) => {
+          const cached = ctx.fileCache.get(entry.path);
+          return cached ? { path: entry.path, ...cached } : entry;
+        }),
+      };
+    };
   }
 
   t0 = performance.now();

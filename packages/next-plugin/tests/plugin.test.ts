@@ -346,7 +346,9 @@ describe('production run (full pipeline)', () => {
     expect(mocks.loadSystemModule).toHaveBeenCalledTimes(1);
     expect(mocks.loadSystemModule).toHaveBeenCalledWith(
       join(root, 'src', 'system.ts'),
-      root
+      root,
+      undefined,
+      undefined
     );
     expect(mocks.analyzeProject).toHaveBeenCalledTimes(1);
 
