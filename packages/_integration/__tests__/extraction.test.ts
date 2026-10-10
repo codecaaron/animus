@@ -592,6 +592,8 @@ export const Bar = ds
     padding: 't-spacing-1',
     paddingLeft: 't-spacing-1',
     borderTopColor: 'feedback.error',
+    marginTop: 'space.t-spacing-1',
+    borderRightColor: 'colors.feedback.error',
     '&[aria-current="page"]': { borderBottomColor: 'primary' },
     borderLeftColor: 'red',
     outlineStyle: 'dotted',
@@ -628,6 +630,8 @@ export const App = () => <Bar />;
   expect(reported).toEqual([
     ['t-spacing-1', 'warn'],
     ['feedback.error', 'warn'],
+    ['space.t-spacing-1', 'warn'],
+    ['colors.feedback.error', 'warn'],
     ['primary', 'warn'],
   ]);
 });

@@ -1438,12 +1438,13 @@ struct ScaleCheck<'a> {
     external: bool,
 }
 
-/// Each theme token by its name within its scale, the first by path when two
-/// scales share a name.
+/// Each theme token by its complete path and by its name within its scale:
+/// a complete path names its own token, and a name the first by path when
+/// two scales share it.
 fn tokens_by_name(theme: &crate::theme::FlatTheme) -> FxHashMap<String, String> {
     let mut paths: Vec<&String> = theme.keys().collect();
     paths.sort();
-    let mut tokens = FxHashMap::default();
+    let mut tokens: FxHashMap<String, String> = paths.iter().map(|path| ((*path).clone(), (*path).clone())).collect();
     for path in paths {
         if let Some((_, name)) = path.split_once('.') {
             tokens.entry(name.to_string()).or_insert_with(|| path.clone());
