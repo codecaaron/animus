@@ -553,27 +553,36 @@ fn named_import_locals(module: &ModuleRecord<'_>) -> BTreeSet<String> {
         .collect()
 }
 
-/// Each module namespace a file exports by name: name → source. That is
+/// Each module namespace a file exports at runtime: name → source. That is
 /// `export * as name from '…'`, which the parser records among the indirect
-/// exports, and `import * as ns from '…'; export { ns as name }`, which it
-/// records among the local exports, and which exports the same namespace.
+/// exports, and an exported namespace import (`import * as ns from '…'` with
+/// `export { ns as name }` or `export default ns`), which it records among
+/// the local exports. A type-only import or export exports nothing.
 pub fn collect_namespace_exports(module: &ModuleRecord<'_>) -> BTreeMap<String, String> {
-    let namespace_imports = collect_namespace_imports(module);
+    let namespace_imports: BTreeMap<&str, &str> = module
+        .import_entries
+        .iter()
+        .filter(|entry| entry.import_name.is_namespace_object() && !entry.is_type)
+        .map(|entry| (entry.local_name.name.as_str(), entry.module_request.name.as_str()))
+        .collect();
     let star_as = module
         .indirect_export_entries
         .iter()
-        .filter(|entry| entry.import_name.is_all())
+        .filter(|entry| entry.import_name.is_all() && !entry.is_type)
         .filter_map(|entry| match (&entry.export_name, &entry.module_request) {
             (ExportExportName::Name(name), Some(source)) => Some((name.name.to_string(), source.name.to_string())),
             _ => None,
         });
-    let exported_imports = module.local_export_entries.iter().filter_map(|entry| {
-        let (ExportExportName::Name(name), ExportLocalName::Name(local)) = (&entry.export_name, &entry.local_name)
-        else {
-            return None;
+    let exported_imports = module.local_export_entries.iter().filter(|entry| !entry.is_type).filter_map(|entry| {
+        let (exported, local) = match (&entry.export_name, &entry.local_name) {
+            (ExportExportName::Name(name), ExportLocalName::Name(local)) => (name.name.as_str(), local),
+            (ExportExportName::Default(_), ExportLocalName::Default(local) | ExportLocalName::Name(local)) => {
+                ("default", local)
+            }
+            _ => return None,
         };
         let source = namespace_imports.get(local.name.as_str())?;
-        Some((name.name.to_string(), source.clone()))
+        Some((exported.to_string(), source.to_string()))
     });
     star_as.chain(exported_imports).collect()
 }

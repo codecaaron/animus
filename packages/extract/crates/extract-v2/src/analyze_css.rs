@@ -9819,10 +9819,13 @@ export const App = ({ n }) => <Box bgImage={n} texture={n} />;
         let host = ("h.tsx", "import { createElement } from 'react';\nexport function H({ as, ...props }) { return createElement(as ?? 'span', props); }\n");
         let h_star_as = [host, ("barrel.ts", "export * as ns from './h';\n")];
         let h_import_export = [host, ("barrel.ts", "import * as ns from './h';\nexport { ns };\n")];
+        let h_default = [host, ("barrel.ts", "import * as ns from './h';\nexport default ns;\n")];
+        let h_type_only = [host, ("barrel.ts", "import type * as ns from './h';\nexport type { ns };\n")];
+        let h_type_export = [host, ("barrel.ts", "import * as ns from './h';\nexport type { ns };\n")];
         // The function module's additions, the app, any further files and the
         // slots left.
         type Case<'a> = (&'a str, &'a str, &'a [(&'a str, &'a str)], &'a [&'a str]);
-        let cases: [Case; 22] = [
+        let cases: [Case; 25] = [
             ("", "() => <><Outer /><Parts.Root><div /></Parts.Root><Box p={8} /></>", &[], &[]),
             ("", "() => <><Outer as=\"span\" /><Parts.Root as=\"section\" /><Box p={8} /></>", &[], &[]),
             ("", "({ X }) => <><Outer as={X} /><Box p={8} /></>", &[], &["p"]),
@@ -9850,6 +9853,10 @@ export const App = ({ n }) => <Box bgImage={n} texture={n} />;
             // A namespace re-exported, however spelled.
             ("", "() => <><Outer /><Parts.Root /><H /><Box p={8} /></>;\nimport { H } from './h';\nimport('./barrel').then(consume)", &h_star_as, &["p"]),
             ("", "() => <><Outer /><Parts.Root /><H /><Box p={8} /></>;\nimport { H } from './h';\nimport('./barrel').then(consume)", &h_import_export, &["p"]),
+            ("", "() => <><Outer /><Parts.Root /><H /><Box p={8} /></>;\nimport { H } from './h';\nimport('./barrel').then(consume)", &h_default, &["p"]),
+            // A type-only namespace export is erased: it exports nothing.
+            ("", "() => <><Outer /><Parts.Root /><H /><Box p={8} /></>;\nimport { H } from './h';\nimport('./barrel').then(consume)", &h_type_only, &[]),
+            ("", "() => <><Outer /><Parts.Root /><H /><Box p={8} /></>;\nimport { H } from './h';\nimport('./barrel').then(consume)", &h_type_export, &[]),
             // A default export, however spelled.
             ("export { El as default };\n", both, &[], &["p"]),
             ("", both, &barrel("export { El as default } from './el';\n"), &["p"]),
