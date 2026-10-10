@@ -443,8 +443,9 @@ export type ThemedVariantModel<
 };
 
 export interface VariantConfig {
-  prop?: string;
-  defaultVariant?: string;
+  // A stored variant keeps the explicit undefined its options admitted.
+  prop?: string | undefined;
+  defaultVariant?: string | undefined;
   base?: CSSProps<AbstractProps, SystemProps<AbstractParser>>;
   variants: CSSPropMap<AbstractProps, SystemProps<AbstractParser>>;
 }
