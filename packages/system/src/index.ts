@@ -134,6 +134,7 @@ export type {
   ThemedCSSProps,
   ThemedScale,
   ThemedVariantModel,
+  ThemedVariantOptions,
   ThemedScaleValue,
   VariantConfig,
 } from './types/config';

@@ -405,8 +405,30 @@ export type ThemedCSSInputPropMap<
   [K in keyof Props]?: ThemedCSSInputProps<Props[K], Config>;
 };
 
+/**
+ * A variant's options as a builder stores them: its `prop` and
+ * `defaultVariant` as declared, and its `base` and `variants` as checked
+ * style models. Built from the variant's own type parameters, so published
+ * declarations print the registry once per variant.
+ */
+export type ThemedVariantOptions<
+  PropName,
+  Default,
+  Base,
+  Props,
+  Config extends Record<string, SystemProp>,
+> = {
+  // A producer compiled without exactOptionalPropertyTypes may store an
+  // explicit undefined in either, as its options declared.
+  prop?: PropName | undefined;
+  defaultVariant?: Default | undefined;
+  base?: ThemedCSSProps<Base, Config>;
+  variants: ThemedCSSPropMap<Props, Config>;
+};
+
 /** A variant's options as stored: its `base` and `variants` as checked
- *  style models, and every other field as written. */
+ *  style models, and every other field as written. Builders store
+ *  `ThemedVariantOptions`, which prints smaller in declarations. */
 export type ThemedVariantModel<
   Options,
   Base,
@@ -421,8 +443,9 @@ export type ThemedVariantModel<
 };
 
 export interface VariantConfig {
-  prop?: string;
-  defaultVariant?: string;
+  // A stored variant keeps the explicit undefined its options admitted.
+  prop?: string | undefined;
+  defaultVariant?: string | undefined;
   base?: CSSProps<AbstractProps, SystemProps<AbstractParser>>;
   variants: CSSPropMap<AbstractProps, SystemProps<AbstractParser>>;
 }
