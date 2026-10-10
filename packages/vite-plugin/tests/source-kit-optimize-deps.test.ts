@@ -44,8 +44,10 @@ function sourceKit(dir: string, dependencies: Record<string, string>): void {
 
 /** The optimizer would prebundle an installed source kit from compiled
  *  code, past the transform, so the plugin excludes it and prebundles its
- *  dependencies in its place; a linked kit is source to Vite already. */
-test('an installed source kit leaves the dependency optimizer, and its dependencies take its place', () => {
+ *  dependencies in its place; a linked kit is source to Vite already. Dev
+ *  SSR would externalize it and load its dist, so the dev server keeps it
+ *  in the SSR transform; a build already reads the source. */
+test('an installed source kit leaves the dependency optimizer and dev SSR externals, and its dependencies take its place', () => {
   const root = realpathSync(
     mkdtempSync(join(tmpdir(), 'animus-kit-optimize-'))
   );
@@ -80,13 +82,18 @@ test('an installed source kit leaves the dependency optimizer, and its dependenc
     throw new Error('expected a plain function `config` hook');
   }
   const config: ConfigHookCall = hook;
+  const optimizeDeps = {
+    exclude: ['@acme/installed'],
+    include: ['@acme/installed > cjs-dep'],
+  };
   expect(
     config({ root: app }, { command: 'serve', mode: 'development' })
   ).toEqual({
     define: { __ANIMUS_DEV__: true },
-    optimizeDeps: {
-      exclude: ['@acme/installed'],
-      include: ['@acme/installed > cjs-dep'],
-    },
+    optimizeDeps,
+    ssr: { noExternal: ['@acme/installed'] },
   });
+  expect(
+    config({ root: app }, { command: 'build', mode: 'production' })
+  ).toEqual({ define: { __ANIMUS_DEV__: false }, optimizeDeps });
 });
