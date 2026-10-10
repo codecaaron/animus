@@ -2,7 +2,7 @@
   "corpusSha256": "86e0aa051e1a343741afe4b607194960dec59ed10e3fd31c34d33d031abd904f",
   "engine": "v2",
   "mode": "production",
-  "refreshIntent": "stable-const-style-spreads-20261010",
+  "refreshIntent": "extension-cycles-report-20261010",
   "surfaceSchemaSha256": "43eb1265e97aab8497c11ca05e8a4159a6d4f4b69a6837a704e1d96fa75eb108",
   "units": {
     "extract-all": {
@@ -1114,7 +1114,10 @@
         "b.tsx": "import { A } from './a';\n\nexport const B = A.extend().styles({ m: 4 }).asElement('div');\n"
       },
       "css": "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer composed {\n  }\n}\n\n",
-      "diagnostics": [],
+      "diagnostics": [
+        "a.tsx|bail|A|'A' extends through 'A' → 'B' → 'A', an extension cycle, so this component is not extracted — a component can only extend one built before it",
+        "b.tsx|bail|B|'B' extends through 'B' → 'A' → 'B', an extension cycle, so this component is not extracted — a component can only extend one built before it"
+      ],
       "hasComponents": {
         "a.tsx": false,
         "b.tsx": false
