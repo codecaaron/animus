@@ -1,4 +1,4 @@
-import { createElement } from 'react';
+import { createElement, type ForwardRefExoticComponent } from 'react';
 
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
@@ -18,14 +18,15 @@ describe('admitted props', () => {
       gap: { '8': 'animus-u-gap' },
       cols: { '2': 'animus-u-cols' },
     };
-    const props: Record<string, unknown> = {
-      cols: 2,
-      gap: 8,
-      alignItems: 'center',
-    };
+    const props = { cols: 2, gap: 8, alignItems: 'center' };
     const classes = 'animus-Box animus-u-items animus-u-gap animus-u-cols';
 
-    const Box = createComponent('div', 'animus-Box', config, systemPropMap);
+    const Box: ForwardRefExoticComponent<any> = createComponent(
+      'div',
+      'animus-Box',
+      config,
+      systemPropMap
+    );
     expect(renderToStaticMarkup(createElement(Box, props))).toBe(
       `<div class="${classes}"></div>`
     );
