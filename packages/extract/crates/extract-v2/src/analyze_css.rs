@@ -3256,9 +3256,10 @@ fn passed_system_props<'u>(
         .map(|attr| attr.name.as_str())
 }
 
-/// One warning per member tag, and set of props, read through an object
-/// (an object of components, a facade copying a compose family, or an
-/// alias of one) whose member loses the system props the tag is passed:
+/// One warning per member tag, or facade's own tag, and set of props, read
+/// through an object (an object of components, a facade copying a compose
+/// family, or an alias of one) whose member loses the system props the tag
+/// is passed:
 /// one that named an extracted component when the object was built, but
 /// which something may have changed since, or one that names a function
 /// component forwarding its props (`LostThrough`).
@@ -3275,15 +3276,17 @@ fn untraced_member_system_props(
     let mut reported: FxHashSet<(&str, Vec<&str>)> = FxHashSet::default();
     let mut warnings = Vec::new();
     for render in tag_renders(ff, inputs) {
-        let TagRender { tag, member: true, call: false, mut props, at, .. } = render else {
+        let TagRender { tag, member, call: false, mut props, at, .. } = render else {
             continue;
         };
         if member_expr_bindings.contains_key(tag) || props.is_empty() {
             continue;
         }
-        let (component, reason) = match objects.member(file, tag) {
+        // A member tag, or a facade's own tag (`<X>` for `X = Object.assign(T, …)`).
+        let read = if member { objects.member(file, tag) } else { objects.root(file, tag) };
+        let (component, reason) = match read {
             Some(Member::Unstable(component, reason)) => (component, reason),
-            Some(Member::Bound { module, binding }) => {
+            Some(Member::Bound { module, binding }) if member => {
                 if let Some((declaration_file, declaration, lost)) =
                     lost_through_binding(&module, &binding, files, inputs)
                 {
@@ -5605,8 +5608,14 @@ fn run_with_system_floor(
             );
         let mut unattributed_imports: Vec<&str> = Vec::new();
         for (name, from_import) in bound_names {
-            let ids =
+            let mut ids =
                 resolve_usage_identity(path, name, files, inputs, &evaluated_ids, &ids_by_binding);
+            // An imported facade built with `Object.assign(T, …)` is `T`.
+            if ids.is_empty() && from_import {
+                if let Some(crate::family_members::Member::Stable(component)) = object_members.root(path, name) {
+                    ids.push(component);
+                }
+            }
             if ids.is_empty() {
                 if from_import {
                     unattributed_imports.push(name);
@@ -5639,6 +5648,25 @@ fn run_with_system_floor(
             file_lookup
                 .get_or_insert_with(|| global_lookup.clone())
                 .publish(alias, &ids, &usage_sources);
+        }
+        // A facade built with `Object.assign(T, …)` is `T`, so `<X>` renders
+        // as `T` does while nothing can have changed it since.
+        let written_tags: BTreeSet<&str> = ff
+            .usage_for_analysis()
+            .iter()
+            .filter_map(|usage| match usage {
+                UsageFact::Element { tag: TagFact::Ident(tag), .. } => Some(tag.as_str()),
+                _ => None,
+            })
+            .collect();
+        for tag in written_tags {
+            if let Some(crate::family_members::Member::Stable(component)) = object_members.root(path, tag) {
+                let ids = vec![component];
+                if global_lookup.attribution.get(tag) == Some(&ids) {
+                    continue;
+                }
+                file_lookup.get_or_insert_with(|| global_lookup.clone()).publish(tag, &ids, &usage_sources);
+            }
         }
         // A spread wrapper's renders stand in for its targets' renders.
         let (wrapper_targets, proxies) =
@@ -10681,11 +10709,16 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
     }
 
     #[test]
-    fn renamed_and_assigned_recipes_warn_but_resolved_and_outside_tags_do_not() {
+    fn renamed_recipes_warn_but_resolved_assigned_and_outside_tags_do_not() {
         let recipe = "const ButtonRecipe = ds.styles({}).system({ space: true }).asElement('button');\n";
+        // `Object.assign(R, …)` returns `R`, so the tag resolves to it.
+        let assigned = format!("{recipe}export const Button = Object.assign(ButtonRecipe, {{ Icon: ButtonRecipe }});\n");
+        let app = "import { Button } from './recipe';\nexport const App = () => <Button marginInlineStart={8} />;\n";
+        let out = analyze_with_logical_space(&[("recipe.tsx", assigned.as_str()), ("app.tsx", app)]);
+        assert!(unattributed(&out).is_empty(), "{:?}", out.diagnostics);
+        assert!(out.system_prop_map.values().any(|map| map.contains_key("8")), "{:?}", out.system_prop_map);
         for (declaration, tag) in [
             ("export const Button = ButtonRecipe;", "Button"),
-            ("export const Button = Object.assign(ButtonRecipe, { Icon: ButtonRecipe });", "Button"),
             (
                 "const Family = compose({ Root: ButtonRecipe }, { name: 'Family' });\nexport const Button = { ...Family };\ndecorate(Button);",
                 "Button.Root",
@@ -10709,6 +10742,60 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
                 ("app.tsx", app),
             ]);
             assert!(unattributed(&out).is_empty(), "{app}: {:?}", out.diagnostics);
+        }
+    }
+
+    /// `Object.assign(Root, { Row })` renders as `Root`, so a facade whose
+    /// members mutation evidence proves keeps both tags' static props; an
+    /// unproven facade keeps its root and warns once for the member. Two
+    /// spellings of one target are one target, and an `Object` the module
+    /// binds is not the built-in.
+    #[test]
+    fn assigned_callable_facades_keep_attribution_or_warn_per_use() {
+        let parts = "const Root = ds.system({ space: true }).asElement('section');\n\
+                     const Row = ds.system({ space: true }).asElement('div');\n";
+        let compose = "const Fam = compose({ Root, Row }, { shared: {} });\n";
+        let usage = "<RecordTable p={8}><RecordTable.Row p={16} /></RecordTable>";
+        let run = |facade: &str| {
+            let kit = format!("{parts}{facade}");
+            let app = format!("import {{ RecordTable }} from './kit';\nexport const App = () => {usage};\n");
+            let same = format!("{kit}export const App = () => {usage};\n");
+            [
+                analyze(&[("kit.tsx", same.as_str())], &test_inputs()),
+                analyze(&[("kit.tsx", kit.as_str()), ("app.tsx", app.as_str())], &test_inputs()),
+            ]
+        };
+        let keys = |out: &CssOutput| {
+            let mut keys: Vec<_> = out.system_prop_map.get("p").into_iter().flat_map(|map| map.keys().cloned()).collect();
+            keys.sort();
+            keys
+        };
+        for facade in [
+            format!("{compose}export const RecordTable = Object.assign(Fam.Root, {{ Root: Fam.Root, Row: Fam.Row }});\n"),
+            "export const RecordTable = Object.assign(Root, { Root, Row });\n".to_string(),
+        ] {
+            for out in run(&facade) {
+                assert_eq!(keys(&out), ["16", "8"], "{facade}");
+                assert!(unattributed(&out).is_empty(), "{facade}: {:?}", out.diagnostics);
+            }
+        }
+        for facade in [
+            "export const RecordTable = Object.assign(Root, { Root, Row });\nRoot.Row = Root;\n".to_string(),
+            format!("{compose}export const RecordTable = Object.assign(Fam.Root, {{ Row: Fam.Row }});\nexport const Other = Object.assign(Fam.Root, {{ Row: Fam.Root }});\n"),
+            format!("{compose}export const RecordTable = Object.assign(Fam.Root, {{ Row: Fam.Row }});\nregister(Fam.Root);\n"),
+            "const Alias = Root;\nexport const RecordTable = Object.assign(Root, { Root, Row });\nconst Other = Object.assign(Alias, { Row: Root });\n".to_string(),
+            "export const RecordTable = Object.assign(Root, { Root, Row });\nRecordTable.Row = Root;\n".to_string(),
+        ] {
+            for out in run(&facade) {
+                assert_eq!(keys(&out), ["8"], "{facade}");
+                let warnings = unattributed(&out);
+                assert_eq!(warnings.len(), 1, "{facade}: {:?}", out.diagnostics);
+                assert_eq!(warnings[0].component, "RecordTable.Row", "{facade}");
+            }
+        }
+        let shadowed = "const Object = { assign: () => Row };\nexport const RecordTable = Object.assign(Root, { Root, Row });\n";
+        for out in run(shadowed) {
+            assert!(keys(&out).is_empty(), "{:?}", out.system_prop_map);
         }
     }
 
