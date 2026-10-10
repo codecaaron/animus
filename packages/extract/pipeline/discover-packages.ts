@@ -12,7 +12,14 @@ import {
 import { globToRegExp } from './core-options';
 import { discoverFiles } from './discover-files';
 import { parseInternalWire } from './internal-wire';
-import { severityFor, UNPROVEN_ROOT_BINDING } from './manifest-diagnostics';
+import {
+  INVALID_KIT_SOURCE_CONDITION,
+  KIT_SYSTEM_NOT_INCLUDED,
+  KIT_WITHOUT_SOURCE_CONDITION,
+  severityFor,
+  UNPROVEN_ROOT_BINDING,
+} from './manifest-diagnostics';
+import { isEngineTransformExtension } from './mdx-preprocessor';
 import { isPathWithinRoot } from './source-identity';
 import { relativeSourceCandidates } from './source-ingestion';
 import { isJsonBlock, isJsonString } from './tsconfig-paths';
@@ -114,6 +121,114 @@ function sourceEntryForSpecifier(
   return resolveAbsolutePathSpecifier(sourceStem, extensionsSet);
 }
 
+/** The package's parsed `package.json`, or null when it cannot be read. */
+function readPackageManifest(pkgRoot: string): JsonValue | null {
+  try {
+    return JSON.parse(readFileSync(join(pkgRoot, 'package.json'), 'utf-8'));
+  } catch {
+    return null;
+  }
+}
+
+/** Each `exports` subpath and its value; a bare target or condition object
+ *  is the `.` entry. */
+function exportsSubpaths(
+  manifest: JsonValue | null
+): Array<[string, JsonValue]> {
+  const exports = isJsonBlock(manifest) ? manifest.exports : undefined;
+  if (exports === undefined || exports === null) return [];
+  const subpaths =
+    isJsonBlock(exports) && Object.keys(exports).some((k) => k.startsWith('.'))
+      ? exports
+      : { '.': exports };
+  return Object.entries(subpaths).filter(([subpath]) =>
+    subpath.startsWith('.')
+  );
+}
+
+/**
+ * The export condition a kit gives each public entry's original source:
+ * `{ "types": …, "animus": "./src/system.ts", "import": …, "default": … }`.
+ * Hosts never resolve through it; discovery reads it, redirects the entry to
+ * its source in every host, and the system loader prefers it.
+ */
+export const KIT_SOURCE_CONDITION = 'animus';
+
+export interface KitSourceCondition {
+  /** Each exact entry that declares the condition: its subpath and its
+   *  absolute source file. */
+  entries: Array<[subpath: string, target: string]>;
+  /** Entries whose target is missing or outside the package. */
+  invalid: Array<[subpath: string, target: string]>;
+  /** The deepest directory holding every source entry: what discovery walks.
+   *  Null when no entry is valid. */
+  root: string | null;
+}
+
+/** The package's kit source condition, or null when no exact `exports`
+ *  entry declares it: the package is no source kit. */
+export function readKitSourceCondition(
+  pkgRoot: string
+): KitSourceCondition | null {
+  const condition: KitSourceCondition = {
+    entries: [],
+    invalid: [],
+    root: null,
+  };
+  for (const [subpath, value] of exportsSubpaths(
+    readPackageManifest(pkgRoot)
+  )) {
+    if (subpath.includes('*') || !isJsonBlock(value)) continue;
+    const target = value[KIT_SOURCE_CONDITION];
+    if (!isJsonString(target)) continue;
+    const file = resolve(pkgRoot, target);
+    if (isPathWithinRoot(pkgRoot, file) && isFile(file)) {
+      condition.entries.push([subpath, file]);
+    } else {
+      condition.invalid.push([subpath, target]);
+    }
+  }
+  if (condition.entries.length === 0 && condition.invalid.length === 0)
+    return null;
+  condition.root = condition.entries.reduce<string | null>(
+    (root, [, file]) =>
+      root === null ? dirname(file) : commonDirectory(root, dirname(file)),
+    null
+  );
+  return condition;
+}
+
+function commonDirectory(a: string, b: string): string {
+  let dir = a;
+  while (!isPathWithinRoot(dir, b)) dir = dirname(dir);
+  return dir;
+}
+
+/** Whether the manifest at `dir` names the package `name`. */
+function isPackageNamed(dir: string, name: string | null): boolean {
+  const manifest = readPackageManifest(dir);
+  return isJsonBlock(manifest) && manifest.name === name;
+}
+
+function realPath(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    return path;
+  }
+}
+
+/** The root of the installed package `name` as Node finds it from `fromDir`,
+ *  the first `node_modules/<name>` up the directory tree, at its real path,
+ *  as host resolvers report a linked package. */
+function locatePackageRoot(name: string, fromDir: string): string | null {
+  for (let dir = fromDir; ; dir = dirname(dir)) {
+    const candidate = join(dir, 'node_modules', name);
+    if (existsSync(join(candidate, 'package.json'))) return realPath(candidate);
+    if (dir === dirname(dir)) return null;
+  }
+}
+
 /**
  * A package's `sideEffects` field, decoded the way Vite reads it: a boolean
  * as written, or the list's globs, one with no `/` matching the basename
@@ -124,12 +239,7 @@ function sourceEntryForSpecifier(
 function readPackageSideEffects(
   pkgRoot: string
 ): boolean | RegExp[] | undefined {
-  let manifest: JsonValue;
-  try {
-    manifest = JSON.parse(readFileSync(join(pkgRoot, 'package.json'), 'utf-8'));
-  } catch {
-    return undefined;
-  }
+  const manifest = readPackageManifest(pkgRoot);
   const field = isJsonBlock(manifest) ? manifest.sideEffects : undefined;
   if (field === true || field === false) return field;
   if (!Array.isArray(field)) return undefined;
@@ -169,21 +279,11 @@ function exportTarget(value: JsonValue | undefined): string | null {
 /** Each exact `exports` entry of the package at `pkgRoot`, as its subpath
  *  and absolute target; `*` patterns name no single file and are skipped. */
 function packageExportEntries(pkgRoot: string): Array<[string, string]> {
-  let manifest: JsonValue;
-  try {
-    manifest = JSON.parse(readFileSync(join(pkgRoot, 'package.json'), 'utf-8'));
-  } catch {
-    return [];
-  }
-  const exports = isJsonBlock(manifest) ? manifest.exports : undefined;
-  if (exports === undefined || exports === null) return [];
-  const subpaths =
-    isJsonBlock(exports) && Object.keys(exports).some((k) => k.startsWith('.'))
-      ? exports
-      : { '.': exports };
   const entries: Array<[string, string]> = [];
-  for (const [subpath, value] of Object.entries(subpaths)) {
-    if (!subpath.startsWith('.') || subpath.includes('*')) continue;
+  for (const [subpath, value] of exportsSubpaths(
+    readPackageManifest(pkgRoot)
+  )) {
+    if (subpath.includes('*')) continue;
     const target = exportTarget(value);
     if (target !== null) entries.push([subpath, resolve(pkgRoot, target)]);
   }
@@ -246,6 +346,9 @@ export interface CollectedExternalPackages {
    *  the caller's set already supplied stay unattributed. */
   fileOwners: Record<string, string>;
   outcomes: ExternalPackageOutcome[];
+  /** A kit without the source condition, and a condition entry whose target
+   *  is missing or outside its package. */
+  diagnostics: ManifestDiagnostic[];
 }
 
 export async function collectExternalPackageSources(opts: {
@@ -316,6 +419,28 @@ export async function collectExternalPackageSources(opts: {
   const alreadyIngested = (relPath: string): boolean =>
     hasEntry(relPath) || pushed.has(relPath);
 
+  /** Adds `file` to the analysis set unless it is there; false when it
+   *  cannot be read. */
+  const ingest = (file: string, specifier: string): boolean => {
+    const relPath = relative(rootDir, file);
+    if (alreadyIngested(relPath)) return true;
+    let source: string;
+    try {
+      source = readFileSync(file, 'utf-8');
+    } catch (err) {
+      onUnreadable(relPath, err);
+      return false;
+    }
+    onSourceRead?.(source, relPath, file);
+    entries.push({ path: relPath, source });
+    pushed.add(relPath);
+    fileOwners[relPath] ??= specifier;
+    return true;
+  };
+
+  const diagnostics: ManifestDiagnostic[] = [];
+  const reportedPackages = new Set<string>();
+
   for (const specifier of specifiers) {
     let absEntry: string | null;
     try {
@@ -328,17 +453,65 @@ export async function collectExternalPackageSources(opts: {
     if (!absEntry && isAbsolute(specifier)) {
       absEntry = resolveAbsolutePathSpecifier(specifier, extensionsSet);
     }
-    if (!absEntry) {
+    const packageName = isAbsolute(specifier)
+      ? null
+      : bareSpecifierPackageName(specifier);
+    // The host's resolution names the package unless it lands outside it: a
+    // dev server resolves a package it prebundles into its dependency cache,
+    // from where the nearest manifest can be the application's own. Then,
+    // and for a source-only kit with no runtime entry to resolve, the package
+    // is found as Node finds it, and its condition names the entry.
+    const resolvedRoot = absEntry ? findPackageRoot(absEntry) : null;
+    const locatedRoot = packageName && locatePackageRoot(packageName, rootDir);
+    const pkgRoot =
+      resolvedRoot &&
+      (!locatedRoot ||
+        isPackageNamed(resolvedRoot, packageName) ||
+        realPath(resolvedRoot) === locatedRoot)
+        ? resolvedRoot
+        : locatedRoot || resolvedRoot;
+    const condition =
+      packageName && pkgRoot ? readKitSourceCondition(pkgRoot) : null;
+    const entryKey = packageName && `.${specifier.slice(packageName.length)}`;
+    absEntry ??=
+      condition?.entries.find(([entry]) => entry === entryKey)?.[1] ?? null;
+    if (!absEntry || !pkgRoot) {
       outcomes.push({ specifier, outcome: 'unresolvable', fileCount: 0 });
       continue;
     }
 
-    const pkgRoot = findPackageRoot(absEntry);
     const srcDir = join(pkgRoot, 'src');
     let fileCount = 0;
     let staleDist = false;
 
-    if (existsSync(srcDir)) {
+    if (packageName && !reportedPackages.has(packageName)) {
+      reportedPackages.add(packageName);
+      diagnostics.push(...sourceConditionDiagnostics(packageName, condition));
+    }
+
+    if (condition && packageName) {
+      for (const [entry, target] of condition.entries) {
+        const entrySpecifier = packageName + entry.slice(1);
+        packageMap[entrySpecifier] = relative(rootDir, target);
+        await redirect(entrySpecifier, target, pkgRoot, async () => {
+          try {
+            return await resolveSpecifier(entrySpecifier);
+          } catch {
+            return null;
+          }
+        });
+      }
+      packageMap[specifier] ??= relative(rootDir, absEntry);
+      if (condition.root) {
+        packageDirs.push(condition.root);
+        claimDir(condition.root, specifier);
+        dirExtensions[condition.root] = [...extensionsSet];
+        onPackageResolved?.(specifier, condition.root);
+        for (const file of walkPackageSources(condition.root, extensionsSet)) {
+          if (ingest(file, specifier)) fileCount++;
+        }
+      }
+    } else if (existsSync(srcDir)) {
       packageDirs.push(srcDir);
       claimDir(srcDir, specifier);
       dirExtensions[srcDir] = [...extensionsSet];
@@ -359,8 +532,7 @@ export async function collectExternalPackageSources(opts: {
 
       // App code imports a kit declared at a subpath by its package root; with
       // no root key the src redirect is bypassed and untransformed dist ships.
-      if (!isAbsolute(specifier)) {
-        const packageName = bareSpecifierPackageName(specifier);
+      if (packageName) {
         if (packageName !== specifier && !(packageName in packageMap)) {
           const rootEntry = sourceEntryForSpecifier(
             packageName,
@@ -387,25 +559,7 @@ export async function collectExternalPackageSources(opts: {
         distEntryIsStale(absEntry, srcDir, pkgFiles);
 
       for (const pkgFile of pkgFiles) {
-        const relPath = relative(rootDir, pkgFile);
-        if (alreadyIngested(relPath)) {
-          fileCount++;
-          continue;
-        }
-
-        let source: string;
-        try {
-          source = readFileSync(pkgFile, 'utf-8');
-        } catch (err) {
-          onUnreadable(relPath, err);
-          continue;
-        }
-
-        onSourceRead?.(source, relPath, pkgFile);
-        entries.push({ path: relPath, source });
-        pushed.add(relPath);
-        fileOwners[relPath] ??= specifier;
-        fileCount++;
+        if (ingest(pkgFile, specifier)) fileCount++;
       }
     } else {
       const outputDir = dirname(absEntry);
@@ -432,23 +586,7 @@ export async function collectExternalPackageSources(opts: {
       if (!outputFiles.includes(absEntry)) outputFiles.unshift(absEntry);
 
       for (const outputFile of outputFiles) {
-        const outputRelPath = relative(rootDir, outputFile);
-        if (alreadyIngested(outputRelPath)) {
-          fileCount++;
-          continue;
-        }
-        let source: string;
-        try {
-          source = readFileSync(outputFile, 'utf-8');
-        } catch (err) {
-          onUnreadable(outputRelPath, err);
-          continue;
-        }
-        onSourceRead?.(source, outputRelPath, outputFile);
-        entries.push({ path: outputRelPath, source });
-        pushed.add(outputRelPath);
-        fileOwners[outputRelPath] ??= specifier;
-        fileCount++;
+        if (ingest(outputFile, specifier)) fileCount++;
       }
     }
 
@@ -456,8 +594,7 @@ export async function collectExternalPackageSources(opts: {
     // root, while only the include specifier was mapped above. An entry whose
     // target was analysed maps there too, so its bindings resolve, as they do
     // for a source install through its root redirect.
-    if (!isAbsolute(specifier)) {
-      const packageName = bareSpecifierPackageName(specifier);
+    if (packageName) {
       for (const [subpath, target] of packageExportEntries(pkgRoot)) {
         const entrySpecifier = packageName + subpath.slice(1);
         const targetRelPath = relative(rootDir, target);
@@ -485,7 +622,154 @@ export async function collectExternalPackageSources(opts: {
     dirExtensions,
     fileOwners,
     outcomes,
+    diagnostics,
   };
+}
+
+export interface SourceKitDependency {
+  name: string;
+  /** Installed under `node_modules`, not linked from a workspace. */
+  installed: boolean;
+  /** The kit's own `dependencies`, by name. */
+  dependencies: string[];
+}
+
+/** The dependency names a manifest lists in `fields`. */
+function dependencyNames(
+  manifest: JsonValue | null,
+  fields: readonly string[]
+): string[] {
+  if (!isJsonBlock(manifest)) return [];
+  const names = new Set<string>();
+  for (const field of fields) {
+    const deps = manifest[field];
+    if (isJsonBlock(deps))
+      for (const name of Object.keys(deps)) names.add(name);
+  }
+  return [...names];
+}
+
+/** The source kits the application at `rootDir` declares as dependencies.
+ *  A bundler serves an installed one as compiled code unless told
+ *  otherwise: Next keeps it external on the server unless it is in
+ *  `transpilePackages`, and Vite's optimizer prebundles it. */
+export function sourceKitDependencies(rootDir: string): SourceKitDependency[] {
+  const declared = dependencyNames(readPackageManifest(rootDir), [
+    'dependencies',
+    'devDependencies',
+  ]);
+  return declared.flatMap((name) => {
+    const pkgRoot = locatePackageRoot(name, rootDir);
+    if (pkgRoot === null || readKitSourceCondition(pkgRoot) === null) return [];
+    return [
+      {
+        name,
+        installed: isInstalledPackage(pkgRoot),
+        dependencies: dependencyNames(readPackageManifest(pkgRoot), [
+          'dependencies',
+        ]),
+      },
+    ];
+  });
+}
+
+/** A specifier that names a package: not relative or absolute, and no URL,
+ *  scheme (`node:`, `virtual:`), subpath import or virtual id. */
+function isPackageSpecifier(specifier: string): boolean {
+  return /^(?:@[^/\\:]+\/)?[^./\\#\0:][^:]*$/.test(specifier);
+}
+
+/**
+ * An error for each kit the application's own `files` import or re-export
+ * whose system the application's system does not include: a package that
+ * declares the kit source condition, with no kit the system extends
+ * (`systemKits`) in that package. One app build has exactly one system, and
+ * every kit's system is part of it, so such a kit is not extracted against
+ * a system it was not built for. One batch parse reads the imports of every
+ * file the engine parses as it is; an adapted source (`.svelte`, `.mdx`)
+ * reaches the engine only as its generated children.
+ */
+export function importedKitDiagnostics(
+  files: ReadonlyArray<{ path: string; source: string }>,
+  engine: Pick<EngineApi, 'extractFacts'>,
+  rootDir: string,
+  systemKits: readonly string[]
+): ManifestDiagnostic[] {
+  const { extractFacts } = engine;
+  const parsed = files.filter(({ path }) => isEngineTransformExtension(path));
+  if (!extractFacts || parsed.length === 0) return [];
+  let facts: ExtractFactsResult;
+  try {
+    facts = parseInternalWire<ExtractFactsResult>(
+      extractFacts(
+        JSON.stringify(parsed.map(({ path, source }) => ({ path, source })))
+      ),
+      'extractFacts'
+    );
+  } catch {
+    return [];
+  }
+  const seen = new Set(
+    systemKits
+      .filter((specifier) => !isAbsolute(specifier))
+      .map(bareSpecifierPackageName)
+  );
+  const diagnostics: ManifestDiagnostic[] = [];
+  for (const [path, file] of Object.entries(facts.files)) {
+    if (file.parsePanicked) continue;
+    const specifiers = [
+      ...file.imports.map((fact) => fact.source),
+      ...file.exports.flatMap((fact) =>
+        fact.source === null ? [] : [fact.source]
+      ),
+    ];
+    for (const specifier of specifiers) {
+      if (!isPackageSpecifier(specifier)) continue;
+      const name = bareSpecifierPackageName(specifier);
+      if (seen.has(name)) continue;
+      seen.add(name);
+      const pkgRoot = locatePackageRoot(name, dirname(resolve(rootDir, path)));
+      if (pkgRoot && readKitSourceCondition(pkgRoot)) {
+        diagnostics.push({
+          file: path,
+          component: name,
+          kind: 'warn',
+          message: `the application imports this kit, but its system is not included in the application's system, so its components are not extracted — include the kit's system in the application's system: createSystem().extend(<the kit's system>)`,
+          code: KIT_SYSTEM_NOT_INCLUDED,
+          severity: severityFor(KIT_SYSTEM_NOT_INCLUDED),
+        });
+      }
+    }
+  }
+  return diagnostics;
+}
+
+/** A kit without the source condition, warned once, or each condition entry
+ *  whose target is missing or outside the package. */
+function sourceConditionDiagnostics(
+  packageName: string,
+  condition: KitSourceCondition | null
+): ManifestDiagnostic[] {
+  if (condition === null) {
+    return [
+      {
+        file: packageName,
+        component: 'kit',
+        kind: 'warn',
+        message: `declares no "${KIT_SOURCE_CONDITION}" export condition, so discovery guesses its source from src/ — give each public exports entry an "${KIT_SOURCE_CONDITION}" condition naming its original source`,
+        code: KIT_WITHOUT_SOURCE_CONDITION,
+        severity: severityFor(KIT_WITHOUT_SOURCE_CONDITION),
+      },
+    ];
+  }
+  return condition.invalid.map(([subpath, target]) => ({
+    file: packageName,
+    component: 'kit',
+    kind: 'warn',
+    message: `exports["${subpath}"].${KIT_SOURCE_CONDITION} names ${target}, which is missing or outside the package, so that entry is not read from source`,
+    code: INVALID_KIT_SOURCE_CONDITION,
+    severity: severityFor(INVALID_KIT_SOURCE_CONDITION),
+  }));
 }
 
 export interface PackageDirOwners {
@@ -563,6 +847,7 @@ export function excludeCollectedPackages(
     dirExtensions,
     fileOwners,
     outcomes: collected.outcomes,
+    diagnostics: collected.diagnostics,
   };
 }
 

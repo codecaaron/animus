@@ -2,7 +2,7 @@
   "corpusSha256": "fcbf88aba94840f3174347541e76afbf310dd399d29c45489e7ba63635f4c5d2",
   "engine": "v2",
   "mode": "development",
-  "refreshIntent": "system-props-definition-order-20261009",
+  "refreshIntent": "style-keys-dead-or-reordered-20261010",
   "surfaceSchemaSha256": "43eb1265e97aab8497c11ca05e8a4159a6d4f4b69a6837a704e1d96fa75eb108",
   "units": {
     "extract-all": {
@@ -495,7 +495,9 @@
         "cascade-combos.tsx": "import { createComponent } from '@animus-ui/system';\nimport 'virtual:animus/styles.css';\nimport { ds } from '../setup';\n\nexport const PxPl = createComponent('div', 'animus-PxPl-5520994e', {});\n\nexport const PyPt = createComponent('div', 'animus-PyPt-59ab3091', {});\n\nexport const PxPyPt = createComponent('div', 'animus-PxPyPt-87570579', {});\n\nexport const PPx = createComponent('div', 'animus-PPx-829247e6', {});\n\nexport const PPxPl = createComponent('div', 'animus-PPxPl-2e6fbc2a', {});\n\nexport const PPxPyPtPb = createComponent('div', 'animus-PPxPyPtPb-2acaa787', {});\n\nexport const MxMl = createComponent('div', 'animus-MxMl-b17c5cf6', {});\n\nexport const MyMt = createComponent('div', 'animus-MyMt-ae0c929d', {});\n\nexport const MMxMl = createComponent('div', 'animus-MMxMl-d5a512e1', {});\n\nexport const PlRawPadding = createComponent('div', 'animus-PlRawPadding-6dc1ac95', {});\n\n"
       },
       "css": "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-base {\n  .animus-MMxMl-d5a512e1 {\n    margin: 1rem;\n    margin-left: 0.5rem;\n    margin-right: 0.5rem;\n    margin-left: 0.25rem;\n  }\n  .animus-MxMl-b17c5cf6 {\n    margin-left: 0.5rem;\n    margin-right: 0.5rem;\n    margin-left: 0.25rem;\n  }\n  .animus-MyMt-ae0c929d {\n    margin-top: 0.5rem;\n    margin-bottom: 0.5rem;\n    margin-top: 1rem;\n  }\n  .animus-PPx-829247e6 {\n    padding: 1rem;\n    padding-left: 0.5rem;\n    padding-right: 0.5rem;\n  }\n  .animus-PPxPl-2e6fbc2a {\n    padding: 1rem;\n    padding-left: 0.5rem;\n    padding-right: 0.5rem;\n    padding-left: 0.25rem;\n  }\n  .animus-PPxPyPtPb-2acaa787 {\n    padding: 1rem;\n    padding-left: 0.5rem;\n    padding-right: 0.5rem;\n    padding-top: 0.5rem;\n    padding-bottom: 0.5rem;\n    padding-top: 0.25rem;\n    padding-bottom: 1.5rem;\n  }\n  .animus-PlRawPadding-6dc1ac95 {\n    padding: 1rem;\n    padding-left: 0.25rem;\n  }\n  .animus-PxPl-5520994e {\n    padding-left: 0.5rem;\n    padding-right: 0.5rem;\n    padding-left: 0.25rem;\n  }\n  .animus-PxPyPt-87570579 {\n    padding-left: 0.25rem;\n    padding-right: 0.25rem;\n    padding-top: 0.25rem;\n    padding-bottom: 0.25rem;\n    padding-top: 0.5rem;\n  }\n  .animus-PyPt-59ab3091 {\n    padding-top: 0.5rem;\n    padding-bottom: 0.5rem;\n    padding-top: 1rem;\n  }\n}\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer composed {\n  }\n}\n\n",
-      "diagnostics": [],
+      "diagnostics": [
+        "cascade-combos.tsx|warn|PlRawPadding|style key 'pl' comes before 'padding', which also sets padding-left: in plain CSS 'padding' would reset it, but a longhand applies after its shorthand, so 'pl' takes effect"
+      ],
       "hasComponents": {
         "cascade-combos.tsx": true
       },

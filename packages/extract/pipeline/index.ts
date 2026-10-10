@@ -53,6 +53,7 @@ export type {
   ExternalPackageOutcome,
   ModuleParser,
   ModuleRecord,
+  SourceKitDependency,
 } from './discover-packages';
 export {
   collectExternalPackageSources,
@@ -61,8 +62,10 @@ export {
   extractSystemFilePackages,
   findPackageRoot,
   firstOwners,
+  importedKitDiagnostics,
   isExcludedPackageRelativePath,
   resolveAbsolutePathSpecifier,
+  sourceKitDependencies,
   staleDistIncludesMessage,
   unresolvableIncludesMessage,
   walkPackageSources,

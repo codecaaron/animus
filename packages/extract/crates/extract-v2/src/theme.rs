@@ -66,6 +66,72 @@ fn entry_properties(key: &str, config: &PropConfigMap) -> Vec<String> {
     }
 }
 
+/// The conditions an entry's value sets: its breakpoint keys when it is an
+/// object of them, else the base (`_`).
+fn entry_conditions<'a>(value: &'a Value, ctx: &ResolveContext) -> FxHashSet<&'a str> {
+    match value.as_object() {
+        Some(obj) if !obj.is_empty() && obj.keys().all(|key| key == "_" || ctx.breakpoint_keys.contains(key)) => {
+            obj.keys().map(String::as_str).collect()
+        }
+        _ => FxHashSet::from_iter(["_"]),
+    }
+}
+
+/// Reports two keys of one block, in cascade order, that set one CSS
+/// property at one condition when the result is surprising: one key sets
+/// exactly what the other does, so it has no effect, or a longhand is
+/// written before the shorthand that covers it, which plain CSS would let
+/// reset it. A shorthand followed by its longhand is the override idiom:
+/// both contribute as CSS order says, and nothing is reported.
+fn record_shared_properties(obj: &Map<String, Value>, entries: &[(&String, &Value)], ctx: &ResolveContext) {
+    if ctx.dropped_keys.is_none() {
+        return;
+    }
+    let writes: Vec<_> = entries
+        .iter()
+        .filter_map(|(key, value)| {
+            let properties = entry_properties(key, ctx.config);
+            (!properties.is_empty()).then(|| (*key, properties, entry_conditions(value, ctx)))
+        })
+        .collect();
+    let authored = |key: &str| obj.keys().position(|k| k == key);
+    for (index, (earlier, earlier_properties, earlier_conditions)) in writes.iter().enumerate() {
+        let earlier_resets = crate::declarations::reset_set(earlier_properties.iter().map(String::as_str));
+        for (later, later_properties, later_conditions) in &writes[index + 1..] {
+            if earlier_conditions.is_disjoint(later_conditions) {
+                continue;
+            }
+            let later_resets = crate::declarations::reset_set(later_properties.iter().map(String::as_str));
+            let shared: Vec<&str> = earlier_resets.intersection(&later_resets).copied().collect();
+            let Some(first_shared) = shared.first() else {
+                continue;
+            };
+            // Named by the narrower key's own property where it can be.
+            let property = later_properties
+                .iter()
+                .chain(earlier_properties)
+                .find(|property| shared.contains(&property.as_str()))
+                .map_or_else(|| first_shared.to_string(), String::clone);
+            let rule = if earlier_resets == later_resets {
+                if authored(earlier) < authored(later) { CascadeRule::AuthoredOrder } else { CascadeRule::PropRank }
+            } else if earlier_resets.is_superset(&later_resets) && authored(later) < authored(earlier) {
+                CascadeRule::LonghandBeforeShorthand
+            } else {
+                continue;
+            };
+            record_dropped_key(
+                ctx,
+                DroppedStyleKey::SharedProperty {
+                    overridden: earlier.to_string(),
+                    winner: later.to_string(),
+                    property,
+                    rule,
+                },
+            );
+        }
+    }
+}
+
 /// A style object's entries in cascade order: by tier, except that an entry
 /// moves ahead of every entry whose properties it strictly contains,
 /// whatever their tiers, so a longhand always beats its shorthand. Entries
@@ -248,6 +314,9 @@ pub type StrictTokenMissSink = RefCell<Vec<StrictTokenMiss>>;
 /// A style-object key whose block no rule emits, so its styling is lost.
 pub const UNRECOGNIZED_STYLE_KEY: &str = "animus.style.unrecognized-key";
 
+/// Two keys of one style block that set one CSS property at one condition.
+pub const KEYS_SHARE_PROPERTY: &str = "animus.style.keys-share-property";
+
 /// A style-object key given an object that resolves to nothing.
 #[derive(Debug, Clone, PartialEq)]
 pub enum DroppedStyleKey {
@@ -257,13 +326,32 @@ pub enum DroppedStyleKey {
     NonResponsiveObject(String),
     /// Any other key, such as an HTML element name written without `&`.
     UnrecognizedKey(String),
+    /// Two keys of one block set `property` at one condition with a result
+    /// worth knowing, and only `winner`, the later in cascade order, takes
+    /// effect there.
+    SharedProperty { overridden: String, winner: String, property: String, rule: CascadeRule },
+}
+
+/// Why the later of two keys on one property follows the other.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum CascadeRule {
+    /// Both keys set the same properties and rank alike: the later authored
+    /// wins, and the other has no effect.
+    AuthoredOrder,
+    /// Both keys set the same properties, and a raw CSS property follows the
+    /// system's props: the other has no effect.
+    PropRank,
+    /// A longhand written before its shorthand: plain CSS would let the
+    /// shorthand reset it, but the longhand follows its shorthand.
+    LonghandBeforeShorthand,
 }
 
 impl DroppedStyleKey {
-    /// The key as written.
+    /// The key as written; for two keys, the one that takes effect.
     pub fn key(&self) -> &str {
         match self {
             Self::UnregisteredAlias(key) | Self::NonResponsiveObject(key) | Self::UnrecognizedKey(key) => key,
+            Self::SharedProperty { winner, .. } => winner,
         }
     }
 }
@@ -603,6 +691,7 @@ pub fn resolve_styles(
     };
 
     let entries = cascade_order(obj, ctx.config);
+    record_shared_properties(obj, &entries, ctx);
     let slots = key_slots(obj, ctx);
     let slot = |key: &str| slots.get(key).copied().unwrap_or_default();
     let root = NestFrame::root(NEXT_SOURCE_BLOCK.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
@@ -696,6 +785,7 @@ fn resolve_block_entries(
     raw_condition_index: &mut usize,
 ) {
     let entries = cascade_order(obj, ctx.config);
+    record_shared_properties(obj, &entries, ctx);
     let slots = key_slots(obj, ctx);
     let slot = |key: &str| slots.get(key).copied().unwrap_or_default();
 

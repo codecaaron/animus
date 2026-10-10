@@ -233,6 +233,20 @@ export const UNREADABLE_SOURCE_FILE = 'animus.ingestion.unreadable-source-file';
 /** A kit the system extends resolved, yet discovery found none of its files. */
 export const NO_KIT_FILES = 'animus.discovery.no-kit-files';
 
+/** A kit with no `animus` export condition: discovery guesses its source
+ *  from `src/`. */
+export const KIT_WITHOUT_SOURCE_CONDITION =
+  'animus.discovery.kit-without-source-condition';
+
+/** A kit's `animus` export condition names a file that is missing or outside
+ *  its package, so that entry is not read from source. */
+export const INVALID_KIT_SOURCE_CONDITION =
+  'animus.discovery.invalid-source-condition';
+
+/** A kit the application imports whose system the application's system
+ *  does not include: its components are not extracted. */
+export const KIT_SYSTEM_NOT_INCLUDED = 'animus.kit.system-not-included';
+
 /** A system file's `createSystem` binding that discovery could not follow to
  *  Animus's factory, so it is no root. */
 export const UNPROVEN_ROOT_BINDING = 'animus.discovery.unproven-root-binding';
@@ -355,6 +369,9 @@ const DIAGNOSTIC_SEVERITY: ReadonlyMap<string, DiagnosticSeverity> = new Map([
   [SELECTOR_UNSUPPORTED_SUBJECT, 'error'],
   [UNREADABLE_SOURCE_FILE, 'error'],
   [NO_KIT_FILES, 'warn'],
+  [KIT_WITHOUT_SOURCE_CONDITION, 'warn'],
+  [INVALID_KIT_SOURCE_CONDITION, 'error'],
+  [KIT_SYSTEM_NOT_INCLUDED, 'error'],
   [UNPROVEN_ROOT_BINDING, 'warn'],
   [VOCABULARY_COLLISION, 'warn'],
   [VOCABULARY_LEGACY_VERB, 'warn'],

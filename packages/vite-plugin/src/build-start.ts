@@ -8,6 +8,7 @@ import {
   discoverFiles,
   engineModuleParser,
   extractSystemFilePackages,
+  importedKitDiagnostics,
   firstOwners,
   isDeletedSource,
   noKitFilesDiagnostics,
@@ -103,6 +104,14 @@ export async function runBuildStart(
     (diagnostic) => discoveryDiagnostics.push(diagnostic),
     resolveSpecifier
   );
+  discoveryDiagnostics.push(
+    ...importedKitDiagnostics(
+      rawEntries,
+      ctx.engineApi(),
+      ctx.rootDir,
+      packageSpecifiers
+    )
+  );
 
   ctx.externalSourceEntries.clear();
 
@@ -125,13 +134,15 @@ export async function runBuildStart(
     {
       diagnostics: [
         ...discoveryDiagnostics,
+        ...collected.diagnostics,
         ...(ctx.options.verify
           ? []
           : noKitFilesDiagnostics(collected.outcomes)),
       ],
     },
     (message) => ctx.warn(message),
-    { levels: ctx.options.diagnostics }
+    // An error-severity discovery diagnostic fails a strict build.
+    { levels: ctx.options.diagnostics, strict: ctx.options.strict }
   );
 
   ctx.packageMap = collected.packageMap;

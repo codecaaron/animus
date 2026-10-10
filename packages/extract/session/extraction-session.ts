@@ -27,6 +27,7 @@ import {
   enforceExternalTokenContracts,
   excludeCollectedPackages,
   extractSystemFilePackages,
+  importedKitDiagnostics,
   findPackageRoot,
   findSheetAssetSpecifiers,
   firstOwners,
@@ -970,6 +971,9 @@ export class ExtractionSession {
         return entry ? resolve(rootDir, entry) : null;
       }
     );
+    discoveryDiagnostics.push(
+      ...importedKitDiagnostics(rawEntries, engineApi(), rootDir, packageNames)
+    );
     const preResolved = resolvePackagesByName(rootDir, packageNames);
 
     // Raw content hashes of every walked external file, keyed by absolute
@@ -1013,13 +1017,15 @@ export class ExtractionSession {
       {
         diagnostics: [
           ...discoveryDiagnostics,
+          ...collected.diagnostics,
           ...(this.selfCheckReportsEmptyKits
             ? []
             : noKitFilesDiagnostics(collected.outcomes)),
         ],
       },
       (message) => this.warn(message),
-      { levels: this.options.diagnostics }
+      // An error-severity discovery diagnostic fails a strict build.
+      { levels: this.options.diagnostics, strict: this.options.strict }
     );
     const unresolvableMessage = unresolvableIncludesMessage(collected.outcomes);
     if (unresolvableMessage !== null) {
