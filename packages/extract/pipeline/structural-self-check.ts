@@ -37,9 +37,9 @@ export function runStructuralSelfCheck(input: StructuralCheckInput): string[] {
     }
   }
 
+  // An empty kit is discovery's warning, which the diagnostics option can
+  // raise; it never fails this check.
   for (const { specifier, outcome } of input.externalOutcomes ?? []) {
-    // An empty kit is discovery's warning, which the diagnostics option can
-    // raise; it never fails this check.
     if (outcome === 'unresolvable') {
       failures.push(`include '${specifier}' could not be resolved`);
     }

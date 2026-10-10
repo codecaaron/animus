@@ -17,6 +17,7 @@ import {
   INVALID_KIT_SOURCE_CONDITION,
   KIT_SYSTEM_NOT_INCLUDED,
   KIT_WITHOUT_SOURCE_CONDITION,
+  noKitFilesDiagnostics,
   severityFor,
   UNIMPORTED_CREATE_SYSTEM,
   UNPROVEN_ROOT_BINDING,
@@ -353,8 +354,8 @@ export interface CollectedExternalPackages {
    *  the caller's set already supplied stay unattributed. */
   fileOwners: Record<string, string>;
   outcomes: ExternalPackageOutcome[];
-  /** A kit without the source condition, and a condition entry whose target
-   *  is missing or outside its package. */
+  /** A kit without the source condition, a condition entry whose target is
+   *  missing or outside its package, and a kit that yielded no files. */
   diagnostics: ManifestDiagnostic[];
   /** Each resolved package's kit descriptor, once per package root. */
   kitDescriptors: KitDescriptorRecord[];
@@ -643,7 +644,7 @@ export async function collectExternalPackageSources(opts: {
     dirExtensions,
     fileOwners,
     outcomes,
-    diagnostics,
+    diagnostics: [...diagnostics, ...noKitFilesDiagnostics(outcomes)],
     kitDescriptors,
   };
 }
@@ -1118,10 +1119,7 @@ async function systemRoots(
     name: string
   ): Promise<BindingIdentity> =>
     exportIdentity(systemFilePath, specifier, name, following, new Set());
-  const called = (callee: string): boolean =>
-    new RegExp(`(?<![a-zA-Z0-9_$.])${escapeRegExp(callee)}\\s*\\(`).test(
-      source
-    );
+  const called = (callee: string): boolean => callOf(callee).test(source);
   /** Admits a binding named `createSystem` by its identity: an unknown one
    *  keeps `spellingAdmits`, and every unproven one is reported. */
   const admit = (
@@ -1217,20 +1215,16 @@ async function systemRoots(
       why: `it is destructured from '${initializer}', which is not a module namespace`,
     });
   };
-  for (const match of source.matchAll(DESTRUCTURE)) {
-    const [whole, pattern, initializer] = match;
-    for (const property of pattern.split(',')) {
-      const binding = DESTRUCTURED_CREATE_SYSTEM.exec(property);
-      if (!binding) continue;
-      const local = binding[1] ?? 'createSystem';
-      // Spelling read an unrenamed destructured `createSystem` as a root.
-      admit(
-        local,
-        match.index + whole.indexOf('createSystem'),
-        await destructuredFrom(initializer.trim()),
-        local === 'createSystem'
-      );
-    }
+  for (const { local, offset, initializer } of destructuredCreateSystems(
+    source
+  )) {
+    // Spelling read an unrenamed destructured `createSystem` as a root.
+    admit(
+      local,
+      offset,
+      await destructuredFrom(initializer),
+      local === 'createSystem'
+    );
   }
 
   const unimported = unimportedCreateSystemCall(
@@ -1242,10 +1236,34 @@ async function systemRoots(
   return roots;
 }
 
-const DESTRUCTURE = /\b(?:const|let|var)\s*\{([^}]*)\}\s*=\s*([^;\n]+)/g;
-/** A destructured `createSystem` property, with its rename if any. */
-const DESTRUCTURED_CREATE_SYSTEM =
-  /^\s*createSystem\s*(?::\s*([a-zA-Z_$][a-zA-Z0-9_$]*))?\s*(?:=[\s\S]*)?$/;
+/** A call of `callee` as a whole name, not a member. */
+function callOf(callee: string): RegExp {
+  return new RegExp(`(?<![a-zA-Z0-9_$.])${escapeRegExp(callee)}\\s*\\(`);
+}
+
+/** Each `createSystem` property a declaration destructures: its local name,
+ *  its offset in `source`, and the destructured initializer. */
+function* destructuredCreateSystems(
+  source: string
+): Generator<{ local: string; offset: number; initializer: string }> {
+  for (const match of source.matchAll(
+    /\b(?:const|let|var)\s*\{([^}]*)\}\s*=\s*([^;\n]+)/g
+  )) {
+    const [whole, pattern, initializer] = match;
+    for (const property of pattern.split(',')) {
+      const binding =
+        /^\s*createSystem\s*(?::\s*([a-zA-Z_$][a-zA-Z0-9_$]*))?\s*(?:=[\s\S]*)?$/.exec(
+          property
+        );
+      if (!binding) continue;
+      yield {
+        local: binding[1] ?? 'createSystem',
+        offset: match.index + whole.indexOf('createSystem'),
+        initializer: initializer.trim(),
+      };
+    }
+  }
+}
 
 /** The warning for a call of `createSystem` that the system file neither
  *  imports, destructures nor declares; null when there is none. */
@@ -1254,17 +1272,12 @@ export function unimportedCreateSystemCall(
   source: string,
   imports: readonly ExtractImportFact[]
 ): ManifestDiagnostic | null {
-  const call = /(?<![a-zA-Z0-9_$.])createSystem\s*\(/.exec(source);
+  const call = callOf('createSystem').exec(source);
   if (!call || imports.some((binding) => binding.local === 'createSystem')) {
     return null;
   }
-  for (const [, pattern] of source.matchAll(DESTRUCTURE)) {
-    for (const property of pattern.split(',')) {
-      const binding = DESTRUCTURED_CREATE_SYSTEM.exec(property);
-      if (binding && (binding[1] ?? 'createSystem') === 'createSystem') {
-        return null;
-      }
-    }
+  for (const { local } of destructuredCreateSystems(source)) {
+    if (local === 'createSystem') return null;
   }
   if (
     /\b(?:function\*?|class)\s+createSystem\b|\b(?:const|let|var)\s+createSystem\b/.test(
@@ -1282,28 +1295,6 @@ export function unimportedCreateSystemCall(
     severity: severityFor(UNIMPORTED_CREATE_SYSTEM),
     ...locationIn(source, call.index),
   };
-}
-
-/** A system load error led by the unimported-call warning, when the system
- *  file calls `createSystem` with no binding, so every host names the fix. */
-export function withUnimportedCreateSystemHint<Thrown>(
-  error: Thrown,
-  systemFilePath: string,
-  parseModule: ModuleParser | undefined
-): Thrown | Error {
-  let source: string;
-  try {
-    source = readFileSync(systemFilePath, 'utf-8');
-  } catch {
-    return error;
-  }
-  const imports = parseModule?.(source, systemFilePath)?.imports ?? [];
-  const call = unimportedCreateSystemCall(systemFilePath, source, imports);
-  if (!call) return error;
-  return new Error(
-    `${call.file}:${call.line}:${call.column}: ${call.component}: ${call.message} [${call.code}]\n${String(error)}`,
-    { cause: error }
-  );
 }
 
 /** A pattern matching a call of any of `callees` as a whole name, or null

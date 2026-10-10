@@ -54,7 +54,6 @@ import {
   unresolvableIncludesMessage,
   walkPackageSources,
   engineModuleParser,
-  noKitFilesDiagnostics,
   surfaceManifestDiagnostics,
 } from '../pipeline/index';
 import {
@@ -1024,11 +1023,7 @@ export class ExtractionSession {
 
     surfaceManifestDiagnostics(
       {
-        diagnostics: [
-          ...discoveryDiagnostics,
-          ...collected.diagnostics,
-          ...noKitFilesDiagnostics(collected.outcomes),
-        ],
+        diagnostics: [...discoveryDiagnostics, ...collected.diagnostics],
       },
       (message) => this.warn(message),
       // An error-severity discovery diagnostic fails a strict build.

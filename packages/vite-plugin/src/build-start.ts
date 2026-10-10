@@ -11,7 +11,6 @@ import {
   importedKitDiagnostics,
   firstOwners,
   isDeletedSource,
-  noKitFilesDiagnostics,
   surfaceManifestDiagnostics,
   unreadableSourceDiagnostic,
   validateLayerOrder,
@@ -131,11 +130,7 @@ export async function runBuildStart(
   ctx.ingestionFailureDiagnostics = ingestionFailures;
   surfaceManifestDiagnostics(
     {
-      diagnostics: [
-        ...discoveryDiagnostics,
-        ...collected.diagnostics,
-        ...noKitFilesDiagnostics(collected.outcomes),
-      ],
+      diagnostics: [...discoveryDiagnostics, ...collected.diagnostics],
     },
     (message) => ctx.warn(message),
     // An error-severity discovery diagnostic fails a strict build.

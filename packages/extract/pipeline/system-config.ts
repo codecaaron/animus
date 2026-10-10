@@ -1,8 +1,11 @@
+import { readFileSync } from 'fs';
+
 import {
   engineModuleParser,
-  withUnimportedCreateSystemHint,
+  unimportedCreateSystemCall,
 } from './discover-packages';
 import { parseInternalWire } from './internal-wire';
+import { warnLine } from './manifest-diagnostics';
 import {
   applyPrefix,
   applyPropertyNames,
@@ -10,6 +13,7 @@ import {
 } from './prefix';
 import { splitInvalidPropertyRegistrations } from './property-registrations';
 
+import type { EngineApi } from './engine-adapter';
 import type { PrefixNameConflict } from './prefix';
 import type { InvalidPropertyRegistration } from './property-registrations';
 
@@ -63,22 +67,28 @@ export interface SystemConfig {
   legacyPrefixedContextualVars?: string[];
 }
 
-/** The loader's evaluation of the system file. A failure that an
- *  unimported `createSystem` call explains leads with that warning. */
-function loadSystemModule(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  engine: any,
+/** The loader's evaluation of the system file. A failure on a file that
+ *  calls `createSystem` with no binding leads with discovery's warning line
+ *  for it, then keeps the loader's own error. */
+function evaluateSystemModule(
+  engine: Pick<EngineApi, 'loadSystemModule' | 'extractFacts'>,
   systemPath: string,
   rootDir: string
 ) {
   try {
     return engine.loadSystemModule(systemPath, rootDir);
   } catch (error) {
-    throw withUnimportedCreateSystemHint(
-      error,
-      systemPath,
-      engineModuleParser(engine)
-    );
+    let source: string;
+    try {
+      source = readFileSync(systemPath, 'utf-8');
+    } catch {
+      throw error;
+    }
+    const imports =
+      engineModuleParser(engine)?.(source, systemPath)?.imports ?? [];
+    const call = unimportedCreateSystemCall(systemPath, source, imports);
+    if (!call) throw error;
+    throw new Error(`${warnLine(call)}\n${String(error)}`, { cause: error });
   }
 }
 
@@ -96,7 +106,11 @@ export function loadSystemConfig(
     prefixContextualVars?: boolean;
   }
 ): SystemConfig {
-  const config = loadSystemModule(engineApi(), opts.systemPath, opts.rootDir);
+  const config = evaluateSystemModule(
+    engineApi(),
+    opts.systemPath,
+    opts.rootDir
+  );
 
   let scalesJson: string = config.scalesJson;
   let variableMapJson: string = config.variableMapJson;
