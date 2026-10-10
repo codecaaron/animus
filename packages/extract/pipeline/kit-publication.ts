@@ -144,13 +144,16 @@ function packageFiles(pkgRoot: string, dir = ''): string[] {
   );
 }
 
-/** A `*` target pattern as a matcher of package-relative files. */
+/** A `*` target pattern as a matcher of package-relative files. Node puts
+ *  one subpath into every `*`, so each later `*` repeats the first match. */
 function targetPattern(target: string): RegExp {
   const body = posixPath(target)
     .replace(/^\.\//, '')
     .split('*')
     .map((part) => part.replace(/[.+?^${}()|[\]\\]/g, '\\$&'))
-    .join('.+');
+    .reduce((pattern, part, index) =>
+      index === 0 ? part : `${pattern}${index === 1 ? '(.+)' : '\\1'}${part}`
+    );
   return new RegExp(`^${body}$`);
 }
 

@@ -185,5 +185,23 @@ suite('kit publication', () => {
       'package.json: the "animus" target of exports["./extra"], ./src/missing.ts, does not exist in the package',
       'package.json: the "animus" target of exports["./parts/*"], ./src/parts/*.ts, matches no file in the package',
     ]);
+    // Node puts one subpath into every `*`, so `a-b` is no target of `*-*`.
+    expect(
+      kitPublicationFailures(
+        kit(
+          ['src', 'helpers', 'dist', 'parts/a-a.js'],
+          '../helpers/palette',
+          (manifest, write) => {
+            manifest.exports = {
+              '.': { animus: './src/index.ts', import: './dist/index.js' },
+              './parts/*': { animus: './parts/*-*.js' },
+            };
+            write('parts/a-a.js', 'export const part = 1;');
+            write('parts/a-b.js', 'export const part = 2;');
+          }
+        ),
+        engine
+      )
+    ).toEqual([]);
   });
 });
