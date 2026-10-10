@@ -10,7 +10,7 @@ use std::rc::Rc;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::analyze_css::{
-    declared_export, loaded_modules, namespace_path_module, resolve_import_source, CssInputs,
+    declared_export, loaded_modules, namespace_path_module, resolve_declaration, resolve_import_source, CssInputs,
 };
 use crate::facts::{FacadeEntry, FileFacts};
 
@@ -298,12 +298,11 @@ impl<'f> ObjectMembers<'f> {
         Some(held)
     }
 
-    /// The wrapper `object` holds at `key`, as its last write of the key set
-    /// it.
-    fn holds(&self, object: &Object, key: &str) -> Option<(String, String)> {
+    /// The binding `object` holds at `key`, with the module that names it,
+    /// as its last write of the key set it.
+    fn member_binding(&self, object: &Object, key: &str) -> Option<(String, String)> {
         let Object::Facade(module, binding) = object else { return None };
-        let ff = self.files.get(module)?;
-        let last = ff.facades.get(binding)?.iter().rev().find(|entry| match entry {
+        let last = self.files.get(module)?.facades.get(binding)?.iter().rev().find(|entry| match entry {
             FacadeEntry::Member { key: set, .. }
             | FacadeEntry::Other(set)
             | FacadeEntry::Written { key: set, .. }
@@ -311,13 +310,34 @@ impl<'f> ObjectMembers<'f> {
             FacadeEntry::Copy(_) | FacadeEntry::Unknown | FacadeEntry::Code(None) => true,
         })?;
         match last {
-            FacadeEntry::Member { binding: wrapper, member: None, .. }
-                if ff.spread_wrappers.get(wrapper).is_some_and(|held| held.held > 0) =>
-            {
-                Some((module.clone(), wrapper.clone()))
-            }
+            FacadeEntry::Member { binding, member: None, .. } => Some((module.clone(), binding.clone())),
             _ => None,
         }
+    }
+
+    /// The wrapper `object` holds at `key`, as its last write of the key set
+    /// it.
+    fn holds(&self, object: &Object, key: &str) -> Option<(String, String)> {
+        let (module, wrapper) = self.member_binding(object, key)?;
+        let held = self.files.get(&module)?.spread_wrappers.get(&wrapper).is_some_and(|held| held.held > 0);
+        held.then_some((module, wrapper))
+    }
+
+    /// The ordinary function component `tag`, written in `file`, renders as
+    /// a member of an object (`<Dialog.Root>` for `const Dialog = { Root }`):
+    /// its declaring module and binding. The object's last write of the key
+    /// names it, through an import too, and nothing may have changed the
+    /// object since.
+    pub(crate) fn ordinary_member(&mut self, file: &str, tag: &str) -> Option<(String, String)> {
+        let (path, key) = tag.rsplit_once('.')?;
+        let object = self.object_at(file, path)?;
+        let (module, binding) = self.member_binding(&object, key)?;
+        if self.table(&object).open || self.instability(&object).is_some() {
+            return None;
+        }
+        let ff = self.files.get(&module)?;
+        let (declaring, declared, _) = resolve_declaration(&module, ff, &binding, self.files, self.inputs)?;
+        self.files.get(&declaring)?.ordinary_components.contains(&declared).then_some((declaring, declared))
     }
 
     /// Every wrapper `object`'s initializer holds, whatever came later.

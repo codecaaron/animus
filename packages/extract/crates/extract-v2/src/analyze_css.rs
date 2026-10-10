@@ -823,7 +823,7 @@ fn classify_parent(
 /// Where a name visible in `file_path` is declared: the landing file, the
 /// declarator binding there, and whether that file declares it itself.
 /// None when the name's import source is outside the analyzed set.
-fn resolve_declaration(
+pub(crate) fn resolve_declaration(
     file_path: &str,
     ff: &FileFacts,
     name: &str,
@@ -3655,7 +3655,8 @@ fn names_react_pass_through(ff: &FileFacts, tag: &str, origin: Option<TagOrigin>
 /// into them. A receiver blocks nothing here, because the components whose
 /// elements it receives open (`opaque_delivery`); so a tag that can only
 /// receive leaves usage proven: an ordinary component an analysed module
-/// declares, whose body is analysed; one of React's pass-through
+/// declares, named directly or as the member a stable object holds
+/// (`<Dialog.Root>`), whose body is analysed; one of React's pass-through
 /// components; or an import, or a member of one, from a package extraction
 /// does not analyse, which cannot be a component extraction declared. A
 /// `createElement` call on any receiver but React's still blocks, since
@@ -3667,6 +3668,7 @@ fn uncertainty_leaves_usage_proven(
     sites: &[(&String, UncertainIdentity)],
     files: &BTreeMap<String, FileFacts>,
     inputs: &CssInputs,
+    ordinary_members: &FxHashMap<(String, String), (String, String)>,
 ) -> bool {
     // Each element of an ordinary component is a site; classify each tag once.
     let mut classified: FxHashSet<(&str, &str, Option<TagOrigin>)> = FxHashSet::default();
@@ -3687,6 +3689,9 @@ fn uncertainty_leaves_usage_proven(
             || names_react_pass_through(ff, tag, site.origin)
             || imported_from_outside(file, ff, tag, site.origin, files, inputs)
             || uncertain_tag_reason(file, ff, tag, site.origin, files, inputs).0 == TagClass::Ordinary
+            // The module's binding, never a parameter or local of the name.
+            || (matches!(site.origin, Some(TagOrigin::Import | TagOrigin::TopLevel))
+                && ordinary_members.contains_key(&(file.to_string(), tag.to_string())))
     })
 }
 
@@ -4029,12 +4034,14 @@ fn proven_slot_conditions(
 /// keeps them in place only when it is an Animus component that renders an
 /// element and the element cannot render another one (`as`, `asChild` or a
 /// spread), or an ordinary component that forwards nothing outside.
+#[allow(clippy::too_many_arguments)]
 fn opaque_delivery(
     files: &BTreeMap<String, FileFacts>,
     inputs: &CssInputs,
     evaluated_ids: &FxHashSet<String>,
     ids_by_binding: &IdsByBinding,
     wrapper_targets: &FxHashMap<String, FxHashMap<String, Vec<String>>>,
+    ordinary_members: &FxHashMap<(String, String), (String, String)>,
     receiver_ids: impl Fn(&str, &FileFacts, &str) -> Vec<String>,
     renders_in_place: impl Fn(&str) -> bool,
 ) -> std::collections::BTreeSet<String> {
@@ -4068,10 +4075,14 @@ fn opaque_delivery(
         if !ids.is_empty() {
             return tag.polymorphic || !ids.iter().all(|id| renders_in_place(id));
         }
-        let ordinary = declaration(file, ff, &tag.tag).filter(|(declaring, binding, _)| {
-            files.get(declaring).is_some_and(|declared| declared.ordinary_components.contains(binding))
-        });
-        ordinary.is_none_or(|(declaring, binding, _)| tag.polymorphic || forwarding.contains(&(declaring, binding)))
+        // An ordinary component, named directly or as an object's member.
+        let ordinary = declaration(file, ff, &tag.tag)
+            .filter(|(declaring, binding, _)| {
+                files.get(declaring).is_some_and(|declared| declared.ordinary_components.contains(binding))
+            })
+            .map(|(declaring, binding, _)| (declaring, binding))
+            .or_else(|| ordinary_members.get(&(file.to_string(), tag.tag.clone())).cloned());
+        ordinary.is_none_or(|(declaring, binding)| tag.polymorphic || forwarding.contains(&(declaring, binding)))
     };
     let mut forwarding: FxHashSet<(String, String)> = FxHashSet::default();
     loop {
@@ -6134,6 +6145,16 @@ fn run_with_system_floor(
     }
     // An element handed to code outside the analysis renders with options
     // and props no analysed use shows, so it opens as an escape does.
+    // Each member tag a module writes that names an ordinary function
+    // component an object holds (`<Dialog.Root>`), with its declaration.
+    let mut ordinary_members: FxHashMap<(String, String), (String, String)> = FxHashMap::default();
+    for (path, ff) in files {
+        for tag in written_member_tags(ff) {
+            if let Some(declared) = object_members.ordinary_member(path, tag) {
+                ordinary_members.insert((path.clone(), tag.to_string()), declared);
+            }
+        }
+    }
     // A receiver is known through its file's declarations, imports and
     // members only (`<Family.Root>`), never by a bare name elsewhere; a
     // member, only through the binding its object proves it holds.
@@ -6152,6 +6173,7 @@ fn run_with_system_floor(
         &evaluated_ids,
         &ids_by_binding,
         &wrapper_targets_by_file,
+        &ordinary_members,
         receiver_ids,
         |id| evaluated.get(id).is_some_and(|(_, _, terminal, ..)| *terminal == TerminalKind::AsElement),
     );
@@ -6340,7 +6362,7 @@ fn run_with_system_floor(
     let usage_complete = inputs.analysis_context.skipped_sources.is_empty()
         && !files.values().any(|ff| ff.direct_eval)
         && (!identity_policy.uncertain
-            || uncertainty_leaves_usage_proven(&uncertain_identities, files, inputs));
+            || uncertainty_leaves_usage_proven(&uncertain_identities, files, inputs, &ordinary_members));
     let project_uses = usage_complete
         .then(|| {
             let unproven: std::collections::BTreeSet<String> =
@@ -8991,6 +9013,36 @@ export const App = ({ n }) => <Box bgImage={n} texture={n} />;
         ] {
             let app = format!("import {{ R }} from './r';\nexport const App = ({{ c, o }}) => {render};\n");
             assert_eq!(kept_options(&[("r.tsx", RECIPE), ("app.tsx", app.as_str())]).0, sizes, "{render}");
+        }
+    }
+
+    /// A member tag that names an ordinary function component a stable
+    /// object holds (`<Dialog.Root>` for `const Dialog = { Root }`) is that
+    /// component: it leaves usage proven, and its children stay in place
+    /// unless it passes them to code outside the analysis. A member the
+    /// object may no longer hold, one built by a call, or a parameter that
+    /// shares the object's name still blocks.
+    #[test]
+    fn ordinary_family_members_leave_usage_proven() {
+        let kit = "export const Box = ds.system({ space: true }).asElement('div');\n";
+        let family = "import { Slot } from 'ui-lib';\n\
+                      function Root({ children }) { return <section>{children}</section>; }\n\
+                      function Pass({ children }) { return <Slot>{children}</Slot>; }\n\
+                      export const Dialog = { Root, Pass, Made: memo(Root) };\n";
+        let cases: [(&str, &str, &[&str]); 7] = [
+            ("", "() => <><Dialog.Root /><Box p={8} /></>", &[]),
+            ("", "() => <Dialog.Root><Box p={8} /></Dialog.Root>", &[]),
+            ("", "() => <><Dialog.Pass><div /></Dialog.Pass><Box p={8} /></>", &[]),
+            ("", "() => <><Dialog.Pass><Box p={8} /></Dialog.Pass><Box p={8} /></>", &["p"]),
+            ("", "() => <><Dialog.Made /><Box p={8} /></>", &["p"]),
+            ("", "({ Dialog }) => <><Dialog.Root /><Box p={8} /></>", &["p"]),
+            ("Dialog.Root = maybe;\n", "() => <><Dialog.Root /><Box p={8} /></>", &["p"]),
+        ];
+        for (more, app, want) in cases {
+            let family = format!("{family}{more}");
+            let app = format!("import {{ Box }} from './kit';\nimport {{ Dialog }} from './fam';\nexport const App = {app};\n");
+            let out = analyze(&[("kit.tsx", kit), ("fam.tsx", family.as_str()), ("app.tsx", app.as_str())], &test_inputs());
+            assert_eq!(out.dynamic_props.keys().collect::<Vec<_>>(), want, "{more}{app}");
         }
     }
 
