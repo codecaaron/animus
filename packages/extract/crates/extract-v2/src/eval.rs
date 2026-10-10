@@ -5,7 +5,7 @@ use oxc::ast::ast::{
     Argument, ArrayExpressionElement, Declaration, Expression, ObjectExpression, ObjectPropertyKind,
     Program, PropertyKey, PropertyKind, Statement, UnaryOperator, VariableDeclarationKind,
 };
-use oxc::span::Span;
+use oxc::span::{GetSpan, Span};
 use rustc_hash::FxHashMap;
 use serde_json::{Map, Value};
 
@@ -29,6 +29,13 @@ pub struct SkippedProperty {
     /// Key path of the nested object holding `key`, relative to the
     /// evaluated object; `None` at its top level.
     pub parent: Option<String>,
+    /// Source span of what was skipped: the value, or the key when the key
+    /// itself is unsupported.
+    pub span: Option<(u32, u32)>,
+}
+
+fn span_of(span: Span) -> Option<(u32, u32)> {
+    Some((span.start, span.end))
 }
 
 pub const SELECTOR_UNSUPPORTED_SUBJECT: &str = "animus.selector.unsupported-subject";
@@ -39,13 +46,14 @@ pub(crate) fn unsupported_selector_key(key: &str) -> bool {
     key.contains('&') && !crate::selector_subject::has_subject(key)
 }
 
-fn unsupported_selector_skip(key: &str) -> SkippedProperty {
+fn unsupported_selector_skip(key: &str, span: Span) -> SkippedProperty {
     SkippedProperty {
         key: key.to_string(),
         reason: format!(
             "selector '{key}' has no substitutable '&' subject outside quoted text ({SELECTOR_UNSUPPORTED_SUBJECT})"
         ),
         parent: None,
+        span: span_of(span),
     }
 }
 
@@ -98,7 +106,7 @@ fn eval_object_expr_scoped(
                 // Without a coded skip, theme resolution drops the rule
                 // silently.
                 if unsupported_selector_key(&key) {
-                    skipped.push(unsupported_selector_skip(&key));
+                    skipped.push(unsupported_selector_skip(&key, prop.key.span()));
                     continue;
                 }
 
@@ -144,6 +152,7 @@ fn eval_object_expr_scoped(
                                 key,
                                 reason: bail.reason,
                                 parent: None,
+                                span: span_of(inner_obj.span),
                             });
                         }
                     }
@@ -164,6 +173,7 @@ fn eval_object_expr_scoped(
                             key,
                             reason: bail.reason,
                             parent: None,
+                            span: span_of(prop.value.span()),
                         });
                     }
                 }
@@ -407,10 +417,11 @@ pub fn parse_variant_arg(
     let mut base = None;
     let mut variants = Map::new();
     let mut all_skips = Vec::new();
-    let skip = |key: &str, reason: &str| SkippedProperty {
+    let skip = |key: &str, reason: &str, span: Span| SkippedProperty {
         key: key.to_string(),
         reason: reason.to_string(),
         parent: None,
+        span: span_of(span),
     };
 
     for prop_kind in &obj.properties {
@@ -421,15 +432,18 @@ pub fn parse_variant_arg(
                     if let Expression::StringLiteral(lit) = &p.value {
                         prop = lit.value.to_string();
                     } else {
-                        all_skips.push(skip("prop", "variant prop name (non-static)"));
+                        all_skips.push(skip("prop", "variant prop name (non-static)", p.value.span()));
                     }
                 }
                 "defaultVariant" => {
                     if let Expression::StringLiteral(lit) = &p.value {
                         default_variant = Some(lit.value.to_string());
                     } else {
-                        all_skips
-                            .push(skip("defaultVariant", "default variant name (non-static)"));
+                        all_skips.push(skip(
+                            "defaultVariant",
+                            "default variant name (non-static)",
+                            p.value.span(),
+                        ));
                     }
                 }
                 "base" => {
@@ -445,7 +459,7 @@ pub fn parse_variant_arg(
                     ) {
                         base = Some(Value::Object(map));
                     } else {
-                        all_skips.push(skip("base", "variant base styles (non-static)"));
+                        all_skips.push(skip("base", "variant base styles (non-static)", p.value.span()));
                     }
                 }
                 "variants" => {
@@ -463,9 +477,12 @@ pub fn parse_variant_arg(
                                     all_skips.extend(skips);
                                     variants.insert(vkey, vstyles);
                                 }
-                                ObjectPropertyKind::SpreadProperty(_) => {
-                                    all_skips
-                                        .push(skip("variants", "variant map spread (non-static)"));
+                                ObjectPropertyKind::SpreadProperty(spread) => {
+                                    all_skips.push(skip(
+                                        "variants",
+                                        "variant map spread (non-static)",
+                                        spread.span,
+                                    ));
                                 }
                             }
                         }
@@ -478,7 +495,7 @@ pub fn parse_variant_arg(
                             variants.insert(vkey, vstyles);
                         }
                     } else {
-                        all_skips.push(skip("variants", "variant map (non-static)"));
+                        all_skips.push(skip("variants", "variant map (non-static)", p.value.span()));
                     }
                 }
                 _ => {}
@@ -487,6 +504,7 @@ pub fn parse_variant_arg(
             all_skips.push(skip(
                 "variant config",
                 "variant config spread (non-static)",
+                prop_kind.span(),
             ));
         }
     }

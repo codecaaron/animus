@@ -4255,6 +4255,17 @@ fn run_with_system_floor(
                         unbound,
                     ));
                 }
+                // A skip the evaluator located points at what it dropped, as
+                // written.
+                let mut located: Vec<(String, &crate::facts::SkippedSource)> = chain
+                    .stages
+                    .iter()
+                    .flat_map(|stage| &stage.skipped_sources)
+                    .map(|source| {
+                        let line = crate::pipeline::skip_warning(&chain.descriptor.binding, &source.key, &source.reason);
+                        (line, source)
+                    })
+                    .collect();
                 for warning in &out.skip_warnings {
                     if let Some(index) = replaced.iter().position(|line| line == warning) {
                         replaced.swap_remove(index);
@@ -4262,13 +4273,20 @@ fn run_with_system_floor(
                     }
                     // A skip names its own code when it has one.
                     let code = diagnostic_code_from_message(warning);
-                    diagnostics.push(diagnostic(
+                    let record = diagnostic(
                         file_path,
                         &chain.descriptor.binding,
                         "skip",
                         warning.clone(),
                         Some(code.as_deref().unwrap_or(SKIPPED_VALUE)),
-                    ));
+                    );
+                    diagnostics.push(match located.iter().position(|(line, _)| line == warning) {
+                        Some(index) => {
+                            let (_, source) = located.swap_remove(index);
+                            record.at(source.start).dropping(&source.text)
+                        }
+                        None => record,
+                    });
                 }
                 if classify_drops {
                     for dropped in dropped {

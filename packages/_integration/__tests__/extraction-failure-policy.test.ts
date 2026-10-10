@@ -439,6 +439,7 @@ describe.each([
           "chain dropped: stage 'props' evaluation failed — props config parse failed: invalid type: integer `123`, expected a string",
       },
     ]);
+    // A skip points at the value it dropped and carries it as written.
     expect(
       forComponent(analysis.diagnostics, 'LookalikeTransform')
     ).toMatchObject([
@@ -446,6 +447,9 @@ describe.each([
         kind: 'skip',
         message:
           "[skip] LookalikeTransform: property 'transform' — transform reference 'shift' is a mutable `let` binding",
+        line: 88,
+        column: 51,
+        dropped: 'shift',
       },
     ]);
   });
