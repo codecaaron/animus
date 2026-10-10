@@ -360,6 +360,8 @@ struct StyleModule {
     namespace_exports: BTreeMap<String, String>,
     /// Every module load, as usage records them.
     loads: Vec<crate::usage_facts::ModuleLoad>,
+    /// The sources of its `export * from '…'` declarations.
+    star_exports: Vec<String>,
 }
 
 /// Each module-scope static that a use anywhere in the analysis may change
@@ -392,18 +394,30 @@ fn unstable_style_statics(
             None => Some((file.to_string(), name.to_string())),
         }
     };
+    // Every declaration a module exports, those `export *` re-exports from
+    // other modules included, every module's `default` but its own excepted.
     let every_export = |target: &str| -> Vec<(String, String)> {
-        modules
-            .get(target)
-            .map(|(_, exports)| {
-                exports
+        let mut declarations = Vec::new();
+        let mut seen: rustc_hash::FxHashSet<String> = rustc_hash::FxHashSet::default();
+        let mut pending = vec![(target.to_string(), true)];
+        while let Some((module, own)) = pending.pop() {
+            if !seen.insert(module.clone()) {
+                continue;
+            }
+            if let Some((_, exports)) = modules.get(&module) {
+                declarations.extend(exports.iter().filter(|export| own || export.exported != "default").filter_map(
+                    |export| declaration(chase_export(module.clone(), export.exported.clone(), modules, files, inputs)),
+                ));
+            }
+            let stars = style.get(&module).map(|module| module.star_exports.as_slice()).unwrap_or_default();
+            pending.extend(
+                stars
                     .iter()
-                    .filter_map(|export| {
-                        declaration(chase_export(target.to_string(), export.exported.clone(), modules, files, inputs))
-                    })
-                    .collect()
-            })
-            .unwrap_or_default()
+                    .filter_map(|spec| analyze_css::resolve_import_source(&module, spec, files, inputs))
+                    .map(|star| (star, false)),
+            );
+        }
+        declarations
     };
     // Whether the function `function` of `file` only reads the object passed
     // as its parameter `index`, through the read-only callees it passes the
@@ -520,8 +534,9 @@ fn unstable_style_statics(
             Some((target, format!("as the namespace {name}")))
         });
         // A load by any specifier reaches every module it can name; one whose
-        // specifier cannot be read reaches every module, unless the host
-        // leaves such an `import()` unbundled.
+        // specifier cannot be read reaches every module. That holds for an
+        // `import()` a host leaves unbundled too: a dev server still runs it
+        // against the analysed modules.
         let loads = module.loads.iter().flat_map(|load| {
             use crate::usage_facts::LoadTarget;
             let unreadable = match &load.target {
@@ -529,12 +544,10 @@ fn unstable_style_statics(
                 LoadTarget::Prefix(prefix) => prefix.is_empty(),
                 _ => false,
             };
-            let reached: Vec<String> = if !unreadable {
-                analyze_css::loaded_modules(file, load, files, inputs).into_iter().cloned().collect()
-            } else if load.dynamic_import && inputs.analysis_context.unbundled_computed_imports {
-                Vec::new()
-            } else {
+            let reached: Vec<String> = if unreadable {
                 files.keys().cloned().collect()
+            } else {
+                analyze_css::loaded_modules(file, load, files, inputs).into_iter().cloned().collect()
             };
             reached.into_iter().map(|target| (target, "at runtime".to_string()))
         });
@@ -732,6 +745,7 @@ impl ExtractEngine {
                     namespace_imports,
                     namespace_exports: crate::usage_facts::collect_namespace_exports(module),
                     loads: crate::usage_facts::runtime_loads(program, ast.source()),
+                    star_exports: crate::usage_facts::collect_star_exports(module),
                 },
             );
         }
@@ -1315,7 +1329,11 @@ mod tests {
     /// Contract: a style constant a module may change after loading its
     /// module at runtime refuses its style reads, whatever spells the load:
     /// a string, a template or concatenation, `require`, `import.meta.glob`,
-    /// or a specifier the analysis cannot read, which may reach any module.
+    /// or a specifier the analysis cannot read, which may reach any module,
+    /// even an `import()` the host leaves unbundled. Loading a module that
+    /// re-exports it through `export *` counts; a glob reaches what its
+    /// pattern can match, a simple `!path` negation excluding that module and
+    /// syntax it does not model widening to the pattern's directory.
     #[test]
     fn a_style_constant_any_runtime_load_reaches_refuses_its_reads() {
         let styles = "export const STYLE = { color: 'red' };\n";
@@ -1323,29 +1341,42 @@ mod tests {
                    export const Box = ds.styles({ ...STYLE }).asElement('div');\n\
                    export const App = () => <Box />;\n";
         let mutate = "(m) => { m.STYLE.color = 'blue'; }";
-        let cases = [
-            ("none", "export const load = () => null;\n".to_string(), false),
-            ("string", format!("export const load = () => import('./styles').then({mutate});\n"), true),
-            ("template", format!("export const load = () => import(`./styles`).then({mutate});\n"), true),
-            ("require", format!("export const load = (name) => ({mutate})(require(`./${{name}}`));\n"), true),
-            (
-                "glob",
-                format!("const modules = import.meta.glob('./styles.ts');\nexport const load = () => modules['./styles.ts']().then({mutate});\n"),
-                true,
-            ),
-            ("unread", format!("export const load = (name) => import(name).then({mutate});\n"), true),
+        let loader = |body: String| vec![("loader.ts", body)];
+        let barrel = |body: String| vec![("barrel.ts", "export * from './styles';\n".to_string()), ("loader.ts", body)];
+        let glob = |patterns: &str| {
+            loader(format!("const modules = import.meta.glob({patterns});\nexport const load = () => Object.values(modules)[0]().then({mutate});\n"))
+        };
+        type Case = (&'static str, Vec<(&'static str, String)>, bool, bool);
+        let cases: Vec<Case> = vec![
+            ("none", loader("export const load = () => null;\n".to_string()), false, false),
+            ("string", loader(format!("export const load = () => import('./styles').then({mutate});\n")), false, true),
+            ("template", loader(format!("export const load = () => import(`./styles`).then({mutate});\n")), false, true),
+            ("require", loader(format!("export const load = (name) => ({mutate})(require(`./${{name}}`));\n")), false, true),
+            ("glob", glob("'./styles.ts'"), false, true),
+            ("unread", loader(format!("export const load = (name) => import(name).then({mutate});\n")), false, true),
+            ("unread-unbundled", loader(format!("export const load = (name) => import(name).then({mutate});\n")), true, true),
+            ("star-barrel", barrel(format!("export const load = () => import('./barrel').then({mutate});\n")), false, true),
+            ("star-barrel-template", barrel(format!("export const load = () => import(`./barrel`).then({mutate});\n")), false, true),
+            ("range-glob", glob("'./st{x..z}les.ts'"), false, true),
+            ("negated-glob", glob("['./*.ts', '!./styles.ts']"), false, false),
+            ("negated-other-glob", glob("['./*.ts', '!./other.ts']"), false, true),
         ];
-        for (name, loader, refused) in cases {
-            let mut engine = ExtractEngine::new(None).unwrap();
-            let files = serde_json::json!([
-                { "path": "styles.ts", "source": styles },
-                { "path": "app.tsx", "source": app },
-                { "path": "loader.ts", "source": loader },
-            ]);
-            let out: serde_json::Value = serde_json::from_str(&engine.analyze(files.to_string()).unwrap()).unwrap();
+        for (name, extra, unbundled, refused) in cases {
+            let options = EngineOptions {
+                analysis_context_json: unbundled.then(|| r#"{"unbundledComputedImports":true}"#.to_string()),
+                ..Default::default()
+            };
+            let mut engine = ExtractEngine::new(Some(options)).unwrap();
+            let mut files = vec![
+                serde_json::json!({ "path": "styles.ts", "source": styles }),
+                serde_json::json!({ "path": "app.tsx", "source": app }),
+            ];
+            files.extend(extra.iter().map(|(path, source)| serde_json::json!({ "path": path, "source": source })));
+            let out: serde_json::Value =
+                serde_json::from_str(&engine.analyze(serde_json::Value::Array(files).to_string()).unwrap()).unwrap();
             let refusal = out["diagnostics"].as_array().unwrap().iter().any(|diagnostic| {
                 diagnostic["component"] == "Box"
-                    && diagnostic["message"].as_str().unwrap_or_default().contains("loader.ts hands on styles.ts at runtime")
+                    && diagnostic["message"].as_str().unwrap_or_default().contains("loader.ts hands on")
             });
             assert_eq!(refusal, refused, "{name}: {}", out["diagnostics"]);
         }

@@ -2663,7 +2663,7 @@ pub(crate) fn loaded_modules<'f, T>(
                     && filter.as_ref().is_none_or(|filter| filter.is_match(&format!("./{rest}")))
             })
         }
-        LoadTarget::Glob(pattern) => {
+        LoadTarget::Glob(pattern, excluded) => {
             // The fixed part ends at the first glob syntax, an extglob group
             // (`+(`, `@(`, `!(`) included.
             let split = pattern
@@ -2675,11 +2675,21 @@ pub(crate) fn loaded_modules<'f, T>(
                 .map_or(pattern.len(), |(at, _)| at);
             let (fixed, rest) = pattern.split_at(split);
             let fixed = if fixed.is_empty() { "./" } else { fixed };
-            // A pattern it cannot read keeps only the fixed part's filter.
+            // A pattern it cannot model exactly widens to every module under
+            // its fixed part's directory.
             let glob = glob_regex(rest);
-            modules_under(file, fixed, files, inputs, |path| {
-                glob.as_ref().is_none_or(|glob| glob.is_match(path))
-            })
+            let fixed = match (&glob, fixed.rfind('/')) {
+                (None, Some(slash)) => &fixed[..=slash],
+                _ => fixed,
+            };
+            let excluded: Vec<String> = excluded
+                .iter()
+                .filter_map(|path| resolve_import_source(file, path, files, inputs))
+                .collect();
+            modules_under(file, fixed, files, inputs, |path| glob.as_ref().is_none_or(|glob| glob.is_match(path)))
+                .into_iter()
+                .filter(|module| !excluded.contains(module))
+                .collect()
         }
         LoadTarget::Prefix(_) | LoadTarget::Unknown => {
             if load.dynamic_import && inputs.analysis_context.unbundled_computed_imports {
@@ -2756,8 +2766,10 @@ fn modules_under<'f, T>(
 
 /// A glob pattern (the part past its fixed prefix) as an anchored regular
 /// expression over a path: `**/` any directories, `*` and `?` within one
-/// segment, `[…]` a class, `{a,b}` alternatives. `None` for an extglob or a
-/// pattern it cannot translate, which then matches any path.
+/// segment, `[…]` a class, `{a,b}` alternatives. `None` for syntax it does
+/// not model exactly (an extglob, a `{1..3}` range, a group or an escape)
+/// or a pattern it cannot translate; the load then reaches every module
+/// under the fixed part's directory.
 fn glob_regex(glob: &str) -> Option<regex::Regex> {
     fn translate(glob: &str) -> Option<String> {
         let mut out = String::new();
@@ -2776,6 +2788,8 @@ fn glob_regex(glob: &str) -> Option<regex::Regex> {
                     continue;
                 }
                 '*' | '?' | '+' | '@' | '!' if chars.get(i + 1) == Some(&'(') => return None,
+                // Regular-expression groups and escapes are not modelled.
+                '(' | ')' | '|' | '\\' => return None,
                 '*' => out.push_str("[^/]*"),
                 '?' => out.push_str("[^/]"),
                 '[' => {
@@ -2806,6 +2820,10 @@ fn glob_regex(glob: &str) -> Option<regex::Regex> {
                     }
                     let end = end?;
                     let inner: String = chars[i + 1..end].iter().collect();
+                    // A range (`{1..3}`, `{a..c}`) is not modelled.
+                    if inner.contains("..") {
+                        return None;
+                    }
                     let mut alternatives = Vec::new();
                     let (mut depth, mut start) = (0, 0);
                     for (at, c) in inner.char_indices() {

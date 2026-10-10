@@ -748,8 +748,9 @@ pub enum LoadTarget {
         recursive: bool,
         filter: Option<String>,
     },
-    /// One `import.meta.glob` pattern.
-    Glob(String),
+    /// One `import.meta.glob` pattern, with the call's simple negations
+    /// (`'!./path'` naming one module) that exclude a module from it.
+    Glob(String, Vec<String>),
     /// A specifier usage cannot read.
     Unknown,
 }
@@ -878,23 +879,33 @@ fn webpack_context_of(call: &CallExpression<'_>) -> LoadTarget {
 /// The patterns one glob argument names: a pattern, or an array of them; a
 /// negated pattern only narrows, so it is skipped.
 fn glob_loads(argument: Option<&Argument<'_>>) -> Vec<LoadTarget> {
-    let pattern = |expression: &Expression<'_>| match expression.get_inner_expression() {
-        Expression::StringLiteral(literal) if literal.value.starts_with('!') => None,
-        Expression::StringLiteral(literal) => Some(LoadTarget::Glob(literal.value.to_string())),
-        _ => Some(LoadTarget::Unknown),
+    let expressions: Vec<Option<&Expression<'_>>> =
+        match argument.and_then(Argument::as_expression).map(Expression::get_inner_expression) {
+            Some(Expression::ArrayExpression(array)) => {
+                array.elements.iter().map(|element| element.as_expression()).collect()
+            }
+            Some(expression) => vec![Some(expression)],
+            None => vec![None],
+        };
+    let literal = |expression: Option<&Expression<'_>>| match expression.map(Expression::get_inner_expression) {
+        Some(Expression::StringLiteral(literal)) => Some(literal.value.to_string()),
+        _ => None,
     };
-    match argument.and_then(Argument::as_expression).map(Expression::get_inner_expression) {
-        Some(Expression::ArrayExpression(array)) => array
-            .elements
-            .iter()
-            .filter_map(|element| match element.as_expression() {
-                Some(expression) => pattern(expression),
-                None => Some(LoadTarget::Unknown),
-            })
-            .collect(),
-        Some(expression) => pattern(expression).into_iter().collect(),
-        None => vec![LoadTarget::Unknown],
-    }
+    // A negation naming one module excludes exactly that module; one with
+    // glob syntax is not modelled and excludes nothing, which only widens.
+    let excluded: Vec<String> = expressions
+        .iter()
+        .filter_map(|expression| literal(*expression)?.strip_prefix('!').map(str::to_string))
+        .filter(|path| !path.contains(['*', '?', '[', ']', '{', '}', '(', ')', '!', '|', '\\']))
+        .collect();
+    expressions
+        .iter()
+        .filter_map(|expression| match literal(*expression) {
+            Some(pattern) if pattern.starts_with('!') => None,
+            Some(pattern) => Some(LoadTarget::Glob(pattern, excluded.clone())),
+            None => Some(LoadTarget::Unknown),
+        })
+        .collect()
 }
 
 /// What a call loads: `require(…)`, `require.context(…)`,
