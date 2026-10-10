@@ -17,7 +17,7 @@ use crate::chain_walk::{MemberParentExtension, TerminalKind};
 use crate::css::{
     build_variable_slot_entries, css_property_name, generate_composed_compound_css, slot_segment,
     generate_composed_variant_css, generate_css_sheets_ordered, layer_name, layer_order,
-    resolve_custom_prop_classes, resolve_utility_classes, wrap_layer, BreakpointMap, ComponentCss, ComposeFamilyRef, CompoundConditionMap,
+    resolve_custom_prop_classes, resolve_utility_classes, slot_property_registrations, wrap_layer, BreakpointMap, ComponentCss, ComposeFamilyRef, CompoundConditionMap,
     CssFragmentStore, CssSheets, UtilityInput, VariantCss,
 };
 use crate::declarations::{bind_component_declarations, check_surface_overlap, DeclarationBinding, DeclarationScales};
@@ -6006,6 +6006,13 @@ fn run_with_system_floor(
         sheets.global.push_str(&unlayered_global_css);
         sheets.global.push('\n');
     }
+    // The slot variables' registrations lead the global sheet, which every
+    // host delivers right after the theme's own `@property` rules.
+    let slot_registrations = slot_property_registrations(
+        dynamic_props.values().chain(per_component_custom_dynamic.values().flat_map(|metas| metas.values())),
+        &breakpoints,
+    );
+    sheets.global.insert_str(0, &slot_registrations);
 
     // Global is excluded here; it flows through `sheets`.
     let mut css = sheets.declaration.clone();
