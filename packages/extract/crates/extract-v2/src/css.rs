@@ -1838,6 +1838,11 @@ use crate::dynamic_meta::DynamicPropMeta;
 /// condition.
 pub type SlotConditions = HashMap<String, BTreeSet<String>>;
 
+/// Whether the rules of slot variable `var` serve `condition`.
+fn slot_serves(conditions: &SlotConditions, var: &str, condition: &str) -> bool {
+    conditions.get(var).is_none_or(|served| served.contains(condition))
+}
+
 pub fn build_variable_slot_entries(
     dynamic_props: &HashMap<String, DynamicPropMeta>,
     breakpoints: &BreakpointMap,
@@ -1855,9 +1860,7 @@ pub fn build_variable_slot_entries(
         if !rendered.insert(meta.slot_class.as_str()) {
             continue;
         }
-        let serves = |condition: &str| {
-            conditions.get(&meta.var_name).is_none_or(|served| served.contains(condition))
-        };
+        let serves = |condition: &str| slot_serves(conditions, &meta.var_name, condition);
         let css_property = css_property_name(&meta.property);
         let declarations = |var: &str, write_current_var: bool| {
             let value = format!("var({var})");
@@ -1931,9 +1934,7 @@ pub fn slot_property_registrations<'a>(
 ) -> String {
     let mut names = BTreeSet::new();
     for meta in metas.into_iter().filter_map(DynamicPropMeta::value) {
-        let serves = |condition: &str| {
-            conditions.get(&meta.var_name).is_none_or(|served| served.contains(condition))
-        };
+        let serves = |condition: &str| slot_serves(conditions, &meta.var_name, condition);
         if serves(crate::usage_facts::BASE_CONDITION) {
             names.insert(meta.var_name.clone());
         }

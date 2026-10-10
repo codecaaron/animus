@@ -82,7 +82,7 @@ pub enum TagFact {
 
 /// Where the name a tag starts with is bound, as the file's own scopes tell
 /// it: for `<ui.Item>`, where `ui` is.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TagOrigin {
     Import,
     /// Any other top-level binding of the file.
@@ -769,7 +769,11 @@ pub(crate) fn collect_enriched_usage(
         None => Some(SemanticBuilder::new().build(program).semantic.into_scoping()),
     };
     let origins = scoping.as_ref().or(tag_scoping.as_ref());
-    let finite_params = origins.map(|scoping| literal_union_parameters(program, scoping)).unwrap_or_default();
+    // Only TypeScript annotates parameters.
+    let finite_params = origins
+        .filter(|_| program.source_type.is_typescript())
+        .map(|scoping| literal_union_parameters(program, scoping))
+        .unwrap_or_default();
     let mut collector = FactCollector {
         facts: Vec::new(),
         static_values,
@@ -796,7 +800,7 @@ pub(crate) fn collect_enriched_usage(
     let direct_eval = origins.is_none_or(|scoping| scoping.root_unresolved_references().contains_key("eval"));
     let confined = match &scoping {
         // Direct eval can read any binding by name.
-        Some(scoping) if !scoping.root_unresolved_references().contains_key("eval") => {
+        Some(scoping) if !direct_eval => {
             let mut scan = ConfinementScan {
                 scoping,
                 chains,
@@ -2107,17 +2111,11 @@ impl FactCollector<'_, '_> {
             Expression::LogicalExpression(logical) if logical.operator.is_or() || logical.operator.is_coalesce() => {
                 let left = self.finite_set(&logical.left)?;
                 let right = self.finite_set(&logical.right)?;
-                let reaches_right = match logical.operator.is_or() {
-                    true => left.falsy(),
-                    false => left.absent,
+                let (reaches_right, values) = match logical.operator.is_or() {
+                    true => (left.falsy(), left.values.into_iter().filter(truthy).collect()),
+                    false => (left.absent, left.values),
                 };
-                let kept = FiniteSet {
-                    values: match logical.operator.is_or() {
-                        true => left.values.into_iter().filter(truthy).collect(),
-                        false => left.values,
-                    },
-                    absent: false,
-                };
+                let kept = FiniteSet { values, absent: false };
                 Some(if reaches_right { kept.union(right) } else { kept })
             }
             Expression::Identifier(ident) => {
@@ -2130,10 +2128,7 @@ impl FactCollector<'_, '_> {
                 let value = evaluate_with_statics(expression, self.static_values, self.scoping)?;
                 is_class_value(&value).then(|| FiniteSet { values: vec![value], absent: false })
             }
-            _ => {
-                let value = eval_static_expression(expression).filter(is_class_value)?;
-                Some(FiniteSet { values: vec![value], absent: false })
-            }
+            _ => Some(FiniteSet { values: vec![literal_value(expression)?], absent: false }),
         }
     }
 
@@ -2301,7 +2296,7 @@ impl ParameterScan<'_> {
         let (Some(mut set), Some(symbol)) = (set, id.symbol_id.get()) else {
             return;
         };
-        if self.scoping.get_resolved_references(symbol).any(|reference| reference.is_write()) {
+        if self.scoping.symbol_is_mutated(symbol) {
             return;
         }
         if let Some(default) = default {

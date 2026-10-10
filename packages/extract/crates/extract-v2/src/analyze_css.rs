@@ -3301,7 +3301,9 @@ const REACT_PASS_THROUGH: [&str; 5] = ["Activity", "Fragment", "Profiler", "Stri
 
 /// Whether `tag` names one of React's pass-through components, proven by
 /// its import from `react` or `react/jsx-runtime`, as a named import or a
-/// member of the default or namespace import.
+/// member of the default or namespace import. Unlike `ReactNames`, which an
+/// unbound `React` satisfies so that more escapes are seen, this widens a
+/// proof, so only an import counts.
 fn names_react_pass_through(ff: &FileFacts, tag: &str, origin: Option<TagOrigin>) -> bool {
     let from_react = |source: &str| source == "react" || source == "react/jsx-runtime";
     if origin != Some(TagOrigin::Import) {
@@ -3334,6 +3336,8 @@ fn uncertainty_leaves_usage_proven(
     files: &BTreeMap<String, FileFacts>,
     inputs: &CssInputs,
 ) -> bool {
+    // Each element of an ordinary component is a site; classify each tag once.
+    let mut classified: FxHashSet<(&str, &str, Option<TagOrigin>)> = FxHashSet::default();
     sites.iter().all(|(file, site)| {
         let (UncertainIdentity::Tag(site), Some(ff)) = (site, files.get(*file)) else {
             return false;
@@ -3341,7 +3345,8 @@ fn uncertainty_leaves_usage_proven(
         let Some(tag) = site.tag.as_deref() else {
             return false;
         };
-        names_react_pass_through(ff, tag, site.origin)
+        !classified.insert((file.as_str(), tag, site.origin))
+            || names_react_pass_through(ff, tag, site.origin)
             || uncertain_tag_reason(file, ff, tag, site.origin, files, inputs).0 == TagClass::Ordinary
     })
 }
@@ -3569,20 +3574,18 @@ impl UsageLookupMaps {
 struct ConfinedUse {
     /// A spread attribute can deliver any prop.
     spread: bool,
-    /// Props with an attribute value that is not a literal.
-    runtime_props: FxHashSet<String>,
+    /// Each prop with a value that is not a literal, and the conditions its
+    /// runtime values write: `None` when one value's shape is unknown.
+    runtime: FxHashMap<String, Option<BTreeSet<String>>>,
+    /// Each prop's distinct literal values.
     static_values: FxHashMap<String, Vec<Value>>,
-    /// Where every use is proven, the conditions each runtime prop's values
-    /// write; `None` when one value's shape is unknown. A runtime prop
-    /// without an entry arrives another way, in any shape.
-    runtime_conditions: FxHashMap<String, Option<BTreeSet<String>>>,
 }
 
 impl ConfinedUse {
     /// Every value `prop` can receive is a literal for which `has_class` holds.
     fn covers(&self, prop: &str, has_class: impl Fn(&Value) -> bool) -> bool {
         !self.spread
-            && !self.runtime_props.contains(prop)
+            && !self.runtime.contains_key(prop)
             && self.static_values.get(prop).is_none_or(|values| values.iter().all(has_class))
     }
 
@@ -3593,9 +3596,9 @@ impl ConfinedUse {
         if self.spread {
             return None;
         }
-        let mut conditions = match self.runtime_props.contains(prop) {
-            true => self.runtime_conditions.get(prop).cloned().flatten()?,
-            false => BTreeSet::new(),
+        let mut conditions = match self.runtime.get(prop) {
+            Some(conditions) => conditions.clone()?,
+            None => BTreeSet::new(),
         };
         for value in self.static_values.get(prop).into_iter().flatten().filter(|value| !has_class(value)) {
             match value {
@@ -3608,14 +3611,27 @@ impl ConfinedUse {
         Some(conditions)
     }
 
-    /// Records a runtime value of `prop` that writes `conditions`.
+    /// Records a runtime value of `prop` that writes `conditions`, `None`
+    /// when its shape is unknown.
     fn write(&mut self, prop: &str, conditions: Option<BTreeSet<String>>) {
-        self.runtime_props.insert(prop.to_string());
-        let entry = self.runtime_conditions.entry(prop.to_string()).or_insert_with(|| Some(BTreeSet::new()));
-        match (entry, conditions) {
-            (Some(known), Some(conditions)) => known.extend(conditions),
-            (entry, _) => *entry = None,
+        join_conditions(self.runtime.entry(prop.to_string()).or_insert_with(|| Some(BTreeSet::new())), conditions);
+    }
+
+    /// Records a literal value of `prop`.
+    fn receive(&mut self, prop: &str, value: &Value) {
+        let values = self.static_values.entry(prop.to_string()).or_default();
+        if !values.contains(value) {
+            values.push(value.clone());
         }
+    }
+}
+
+/// Joins `conditions` into `entry`: an unknown set on either side leaves
+/// the union unknown.
+fn join_conditions(entry: &mut Option<BTreeSet<String>>, conditions: Option<BTreeSet<String>>) {
+    match (entry, conditions) {
+        (Some(known), Some(conditions)) => known.extend(conditions),
+        (entry, _) => *entry = None,
     }
 }
 
@@ -3630,12 +3646,7 @@ fn proven_slot_conditions(
     let mut slots: HashMap<String, Option<BTreeSet<String>>> = HashMap::new();
     for (prop, meta) in metas {
         let Some(meta) = meta.value() else { continue };
-        let conditions = conditions_of(prop);
-        let entry = slots.entry(meta.var_name.clone()).or_insert_with(|| Some(BTreeSet::new()));
-        match (entry, conditions) {
-            (Some(known), Some(conditions)) => known.extend(conditions),
-            (entry, _) => *entry = None,
-        }
+        join_conditions(slots.entry(meta.var_name.clone()).or_insert_with(|| Some(BTreeSet::new())), conditions_of(prop));
     }
     slots.into_iter().filter_map(|(slot, conditions)| Some((slot, conditions.filter(|c| !c.is_empty())?))).collect()
 }
@@ -3655,22 +3666,25 @@ fn project_confined_uses<'a>(
         return None;
     }
     let open: FxHashSet<&String> = results.iter().flat_map(|result| &result.open_components).collect();
-    let cloned: FxHashSet<String> = results.iter().flat_map(|result| result.cloned_props.iter().cloned()).collect();
+    // A clone's override may take any shape.
+    let cloned: FxHashMap<String, Option<BTreeSet<String>>> =
+        results.iter().flat_map(|result| result.cloned_props.iter().map(|prop| (prop.clone(), None))).collect();
     let mut uses: FxHashMap<String, ConfinedUse> = components
         .filter(|(id, class_resolver)| !class_resolver && !escaped_ids.contains(*id) && !open.contains(id))
-        .map(|(id, _)| (id.clone(), ConfinedUse { runtime_props: cloned.clone(), ..Default::default() }))
+        .map(|(id, _)| (id.clone(), ConfinedUse { runtime: cloned.clone(), ..Default::default() }))
         .collect();
     for result in results {
         for written in &result.written_props {
             let Some(confined) = uses.get_mut(&written.binding) else { continue };
             match &written.literal {
-                Some(value) => confined.static_values.entry(written.prop.clone()).or_default().push(value.clone()),
+                Some(value) => confined.receive(&written.prop, value),
                 None => confined.write(&written.prop, written.conditions.clone()),
             }
         }
+        // Each also has a written prop; one without arrives in any shape.
         for usage in &result.dynamic_prop_usages {
             if let Some(confined) = uses.get_mut(&usage.binding) {
-                confined.runtime_props.insert(usage.prop_name.clone());
+                confined.runtime.entry(usage.prop_name.clone()).or_insert(None);
             }
         }
     }
@@ -3704,18 +3718,14 @@ fn confined_uses(
             confined.spread |= spread.is_some();
             for attr in attrs {
                 match (&attr.static_value, attr.dynamic) {
-                    (Some(value), false) => confined
-                        .static_values
-                        .entry(attr.name.clone())
-                        .or_default()
-                        .push(value.clone()),
-                    (None, false) if attr.literal => confined
-                        .static_values
-                        .entry(attr.name.clone())
-                        .or_default()
-                        .extend(attr.enumerable_values.iter().cloned()),
+                    (Some(value), false) => confined.receive(&attr.name, value),
+                    (None, false) if attr.literal => {
+                        for value in &attr.enumerable_values {
+                            confined.receive(&attr.name, value);
+                        }
+                    }
                     _ => {
-                        confined.runtime_props.insert(attr.name.clone());
+                        confined.runtime.insert(attr.name.clone(), None);
                     }
                 }
             }
@@ -5605,17 +5615,17 @@ fn run_with_system_floor(
         &reachable_ids,
         identity_policy.uncertain,
     );
-    // Where the analysis is complete enough to remove an unrendered
-    // component, it also proves every use of the rest, across modules.
-    // Otherwise only a component its own module confines is proven.
-    // A direct `eval` can read any binding by name.
+    // Where the analysis sees every source in production, no direct `eval`
+    // can read a binding by name, and every tag it cannot match is one that
+    // cannot hide a use, it proves every use of each component across
+    // modules. Otherwise only a component its own module confines is proven.
     let every_use_proven = !inputs.dev_mode
         && inputs.analysis_context.skipped_sources.is_empty()
+        && !files.values().any(|ff| ff.direct_eval)
         && (!identity_policy.uncertain
             || (identity_policy.unattributed.is_empty()
-                && uncertainty_leaves_usage_proven(&uncertain_identities, files, inputs)))
-        && !files.values().any(|ff| ff.direct_eval);
-    let confined_uses = every_use_proven
+                && uncertainty_leaves_usage_proven(&uncertain_identities, files, inputs)));
+    let project_uses = every_use_proven
         .then(|| {
             project_confined_uses(
                 &all_usage_results,
@@ -5623,8 +5633,10 @@ fn run_with_system_floor(
                 &escaped_ids,
             )
         })
-        .flatten()
-        .unwrap_or_else(|| confined_uses(files, &chain_lookup, &evaluated_ids));
+        .flatten();
+    // Only project-wide uses record the conditions runtime values write.
+    let narrows_slots = project_uses.is_some();
+    let confined_uses = project_uses.unwrap_or_else(|| confined_uses(files, &chain_lookup, &evaluated_ids));
     let utility_classes = resolve_utility_classes(&all_utility_inputs, &resolve_ctx, class_prefix);
     // A system prop keeps its slot while any component it is active on can
     // receive a value without a utility class; a same-named custom prop takes
@@ -5676,9 +5688,8 @@ fn run_with_system_floor(
     share_slots(&mut dynamic_props);
     // Where every use is proven, a slot serves only the conditions some
     // value reaching it writes.
-    let mut slot_conditions = crate::css::SlotConditions::new();
-    if every_use_proven {
-        slot_conditions = proven_slot_conditions(&dynamic_props, |prop| {
+    let mut slot_conditions = if narrows_slots {
+        proven_slot_conditions(&dynamic_props, |prop| {
             let mut conditions = BTreeSet::new();
             for (component_id, (_, _, _, active_props, _, custom_configs, _)) in &evaluated {
                 let active = active_props.as_ref().is_some_and(|props| props.contains(prop));
@@ -5692,8 +5703,10 @@ fn run_with_system_floor(
                 );
             }
             Some(conditions)
-        });
-    }
+        })
+    } else {
+        Default::default()
+    };
     let slot_entries = if !dynamic_props.is_empty() {
         Some(build_variable_slot_entries(&dynamic_props, &breakpoints, &slot_conditions))
     } else {
@@ -5876,7 +5889,7 @@ fn run_with_system_floor(
         }
         if !component_dynamic.is_empty() {
             share_slots(&mut component_dynamic);
-            if every_use_proven {
+            if narrows_slots {
                 let confined = confined_uses.get(component_id.as_str());
                 let proven = proven_slot_conditions(&component_dynamic, |prop| {
                     confined?.slot_conditions(prop, |value| custom_classes.has_class(component_id, prop, value))
@@ -7940,7 +7953,7 @@ export const App = ({ n }) => <Box bgImage={n} texture={n} />;
             assert_eq!(registered, rules.len(), "{app}");
             rules
         };
-        let cases: [(&str, &[&str]); 6] = [
+        let cases: [(&str, &[&str]); 7] = [
             // A scalar writes the base; an object literal, its keys.
             ("export const App = ({ n }) => <Box p={`${n}px`} />;\n", &["p_"]),
             ("export const App = ({ c, n }) => <Box p={c ? 8 : `${n}px`} />;\n", &["p_"]),
@@ -7949,6 +7962,8 @@ export const App = ({ n }) => <Box bgImage={n} texture={n} />;
             // A value of unknown shape, or a spread, may write any condition.
             ("export const App = ({ c, n }) => <Box p={c ? 8 : n} />;\n", &["p_", "p_-sm"]),
             ("export const App = ({ n, ...rest }) => <Box {...rest} p={`${n}`} />;\n", &["p_", "p_-sm", "tone_091638e9", "tone_091638e9-sm"]),
+            // So may a clone's override, whatever the element writes.
+            ("import { cloneElement } from 'react';\nfunction Wrap({ children, n }) { return cloneElement(children, { p: n }); }\nexport const App = ({ m, n }) => <Wrap n={n}><Box p={`${m}px`} /></Wrap>;\n", &["p_", "p_-sm"]),
         ];
         for (app, want) in cases {
             assert_eq!(slots(app), want, "{app}");

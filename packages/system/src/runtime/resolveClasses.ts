@@ -565,13 +565,12 @@ function applyDynamicProp(
   dynStyle: Record<string, string>,
   propValue: unknown,
   dc: ValueDynamicPropConfig,
-  literalClass: (value: unknown) => string | undefined,
+  propClasses: Record<string, string> | undefined,
+  typed: boolean,
   ignoredImportant: (value: string) => void
 ): EntryFailure | null {
   const staged: [cls: string, varName?: string, resolved?: string][] = [];
   const [responsive, entries] = responsiveEntries(propValue);
-  const lookup = (bp: string, value: unknown) =>
-    literalClass(bp === '_' ? value : { [bp]: value });
   for (const [bp, authored] of entries) {
     let value = authored;
     // The authored text, when its priority cannot reach the slot.
@@ -583,7 +582,9 @@ function applyDynamicProp(
       priority &&
       (priority.spelling === 'important' || !isCustomOnly(slotProperties(dc)))
     ) {
-      const literal = responsive ? lookup(bp, authored) : undefined;
+      const literal = responsive
+        ? entryClass(propClasses, typed, bp, authored)
+        : undefined;
       if (literal) {
         staged.push([literal]);
         continue;
@@ -668,19 +669,34 @@ function applyDeclarationProp(
 }
 
 /**
+ * The static class of `value` written alone at breakpoint `bp` (`_` the
+ * base), keyed as extraction keys it.
+ */
+function entryClass(
+  propClasses: Record<string, string> | undefined,
+  typed: boolean,
+  bp: string,
+  value: unknown
+): string | undefined {
+  const entry = bp === '_' ? value : { [bp]: value };
+  return propClasses?.[(typed ? typedValueKey : serializeValueKey)(entry)];
+}
+
+/**
  * The static classes of a responsive value's entries, when every entry has
  * one: extraction gives a value proven to be one of a few at each
  * breakpoint a class per entry, and no slot.
  */
 function entryClasses(
   propValue: unknown,
-  literalClass: (value: unknown) => string | undefined
+  propClasses: Record<string, string>,
+  typed: boolean
 ): string[] | undefined {
   const [responsive, entries] = responsiveEntries(propValue);
   if (!responsive || entries.length === 0) return undefined;
   const found: string[] = [];
   for (const [bp, value] of entries) {
-    const cls = literalClass(bp === '_' ? value : { [bp]: value });
+    const cls = entryClass(propClasses, typed, bp, value);
     if (!cls) return undefined;
     found.push(cls);
   }
@@ -760,12 +776,11 @@ export function resolveClasses(
         ? [customPropMap, config.typedCustomProps]
         : [systemPropMap, config.typedSystemProps];
       const typed = typedProps?.includes(propName) === true;
-      const literalClass = (value: unknown) =>
-        classMap?.[propName]?.[
-          (typed ? typedValueKey : serializeValueKey)(value)
-        ];
-      const cls = literalClass(propValue);
-      const found = cls ? [cls] : entryClasses(propValue, literalClass);
+      const propClasses = classMap?.[propName];
+      const cls = propClasses?.[typed ? typedValueKey(propValue) : key];
+      const found = cls
+        ? [cls]
+        : propClasses && entryClasses(propValue, propClasses, typed);
 
       if (found) {
         classes.push(...found);
@@ -787,7 +802,8 @@ export function resolveClasses(
                   staged,
                   propValue,
                   dc,
-                  literalClass,
+                  propClasses,
+                  typed,
                   (value) =>
                     warnIgnoredImportant(baseClassName, propName, value)
                 );
