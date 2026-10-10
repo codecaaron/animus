@@ -5725,12 +5725,11 @@ fn run_with_system_floor(
     // An element a call hands outside the analysis, and every component
     // staticCss forces, renders with props no analysed use shows.
     let (delivered_ids, forwarding) = opaque_delivery(files, inputs, &evaluated_ids, &ids_by_binding);
-    let every_use_proven = !inputs.dev_mode
-        && inputs.analysis_context.skipped_sources.is_empty()
+    let usage_complete = inputs.analysis_context.skipped_sources.is_empty()
         && !files.values().any(|ff| ff.direct_eval)
         && (!identity_policy.uncertain
             || uncertainty_leaves_usage_proven(&uncertain_identities, files, inputs, &forwarding));
-    let project_uses = every_use_proven
+    let project_uses = usage_complete
         .then(|| {
             let unproven: std::collections::BTreeSet<String> =
                 escaped_ids.iter().chain(&delivered_ids).chain(&forced_ids).cloned().collect();
@@ -5741,6 +5740,11 @@ fn run_with_system_floor(
             )
         })
         .flatten();
+    // Development keeps every slot, and records which ones a production
+    // build prunes (`production_uses`), so its runtime can warn when a value
+    // reaches one: such a value arrives in a way the proof missed.
+    let (project_uses, production_uses) =
+        if inputs.dev_mode { (None, project_uses) } else { (project_uses, None) };
     // Only project-wide uses record the conditions runtime values write.
     let narrows_slots = project_uses.is_some();
     let confined_uses = project_uses.unwrap_or_else(|| confined_uses(files, &chain_lookup, &evaluated_ids));
@@ -5748,21 +5752,38 @@ fn run_with_system_floor(
     // A system prop keeps its slot while any component it is active on can
     // receive a value without a utility class; a same-named custom prop takes
     // that component's values instead.
-    let (proven_static_props, dynamic_prop_names): (FxHashSet<String>, FxHashSet<String>) =
-        if total_system_floor {
-            let mut uncovered: FxHashSet<&String> = FxHashSet::default();
-            for (component_id, (_, _, _, active_props, _, custom_configs, _)) in &evaluated {
-                let confined = confined_uses.get(component_id);
-                for prop in active_props.iter().flatten() {
-                    let custom = custom_configs.as_ref().is_some_and(|configs| configs.contains_key(prop));
-                    let covered = confined.is_some_and(|confined| {
-                        confined.covers(prop, |value| utility_classes.has_class(prop, value))
-                    });
-                    if !custom && !covered {
-                        uncovered.insert(prop);
-                    }
+    let uncovered_by = |uses: &FxHashMap<String, ConfinedUse>| {
+        let mut uncovered: FxHashSet<&String> = FxHashSet::default();
+        for (component_id, (_, _, _, active_props, _, custom_configs, _)) in &evaluated {
+            let confined = uses.get(component_id);
+            for prop in active_props.iter().flatten() {
+                let custom = custom_configs.as_ref().is_some_and(|configs| configs.contains_key(prop));
+                let covered = confined
+                    .is_some_and(|confined| confined.covers(prop, |value| utility_classes.has_class(prop, value)));
+                if !custom && !covered {
+                    uncovered.insert(prop);
                 }
             }
+        }
+        uncovered
+    };
+    // The conditions the values reaching a system prop's slot write, where
+    // `uses` proves every use.
+    let system_conditions_by = |uses: &FxHashMap<String, ConfinedUse>, prop: &str| {
+        let mut conditions = BTreeSet::new();
+        for (component_id, (_, _, _, active_props, _, custom_configs, _)) in &evaluated {
+            let active = active_props.as_ref().is_some_and(|props| props.contains(prop));
+            if !active || custom_configs.as_ref().is_some_and(|configs| configs.contains_key(prop)) {
+                continue;
+            }
+            conditions
+                .extend(uses.get(component_id)?.slot_conditions(prop, |value| utility_classes.has_class(prop, value))?);
+        }
+        Some(conditions)
+    };
+    let (proven_static_props, dynamic_prop_names): (FxHashSet<String>, FxHashSet<String>) =
+        if total_system_floor {
+            let uncovered = uncovered_by(&confined_uses);
             active_system_prop_names.into_iter().partition(|prop| !uncovered.contains(prop))
         } else {
             (FxHashSet::default(), detected_dynamic_prop_names)
@@ -5796,24 +5817,22 @@ fn run_with_system_floor(
     // Where every use is proven, a slot serves only the conditions some
     // value reaching it writes.
     let mut slot_conditions = if narrows_slots {
-        proven_slot_conditions(&dynamic_props, |prop| {
-            let mut conditions = BTreeSet::new();
-            for (component_id, (_, _, _, active_props, _, custom_configs, _)) in &evaluated {
-                let active = active_props.as_ref().is_some_and(|props| props.contains(prop));
-                if !active || custom_configs.as_ref().is_some_and(|configs| configs.contains_key(prop)) {
-                    continue;
-                }
-                conditions.extend(
-                    confined_uses
-                        .get(component_id)?
-                        .slot_conditions(prop, |value| utility_classes.has_class(prop, value))?,
-                );
-            }
-            Some(conditions)
-        })
+        proven_slot_conditions(&dynamic_props, |prop| system_conditions_by(&confined_uses, prop))
     } else {
         Default::default()
     };
+    if let (Some(production), true) = (&production_uses, total_system_floor) {
+        let uncovered = uncovered_by(production);
+        let narrowed = proven_slot_conditions(&dynamic_props, |prop| system_conditions_by(production, prop));
+        for (prop, meta) in dynamic_props.iter_mut() {
+            let conditions = match (uncovered.contains(prop), meta.value()) {
+                (false, _) => Some(Vec::new()),
+                (true, Some(value)) => narrowed.get(&value.var_name).map(|set| set.iter().cloned().collect()),
+                (true, None) => None,
+            };
+            meta.set_production_conditions(conditions);
+        }
+    }
     let slot_entries = if !dynamic_props.is_empty() {
         Some(build_variable_slot_entries(&dynamic_props, &breakpoints, &slot_conditions))
     } else {
@@ -5905,50 +5924,68 @@ fn run_with_system_floor(
             })
         })
     };
+    // Development also decides each prop as a production build would.
+    let mut production_custom_dynamic = production_uses.as_ref().map(|_| custom_dynamic_by_id.clone());
     for (component_id, custom_configs) in &custom_configs_by_id {
         let confined = confined_uses.get(*component_id);
+        let production = production_uses.as_ref().map(|uses| uses.get(*component_id));
         for (prop_name, config) in custom_configs.iter() {
             // The callback-bound props are the ones whose keys are typed.
             if !config.keys_typed() {
                 continue;
             }
             let delivery = config.transform_fn_source.as_deref();
-            let covered = confined.is_some_and(|confined| {
-                confined.covers(prop_name, |value| custom_classes.has_class(component_id, prop_name, value))
-            }) && config.callback.as_ref().is_none_or(|callback| {
-                delivery != Some(callback.definition.source.as_str())
-                    || (admit_callback(&callback.definition, &evaluator, &mut attempted_callbacks)
-                        && !reads_import(callback))
-            });
-            if !covered {
+            let covers = |confined: Option<&ConfinedUse>| {
+                confined.is_some_and(|confined| {
+                    confined.covers(prop_name, |value| custom_classes.has_class(component_id, prop_name, value))
+                })
+            };
+            let mut callback_admitted = || {
+                config.callback.as_ref().is_none_or(|callback| {
+                    delivery != Some(callback.definition.source.as_str())
+                        || (admit_callback(&callback.definition, &evaluator, &mut attempted_callbacks)
+                            && !reads_import(callback))
+                })
+            };
+            if !(covers(confined) && callback_admitted()) {
                 custom_dynamic_by_id
                     .entry(component_id.to_string())
                     .or_default()
                     .insert(prop_name.clone());
+            }
+            if let (Some(production), Some(dynamic)) = (production, production_custom_dynamic.as_mut()) {
+                if !(covers(production) && callback_admitted()) {
+                    dynamic.entry(component_id.to_string()).or_default().insert(prop_name.clone());
+                }
             }
         }
     }
     // An extension reads an inherited callback from its parent's runtime
     // component, so a parent delivers each callback a delivering extension
     // inherits from it; children precede parents in reverse order.
-    for component_id in sorted_ids.iter().rev() {
-        let (Some(parent_id), Some(read_from_parent)) =
-            (parent_map.get(component_id), parent_callbacks.get(component_id))
-        else {
-            continue;
-        };
-        let read: Vec<String> = custom_dynamic_by_id
-            .get(component_id)
-            .into_iter()
-            .flatten()
-            .filter(|prop| read_from_parent.contains(*prop))
-            .cloned()
-            .collect();
-        if !read.is_empty() {
-            custom_dynamic_by_id.entry(parent_id.clone()).or_default().extend(read);
+    let deliver_to_parents = |dynamic: &mut FxHashMap<String, FxHashSet<String>>| {
+        for component_id in sorted_ids.iter().rev() {
+            let (Some(parent_id), Some(read_from_parent)) =
+                (parent_map.get(component_id), parent_callbacks.get(component_id))
+            else {
+                continue;
+            };
+            let read: Vec<String> = dynamic
+                .get(component_id)
+                .into_iter()
+                .flatten()
+                .filter(|prop| read_from_parent.contains(*prop))
+                .cloned()
+                .collect();
+            if !read.is_empty() {
+                dynamic.entry(parent_id.clone()).or_default().extend(read);
+            }
         }
+    };
+    deliver_to_parents(&mut custom_dynamic_by_id);
+    if let Some(dynamic) = production_custom_dynamic.as_mut() {
+        deliver_to_parents(dynamic);
     }
-
     let mut per_component_custom_dynamic: FxHashMap<String, HashMap<String, DynamicPropMeta>> =
         FxHashMap::default();
     let mut runtime_custom_declarations: Vec<(String, Arc<DeclarationBinding>)> = Vec::new();
@@ -5957,6 +5994,9 @@ fn run_with_system_floor(
     // written once, whichever copies read it.
     let mut written_slots: FxHashSet<String> = FxHashSet::default();
     let mut custom_slot_vars: FxHashSet<String> = FxHashSet::default();
+    // Development: each custom slot's conditions in a production build,
+    // joined across copies like `slot_conditions`; `None` serves every one.
+    let mut production_custom_conditions: HashMap<String, Option<BTreeSet<String>>> = HashMap::new();
     for component_id in &sorted_ids {
         let Some((component_css, _, _, _, _, custom_configs, _)) = evaluated.get(component_id)
         else {
@@ -6017,12 +6057,44 @@ fn run_with_system_floor(
                     }
                 }
             }
+            if let Some(production) = &production_uses {
+                let confined = production.get(component_id.as_str());
+                let proven = proven_slot_conditions(&component_dynamic, |prop| {
+                    confined?.slot_conditions(prop, |value| custom_classes.has_class(component_id, prop, value))
+                });
+                for meta in component_dynamic.values().filter_map(DynamicPropMeta::value) {
+                    let conditions = proven.get(&meta.var_name).cloned();
+                    match production_custom_conditions.get_mut(&meta.var_name) {
+                        None => {
+                            production_custom_conditions.insert(meta.var_name.clone(), conditions);
+                        }
+                        Some(known) => join_conditions(known, conditions),
+                    }
+                }
+            }
             all_custom_slot_entries.extend(
                 build_variable_slot_entries(&component_dynamic, &breakpoints, &slot_conditions)
                     .into_iter()
                     .filter(|(slot_class, _, _)| written_slots.insert(slot_class.clone())),
             );
             per_component_custom_dynamic.insert(component_id.clone(), component_dynamic);
+        }
+    }
+    if let Some(production) = &production_custom_dynamic {
+        for (component_id, metas) in per_component_custom_dynamic.iter_mut() {
+            let kept = production.get(component_id);
+            for (prop, meta) in metas.iter_mut() {
+                let conditions = match (kept.is_some_and(|kept| kept.contains(prop)), meta.value()) {
+                    (false, _) => Some(Vec::new()),
+                    (true, Some(value)) => production_custom_conditions
+                        .get(&value.var_name)
+                        .cloned()
+                        .flatten()
+                        .map(|set| set.into_iter().collect()),
+                    (true, None) => None,
+                };
+                meta.set_production_conditions(conditions);
+            }
         }
     }
     // Runtime configs carry scale values to the browser; an asset() among them

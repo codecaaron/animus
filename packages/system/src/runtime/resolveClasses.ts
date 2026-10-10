@@ -47,6 +47,11 @@ interface ValueDynamicPropConfig {
   keywords?: readonly string[];
   /** The custom property the prop's slot also writes. */
   currentVar?: string;
+  /**
+   * Development only: the conditions (`_` for the base) at which a
+   * production build keeps this prop's slot, empty when it keeps none.
+   */
+  productionConditions?: readonly string[];
   kind?: never;
 }
 
@@ -57,10 +62,20 @@ interface DeclarationDynamicPropConfig {
   memberVars: Record<string, string>;
   /** Scale key → member property → resolved CSS value. */
   declarationScaleValues: Record<string, Record<string, string>>;
+  /**
+   * Development only: the conditions (`_` for the base) at which a
+   * production build keeps this prop's slot, empty when it keeps none.
+   */
+  productionConditions?: readonly string[];
 }
 
 type DeclarationConfig = DeclarationDynamicPropConfig & {
-  [K in Exclude<keyof ValueDynamicPropConfig, 'kind' | 'slotClass'>]?: never;
+  [
+    K in Exclude<
+      keyof ValueDynamicPropConfig,
+      'kind' | 'slotClass' | 'productionConditions'
+    >
+  ]?: never;
 };
 
 export type DynamicPropConfig = Record<
@@ -343,6 +358,34 @@ function warnDroppedValue(
             `If this prop should accept runtime values, ensure its dynamic config is emitted.`
     );
   }
+}
+
+/**
+ * A runtime value that reaches a slot condition a production build removes:
+ * the build's usage analysis saw no runtime value for the prop there, so the
+ * value arrived in a way it does not follow, and in production it has
+ * neither a class nor a slot.
+ */
+function warnPrunedSlot(
+  baseClassName: string,
+  propName: string,
+  serializedValue: string,
+  propValue: unknown,
+  productionConditions: readonly string[]
+): void {
+  const [, entries] = responsiveEntries(propValue);
+  const pruned = entries
+    .map(([bp]) => bp)
+    .filter((bp) => !productionConditions.includes(bp));
+  if (pruned.length === 0) return;
+  const dedupeKey = `${baseClassName}|${propName}|pruned`;
+  if (warnedDrops.has(dedupeKey)) return;
+  warnedDrops.add(dedupeKey);
+  // oxlint-disable-next-line no-console -- intentional runtime diagnostic
+  console.warn(
+    `[animus:drop] ${baseClassName}: value ${serializedValue} on prop '${propName}' uses its runtime slot at ${pruned.join(', ')}, which a production build removes — in production it will not render there. ` +
+      `The build found no runtime value for this prop, so this one arrives through code it does not follow, such as a library that clones the element.`
+  );
 }
 
 /**
@@ -810,6 +853,15 @@ export function resolveClasses(
           if (failure === null) {
             dynStyle = staged;
             recordWitness(baseClassName, propName, key, 'dynamic');
+            if (IS_DEV && dc.productionConditions) {
+              warnPrunedSlot(
+                baseClassName,
+                propName,
+                key,
+                propValue,
+                dc.productionConditions
+              );
+            }
           } else {
             if ('shape' in failure) {
               warnInvalidTransformResult(

@@ -851,6 +851,7 @@ mod tests {
             transform_fn_source: transform_fn_source.map(str::to_string),
             scale_values: BTreeMap::new(),
             current_var: None,
+            production_conditions: None,
         })
     }
 

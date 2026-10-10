@@ -88,6 +88,7 @@ mod tests {
             transform_fn_source: None,
             scale_values: serde_json::from_value(scale_values).unwrap(),
             current_var: None,
+            production_conditions: None,
         })
     }
 
@@ -120,6 +121,7 @@ mod tests {
             )]
             .into_iter()
             .collect(),
+            production_conditions: None,
         });
         let mut value = value_meta(serde_json::json!({ "rock": ROCK }));
         vars.lift_meta(&mut declarations);

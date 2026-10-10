@@ -43,6 +43,9 @@ pub struct ValuePropMeta {
     /// The custom property a write of the prop also sets.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub current_var: Option<String>,
+    /// See `DynamicPropMeta::set_production_conditions`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub production_conditions: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -53,6 +56,9 @@ pub struct DeclarationPropMeta {
     pub member_vars: BTreeMap<String, String>,
     /// Scale key → member → CSS value, as the binding classes declare them.
     pub declaration_scale_values: BTreeMap<String, BTreeMap<String, String>>,
+    /// See `DynamicPropMeta::set_production_conditions`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub production_conditions: Option<Vec<String>>,
 }
 
 impl DynamicPropMeta {
@@ -88,6 +94,7 @@ impl DynamicPropMeta {
                 .current_var
                 .as_deref()
                 .map(|current_var| contextual_vars.emitted_property(current_var).into_owned()),
+            production_conditions: None,
         })
     }
 
@@ -104,7 +111,19 @@ impl DynamicPropMeta {
                 .map(|member| (member.name.clone(), names.member_var(member)))
                 .collect(),
             declaration_scale_values: binding.records.as_ref().clone(),
+            production_conditions: None,
         })
+    }
+
+    /// Development only: the conditions (`_` for the base) at which a
+    /// production build keeps this prop's slot, empty when it keeps none;
+    /// `None` when it keeps every one. The development runtime warns when a
+    /// value reaches a condition production prunes.
+    pub fn set_production_conditions(&mut self, conditions: Option<Vec<String>>) {
+        match self {
+            Self::Value(meta) => meta.production_conditions = conditions,
+            Self::Declarations(meta) => meta.production_conditions = conditions,
+        }
     }
 
     pub fn value(&self) -> Option<&ValuePropMeta> {

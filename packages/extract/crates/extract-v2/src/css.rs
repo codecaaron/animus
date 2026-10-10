@@ -2546,6 +2546,7 @@ mod tests {
                 transform_fn_source: None,
                 scale_values: std::collections::BTreeMap::new(),
                 current_var: current_var.map(str::to_string),
+                production_conditions: None,
             }),
         );
         dynamic_props
@@ -2606,6 +2607,7 @@ mod tests {
                 transform_fn_source: None,
                 scale_values: std::collections::BTreeMap::new(),
                 current_var: None,
+                production_conditions: None,
             }),
         );
         let bp = test_breakpoints();
@@ -2646,6 +2648,7 @@ mod tests {
                 transform_fn_source: None,
                 scale_values: std::collections::BTreeMap::new(),
                 current_var: None,
+                production_conditions: None,
             }),
         );
         let bp = test_breakpoints();
@@ -2686,6 +2689,7 @@ mod tests {
                 transform_fn_source: None,
                 scale_values: std::collections::BTreeMap::new(),
                 current_var: None,
+                production_conditions: None,
             }),
         );
         let bp = test_breakpoints();

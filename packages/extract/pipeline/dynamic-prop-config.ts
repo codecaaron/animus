@@ -14,6 +14,11 @@ interface ValuePropMeta {
   keywords?: readonly string[];
   /** The custom property a write of the prop also sets. */
   currentVar?: string | null;
+  /**
+   * Development only: the conditions (`_` for the base) at which a
+   * production build keeps this prop's slot, empty when it keeps none.
+   */
+  productionConditions?: readonly string[];
   kind?: never;
 }
 
@@ -22,10 +27,20 @@ interface DeclarationPropMeta {
   slotClass: string;
   memberVars: Record<string, string>;
   declarationScaleValues: Record<string, Record<string, string>>;
+  /**
+   * Development only: the conditions (`_` for the base) at which a
+   * production build keeps this prop's slot, empty when it keeps none.
+   */
+  productionConditions?: readonly string[];
 }
 
 type DeclarationMeta = DeclarationPropMeta & {
-  [K in Exclude<keyof ValuePropMeta, 'kind' | 'slotClass'>]?: never;
+  [
+    K in Exclude<
+      keyof ValuePropMeta,
+      'kind' | 'slotClass' | 'productionConditions'
+    >
+  ]?: never;
 };
 
 export type DynamicPropMeta = ValuePropMeta | DeclarationMeta;
@@ -42,11 +57,17 @@ interface ValuePropConfigEntry {
   strict?: boolean;
   keywords?: readonly string[];
   currentVar?: string;
+  productionConditions?: readonly string[];
   kind?: never;
 }
 
 type DeclarationConfigEntry = DeclarationPropMeta & {
-  [K in Exclude<keyof ValuePropConfigEntry, 'kind' | 'slotClass'>]?: never;
+  [
+    K in Exclude<
+      keyof ValuePropConfigEntry,
+      'kind' | 'slotClass' | 'productionConditions'
+    >
+  ]?: never;
 };
 
 export type DynamicPropConfigEntry =
@@ -73,6 +94,9 @@ export function buildDynamicPropConfig(
         slotClass: meta.slotClass,
         memberVars: meta.memberVars,
         declarationScaleValues: meta.declarationScaleValues,
+        ...(meta.productionConditions && {
+          productionConditions: meta.productionConditions,
+        }),
       };
       continue;
     }
@@ -99,6 +123,9 @@ export function buildDynamicPropConfig(
     if (meta.strict) entry.strict = true;
     if (meta.keywords?.length) entry.keywords = meta.keywords;
     if (meta.currentVar) entry.currentVar = meta.currentVar;
+    if (meta.productionConditions) {
+      entry.productionConditions = meta.productionConditions;
+    }
     configEntries[propName] = entry;
   }
   return configEntries;
