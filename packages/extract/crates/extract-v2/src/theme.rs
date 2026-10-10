@@ -846,6 +846,10 @@ fn resolve_block_entries(
 
     if frame.conditions.is_empty() {
         if let Some(sel) = &frame.selector {
+            // A block nested here that names the same selector, such as
+            // `'&': { … }`, follows this block's own rule, so a property it
+            // already wrote keeps its value.
+            let plain_decls = beneath_descendants(&result.pseudo_selectors, sel, plain_decls, frame.origin.as_ref());
             merge_pseudo_selectors(&mut result.pseudo_selectors, sel.clone(), plain_decls, frame.origin.as_ref());
         }
     } else if !plain_decls.is_empty() {
@@ -922,6 +926,29 @@ fn push_nested_breakpoint_group(
             emit_order,
         }),
     }
+}
+
+/// `declarations` without the properties a block nested under `origin`
+/// already wrote to `selector`'s group.
+fn beneath_descendants(
+    pseudo_selectors: &[SelectorGroup],
+    selector: &str,
+    declarations: Vec<CssDeclaration>,
+    origin: Option<&AuthoredOrigin>,
+) -> Vec<CssDeclaration> {
+    let Some(origin) = origin else { return declarations };
+    let Some((_, _, suppliers)) = pseudo_selectors.iter().find(|(s, _, _)| s == selector) else {
+        return declarations;
+    };
+    let nested: FxHashSet<&str> = suppliers
+        .0
+        .iter()
+        .filter(|(writer, _)| {
+            writer.block == origin.block && writer.path.len() > origin.path.len() && writer.path.starts_with(&origin.path)
+        })
+        .flat_map(|(_, properties)| properties.iter().map(String::as_str))
+        .collect();
+    declarations.into_iter().filter(|declaration| !nested.contains(declaration.property.as_str())).collect()
 }
 
 pub fn merge_pseudo_selectors(
@@ -1981,10 +2008,10 @@ fn global_conditioned_rule(preludes: &[String], selector: &str, declarations: &[
     out
 }
 
-/// A global's rules in the order components emit them, except that nested
-/// selectors keep the resolver's order (authored, with a block after the
-/// blocks nested inside it): the base rule, nested selectors, breakpoints by
-/// width, then the other conditions.
+/// A global's rules in the order components emit them: the base rule, then
+/// the rules of its selector and at-rule keys, raw or aliases, in their
+/// authored order, with its plain breakpoints by width in their own slots
+/// (`authored_emission_order`).
 fn push_global_rules(
     rules: &mut Vec<String>,
     selector: &str,
@@ -2001,12 +2028,16 @@ fn push_global_rules(
         Some(inner) => compose_selectors(&branches, inner),
         None => selector.to_string(),
     };
+    // Each rule with the authored key that placed it, in default order.
+    let mut placed: Vec<(String, Option<&AuthoredOrigin>)> = Vec::new();
     if !resolved.declarations.is_empty() {
-        rules.push(global_rule(selector, &resolved.declarations, 0));
+        placed.push((global_rule(selector, &resolved.declarations, 0), None));
     }
-    for (nested, declarations, _) in &resolved.pseudo_selectors {
-        if !declarations.is_empty() {
-            rules.push(global_rule(&subject(&Some(nested.clone())), declarations, 0));
+    for (nested, declarations, suppliers) in &resolved.pseudo_selectors {
+        for (part, origin) in crate::css::supplied_parts(declarations, suppliers) {
+            if !part.is_empty() {
+                placed.push((global_rule(&subject(&Some(nested.clone())), &part, 0), origin));
+            }
         }
     }
     let width = |bp: &str| breakpoints.breakpoints.get(bp).copied().unwrap_or(0);
@@ -2023,14 +2054,22 @@ fn push_global_rules(
         let [Condition::Breakpoint(bp)] = group.conditions.as_slice() else {
             continue;
         };
-        if let (Some(query), false) = (breakpoints.media_query(bp), group.declarations.is_empty()) {
-            rules.push(global_conditioned_rule(&[query], &subject(&group.selector), &group.declarations));
+        let Some(query) = breakpoints.media_query(bp) else {
+            continue;
+        };
+        if group.selector.is_none() {
+            if !group.declarations.is_empty() {
+                placed.push((global_conditioned_rule(&[query], selector, &group.declarations), None));
+            }
+            continue;
+        }
+        for (part, origin) in crate::css::supplied_parts(&group.declarations, &group.suppliers) {
+            if !part.is_empty() {
+                placed.push((global_conditioned_rule(std::slice::from_ref(&query), &subject(&group.selector), &part), origin));
+            }
         }
     }
     for group in resolved.conditioned_emission_order() {
-        if group.declarations.is_empty() {
-            continue;
-        }
         let preludes: Option<Vec<String>> = group
             .conditions
             .iter()
@@ -2039,9 +2078,18 @@ fn push_global_rules(
                 other => other.prelude().map(str::to_string),
             })
             .collect();
-        if let Some(preludes) = preludes.filter(|p| !p.is_empty()) {
-            rules.push(global_conditioned_rule(&preludes, &subject(&group.selector), &group.declarations));
+        let Some(preludes) = preludes.filter(|p| !p.is_empty()) else {
+            continue;
+        };
+        for (part, origin) in crate::css::supplied_parts(&group.declarations, &group.suppliers) {
+            if !part.is_empty() {
+                placed.push((global_conditioned_rule(&preludes, &subject(&group.selector), &part), origin));
+            }
         }
+    }
+    let origins: Vec<Option<&AuthoredOrigin>> = placed.iter().map(|(_, origin)| *origin).collect();
+    for index in crate::css::authored_emission_order(&origins) {
+        rules.push(std::mem::take(&mut placed[index].0));
     }
 }
 
