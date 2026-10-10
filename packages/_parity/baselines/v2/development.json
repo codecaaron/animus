@@ -2,7 +2,7 @@
   "corpusSha256": "fcbf88aba94840f3174347541e76afbf310dd399d29c45489e7ba63635f4c5d2",
   "engine": "v2",
   "mode": "development",
-  "refreshIntent": "style-keys-share-property-20261010",
+  "refreshIntent": "style-keys-dead-or-reordered-20261010",
   "surfaceSchemaSha256": "43eb1265e97aab8497c11ca05e8a4159a6d4f4b69a6837a704e1d96fa75eb108",
   "units": {
     "extract-all": {
@@ -496,25 +496,7 @@
       },
       "css": "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-base {\n  .animus-MMxMl-d5a512e1 {\n    margin: 1rem;\n    margin-left: 0.5rem;\n    margin-right: 0.5rem;\n    margin-left: 0.25rem;\n  }\n  .animus-MxMl-b17c5cf6 {\n    margin-left: 0.5rem;\n    margin-right: 0.5rem;\n    margin-left: 0.25rem;\n  }\n  .animus-MyMt-ae0c929d {\n    margin-top: 0.5rem;\n    margin-bottom: 0.5rem;\n    margin-top: 1rem;\n  }\n  .animus-PPx-829247e6 {\n    padding: 1rem;\n    padding-left: 0.5rem;\n    padding-right: 0.5rem;\n  }\n  .animus-PPxPl-2e6fbc2a {\n    padding: 1rem;\n    padding-left: 0.5rem;\n    padding-right: 0.5rem;\n    padding-left: 0.25rem;\n  }\n  .animus-PPxPyPtPb-2acaa787 {\n    padding: 1rem;\n    padding-left: 0.5rem;\n    padding-right: 0.5rem;\n    padding-top: 0.5rem;\n    padding-bottom: 0.5rem;\n    padding-top: 0.25rem;\n    padding-bottom: 1.5rem;\n  }\n  .animus-PlRawPadding-6dc1ac95 {\n    padding: 1rem;\n    padding-left: 0.25rem;\n  }\n  .animus-PxPl-5520994e {\n    padding-left: 0.5rem;\n    padding-right: 0.5rem;\n    padding-left: 0.25rem;\n  }\n  .animus-PxPyPt-87570579 {\n    padding-left: 0.25rem;\n    padding-right: 0.25rem;\n    padding-top: 0.25rem;\n    padding-bottom: 0.25rem;\n    padding-top: 0.5rem;\n  }\n  .animus-PyPt-59ab3091 {\n    padding-top: 0.5rem;\n    padding-bottom: 0.5rem;\n    padding-top: 1rem;\n  }\n}\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer composed {\n  }\n}\n\n",
       "diagnostics": [
-        "cascade-combos.tsx|warn|MMxMl|style keys 'm' and 'ml' both set margin-left, and only 'ml' takes effect there: a longhand follows its shorthand in any key order",
-        "cascade-combos.tsx|warn|MMxMl|style keys 'm' and 'mx' both set margin-left, and only 'mx' takes effect there: a longhand follows its shorthand in any key order",
-        "cascade-combos.tsx|warn|MMxMl|style keys 'mx' and 'ml' both set margin-left, and only 'ml' takes effect there: a longhand follows its shorthand in any key order",
-        "cascade-combos.tsx|warn|MxMl|style keys 'mx' and 'ml' both set margin-left, and only 'ml' takes effect there: a longhand follows its shorthand in any key order",
-        "cascade-combos.tsx|warn|MyMt|style keys 'my' and 'mt' both set margin-top, and only 'mt' takes effect there: a longhand follows its shorthand in any key order",
-        "cascade-combos.tsx|warn|PPxPl|style keys 'p' and 'pl' both set padding-left, and only 'pl' takes effect there: a longhand follows its shorthand in any key order",
-        "cascade-combos.tsx|warn|PPxPl|style keys 'p' and 'px' both set padding-left, and only 'px' takes effect there: a longhand follows its shorthand in any key order",
-        "cascade-combos.tsx|warn|PPxPl|style keys 'px' and 'pl' both set padding-left, and only 'pl' takes effect there: a longhand follows its shorthand in any key order",
-        "cascade-combos.tsx|warn|PPxPyPtPb|style keys 'p' and 'pb' both set padding-bottom, and only 'pb' takes effect there: a longhand follows its shorthand in any key order",
-        "cascade-combos.tsx|warn|PPxPyPtPb|style keys 'p' and 'pt' both set padding-top, and only 'pt' takes effect there: a longhand follows its shorthand in any key order",
-        "cascade-combos.tsx|warn|PPxPyPtPb|style keys 'p' and 'px' both set padding-left, and only 'px' takes effect there: a longhand follows its shorthand in any key order",
-        "cascade-combos.tsx|warn|PPxPyPtPb|style keys 'p' and 'py' both set padding-top, and only 'py' takes effect there: a longhand follows its shorthand in any key order",
-        "cascade-combos.tsx|warn|PPxPyPtPb|style keys 'py' and 'pb' both set padding-bottom, and only 'pb' takes effect there: a longhand follows its shorthand in any key order",
-        "cascade-combos.tsx|warn|PPxPyPtPb|style keys 'py' and 'pt' both set padding-top, and only 'pt' takes effect there: a longhand follows its shorthand in any key order",
-        "cascade-combos.tsx|warn|PPx|style keys 'p' and 'px' both set padding-left, and only 'px' takes effect there: a longhand follows its shorthand in any key order",
-        "cascade-combos.tsx|warn|PlRawPadding|style keys 'padding' and 'pl' both set padding-left, and only 'pl' takes effect there: a longhand follows its shorthand in any key order",
-        "cascade-combos.tsx|warn|PxPl|style keys 'px' and 'pl' both set padding-left, and only 'pl' takes effect there: a longhand follows its shorthand in any key order",
-        "cascade-combos.tsx|warn|PxPyPt|style keys 'py' and 'pt' both set padding-top, and only 'pt' takes effect there: a longhand follows its shorthand in any key order",
-        "cascade-combos.tsx|warn|PyPt|style keys 'py' and 'pt' both set padding-top, and only 'pt' takes effect there: a longhand follows its shorthand in any key order"
+        "cascade-combos.tsx|warn|PlRawPadding|style key 'pl' comes before 'padding', which also sets padding-left: in plain CSS 'padding' would reset it, but a longhand applies after its shorthand, so 'pl' takes effect"
       ],
       "hasComponents": {
         "cascade-combos.tsx": true
@@ -662,10 +644,6 @@
       },
       "css": "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-base {\n  .animus-PatternC-6fc6b524 {\n    color: var(--color-text);\n    cursor: pointer;\n  }\n  .animus-PatternC-6fc6b524:focus-visible {\n    outline: 2px solid;\n    outline-color: var(--color-primary);\n  }\n  .animus-PatternD-d307a952 {\n    color: var(--color-text);\n    cursor: pointer;\n  }\n  .animus-PatternD-d307a952:hover {\n    color: var(--color-primary);\n  }\n  .animus-PatternD-d307a952:focus-visible {\n    outline: 2px solid var(--color-primary);\n    outline-offset: -2px;\n  }\n  .animus-PatternD-d307a952[aria-selected=\"true\"], .animus-PatternD-d307a952[data-selected] {\n    color: var(--color-secondary);\n  }\n  .animus-PatternE-061669d8 {\n    color: var(--color-text);\n    cursor: pointer;\n  }\n  .animus-PatternE-061669d8:focus-visible {\n    outline: 2px solid;\n    outline-color: var(--color-primary);\n  }\n  .animus-PatternG-7a1c632e {\n    color: var(--color-text);\n    cursor: pointer;\n  }\n  .animus-PatternG-7a1c632e:hover {\n    color: var(--color-primary);\n  }\n  .animus-PatternG-7a1c632e:focus-visible {\n    outline: 2px solid var(--color-primary);\n    outline-offset: 2px;\n  }\n  .animus-PatternH-b4cb5db9 {\n    color: var(--color-text);\n  }\n  .animus-PatternH-b4cb5db9:focus-visible {\n    outline: 2px solid;\n    outline-color: var(--color-primary);\n  }\n  .animus-PatternA-13aae536 {\n    color: var(--color-text);\n    cursor: pointer;\n  }\n  .animus-PatternA-13aae536:hover {\n    color: var(--color-primary);\n  }\n  .animus-PatternA-13aae536:focus-visible {\n    outline: 2px solid;\n    outline-color: var(--color-primary);\n  }\n  .animus-PatternB-79e0e92d {\n    color: var(--color-text);\n    cursor: pointer;\n  }\n  .animus-PatternB-79e0e92d:focus-visible {\n    outline: 2px solid var(--color-primary);\n    outline-offset: 2px;\n  }\n  .animus-PatternF-ca65441e {\n    color: var(--color-text);\n    cursor: pointer;\n  }\n  .animus-PatternF-ca65441e:focus-visible {\n    outline-offset: 2px;\n  }\n}\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer standalone {\n\n  .animus-PatternG-7a1c632e--size-small {\n    font-size: 0.875rem;\n  }\n  .animus-PatternG-7a1c632e--size-medium {\n    font-size: 1rem;\n  }\n  .animus-PatternG-7a1c632e--size-default {\n    font-size: 0.875rem;\n  }\n  }\n  @layer composed {\n  }\n}\n\n@layer anm-states {\n  .animus-PatternG-7a1c632e--pressed {\n    color: var(--color-secondary);\n  }\n}\n\n",
       "diagnostics": [
-        "selector-rules-clean.tsx|warn|PatternC|style keys 'outline' and 'outlineColor' both set outline-color, and only 'outlineColor' takes effect there: a longhand follows its shorthand in any key order",
-        "selector-rules-create-element.tsx|warn|PatternE|style keys 'outline' and 'outlineColor' both set outline-color, and only 'outlineColor' takes effect there: a longhand follows its shorthand in any key order",
-        "selector-rules-prospective-unrendered.tsx|warn|PatternH|style keys 'outline' and 'outlineColor' both set outline-color, and only 'outlineColor' takes effect there: a longhand follows its shorthand in any key order",
-        "selector-rules-raw-mix.tsx|warn|PatternA|style keys 'outline' and 'outlineColor' both set outline-color, and only 'outlineColor' takes effect there: a longhand follows its shorthand in any key order",
         "selector-rules-unresolvable-token.tsx|warn|PatternF|unresolvable token alias {colors.does-not-exist.999} in 'outline' — declaration dropped"
       ],
       "hasComponents": {
