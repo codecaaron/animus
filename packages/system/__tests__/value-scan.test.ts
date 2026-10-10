@@ -57,6 +57,9 @@ const CASES = [
   'red /* ! */ !important',
   'u\\72l(a!b)!',
   '"unterminated !important\n" !important',
+  // A backslash before CRLF continues the string past one newline.
+  '"a\\\r\n!" !important',
+  '"a\\\r\nred!"!',
   'fooUrl(a!)!',
   // After a number, `url` is its unit, so its `(` opens no url token.
   '2url(a!b)!',
@@ -94,6 +97,8 @@ const READS = [
   'url(var(--current-bg))',
   'url( var(--current-bg) )',
   'url("var(--current-bg)")',
+  '"a\\\r\nvar(--current-bg)"',
+  'url("a\\\r\nvar(--current-bg)")',
   'variable(--current-bg)',
   '-var(--current-bg)',
   '2var(--current-bg)',

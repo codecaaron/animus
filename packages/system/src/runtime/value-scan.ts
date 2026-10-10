@@ -16,9 +16,10 @@ export interface TrailingPriority {
 const ESCAPE = String.raw`\\(?:[\da-fA-F]{1,6}(?:\r\n|[ \t\n\r\f])?|[^\n\r\f\da-fA-F])`;
 const NAME_CHAR = String.raw`(?:[\w\u0080-￿-]|${ESCAPE})`;
 /** One unit per match: a comment (1), whitespace (2), an opaque string or
- *  `<!--` (3), a name (4), a `!` (5), or any other character. */
+ *  `<!--` (3), a name (4), a `!` (5), or any other character. In a string, a
+ *  backslash escapes a CRLF as one newline. */
 const UNIT = new RegExp(
-  String.raw`(\/\*[\s\S]*?(?:\*\/|$))|([ \t\n\r\f]+)|("(?:\\[\s\S]|[^"\\\n\r\f])*"?|'(?:\\[\s\S]|[^'\\\n\r\f])*'?|<!--)|((?:-?(?:[a-zA-Z_\u0080-￿]|${ESCAPE})|--)${NAME_CHAR}*)|(!)|[\s\S]`,
+  String.raw`(\/\*[\s\S]*?(?:\*\/|$))|([ \t\n\r\f]+)|("(?:\\(?:\r\n|[\s\S])|[^"\\\n\r\f])*"?|'(?:\\(?:\r\n|[\s\S])|[^'\\\n\r\f])*'?|<!--)|((?:-?(?:[a-zA-Z_\u0080-￿]|${ESCAPE})|--)${NAME_CHAR}*)|(!)|[\s\S]`,
   'gy'
 );
 /** An unquoted `url(` body, through its `)`. */
