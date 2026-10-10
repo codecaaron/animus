@@ -9,7 +9,7 @@ use serde_json::Value;
 use crate::css::{ComponentCss, VariantCss};
 use crate::facts::{ChainFacts, StageFacts};
 use crate::theme::{
-    merge_pseudo_selectors, resolve_styles, ConditionEmitOrder, CssDeclaration, PropConfig,
+    merge_selector_group, resolve_styles, ConditionEmitOrder, CssDeclaration, PropConfig,
     PropConfigMap, ResolveContext, ResolvedStyles,
 };
 
@@ -202,12 +202,8 @@ fn merge_variant_base(
     let mut merged_declarations = base.declarations.clone();
     merged_declarations.append(&mut resolved.declarations);
     resolved.declarations = merged_declarations;
-    for (selector, declarations) in &base.pseudo_selectors {
-        merge_pseudo_selectors(
-            &mut resolved.pseudo_selectors,
-            selector.clone(),
-            declarations.clone(),
-        );
+    for group in &base.pseudo_selectors {
+        merge_selector_group(&mut resolved.pseudo_selectors, group);
     }
     for (breakpoint, declarations) in base.breakpoint_groups() {
         merge_responsive_base(&mut resolved, breakpoint, declarations);
@@ -490,8 +486,10 @@ mod tests {
             pseudo_selectors: vec![(
                 ":hover".to_string(),
                 vec![CssDeclaration { property: "padding".into(), value: "0.5rem".into() }],
+                Default::default(),
             )],
             conditioned: vec![ConditionedGroup {
+                suppliers: Default::default(),
                 conditions: vec![Condition::Breakpoint("sm".into())],
                 selector: Some(":hover".into()),
                 declarations: vec![CssDeclaration { property: "padding".into(), value: "1rem".into() }],
@@ -502,7 +500,7 @@ mod tests {
         let merged = merge_variant_base(option, Some(&base));
         assert_eq!(merged.conditioned.len(), 1, "bp+selector group must carry");
         assert_eq!(merged.conditioned[0].selector.as_deref(), Some(":hover"));
-        assert!(merged.pseudo_selectors.iter().any(|(s, _)| s == ":hover"));
+        assert!(merged.pseudo_selectors.iter().any(|(s, _, _)| s == ":hover"));
     }
 
     #[test]
