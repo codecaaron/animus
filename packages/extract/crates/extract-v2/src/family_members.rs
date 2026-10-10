@@ -572,7 +572,18 @@ impl<'f> ObjectMembers<'f> {
                     };
                     table.members.insert(key.clone(), value.unwrap_or(Member::Other));
                 }
-                FacadeEntry::Other(key) | FacadeEntry::Code(Some(key)) => {
+                // A component function the literal holds forwards as a
+                // binding does, under the key `X.key` (`collect_props_forwarding`).
+                FacadeEntry::Other(key) => {
+                    let held = format!("{binding}.{key}");
+                    let value = if files.get(module).is_some_and(|ff| ff.props_forwarding.contains_key(&held)) {
+                        Member::Bound { module: module.to_string(), binding: held }
+                    } else {
+                        Member::Other
+                    };
+                    table.members.insert(key.clone(), value);
+                }
+                FacadeEntry::Code(Some(key)) => {
                     table.members.insert(key.clone(), Member::Other);
                 }
                 // The write replaces a component the member named with a value

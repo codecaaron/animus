@@ -3103,17 +3103,20 @@ fn spread_wrapper_targets(
     (published, proxies, forwards)
 }
 
-/// One warning per tag and prop set for a capitalised tag that `file` imports
-/// from an analyzed module, rendered as an element or by `createElement`,
-/// that resolves to no extracted component, naming only the system props
-/// the component it reaches takes and really loses (`LostThrough`). An
-/// import outside the analysis never warns.
+/// One warning per tag and prop set for a capitalised tag, rendered as an
+/// element or by `createElement`, that resolves to no extracted component:
+/// one `file` imports from an analyzed module, or a top-level function the
+/// attribution leaves out (`attributed`), such as a wrapper of an imported
+/// wrapper. It names only the system props the component it reaches takes
+/// and really loses (`LostThrough`). An import outside the analysis never
+/// warns.
 /// `takes_system_prop(file, name, prop)`: whether `name`, as `file` declares
 /// or imports it, is an extracted component taking `prop` as a system prop.
 fn unattributed_system_props(
     file: &str,
     ff: &FileFacts,
     unattributed_imports: &[&str],
+    attributed: &dyn Fn(&str) -> bool,
     files: &BTreeMap<String, FileFacts>,
     inputs: &CssInputs,
     takes_system_prop: &dyn Fn(&str, &str, &str) -> bool,
@@ -3125,10 +3128,9 @@ fn unattributed_system_props(
             continue;
         };
         // A name a parameter or a nested binding shadows is not the import.
-        if !tag.starts_with(|c: char| c.is_ascii_uppercase())
-            || !unattributed_imports.contains(&tag)
-            || origin.is_some_and(|origin| origin != TagOrigin::Import)
-        {
+        let imported = unattributed_imports.contains(&tag) && origin.is_none_or(|origin| origin == TagOrigin::Import);
+        let local = origin == Some(TagOrigin::TopLevel) && !attributed(tag);
+        if !tag.starts_with(|c: char| c.is_ascii_uppercase()) || !(imported || local) {
             continue;
         }
         let Some((declaration_file, declaration, lost)) = lost_through_binding(file, tag, files, inputs) else {
@@ -3140,6 +3142,7 @@ fn unattributed_system_props(
             at,
             props,
             (&declaration_file, &declaration, &lost),
+            (files, inputs),
             takes_system_prop,
             &mut reported,
         ));
@@ -3243,19 +3246,46 @@ fn lost_through_export<'f>(
         .find_map(|next| lost_through_export(next, declaration.clone(), files, inputs, visited))
 }
 
+/// The extracted component taking `prop` that `lost`, read in `file`, hands
+/// it to: a target itself, or the one a target that loses it reaches in
+/// turn, with that target.
+fn component_reached(
+    file: &str,
+    lost: &LostThrough<'_>,
+    prop: &str,
+    (files, inputs): (&BTreeMap<String, FileFacts>, &CssInputs),
+    takes_system_prop: &dyn Fn(&str, &str, &str) -> bool,
+    visited: &mut FxHashSet<(String, String)>,
+) -> Option<(String, Option<String>)> {
+    lost.reaching(prop).into_iter().find_map(|target| {
+        if takes_system_prop(file, target, prop) {
+            return Some((target.clone(), None));
+        }
+        let (next_file, next, next_lost) = lost_through_binding(file, target, files, inputs)?;
+        if !visited.insert((next_file.clone(), next)) {
+            return None;
+        }
+        let (component, _) = component_reached(&next_file, &next_lost, prop, (files, inputs), takes_system_prop, visited)?;
+        Some((component, Some(target.clone())))
+    })
+}
+
 /// The warning for `tag` passing `props` to `declaration`, which loses them
 /// through `lost`, once per tag and set of the props it really loses.
+#[allow(clippy::too_many_arguments)]
 fn lost_props_warning<'u>(
     file: &str,
     tag: &'u str,
     at: u32,
     props: Vec<&'u str>,
     (declaration_file, declaration, lost): (&str, &str, &LostThrough<'_>),
+    analysis: (&BTreeMap<String, FileFacts>, &CssInputs),
     takes_system_prop: &dyn Fn(&str, &str, &str) -> bool,
     reported: &mut FxHashSet<(&'u str, Vec<&'u str>)>,
 ) -> Option<CssDiagnostic> {
     let takes = |prop: &str| {
-        lost.reaching(prop).into_iter().find(|target| takes_system_prop(declaration_file, target, prop))
+        let mut visited = FxHashSet::from_iter([(declaration_file.to_string(), declaration.to_string())]);
+        component_reached(declaration_file, lost, prop, analysis, takes_system_prop, &mut visited)
     };
     let mut props: Vec<&str> = props.into_iter().filter(|prop| takes(prop).is_some()).collect();
     props.sort_unstable();
@@ -3264,16 +3294,22 @@ fn lost_props_warning<'u>(
         return None;
     }
     let listed = props.join(", ");
-    let target = props.iter().find_map(|prop| takes(prop)).map_or("", String::as_str);
+    let (target, via) = props.iter().find_map(|prop| takes(prop)).unwrap_or_default();
     if !reported.insert((tag, props)) {
         return None;
     }
-    let how = match lost {
-        LostThrough::Alias(_) => format!(
+    let how = match (lost, via) {
+        (LostThrough::Alias(_), None) => format!(
             "an alias of the extracted component {target} that usage tracking does not follow"
         ),
-        LostThrough::Spread(_) => format!(
+        (LostThrough::Alias(_), Some(via)) => format!(
+            "an alias of {via} that usage tracking does not follow, which reaches the extracted component {target}"
+        ),
+        (LostThrough::Spread(_), None) => format!(
             "a function component that forwards them by spread to the extracted component {target}"
+        ),
+        (LostThrough::Spread(_), Some(via)) => format!(
+            "a function component that forwards them by spread to {via}, which reaches the extracted component {target}"
         ),
     };
     Some(
@@ -3345,6 +3381,7 @@ fn untraced_member_system_props(
                         at,
                         props,
                         (&declaration_file, &declaration, &lost),
+                        (files, inputs),
                         takes_system_prop,
                         &mut reported,
                     ));
@@ -6269,10 +6306,14 @@ fn run_with_system_floor(
                 .iter()
                 .any(|id| component_takes(id, prop))
         };
+        let attributed = |tag: &str| {
+            file_lookup.as_ref().unwrap_or(&global_lookup).attribution.contains_key(tag)
+        };
         diagnostics.extend(unattributed_system_props(
             path,
             ff,
             &unattributed_imports,
+            &attributed,
             files,
             inputs,
             &takes_system_prop,
@@ -11782,14 +11823,24 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
     /// use: a wrapper reached through `export *`, one that destructures its
     /// props in its body, a function declaration, one with two rest routes
     /// of which one still carries the prop, one rendered by `createElement`,
-    /// and a function component held by a facade object. A prop a pattern
-    /// on every route consumes, and a name a parameter shadows, warn nothing.
+    /// a function component held by a facade object, a same-module wrapper
+    /// of an imported one, the root of an `Object.assign` facade built on a
+    /// function component, and a function component a facade literal holds
+    /// inline. A prop a pattern on every route consumes, and a name a
+    /// parameter shadows, warn nothing. A same-module wrapper rendered by
+    /// `createElement` is followed as its elements are.
     #[test]
     fn every_unfollowed_wrapper_shape_warns_at_its_use() {
         let recipe = "export const Box = ds.styles({}).system({ space: true }).asElement('div');\n";
         let wrapper = "import { Box } from './recipe';\nexport const Top = (props) => <Box {...props} />;\n";
         let rendered = "import { Top } from './wrapper';\nexport const App = () => <Top marginInlineStart={8} />;\n";
-        let cases: [(&str, &str, &str, Option<&str>); 8] = [
+        let followed = "import { createElement } from 'react';\nimport { Box } from './recipe';\n\
+                        const Top = (props) => <Box {...props} />;\n\
+                        export const App = () => createElement(Top, { marginInlineStart: 8 });\n";
+        let out = analyze_with_logical_space(&[("recipe.tsx", recipe), ("app.tsx", followed)]);
+        assert!(out.css.contains("margin-inline-start: 0.5rem;"), "{}", out.css);
+        assert!(unattributed(&out).is_empty(), "{:?}", out.diagnostics);
+        let cases: [(&str, &str, &str, Option<&str>); 10] = [
             ("index.ts", "export * from './wrapper';\n", "import { Top } from './index';\nexport const App = () => <Top marginInlineStart={8} />;\n", Some("<Top")),
             (
                 "wrapper.tsx",
@@ -11823,6 +11874,18 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
                 "import { Identity } from './facade';\nexport const App = () => <><Identity.Body marginInlineStart={8} /><Identity.Media marginInlineStart={8} /></>;\n",
                 Some("<Identity.Media"),
             ),
+            (
+                "index.ts",
+                "export {};\n",
+                "import { Top } from './wrapper';\nconst TopOfTop = (props) => <Top {...props} />;\nexport const App = () => <TopOfTop marginInlineStart={8} />;\n",
+                Some("<TopOfTop"),
+            ),
+            (
+                "facade.tsx",
+                "import { Box } from './recipe';\nfunction Held(props) { return <Box {...props} />; }\nexport const Facade = Object.assign(Held, { Item: Held });\n",
+                "import { Facade } from './facade';\nexport const App = () => <Facade marginInlineStart={8} />;\n",
+                Some("<Facade"),
+            ),
         ];
         for (path, module, app, use_site) in cases {
             let mut entries = vec![("recipe.tsx", recipe), (path, module), ("app.tsx", app)];
@@ -11837,6 +11900,17 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
                 .collect();
             assert_eq!(warned, expected, "{module}{app}: {:?}", out.diagnostics);
         }
+        let held = "import { Box } from './recipe';\nexport const Facade = { Item: (props) => <Box {...props} /> };\n";
+        let app = "import { Facade } from './barrel';\nexport const App = () => <Facade.Item marginInlineStart={8} />;\n";
+        let out = analyze_with_logical_space(&[
+            ("recipe.tsx", recipe),
+            ("held.tsx", held),
+            ("barrel.ts", "export * from './held';\n"),
+            ("app.tsx", app),
+        ]);
+        let warned: Vec<_> = unattributed(&out).iter().map(|d| (d.file.as_str(), d.offset, d.dropped.as_deref())).collect();
+        let at = app.find("<Facade.Item").unwrap() as u32;
+        assert_eq!(warned, [("app.tsx", Some(at), Some("marginInlineStart"))], "{:?}", out.diagnostics);
     }
 
     #[test]
