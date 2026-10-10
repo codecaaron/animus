@@ -57,8 +57,8 @@ test('copies of one definition share one class, written once with every kept opt
   expect(count('variants', `${shared}--size-sm`)).toBe(1);
   expect(count('variants', `${shared}--size-lg`)).toBe(1);
   const hash = shared.slice(shared.lastIndexOf('-') + 1);
-  expect(count('custom', `animus-dyn-lift_${hash}`)).toBe(1);
-  expect(count('custom', `animus-dyn-tilt_${hash}`)).toBe(1);
+  expect(count('custom', `animus-dyn-lift_Button_${hash}`)).toBe(1);
+  expect(count('custom', `animus-dyn-tilt_Button_${hash}`)).toBe(1);
 });
 
 test('a copy whose usage the analysis cannot see keeps every option and state for every copy', () => {

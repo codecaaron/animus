@@ -213,15 +213,15 @@ async function main(): Promise<void> {
   const dynamicHash = dynamicBase.slice('animus-dynamicNotice-'.length);
   const gapClass = classToken(
     dynamicTag,
-    /^animus-dyn-gap_[a-f0-9]+$/,
+    /^animus-dyn-gap_dynamicNotice_[a-f0-9]+$/,
     'dynamicNotice gap'
   );
   expect(
-    gapClass === `animus-dyn-gap_${dynamicHash}`,
+    gapClass === `animus-dyn-gap_dynamicNotice_${dynamicHash}`,
     `Rendered gap class ${gapClass} must belong to ${dynamicBase}`
   );
 
-  const gapVar = `--animus-gap_${dynamicHash}`;
+  const gapVar = `--animus-gap_dynamicNotice_${dynamicHash}`;
   const dynamicStyle = attribute(dynamicTag, 'style');
   expect(
     new RegExp(`(?:^|;)\\s*${gapVar}:\\s*13px(?:;|$)`).test(dynamicStyle),

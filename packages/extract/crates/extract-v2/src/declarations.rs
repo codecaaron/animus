@@ -46,7 +46,7 @@ pub type DeclarationScales = BTreeMap<String, LoweredScale>;
 pub struct DeclarationBinding {
     pub members: Vec<DeclarationMember>,
     pub records: Arc<DeclarationRecords>,
-    /// The declaring component's class suffix for a component prop; `None`
+    /// The declaring component's name scope for a component prop; `None`
     /// for a system prop, whose member variables every consumer shares.
     pub identity: Option<String>,
 }
@@ -407,13 +407,13 @@ pub fn check_surface_overlap(config: &PropConfigMap) -> Result<(), String> {
 }
 
 /// Binds a component's own `.props()` declaration props to the theme's
-/// declaration scales under the declaring component's class suffix. Props
-/// already bound, such as inherited ones, keep the suffix they carry.
+/// declaration scales under the declaring component's name scope. Props
+/// already bound, such as inherited ones, keep the scope they carry.
 pub fn bind_component_declarations(
     config: &mut PropConfigMap,
     scales: &DeclarationScales,
     theme: &FlatTheme,
-    class_suffix: &str,
+    name_scope: &str,
 ) -> Result<(), String> {
     let mut prop_names: Vec<String> = config.keys().cloned().collect();
     prop_names.sort();
@@ -422,7 +422,7 @@ pub fn bind_component_declarations(
         match prop.declaration.kind.as_deref() {
             None => check_value_prop(prop_name, prop, scales)?,
             Some(DECLARATIONS_KIND) if prop.declaration.binding.is_none() => {
-                let identity = Some(class_suffix.to_string());
+                let identity = Some(name_scope.to_string());
                 prop.declaration.binding = Some(Arc::new(bind_prop(prop_name, prop, scales, theme, identity)?));
             }
             Some(DECLARATIONS_KIND) => {}
@@ -490,8 +490,8 @@ fn key_segment(key: &str) -> String {
 }
 
 /// Names shared by the binding classes, the consuming rules and the runtime.
-/// A component prop's names carry its declaring class's suffix, so unrelated
-/// components never read each other's member variables.
+/// A component prop's names carry its declaring component's name scope, so
+/// unrelated components never read each other's member variables.
 pub struct DeclarationNames<'a> {
     pub prefix: &'a str,
     pub prop: &'a str,
