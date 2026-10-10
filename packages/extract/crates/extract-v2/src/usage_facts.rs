@@ -1288,6 +1288,9 @@ impl OpaqueCallScan<'_> {
         let mut seen: FxHashSet<SymbolId> = FxHashSet::default();
         let mut entered: FxHashSet<oxc::semantic::ScopeId> = FxHashSet::default();
         let mut parameters: Vec<SymbolId> = Vec::new();
+        // A binding the walk does not follow (`let held; held = children`)
+        // may hold anything a parameter does.
+        let mut unresolved = false;
         let mut pending: Vec<SymbolId> = reads.symbols.iter().copied().collect();
         while let Some(symbol) = pending.pop() {
             if !seen.insert(symbol) {
@@ -1304,15 +1307,18 @@ impl OpaqueCallScan<'_> {
             let (next, function) = match (self.consts.get(&symbol), self.functions.get(&symbol)) {
                 (Some(init), _) => (&init.reads, init.function),
                 (None, Some((reads, scope))) => (reads, Some(*scope)),
-                (None, None) => continue,
+                (None, None) => {
+                    unresolved |= !self.parameters.contains(&symbol) && !self.sources.contains_key(&symbol);
+                    continue;
+                }
             };
             entered.extend(function);
             closed.tags.extend(next.tags.iter().cloned());
             closed.unknown_global |= next.unknown_global;
             pending.extend(next.symbols.iter().copied());
         }
-        closed.reads_parameter =
-            parameters.iter().any(|parameter| !entered.contains(&self.scoping.symbol_scope_id(*parameter)));
+        closed.reads_parameter = unresolved
+            || parameters.iter().any(|parameter| !entered.contains(&self.scoping.symbol_scope_id(*parameter)));
         closed.imports.sort();
         closed
     }

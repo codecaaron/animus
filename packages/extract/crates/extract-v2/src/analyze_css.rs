@@ -9036,12 +9036,15 @@ export const App = ({ n }) => <Box bgImage={n} texture={n} />;
         let family = "import { Slot } from 'ui-lib';\n\
                       function Root({ children }) { return <section>{children}</section>; }\n\
                       function Pass({ children }) { return <Slot>{children}</Slot>; }\n\
-                      export const Dialog = { Root, Pass, Made: memo(Root) };\n";
-        let cases: [(&str, &str, &[&str]); 7] = [
+                      function Held({ children }) { let held; held = children; return <Slot>{held}</Slot>; }\n\
+                      export const Dialog = { Root, Pass, Held, Made: memo(Root) };\n";
+        let cases: [(&str, &str, &[&str]); 8] = [
             ("", "() => <><Dialog.Root /><Box p={8} /></>", &[]),
             ("", "() => <Dialog.Root><Box p={8} /></Dialog.Root>", &[]),
             ("", "() => <><Dialog.Pass><div /></Dialog.Pass><Box p={8} /></>", &[]),
             ("", "() => <><Dialog.Pass><Box p={8} /></Dialog.Pass><Box p={8} /></>", &["p"]),
+            // Children a local takes by assignment may still be passed on.
+            ("", "() => <><Dialog.Held><Box p={8} /></Dialog.Held><Box p={8} /></>", &["p"]),
             ("", "() => <><Dialog.Made /><Box p={8} /></>", &["p"]),
             ("", "({ Dialog }) => <><Dialog.Root /><Box p={8} /></>", &["p"]),
             ("Dialog.Root = maybe;\n", "() => <><Dialog.Root /><Box p={8} /></>", &["p"]),
