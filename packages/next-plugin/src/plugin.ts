@@ -121,6 +121,7 @@ type Compiler = {
     name?: string;
     resolve?: {
       alias?: WebpackAliasMap;
+      conditionNames?: string[];
     };
     watchOptions?: {
       ignored?: WatchIgnored;
@@ -217,6 +218,13 @@ export class AnimusWebpackPlugin {
       watchOptions.ignored = (path: string) =>
         path === epochPath || Boolean(ignored(path));
     }
+  }
+
+  /** Webpack's export conditions select the system's kit files as they
+   *  select the bundle's; `...`, webpack's own defaults, names none. */
+  private extractConditions(compiler: Compiler): void {
+    const names = compiler.options?.resolve?.conditionNames ?? [];
+    this.session.conditions = names.filter((name) => name !== '...');
   }
 
   private extractAliases(compiler: Compiler): void {
@@ -317,6 +325,7 @@ export class AnimusWebpackPlugin {
     compiler.hooks.run.tapPromise(PLUGIN_NAME, async (_compiler: Compiler) => {
       this.adoptCompilerContext(_compiler);
       this.extractAliases(_compiler);
+      this.extractConditions(_compiler);
 
       const existing = getAnalysisStartedPromise();
       if (existing) {
@@ -334,6 +343,7 @@ export class AnimusWebpackPlugin {
       async (_compiler: Compiler) => {
         this.adoptCompilerContext(_compiler);
         this.extractAliases(_compiler);
+        this.extractConditions(_compiler);
         try {
           await this.analyzeWatchTurn(_compiler);
           this.watchFailure = null;
