@@ -1428,12 +1428,28 @@ const TOKEN_SHAPE_EXEMPT_PROPERTIES: &[&str] = &[
 /// value among them came from a token, so it is no miss.
 type ScaleFamily = FxHashMap<String, FxHashSet<String>>;
 
-/// What a scale-miss warning reads: the scaled properties, and whether the
-/// file is an included package's, whose identifier misses are external
-/// token candidates instead.
+/// What a scale-miss warning reads: the scaled properties, the theme's
+/// tokens by their name within their scale (`primary` → `colors.primary`),
+/// and whether the file is an included package's, whose identifier misses
+/// are external token candidates instead.
 struct ScaleCheck<'a> {
     family: &'a ScaleFamily,
+    tokens: &'a FxHashMap<String, String>,
     external: bool,
+}
+
+/// Each theme token by its name within its scale, the first by path when two
+/// scales share a name.
+fn tokens_by_name(theme: &crate::theme::FlatTheme) -> FxHashMap<String, String> {
+    let mut paths: Vec<&String> = theme.keys().collect();
+    paths.sort();
+    let mut tokens = FxHashMap::default();
+    for path in paths {
+        if let Some((_, name)) = path.split_once('.') {
+            tokens.entry(name.to_string()).or_insert_with(|| path.clone());
+        }
+    }
+    tokens
 }
 
 fn scale_family_css_properties(config: &PropConfigMap, theme: &crate::theme::FlatTheme) -> ScaleFamily {
@@ -1505,12 +1521,13 @@ fn warn_token_shaped_value(
     component: &str,
     diagnostics: &mut Vec<CssDiagnostic>,
 ) {
-    let Some(literals) = scale_check.family.get(&decl.property) else {
-        return;
-    };
     if decl.property.starts_with("--") || TOKEN_SHAPE_EXEMPT_PROPERTIES.contains(&decl.property.as_str()) {
         return;
     }
+    let Some(literals) = scale_check.family.get(&decl.property) else {
+        warn_unowned_token_value(decl, scale_check, file, component, diagnostics);
+        return;
+    };
     let message = if is_token_shaped_value(&decl.value) {
         format!(
             "token-shaped value '{}' in '{}' did not resolve — likely an unresolved token: \
@@ -1528,6 +1545,34 @@ fn warn_token_shaped_value(
     } else {
         return;
     };
+    diagnostics.push(diagnostic(file, component, "warn", message, Some(TOKEN_SHAPED_VALUE)).dropping(&decl.value));
+}
+
+/// A property no scaled prop writes, so nothing resolves a token there: a
+/// value that names a theme token, dotted or an identifier that is no keyword
+/// of the property, is emitted as authored and reported. Any other value,
+/// dotted or not, carries no theme meaning there and is taken as written.
+fn warn_unowned_token_value(
+    decl: &CssDeclaration,
+    scale_check: &ScaleCheck<'_>,
+    file: &str,
+    component: &str,
+    diagnostics: &mut Vec<CssDiagnostic>,
+) {
+    let Some(path) = scale_check.tokens.get(&decl.value) else {
+        return;
+    };
+    let dotted = is_token_shaped_value(&decl.value);
+    if !dotted
+        && (scale_check.external || !is_unknown_identifier(&decl.property, &decl.value, &FxHashSet::default()))
+    {
+        return;
+    }
+    let message = format!(
+        "value '{}' in '{}' names the token '{path}', but no prop resolves tokens for '{}' — write \
+         '{{{path}}}', or register a prop for the property. The declaration is emitted as authored.",
+        decl.value, decl.property, decl.property
+    );
     diagnostics.push(diagnostic(file, component, "warn", message, Some(TOKEN_SHAPED_VALUE)).dropping(&decl.value));
 }
 
@@ -4226,6 +4271,7 @@ fn run_with_system_floor(
     );
     let mut evaluated: FxHashMap<String, EvalEntry> = FxHashMap::default();
     let scale_family_props = scale_family_css_properties(&inputs.config, &inputs.theme);
+    let theme_tokens = tokens_by_name(&inputs.theme);
     let scale_names = if inputs.external_dirs.is_empty() {
         FxHashMap::default()
     } else {
@@ -4520,6 +4566,7 @@ fn run_with_system_floor(
                     &mut component_css,
                     &ScaleCheck {
                         family: &scale_family_props,
+                        tokens: &theme_tokens,
                         external: is_external_file(file_path, &inputs.external_dirs),
                     },
                     file_path,

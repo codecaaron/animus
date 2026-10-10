@@ -581,6 +581,57 @@ export const App = () => <><Box height="{space.16}" /><Box height="{space.nope}"
   );
 });
 
+test('a token name on a longhand no scaled prop owns is reported, and valid CSS is not', () => {
+  const { manifest } = runPipeline(
+    [
+      {
+        path: 'unowned-tokens.tsx',
+        source: `import { ds } from '../setup';
+export const Bar = ds
+  .styles({
+    padding: 't-spacing-1',
+    paddingLeft: 't-spacing-1',
+    borderTopColor: 'feedback.error',
+    '&[aria-current="page"]': { borderBottomColor: 'primary' },
+    borderLeftColor: 'red',
+    outlineStyle: 'dotted',
+    listStyleType: 'primary',
+  })
+  .asElement('div');
+export const App = () => <Bar />;
+`,
+      },
+    ],
+    {
+      inputs: {
+        propConfigJson: JSON.stringify({
+          color: { property: 'color', scale: 'colors' },
+          padding: { property: 'padding', scale: 'space' },
+        }),
+        scalesJson: JSON.stringify({
+          'colors.primary': '#00f',
+          'colors.feedback.error': '#f00',
+          'space.t-spacing-1': '4px',
+        }),
+        variableMapJson: '{}',
+      },
+    }
+  );
+  const reported = manifest.diagnostics
+    .filter(
+      (d: { code?: string }) => d.code === 'animus.style.unresolved-token-value'
+    )
+    .map((d: { dropped?: string; severity?: string }) => [
+      d.dropped,
+      d.severity,
+    ]);
+  expect(reported).toEqual([
+    ['t-spacing-1', 'warn'],
+    ['feedback.error', 'warn'],
+    ['primary', 'warn'],
+  ]);
+});
+
 test('fill and stroke take SVG paint keywords, and a misspelt one still misses', () => {
   const { manifest, css } = runPipeline([
     {
