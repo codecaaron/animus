@@ -100,6 +100,11 @@ impl ContextualVarsMap {
             .collect();
     }
 
+    /// Each scale with its contextual variables, in no order.
+    pub fn scales(&self) -> impl Iterator<Item = (&str, &[ContextualVar])> {
+        self.by_scale.iter().map(|(scale, vars)| (scale.as_str(), vars.as_slice()))
+    }
+
     /// The scale's contextual variables, in declaration order.
     pub fn scale(&self, scale: &str) -> &[ContextualVar] {
         self.by_scale.get(scale).map_or(&[], Vec::as_slice)

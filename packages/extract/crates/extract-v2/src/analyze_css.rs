@@ -1539,28 +1539,54 @@ const TOKEN_SHAPE_EXEMPT_PROPERTIES: &[&str] = &[
 type ScaleFamily = FxHashMap<String, FxHashSet<String>>;
 
 /// What a scale-miss warning reads: the scaled properties, the theme's
-/// tokens by their name within their scale (`primary` → `colors.primary`),
-/// and whether the file is an included package's, whose identifier misses
-/// are external token candidates instead.
+/// tokens and contextual variables by their name within their scale
+/// (`primary` → `colors.primary`), the theme, and whether the file is an
+/// included package's, whose identifier misses that name no token are
+/// external token candidates instead.
 struct ScaleCheck<'a> {
     family: &'a ScaleFamily,
-    tokens: &'a FxHashMap<String, String>,
+    tokens: &'a FxHashMap<String, Vec<String>>,
+    theme: &'a crate::theme::FlatTheme,
     external: bool,
 }
 
-/// Each theme token by its complete path and by its name within its scale:
-/// a complete path names its own token, and a name the first by path when
-/// two scales share it.
-fn tokens_by_name(theme: &crate::theme::FlatTheme) -> FxHashMap<String, String> {
-    let mut paths: Vec<&String> = theme.keys().collect();
+/// Each theme token and contextual variable by its complete path, and by
+/// its name within its scale: a complete path names only its own token, and
+/// a name every path that holds it, in path order.
+fn tokens_by_name(
+    theme: &crate::theme::FlatTheme,
+    contextual: &crate::property_names::ContextualVarsMap,
+) -> FxHashMap<String, Vec<String>> {
+    let declared = contextual.scales().flat_map(|(scale, vars)| vars.iter().map(move |var| format!("{scale}.{}", var.name)));
+    let mut paths: Vec<String> = theme.keys().cloned().chain(declared).collect();
     paths.sort();
-    let mut tokens: FxHashMap<String, String> = paths.iter().map(|path| ((*path).clone(), (*path).clone())).collect();
-    for path in paths {
+    paths.dedup();
+    let mut tokens: FxHashMap<String, Vec<String>> = paths.iter().map(|path| (path.clone(), vec![path.clone()])).collect();
+    for path in &paths {
         if let Some((_, name)) = path.split_once('.') {
-            tokens.entry(name.to_string()).or_insert_with(|| path.clone());
+            if paths.binary_search_by(|other| other.as_str().cmp(name)).is_err() {
+                tokens.entry(name.to_string()).or_default().push(path.clone());
+            }
         }
     }
     tokens
+}
+
+/// Whether a token's value can stand on `property`: a bare number other
+/// than zero only on a unitless property, a colour only on a colour
+/// property, anything else (a `var()`, a contextual variable) anywhere.
+fn token_fits(property: &str, value: Option<&String>) -> bool {
+    let Some(value) = value.map(|value| value.trim()) else { return true };
+    if let Ok(number) = value.parse::<f64>() {
+        return number == 0.0 || crate::css::is_unitless_css_property(property);
+    }
+    let lower = value.to_ascii_lowercase();
+    let colour = lower.starts_with('#')
+        || ["rgb(", "rgba(", "hsl(", "hsla(", "hwb(", "lab(", "lch(", "oklab(", "oklch(", "color("]
+            .iter()
+            .any(|function| lower.starts_with(function))
+        || NAMED_COLOURS.iter().any(|named| named.eq_ignore_ascii_case(value));
+    !colour || is_colour_property(property)
 }
 
 fn scale_family_css_properties(config: &PropConfigMap, theme: &crate::theme::FlatTheme) -> ScaleFamily {
@@ -1646,7 +1672,9 @@ fn warn_token_shaped_value(
              will be ignored by browsers.",
             decl.value, decl.property
         )
-    } else if !scale_check.external && is_unknown_identifier(&decl.property, &decl.value, literals) {
+    } else if (!scale_check.external || scale_check.tokens.contains_key(&decl.value))
+        && is_unknown_identifier(&decl.property, &decl.value, literals)
+    {
         format!(
             "value '{}' in '{}' is neither a key of its scale nor a keyword of the property — \
              likely an unresolved token: check the key against the theme. The declaration is \
@@ -1660,9 +1688,11 @@ fn warn_token_shaped_value(
 }
 
 /// A property no scaled prop writes, so nothing resolves a token there: a
-/// value that names a theme token, dotted or an identifier that is no keyword
-/// of the property, is emitted as authored and reported. Any other value,
-/// dotted or not, carries no theme meaning there and is taken as written.
+/// value that names a theme token or contextual variable, dotted or an
+/// identifier that is no keyword of the property, is emitted as authored and
+/// reported, in any file. It names every token it may mean, those whose
+/// values fit the property first. Any other value, dotted or not, carries no
+/// theme meaning there and is taken as written.
 fn warn_unowned_token_value(
     decl: &CssDeclaration,
     scale_check: &ScaleCheck<'_>,
@@ -1670,17 +1700,24 @@ fn warn_unowned_token_value(
     component: &str,
     diagnostics: &mut Vec<CssDiagnostic>,
 ) {
-    let Some(path) = scale_check.tokens.get(&decl.value) else {
+    let Some(paths) = scale_check.tokens.get(&decl.value) else {
         return;
     };
     let dotted = is_token_shaped_value(&decl.value);
-    if !dotted
-        && (scale_check.external || !is_unknown_identifier(&decl.property, &decl.value, &FxHashSet::default()))
-    {
+    if !dotted && !is_unknown_identifier(&decl.property, &decl.value, &FxHashSet::default()) {
         return;
     }
+    let mut ranked: Vec<&String> = paths.iter().collect();
+    ranked.sort_by_key(|path| !token_fits(&decl.property, scale_check.theme.get(*path)));
+    let quoted: Vec<String> = ranked.iter().map(|path| format!("'{path}'")).collect();
+    let named = match quoted.as_slice() {
+        [one] => format!("the token {one}"),
+        [rest @ .., last] => format!("the tokens {} and {last}", rest.join(", ")),
+        [] => return,
+    };
+    let path = ranked[0];
     let message = format!(
-        "value '{}' in '{}' names the token '{path}', but no prop resolves tokens for '{}' — write \
+        "value '{}' in '{}' names {named}, but no prop resolves tokens for '{}' — write \
          '{{{path}}}', or register a prop for the property. The declaration is emitted as authored.",
         decl.value, decl.property, decl.property
     );
@@ -5347,7 +5384,7 @@ fn run_with_system_floor(
     );
     let mut evaluated: FxHashMap<String, EvalEntry> = FxHashMap::default();
     let scale_family_props = scale_family_css_properties(&inputs.config, &inputs.theme);
-    let theme_tokens = tokens_by_name(&inputs.theme);
+    let theme_tokens = tokens_by_name(&inputs.theme, &inputs.contextual_vars);
     let scale_names = if inputs.external_dirs.is_empty() {
         FxHashMap::default()
     } else {
@@ -5654,6 +5691,7 @@ fn run_with_system_floor(
                     &ScaleCheck {
                         family: &scale_family_props,
                         tokens: &theme_tokens,
+                        theme: &inputs.theme,
                         external: is_external_file(file_path, &inputs.external_dirs),
                     },
                     file_path,
@@ -8280,6 +8318,62 @@ mod tests {
         let mut inputs = token_shape_inputs();
         inputs.external_dirs = vec!["kit/src".into()];
         inputs
+    }
+
+    /// Space props on `padding-left` only through `pl`; `t-spacing-1` is a
+    /// contextual variable of the space scale, and `md` a key of both space
+    /// and breakpoints.
+    fn kit_spacing_inputs() -> CssInputs {
+        let mut inputs = CssInputs::from_json(
+            None,
+            None,
+            Some(r#"{"space": ["t-spacing-1"]}"#),
+            Some(r#"{"pl": {"property": "paddingLeft", "scale": "space"}}"#),
+            Some(r#"{"space": ["pl"]}"#),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(r#"["kit/src"]"#),
+            false,
+        )
+        .unwrap();
+        inputs.theme.insert("space.1".into(), "4px".into());
+        inputs.theme.insert("space.md".into(), "var(--space-md)".into());
+        inputs.theme.insert("breakpoints.md".into(), "960".into());
+        inputs
+    }
+
+    #[test]
+    fn token_names_in_an_included_package_report_as_in_its_own_build() {
+        let source = "export const chipContent = ds.styles({ paddingLeft: 't-spacing-1', scrollPaddingLeft: 't-spacing-1' }).asClass();\n";
+        let reported = |path: &str| {
+            let out = analyze(&[(path, source)], &kit_spacing_inputs());
+            let mut warned: Vec<_> = out
+                .diagnostics
+                .iter()
+                .filter(|d| d.code.as_deref() == Some(TOKEN_SHAPED_VALUE))
+                .map(|d| d.message.split(" — ").next().unwrap_or_default().to_string())
+                .collect();
+            warned.sort();
+            warned
+        };
+        let own = reported("src/Chip.tsx");
+        assert_eq!(own.len(), 2, "both longhands name a token: {own:?}");
+        assert_eq!(reported("kit/src/Chip.tsx"), own, "a consuming app reports what the kit's build does");
+    }
+
+    #[test]
+    fn unowned_token_hints_name_every_scale_with_the_key_fitting_first() {
+        let out = analyze(&[("src/a.tsx", "export const a = ds.styles({ scrollPaddingInline: 'md' }).asClass();\n")], &kit_spacing_inputs());
+        let warned: Vec<_> = out.diagnostics.iter().filter(|d| d.code.as_deref() == Some(TOKEN_SHAPED_VALUE)).collect();
+        assert_eq!(warned.len(), 1, "{:?}", out.diagnostics);
+        let message = &warned[0].message;
+        assert!(message.contains("'space.md'") && message.contains("'breakpoints.md'"), "{message}");
+        assert!(message.contains("write '{space.md}'"), "{message}");
     }
 
     #[test]
