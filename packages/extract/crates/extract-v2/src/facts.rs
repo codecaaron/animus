@@ -371,6 +371,10 @@ pub struct FileFacts {
     #[serde(skip)]
     pub(crate) captured_transform_bindings: BTreeSet<(String, String)>,
     pub parse_diagnostics: Vec<String>,
+    /// 1-based `[line, column]` of each `createSystem(…)` call no binding
+    /// resolves: a system file's root that can only fail where it loads.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub unbound_create_system_calls: Vec<(usize, usize)>,
     /// The parser stopped at an unrecoverable error and yielded no chains,
     /// imports or exports: these facts describe nothing of the file.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
@@ -1283,6 +1287,10 @@ pub(crate) fn extract_file_facts_from_static_maps(
         module_loads,
         ordinary_components,
         parse_diagnostics: ast.diagnostics.clone(),
+        unbound_create_system_calls: crate::usage_facts::unbound_create_system_calls(program)
+            .into_iter()
+            .map(|span| line_column(source, span.start))
+            .collect(),
         parse_panicked: ast.panicked,
     }
 }
@@ -1298,6 +1306,27 @@ mod tests {
         let facts = extract_file_facts(&ast);
         assert_eq!(counter.load(std::sync::atomic::Ordering::SeqCst), 1);
         facts
+    }
+
+    #[test]
+    fn records_only_create_system_calls_no_binding_resolves() {
+        let calls = |source: &str| facts_for(source).unbound_create_system_calls;
+        // A bare call, at its callee.
+        assert_eq!(calls("export const ds = createSystem().build();"), vec![(1, 19)]);
+        // A comment or string spelling it is no call, and an alias is bound.
+        assert!(calls(
+            "import { createSystem as makeSystem } from '@animus-ui/system';\n\
+             // createSystem()\nconst s = 'createSystem()';\n\
+             export const ds = makeSystem().build();"
+        )
+        .is_empty());
+        // A parameter, a declaration and an import each bind the name.
+        assert!(calls("function build(createSystem) { return createSystem().build(); }").is_empty());
+        assert!(calls("function createSystem() {}\nexport const ds = createSystem();").is_empty());
+        assert!(calls(
+            "import { createSystem } from '@animus-ui/system';\nexport const ds = createSystem();"
+        )
+        .is_empty());
     }
 
     #[test]

@@ -909,6 +909,9 @@ export function staleDistIncludesMessage(
 export interface ModuleRecord {
   imports: readonly ExtractImportFact[];
   exports: readonly ExtractExportFact[];
+  /** 1-based `[line, column]` of each `createSystem(…)` call that no
+   *  import, declaration or parameter binds, from the parser's scopes. */
+  unboundCreateSystemCalls?: ReadonlyArray<readonly [number, number]>;
 }
 
 /** A module's parsed bindings, or null when it cannot be parsed. */
@@ -932,7 +935,11 @@ export function engineModuleParser(
         'extractFacts'
       ).files[path];
       return facts && !facts.parsePanicked
-        ? { imports: facts.imports, exports: facts.exports }
+        ? {
+            imports: facts.imports,
+            exports: facts.exports,
+            unboundCreateSystemCalls: facts.unboundCreateSystemCalls ?? [],
+          }
         : null;
     } catch {
       return null;
@@ -1110,9 +1117,10 @@ const NAMESPACE_IMPORT =
 async function systemRoots(
   systemFilePath: string,
   source: string,
-  imports: readonly ExtractImportFact[],
+  record: ModuleRecord,
   following: RootFollowing
 ): Promise<Set<string>> {
+  const { imports } = record;
   const roots = new Set<string>();
   const identityOf = (
     specifier: string,
@@ -1227,11 +1235,7 @@ async function systemRoots(
     );
   }
 
-  const unimported = unimportedCreateSystemCall(
-    systemFilePath,
-    source,
-    imports
-  );
+  const unimported = unimportedCreateSystemCall(systemFilePath, record);
   if (unimported) following.report?.(unimported);
   return roots;
 }
@@ -1265,27 +1269,15 @@ function* destructuredCreateSystems(
   }
 }
 
-/** The warning for a call of `createSystem` that the system file neither
- *  imports, destructures nor declares; null when there is none. */
+/** The warning for a `createSystem` call that the parser's scopes leave
+ *  unbound: no import, declaration or parameter names it. Null when there is
+ *  none, or when the parser reports no scopes. */
 export function unimportedCreateSystemCall(
   systemFilePath: string,
-  source: string,
-  imports: readonly ExtractImportFact[]
+  record: ModuleRecord
 ): ManifestDiagnostic | null {
-  const call = callOf('createSystem').exec(source);
-  if (!call || imports.some((binding) => binding.local === 'createSystem')) {
-    return null;
-  }
-  for (const { local } of destructuredCreateSystems(source)) {
-    if (local === 'createSystem') return null;
-  }
-  if (
-    /\b(?:function\*?|class)\s+createSystem\b|\b(?:const|let|var)\s+createSystem\b/.test(
-      source
-    )
-  ) {
-    return null;
-  }
+  const call = record.unboundCreateSystemCalls?.[0];
+  if (!call) return null;
   return {
     file: systemFilePath,
     component: 'createSystem',
@@ -1293,7 +1285,8 @@ export function unimportedCreateSystemCall(
     message: `'createSystem' is called with no import or local binding, so it is not read as a system root: the system loader evaluates this file without auto-imports, where the name is undefined — import createSystem from '@animus-ui/system'`,
     code: UNIMPORTED_CREATE_SYSTEM,
     severity: severityFor(UNIMPORTED_CREATE_SYSTEM),
-    ...locationIn(source, call.index),
+    line: call[0],
+    column: call[1],
   };
 }
 
@@ -1318,15 +1311,13 @@ export async function extractSystemFilePackages(
     return [];
   }
 
-  // A parse that reports no imports names no kit, so the spelling path
-  // decides, as without a parse.
+  // A parsed file's bindings decide its roots, even with no imports; only an
+  // unparsed one falls back to the spelling.
   const parsed = parseModule?.(source, systemFilePath) ?? null;
-  const parsedImports =
-    parsed && parsed.imports.length > 0 ? parsed.imports : null;
   let rootCall: string | null = 'createSystem';
-  if (parseModule && parsedImports) {
+  if (parseModule && parsed) {
     rootCall = rootCallPattern([
-      ...(await systemRoots(systemFilePath, source, parsedImports, {
+      ...(await systemRoots(systemFilePath, source, parsed, {
         parseModule,
         resolvePackage,
         report,
@@ -1561,14 +1552,14 @@ export async function extractSystemFilePackages(
   if (identifiers.size === 0) return [];
 
   const importMap = new Map<string, string>();
-  for (const binding of parsedImports ?? []) {
+  for (const binding of parsed?.imports ?? []) {
     importMap.set(binding.local, binding.source);
   }
   const importRegex =
     /^\s*import\s+(?:([a-zA-Z_$][a-zA-Z0-9_$]*)\s*,\s*)?(?:\{([^}]*)\}|([a-zA-Z_$][a-zA-Z0-9_$]*))\s+from\s+['"]([^'"]+)['"]/gm;
 
   // Without a parse, the import table is read from its syntax.
-  if (!parsedImports) {
+  if (!parsed) {
     let importMatch: RegExpExecArray | null;
     while ((importMatch = importRegex.exec(source)) !== null) {
       const [, comboDefault, namedImports, defaultImport, specifier] =

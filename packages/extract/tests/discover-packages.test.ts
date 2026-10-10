@@ -653,6 +653,7 @@ describe('extractSystemFilePackages root bindings', () => {
         {
           imports: [{ local: 'kitD', imported: 'ds', source: '@acme/d' }],
           exports: [],
+          unboundCreateSystemCalls: [[2, 18]],
         },
       ],
     ]);

@@ -84,9 +84,8 @@ function evaluateSystemModule(
     } catch {
       throw error;
     }
-    const imports =
-      engineModuleParser(engine)?.(source, systemPath)?.imports ?? [];
-    const call = unimportedCreateSystemCall(systemPath, source, imports);
+    const record = engineModuleParser(engine)?.(source, systemPath);
+    const call = record && unimportedCreateSystemCall(systemPath, record);
     if (!call) throw error;
     throw new Error(`${warnLine(call)}\n${String(error)}`, { cause: error });
   }
