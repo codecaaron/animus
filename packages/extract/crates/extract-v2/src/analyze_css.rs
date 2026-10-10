@@ -155,6 +155,9 @@ pub struct AnalysisContext {
     /// as their files are keyed: development names their files where they
     /// are defined, whatever the path spells.
     pub linked_dirs: Vec<String>,
+    /// Those of them read from their package's compiled output: the package
+    /// declares no source condition and ships no `src/`.
+    pub output_dirs: Vec<String>,
 }
 
 impl CssInputs {
