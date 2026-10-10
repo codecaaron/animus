@@ -172,9 +172,9 @@ Symptom-to-fix table for extraction-pipeline failures: see [`packages/extract/AG
 
 ### Changelog Entries
 
-A user-visible change adds one file, `changes/unreleased/<slug>.md`, instead of editing `CHANGELOG.md`, so concurrent branches do not conflict there. The slug is lowercase kebab-case, such as `wrapper-props.md`. The file holds one entry in the changelog's existing style: a bold lead, such as `**What changed.**`, then the details. Lists, tables and code blocks are fine; headings are not, because the entry sits inside a section. Text already in `CHANGELOG.md` is corrected there, and text still in `changes/unreleased/` is corrected in its file.
+Changelog entries are paused until 1.0.0. A change adds no file under `changes/unreleased/` and does not edit `CHANGELOG.md`. A user-visible or breaking change states its release note in the PR body instead, and the release notes are written from those. Reviewers do not ask for a changelog entry.
 
-Anyone can run `bun run changelog` on `main` at any time to fold the entries into the `## Unreleased` section of `CHANGELOG.md`, above the paragraphs already there and in file-name order; it deletes their files.
+The mechanism stays for when the pause ends: an entry is one file, `changes/unreleased/<slug>.md`, and `bun run changelog` folds the entries into `CHANGELOG.md`. The `verify:lint` changelog check still validates any entry that exists.
 
 ### Code Hygiene Workflow
 
