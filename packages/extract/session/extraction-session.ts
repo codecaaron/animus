@@ -53,7 +53,7 @@ import {
   unreadableSourceDiagnostic,
   unresolvableIncludesMessage,
   walkPackageSources,
-  engineImportParser,
+  engineModuleParser,
   noKitFilesDiagnostics,
   surfaceManifestDiagnostics,
 } from '../pipeline/index';
@@ -226,6 +226,9 @@ export class ExtractionSession {
   /** Whether the analysis-inputs hydration corpus is written to disk. Only
    *  isolated loader workers replay it; an in-process loader reads memory. */
   persistAnalysisInputs = false;
+  /** Whether the host's structural self-check reports an empty kit, so
+   *  discovery leaves its warning out. */
+  selfCheckReportsEmptyKits = false;
 
   /** Absolute directory prefixes for external packages (loader allowlist). */
   externalPackageDirs: string[] = [];
@@ -957,9 +960,11 @@ export class ExtractionSession {
     // Workspace walk + require.resolve stays local (the Node-resolution
     // seam); the traversal and ingest below are the shared collector.
     t = this.now();
+    const discoveryDiagnostics: ManifestDiagnostic[] = [];
     const packageNames = extractSystemFilePackages(
       resolvedSystemPath,
-      engineImportParser(engineApi())
+      engineModuleParser(engineApi()),
+      (diagnostic) => discoveryDiagnostics.push(diagnostic)
     );
     const preResolved = resolvePackagesByName(rootDir, packageNames);
 
@@ -1001,7 +1006,14 @@ export class ExtractionSession {
     this.ingestionFailureDiagnostics = ingestionFailures;
 
     surfaceManifestDiagnostics(
-      { diagnostics: noKitFilesDiagnostics(collected.outcomes) },
+      {
+        diagnostics: [
+          ...discoveryDiagnostics,
+          ...(this.selfCheckReportsEmptyKits
+            ? []
+            : noKitFilesDiagnostics(collected.outcomes)),
+        ],
+      },
       (message) => this.warn(message)
     );
     const unresolvableMessage = unresolvableIncludesMessage(collected.outcomes);

@@ -6,7 +6,7 @@ import {
   createExcludeMatcher,
   DEFAULT_EXTENSIONS,
   discoverFiles,
-  engineImportParser,
+  engineModuleParser,
   extractSystemFilePackages,
   firstOwners,
   isDeletedSource,
@@ -96,9 +96,11 @@ export async function runBuildStart(
   }
 
   const localFileCount = rawEntries.length;
+  const discoveryDiagnostics: ManifestDiagnostic[] = [];
   const packageSpecifiers = extractSystemFilePackages(
     ctx.resolvedSystemPath!,
-    engineImportParser(ctx.engineApi())
+    engineModuleParser(ctx.engineApi()),
+    (diagnostic) => discoveryDiagnostics.push(diagnostic)
   );
 
   ctx.externalSourceEntries.clear();
@@ -117,8 +119,16 @@ export async function runBuildStart(
     },
   });
   ctx.ingestionFailureDiagnostics = ingestionFailures;
+  // `verify` reports an empty kit through the structural self-check.
   surfaceManifestDiagnostics(
-    { diagnostics: noKitFilesDiagnostics(collected.outcomes) },
+    {
+      diagnostics: [
+        ...discoveryDiagnostics,
+        ...(ctx.options.verify
+          ? []
+          : noKitFilesDiagnostics(collected.outcomes)),
+      ],
+    },
     (message) => ctx.warn(message)
   );
 

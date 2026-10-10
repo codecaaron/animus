@@ -122,6 +122,10 @@ export const UNREADABLE_SOURCE_FILE = 'animus.ingestion.unreadable-source-file';
 /** A kit the system extends resolved, yet discovery found none of its files. */
 export const NO_KIT_FILES = 'animus.discovery.no-kit-files';
 
+/** A system file's `createSystem` binding that discovery could not follow to
+ *  Animus's factory, so it is no root. */
+export const UNPROVEN_ROOT_BINDING = 'animus.discovery.unproven-root-binding';
+
 /** What a skipped source file costs: the analysis never sees what it
  *  renders. */
 export const SKIPPED_SOURCE_COST =
@@ -240,6 +244,7 @@ const DIAGNOSTIC_SEVERITY: ReadonlyMap<string, DiagnosticSeverity> = new Map([
   [SELECTOR_UNSUPPORTED_SUBJECT, 'error'],
   [UNREADABLE_SOURCE_FILE, 'error'],
   [NO_KIT_FILES, 'warn'],
+  [UNPROVEN_ROOT_BINDING, 'warn'],
   [VOCABULARY_COLLISION, 'warn'],
   [VOCABULARY_LEGACY_VERB, 'warn'],
   [INVALID_PROPERTY_REGISTRATION, 'error'],
