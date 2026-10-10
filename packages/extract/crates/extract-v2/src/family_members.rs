@@ -501,6 +501,18 @@ impl<'f> ObjectMembers<'f> {
         objects
     }
 
+    /// The objects `module` exports under the names in `members`: those
+    /// `exported_objects` lists, for those names alone.
+    fn member_objects(&mut self, module: &str, members: &[String]) -> Rc<[Object]> {
+        let mut names = module_export_names(module, self.files, self.inputs);
+        names.insert("default".to_string());
+        members
+            .iter()
+            .filter(|member| names.contains(*member))
+            .filter_map(|member| self.exported_object(module, member))
+            .collect()
+    }
+
     fn table(&mut self, object: &Object) -> Rc<MemberTable> {
         if let Some(table) = self.tables.get(object) {
             return Rc::clone(table);
@@ -681,7 +693,11 @@ impl<'f> ObjectMembers<'f> {
             for load in &ff.module_loads {
                 for target in loaded_modules(module, load, files, inputs) {
                     let reason = format!("{module} loads {target} at runtime on line {}", load.line);
-                    for object in self.exported_objects(target).iter() {
+                    let objects = match crate::analyze_css::handed_members(target, load, files, self.inputs) {
+                        Some(members) => self.member_objects(target, members),
+                        None => self.exported_objects(target),
+                    };
+                    for object in objects.iter() {
                         found.entry(object.clone()).or_insert_with(|| reason.clone());
                     }
                 }
