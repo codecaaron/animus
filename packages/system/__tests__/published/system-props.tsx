@@ -131,6 +131,53 @@ export const numericLengths = (
   </>
 );
 
+// On a strict scale, zero is admitted only where the property's value is a
+// single length; elsewhere the scale wins, and zero must be one of its keys.
+const Zeroes = ds
+  .styles({})
+  .props({
+    m: { property: 'margin', scale: { page: '24px' } },
+    p: { property: 'padding', scale: { page: '24px' } },
+    gap: { property: 'gap', scale: { page: '24px' } },
+    rows: { property: 'gridTemplateRows', scale: { 1: '1fr', 2: '1fr 1fr' } },
+    cols: {
+      property: 'gridTemplateColumns',
+      scale: { 1: '1fr', 2: '1fr 1fr' },
+    },
+    opacity: { property: 'opacity', scale: { faint: '0.4' } },
+    leading: { property: 'lineHeight', scale: { tight: '1.1' } },
+    textDecoration: {
+      property: 'textDecoration',
+      scale: { none: 'none', underline: 'underline' },
+    },
+  })
+  .asElement('div');
+
+export const zeroLengths = (
+  <>
+    <Zeroes m={0} p={0} gap={0} rows={1} cols={2} opacity="faint" />
+    <Zeroes m="0" p="0" gap={{ _: '0', md: 0 }} textDecoration="none" />
+    {/* @ts-expect-error — a grid template is no single length */}
+    <Zeroes rows={0} />
+    {/* @ts-expect-error — nor as a string */}
+    <Zeroes rows="0" />
+    {/* @ts-expect-error — at any breakpoint */}
+    <Zeroes cols={{ _: 1, md: 0 }} />
+    {/* @ts-expect-error — the string zero */}
+    <Zeroes cols="0" />
+    {/* @ts-expect-error — opacity takes its scale's keys */}
+    <Zeroes opacity={0} />
+    {/* @ts-expect-error — the string zero */}
+    <Zeroes opacity="0" />
+    {/* @ts-expect-error — a size-like name that takes no length */}
+    <Zeroes leading={0} />
+    {/* @ts-expect-error — a text-decoration shorthand is no single length */}
+    <Zeroes textDecoration={0} />
+    {/* @ts-expect-error — the string zero */}
+    <Zeroes textDecoration="0" />
+  </>
+);
+
 export const rejected = (
   <>
     {/* @ts-expect-error — a strict space scale rejects a raw length */}

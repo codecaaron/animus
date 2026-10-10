@@ -1715,15 +1715,17 @@ fn is_contextual_token(value: &Value, config: &PropConfig, contextual_vars: &Con
 const CONTAINER_UNITS: &[&str] = &["cqw", "cqi", "cqh", "cqb", "cqmin", "cqmax"];
 const SIZE_UNITS: &[&str] = &["px", "rem", "vh", "vw", "vmax", "vmin", "%"];
 
-/// Values a strict prop's public type admits beside its tokens: zero, the
-/// CSS-wide and per-property keywords of `css_keywords.json`, container units,
-/// token references, and the lengths size properties take. Must stay in step
-/// with the runtime resolver's rule.
+/// Values a strict prop's public type admits beside its tokens: zero on a
+/// property whose value is a single length, the CSS-wide and per-property
+/// keywords of `css_keywords.json`, container units, token references, and
+/// the lengths size properties take. Must stay in step with the runtime
+/// resolver's rule.
 fn admitted_without_token(value: &Value, config: &PropConfig) -> bool {
+    let zero_length = || crate::css::is_zero_length_property(&config.property);
     match value {
-        Value::Number(number) => number.as_f64() == Some(0.0),
+        Value::Number(number) => number.as_f64() == Some(0.0) && zero_length(),
         Value::String(text) => {
-            text == "0"
+            (text == "0" && zero_length())
                 || css_keywords(&config.property).any(|keyword| keyword == text)
                 || text.contains('{')
                 || is_number_with_unit(text, CONTAINER_UNITS)
@@ -2971,6 +2973,19 @@ mod tests {
         assert!(!miss(&array, json!("8")));
         assert!(!miss(&array, json!(8)));
         assert!(miss(&array, json!(16)));
+        // Zero is admitted only where the property's value is a single length;
+        // elsewhere the scale wins.
+        let unzeroed = |name: &str| PropConfig { scale: Some(json!({ "page": "24px" })), ..property(name) };
+        for name in ["margin", "padding", "gap"] {
+            for zero in [json!(0), json!("0")] {
+                assert!(!miss(&unzeroed(name), zero.clone()), "{zero} on {name} should be admitted");
+            }
+        }
+        for name in ["gridTemplateRows", "gridTemplateColumns", "opacity", "textDecoration"] {
+            for zero in [json!(0), json!("0")] {
+                assert!(miss(&unzeroed(name), zero.clone()), "{zero} on {name} should miss");
+            }
+        }
     }
 
     #[test]

@@ -1,3 +1,5 @@
+import { type ZeroLengthProperty } from '@animus-ui/properties';
+
 import {
   type Conditions,
   type RawAtRuleKey,
@@ -136,11 +138,13 @@ type NegativeOf<
 /**
  * What a strict scale admits beside its keys and keywords, as strict
  * extraction and the runtime do: zero, as a string or a number, on a property
- * that takes a length, and a reference to one of the scale's own tokens. A
- * non-strict scale already admits them through its raw values. The authored
- * style inputs check values through `ThemedCSSInputProps`, whose leaves TS
- * does not infer from, so the numeric zero does not overflow the unions TS
- * builds when inferring a style record against a large prop registry (TS2590).
+ * whose value is a single length (`ZeroLengthProperty`), and a reference to
+ * one of the scale's own tokens. Elsewhere the scale wins: zero takes a key.
+ * A non-strict scale already admits them through its raw values. The
+ * authored style inputs check values through `ThemedCSSInputProps`, whose
+ * leaves TS does not infer from, so the numeric zero does not overflow the
+ * unions TS builds when inferring a style record against a large prop
+ * registry (TS2590).
  */
 type StrictAdmissions<
   Config extends SystemProp,
@@ -150,7 +154,7 @@ type StrictAdmissions<
 > = Strict extends true
   ? never
   :
-      | (0 extends PropertyValues<Config, true> ? '0' | 0 : never)
+      | (Config['property'] extends ZeroLengthProperty ? '0' | 0 : never)
       | (ScaleName extends string
           ? `{${ScaleName}.${Extract<Keys, string | number>}}`
           : never);
