@@ -3300,6 +3300,9 @@ fn lost_props_warning<'u>(
     }
     let listed = props.join(", ");
     let target = props.iter().find_map(|prop| takes(prop)).map_or("", String::as_str);
+    let surely = props
+        .iter()
+        .any(|prop| lost.surely_reaches(prop, |name| takes_system_prop(declaration_file, name, prop)));
     if !reported.insert((tag, props)) {
         return None;
     }
@@ -3307,8 +3310,12 @@ fn lost_props_warning<'u>(
         LostThrough::Alias(_) => format!(
             "an alias of the extracted component {target} that usage tracking does not follow"
         ),
-        LostThrough::Spread(_) => format!(
+        LostThrough::Spread(_) if surely => format!(
             "a function component that forwards them by spread to the extracted component {target}"
+        ),
+        LostThrough::Spread(_) => format!(
+            "a function component that may forward them to the extracted component {target}, \
+             spreading what a call it passes its props to returns"
         ),
     };
     Some(
@@ -4225,6 +4232,20 @@ impl<'f> LostThrough<'f> {
         }
         let forwarding = ff.props_forwarding.get(local)?;
         Some(Self::Spread(&forwarding.routes))
+    }
+
+    /// Whether `prop`, passed to the declaration, surely reaches a name
+    /// `takes` accepts: through an alias, or a spread of the props or their
+    /// rest, not of what a call returns.
+    fn surely_reaches(&self, prop: &str, takes: impl Fn(&String) -> bool) -> bool {
+        match self {
+            Self::Alias(target) => takes(target),
+            Self::Spread(routes) => routes
+                .iter()
+                .filter(|route| !route.derived && !route.named.iter().any(|name| name == prop))
+                .flat_map(|route| &route.targets)
+                .any(takes),
+        }
     }
 
     /// The names, read in the declaration's file, that `prop`, passed to the
@@ -11883,14 +11904,15 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
     /// use: a wrapper reached through `export *`, one that destructures its
     /// props in its body, a function declaration, one with two rest routes
     /// of which one still carries the prop, one rendered by `createElement`,
-    /// and a function component held by a facade object. A prop a pattern
-    /// on every route consumes, and a name a parameter shadows, warn nothing.
+    /// a function component held by a facade object, and one spreading what
+    /// a call it passes its props to returns. A prop a pattern on every route
+    /// consumes, and a name a parameter shadows, warn nothing.
     #[test]
     fn every_unfollowed_wrapper_shape_warns_at_its_use() {
         let recipe = "export const Box = ds.styles({}).system({ space: true }).asElement('div');\n";
         let wrapper = "import { Box } from './recipe';\nexport const Top = (props) => <Box {...props} />;\n";
         let rendered = "import { Top } from './wrapper';\nexport const App = () => <Top marginInlineStart={8} />;\n";
-        let cases: [(&str, &str, &str, Option<&str>); 8] = [
+        let cases: [(&str, &str, &str, Option<&str>); 10] = [
             ("index.ts", "export * from './wrapper';\n", "import { Top } from './index';\nexport const App = () => <Top marginInlineStart={8} />;\n", Some("<Top")),
             (
                 "wrapper.tsx",
@@ -11924,6 +11946,18 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
                 "import { Identity } from './facade';\nexport const App = () => <><Identity.Body marginInlineStart={8} /><Identity.Media marginInlineStart={8} /></>;\n",
                 Some("<Identity.Media"),
             ),
+            (
+                "facade.tsx",
+                "import { Box } from './recipe';\nfunction FieldInput(props) { const [styling, behavior] = splitProps(props, KEYS); return <Box size=\"sm\" {...styling}>{behavior.children}</Box>; }\nexport const Field = { Input: FieldInput };\n",
+                "import { Field } from './facade';\nexport const App = () => <Field.Input marginInlineStart={8} />;\n",
+                Some("<Field.Input"),
+            ),
+            (
+                "wrapper.tsx",
+                "import { Box } from './recipe';\nexport const Top = ({ children, ...props }) => { const styling = pick(props); return <Box {...styling}>{children}</Box>; };\n",
+                rendered,
+                Some("<Top"),
+            ),
         ];
         for (path, module, app, use_site) in cases {
             let mut entries = vec![("recipe.tsx", recipe), (path, module), ("app.tsx", app)];
@@ -11937,6 +11971,26 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
                 .into_iter()
                 .collect();
             assert_eq!(warned, expected, "{module}{app}: {:?}", out.diagnostics);
+        }
+        // A spread of what a call returns warns that it may forward, for
+        // every name the call's result binds; a spread of the props says
+        // it forwards them.
+        let routes: [(&str, &str); 6] = [
+            ("const [styling = {}] = splitProps(props, KEYS); return <Box {...styling} />;", "may forward"),
+            ("const { styling = {} } = splitProps(props, KEYS); return <Box {...styling} />;", "may forward"),
+            ("const { part: { styling } } = splitProps(props, KEYS); return <Box {...styling} />;", "may forward"),
+            ("const styling = pick(props); return <Box {...styling} />;", "may forward"),
+            ("let styling = pick(props); styling = {}; return <Box {...styling} />;", "may forward"),
+            ("return <Box {...props} />;", "forwards them by spread"),
+        ];
+        for (body, how) in routes {
+            let wrapper = format!(
+                "import {{ Box }} from './recipe';\nconst pick = ({{ marginInlineStart, ...rest }}) => rest;\n\
+                 export const Top = (props) => {{ {body} }};\n"
+            );
+            let out = analyze_with_logical_space(&[("recipe.tsx", recipe), ("wrapper.tsx", &wrapper), ("app.tsx", rendered)]);
+            let messages: Vec<_> = unattributed(&out).iter().map(|d| d.message.as_str()).collect();
+            assert!(matches!(messages.as_slice(), [one] if one.contains(how)), "{body}: {messages:?}");
         }
     }
 
