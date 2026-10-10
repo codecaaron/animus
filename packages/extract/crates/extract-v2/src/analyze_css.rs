@@ -282,6 +282,18 @@ impl CssInputs {
         crate::ids::fingerprint(crate::ids::fnv1a(self.system_hash, class_prefix))
     }
 
+    /// Merges the prefix's generated names into the authored-name map.
+    pub fn set_generated_names(&mut self, json: Option<&str>) -> Result<(), String> {
+        let Some(json) = json.map(str::trim).filter(|s| !s.is_empty() && *s != "null") else {
+            return Ok(());
+        };
+        let generated: FxHashMap<String, String> =
+            serde_json::from_str(json).map_err(|e| format!("EngineOptions.generatedNamesJson: {e}"))?;
+        self.contextual_vars.add_generated(generated);
+        self.system_hash = fold_system_input(self.system_hash, Some(json));
+        Ok(())
+    }
+
     pub fn set_transform_sources(&mut self, json: Option<&str>) -> Result<(), String> {
         self.transform_sources = match json {
             None => FxHashMap::default(),
@@ -528,6 +540,8 @@ pub(crate) const DIAGNOSTIC_CODES: &[(&str, &str)] = &[
     (STATIC_CSS_INVALID_SHAPE, "warn"),
     (crate::theme::UNRECOGNIZED_STYLE_KEY, "warn"),
     (crate::theme::KEYS_SHARE_PROPERTY, "warn"),
+    (crate::theme::UNSUPPORTED_AT_RULE, "error"),
+    (crate::theme::UNITLESS_CUSTOM_PROPERTY, "warn"),
     (CLASS_NAME_WHITESPACE, "warn"),
     (INVALID_OPACITY_MODIFIER, "warn"),
     (UNSUPPORTED_OBJECT_MEMBER, "warn"),
@@ -1158,17 +1172,30 @@ fn drain_strict_token_misses(
 }
 
 /// `inheritors` are the components that extend `component`, which inherit
-/// each key it drops in a variant option.
+/// each key it drops in a variant option; `at_rules` are where the
+/// component's unsupported at-rule keys are written, each claimed once.
 fn drain_dropped_style_keys(
     sink: &crate::theme::DroppedStyleKeySink,
     file: &str,
     component: &str,
     inheritors: &[&str],
+    at_rules: &mut Vec<&crate::facts::KeySource>,
     diagnostics: &mut Vec<CssDiagnostic>,
 ) {
     for dropped in sink.borrow_mut().drain(..) {
         let inheritors = if dropped.variant_origin.is_some() { inheritors } else { &[] };
-        diagnostics.push(dropped_style_key(file, component, &dropped.dropped, inheritors));
+        let record = dropped_style_key(file, component, &dropped.dropped, inheritors);
+        let crate::theme::DroppedStyleKey::UnsupportedAtRule { key, block } = &dropped.dropped else {
+            diagnostics.push(record);
+            continue;
+        };
+        diagnostics.push(match at_rules.iter().position(|source| source.key == *key) {
+            Some(index) => {
+                let source = at_rules.remove(index);
+                record.at(source.start).dropping(&source.text)
+            }
+            None => record.dropping(&format!("{}: {block}", serde_json::to_string(key).unwrap_or_default())),
+        });
     }
 }
 
@@ -1202,15 +1229,42 @@ fn dropped_style_key(
              it a value or an object of breakpoint keys{}",
             element_hint(key)
         ),
+        DroppedStyleKey::UnitlessCustomProperty { prop, value, properties } => {
+            return unitless_custom_property(file, component, prop, value, properties);
+        }
         DroppedStyleKey::UnrecognizedKey(key) => format!(
             "style key '{key}' is not a prop, selector, alias or supported at-rule, {not_emitted}{}",
             element_hint(key)
         ),
+        DroppedStyleKey::UnsupportedAtRule { key, .. } => {
+            let message = format!(
+                "style key '{key}' is an at-rule extraction does not support, {not_emitted} — \
+                 extraction supports @media, @container and @supports; fix the at-rule's name, or \
+                 write the block in a stylesheet of its own"
+            );
+            return diagnostic(file, component, "warn", message, Some(crate::theme::UNSUPPORTED_AT_RULE));
+        }
         DroppedStyleKey::SharedProperty { overridden, winner, property, rule } => {
             return keys_share_property(file, component, (overridden, winner, property, *rule), inheritors);
         }
     };
     diagnostic(file, component, "warn", message, Some(crate::theme::UNRECOGNIZED_STYLE_KEY))
+}
+
+/// A number a prop writes unitless to its custom properties.
+fn unitless_custom_property(file: &str, component: &str, prop: &str, value: &Value, properties: &[String]) -> CssDiagnostic {
+    diagnostic(
+        file,
+        component,
+        "warn",
+        format!(
+            "prop '{prop}' writes the number {value} to {} without a unit: a custom property has no unit \
+             context, so the number stays unitless — give the value a unit, or bind a transform that adds one",
+            properties.join(", ")
+        ),
+        Some(crate::theme::UNITLESS_CUSTOM_PROPERTY),
+    )
+    .dropping(&value.to_string())
 }
 
 /// Two keys of one block on one CSS property, naming the one that takes
@@ -1428,12 +1482,29 @@ const TOKEN_SHAPE_EXEMPT_PROPERTIES: &[&str] = &[
 /// value among them came from a token, so it is no miss.
 type ScaleFamily = FxHashMap<String, FxHashSet<String>>;
 
-/// What a scale-miss warning reads: the scaled properties, and whether the
-/// file is an included package's, whose identifier misses are external
-/// token candidates instead.
+/// What a scale-miss warning reads: the scaled properties, the theme's
+/// tokens by their name within their scale (`primary` → `colors.primary`),
+/// and whether the file is an included package's, whose identifier misses
+/// are external token candidates instead.
 struct ScaleCheck<'a> {
     family: &'a ScaleFamily,
+    tokens: &'a FxHashMap<String, String>,
     external: bool,
+}
+
+/// Each theme token by its complete path and by its name within its scale:
+/// a complete path names its own token, and a name the first by path when
+/// two scales share it.
+fn tokens_by_name(theme: &crate::theme::FlatTheme) -> FxHashMap<String, String> {
+    let mut paths: Vec<&String> = theme.keys().collect();
+    paths.sort();
+    let mut tokens: FxHashMap<String, String> = paths.iter().map(|path| ((*path).clone(), (*path).clone())).collect();
+    for path in paths {
+        if let Some((_, name)) = path.split_once('.') {
+            tokens.entry(name.to_string()).or_insert_with(|| path.clone());
+        }
+    }
+    tokens
 }
 
 fn scale_family_css_properties(config: &PropConfigMap, theme: &crate::theme::FlatTheme) -> ScaleFamily {
@@ -1505,12 +1576,13 @@ fn warn_token_shaped_value(
     component: &str,
     diagnostics: &mut Vec<CssDiagnostic>,
 ) {
-    let Some(literals) = scale_check.family.get(&decl.property) else {
-        return;
-    };
     if decl.property.starts_with("--") || TOKEN_SHAPE_EXEMPT_PROPERTIES.contains(&decl.property.as_str()) {
         return;
     }
+    let Some(literals) = scale_check.family.get(&decl.property) else {
+        warn_unowned_token_value(decl, scale_check, file, component, diagnostics);
+        return;
+    };
     let message = if is_token_shaped_value(&decl.value) {
         format!(
             "token-shaped value '{}' in '{}' did not resolve — likely an unresolved token: \
@@ -1528,6 +1600,34 @@ fn warn_token_shaped_value(
     } else {
         return;
     };
+    diagnostics.push(diagnostic(file, component, "warn", message, Some(TOKEN_SHAPED_VALUE)).dropping(&decl.value));
+}
+
+/// A property no scaled prop writes, so nothing resolves a token there: a
+/// value that names a theme token, dotted or an identifier that is no keyword
+/// of the property, is emitted as authored and reported. Any other value,
+/// dotted or not, carries no theme meaning there and is taken as written.
+fn warn_unowned_token_value(
+    decl: &CssDeclaration,
+    scale_check: &ScaleCheck<'_>,
+    file: &str,
+    component: &str,
+    diagnostics: &mut Vec<CssDiagnostic>,
+) {
+    let Some(path) = scale_check.tokens.get(&decl.value) else {
+        return;
+    };
+    let dotted = is_token_shaped_value(&decl.value);
+    if !dotted
+        && (scale_check.external || !is_unknown_identifier(&decl.property, &decl.value, &FxHashSet::default()))
+    {
+        return;
+    }
+    let message = format!(
+        "value '{}' in '{}' names the token '{path}', but no prop resolves tokens for '{}' — write \
+         '{{{path}}}', or register a prop for the property. The declaration is emitted as authored.",
+        decl.value, decl.property, decl.property
+    );
     diagnostics.push(diagnostic(file, component, "warn", message, Some(TOKEN_SHAPED_VALUE)).dropping(&decl.value));
 }
 
@@ -3094,13 +3194,11 @@ fn untracked_clone_props(file: &str, ff: &FileFacts) -> Vec<CssDiagnostic> {
                 file,
                 call,
                 "warn",
-                format!(
-                    "line {line}: props passed through {call} are not tracked, so variant \
-                     and state options only they set can be pruned from production CSS — \
-                     write the override keys literally, as in \
-                     cloneElement(child, {{ size: 'lg' }}), or keep those options with \
-                     staticCss.components"
-                ),
+                "props passed through this call are not tracked, so variant and state options only \
+                 they set can be pruned from production CSS — write the override keys literally, as \
+                 in cloneElement(child, { size: 'lg' }), or keep those options with \
+                 staticCss.components"
+                    .to_string(),
                 Some(UNTRACKED_CLONE_PROPS),
             )
             .on_line(*line)),
@@ -4495,6 +4593,7 @@ fn run_with_system_floor(
     );
     let mut evaluated: FxHashMap<String, EvalEntry> = FxHashMap::default();
     let scale_family_props = scale_family_css_properties(&inputs.config, &inputs.theme);
+    let theme_tokens = tokens_by_name(&inputs.theme);
     let scale_names = if inputs.external_dirs.is_empty() {
         FxHashMap::default()
     } else {
@@ -4650,7 +4749,15 @@ fn run_with_system_floor(
         } else {
             vec![]
         };
-        drain_dropped_style_keys(&dropped_keys, file_path, &chain.descriptor.binding, &inheritors, &mut diagnostics);
+        let mut at_rules: Vec<_> = chain.stages.iter().flat_map(|stage| &stage.unsupported_at_rules).collect();
+        drain_dropped_style_keys(
+            &dropped_keys,
+            file_path,
+            &chain.descriptor.binding,
+            &inheritors,
+            &mut at_rules,
+            &mut diagnostics,
+        );
         match result {
             Ok(out) => {
                 let mut component_css = out.component_css;
@@ -4789,6 +4896,7 @@ fn run_with_system_floor(
                     &mut component_css,
                     &ScaleCheck {
                         family: &scale_family_props,
+                        tokens: &theme_tokens,
                         external: is_external_file(file_path, &inputs.external_dirs),
                     },
                     file_path,
@@ -5206,6 +5314,12 @@ fn run_with_system_floor(
         if prop_config.is_some_and(|prop_config| !extracts_configured_value(prop_config, value, &resolve_ctx)) {
             return None;
         }
+        if let Some(prop_config) = prop_config {
+            let usage_ctx = ResolveContext { config, ..resolve_ctx };
+            if let Some(number) = crate::theme::unitless_custom_number(prop_name, prop_config, value, &usage_ctx) {
+                diagnostics.push(unitless_custom_property(file, component, prop_name, &number, prop_config.css_properties()));
+            }
+        }
         // An alias that names no token is reported here, at its usage, and
         // its declaration is dropped from the class, as in a style object.
         if writes_token_reference(value) {
@@ -5465,7 +5579,7 @@ fn run_with_system_floor(
                     call,
                     "warn",
                     format!(
-                        "line {line}: {call} can load {} components, so each keeps every \
+                        "this call can load {} components, so each keeps every \
                          variant and state option it declares — write the specifier \
                          literally so only what it loads keeps its options",
                         opened.len()
@@ -6525,7 +6639,11 @@ fn run_with_system_floor(
     let (global_css_raw, unlayered_global_css) = if let Some(blocks) = &inputs.global_style_blocks {
         // Each block's reports name its registration key and the module that
         // declares it; without one, the loaded system stands in.
-        let mut attribute = |name: &str, source: Option<&str>| {
+        // A block's keys are located in its own declaration in the module
+        // that declares it, when the loader named that declaration and the
+        // analysis read the module; each location is claimed once.
+        let mut declared_keys: FxHashMap<(String, String), Vec<&crate::facts::KeySource>> = FxHashMap::default();
+        let mut attribute = |name: &str, source: Option<&str>, declared_by: Option<&str>| {
             let file = source.unwrap_or("system");
             let component = format!("global '{name}'");
             drain_transform_failures(
@@ -6537,7 +6655,18 @@ fn run_with_system_floor(
                 &mut deferred_errors,
             );
             drain_strict_token_misses(&token_misses, file, &component, &mut diagnostics);
-            drain_dropped_style_keys(&dropped_keys, file, &component, &[], &mut diagnostics);
+            let mut undeclared = Vec::new();
+            let keys = match declared_by {
+                Some(declared_by) => declared_keys.entry((file.to_string(), declared_by.to_string())).or_insert_with(|| {
+                    files
+                        .get(file)
+                        .and_then(|ff| ff.global_keys.get(declared_by))
+                        .map(|keys| keys.iter().collect())
+                        .unwrap_or_default()
+                }),
+                None => &mut undeclared,
+            };
+            drain_dropped_style_keys(&dropped_keys, file, &component, &[], keys, &mut diagnostics);
         };
         let css = crate::theme::resolve_global_blocks(blocks, &resolve_ctx, false, &mut attribute);
         let unlayered = crate::theme::resolve_global_blocks(blocks, &resolve_ctx, true, &mut attribute);
@@ -9451,14 +9580,17 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         assert_eq!(kept_sizes(&run(require, true, None), "src/r.tsx::R"), vec!["sm", "md", "lg"]);
         let many: String = (0..20).map(|i| sized(&format!("C{i}"))).collect();
         let out = run(import, false, Some(&many));
-        let warnings: Vec<&str> = out
+        let warnings: Vec<(Option<u32>, &str, &str)> = out
             .diagnostics
             .iter()
             .filter(|d| d.code.as_deref() == Some(WIDE_MODULE_LOAD))
-            .map(|d| d.message.as_str())
+            .map(|d| (d.line, d.component.as_str(), d.message.as_str()))
             .collect();
         assert_eq!(warnings.len(), 1, "{warnings:#?}");
-        assert!(warnings[0].starts_with("line 1: import(name) can load 21 components"), "{warnings:#?}");
+        // The location carries the line and the component the call, so the
+        // message names neither again.
+        assert_eq!((warnings[0].0, warnings[0].1), (Some(1), "import(name)"), "{warnings:#?}");
+        assert!(warnings[0].2.starts_with("this call can load 21 components"), "{warnings:#?}");
     }
 
     /// Tags usage cannot match to an Animus component give a production
@@ -9788,16 +9920,14 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
                 ("app.tsx", "cloneElement(child, …)", "warn"),
             ]
         );
-        let lines: Vec<bool> = ["line 4:", "line 6:"]
+        // Each is located at its call's line, which its message does not repeat.
+        let lines: Vec<(Option<u32>, bool)> = out
+            .diagnostics
             .iter()
-            .map(|line| {
-                out.diagnostics
-                    .iter()
-                    .filter(|d| d.code.as_deref() == Some(UNTRACKED_CLONE_PROPS))
-                    .any(|d| d.message.starts_with(line))
-            })
+            .filter(|d| d.code.as_deref() == Some(UNTRACKED_CLONE_PROPS))
+            .map(|d| (d.line, d.message.starts_with("props passed through this call")))
             .collect();
-        assert_eq!(lines, vec![true, true]);
+        assert_eq!(lines, vec![(Some(4), true), (Some(6), true)]);
         let class = class_of(&out, "r.tsx::R");
         assert!(!out.css.contains(&format!(".{class}--size-md")), "nothing is opened");
     }

@@ -1,6 +1,7 @@
 import {
   applyUnitFallback,
   buildSystemPropsModule,
+  surfaceManifestDiagnostics,
 } from '@animus-ui/extract/pipeline';
 import { createSystem, createTransform } from '@animus-ui/system';
 import { layout } from '@animus-ui/system/groups';
@@ -15,6 +16,8 @@ import {
   clearAnalysisCache,
   runPipeline,
 } from './run-pipeline';
+
+import type { ManifestDiagnostic } from '@animus-ui/extract/pipeline';
 
 const COMPONENTS = join(__dirname, '..', 'fixtures', 'components');
 
@@ -581,6 +584,61 @@ export const App = () => <><Box height="{space.16}" /><Box height="{space.nope}"
   );
 });
 
+test('a token name on a longhand no scaled prop owns is reported, and valid CSS is not', () => {
+  const { manifest } = runPipeline(
+    [
+      {
+        path: 'unowned-tokens.tsx',
+        source: `import { ds } from '../setup';
+export const Bar = ds
+  .styles({
+    padding: 't-spacing-1',
+    paddingLeft: 't-spacing-1',
+    borderTopColor: 'feedback.error',
+    marginTop: 'space.t-spacing-1',
+    borderRightColor: 'colors.feedback.error',
+    '&[aria-current="page"]': { borderBottomColor: 'primary' },
+    borderLeftColor: 'red',
+    outlineStyle: 'dotted',
+    listStyleType: 'primary',
+  })
+  .asElement('div');
+export const App = () => <Bar />;
+`,
+      },
+    ],
+    {
+      inputs: {
+        propConfigJson: JSON.stringify({
+          color: { property: 'color', scale: 'colors' },
+          padding: { property: 'padding', scale: 'space' },
+        }),
+        scalesJson: JSON.stringify({
+          'colors.primary': '#00f',
+          'colors.feedback.error': '#f00',
+          'space.t-spacing-1': '4px',
+        }),
+        variableMapJson: '{}',
+      },
+    }
+  );
+  const reported = manifest.diagnostics
+    .filter(
+      (d: { code?: string }) => d.code === 'animus.style.unresolved-token-value'
+    )
+    .map((d: { dropped?: string; severity?: string }) => [
+      d.dropped,
+      d.severity,
+    ]);
+  expect(reported).toEqual([
+    ['t-spacing-1', 'warn'],
+    ['feedback.error', 'warn'],
+    ['space.t-spacing-1', 'warn'],
+    ['colors.feedback.error', 'warn'],
+    ['primary', 'warn'],
+  ]);
+});
+
 test('fill and stroke take SVG paint keywords, and a misspelt one still misses', () => {
   const { manifest, css } = runPipeline([
     {
@@ -627,6 +685,121 @@ export const App = () => <><Child size="sm" /><Other size="sm" /></>;
       ),
     ],
   ]);
+});
+
+test('an unsupported at-rule key is reported where it is written, and fails a strict build', () => {
+  const { manifest, css } = runPipeline(
+    [
+      {
+        path: 'at-rules.tsx',
+        source: `import { ds } from '../setup';
+export const Card = ds
+  .styles({
+    display: 'block',
+    '@media (min-width: 1px)': { cursor: 'help' },
+    '@mdia (min-width: 1px)': { cursor: 'pointer' },
+    '@starting-style': { opacity: 0 } as any,
+    '&:hover': { '@scope (&)': { cursor: 'wait' } },
+  } as any)
+  .asElement('div');
+export const App = () => <Card />;
+`,
+      },
+      {
+        path: 'at-rules.jsx',
+        source: `import { ds } from '../setup';
+export const Note = ds.styles({ display: 'block', '@scope (.x)': { cursor: 'pointer' } }).asElement('p');
+export const UseNote = () => <Note />;
+`,
+      },
+      {
+        path: 'globals.ts',
+        source: `const unrelated = { '@scope (.x)': { opacity: 1 } };
+export const reset = { __brand: 'GlobalStyleBlock', styles: { html: { '@scope (.x)': { opacity: 0 } } } };
+`,
+      },
+    ],
+    {
+      inputs: {
+        globalStyleBlocksJson: JSON.stringify({
+          reset: {
+            source: 'globals.ts',
+            sourceExport: 'reset',
+            styles: { html: { '@scope (.x)': { opacity: 0 } } },
+          },
+          // No exporting binding names its declaration, so it is not located,
+          // though a declaration in its module shares its registration name.
+          unrelated: {
+            source: 'globals.ts',
+            styles: { body: { '@scope (.x)': { opacity: 1 } } },
+          },
+        }),
+      },
+    }
+  );
+  expect(css).toMatch(
+    /@media \(min-width: 1px\) \{\s*\.animus-Card-\w+ \{\s*cursor: help;/
+  );
+  const reported = manifest.diagnostics
+    .filter(
+      (d: { code?: string }) => d.code === 'animus.style.unsupported-at-rule'
+    )
+    .map((d: ManifestDiagnostic) => [
+      d.file,
+      d.line,
+      d.column,
+      d.kind,
+      d.severity,
+      d.dropped,
+    ])
+    .sort();
+  expect(reported).toEqual([
+    [
+      'at-rules.jsx',
+      2,
+      51,
+      'warn',
+      'error',
+      "'@scope (.x)': { cursor: 'pointer' }",
+    ],
+    [
+      'at-rules.tsx',
+      6,
+      5,
+      'warn',
+      'error',
+      "'@mdia (min-width: 1px)': { cursor: 'pointer' }",
+    ],
+    [
+      'at-rules.tsx',
+      7,
+      5,
+      'warn',
+      'error',
+      "'@starting-style': { opacity: 0 } as any",
+    ],
+    [
+      'at-rules.tsx',
+      8,
+      18,
+      'warn',
+      'error',
+      "'@scope (&)': { cursor: 'wait' }",
+    ],
+    [
+      'globals.ts',
+      undefined,
+      undefined,
+      'warn',
+      'error',
+      '"@scope (.x)": {"opacity":1}',
+    ],
+    ['globals.ts', 2, 71, 'warn', 'error', "'@scope (.x)': { opacity: 0 }"],
+  ]);
+  expect(() => surfaceManifestDiagnostics(manifest, () => {})).not.toThrow();
+  expect(() =>
+    surfaceManifestDiagnostics(manifest, () => {}, { strict: true })
+  ).toThrow(/6 error diagnostic/);
 });
 
 describe('!important shorthand', () => {

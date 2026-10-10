@@ -11,7 +11,6 @@ import {
   importedKitDiagnostics,
   firstOwners,
   isDeletedSource,
-  noKitFilesDiagnostics,
   surfaceManifestDiagnostics,
   unreadableSourceDiagnostic,
   validateLayerOrder,
@@ -250,16 +249,9 @@ async function discoverSources(
     },
   });
   ctx.ingestionFailureDiagnostics = ingestionFailures;
-  // `verify` reports an empty kit through the structural self-check.
   surfaceManifestDiagnostics(
     {
-      diagnostics: [
-        ...discoveryDiagnostics,
-        ...collected.diagnostics,
-        ...(ctx.options.verify
-          ? []
-          : noKitFilesDiagnostics(collected.outcomes)),
-      ],
+      diagnostics: [...discoveryDiagnostics, ...collected.diagnostics],
     },
     (message) => ctx.warn(message),
     // An error-severity discovery diagnostic fails a strict build.

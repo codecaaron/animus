@@ -17,15 +17,14 @@ function makeContext(strict: boolean): PluginContext {
 }
 
 describe('self-verify: external package include outcomes', () => {
-  test('an include that resolved but discovered nothing fails verification', () => {
+  test('an include that resolved but discovered nothing passes verification under strict', () => {
+    // An empty kit is discovery's coded warning, never a verify failure.
     const ctx = makeContext(true);
     ctx.externalPackageOutcomes = [
       { specifier: '@x/ds', outcome: 'empty', fileCount: 0 },
     ];
 
-    expect(() => ctx.runSelfVerify()).toThrow(
-      "[animus:verify] include '@x/ds' resolved but discovered no component sources"
-    );
+    expect(() => ctx.runSelfVerify()).not.toThrow();
   });
 
   test('an unresolvable include fails verification', () => {
@@ -46,13 +45,13 @@ describe('self-verify: external package include outcomes', () => {
     ctx.logger = createLogger('silent');
     ctx.logger.warn = (message) => warnings.push(message);
     ctx.externalPackageOutcomes = [
-      { specifier: '@x/ds', outcome: 'empty', fileCount: 0 },
+      { specifier: '@x/missing', outcome: 'unresolvable', fileCount: 0 },
     ];
 
     ctx.runSelfVerify();
 
     expect(warnings).toEqual([
-      "[animus:verify] include '@x/ds' resolved but discovered no component sources [animus.discovery.no-kit-files]",
+      "[animus:verify] include '@x/missing' could not be resolved",
     ]);
   });
 });

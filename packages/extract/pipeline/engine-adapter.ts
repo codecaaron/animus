@@ -50,7 +50,8 @@ export interface EngineApi {
     transformSourcesJson: string | null,
     transformProvenanceJson?: string | null,
     declarationScalesJson?: string,
-    analysisContextJson?: string
+    analysisContextJson?: string,
+    generatedNamesJson?: string
   ) => string;
   transformFile: (
     source: string,
@@ -102,6 +103,7 @@ interface V2ExtractEngineConfig {
   transformProvenanceJson?: string;
   declarationScalesJson?: string;
   analysisContextJson?: string;
+  generatedNamesJson?: string;
   devMode: boolean;
 }
 
@@ -161,7 +163,8 @@ export function createV2EngineApi(deps: V2EngineAdapterDeps): () => EngineApi {
         transformSourcesJson,
         transformProvenanceJson,
         declarationScalesJson,
-        analysisContextJson
+        analysisContextJson,
+        generatedNamesJson
       ) => {
         const filesJson = deps.rehydrateFilesJson
           ? deps.rehydrateFilesJson(filesJsonRaw)
@@ -209,6 +212,7 @@ export function createV2EngineApi(deps: V2EngineAdapterDeps): () => EngineApi {
           transformProvenanceJson: transformProvenanceJson ?? undefined,
           declarationScalesJson,
           analysisContextJson,
+          generatedNamesJson,
           devMode,
         };
         // SAFETY: `native` is the loaded engine module, whose generated

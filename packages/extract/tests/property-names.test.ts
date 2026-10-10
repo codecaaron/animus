@@ -198,10 +198,29 @@ const legacy = {
 describe('system load under a prefix', () => {
   it('is unchanged without the option, prefixed or not', () => {
     expect(artifacts(load())).toEqual(legacy.unprefixed);
-    expect(artifacts(load('acme'))).toEqual(legacy.prefixed);
     expect(artifacts(load(undefined, true))).toEqual(legacy.unprefixed);
-    expect(load('acme').contextualProperties).toEqual(['--acme-tone']);
     expect(load().contextualProperties).toEqual(['--tone']);
+
+    // Intended changes: with a prefix and without the option, a contextual
+    // variable keeps its declared name wherever it is defined, registered or
+    // read, and a theme variable inside a `var()` fallback takes the prefix
+    // (`--acme-color-ink` read the dead `--color-red`). Other fallback output
+    // keeps its recorded form.
+    const prefixed = artifacts(load('acme'));
+    expect(prefixed.declarationScalesJson).toBe(
+      legacy.prefixed.declarationScalesJson
+    );
+    expect(prefixed.variableMapJson).toBe(legacy.prefixed.variableMapJson);
+    expect(prefixed.variableCss).toBe(
+      legacy.prefixed.variableCss
+        .replace('@property --acme-tone', '@property --tone')
+        .replace('var(--color-red, black)', 'var(--acme-color-red, black)')
+    );
+    expect(prefixed.scalesJson).toBe(
+      legacy.prefixed.scalesJson.replace('var(--acme-tone)', 'var(--tone)')
+    );
+    expect(prefixed.contextualVarsJson).toBe('{"colors":["tone"]}');
+    expect(load('acme').contextualProperties).toEqual(['--tone']);
   });
 
   it('with the option, renames managed names once and keeps the declared names', () => {
@@ -291,17 +310,10 @@ describe('system load under a prefix', () => {
     );
   });
 
-  it('names the option when a prefix meets contextual variables without it', () => {
-    const codes = (system: ReturnType<typeof load>) =>
-      systemLoadDiagnostics(system).map((d) => [d.code, d.severity]);
-    expect(codes(load('acme'))).toEqual([
-      ['animus.prefix.contextual-vars-unprefixed', 'warn'],
-    ]);
-    expect(systemLoadDiagnostics(load('acme'))[0]?.message).toContain(
-      'prefixContextualVars'
-    );
-    expect(codes(load('acme', true))).toEqual([]);
-    expect(codes(load())).toEqual([]);
+  it('reports nothing about the prefix without the option, since contextual names are kept', () => {
+    expect(systemLoadDiagnostics(load('acme'))).toEqual([]);
+    expect(systemLoadDiagnostics(load('acme', true))).toEqual([]);
+    expect(systemLoadDiagnostics(load())).toEqual([]);
   });
 });
 
@@ -356,9 +368,7 @@ describe('the map reaches the extractor', () => {
     expect(optedIn.contextualVarsJson).toBe(
       '{"colors":[{"name":"tone","var":"acme-tone"}]}'
     );
-    expect(engineOptions(false).contextualVarsJson).toBe(
-      legacy.prefixed.contextualVarsJson
-    );
+    expect(engineOptions(false).contextualVarsJson).toBe('{"colors":["tone"]}');
     expect(Object.keys(optedIn)).toEqual(Object.keys(engineOptions(false)));
   });
 });

@@ -274,8 +274,6 @@ export async function runBuild(
   });
   try {
     session = createCliSession(config);
-    // The build's structural self-check reports an empty kit.
-    session.selfCheckReportsEmptyKits = true;
 
     try {
       await session.runFullPipeline();
