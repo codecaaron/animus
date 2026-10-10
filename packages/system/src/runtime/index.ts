@@ -185,10 +185,20 @@ export function renderAsChild(
   return renderSlot(children, props as Record<string, any>, ref);
 }
 
+/** Animus's classes, then the caller's. */
+function joinClassNames(classes: string, className: unknown): string {
+  return className ? `${classes} ${className}` : classes;
+}
+
 /**
  * A string terminal renders `as` in place of its tag. A component terminal
  * always renders its component, which receives `as` and `asChild` like any
  * other prop, so its own wiring runs whatever element it ends up rendering.
+ *
+ * A component target may take `className` and `style` as callbacks that it
+ * calls with its own state, as Base UI's do. It gets a callback in their
+ * place, which merges the caller's result as a plain value merges: Animus's
+ * classes first, and Animus's dynamic style over the caller's style.
  */
 function renderElement(
   element: ElementType,
@@ -198,18 +208,24 @@ function renderElement(
   classes: string[],
   dynamicStyle: Record<string, string> | undefined
 ): ReactElement {
-  const target = typeof element === 'string' ? props.as || element : element;
+  const ownsElement = typeof element === 'string';
+  const target = ownsElement ? props.as || element : element;
+  const { className, style } = props;
+  const ownClassName = classes.join(' ');
 
   const domProps: Record<string, any> = {
     ref,
-    className: classes.join(' '),
+    className:
+      !ownsElement && typeof className === 'function'
+        ? (state: unknown) => joinClassNames(ownClassName, className(state))
+        : joinClassNames(ownClassName, className),
   };
   forwardProps(props, filterProps, domProps);
 
-  if (dynamicStyle) {
-    domProps.style = props.style
-      ? { ...props.style, ...dynamicStyle }
-      : dynamicStyle;
+  if (dynamicStyle && !ownsElement && typeof style === 'function') {
+    domProps.style = (state: unknown) => ({ ...style(state), ...dynamicStyle });
+  } else if (dynamicStyle) {
+    domProps.style = style ? { ...style, ...dynamicStyle } : dynamicStyle;
   }
 
   return createElement(target as any, domProps);
@@ -244,12 +260,10 @@ export function createComponent(
         dynamicPropConfig
       );
 
-      if (props.className) {
-        classes.push(props.className);
-      }
-
       if (props.asChild && ownsPolymorphism) {
-        const slotProps: Record<string, any> = { className: classes.join(' ') };
+        const slotProps: Record<string, any> = {
+          className: joinClassNames(classes.join(' '), props.className),
+        };
         forwardProps(props, filterProps, slotProps);
         return renderSlot(props.children, slotProps, ref, dynamicStyle);
       }
