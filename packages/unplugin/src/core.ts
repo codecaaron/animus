@@ -167,6 +167,25 @@ export function transformWithEngine(
   return result.hasComponents ? result.code : null;
 }
 
+/** Whether esbuild's `external` option names `specifier`: exactly, as the
+ *  package a subpath belongs to, or through a `*` wildcard. */
+function isEsbuildExternal(
+  specifier: string,
+  external: readonly string[] | undefined
+): boolean {
+  return (external ?? []).some((pattern) => {
+    if (!pattern.includes('*')) {
+      return specifier === pattern || specifier.startsWith(`${pattern}/`);
+    }
+    const [prefix, suffix] = pattern.split('*', 2);
+    return (
+      specifier.length >= prefix.length + suffix.length &&
+      specifier.startsWith(prefix) &&
+      specifier.endsWith(suffix)
+    );
+  });
+}
+
 function moduleFilePath(id: string): string {
   const query = id.indexOf('?');
   return query === -1 ? id : id.slice(0, query);
@@ -179,6 +198,17 @@ interface EsbuildOptionsLike {
   write?: boolean;
   define?: Record<string, string>;
   conditions?: string[];
+}
+
+interface RspackLikeCompiler extends WebpackLikeCompiler {
+  options: WebpackLikeCompiler['options'] & {
+    module: {
+      rules: Array<{
+        test: (resource: string) => boolean;
+        sideEffects: boolean;
+      }>;
+    };
+  };
 }
 
 interface WebpackLikeCompiler {
@@ -428,6 +458,8 @@ export const unpluginFactory: UnpluginFactory<
       ) {
         return null;
       }
+      // esbuild redirects in `esbuild.setup`, where the classification holds.
+      if (meta.framework === 'esbuild') return null;
       await joinPipeline();
       const target = state.kitRedirects.get(id);
       if (target === undefined) return null;
@@ -546,9 +578,31 @@ export const unpluginFactory: UnpluginFactory<
 
     rspack(compiler) {
       wireWebpackLike(compiler);
+      classifyRspackRedirects(compiler);
     },
 
     esbuild: {
+      /** unplugin's esbuild resolve drops `moduleSideEffects` and puts the
+       *  target in its own namespace, where no package classifies it. A
+       *  redirect resolved here stays in the `file` namespace and carries the
+       *  replaced entry's classification. */
+      setup(build) {
+        build.onResolve({ filter: /^[^./\0]/ }, async (args) => {
+          if (args.path.startsWith('animus:')) return undefined;
+          // The host's `external` keeps a kit out of the bundle, redirect
+          // or not, as unplugin's own esbuild resolve honours it.
+          if (isEsbuildExternal(args.path, build.initialOptions.external)) {
+            return undefined;
+          }
+          await joinPipeline();
+          const target = state.kitRedirects.get(args.path);
+          if (target === undefined) return undefined;
+          const sideEffects = state.kitSideEffects.get(args.path);
+          return sideEffects === undefined
+            ? { path: target }
+            : { path: target, sideEffects };
+        });
+      },
       config(buildOptions) {
         esbuildOptions = buildOptions;
         hostConditions = buildOptions.conditions ?? [];
@@ -560,6 +614,33 @@ export const unpluginFactory: UnpluginFactory<
       },
     },
   };
+
+  /** Rspack's resolve data carries no rule settings, so a module rule per
+   *  classification marks each redirect target, read when it resolves. */
+  function classifyRspackRedirects(compiler: RspackLikeCompiler): void {
+    // A source that any specifier reaches with side effects keeps them: an
+    // unused pure alias of it must not drop an effect another import needs.
+    const classification = (resource: string): boolean | undefined => {
+      let pure = false;
+      for (const [specifier, target] of state.kitRedirects) {
+        if (target !== resource) continue;
+        const sideEffects = state.kitSideEffects.get(specifier);
+        if (sideEffects === true) return true;
+        if (sideEffects === false) pure = true;
+      }
+      return pure ? false : undefined;
+    };
+    compiler.options.module.rules.push(
+      {
+        test: (resource: string) => classification(resource) === true,
+        sideEffects: true,
+      },
+      {
+        test: (resource: string) => classification(resource) === false,
+        sideEffects: false,
+      }
+    );
+  }
 
   /** Webpack would classify a redirect target by its own path against the
    *  package's `sideEffects`, so the replaced entry's classification is set

@@ -60,6 +60,7 @@ export {
   engineModuleParser,
   excludeCollectedPackages,
   extractSystemFilePackages,
+  fileSideEffects,
   findPackageRoot,
   firstOwners,
   importedKitDiagnostics,
