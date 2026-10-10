@@ -575,6 +575,8 @@ pub(crate) struct EnrichedUsage {
     pub unsafe_object_uses: BTreeMap<String, ObjectUse>,
     /// See `FileFacts::ordinary_components`.
     pub ordinary_components: BTreeSet<String>,
+    /// See `FileFacts::context_consts`.
+    pub context_consts: BTreeSet<String>,
     /// See `FileFacts::direct_eval`.
     pub direct_eval: bool,
     /// See `FileFacts::opaque_calls`.
@@ -940,10 +942,17 @@ pub(crate) fn collect_enriched_usage(
         }
         _ => BTreeMap::new(),
     };
+    let context_consts =
+        origins.map_or_else(BTreeSet::new, |scoping| context_consts(program, scoping, &ReactImports::of(program, scoping)));
+    // A context is watched as an object too: its `Provider` must stay React's.
+    let mut watched = object_consts.clone();
+    for context in &context_consts {
+        watched.entry(context.as_str()).or_insert(false);
+    }
     // Read through the scopes every module builds, so a module with no
     // import or chain still records what may change its objects.
     let unsafe_object_uses = match origins {
-        Some(scoping) => unsafe_object_uses(program, scoping, object_consts, assigned_targets),
+        Some(scoping) => unsafe_object_uses(program, scoping, &watched, assigned_targets),
         None => BTreeMap::new(),
     };
     let (opaque_calls, opaque_tags, element_consts) =
@@ -956,6 +965,7 @@ pub(crate) fn collect_enriched_usage(
         module_loads,
         unsafe_object_uses,
         ordinary_components,
+        context_consts,
         direct_eval,
         opaque_calls,
         element_consts,
@@ -1565,6 +1575,7 @@ fn unsafe_object_uses(
         candidates,
         // A module-scope `Object` is not the global one.
         global_object: scoping.get_root_binding("Object".into()).is_none(),
+        react: ReactImports::of(program, scoping),
         uses: BTreeMap::new(),
         ancestors: Vec::new(),
         style: false,
@@ -1609,6 +1620,7 @@ pub(crate) fn style_object_uses(
         source: program.source_text,
         candidates,
         global_object: !binds_anywhere(&scoping, "Object"),
+        react: ReactImports::of(program, &scoping),
         uses: BTreeMap::new(),
         ancestors: Vec::new(),
         style: true,
@@ -2121,6 +2133,8 @@ struct ObjectUseScan<'a, 's> {
     source: &'s str,
     candidates: FxHashMap<SymbolId, ObjectBinding>,
     global_object: bool,
+    /// React's own functions, whose context readers change nothing.
+    react: ReactImports,
     uses: BTreeMap<String, ObjectUse>,
     ancestors: Vec<AstKind<'a>>,
     /// Style-value rules (see `style_object_uses`) instead of a facade's.
@@ -2240,6 +2254,15 @@ impl<'a> Visit<'a> for ObjectUseScan<'a, '_> {
             let line = self.line(ident.span);
             self.uses.insert(key, ObjectUse { line: Some(line), what });
             return;
+        }
+        // React's `useContext` and `use` read the context they receive.
+        let mut ancestors = self.ancestors.iter().rev();
+        if let (current, Some(AstKind::CallExpression(call))) = peel_wrappers(ident.span, &mut ancestors) {
+            let read = call.arguments.first().map(GetSpan::span) == Some(current)
+                && self.react.calls(self.scoping, &call.callee, &["useContext", "use"]);
+            if read {
+                return;
+            }
         }
         // An assigned facade's target below the binding, watched as an object
         // of its own under its path.
@@ -4037,6 +4060,123 @@ fn tag_origin(scoping: &Scoping, name: &IdentifierReference<'_>) -> TagOrigin {
         Some(symbol) if scoping.symbol_flags(symbol).is_import() => TagOrigin::Import,
         Some(_) => TagOrigin::TopLevel,
     }
+}
+
+/// React's functions and namespaces a module imports, by the symbol each
+/// import binds; a binding of any other origin, an unbound `React`
+/// included, is never React's.
+struct ReactImports {
+    functions: FxHashMap<SymbolId, String>,
+    namespaces: FxHashSet<SymbolId>,
+}
+
+impl ReactImports {
+    fn of(program: &Program<'_>, scoping: &Scoping) -> Self {
+        let mut imports = Self { functions: FxHashMap::default(), namespaces: FxHashSet::default() };
+        for statement in &program.body {
+            let Statement::ImportDeclaration(import) = statement else { continue };
+            if !REACT_RUNTIMES.contains(&import.source.value.as_str()) {
+                continue;
+            }
+            for specifier in import.specifiers.iter().flatten() {
+                let Some(symbol) = specifier.local().symbol_id.get() else { continue };
+                match specifier {
+                    ImportDeclarationSpecifier::ImportSpecifier(named) => {
+                        imports.functions.insert(symbol, named.imported.name().to_string());
+                    }
+                    ImportDeclarationSpecifier::ImportDefaultSpecifier(_)
+                    | ImportDeclarationSpecifier::ImportNamespaceSpecifier(_) => {
+                        imports.namespaces.insert(symbol);
+                    }
+                }
+            }
+        }
+        // A namespace the module writes a member of (`React.createContext =
+        // …`) no longer holds React's functions.
+        struct Written<'s> {
+            scoping: &'s Scoping,
+            namespaces: &'s FxHashSet<SymbolId>,
+            written: FxHashSet<SymbolId>,
+        }
+        impl<'a> Visit<'a> for Written<'_> {
+            fn visit_simple_assignment_target(&mut self, target: &oxc::ast::ast::SimpleAssignmentTarget<'a>) {
+                if let Some(member) = target.as_member_expression() {
+                    if let Expression::Identifier(object) = member.object() {
+                        let symbol = object.reference_id.get().and_then(|id| self.scoping.get_reference(id).symbol_id());
+                        if let Some(symbol) = symbol.filter(|symbol| self.namespaces.contains(symbol)) {
+                            self.written.insert(symbol);
+                        }
+                    }
+                }
+                oxc::ast_visit::walk::walk_simple_assignment_target(self, target);
+            }
+            fn visit_unary_expression(&mut self, unary: &oxc::ast::ast::UnaryExpression<'a>) {
+                if unary.operator == oxc::syntax::operator::UnaryOperator::Delete {
+                    if let Some(member) = unary.argument.as_member_expression() {
+                        if let Expression::Identifier(object) = member.object() {
+                            let symbol = object.reference_id.get().and_then(|id| self.scoping.get_reference(id).symbol_id());
+                            if let Some(symbol) = symbol.filter(|symbol| self.namespaces.contains(symbol)) {
+                                self.written.insert(symbol);
+                            }
+                        }
+                    }
+                }
+                oxc::ast_visit::walk::walk_unary_expression(self, unary);
+            }
+        }
+        let mut written = Written { scoping, namespaces: &imports.namespaces, written: FxHashSet::default() };
+        written.visit_program(program);
+        let written = written.written;
+        imports.namespaces.retain(|symbol| !written.contains(symbol));
+        imports
+    }
+
+    /// Whether `callee` calls one of React's `functions`, named or through a
+    /// React namespace, as the module's scopes resolve it.
+    fn calls(&self, scoping: &Scoping, callee: &Expression<'_>, functions: &[&str]) -> bool {
+        let symbol = |id: &IdentifierReference<'_>| id.reference_id.get().and_then(|id| scoping.get_reference(id).symbol_id());
+        match crate::chain_walk::unwrap_type_assertions(callee) {
+            Expression::Identifier(id) => symbol(id)
+                .and_then(|symbol| self.functions.get(&symbol))
+                .is_some_and(|function| functions.contains(&function.as_str())),
+            Expression::StaticMemberExpression(member) => {
+                functions.contains(&member.property.name.as_str())
+                    && matches!(&member.object, Expression::Identifier(object)
+                        if symbol(object).is_some_and(|symbol| self.namespaces.contains(&symbol)))
+            }
+            _ => false,
+        }
+    }
+}
+
+/// Top-level `const` bindings the runtime's `createContext` builds: their
+/// `Provider` renders its children in place.
+fn context_consts(program: &Program<'_>, scoping: &Scoping, react: &ReactImports) -> BTreeSet<String> {
+    use oxc::ast::ast::{Declaration, VariableDeclarationKind};
+    let mut names = BTreeSet::new();
+    for statement in &program.body {
+        let declaration = match statement {
+            Statement::VariableDeclaration(declaration) => declaration,
+            Statement::ExportNamedDeclaration(export) => match &export.declaration {
+                Some(Declaration::VariableDeclaration(declaration)) => declaration,
+                _ => continue,
+            },
+            _ => continue,
+        };
+        if declaration.kind != VariableDeclarationKind::Const {
+            continue;
+        }
+        for declarator in &declaration.declarations {
+            let built = declarator.init.as_ref().is_some_and(|init| {
+                matches!(crate::chain_walk::unwrap_type_assertions(init),
+                    Expression::CallExpression(call) if react.calls(scoping, &call.callee, &["createContext"]))
+            });
+            if let (true, Some(name)) = (built, declarator.id.get_identifier_name()) {
+                names.insert(name.to_string());
+            }
+        }
+    }
+    names
 }
 
 /// Top-level functions and classes, and `const` bindings of a function or
