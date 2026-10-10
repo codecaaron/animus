@@ -668,6 +668,30 @@ describe('collectExternalPackageSources', () => {
         'src/parts/card.tsx': 'export const Card = 3;',
       }
     );
+    // An exact entry only `require` or `types` reaches is not source, so
+    // these warn and keep the src/ guess.
+    const requireOnly = kit(
+      join(root, 'node_modules', '@acme', 'require-only'),
+      {
+        '.': './src/index.ts',
+        './part': { require: './dist/index.cjs' },
+      },
+      {
+        'src/index.ts': 'export const Req = 1;',
+        'dist/index.cjs': 'exports.Req = 1;',
+      }
+    );
+    const typesOnly = kit(
+      join(root, 'node_modules', '@acme', 'types-only'),
+      {
+        '.': { import: './src/index.ts' },
+        './types': { types: './src/types.ts' },
+      },
+      {
+        'src/index.ts': 'export const Typed = 1;',
+        'src/types.ts': 'export type T = 1;',
+      }
+    );
     kit(
       join(root, 'node_modules', '@acme', 'stray'),
       { '.': { animus: './src/index.ts' } },
@@ -721,6 +745,8 @@ describe('collectExternalPackageSources', () => {
       '@acme/legacy': join(legacy, 'dist', 'index.mjs'),
       '@acme/linked': null,
       '@acme/source': join(sourceOnly, 'src', 'index.ts'),
+      '@acme/require-only': join(requireOnly, 'src', 'index.ts'),
+      '@acme/types-only': join(typesOnly, 'src', 'index.ts'),
     });
 
     expect(Object.fromEntries(result.sourceEntries)).toEqual({
@@ -730,6 +756,8 @@ describe('collectExternalPackageSources', () => {
       '@acme/linked': join(linked, 'src', 'index.ts'),
       '@acme/source': join(sourceOnly, 'src', 'index.ts'),
       '@acme/source/parts': join(sourceOnly, 'src', 'parts', 'card.tsx'),
+      '@acme/require-only': join(requireOnly, 'src', 'index.ts'),
+      '@acme/types-only': join(typesOnly, 'src', 'index.ts'),
     });
     expect(result.entries.map((e) => e.path).sort()).toEqual([
       'kits/linked/src/index.ts',
@@ -737,10 +765,15 @@ describe('collectExternalPackageSources', () => {
       'node_modules/@acme/installed/authoring/parts/card.tsx',
       'node_modules/@acme/installed/authoring/system.ts',
       'node_modules/@acme/legacy/src/index.ts',
+      'node_modules/@acme/require-only/src/index.ts',
       'node_modules/@acme/source/src/index.ts',
       'node_modules/@acme/source/src/parts/card.tsx',
+      'node_modules/@acme/types-only/src/index.ts',
+      'node_modules/@acme/types-only/src/types.ts',
     ]);
     expect(result.outcomes.map((o) => o.outcome)).toEqual([
+      'resolved',
+      'resolved',
       'resolved',
       'resolved',
       'resolved',
@@ -748,6 +781,8 @@ describe('collectExternalPackageSources', () => {
     ]);
     expect(result.diagnostics.map((d) => [d.file, d.code])).toEqual([
       ['@acme/legacy', KIT_WITHOUT_SOURCE_CONDITION],
+      ['@acme/require-only', KIT_WITHOUT_SOURCE_CONDITION],
+      ['@acme/types-only', KIT_WITHOUT_SOURCE_CONDITION],
     ]);
   });
 });
