@@ -304,11 +304,15 @@ function forComponent(diagnostics: ManifestDiagnostic[], component: string) {
   return diagnostics.filter((d) => d.component === component);
 }
 
+/** A located line's leading `file:line:column: ` or `file:line: `. */
+const LOCATION = String.raw`\S+:\d+(?::\d+)?: `;
+
 /** A delivered line about `component` itself, not a name containing it. */
 function namesComponent(line: string, component: string): boolean {
+  const unlocated = line.replace(new RegExp(`^⚠ ${LOCATION}`), '⚠ ');
   return (
-    line.startsWith(`⚠ ${component} `) ||
-    line.startsWith(`⚠ ${component}: `) ||
+    unlocated.startsWith(`⚠ ${component} `) ||
+    unlocated.startsWith(`⚠ ${component}: `) ||
     line.includes(`: ${component}: `)
   );
 }
@@ -502,7 +506,9 @@ describe('the shared build-strictness policy over a real analysis', () => {
       `[animus] strict: ${CLASSIFIED.length} error diagnostic(s)`
     );
     for (const expected of CLASSIFIED) {
-      expect(message).toContain(`${expected.code} — ${expected.component}:`);
+      expect(message).toMatch(
+        new RegExp(`${expected.code} — (?:${LOCATION})?${expected.component}:`)
+      );
     }
     for (const unclassified of ['LookalikeAxis', 'OutsideAxis']) {
       expect(
