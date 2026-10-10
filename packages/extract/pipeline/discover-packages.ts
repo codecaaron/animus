@@ -202,19 +202,27 @@ function commonDirectory(a: string, b: string): string {
   return dir;
 }
 
+/** Whether the manifest at `dir` names the package `name`. */
+function isPackageNamed(dir: string, name: string | null): boolean {
+  const manifest = readPackageManifest(dir);
+  return isJsonBlock(manifest) && manifest.name === name;
+}
+
+function realPath(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    return path;
+  }
+}
+
 /** The root of the installed package `name` as Node finds it from `fromDir`,
  *  the first `node_modules/<name>` up the directory tree, at its real path,
  *  as host resolvers report a linked package. */
 function locatePackageRoot(name: string, fromDir: string): string | null {
   for (let dir = fromDir; ; dir = dirname(dir)) {
     const candidate = join(dir, 'node_modules', name);
-    if (existsSync(join(candidate, 'package.json'))) {
-      try {
-        return realpathSync(candidate);
-      } catch {
-        return candidate;
-      }
-    }
+    if (existsSync(join(candidate, 'package.json'))) return realPath(candidate);
     if (dir === dirname(dir)) return null;
   }
 }
@@ -446,11 +454,20 @@ export async function collectExternalPackageSources(opts: {
     const packageName = isAbsolute(specifier)
       ? null
       : bareSpecifierPackageName(specifier);
-    // A source-only kit has no runtime entry for the host to resolve: its
-    // package is found as Node finds it, and its condition names the entry.
-    const pkgRoot = absEntry
-      ? findPackageRoot(absEntry)
-      : packageName && locatePackageRoot(packageName, rootDir);
+    // The host's resolution names the package unless it lands outside it: a
+    // dev server resolves a package it prebundles into its dependency cache,
+    // from where the nearest manifest can be the application's own. Then,
+    // and for a source-only kit with no runtime entry to resolve, the package
+    // is found as Node finds it, and its condition names the entry.
+    const resolvedRoot = absEntry ? findPackageRoot(absEntry) : null;
+    const locatedRoot = packageName && locatePackageRoot(packageName, rootDir);
+    const pkgRoot =
+      resolvedRoot &&
+      (!locatedRoot ||
+        isPackageNamed(resolvedRoot, packageName) ||
+        realPath(resolvedRoot) === locatedRoot)
+        ? resolvedRoot
+        : locatedRoot || resolvedRoot;
     const condition =
       packageName && pkgRoot ? readKitSourceCondition(pkgRoot) : null;
     const entryKey = packageName && `.${specifier.slice(packageName.length)}`;
@@ -607,21 +624,50 @@ export async function collectExternalPackageSources(opts: {
   };
 }
 
-/** The source kits the application at `rootDir` declares as dependencies.
- *  Next bundles and transpiles an installed package only through
- *  `transpilePackages`; without it the server loads the kit's runtime entry,
- *  whose classes the CSS extracted from its source does not hold. */
-export function sourceKitDependencies(rootDir: string): string[] {
-  const manifest = readPackageManifest(rootDir);
+export interface SourceKitDependency {
+  name: string;
+  /** Installed under `node_modules`, not linked from a workspace. */
+  installed: boolean;
+  /** The kit's own `dependencies`, by name. */
+  dependencies: string[];
+}
+
+/** The dependency names a manifest lists in `fields`. */
+function dependencyNames(
+  manifest: JsonValue | null,
+  fields: readonly string[]
+): string[] {
   if (!isJsonBlock(manifest)) return [];
   const names = new Set<string>();
-  for (const field of [manifest.dependencies, manifest.devDependencies]) {
-    if (isJsonBlock(field))
-      for (const name of Object.keys(field)) names.add(name);
+  for (const field of fields) {
+    const deps = manifest[field];
+    if (isJsonBlock(deps))
+      for (const name of Object.keys(deps)) names.add(name);
   }
-  return [...names].filter((name) => {
+  return [...names];
+}
+
+/** The source kits the application at `rootDir` declares as dependencies.
+ *  A bundler serves an installed one as compiled code unless told
+ *  otherwise: Next keeps it external on the server unless it is in
+ *  `transpilePackages`, and Vite's optimizer prebundles it. */
+export function sourceKitDependencies(rootDir: string): SourceKitDependency[] {
+  const declared = dependencyNames(readPackageManifest(rootDir), [
+    'dependencies',
+    'devDependencies',
+  ]);
+  return declared.flatMap((name) => {
     const pkgRoot = locatePackageRoot(name, rootDir);
-    return pkgRoot !== null && readKitSourceCondition(pkgRoot) !== null;
+    if (pkgRoot === null || readKitSourceCondition(pkgRoot) === null) return [];
+    return [
+      {
+        name,
+        installed: isInstalledPackage(pkgRoot),
+        dependencies: dependencyNames(readPackageManifest(pkgRoot), [
+          'dependencies',
+        ]),
+      },
+    ];
   });
 }
 

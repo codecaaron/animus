@@ -2,7 +2,9 @@ import {
   assertKnownOptionKeys,
   assertNoRetiredEngineSelection,
   resolveMode,
+  sourceKitDependencies,
 } from '@animus-ui/extract/pipeline';
+import { resolve } from 'path';
 
 import { runBuildStart } from './build-start';
 import { applyResolvedConfig } from './config';
@@ -19,6 +21,24 @@ import type {
 import type { Plugin } from 'vite';
 
 export { discoverFiles } from '@animus-ui/extract/pipeline';
+
+/** The optimizer would prebundle an installed source kit from its compiled
+ *  entry, past the transform, so each is excluded and served as the source
+ *  the redirect names; its own dependencies, which that source imports as
+ *  a browser would, are prebundled in its place (`kit > dependency`). A
+ *  linked kit is source to Vite already. */
+function sourceKitOptimizeDeps(
+  rootDir: string
+): { exclude: string[]; include: string[] } | undefined {
+  const kits = sourceKitDependencies(rootDir).filter((kit) => kit.installed);
+  if (kits.length === 0) return undefined;
+  return {
+    exclude: kits.map((kit) => kit.name),
+    include: kits.flatMap((kit) =>
+      kit.dependencies.map((dependency) => `${kit.name} > ${dependency}`)
+    ),
+  };
+}
 
 export interface AnimusExtractOptions {
   /** Path to a module exporting a SystemInstance from `@animus-ui/system`. */
@@ -133,11 +153,15 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
     enforce: 'pre',
 
     // `__ANIMUS_DEV__` gates the system runtime's development-only diagnostics.
-    config(_config, env) {
+    config(userConfig, env) {
       const { mode } = resolveMode(options.mode, () =>
         env.command === 'build' ? 'production' : 'development'
       );
-      return { define: { __ANIMUS_DEV__: mode === 'development' } };
+      const define = { __ANIMUS_DEV__: mode === 'development' };
+      const optimizeDeps = sourceKitOptimizeDeps(
+        resolve(userConfig.root ?? process.cwd())
+      );
+      return optimizeDeps ? { define, optimizeDeps } : { define };
     },
 
     configureServer(server) {

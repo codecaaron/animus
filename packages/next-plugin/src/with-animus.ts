@@ -397,9 +397,9 @@ function withSourceKits<Config extends NextOwnedConfig>(
   rootDir: string
 ): NextConfigInput<Config> {
   const declared = nextConfig.transpilePackages ?? [];
-  const kits = sourceKitDependencies(rootDir).filter(
-    (name) => !declared.includes(name)
-  );
+  const kits = sourceKitDependencies(rootDir)
+    .map((kit) => kit.name)
+    .filter((name) => !declared.includes(name));
   if (kits.length === 0) return nextConfig;
   return { ...nextConfig, transpilePackages: [...declared, ...kits] };
 }

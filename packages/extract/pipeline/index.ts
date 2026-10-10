@@ -53,6 +53,7 @@ export type {
   ExternalPackageOutcome,
   ModuleParser,
   ModuleRecord,
+  SourceKitDependency,
 } from './discover-packages';
 export {
   collectExternalPackageSources,
