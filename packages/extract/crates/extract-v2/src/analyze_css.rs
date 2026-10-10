@@ -1413,7 +1413,8 @@ fn unsupported_default_export(
 }
 
 /// A chain-shaped call no walked chain contains, when its root has proven
-/// Animus origin.
+/// Animus origin. `resolver.props(…)` on an `asClass()` resolver is the
+/// resolver's own method, not the builder step of that name.
 fn runtime_builder_reference(
     file: &str,
     site: &crate::facts::UnwalkedChainSite,
@@ -1421,6 +1422,11 @@ fn runtime_builder_reference(
     inputs: &CssInputs,
 ) -> Option<CssDiagnostic> {
     let chain = &site.chain;
+    if chain.methods.first().is_some_and(|method| method == "props")
+        && holds_class_resolver(file, &chain.root, files, inputs, &mut FxHashSet::default())
+    {
+        return None;
+    }
     has_animus_origin(file, &chain.root, files, inputs, &mut FxHashSet::default()).then(|| {
         let spelling = chain
             .methods
@@ -1440,6 +1446,33 @@ fn runtime_builder_reference(
             Some(RUNTIME_BUILDER_REFERENCE),
         )
     })
+}
+
+/// Whether `name`, as `file` declares or imports it, is a chain ending in
+/// `asClass()`, or a `const` alias of one.
+fn holds_class_resolver(
+    file: &str,
+    name: &str,
+    files: &BTreeMap<String, FileFacts>,
+    inputs: &CssInputs,
+    seen: &mut FxHashSet<(String, String)>,
+) -> bool {
+    if !seen.insert((file.to_string(), name.to_string())) {
+        return false;
+    }
+    let Some((declaring_file, binding, true)) =
+        files.get(file).and_then(|ff| resolve_declaration(file, ff, name, files, inputs))
+    else {
+        return false;
+    };
+    let Some(dff) = files.get(&declaring_file) else { return false };
+    dff.chains
+        .iter()
+        .any(|chain| chain.descriptor.binding == binding && chain.descriptor.terminal == TerminalKind::AsClass)
+        || dff
+            .aliases
+            .get(&binding)
+            .is_some_and(|target| holds_class_resolver(&declaring_file, target, files, inputs, seen))
 }
 
 /// A chain rooted in `ns.member` where `ns` is a namespace import of an

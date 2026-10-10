@@ -185,6 +185,8 @@ export const Staged = staged.variant({ prop: 'tone', variants: { x: { display: '
 const followed = ds.styles({ cursor: 'nwse-resize' });
 export const Followed = followed.asElement('div');
 export const LookalikeInRender = () => lib.styles({ cursor: 'copy' }).asElement('div');
+export const textClass = ds.styles({ display: 'inline' }).asClass();
+export const Text = (p) => <span {...textClass.props(p)} />;
 `,
 };
 
@@ -449,6 +451,7 @@ describe.each([
   });
 
   test('a system chain built in a function, in render or in a builder no chain continues warns once at its line', () => {
+    // A class resolver's `.props()` in render is the resolver's method.
     const runtime = analysis.diagnostics.filter(
       (d) => d.code === RUNTIME_BUILDER_REFERENCE
     );
