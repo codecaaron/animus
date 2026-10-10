@@ -8898,15 +8898,19 @@ export const App = ({ n }) => <Box bgImage={n} texture={n} />;
     /// (`const Code = { Header }`) renders through `<Code.Header>` in any
     /// module, so those renders stand in for its renders. Any other route
     /// to it (the object or the member as a value, a copy of the object, a
-    /// write to it, or the wrapper anywhere else) keeps its target's slots.
+    /// write to it, or the wrapper anywhere else), and a member tag whose
+    /// first name a parameter or local binds, keeps its target's slots.
     #[test]
     fn object_held_wrappers_render_through_member_tags() {
         let kit = "export const Box = ds.system({ space: true }).asElement('div');\n";
         let family = "import { Box } from './kit';\n\
                       function Header(props) { return <Box as=\"span\" {...props} />; }\n\
                       export const Code = { Header };\n";
-        let cases: [(&str, &str, &[&str]); 11] = [
+        let cases: [(&str, &str, &[&str]); 13] = [
             ("", "import { Code } from './fam';\nexport const App = () => <Code.Header p={8} />;\n", &[]),
+            // A parameter or local of the object's name is another value.
+            ("", "import { Code } from './fam';\nexport const App = ({ Code }) => <Code.Header p={8} />;\n", &["p"]),
+            ("", "import { Code } from './fam';\nexport const App = () => { const Code = getCode(); return <Code.Header p={8} />; };\n", &["p"]),
             ("", "import * as ui from './fam';\nexport const App = () => <ui.Code.Header p={8} />;\n", &[]),
             ("", "import { Code } from './fam';\nexport const App = (rest) => <Code.Header {...rest} />;\n", &["p"]),
             ("", "import { Code } from './fam';\nexport const App = ({ n }) => <Code.Header p={n} />;\n", &["p"]),
