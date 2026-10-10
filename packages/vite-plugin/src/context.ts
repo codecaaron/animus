@@ -8,7 +8,6 @@ import {
   clearEngineCache,
   diffFilePlans,
   enforceExternalTokenContracts,
-  findPackageRoot,
   createSourceCorpus,
   findSheetAssetSpecifiers,
   generatedModuleCode,
@@ -28,8 +27,8 @@ import {
   unresolvableIncludesMessage,
   runStructuralSelfCheck,
 } from '@animus-ui/extract/pipeline';
-import { existsSync, statSync } from 'fs';
-import { isAbsolute, join, relative, resolve } from 'path';
+import { statSync } from 'fs';
+import { isAbsolute, relative, resolve } from 'path';
 
 import {
   RESOLVED_COMPONENTS_ID,
@@ -152,6 +151,13 @@ const NO_SHEETS: AssetSheets = {
   componentCss: '',
 };
 
+/** A discovery's analysis input: its entries, and the file-cache seeding
+ *  that follows their ingestion. */
+export type DiscoveredSources = {
+  rawEntries: readonly RawSourceEntry[];
+  afterIngestion: (accepted: SourceIngestionResult) => void;
+};
+
 export class PluginContext {
   readonly options: AnimusExtractOptions;
   readonly verbose: boolean;
@@ -176,6 +182,12 @@ export class PluginContext {
   lcssTargets: LightningTargets = {};
 
   pathAliasesJson: string | null = null;
+
+  /** Vite's export conditions, so the loader reads the files Vite serves. */
+  resolveConditions: string[] = [];
+
+  /** Development's repeat of buildStart's discovery, with its resolver. */
+  rediscoverSources: (() => Promise<DiscoveredSources>) | null = null;
 
   extensionsSet: ReadonlySet<string>;
 
@@ -441,22 +453,11 @@ export class PluginContext {
         rootDir: this.rootDir,
         prefix: this.options.prefix,
         prefixContextualVars: this.options.prefixContextualVars,
+        conditions: this.resolveConditions,
       });
-      // A package's manifest decides, through `exports`, which of its files
-      // the loader reads, so an edit to it reloads the system too. The app's
-      // own manifest decides nothing the loader reads.
-      const appManifest = join(
-        findPackageRoot(this.resolvedSystemPath),
-        'package.json'
-      );
-      const manifests = new Set<string>();
-      for (const dep of this.system.dependencies ?? []) {
-        const manifest = join(findPackageRoot(dep), 'package.json');
-        if (manifest !== appManifest && existsSync(manifest)) {
-          manifests.add(manifest);
-        }
-      }
-      const deps = [...(this.system.dependencies ?? []), ...manifests];
+      // Includes each manifest whose `exports` selected a module, so an edit
+      // to one reloads the system too.
+      const deps = this.system.dependencies ?? [];
       const keys = new Set<string>();
       for (const key of toWatchKeys(this.resolvedSystemPath)) keys.add(key);
       for (const dep of deps) {
@@ -849,7 +850,7 @@ export class PluginContext {
   private async performSystemReloadExclusive(): Promise<void> {
     const resetStart = performance.now();
     this.systemReloadOwed = true;
-    const { ok } = await this.analyzeIngested();
+    const { ok } = await this.analyzeIngested(await this.rediscoverSources?.());
     if (!ok) return;
     this.log(
       `HMR system reload complete: ${Math.round(performance.now() - resetStart)}ms`

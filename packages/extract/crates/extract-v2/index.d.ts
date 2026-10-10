@@ -70,7 +70,7 @@ export declare function engineVersion(): string
  */
 export declare function extractFacts(fileEntriesJson: string): string
 
-export declare function loadSystemModule(systemPath: string, rootDir: string, exportName?: string | undefined | null): NapiSystemConfig
+export declare function loadSystemModule(systemPath: string, rootDir: string, exportName?: string | undefined | null, conditions?: Array<string> | undefined | null): NapiSystemConfig
 
 export interface NapiSystemConfig {
   propConfig: string
@@ -116,8 +116,9 @@ export interface NapiSystemConfig {
    */
   vocabularyWitnesses?: string
   /**
-   * Canonical absolute paths of every module evaluated for the system,
-   * sorted; the entry is included, runtime stubs are not.
+   * Canonical absolute paths of every module evaluated for the system, and
+   * of each `package.json` that selected one, sorted; the entry is
+   * included, runtime stubs are not.
    */
   dependencies: Array<string>
   /**

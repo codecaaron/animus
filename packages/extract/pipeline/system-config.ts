@@ -69,10 +69,11 @@ export interface SystemConfig {
 function evaluateSystemModule(
   engine: Pick<EngineApi, 'loadSystemModule' | 'extractFacts'>,
   systemPath: string,
-  rootDir: string
+  rootDir: string,
+  conditions: readonly string[] | undefined
 ) {
   try {
-    return engine.loadSystemModule(systemPath, rootDir);
+    return engine.loadSystemModule(systemPath, rootDir, undefined, conditions);
   } catch (error) {
     let source: string;
     try {
@@ -99,12 +100,16 @@ export function loadSystemConfig(
     rootDir: string;
     prefix?: string;
     prefixContextualVars?: boolean;
+    /** The host's export conditions, in its order; the loader tries them
+     *  with `import` and `default`. */
+    conditions?: readonly string[];
   }
 ): SystemConfig {
   const config = evaluateSystemModule(
     engineApi(),
     opts.systemPath,
-    opts.rootDir
+    opts.rootDir,
+    opts.conditions
   );
 
   let scalesJson: string = config.scalesJson;

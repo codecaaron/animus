@@ -22,6 +22,14 @@ export function applyResolvedConfig(
       config.command === 'build' ? 'production' : 'development'
     ).mode === 'production';
   ctx.rootDir = config.root;
+  // Vite substitutes the mode for its `development|production` condition.
+  ctx.resolveConditions = config.resolve.conditions.map((condition) =>
+    condition === 'development|production'
+      ? config.isProduction
+        ? 'production'
+        : 'development'
+      : condition
+  );
   ctx.logger = config.logger;
   // Public base for dev /@fs asset URLs (build URLs are resolved by Vite's
   // own asset pipeline, which applies base itself).
