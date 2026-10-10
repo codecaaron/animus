@@ -51,11 +51,12 @@ export { compareDiscoveryOrder, discoverFiles } from './discover-files';
 export type {
   CollectedExternalPackages,
   ExternalPackageOutcome,
-  ImportParser,
+  ModuleParser,
+  ModuleRecord,
 } from './discover-packages';
 export {
   collectExternalPackageSources,
-  engineImportParser,
+  engineModuleParser,
   excludeCollectedPackages,
   extractSystemFilePackages,
   findPackageRoot,

@@ -1,5 +1,6 @@
 import { ANIMUS_LAYERS, assembleStylesheet } from './assemble-stylesheet';
 import { parseInternalWire } from './internal-wire';
+import { NO_KIT_FILES } from './manifest-diagnostics';
 
 import type { ExternalPackageOutcome } from './discover-packages';
 
@@ -39,8 +40,10 @@ export function runStructuralSelfCheck(input: StructuralCheckInput): string[] {
 
   for (const { specifier, outcome } of input.externalOutcomes ?? []) {
     if (outcome === 'empty') {
+      // The coded line stands in for the discovery warning, which a host
+      // that runs this check leaves out.
       failures.push(
-        `include '${specifier}' resolved but discovered no component sources`
+        `include '${specifier}' resolved but discovered no component sources [${NO_KIT_FILES}]`
       );
     } else if (outcome === 'unresolvable') {
       failures.push(`include '${specifier}' could not be resolved`);

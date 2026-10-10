@@ -12,11 +12,18 @@ import {
 import { globToRegExp } from './core-options';
 import { discoverFiles } from './discover-files';
 import { parseInternalWire } from './internal-wire';
+import { severityFor, UNPROVEN_ROOT_BINDING } from './manifest-diagnostics';
 import { isPathWithinRoot } from './source-identity';
+import { relativeSourceCandidates } from './source-ingestion';
 import { isJsonBlock, isJsonString } from './tsconfig-paths';
 
 import type { EngineApi } from './engine-adapter';
-import type { ExtractFactsResult, ExtractImportFact } from './source-ingestion';
+import type { ManifestDiagnostic } from './manifest-diagnostics';
+import type {
+  ExtractExportFact,
+  ExtractFactsResult,
+  ExtractImportFact,
+} from './source-ingestion';
 import type { JsonValue } from './tsconfig-paths';
 
 export function findPackageRoot(absEntryPath: string): string {
@@ -581,18 +588,24 @@ export function staleDistIncludesMessage(
   return `[animus-extract] stale dist for include specifier(s): ${stale.join(', ')} — dist entry is older than the newest src/ file; rebuild the package(s) before extracting`;
 }
 
-/** A module's parsed import bindings, or null when it cannot be parsed. */
-export type ImportParser = (
+/** A module's parsed import and export bindings. */
+export interface ModuleRecord {
+  imports: readonly ExtractImportFact[];
+  exports: readonly ExtractExportFact[];
+}
+
+/** A module's parsed bindings, or null when it cannot be parsed. */
+export type ModuleParser = (
   source: string,
   path: string
-) => readonly ExtractImportFact[] | null;
+) => ModuleRecord | null;
 
-/** The engine's own parse of a module's imports, through its
+/** The engine's own parse of a module's bindings, through its
  *  `extractFacts`; undefined for an engine without one. A parse that
- *  panicked reports no imports, so it counts as no parse. */
-export function engineImportParser(
+ *  panicked counts as no parse. */
+export function engineModuleParser(
   engine: Pick<EngineApi, 'extractFacts'>
-): ImportParser | undefined {
+): ModuleParser | undefined {
   const { extractFacts } = engine;
   if (!extractFacts) return undefined;
   return (source, path) => {
@@ -601,11 +614,322 @@ export function engineImportParser(
         extractFacts(JSON.stringify([{ path, source }])),
         'extractFacts'
       ).files[path];
-      return facts && !facts.parsePanicked ? facts.imports : null;
+      return facts && !facts.parsePanicked
+        ? { imports: facts.imports, exports: facts.exports }
+        : null;
     } catch {
       return null;
     }
   };
+}
+
+const ANIMUS_SYSTEM_SPECIFIER = /^@animus-ui\/system(?:\/.*)?$/;
+
+/** A host's resolution of a bare specifier to its entry file: the one it
+ *  resolves the packages a system extends with, under its own conditions. */
+export type PackageResolver = (
+  specifier: string
+) => string | null | Promise<string | null>;
+
+/** What following a binding needs: the module parse, the host's package
+ *  resolution, and where an unproven binding is reported. */
+interface RootFollowing {
+  parseModule: ModuleParser;
+  resolvePackage: PackageResolver | undefined;
+  report: ((diagnostic: ManifestDiagnostic) => void) | undefined;
+}
+
+/** The file a specifier names from `importer`: a relative one by the
+ *  ingestion's probe order, a bare one by the host's package resolution. */
+async function resolveModuleFile(
+  importer: string,
+  specifier: string,
+  resolvePackage: PackageResolver | undefined
+): Promise<string | null> {
+  if (specifier.startsWith('.')) {
+    return relativeSourceCandidates(importer, specifier).find(isFile) ?? null;
+  }
+  try {
+    return (await resolvePackage?.(specifier)) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** What a binding was shown to be bound to. */
+type BindingIdentity =
+  | { kind: 'animus' }
+  | { kind: 'other'; what: string }
+  | { kind: 'unknown'; why: string };
+
+const escapeRegExp = (text: string): string =>
+  text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/**
+ * Follows `name`, exported by the module `specifier` names from `importer`,
+ * through re-exports to its declaration. It is Animus's factory only when
+ * that is `createSystem` of `@animus-ui/system`, and another identity only
+ * when a module is shown to declare it; anything discovery cannot follow is
+ * unknown.
+ */
+async function exportIdentity(
+  importer: string,
+  specifier: string,
+  name: string,
+  following: RootFollowing,
+  seen: Set<string>
+): Promise<BindingIdentity> {
+  if (ANIMUS_SYSTEM_SPECIFIER.test(specifier)) {
+    return name === 'createSystem'
+      ? { kind: 'animus' }
+      : { kind: 'other', what: `'${name}' of ${specifier}` };
+  }
+  const file = await resolveModuleFile(
+    importer,
+    specifier,
+    following.resolvePackage
+  );
+  if (file === null) {
+    return { kind: 'unknown', why: `'${specifier}' could not be resolved` };
+  }
+  const key = `${file}#${name}`;
+  if (seen.has(key)) {
+    return { kind: 'unknown', why: `'${specifier}' re-exports it in a cycle` };
+  }
+  seen.add(key);
+  let source: string;
+  try {
+    source = readFileSync(file, 'utf-8');
+  } catch {
+    return { kind: 'unknown', why: `'${specifier}' could not be read` };
+  }
+  const record = following.parseModule(source, file);
+  if (record === null) {
+    return { kind: 'unknown', why: `'${specifier}' could not be parsed` };
+  }
+  const exported = record.exports.find((entry) => entry.exported === name);
+  if (exported?.source) {
+    return exportIdentity(
+      file,
+      exported.source,
+      exported.original ?? name,
+      following,
+      seen
+    );
+  }
+  const local = exported?.local ?? name;
+  const imported = record.imports.find((entry) => entry.local === local);
+  if (exported && imported) {
+    return exportIdentity(
+      file,
+      imported.source,
+      imported.imported,
+      following,
+      seen
+    );
+  }
+  if (
+    exported ||
+    new RegExp(
+      `\\bexport\\s+(?:async\\s+)?(?:function\\*?|class|const|let|var)\\s+${escapeRegExp(name)}\\b`
+    ).test(source)
+  ) {
+    return {
+      kind: 'other',
+      what: `the '${name}' that '${specifier}' declares`,
+    };
+  }
+  // `export * from` re-exports `name` when exactly one of its sources does.
+  const stars: BindingIdentity[] = [];
+  for (const match of source.matchAll(
+    /\bexport\s*\*\s*from\s*['"]([^'"]+)['"]/g
+  )) {
+    stars.push(await exportIdentity(file, match[1], name, following, seen));
+  }
+  const definite = stars.filter((identity) => identity.kind !== 'unknown');
+  if (definite.length === 1) return definite[0];
+  if (definite.length > 1) {
+    return {
+      kind: 'unknown',
+      why: `more than one \`export *\` of '${specifier}' provides '${name}'`,
+    };
+  }
+  return (
+    stars.find((identity) => identity.kind === 'unknown') ?? {
+      kind: 'unknown',
+      why: `'${specifier}' has no export '${name}' discovery can read`,
+    }
+  );
+}
+
+/** 1-based line and column of `offset` in `source`. */
+function locationIn(
+  source: string,
+  offset: number
+): Pick<ManifestDiagnostic, 'line' | 'column'> {
+  const before = source.slice(0, offset);
+  const lineStart = before.lastIndexOf('\n') + 1;
+  return {
+    line: before.split('\n').length,
+    column: offset - lineStart + 1,
+  };
+}
+
+const NAMESPACE_IMPORT =
+  /\bimport\s+(?:[a-zA-Z_$][a-zA-Z0-9_$]*\s*,\s*)?\*\s*as\s+([a-zA-Z_$][a-zA-Z0-9_$]*)\s+from\s+['"]([^'"]+)['"]/g;
+
+/**
+ * The callees that are Animus's `createSystem` in a parsed system file. A
+ * binding counts once its identity is followed to the factory: a named
+ * import, through local and package re-exports; a namespace import's
+ * member; or a property destructured from a namespace import, `require` or
+ * `import()` of a module. A binding named `createSystem` shown to be
+ * something else is no root. One whose identity discovery cannot follow
+ * keeps the admission spelling gave it, so a resolution limit never drops a
+ * kit. Both are reported. The bare name also anchors, as a global, unless
+ * the file binds it.
+ */
+async function systemRoots(
+  systemFilePath: string,
+  source: string,
+  imports: readonly ExtractImportFact[],
+  following: RootFollowing
+): Promise<Set<string>> {
+  const roots = new Set<string>();
+  const identityOf = (
+    specifier: string,
+    name: string
+  ): Promise<BindingIdentity> =>
+    exportIdentity(systemFilePath, specifier, name, following, new Set());
+  const called = (callee: string): boolean =>
+    new RegExp(`(?<![a-zA-Z0-9_$.])${escapeRegExp(callee)}\\s*\\(`).test(
+      source
+    );
+  /** Admits a binding named `createSystem` by its identity: an unknown one
+   *  keeps `spellingAdmits`, and every unproven one is reported. */
+  const admit = (
+    local: string,
+    offset: number,
+    identity: BindingIdentity,
+    spellingAdmits: boolean
+  ): void => {
+    if (identity.kind === 'animus') {
+      roots.add(local);
+      return;
+    }
+    if (identity.kind === 'unknown' && spellingAdmits) roots.add(local);
+    const shown =
+      identity.kind === 'other'
+        ? `it is ${identity.what}, so it is not read as a system root`
+        : `discovery cannot follow what it is bound to (${identity.why}), so it is ${spellingAdmits ? 'still read' : 'not read'} as a system root by its name alone`;
+    following.report?.({
+      file: systemFilePath,
+      component: local,
+      kind: 'warn',
+      message: `'${local}' is not proven to be Animus's createSystem: ${shown} — import createSystem from '@animus-ui/system', directly or through a re-export discovery can follow`,
+      code: UNPROVEN_ROOT_BINDING,
+      severity: severityFor(UNPROVEN_ROOT_BINDING),
+      ...locationIn(source, offset),
+    });
+  };
+
+  let bindsName = false;
+  for (const binding of imports) {
+    const named =
+      binding.imported === 'createSystem' || binding.local === 'createSystem';
+    if (binding.local === 'createSystem') bindsName = true;
+    if (named) {
+      const statement = new RegExp(
+        `\\bimport\\b[^;]*?\\bfrom\\s*['"]${escapeRegExp(binding.source)}['"]`,
+        'g'
+      );
+      let offset = 0;
+      for (const match of source.matchAll(statement)) {
+        const at = match[0].search(
+          new RegExp(`(?<![a-zA-Z0-9_$])${escapeRegExp(binding.local)}\\b`)
+        );
+        if (at !== -1) {
+          offset = match.index + at;
+          break;
+        }
+      }
+      // Spelling read an import of `createSystem` as a root by its local
+      // name, and any other import named `createSystem` as a shadow.
+      admit(
+        binding.local,
+        offset,
+        await identityOf(binding.source, binding.imported),
+        binding.imported === 'createSystem'
+      );
+      continue;
+    }
+    // Another name is followed only when it is called and imported from a
+    // local module, where a renamed re-export of the factory can surface.
+    if (
+      binding.source.startsWith('.') &&
+      called(binding.local) &&
+      (await identityOf(binding.source, binding.imported)).kind === 'animus'
+    ) {
+      roots.add(binding.local);
+    }
+  }
+
+  // The parse omits namespace imports, so they are read from their syntax.
+  const namespaces = new Map<string, string>();
+  for (const [, namespace, specifier] of source.matchAll(NAMESPACE_IMPORT)) {
+    namespaces.set(namespace, specifier);
+    const member = `${namespace}.createSystem`;
+    if (
+      ANIMUS_SYSTEM_SPECIFIER.test(specifier) ||
+      (specifier.startsWith('.') &&
+        called(member) &&
+        (await identityOf(specifier, 'createSystem')).kind === 'animus')
+    ) {
+      roots.add(member);
+    }
+  }
+
+  const destructuredFrom = (initializer: string): Promise<BindingIdentity> => {
+    const loaded =
+      /^\(?\s*(?:(?:await\s+)?import|require)\(\s*['"]([^'"]+)['"]\s*\)\s*\)?$/.exec(
+        initializer
+      );
+    if (loaded) return identityOf(loaded[1], 'createSystem');
+    const namespace = namespaces.get(initializer);
+    if (namespace !== undefined) return identityOf(namespace, 'createSystem');
+    return Promise.resolve({
+      kind: 'unknown',
+      why: `it is destructured from '${initializer}', which is not a module namespace`,
+    });
+  };
+  for (const match of source.matchAll(
+    /\b(?:const|let|var)\s*\{([^}]*)\}\s*=\s*([^;\n]+)/g
+  )) {
+    const [whole, pattern, initializer] = match;
+    for (const property of pattern.split(',')) {
+      const binding =
+        /^\s*createSystem\s*(?::\s*([a-zA-Z_$][a-zA-Z0-9_$]*))?\s*(?:=[\s\S]*)?$/.exec(
+          property
+        );
+      if (!binding) continue;
+      const local = binding[1] ?? 'createSystem';
+      if (local === 'createSystem') bindsName = true;
+      // Spelling read an unrenamed destructured `createSystem` as a root.
+      admit(
+        local,
+        match.index + whole.indexOf('createSystem'),
+        await destructuredFrom(initializer.trim()),
+        local === 'createSystem'
+      );
+    }
+  }
+
+  const declaresName =
+    /\b(?:function\*?|class)\s+createSystem\b|\b(?:const|let|var)\s+createSystem\b/.test(
+      source
+    );
+  if (!bindsName && !declaresName) roots.add('createSystem');
+  return roots;
 }
 
 /** A pattern matching a call of any of `callees` as a whole name, or null
@@ -616,10 +940,12 @@ function rootCallPattern(callees: readonly string[]): string | null {
   return `(?<![a-zA-Z0-9_$.])(?:${names.join('|')})`;
 }
 
-export function extractSystemFilePackages(
+export async function extractSystemFilePackages(
   systemFilePath: string,
-  parseImports?: ImportParser
-): string[] {
+  parseModule?: ModuleParser,
+  report?: (diagnostic: ManifestDiagnostic) => void,
+  resolvePackage?: PackageResolver
+): Promise<string[]> {
   let source: string;
   try {
     source = readFileSync(systemFilePath, 'utf-8');
@@ -629,37 +955,18 @@ export function extractSystemFilePackages(
 
   // A parse that reports no imports names no kit, so the spelling path
   // decides, as without a parse.
-  const parsed = parseImports?.(source, systemFilePath) ?? null;
-  const parsedImports = parsed && parsed.length > 0 ? parsed : null;
+  const parsed = parseModule?.(source, systemFilePath) ?? null;
+  const parsedImports =
+    parsed && parsed.imports.length > 0 ? parsed.imports : null;
   let rootCall: string | null = 'createSystem';
-  if (parsedImports) {
-    // The roots are the local names an import binds `createSystem` to:
-    // Animus's export, renamed or not, or a module re-exporting it, which
-    // is not followed. The parse omits namespace imports, so those are read
-    // from their syntax. The bare name also anchors, as a global or a
-    // destructured binding, unless the file binds it to something else.
-    const shadowed =
-      parsedImports.some(
-        (binding) =>
-          binding.local === 'createSystem' &&
-          binding.imported !== 'createSystem'
-      ) ||
-      /\b(?:function\*?|class)\s+createSystem\b|\b(?:const|let|var)\s+createSystem\b/.test(
-        source
-      );
-    const roots = new Set([
-      ...parsedImports
-        .filter((binding) => binding.imported === 'createSystem')
-        .map((binding) => binding.local),
-      ...Array.from(
-        source.matchAll(
-          /\bimport\s+(?:[a-zA-Z_$][a-zA-Z0-9_$]*\s*,\s*)?\*\s*as\s+([a-zA-Z_$][a-zA-Z0-9_$]*)\s+from\s+['"]@animus-ui\/system(?:\/[^'"]*)?['"]/g
-        ),
-        (match) => `${match[1]}.createSystem`
-      ),
-      ...(shadowed ? [] : ['createSystem']),
+  if (parseModule && parsedImports) {
+    rootCall = rootCallPattern([
+      ...(await systemRoots(systemFilePath, source, parsedImports, {
+        parseModule,
+        resolvePackage,
+        report,
+      })),
     ]);
-    rootCall = rootCallPattern([...roots]);
   }
 
   const identifiers = new Set<string>();
