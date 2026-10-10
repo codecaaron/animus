@@ -6,8 +6,13 @@ import { afterEach, describe, expect, test } from 'vitest';
 import {
   createKitWorkspace,
   disposeTempRoots,
+  KIT_SYSTEM_SOURCE,
 } from '../../extract/tests/session/session-fixtures';
-import { factsExtractor } from '../../extract/tests/source-ingestion-fixtures';
+import {
+  emptyFacts,
+  factsExtractor,
+  systemImportFacts,
+} from '../../extract/tests/source-ingestion-fixtures';
 import { runBuildStart } from '../src/build-start';
 import { PluginContext } from '../src/context';
 import { makeManifest } from './manifest-fixture';
@@ -50,7 +55,12 @@ async function productionBuild(app: string, strict: boolean) {
       variableCss: '',
       dependencies: [],
     }),
-    extractFacts: factsExtractor({}),
+    extractFacts: factsExtractor({
+      [join(app, 'src', 'system.ts')]: {
+        ...emptyFacts(join(app, 'src', 'system.ts')),
+        imports: systemImportFacts(KIT_SYSTEM_SOURCE),
+      },
+    }),
     analyzeProject: (...args: unknown[]) => {
       // SAFETY: the context slot holds the host's own JSON.stringify output,
       // or nothing when the host knows of no unseen source.

@@ -17,7 +17,9 @@ import {
   INVALID_KIT_SOURCE_CONDITION,
   KIT_SYSTEM_NOT_INCLUDED,
   KIT_WITHOUT_SOURCE_CONDITION,
+  noKitFilesDiagnostics,
   severityFor,
+  UNIMPORTED_CREATE_SYSTEM,
   UNPROVEN_ROOT_BINDING,
 } from './manifest-diagnostics';
 import { isEngineTransformExtension } from './mdx-preprocessor';
@@ -352,8 +354,8 @@ export interface CollectedExternalPackages {
    *  the caller's set already supplied stay unattributed. */
   fileOwners: Record<string, string>;
   outcomes: ExternalPackageOutcome[];
-  /** A kit without the source condition, and a condition entry whose target
-   *  is missing or outside its package. */
+  /** A kit without the source condition, a condition entry whose target is
+   *  missing or outside its package, and a kit that yielded no files. */
   diagnostics: ManifestDiagnostic[];
   /** Each resolved package's kit descriptor, once per package root. */
   kitDescriptors: KitDescriptorRecord[];
@@ -642,7 +644,7 @@ export async function collectExternalPackageSources(opts: {
     dirExtensions,
     fileOwners,
     outcomes,
-    diagnostics,
+    diagnostics: [...diagnostics, ...noKitFilesDiagnostics(outcomes)],
     kitDescriptors,
   };
 }
@@ -907,6 +909,9 @@ export function staleDistIncludesMessage(
 export interface ModuleRecord {
   imports: readonly ExtractImportFact[];
   exports: readonly ExtractExportFact[];
+  /** 1-based `[line, column]` of each `createSystem(…)` call that no
+   *  import, declaration or parameter binds, from the parser's scopes. */
+  unboundCreateSystemCalls?: ReadonlyArray<readonly [number, number]>;
 }
 
 /** A module's parsed bindings, or null when it cannot be parsed. */
@@ -930,7 +935,11 @@ export function engineModuleParser(
         'extractFacts'
       ).files[path];
       return facts && !facts.parsePanicked
-        ? { imports: facts.imports, exports: facts.exports }
+        ? {
+            imports: facts.imports,
+            exports: facts.exports,
+            unboundCreateSystemCalls: facts.unboundCreateSystemCalls ?? [],
+          }
         : null;
     } catch {
       return null;
@@ -1101,25 +1110,24 @@ const NAMESPACE_IMPORT =
  * `import()` of a module. A binding named `createSystem` shown to be
  * something else is no root. One whose identity discovery cannot follow
  * keeps the admission spelling gave it, so a resolution limit never drops a
- * kit. Both are reported. The bare name also anchors, as a global, unless
- * the file binds it.
+ * kit. Both are reported. A call of the bare name, which the file neither
+ * imports nor declares, is no root: the system loader evaluates the file
+ * without auto-imports, where the name is undefined. It is reported once.
  */
 async function systemRoots(
   systemFilePath: string,
   source: string,
-  imports: readonly ExtractImportFact[],
+  record: ModuleRecord,
   following: RootFollowing
 ): Promise<Set<string>> {
+  const { imports } = record;
   const roots = new Set<string>();
   const identityOf = (
     specifier: string,
     name: string
   ): Promise<BindingIdentity> =>
     exportIdentity(systemFilePath, specifier, name, following, new Set());
-  const called = (callee: string): boolean =>
-    new RegExp(`(?<![a-zA-Z0-9_$.])${escapeRegExp(callee)}\\s*\\(`).test(
-      source
-    );
+  const called = (callee: string): boolean => callOf(callee).test(source);
   /** Admits a binding named `createSystem` by its identity: an unknown one
    *  keeps `spellingAdmits`, and every unproven one is reported. */
   const admit = (
@@ -1148,11 +1156,9 @@ async function systemRoots(
     });
   };
 
-  let bindsName = false;
   for (const binding of imports) {
     const named =
       binding.imported === 'createSystem' || binding.local === 'createSystem';
-    if (binding.local === 'createSystem') bindsName = true;
     if (named) {
       const statement = new RegExp(
         `\\bimport\\b[^;]*?\\bfrom\\s*['"]${escapeRegExp(binding.source)}['"]`,
@@ -1217,6 +1223,33 @@ async function systemRoots(
       why: `it is destructured from '${initializer}', which is not a module namespace`,
     });
   };
+  for (const { local, offset, initializer } of destructuredCreateSystems(
+    source
+  )) {
+    // Spelling read an unrenamed destructured `createSystem` as a root.
+    admit(
+      local,
+      offset,
+      await destructuredFrom(initializer),
+      local === 'createSystem'
+    );
+  }
+
+  const unimported = unimportedCreateSystemCall(systemFilePath, record);
+  if (unimported) following.report?.(unimported);
+  return roots;
+}
+
+/** A call of `callee` as a whole name, not a member. */
+function callOf(callee: string): RegExp {
+  return new RegExp(`(?<![a-zA-Z0-9_$.])${escapeRegExp(callee)}\\s*\\(`);
+}
+
+/** Each `createSystem` property a declaration destructures: its local name,
+ *  its offset in `source`, and the destructured initializer. */
+function* destructuredCreateSystems(
+  source: string
+): Generator<{ local: string; offset: number; initializer: string }> {
   for (const match of source.matchAll(
     /\b(?:const|let|var)\s*\{([^}]*)\}\s*=\s*([^;\n]+)/g
   )) {
@@ -1227,24 +1260,34 @@ async function systemRoots(
           property
         );
       if (!binding) continue;
-      const local = binding[1] ?? 'createSystem';
-      if (local === 'createSystem') bindsName = true;
-      // Spelling read an unrenamed destructured `createSystem` as a root.
-      admit(
-        local,
-        match.index + whole.indexOf('createSystem'),
-        await destructuredFrom(initializer.trim()),
-        local === 'createSystem'
-      );
+      yield {
+        local: binding[1] ?? 'createSystem',
+        offset: match.index + whole.indexOf('createSystem'),
+        initializer: initializer.trim(),
+      };
     }
   }
+}
 
-  const declaresName =
-    /\b(?:function\*?|class)\s+createSystem\b|\b(?:const|let|var)\s+createSystem\b/.test(
-      source
-    );
-  if (!bindsName && !declaresName) roots.add('createSystem');
-  return roots;
+/** The warning for a `createSystem` call that the parser's scopes leave
+ *  unbound: no import, declaration or parameter names it. Null when there is
+ *  none, or when the parser reports no scopes. */
+export function unimportedCreateSystemCall(
+  systemFilePath: string,
+  record: ModuleRecord
+): ManifestDiagnostic | null {
+  const call = record.unboundCreateSystemCalls?.[0];
+  if (!call) return null;
+  return {
+    file: systemFilePath,
+    component: 'createSystem',
+    kind: 'warn',
+    message: `'createSystem' is called with no import or local binding, so it is not read as a system root: the system loader evaluates this file without auto-imports, where the name is undefined — import createSystem from '@animus-ui/system'`,
+    code: UNIMPORTED_CREATE_SYSTEM,
+    severity: severityFor(UNIMPORTED_CREATE_SYSTEM),
+    line: call[0],
+    column: call[1],
+  };
 }
 
 /** A pattern matching a call of any of `callees` as a whole name, or null
@@ -1268,15 +1311,13 @@ export async function extractSystemFilePackages(
     return [];
   }
 
-  // A parse that reports no imports names no kit, so the spelling path
-  // decides, as without a parse.
+  // A parsed file's bindings decide its roots, even with no imports; only an
+  // unparsed one falls back to the spelling.
   const parsed = parseModule?.(source, systemFilePath) ?? null;
-  const parsedImports =
-    parsed && parsed.imports.length > 0 ? parsed.imports : null;
   let rootCall: string | null = 'createSystem';
-  if (parseModule && parsedImports) {
+  if (parseModule && parsed) {
     rootCall = rootCallPattern([
-      ...(await systemRoots(systemFilePath, source, parsedImports, {
+      ...(await systemRoots(systemFilePath, source, parsed, {
         parseModule,
         resolvePackage,
         report,
@@ -1511,14 +1552,14 @@ export async function extractSystemFilePackages(
   if (identifiers.size === 0) return [];
 
   const importMap = new Map<string, string>();
-  for (const binding of parsedImports ?? []) {
+  for (const binding of parsed?.imports ?? []) {
     importMap.set(binding.local, binding.source);
   }
   const importRegex =
     /^\s*import\s+(?:([a-zA-Z_$][a-zA-Z0-9_$]*)\s*,\s*)?(?:\{([^}]*)\}|([a-zA-Z_$][a-zA-Z0-9_$]*))\s+from\s+['"]([^'"]+)['"]/gm;
 
   // Without a parse, the import table is read from its syntax.
-  if (!parsedImports) {
+  if (!parsed) {
     let importMatch: RegExpExecArray | null;
     while ((importMatch = importRegex.exec(source)) !== null) {
       const [, comboDefault, namedImports, defaultImport, specifier] =

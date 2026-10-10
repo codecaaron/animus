@@ -118,6 +118,9 @@ export interface ExtractFileFacts {
   /** The parser stopped at an unrecoverable error and yielded no chains,
    *  imports or exports. Absent when the parse completed. */
   parsePanicked?: boolean;
+  /** 1-based `[line, column]` of each `createSystem(…)` call no binding
+   *  resolves; absent when there is none. */
+  unboundCreateSystemCalls?: Array<[number, number]>;
 }
 
 export interface ExtractFactsResult {

@@ -54,7 +54,6 @@ import {
   unresolvableIncludesMessage,
   walkPackageSources,
   engineModuleParser,
-  noKitFilesDiagnostics,
   surfaceManifestDiagnostics,
 } from '../pipeline/index';
 import {
@@ -227,9 +226,6 @@ export class ExtractionSession {
   /** Whether the analysis-inputs hydration corpus is written to disk. Only
    *  isolated loader workers replay it; an in-process loader reads memory. */
   persistAnalysisInputs = false;
-  /** Whether the host's structural self-check reports an empty kit, so
-   *  discovery leaves its warning out. */
-  selfCheckReportsEmptyKits = false;
   /** Whether this session serves development (a watch), where an error-level
    *  diagnostic is reported and the session keeps running. Only a build
    *  fails on one. */
@@ -1036,13 +1032,7 @@ export class ExtractionSession {
 
     surfaceManifestDiagnostics(
       {
-        diagnostics: [
-          ...discoveryDiagnostics,
-          ...collected.diagnostics,
-          ...(this.selfCheckReportsEmptyKits
-            ? []
-            : noKitFilesDiagnostics(collected.outcomes)),
-        ],
+        diagnostics: [...discoveryDiagnostics, ...collected.diagnostics],
       },
       (message) => this.warn(message),
       // An error-severity discovery diagnostic fails a strict build.
