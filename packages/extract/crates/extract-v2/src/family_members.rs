@@ -185,6 +185,11 @@ impl Member {
     }
 }
 
+/// Whether `binding` is a private spread wrapper that object members hold.
+fn is_held_wrapper(ff: &FileFacts, binding: &str) -> bool {
+    ff.spread_wrappers.get(binding).is_some_and(|wrapper| wrapper.held > 0)
+}
+
 /// An object's members once it is built. An open table may also hold
 /// members no write the analysis reads names.
 #[derive(Default)]
@@ -319,7 +324,7 @@ impl<'f> ObjectMembers<'f> {
     /// it.
     fn holds(&self, object: &Object, key: &str) -> Option<(String, String)> {
         let (module, wrapper) = self.member_binding(object, key)?;
-        let held = self.files.get(&module)?.spread_wrappers.get(&wrapper).is_some_and(|held| held.held > 0);
+        let held = is_held_wrapper(self.files.get(&module)?, &wrapper);
         held.then_some((module, wrapper))
     }
 
@@ -346,7 +351,7 @@ impl<'f> ObjectMembers<'f> {
         let Some(ff) = self.files.get(module) else { return Vec::new() };
         let held = |entry: &FacadeEntry| match entry {
             FacadeEntry::Member { binding: wrapper, member: None, .. }
-                if ff.spread_wrappers.get(wrapper).is_some_and(|held| held.held > 0) =>
+                if is_held_wrapper(ff, wrapper) =>
             {
                 Some((module.clone(), wrapper.clone()))
             }

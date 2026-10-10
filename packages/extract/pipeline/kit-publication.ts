@@ -163,11 +163,13 @@ function targetPattern(target: string): RegExp {
  * relative imports reach, must be in the package and among the files `npm
  * pack` publishes, and each bare package import a declared dependency.
  * Each line names the file, the import and the cause; none means the
- * published source is complete.
+ * published source is complete. With `artifactDir`, a build's artifact
+ * directory inside the package that `npm pack` would publish is a line too.
  */
 export function kitPublicationFailures(
   pkgRoot: string,
-  engine: ModuleSpecifierReader
+  engine: ModuleSpecifierReader,
+  artifactDir?: string
 ): string[] {
   let manifest: JsonValue;
   try {
@@ -291,6 +293,19 @@ export function kitPublicationFailures(
       if (isBuiltin(name) || name === ownName || declared.has(name)) continue;
       failures.push(
         `${rel(file)}: import '${specifier}' names the package ${name}, which package.json does not declare in dependencies, peerDependencies or optionalDependencies`
+      );
+    }
+  }
+  // A build writes its artifacts into the package, where npm publishes them
+  // unless `files`, `.npmignore` or `.gitignore` leaves them out.
+  const artifacts = artifactDir === undefined ? '' : rel(artifactDir);
+  if (artifacts !== '' && !outside(artifacts)) {
+    const shipped = [...publication.files].filter((file) =>
+      file.startsWith(`${artifacts}/`)
+    );
+    if (shipped.length > 0) {
+      failures.push(
+        `${artifacts}/: npm pack would publish this build-artifact directory (${shipped.length} files) — add "${artifacts}/" to .npmignore or .gitignore, or list the published files in package.json "files"`
       );
     }
   }
