@@ -8672,17 +8672,20 @@ mod tests {
     fn strict_token_misses_point_at_each_use() {
         let mut inputs = test_inputs();
         inputs.config.get_mut("p").unwrap().strict = Some(true);
+        // A spread both of whose branches write one value is one use.
         let source = "export const Box = ds.system({ space: true }).asElement('div');\n\
                       export const A = () => <Box p={16} />;\n\
-                      export const B = () => <Box m={8} p={16} />;\n";
+                      export const B = () => <Box m={8} p={16} />;\n\
+                      export const C = ({ c }) => <Box {...(c ? { p: 999 } : { p: 999 })} />;\n";
         let out = analyze(&[("a.tsx", source)], &inputs);
         let located: Vec<_> = out
             .diagnostics
             .iter()
             .filter(|d| d.code.as_deref() == Some(STRICT_TOKEN_MISS))
-            .map(|d| d.offset)
+            .map(|d| (d.offset, d.dropped.as_deref()))
             .collect();
-        let uses: Vec<_> = source.match_indices("p={16}").map(|(at, _)| Some(at as u32)).collect();
+        let mut uses: Vec<_> = source.match_indices("p={16}").map(|(at, _)| (Some(at as u32), Some("16"))).collect();
+        uses.push((source.find("{...(c").map(|at| at as u32), Some("999")));
         assert_eq!(located, uses, "{:#?}", out.diagnostics);
     }
 

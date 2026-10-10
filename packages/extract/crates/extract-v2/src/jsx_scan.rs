@@ -31,8 +31,8 @@ pub struct SystemPropUsage {
     pub uses: Vec<(u32, String)>,
 }
 
-/// Records a written value once per key, with the offset of every use that
-/// writes it.
+/// Records a written value once per key, with every use that writes it
+/// once: both branches of `{...(c ? { p: 1 } : { p: 1 })}` are one use.
 pub(crate) fn record_written(
     usages: &mut Vec<SystemPropUsage>,
     recorded: &mut rustc_hash::FxHashMap<String, usize>,
@@ -42,7 +42,10 @@ pub(crate) fn record_written(
 ) {
     match recorded.entry(key) {
         std::collections::hash_map::Entry::Occupied(index) => {
-            usages[*index.get()].uses.push((at, usage.binding));
+            let uses = &mut usages[*index.get()].uses;
+            if !uses.iter().any(|(written, binding)| *written == at && *binding == usage.binding) {
+                uses.push((at, usage.binding));
+            }
         }
         std::collections::hash_map::Entry::Vacant(slot) => {
             slot.insert(usages.len());
