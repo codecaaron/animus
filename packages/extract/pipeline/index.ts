@@ -62,6 +62,7 @@ export {
   extractSystemFilePackages,
   fileSideEffects,
   findPackageRoot,
+  kitSourceModuleSideEffects,
   firstOwners,
   importedKitDiagnostics,
   isExcludedPackageRelativePath,

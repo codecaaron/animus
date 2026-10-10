@@ -4,6 +4,7 @@ import {
   ENGINE_TRANSFORM_EXTENSIONS,
   isEngineTransformExtension,
   isPathWithinRoot,
+  kitSourceModuleSideEffects,
   readTsconfigAliasPairs,
 } from '@animus-ui/extract/pipeline';
 import {
@@ -29,6 +30,7 @@ import type { AnimusMode } from '@animus-ui/extract/pipeline';
 import type {
   ExternalIdResult,
   UnpluginBuildContext,
+  UnpluginContext,
   UnpluginFactory,
 } from 'unplugin';
 
@@ -167,9 +169,44 @@ export function transformWithEngine(
   return result.hasComponents ? result.code : null;
 }
 
+/** Whether a module under a discovered kit's source must stay
+ *  side-effectful, whatever the package's list says of its own path. */
+function keepsKitSourceEffects(
+  filePath: string,
+  state: Pick<HostState, 'externalPackageDirs'>
+): boolean {
+  return (
+    state.externalPackageDirs.some((dir) => isPathWithinRoot(dir, filePath)) &&
+    kitSourceModuleSideEffects(filePath) === true
+  );
+}
+
 function moduleFilePath(id: string): string {
   const query = id.indexOf('?');
   return query === -1 ? id : id.slice(0, query);
+}
+
+/** Whether a hook context is a Rollup-family one that resolves imports. */
+function canResolve(
+  context: UnpluginBuildContext & UnpluginContext
+): context is UnpluginBuildContext & UnpluginContext & RollupResolveContext {
+  return 'resolve' in context;
+}
+
+/** Marks the esbuild resolve that `esbuild.setup` makes for itself. */
+const KIT_SOURCE_RESOLVE = 'animus:kit-source-resolve';
+
+/** The slice of a Rollup-family plugin context that resolves an import. */
+interface RollupResolveContext {
+  resolve(
+    id: string,
+    importer: string,
+    options: { skipSelf: boolean }
+  ): Promise<{
+    id: string;
+    external?: boolean | 'absolute' | 'relative';
+    moduleSideEffects?: boolean | 'no-treeshake' | null;
+  } | null>;
 }
 
 interface EsbuildOptionsLike {
@@ -262,6 +299,12 @@ export const unpluginFactory: UnpluginFactory<
 
   const effectiveMode = (): AnimusMode =>
     resolveHostMode(options.mode, modeOracle);
+
+  /** Hosts whose `resolveId` result carries `moduleSideEffects`. */
+  const rollupLike =
+    meta.framework === 'rollup' ||
+    meta.framework === 'rolldown' ||
+    meta.framework === 'vite';
 
   const needsInlineDefine =
     meta.framework !== 'esbuild' &&
@@ -423,9 +466,37 @@ export const unpluginFactory: UnpluginFactory<
       registerWatchTargets(this);
     },
 
-    async resolveId(id) {
+    async resolveId(id, importer) {
       const virtual = resolveAnimusId(id);
       if (virtual !== null) return virtual;
+      if (id.startsWith('.') && importer !== undefined && rollupLike) {
+        await joinPipeline();
+      }
+      if (
+        id.startsWith('.') &&
+        importer !== undefined &&
+        rollupLike &&
+        state.externalPackageDirs.some((dir) =>
+          isPathWithinRoot(dir, moduleFilePath(importer))
+        )
+      ) {
+        // A kit module's import, which the package's list may misclassify.
+        // Under Rollup, Rolldown and Vite, unplugin calls `resolveId` with
+        // the bundler's own plugin context, which resolves.
+        if (!canResolve(this)) return null;
+        const resolved = await this.resolve(id, importer, { skipSelf: true });
+        if (
+          resolved === null ||
+          !keepsKitSourceEffects(moduleFilePath(resolved.id), state)
+        ) {
+          return null;
+        }
+        const kept: ExternalIdResult & { moduleSideEffects: boolean } = {
+          id: resolved.id,
+          moduleSideEffects: true,
+        };
+        return kept;
+      }
       if (
         id.startsWith('.') ||
         id.startsWith('/') ||
@@ -563,6 +634,32 @@ export const unpluginFactory: UnpluginFactory<
        *  redirect resolved here stays in the `file` namespace and carries the
        *  replaced entry's classification. */
       setup(build) {
+        // A kit module's relative import, which the package's list may
+        // misclassify; `pluginData` marks this hook's own resolve.
+        build.onResolve({ filter: /^\./ }, async (args) => {
+          if (args.pluginData === KIT_SOURCE_RESOLVE) return undefined;
+          await joinPipeline();
+          if (
+            !state.externalPackageDirs.some((dir) =>
+              isPathWithinRoot(dir, args.importer)
+            )
+          ) {
+            return undefined;
+          }
+          const resolved = await build.resolve(args.path, {
+            importer: args.importer,
+            resolveDir: args.resolveDir,
+            kind: args.kind,
+            pluginData: KIT_SOURCE_RESOLVE,
+          });
+          if (
+            resolved.errors.length > 0 ||
+            !keepsKitSourceEffects(resolved.path, state)
+          ) {
+            return undefined;
+          }
+          return { path: resolved.path, sideEffects: true };
+        });
         build.onResolve({ filter: /^[^./\0]/ }, async (args) => {
           if (args.path.startsWith('animus:')) return undefined;
           await joinPipeline();
@@ -588,12 +685,19 @@ export const unpluginFactory: UnpluginFactory<
   /** Rspack's resolve data carries no rule settings, so a module rule per
    *  classification marks each redirect target, read when it resolves. */
   function classifyRspackRedirects(compiler: RspackLikeCompiler): void {
-    const classified = (sideEffects: boolean) => (resource: string) =>
+    const redirected = (sideEffects: boolean, resource: string) =>
       [...state.kitRedirects].some(
         ([specifier, target]) =>
           target === resource &&
           state.kitSideEffects.get(specifier) === sideEffects
       );
+    // A kit source module the package's list may misclassify stays
+    // side-effectful unless it is a redirect target with its own class.
+    const classified = (sideEffects: boolean) => (resource: string) =>
+      redirected(sideEffects, resource) ||
+      (sideEffects &&
+        !redirected(false, resource) &&
+        keepsKitSourceEffects(resource, state));
     compiler.options.module.rules.push(
       { test: classified(true), sideEffects: true },
       { test: classified(false), sideEffects: false }
@@ -608,15 +712,18 @@ export const unpluginFactory: UnpluginFactory<
     compiler.hooks.normalModuleFactory.tap(PLUGIN_NAME, (nmf) => {
       nmf.hooks.afterResolve.tap(PLUGIN_NAME, (resolveData) => {
         const { createData } = resolveData;
+        if (!createData?.settings || createData.resource === undefined) return;
         const sideEffects = state.kitSideEffects.get(resolveData.request);
         if (
-          sideEffects === undefined ||
-          !createData?.settings ||
-          createData.resource !== state.kitRedirects.get(resolveData.request)
+          sideEffects !== undefined &&
+          createData.resource === state.kitRedirects.get(resolveData.request)
         ) {
-          return;
+          createData.settings.sideEffects = sideEffects;
+        } else if (
+          keepsKitSourceEffects(moduleFilePath(createData.resource), state)
+        ) {
+          createData.settings.sideEffects = true;
         }
-        createData.settings.sideEffects = sideEffects;
       });
     });
   }

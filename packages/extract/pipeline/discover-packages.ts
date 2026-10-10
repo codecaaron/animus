@@ -264,6 +264,33 @@ export function fileSideEffects(absFile: string): boolean | undefined {
   return matchesSideEffects(field, pkgRoot, [absFile]);
 }
 
+/** Whether a `sideEffects` glob can name a code file: a last segment with
+ *  no extension can name any file, and an extension with glob syntax or of
+ *  a script can name code; `*.css` cannot. */
+function globNamesCode(glob: string): boolean {
+  const last = glob.split('/').at(-1) ?? '';
+  const dot = last.lastIndexOf('.');
+  if (dot === -1) return true;
+  const extension = last.slice(dot + 1);
+  return /[*?{[]/.test(extension) || /^[cm]?[jt]sx?$/.test(extension);
+}
+
+/**
+ * True when a source module of the package that owns `absFile` must stay
+ * side-effectful: its `sideEffects` list names shipped code, and no proven
+ * map takes a shipped file to its source module, so a bundler that reads
+ * the list against the source path can drop a listed effect. Undefined
+ * leaves the bundler's own reading, which no list naming code can mislead.
+ */
+export function kitSourceModuleSideEffects(absFile: string): true | undefined {
+  const manifest = readPackageManifest(findPackageRoot(absFile));
+  const field = isJsonBlock(manifest) ? manifest.sideEffects : undefined;
+  if (!Array.isArray(field)) return undefined;
+  return field.some((glob) => isJsonString(glob) && globNamesCode(glob))
+    ? true
+    : undefined;
+}
+
 function matchesSideEffects(
   globs: readonly RegExp[],
   pkgRoot: string,

@@ -1,6 +1,8 @@
 import {
   assertKnownOptionKeys,
   assertNoRetiredEngineSelection,
+  isPathWithinRoot,
+  kitSourceModuleSideEffects,
   resolveMode,
   sourceKitDependencies,
 } from '@animus-ui/extract/pipeline';
@@ -214,8 +216,28 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
       );
     },
 
-    resolveId(id) {
-      return resolveVirtualId(ctx, id);
+    async resolveId(id, importer) {
+      const virtual = resolveVirtualId(ctx, id);
+      if (virtual !== null || !id.startsWith('.') || importer === undefined) {
+        return virtual;
+      }
+      // A kit module's import, which the package's list may misclassify.
+      const importerPath = importer.split('?')[0];
+      if (
+        !ctx.externalPackageDirs.some((dir) =>
+          isPathWithinRoot(dir, importerPath)
+        )
+      ) {
+        return null;
+      }
+      const resolved = await this.resolve(id, importer, { skipSelf: true });
+      if (
+        resolved === null ||
+        kitSourceModuleSideEffects(resolved.id.split('?')[0]) !== true
+      ) {
+        return null;
+      }
+      return { ...resolved, moduleSideEffects: true };
     },
 
     load(id) {
