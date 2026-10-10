@@ -2884,7 +2884,7 @@ impl<'a, 's> Visit<'a> for FactCollector<'a, 's> {
                     member,
                     identity_uncertain,
                     props: create_element_props(call.arguments.get(1)),
-                    literals: create_element_literals(call.arguments.get(1)),
+                    literals: create_element_literals(call.arguments.get(1), self.origins),
                     clone: false,
                     at: call.span.start,
                     origin: self.origins.zip(root).map(|(scoping, root)| tag_origin(scoping, root)),
@@ -3297,7 +3297,7 @@ fn evaluate_with_statics(
 /// Whether `expression` is an explicit `undefined`: `void 0`, or the global
 /// `undefined`, which no binding shadows. Without scoping a reference cannot
 /// be told from a shadowing binding, so it is not one.
-fn is_absent(expression: &Expression<'_>, scoping: Option<&Scoping>) -> bool {
+pub(crate) fn is_absent(expression: &Expression<'_>, scoping: Option<&Scoping>) -> bool {
     let shadowed = match crate::chain_walk::unwrap_type_assertions(expression) {
         Expression::Identifier(ident) => !scoping.is_some_and(|scoping| {
             ident.reference_id.get().is_some_and(|reference| scoping.get_reference(reference).symbol_id().is_none())

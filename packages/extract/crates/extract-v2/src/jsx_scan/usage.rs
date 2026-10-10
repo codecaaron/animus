@@ -12,7 +12,7 @@ use oxc::ast::ast::{
 };
 use oxc::ast_visit::Visit;
 
-use super::value_eval::{eval_jsx_attribute_value, eval_static_expression};
+use super::value_eval::{eval_jsx_attribute_value, eval_property_key, eval_static_expression};
 use super::{DynamicPropUsage, PropValueResult, SystemPropUsage, UsageResidueSite};
 
 #[derive(Debug, Clone, Default)]
@@ -322,7 +322,7 @@ impl<'a, 'b> Visit<'a> for UsageScanner<'a, 'b> {
 
                 if let Some(binding) = resolved {
                     if let Some(props) = self.component_props.get(&binding) {
-                        for (prop_name, value) in create_element_literals(call.arguments.get(1)) {
+                        for (prop_name, value) in create_element_literals(call.arguments.get(1), None) {
                             if !props.contains(&prop_name) {
                                 continue;
                             }
@@ -403,10 +403,14 @@ impl<'a, 'b> Visit<'a> for UsageScanner<'a, 'b> {
 /// nothing; `None` means the argument can deliver unknown props (an
 /// expression, a spread, or a computed key).
 pub(crate) fn create_element_props(argument: Option<&Argument<'_>>) -> Option<Vec<(String, String)>> {
-    match argument {
-        None | Some(Argument::NullLiteral(_)) => Some(Vec::new()),
-        Some(Argument::Identifier(id)) if id.name == "undefined" => Some(Vec::new()),
-        Some(Argument::ObjectExpression(object)) => object
+    let Some(argument) = argument else {
+        return Some(Vec::new());
+    };
+    // Parentheses and type-only wrappers leave the value as it is.
+    match crate::chain_walk::unwrap_type_assertions(argument.as_expression()?) {
+        Expression::NullLiteral(_) => Some(Vec::new()),
+        Expression::Identifier(id) if id.name == "undefined" => Some(Vec::new()),
+        Expression::ObjectExpression(object) => object
             .properties
             .iter()
             .map(|property| {
@@ -421,17 +425,44 @@ pub(crate) fn create_element_props(argument: Option<&Argument<'_>>) -> Option<Ve
                 Some((key.to_string(), class))
             })
             .collect(),
-        Some(_) => None,
+        _ => None,
     }
 }
 
 /// The literal values a `createElement` props object writes: a string,
 /// number or object of them, with nullish breakpoints left out as at
-/// runtime. A spread or computed key leaves the object unread.
-pub(crate) fn create_element_literals(argument: Option<&Argument<'_>>) -> Vec<(String, serde_json::Value)> {
-    use oxc::ast::ast::ObjectPropertyKind;
-    let Some(Argument::ObjectExpression(object)) = argument else {
+/// runtime. A spread or computed key leaves the object unread. `origins`
+/// tells the global `undefined` from a shadowing binding.
+pub(crate) fn create_element_literals(
+    argument: Option<&Argument<'_>>,
+    origins: Option<&oxc::semantic::Scoping>,
+) -> Vec<(String, serde_json::Value)> {
+    use oxc::ast::ast::{ObjectPropertyKind, PropertyKind};
+    let Some(Expression::ObjectExpression(object)) =
+        argument.and_then(Argument::as_expression).map(crate::chain_walk::unwrap_type_assertions)
+    else {
         return Vec::new();
+    };
+    let nullish = |value: &Expression<'_>| {
+        matches!(crate::chain_walk::unwrap_type_assertions(value), Expression::NullLiteral(_))
+            || crate::usage_facts::is_absent(value, origins)
+    };
+    // A breakpoint set to nothing is left out before the rest is read.
+    let evaluate = |value: &Expression<'_>| match crate::chain_walk::unwrap_type_assertions(value) {
+        Expression::ObjectExpression(entries) => {
+            let mut map = serde_json::Map::new();
+            for entry in &entries.properties {
+                let ObjectPropertyKind::ObjectProperty(entry) = entry else { return None };
+                if entry.kind != PropertyKind::Init || entry.computed {
+                    return None;
+                }
+                if !nullish(&entry.value) {
+                    map.insert(eval_property_key(&entry.key)?, eval_static_expression(&entry.value)?);
+                }
+            }
+            Some(serde_json::Value::Object(map))
+        }
+        value => eval_static_expression(value),
     };
     if object.properties.iter().any(|property| !matches!(property, ObjectPropertyKind::ObjectProperty(p) if !p.computed)) {
         return Vec::new();
@@ -442,7 +473,7 @@ pub(crate) fn create_element_literals(argument: Option<&Argument<'_>>) -> Vec<(S
         .filter_map(|property| {
             let ObjectPropertyKind::ObjectProperty(p) = property else { return None };
             let key = p.key.static_name()?.to_string();
-            let mut value = eval_static_expression(&p.value)?;
+            let mut value = evaluate(&p.value)?;
             if let serde_json::Value::Object(entries) = &mut value {
                 entries.retain(|_, entry| !entry.is_null());
                 if entries.is_empty() {

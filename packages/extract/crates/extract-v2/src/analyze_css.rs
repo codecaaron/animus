@@ -3116,12 +3116,16 @@ fn untracked_clone_props(file: &str, ff: &FileFacts) -> Vec<CssDiagnostic> {
 }
 
 /// One warning per `createElement` call on an extracted component (one
-/// `renders` names) whose props usage cannot read.
+/// `renders` names, through a module-scope binding: a parameter or local of
+/// the same name is another value) whose props usage cannot read.
 fn unread_create_element_props(file: &str, ff: &FileFacts, renders: impl Fn(&UsageFact) -> bool) -> Vec<CssDiagnostic> {
     ff.usage_for_analysis()
         .iter()
         .filter_map(|fact| match fact {
-            UsageFact::CreateElement { ident, member, props: None, clone: false, at, .. } if renders(fact) => {
+            UsageFact::CreateElement { ident, member, props: None, clone: false, at, origin, .. }
+                if matches!(origin, Some(crate::usage_facts::TagOrigin::Import | crate::usage_facts::TagOrigin::TopLevel))
+                    && renders(fact) =>
+            {
                 let component = ident.as_deref().or(member.as_deref()).unwrap_or_default();
                 Some(
                     diagnostic(
@@ -8194,7 +8198,9 @@ export const App = ({ n }) => <Box bgImage={n} texture={n} />;
 
     /// A direct `createElement` call on an extracted component records the
     /// literal system props JSX records for the same element, so they take
-    /// static classes; props usage cannot read get a coded warning.
+    /// static classes, through parentheses and type-only wrappers and past an
+    /// absent breakpoint; props usage cannot read get a coded warning, never
+    /// a parameter that shares the component's name.
     #[test]
     fn create_element_records_literal_system_props_as_jsx_does() {
         let kit = "export const Box = ds.system({ space: true }).asElement('div');\n";
@@ -8210,6 +8216,10 @@ export const App = ({ n }) => <Box bgImage={n} texture={n} />;
             ("createElement(Box, { p: 8 })", "<Box p={8} />"),
             ("createElement(Box, { p: { _: 8, sm: 16 } })", "<Box p={{ _: 8, sm: 16 }} />"),
             ("React.createElement(Box, { p: 8, id: 'a' })", "<Box p={8} id=\"a\" />"),
+            ("createElement(Box, { p: { _: 8, md: undefined, sm: 16 } })", "<Box p={{ _: 8, md: undefined, sm: 16 }} />"),
+            ("createElement(Box, ({ p: 8 }))", "<Box p={8} />"),
+            ("createElement(Box, ({ p: 8 } as const))", "<Box p={8} />"),
+            ("createElement(Box, ({ p: 8 } satisfies Record<string, number>))", "<Box p={8} />"),
         ] {
             let by_call = analyzed(&format!("export const App = () => {call};\n"));
             let by_jsx = analyzed(&format!("export const App = () => {jsx};\n"));
@@ -8221,6 +8231,8 @@ export const App = ({ n }) => <Box bgImage={n} texture={n} />;
             let out = analyzed(&format!("export const App = (props) => {call};\n"));
             assert_eq!(unread(&out), 1, "{call}");
         }
+        let shadowed = analyzed("export const App = ({ Box, props }) => createElement(Box, props);\n");
+        assert_eq!(unread(&shadowed), 0);
     }
 
     #[test]
