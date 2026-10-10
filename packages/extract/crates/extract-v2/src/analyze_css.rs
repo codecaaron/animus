@@ -1159,26 +1159,32 @@ fn keys_share_property(
     inheritors: &[&str],
 ) -> CssDiagnostic {
     use crate::theme::CascadeRule;
-    // A longhand after its shorthand is a deliberate override; keys on equal
-    // properties set one property twice.
-    let why = match rule {
-        CascadeRule::LonghandAfterShorthand => "a longhand follows its shorthand in any key order",
-        CascadeRule::AuthoredOrder => "the later key wins — remove the key you do not mean",
-        CascadeRule::PropRank => "the extractor orders it after the other — remove the key you do not mean",
-    };
     let inherited = match inheritors {
         [] => String::new(),
         [one] => format!(", here and in {one}, which inherits it"),
         _ => format!(", here and in {}, which inherit it", inheritors.join(", ")),
     };
+    let message = match rule {
+        CascadeRule::AuthoredOrder => format!(
+            "style keys '{overridden}' and '{winner}' both set {property}, so '{overridden}' has no effect: \
+             '{winner}', the later key, takes effect{inherited} — remove one"
+        ),
+        CascadeRule::PropRank => format!(
+            "style keys '{overridden}' and '{winner}' both set {property}, so '{overridden}' has no effect: \
+             '{winner}' takes effect{inherited}, since a raw CSS property applies after the system's props \
+             — remove one"
+        ),
+        CascadeRule::LonghandBeforeShorthand => format!(
+            "style key '{winner}' comes before '{overridden}', which also sets {property}: in plain CSS \
+             '{overridden}' would reset it, but a longhand applies after its shorthand, so '{winner}' \
+             takes effect{inherited}"
+        ),
+    };
     diagnostic(
         file,
         component,
         "warn",
-        format!(
-            "style keys '{overridden}' and '{winner}' both set {property}, and only '{winner}' takes effect there{inherited}: \
-             {why}"
-        ),
+        message,
         Some(crate::theme::KEYS_SHARE_PROPERTY),
     )
 }
@@ -7447,8 +7453,11 @@ export const App = ({ n }) => <Box bgImage={n} texture={n} />;
         assert!(!out.components["a.tsx::Box"].replacement.contains("animus-asset:"));
     }
 
-    /// Two keys of one block on one CSS property at one condition warn once,
-    /// naming the one that takes effect; the cascade rule is unchanged.
+    /// Two keys of one block on one CSS property at one condition warn when
+    /// one has no effect or a longhand is written before its shorthand,
+    /// naming the one that takes effect; a shorthand followed by its
+    /// longhand is the override idiom and stays quiet. The cascade rule is
+    /// unchanged.
     #[test]
     fn two_keys_on_one_property_warn_naming_the_one_that_takes_effect() {
         let mut inputs = CssInputs::from_json(
@@ -7470,7 +7479,7 @@ export const App = ({ n }) => <Box bgImage={n} texture={n} />;
         .unwrap();
         inputs.theme.insert("breakpoints.sm".into(), "480".into());
         let source = "export const Box = ds.styles({ padding: '1px', p: '2px', '&:hover': { marginTop: '3px', m: '4px' } }).asElement('div');\n\
-             export const Quiet = ds.styles({ p: { sm: '8px' }, padding: '1px', '&:focus': { paddingTop: '2px' } }).asElement('span');\n\
+             export const Quiet = ds.styles({ p: { sm: '8px' }, padding: '1px', margin: '1px', marginTop: '2px', '&:focus': { paddingTop: '2px' } }).asElement('span');\n\
              export const App = () => <><Box /><Quiet /></>;\n";
         let out = analyze(&[("a.tsx", source)], &inputs);
         let warnings: Vec<(&str, &str)> = out
@@ -7484,13 +7493,13 @@ export const App = ({ n }) => <Box bgImage={n} texture={n} />;
             [
                 (
                     "Box",
-                    "style keys 'padding' and 'p' both set padding, and only 'p' takes effect there: the later key \
-                     wins — remove the key you do not mean"
+                    "style keys 'padding' and 'p' both set padding, so 'padding' has no effect: 'p', the later \
+                     key, takes effect — remove one"
                 ),
                 (
                     "Box",
-                    "style keys 'm' and 'marginTop' both set margin-top, and only 'marginTop' takes effect there: \
-                     a longhand follows its shorthand in any key order"
+                    "style key 'marginTop' comes before 'm', which also sets margin-top: in plain CSS 'm' would \
+                     reset it, but a longhand applies after its shorthand, so 'marginTop' takes effect"
                 ),
             ]
         );

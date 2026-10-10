@@ -77,8 +77,12 @@ fn entry_conditions<'a>(value: &'a Value, ctx: &ResolveContext) -> FxHashSet<&'a
     }
 }
 
-/// Reports each two keys of one block, in cascade order, that set one CSS
-/// property at one condition: only the later takes effect there.
+/// Reports two keys of one block, in cascade order, that set one CSS
+/// property at one condition when the result is surprising: one key sets
+/// exactly what the other does, so it has no effect, or a longhand is
+/// written before the shorthand that covers it, which plain CSS would let
+/// reset it. A shorthand followed by its longhand is the override idiom:
+/// both contribute as CSS order says, and nothing is reported.
 fn record_shared_properties(obj: &Map<String, Value>, entries: &[(&String, &Value)], ctx: &ResolveContext) {
     if ctx.dropped_keys.is_none() {
         return;
@@ -108,14 +112,12 @@ fn record_shared_properties(obj: &Map<String, Value>, entries: &[(&String, &Valu
                 .chain(earlier_properties)
                 .find(|property| shared.contains(&property.as_str()))
                 .map_or_else(|| first_shared.to_string(), String::clone);
-            let rule = if earlier_resets.len() > later_resets.len() && earlier_resets.is_superset(&later_resets) {
-                CascadeRule::LonghandAfterShorthand
-            } else if prop_cascade_tier(earlier, ctx.config) == prop_cascade_tier(later, ctx.config)
-                && authored(earlier) < authored(later)
-            {
-                CascadeRule::AuthoredOrder
+            let rule = if earlier_resets == later_resets {
+                if authored(earlier) < authored(later) { CascadeRule::AuthoredOrder } else { CascadeRule::PropRank }
+            } else if earlier_resets.is_superset(&later_resets) && authored(later) < authored(earlier) {
+                CascadeRule::LonghandBeforeShorthand
             } else {
-                CascadeRule::PropRank
+                continue;
             };
             record_dropped_key(
                 ctx,
@@ -324,21 +326,24 @@ pub enum DroppedStyleKey {
     NonResponsiveObject(String),
     /// Any other key, such as an HTML element name written without `&`.
     UnrecognizedKey(String),
-    /// Two keys of one block set `property` at one condition, and only
-    /// `winner`, the later in cascade order, takes effect there.
+    /// Two keys of one block set `property` at one condition with a result
+    /// worth knowing, and only `winner`, the later in cascade order, takes
+    /// effect there.
     SharedProperty { overridden: String, winner: String, property: String, rule: CascadeRule },
 }
 
 /// Why the later of two keys on one property follows the other.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum CascadeRule {
-    /// The winner is a longhand of the other's shorthand.
-    LonghandAfterShorthand,
-    /// The keys rank alike, so authored order decides.
+    /// Both keys set the same properties and rank alike: the later authored
+    /// wins, and the other has no effect.
     AuthoredOrder,
-    /// The winner ranks later: a raw CSS property after the system's props,
-    /// or a single-property prop after a multi-property one.
+    /// Both keys set the same properties, and a raw CSS property follows the
+    /// system's props: the other has no effect.
     PropRank,
+    /// A longhand written before its shorthand: plain CSS would let the
+    /// shorthand reset it, but the longhand follows its shorthand.
+    LonghandBeforeShorthand,
 }
 
 impl DroppedStyleKey {
