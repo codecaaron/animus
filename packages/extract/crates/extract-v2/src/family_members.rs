@@ -294,18 +294,14 @@ impl<'f> ObjectMembers<'f> {
     /// key, nothing later sets the key, and nothing may have changed the
     /// object since.
     pub(crate) fn held_wrapper(&mut self, file: &str, tag: &str) -> Option<(String, String)> {
-        let (path, key) = tag.rsplit_once('.')?;
-        let object = self.object_at(file, path)?;
-        let held = self.holds(&object, key)?;
-        if self.table(&object).open || self.instability(&object).is_some() {
-            return None;
-        }
-        Some(held)
+        let (module, wrapper, None) = self.member_entry(file, tag)? else { return None };
+        is_held_wrapper(self.files.get(&module)?, &wrapper).then_some((module, wrapper))
     }
 
-    /// The binding `object` holds at `key`, with the module that names it,
-    /// as its last write of the key set it.
-    fn member_binding(&self, object: &Object, key: &str) -> Option<(String, String)> {
+    /// What `object` holds at `key`, as its last write of the key set it: the
+    /// module that names the value, the binding, and the member read from it
+    /// (`Trigger: ArkMenu.Trigger`).
+    fn member_read(&self, object: &Object, key: &str) -> Option<(String, String, Option<String>)> {
         let Object::Facade(module, binding) = object else { return None };
         let last = self.files.get(module)?.facades.get(binding)?.iter().rev().find(|entry| match entry {
             FacadeEntry::Member { key: set, .. }
@@ -315,7 +311,16 @@ impl<'f> ObjectMembers<'f> {
             FacadeEntry::Copy(_) | FacadeEntry::Unknown | FacadeEntry::Code(None) => true,
         })?;
         match last {
-            FacadeEntry::Member { binding, member: None, .. } => Some((module.clone(), binding.clone())),
+            FacadeEntry::Member { binding, member, .. } => Some((module.clone(), binding.clone(), member.clone())),
+            _ => None,
+        }
+    }
+
+    /// The binding `object` holds at `key` as a whole, with the module that
+    /// names it.
+    fn member_binding(&self, object: &Object, key: &str) -> Option<(String, String)> {
+        match self.member_read(object, key)? {
+            (module, binding, None) => Some((module, binding)),
             _ => None,
         }
     }
@@ -334,12 +339,7 @@ impl<'f> ObjectMembers<'f> {
     /// names it, through an import too, and nothing may have changed the
     /// object since.
     pub(crate) fn ordinary_member(&mut self, file: &str, tag: &str) -> Option<(String, String)> {
-        let (path, key) = tag.rsplit_once('.')?;
-        let object = self.object_at(file, path)?;
-        let (module, binding) = self.member_binding(&object, key)?;
-        if self.table(&object).open || self.instability(&object).is_some() {
-            return None;
-        }
+        let (module, binding, None) = self.member_entry(file, tag)? else { return None };
         let ff = self.files.get(&module)?;
         let (declaring, declared, _) = resolve_declaration(&module, ff, &binding, self.files, self.inputs)?;
         self.files.get(&declaring)?.ordinary_components.contains(&declared).then_some((declaring, declared))
@@ -408,6 +408,20 @@ impl<'f> ObjectMembers<'f> {
             }
         }
         found
+    }
+
+    /// What `tag`, written in `file`, reads from an object nothing may have
+    /// changed since it was built: the module naming the value, the binding
+    /// the object's last write of the key names, and the member read from it
+    /// (`Trigger: ArkMenu.Trigger`).
+    pub(crate) fn member_entry(&mut self, file: &str, tag: &str) -> Option<(String, String, Option<String>)> {
+        let (path, key) = tag.rsplit_once('.')?;
+        let object = self.object_at(file, path)?;
+        let entry = self.member_read(&object, key)?;
+        if self.table(&object).open || self.instability(&object).is_some() {
+            return None;
+        }
+        Some(entry)
     }
 
     /// The components an escaping `name` hands over: every member of the
