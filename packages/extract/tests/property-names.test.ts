@@ -201,19 +201,20 @@ describe('system load under a prefix', () => {
     expect(artifacts(load(undefined, true))).toEqual(legacy.unprefixed);
     expect(load().contextualProperties).toEqual(['--tone']);
 
-    // Intended change: with a prefix and without the option, a contextual
+    // Intended changes: with a prefix and without the option, a contextual
     // variable keeps its declared name wherever it is defined, registered or
-    // read. Fallback output keeps its recorded form.
+    // read, and a theme variable inside a `var()` fallback takes the prefix
+    // (`--acme-color-ink` read the dead `--color-red`). Other fallback output
+    // keeps its recorded form.
     const prefixed = artifacts(load('acme'));
     expect(prefixed.declarationScalesJson).toBe(
       legacy.prefixed.declarationScalesJson
     );
     expect(prefixed.variableMapJson).toBe(legacy.prefixed.variableMapJson);
     expect(prefixed.variableCss).toBe(
-      legacy.prefixed.variableCss.replace(
-        '@property --acme-tone',
-        '@property --tone'
-      )
+      legacy.prefixed.variableCss
+        .replace('@property --acme-tone', '@property --tone')
+        .replace('var(--color-red, black)', 'var(--acme-color-red, black)')
     );
     expect(prefixed.scalesJson).toBe(
       legacy.prefixed.scalesJson.replace('var(--acme-tone)', 'var(--tone)')

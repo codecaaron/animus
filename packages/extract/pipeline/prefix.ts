@@ -6,38 +6,35 @@ export interface PrefixedSystemArtifacts {
   variableCss: string;
   themeJson?: string;
   contextualVarsJson?: string;
-}
-
-/** Prefix variable references without changing their matching rules. A
- *  contextual variable in `keep` keeps its declared name. */
-export function prefixVariableReferences(
-  prefix: string,
-  value: string,
-  keep: ReadonlySet<string> = new Set()
-): string {
-  if (!prefix) return value;
-  return value.replace(/var\(--([a-zA-Z][\w-]*)\)/g, (whole, name: string) =>
-    keep.has(name) ? whole : `var(--${prefix}-${name})`
-  );
+  declarationScalesJson?: string;
 }
 
 /**
- * The prefix without `prefixContextualVars`: every name Animus generates
- * (the theme's token variables) takes `--${prefix}-`, and each declared
- * contextual variable keeps its declared name wherever it is defined,
- * registered or read, as authors write it.
+ * The prefix without `prefixContextualVars`: every name Animus generates (a
+ * variable the theme's map or variable CSS defines) takes `--${prefix}-`
+ * wherever it is defined, registered or read, `var()` fallbacks at any depth
+ * included. Every other name stays as written: each declared contextual
+ * variable, and any custom property an author writes.
  */
 export function applyPrefix(
   prefix: string,
   variableMapJson: string,
   variableCss: string,
   themeJson?: string,
-  contextualVarsJson?: string
+  contextualVarsJson?: string,
+  declarationScalesJson?: string
 ): PrefixedSystemArtifacts {
-  if (!prefix)
-    return { variableMapJson, variableCss, themeJson, contextualVarsJson };
+  if (!prefix) {
+    return {
+      variableMapJson,
+      variableCss,
+      themeJson,
+      contextualVarsJson,
+      declarationScalesJson,
+    };
+  }
 
-  const keep = new Set(
+  const contextual = new Set(
     contextualVarsJson
       ? Object.values(
           parseInternalWire<Record<string, string[]>>(
@@ -47,37 +44,33 @@ export function applyPrefix(
         ).flat()
       : []
   );
-  const rename = (name: string) =>
-    keep.has(name) ? name : `${prefix}-${name}`;
-
-  const map: Record<string, string> = JSON.parse(variableMapJson);
-  const prefixed: Record<string, string> = {};
-  for (const [key, varName] of Object.entries(map)) {
-    prefixed[key] = varName.startsWith('--')
-      ? `--${rename(varName.slice(2))}`
-      : varName;
-  }
-
-  let css = variableCss;
-  css = css.replace(
-    /--([a-zA-Z][\w-]*)\s*:/g,
-    (_whole, name: string) => `--${rename(name)}:`
+  const variableMap = parseInternalWire<Record<string, string>>(
+    variableMapJson,
+    "variableMapJson (the theme's token variables)"
   );
-  css = prefixVariableReferences(prefix, css, keep);
-  css = css.replace(
-    /@property(\s+)--([a-zA-Z][\w-]*)/g,
-    (_whole, space: string, name: string) =>
-      `@property${space}--${rename(name)}`
-  );
+  const generated = [
+    ...Object.values(variableMap).map((name) => name.replace(/^--/, '')),
+    ...[...variableCss.matchAll(THEME_DEFINITION)].map((m) => m[1]),
+  ].filter((name) => !contextual.has(name));
+  const names = createPropertyNames([], prefix, generated);
+  const rename = (value: string) => renameCustomProperties(value, names);
 
   const result: PrefixedSystemArtifacts = {
-    variableMapJson: JSON.stringify(prefixed),
-    variableCss: css,
+    variableMapJson: JSON.stringify(
+      Object.fromEntries(
+        Object.entries(variableMap).map(([key, name]) => [key, rename(name)])
+      )
+    ),
+    variableCss: rename(variableCss),
   };
-  if (themeJson) {
-    result.themeJson = prefixVariableReferences(prefix, themeJson, keep);
-  }
+  if (themeJson) result.themeJson = renameTokenValues(themeJson, rename);
   if (contextualVarsJson) result.contextualVarsJson = contextualVarsJson;
+  if (declarationScalesJson) {
+    result.declarationScalesJson = renameDeclarationRecords(
+      declarationScalesJson,
+      rename
+    );
+  }
   return result;
 }
 

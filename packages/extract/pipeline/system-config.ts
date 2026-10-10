@@ -1,9 +1,5 @@
 import { parseInternalWire } from './internal-wire';
-import {
-  applyPrefix,
-  applyPropertyNames,
-  prefixVariableReferences,
-} from './prefix';
+import { applyPrefix, applyPropertyNames } from './prefix';
 import { splitInvalidPropertyRegistrations } from './property-registrations';
 
 import type { PrefixNameConflict } from './prefix';
@@ -112,18 +108,15 @@ export function loadSystemConfig(
       variableMapJson,
       variableCss,
       scalesJson,
-      contextualVarsJson || undefined
+      contextualVarsJson || undefined,
+      declarationScalesJson || undefined
     );
     variableMapJson = prefixed.variableMapJson;
     variableCss = prefixed.variableCss;
     if (prefixed.themeJson) scalesJson = prefixed.themeJson;
     // Records hold resolved `var()` references, rewritten like scale values.
-    if (declarationScalesJson) {
-      declarationScalesJson = prefixVariableReferences(
-        opts.prefix,
-        declarationScalesJson,
-        new Set(declaredNames)
-      );
+    if (prefixed.declarationScalesJson) {
+      declarationScalesJson = prefixed.declarationScalesJson;
     }
   }
 

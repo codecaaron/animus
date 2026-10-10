@@ -42,6 +42,7 @@ const theme = createTheme()
   .addBreakpoints({ sm: 768 })
   .addColors({ red: '#f00', blue: '#00f' })
   .addScale({ name: 'sizes', values: { dialog: '40rem' } })
+  .addScale({ name: 'space', values: { 't-spacing-2': '8px' }, emit: true })
   .declareContextualVars(
     { colors: ['tone'], sizes: ['cap'] },
     {
@@ -65,6 +66,7 @@ export const Card = ds
     '--tone': 'red',
     '--edge': 'var(--tone, var(--cap, 1px))',
     '--other': 'var(--other, 2px)',
+    marginTop: 'var(--dialog-title-margin, {space.t-spacing-2})',
     transition: '--tone 1s',
     '@container style(--tone: dark)': { '--cap': '2px' },
   })
@@ -160,6 +162,9 @@ describe('contextual variables under a prefix', () => {
       'style(--tone: dark)',
       '--cap: 2px',
       '--cap: 40rem',
+      // An authored name keeps its spelling; the theme variable in its
+      // fallback takes the prefix.
+      'margin-top: var(--dialog-title-margin, var(--acme-space-t-spacing-2))',
     ]) {
       expect(result.componentCss).toContain(expected);
     }
