@@ -59,6 +59,12 @@ export interface EngineOptions {
    * without `--`: authored component styles take the final names.
    */
   generatedNamesJson?: string
+  /**
+   * The theme's property records (`name`, `syntax`, `registered`, …): a
+   * prop that writes only properties registered with a numeric syntax
+   * takes a number without a unit.
+   */
+  propertyRecordsJson?: string
 }
 
 /** Probe identity: proves the binary loads and its oxc linkage parses. */

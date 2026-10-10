@@ -138,6 +138,9 @@ export function buildAnalysisInputs(
   if (opts.system.generatedNamesJson) {
     inputs.generatedNamesJson = opts.system.generatedNamesJson;
   }
+  if (opts.system.propertyRecordsJson) {
+    inputs.propertyRecordsJson = opts.system.propertyRecordsJson;
+  }
   // Present only when the host knows something, for the same reason.
   const context = opts.analysisContext;
   if (

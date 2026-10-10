@@ -259,6 +259,9 @@ pub(super) fn build_config(
             if !meta.keywords.is_empty() {
                 fields.insert("keywords", json!(meta.keywords));
             }
+            if meta.declared_numeric {
+                fields.insert("declaredNumeric", json!(true));
+            }
             if let Some(ref fn_src) = meta.transform_fn_source {
                 fields.insert("transform", Field::Script(fn_src.clone()));
             } else if let Some(ref tn) = meta.transform_name {
@@ -351,6 +354,7 @@ mod tests {
             scale_values: BTreeMap::new(),
             current_var: None,
             production_conditions: None,
+            declared_numeric: false,
         }
     }
 
