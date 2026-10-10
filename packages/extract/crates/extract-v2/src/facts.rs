@@ -421,6 +421,11 @@ pub struct FileFacts {
     /// identity does not follow them.
     #[serde(skip)]
     pub assigned_aliases: BTreeMap<String, String>,
+    /// Top-level `const X = Object.assign(T, …)` facades whose target `T` is
+    /// a binding or a member path of one (`Root`, `Fam.Root`): X → T. X is
+    /// T itself, with the sources' members written onto it.
+    #[serde(skip)]
+    pub(crate) assigned_targets: BTreeMap<String, String>,
     /// Top-level function components that spread their props into a tag.
     #[serde(skip)]
     pub props_forwarding: BTreeMap<String, crate::usage_facts::PropsForwarding>,
@@ -668,6 +673,7 @@ fn expression_root(expr: &Expression<'_>) -> Option<String> {
 struct ConstInitializerFacts {
     aliases: BTreeMap<String, String>,
     assigned: BTreeMap<String, String>,
+    targets: BTreeMap<String, String>,
     roots: BTreeMap<String, String>,
     objects: BTreeMap<String, BTreeMap<String, String>>,
     facades: BTreeMap<String, Vec<FacadeEntry>>,
@@ -686,9 +692,11 @@ pub(crate) enum FacadeEntry {
         binding: String,
         member: Option<String>,
     },
-    /// `key` set to a value no binding names: a literal, a call, a later
-    /// `X.key = …`.
+    /// `key` set to a value no binding names: a literal or a call.
     Other(String),
+    /// A later top-level `X.key = …`, on `line`: the member holds whatever
+    /// it sets.
+    Written { key: String, line: usize },
     /// A method, accessor or function value, by key when it has a static
     /// one: it runs with the object as `this` and can change its members.
     Code(Option<String>),
@@ -708,7 +716,7 @@ fn sets_prototype(p: &oxc::ast::ast::ObjectProperty<'_>) -> bool {
 /// …)`, or `None` for any other initializer. `Object.assign` sets each member
 /// on its target, so a target with accessors or a prototype key lets any
 /// copied member go elsewhere.
-fn facade_entries(init: &Expression<'_>) -> Option<Vec<FacadeEntry>> {
+fn facade_entries(init: &Expression<'_>, native_object: bool) -> Option<Vec<FacadeEntry>> {
     use oxc::ast::ast::PropertyKind;
     let accessor_or_prototype = |object: &ObjectExpression<'_>| {
         object.properties.iter().any(|property| match property {
@@ -724,17 +732,20 @@ fn facade_entries(init: &Expression<'_>) -> Option<Vec<FacadeEntry>> {
             literal_entries(object, &mut entries);
             Some(entries)
         }
-        Expression::CallExpression(call) if is_object_assign(&call.callee) => {
-            let Expression::ObjectExpression(target) =
-                crate::chain_walk::unwrap_type_assertions(call.arguments.first()?.as_expression()?)
-            else {
-                return None;
-            };
-            if accessor_or_prototype(target) {
-                return None;
-            }
+        Expression::CallExpression(call) if native_object && is_object_assign(&call.callee) => {
             let mut entries = Vec::new();
-            literal_entries(target, &mut entries);
+            // A component target, `Object.assign(Root, …)`, holds only what
+            // the sources write; its own members are not followed.
+            match crate::chain_walk::unwrap_type_assertions(call.arguments.first()?.as_expression()?) {
+                Expression::ObjectExpression(target) => {
+                    if accessor_or_prototype(target) {
+                        return None;
+                    }
+                    literal_entries(target, &mut entries);
+                }
+                target if member_path(target).is_some() => {}
+                _ => return None,
+            }
             for argument in call.arguments.iter().skip(1) {
                 match argument.as_expression().map(crate::chain_walk::unwrap_type_assertions) {
                     Some(Expression::Identifier(id)) => entries.push(FacadeEntry::Copy(id.name.to_string())),
@@ -795,6 +806,29 @@ fn literal_entries(object: &ObjectExpression<'_>, entries: &mut Vec<FacadeEntry>
     }
 }
 
+/// A binding, or a static member path of one, as written: `Root`,
+/// `Fam.Root`.
+fn member_path(expression: &Expression<'_>) -> Option<String> {
+    match crate::chain_walk::unwrap_type_assertions(expression) {
+        Expression::Identifier(id) => Some(id.name.to_string()),
+        Expression::StaticMemberExpression(member) => {
+            Some(format!("{}.{}", member_path(&member.object)?, member.property.name))
+        }
+        _ => None,
+    }
+}
+
+/// `T` in `Object.assign(T, …)` when it is a binding or a member path of one.
+fn assigned_target(init: &Expression<'_>) -> Option<String> {
+    let Expression::CallExpression(call) = crate::chain_walk::unwrap_type_assertions(init) else {
+        return None;
+    };
+    if !is_object_assign(&call.callee) {
+        return None;
+    }
+    member_path(call.arguments.first()?.as_expression()?)
+}
+
 /// `Y` in `Object.assign(Y, …)`.
 fn object_assign_target<'a>(init: &'a Expression<'_>) -> Option<&'a str> {
     let Expression::CallExpression(call) = crate::chain_walk::unwrap_type_assertions(init) else {
@@ -850,6 +884,8 @@ fn object_member_chains(name: &str, init: &Expression<'_>, chains: &mut Vec<chai
 fn collect_const_initializers(program: &Program<'_>) -> ConstInitializerFacts {
     use oxc::ast::ast::{Declaration, Statement, VariableDeclarationKind};
     let mut facts = ConstInitializerFacts::default();
+    // `Object.assign` is the built-in only where the module binds no `Object`.
+    let native_object = !crate::eval::module_binds(program, "Object");
     let mut record = |decl: &oxc::ast::ast::VariableDeclaration<'_>| {
         if decl.kind != VariableDeclarationKind::Const {
             return;
@@ -863,24 +899,29 @@ fn collect_const_initializers(program: &Program<'_>) -> ConstInitializerFacts {
             {
                 facts.aliases.insert(name.to_string(), target.name.to_string());
             }
-            if let Some(target) = object_assign_target(init) {
+            if let Some(target) = object_assign_target(init).filter(|_| native_object) {
                 facts.assigned.insert(name.to_string(), target.to_string());
             }
+            let target = assigned_target(init).filter(|_| native_object);
             if let Some(root) = expression_root(init) {
                 facts.roots.insert(name.to_string(), root);
             }
             object_member_chains(&name, init, &mut facts.chains);
-            let Some(entries) = facade_entries(init) else {
+            let Some(entries) = facade_entries(init, native_object) else {
                 continue;
             };
             if matches!(crate::chain_walk::unwrap_type_assertions(init), Expression::ObjectExpression(_)) {
                 facts.objects.insert(name.to_string(), identifier_members(&entries));
             }
-            if entries
-                .iter()
-                .any(|entry| matches!(entry, FacadeEntry::Copy(_) | FacadeEntry::Member { .. }))
+            if target.is_some()
+                || entries
+                    .iter()
+                    .any(|entry| matches!(entry, FacadeEntry::Copy(_) | FacadeEntry::Member { .. }))
             {
                 facts.facades.insert(name.to_string(), entries);
+            }
+            if let Some(target) = target {
+                facts.targets.insert(name.to_string(), target);
             }
         }
     };
@@ -896,6 +937,21 @@ fn collect_const_initializers(program: &Program<'_>) -> ConstInitializerFacts {
         }
     }
     invalidate_top_level_writes(program, &mut facts.objects, &mut facts.facades);
+    // Each target by the object it holds: `Alias` for `const Alias = Root`,
+    // and a facade built onto `Root`, are `Root`.
+    let canonical = |path: &str| {
+        let (root, rest) = path.split_once('.').map_or((path, None), |(root, rest)| (root, Some(rest)));
+        let mut current = root;
+        let mut seen = BTreeSet::new();
+        while let Some(next) = facts.aliases.get(current).or_else(|| facts.assigned.get(current)) {
+            if !seen.insert(current) {
+                return path.to_string();
+            }
+            current = next;
+        }
+        rest.map_or_else(|| current.to_string(), |rest| format!("{current}.{rest}"))
+    };
+    facts.targets = facts.targets.iter().map(|(name, target)| (name.clone(), canonical(target))).collect();
     facts
 }
 
@@ -909,7 +965,10 @@ fn identifier_members(entries: &[FacadeEntry]) -> BTreeMap<String, String> {
             FacadeEntry::Member { key, binding, member: None } => {
                 members.insert(key.clone(), binding.clone());
             }
-            FacadeEntry::Member { key, .. } | FacadeEntry::Other(key) | FacadeEntry::Code(Some(key)) => {
+            FacadeEntry::Member { key, .. }
+            | FacadeEntry::Other(key)
+            | FacadeEntry::Written { key, .. }
+            | FacadeEntry::Code(Some(key)) => {
                 members.remove(key);
             }
             FacadeEntry::Copy(_) | FacadeEntry::Unknown | FacadeEntry::Code(None) => members.clear(),
@@ -945,7 +1004,11 @@ fn invalidate_top_level_writes(
     facades: &mut BTreeMap<String, Vec<FacadeEntry>>,
 ) {
     use oxc::ast::ast::{AssignmentTarget, Statement};
-    let mut write = |object: Option<&str>, key: Option<&str>| {
+    let line = |span: oxc::span::Span| {
+        let start = (span.start as usize).min(program.source_text.len());
+        program.source_text[..start].matches('\n').count() + 1
+    };
+    let mut write = |object: Option<&str>, key: Option<&str>, line: usize| {
         let Some(object) = object else { return };
         if let Some(members) = objects.get_mut(object) {
             match key {
@@ -956,7 +1019,7 @@ fn invalidate_top_level_writes(
             }
         }
         if let Some(entries) = facades.get_mut(object) {
-            entries.push(key.map_or(FacadeEntry::Unknown, |key| FacadeEntry::Other(key.to_string())));
+            entries.push(key.map_or(FacadeEntry::Unknown, |key| FacadeEntry::Written { key: key.to_string(), line }));
         }
     };
     for stmt in &program.body {
@@ -966,16 +1029,16 @@ fn invalidate_top_level_writes(
         match crate::chain_walk::unwrap_type_assertions(&statement.expression) {
             Expression::AssignmentExpression(assignment) => match &assignment.left {
                 AssignmentTarget::StaticMemberExpression(member) => {
-                    write(written_object(&member.object), Some(member.property.name.as_str()));
+                    write(written_object(&member.object), Some(member.property.name.as_str()), line(statement.span));
                 }
                 AssignmentTarget::ComputedMemberExpression(member) => {
-                    write(written_object(&member.object), None);
+                    write(written_object(&member.object), None, line(statement.span));
                 }
                 _ => {}
             },
             Expression::CallExpression(call) if is_object_assign(&call.callee) => {
                 let target = call.arguments.first().and_then(|arg| arg.as_expression());
-                write(target.and_then(written_object), None);
+                write(target.and_then(written_object), None, line(statement.span));
             }
             _ => {}
         }
@@ -1076,7 +1139,7 @@ pub fn extract_file_facts_enriched_with_usage_statics(
     let program = ast.program();
     let local_statics = eval::collect_static_values(program);
     let local_usage_statics = eval::collect_complete_static_values(program);
-    let imports = collect_import_facts(program);
+    let imports = collect_import_facts(ast.module_record());
     let exports = crate::usage_facts::collect_export_facts(program);
     let inputs = crate::analyze_css::CssInputs::default();
     // Alone, a module resolves only its own bindings.
@@ -1133,7 +1196,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
     let member_parent_extensions = walked.member_parents;
     let walked_chains = walked.chains;
     let const_initializers = collect_const_initializers(program);
-    let imports = collect_import_facts(program);
+    let imports = collect_import_facts(ast.module_record());
     let create_transform_locals: rustc_hash::FxHashSet<String> = imports
         .iter()
         .filter(|imp| imp.imported == "createTransform")
@@ -1374,6 +1437,9 @@ pub(crate) fn extract_file_facts_from_static_maps(
         .chain(compose.iter().filter_map(|family| Some((family.family_binding.as_deref()?, false))))
         .chain(const_initializers.facades.keys().map(|name| (name.as_str(), true)))
         .collect();
+    // Assigned facades' targets (`Root`, `Fam.Root`): a write to one after
+    // the facade is built changes the facade too.
+    let assigned_targets: BTreeSet<&str> = const_initializers.targets.values().map(String::as_str).collect();
     let crate::usage_facts::EnrichedUsage {
         usage: usage_enriched,
         confined: confined_components,
@@ -1388,10 +1454,12 @@ pub(crate) fn extract_file_facts_from_static_maps(
         opaque_tags,
     } = crate::usage_facts::collect_enriched_usage(
         program,
+        ast.module_record(),
         &usage_statics_fx,
         &descriptors,
         &exports,
         &object_consts,
+        &assigned_targets,
     );
 
     let compose_callees_in_use = compose_callees_referenced_outside(program, &compose);
@@ -1411,12 +1479,13 @@ pub(crate) fn extract_file_facts_from_static_maps(
         usage,
         usage_enriched: Some(usage_enriched),
         compose,
-        star_exports: crate::usage_facts::collect_star_exports(program),
-        namespace_exports: crate::usage_facts::collect_namespace_exports(program),
+        star_exports: crate::usage_facts::collect_star_exports(ast.module_record()),
+        namespace_exports: crate::usage_facts::collect_namespace_exports(ast.module_record()),
         default_export_binding: crate::usage_facts::collect_default_export_binding(program),
         compose_callees_in_use,
         aliases: const_initializers.aliases,
         assigned_aliases: const_initializers.assigned,
+        assigned_targets: const_initializers.targets,
         props_forwarding: crate::usage_facts::collect_props_forwarding(program),
         declaration_roots: const_initializers.roots,
         global_keys: BTreeMap::new(),
@@ -1426,7 +1495,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
         member_parent_extensions,
         member_rooted_chains: walked.member_rooted,
         object_member_chains: const_initializers.chains,
-        namespace_imports: crate::usage_facts::collect_namespace_imports(program),
+        namespace_imports: crate::usage_facts::collect_namespace_imports(ast.module_record()),
         default_export_chain: walked
             .default_export
             .map(|start| default_export_chain(program, source, start)),

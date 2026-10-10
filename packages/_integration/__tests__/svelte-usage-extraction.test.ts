@@ -154,10 +154,10 @@ describe('isolated native Svelte usage projection', () => {
     ]);
     expect(badgeComponent?.system_prop_names).toContain('gap');
     expect(badgeComponent?.replacement).toContain(
-      '"gap":{"varName":"--animus-gap_'
+      '"gap":{"varName":"--animus-gap_badge_'
     );
     expect(css).toMatch(
-      /\.animus-dyn-gap_[0-9a-f]{8}\s*\{\s*gap: var\(--animus-gap_[0-9a-f]{8}\)/
+      /\.animus-dyn-gap_badge_[0-9a-f]{8}\s*\{\s*gap: var\(--animus-gap_badge_[0-9a-f]{8}\)/
     );
     expect(usageTags(fileFacts)).toEqual(['dynamicBadge']);
     expect(fileFacts.exports).toEqual([]);

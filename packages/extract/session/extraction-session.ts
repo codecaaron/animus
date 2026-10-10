@@ -204,6 +204,8 @@ export class ExtractionSession {
   rootDir: string | null = null;
   /** Serialized path aliases, harvested by the adapter from bundler config. */
   pathAliasesJson: string | null = null;
+  /** The host's export conditions, in its order, for the system loader. */
+  conditions: readonly string[] = [];
 
   // Per-specifier asset resolve/copy memo — stable per loaded system, so
   // loading a system clears it.
@@ -911,6 +913,7 @@ export class ExtractionSession {
       rootDir,
       prefix: this.options.prefix,
       prefixContextualVars: this.options.prefixContextualVars,
+      conditions: this.conditions,
     });
     this.assetCopyCache.clear();
     this.assetDependencyPaths.clear();

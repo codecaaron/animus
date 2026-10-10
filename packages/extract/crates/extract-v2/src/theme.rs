@@ -2395,6 +2395,9 @@ fn render_font_faces(faces: &Value, ctx: &ResolveContext) -> String {
     blocks.join("\n")
 }
 
+/// A registered keyframes block's rule. Each frame holds declarations only,
+/// so a frame given no block, and a block nested in a frame, are reported
+/// under the block's `@keyframes` selector.
 pub fn resolve_keyframes_block(block: &Value, ctx: &ResolveContext) -> String {
     let obj = match block.as_object() {
         Some(o) => o,
@@ -2411,13 +2414,14 @@ pub fn resolve_keyframes_block(block: &Value, ctx: &ResolveContext) -> String {
         None => return String::new(),
     };
 
+    let selector = format!("@keyframes {name}");
     let mut rendered_frames: Vec<String> = Vec::new();
     for (pct, frame_styles) in frames {
-        let frame_obj = match frame_styles.as_object() {
-            Some(o) => o,
-            None => continue,
+        let Some(frame_obj) = frame_styles.as_object() else {
+            record_non_block(ctx, std::slice::from_ref(&selector), pct, frame_styles);
+            continue;
         };
-        let decls = resolve_flat_styles(frame_obj, ctx, None);
+        let decls = resolve_flat_styles(frame_obj, ctx, Some(&[selector.clone(), pct.clone()]));
         if !decls.is_empty() {
             let decl_str: String = decls
                 .iter()
@@ -2435,9 +2439,13 @@ pub fn resolve_keyframes_block(block: &Value, ctx: &ResolveContext) -> String {
     format!("@keyframes {} {{\n{}\n}}", name, rendered_frames.join("\n"))
 }
 
+/// Resolves every registered keyframes block, calling `after_block` with
+/// each block's name once it has resolved, so what its resolution reported
+/// can be attributed to it.
 pub fn resolve_all_keyframes_blocks(
     blocks: &Value,
     ctx: &ResolveContext,
+    after_block: &mut dyn FnMut(&str),
 ) -> String {
     let block_map = match blocks.as_object() {
         Some(o) => o,
@@ -2454,6 +2462,9 @@ pub fn resolve_all_keyframes_blocks(
             let css = resolve_keyframes_block(block, ctx);
             if !css.is_empty() {
                 parts.push(css);
+            }
+            if let Some(name) = block.get("name").and_then(Value::as_str) {
+                after_block(name);
             }
         }
     }

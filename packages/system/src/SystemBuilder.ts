@@ -34,7 +34,7 @@ import {
   type BuiltInSelectorAlias,
   Prop,
   SystemProp,
-  ThemedCSSProps,
+  ThemedCSSInputProps,
 } from './types/config';
 import { AbstractProps } from './types/props';
 
@@ -105,7 +105,7 @@ export type GlobalStylesFactory<
   PropReg extends Record<string, SystemProp> = Record<string, SystemProp>,
 > = <Map extends Record<string, AbstractProps>>(
   styles: {
-    readonly [K in keyof Map]: ThemedCSSProps<Map[K], PropReg>;
+    readonly [K in keyof Map]: ThemedCSSInputProps<Map[K], PropReg>;
   },
   options?: { fontFaces?: readonly FontFace[]; unlayered?: boolean }
 ) => GlobalStyleBlock;
@@ -114,7 +114,7 @@ export type CreateKeyframesFactory<
   PropReg extends Record<string, SystemProp> = Record<string, SystemProp>,
 > = <Frames extends Record<string, Record<string, AbstractProps>>>(frames: {
   readonly [N in keyof Frames]: {
-    readonly [S in keyof Frames[N]]: ThemedCSSProps<Frames[N][S], PropReg>;
+    readonly [S in keyof Frames[N]]: ThemedCSSInputProps<Frames[N][S], PropReg>;
   };
 }) => Keyframes<{
   readonly [N in keyof Frames]: KeyframeFrameMap;

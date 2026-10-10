@@ -1,4 +1,7 @@
-import { ENGINE_TRANSFORM_EXTENSIONS } from '@animus-ui/extract/pipeline';
+import {
+  ENGINE_TRANSFORM_EXTENSIONS,
+  fileSideEffects,
+} from '@animus-ui/extract/pipeline';
 import {
   ANIMUS_CSS_MODULE_ID,
   STYLES_ARTIFACT,
@@ -109,6 +112,32 @@ export function buildTurbopackConfig(args: {
     },
     resolveAlias,
   };
+}
+
+/**
+ * Turbopack aliases a kit entry to its source with no per-module setting, so
+ * it reads the package's `sideEffects` against the source file's own path.
+ * One line for each redirect whose source that reading classifies otherwise
+ * than the entry it replaces: Turbopack cannot represent the declaration.
+ */
+export function turbopackSideEffectsLimits(
+  rootDir: string,
+  externalSourceEntries: ReadonlyMap<string, string>,
+  externalSourceSideEffects: ReadonlyMap<string, boolean>
+): string[] {
+  return [...externalSourceEntries].flatMap(([specifier, srcEntry]) => {
+    const declared = externalSourceSideEffects.get(specifier);
+    if (declared === undefined) return [];
+    const read = fileSideEffects(srcEntry) ?? true;
+    if (read === declared) return [];
+    const source = relative(rootDir, srcEntry).replace(/\\/g, '/');
+    const consequence = declared
+      ? 'Turbopack can drop its side effects'
+      : 'Turbopack keeps it when it is unused';
+    return [
+      `[animus-extract] Turbopack cannot carry the "sideEffects" of ${specifier} to its source ${source}: the package's "sideEffects" classify the shipped entry as ${declared ? 'side-effectful' : 'free of side effects'} but the source as ${read ? 'side-effectful' : 'free of side effects'}, so ${consequence}. Make the package's "sideEffects" classify the source as it classifies the shipped entry, or build with webpack.`,
+    ];
+  });
 }
 
 export function resolveTurbopackLoaderPath(pluginDir: string): string {
