@@ -77,6 +77,9 @@ pub struct UnwalkedChain {
     /// The top-level declaration it sits in.
     pub enclosing: Option<String>,
     pub start: u32,
+    /// The file binds the root's name once, so the root is that binding;
+    /// a name bound twice may be a parameter or local where it is used.
+    pub root_bound_once: bool,
 }
 
 /// `const X = ns.member.styles()…terminal` — a chain rooted in a static

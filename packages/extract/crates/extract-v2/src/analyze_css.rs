@@ -1414,7 +1414,8 @@ fn unsupported_default_export(
 
 /// A chain-shaped call no walked chain contains, when its root has proven
 /// Animus origin. `resolver.props(…)` on an `asClass()` resolver is the
-/// resolver's own method, not the builder step of that name.
+/// resolver's own method, not the builder step of that name, when the root
+/// is the resolver's binding: one the file binds once.
 fn runtime_builder_reference(
     file: &str,
     site: &crate::facts::UnwalkedChainSite,
@@ -1423,6 +1424,7 @@ fn runtime_builder_reference(
 ) -> Option<CssDiagnostic> {
     let chain = &site.chain;
     if chain.methods.first().is_some_and(|method| method == "props")
+        && chain.root_bound_once
         && holds_class_resolver(file, &chain.root, files, inputs, &mut FxHashSet::default())
     {
         return None;
