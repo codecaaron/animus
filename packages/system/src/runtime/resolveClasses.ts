@@ -93,6 +93,8 @@ import {
 } from '@animus-ui/properties';
 
 import { IS_DEV } from './is-dev';
+
+declare const __ANIMUS_DEV__: boolean | undefined;
 import { recordWitness } from './witness';
 
 /** Whether a property set is custom properties only, which read a value as
@@ -364,19 +366,37 @@ function warnDroppedValue(
  * A runtime value that reaches a slot condition a production build removes:
  * the build's usage analysis saw no runtime value for the prop there, so the
  * value arrived in a way it does not follow, and in production it has
- * neither a class nor a slot.
+ * neither a class nor a slot. An entry a literal class serves, as
+ * `applyDynamicProp` serves an `!important` literal, takes no slot.
  */
 function warnPrunedSlot(
   baseClassName: string,
   propName: string,
   serializedValue: string,
   propValue: unknown,
-  productionConditions: readonly string[]
+  dc: ValueDynamicPropConfig | DeclarationConfig,
+  propClasses: Record<string, string> | undefined,
+  typed: boolean
 ): void {
-  const [, entries] = responsiveEntries(propValue);
+  if (!IS_DEV || !dc.productionConditions) return;
+  const production = dc.productionConditions;
+  const [responsive, entries] = responsiveEntries(propValue);
+  const servedByClass = (bp: string, value: unknown) => {
+    if (dc.kind === 'declarations' || !responsive || typeof value !== 'string')
+      return false;
+    const priority = importantPriority(value);
+    return (
+      !!priority &&
+      (priority.spelling === 'important' ||
+        !isCustomOnly(slotProperties(dc))) &&
+      entryClass(propClasses, typed, bp, value) !== undefined
+    );
+  };
   const pruned = entries
-    .map(([bp]) => bp)
-    .filter((bp) => !productionConditions.includes(bp));
+    .filter(
+      ([bp, value]) => !production.includes(bp) && !servedByClass(bp, value)
+    )
+    .map(([bp]) => bp);
   if (pruned.length === 0) return;
   const dedupeKey = `${baseClassName}|${propName}|pruned`;
   if (warnedDrops.has(dedupeKey)) return;
@@ -853,13 +873,17 @@ export function resolveClasses(
           if (failure === null) {
             dynStyle = staged;
             recordWitness(baseClassName, propName, key, 'dynamic');
-            if (IS_DEV && dc.productionConditions) {
+            // The define token tested in place lets a minifier drop the
+            // warning from a production bundle.
+            if (typeof __ANIMUS_DEV__ === 'boolean' ? __ANIMUS_DEV__ : IS_DEV) {
               warnPrunedSlot(
                 baseClassName,
                 propName,
                 key,
                 propValue,
-                dc.productionConditions
+                dc,
+                propClasses,
+                typed
               );
             }
           } else {

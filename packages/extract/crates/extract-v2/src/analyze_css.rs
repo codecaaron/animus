@@ -8089,7 +8089,7 @@ export const App = ({ n }) => <Box bgImage={n} texture={n} />;
             let out = analyze(&[("kit.tsx", kit), ("app.tsx", app)], inputs);
             out.dynamic_props.keys().cloned().collect::<Vec<_>>()
         };
-        let cases: [(&str, &[&str]); 25] = [
+        let cases: [(&str, &[&str]); 29] = [
             ("export const App = () => <Box p={8} />;\n", &[]),
             ("export const App = ({ n }) => <Box p={n} />;\n", &["p"]),
             // A spread, an escape or a component chosen at runtime leaves a
@@ -8125,6 +8125,11 @@ export const App = ({ n }) => <Box bgImage={n} texture={n} />;
             ("import { enhance } from 'ui-lib';\nfunction renderIcon() { return <Box p={8} />; }\nexport const App = () => <div>{enhance(renderIcon)}</div>;\n", &["p"]),
             ("import * as lib from 'ui-lib';\nfunction getEnhance() { return lib.enhance; }\nconst enhance = getEnhance();\nexport const App = () => <div>{enhance(<Box p={8} />)}</div>;\n", &["p"]),
             ("import { enhance } from 'ui-lib';\nconst icons = { a: <Box p={8} /> };\nconst { a } = icons;\nexport const App = () => <div>{enhance(a)}</div>;\n", &["p"]),
+            // A pattern's defaults, and a parameter a function captures.
+            ("import { enhance } from 'ui-lib';\nconst { a = <Box p={8} /> } = {};\nexport const App = () => <div>{enhance(a)}</div>;\n", &["p"]),
+            ("import { enhance } from 'ui-lib';\nconst [a = <Box p={8} />] = [];\nexport const App = () => <div>{enhance(a)}</div>;\n", &["p"]),
+            ("import * as lib from 'ui-lib';\nconst { enhance = lib.enhance } = {};\nexport const App = () => <div>{enhance(<Box p={8} />)}</div>;\n", &["p"]),
+            ("import { enhance } from 'ui-lib';\nfunction Button(props) { const getRender = () => props.render; return enhance(getRender()); }\nexport const App = () => <Button render={<Box p={8} />} />;\n", &["p"]),
             // React's own calls and calls on the module's values stay proven.
             ("import { useMemo } from 'react';\nexport const App = () => useMemo(() => <Box p={8} />, []);\n", &[]),
             ("const items = [1, 2];\nexport const App = () => <>{items.map((i) => <Box key={i} p={8} />)}</>;\n", &[]),
@@ -8137,6 +8142,7 @@ export const App = ({ n }) => <Box bgImage={n} texture={n} />;
         for (els, import) in [
             ("import { Box } from './kit';\nexport const icon = <Box p={8} />;\n", "import { icon } from './els';"),
             ("import { Box } from './kit';\nexport default <Box p={8} />;\n", "import icon from './els';"),
+            ("import { Box } from './kit';\nexport default function () { return <Box p={8} />; }\n", "import icon from './els';"),
         ] {
             let app = format!("{import}\nimport {{ enhance }} from 'ui-lib';\nexport const App = () => <div>{{enhance(icon)}}</div>;\n");
             let out = analyze(&[("kit.tsx", kit), ("els.tsx", els), ("app.tsx", &app)], &test_inputs());

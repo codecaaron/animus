@@ -66,3 +66,32 @@ test('a runtime value reaching a slot production removes warns in development', 
     )
   );
 });
+
+test('an entry a static class serves does not warn', () => {
+  // A runtime `p` keeps the base slot; a literal `!important` entry takes a
+  // static class at `sm`, as the runtime applies it in either mode.
+  const hybrid = `import { ds } from './setup';
+export const Box = ds.system({ space: true }).asElement('div');
+export const App = ({ n }) => <><Box p={n + 1} /><Box p={{ sm: '8px!' }} /></>;`;
+  const manifest = JSON.parse(
+    analyzeProject(JSON.stringify([{ path, source: hybrid }]), {
+      ...theme,
+      propConfigJson: config.propConfig,
+      groupRegistryJson: config.groupRegistry,
+      devMode: true,
+    })
+  );
+  const dynamicProps = buildDynamicPropConfig(manifest.dynamic_props);
+  expect(dynamicProps.p.productionConditions).toEqual(['_']);
+
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  const resolved = resolveClasses(
+    'animus-Hybrid',
+    { p: { _: 12, sm: '8px!' } },
+    { systemPropNames: ['p'] },
+    manifest.system_prop_map,
+    dynamicProps
+  );
+  expect(resolved.classes).toContain(manifest.system_prop_map.p['sm:8px!']);
+  expect(warn).not.toHaveBeenCalled();
+});

@@ -951,11 +951,23 @@ fn opaque_calls(program: &Program<'_>, scoping: &Scoping) -> (Vec<OpaqueCall>, B
     for statement in &program.body {
         scan.top = top_level_names(statement);
         if let Statement::ExportDefaultDeclaration(export) = statement {
-            if let Some(expression) = export.declaration.as_expression() {
-                let mut reads = ArgumentReads::default();
-                collect_reads(scoping, expression, &mut reads);
-                scan.default_export = Some(reads);
+            use oxc::ast::ast::ExportDefaultDeclarationKind;
+            let mut reads = ArgumentReads::default();
+            let mut collector = ReadCollector { scoping, reads: &mut reads };
+            match &export.declaration {
+                ExportDefaultDeclarationKind::FunctionDeclaration(function) => {
+                    if let Some(body) = &function.body {
+                        collector.visit_function_body(body);
+                    }
+                }
+                ExportDefaultDeclarationKind::ClassDeclaration(class) => collector.visit_class(class),
+                declaration => {
+                    if let Some(expression) = declaration.as_expression() {
+                        collector.visit_expression(expression);
+                    }
+                }
             }
+            scan.default_export = Some(reads);
         }
         scan.visit_statement(statement);
     }
@@ -982,7 +994,7 @@ fn opaque_calls(program: &Program<'_>, scoping: &Scoping) -> (Vec<OpaqueCall>, B
         .consts
         .iter()
         .map(|(symbol, init)| (*symbol, &init.reads))
-        .chain(scan.functions.iter().map(|(symbol, reads)| (*symbol, reads)))
+        .chain(scan.functions.iter().map(|(symbol, (reads, _))| (*symbol, reads)))
         .filter(|(symbol, _)| scoping.symbol_scope_id(*symbol) == scoping.root_scope_id())
         .map(|(symbol, reads)| (scoping.symbol_name(symbol).to_string(), reads))
         .chain(scan.default_export.as_ref().map(|reads| ("default".to_string(), reads)));
@@ -1028,7 +1040,7 @@ fn top_level_names(statement: &Statement<'_>) -> Vec<String> {
 
 /// What an expression reads: the component tags of its elements, the
 /// bindings it names, and whether it names a global outside the built-ins.
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct ArgumentReads {
     tags: BTreeSet<String>,
     symbols: FxHashSet<SymbolId>,
@@ -1094,7 +1106,9 @@ impl<'a> Visit<'a> for BindingNames {
 /// A `const` initializer: what it reads, and whether it is a function.
 struct ConstInit {
     reads: ArgumentReads,
-    function: bool,
+    /// The scope of the function the initializer is, whose own parameters
+    /// a call does not forward by calling it.
+    function: Option<oxc::semantic::ScopeId>,
 }
 
 /// What a callee starts from.
@@ -1117,8 +1131,8 @@ struct OpaqueCallScan<'s> {
     in_parameter: usize,
     parameters: FxHashSet<SymbolId>,
     consts: FxHashMap<SymbolId, ConstInit>,
-    /// What each function declaration's body reads.
-    functions: FxHashMap<SymbolId, ArgumentReads>,
+    /// What each function declaration's body reads, and its scope.
+    functions: FxHashMap<SymbolId, (ArgumentReads, oxc::semantic::ScopeId)>,
     /// What a default-exported expression reads.
     default_export: Option<ArgumentReads>,
     calls: Vec<(CalleeRoot, ArgumentReads, Vec<String>)>,
@@ -1161,7 +1175,7 @@ impl OpaqueCallScan<'_> {
                     return (name, Vec::new());
                 }
                 match self.consts.get(symbol) {
-                    Some(init) if init.function => (name, Vec::new()),
+                    Some(init) if init.function.is_some() => (name, Vec::new()),
                     Some(init) => {
                         let closed = self.closure(&init.reads);
                         if closed.unknown_global { (None, Vec::new()) } else { (name, closed.imports) }
@@ -1172,10 +1186,11 @@ impl OpaqueCallScan<'_> {
         }
     }
 
-    /// `reads`, with every `const` and function declaration it names
-    /// followed to what that reads: a function a call receives can be
-    /// called, and return its elements. A parameter counts only when data
-    /// reaches it, never through a function's own body.
+    /// `reads`, with every `const`, parameter default and function
+    /// declaration it names followed to what that reads: a function a call
+    /// receives can be called, and return its elements. A followed
+    /// function's own parameters are not forwarded by the call; a parameter
+    /// it captures from an enclosing function is.
     fn closure(&self, reads: &ArgumentReads) -> ClosedReads {
         let mut closed = ClosedReads {
             tags: reads.tags.clone(),
@@ -1183,12 +1198,16 @@ impl OpaqueCallScan<'_> {
             ..ClosedReads::default()
         };
         let mut seen: FxHashSet<SymbolId> = FxHashSet::default();
-        let mut pending: Vec<(SymbolId, bool)> = reads.symbols.iter().map(|symbol| (*symbol, false)).collect();
-        while let Some((symbol, in_function)) = pending.pop() {
+        let mut entered: FxHashSet<oxc::semantic::ScopeId> = FxHashSet::default();
+        let mut parameters: Vec<SymbolId> = Vec::new();
+        let mut pending: Vec<SymbolId> = reads.symbols.iter().copied().collect();
+        while let Some(symbol) = pending.pop() {
             if !seen.insert(symbol) {
                 continue;
             }
-            closed.reads_parameter |= !in_function && self.parameters.contains(&symbol);
+            if self.parameters.contains(&symbol) {
+                parameters.push(symbol);
+            }
             match self.sources.get(&symbol) {
                 Some(source) if REACT_MODULES.contains(source) => {}
                 Some(_) => closed.imports.push(self.scoping.symbol_name(symbol).to_string()),
@@ -1196,13 +1215,16 @@ impl OpaqueCallScan<'_> {
             }
             let (next, function) = match (self.consts.get(&symbol), self.functions.get(&symbol)) {
                 (Some(init), _) => (&init.reads, init.function),
-                (None, Some(reads)) => (reads, true),
+                (None, Some((reads, scope))) => (reads, Some(*scope)),
                 (None, None) => continue,
             };
+            entered.extend(function);
             closed.tags.extend(next.tags.iter().cloned());
             closed.unknown_global |= next.unknown_global;
-            pending.extend(next.symbols.iter().map(|symbol| (*symbol, in_function || function)));
+            pending.extend(next.symbols.iter().copied());
         }
+        closed.reads_parameter =
+            parameters.iter().any(|parameter| !entered.contains(&self.scoping.symbol_scope_id(*parameter)));
         closed.imports.sort();
         closed
     }
@@ -1247,6 +1269,21 @@ fn callee_root<'b, 'a>(callee: &'b Expression<'a>) -> Option<(&'b IdentifierRefe
 
 impl<'a> Visit<'a> for OpaqueCallScan<'_> {
     fn visit_formal_parameter(&mut self, parameter: &oxc::ast::ast::FormalParameter<'a>) {
+        // A parameter's default, or a default inside its pattern, is a
+        // value its bindings may hold.
+        let mut reads = ArgumentReads::default();
+        let mut collector = ReadCollector { scoping: self.scoping, reads: &mut reads };
+        collector.visit_binding_pattern(&parameter.pattern);
+        if let Some(initializer) = &parameter.initializer {
+            collector.visit_expression(initializer);
+        }
+        if !reads.tags.is_empty() || !reads.symbols.is_empty() || reads.unknown_global {
+            let mut names = BindingNames::default();
+            names.visit_binding_pattern(&parameter.pattern);
+            for symbol in names.0 {
+                self.consts.insert(symbol, ConstInit { reads: reads.clone(), function: None });
+            }
+        }
         self.in_parameter += 1;
         oxc::ast_visit::walk::walk_formal_parameter(self, parameter);
         self.in_parameter -= 1;
@@ -1261,17 +1298,23 @@ impl<'a> Visit<'a> for OpaqueCallScan<'_> {
     fn visit_variable_declarator(&mut self, declarator: &oxc::ast::ast::VariableDeclarator<'a>) {
         if let Some(init) = &declarator.init {
             // A destructured binding may hold any part of what the
-            // initializer reads.
+            // initializer reads, or a default the pattern names.
             let mut names = BindingNames::default();
             names.visit_binding_pattern(&declarator.id);
-            let function = matches!(declarator.id, oxc::ast::ast::BindingPattern::BindingIdentifier(_))
-                && matches!(
-                    crate::chain_walk::unwrap_type_assertions(init),
-                    Expression::ArrowFunctionExpression(_) | Expression::FunctionExpression(_)
-                );
+            let function = match (&declarator.id, crate::chain_walk::unwrap_type_assertions(init)) {
+                (oxc::ast::ast::BindingPattern::BindingIdentifier(_), Expression::ArrowFunctionExpression(arrow)) => {
+                    arrow.scope_id.get()
+                }
+                (oxc::ast::ast::BindingPattern::BindingIdentifier(_), Expression::FunctionExpression(function)) => {
+                    function.scope_id.get()
+                }
+                _ => None,
+            };
             for symbol in names.0.into_iter().filter(|symbol| !self.scoping.symbol_is_mutated(*symbol)) {
                 let mut reads = ArgumentReads::default();
-                collect_reads(self.scoping, init, &mut reads);
+                let mut collector = ReadCollector { scoping: self.scoping, reads: &mut reads };
+                collector.visit_expression(init);
+                collector.visit_binding_pattern(&declarator.id);
                 self.consts.insert(symbol, ConstInit { reads, function });
             }
         }
@@ -1279,11 +1322,11 @@ impl<'a> Visit<'a> for OpaqueCallScan<'_> {
     }
 
     fn visit_function(&mut self, function: &oxc::ast::ast::Function<'a>, flags: oxc::syntax::scope::ScopeFlags) {
-        if let (Some(id), Some(body)) = (&function.id, &function.body) {
+        if let (Some(id), Some(body), Some(scope)) = (&function.id, &function.body, function.scope_id.get()) {
             if let Some(symbol) = id.symbol_id.get() {
                 let mut reads = ArgumentReads::default();
                 ReadCollector { scoping: self.scoping, reads: &mut reads }.visit_function_body(body);
-                self.functions.insert(symbol, reads);
+                self.functions.insert(symbol, (reads, scope));
             }
         }
         oxc::ast_visit::walk::walk_function(self, function, flags);
