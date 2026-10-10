@@ -13,6 +13,8 @@ use oxc::semantic::SemanticBuilder;
 use oxc::span::{GetSpan, SourceType};
 use oxc::transformer::{TransformOptions, Transformer};
 use rquickjs::{Context, Function, Object, Runtime};
+
+mod linked;
 use serde::{Deserialize, Serialize};
 
 /// Serialized system configuration returned by `load_system_module()`.
@@ -1121,29 +1123,149 @@ fn build_bundle(
         bundle.push_str("})();\n\n");
     }
 
-    let order = topological_sort(specifier_map, source_map, entry_path)?;
+    let order = match topological_sort(specifier_map, source_map, entry_path) {
+        Ok(order) => order,
+        Err(_) => {
+            return build_linked_bundle(
+                specifier_map,
+                source_map,
+                entry_path,
+                bundle,
+                marker_offsets,
+                stub_specifiers,
+            )
+        }
+    };
     let mut module_spans = Vec::with_capacity(order.len());
 
     for module_path in &order {
-        let source = source_map
-            .get(module_path)
-            .ok_or_else(|| format!("module '{}' not found in source_map", module_path))?;
+        push_module_iife(
+            &mut bundle,
+            &mut marker_offsets,
+            &mut module_spans,
+            module_path,
+            source_map,
+            specifier_map,
+        )?;
+    }
 
-        let rewritten = rewrite_module_for_bundle(source, module_path, specifier_map)?;
+    let module_starts = offsets_to_line_numbers(&bundle, marker_offsets);
+    Ok((
+        bundle,
+        BundleLayout {
+            module_starts,
+            stub_specifiers,
+            module_spans,
+        },
+    ))
+}
 
-        marker_offsets.push((bundle.len(), module_path.clone()));
-        let _ = writeln!(bundle, "{}{}", MODULE_MARKER_PREFIX, module_path);
-        bundle.push_str("(function(){ const __exports = {};\n");
-        let start = bundle.len();
-        bundle.push_str(&rewritten);
-        module_spans.push((start, bundle.len(), module_path.clone()));
-        bundle.push('\n');
-        let _ = writeln!(
-            bundle,
-            "__modules['{}'] = __exports;",
-            js_quoted(module_path)
-        );
-        bundle.push_str("})();\n\n");
+/// Appends `module_path` as an IIFE that evaluates it at once and registers
+/// its exports.
+fn push_module_iife(
+    bundle: &mut String,
+    marker_offsets: &mut Vec<(usize, String)>,
+    module_spans: &mut Vec<(usize, usize, String)>,
+    module_path: &String,
+    source_map: &HashMap<String, String>,
+    specifier_map: &HashMap<(String, String), String>,
+) -> Result<(), String> {
+    let source = source_map
+        .get(module_path)
+        .ok_or_else(|| format!("module '{}' not found in source_map", module_path))?;
+
+    let rewritten = rewrite_module_for_bundle(source, module_path, specifier_map)?;
+
+    marker_offsets.push((bundle.len(), module_path.clone()));
+    let _ = writeln!(bundle, "{}{}", MODULE_MARKER_PREFIX, module_path);
+    bundle.push_str("(function(){ const __exports = {};\n");
+    let start = bundle.len();
+    bundle.push_str(&rewritten);
+    module_spans.push((start, bundle.len(), module_path.clone()));
+    bundle.push('\n');
+    let _ = writeln!(
+        bundle,
+        "__modules['{}'] = __exports;",
+        js_quoted(module_path)
+    );
+    bundle.push_str("})();\n\n");
+    Ok(())
+}
+
+/// The bundle of a graph with an import cycle (see `linked`), after the
+/// stub modules `bundle` already holds. A module outside every cycle keeps
+/// its IIFE, since everything it imports has evaluated when it runs. Each
+/// cycle is linked before the first of its modules evaluates: its modules'
+/// export objects exist, and each module runs to its `yield` to define its
+/// getters; each then finishes in evaluation order.
+fn build_linked_bundle(
+    specifier_map: &HashMap<(String, String), String>,
+    source_map: &HashMap<String, String>,
+    entry_path: &str,
+    mut bundle: String,
+    mut marker_offsets: Vec<(usize, String)>,
+    stub_specifiers: Vec<String>,
+) -> Result<(String, BundleLayout), String> {
+    let linked::CyclicOrder { order, cycles } = linked::cyclic_order(specifier_map, source_map, entry_path);
+    let cycle_of: HashMap<&str, usize> = cycles
+        .iter()
+        .enumerate()
+        .flat_map(|(index, cycle)| cycle.iter().map(move |module| (module.as_str(), index)))
+        .collect();
+    let generators: HashMap<&str, String> = cycles
+        .iter()
+        .flatten()
+        .enumerate()
+        .map(|(index, module)| (module.as_str(), format!("__linked{index}")))
+        .collect();
+    let generator = |module: &str| &generators[module];
+    bundle.push_str(linked::STAR_HELPER);
+    bundle.push('\n');
+
+    let mut module_spans = Vec::with_capacity(order.len());
+    let mut linked_cycles: HashSet<usize> = HashSet::new();
+    for module_path in &order {
+        let Some(&cycle) = cycle_of.get(module_path.as_str()) else {
+            push_module_iife(
+                &mut bundle,
+                &mut marker_offsets,
+                &mut module_spans,
+                module_path,
+                source_map,
+                specifier_map,
+            )?;
+            continue;
+        };
+        if linked_cycles.insert(cycle) {
+            for member in &cycles[cycle] {
+                let _ = writeln!(bundle, "__modules['{}'] = {{}};", js_quoted(member));
+            }
+            for member in &cycles[cycle] {
+                let member_source = source_map
+                    .get(member)
+                    .ok_or_else(|| format!("module '{}' not found in source_map", member))?;
+                let module = linked::rewrite_module_for_linking(member_source, member, specifier_map)?;
+                marker_offsets.push((bundle.len(), member.clone()));
+                let _ = writeln!(bundle, "{}{}", MODULE_MARKER_PREFIX, member);
+                let _ = writeln!(
+                    bundle,
+                    "const {} = (function*(){{ const __exports = __modules['{}'];",
+                    generator(member),
+                    js_quoted(member)
+                );
+                bundle.push_str(&module.link);
+                bundle.push_str("yield;\n");
+                for star in &module.stars {
+                    let _ = writeln!(bundle, "__star(__exports, __require('{}'));", star);
+                }
+                let start = bundle.len();
+                bundle.push_str(&module.body);
+                module_spans.push((start, bundle.len(), member.clone()));
+                bundle.push_str("\n})();\n");
+                let _ = writeln!(bundle, "{}.next();\n", generator(member));
+            }
+        }
+        let _ = writeln!(bundle, "{}.next();", generator(module_path));
     }
 
     let module_starts = offsets_to_line_numbers(&bundle, marker_offsets);
@@ -2452,6 +2574,47 @@ export const ds = tokens;
             !blocks.contains("motion") && !blocks.contains("animus-kf-ccc"),
             "unregistered export must not carry: {blocks}"
         );
+    }
+
+    /// Contract: a system whose module graph has an import cycle loads with
+    /// Node's semantics: each module evaluates once, after the modules it
+    /// imports outside its cycle; a hoisted function is callable before its
+    /// module evaluates, and an import reads the exporting binding live.
+    #[test]
+    fn cyclic_module_graph_evaluates_with_node_semantics() {
+        let dir = scratch_dir("cyclic-esm");
+        write_fixture(
+            &dir.join("a.js"),
+            "import { describe, hello } from './b.js';\n\
+             export let count = 0;\n\
+             count += 1;\n\
+             export const greeting = hello();\n\
+             export class Day { constructor(n) { this.n = n; } label() { return describe(this); } }\n",
+        );
+        write_fixture(
+            &dir.join("b.js"),
+            "import { Day, count } from './a.js';\n\
+             export function hello() { return 'hello'; }\n\
+             export function describe(day) { return 'day-' + day.n + '-' + count; }\n\
+             export const make = (n) => new Day(n);\n",
+        );
+        let entry = dir.join("entry.ts");
+        write_fixture(
+            &entry,
+            &format!(
+                "import {{ make }} from './b.js';\n\
+                 import {{ greeting }} from './a.js';\n\
+                 const label = make(3).label();\n\
+                 export const ds = {{ toConfig: () => ({{ propConfig: JSON.stringify({{ label, greeting }}), groupRegistry: '{{}}' }}), getVocabularyRecord: () => ({{ version: 1, keyframes: [], globalStyles: [], collisions: [] }}) }};\n\
+                 {FIXTURE_THEME}"
+            ),
+        );
+
+        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &[]);
+        let _ = fs::remove_dir_all(&dir);
+
+        let config = result.expect("a cyclic module graph must load");
+        assert_eq!(config.prop_config, r#"{"label":"day-3-1","greeting":"hello"}"#);
     }
 
     #[test]
