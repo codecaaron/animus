@@ -664,29 +664,38 @@ fn inert_declaration(declaration: &oxc::ast::ast::Declaration<'_>, builders: &mu
     }
 }
 
-/// A class whose definition runs no code: no decorators, static blocks, or
-/// static values and computed keys that are not inert.
+/// A key that names a property without running code to compute it: a plain
+/// identifier, private name, string or number, never computed, so no value
+/// is converted to a key.
+fn plain_key(key: &oxc::ast::ast::PropertyKey<'_>, computed: bool) -> bool {
+    use oxc::ast::ast::PropertyKey;
+    !computed
+        && matches!(
+            key,
+            PropertyKey::StaticIdentifier(_)
+                | PropertyKey::PrivateIdentifier(_)
+                | PropertyKey::StringLiteral(_)
+                | PropertyKey::NumericLiteral(_)
+        )
+}
+
+/// A class whose definition runs no code and whose members a reader cannot
+/// turn into code: no decorators, static blocks, getters or setters, only
+/// plain keys, and inert static values.
 fn inert_class(class: &oxc::ast::ast::Class<'_>, builders: &FxHashSet<String>) -> bool {
-    use oxc::ast::ast::{ClassElement, PropertyKey};
-    let key_inert = |key: &PropertyKey<'_>, computed: bool| {
-        !computed || key.as_expression().is_some_and(|key| inert_expression(key, builders))
-    };
+    use oxc::ast::ast::{ClassElement, MethodDefinitionKind};
     class.decorators.is_empty()
         && class.super_class.as_ref().is_none_or(|super_class| inert_expression(super_class, builders))
         && class.body.body.iter().all(|element| match element {
-            ClassElement::StaticBlock(_) => false,
+            ClassElement::StaticBlock(_) | ClassElement::AccessorProperty(_) => false,
             ClassElement::MethodDefinition(method) => {
-                method.decorators.is_empty() && key_inert(&method.key, method.computed)
+                method.decorators.is_empty()
+                    && matches!(method.kind, MethodDefinitionKind::Method | MethodDefinitionKind::Constructor)
+                    && plain_key(&method.key, method.computed)
             }
             ClassElement::PropertyDefinition(property) => {
                 property.decorators.is_empty()
-                    && key_inert(&property.key, property.computed)
-                    && (!property.r#static
-                        || property.value.as_ref().is_none_or(|value| inert_expression(value, builders)))
-            }
-            ClassElement::AccessorProperty(property) => {
-                property.decorators.is_empty()
-                    && key_inert(&property.key, property.computed)
+                    && plain_key(&property.key, property.computed)
                     && (!property.r#static
                         || property.value.as_ref().is_none_or(|value| inert_expression(value, builders)))
             }
@@ -694,11 +703,13 @@ fn inert_class(class: &oxc::ast::ast::Class<'_>, builders: &FxHashSet<String>) -
         })
 }
 
-/// An expression whose evaluation runs no code of its own: a literal, an
-/// identifier read, an object or array of inert values, a function, an
-/// inert class, or an Animus builder chain with inert arguments.
+/// An expression whose evaluation runs no code of its own, and whose value no
+/// reader can turn into code: a literal, a template with no substitutions,
+/// an identifier read, an object or array of inert values with plain keys and
+/// no accessors or spreads, a function, an inert class, or an Animus builder
+/// chain whose arguments are all inert by these same rules.
 fn inert_expression(expression: &Expression<'_>, builders: &FxHashSet<String>) -> bool {
-    use oxc::ast::ast::{ArrayExpressionElement, ObjectPropertyKind, UnaryOperator};
+    use oxc::ast::ast::{ArrayExpressionElement, ObjectPropertyKind, PropertyKind, UnaryOperator};
     match expression.without_parentheses().get_inner_expression() {
         Expression::BooleanLiteral(_)
         | Expression::NullLiteral(_)
@@ -709,9 +720,7 @@ fn inert_expression(expression: &Expression<'_>, builders: &FxHashSet<String>) -
         | Expression::Identifier(_)
         | Expression::FunctionExpression(_)
         | Expression::ArrowFunctionExpression(_) => true,
-        Expression::TemplateLiteral(template) => {
-            template.expressions.iter().all(|expression| inert_expression(expression, builders))
-        }
+        Expression::TemplateLiteral(template) => template.expressions.is_empty(),
         Expression::UnaryExpression(unary) => match unary.operator {
             UnaryOperator::UnaryNegation | UnaryOperator::UnaryPlus | UnaryOperator::BitwiseNot => matches!(
                 unary.argument.get_inner_expression(),
@@ -730,8 +739,8 @@ fn inert_expression(expression: &Expression<'_>, builders: &FxHashSet<String>) -
         Expression::ObjectExpression(object) => object.properties.iter().all(|property| match property {
             ObjectPropertyKind::SpreadProperty(_) => false,
             ObjectPropertyKind::ObjectProperty(property) => {
-                (!property.computed
-                    || property.key.as_expression().is_some_and(|key| inert_expression(key, builders)))
+                property.kind == PropertyKind::Init
+                    && plain_key(&property.key, property.computed)
                     && inert_expression(&property.value, builders)
             }
         }),

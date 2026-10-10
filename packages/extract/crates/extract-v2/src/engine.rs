@@ -1483,8 +1483,9 @@ mod tests {
     /// leaves reads it and its module provably has no effects, and the whole
     /// import when no value specifier is left. A root still read keeps its
     /// import, as does one whose module, or a module it loads, may run code
-    /// beyond declaring inert values and Animus builder chains, and every
-    /// import of a module that calls eval directly.
+    /// beyond declaring inert values and Animus builder chains (a computed
+    /// key, a template substitution or an accessor can run code when read),
+    /// and every import of a module that calls eval directly.
     #[test]
     fn transform_drops_imports_of_roots_only_replaced_chains_read() {
         let mut engine = ExtractEngine::new(None).unwrap();
@@ -1504,6 +1505,20 @@ mod tests {
             ("defaulted.ts", "export const defaulted = {};\nexport default record();\n"),
             ("initialized.ts", "export const value = record();\n"),
             ("transitive.ts", "import { value } from './initialized';\nexport const transitive = { value };\n"),
+            ("keyed.ts", "const key = { toString() { return record(); } };\nexport const keyed = { [key]: 1 };\n"),
+            ("classed.ts", "const key = { toString() { return record(); } };\nexport const classed = {};\nexport class Audit { [key]() {} }\n"),
+            ("templated.ts", "const key = { toString() { return record(); } };\nexport const templated = `${key}`;\n"),
+            (
+                "accessed.ts",
+                "import { createSystem } from '@animus-ui/system';\n\
+                 export const accessed = createSystem().addProps({ get p() { return record(); } });\n",
+            ),
+            (
+                "held.ts",
+                "import { createSystem } from '@animus-ui/system';\n\
+                 const props = { get p() { return record(); } };\n\
+                 export const held = createSystem().addProps(props);\n",
+            ),
             (
                 "app.tsx",
                 "import { system, theme } from './system';\n\
@@ -1514,6 +1529,11 @@ mod tests {
                  import { statics } from './statics';\n\
                  import { defaulted } from './defaulted';\n\
                  import { transitive } from './transitive';\n\
+                 import { keyed } from './keyed';\n\
+                 import { classed } from './classed';\n\
+                 import { templated } from './templated';\n\
+                 import { accessed } from './accessed';\n\
+                 import { held } from './held';\n\
                  export const Box = system.styles({ p: 4 }).asElement('div');\n\
                  export const Card = ds.styles({ m: 2 }).asElement('div');\n\
                  export const Other = kept.styles({ m: 1 }).asElement('div');\n\
@@ -1522,6 +1542,11 @@ mod tests {
                  export const Statics = statics.styles({ m: 5 }).asElement('div');\n\
                  export const Defaulted = defaulted.styles({ m: 6 }).asElement('div');\n\
                  export const Transitive = transitive.styles({ m: 7 }).asElement('div');\n\
+                 export const Keyed = keyed.styles({ m: 8 }).asElement('div');\n\
+                 export const Classed = classed.styles({ m: 9 }).asElement('div');\n\
+                 export const Templated = templated.styles({ m: 10 }).asElement('div');\n\
+                 export const Accessed = accessed.styles({ m: 11 }).asElement('div');\n\
+                 export const Held = held.styles({ m: 12 }).asElement('div');\n\
                  export const read = () => [kept, theme];\n",
             ),
             (
@@ -1542,7 +1567,9 @@ mod tests {
         assert!(code.contains("import { theme } from './system';"), "{code}");
         assert!(!code.contains("'./other'"), "{code}");
         assert!(code.contains("import kept from './kept';"), "{code}");
-        for kept in ["styled", "audited", "statics", "defaulted", "transitive"] {
+        for kept in [
+            "styled", "audited", "statics", "defaulted", "transitive", "keyed", "classed", "templated", "accessed", "held",
+        ] {
             assert!(code.contains(&format!("import {{ {kept} }} from './{kept}';")), "{kept}: {code}");
         }
         assert!(!code.contains(".styles("), "{code}");
