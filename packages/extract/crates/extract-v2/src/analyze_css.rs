@@ -3041,6 +3041,7 @@ fn spread_wrapper_targets(
                 outer: outer.clone(),
                 inner: ids.iter().cloned().collect(),
                 dropped: dropped.iter().cloned().collect(),
+                named: dropped.iter().cloned().collect(),
             }));
         }
         let all: BTreeSet<&String> = reach.paths.values().flatten().collect();
@@ -3824,6 +3825,14 @@ impl ConfinedUse {
             values.push(value.clone());
         }
     }
+
+    /// Records what an element writes: its literal, or a runtime value.
+    fn take(&mut self, written: &crate::jsx_scan::WrittenProp) {
+        match &written.literal {
+            Some(value) => self.receive(&written.prop, value),
+            None => self.write(&written.prop, written.conditions.clone()),
+        }
+    }
 }
 
 /// Joins `conditions` into `entry`: an unknown set on either side leaves
@@ -3985,14 +3994,22 @@ fn opaque_delivery(
     (delivered, forwarding)
 }
 
+/// The props the runtime sets itself on an `.asComponent()` target: the
+/// class string it joins (its classes, then the caller's), the style it
+/// merges its dynamic style into, and the ref. A caller's own value of one
+/// never reaches the target as written.
+const RUNTIME_SET_PROPS: [&str; 3] = ["className", "style", "ref"];
+
 /// A component `outer` built with `.asComponent(W)`, where `W` spreads its
 /// props into the `inner` components: the runtime renders `W` with each of
-/// `outer`'s props but its own variant, state and system props, and `W`
-/// passes them on, all but `dropped`.
+/// `outer`'s props but its own variant, state and system props and the
+/// ones it sets itself, and `W` passes them on, all but `dropped`. `named`
+/// holds the props `W`'s own pattern takes on this path.
 struct Forward {
     outer: String,
     inner: Vec<String>,
     dropped: FxHashSet<String>,
+    named: FxHashSet<String>,
 }
 
 /// What each forward carries to its inner components: its outer
@@ -4067,10 +4084,7 @@ fn project_confined_uses<'a>(
     for result in results {
         for written in &result.written_props {
             let Some(confined) = uses.get_mut(&written.binding) else { continue };
-            match &written.literal {
-                Some(value) => confined.receive(&written.prop, value),
-                None => confined.write(&written.prop, written.conditions.clone()),
-            }
+            confined.take(written);
         }
         // Each also has a written prop; one without arrives in any shape.
         for usage in &result.dynamic_prop_usages {
@@ -4089,10 +4103,12 @@ fn project_confined_uses<'a>(
                 Some(carried) => {
                     let Some(confined) = uses.get_mut(inner) else { continue };
                     for written in carried {
-                        match &written.literal {
-                            Some(value) => confined.receive(&written.prop, value),
-                            None => confined.write(&written.prop, written.conditions.clone()),
-                        }
+                        confined.take(written);
+                    }
+                    // What the runtime sets itself reaches the spread unless
+                    // the wrapper's own pattern takes it.
+                    for prop in RUNTIME_SET_PROPS.iter().filter(|prop| !forward.named.contains(**prop)) {
+                        confined.write(prop, None);
                     }
                 }
                 None => {
@@ -5636,8 +5652,10 @@ fn run_with_system_floor(
         let (wrapper_targets, proxies, file_forwards) =
             spread_wrapper_targets(path, ff, files, inputs, &evaluated_ids);
         wrapper_targets_by_file.insert(path.clone(), wrapper_targets.iter().cloned().collect());
-        // The runtime hands the target every prop but the component's own.
+        // The runtime hands the target every prop but the component's own
+        // and the ones it sets itself.
         forwards.extend(file_forwards.into_iter().map(|mut forward| {
+            forward.dropped.extend(RUNTIME_SET_PROPS.map(String::from));
             if let Some((css, _, _, active_props, _, custom_configs, _)) = evaluated.get(&forward.outer) {
                 forward.dropped.extend(css.variants.iter().map(|variant| variant.prop.clone()));
                 forward.dropped.extend(css.states.iter().map(|(state, _)| state.clone()));
@@ -8573,7 +8591,8 @@ export const App = ({ n }) => <Box bgImage={n} texture={n} />;
     /// `.asComponent()` target's spread only what the component's own uses
     /// forward, every prop but its variants, states and system props: both
     /// leave the component they render proven. A use the analysis cannot
-    /// read, of the wrapper or of the component, keeps its slots.
+    /// read, of the wrapper or of the component, keeps its slots, and so
+    /// does the class string the runtime builds for the target itself.
     #[test]
     fn forwarding_spreads_carry_only_the_uses_that_reach_them() {
         let kit = "export const Box = ds.system({ space: true }).asElement('div');\n";
@@ -8593,6 +8612,35 @@ export const App = ({ n }) => <Box bgImage={n} texture={n} />;
             let app = format!("import {{ Box }} from './kit';\n{app}");
             let out = analyze(&[("kit.tsx", kit), ("app.tsx", &app)], &test_inputs());
             assert_eq!(out.dynamic_props.keys().collect::<Vec<_>>(), want, "{app}");
+        }
+        let class_prop = CssInputs::from_json(
+            None,
+            None,
+            None,
+            Some(r#"{"className": {"property": "--observed"}}"#),
+            Some(r#"{"special": ["className"]}"#),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            false,
+        )
+        .unwrap();
+        let kit = "export const Special = ds.system({ special: true }).asElement('div');\n\
+                   export const Base = ds.styles({ display: 'block' }).asElement('div');\n";
+        for render in ["<Outer />", "<Outer className=\"red\" />"] {
+            let app = format!(
+                "import {{ Base, Special }} from './kit';\n\
+                 function El(props) {{ return <Special as=\"span\" {{...props}} />; }}\n\
+                 const Outer = Base.extend().asComponent(El);\nexport const App = () => {render};\n"
+            );
+            let out = analyze(&[("kit.tsx", kit), ("app.tsx", &app)], &class_prop);
+            assert_eq!(out.dynamic_props.keys().collect::<Vec<_>>(), ["className"], "{render}");
+            assert!(!out.system_prop_map.contains_key("className"), "{render}: {:?}", out.system_prop_map);
         }
     }
 
