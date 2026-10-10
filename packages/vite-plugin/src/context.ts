@@ -273,6 +273,8 @@ export class PluginContext {
   assetPassComplete = false;
 
   externalPackageDirs: string[] = [];
+  /** Those whose package is linked rather than installed. */
+  externalLinkedDirs: string[] = [];
 
   externalDirOwners: Record<string, string> = {};
 
@@ -494,6 +496,9 @@ export class PluginContext {
           ),
           unbundledComputedImports: true,
           packageDirs: this.externalPackageDirs.map((dir) =>
+            relative(this.rootDir, dir)
+          ),
+          linkedDirs: this.externalLinkedDirs.map((dir) =>
             relative(this.rootDir, dir)
           ),
         },

@@ -49,14 +49,14 @@ export interface AnalysisOptions {
   /** rootDir-relative external package dirs (external-token candidates). */
   externalDirs?: string[];
   devMode: boolean;
-  /** What the host knows about renders the analysis cannot see. */
+  /** What the host knows that the analysis cannot see. */
   analysisContext?: AnalysisContext;
   /** Diagnostics gathered outside analysis, surfaced through the same
    *  policy point as the manifest's own. */
   extraDiagnostics?: import('./manifest-diagnostics').ManifestDiagnostic[];
 }
 
-/** What a host knows about renders the analysis cannot see. */
+/** What a host knows that the analysis cannot see. */
 export interface AnalysisContext {
   /** rootDir-relative sources ingestion skipped. Their renders are unseen,
    *  so nothing is pruned while any is skipped, and an error from an option
@@ -69,6 +69,9 @@ export interface AnalysisContext {
   /** rootDir-relative directories of the analysed packages: a load into
    *  one reaches only its modules. */
   packageDirs?: string[];
+  /** Those of them whose package is linked rather than installed, so
+   *  development names their files where they are defined. */
+  linkedDirs?: string[];
 }
 
 /**
@@ -134,6 +137,7 @@ export function buildAnalysisInputs(
       skippedSources: context.skippedSources ?? [],
       unbundledComputedImports: context.unbundledComputedImports ?? false,
       packageDirs: context.packageDirs ?? [],
+      linkedDirs: context.linkedDirs ?? [],
     });
   }
   return inputs;

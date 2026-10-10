@@ -233,6 +233,8 @@ export class ExtractionSession {
 
   /** Absolute directory prefixes for external packages (loader allowlist). */
   externalPackageDirs: string[] = [];
+  /** Those whose package is linked rather than installed. */
+  externalLinkedDirs: string[] = [];
   /** Absolute package dir → owning specifier (cross-source correlation). */
   private externalDirOwners: Record<string, string> = {};
   /** rootDir-relative external file → owning specifier (correlation join). */
@@ -1114,6 +1116,7 @@ export class ExtractionSession {
       }
 
       this.externalPackageDirs = admitted.packageDirs;
+      this.externalLinkedDirs = admitted.linkedDirs;
 
       bt.packageResolve = this.elapsed(t);
 
@@ -1453,6 +1456,9 @@ export class ExtractionSession {
         ),
         unbundledComputedImports: this.host.unbundledComputedImports,
         packageDirs: this.externalPackageDirs.map((dir) =>
+          relative(this.rootDir!, dir)
+        ),
+        linkedDirs: this.externalLinkedDirs.map((dir) =>
           relative(this.rootDir!, dir)
         ),
       },

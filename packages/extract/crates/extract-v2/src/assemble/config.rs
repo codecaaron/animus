@@ -9,7 +9,6 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use serde_json::{json, Map, Value};
 
 use crate::facts::ChainFacts;
-use crate::ids::class_name_for;
 use crate::theme::PropConfigMap;
 
 use super::{AssembleError, ReplacementPayload};
@@ -97,7 +96,7 @@ pub(super) fn build_config(
     let mut compounds: Vec<Value> = Vec::new();
     let mut states: Vec<String> = Vec::new();
     let mut compound_index = 0usize;
-    let class_name = class_name_for(filename, binding, prefix);
+    let class_name = super::component_class_name(filename, binding, prefix, payload);
     let use_merged = payload.and_then(|p| p.merged_config.as_ref());
 
     for stage in &chain.stages {

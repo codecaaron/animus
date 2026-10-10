@@ -336,6 +336,10 @@ export interface CollectedExternalPackages {
   sourceEntrySideEffects: Map<string, boolean>;
   /** Absolute directories for bundler loader allowlisting. */
   packageDirs: string[];
+  /** Those of `packageDirs` whose package is linked rather than installed:
+   *  its real path is outside `node_modules`, so its source can change in
+   *  place. */
+  linkedDirs: string[];
   /** Absolute package dir → every declared specifier that claimed it, in
    *  declaration order. `firstOwners` derives the single-value view. */
   dirOwnerSets: Record<string, string[]>;
@@ -407,6 +411,7 @@ export async function collectExternalPackageSources(opts: {
     );
   };
   const packageDirs: string[] = [];
+  const linkedDirs: string[] = [];
   const dirOwnerSets: Record<string, string[]> = {};
   const dirExtensions: Record<string, string[]> = {};
   const fileOwners: Record<string, string> = {};
@@ -480,6 +485,7 @@ export async function collectExternalPackageSources(opts: {
       continue;
     }
 
+    const linked = !isInstalledPackage(pkgRoot);
     const srcDir = join(pkgRoot, 'src');
     let fileCount = 0;
     let staleDist = false;
@@ -504,6 +510,7 @@ export async function collectExternalPackageSources(opts: {
       packageMap[specifier] ??= relative(rootDir, absEntry);
       if (condition.root) {
         packageDirs.push(condition.root);
+        if (linked) linkedDirs.push(condition.root);
         claimDir(condition.root, specifier);
         dirExtensions[condition.root] = [...extensionsSet];
         onPackageResolved?.(specifier, condition.root);
@@ -513,6 +520,7 @@ export async function collectExternalPackageSources(opts: {
       }
     } else if (existsSync(srcDir)) {
       packageDirs.push(srcDir);
+      if (linked) linkedDirs.push(srcDir);
       claimDir(srcDir, specifier);
       dirExtensions[srcDir] = [...extensionsSet];
       onPackageResolved?.(specifier, srcDir);
@@ -554,9 +562,7 @@ export async function collectExternalPackageSources(opts: {
 
       const pkgFiles = walkPackageSources(srcDir, extensionsSet);
 
-      staleDist =
-        !isInstalledPackage(pkgRoot) &&
-        distEntryIsStale(absEntry, srcDir, pkgFiles);
+      staleDist = linked && distEntryIsStale(absEntry, srcDir, pkgFiles);
 
       for (const pkgFile of pkgFiles) {
         if (ingest(pkgFile, specifier)) fileCount++;
@@ -564,6 +570,7 @@ export async function collectExternalPackageSources(opts: {
     } else {
       const outputDir = dirname(absEntry);
       packageDirs.push(outputDir);
+      if (linked) linkedDirs.push(outputDir);
       claimDir(outputDir, specifier);
       onPackageResolved?.(specifier, outputDir);
       const relPath = relative(rootDir, absEntry);
@@ -618,6 +625,7 @@ export async function collectExternalPackageSources(opts: {
     sourceEntries,
     sourceEntrySideEffects,
     packageDirs,
+    linkedDirs,
     dirOwnerSets,
     dirExtensions,
     fileOwners,
@@ -841,6 +849,9 @@ export function excludeCollectedPackages(
     sourceEntries,
     sourceEntrySideEffects,
     packageDirs: collected.packageDirs.filter(
+      (dir) => !rejectedDirs.includes(dir)
+    ),
+    linkedDirs: collected.linkedDirs.filter(
       (dir) => !rejectedDirs.includes(dir)
     ),
     dirOwnerSets,

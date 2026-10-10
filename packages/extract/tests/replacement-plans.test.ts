@@ -25,6 +25,7 @@ function descriptor(
     tag: 'div',
     replacement,
     system_prop_names: [],
+    definition_fingerprint: '',
   };
 }
 

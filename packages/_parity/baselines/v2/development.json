@@ -2,7 +2,7 @@
   "corpusSha256": "fcbf88aba94840f3174347541e76afbf310dd399d29c45489e7ba63635f4c5d2",
   "engine": "v2",
   "mode": "development",
-  "refreshIntent": "style-keys-dead-or-reordered-20261010",
+  "refreshIntent": "semantic-class-identity-20261010",
   "surfaceSchemaSha256": "43eb1265e97aab8497c11ca05e8a4159a6d4f4b69a6837a704e1d96fa75eb108",
   "units": {
     "extract-all": {

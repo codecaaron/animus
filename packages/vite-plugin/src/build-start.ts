@@ -160,6 +160,7 @@ export async function runBuildStart(
   }
 
   ctx.externalPackageDirs = collected.packageDirs;
+  ctx.externalLinkedDirs = collected.linkedDirs;
   // The earlier registration points both run before this assignment, so
   // external dirs must register here or they are never watched.
   ctx.registerSystemWatchPaths();
