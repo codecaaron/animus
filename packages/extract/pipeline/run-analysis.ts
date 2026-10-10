@@ -205,8 +205,8 @@ export function runProjectAnalysis(
   // SAFETY: `manifestJson` is this call's own `analyzeProject` return value,
   // the serde output `ProjectManifest` mirrors. Unparseable JSON throws.
   const manifest = JSON.parse(manifestJson) as ProjectManifest;
-  // The system's errors join the manifest's on every analysis, so each host
-  // refuses to publish whatever the build's strictness.
+  // The system's errors join the manifest's on every analysis, so a build
+  // fails on them whatever its strictness, and development reports them.
   const systemErrors = systemLoadDiagnostics(opts.system).filter(
     (diagnostic) => diagnostic.kind === 'error'
   );

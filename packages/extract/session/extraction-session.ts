@@ -14,7 +14,6 @@ import { basename, extname, isAbsolute, join, relative, resolve } from 'path';
 
 import {
   assembleStylesheet,
-  assertNoErrorDiagnostics,
   buildSystemPropsModule,
   clearEngineCache,
   collectExternalPackageSources,
@@ -1471,6 +1470,8 @@ export class ExtractionSession {
     };
 
     this.writeAnalysisStatus('analyzing', pending);
+    // An error-level diagnostic, a hard error included, throws here in a
+    // build, before any stylesheet is assembled: no partial generation.
     const result = runProjectAnalysis(engineApi, {
       ...analysisOptions,
       warn: (message) => this.warn(message),
@@ -1480,10 +1481,6 @@ export class ExtractionSession {
       reportErrors: this.reportErrors(),
       extraDiagnostics: this.ingestionFailureDiagnostics,
     });
-
-    // Throws on any error diagnostic in EVERY mode, before token contracts
-    // and before any stylesheet is assembled — no partial generation.
-    assertNoErrorDiagnostics(result.manifest?.diagnostics);
 
     enforceExternalTokenContracts({
       diagnostics: result.manifest?.diagnostics,

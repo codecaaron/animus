@@ -1,5 +1,4 @@
 import {
-  assertNoErrorDiagnostics,
   buildSystemPropsModule,
   contentHash,
   createExcludeMatcher,
@@ -526,7 +525,6 @@ export class PluginContext {
       return false;
     }
 
-    assertNoErrorDiagnostics(result.manifest.diagnostics);
     this.assertRuntimeImportSuppliesTerminals(result.manifest);
     reportSurvivingAssetPlaceholders(generatedModuleCode(result.manifest), {
       strict: this.options.strict,

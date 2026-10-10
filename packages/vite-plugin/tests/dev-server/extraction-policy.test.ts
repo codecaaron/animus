@@ -58,6 +58,7 @@ suite.each([
   ['false strictness', { strict: false }, WARNS],
   ['true strictness', { strict: true }, ERRORS],
   ['an error entry', { diagnostics: { [CODE]: 'error' } }, ERRORS],
+  ['a kind entry', { diagnostics: { 'kind:bail': 'error' } }, ERRORS],
 ] as const)('development with %s', (_label, pluginOptions, report) => {
   let fixture: DevFixture;
   let adapter: DevServerAdapter;

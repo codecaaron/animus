@@ -206,7 +206,10 @@ export function withAnimus(
         const { mode } = resolveMode(options.mode, () =>
           context.dev === true ? 'development' : 'production'
         );
-        const plugin = new AnimusWebpackPlugin({ ...options, mode });
+        const plugin = new AnimusWebpackPlugin(
+          { ...options, mode },
+          { development: context.dev === true }
+        );
         plugin.setRootDir(rootDir);
         const sessionDir = plugin.sessionDir;
 
@@ -486,6 +489,9 @@ async function analyzeForTurbopack(
   liveTurbopackWatcher?.close();
   liveTurbopackWatcher = null;
   liveTurbopackSession = session;
+  // The dev server's phase, not the emission mode: an error-level
+  // diagnostic reports there and the session keeps publishing.
+  session.development = development;
   session.rootDir = rootDir;
   const aliasPairs = readTsconfigAliasPairs(rootDir);
   const builtAliases = buildPathAliasesJson(aliasPairs, rootDir);

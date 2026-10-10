@@ -62,10 +62,10 @@ export interface AnimusCoreOptions {
   strict?: boolean;
   /** Each `animus.*` code's level, by exact code, by a prefix ending in `.*`
    *  (`'animus.style.*'`), or by kind (`'kind:bail'`, `'kind:skip'`,
-   *  `'kind:warn'`): `'off'`, `'info'`, `'warn'` or `'error'`, which fails a
-   *  build and is reported in development, which keeps running. An exact
-   *  code beats the longest matching prefix, which beats a kind, and an
-   *  entry beats `strict` and the code's own severity. */
+   *  `'kind:warn'`, `'kind:error'`): `'off'`, `'info'`, `'warn'` or
+   *  `'error'`, which fails a build and is reported in development, which
+   *  keeps running. An exact code beats the longest matching prefix, which
+   *  beats a kind, and an entry beats `strict` and the code's own severity. */
   diagnostics?: DiagnosticLevels;
   /** `true` logs phase checkpoints, summaries and timing; `'trace'` also logs
    *  one line per item (pruned option, transformed file, HMR decision).

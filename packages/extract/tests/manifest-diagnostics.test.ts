@@ -164,7 +164,7 @@ describe('surfaceManifestDiagnostics strict policy', () => {
 });
 
 describe('surfaceManifestDiagnostics levels', () => {
-  it('sets each code by exact entry, else longest prefix, else kind, over strict and the default', () => {
+  it('sets each code by exact entry, else longest prefix, else kind, over strict and the default, a hard error at error', () => {
     const record = (code: string, severity = 'warn'): ManifestDiagnostic => ({
       file: 'src/a.tsx',
       component: 'A',
@@ -241,10 +241,40 @@ describe('surfaceManifestDiagnostics levels', () => {
     );
     // An unknown key warns once, however often the build analyzes.
     expect(warned.filter((m) => m.includes("'kind:skp'"))).toEqual([
-      "⚠ diagnostics option: 'kind:skp' names no diagnostic kind — use kind:bail, kind:skip or kind:warn",
+      "⚠ diagnostics option: 'kind:skp' names no diagnostic kind — use kind:bail, kind:skip, kind:warn or kind:error",
     ]);
     expect(warned.filter((m) => m.includes("'animus.styel.typo'"))).toEqual([
       "⚠ diagnostics option: 'animus.styel.typo' matches no Animus diagnostic code — check its spelling (a code the system package mints at run time is known only once it is reported)",
+    ]);
+
+    // A hard error is error-level without strict: a build fails on it,
+    // development reports it, and `kind:error` sets its level.
+    const hard: ManifestDiagnostic = {
+      file: 'system',
+      component: '--tone',
+      kind: 'error',
+      message: 'conflict',
+      code: 'animus.prefix.name-conflict',
+      severity: 'error',
+    };
+    expect(() =>
+      surfaceManifestDiagnostics({ diagnostics: [hard] }, () => {})
+    ).toThrow(/animus\.prefix\.name-conflict — system: --tone: conflict/);
+    const reported: string[] = [];
+    surfaceManifestDiagnostics({ diagnostics: [hard] }, () => {}, {
+      reportErrors: (m) => reported.push(m),
+    });
+    expect(reported).toHaveLength(1);
+    const demoted: string[] = [];
+    surfaceManifestDiagnostics(
+      { diagnostics: [hard] },
+      (m) => demoted.push(m),
+      {
+        levels: { 'kind:error': 'warn' },
+      }
+    );
+    expect(demoted).toEqual([
+      '⚠ system: --tone: conflict [animus.prefix.name-conflict]',
     ]);
   });
 });

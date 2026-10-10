@@ -14,7 +14,15 @@ import type {
   AnimusMode,
 } from '@animus-ui/extract/pipeline';
 
-export type AnimusUnpluginOptions = AnimusCoreOptions;
+export interface AnimusUnpluginOptions extends AnimusCoreOptions {
+  /**
+   * esbuild only: set this where you call `context().watch()` or `serve()`.
+   * Every turn, the first included, then reports an error-level diagnostic
+   * and publishes. Without it, esbuild is a one-shot build, which an
+   * error-level diagnostic fails. Other hosts detect a watch themselves.
+   */
+  watch?: boolean;
+}
 
 type HostOptionRecord = Partial<AnimusUnpluginOptions>;
 
@@ -37,6 +45,8 @@ function hasRequiredSystem(
 export interface ResolvedHostOptions {
   root: string;
   options: AnimusCoreOptions;
+  /** The esbuild adapter's `watch` option. */
+  watch: boolean;
 }
 
 export function resolveHostOptions(
@@ -45,7 +55,7 @@ export function resolveHostOptions(
 ): ResolvedHostOptions {
   const options: HostOptionRecord = raw ?? {};
   assertNoRetiredEngineSelection(options.engine);
-  assertKnownOptionKeys(options);
+  assertKnownOptionKeys(options, ['watch']);
   if (!hasRequiredSystem(options)) {
     throw new AnimusConfigError(
       'Missing required option `system` — pass `system: "./src/ds.ts"` to ' +
@@ -53,7 +63,8 @@ export function resolveHostOptions(
     );
   }
   const root = options.root ? resolve(cwd, options.root) : cwd;
-  return { root, options };
+  const { watch, ...core } = options;
+  return { root, options: core, watch: watch === true };
 }
 
 export function resolveHostMode(

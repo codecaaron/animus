@@ -162,11 +162,17 @@ export class AnimusWebpackPlugin {
    *  never `watchRun`: webpack stops watching after a failed `watchRun`. */
   private watchFailure: Error | null = null;
 
-  constructor(options: AnimusNextOptions) {
+  /** `development` is `next dev`: an error-level diagnostic reports and the
+   *  compilation keeps publishing, whatever the emission mode. */
+  constructor(
+    options: AnimusNextOptions,
+    { development = false }: { development?: boolean } = {}
+  ) {
     this.options = options;
     assertNoRetiredEngineSelection(options.engine);
     setSharedEngine(options.engine ?? 'v2');
     this.session = new ExtractionSession(options);
+    this.session.development = development;
     // Transforms import the virtual id, which the module factory resolves to
     // this session's system-props module: a transform a persistent cache
     // restores then binds to the current session, not the one that built it.
