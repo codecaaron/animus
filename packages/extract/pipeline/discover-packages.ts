@@ -255,6 +255,16 @@ function readPackageSideEffects(
   );
 }
 
+/** Whether a bundler that reads the nearest `package.json`'s `sideEffects`
+ *  against the file's own path keeps `absFile`; undefined without a field
+ *  it reads, which keeps the bundler's side-effectful default. */
+export function fileSideEffects(absFile: string): boolean | undefined {
+  const pkgRoot = findPackageRoot(absFile);
+  const field = readPackageSideEffects(pkgRoot);
+  if (field === undefined || field === true || field === false) return field;
+  return matchesSideEffects(field, pkgRoot, [absFile]);
+}
+
 function matchesSideEffects(
   globs: readonly RegExp[],
   pkgRoot: string,
@@ -394,6 +404,25 @@ export async function collectExternalPackageSources(opts: {
   const sourceEntrySideEffects = new Map<string, boolean>();
   /** `replaced` names the entry the redirect stands in for; it is only
    *  needed, and so only resolved, for a glob list. */
+  /** The entry `subpath` of the package resolves to without the redirect.
+   *  A resolver with no `import` condition, as Node's `require` has none,
+   *  finds no ESM-only entry, so the manifest's own target answers then. */
+  const shippedEntry = async (
+    specifier: string,
+    pkgRoot: string,
+    subpath: string
+  ): Promise<string | null> => {
+    try {
+      const resolved = await resolveSpecifier(specifier);
+      if (resolved) return resolved;
+    } catch {
+      // Fall through to the manifest.
+    }
+    return (
+      packageExportEntries(pkgRoot).find(([entry]) => entry === subpath)?.[1] ??
+      null
+    );
+  };
   const redirect = async (
     specifier: string,
     srcEntry: string,
@@ -514,13 +543,9 @@ export async function collectExternalPackageSources(opts: {
       for (const [entry, target] of condition.entries) {
         const entrySpecifier = packageName + entry.slice(1);
         packageMap[entrySpecifier] = relative(rootDir, target);
-        await redirect(entrySpecifier, target, pkgRoot, async () => {
-          try {
-            return await resolveSpecifier(entrySpecifier);
-          } catch {
-            return null;
-          }
-        });
+        await redirect(entrySpecifier, target, pkgRoot, () =>
+          shippedEntry(entrySpecifier, pkgRoot, entry)
+        );
       }
       packageMap[specifier] ??= relative(rootDir, absEntry);
       if (condition.root) {
@@ -564,13 +589,9 @@ export async function collectExternalPackageSources(opts: {
           );
           if (rootEntry) {
             packageMap[packageName] = relative(rootDir, rootEntry);
-            await redirect(packageName, rootEntry, pkgRoot, async () => {
-              try {
-                return await resolveSpecifier(packageName);
-              } catch {
-                return null;
-              }
-            });
+            await redirect(packageName, rootEntry, pkgRoot, () =>
+              shippedEntry(packageName, pkgRoot, '.')
+            );
           }
         }
       }
