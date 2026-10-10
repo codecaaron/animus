@@ -154,6 +154,10 @@ pub enum UsageFact {
         /// static value reads them.
         #[serde(skip)]
         literals: Vec<(String, Value)>,
+        /// What the props object writes when usage reads all of it; `None`
+        /// when it can deliver props usage cannot list.
+        #[serde(skip)]
+        writes: Option<CreateWrites>,
         /// A `cloneElement` of an element of this component: `props` are
         /// its overrides, and the element's own props are recorded where
         /// it is written.
@@ -882,6 +886,7 @@ pub(crate) fn collect_enriched_usage(
         module_loads: Some(Vec::new()),
         origins,
         provided: provided_components(program),
+        rests: origins.map(|scoping| rest_parameters(program, scoping)).unwrap_or_default(),
     };
     collector.visit_program(program);
     let module_loads = collector.module_loads.take().unwrap_or_default();
@@ -2616,6 +2621,9 @@ struct FactCollector<'a, 's> {
     /// Enriched collection only: the values a parameter's literal-union type
     /// annotation admits.
     finite_params: FxHashMap<SymbolId, FiniteSet>,
+    /// Enriched collection only: each rest parameter a `createElement`
+    /// props object may spread, with the keys it can never carry.
+    rests: FxHashMap<SymbolId, BTreeSet<String>>,
     /// Enriched collection only: see `TagOrigin::Provided`.
     provided: FxHashSet<SymbolId>,
 }
@@ -2929,6 +2937,57 @@ fn truthy(value: &Value) -> bool {
 }
 
 impl FactCollector<'_, '_> {
+    /// What a `createElement` props argument writes, when usage reads all of
+    /// it: no argument, `null` or `undefined`, or an object literal of
+    /// static keys whose only spreads are bounded rest parameters.
+    fn create_writes(&self, argument: Option<&Argument<'_>>) -> Option<CreateWrites> {
+        use oxc::ast::ast::{ObjectPropertyKind, PropertyKind};
+        let scoping = self.origins?;
+        let Some(argument) = argument else { return Some(CreateWrites::default()) };
+        let expression = crate::chain_walk::unwrap_type_assertions(argument.as_expression()?);
+        if matches!(expression, Expression::NullLiteral(_)) || is_absent(expression, self.origins) {
+            return Some(CreateWrites::default());
+        }
+        let Expression::ObjectExpression(object) = expression else { return None };
+        let mut writes = CreateWrites::default();
+        for property in &object.properties {
+            match property {
+                ObjectPropertyKind::ObjectProperty(property) => {
+                    if property.kind != PropertyKind::Init || property.computed || property.method {
+                        return None;
+                    }
+                    let key = eval_property_key(&property.key)?;
+                    if key == "__proto__" {
+                        return None;
+                    }
+                    let value = crate::chain_walk::unwrap_type_assertions(&property.value);
+                    // An explicit `undefined` is an omitted prop, as at runtime.
+                    if is_absent(value, self.origins) {
+                        continue;
+                    }
+                    let write = match eval_static_expression(value) {
+                        Some(literal) => (key, Some(literal), None),
+                        None => (key, None, write_conditions(value, self.origins)),
+                    };
+                    writes.props.push(write);
+                }
+                ObjectPropertyKind::SpreadProperty(spread) => {
+                    let Expression::Identifier(id) = crate::chain_walk::unwrap_type_assertions(&spread.argument) else {
+                        return None;
+                    };
+                    let symbol = id.reference_id.get().and_then(|id| scoping.get_reference(id).symbol_id())?;
+                    let excluded = self.rests.get(&symbol)?;
+                    // Two rests together can carry what either can.
+                    writes.rest_excludes = Some(match writes.rest_excludes.take() {
+                        Some(so_far) => so_far.intersection(excluded).cloned().collect(),
+                        None => excluded.clone(),
+                    });
+                }
+            }
+        }
+        Some(writes)
+    }
+
     /// Where `root` is bound, as the file's scopes tell it.
     fn origin_of(&self, root: &IdentifierReference<'_>) -> Option<TagOrigin> {
         let scoping = self.origins?;
@@ -3253,6 +3312,7 @@ impl<'a, 's> Visit<'a> for FactCollector<'a, 's> {
                     identity_uncertain,
                     props: create_element_props(call.arguments.get(1)),
                     literals: create_element_literals(call.arguments.get(1), self.origins),
+                    writes: self.create_writes(call.arguments.get(1)),
                     clone: false,
                     at: call.span.start,
                     origin: root.and_then(|root| self.origin_of(root)),
@@ -3377,6 +3437,7 @@ fn clone_of(tag: TagFact, props: Option<Vec<(String, String)>>, at: u32) -> Opti
         identity_uncertain: false,
         props,
         literals: Vec::new(),
+        writes: None,
         clone: true,
         at,
         origin: None,
@@ -3435,6 +3496,93 @@ fn tag_origin(scoping: &Scoping, name: &IdentifierReference<'_>) -> TagOrigin {
         Some(symbol) if scoping.symbol_flags(symbol).is_import() => TagOrigin::Import,
         Some(_) => TagOrigin::TopLevel,
     }
+}
+
+/// What a `createElement` props object usage reads in full writes: each
+/// key with its literal, or `None` and the conditions a runtime value
+/// writes; and, when it spreads a rest parameter, the keys that rest can
+/// never carry, any other prop arriving through it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CreateWrites {
+    pub props: Vec<(String, Option<Value>, Option<BTreeSet<String>>)>,
+    pub rest_excludes: Option<BTreeSet<String>>,
+}
+
+/// Each rest parameter (`function F({ as, ...props })`) whose keys usage
+/// can bound: every other key of its pattern is static, and it is only
+/// spread or read through a static member, so nothing adds a key to it.
+/// Mapped to the keys its pattern takes out of it.
+fn rest_parameters(program: &Program<'_>, scoping: &Scoping) -> FxHashMap<SymbolId, BTreeSet<String>> {
+    use oxc::ast::ast::BindingPattern;
+    struct Rests<'a, 's> {
+        scoping: &'s Scoping,
+        rests: FxHashMap<SymbolId, BTreeSet<String>>,
+        invalid: FxHashSet<SymbolId>,
+        ancestors: Vec<AstKind<'a>>,
+    }
+    impl<'a> Rests<'a, '_> {
+        fn params(&mut self, params: &oxc::ast::ast::FormalParameters<'a>) {
+            let Some(BindingPattern::ObjectPattern(pattern)) = params.items.first().map(|param| &param.pattern) else {
+                return;
+            };
+            let Some(rest) = &pattern.rest else { return };
+            let BindingPattern::BindingIdentifier(binding) = &rest.argument else { return };
+            let Some(symbol) = binding.symbol_id.get() else { return };
+            let keys: Option<BTreeSet<String>> = pattern
+                .properties
+                .iter()
+                .map(|property| property.key.static_name().filter(|_| !property.computed).map(|key| key.to_string()))
+                .collect();
+            match keys {
+                Some(keys) if !self.scoping.symbol_is_mutated(symbol) => {
+                    self.rests.insert(symbol, keys);
+                }
+                _ => {}
+            }
+        }
+    }
+    impl<'a> Visit<'a> for Rests<'a, '_> {
+        fn enter_node(&mut self, kind: AstKind<'a>) {
+            self.ancestors.push(kind);
+        }
+        fn leave_node(&mut self, _kind: AstKind<'a>) {
+            self.ancestors.pop();
+        }
+        fn visit_function(&mut self, function: &oxc::ast::ast::Function<'a>, flags: oxc::semantic::ScopeFlags) {
+            self.params(&function.params);
+            oxc::ast_visit::walk::walk_function(self, function, flags);
+        }
+        fn visit_arrow_function_expression(&mut self, arrow: &oxc::ast::ast::ArrowFunctionExpression<'a>) {
+            self.params(&arrow.params);
+            oxc::ast_visit::walk::walk_arrow_function_expression(self, arrow);
+        }
+        fn visit_identifier_reference(&mut self, ident: &IdentifierReference<'a>) {
+            let Some(reference) = ident.reference_id.get().map(|id| self.scoping.get_reference(id)) else { return };
+            let Some(symbol) = reference.symbol_id() else { return };
+            if !self.rests.contains_key(&symbol) {
+                return;
+            }
+            let mut ancestors = self.ancestors.iter().rev();
+            let (current, parent) = peel_wrappers(ident.span, &mut ancestors);
+            let read = match parent {
+                Some(AstKind::SpreadElement(_) | AstKind::JSXSpreadAttribute(_)) => true,
+                Some(AstKind::StaticMemberExpression(member)) => {
+                    member.object.span() == current
+                        && !reference.flags().is_member_write_target()
+                        && !matches!(ancestors.next(), Some(AstKind::CallExpression(call)) if call.callee.span() == member.span)
+                }
+                _ => false,
+            };
+            if !read {
+                self.invalid.insert(symbol);
+            }
+        }
+    }
+    let mut rests = Rests { scoping, rests: FxHashMap::default(), invalid: FxHashSet::default(), ancestors: Vec::new() };
+    rests.visit_program(program);
+    let invalid = rests.invalid;
+    rests.rests.retain(|symbol, _| !invalid.contains(symbol));
+    rests.rests
 }
 
 /// A tag whose type a function's own prop chooses at runtime: `<As>` or
@@ -3939,6 +4087,7 @@ pub fn collect_usage_facts(program: &Program<'_>) -> Vec<UsageFact> {
         origins: None,
         finite_params: FxHashMap::default(),
         provided: FxHashSet::default(),
+        rests: FxHashMap::default(),
     };
     collector.visit_program(program);
     collector.finish()
@@ -4644,6 +4793,7 @@ pub fn filter_usage_scan(
                 identity_uncertain,
                 props,
                 literals,
+                writes,
                 clone,
                 at,
                 origin,
@@ -4679,9 +4829,36 @@ pub fn filter_usage_scan(
                     None
                 };
                 if let Some(binding) = resolved {
-                    result.open_components.insert(binding.clone());
+                    // A props object usage reads in full writes what it lists,
+                    // and through a rest only what that rest can carry.
+                    match writes.as_ref().filter(|_| !*clone) {
+                        Some(writes) => {
+                            let active = component_props.get(binding.as_str());
+                            for (prop, literal, conditions) in &writes.props {
+                                result.written_props.push(WrittenProp {
+                                    binding: binding.clone(),
+                                    prop: prop.clone(),
+                                    literal: literal.clone(),
+                                    conditions: conditions.clone(),
+                                });
+                                let system = active.is_some_and(|active| active.contains(prop));
+                                if literal.is_none() && system && seen.insert(format!("__dynamic__:{prop}")) {
+                                    result.dynamic_prop_usages.push(DynamicPropUsage {
+                                        prop_name: prop.clone(),
+                                        binding: binding.clone(),
+                                    });
+                                }
+                            }
+                            if let Some(excluded) = &writes.rest_excludes {
+                                result.open_except.push((binding.clone(), excluded.clone()));
+                            }
+                        }
+                        None => {
+                            result.open_components.insert(binding.clone());
+                        }
+                    }
                     // Literal system props take their static classes as a
-                    // JSX attribute's do; the open component keeps its slots.
+                    // JSX attribute's do.
                     if let Some(active) = component_props.get(binding.as_str()) {
                         let custom = custom_props.get(binding.as_str());
                         for (prop_name, value) in literals {
