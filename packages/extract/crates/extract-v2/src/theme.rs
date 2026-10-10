@@ -328,7 +328,64 @@ pub struct ConditionedGroup {
     pub selector: Option<String>,
     pub declarations: Vec<CssDeclaration>,
     pub emit_order: ConditionEmitOrder,
+    pub suppliers: Suppliers,
 }
+
+/// Where an authored selector or at-rule key placed a group: the
+/// `resolve_styles` call that resolved it and, per nesting level, the key's
+/// slot among its object's selector and at-rule keys.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuthoredOrigin {
+    pub block: usize,
+    pub path: Vec<usize>,
+    /// A raw selector or at-rule key lies on the path.
+    pub raw: bool,
+}
+
+/// The authored keys a group's declarations came from, each with the
+/// properties it wrote last, in the order they first wrote. Provenance orders
+/// emission; it never makes two groups' styles differ.
+#[derive(Debug, Clone, Default)]
+pub struct Suppliers(pub Vec<(AuthoredOrigin, Vec<String>)>);
+
+impl PartialEq for Suppliers {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl Suppliers {
+    fn of(origin: Option<&AuthoredOrigin>, declarations: &[CssDeclaration]) -> Self {
+        let mut suppliers = Self::default();
+        suppliers.record(origin, declarations);
+        suppliers
+    }
+
+    /// `origin` wrote `declarations` last: each property moves to it.
+    pub fn record(&mut self, origin: Option<&AuthoredOrigin>, declarations: &[CssDeclaration]) {
+        let Some(origin) = origin else { return };
+        for (_, properties) in &mut self.0 {
+            properties.retain(|property| !declarations.iter().any(|d| &d.property == property));
+        }
+        let properties = declarations.iter().map(|d| d.property.clone());
+        match self.0.iter_mut().find(|(known, _)| known == origin) {
+            Some((_, known)) => known.extend(properties),
+            None => self.0.push((origin.clone(), properties.collect())),
+        }
+    }
+
+    /// Applies `other`'s writes after this group's own.
+    pub fn absorb(&mut self, other: &Suppliers, declarations: &[CssDeclaration]) {
+        for (origin, properties) in &other.0 {
+            let written: Vec<CssDeclaration> =
+                declarations.iter().filter(|d| properties.contains(&d.property)).cloned().collect();
+            self.record(Some(origin), &written);
+        }
+    }
+}
+
+/// A selector group: its selector, declarations and their suppliers.
+pub type SelectorGroup = (String, Vec<CssDeclaration>, Suppliers);
 
 impl ConditionedGroup {
     pub fn breakpoint(bp: impl Into<String>, declarations: Vec<CssDeclaration>) -> Self {
@@ -337,6 +394,7 @@ impl ConditionedGroup {
             selector: None,
             declarations,
             emit_order: ConditionEmitOrder::Breakpoint,
+            suppliers: Suppliers::default(),
         }
     }
 
@@ -346,6 +404,7 @@ impl ConditionedGroup {
             selector: None,
             declarations,
             emit_order,
+            suppliers: Suppliers::default(),
         }
     }
 }
@@ -369,10 +428,16 @@ struct NestFrame {
     selector: Option<String>,
     conditions: Vec<Condition>,
     emit_order: Option<ConditionEmitOrder>,
+    block: usize,
+    origin: Option<AuthoredOrigin>,
 }
 
 impl NestFrame {
-    fn with_selector(&self, inner_raw: &str) -> Self {
+    fn root(block: usize) -> Self {
+        Self { block, ..Self::default() }
+    }
+
+    fn with_selector(&self, inner_raw: &str, slot: KeySlot) -> Self {
         let composed = match &self.selector {
             Some(outer) => compose_selectors(outer, inner_raw),
             None => normalize_pseudo_selector(inner_raw),
@@ -381,26 +446,79 @@ impl NestFrame {
             selector: Some(composed),
             conditions: self.conditions.clone(),
             emit_order: self.emit_order.clone(),
+            block: self.block,
+            origin: Some(self.nested_origin(slot)),
         }
     }
 
-    fn with_condition(&self, condition: Condition, order: ConditionEmitOrder) -> Self {
+    fn with_condition(&self, condition: Condition, order: ConditionEmitOrder, slot: KeySlot) -> Self {
         let mut conditions = self.conditions.clone();
         conditions.push(condition);
         Self {
             selector: self.selector.clone(),
             conditions,
             emit_order: Some(self.emit_order.clone().unwrap_or(order)),
+            block: self.block,
+            origin: Some(self.nested_origin(slot)),
+        }
+    }
+
+    fn nested_origin(&self, slot: KeySlot) -> AuthoredOrigin {
+        let mut path = self.origin.as_ref().map_or_else(Vec::new, |origin| origin.path.clone());
+        path.push(slot.index);
+        AuthoredOrigin {
+            block: self.block,
+            path,
+            raw: slot.raw || self.origin.as_ref().is_some_and(|origin| origin.raw),
         }
     }
 }
+
+/// A selector or at-rule key's emission slot within its object.
+#[derive(Clone, Copy, Default)]
+struct KeySlot {
+    index: usize,
+    raw: bool,
+}
+
+/// Each selector and at-rule key's slot: a raw key keeps its authored
+/// position, and the aliases take the aliases' positions in their
+/// established ranking, selector aliases before condition aliases.
+fn key_slots<'a>(obj: &'a Map<String, Value>, ctx: &ResolveContext) -> FxHashMap<&'a str, KeySlot> {
+    let mut slots = FxHashMap::default();
+    let mut aliases: Vec<(usize, (u8, u32), &str)> = Vec::new();
+    for (index, (key, value)) in obj.iter().enumerate() {
+        if !value.is_object() {
+            continue;
+        }
+        if let Some(selector) = ctx.selector_aliases.get(key) {
+            aliases.push((index, (0, crate::css::pseudo_sort_order(&normalize_pseudo_selector(selector))), key));
+        } else if let Some(alias) = ctx.condition_aliases.get(key) {
+            aliases.push((index, (1, alias.order), key));
+        } else if !key.starts_with('_')
+            && (crate::selector_subject::has_subject(key) || key.starts_with(':') || key.starts_with('@'))
+        {
+            slots.insert(key.as_str(), KeySlot { index, raw: true });
+        }
+    }
+    let positions: Vec<usize> = aliases.iter().map(|(index, _, _)| *index).collect();
+    aliases.sort_by_key(|(index, rank, _)| (*rank, *index));
+    for (index, (_, _, key)) in positions.into_iter().zip(aliases) {
+        slots.insert(key, KeySlot { index, raw: false });
+    }
+    slots
+}
+
+/// Each `resolve_styles` call is one source block: only its own groups trade
+/// emission slots.
+static NEXT_SOURCE_BLOCK: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ResolvedStyles {
     pub declarations: Vec<CssDeclaration>,
     /// Unconditioned selector groups live only here; a conditioned group with
     /// an empty stack would change class-hash coverage and byte-identity.
-    pub pseudo_selectors: Vec<(String, Vec<CssDeclaration>)>,
+    pub pseudo_selectors: Vec<SelectorGroup>,
     pub conditioned: Vec<ConditionedGroup>,
 }
 
@@ -409,14 +527,14 @@ impl ResolvedStyles {
     pub fn all_declarations(&self) -> impl Iterator<Item = &CssDeclaration> {
         self.declarations
             .iter()
-            .chain(self.pseudo_selectors.iter().flat_map(|(_, decls)| decls))
+            .chain(self.pseudo_selectors.iter().flat_map(|(_, decls, _)| decls))
             .chain(self.conditioned.iter().flat_map(|group| &group.declarations))
     }
 
     /// Keeps, in each group, the declarations `keep` admits.
     pub fn retain_declarations(&mut self, mut keep: impl FnMut(&CssDeclaration) -> bool) {
         self.declarations.retain(&mut keep);
-        for (_, decls) in &mut self.pseudo_selectors {
+        for (_, decls, _) in &mut self.pseudo_selectors {
             decls.retain(&mut keep);
         }
         for group in &mut self.conditioned {
@@ -485,6 +603,9 @@ pub fn resolve_styles(
     };
 
     let entries = cascade_order(obj, ctx.config);
+    let slots = key_slots(obj, ctx);
+    let slot = |key: &str| slots.get(key).copied().unwrap_or_default();
+    let root = NestFrame::root(NEXT_SOURCE_BLOCK.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
 
     let mut raw_condition_index = 0usize;
 
@@ -492,7 +613,7 @@ pub fn resolve_styles(
         if key.starts_with('_') {
             if let Some(alias_selector) = ctx.selector_aliases.get(key) {
                 if let Some(nested_obj) = value.as_object() {
-                    let frame = NestFrame::default().with_selector(alias_selector);
+                    let frame = root.with_selector(alias_selector, slot(key));
                     let inject = auto_content && (key == "_before" || key == "_after");
                     resolve_block_entries(
                         nested_obj, ctx, &frame, auto_content, inject, &mut result, &mut raw_condition_index,
@@ -500,9 +621,10 @@ pub fn resolve_styles(
                 }
             } else if let Some(cond_alias) = ctx.condition_aliases.get(key) {
                 if let Some(nested_obj) = value.as_object() {
-                    let frame = NestFrame::default().with_condition(
+                    let frame = root.with_condition(
                         alias_condition(cond_alias, ctx.contextual_vars),
                         ConditionEmitOrder::Aliased(cond_alias.order),
+                        slot(key),
                     );
                     resolve_block_entries(
                         nested_obj, ctx, &frame, auto_content, false, &mut result, &mut raw_condition_index,
@@ -516,7 +638,7 @@ pub fn resolve_styles(
 
         if crate::selector_subject::has_subject(key) || key.starts_with(':') {
             if let Some(nested_obj) = value.as_object() {
-                let frame = NestFrame::default().with_selector(key);
+                let frame = root.with_selector(key, slot(key));
                 resolve_block_entries(
                     nested_obj, ctx, &frame, auto_content, false, &mut result, &mut raw_condition_index,
                 );
@@ -529,8 +651,7 @@ pub fn resolve_styles(
                 let idx = raw_condition_index;
                 raw_condition_index += 1;
                 if let Some(nested_obj) = value.as_object() {
-                    let frame = NestFrame::default()
-                        .with_condition(condition, ConditionEmitOrder::Raw(idx));
+                    let frame = root.with_condition(condition, ConditionEmitOrder::Raw(idx), slot(key));
                     resolve_block_entries(
                         nested_obj, ctx, &frame, auto_content, false, &mut result, &mut raw_condition_index,
                     );
@@ -575,6 +696,8 @@ fn resolve_block_entries(
     raw_condition_index: &mut usize,
 ) {
     let entries = cascade_order(obj, ctx.config);
+    let slots = key_slots(obj, ctx);
+    let slot = |key: &str| slots.get(key).copied().unwrap_or_default();
 
     // This block's own declarations must precede its children's groups, or
     // the breakpoint override is cascade-dead at equal specificity.
@@ -586,7 +709,7 @@ fn resolve_block_entries(
         if key.starts_with('_') {
             if let Some(alias_selector) = ctx.selector_aliases.get(key) {
                 if let Some(nested_obj) = value.as_object() {
-                    let child = frame.with_selector(alias_selector);
+                    let child = frame.with_selector(alias_selector, slot(key));
                     let inject = auto_content && (key == "_before" || key == "_after");
                     resolve_block_entries(
                         nested_obj, ctx, &child, auto_content, inject, result, raw_condition_index,
@@ -597,6 +720,7 @@ fn resolve_block_entries(
                     let child = frame.with_condition(
                         alias_condition(cond_alias, ctx.contextual_vars),
                         ConditionEmitOrder::Aliased(cond_alias.order),
+                        slot(key),
                     );
                     resolve_block_entries(
                         nested_obj, ctx, &child, auto_content, false, result, raw_condition_index,
@@ -610,7 +734,7 @@ fn resolve_block_entries(
 
         if crate::selector_subject::has_subject(key) || key.starts_with(':') {
             if let Some(nested_obj) = value.as_object() {
-                let child = frame.with_selector(key);
+                let child = frame.with_selector(key, slot(key));
                 resolve_block_entries(
                     nested_obj, ctx, &child, auto_content, false, result, raw_condition_index,
                 );
@@ -623,7 +747,7 @@ fn resolve_block_entries(
                 let idx = *raw_condition_index;
                 *raw_condition_index += 1;
                 if let Some(nested_obj) = value.as_object() {
-                    let child = frame.with_condition(condition, ConditionEmitOrder::Raw(idx));
+                    let child = frame.with_condition(condition, ConditionEmitOrder::Raw(idx), slot(key));
                     resolve_block_entries(
                         nested_obj, ctx, &child, auto_content, false, result, raw_condition_index,
                     );
@@ -667,7 +791,7 @@ fn resolve_block_entries(
 
     if frame.conditions.is_empty() {
         if let Some(sel) = &frame.selector {
-            merge_pseudo_selectors(&mut result.pseudo_selectors, sel.clone(), plain_decls);
+            merge_pseudo_selectors(&mut result.pseudo_selectors, sel.clone(), plain_decls, frame.origin.as_ref());
         }
     } else if !plain_decls.is_empty() {
         result.conditioned.insert(
@@ -675,6 +799,7 @@ fn resolve_block_entries(
             ConditionedGroup {
                 conditions: frame.conditions.clone(),
                 selector: frame.selector.clone(),
+                suppliers: Suppliers::of(frame.origin.as_ref(), &plain_decls),
                 declarations: plain_decls,
                 emit_order: frame
                     .emit_order
@@ -729,10 +854,15 @@ fn push_nested_breakpoint_group(
         g.conditions == conditions && g.selector == frame.selector && g.emit_order == emit_order
     });
     match pos {
-        Some(i) => result.conditioned[i].declarations.extend(declarations),
+        Some(i) => {
+            let group = &mut result.conditioned[i];
+            group.suppliers.record(frame.origin.as_ref(), &declarations);
+            group.declarations.extend(declarations);
+        }
         None => result.conditioned.push(ConditionedGroup {
             conditions,
             selector: frame.selector.clone(),
+            suppliers: Suppliers::of(frame.origin.as_ref(), &declarations),
             declarations,
             emit_order,
         }),
@@ -740,11 +870,13 @@ fn push_nested_breakpoint_group(
 }
 
 pub fn merge_pseudo_selectors(
-    pseudo_selectors: &mut Vec<(String, Vec<CssDeclaration>)>,
+    pseudo_selectors: &mut Vec<SelectorGroup>,
     selector: String,
     new_declarations: Vec<CssDeclaration>,
+    origin: Option<&AuthoredOrigin>,
 ) {
-    if let Some((_, existing)) = pseudo_selectors.iter_mut().find(|(s, _)| *s == selector) {
+    if let Some((_, existing, suppliers)) = pseudo_selectors.iter_mut().find(|(s, _, _)| *s == selector) {
+        suppliers.record(origin, &new_declarations);
         for new_decl in new_declarations {
             if let Some(pos) = existing.iter().position(|d| d.property == new_decl.property) {
                 existing[pos] = new_decl;
@@ -753,7 +885,17 @@ pub fn merge_pseudo_selectors(
             }
         }
     } else {
-        pseudo_selectors.push((selector, new_declarations));
+        let suppliers = Suppliers::of(origin, &new_declarations);
+        pseudo_selectors.push((selector, new_declarations, suppliers));
+    }
+}
+
+/// Merges a group another resolution produced, keeping who wrote each
+/// declaration.
+pub fn merge_selector_group(pseudo_selectors: &mut Vec<SelectorGroup>, (selector, declarations, suppliers): &SelectorGroup) {
+    merge_pseudo_selectors(pseudo_selectors, selector.clone(), declarations.clone(), None);
+    if let Some((_, _, merged)) = pseudo_selectors.iter_mut().find(|(s, _, _)| s == selector) {
+        merged.absorb(suppliers, declarations);
     }
 }
 
@@ -1807,7 +1949,7 @@ fn push_global_rules(
     if !resolved.declarations.is_empty() {
         rules.push(global_rule(selector, &resolved.declarations, 0));
     }
-    for (nested, declarations) in &resolved.pseudo_selectors {
+    for (nested, declarations, _) in &resolved.pseudo_selectors {
         if !declarations.is_empty() {
             rules.push(global_rule(&subject(&Some(nested.clone())), declarations, 0));
         }
@@ -2558,7 +2700,7 @@ mod tests {
             .declarations
             .iter()
             .chain(resolved.conditioned.iter().flat_map(|g| &g.declarations))
-            .chain(resolved.pseudo_selectors.iter().flat_map(|(_, d)| d))
+            .chain(resolved.pseudo_selectors.iter().flat_map(|(_, d, _)| d))
             .collect();
         assert!(all.iter().all(|d| d.property != "padding"), "{all:?}");
         assert!(all.iter().any(|d| d.property == "padding-left"), "{all:?}");
@@ -3281,14 +3423,14 @@ mod tests {
         let owner = TestCtxOwner { selector_aliases: aliases, ..owner };
         let styles = json!({ "_hover": { "_before": { "opacity": 1 } }, "_active": { "_before": { "opacity": 0.5 } } });
         let resolved = resolve_styles(&styles, &owner.ctx(), true);
-        let hover: Vec<_> = resolved.pseudo_selectors.iter().filter(|(s, _)| s == "&:hover::before").collect();
+        let hover: Vec<_> = resolved.pseudo_selectors.iter().filter(|(s, _, _)| s == "&:hover::before").collect();
         assert_eq!(hover.len(), 1, "composed :hover::before entry: {:?}", resolved.pseudo_selectors);
         assert_eq!(hover[0].1[0].property, "content");
         assert!(hover[0].1.iter().any(|d| d.property == "opacity" && d.value == "1"));
-        let hi = resolved.pseudo_selectors.iter().position(|(s, _)| s == "&:hover::before").unwrap();
-        let ai = resolved.pseudo_selectors.iter().position(|(s, _)| s == "&:active::before").unwrap();
+        let hi = resolved.pseudo_selectors.iter().position(|(s, _, _)| s == "&:hover::before").unwrap();
+        let ai = resolved.pseudo_selectors.iter().position(|(s, _, _)| s == "&:active::before").unwrap();
         assert!(hi < ai);
-        assert!(!resolved.pseudo_selectors.iter().any(|(s, d)| s == "&:hover" && d.iter().any(|x| x.property == "opacity")));
+        assert!(!resolved.pseudo_selectors.iter().any(|(s, d, _)| s == "&:hover" && d.iter().any(|x| x.property == "opacity")));
     }
 
     #[test]
@@ -3302,8 +3444,8 @@ mod tests {
             "_hover": { "& .icon2": { "color": "primary" } }
         });
         let resolved = resolve_styles(&styles, &owner.ctx(), true);
-        assert!(resolved.pseudo_selectors.iter().any(|(s, d)| s == "& .icon:hover" && d[0].value == "var(--colors-primary)"));
-        assert!(resolved.pseudo_selectors.iter().any(|(s, _)| s == "&:hover .icon2"));
+        assert!(resolved.pseudo_selectors.iter().any(|(s, d, _)| s == "& .icon:hover" && d[0].value == "var(--colors-primary)"));
+        assert!(resolved.pseudo_selectors.iter().any(|(s, _, _)| s == "&:hover .icon2"));
     }
 
     #[test]
@@ -3366,7 +3508,7 @@ mod tests {
         let owner = TestCtxOwner { selector_aliases: aliases, ..owner };
         let styles = json!({ "_hover": { "p": { "_": 8, "sm": 16 } } });
         let resolved = resolve_styles(&styles, &owner.ctx(), true);
-        assert!(resolved.pseudo_selectors.iter().any(|(s, d)| s == "&:hover" && d[0].value == "0.5rem"));
+        assert!(resolved.pseudo_selectors.iter().any(|(s, d, _)| s == "&:hover" && d[0].value == "0.5rem"));
         let groups: Vec<_> = resolved.breakpoint_selector_groups().collect();
         assert_eq!(groups.len(), 1);
         assert_eq!(groups[0].0, "sm");
@@ -3495,7 +3637,7 @@ mod tests {
             "&:a1": { "&:a2": { "&:a3": { "&:a4": { "&:a5": { "&:a6": { "&:a7": { "&:a8": { "color": "primary" } } } } } } } }
         });
         let resolved = resolve_styles(&styles, &owner.ctx(), true);
-        assert!(resolved.pseudo_selectors.iter().any(|(s, d)| s == "&:a1:a2:a3:a4:a5:a6:a7:a8" && d[0].value == "var(--colors-primary)"));
+        assert!(resolved.pseudo_selectors.iter().any(|(s, d, _)| s == "&:a1:a2:a3:a4:a5:a6:a7:a8" && d[0].value == "var(--colors-primary)"));
     }
 
     /// `tone` is declared under a prefix; `acme-tone` is declared too, so it

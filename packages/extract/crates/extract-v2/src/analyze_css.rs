@@ -1659,7 +1659,7 @@ fn record_external_candidates_in_styles(
     diagnostics: &mut Vec<CssDiagnostic>,
 ) {
     record_external_candidates_in_decls(walk, &styles.declarations, diagnostics);
-    for (_, decls) in &styles.pseudo_selectors {
+    for (_, decls, _) in &styles.pseudo_selectors {
         record_external_candidates_in_decls(walk, decls, diagnostics);
     }
     for group in &styles.conditioned {
@@ -1721,7 +1721,7 @@ fn shed_unresolved_aliases_in_styles(
         component,
         diagnostics,
     );
-    for (_, decls) in &mut styles.pseudo_selectors {
+    for (_, decls, _) in &mut styles.pseudo_selectors {
         shed_unresolved_alias_decls(decls, scale_check, file, component, diagnostics);
     }
     for group in &mut styles.conditioned {
@@ -4421,13 +4421,13 @@ fn run_with_system_floor(
                                 merged_decls.extend(child_base.declarations.clone());
 
                                 let mut merged_pseudos = parent_base.pseudo_selectors.clone();
-                                for (sel, decls) in &child_base.pseudo_selectors {
+                                for child_group in &child_base.pseudo_selectors {
                                     if let Some(entry) =
-                                        merged_pseudos.iter_mut().find(|(s, _)| s == sel)
+                                        merged_pseudos.iter_mut().find(|(s, _, _)| *s == child_group.0)
                                     {
-                                        entry.1 = decls.clone();
+                                        *entry = child_group.clone();
                                     } else {
-                                        merged_pseudos.push((sel.clone(), decls.clone()));
+                                        merged_pseudos.push(child_group.clone());
                                     }
                                 }
 
