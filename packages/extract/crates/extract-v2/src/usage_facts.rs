@@ -565,6 +565,8 @@ pub(crate) struct EnrichedUsage {
     pub unsafe_object_uses: BTreeMap<String, ObjectUse>,
     /// See `FileFacts::ordinary_components`.
     pub ordinary_components: BTreeSet<String>,
+    /// See `FileFacts::context_consts`.
+    pub context_consts: BTreeSet<String>,
     /// See `FileFacts::direct_eval`.
     pub direct_eval: bool,
     /// See `FileFacts::opaque_calls`.
@@ -944,6 +946,7 @@ pub(crate) fn collect_enriched_usage(
         module_loads,
         unsafe_object_uses,
         ordinary_components,
+        context_consts: origins.map_or_else(BTreeSet::new, |_| context_consts(program, &react)),
         direct_eval,
         opaque_calls,
         element_consts,
@@ -3307,6 +3310,36 @@ fn tag_origin(scoping: &Scoping, name: &IdentifierReference<'_>) -> TagOrigin {
     }
 }
 
+/// Top-level `const` bindings the runtime's `createContext` builds: their
+/// `Provider` renders its children in place.
+fn context_consts(program: &Program<'_>, react: &ReactNames) -> BTreeSet<String> {
+    use oxc::ast::ast::{Declaration, VariableDeclarationKind};
+    let mut names = BTreeSet::new();
+    for statement in &program.body {
+        let declaration = match statement {
+            Statement::VariableDeclaration(declaration) => declaration,
+            Statement::ExportNamedDeclaration(export) => match &export.declaration {
+                Some(Declaration::VariableDeclaration(declaration)) => declaration,
+                _ => continue,
+            },
+            _ => continue,
+        };
+        if declaration.kind != VariableDeclarationKind::Const {
+            continue;
+        }
+        for declarator in &declaration.declarations {
+            let built = declarator.init.as_ref().is_some_and(|init| {
+                matches!(crate::chain_walk::unwrap_type_assertions(init),
+                    Expression::CallExpression(call) if react.calls(&call.callee, "createContext"))
+            });
+            if let (true, Some(name)) = (built, declarator.id.get_identifier_name()) {
+                names.insert(name.to_string());
+            }
+        }
+    }
+    names
+}
+
 /// Top-level functions and classes, and `const` bindings of a function or
 /// class expression, that nothing in the file writes: what a tag naming an
 /// ordinary component is proved by. An ordinary default export is also
@@ -3395,6 +3428,8 @@ pub(crate) struct ReactNames {
 
 const REACT_RUNTIMES: [&str; 3] = ["react", "preact", "preact/compat"];
 const ELEMENT_FUNCTIONS: [&str; 2] = ["createElement", "cloneElement"];
+/// The runtime functions read by the name an import binds them to.
+const RUNTIME_FUNCTIONS: [&str; 3] = ["createElement", "cloneElement", "createContext"];
 
 impl ReactNames {
     /// By spelling alone, for facts read without bindings.
@@ -3421,7 +3456,7 @@ impl ReactNames {
                 match specifier {
                     ImportDeclarationSpecifier::ImportSpecifier(named) => {
                         let imported = named.imported.name();
-                        let function = ELEMENT_FUNCTIONS
+                        let function = RUNTIME_FUNCTIONS
                             .iter()
                             .find(|function| **function == imported.as_str());
                         if let Some(function) = function {

@@ -502,6 +502,10 @@ pub struct FileFacts {
     /// one renders an ordinary component, not an Animus one.
     #[serde(skip)]
     pub(crate) ordinary_components: BTreeSet<String>,
+    /// Top-level `const` bindings React's `createContext` builds: a tag
+    /// naming one's `Provider` renders its children in place.
+    #[serde(skip)]
+    pub(crate) context_consts: BTreeSet<String>,
     /// The module calls `eval` directly, which can read any of its bindings
     /// by name.
     #[serde(skip)]
@@ -1448,6 +1452,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
         module_loads,
         unsafe_object_uses,
         ordinary_components,
+        context_consts,
         direct_eval,
         opaque_calls,
         element_consts,
@@ -1517,6 +1522,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
         spread_wrappers,
         module_loads,
         ordinary_components,
+        context_consts,
         direct_eval,
         opaque_calls,
         element_consts,
