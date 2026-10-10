@@ -403,6 +403,10 @@ impl ExtractEngine {
                 let mut resolved_file = direct_file;
                 let mut resolved_name = imp.imported.clone();
                 let mut terminated_locally = false;
+                // The binding the export names where it is declared: a
+                // bundler's chunk keeps a collection's source name there and
+                // renames only the export (`export { feedbackMotion as r }`).
+                let mut declared_local: Option<String> = None;
                 {
                     let mut seen: rustc_hash::FxHashSet<(String, String)> =
                         rustc_hash::FxHashSet::default();
@@ -425,6 +429,7 @@ impl ExtractEngine {
                                 .and_then(|local| imps.iter().find(|i| &i.local == local));
                             let Some(import) = barrel else {
                                 terminated_locally = exp.local.is_some();
+                                declared_local = exp.local.clone();
                                 break;
                             };
                             let Some(next) = crate::analyze_css::resolve_import_source(
@@ -467,14 +472,19 @@ impl ExtractEngine {
                         usage_extra.insert(imp.local.clone(), val.clone());
                     }
                 }
-                if let Some(kf) = keyframes_registry.get(&resolved_name) {
+                let registered = keyframes_registry
+                    .get(&resolved_name)
+                    .or_else(|| declared_local.as_ref().and_then(|local| keyframes_registry.get(local)));
+                if let Some(kf) = registered {
                     extra.insert(imp.local.clone(), kf.clone());
                     usage_extra.insert(imp.local.clone(), kf.clone());
                 }
             }
             for exp in exports {
                 if let Some(local) = &exp.local {
-                    if let Some(kf) = keyframes_registry.get(&exp.exported) {
+                    let registered =
+                        keyframes_registry.get(&exp.exported).or_else(|| keyframes_registry.get(local));
+                    if let Some(kf) = registered {
                         extra.insert(local.clone(), kf.clone());
                         usage_extra.insert(local.clone(), kf.clone());
                     }
@@ -1538,6 +1548,41 @@ export const App = () => <Box tone="red" />;
             .filter(|d| d["kind"] == "skip")
             .collect();
         assert!(skips.is_empty(), "{skips:?}");
+    }
+
+    /// A bundler's chunk keeps a registered collection's source name as its
+    /// local binding and renames only the export: the collection resolves
+    /// through the chunk-renamed barrel, and where the chunk uses it itself.
+    #[test]
+    fn a_collection_a_chunk_exports_under_another_name_resolves() {
+        let mut engine = ExtractEngine::new(Some(EngineOptions {
+            keyframes_json: Some(
+                r#"{"feedbackMotion":{"loaderDot":{"name":"animus-kf-honfj9","frames":{"from":{"opacity":0},"to":{"opacity":1}}}}}"#
+                    .to_string(),
+            ),
+            package_resolution_json: Some(r#"{"@kit/ds":"kit/dist/index.js"}"#.to_string()),
+            ..Default::default()
+        }))
+        .unwrap();
+        let manifest: serde_json::Value = serde_json::from_str(
+            &engine
+                .analyze(
+                    serde_json::json!([
+                        { "path": "kit/dist/chunk.js", "source": "const feedbackMotion = createKeyframes({ loaderDot: { from: { opacity: 0 }, to: { opacity: 1 } } });\nconst Spinner = ds.styles({ animationName: feedbackMotion.loaderDot }).asElement('i');\nexport { feedbackMotion as r, Spinner as s };\n" },
+                        { "path": "kit/dist/index.js", "source": "import { r as feedbackMotion, s as Spinner } from './chunk.js';\nexport { feedbackMotion, Spinner };\n" },
+                        { "path": "a.tsx", "source": "import { feedbackMotion, Spinner } from '@kit/ds';\nexport const LoaderDot = ds.styles({ animationName: feedbackMotion.loaderDot, animationDuration: '1s' }).asElement('span');\nexport const App = () => <><LoaderDot /><Spinner /></>;\n" }
+                    ])
+                    .to_string(),
+                )
+                .unwrap(),
+        )
+        .unwrap();
+        let css = manifest["css"].as_str().unwrap_or("").replace(' ', "");
+        for component in ["LoaderDot", "Spinner"] {
+            let rule = css.split(&format!(".animus-{component}-")).nth(1).and_then(|rest| rest.split('}').next()).unwrap_or("");
+            assert!(rule.contains("animation-name:animus-kf-honfj9"), "{component}: {css}");
+        }
+        assert!(unregistered_keyframe_diagnostics(&manifest).is_empty(), "{manifest:?}");
     }
 
     #[test]
