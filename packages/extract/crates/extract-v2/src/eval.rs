@@ -94,8 +94,7 @@ fn eval_object_expr_scoped(
                     return Err(BailError::new("getter/setter in style object"));
                 }
                 let key = if prop.computed {
-                    computed_key(&prop.key, static_values)
-                        .ok_or_else(|| BailError::new("computed property key in style object"))?
+                    computed_key(&prop.key, static_values)?
                 } else {
                     eval_property_key(&prop.key)?
                 };
@@ -184,11 +183,15 @@ fn eval_object_expr_scoped(
             ObjectPropertyKind::SpreadProperty(spread) => {
                 // A stable static object spreads in authored order: a later
                 // key overrides an earlier one and keeps its first position.
+                // A lost key overrides too, so no earlier value stands for it.
                 let mut spread_value = static_object_at(&spread.argument, static_values)?;
                 for (path, reason) in take_lost_values(&mut spread_value) {
                     let (parent, key) = match path.rsplit_once('.') {
                         Some((parent, key)) => (Some(parent.to_string()), key.to_string()),
-                        None => (None, path),
+                        None => {
+                            map.shift_remove(&path);
+                            (None, path)
+                        }
                     };
                     skipped.push(SkippedProperty {
                         key,
@@ -211,21 +214,31 @@ fn eval_object_expr_scoped(
 
 /// A computed key whose value is a constant string: a string or an
 /// expression-free template literal, or a static binding or member that
-/// holds a string.
+/// holds a string. A key read from a lost value bails with its reason.
 fn computed_key(
     key: &PropertyKey<'_>,
     static_values: Option<&FxHashMap<String, Value>>,
-) -> Option<String> {
-    let expr = key.as_expression()?;
+) -> Result<String, BailError> {
+    let unsupported = || BailError::new("computed property key in style object");
+    let expr = key.as_expression().ok_or_else(unsupported)?;
     match crate::chain_walk::unwrap_type_assertions(expr) {
-        Expression::StringLiteral(lit) => Some(lit.value.to_string()),
-        Expression::TemplateLiteral(tpl) if tpl.expressions.is_empty() => {
-            tpl.quasis.first().and_then(|quasi| quasi.value.cooked).map(|cooked| cooked.to_string())
+        Expression::StringLiteral(lit) => Ok(lit.value.to_string()),
+        Expression::TemplateLiteral(tpl) if tpl.expressions.is_empty() => tpl
+            .quasis
+            .first()
+            .and_then(|quasi| quasi.value.cooked)
+            .map(|cooked| cooked.to_string())
+            .ok_or_else(unsupported),
+        other => {
+            let statics = static_values.ok_or_else(unsupported)?;
+            if let Some(reason) = lost_path_reason(other, statics) {
+                return Err(BailError::new(format!("computed property key in style object — {reason}")));
+            }
+            match static_path_value(other, statics) {
+                Some(Value::String(text)) => Ok(text.clone()),
+                _ => Err(unsupported()),
+            }
         }
-        other => match static_path_value(other, static_values?)? {
-            Value::String(text) => Some(text.clone()),
-            _ => None,
-        },
     }
 }
 
@@ -261,6 +274,20 @@ pub(crate) fn static_path_value<'v>(
     }
 }
 
+/// The reason of the lost-value marker an identifier or member path meets.
+fn lost_path_reason<'v>(expr: &Expression<'_>, static_values: &'v FxHashMap<String, Value>) -> Option<&'v str> {
+    match crate::chain_walk::unwrap_type_assertions(expr) {
+        Expression::Identifier(ident) => lost_value_reason(static_values.get(ident.name.as_str())?),
+        Expression::StaticMemberExpression(member) => lost_path_reason(&member.object, static_values).or_else(|| {
+            let parent = static_path_value(&member.object, static_values)?;
+            lost_value_reason(parent.get(member.property.name.as_str())?)
+        }),
+        Expression::ComputedMemberExpression(member) => lost_path_reason(&member.object, static_values)
+            .or_else(|| lost_path_reason(&member.expression, static_values)),
+        _ => None,
+    }
+}
+
 /// The static object a spread argument names, or why it names none. An
 /// object whose stability the analysis could not prove is a marker naming
 /// the use that makes it unstable.
@@ -268,13 +295,12 @@ fn static_object_at(
     expr: &Expression<'_>,
     static_values: Option<&FxHashMap<String, Value>>,
 ) -> Result<Value, BailError> {
-    let named = static_values.and_then(|sv| static_path_value(expr, sv));
-    match named {
-        Some(value) => match lost_value_reason(value) {
-            Some(reason) => Err(BailError::new(format!("spread of {reason}"))),
-            None if value.is_object() => Ok(value.clone()),
-            None => Err(BailError::new("spread of a static value that is no object")),
-        },
+    if let Some(reason) = static_values.and_then(|sv| lost_path_reason(expr, sv)) {
+        return Err(BailError::new(format!("spread of {reason}")));
+    }
+    match static_values.and_then(|sv| static_path_value(expr, sv)) {
+        Some(value) if value.is_object() => Ok(value.clone()),
+        Some(_) => Err(BailError::new("spread of a static value that is no object")),
         None => Err(BailError::new("spread element in style object")),
     }
 }

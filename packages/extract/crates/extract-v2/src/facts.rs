@@ -389,6 +389,7 @@ pub struct FileFacts {
     pub directive_prologue: Option<DirectivePrologueFact>,
     pub chains: Vec<ChainFacts>,
     /// Same-file static const values (feeds identifier resolution).
+    #[serde(serialize_with = "serialize_statics")]
     pub statics: BTreeMap<String, Value>,
     /// Raw JSX/createElement usage facts, component-agnostic; cross-file
     /// filtering happens later.
@@ -673,6 +674,12 @@ fn expression_root(expr: &Expression<'_>) -> Option<String> {
         Expression::StaticMemberExpression(member) => expression_root(&member.object),
         _ => None,
     }
+}
+
+/// Statics without a binding a lost-value marker stands for whole: its
+/// reason reaches readers in memory, and serialized facts carry no marker.
+fn serialize_statics<S: serde::Serializer>(statics: &BTreeMap<String, Value>, serializer: S) -> Result<S::Ok, S::Error> {
+    serializer.collect_map(statics.iter().filter(|(_, value)| eval::lost_value_reason(value).is_none()))
 }
 
 #[derive(Default)]

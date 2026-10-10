@@ -1085,6 +1085,7 @@ export const Use${name} = () => <${name} />;`,
         "{ display: 'grid', cursor: 'pointer', '--zz-x': '1px', '&:hover': { opacity: 0.5 } }"
       ),
     ]);
+    assertNoUnresolvedTokens(inline.css);
     const constant = runPipeline([
       source(
         'Const',
@@ -1092,6 +1093,7 @@ export const Use${name} = () => <${name} />;`,
         "const KEY = '--zz-x';\nconst base = { display: 'flex', cursor: 'pointer' };\nconst presets = { hover: { opacity: 0.5 } };"
       ),
     ]);
+    assertNoUnresolvedTokens(constant.css);
     expect(body(constant.css, 'Const')).toBe(body(inline.css, 'Inline'));
 
     const escaped = runPipeline([
@@ -1101,6 +1103,7 @@ export const Use${name} = () => <${name} />;`,
         "declare function decorate(o: object): void;\nconst preset = { cursor: 'pointer' };\ndecorate(preset);"
       ),
     ]);
+    assertNoUnresolvedTokens(escaped.css);
     expect(body(escaped.css, 'Escaped')).toBeUndefined();
     expect(JSON.stringify(escaped.manifest.diagnostics)).toContain(
       'preset is passed to decorate() in fixtures/Escaped.tsx on line 4'

@@ -361,11 +361,11 @@ struct StyleModule {
 /// a.tsx on line 4`. A namespace re-export or a runtime load of a module
 /// unsettles every static it exports. Statics stored in an unstable object,
 /// or read from an unstable binding, are unstable too.
-fn unstable_style_statics<T>(
+fn unstable_style_statics(
     style: &BTreeMap<String, StyleModule>,
     modules: &ModuleFacts,
     function_modules: &ModuleFacts,
-    files: &BTreeMap<String, T>,
+    files: &BTreeMap<String, rustc_hash::FxHashMap<String, serde_json::Value>>,
     inputs: &analyze_css::CssInputs,
     readings_of: &mut ReadingsOf<'_>,
 ) -> BTreeMap<(String, String), String> {
@@ -444,24 +444,30 @@ fn unstable_style_statics<T>(
             None => Some((file.to_string(), name.to_string())),
         }
     };
+    // Whether a declaration's static is an object or array: no use can
+    // change a primitive.
+    let mutable = |(file, local): &(String, String)| {
+        files
+            .get(file)
+            .and_then(|statics| statics.get(local))
+            .is_some_and(|value| value.is_object() || value.is_array())
+    };
+    // Whether a declaration's static holds an object among its values.
+    let nested = |(file, local): &(String, String)| {
+        files.get(file).and_then(|statics| statics.get(local)).and_then(serde_json::Value::as_object).is_some_and(
+            |object| object.values().any(|value| value.is_object() || value.is_array()),
+        )
+    };
+    let said = |file: &str, name: &str, used: &crate::usage_facts::ObjectUse| {
+        let line = used.line.map_or(String::new(), |line| format!(" on line {line}"));
+        format!("{name} {} in {file}{line}", used.what)
+    };
     let mut unstable: BTreeMap<(String, String), String> = BTreeMap::new();
     for (file, module) in style {
-        for handoff in &module.facts.handoffs {
-            let read = declared_function(file, &handoff.callee).is_some_and(|(callee_file, callee_name)| {
-                reads_only(&callee_file, &callee_name, handoff.index, 0, &declared_function, readings_of)
-            });
-            if read {
-                continue;
-            }
-            let line = handoff.used.line.map_or(String::new(), |line| format!(" on line {line}"));
-            let reason = format!("{} {} in {file}{line}", handoff.binding, handoff.used.what);
-            if let Some(target) = declared(file, &handoff.binding) {
-                unstable.entry(target).or_insert(reason);
-            }
-        }
-        for (name, used) in &module.facts.uses {
-            let line = used.line.map_or(String::new(), |line| format!(" on line {line}"));
-            let reason = format!("{name} {} in {file}{line}", used.what);
+        // The declarations a use's name stands for that hold an object: a
+        // namespace's member, every export of a namespace used whole, or
+        // the binding's own.
+        let targets_of = |name: &str| -> Vec<(String, String)> {
             let targets: Vec<(String, String)> = match name.split_once('.') {
                 Some((namespace, member)) => module
                     .namespace_imports
@@ -477,8 +483,29 @@ fn unstable_style_statics<T>(
                     None => declared(file, name).into_iter().collect(),
                 },
             };
-            for target in targets {
-                unstable.entry(target).or_insert_with(|| reason.clone());
+            targets.into_iter().filter(|target| mutable(target)).collect()
+        };
+        // A function hands a nested object on to whatever it hands
+        // members to, so only an object of primitives passes as a read.
+        for handoff in &module.facts.handoffs {
+            let Some(target) = declared(file, &handoff.binding).filter(|target| mutable(target)) else { continue };
+            let read = !nested(&target)
+                && declared_function(file, &handoff.callee).is_some_and(|(callee_file, callee_name)| {
+                    reads_only(&callee_file, &callee_name, handoff.index, 0, &declared_function, readings_of)
+                });
+            if !read {
+                unstable.entry(target).or_insert_with(|| said(file, &handoff.binding, &handoff.used));
+            }
+        }
+        for (name, used) in &module.facts.uses {
+            for target in targets_of(name) {
+                unstable.entry(target).or_insert_with(|| said(file, name, used));
+            }
+        }
+        for (name, used) in &module.facts.flat_reads {
+            for target in targets_of(name).into_iter().filter(|target| nested(target)) {
+                let reason = format!("{}, and it holds a nested object", said(file, name, used));
+                unstable.entry(target).or_insert(reason);
             }
         }
         let reexports = module
