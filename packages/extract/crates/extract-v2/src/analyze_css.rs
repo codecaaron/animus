@@ -3791,14 +3791,14 @@ fn uncertain_tag_reason(
                     .to_string(),
             )
         }),
-        Some(TagOrigin::Nested) if member => (
+        Some(TagOrigin::Nested | TagOrigin::Provided) if member => (
             TagClass::Member,
             format!(
                 "is a member of '{root}', a parameter or a binding inside a function, so the \
                  component is chosen at runtime"
             ),
         ),
-        Some(TagOrigin::Nested) => (
+        Some(TagOrigin::Nested | TagOrigin::Provided) => (
             TagClass::Nested,
             "is a parameter or a binding inside a function, so the component it holds is \
              chosen at runtime"
@@ -4058,7 +4058,7 @@ fn opaque_delivery(
     };
     let tag_opaque = |file: &str, ff: &FileFacts, tag: &crate::usage_facts::OpaqueTag, forwarding: &FxHashSet<(String, String)>| {
         use crate::usage_facts::TagOrigin;
-        if matches!(tag.origin, TagOrigin::Nested | TagOrigin::Undeclared) {
+        if matches!(tag.origin, TagOrigin::Nested | TagOrigin::Provided | TagOrigin::Undeclared) {
             return true;
         }
         let ids = receiver_ids(file, ff, &tag.tag);
@@ -8886,6 +8886,33 @@ export const App = ({ n }) => <Box bgImage={n} texture={n} />;
         }
         let shadowed = analyzed("export const App = ({ Box, props }) => createElement(Box, props);\n");
         assert_eq!(unread(&shadowed), 0);
+    }
+
+    /// A tag whose first name a parameter or local binds is not the module's
+    /// binding of that name: `({ Fam }) => <Fam.Root p={n} />` may render
+    /// any component, so its runtime value keeps every component's slot,
+    /// where the imported `Fam.Root` would carry it to a component that
+    /// takes no `p`.
+    #[test]
+    fn tags_resolve_through_their_root_binding() {
+        let kit = "export const Plain = ds.styles({ display: 'flex' }).asElement('div');\n\
+                   export const Other = ds.system({ space: true }).asElement('div');\n\
+                   export const Fam = compose({ Root: Plain }, { name: 'Fam' });\n";
+        let cases: [(&str, &[&str]); 5] = [
+            ("({ Fam, n }) => <Fam.Root p={n} />", &["p"]),
+            ("({ n }) => { const Fam = pick(); return <Fam.Root p={n} />; }", &["p"]),
+            ("({ Plain, n }) => <Plain p={n} />", &["p"]),
+            ("({ Fam, n }) => createElement(Fam.Root, { p: n })", &["p"]),
+            ("({ n }) => <Fam.Root p={n} />", &[]),
+        ];
+        for (app, want) in cases {
+            let app = format!(
+                "import {{ Fam, Plain, Other }} from './kit';\nimport {{ createElement }} from 'react';\n\
+                 export const App = {app};\nexport const B = () => <Other p={{8}} />;\n"
+            );
+            let out = analyze(&[("kit.tsx", kit), ("app.tsx", app.as_str())], &test_inputs());
+            assert_eq!(out.dynamic_props.keys().collect::<Vec<_>>(), want, "{app}");
+        }
     }
 
     #[test]
