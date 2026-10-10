@@ -456,6 +456,7 @@ pub fn collect_import_facts(module: &ModuleRecord<'_>) -> Vec<ImportFact> {
 /// leaves reads it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RootImport {
+    pub source: String,
     pub declaration: (u32, u32),
     /// From just after `import` to the source string: the specifiers and
     /// `from`.
@@ -530,6 +531,7 @@ pub(crate) fn collect_root_imports(program: &Program<'_>, roots: &FxHashSet<&str
     declarations
         .into_iter()
         .map(|import| RootImport {
+            source: import.source.value.to_string(),
             declaration: (import.span.start, import.span.end),
             clause: (import.span.start + "import".len() as u32, import.source.span.start),
             specifiers: import
@@ -558,6 +560,55 @@ pub(crate) fn collect_root_imports(program: &Program<'_>, roots: &FxHashSet<&str
                 .collect(),
         })
         .collect()
+}
+
+/// What evaluating a module does besides declaring and exporting: whether
+/// it has an effect of its own, and the modules it loads.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct ModuleEffects {
+    /// A bare import (`import './x.css'`), or a top-level statement other
+    /// than an import, export or declaration.
+    pub own: bool,
+    /// The specifiers of every import and re-export that loads a module at
+    /// runtime: all but `import type` and `export type`.
+    pub loads: Vec<String>,
+}
+
+pub(crate) fn collect_module_effects(program: &Program<'_>) -> ModuleEffects {
+    let mut effects = ModuleEffects::default();
+    for stmt in &program.body {
+        match stmt {
+            Statement::ImportDeclaration(import) => {
+                if import.import_kind.is_type() {
+                    continue;
+                }
+                effects.own |= import.specifiers.as_ref().is_none_or(|specifiers| specifiers.is_empty());
+                effects.loads.push(import.source.value.to_string());
+            }
+            Statement::ExportNamedDeclaration(export) => {
+                if let Some(source) = export.source.as_ref().filter(|_| !export.export_kind.is_type()) {
+                    effects.loads.push(source.value.to_string());
+                }
+            }
+            Statement::ExportAllDeclaration(export) => {
+                if !export.export_kind.is_type() {
+                    effects.loads.push(export.source.value.to_string());
+                }
+            }
+            Statement::ExportDefaultDeclaration(_)
+            | Statement::VariableDeclaration(_)
+            | Statement::FunctionDeclaration(_)
+            | Statement::ClassDeclaration(_)
+            | Statement::TSTypeAliasDeclaration(_)
+            | Statement::TSInterfaceDeclaration(_)
+            | Statement::TSEnumDeclaration(_)
+            | Statement::TSModuleDeclaration(_)
+            | Statement::TSGlobalDeclaration(_)
+            | Statement::EmptyStatement(_) => {}
+            _ => effects.own = true,
+        }
+    }
+    effects
 }
 
 /// Per-file named-export fact; feeds static enrichment and re-export

@@ -482,6 +482,9 @@ pub struct FileFacts {
     /// Value import declarations that bind the root of a primary chain here.
     #[serde(skip)]
     pub(crate) root_imports: Vec<crate::usage_facts::RootImport>,
+    /// What evaluating this module does besides declaring and exporting.
+    #[serde(skip)]
+    pub(crate) module_effects: crate::usage_facts::ModuleEffects,
     /// Named-export facts (re-export following for provenance/statics).
     pub exports: Vec<crate::usage_facts::ExportFact>,
     /// Bindings of extracted components whose every use is a JSX element of
@@ -1557,6 +1560,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
         staged_builders: walked.staged_builders,
         imports,
         root_imports,
+        module_effects: crate::usage_facts::collect_module_effects(program),
         exports,
         transforms,
         captured_transform_bindings,

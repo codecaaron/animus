@@ -169,12 +169,49 @@ fn dead_staged_builders(
     dead
 }
 
+/// The analysed modules whose evaluation provably does nothing but declare
+/// and export: no effect of their own, and every module they load is one too
+/// or an `@animus-ui/system` module, whose package declares no side effects.
+/// A module that loads anything else, such as a stylesheet or an unanalysed
+/// package, is not.
+fn effect_free_modules(
+    facts: &BTreeMap<String, facts::FileFacts>,
+    inputs: &analyze_css::CssInputs,
+) -> rustc_hash::FxHashSet<String> {
+    let mut free: rustc_hash::FxHashSet<String> = facts
+        .iter()
+        .filter(|(_, file)| !file.module_effects.own)
+        .map(|(path, _)| path.clone())
+        .collect();
+    // Cycles stay free unless a module in them is not.
+    loop {
+        let effectful: Vec<String> = free
+            .iter()
+            .filter(|path| {
+                facts[path.as_str()].module_effects.loads.iter().any(|spec| {
+                    !crate::usage_facts::is_animus_system_specifier(spec)
+                        && !analyze_css::resolve_import_source(path, spec, facts, inputs)
+                            .is_some_and(|target| free.contains(&target))
+                })
+            })
+            .cloned()
+            .collect();
+        if effectful.is_empty() {
+            return free;
+        }
+        for path in effectful {
+            free.remove(&path);
+        }
+    }
+}
+
 /// Edits dropping each import of a replaced primary chain's root that no
 /// code the transform leaves reads: every read lies in a replaced span and
 /// no replacement names it. Under `verbatimModuleSyntax` nothing elides such
 /// an import, so its module, the whole system builder, would still load. A
-/// declaration left with no value specifier goes whole; one the transform
-/// keeps for its module's effects stays as written.
+/// declaration left with no value specifier goes whole. An import of a module
+/// that may have effects of its own stays as written (`effect_free_modules`),
+/// as does one the transform keeps for its module's effects.
 fn unread_root_imports(
     path: &str,
     source: &str,
@@ -182,6 +219,7 @@ fn unread_root_imports(
     payloads: &std::collections::HashMap<String, assemble::ReplacementPayload>,
     replacements: &[(u32, u32, String)],
     kept: &BTreeMap<(u32, u32), String>,
+    effect_free: &dyn Fn(&str) -> bool,
 ) -> Vec<(u32, u32, String)> {
     use crate::usage_facts::{RootImportKind, RootImportSpecifier};
     let roots: rustc_hash::FxHashSet<&str> = file_facts
@@ -210,7 +248,7 @@ fn unread_root_imports(
 
     let mut edits = Vec::new();
     for import in &file_facts.root_imports {
-        if kept.contains_key(&import.declaration) {
+        if kept.contains_key(&import.declaration) || !effect_free(&import.source) {
             continue;
         }
         let remaining: Vec<&RootImportSpecifier> =
@@ -339,6 +377,9 @@ pub struct ExtractEngine {
     /// utility-class first-wins dedup are order-sensitive.
     order: Vec<String>,
     css: Option<analyze_css::CssOutput>,
+    /// Modules provably free of effects (`effect_free_modules`), from the
+    /// last analyze().
+    effect_free: rustc_hash::FxHashSet<String>,
     parse_count: usize,
 }
 
@@ -738,6 +779,7 @@ impl ExtractEngine {
             sources: BTreeMap::new(),
             order: Vec::new(),
             css: None,
+            effect_free: rustc_hash::FxHashSet::default(),
             parse_count: 0,
         })
     }
@@ -1080,6 +1122,7 @@ impl ExtractEngine {
             files: &css.files_map,
             timing: serde_json::json!({ "parseCount": self.parse_count }),
         });
+        self.effect_free = effect_free_modules(&self.facts, &self.opts.css_inputs);
         self.cross = Some(cross);
         self.css = Some(css);
         out.map_err(|e| napi::Error::from_reason(format!("serialize failed: {e}")))
@@ -1092,6 +1135,7 @@ impl ExtractEngine {
         self.sources.clear();
         self.order.clear();
         self.css = None;
+        self.effect_free.clear();
         self.parse_count = 0;
     }
 
@@ -1199,6 +1243,11 @@ impl ExtractEngine {
             &file_payloads,
             &replacements,
             &import_needs.effect_imports,
+            &|spec| {
+                crate::usage_facts::is_animus_system_specifier(spec)
+                    || analyze_css::resolve_import_source(&path, spec, &self.facts, &self.opts.css_inputs)
+                        .is_some_and(|target| self.effect_free.contains(&target))
+            },
         );
         replacements.extend(root_import_edits);
 
@@ -1428,22 +1477,39 @@ mod tests {
     }
 
     /// Contract: the transform drops an imported chain root once no code it
-    /// leaves reads it, and the whole import when no value specifier is
-    /// left; a root still read keeps its import.
+    /// leaves reads it and its module provably has no effects, and the whole
+    /// import when no value specifier is left; a root still read, or one from
+    /// a module with an effect such as a stylesheet import, keeps its import.
     #[test]
     fn transform_drops_imports_of_roots_only_replaced_chains_read() {
-        let code = transform_source(
-            "import { system, theme } from './system';\n\
-             import { ds, type Theme } from './other';\n\
-             import kept from './kept';\n\
-             export const Box = system.styles({ p: 4 }).asElement('div');\n\
-             export const Card = ds.styles({ m: 2 }).asElement('div');\n\
-             export const Other = kept.styles({ m: 1 }).asElement('div');\n\
-             export const read = () => [kept, theme];\n",
-        );
+        let mut engine = ExtractEngine::new(None).unwrap();
+        let files = [
+            ("system.ts", "import { createSystem } from '@animus-ui/system';\nexport const system = createSystem();\nexport const theme = {};\n"),
+            ("other.ts", "export const ds = {};\nexport type Theme = {};\n"),
+            ("kept.ts", "export default {};\n"),
+            ("styled.ts", "import './x.css';\nexport const styled = {};\n"),
+            (
+                "app.tsx",
+                "import { system, theme } from './system';\n\
+                 import { ds, type Theme } from './other';\n\
+                 import kept from './kept';\n\
+                 import { styled } from './styled';\n\
+                 export const Box = system.styles({ p: 4 }).asElement('div');\n\
+                 export const Card = ds.styles({ m: 2 }).asElement('div');\n\
+                 export const Other = kept.styles({ m: 1 }).asElement('div');\n\
+                 export const Styled = styled.styles({ m: 3 }).asElement('div');\n\
+                 export const read = () => [kept, theme];\n",
+            ),
+        ];
+        let entries: Vec<_> = files.iter().map(|(path, source)| serde_json::json!({ "path": path, "source": source })).collect();
+        engine.analyze(serde_json::Value::Array(entries).to_string()).unwrap();
+        let result: serde_json::Value =
+            serde_json::from_str(&engine.transform_file("app.tsx".to_string()).unwrap()).unwrap();
+        let code = result["code"].as_str().unwrap();
         assert!(code.contains("import { theme } from './system';"), "{code}");
         assert!(!code.contains("'./other'"), "{code}");
         assert!(code.contains("import kept from './kept';"), "{code}");
+        assert!(code.contains("import { styled } from './styled';"), "{code}");
         assert!(!code.contains(".styles("), "{code}");
     }
 
