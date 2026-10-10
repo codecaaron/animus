@@ -17,6 +17,7 @@ mod config;
 mod source_edit;
 
 use config::build_config;
+pub(crate) use config::superseded_props;
 
 pub use source_edit::{
     consumed_import_removals, directive_and_imports, directive_prefix_and_body,
@@ -54,6 +55,9 @@ pub struct ReplacementPayload {
     /// The extension inherits callbacks from its parent but delivers none,
     /// so its replacement no longer names the parent.
     pub drops_parent_reference: bool,
+    /// System prop → the later-defined props that take effect over it when
+    /// one element sets both (`superseded_props`).
+    pub superseded_by: BTreeMap<String, Vec<String>>,
 }
 
 #[derive(Debug, Clone, Default)]
