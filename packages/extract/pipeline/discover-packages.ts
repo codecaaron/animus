@@ -265,6 +265,81 @@ export function fileSideEffects(absFile: string): boolean | undefined {
   return matchesSideEffects(field, pkgRoot, [absFile]);
 }
 
+/** Whether a `sideEffects` glob can name a code file: a last segment with
+ *  no extension can name any file, and an extension with glob syntax or of
+ *  a script can name code; `*.css` cannot. Brace alternatives are each read,
+ *  and braces this reading cannot expand count as naming code. */
+function globNamesCode(glob: string): boolean {
+  const alternatives = expandBraces(glob);
+  if (alternatives === null) return true;
+  return alternatives.some((alternative) => {
+    const last = alternative.split('/').at(-1) ?? '';
+    const dot = last.lastIndexOf('.');
+    if (dot === -1) return true;
+    const extension = last.slice(dot + 1);
+    return /[*?[]/.test(extension) || /^[cm]?[jt]sx?$/.test(extension);
+  });
+}
+
+/** Every alternative a glob's `{a,b}` groups spell, nested groups included;
+ *  null when its braces do not balance. */
+function expandBraces(glob: string): string[] | null {
+  const open = glob.indexOf('{');
+  if (open === -1) return glob.includes('}') ? null : [glob];
+  let depth = 0;
+  const commas: number[] = [];
+  for (let at = open; at < glob.length; at++) {
+    if (glob[at] === '{') depth++;
+    else if (glob[at] === ',' && depth === 1) commas.push(at);
+    else if (glob[at] === '}' && --depth === 0) {
+      const bounds = [open, ...commas, at];
+      const rest = expandBraces(glob.slice(at + 1));
+      if (rest === null) return null;
+      const expanded: string[] = [];
+      for (let i = 0; i < bounds.length - 1; i++) {
+        const inner = expandBraces(glob.slice(bounds[i] + 1, bounds[i + 1]));
+        if (inner === null) return null;
+        for (const middle of inner) {
+          for (const tail of rest)
+            expanded.push(glob.slice(0, open) + middle + tail);
+        }
+      }
+      return expanded;
+    }
+  }
+  return null;
+}
+
+/**
+ * True when a source module of the package that owns `absFile` must stay
+ * side-effectful: its `sideEffects` list names shipped code, and no proven
+ * map takes a shipped file to its source module, so a bundler that reads
+ * the list against the source path can drop a listed effect. Undefined
+ * leaves the bundler's own reading, which no list naming code can mislead.
+ */
+export function kitSourceModuleSideEffects(absFile: string): true | undefined {
+  const manifest = readPackageManifest(findPackageRoot(absFile));
+  const field = isJsonBlock(manifest) ? manifest.sideEffects : undefined;
+  if (!Array.isArray(field)) return undefined;
+  return field.some((glob) => isJsonString(glob) && globNamesCode(glob))
+    ? true
+    : undefined;
+}
+
+/** Whether a host keeps the module at `file` side-effectful: it lies under
+ *  one of the discovered kit source directories, and its package's list
+ *  could misread it (see `kitSourceModuleSideEffects`). A host asks this of
+ *  the resolved module, never of its importer alone. */
+export function keepsKitSourceEffects(
+  file: string,
+  kitDirs: readonly string[]
+): boolean {
+  return (
+    kitDirs.some((dir) => isPathWithinRoot(dir, file)) &&
+    kitSourceModuleSideEffects(file) === true
+  );
+}
+
 function matchesSideEffects(
   globs: readonly RegExp[],
   pkgRoot: string,
@@ -355,6 +430,9 @@ export interface CollectedExternalPackages {
    *  its real path is outside `node_modules`, so its source can change in
    *  place. */
   linkedDirs: string[];
+  /** Those of `packageDirs` read from their package's compiled output: the
+   *  package declares no source condition and ships no `src/`. */
+  outputDirs: string[];
   /** Absolute package dir → every declared specifier that claimed it, in
    *  declaration order. `firstOwners` derives the single-value view. */
   dirOwnerSets: Record<string, string[]>;
@@ -448,6 +526,7 @@ export async function collectExternalPackageSources(opts: {
   };
   const packageDirs: string[] = [];
   const linkedDirs: string[] = [];
+  const outputDirs: string[] = [];
   const dirOwnerSets: Record<string, string[]> = {};
   const dirExtensions: Record<string, string[]> = {};
   const fileOwners: Record<string, string> = {};
@@ -607,6 +686,7 @@ export async function collectExternalPackageSources(opts: {
       const outputDir = dirname(absEntry);
       packageDirs.push(outputDir);
       if (linked) linkedDirs.push(outputDir);
+      outputDirs.push(outputDir);
       claimDir(outputDir, specifier);
       onPackageResolved?.(specifier, outputDir);
       const relPath = relative(rootDir, absEntry);
@@ -662,6 +742,7 @@ export async function collectExternalPackageSources(opts: {
     sourceEntrySideEffects,
     packageDirs,
     linkedDirs,
+    outputDirs,
     dirOwnerSets,
     dirExtensions,
     fileOwners,
@@ -889,6 +970,9 @@ export function excludeCollectedPackages(
       (dir) => !rejectedDirs.includes(dir)
     ),
     linkedDirs: collected.linkedDirs.filter(
+      (dir) => !rejectedDirs.includes(dir)
+    ),
+    outputDirs: collected.outputDirs.filter(
       (dir) => !rejectedDirs.includes(dir)
     ),
     dirOwnerSets,
