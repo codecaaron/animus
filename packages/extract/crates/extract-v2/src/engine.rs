@@ -169,6 +169,101 @@ fn dead_staged_builders(
     dead
 }
 
+/// Edits dropping each import of a replaced primary chain's root that no
+/// code the transform leaves reads: every read lies in a replaced span and
+/// no replacement names it. Under `verbatimModuleSyntax` nothing elides such
+/// an import, so its module, the whole system builder, would still load. A
+/// declaration left with no value specifier goes whole; one the transform
+/// keeps for its module's effects stays as written.
+fn unread_root_imports(
+    path: &str,
+    source: &str,
+    file_facts: &facts::FileFacts,
+    payloads: &std::collections::HashMap<String, assemble::ReplacementPayload>,
+    replacements: &[(u32, u32, String)],
+    kept: &BTreeMap<(u32, u32), String>,
+) -> Vec<(u32, u32, String)> {
+    use crate::usage_facts::{RootImportKind, RootImportSpecifier};
+    let roots: rustc_hash::FxHashSet<&str> = file_facts
+        .chains
+        .iter()
+        .filter(|chain| {
+            chain.descriptor.extends_from.is_none() && payloads.contains_key(&chain.descriptor.binding)
+        })
+        .map(|chain| chain.descriptor.root.as_str())
+        .collect();
+    if roots.is_empty() || file_facts.root_imports.is_empty() {
+        return Vec::new();
+    }
+    let Some(named) = replacement_reads(path, replacements) else {
+        return Vec::new();
+    };
+    let replaced =
+        |(start, end): (u32, u32)| replacements.iter().any(|(s, e, _)| *s <= start && end <= *e);
+    let unread = |specifier: &RootImportSpecifier| {
+        specifier.kind != RootImportKind::Namespace
+            && roots.contains(specifier.local.as_str())
+            && !named.contains(specifier.local.as_str())
+            && specifier.reads.as_ref().is_some_and(|reads| reads.iter().all(|&read| replaced(read)))
+    };
+    let text = |specifier: &RootImportSpecifier| &source[specifier.span.0 as usize..specifier.span.1 as usize];
+
+    let mut edits = Vec::new();
+    for import in &file_facts.root_imports {
+        if kept.contains_key(&import.declaration) {
+            continue;
+        }
+        let remaining: Vec<&RootImportSpecifier> =
+            import.specifiers.iter().filter(|specifier| !unread(specifier)).collect();
+        if remaining.len() == import.specifiers.len() {
+            continue;
+        }
+        if remaining.iter().all(|specifier| specifier.reads.is_none()) {
+            edits.push((import.declaration.0, import.declaration.1, String::new()));
+            continue;
+        }
+        let mut parts: Vec<String> = Vec::new();
+        let mut braced: Vec<&str> = Vec::new();
+        for specifier in remaining {
+            match specifier.kind {
+                RootImportKind::Named => braced.push(text(specifier)),
+                RootImportKind::Default | RootImportKind::Namespace => parts.push(text(specifier).to_string()),
+            }
+        }
+        if !braced.is_empty() {
+            parts.push(format!("{{ {} }}", braced.join(", ")));
+        }
+        edits.push((import.clause.0, import.clause.1, format!(" {} from ", parts.join(", "))));
+    }
+    edits
+}
+
+/// The names the replacement texts read, which can carry authored source
+/// (a component tag, a transform's callback); `None` when they do not parse.
+fn replacement_reads(path: &str, replacements: &[(u32, u32, String)]) -> Option<rustc_hash::FxHashSet<String>> {
+    use oxc::ast_visit::Visit;
+    struct Names(rustc_hash::FxHashSet<String>);
+    impl<'a> Visit<'a> for Names {
+        fn visit_identifier_reference(&mut self, ident: &oxc::ast::ast::IdentifierReference<'a>) {
+            self.0.insert(ident.name.to_string());
+        }
+    }
+    let texts: Vec<&str> = replacements
+        .iter()
+        .map(|(_, _, text)| text.as_str())
+        .filter(|text| !text.is_empty())
+        .collect();
+    let wrapped = format!("[\n{}\n];", texts.join(",\n"));
+    let allocator = oxc::allocator::Allocator::default();
+    let parsed = oxc::parser::Parser::new(&allocator, &wrapped, crate::owned_ast::source_type_for(path)).parse();
+    if parsed.panicked || !parsed.diagnostics.is_empty() {
+        return None;
+    }
+    let mut names = Names(rustc_hash::FxHashSet::default());
+    names.visit_program(&parsed.program);
+    Some(names.0)
+}
+
 fn replacement_import_needs(
     file_facts: &facts::FileFacts,
     payloads: &std::collections::HashMap<String, assemble::ReplacementPayload>,
@@ -1097,6 +1192,15 @@ impl ExtractEngine {
         if replacements.is_empty() {
             return Ok(serde_json::json!({ "code": source, "hasComponents": false }).to_string());
         }
+        let root_import_edits = unread_root_imports(
+            &path,
+            source,
+            file_facts,
+            &file_payloads,
+            &replacements,
+            &import_needs.effect_imports,
+        );
+        replacements.extend(root_import_edits);
 
         let mut virtual_imports: Vec<&str> = Vec::new();
         if import_needs.system_prop_map {
@@ -1321,6 +1425,26 @@ mod tests {
             .as_str()
             .unwrap()
             .to_string()
+    }
+
+    /// Contract: the transform drops an imported chain root once no code it
+    /// leaves reads it, and the whole import when no value specifier is
+    /// left; a root still read keeps its import.
+    #[test]
+    fn transform_drops_imports_of_roots_only_replaced_chains_read() {
+        let code = transform_source(
+            "import { system, theme } from './system';\n\
+             import { ds, type Theme } from './other';\n\
+             import kept from './kept';\n\
+             export const Box = system.styles({ p: 4 }).asElement('div');\n\
+             export const Card = ds.styles({ m: 2 }).asElement('div');\n\
+             export const Other = kept.styles({ m: 1 }).asElement('div');\n\
+             export const read = () => [kept, theme];\n",
+        );
+        assert!(code.contains("import { theme } from './system';"), "{code}");
+        assert!(!code.contains("'./other'"), "{code}");
+        assert!(code.contains("import kept from './kept';"), "{code}");
+        assert!(!code.contains(".styles("), "{code}");
     }
 
     #[test]

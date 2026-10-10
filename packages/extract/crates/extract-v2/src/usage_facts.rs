@@ -451,6 +451,115 @@ pub fn collect_import_facts(module: &ModuleRecord<'_>) -> Vec<ImportFact> {
         .collect()
 }
 
+/// A value import declaration that binds the root of a chain in its
+/// module: what the transform needs to drop the root once no code it
+/// leaves reads it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RootImport {
+    pub declaration: (u32, u32),
+    /// From just after `import` to the source string: the specifiers and
+    /// `from`.
+    pub clause: (u32, u32),
+    pub specifiers: Vec<RootImportSpecifier>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RootImportSpecifier {
+    pub local: String,
+    pub kind: RootImportKind,
+    /// The specifier as written, `type` modifier and alias included.
+    pub span: (u32, u32),
+    /// Every value read of its binding, shadowed same-name reads included,
+    /// so the list never runs short. `None` for a type-only specifier.
+    pub reads: Option<Vec<(u32, u32)>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RootImportKind {
+    Default,
+    Namespace,
+    Named,
+}
+
+/// The value import declarations of `program` that bind one of `roots`.
+pub(crate) fn collect_root_imports(program: &Program<'_>, roots: &FxHashSet<&str>) -> Vec<RootImport> {
+    use oxc::ast::ast::ImportOrExportKind;
+    let declarations: Vec<_> = program
+        .body
+        .iter()
+        .filter_map(|stmt| match stmt {
+            Statement::ImportDeclaration(import) if import.import_kind == ImportOrExportKind::Value => {
+                Some(import)
+            }
+            _ => None,
+        })
+        .filter(|import| {
+            import.specifiers.iter().flatten().any(|specifier| match specifier {
+                ImportDeclarationSpecifier::ImportSpecifier(named) => {
+                    named.import_kind == ImportOrExportKind::Value && roots.contains(named.local.name.as_str())
+                }
+                ImportDeclarationSpecifier::ImportDefaultSpecifier(default) => {
+                    roots.contains(default.local.name.as_str())
+                }
+                ImportDeclarationSpecifier::ImportNamespaceSpecifier(_) => false,
+            })
+        })
+        .collect();
+    if declarations.is_empty() {
+        return Vec::new();
+    }
+
+    /// Value reads by name; type positions read no binding at runtime.
+    struct Reads(FxHashMap<String, Vec<(u32, u32)>>);
+    impl<'a> Visit<'a> for Reads {
+        fn visit_identifier_reference(&mut self, ident: &IdentifierReference<'a>) {
+            if let Some(reads) = self.0.get_mut(ident.name.as_str()) {
+                reads.push((ident.span.start, ident.span.end));
+            }
+        }
+        fn visit_ts_type(&mut self, _: &oxc::ast::ast::TSType<'a>) {}
+    }
+    let mut reads = Reads(FxHashMap::default());
+    for import in &declarations {
+        for specifier in import.specifiers.iter().flatten() {
+            reads.0.insert(specifier.local().name.to_string(), Vec::new());
+        }
+    }
+    reads.visit_program(program);
+
+    declarations
+        .into_iter()
+        .map(|import| RootImport {
+            declaration: (import.span.start, import.span.end),
+            clause: (import.span.start + "import".len() as u32, import.source.span.start),
+            specifiers: import
+                .specifiers
+                .iter()
+                .flatten()
+                .map(|specifier| {
+                    let local = specifier.local().name.to_string();
+                    let (kind, type_only) = match specifier {
+                        ImportDeclarationSpecifier::ImportSpecifier(named) => {
+                            (RootImportKind::Named, named.import_kind == ImportOrExportKind::Type)
+                        }
+                        ImportDeclarationSpecifier::ImportDefaultSpecifier(_) => (RootImportKind::Default, false),
+                        ImportDeclarationSpecifier::ImportNamespaceSpecifier(_) => {
+                            (RootImportKind::Namespace, false)
+                        }
+                    };
+                    let span = specifier.span();
+                    RootImportSpecifier {
+                        reads: (!type_only).then(|| reads.0.get(&local).cloned().unwrap_or_default()),
+                        local,
+                        kind,
+                        span: (span.start, span.end),
+                    }
+                })
+                .collect(),
+        })
+        .collect()
+}
+
 /// Per-file named-export fact; feeds static enrichment and re-export
 /// following.
 #[derive(Debug, Clone, Serialize)]
