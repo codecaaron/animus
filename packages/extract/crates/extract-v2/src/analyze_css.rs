@@ -460,6 +460,11 @@ const UNATTRIBUTED_SYSTEM_PROPS: &str = "animus.usage.unattributed-system-props"
 /// element usage cannot name, from a value it cannot list, are not tracked,
 /// so options only they set can be pruned.
 const UNTRACKED_CLONE_PROPS: &str = "animus.usage.untracked-clone-props";
+/// A warning, never escalated: a `createElement` call on an extracted
+/// component passes props extraction cannot read (a value, a spread or a
+/// computed key), so their system props take no static class; the runtime
+/// slot still applies them.
+const UNREAD_CREATE_ELEMENT_PROPS: &str = "animus.usage.unread-create-element-props";
 /// A warning: one runtime module load opens more components than
 /// `WIDE_MODULE_LOAD_LIMIT`, so the user can see why pruning stopped.
 const WIDE_MODULE_LOAD: &str = "animus.usage.wide-module-load";
@@ -524,6 +529,7 @@ pub(crate) const DIAGNOSTIC_CODES: &[(&str, &str)] = &[
     (TRANSFORM_INVALID_RESULT, "error"),
     (UNATTRIBUTED_SYSTEM_PROPS, "warn"),
     (UNTRACKED_CLONE_PROPS, "warn"),
+    (UNREAD_CREATE_ELEMENT_PROPS, "warn"),
     (WIDE_MODULE_LOAD, "warn"),
     (IDENTITY_UNCERTAIN, "warn"),
     (IDENTITY_UNCERTAIN_TAG, "info"),
@@ -3264,6 +3270,38 @@ fn untracked_clone_props(file: &str, ff: &FileFacts) -> Vec<CssDiagnostic> {
         .collect()
 }
 
+/// One warning per `createElement` call on an extracted component (one
+/// `renders` names, through a module-scope binding: a parameter or local of
+/// the same name is another value) whose props usage cannot read.
+fn unread_create_element_props(file: &str, ff: &FileFacts, renders: impl Fn(&UsageFact) -> bool) -> Vec<CssDiagnostic> {
+    ff.usage_for_analysis()
+        .iter()
+        .filter_map(|fact| match fact {
+            UsageFact::CreateElement { ident, member, props: None, clone: false, at, origin, .. }
+                if matches!(origin, Some(crate::usage_facts::TagOrigin::Import | crate::usage_facts::TagOrigin::TopLevel))
+                    && renders(fact) =>
+            {
+                let component = ident.as_deref().or(member.as_deref()).unwrap_or_default();
+                Some(
+                    diagnostic(
+                        file,
+                        component,
+                        "warn",
+                        format!(
+                            "createElement({component}, …) passes props extraction cannot read, so their \
+                             system props take no static class; the runtime slot still applies them — \
+                             write the props as an object literal with plain keys"
+                        ),
+                        Some(UNREAD_CREATE_ELEMENT_PROPS),
+                    )
+                    .at(*at),
+                )
+            }
+            _ => None,
+        })
+        .collect()
+}
+
 /// What left one file's usage scan unable to tell which component it renders.
 enum UncertainIdentity {
     Tag(crate::usage_facts::UncertainTag),
@@ -4816,6 +4854,10 @@ fn run_with_system_floor(
         .collect();
     let identity_of: FxHashMap<&str, &str> =
         identities.iter().map(|(id, _, identity)| (id.as_str(), identity.as_str())).collect();
+    let name_scopes: FxHashMap<&String, String> = identities
+        .iter()
+        .map(|(id, binding, _)| (*id, crate::ids::name_scope(binding, &class_names[id])))
+        .collect();
 
     for component_id in &sorted_ids {
         let Some((file_path, chain_idx)) = chain_lookup.get(component_id.as_str()) else {
@@ -4855,8 +4897,8 @@ fn run_with_system_floor(
             .and_then(|parent_id| inherited_variant_configs.get(parent_id))
             .map_or(&[][..], Vec::as_slice);
         let merged_chain = inherit_variant_stages(chain, parent_variant_configs);
-        // A component's own declaration props bind under its class's suffix;
-        // an inherited one keeps the suffix of the component that declared it.
+        // A component's own declaration props bind under its name scope; an
+        // inherited one keeps the scope of the component that declared it.
         let result = process_chain_facts(
             merged_chain.as_ref().unwrap_or(chain),
             &resolve_ctx,
@@ -4865,8 +4907,7 @@ fn run_with_system_floor(
         .and_then(|mut out| {
             out.component_css.class_name = class_names[component_id].clone();
             if let Some(own) = out.custom_prop_configs.as_mut() {
-                let suffix = crate::ids::class_suffix(&class_names[component_id]);
-                bind_component_declarations(own, &inputs.declaration_scales, &inputs.theme, suffix)
+                bind_component_declarations(own, &inputs.declaration_scales, &inputs.theme, &name_scopes[component_id])
                     .map_err(|detail| ("props".to_string(), detail))?;
             }
             Ok(out)
@@ -5648,6 +5689,11 @@ fn run_with_system_floor(
         ));
         diagnostics.extend(untracked_clone_props(path, ff));
         let lookup = file_lookup.as_ref().unwrap_or(&global_lookup);
+        diagnostics.extend(unread_create_element_props(path, ff, |fact| match fact {
+            UsageFact::CreateElement { ident: Some(name), .. } => lookup.props.contains_key(name.as_str()),
+            UsageFact::CreateElement { member: Some(key), .. } => member_expr_bindings.contains_key(key),
+            _ => false,
+        }));
 
         let mut usage_result = crate::usage_facts::filter_usage_scan(
             ff.usage_for_analysis(),
@@ -6350,7 +6396,7 @@ fn run_with_system_floor(
     // joined across copies like `slot_conditions`; `None` serves every one.
     let mut production_custom_conditions: HashMap<String, Option<BTreeSet<String>>> = HashMap::new();
     for component_id in &sorted_ids {
-        let Some((component_css, _, _, _, _, custom_configs, _)) = evaluated.get(component_id)
+        let Some((_, _, _, _, _, custom_configs, _)) = evaluated.get(component_id)
         else {
             continue;
         };
@@ -6360,7 +6406,7 @@ fn run_with_system_floor(
         };
         let mut component_dynamic: HashMap<String, DynamicPropMeta> = HashMap::new();
         runtime_custom_declarations.extend(runtime_declarations_of(dynamic_props_for_binding.iter(), cc));
-        let class_hash = crate::ids::class_suffix(&component_css.class_name);
+        let scope = &name_scopes[component_id];
         for prop_name in dynamic_props_for_binding {
             if let Some(prop_config) = cc.get(prop_name) {
                 if let Some(binding) = prop_config.declaration_binding() {
@@ -6370,15 +6416,15 @@ fn run_with_system_floor(
                     );
                     continue;
                 }
-                // The component's hash follows the segment's `_`: its slot
-                // never shares a name with a system prop's or another
+                // The component's name scope follows the segment's `_`: its
+                // slot never shares a name with a system prop's or another
                 // component's.
                 let segment = slot_segment(prop_name);
                 component_dynamic.insert(
                     prop_name.clone(),
                     DynamicPropMeta::new(
-                        format!("--{class_prefix}-{segment}{class_hash}"),
-                        format!("{class_prefix}-dyn-{segment}{class_hash}"),
+                        format!("--{class_prefix}-{segment}{scope}"),
+                        format!("{class_prefix}-dyn-{segment}{scope}"),
                         prop_config,
                         &inputs.theme,
                         &inputs.contextual_vars,
@@ -6913,7 +6959,10 @@ fn run_with_system_floor(
         (String::new(), String::new())
     };
     let keyframes_css_raw = if let Some(blocks) = &inputs.keyframes_blocks {
-        let css = crate::theme::resolve_all_keyframes_blocks(blocks, &resolve_ctx);
+        let css = crate::theme::resolve_all_keyframes_blocks(blocks, &resolve_ctx, &mut |name| {
+            let component = format!("keyframes '{name}'");
+            drain_dropped_style_keys(&dropped_keys, "system", &component, &[], &mut Vec::new(), &mut diagnostics);
+        });
         drain_transform_failures(
             &transform_failures,
             "",
@@ -8547,6 +8596,45 @@ export const App = ({ n }) => <Box bgImage={n} texture={n} />;
         }
     }
 
+    /// A direct `createElement` call on an extracted component records the
+    /// literal system props JSX records for the same element, so they take
+    /// static classes, through parentheses and type-only wrappers and past an
+    /// absent breakpoint; props usage cannot read get a coded warning, never
+    /// a parameter that shares the component's name.
+    #[test]
+    fn create_element_records_literal_system_props_as_jsx_does() {
+        let kit = "export const Box = ds.system({ space: true }).asElement('div');\n";
+        let analyzed = |app: &str| {
+            let app = format!("import {{ Box }} from './kit';\nimport {{ createElement }} from 'react';\n{app}");
+            analyze(&[("kit.tsx", kit), ("app.tsx", &app)], &test_inputs())
+        };
+        let keys = |out: &CssOutput| out.system_prop_map.get("p").map(|map| map.keys().cloned().collect::<Vec<_>>());
+        let unread = |out: &CssOutput| {
+            out.diagnostics.iter().filter(|d| d.code.as_deref() == Some(UNREAD_CREATE_ELEMENT_PROPS)).count()
+        };
+        for (call, jsx) in [
+            ("createElement(Box, { p: 8 })", "<Box p={8} />"),
+            ("createElement(Box, { p: { _: 8, sm: 16 } })", "<Box p={{ _: 8, sm: 16 }} />"),
+            ("React.createElement(Box, { p: 8, id: 'a' })", "<Box p={8} id=\"a\" />"),
+            ("createElement(Box, { p: { _: 8, md: undefined, sm: 16 } })", "<Box p={{ _: 8, md: undefined, sm: 16 }} />"),
+            ("createElement(Box, ({ p: 8 }))", "<Box p={8} />"),
+            ("createElement(Box, ({ p: 8 } as const))", "<Box p={8} />"),
+            ("createElement(Box, ({ p: 8 } satisfies Record<string, number>))", "<Box p={8} />"),
+        ] {
+            let by_call = analyzed(&format!("export const App = () => {call};\n"));
+            let by_jsx = analyzed(&format!("export const App = () => {jsx};\n"));
+            assert_eq!(keys(&by_call), keys(&by_jsx), "{call}");
+            assert!(keys(&by_call).is_some(), "{call}");
+            assert_eq!(unread(&by_call), 0, "{call}");
+        }
+        for call in ["createElement(Box, props)", "createElement(Box, { ...props, p: 8 })"] {
+            let out = analyzed(&format!("export const App = (props) => {call};\n"));
+            assert_eq!(unread(&out), 1, "{call}");
+        }
+        let shadowed = analyzed("export const App = ({ Box, props }) => createElement(Box, props);\n");
+        assert_eq!(unread(&shadowed), 0);
+    }
+
     #[test]
     fn slots_serve_only_the_conditions_known_value_shapes_write() {
         let kit = "export const Box = ds.system({ space: true }).props({ tone: { property: 'color' } }).asElement('div');\n";
@@ -8570,10 +8658,10 @@ export const App = ({ n }) => <Box bgImage={n} texture={n} />;
             ("export const App = ({ n }) => <Box p={`${n}px`} />;\n", &["p_"]),
             ("export const App = ({ c, n }) => <Box p={c ? 8 : `${n}px`} />;\n", &["p_"]),
             ("export const App = ({ n, m }) => <Box p={{ _: n, sm: m }} />;\n", &["p_", "p_-sm"]),
-            ("export const App = ({ n }) => <Box tone={{ sm: n }} />;\n", &["tone_091638e9-sm"]),
+            ("export const App = ({ n }) => <Box tone={{ sm: n }} />;\n", &["tone_Box_091638e9-sm"]),
             // A value of unknown shape, or a spread, may write any condition.
             ("export const App = ({ c, n }) => <Box p={c ? 8 : n} />;\n", &["p_", "p_-sm"]),
-            ("export const App = ({ n, ...rest }) => <Box {...rest} p={`${n}`} />;\n", &["p_", "p_-sm", "tone_091638e9", "tone_091638e9-sm"]),
+            ("export const App = ({ n, ...rest }) => <Box {...rest} p={`${n}`} />;\n", &["p_", "p_-sm", "tone_Box_091638e9", "tone_Box_091638e9-sm"]),
             // So may a clone's override, whatever the element writes.
             ("import { cloneElement } from 'react';\nfunction Wrap({ children, n }) { return cloneElement(children, { p: n }); }\nexport const App = ({ m, n }) => <Wrap n={n}><Box p={`${m}px`} /></Wrap>;\n", &["p_", "p_-sm"]),
         ];
@@ -8585,7 +8673,7 @@ export const App = ({ n }) => <Box bgImage={n} texture={n} />;
         forced.static_css =
             Some(crate::forced_usage::StaticCssConfig::parse(r#"{"components":{"Box":{"dynamicProps":["tone"]}}}"#).unwrap());
         let app = "export const App = ({ n }) => <Box tone={`${n}`} />;\n";
-        assert_eq!(slots(app, &forced), ["p_", "p_-sm", "tone_091638e9", "tone_091638e9-sm"]);
+        assert_eq!(slots(app, &forced), ["p_", "p_-sm", "tone_Box_091638e9", "tone_Box_091638e9-sm"]);
     }
 
     #[test]

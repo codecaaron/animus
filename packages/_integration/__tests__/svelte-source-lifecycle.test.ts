@@ -137,7 +137,9 @@ async function barrelReceipt(barrelSource: string, imported: 'badge' | 'pill') {
     diagnosticCodes: ingestion.diagnostics.map((diagnostic) => diagnostic.code),
     analysisPaths: ingestion.ownership[usage.path].analysisPaths,
     residue: manifest.usageResidue,
-    dynamicGapCss: /gap:\s*var\(--animus-gap_[0-9a-f]{8}\)/.test(manifest.css),
+    dynamicGapCss: /gap:\s*var\(--animus-gap_badge_[0-9a-f]{8}\)/.test(
+      manifest.css
+    ),
   };
 }
 
@@ -187,7 +189,9 @@ describe('real-engine Svelte source lifecycle', () => {
         kind: 'identifier',
       })
     );
-    expect(manifest.css).toMatch(/gap:\s*var\(--animus-gap_[0-9a-f]{8}\)/);
+    expect(manifest.css).toMatch(
+      /gap:\s*var\(--animus-gap_badge_[0-9a-f]{8}\)/
+    );
   });
 
   test('keeps raw ownership and analysis projection equivalent across the lifecycle', async () => {

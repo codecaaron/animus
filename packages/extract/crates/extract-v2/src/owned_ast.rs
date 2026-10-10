@@ -6,6 +6,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use oxc::allocator::Allocator;
 use oxc::ast::ast::Program;
 use oxc::parser::Parser;
+use oxc::syntax::module_record::ModuleRecord;
 use oxc::span::SourceType;
 use self_cell::self_cell;
 
@@ -21,6 +22,8 @@ pub struct AstOwner {
 
 pub struct DependentProgram<'a> {
     pub program: Program<'a>,
+    /// The parser's static import and export entries for `program`.
+    pub module_record: ModuleRecord<'a>,
 }
 
 self_cell!(
@@ -78,6 +81,7 @@ impl OwnedAst {
                 panicked = ret.panicked;
                 DependentProgram {
                     program: ret.program,
+                    module_record: ret.module_record,
                 }
             },
         );
@@ -92,6 +96,10 @@ impl OwnedAst {
 
     pub fn program(&self) -> &Program<'_> {
         &self.cell.borrow_dependent().program
+    }
+
+    pub fn module_record(&self) -> &ModuleRecord<'_> {
+        &self.cell.borrow_dependent().module_record
     }
 
     pub fn source(&self) -> &str {

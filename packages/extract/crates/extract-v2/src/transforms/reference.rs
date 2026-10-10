@@ -514,7 +514,7 @@ mod tests {
             .collect();
         let facts: Vec<(Vec<ImportFact>, Vec<ExportFact>)> = asts
             .iter()
-            .map(|ast| (collect_import_facts(ast.program()), collect_export_facts(ast.program())))
+            .map(|ast| (collect_import_facts(ast.module_record()), collect_export_facts(ast.program())))
             .collect();
         let inputs = CssInputs::default();
         let mut references = TransformReferences::new(&inputs);

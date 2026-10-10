@@ -10,6 +10,7 @@ use oxc::ast_visit::Visit;
 use oxc::semantic::{Scoping, SemanticBuilder, SymbolFlags, SymbolId};
 use oxc::span::Span;
 use oxc::span::GetSpan;
+use oxc::syntax::module_record::{ExportExportName, ImportImportName, ModuleRecord};
 use rustc_hash::{FxHashMap, FxHashSet};
 use serde::Serialize;
 use serde_json::Value;
@@ -17,7 +18,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::chain_walk::{ChainDescriptor, TerminalKind};
 use crate::jsx_scan::{
-    classify_jsx_attribute_as_variant_value, create_element_props, eval_jsx_attribute_value, eval_property_key,
+    classify_jsx_attribute_as_variant_value, create_element_literals, create_element_props, eval_jsx_attribute_value, eval_property_key,
     eval_static_expression, make_json_number,
     is_component_like_identifier, jsx_member_path, ComponentUsageConfig, CustomPropScanResult,
     DynamicExpressionKind, DynamicPropUsage, PropValueResult, StateUsage, SystemPropUsage,
@@ -135,6 +136,10 @@ pub enum UsageFact {
         /// classification; `None` when it can deliver unknown props.
         #[serde(skip)]
         props: Option<Vec<(String, String)>>,
+        /// The literal values among those props, as a JSX attribute's
+        /// static value reads them.
+        #[serde(skip)]
+        literals: Vec<(String, Value)>,
         /// A `cloneElement` of an element of this component: `props` are
         /// its overrides, and the element's own props are recorded where
         /// it is written.
@@ -179,22 +184,16 @@ pub(crate) fn is_animus_system_specifier(spec: &str) -> bool {
     spec == "@animus-ui/system" || spec.starts_with("@animus-ui/system/")
 }
 
-/// Namespace imports (`import * as ns from 'x'`) from top-level
-/// statements: local name → specifier. Kept apart from `ImportFact`, whose
-/// consumers resolve `local` as a named binding.
-pub fn collect_namespace_imports(program: &Program<'_>) -> std::collections::BTreeMap<String, String> {
-    let mut namespaces = std::collections::BTreeMap::new();
-    for stmt in &program.body {
-        let Statement::ImportDeclaration(import) = stmt else {
-            continue;
-        };
-        for spec in import.specifiers.iter().flatten() {
-            if let ImportDeclarationSpecifier::ImportNamespaceSpecifier(ns) = spec {
-                namespaces.insert(ns.local.name.to_string(), import.source.value.to_string());
-            }
-        }
-    }
-    namespaces
+/// Namespace imports (`import * as ns from 'x'`): local name → specifier.
+/// Kept apart from `ImportFact`, whose consumers resolve `local` as a named
+/// binding.
+pub fn collect_namespace_imports(module: &ModuleRecord<'_>) -> std::collections::BTreeMap<String, String> {
+    module
+        .import_entries
+        .iter()
+        .filter(|entry| entry.import_name.is_namespace_object())
+        .map(|entry| (entry.local_name.name.to_string(), entry.module_request.name.to_string()))
+        .collect()
 }
 
 /// A top-level function component that forwards its props by spread:
@@ -369,41 +368,28 @@ impl<'a> Visit<'a> for SpreadTargets<'_> {
     }
 }
 
-/// Collect import facts from top-level statements.
-pub fn collect_import_facts(program: &Program<'_>) -> Vec<ImportFact> {
-    let mut out = Vec::new();
-    for stmt in &program.body {
-        if let Statement::ImportDeclaration(import) = stmt {
-            let source = import.source.value.to_string();
-            let declaration = (import.span.start, import.span.end);
-            if let Some(specifiers) = &import.specifiers {
-                for spec in specifiers {
-                    match spec {
-                        ImportDeclarationSpecifier::ImportSpecifier(named) => {
-                            out.push(ImportFact {
-                                local: named.local.name.to_string(),
-                                imported: named.imported.name().to_string(),
-                                source: source.clone(),
-                                declaration,
-                            });
-                        }
-                        // `imported` is "default" for a default import, so
-                        // the parent dangles and the child stands alone.
-                        ImportDeclarationSpecifier::ImportDefaultSpecifier(def) => {
-                            out.push(ImportFact {
-                                local: def.local.name.to_string(),
-                                imported: "default".to_string(),
-                                source: source.clone(),
-                                declaration,
-                            });
-                        }
-                        ImportDeclarationSpecifier::ImportNamespaceSpecifier(_) => {}
-                    }
-                }
-            }
-        }
-    }
-    out
+/// A module's named and default imports, from the parser's record of its
+/// top-level import declarations, type-only ones included.
+pub fn collect_import_facts(module: &ModuleRecord<'_>) -> Vec<ImportFact> {
+    module
+        .import_entries
+        .iter()
+        .filter_map(|entry| {
+            let imported = match &entry.import_name {
+                ImportImportName::Name(name) => name.name.to_string(),
+                // `imported` is "default" for a default import, so the parent
+                // dangles and the child stands alone.
+                ImportImportName::Default(_) => "default".to_string(),
+                ImportImportName::NamespaceObject => return None,
+            };
+            Some(ImportFact {
+                local: entry.local_name.name.to_string(),
+                imported,
+                source: entry.module_request.name.to_string(),
+                declaration: (entry.statement_span.start, entry.statement_span.end),
+            })
+        })
+        .collect()
 }
 
 /// Per-file named-export fact; feeds static enrichment and re-export
@@ -422,7 +408,8 @@ pub struct ExportFact {
     pub original: Option<String>,
 }
 
-/// The identifier `export default X;` names, if any.
+/// The identifier `export default X;` names, if any, through type
+/// assertions, which the parser's module record does not see through.
 pub fn collect_default_export_binding(program: &Program<'_>) -> Option<String> {
     program.body.iter().find_map(|stmt| match stmt {
         Statement::ExportDefaultDeclaration(export) => match export
@@ -438,57 +425,42 @@ pub fn collect_default_export_binding(program: &Program<'_>) -> Option<String> {
 }
 
 /// The local names of a file's named and default imports.
-fn named_import_locals(program: &Program<'_>) -> BTreeSet<String> {
-    let mut locals = BTreeSet::new();
-    for stmt in &program.body {
-        let Statement::ImportDeclaration(import) = stmt else {
-            continue;
-        };
-        for specifier in import.specifiers.iter().flatten() {
-            match specifier {
-                ImportDeclarationSpecifier::ImportSpecifier(named) => {
-                    locals.insert(named.local.name.to_string());
-                }
-                ImportDeclarationSpecifier::ImportDefaultSpecifier(default) => {
-                    locals.insert(default.local.name.to_string());
-                }
-                ImportDeclarationSpecifier::ImportNamespaceSpecifier(_) => {}
-            }
-        }
-    }
-    locals
+fn named_import_locals(module: &ModuleRecord<'_>) -> BTreeSet<String> {
+    module
+        .import_entries
+        .iter()
+        .filter(|entry| !entry.import_name.is_namespace_object())
+        .map(|entry| entry.local_name.name.to_string())
+        .collect()
 }
 
-/// `export * as name from '…'`: name → source.
-pub fn collect_namespace_exports(program: &Program<'_>) -> BTreeMap<String, String> {
-    program
-        .body
+/// `export * as name from '…'`: name → source. The parser records these
+/// among the indirect exports.
+pub fn collect_namespace_exports(module: &ModuleRecord<'_>) -> BTreeMap<String, String> {
+    module
+        .indirect_export_entries
         .iter()
-        .filter_map(|stmt| match stmt {
-            Statement::ExportAllDeclaration(export) => export
-                .exported
-                .as_ref()
-                .map(|name| (name.name().to_string(), export.source.value.to_string())),
+        .filter(|entry| entry.import_name.is_all())
+        .filter_map(|entry| match (&entry.export_name, &entry.module_request) {
+            (ExportExportName::Name(name), Some(source)) => Some((name.name.to_string(), source.name.to_string())),
             _ => None,
         })
         .collect()
 }
 
 /// The sources of `export * from '…'`, which re-export every named export.
-pub fn collect_star_exports(program: &Program<'_>) -> Vec<String> {
-    program
-        .body
+pub fn collect_star_exports(module: &ModuleRecord<'_>) -> Vec<String> {
+    module
+        .star_export_entries
         .iter()
-        .filter_map(|stmt| match stmt {
-            Statement::ExportAllDeclaration(export) if export.exported.is_none() => {
-                Some(export.source.value.to_string())
-            }
-            _ => None,
-        })
+        .filter_map(|entry| entry.module_request.as_ref().map(|source| source.name.to_string()))
         .collect()
 }
 
-/// Collect export facts from top-level statements.
+/// Collect export facts from top-level statements. Walked rather than read
+/// from the parser's module record, which files `export { a }` of an
+/// imported `a` as a re-export from `a`'s module, and lists function, class
+/// and destructured exports that these facts leave out.
 pub fn collect_export_facts(program: &Program<'_>) -> Vec<ExportFact> {
     use oxc::ast::ast::Declaration;
     let mut out = Vec::new();
@@ -790,6 +762,7 @@ fn call_loads(call: &CallExpression<'_>) -> Vec<LoadTarget> {
 
 pub(crate) fn collect_enriched_usage(
     program: &Program<'_>,
+    module: &ModuleRecord<'_>,
     static_values: &FxHashMap<String, Value>,
     chains: &[&ChainDescriptor],
     exports: &[ExportFact],
@@ -881,8 +854,8 @@ pub(crate) fn collect_enriched_usage(
                 scoping,
                 chains,
                 react: &react,
-                namespaces: collect_namespace_imports(program).into_keys().collect(),
-                imports: named_import_locals(program),
+                namespaces: collect_namespace_imports(module).into_keys().collect(),
+                imports: named_import_locals(module),
                 escapes: BTreeSet::new(),
                 ancestors: Vec::new(),
             };
@@ -2986,6 +2959,7 @@ impl<'a, 's> Visit<'a> for FactCollector<'a, 's> {
                     member,
                     identity_uncertain,
                     props: create_element_props(call.arguments.get(1)),
+                    literals: create_element_literals(call.arguments.get(1), self.origins),
                     clone: false,
                     at: call.span.start,
                     origin: self.origins.zip(root).map(|(scoping, root)| tag_origin(scoping, root)),
@@ -3109,6 +3083,7 @@ fn clone_of(tag: TagFact, props: Option<Vec<(String, String)>>, at: u32) -> Opti
         member,
         identity_uncertain: false,
         props,
+        literals: Vec::new(),
         clone: true,
         at,
         origin: None,
@@ -3351,9 +3326,10 @@ pub fn collect_usage_facts(program: &Program<'_>) -> Vec<UsageFact> {
 
 pub fn collect_usage_facts_with_statics(
     program: &Program<'_>,
+    module: &ModuleRecord<'_>,
     static_values: &FxHashMap<String, Value>,
 ) -> Vec<UsageFact> {
-    collect_enriched_usage(program, static_values, &[], &[], &BTreeMap::new()).usage
+    collect_enriched_usage(program, module, static_values, &[], &[], &BTreeMap::new()).usage
 }
 
 fn attribute_expression<'a, 'b>(
@@ -3397,7 +3373,7 @@ fn evaluate_with_statics(
 /// Whether `expression` is an explicit `undefined`: `void 0`, or the global
 /// `undefined`, which no binding shadows. Without scoping a reference cannot
 /// be told from a shadowing binding, so it is not one.
-fn is_absent(expression: &Expression<'_>, scoping: Option<&Scoping>) -> bool {
+pub(crate) fn is_absent(expression: &Expression<'_>, scoping: Option<&Scoping>) -> bool {
     let shadowed = match crate::chain_walk::unwrap_type_assertions(expression) {
         Expression::Identifier(ident) => !scoping.is_some_and(|scoping| {
             ident.reference_id.get().is_some_and(|reference| scoping.get_reference(reference).symbol_id().is_none())
@@ -4014,6 +3990,7 @@ pub fn filter_usage_scan(
                 member,
                 identity_uncertain,
                 props,
+                literals,
                 clone,
                 at,
                 origin,
@@ -4047,6 +4024,27 @@ pub fn filter_usage_scan(
                 };
                 if let Some(binding) = resolved {
                     result.open_components.insert(binding.clone());
+                    // Literal system props take their static classes as a
+                    // JSX attribute's do; the open component keeps its slots.
+                    if let Some(active) = component_props.get(binding.as_str()) {
+                        let custom = custom_props.get(binding.as_str());
+                        for (prop_name, value) in literals {
+                            if !active.contains(prop_name) || custom.is_some_and(|c| c.contains(prop_name)) {
+                                continue;
+                            }
+                            let dedup_key = format!(
+                                "{prop_name}:{}",
+                                serde_json::to_string(value).unwrap_or_else(|_| "null".to_string())
+                            );
+                            if seen.insert(dedup_key) {
+                                result.system_prop_usages.push(SystemPropUsage {
+                                    prop_name: prop_name.clone(),
+                                    value: value.clone(),
+                                    binding: binding.clone(),
+                                });
+                            }
+                        }
+                    }
                     if let Some(config) = component_configs.get(&binding) {
                         let mut written: FxHashSet<&str> = FxHashSet::default();
                         for (key, class) in props.iter().flatten() {
@@ -4284,7 +4282,7 @@ mod tests {
         let ast = parse(source);
         let program = ast.program();
         let statics = crate::eval::collect_complete_static_values(program);
-        let facts = collect_usage_facts_with_statics(program, &statics);
+        let facts = collect_usage_facts_with_statics(program, ast.module_record(), &statics);
         filter_usage_scan(
             &facts,
             &props(&[("Box", &["p", "display", "mt"])]),
@@ -4563,7 +4561,7 @@ mod tests {
         let ast = parse(source);
         let statics = crate::eval::collect_complete_static_values(ast.program());
         let raw = collect_usage_facts(ast.program());
-        let enriched = collect_usage_facts_with_statics(ast.program(), &statics);
+        let enriched = collect_usage_facts_with_statics(ast.program(), ast.module_record(), &statics);
 
         for (label, facts) in [("raw", raw), ("enriched", enriched)] {
             let filtered = filter_usage_scan(
