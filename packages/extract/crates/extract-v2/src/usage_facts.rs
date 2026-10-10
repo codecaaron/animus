@@ -767,6 +767,7 @@ pub(crate) fn collect_enriched_usage(
     chains: &[&ChainDescriptor],
     exports: &[ExportFact],
     object_consts: &BTreeMap<&str, bool>,
+    assigned_targets: &BTreeSet<&str>,
 ) -> EnrichedUsage {
     let exported: FxHashSet<&str> = exports.iter().filter_map(|e| e.local.as_deref()).collect();
     let candidates: Vec<&str> = chains
@@ -884,7 +885,7 @@ pub(crate) fn collect_enriched_usage(
         _ => BTreeMap::new(),
     };
     let unsafe_object_uses = match &scoping {
-        Some(scoping) => unsafe_object_uses(program, scoping, object_consts),
+        Some(scoping) => unsafe_object_uses(program, scoping, object_consts, assigned_targets),
         None => BTreeMap::new(),
     };
     let (opaque_calls, opaque_tags, element_consts) =
@@ -1416,13 +1417,14 @@ fn object_bindings(
     program: &Program<'_>,
     scoping: &Scoping,
     object_consts: &BTreeMap<&str, bool>,
+    assigned_targets: &BTreeSet<&str>,
 ) -> FxHashMap<SymbolId, ObjectBinding> {
     use oxc::ast::ast::ImportOrExportKind;
     let mut bindings = FxHashMap::default();
     let mut add = |binding: &oxc::ast::ast::BindingIdentifier<'_>, namespace: bool| {
         if let Some(symbol) = binding.symbol_id.get() {
             let name = binding.name.to_string();
-            bindings.insert(symbol, ObjectBinding { name, namespace, facade: false });
+            bindings.insert(symbol, ObjectBinding { name, namespace, facade: false, targets: Vec::new() });
         }
     };
     for stmt in &program.body {
@@ -1445,7 +1447,19 @@ fn object_bindings(
     for (name, &facade) in object_consts {
         if let Some(symbol) = scoping.get_root_binding((*name).into()) {
             let name = name.to_string();
-            bindings.insert(symbol, ObjectBinding { name, namespace: false, facade });
+            bindings.insert(symbol, ObjectBinding { name, namespace: false, facade, targets: Vec::new() });
+        }
+    }
+    for target in assigned_targets {
+        let (root, path) = target.split_once('.').map_or((*target, ""), |(root, path)| (root, path));
+        if let Some(symbol) = scoping.get_root_binding(root.into()) {
+            let binding = bindings.entry(symbol).or_insert_with(|| ObjectBinding {
+                name: root.to_string(),
+                namespace: false,
+                facade: false,
+                targets: Vec::new(),
+            });
+            binding.targets.push(path.to_string());
         }
     }
     bindings
@@ -1458,6 +1472,11 @@ struct ObjectBinding {
     /// A facade of this module, whose top-level member writes its member
     /// facts record in order.
     facade: bool,
+    /// The paths below it that an assigned facade targets (`Root` in
+    /// `Object.assign(Fam.Root, …)`, empty for the binding itself): each is
+    /// watched as an object of its own, apart from the facade's own
+    /// initializer.
+    targets: Vec<String>,
 }
 
 /// See `FileFacts::unsafe_object_uses`.
@@ -1465,8 +1484,9 @@ fn unsafe_object_uses(
     program: &Program<'_>,
     scoping: &Scoping,
     object_consts: &BTreeMap<&str, bool>,
+    assigned_targets: &BTreeSet<&str>,
 ) -> BTreeMap<String, ObjectUse> {
-    let candidates = object_bindings(program, scoping, object_consts);
+    let candidates = object_bindings(program, scoping, object_consts, assigned_targets);
     if candidates.is_empty() {
         return BTreeMap::new();
     }
@@ -1522,6 +1542,34 @@ impl<'a> Visit<'a> for ObjectUseScan<'a, '_> {
         if !reference.is_value() {
             return;
         }
+        // An assigned facade's target below the binding, watched as an object
+        // of its own under its path.
+        for target in binding.targets.iter().filter(|target| !target.is_empty()) {
+            let key = format!("{}.{target}", binding.name);
+            if self.uses.contains_key(&key) {
+                continue;
+            }
+            let mut ancestors = self.ancestors.iter().rev();
+            let mut span = ident.span;
+            let reached = target.split('.').all(|segment| match peel_wrappers(span, &mut ancestors) {
+                (current, Some(AstKind::StaticMemberExpression(member)))
+                    if member.object.span() == current && member.property.name == segment =>
+                {
+                    span = member.span;
+                    true
+                }
+                _ => false,
+            });
+            if !reached {
+                continue;
+            }
+            if let Some(what) = object_use(span, ancestors, false, self.global_object, true) {
+                let start = (ident.span.start as usize).min(self.source.len());
+                let line = self.source[..start].matches('\n').count() + 1;
+                self.uses.insert(key, ObjectUse { line: Some(line), what });
+            }
+        }
+        let assigned_target = binding.targets.iter().any(String::is_empty);
         let mut ancestors = self.ancestors.iter().rev();
         let (key, what) = if binding.namespace {
             let (span, parent) = peel_wrappers(ident.span, &mut ancestors);
@@ -1532,7 +1580,7 @@ impl<'a> Visit<'a> for ObjectUseScan<'a, '_> {
                     if self.uses.contains_key(&key) {
                         return;
                     }
-                    let what = object_use(member.span, ancestors, false, self.global_object);
+                    let what = object_use(member.span, ancestors, false, self.global_object, false);
                     (key, what)
                 }
                 _ => (binding.name.clone(), Some("is used as a whole namespace".to_string())),
@@ -1543,7 +1591,7 @@ impl<'a> Visit<'a> for ObjectUseScan<'a, '_> {
             {
                 return;
             }
-            (binding.name.clone(), object_use(ident.span, ancestors, true, self.global_object))
+            (binding.name.clone(), object_use(ident.span, ancestors, true, self.global_object, assigned_target))
         };
         let Some(what) = what else { return };
         let start = (ident.span.start as usize).min(self.source.len());
@@ -1622,6 +1670,7 @@ fn object_use<'b, 'a: 'b>(
     mut ancestors: impl Iterator<Item = &'b AstKind<'a>>,
     alias: bool,
     global_object: bool,
+    assigned_target: bool,
 ) -> Option<String> {
     use oxc::ast::ast::{AssignmentTarget, BindingPattern};
     let (current, parent) = peel_wrappers(span, &mut ancestors);
@@ -1658,6 +1707,8 @@ fn object_use<'b, 'a: 'b>(
             };
             let first = call.arguments.first().map(GetSpan::span) == Some(current);
             match object_function {
+                // An assigned facade's own initializer builds it.
+                Some("assign") if first && assigned_target && initializes_top_level_const(call.span, &mut ancestors) => None,
                 Some("assign") if first => unfollowed("is the target of Object.assign()"),
                 Some("assign" | "freeze" | "keys" | "values" | "entries") => None,
                 _ => Some(match callee {
@@ -1687,18 +1738,40 @@ fn object_use<'b, 'a: 'b>(
         AstKind::AssignmentExpression(assignment) if assignment.right.span() == current => {
             match &assignment.left {
                 AssignmentTarget::ObjectAssignmentTarget(_) => {
-                    object_use(assignment.span, ancestors, false, global_object)
+                    object_use(assignment.span, ancestors, false, global_object, false)
                 }
                 _ => unfollowed("is assigned to a variable"),
             }
         }
         AstKind::ExpressionStatement(_) => None,
         AstKind::ForInStatement(statement) if statement.right.span() == current => None,
+        // An assigned facade's own sources may name it.
+        AstKind::ObjectProperty(_) if assigned_target && in_own_assign_source(&mut ancestors, global_object) => None,
         AstKind::ObjectProperty(_) => unfollowed("is stored in an object"),
         AstKind::ArrayExpression(_) => unfollowed("is stored in an array"),
         AstKind::JSXExpressionContainer(_) => unfollowed("is passed as a prop"),
         _ => unfollowed("is used where the extractor does not follow it"),
     }
+}
+
+/// Whether the object property just left sits in an object literal that is
+/// a source of an `Object.assign` call initializing a top-level `const`:
+/// the assigned facade's own initializer. `ancestors` runs from the
+/// property's parent out.
+fn in_own_assign_source<'b, 'a: 'b>(ancestors: &mut impl Iterator<Item = &'b AstKind<'a>>, global_object: bool) -> bool {
+    let Some(AstKind::ObjectExpression(object)) = ancestors.next() else {
+        return false;
+    };
+    let (current, parent) = peel_wrappers(object.span, ancestors);
+    let Some(AstKind::CallExpression(call)) = parent else {
+        return false;
+    };
+    let object_assign = matches!(crate::chain_walk::unwrap_type_assertions(&call.callee),
+        Expression::StaticMemberExpression(member)
+            if global_object && member.object.is_specific_id("Object") && member.property.name == "assign");
+    object_assign
+        && call.arguments.iter().skip(1).any(|argument| argument.span() == current)
+        && initializes_top_level_const(call.span, ancestors)
 }
 
 /// What a use of one member of an object (`X.key`, at `span`) may do to
@@ -3314,7 +3387,7 @@ pub fn collect_usage_facts_with_statics(
     module: &ModuleRecord<'_>,
     static_values: &FxHashMap<String, Value>,
 ) -> Vec<UsageFact> {
-    collect_enriched_usage(program, module, static_values, &[], &[], &BTreeMap::new()).usage
+    collect_enriched_usage(program, module, static_values, &[], &[], &BTreeMap::new(), &BTreeSet::new()).usage
 }
 
 fn attribute_expression<'a, 'b>(
