@@ -336,9 +336,42 @@ fn props_forwarding(function: ComponentFunction<'_, '_>) -> Option<PropsForwardi
         targets: Vec::new(),
     };
     scan.visit_function_body(function.body);
-    (!scan.targets.is_empty()).then_some(PropsForwarding {
-        named,
-        targets: scan.targets,
+    if !scan.targets.is_empty() {
+        return Some(PropsForwarding { named, targets: scan.targets });
+    }
+    // `const { a, ...rest } = props` in the body, then `{...rest}`: every
+    // prop but the ones it names reaches the tags `rest` is spread into.
+    function.body.statements.iter().find_map(|statement| {
+        let (named, rest) = destructured_rest(statement, &spread)?;
+        let mut scan = SpreadTargets {
+            spread: &rest,
+            targets: Vec::new(),
+        };
+        scan.visit_function_body(function.body);
+        (!scan.targets.is_empty()).then_some(PropsForwarding { named, targets: scan.targets })
+    })
+}
+
+/// `const { a, b, ...rest } = props;`: the keys it names and its rest
+/// binding, when it destructures `props` itself.
+fn destructured_rest(statement: &Statement<'_>, props: &str) -> Option<(Vec<String>, String)> {
+    use oxc::ast::ast::BindingPattern;
+    let Statement::VariableDeclaration(declaration) = statement else { return None };
+    declaration.declarations.iter().find_map(|declarator| {
+        let init = crate::chain_walk::unwrap_type_assertions(declarator.init.as_ref()?);
+        if !matches!(init, Expression::Identifier(id) if id.name == props) {
+            return None;
+        }
+        let BindingPattern::ObjectPattern(object) = &declarator.id else { return None };
+        let BindingPattern::BindingIdentifier(rest) = &object.rest.as_ref()?.argument else {
+            return None;
+        };
+        let named = object
+            .properties
+            .iter()
+            .filter_map(|property| property.key.static_name().map(|key| key.to_string()))
+            .collect();
+        Some((named, rest.name.to_string()))
     })
 }
 

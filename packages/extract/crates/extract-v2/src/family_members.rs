@@ -165,6 +165,9 @@ enum Object {
 pub(crate) enum Member {
     /// A value that names no component.
     Other,
+    /// A binding of a module, as written there, that names no component,
+    /// such as a function component that forwards its props.
+    Bound { module: String, binding: String },
     /// The component the member names; nothing the analysis sees can have
     /// changed the object since.
     Stable(String),
@@ -176,7 +179,7 @@ pub(crate) enum Member {
 impl Member {
     fn component(&self) -> Option<&String> {
         match self {
-            Self::Other => None,
+            Self::Other | Self::Bound { .. } => None,
             Self::Stable(component) | Self::Unstable(component, _) => Some(component),
         }
     }
@@ -382,7 +385,10 @@ impl<'f> ObjectMembers<'f> {
                             }
                             _ => None,
                         },
-                        None => (self.component)(module, binding).map(Member::Stable),
+                        None => Some((self.component)(module, binding).map_or_else(
+                            || Member::Bound { module: module.to_string(), binding: binding.clone() },
+                            Member::Stable,
+                        )),
                     };
                     table.members.insert(key.clone(), value.unwrap_or(Member::Other));
                 }
