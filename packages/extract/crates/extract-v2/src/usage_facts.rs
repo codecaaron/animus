@@ -196,12 +196,20 @@ pub fn collect_namespace_imports(module: &ModuleRecord<'_>) -> std::collections:
         .collect()
 }
 
-/// A top-level function component that forwards its props by spread:
-/// `(props) => <Recipe {...props} />` or `({ a, ...rest }) => <Recipe {...rest} />`.
+/// A top-level function component that forwards its props by spread, by
+/// one route or more: `(props) => <Recipe {...props} />`,
+/// `({ a, ...rest }) => <Recipe {...rest} />`, or `const { a, ...rest } =
+/// props` in its body and then `{...rest}`.
 #[derive(Debug, Clone, Default)]
 pub struct PropsForwarding {
-    /// Props the parameter destructures by name, which the spread never
-    /// carries.
+    pub routes: Vec<ForwardRoute>,
+}
+
+/// One spread of a component's props.
+#[derive(Debug, Clone, Default)]
+pub struct ForwardRoute {
+    /// Props a pattern on the way destructures by name, which the spread
+    /// never carries.
     pub named: Vec<String>,
     /// The tags that receive the spread, as written (`Recipe`, `Ns.Item`).
     pub targets: Vec<String>,
@@ -317,62 +325,62 @@ fn props_forwarding(function: ComponentFunction<'_, '_>) -> Option<PropsForwardi
     }
     let (named, spread) = match pattern {
         BindingPattern::BindingIdentifier(id) => (Vec::new(), id.name.to_string()),
-        BindingPattern::ObjectPattern(object) => {
-            let rest = object.rest.as_ref()?;
-            let BindingPattern::BindingIdentifier(rest) = &rest.argument else {
-                return None;
-            };
-            let named = object
-                .properties
-                .iter()
-                .filter_map(|property| property.key.static_name().map(|key| key.to_string()))
-                .collect();
-            (named, rest.name.to_string())
-        }
+        BindingPattern::ObjectPattern(object) => object_rest(object)?,
         _ => return None,
     };
-    let mut scan = SpreadTargets {
-        spread: &spread,
-        targets: Vec::new(),
-    };
-    scan.visit_function_body(function.body);
-    if !scan.targets.is_empty() {
-        return Some(PropsForwarding { named, targets: scan.targets });
-    }
-    // `const { a, ...rest } = props` in the body, then `{...rest}`: every
-    // prop but the ones it names reaches the tags `rest` is spread into.
-    function.body.statements.iter().find_map(|statement| {
-        let (named, rest) = destructured_rest(statement, &spread)?;
+    let mut routes = Vec::new();
+    let mut route = |named: Vec<String>, spread: &str| {
         let mut scan = SpreadTargets {
-            spread: &rest,
+            spread,
             targets: Vec::new(),
         };
         scan.visit_function_body(function.body);
-        (!scan.targets.is_empty()).then_some(PropsForwarding { named, targets: scan.targets })
-    })
+        if !scan.targets.is_empty() {
+            routes.push(ForwardRoute { named, targets: scan.targets });
+        }
+    };
+    route(named.clone(), &spread);
+    // `const { a, ...rest } = props` in the body, then `{...rest}`: neither
+    // the props the parameter names nor the ones the body names reach the
+    // tags `rest` is spread into.
+    for statement in &function.body.statements {
+        for (body_named, rest) in destructured_rests(statement, &spread) {
+            route(named.iter().cloned().chain(body_named).collect(), &rest);
+        }
+    }
+    (!routes.is_empty()).then_some(PropsForwarding { routes })
 }
 
-/// `const { a, b, ...rest } = props;`: the keys it names and its rest
-/// binding, when it destructures `props` itself.
-fn destructured_rest(statement: &Statement<'_>, props: &str) -> Option<(Vec<String>, String)> {
+/// `{ a, b, ...rest }`: the keys it names and its rest binding.
+fn object_rest(object: &oxc::ast::ast::ObjectPattern<'_>) -> Option<(Vec<String>, String)> {
+    let oxc::ast::ast::BindingPattern::BindingIdentifier(rest) = &object.rest.as_ref()?.argument else {
+        return None;
+    };
+    let named = object
+        .properties
+        .iter()
+        .filter_map(|property| property.key.static_name().map(|key| key.to_string()))
+        .collect();
+    Some((named, rest.name.to_string()))
+}
+
+/// Each `const { a, b, ...rest } = props` of a statement: the keys it names
+/// and its rest binding, when it destructures `props` itself.
+fn destructured_rests(statement: &Statement<'_>, props: &str) -> Vec<(Vec<String>, String)> {
     use oxc::ast::ast::BindingPattern;
-    let Statement::VariableDeclaration(declaration) = statement else { return None };
-    declaration.declarations.iter().find_map(|declarator| {
-        let init = crate::chain_walk::unwrap_type_assertions(declarator.init.as_ref()?);
-        if !matches!(init, Expression::Identifier(id) if id.name == props) {
-            return None;
-        }
-        let BindingPattern::ObjectPattern(object) = &declarator.id else { return None };
-        let BindingPattern::BindingIdentifier(rest) = &object.rest.as_ref()?.argument else {
-            return None;
-        };
-        let named = object
-            .properties
-            .iter()
-            .filter_map(|property| property.key.static_name().map(|key| key.to_string()))
-            .collect();
-        Some((named, rest.name.to_string()))
-    })
+    let Statement::VariableDeclaration(declaration) = statement else { return Vec::new() };
+    declaration
+        .declarations
+        .iter()
+        .filter_map(|declarator| {
+            let init = crate::chain_walk::unwrap_type_assertions(declarator.init.as_ref()?);
+            if !matches!(init, Expression::Identifier(id) if id.name == props) {
+                return None;
+            }
+            let BindingPattern::ObjectPattern(object) = &declarator.id else { return None };
+            object_rest(object)
+        })
+        .collect()
 }
 
 struct SpreadTargets<'s> {

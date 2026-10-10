@@ -3072,10 +3072,14 @@ fn unattributed_system_props(
     let mut reported: FxHashSet<(&str, Vec<&str>)> = FxHashSet::default();
     let mut warnings = Vec::new();
     for render in tag_renders(ff, inputs) {
-        let TagRender { tag, member: false, props, at, .. } = render else {
+        let TagRender { tag, member: false, props, at, origin, .. } = render else {
             continue;
         };
-        if !tag.starts_with(|c: char| c.is_ascii_uppercase()) || !unattributed_imports.contains(&tag) {
+        // A name a parameter or a nested binding shadows is not the import.
+        if !tag.starts_with(|c: char| c.is_ascii_uppercase())
+            || !unattributed_imports.contains(&tag)
+            || origin.is_some_and(|origin| origin != TagOrigin::Import)
+        {
             continue;
         }
         let Some((declaration_file, declaration, lost)) = lost_through_binding(file, tag, files, inputs) else {
@@ -3103,20 +3107,30 @@ struct TagRender<'u> {
     call: bool,
     props: Vec<&'u str>,
     at: u32,
+    /// Where the tag's name is bound, when the facts were collected with
+    /// the file's scopes.
+    origin: Option<TagOrigin>,
 }
 
 /// Every tag `ff` renders with the system props it passes, in usage order.
 /// A `createElement` call whose props are not known passes none.
 fn tag_renders<'u>(ff: &'u FileFacts, inputs: &'u CssInputs) -> impl Iterator<Item = TagRender<'u>> {
     ff.usage_for_analysis().iter().filter_map(move |usage| match usage {
-        UsageFact::Element { tag, attrs, span, .. } => {
+        UsageFact::Element { tag, attrs, span, origin, .. } => {
             let (tag, member) = match tag {
                 TagFact::Ident(tag) => (tag.as_str(), false),
                 TagFact::Member(tag) => (tag.as_str(), true),
             };
-            Some(TagRender { tag, member, call: false, props: passed_system_props(attrs, inputs).collect(), at: span.0 })
+            Some(TagRender {
+                tag,
+                member,
+                call: false,
+                props: passed_system_props(attrs, inputs).collect(),
+                at: span.0,
+                origin: *origin,
+            })
         }
-        UsageFact::CreateElement { ident, member, props: Some(props), clone: false, at, .. } => {
+        UsageFact::CreateElement { ident, member, props: Some(props), clone: false, at, origin, .. } => {
             let (tag, is_member) = match (ident, member) {
                 (Some(ident), _) => (ident.as_str(), false),
                 (None, Some(member)) => (member.as_str(), true),
@@ -3127,15 +3141,14 @@ fn tag_renders<'u>(ff: &'u FileFacts, inputs: &'u CssInputs) -> impl Iterator<It
                 .map(|(name, _)| name.as_str())
                 .filter(|name| inputs.config.contains_key(*name))
                 .collect();
-            Some(TagRender { tag, member: is_member, call: true, props, at: *at })
+            Some(TagRender { tag, member: is_member, call: true, props, at: *at, origin: *origin })
         }
         _ => None,
     })
 }
 
 /// The declaration `binding`, as `file` declares or imports it, resolves to,
-/// followed through re-exports and `export *`, and what it hands its props
-/// to.
+/// and what it hands its props to.
 fn lost_through_binding<'f>(
     file: &str,
     binding: &str,
@@ -3143,15 +3156,42 @@ fn lost_through_binding<'f>(
     inputs: &CssInputs,
 ) -> Option<(String, String, LostThrough<'f>)> {
     let ff = files.get(file)?;
-    let (declaration_file, declaration) = match ff.imports.iter().find(|import| import.local == binding) {
+    match ff.imports.iter().find(|import| import.local == binding) {
         Some(import) => {
             let module = resolve_import_source(file, &import.source, files, inputs)?;
-            crate::family_members::follow_exports(module, import.imported.clone(), files, inputs)?
+            lost_through_export(module, import.imported.clone(), files, inputs, &mut FxHashSet::default())
         }
-        None => (file.to_string(), binding.to_string()),
-    };
-    let lost = LostThrough::of(&declaration_file, &declaration, files)?;
-    Some((declaration_file, declaration, lost))
+        None => LostThrough::of(file, binding, files).map(|lost| (file.to_string(), binding.to_string(), lost)),
+    }
+}
+
+/// The declaration `module` exports as `name` that loses the props it is
+/// passed, followed through re-exports and imported names exported again,
+/// then through `export *` when the module exports no `name` of its own.
+fn lost_through_export<'f>(
+    module: String,
+    name: String,
+    files: &'f BTreeMap<String, FileFacts>,
+    inputs: &CssInputs,
+    visited: &mut FxHashSet<(String, String)>,
+) -> Option<(String, String, LostThrough<'f>)> {
+    if !visited.insert((module.clone(), name.clone())) {
+        return None;
+    }
+    let (file, declaration) = follow_reexports(module, name, files, inputs);
+    if let Some(lost) = LostThrough::of(&file, &declaration, files) {
+        return Some((file, declaration, lost));
+    }
+    let ff = files.get(&file)?;
+    // `export *` never carries a default export, nor a name the module
+    // exports itself.
+    if declaration == "default" || ff.exports.iter().any(|export| export.exported == declaration) {
+        return None;
+    }
+    ff.star_exports
+        .iter()
+        .filter_map(|spec| resolve_import_source(&file, spec, files, inputs))
+        .find_map(|next| lost_through_export(next, declaration.clone(), files, inputs, visited))
 }
 
 /// The warning for `tag` passing `props` to `declaration`, which loses them
@@ -3165,24 +3205,17 @@ fn lost_props_warning<'u>(
     takes_system_prop: &dyn Fn(&str, &str, &str) -> bool,
     reported: &mut FxHashSet<(&'u str, Vec<&'u str>)>,
 ) -> Option<CssDiagnostic> {
-    let mut props: Vec<&str> = props
-        .into_iter()
-        .filter(|prop| {
-            lost.reaches(prop)
-                && lost.targets().iter().any(|target| takes_system_prop(declaration_file, target, prop))
-        })
-        .collect();
+    let takes = |prop: &str| {
+        lost.reaching(prop).into_iter().find(|target| takes_system_prop(declaration_file, target, prop))
+    };
+    let mut props: Vec<&str> = props.into_iter().filter(|prop| takes(prop).is_some()).collect();
     props.sort_unstable();
     props.dedup();
     if props.is_empty() {
         return None;
     }
     let listed = props.join(", ");
-    let target = lost
-        .targets()
-        .iter()
-        .find(|target| props.iter().any(|prop| takes_system_prop(declaration_file, target, prop)))
-        .map_or("", String::as_str);
+    let target = props.iter().find_map(|prop| takes(prop)).map_or("", String::as_str);
     if !reported.insert((tag, props)) {
         return None;
     }
@@ -3190,7 +3223,7 @@ fn lost_props_warning<'u>(
         LostThrough::Alias(_) => format!(
             "an alias of the extracted component {target} that usage tracking does not follow"
         ),
-        LostThrough::Spread { .. } => format!(
+        LostThrough::Spread(_) => format!(
             "a function component that forwards them by spread to the extracted component {target}"
         ),
     };
@@ -3242,7 +3275,7 @@ fn untraced_member_system_props(
     let mut reported: FxHashSet<(&str, Vec<&str>)> = FxHashSet::default();
     let mut warnings = Vec::new();
     for render in tag_renders(ff, inputs) {
-        let TagRender { tag, member: true, call: false, mut props, at } = render else {
+        let TagRender { tag, member: true, call: false, mut props, at, .. } = render else {
             continue;
         };
         if member_expr_bindings.contains_key(tag) || props.is_empty() {
@@ -3722,12 +3755,9 @@ enum LostThrough<'f> {
     /// boundary, so every prop reaches the recipe.
     Alias(&'f String),
     /// A function component spreading its props, or a rest element of them,
-    /// into the tags it renders; props it destructures by name never reach
-    /// them.
-    Spread {
-        targets: &'f [String],
-        named: &'f [String],
-    },
+    /// into the tags it renders, by each of `routes`; a prop a pattern on a
+    /// route destructures by name never reaches that route's tags.
+    Spread(&'f [crate::usage_facts::ForwardRoute]),
 }
 
 impl<'f> LostThrough<'f> {
@@ -3743,25 +3773,19 @@ impl<'f> LostThrough<'f> {
             return Some(Self::Alias(target));
         }
         let forwarding = ff.props_forwarding.get(local)?;
-        Some(Self::Spread {
-            targets: &forwarding.targets,
-            named: &forwarding.named,
-        })
+        Some(Self::Spread(&forwarding.routes))
     }
 
-    /// The names the declaration hands its props to, read in its file.
-    fn targets(&self) -> &'f [String] {
+    /// The names, read in the declaration's file, that `prop`, passed to the
+    /// declaration, reaches.
+    fn reaching(&self, prop: &str) -> Vec<&'f String> {
         match self {
-            Self::Alias(target) => std::slice::from_ref(*target),
-            Self::Spread { targets, .. } => targets,
-        }
-    }
-
-    /// Whether `prop`, passed to the declaration, reaches its target.
-    fn reaches(&self, prop: &str) -> bool {
-        match self {
-            Self::Alias(_) => true,
-            Self::Spread { named, .. } => !named.iter().any(|name| name == prop),
+            Self::Alias(target) => vec![*target],
+            Self::Spread(routes) => routes
+                .iter()
+                .filter(|route| !route.named.iter().any(|name| name == prop))
+                .flat_map(|route| &route.targets)
+                .collect(),
         }
     }
 }
@@ -10567,26 +10591,48 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
 
     /// Each wrapper shape the attribution does not follow warns once, at the
     /// use: a wrapper reached through `export *`, one that destructures its
-    /// props in its body, one rendered by `createElement`, and a function
-    /// component held by a facade object.
+    /// props in its body, a function declaration, one with two rest routes
+    /// of which one still carries the prop, one rendered by `createElement`,
+    /// and a function component held by a facade object. A prop a pattern
+    /// on every route consumes, and a name a parameter shadows, warn nothing.
     #[test]
     fn every_unfollowed_wrapper_shape_warns_at_its_use() {
         let recipe = "export const Box = ds.styles({}).system({ space: true }).asElement('div');\n";
         let wrapper = "import { Box } from './recipe';\nexport const Top = (props) => <Box {...props} />;\n";
-        let cases: [(&str, &str, &str, &str); 4] = [
-            ("index.ts", "export * from './wrapper';\n", "import { Top } from './index';\nexport const App = () => <Top marginInlineStart={8} />;\n", "<Top"),
+        let rendered = "import { Top } from './wrapper';\nexport const App = () => <Top marginInlineStart={8} />;\n";
+        let cases: [(&str, &str, &str, Option<&str>); 8] = [
+            ("index.ts", "export * from './wrapper';\n", "import { Top } from './index';\nexport const App = () => <Top marginInlineStart={8} />;\n", Some("<Top")),
             (
                 "wrapper.tsx",
                 "import { Box } from './recipe';\nexport const Top = (props) => { const { children, ...rest } = props; return <Box {...rest}>{children}</Box>; };\n",
-                "import { Top } from './wrapper';\nexport const App = () => <Top marginInlineStart={8} />;\n",
-                "<Top",
+                rendered,
+                Some("<Top"),
             ),
-            ("index.ts", "export {};\n", "import { createElement } from 'react';\nimport { Top } from './wrapper';\nexport const App = () => createElement(Top, { marginInlineStart: 8 });\n", "createElement(Top"),
+            (
+                "wrapper.tsx",
+                "import { Box } from './recipe';\nexport function Top(props) { const { children, ...rest } = props; return <Box {...rest} />; }\n",
+                rendered,
+                Some("<Top"),
+            ),
+            (
+                "wrapper.tsx",
+                "import { Box } from './recipe';\nexport const Top = (props) => { const { marginInlineStart, ...a } = props; const { children, ...b } = props; return <><Box {...a} /><Box {...b} /></>; };\n",
+                rendered,
+                Some("<Top"),
+            ),
+            (
+                "wrapper.tsx",
+                "import { Box } from './recipe';\nexport const Top = ({ marginInlineStart, ...props }) => { const { children, ...rest } = props; return <Box {...rest} />; };\n",
+                rendered,
+                None,
+            ),
+            ("index.ts", "export {};\n", "import { createElement } from 'react';\nimport { Top } from './wrapper';\nexport const App = () => createElement(Top, { marginInlineStart: 8 });\n", Some("createElement(Top")),
+            ("index.ts", "export {};\n", "import { createElement } from 'react';\nimport { Top } from './wrapper';\nexport const App = ({ Top }) => createElement(Top, { marginInlineStart: 8 });\n", None),
             (
                 "facade.tsx",
                 "import { Box } from './recipe';\nimport { Top } from './wrapper';\nexport const Identity = { Body: Box, Media: Top };\n",
                 "import { Identity } from './facade';\nexport const App = () => <><Identity.Body marginInlineStart={8} /><Identity.Media marginInlineStart={8} /></>;\n",
-                "<Identity.Media",
+                Some("<Identity.Media"),
             ),
         ];
         for (path, module, app, use_site) in cases {
@@ -10596,8 +10642,11 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             }
             let out = analyze_with_logical_space(&entries);
             let warned: Vec<_> = unattributed(&out).iter().map(|d| (d.file.as_str(), d.offset, d.dropped.as_deref())).collect();
-            let at = app.find(use_site).unwrap() as u32;
-            assert_eq!(warned, [("app.tsx", Some(at), Some("marginInlineStart"))], "{use_site}: {:?}", out.diagnostics);
+            let expected: Vec<_> = use_site
+                .map(|site| ("app.tsx", Some(app.find(site).unwrap() as u32), Some("marginInlineStart")))
+                .into_iter()
+                .collect();
+            assert_eq!(warned, expected, "{module}{app}: {:?}", out.diagnostics);
         }
     }
 
