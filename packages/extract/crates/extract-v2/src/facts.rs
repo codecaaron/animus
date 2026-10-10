@@ -506,6 +506,15 @@ pub struct FileFacts {
     /// naming one's `Provider` renders its children in place.
     #[serde(skip)]
     pub(crate) context_consts: BTreeSet<String>,
+    /// Tags whose type a top-level function's own prop chooses at runtime.
+    #[serde(skip)]
+    pub(crate) prop_tags: Vec<crate::usage_facts::PropTag>,
+    /// How the module uses each module-scope name it declares or imports.
+    #[serde(skip)]
+    pub(crate) name_uses: BTreeMap<String, crate::usage_facts::NameUses>,
+    /// How the module uses each member of a namespace import (`ns.X`).
+    #[serde(skip)]
+    pub(crate) namespace_member_uses: BTreeMap<String, crate::usage_facts::NameUses>,
     /// The module calls `eval` directly, which can read any of its bindings
     /// by name.
     #[serde(skip)]
@@ -1453,6 +1462,9 @@ pub(crate) fn extract_file_facts_from_static_maps(
         unsafe_object_uses,
         ordinary_components,
         context_consts,
+        prop_tags,
+        name_uses,
+        namespace_member_uses,
         direct_eval,
         opaque_calls,
         element_consts,
@@ -1523,6 +1535,9 @@ pub(crate) fn extract_file_facts_from_static_maps(
         module_loads,
         ordinary_components,
         context_consts,
+        prop_tags,
+        name_uses,
+        namespace_member_uses,
         direct_eval,
         opaque_calls,
         element_consts,

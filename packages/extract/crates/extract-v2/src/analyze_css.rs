@@ -3652,6 +3652,224 @@ fn names_react_pass_through(ff: &FileFacts, tag: &str, origin: Option<TagOrigin>
     }
 }
 
+/// The tags whose type a function's own prop chooses (`PropTag`) that
+/// render only host elements, by file and start: every route by which the
+/// analysis sees the function render is one it reads, and each gives the
+/// prop a string literal or leaves it out. The routes are a component
+/// `.asComponent()` builds from it, whose proven uses the runtime forwards
+/// the prop from; JSX renders of it, by name, as a stable object's member
+/// or through a namespace; and nothing else: another use of it, of an
+/// object holding it, a copy of such an object, a `createElement` of it or
+/// a runtime load of a module exporting it leaves the tag unbounded, and so
+/// does a function no analysed code renders, or a default export, which
+/// code outside the analysis (a framework, an entry) may render.
+#[allow(clippy::too_many_arguments)]
+fn bounded_prop_tags(
+    files: &BTreeMap<String, FileFacts>,
+    inputs: &CssInputs,
+    evaluated_ids: &FxHashSet<String>,
+    results: &[UsageScanResult],
+    unproven: &std::collections::BTreeSet<String>,
+    forwards: &[Forward],
+    ordinary_members: &FxHashMap<(String, String), (String, String)>,
+    object_members: &mut crate::family_members::ObjectMembers<'_>,
+) -> FxHashSet<(String, u32)> {
+    let open: FxHashSet<&String> = results.iter().flat_map(|result| &result.open_components).collect();
+    let cloned: FxHashSet<&String> = results.iter().flat_map(|result| &result.cloned_props).collect();
+    // A declaration a module's name or default import resolves to.
+    let declared = |file: &str, ff: &FileFacts, name: &str| {
+        let (declaring, binding, _) = resolve_declaration(file, ff, name, files, inputs)?;
+        let binding = match binding.as_str() {
+            "default" => files.get(&declaring)?.default_export_binding.clone().unwrap_or(binding),
+            _ => binding,
+        };
+        Some((declaring, binding))
+    };
+    // A namespace member path (`ns.X`) a module reads, as a declaration.
+    let namespace_declared = |file: &str, ff: &FileFacts, path: &str| {
+        let (namespace, member) = path.rsplit_once('.')?;
+        let module = namespace_path_module(file, ff, namespace, files, inputs)?;
+        let (declaring, _, binding) = declared_export(&module, member.to_string(), files, inputs)?;
+        Some((declaring, binding))
+    };
+    // Whether the component `outer` builds forwards the prop only as written
+    // literals: every use proven, none of them spread, cloned, forwarded into
+    // or written with anything but a string.
+    let outer_bounded = |outer: &String, prop: &str| {
+        !unproven.contains(outer)
+            && !open.contains(outer)
+            && !cloned.iter().any(|cloned| *cloned == prop)
+            && !forwards.iter().any(|forward| forward.inner.contains(outer))
+            && results.iter().flat_map(|result| &result.written_props).all(|written| {
+                written.binding != *outer
+                    || written.prop != prop
+                    || matches!(&written.literal, Some(Value::String(_)))
+            })
+    };
+    let mut bounded: FxHashMap<(String, String, String), bool> = FxHashMap::default();
+    let mut renders_bounded = |module: &String, function: &String, prop: &String| -> bool {
+        let target = (module.clone(), function.clone());
+        // A default export is what a framework or entry renders by itself.
+        if files.get(module).is_none_or(|ff| ff.default_export_binding.as_ref() == Some(function)) {
+            return false;
+        }
+        // A function no analysed code renders is rendered by code that is not.
+        let mut routes = 0;
+        // A module loaded at runtime hands its exports to code usage cannot follow.
+        for (path, ff) in files {
+            for load in &ff.module_loads {
+                for loaded in loaded_modules(path, load, files, inputs) {
+                    let exports = crate::family_members::module_export_names(loaded, files, inputs);
+                    let reaches = exports.into_iter().any(|name| {
+                        declared_export(loaded, name, files, inputs)
+                            .is_some_and(|(declaring, _, binding)| (declaring, binding) == target)
+                    });
+                    if reaches {
+                        return false;
+                    }
+                }
+            }
+        }
+        for (path, ff) in files {
+            for (name, uses) in &ff.name_uses {
+                if declared(path, ff, name).as_ref() != Some(&target) {
+                    continue;
+                }
+                if uses.other > 0 {
+                    return false;
+                }
+                routes += uses.as_component + uses.held + uses.jsx;
+                // Each `.asComponent()` that takes it builds a component of this module.
+                let outers: Vec<Vec<String>> = ff
+                    .chains
+                    .iter()
+                    .filter(|chain| chain.descriptor.terminal == TerminalKind::AsComponent && chain.descriptor.tag == *name)
+                    .map(|chain| resolve_declared_identity(path, &chain.descriptor.binding, files, inputs, evaluated_ids))
+                    .collect();
+                if outers.len() != uses.as_component || outers.iter().any(Vec::is_empty) {
+                    return false;
+                }
+                if outers.iter().flatten().any(|outer| !outer_bounded(outer, prop)) {
+                    return false;
+                }
+                // Each object that holds it renders it only through member tags.
+                let holders: Vec<&String> = ff
+                    .facades
+                    .iter()
+                    .filter(|(_, entries)| {
+                        entries.iter().any(|entry| {
+                            matches!(entry, crate::facts::FacadeEntry::Member { binding, member: None, .. } if binding == name)
+                        })
+                    })
+                    .map(|(holder, _)| holder)
+                    .collect();
+                let held: usize = holders
+                    .iter()
+                    .map(|holder| {
+                        ff.facades[*holder]
+                            .iter()
+                            .filter(|entry| {
+                                matches!(entry, crate::facts::FacadeEntry::Member { binding, member: None, .. } if binding == name)
+                            })
+                            .count()
+                    })
+                    .sum();
+                if held != uses.held {
+                    return false;
+                }
+                for holder in holders {
+                    if !object_members.facade_stable(path, holder) {
+                        return false;
+                    }
+                    let holder = (path.clone(), holder.clone());
+                    for (other, off) in files {
+                        let escapes = off.value_escapes.iter().any(|escaped| {
+                            object_members.facade_at(other, escaped).as_ref() == Some(&holder)
+                        });
+                        let copies = off.facades.values().flatten().any(|entry| {
+                            matches!(entry, crate::facts::FacadeEntry::Copy(copied)
+                                if object_members.facade_at(other, copied).as_ref() == Some(&holder))
+                        });
+                        if escapes || copies {
+                            return false;
+                        }
+                    }
+                }
+            }
+            for (path_name, uses) in &ff.namespace_member_uses {
+                if namespace_declared(path, ff, path_name).as_ref() != Some(&target) {
+                    continue;
+                }
+                if uses.other > 0 || uses.as_component > 0 || uses.held > 0 {
+                    return false;
+                }
+                routes += uses.jsx;
+            }
+        }
+        if routes == 0 {
+            return false;
+        }
+        // Every render gives the prop a string, or leaves it out.
+        for (path, ff) in files {
+            for fact in ff.usage_for_analysis() {
+                match fact {
+                    UsageFact::Element { tag, attrs, spread, origin, .. } => {
+                        let renders = match tag {
+                            TagFact::Ident(name) => {
+                                matches!(origin, Some(TagOrigin::Import | TagOrigin::TopLevel))
+                                    && declared(path, ff, name).as_ref() == Some(&target)
+                            }
+                            TagFact::Member(member) => {
+                                ordinary_members.get(&(path.clone(), member.clone())) == Some(&target)
+                                    || (matches!(origin, Some(TagOrigin::Import))
+                                        && namespace_declared(path, ff, member).as_ref() == Some(&target))
+                            }
+                        };
+                        let written = |attr: &&crate::usage_facts::AttrFact| attr.name == *prop;
+                        let literal = |attr: &crate::usage_facts::AttrFact| {
+                            !attr.dynamic && matches!(attr.static_value, Some(Value::String(_)))
+                        };
+                        if renders && (spread.is_some() || !attrs.iter().filter(written).all(literal)) {
+                            return false;
+                        }
+                    }
+                    UsageFact::CreateElement { ident, member, .. } => {
+                        let named = ident.as_ref().or(member.as_ref());
+                        let renders = named.is_some_and(|named| {
+                            declared(path, ff, named).as_ref() == Some(&target)
+                                || ordinary_members.get(&(path.clone(), named.clone())) == Some(&target)
+                                || namespace_declared(path, ff, named).as_ref() == Some(&target)
+                        });
+                        if renders {
+                            return false;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        true
+    };
+    let mut tags = FxHashSet::default();
+    for (path, ff) in files {
+        for tag in &ff.prop_tags {
+            let key = (path.clone(), tag.function.clone(), tag.prop.clone());
+            let proven = match bounded.get(&key) {
+                Some(proven) => *proven,
+                None => {
+                    let proven = renders_bounded(path, &tag.function, &tag.prop);
+                    bounded.insert(key, proven);
+                    proven
+                }
+            };
+            if proven {
+                tags.insert((path.clone(), tag.at));
+            }
+        }
+    }
+    tags
+}
+
 /// Whether every tag that leaves usage identity uncertain still lets usage
 /// prove where each extracted component renders and with what props. A tag
 /// matters in two ways: it may be one of our components, rendered with
@@ -3674,6 +3892,7 @@ fn uncertainty_leaves_usage_proven(
     files: &BTreeMap<String, FileFacts>,
     inputs: &CssInputs,
     ordinary_members: &FxHashMap<(String, String), (String, String)>,
+    bounded_tags: &FxHashSet<(String, u32)>,
 ) -> bool {
     let unstable_contexts = &unstable_contexts(files, inputs);
     // Each element of an ordinary component is a site; classify each tag once.
@@ -3682,6 +3901,11 @@ fn uncertainty_leaves_usage_proven(
         let (UncertainIdentity::Tag(site), Some(ff)) = (site, files.get(*file)) else {
             return false;
         };
+        // A tag a function's prop chooses, which every render of the
+        // function gives a host element's name, renders that element.
+        if bounded_tags.contains(&(file.to_string(), site.at)) {
+            return true;
+        }
         let Some(tag) = site.tag.as_deref() else {
             return false;
         };
@@ -6408,10 +6632,26 @@ fn run_with_system_floor(
     // modules. Otherwise only a component its own module confines is proven.
     // An element a call hands outside the analysis, and every component
     // staticCss forces, renders with props no analysed use shows.
+    let bounded_tags = match identity_policy.uncertain {
+        true => {
+            let unproven: std::collections::BTreeSet<String> = escaped_ids.iter().chain(&forced_ids).cloned().collect();
+            bounded_prop_tags(
+                files,
+                inputs,
+                &evaluated_ids,
+                &all_usage_results,
+                &unproven,
+                &forwards,
+                &ordinary_members,
+                &mut object_members,
+            )
+        }
+        false => FxHashSet::default(),
+    };
     let usage_complete = inputs.analysis_context.skipped_sources.is_empty()
         && !files.values().any(|ff| ff.direct_eval)
         && (!identity_policy.uncertain
-            || uncertainty_leaves_usage_proven(&uncertain_identities, files, inputs, &ordinary_members));
+            || uncertainty_leaves_usage_proven(&uncertain_identities, files, inputs, &ordinary_members, &bounded_tags));
     let project_uses = usage_complete
         .then(|| {
             let unproven: std::collections::BTreeSet<String> =
@@ -9198,6 +9438,45 @@ export const App = ({ n }) => <Box bgImage={n} texture={n} />;
                        export const App = () => <Shared.Provider value={1}><Box p={8} /></Shared.Provider>;\n";
             let files = [("kit.tsx", kit), ("contexts.tsx", contexts.as_str()), ("read.tsx", read), ("app.tsx", app)];
             assert_eq!(analyze(&files, &test_inputs()).dynamic_props.keys().collect::<Vec<_>>(), want, "{more}");
+        }
+    }
+
+    /// A tag whose type a function's own prop chooses (`createElement(as ??
+    /// 'label', …)` in `function Root({ as })`) renders a host element when
+    /// every route by which the analysis sees the function render is read
+    /// and gives the prop a string or leaves it out: a component
+    /// `.asComponent()` builds from it, or an object member's JSX tag. Then
+    /// it leaves usage proven. A runtime value, a spread, the object or the
+    /// function as a value, or no analysed route at all keeps it blocking.
+    #[test]
+    fn props_that_choose_a_host_element_leave_usage_proven() {
+        let kit = "export const Box = ds.system({ space: true }).asElement('div');\n\
+                   export const Base = ds.styles({ display: 'block' }).asElement('div');\n";
+        let el = "import { createElement } from 'react';\n\
+                  export function El({ as, ...props }) { if (as) return createElement(as, props); return <label {...props} />; }\n\
+                  export function Root({ as, children }) { return createElement(as ?? 'label', {}, children); }\n\
+                  export const Parts = { Root };\n";
+        let outer = "import { Base } from './kit';\nimport { El } from './el';\nexport const Outer = Base.extend().asComponent(El);\n";
+        let cases: [(&str, &str, &[&str]); 9] = [
+            ("", "() => <><Outer /><Parts.Root><div /></Parts.Root><Box p={8} /></>", &[]),
+            ("", "() => <><Outer as=\"span\" /><Parts.Root as=\"section\" /><Box p={8} /></>", &[]),
+            ("", "({ X }) => <><Outer as={X} /><Box p={8} /></>", &["p"]),
+            ("", "({ r }) => <><Outer {...r} /><Box p={8} /></>", &["p"]),
+            ("", "({ X }) => <><Parts.Root as={X} /><Box p={8} /></>", &["p"]),
+            ("", "() => <><Outer /><Box p={8} /></>;\nexport const all = Object.values(Parts)", &["p"]),
+            ("", "({ X }) => <><El as={X} /><Box p={8} /></>", &["p"]),
+            ("export const list = [El];\n", "() => <><Outer /><Box p={8} /></>", &["p"]),
+            // Nothing analysed renders `Alone`: code outside may, with any `as`.
+            ("export function Alone({ as }) { return createElement(as ?? 'label', {}); }\n", "() => <><Outer /><Parts.Root /><Box p={8} /></>", &["p"]),
+        ];
+        for (more, app, want) in cases {
+            let el = format!("{el}{more}");
+            let app = format!(
+                "import {{ Box }} from './kit';\nimport {{ Outer }} from './outer';\nimport {{ Parts, El }} from './el';\n\
+                 export const App = {app};\n"
+            );
+            let files = [("kit.tsx", kit), ("el.tsx", el.as_str()), ("outer.tsx", outer), ("app.tsx", app.as_str())];
+            assert_eq!(analyze(&files, &test_inputs()).dynamic_props.keys().collect::<Vec<_>>(), want, "{more}{app}");
         }
     }
 

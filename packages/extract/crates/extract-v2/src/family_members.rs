@@ -370,6 +370,21 @@ impl<'f> ObjectMembers<'f> {
         self.object_at(file, path).and_then(|object| self.holds(&object, key)).into_iter().collect()
     }
 
+    /// The facade `name`, written in `file`, names: its module and binding.
+    pub(crate) fn facade_at(&mut self, file: &str, name: &str) -> Option<(String, String)> {
+        match self.object_at(file, name)? {
+            Object::Facade(module, binding) => Some((module, binding)),
+            Object::Family(_) => None,
+        }
+    }
+
+    /// Whether nothing may have changed the facade `binding` of `module`
+    /// since it was built.
+    pub(crate) fn facade_stable(&mut self, module: &str, binding: &str) -> bool {
+        let object = Object::Facade(module.to_string(), binding.to_string());
+        !self.table(&object).open && self.instability(&object).is_none()
+    }
+
     /// The held wrappers some render of which no member tag shows: those of
     /// an object something may have changed, and of an object another one
     /// copies (`{ ...Code }`), whose members render them too.
