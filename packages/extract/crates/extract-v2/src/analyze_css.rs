@@ -11782,14 +11782,15 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
     /// use: a wrapper reached through `export *`, one that destructures its
     /// props in its body, a function declaration, one with two rest routes
     /// of which one still carries the prop, one rendered by `createElement`,
-    /// and a function component held by a facade object. A prop a pattern
-    /// on every route consumes, and a name a parameter shadows, warn nothing.
+    /// a function component held by a facade object, and one spreading what
+    /// a call it passes its props to returns. A prop a pattern on every route
+    /// consumes, and a name a parameter shadows, warn nothing.
     #[test]
     fn every_unfollowed_wrapper_shape_warns_at_its_use() {
         let recipe = "export const Box = ds.styles({}).system({ space: true }).asElement('div');\n";
         let wrapper = "import { Box } from './recipe';\nexport const Top = (props) => <Box {...props} />;\n";
         let rendered = "import { Top } from './wrapper';\nexport const App = () => <Top marginInlineStart={8} />;\n";
-        let cases: [(&str, &str, &str, Option<&str>); 8] = [
+        let cases: [(&str, &str, &str, Option<&str>); 10] = [
             ("index.ts", "export * from './wrapper';\n", "import { Top } from './index';\nexport const App = () => <Top marginInlineStart={8} />;\n", Some("<Top")),
             (
                 "wrapper.tsx",
@@ -11822,6 +11823,18 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
                 "import { Box } from './recipe';\nimport { Top } from './wrapper';\nexport const Identity = { Body: Box, Media: Top };\n",
                 "import { Identity } from './facade';\nexport const App = () => <><Identity.Body marginInlineStart={8} /><Identity.Media marginInlineStart={8} /></>;\n",
                 Some("<Identity.Media"),
+            ),
+            (
+                "facade.tsx",
+                "import { Box } from './recipe';\nfunction FieldInput(props) { const [styling, behavior] = splitProps(props, KEYS); return <Box size=\"sm\" {...styling}>{behavior.children}</Box>; }\nexport const Field = { Input: FieldInput };\n",
+                "import { Field } from './facade';\nexport const App = () => <Field.Input marginInlineStart={8} />;\n",
+                Some("<Field.Input"),
+            ),
+            (
+                "wrapper.tsx",
+                "import { Box } from './recipe';\nexport const Top = ({ children, ...props }) => { const styling = pick(props); return <Box {...styling}>{children}</Box>; };\n",
+                rendered,
+                Some("<Top"),
             ),
         ];
         for (path, module, app, use_site) in cases {

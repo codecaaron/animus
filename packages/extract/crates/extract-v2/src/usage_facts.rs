@@ -361,12 +361,59 @@ fn props_forwarding(function: ComponentFunction<'_, '_>) -> Option<PropsForwardi
     // `const { a, ...rest } = props` in the body, then `{...rest}`: neither
     // the props the parameter names nor the ones the body names reach the
     // tags `rest` is spread into.
+    // `const [styling, behavior] = splitProps(props, KEYS)` or `const
+    // styling = pick(props)`: what a call the props are passed to returns
+    // may carry any of them.
     for statement in &function.body.statements {
         for (body_named, rest) in destructured_rests(statement, &spread) {
             route(named.iter().cloned().chain(body_named).collect(), &rest);
         }
+        for derived in call_results(statement, &spread) {
+            route(named.clone(), &derived);
+        }
     }
     (!routes.is_empty()).then_some(PropsForwarding { routes })
+}
+
+/// The names a statement binds to what a call taking `props` as an argument
+/// returns: the whole result, or each element or property value a pattern
+/// takes from it, and its rest.
+fn call_results(statement: &Statement<'_>, props: &str) -> Vec<String> {
+    use oxc::ast::ast::BindingPattern;
+    let Statement::VariableDeclaration(declaration) = statement else { return Vec::new() };
+    let mut names = Vec::new();
+    for declarator in &declaration.declarations {
+        let Some(Expression::CallExpression(call)) =
+            declarator.init.as_ref().map(crate::chain_walk::unwrap_type_assertions)
+        else {
+            continue;
+        };
+        let takes_props = call.arguments.iter().any(|argument| {
+            argument.as_expression().map(crate::chain_walk::unwrap_type_assertions)
+                .is_some_and(|argument| matches!(argument, Expression::Identifier(id) if id.name == props))
+        });
+        if !takes_props {
+            continue;
+        }
+        let bound: Vec<&BindingPattern<'_>> = match &declarator.id {
+            pattern @ BindingPattern::BindingIdentifier(_) => vec![pattern],
+            BindingPattern::ArrayPattern(array) => {
+                array.elements.iter().flatten().chain(array.rest.as_ref().map(|rest| &rest.argument)).collect()
+            }
+            BindingPattern::ObjectPattern(object) => object
+                .properties
+                .iter()
+                .map(|property| &property.value)
+                .chain(object.rest.as_ref().map(|rest| &rest.argument))
+                .collect(),
+            BindingPattern::AssignmentPattern(_) => Vec::new(),
+        };
+        names.extend(bound.into_iter().filter_map(|pattern| match pattern {
+            BindingPattern::BindingIdentifier(id) => Some(id.name.to_string()),
+            _ => None,
+        }));
+    }
+    names
 }
 
 /// `{ a, b, ...rest }`: the keys it names and its rest binding.
