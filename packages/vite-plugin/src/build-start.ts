@@ -97,10 +97,11 @@ export async function runBuildStart(
 
   const localFileCount = rawEntries.length;
   const discoveryDiagnostics: ManifestDiagnostic[] = [];
-  const packageSpecifiers = extractSystemFilePackages(
+  const packageSpecifiers = await extractSystemFilePackages(
     ctx.resolvedSystemPath!,
     engineModuleParser(ctx.engineApi()),
-    (diagnostic) => discoveryDiagnostics.push(diagnostic)
+    (diagnostic) => discoveryDiagnostics.push(diagnostic),
+    resolveSpecifier
   );
 
   ctx.externalSourceEntries.clear();

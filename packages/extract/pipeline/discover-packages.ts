@@ -1,5 +1,4 @@
 import { existsSync, readFileSync, realpathSync, statSync } from 'fs';
-import { createRequire } from 'module';
 import {
   dirname,
   extname,
@@ -15,6 +14,7 @@ import { discoverFiles } from './discover-files';
 import { parseInternalWire } from './internal-wire';
 import { severityFor, UNPROVEN_ROOT_BINDING } from './manifest-diagnostics';
 import { isPathWithinRoot } from './source-identity';
+import { relativeSourceCandidates } from './source-ingestion';
 import { isJsonBlock, isJsonString } from './tsconfig-paths';
 
 import type { EngineApi } from './engine-adapter';
@@ -625,39 +625,35 @@ export function engineModuleParser(
 
 const ANIMUS_SYSTEM_SPECIFIER = /^@animus-ui\/system(?:\/.*)?$/;
 
-const MODULE_EXTENSIONS: ReadonlySet<string> = new Set([
-  '.ts',
-  '.tsx',
-  '.mts',
-  '.cts',
-  '.js',
-  '.jsx',
-  '.mjs',
-  '.cjs',
-]);
+/** A host's resolution of a bare specifier to its entry file: the one it
+ *  resolves the packages a system extends with, under its own conditions. */
+export type PackageResolver = (
+  specifier: string
+) => string | null | Promise<string | null>;
 
-/** The file a specifier names from `importer`: a relative one probed as
- *  written, then as its TypeScript source when it carries an emitted
- *  extension (`./x.js` for `x.ts`); a bare one through Node resolution. */
-function resolveModuleFile(importer: string, specifier: string): string | null {
-  if (!specifier.startsWith('.')) {
-    try {
-      return createRequire(importer).resolve(specifier);
-    } catch {
-      return null;
-    }
+/** What following a binding needs: the module parse, the host's package
+ *  resolution, and where an unproven binding is reported. */
+interface RootFollowing {
+  parseModule: ModuleParser;
+  resolvePackage: PackageResolver | undefined;
+  report: ((diagnostic: ManifestDiagnostic) => void) | undefined;
+}
+
+/** The file a specifier names from `importer`: a relative one by the
+ *  ingestion's probe order, a bare one by the host's package resolution. */
+async function resolveModuleFile(
+  importer: string,
+  specifier: string,
+  resolvePackage: PackageResolver | undefined
+): Promise<string | null> {
+  if (specifier.startsWith('.')) {
+    return relativeSourceCandidates(importer, specifier).find(isFile) ?? null;
   }
-  const base = resolve(dirname(importer), specifier);
-  const emitted = /\.[cm]?jsx?$/.exec(base);
-  return (
-    resolveAbsolutePathSpecifier(base, MODULE_EXTENSIONS) ??
-    (emitted
-      ? resolveAbsolutePathSpecifier(
-          base.slice(0, -emitted[0].length),
-          MODULE_EXTENSIONS
-        )
-      : null)
-  );
+  try {
+    return (await resolvePackage?.(specifier)) ?? null;
+  } catch {
+    return null;
+  }
 }
 
 /** What a binding was shown to be bound to. */
@@ -672,21 +668,27 @@ const escapeRegExp = (text: string): string =>
 /**
  * Follows `name`, exported by the module `specifier` names from `importer`,
  * through re-exports to its declaration. It is Animus's factory only when
- * that is `createSystem` of `@animus-ui/system`.
+ * that is `createSystem` of `@animus-ui/system`, and another identity only
+ * when a module is shown to declare it; anything discovery cannot follow is
+ * unknown.
  */
-function exportIdentity(
+async function exportIdentity(
   importer: string,
   specifier: string,
   name: string,
-  parseModule: ModuleParser,
+  following: RootFollowing,
   seen: Set<string>
-): BindingIdentity {
+): Promise<BindingIdentity> {
   if (ANIMUS_SYSTEM_SPECIFIER.test(specifier)) {
     return name === 'createSystem'
       ? { kind: 'animus' }
       : { kind: 'other', what: `'${name}' of ${specifier}` };
   }
-  const file = resolveModuleFile(importer, specifier);
+  const file = await resolveModuleFile(
+    importer,
+    specifier,
+    following.resolvePackage
+  );
   if (file === null) {
     return { kind: 'unknown', why: `'${specifier}' could not be resolved` };
   }
@@ -701,7 +703,7 @@ function exportIdentity(
   } catch {
     return { kind: 'unknown', why: `'${specifier}' could not be read` };
   }
-  const record = parseModule(source, file);
+  const record = following.parseModule(source, file);
   if (record === null) {
     return { kind: 'unknown', why: `'${specifier}' could not be parsed` };
   }
@@ -711,7 +713,7 @@ function exportIdentity(
       file,
       exported.source,
       exported.original ?? name,
-      parseModule,
+      following,
       seen
     );
   }
@@ -722,7 +724,7 @@ function exportIdentity(
       file,
       imported.source,
       imported.imported,
-      parseModule,
+      following,
       seen
     );
   }
@@ -738,10 +740,12 @@ function exportIdentity(
     };
   }
   // `export * from` re-exports `name` when exactly one of its sources does.
-  const stars = Array.from(
-    source.matchAll(/\bexport\s*\*\s*from\s*['"]([^'"]+)['"]/g),
-    (match) => exportIdentity(file, match[1], name, parseModule, seen)
-  );
+  const stars: BindingIdentity[] = [];
+  for (const match of source.matchAll(
+    /\bexport\s*\*\s*from\s*['"]([^'"]+)['"]/g
+  )) {
+    stars.push(await exportIdentity(file, match[1], name, following, seen));
+  }
   const definite = stars.filter((identity) => identity.kind !== 'unknown');
   if (definite.length === 1) return definite[0];
   if (definite.length > 1) {
@@ -780,40 +784,49 @@ const NAMESPACE_IMPORT =
  * import, through local and package re-exports; a namespace import's
  * member; or a property destructured from a namespace import, `require` or
  * `import()` of a module. A binding named `createSystem` shown to be
- * something else, or whose identity cannot be followed, is reported and is
- * no root. The bare name also anchors, as a global, unless the file binds
- * it.
+ * something else is no root. One whose identity discovery cannot follow
+ * keeps the admission spelling gave it, so a resolution limit never drops a
+ * kit. Both are reported. The bare name also anchors, as a global, unless
+ * the file binds it.
  */
-function systemRoots(
+async function systemRoots(
   systemFilePath: string,
   source: string,
   imports: readonly ExtractImportFact[],
-  parseModule: ModuleParser,
-  report: ((diagnostic: ManifestDiagnostic) => void) | undefined
-): Set<string> {
+  following: RootFollowing
+): Promise<Set<string>> {
   const roots = new Set<string>();
-  const identityOf = (specifier: string, name: string): BindingIdentity =>
-    exportIdentity(systemFilePath, specifier, name, parseModule, new Set());
+  const identityOf = (
+    specifier: string,
+    name: string
+  ): Promise<BindingIdentity> =>
+    exportIdentity(systemFilePath, specifier, name, following, new Set());
   const called = (callee: string): boolean =>
     new RegExp(`(?<![a-zA-Z0-9_$.])${escapeRegExp(callee)}\\s*\\(`).test(
       source
     );
-  const unproven = (
+  /** Admits a binding named `createSystem` by its identity: an unknown one
+   *  keeps `spellingAdmits`, and every unproven one is reported. */
+  const admit = (
     local: string,
     offset: number,
-    identity: BindingIdentity
+    identity: BindingIdentity,
+    spellingAdmits: boolean
   ): void => {
+    if (identity.kind === 'animus') {
+      roots.add(local);
+      return;
+    }
+    if (identity.kind === 'unknown' && spellingAdmits) roots.add(local);
     const shown =
       identity.kind === 'other'
-        ? `it is ${identity.what}`
-        : identity.kind === 'unknown'
-          ? `discovery cannot follow what it is bound to (${identity.why})`
-          : '';
-    report?.({
+        ? `it is ${identity.what}, so it is not read as a system root`
+        : `discovery cannot follow what it is bound to (${identity.why}), so it is ${spellingAdmits ? 'still read' : 'not read'} as a system root by its name alone`;
+    following.report?.({
       file: systemFilePath,
       component: local,
       kind: 'warn',
-      message: `'${local}' is not read as Animus's createSystem: ${shown}. Kits a system built from it extends are not discovered — import createSystem from '@animus-ui/system', directly or through a re-export`,
+      message: `'${local}' is not proven to be Animus's createSystem: ${shown} — import createSystem from '@animus-ui/system', directly or through a re-export discovery can follow`,
       code: UNPROVEN_ROOT_BINDING,
       severity: severityFor(UNPROVEN_ROOT_BINDING),
       ...locationIn(source, offset),
@@ -825,15 +838,7 @@ function systemRoots(
     const named =
       binding.imported === 'createSystem' || binding.local === 'createSystem';
     if (binding.local === 'createSystem') bindsName = true;
-    // Another name is followed only when it is called and imported from a
-    // local module, where a renamed re-export of the factory can surface.
-    if (!named && !(binding.source.startsWith('.') && called(binding.local))) {
-      continue;
-    }
-    const identity = identityOf(binding.source, binding.imported);
-    if (identity.kind === 'animus') {
-      roots.add(binding.local);
-    } else if (named) {
+    if (named) {
       const statement = new RegExp(
         `\\bimport\\b[^;]*?\\bfrom\\s*['"]${escapeRegExp(binding.source)}['"]`,
         'g'
@@ -848,7 +853,24 @@ function systemRoots(
           break;
         }
       }
-      unproven(binding.local, offset, identity);
+      // Spelling read an import of `createSystem` as a root by its local
+      // name, and any other import named `createSystem` as a shadow.
+      admit(
+        binding.local,
+        offset,
+        await identityOf(binding.source, binding.imported),
+        binding.imported === 'createSystem'
+      );
+      continue;
+    }
+    // Another name is followed only when it is called and imported from a
+    // local module, where a renamed re-export of the factory can surface.
+    if (
+      binding.source.startsWith('.') &&
+      called(binding.local) &&
+      (await identityOf(binding.source, binding.imported)).kind === 'animus'
+    ) {
+      roots.add(binding.local);
     }
   }
 
@@ -861,13 +883,13 @@ function systemRoots(
       ANIMUS_SYSTEM_SPECIFIER.test(specifier) ||
       (specifier.startsWith('.') &&
         called(member) &&
-        identityOf(specifier, 'createSystem').kind === 'animus')
+        (await identityOf(specifier, 'createSystem')).kind === 'animus')
     ) {
       roots.add(member);
     }
   }
 
-  const destructuredFrom = (initializer: string): BindingIdentity => {
+  const destructuredFrom = (initializer: string): Promise<BindingIdentity> => {
     const loaded =
       /^\(?\s*(?:(?:await\s+)?import|require)\(\s*['"]([^'"]+)['"]\s*\)\s*\)?$/.exec(
         initializer
@@ -875,10 +897,10 @@ function systemRoots(
     if (loaded) return identityOf(loaded[1], 'createSystem');
     const namespace = namespaces.get(initializer);
     if (namespace !== undefined) return identityOf(namespace, 'createSystem');
-    return {
+    return Promise.resolve({
       kind: 'unknown',
       why: `it is destructured from '${initializer}', which is not a module namespace`,
-    };
+    });
   };
   for (const match of source.matchAll(
     /\b(?:const|let|var)\s*\{([^}]*)\}\s*=\s*([^;\n]+)/g
@@ -892,10 +914,13 @@ function systemRoots(
       if (!binding) continue;
       const local = binding[1] ?? 'createSystem';
       if (local === 'createSystem') bindsName = true;
-      const identity = destructuredFrom(initializer.trim());
-      if (identity.kind === 'animus') roots.add(local);
-      else
-        unproven(local, match.index + whole.indexOf('createSystem'), identity);
+      // Spelling read an unrenamed destructured `createSystem` as a root.
+      admit(
+        local,
+        match.index + whole.indexOf('createSystem'),
+        await destructuredFrom(initializer.trim()),
+        local === 'createSystem'
+      );
     }
   }
 
@@ -915,11 +940,12 @@ function rootCallPattern(callees: readonly string[]): string | null {
   return `(?<![a-zA-Z0-9_$.])(?:${names.join('|')})`;
 }
 
-export function extractSystemFilePackages(
+export async function extractSystemFilePackages(
   systemFilePath: string,
   parseModule?: ModuleParser,
-  report?: (diagnostic: ManifestDiagnostic) => void
-): string[] {
+  report?: (diagnostic: ManifestDiagnostic) => void,
+  resolvePackage?: PackageResolver
+): Promise<string[]> {
   let source: string;
   try {
     source = readFileSync(systemFilePath, 'utf-8');
@@ -935,13 +961,11 @@ export function extractSystemFilePackages(
   let rootCall: string | null = 'createSystem';
   if (parseModule && parsedImports) {
     rootCall = rootCallPattern([
-      ...systemRoots(
-        systemFilePath,
-        source,
-        parsedImports,
+      ...(await systemRoots(systemFilePath, source, parsedImports, {
         parseModule,
-        report
-      ),
+        resolvePackage,
+        report,
+      })),
     ]);
   }
 

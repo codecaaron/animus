@@ -961,10 +961,14 @@ export class ExtractionSession {
     // seam); the traversal and ingest below are the shared collector.
     t = this.now();
     const discoveryDiagnostics: ManifestDiagnostic[] = [];
-    const packageNames = extractSystemFilePackages(
+    const packageNames = await extractSystemFilePackages(
       resolvedSystemPath,
       engineModuleParser(engineApi()),
-      (diagnostic) => discoveryDiagnostics.push(diagnostic)
+      (diagnostic) => discoveryDiagnostics.push(diagnostic),
+      (name) => {
+        const entry = resolvePackagesByName(rootDir, [name])[name];
+        return entry ? resolve(rootDir, entry) : null;
+      }
     );
     const preResolved = resolvePackagesByName(rootDir, packageNames);
 

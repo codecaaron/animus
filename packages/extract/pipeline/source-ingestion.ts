@@ -250,24 +250,33 @@ const NODE_NEXT_EXTENSION_MAP: NodeNextExtensionMap = {
   '.cjs': ['.cts'],
 };
 
+/** The paths a relative specifier can name from `importerPath`, in probe
+ *  order: as written with each source suffix, then a NodeNext emitted
+ *  extension's sources. Empty for a non-relative specifier. */
+export function relativeSourceCandidates(
+  importerPath: string,
+  specifier: string
+): string[] {
+  if (!specifier.startsWith('.')) return [];
+  const base = posix.normalize(
+    posix.join(posix.dirname(canonicalResolverPath(importerPath)), specifier)
+  );
+  const explicitExtension = extension(base);
+  return [
+    ...RELATIVE_PROBE_SUFFIXES.map((suffix) => `${base}${suffix}`),
+    ...(NODE_NEXT_EXTENSION_MAP[explicitExtension] ?? []).map(
+      (sourceExtension) =>
+        `${base.slice(0, -explicitExtension.length)}${sourceExtension}`
+    ),
+  ];
+}
+
 function resolveRelativeSource(
   importerPath: string,
   specifier: string,
   files: ReadonlyMap<string, string>
 ): string | null {
-  if (!specifier.startsWith('.')) return null;
-  const base = posix.normalize(
-    posix.join(posix.dirname(canonicalResolverPath(importerPath)), specifier)
-  );
-  for (const suffix of RELATIVE_PROBE_SUFFIXES) {
-    const candidate = `${base}${suffix}`;
-    const actualPath = files.get(candidate);
-    if (actualPath !== undefined) return actualPath;
-  }
-  const explicitExtension = extension(base);
-  for (const sourceExtension of NODE_NEXT_EXTENSION_MAP[explicitExtension] ??
-    []) {
-    const candidate = `${base.slice(0, -explicitExtension.length)}${sourceExtension}`;
+  for (const candidate of relativeSourceCandidates(importerPath, specifier)) {
     const actualPath = files.get(candidate);
     if (actualPath !== undefined) return actualPath;
   }
