@@ -60,6 +60,10 @@ pub struct UsageScanResult {
     /// `createElement` or `cloneElement` render.
     #[serde(skip)]
     pub open_components: FxHashSet<String>,
+    /// Bindings a `createElement` reaches with a rest parameter spread: any
+    /// prop but the listed keys may arrive through it.
+    #[serde(skip)]
+    pub open_except: Vec<(String, std::collections::BTreeSet<String>)>,
     /// Props a `cloneElement` of an element usage cannot name overrides,
     /// on any component.
     #[serde(skip)]

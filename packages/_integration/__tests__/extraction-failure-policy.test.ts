@@ -239,12 +239,6 @@ const CLASSIFIED = [
     reason: "'inset'",
     alternative: 'inside the .props() object literal',
   })),
-  ...['SpreadConfig', 'SpreadConstProps'].map((component) => ({
-    component,
-    code: 'animus.props.unsupported-config',
-    reason: 'spread',
-    alternative: 'object literal',
-  })),
   {
     component: 'MalformedProps',
     code: 'animus.chain.stage-evaluation-failed',
