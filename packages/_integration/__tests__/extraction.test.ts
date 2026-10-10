@@ -961,7 +961,7 @@ export const App = () => <Card />;
 });
 
 test('a registered keyframes frame given no block, and a block nested in a frame, are reported and fail a strict build', () => {
-  const { manifest } = runPipeline(
+  const { manifest, css } = runPipeline(
     [
       {
         path: 'fade.tsx',
@@ -988,6 +988,7 @@ export const App = () => <Box />;
       },
     }
   );
+  assertNoUnresolvedTokens(css);
   expect(manifest.sheets.global.replace(/\s+/g, ' ')).toContain(
     '@keyframes fade { from { opacity: 0; } to { opacity: 1; } }'
   );
