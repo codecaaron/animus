@@ -599,6 +599,36 @@ export const App = () => <><Ring /><Miss /></>;
   expect(reported).toEqual([['Miss', 'animus.props.strict-token-miss']]);
 });
 
+test('a key dropped in an inherited variant option is reported once, naming its inheritors', () => {
+  const { manifest } = runPipeline([
+    {
+      path: 'dropped-inherited.tsx',
+      source: `import { ds } from '../setup';
+export const Parent = ds.styles({ display: 'block' }).variant({ prop: 'size', variants: { sm: { li: { display: 'none' } }, md: { m: 4 } } }).asElement('div');
+export const Child = Parent.extend().variant({ prop: 'size', variants: { lg: { m: 8 } } }).asElement('div');
+export const Other = Parent.extend().variant({ prop: 'size', variants: { lg: { m: 16 } } }).asElement('div');
+export const App = () => <><Child size="sm" /><Other size="sm" /></>;
+`,
+    },
+  ]);
+  const dropped = manifest.diagnostics
+    .filter(
+      (d: { code?: string }) => d.code === 'animus.style.unrecognized-key'
+    )
+    .map((d: { component: string; message: string }) => [
+      d.component,
+      d.message,
+    ]);
+  expect(dropped).toEqual([
+    [
+      'Parent',
+      expect.stringContaining(
+        'not emitted here or in Child, Other, which inherit it'
+      ),
+    ],
+  ]);
+});
+
 describe('!important shorthand', () => {
   test('a trailing ! emits the CSS of !important', () => {
     const css = (value: string) =>

@@ -135,14 +135,22 @@ fn process_stage(
 
 fn resolve_variant_stage(value: &Value, ctx: &ResolveContext) -> VariantCss {
     let variant_prop = value["prop"].as_str().unwrap_or("variant").to_string();
-    // Stamp the axis and option onto this resolution's misses, so a child
-    // re-resolving an inherited option can tell whose declaration missed.
+    // Stamp the axis and option onto this resolution's misses and dropped
+    // keys, so a child re-resolving an inherited option can tell whose
+    // declaration missed.
     let stamp_misses = |option: Option<&String>, resolve: &dyn Fn() -> ResolvedStyles| {
-        let before = ctx.token_misses.map_or(0, |sink| sink.borrow().len());
+        let misses_before = ctx.token_misses.map_or(0, |sink| sink.borrow().len());
+        let dropped_before = ctx.dropped_keys.map_or(0, |sink| sink.borrow().len());
         let resolved = resolve();
+        let origin = || Some((variant_prop.clone(), option.cloned()));
         if let Some(sink) = ctx.token_misses {
-            for miss in sink.borrow_mut().iter_mut().skip(before) {
-                miss.variant_origin = Some((variant_prop.clone(), option.cloned()));
+            for miss in sink.borrow_mut().iter_mut().skip(misses_before) {
+                miss.variant_origin = origin();
+            }
+        }
+        if let Some(sink) = ctx.dropped_keys {
+            for dropped in sink.borrow_mut().iter_mut().skip(dropped_before) {
+                dropped.variant_origin = origin();
             }
         }
         resolved

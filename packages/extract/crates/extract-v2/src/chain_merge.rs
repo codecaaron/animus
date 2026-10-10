@@ -99,6 +99,28 @@ pub fn authors_variant_entry(
         .any(|styles| declares(styles, prop, breakpoint, entry))
 }
 
+/// Whether the chain's own variant stages write `key`, at any depth, under
+/// the axis option (`None` for its base), rather than inheriting it from a
+/// merged-in parent.
+pub fn authors_variant_key(chain: &ChainFacts, axis: &str, option: Option<&str>, key: &str) -> bool {
+    chain
+        .stages
+        .iter()
+        .filter_map(|stage| stage.value.as_ref().filter(|_| stage.method == "variant"))
+        .filter(|config| variant_prop(config) == axis)
+        .filter_map(|config| match option {
+            Some(option) => config["variants"].get(option),
+            None => config.get("base"),
+        })
+        .any(|styles| writes_key(styles, key))
+}
+
+fn writes_key(styles: &Value, key: &str) -> bool {
+    styles
+        .as_object()
+        .is_some_and(|entries| entries.contains_key(key) || entries.values().any(|nested| writes_key(nested, key)))
+}
+
 fn declares(styles: &Value, prop: &str, breakpoint: Option<&str>, entry: &Value) -> bool {
     styles.as_object().is_some_and(|entries| {
         let authored = entries.get(prop).map(|value| match breakpoint {
