@@ -4,6 +4,7 @@ export { pruneStaleAssets } from '../pipeline/asset-copies';
 export { ExtractionSession } from './extraction-session';
 export type {
   SessionHost,
+  SessionLogger,
   SessionOptions,
   SessionOutcome,
   SessionPublication,

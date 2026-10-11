@@ -226,6 +226,9 @@ export interface ObservationQueue {
   rescan: boolean;
   /** Each path no attempt has taken yet, with its latest state. */
   readonly untaken: Map<string, string>;
+  /** The bytes a host supplied for an untaken path's latest observation,
+   *  which the attempt that takes it reads in place of the disk. */
+  readonly suppliedSources: Map<string, string>;
   /** Each waiting caller's revision, and the attempt that took it once one
    *  has. */
   readonly revisions: Map<number, Promise<void> | null>;
@@ -627,6 +630,7 @@ export function joinSession(
         revision: 0,
         rescan: false,
         untaken: new Map(),
+        suppliedSources: new Map(),
         revisions: new Map(),
         active: null,
       },

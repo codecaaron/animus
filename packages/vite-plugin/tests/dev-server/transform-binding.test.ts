@@ -160,38 +160,31 @@ suite('configured transform bindings in development', () => {
 
   it('a failed system reload publishes neither CSS nor callable', async () => {
     const before = await adapter.read();
-    const warnings: string[] = [];
-    const warnSpy = vi
-      .spyOn(console, 'warn')
-      .mockImplementation((...args: unknown[]) => {
-        warnings.push(args.map(String).join(' '));
-      });
 
-    try {
-      fixture.write('src/ds.ts', 'export const ds = createSystem(\n');
+    fixture.write('src/ds.ts', 'export const ds = createSystem(\n');
 
-      // The reset invalidates the static module even when the load fails.
-      const after = await until(
-        async () => {
-          const served = await adapter.read();
-          return served.staticRevision > before.staticRevision ? served : false;
-        },
-        {
-          what: 'the reset over a broken system is attempted',
-          describe: async () =>
-            `static revision stuck at ${(await adapter.read()).staticRevision}${renderTrace(adapter)}`,
-        }
-      );
-      expect(
-        warnings.some((line) => line.includes('Failed to load system from')),
-        JSON.stringify(warnings)
-      ).toBe(true);
-      expect(after.componentCss).toEqual(before.componentCss);
-      expect(after.systemProps).toEqual(before.systemProps);
-      expect(await runtimeValue(after, 'wide', 13)).toBe('39px');
-    } finally {
-      warnSpy.mockRestore();
-    }
+    // The reset invalidates the static module even when the load fails.
+    const after = await until(
+      async () => {
+        const served = await adapter.read();
+        return served.staticRevision > before.staticRevision ? served : false;
+      },
+      {
+        what: 'the reset over a broken system is attempted',
+        describe: async () =>
+          `static revision stuck at ${(await adapter.read()).staticRevision}${renderTrace(adapter)}`,
+      }
+    );
+    const warnings = adapter.trace!().filter((line) =>
+      line.includes('log.warn')
+    );
+    expect(
+      warnings.some((line) => line.includes('system reload failed')),
+      JSON.stringify(warnings)
+    ).toBe(true);
+    expect(after.componentCss).toEqual(before.componentCss);
+    expect(after.systemProps).toEqual(before.systemProps);
+    expect(await runtimeValue(after, 'wide', 13)).toBe('39px');
 
     fixture.write('src/ds.ts', bindingSystemSource(4));
     const repaired = await until(

@@ -1,18 +1,16 @@
 import {
   contentHash,
-  diffFilePlans,
   isEngineTransformExtension,
   isPathWithinRoot,
-  snapshotFilePlans,
 } from '@animus-ui/extract/pipeline';
 import { relative } from 'path';
 
 import { VIRTUAL_BRIDGE_ID, VIRTUAL_PREFIX } from './constants';
-import { runExclusiveAnalysis } from './context';
 import { invalidateFileModules } from './module-invalidation';
 import { reconcileSourceCorpus, unresolvedDropFiles } from './rediscovery';
+import { applyPublished, changesOf, mergePublished } from './session-outcomes';
 
-import type { PluginContext } from './context';
+import type { ObservedOutcome, PluginContext } from './context';
 
 /**
  * The import goes after the directive prologue: above it, 'use client'
@@ -102,68 +100,51 @@ export async function transformSource(
   let detectionFailed = false;
 
   if (!ctx.storedManifest.files[relativePath]?.length) {
-    // Exclusive: Vite transforms concurrently, and two interleaved
-    // detections publish from different cache snapshots — the loser drops.
-    if (!ctx.isProd && !ctx.fileCache.has(relativePath)) {
-      await runExclusiveAnalysis(ctx, async () => {
-        // Re-check under the lock: a queued transaction may have registered
-        // this file meanwhile.
-        if (ctx.fileCache.has(relativePath)) return;
-        // Record ownership before re-analysis: the token-contract
-        // correlation joins on the owner map, or diagnostics drop silently.
-        if (isExternalPkg) {
-          const owner = Object.entries(ctx.externalDirOwners).find(([dir]) =>
-            isPathWithinRoot(dir, id)
-          );
-          if (owner) ctx.externalFileOwners[relativePath] = owner[1];
-        }
-        const hash = contentHash(code);
-        ctx.mutateFileCache((cache) =>
-          cache.set(relativePath, { hash, source: code })
-        );
-        const prevPlans = snapshotFilePlans(ctx.storedManifest);
-        let analysisOk = false;
-        let held = false;
-        try {
-          const analysis = await ctx.analyzeIngested();
-          analysisOk = analysis.ok;
-          held = analysis.abortedOriginals !== undefined;
-        } finally {
-          // A failed analysis leaves the file undetected so the next
-          // transform retries; a registered entry is hash-suppressed forever.
-          // An aborted-parse rejection holds it instead, for the repair to
-          // publish and re-deliver.
-          if (!analysisOk && !held) {
-            ctx.mutateFileCache((cache) => cache.delete(relativePath));
-            detectionFailed = true;
-          }
-        }
+    // A source the Session does not hold yet is submitted to it; the
+    // Session serializes concurrent transforms' attempts.
+    const session = ctx.session;
+    if (
+      !ctx.isProd &&
+      session !== null &&
+      !session.heldSources.has(relativePath)
+    ) {
+      let outcomes: ObservedOutcome[] = [];
+      try {
+        outcomes = await ctx.submitChanges(changesOf('create', id));
+      } catch (error) {
+        // A failed analysis leaves the file undetected, so the next
+        // transform retries.
+        ctx.warn(error instanceof Error ? error.message : String(error));
+        detectionFailed = true;
+      }
+      if (mergePublished(outcomes).published) {
+        // The detected file can itself extend a file the walk has not
+        // seen, so reconcile before this result is served.
+        const merged = mergePublished([
+          ...outcomes,
+          ...(await reconcileSourceCorpus(ctx)),
+        ]);
+        applyPublished(ctx, merged);
 
-        if (analysisOk) {
-          // The detected file can itself extend a file the walk has not
-          // seen, so reconcile before this result is served.
-          await reconcileSourceCorpus(ctx);
-
-          // A detection re-analysis can change other served files' plans;
-          // the detected file's own in-flight transform is the current serve.
+        // A detection re-analysis can change other served files' plans;
+        // the detected file's own in-flight transform is the current serve.
+        // A full pass has evicted them already (applyPublished).
+        if (!merged.full) {
           invalidateFileModules(
             ctx,
-            diffFilePlans(prevPlans, snapshotFilePlans(ctx.storedManifest), {
-              exclude: relativePath,
-            })
+            [...merged.planChanged].filter((path) => path !== relativePath)
           );
-
-          const compCount =
-            ctx.storedManifest?.files[relativePath]?.length ?? 0;
-          ctx.info(
-            `New file detected: ${relativePath} — ${compCount ? `${compCount} components extracted` : 'no components'}`
-          );
-
-          // Unconditional: a usage-only file still moves the system-prop
-          // map, and a stale module is served for the life of the server.
-          ctx.invalidateExtractedModules();
         }
-      });
+
+        const compCount = ctx.storedManifest?.files[relativePath]?.length ?? 0;
+        ctx.info(
+          `New file detected: ${relativePath} — ${compCount ? `${compCount} components extracted` : 'no components'}`
+        );
+
+        // Unconditional: a usage-only file still moves the system-prop
+        // map, and a stale module is served for the life of the server.
+        ctx.invalidateExtractedModules();
+      }
     }
     // A new file whose analysis failed is never served raw (SA1).
     if (detectionFailed) {

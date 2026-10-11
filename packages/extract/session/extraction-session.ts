@@ -174,6 +174,8 @@ function systemLoad(system: SystemConfig): SystemLoad {
 interface TakenObservations {
   taken: Map<string, string>;
   rescan: boolean;
+  /** The host-supplied bytes of taken paths. */
+  sources: Map<string, string>;
 }
 
 /** What the hosting bundler does, which the user does not configure. */
@@ -187,7 +189,29 @@ export interface SessionHost {
    *  Omitted, it reaches the importer's directory, as a webpack context
    *  does. */
   unbundledComputedImports?: boolean;
+  /** The engine this session's build uses; omitted, the build's handle in
+   *  the shared engine store. A host with its own engine (a test, or a
+   *  host that owns the handle) supplies it. */
+  engine?: () => EngineApi;
+  /** Where the session's lines go; omitted, the console. Each line already
+   *  carries its `[animus]` mark. */
+  logger?: SessionLogger;
 }
+
+/** A host's sink for the session's human-facing lines. */
+export interface SessionLogger {
+  info(line: string): void;
+  warn(line: string): void;
+  error(line: string): void;
+}
+
+const CONSOLE_LOGGER: SessionLogger = {
+  // Human-facing session lines go to stderr — stdout belongs to the
+  // drivers' machine surfaces.
+  info: (line) => console.error(line),
+  warn: (line) => console.warn(line),
+  error: (line) => console.error(line),
+};
 
 import type {
   AnimusMode,
@@ -197,11 +221,13 @@ import type {
 } from '../pipeline/index';
 import type {
   AssetSheets,
+  EngineApi,
   IngestionOpening,
   LightningTargets,
   ManifestDiagnostic,
   ProjectManifest,
   SourceCorpus,
+  SourceIngestorHost,
   SourceEntryOwnership,
   SourceIdentity,
   SourceIngestionResult,
@@ -232,6 +258,10 @@ type FileEntry = { path: string; source: string; hash: string };
 export interface WatchChanges {
   modifiedFiles?: ReadonlySet<string>;
   removedFiles?: ReadonlySet<string>;
+  /** Bytes the host already read for some modified files, by path, read in
+   *  place of the disk: a host that settles an atomic save hands over the
+   *  settled text while the file on disk may still be empty. */
+  sources?: ReadonlyMap<string, string>;
 }
 
 /** `payloadHash` gates rewrites; `diskHash` covers the enveloped disk bytes
@@ -258,6 +288,11 @@ function isDiskString<Value>(value: Value): value is Value & string {
 
 /** Rejection of an attempt whose corpus holds an aborted parse. */
 class AbortedParseRejection extends Error {}
+
+/** A system reload a parse hold deferred, refused because its full read
+ *  would replace host-supplied bytes the Session holds with the disk's.
+ *  Like a hold, it keeps the prior publication and the observed sources. */
+class DeferredReloadRefusal extends Error {}
 
 function isDiskNumber<Value>(value: Value): value is Value & number {
   return (
@@ -391,9 +426,16 @@ export class ExtractionSession {
   /** System-props module id override. Turbopack rejects absolute-path
    *  imports, so its driver sets a virtual id; null injects the abs path. */
   systemPropsModuleId: string | null = null;
+  /** The stylesheet module generated code imports; a host that serves the
+   *  stylesheet itself names its own. */
+  cssModuleId: string = ANIMUS_CSS_MODULE_ID;
   /** Whether the analysis-inputs hydration corpus is written to disk. Only
    *  isolated loader workers replay it; an in-process loader reads memory. */
   persistAnalysisInputs = false;
+  /** The host substitutes asset() URLs itself (Vite: dev copies, build
+   *  emitFile markers): the published sheets keep their placeholders, and
+   *  the session makes no copy and tracks no asset file. */
+  hostSubstitutesAssets = false;
   /** Whether the session keeps its artifacts on disk: status, commit,
    *  manifest, styles, the epoch witness, asset copies and its directory
    *  claim, with the sibling reconciliation they need. A host that serves
@@ -456,6 +498,13 @@ export class ExtractionSession {
   onOutcome: ((outcome: SessionOutcome) => void) | null = null;
   /** The last published generation; null before the first. */
   publication: SessionPublication | null = null;
+
+  /** The original sources (raw, before adaptation) the session holds, by
+   *  root-relative path: the published generation's, plus any that an
+   *  attempt in flight or held by an aborted parse has read. */
+  get heldSources(): ReadonlyMap<string, { hash: string; source: string }> {
+    return this.fileCache;
+  }
   /** The generation an emit produced, current once its ingestion
    *  publishes. */
   private stagedPublication: Omit<SessionPublication, 'ownership'> | null =
@@ -483,20 +532,38 @@ export class ExtractionSession {
   // Raw/original paths and hashes only. Generated MDX/Svelte parser entries
   // live in the published source corpus.
   private fileCache = new Map<string, { hash: string; source: string }>();
+  /** Held sources whose bytes the host supplied (WatchChanges.sources),
+   *  by root-relative path; a read from disk drops the path. */
+  private hostSuppliedKeys = new Set<string>();
 
-  readonly corpus: SourceCorpus = createSourceCorpus({
-    engineApi: () => engineApi(this.key),
-    prefix: '[animus-next]',
-    strict: () => !!this.options.strict,
-    warn: (message: string) => this.warn(message),
-    reportErrors: () => this.reportErrors(),
-    extensions: () => this.extensionPolicy,
-    rootDir: () => this.rootDir!,
-  });
+  readonly corpus: SourceCorpus = createSourceCorpus(this.corpusHost());
+
+  /** The corpus reads the driver label when it reports, so a host that
+   *  sets `driverLabel` after construction is named in its messages. */
+  private corpusHost(): SourceIngestorHost {
+    const label = () => this.driverLabel;
+    return {
+      engineApi: () => this.engine(),
+      get prefix() {
+        return `[${label()}]`;
+      },
+      strict: () => !!this.options.strict,
+      warn: (message: string) => this.warn(message),
+      reportErrors: () => this.reportErrors(),
+      extensions: () => this.extensionPolicy,
+      rootDir: () => this.rootDir!,
+    };
+  }
 
   // Membership keys (lexical + canonical) for the system's evaluated module
   // files. A failed reload keeps the last set — the stale config still serves.
   private systemDependencyKeys: Set<string> = new Set();
+
+  /** Whether `path` is the system module, one of its dependencies, or a
+   *  path its load found absent: a change to it reloads the system. */
+  isSystemDependency(path: string): boolean {
+    return toWatchKeys(path).some((key) => this.systemDependencyKeys.has(key));
+  }
 
   /** Loader-reported dependency paths for bundler watch registration. */
   systemDependencyPaths: string[] = [];
@@ -628,20 +695,27 @@ export class ExtractionSession {
     return this.verbosity !== 'quiet';
   }
 
+  /** The engine of this session's build. */
+  private engine(): EngineApi {
+    return this.host.engine?.() ?? engineApi(this.key);
+  }
+
+  private get logger(): SessionLogger {
+    return this.host.logger ?? CONSOLE_LOGGER;
+  }
+
   private log(msg: string): void {
-    if (this.verbose) {
-      // Human-facing session lines go to stderr — stdout belongs to the
-      // drivers' machine surfaces.
-      console.error(`[animus] ${msg}`);
-    }
+    if (this.verbose) this.logger.info(`[animus] ${msg}`);
   }
 
   private warn(msg: string): void {
-    console.warn(`[animus] ${msg}`);
+    this.logger.warn(`[animus] ${msg}`);
   }
 
   private reportErrors(): ((message: string) => void) | undefined {
-    return this.development ? (message) => console.error(message) : undefined;
+    return this.development
+      ? (message) => this.logger.error(message)
+      : undefined;
   }
 
   /** A build-strictness check that failed: a build throws `message`, and
@@ -754,7 +828,9 @@ export class ExtractionSession {
     for (const path of changes.modifiedFiles ?? []) {
       let state: string;
       try {
-        state = contentHash(readFileSync(path, 'utf-8'));
+        state = contentHash(
+          changes.sources?.get(path) ?? readFileSync(path, 'utf-8')
+        );
       } catch {
         state = UNREADABLE_OBSERVATION;
       }
@@ -777,7 +853,13 @@ export class ExtractionSession {
       queue.revisions.set(revision, active.transaction);
       return revision;
     }
-    for (const [path, state] of observed) queue.untaken.set(path, state);
+    for (const [path, state] of observed) {
+      queue.untaken.set(path, state);
+      // This observation supersedes the queued one, bytes included.
+      const supplied = changes.sources?.get(path);
+      if (supplied === undefined) queue.suppliedSources.delete(path);
+      else queue.suppliedSources.set(path, supplied);
+    }
     queue.revisions.set(revision, null);
     return revision;
   }
@@ -822,7 +904,7 @@ export class ExtractionSession {
   /** Starts one attempt over every untaken observation of the build. */
   startObservedAttempt(): boolean {
     if (!this.system || this.detached) return false;
-    const { taken, rescan } = this.takeObservations();
+    const { taken, rescan, sources } = this.takeObservations();
     const modifiedFiles = new Set<string>();
     const removedFiles = new Set<string>();
     for (const [path, state] of taken) {
@@ -830,7 +912,7 @@ export class ExtractionSession {
     }
     this.settleTaken(
       taken,
-      this.runWatchAttempt({ modifiedFiles, removedFiles }, rescan)
+      this.runWatchAttempt({ modifiedFiles, removedFiles, sources }, rescan)
     );
     return true;
   }
@@ -841,9 +923,11 @@ export class ExtractionSession {
     const queue = observationQueue(this.key);
     const taken = new Map(queue.untaken);
     const rescan = queue.rescan;
+    const sources = new Map(queue.suppliedSources);
     queue.untaken.clear();
+    queue.suppliedSources.clear();
     queue.rescan = false;
-    return { taken, rescan };
+    return { taken, rescan, sources };
   }
 
   /** `transaction` settles every waiting revision, and is the active
@@ -872,7 +956,9 @@ export class ExtractionSession {
   ): Promise<void> {
     // A rescan is a full read, nested in this attempt's slot.
     const transaction = Promise.resolve().then(() =>
-      rescan ? this.runFullPipeline() : this.processWatchUpdate(changes)
+      rescan
+        ? this.runFullPipeline([], changes.sources)
+        : this.processWatchUpdate(changes)
     );
     setWatchTransaction(this.key, transaction);
     const settle = () => {
@@ -915,9 +1001,7 @@ export class ExtractionSession {
           configHit = firstChangedFile(this.configInputHashes);
         }
       } else {
-        systemHit = changed.find((path) =>
-          toWatchKeys(path).some((key) => this.systemDependencyKeys.has(key))
-        );
+        systemHit = changed.find((path) => this.isSystemDependency(path));
       }
     } catch (err) {
       // Detection-only failure: degrade to the ordinary incremental diff.
@@ -938,7 +1022,10 @@ export class ExtractionSession {
       );
       this.resetForHmr();
       try {
-        const promise = this.runFullPipeline(this.pendingFromBatch(changes));
+        const promise = this.runFullPipeline(
+          this.pendingFromBatch(changes),
+          changes.sources
+        );
         setAnalysisStartedPromise(this.key, promise);
         await promise;
       } catch (err) {
@@ -1000,6 +1087,10 @@ export class ExtractionSession {
     // Owner records for deleted files, deferred the same way: a rolled-back
     // cache entry with no owner loses its token diagnostics for the session.
     const ownerRemovals: string[] = [];
+    // Removed project files: no later event re-reports a deletion, so a
+    // rollback that restored one would keep it in the corpus for good.
+    // External deletions re-derive from the inventory diff instead.
+    const removedProjectFiles = new Map<string, string>();
 
     // Prune deleted/renamed files so their last source stops riding along.
     // Out-of-root deletions resolve through cached identity only.
@@ -1019,8 +1110,10 @@ export class ExtractionSession {
         }
         recordPrior(key);
         this.clearIngestionFailure(key);
+        this.hostSuppliedKeys.delete(key);
         if (this.fileCache.delete(key)) {
           removedAny = true;
+          if (!owningRoot) removedProjectFiles.set(key, removedPath);
           if (owningRoot) {
             inventoryUpdates.push({
               root: owningRoot,
@@ -1068,7 +1161,10 @@ export class ExtractionSession {
       }
       let source: string;
       try {
-        source = readFileSync(target.abs, 'utf-8');
+        const supplied = changes.sources?.get(target.abs);
+        source = supplied ?? readFileSync(target.abs, 'utf-8');
+        if (supplied === undefined) this.hostSuppliedKeys.delete(relPath);
+        else this.hostSuppliedKeys.add(relPath);
       } catch (err) {
         // Benign race: the file vanished between the watch event and this
         // read — it will surface in removedFiles on the next watch cycle.
@@ -1159,8 +1255,18 @@ export class ExtractionSession {
           this.log(
             'system reload: publishing the reload a parse hold deferred'
           );
+          const stale = this.staleHostSuppliedSources(changes.sources);
+          if (stale.length > 0) {
+            throw new DeferredReloadRefusal(
+              `[${this.driverLabel}] system reload not published: its full ` +
+                `read would take ${stale.join(', ')} from disk, which does ` +
+                `not hold the bytes the host supplied; the last generation ` +
+                `stays served, and the reload publishes with the next ` +
+                `change once the disk holds them`
+            );
+          }
           this.resetForHmr();
-          await this.runFullPipeline(pending);
+          await this.runFullPipeline(pending, changes.sources);
           return;
         }
         this.externalFileOwners = projectExternalFileOwners(
@@ -1176,14 +1282,20 @@ export class ExtractionSession {
         setAnalysisStartedPromise(this.key, promise);
         await promise;
       } catch (err) {
-        if (err instanceof AbortedParseRejection) {
-          // An aborted parse holds publication: keep every observed source,
-          // valid edits included, for the repair to publish together.
+        if (
+          err instanceof AbortedParseRejection ||
+          err instanceof DeferredReloadRefusal
+        ) {
+          // An aborted parse holds publication, and a refused deferred reload
+          // keeps it: keep every observed source, valid edits included, for
+          // the attempt that publishes them together.
           commitObservedBatch();
         } else {
           // Roll the cache back: the failed attempt published nothing, so
           // the same content must analyze again on the next observation.
           for (const [key, prior] of priorCacheEntries) {
+            const removed = removedProjectFiles.get(key);
+            if (removed !== undefined && !existsSync(removed)) continue;
             if (prior === null) this.fileCache.delete(key);
             else this.fileCache.set(key, prior);
           }
@@ -1195,7 +1307,9 @@ export class ExtractionSession {
         }
         throw err;
       }
-      this.publishSourceIngestion(ingested, 'incremental');
+      this.publishSourceIngestion(ingested, 'incremental', (path) =>
+        this.fileCache.get(path)
+      );
       commitObservedBatch();
     } else if (this.statusAttemptOpen) {
       // A debounced burst produced nothing analyzable — close the attempt so
@@ -1218,19 +1332,56 @@ export class ExtractionSession {
     throw new AbortedParseRejection(rejection.message);
   }
 
+  /** Held sources whose bytes the host supplied and which the disk no
+   *  longer matches: a full read not carrying them (`carried`) would
+   *  publish the disk's bytes in their place. */
+  private staleHostSuppliedSources(
+    carried: ReadonlyMap<string, string> | undefined
+  ): string[] {
+    const stale: string[] = [];
+    for (const key of this.hostSuppliedKeys) {
+      const held = this.fileCache.get(key);
+      const abs = resolve(this.rootDir!, key);
+      if (held === undefined || carried?.has(abs)) continue;
+      let onDisk: string | null;
+      try {
+        onDisk = readFileSync(abs, 'utf-8');
+      } catch {
+        onDisk = null;
+      }
+      if (onDisk === null || contentHash(onDisk) !== held.hash) stale.push(key);
+    }
+    return stale.sort();
+  }
+
+  /** `raw` is the attempt's input by original path, from which a
+   *  quarantined original stays held: every later pass re-ingests it, so it
+   *  keeps counting as skipped (nothing it renders is pruned) and its fix
+   *  edit compares against its bytes. */
   private publishSourceIngestion(
     result: SourceIngestionResult,
-    pass: 'full' | 'incremental'
+    pass: 'full' | 'incremental',
+    raw: (path: string) => { hash?: string; source: string } | undefined
   ): void {
     const endedHold = this.heldRejection !== null;
     const previousOwnership = this.corpus.published.ownership;
     this.heldRejection = null;
-    this.fileCache = new Map(
+    const held = new Map(
       result.originalEntries.map((entry) => [
         entry.path,
         { hash: entry.hash, source: entry.source },
       ])
     );
+    for (const path of result.skippedOriginals ?? []) {
+      const entry = raw(path);
+      if (entry) {
+        held.set(path, {
+          hash: entry.hash ?? contentHash(entry.source),
+          source: entry.source,
+        });
+      }
+    }
+    this.fileCache = held;
     this.corpus.publish(result);
     const staged = this.stagedPublication;
     if (staged === null) return;
@@ -1261,7 +1412,13 @@ export class ExtractionSession {
 
   /** Full analysis + publication, registered in the one in-flight
    *  transaction slot; a nested reload leaves the enclosing registration. */
-  async runFullPipeline(pending: Array<[string, string]> = []): Promise<void> {
+  /** `sources` are bytes a host already read (see WatchChanges.sources):
+   *  the full read uses them, and those of the observations it takes, in
+   *  place of the disk. */
+  async runFullPipeline(
+    pending: Array<[string, string]> = [],
+    sources: ReadonlyMap<string, string> = new Map()
+  ): Promise<void> {
     // Publication exclusivity is the pipeline's claim, so the per-instance
     // write guards hold by construction. Re-entrant for this instance.
     if (this.releasePublicationClaim === null) {
@@ -1289,8 +1446,12 @@ export class ExtractionSession {
     const nested = getWatchTransaction(this.key) !== null;
     // A top-level full read covers every observation queued before it, so
     // it settles them; one queued after it runs next.
-    const taken = nested ? null : this.takeObservations().taken;
-    const transaction = this.runPipelineTransaction(pending);
+    const observations = nested ? null : this.takeObservations();
+    const taken = observations?.taken ?? null;
+    const transaction = this.runPipelineTransaction(
+      pending,
+      new Map([...(observations?.sources ?? []), ...sources])
+    );
     if (taken !== null) {
       setWatchTransaction(this.key, transaction);
       this.settleTaken(taken, transaction);
@@ -1433,7 +1594,8 @@ export class ExtractionSession {
   }
 
   private async runPipelineTransaction(
-    pending: Array<[string, string]>
+    pending: Array<[string, string]>,
+    hostSources: ReadonlyMap<string, string>
   ): Promise<void> {
     const pipelineStart = this.now();
     const bt: Record<string, number> = {};
@@ -1492,7 +1654,7 @@ export class ExtractionSession {
     // Once per build: its first full discovery, whether or not it publishes.
     if (claimUnmatchedExcludeReport(this.key)) {
       for (const line of unmatchedExcludeLines(excludeMatcher)) {
-        console.error(line);
+        this.logger.error(line);
       }
     }
 
@@ -1511,7 +1673,10 @@ export class ExtractionSession {
       const relPath = relative(rootDir, filePath);
       let source: string;
       try {
-        source = readFileSync(filePath, 'utf-8');
+        const supplied = hostSources.get(filePath);
+        source = supplied ?? readFileSync(filePath, 'utf-8');
+        if (supplied === undefined) this.hostSuppliedKeys.delete(relPath);
+        else this.hostSuppliedKeys.add(relPath);
       } catch (err) {
         if (!isDeletedSource(err)) {
           ingestionFailures.push(unreadableSourceDiagnostic(relPath, err));
@@ -1533,7 +1698,7 @@ export class ExtractionSession {
         fromDir,
         { conditions, workspaces, extensions }
       ) => {
-        const native = engineApi(this.key).resolveSpecifier;
+        const native = this.engine().resolveSpecifier;
         if (native === undefined) {
           throw new Error(
             'the native engine does not expose resolveSpecifier, which package resolution needs — rebuild @animus-ui/extract'
@@ -1551,7 +1716,7 @@ export class ExtractionSession {
     const hostFirst =
       this.hostResolve === null
         ? null
-        : hostFirstPackageResolver(this.hostResolve, engineApi(this.key), {
+        : hostFirstPackageResolver(this.hostResolve, this.engine(), {
             rootDir,
             conditions: context.conditions,
             workspaces: context.workspaces,
@@ -1560,7 +1725,7 @@ export class ExtractionSession {
     const discoveryDiagnostics: ManifestDiagnostic[] = [];
     const packageNames = await extractSystemFilePackages(
       resolvedSystemPath,
-      engineModuleParser(engineApi(this.key)),
+      engineModuleParser(this.engine()),
       (diagnostic) => discoveryDiagnostics.push(diagnostic),
       hostFirst?.resolveSpecifier ??
         ((name) => {
@@ -1577,7 +1742,7 @@ export class ExtractionSession {
     discoveryDiagnostics.push(
       ...importedKitDiagnostics(
         rawEntries,
-        engineApi(this.key),
+        this.engine(),
         rootDir,
         packageNames
       )
@@ -1599,16 +1764,13 @@ export class ExtractionSession {
     const collected = await collectExternalPackageSources({
       extensions: context.extensions,
       kitSourceRoot: nativeKitSourceRoot(
-        engineApi(this.key),
+        this.engine(),
         rootDir,
         context.conditions,
         context.workspaces,
         extensionPolicyJson(context.extensions)
       ),
-      locatePackage: nativePackageLocator(
-        engineApi(this.key),
-        context.workspaces
-      ),
+      locatePackage: nativePackageLocator(this.engine(), context.workspaces),
       specifiers: packageNames,
       resolveSpecifier:
         hostFirst?.resolveSpecifier ??
@@ -1746,8 +1908,13 @@ export class ExtractionSession {
       this.externalSourceEntries = admitted.sourceEntries;
       this.externalSourceSideEffects = admitted.sourceEntrySideEffects;
       for (const entry of admitted.entries) {
-        const hash = contentHash(entry.source);
-        rawEntries.push({ path: entry.path, source: entry.source, hash });
+        const source =
+          hostSources.get(resolve(rootDir, entry.path)) ?? entry.source;
+        rawEntries.push({
+          path: entry.path,
+          source,
+          hash: contentHash(source),
+        });
       }
 
       this.externalPackageDirs = admitted.packageDirs;
@@ -1778,7 +1945,7 @@ export class ExtractionSession {
       bt.fileCount = accepted.analysisEntries.length;
       // Clear the native cache only after adaptation produced a corpus: a
       // failed reload must leave the last-good transform engine usable.
-      clearEngineCache(() => engineApi(this.key));
+      clearEngineCache(() => this.engine());
       await this.analyzeAndEmit(
         accepted.analysisEntries,
         packageMap,
@@ -1787,7 +1954,9 @@ export class ExtractionSession {
         pipelineStart,
         pending
       );
-      this.publishSourceIngestion(accepted, 'full');
+      this.publishSourceIngestion(accepted, 'full', (path) =>
+        rawEntries.find((entry) => entry.path === path)
+      );
 
       // External package state publishes in the same successful generation
       // as the source projection.
@@ -1856,7 +2025,7 @@ export class ExtractionSession {
   /** The system under `context`: the one load path for the build's
    *  authority and for a participant checking its own context. */
   private loadSystemUnder(context: SessionResolutionContext): SystemConfig {
-    return loadSystemConfig(() => engineApi(this.key), {
+    return loadSystemConfig(() => this.engine(), {
       systemPath: resolve(this.rootDir!, this.options.system),
       rootDir: this.rootDir!,
       prefix: this.options.prefix,
@@ -1992,7 +2161,9 @@ export class ExtractionSession {
       try {
         pending.push([
           classified.key,
-          contentHash(readFileSync(path, 'utf-8')),
+          contentHash(
+            changes.sources?.get(path) ?? readFileSync(path, 'utf-8')
+          ),
         ]);
       } catch {
         // vanished between event and read — surfaces as removed next cycle
@@ -2086,7 +2257,11 @@ export class ExtractionSession {
       }
     }
 
-    return { modifiedFiles: modified, removedFiles: removed };
+    return {
+      modifiedFiles: modified,
+      removedFiles: removed,
+      sources: changes.sources,
+    };
   }
 
   /** Route one watcher path: a project-root member (consumer excludes apply)
@@ -2204,7 +2379,7 @@ export class ExtractionSession {
       system,
       emitter: {
         runtimeImport: this.runtimeImport,
-        cssModuleId: ANIMUS_CSS_MODULE_ID,
+        cssModuleId: this.cssModuleId,
         systemPropsModuleId:
           this.systemPropsModuleId ?? systemPropsPath(this.sessionDir),
       },
@@ -2244,7 +2419,7 @@ export class ExtractionSession {
     this.writeAnalysisStatus('analyzing', pending);
     // An error-level diagnostic, a hard error included, throws here in a
     // build, before any stylesheet is assembled: no partial generation.
-    const result = runProjectAnalysis(() => engineApi(this.key), {
+    const result = runProjectAnalysis(() => this.engine(), {
       ...analysisOptions,
       warn: (message) => this.warn(message),
       info: (message) => this.log(message),
@@ -2320,12 +2495,16 @@ export class ExtractionSession {
     const fullCss = [declaration, variables, processedBody]
       .filter(Boolean)
       .join('\n');
-    reportSurvivingAssetPlaceholders(fullCss, {
-      strict: this.options.strict,
-      warn: (message) => this.warn(message),
-      reportErrors: this.reportErrors(),
-      prefix: `[${this.driverLabel}]`,
-    });
+    // A host that substitutes assets itself receives the placeholders on
+    // purpose and reports the specifiers it cannot resolve.
+    if (!this.hostSubstitutesAssets) {
+      reportSurvivingAssetPlaceholders(fullCss, {
+        strict: this.options.strict,
+        warn: (message) => this.warn(message),
+        reportErrors: this.reportErrors(),
+        prefix: `[${this.driverLabel}]`,
+      });
+    }
     reportSurvivingAssetPlaceholders(generatedModuleCode(manifest), {
       strict: this.options.strict,
       warn: (message) => this.warn(message),
@@ -2845,6 +3024,7 @@ export class ExtractionSession {
     this.assetDependencyPaths.clear();
     this.assetDependencyKeys.clear();
 
+    if (this.hostSubstitutesAssets) return sheets;
     const urlBySpecifier = new Map<string, string>();
     // In memory, until a host supplies an asset URL strategy, each asset is
     // named by its live source path: no copy is made, written or pruned.

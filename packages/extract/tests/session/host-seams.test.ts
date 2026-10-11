@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   clearAnalysisCache: vi.fn(),
 }));
 
+import { ExtractionSession } from '../../session/extraction-session';
 import {
   REPLACEMENT_EPOCH_ARTIFACT,
   sessionsRootDir,
@@ -189,6 +190,91 @@ describe('a session that keeps its artifacts in memory', () => {
     expect(readdirSync(sessionsRootDir(root))).toEqual(['a-stale-sibling']);
     expect(existsSync(siblingEpoch)).toBe(true);
     expect(getSharedCss(session.key)).toContain(logo);
+    session.close();
+  });
+});
+
+describe("a host's engine and logger", () => {
+  test('the session analyses through the host engine and reports to the host logger', async () => {
+    const hostAnalyze = vi.fn<(...args: AnalyzeProjectArgs) => string>(() =>
+      buildManifest({})
+    );
+    setEngineApiOverride(null);
+    const lines: string[] = [];
+    const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const session = new ExtractionSession(
+      { system: './src/system.ts', exclude: ['nothing-matches-this'] },
+      {
+        engine: () => ({
+          extractFacts: () => '{"files":{},"parseCount":0}',
+          loadSystemModule: mocks.loadSystemModule,
+          analyzeProject: hostAnalyze,
+          clearAnalysisCache: mocks.clearAnalysisCache,
+          transformFile: () => ({ code: '', hasComponents: false }),
+        }),
+        logger: {
+          info: (line) => lines.push(line),
+          warn: (line) => lines.push(line),
+          error: (line) => lines.push(line),
+        },
+      }
+    );
+    session.rootDir = createProject('animus-host-engine-');
+
+    await session.runFullPipeline();
+
+    expect(hostAnalyze).toHaveBeenCalledTimes(1);
+    expect(mocks.analyzeProject).not.toHaveBeenCalled();
+    expect(lines).toContain(
+      "[animus] exclude pattern 'nothing-matches-this' matched nothing"
+    );
+    expect(consoleWarn).not.toHaveBeenCalled();
+    session.close();
+  });
+});
+
+describe('a host that substitutes asset URLs itself', () => {
+  async function publishWithAsset(hostSubstitutesAssets: boolean) {
+    setEngineApiOverride(() => ({
+      extractFacts: () => '{"files":{},"parseCount":0}',
+      loadSystemModule: mocks.loadSystemModule,
+      analyzeProject: mocks.analyzeProject,
+      clearAnalysisCache: mocks.clearAnalysisCache,
+    }));
+    const root = createProject('animus-host-assets-');
+    const logo = join(root, 'logo.svg');
+    writeFileSync(logo, '<svg/>');
+    const placeholder = `url('animus-asset:${logo}')`;
+    mocks.loadSystemModule.mockReturnValue({
+      ...SYSTEM_CONFIG,
+      variableCss: `:root{--anm-logo:${placeholder}}`,
+    });
+    mocks.analyzeProject.mockImplementation(() => {
+      const manifest = makeManifest();
+      manifest.sheets.global = `@layer anm-global{body{background:${placeholder}}}`;
+      return JSON.stringify(manifest);
+    });
+    const session = makeSession(root);
+    session.hostSubstitutesAssets = hostSubstitutesAssets;
+    await session.runFullPipeline();
+    return { session, placeholder };
+  }
+
+  test('keeps the placeholders in the analysis sheets and the variable CSS', async () => {
+    const { session, placeholder } = await publishWithAsset(true);
+
+    expect(session.publication?.analysisGlobalCss).toContain(placeholder);
+    expect(session.publication?.system.variableCss).toContain(placeholder);
+    expect(existsSync(join(session.sessionDir, 'assets'))).toBe(false);
+    session.close();
+  });
+
+  test('a persisting host without it still serves its copies', async () => {
+    const { session, placeholder } = await publishWithAsset(false);
+
+    expect(session.publication?.styles).toContain('./assets/logo.');
+    expect(session.publication?.styles).not.toContain(placeholder);
+    expect(readdirSync(join(session.sessionDir, 'assets'))).toHaveLength(1);
     session.close();
   });
 });

@@ -1,178 +1,141 @@
-import { createLogger } from 'vite';
-import { describe, expect, test } from 'vitest';
+import { projectExternalFileOwners } from '@animus-ui/extract/pipeline';
+import { join, resolve } from 'node:path';
+import { createLogger, resolveConfig } from 'vite';
+import { afterEach, describe, expect, test } from 'vitest';
 
+import {
+  createKitWorkspace,
+  disposeTempRoots,
+  KIT_SYSTEM_SOURCE,
+} from '../../extract/tests/session/session-fixtures';
+import {
+  emptyFacts,
+  factsExtractor,
+  systemImportFacts,
+} from '../../extract/tests/source-ingestion-fixtures';
+import { runBuildStart } from '../src/build-start';
+import { applyResolvedConfig } from '../src/config';
 import { PluginContext } from '../src/context';
 import { makeManifest } from './manifest-fixture';
 
-const KIT_DIR = '/repo/packages/kit/src';
+afterEach(() => {
+  disposeTempRoots();
+});
 
-function makeContext(strict: boolean): PluginContext {
-  const ctx = new PluginContext({ system: './src/ds.ts', strict });
-  ctx.storedManifest = makeManifest({
-    diagnostics: [
-      {
-        file: 'packages/kit/src/Card.tsx',
-        component: 'KitCard',
-        kind: 'external-token-candidate',
-        message: "'colors.externalAccent' did not resolve",
-        token: 'colors.externalAccent',
+/** A Vite build of an app extending a sibling kit whose theme defines
+ *  `colors.externalAccent`; the kit's Button references it unresolved. */
+async function buildKitConsumer(strict: boolean) {
+  const { app, kit } = createKitWorkspace();
+  const system = join(app, 'src', 'system.ts');
+  const warnings: string[] = [];
+  const customLogger = createLogger('silent');
+  customLogger.warn = (message) => {
+    warnings.push(message);
+  };
+  const ctx = new PluginContext({ system: './src/system.ts', strict }, () => ({
+    loadSystemModule: () => ({
+      propConfig: '{}',
+      groupRegistry: '{}',
+      scalesJson: '{}',
+      variableMapJson: '{}',
+      variableCss: '',
+      dependencies: [],
+      sourceThemeManifests: JSON.stringify({
+        [join(kit, 'src', 'theme.ts')]: {
+          referenceTokens: ['colors.externalAccent'],
+        },
+      }),
+    }),
+    extractFacts: factsExtractor({
+      [system]: {
+        ...emptyFacts(system),
+        imports: systemImportFacts(KIT_SYSTEM_SOURCE),
       },
-    ],
-  });
-  ctx.externalFileOwners = { 'packages/kit/src/Card.tsx': '@acme/ui-kit' };
-  ctx.externalDirOwners = { [KIT_DIR]: '@acme/ui-kit' };
-  ctx.system.sourceThemeManifestsJson = JSON.stringify({
-    [`${KIT_DIR}/theme.ts`]: { referenceTokens: ['colors.externalAccent'] },
-  });
-  return ctx;
+    }),
+    analyzeProject: () =>
+      JSON.stringify(
+        makeManifest({
+          diagnostics: [
+            {
+              file: '../kits/ui/src/Button.tsx',
+              component: 'KitButton',
+              kind: 'external-token-candidate',
+              message: "'colors.externalAccent' did not resolve",
+              token: 'colors.externalAccent',
+            },
+          ],
+        })
+      ),
+  }));
+  applyResolvedConfig(
+    ctx,
+    await resolveConfig(
+      { configFile: false, root: app, logLevel: 'silent', customLogger },
+      'build'
+    )
+  );
+  const run = () =>
+    runBuildStart(ctx, async (specifier) => resolve(app, 'src', specifier));
+  return { run, warnings };
 }
 
-describe('enforceExternalTokenContracts', () => {
-  test('strict mode fails the build naming token, component, and source', () => {
-    const ctx = makeContext(true);
+describe('external token contracts', () => {
+  test('strict mode fails the build naming token, component, and source', async () => {
+    const { run } = await buildKitConsumer(true);
 
-    expect(() => ctx.enforceExternalTokenContracts()).toThrow(
-      /KitCard \(from '@acme\/ui-kit'\) references token 'colors\.externalAccent'.*createTheme\(\)\.extend\(/
+    await expect(run()).rejects.toThrow(
+      /KitButton \(from '[^']*kits\/ui\/src\/index\.ts'\) references token 'colors\.externalAccent'.*createTheme\(\)\.extend\(/
     );
   });
 
-  test('non-strict mode warns with the same teaching error and continues', () => {
-    const ctx = makeContext(false);
-    const warnings: string[] = [];
-    ctx.logger = createLogger('silent');
-    ctx.logger.warn = (message) => warnings.push(message);
+  test('non-strict mode warns with the same teaching error and continues', async () => {
+    const { run, warnings } = await buildKitConsumer(false);
 
-    expect(() => ctx.enforceExternalTokenContracts()).not.toThrow();
-    expect(warnings).toHaveLength(1);
-    expect(warnings[0]).toContain('KitCard');
-    expect(warnings[0]).toContain("'@acme/ui-kit'");
-    expect(warnings[0]).toContain('createTheme().extend(');
+    await run();
+    const taught = warnings.filter((line) => line.includes('KitButton'));
+    expect(taught).toHaveLength(1);
+    expect(taught[0]).toContain('kits/ui/src/index.ts');
+    expect(taught[0]).toContain('createTheme().extend(');
   });
+});
 
-  test('a fulfilled contract stays silent (no candidates in the manifest)', () => {
-    const ctx = makeContext(true);
-    ctx.storedManifest = makeManifest();
-
-    expect(() => ctx.enforceExternalTokenContracts()).not.toThrow();
-  });
-
-  test('a witness miss stays silent even under strict', () => {
-    const ctx = makeContext(true);
-    ctx.system.sourceThemeManifestsJson = JSON.stringify({
-      [`${KIT_DIR}/theme.ts`]: { referenceTokens: ['colors.somethingElse'] },
-    });
-
-    expect(() => ctx.enforceExternalTokenContracts()).not.toThrow();
-  });
-
-  test('a consumer-local candidate file stays silent even under strict', () => {
-    const ctx = makeContext(true);
-    ctx.externalFileOwners = {};
-
-    expect(() => ctx.enforceExternalTokenContracts()).not.toThrow();
-  });
-
-  function makeAnalysisContext(strict: boolean): PluginContext {
-    const manifest = makeManifest({
-      diagnostics: [
-        {
-          file: 'packages/kit/src/Card.tsx',
-          component: 'KitCard',
-          kind: 'external-token-candidate',
-          message: "'colors.externalAccent' did not resolve",
-          token: 'colors.externalAccent',
-        },
-      ],
-    });
-    const ctx = new PluginContext({ system: './src/ds.ts', strict }, () => ({
-      analyzeProject: () => JSON.stringify(manifest),
-    }));
-    ctx.externalFileOwners = { 'packages/kit/src/Card.tsx': '@acme/ui-kit' };
-    ctx.externalDirOwners = { [KIT_DIR]: '@acme/ui-kit' };
-    ctx.system.sourceThemeManifestsJson = JSON.stringify({
-      [`${KIT_DIR}/theme.ts`]: { referenceTokens: ['colors.externalAccent'] },
-    });
-    return ctx;
-  }
-
-  // The gate runs on publication, not in runAnalysis: generated-child owner
-  // keys enter the map in publishSourceIngestion, on the pass that raises them.
-  const cardEntry = {
-    path: 'packages/kit/src/Card.tsx',
-    source: 'export const KitCard = 1;\n',
-    hash: 'h',
-  };
-  const cardIngestion = {
-    originalEntries: [cardEntry],
-    analysisEntries: [cardEntry],
-    ownership: {
-      [cardEntry.path]: {
-        originalPath: cardEntry.path,
-        originalHash: cardEntry.hash,
-        analysisPaths: [cardEntry.path],
-      },
-    },
-    diagnostics: [],
-  };
-
-  test('publication enforces the gate on every pass — strict throws after owners update', () => {
-    const ctx = makeAnalysisContext(true);
-    expect(ctx.runAnalysis([])).toBe(true);
-    expect(() => ctx.publishSourceIngestion(cardIngestion)).toThrow(
-      /references token 'colors\.externalAccent'/
-    );
-  });
-
-  test('publication warns and continues in non-strict mode', () => {
-    const ctx = makeAnalysisContext(false);
-    const warnings: string[] = [];
-    ctx.logger = createLogger('silent');
-    ctx.logger.warn = (message) => warnings.push(message);
-
-    expect(ctx.runAnalysis([])).toBe(true);
-    expect(() => ctx.publishSourceIngestion(cardIngestion)).not.toThrow();
-    expect(warnings.some((w) => w.includes('KitCard'))).toBe(true);
-  });
-
+describe('external file ownership projection', () => {
   test('a published corpus without the file retires its owner entry', () => {
     // Ownership is projected from the corpus that just published, so an
     // owner whose original is gone cannot outlive it.
-    const ctx = makeAnalysisContext(false);
-    ctx.logger = createLogger('silent');
-    ctx.logger.warn = () => {};
-
-    ctx.publishSourceIngestion({
-      originalEntries: [],
-      analysisEntries: [],
-      ownership: {},
-      diagnostics: [],
-    });
-
-    expect(ctx.externalFileOwners).toEqual({});
+    expect(
+      projectExternalFileOwners(
+        {
+          originalEntries: [],
+          analysisEntries: [],
+          ownership: {},
+          diagnostics: [],
+        },
+        { 'packages/kit/src/Card.tsx': '@acme/ui-kit' }
+      )
+    ).toEqual({});
   });
 
   test('a generated child inherits its original external owner', () => {
     // Diagnostics name the generated `.tsx` child, not the `.svelte`
     // original that ownership is recorded for.
-    const ctx = makeAnalysisContext(false);
-    ctx.logger = createLogger('silent');
-    ctx.logger.warn = () => {};
-    ctx.externalFileOwners = { 'packages/kit/src/Card.svelte': '@acme/ui-kit' };
-
-    ctx.publishSourceIngestion({
-      originalEntries: [],
-      analysisEntries: [],
-      ownership: {
-        'packages/kit/src/Card.svelte': {
-          originalPath: 'packages/kit/src/Card.svelte',
-          originalHash: 'h',
-          analysisPaths: ['packages/kit/src/Card.svelte.tsx'],
+    expect(
+      projectExternalFileOwners(
+        {
+          originalEntries: [],
+          analysisEntries: [],
+          ownership: {
+            'packages/kit/src/Card.svelte': {
+              originalPath: 'packages/kit/src/Card.svelte',
+              originalHash: 'h',
+              analysisPaths: ['packages/kit/src/Card.svelte.tsx'],
+            },
+          },
+          diagnostics: [],
         },
-      },
-      diagnostics: [],
-    });
-
-    expect(ctx.externalFileOwners).toEqual({
+        { 'packages/kit/src/Card.svelte': '@acme/ui-kit' }
+      )
+    ).toEqual({
       'packages/kit/src/Card.svelte': '@acme/ui-kit',
       'packages/kit/src/Card.svelte.tsx': '@acme/ui-kit',
     });
