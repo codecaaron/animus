@@ -16,6 +16,7 @@ import { basename, extname, isAbsolute, join, relative, resolve } from 'path';
 import {
   adaptedOriginals,
   assembleStylesheet,
+  buildPathAliasesJson,
   buildSystemPropsModule,
   BUILT_IN_EXTENSION_POLICY,
   builtInAssetClassification,
@@ -36,6 +37,9 @@ import {
   findPackageRoot,
   findSheetAssetSpecifiers,
   firstOwners,
+  assertRuntimeImportSuppliesTerminals,
+  DEFAULT_RUNTIME_IMPORT,
+  hostFirstPackageResolver,
   hashReplacementPlans,
   isExcludedPackageRelativePath,
   isPathWithinRoot,
@@ -45,6 +49,7 @@ import {
   outputSourceGuard,
   outputSourceMessage,
   postProcessCss,
+  readTsconfigAliasPairs,
   projectExternalFileOwners,
   resolveAssetFile,
   resolveLightningTargets,
@@ -54,11 +59,13 @@ import {
   serializeStaticCss,
   sharesVolumeRoot,
   snapshotFilePlans,
+  diffFilePlans,
   staleDistIncludesMessage,
   generatedModuleCode,
   reportSurvivingAssetPlaceholders,
   substituteSheetAssets,
   toWatchKeys,
+  tsconfigChainPaths,
   isDeletedSource,
   unreadableSourceDiagnostic,
   unmatchedExcludeLines,
@@ -68,6 +75,7 @@ import {
   pruneStaleAssets,
   engineModuleParser,
   surfaceManifestDiagnostics,
+  systemLoadReads,
 } from '../pipeline/index';
 import { COALESCING_WINDOW_MS } from './coalescing-window';
 import {
@@ -181,13 +189,20 @@ export interface SessionHost {
   unbundledComputedImports?: boolean;
 }
 
-import type { AnimusMode, ExcludeMatcher, Verbosity } from '../pipeline/index';
+import type {
+  AnimusMode,
+  ExcludeMatcher,
+  HostResolve,
+  Verbosity,
+} from '../pipeline/index';
 import type {
   AssetSheets,
   IngestionOpening,
   LightningTargets,
   ManifestDiagnostic,
+  ProjectManifest,
   SourceCorpus,
+  SourceEntryOwnership,
   SourceIdentity,
   SourceIngestionResult,
   SystemConfig,
@@ -251,12 +266,70 @@ function isDiskNumber<Value>(value: Value): value is Value & number {
   );
 }
 
+/** One published generation, as a host serving from memory reads it. */
+export interface SessionPublication {
+  manifest: ProjectManifest;
+  manifestJson: string;
+  /** The analysis sheets with asset() URLs substituted, before Lightning
+   *  CSS: what a host assembling its own stylesheet reads. */
+  analysisGlobalCss: string;
+  analysisComponentCss: string;
+  /** The final stylesheet, post-processed: byte for byte the body a
+   *  persisting host writes as `styles.css`. */
+  styles: string;
+  system: SystemConfig;
+  packageMap: Record<string, string>;
+  ownership: Readonly<Record<string, SourceEntryOwnership>>;
+}
+
+/** How an attempt ended, for a host that redelivers modules itself. */
+export type SessionOutcome =
+  | {
+      kind: 'published';
+      publication: SessionPublication;
+      /** A full pass (startup, system reload, rescan) or an incremental one. */
+      pass: 'full' | 'incremental';
+      /** Files whose replacement plans differ from the last publication. */
+      planChanged: string[];
+      /** Whether this publication ended an aborted parse's hold. */
+      endedHold: boolean;
+      /** Originals whose admitted bytes changed while the hold stood. */
+      redeliver: string[];
+    }
+  | {
+      kind: 'held';
+      /** Original path → hash of the bytes whose parse aborted. */
+      abortedOriginals: ReadonlyMap<string, string>;
+    };
+
 /** The files a system load read: its watch keys, paths and content
  *  hashes. */
 interface SystemDependencies {
   keys: Set<string>;
   paths: string[];
+  /** Paths the load looked for and found absent. */
+  missing: string[];
   hashes: Map<string, string>;
+}
+
+/** A file's content hash, or '' when it cannot be read. */
+function fileHashOrEmpty(path: string): string {
+  try {
+    return contentHash(readFileSync(path, 'utf-8'));
+  } catch {
+    return '';
+  }
+}
+
+/** The first file whose content no longer has its recorded hash: an
+ *  unreadable or deleted file reads as '', which mismatches a real one. */
+function firstChangedFile(
+  hashes: ReadonlyMap<string, string>
+): string | undefined {
+  for (const [path, hash] of hashes) {
+    if (fileHashOrEmpty(path) !== hash) return path;
+  }
+  return undefined;
 }
 
 /** Bundler-agnostic extraction pipeline: system load, source ingestion,
@@ -264,8 +337,25 @@ interface SystemDependencies {
 export class ExtractionSession {
   /** Set by the adapter before any pipeline run. */
   rootDir: string | null = null;
+  /** The module extracted terminals import their factories from; an
+   *  override must supply every terminal the analysis extracts. */
+  runtimeImport: string = DEFAULT_RUNTIME_IMPORT;
+  /** A host that resolves imports itself (Vite's `this.resolve`): package
+   *  discovery asks it first, the loader only for a declared workspace it
+   *  cannot resolve. Null resolves through the loader alone. */
+  hostResolve: HostResolve | null = null;
   /** Serialized path aliases, harvested by the adapter from bundler config. */
   pathAliasesJson: string | null = null;
+  /** The host's aliases are the project's tsconfig `paths`: each full pass
+   *  re-reads them, so a tsconfig edit takes effect. */
+  aliasesFromTsconfig = false;
+  /** The root package.json and the tsconfig chain, absent files included:
+   *  a change to any is a configuration change, which runs the full pass. */
+  configInputPaths: string[] = [];
+  private configInputKeys = new Set<string>();
+  /** Each configuration input's content hash at the last full pass, ''
+   *  for an absent one: the probe's basis when the host reports nothing. */
+  private configInputHashes = new Map<string, string>();
   /** The host's export conditions, in its order, for the system loader. */
   conditions: readonly string[] = [];
   /** The host's extension order, as its adapter captured it; the built-in
@@ -297,6 +387,12 @@ export class ExtractionSession {
   /** Whether the analysis-inputs hydration corpus is written to disk. Only
    *  isolated loader workers replay it; an in-process loader reads memory. */
   persistAnalysisInputs = false;
+  /** Whether the session keeps its artifacts on disk: status, commit,
+   *  manifest, styles, the epoch witness, asset copies and its directory
+   *  claim, with the sibling reconciliation they need. A host that serves
+   *  every result from memory (Vite) turns it off; the shared state still
+   *  publishes. */
+  persistArtifacts = true;
   /** Whether this session serves development (a watch), where an error-level
    *  diagnostic is reported and the session keeps running. Only a build
    *  fails on one. */
@@ -349,6 +445,14 @@ export class ExtractionSession {
   /** Fires exactly once per settled `handleWatchUpdate` — the failure cause,
    *  or null when clean. Observation never alters delivery. */
   onCycleSettled: ((cause: unknown) => void) | null = null;
+  /** Fires once per published generation, and per held attempt. */
+  onOutcome: ((outcome: SessionOutcome) => void) | null = null;
+  /** The last published generation; null before the first. */
+  publication: SessionPublication | null = null;
+  /** The generation an emit produced, current once its ingestion
+   *  publishes. */
+  private stagedPublication: Omit<SessionPublication, 'ownership'> | null =
+    null;
 
   private readonly options: SessionOptions;
   private readonly staticCssJson: string | null;
@@ -389,6 +493,9 @@ export class ExtractionSession {
 
   /** Loader-reported dependency paths for bundler watch registration. */
   systemDependencyPaths: string[] = [];
+  /** Paths the system load looked for and found absent: a host registers
+   *  them for creation, which reloads the system. */
+  systemMissingPaths: string[] = [];
 
   // Content hashes at load time — the fallback probe for watch passes that
   // carry no modified/removed sets (webpack's first watchRun).
@@ -444,6 +551,7 @@ export class ExtractionSession {
   private lastGoodSystemDependencies: SystemDependencies = {
     keys: new Set(),
     paths: [],
+    missing: [],
     hashes: new Map(),
   };
   /** Whether the current full pass's system load recorded its
@@ -789,21 +897,15 @@ export class ExtractionSession {
     // module set. Keys are lexical and canonical, so symlinked paths match.
     let assetChanged = false;
     let systemHit: string | undefined;
+    let configHit: string | undefined;
     try {
-      if (!changes.modifiedFiles && !changes.removedFiles) {
-        // No change sets (webpack's first watchRun): probe the dependency
-        // files by content hash.
-        for (const [dep, hash] of this.systemDependencyHashes) {
-          let current = '';
-          try {
-            current = contentHash(readFileSync(dep, 'utf-8'));
-          } catch {
-            // unreadable/deleted → hash stays '' and mismatches a real one
-          }
-          if (current !== hash) {
-            systemHit = dep;
-            break;
-          }
+      if (changed.length === 0) {
+        // No changes from the host (webpack's first watchRun, or empty
+        // sets): probe the dependency and configuration files by content
+        // hash.
+        systemHit = firstChangedFile(this.systemDependencyHashes);
+        if (systemHit === undefined) {
+          configHit = firstChangedFile(this.configInputHashes);
         }
       } else {
         systemHit = changed.find((path) =>
@@ -815,12 +917,17 @@ export class ExtractionSession {
       this.warn(`HMR system-reload check failed: ${String(err)}`);
     }
 
+    configHit ??= changed.find((path) =>
+      toWatchKeys(path).some((key) => this.configInputKeys.has(key))
+    );
     const debtRetry = this.systemReloadOwed && this.heldRejection === null;
-    if (systemHit || debtRetry) {
+    if (systemHit || configHit || debtRetry) {
       this.log(
         systemHit
           ? `system reload: system dependency changed (${relative(rootDir, systemHit)})`
-          : 'system reload: retrying the reload a failure left owed'
+          : configHit
+            ? `system reload: configuration changed (${relative(rootDir, configHit)})`
+            : 'system reload: retrying the reload a failure left owed'
       );
       this.resetForHmr();
       try {
@@ -1081,7 +1188,7 @@ export class ExtractionSession {
         }
         throw err;
       }
-      this.publishSourceIngestion(ingested);
+      this.publishSourceIngestion(ingested, 'incremental');
       commitObservedBatch();
     } else if (this.statusAttemptOpen) {
       // A debounced burst produced nothing analyzable — close the attempt so
@@ -1100,10 +1207,16 @@ export class ExtractionSession {
     const rejection = this.corpus.rejection(prepared);
     if (!rejection) return;
     this.heldRejection = rejection.message;
+    this.onOutcome?.({ kind: 'held', abortedOriginals: rejection.originals });
     throw new AbortedParseRejection(rejection.message);
   }
 
-  private publishSourceIngestion(result: SourceIngestionResult): void {
+  private publishSourceIngestion(
+    result: SourceIngestionResult,
+    pass: 'full' | 'incremental'
+  ): void {
+    const endedHold = this.heldRejection !== null;
+    const previousOwnership = this.corpus.published.ownership;
     this.heldRejection = null;
     this.fileCache = new Map(
       result.originalEntries.map((entry) => [
@@ -1112,6 +1225,31 @@ export class ExtractionSession {
       ])
     );
     this.corpus.publish(result);
+    const staged = this.stagedPublication;
+    if (staged === null) return;
+    this.stagedPublication = null;
+    const previous = this.publication;
+    const publication = { ...staged, ownership: result.ownership };
+    this.publication = publication;
+    this.onOutcome?.({
+      kind: 'published',
+      publication,
+      pass,
+      planChanged: diffFilePlans(
+        snapshotFilePlans(previous?.manifest ?? null),
+        snapshotFilePlans(publication.manifest)
+      ),
+      endedHold,
+      redeliver: endedHold
+        ? Object.values(result.ownership)
+            .filter(
+              (owner) =>
+                previousOwnership[owner.originalPath]?.originalHash !==
+                owner.originalHash
+            )
+            .map((owner) => owner.originalPath)
+        : [],
+    });
   }
 
   /** Full analysis + publication, registered in the one in-flight
@@ -1126,10 +1264,12 @@ export class ExtractionSession {
       );
       // The on-disk record is what stops a sibling from pruning this tree.
       // The build holds it, and releases it only when it retires.
-      mkdirSync(this.sessionDir, { recursive: true });
-      holdBuildClaimRecord(this.key, () =>
-        holdDirectoryClaim(this.sessionDir, { build: this.sessionId })
-      );
+      if (this.persistArtifacts) {
+        mkdirSync(this.sessionDir, { recursive: true });
+        holdBuildClaimRecord(this.key, () =>
+          holdDirectoryClaim(this.sessionDir, { build: this.sessionId })
+        );
+      }
       this.releasePublicationClaim = releaseOwner;
     }
 
@@ -1171,9 +1311,60 @@ export class ExtractionSession {
     this.lastGoodSystemDependencies = {
       keys: this.systemDependencyKeys,
       paths: this.systemDependencyPaths,
+      missing: this.systemMissingPaths,
       hashes: this.systemDependencyHashes,
     };
     this.commitSystemAuthority();
+  }
+
+  /** This attempt's system dependencies: the files its load read, and the
+   *  paths it found absent, whose creation is a system change. */
+  private recordSystemDependencies(
+    systemPath: string,
+    dependencies: string[],
+    missing: string[]
+  ): void {
+    const keys = new Set<string>();
+    for (const path of [systemPath, ...dependencies, ...missing]) {
+      for (const key of toWatchKeys(path)) keys.add(key);
+    }
+    const hashes = new Map<string, string>();
+    for (const dep of dependencies.length > 0 ? dependencies : [systemPath]) {
+      try {
+        hashes.set(dep, contentHash(readFileSync(dep, 'utf-8')));
+      } catch {
+        // Unreadable now → the probe treats any later readability change
+        // as a system change.
+        hashes.set(dep, '');
+      }
+    }
+    // Absent now → the probe treats its creation as a system change.
+    for (const path of missing) hashes.set(path, '');
+    this.systemDependencyKeys = keys;
+    this.systemDependencyPaths = dependencies;
+    this.systemMissingPaths = missing;
+    this.systemDependencyHashes = hashes;
+    this.attemptRecordedSystemDependencies = true;
+  }
+
+  /** Records the configuration inputs and, for a tsconfig-aliased host,
+   *  re-reads its aliases. */
+  private readConfigInputs(rootDir: string): void {
+    this.configInputPaths = [
+      join(rootDir, 'package.json'),
+      ...tsconfigChainPaths(rootDir),
+    ];
+    this.configInputKeys = new Set(
+      this.configInputPaths.flatMap((path) => toWatchKeys(path))
+    );
+    this.configInputHashes = new Map(
+      this.configInputPaths.map((path) => [path, fileHashOrEmpty(path)])
+    );
+    if (this.aliasesFromTsconfig) {
+      this.pathAliasesJson =
+        buildPathAliasesJson(readTsconfigAliasPairs(rootDir), rootDir)?.json ??
+        null;
+    }
   }
 
   /** What hosts watch for assets, and what the last-good generation
@@ -1200,9 +1391,13 @@ export class ExtractionSession {
     if (!this.attemptRecordedSystemDependencies) {
       this.systemDependencyKeys = lastGood.keys;
       this.systemDependencyPaths = lastGood.paths;
+      this.systemMissingPaths = lastGood.missing;
       this.systemDependencyHashes = lastGood.hashes;
       return;
     }
+    this.systemMissingPaths = [
+      ...new Set([...lastGood.missing, ...this.systemMissingPaths]),
+    ];
     this.systemDependencyKeys = new Set([
       ...lastGood.keys,
       ...this.systemDependencyKeys,
@@ -1244,6 +1439,7 @@ export class ExtractionSession {
     const rootDir = this.rootDir!;
     const priorSourceState = this.snapshotSourceState();
     const resolvedSystemPath = resolve(rootDir, this.options.system);
+    this.readConfigInputs(rootDir);
 
     // One resolution context, which system loading and package resolution
     // both read: the host's conditions and extension order, and the session
@@ -1255,33 +1451,27 @@ export class ExtractionSession {
     };
     this.log(`extension order: ${context.extensions.resolverVersion}`);
     let t = this.now();
-    this.system = this.loadSystemUnder(context);
+    try {
+      this.system = this.loadSystemUnder(context);
+    } catch (error) {
+      // A failed load's reads are its dependencies too: a fix to any of
+      // them must reach the owed reload.
+      const reads = systemLoadReads(error);
+      this.recordSystemDependencies(
+        resolvedSystemPath,
+        reads.dependencies,
+        reads.missing
+      );
+      throw error;
+    }
     this.assetCopyCache.clear();
     this.assetDependencyPaths.clear();
     this.assetDependencyKeys.clear();
-    {
-      const deps = this.system.dependencies ?? [];
-      const keys = new Set<string>();
-      for (const key of toWatchKeys(resolvedSystemPath)) keys.add(key);
-      for (const dep of deps) {
-        for (const key of toWatchKeys(dep)) keys.add(key);
-      }
-      this.systemDependencyKeys = keys;
-      this.systemDependencyPaths = deps;
-
-      const hashes = new Map<string, string>();
-      for (const dep of deps.length > 0 ? deps : [resolvedSystemPath]) {
-        try {
-          hashes.set(dep, contentHash(readFileSync(dep, 'utf-8')));
-        } catch {
-          // Unreadable now → the probe treats any later readability
-          // change as a system change.
-          hashes.set(dep, '');
-        }
-      }
-      this.systemDependencyHashes = hashes;
-      this.attemptRecordedSystemDependencies = true;
-    }
+    this.recordSystemDependencies(
+      resolvedSystemPath,
+      this.system.dependencies ?? [],
+      this.system.missing ?? []
+    );
     bt.systemLoad = this.elapsed(t);
 
     t = this.now();
@@ -1351,20 +1541,30 @@ export class ExtractionSession {
         );
       },
     };
+    const hostFirst =
+      this.hostResolve === null
+        ? null
+        : hostFirstPackageResolver(this.hostResolve, engineApi(this.key), {
+            rootDir,
+            conditions: context.conditions,
+            workspaces: context.workspaces,
+            extensions: context.extensions,
+          });
     const discoveryDiagnostics: ManifestDiagnostic[] = [];
     const packageNames = await extractSystemFilePackages(
       resolvedSystemPath,
       engineModuleParser(engineApi(this.key)),
       (diagnostic) => discoveryDiagnostics.push(diagnostic),
-      (name) => {
-        const entry = resolvePackagesByName(
-          rootDir,
-          [name],
-          packageResolution,
-          context
-        ).entries[name];
-        return entry ? resolve(rootDir, entry) : null;
-      },
+      hostFirst?.resolveSpecifier ??
+        ((name) => {
+          const entry = resolvePackagesByName(
+            rootDir,
+            [name],
+            packageResolution,
+            context
+          ).entries[name];
+          return entry ? resolve(rootDir, entry) : null;
+        }),
       context.extensions
     );
     discoveryDiagnostics.push(
@@ -1375,12 +1575,15 @@ export class ExtractionSession {
         packageNames
       )
     );
-    const preResolved = resolvePackagesByName(
-      rootDir,
-      packageNames,
-      packageResolution,
-      context
-    );
+    const preResolved =
+      hostFirst === null
+        ? resolvePackagesByName(
+            rootDir,
+            packageNames,
+            packageResolution,
+            context
+          )
+        : null;
 
     // Raw content hashes of every walked external file, keyed by absolute
     // path — recorded before MDX preprocessing so the diff sees raw bytes.
@@ -1400,11 +1603,14 @@ export class ExtractionSession {
         context.workspaces
       ),
       specifiers: packageNames,
-      resolveSpecifier: (name) =>
-        preResolved.entries[name]
-          ? resolve(rootDir, preResolved.entries[name])
-          : null,
-      unresolvedReason: (name) => preResolved.unresolved[name],
+      resolveSpecifier:
+        hostFirst?.resolveSpecifier ??
+        ((name) =>
+          preResolved?.entries[name]
+            ? resolve(rootDir, preResolved.entries[name])
+            : null),
+      unresolvedReason: (name) => preResolved?.unresolved[name],
+      requireSourceEntry: hostFirst?.requireSourceEntry,
       rootDir,
       extensionsSet,
       hasEntry: (relPath) => rawEntries.some((e) => e.path === relPath),
@@ -1574,7 +1780,7 @@ export class ExtractionSession {
         pipelineStart,
         pending
       );
-      this.publishSourceIngestion(accepted);
+      this.publishSourceIngestion(accepted, 'full');
 
       // External package state publishes in the same successful generation
       // as the source projection.
@@ -1990,7 +2196,7 @@ export class ExtractionSession {
       packageMap,
       system,
       emitter: {
-        runtimeImport: '@animus-ui/system/runtime',
+        runtimeImport: this.runtimeImport,
         cssModuleId: ANIMUS_CSS_MODULE_ID,
         systemPropsModuleId:
           this.systemPropsModuleId ?? systemPropsPath(this.sessionDir),
@@ -2041,6 +2247,9 @@ export class ExtractionSession {
       extraDiagnostics: this.ingestionFailureDiagnostics,
       kitDescriptors: this.kitDescriptors,
     });
+    if (result.manifest) {
+      assertRuntimeImportSuppliesTerminals(this.runtimeImport, result.manifest);
+    }
 
     enforceExternalTokenContracts({
       diagnostics: result.manifest?.diagnostics,
@@ -2131,6 +2340,17 @@ export class ExtractionSession {
     setSharedSystemProps(this.key, systemPropsContent);
 
     setManifestJson(this.key, result.manifestJson);
+    if (manifest) {
+      this.stagedPublication = {
+        manifest,
+        manifestJson: result.manifestJson,
+        analysisGlobalCss: sheets.globalCss,
+        analysisComponentCss: sheets.componentCss,
+        styles: fullCss,
+        system,
+        packageMap,
+      };
+    }
 
     // The analyzed-hash map publishes with the manifest — one generation,
     // one publication; it is the loader's stale-input witness.
@@ -2379,6 +2599,12 @@ export class ExtractionSession {
   /** Maintain the session's epoch witness, rewritten ONLY when the value
    *  changes, then expose it through the singleton. */
   private publishReplacementEpoch(epoch: string): void {
+    // In memory, no artifact names the epoch and no sibling is reconciled.
+    if (!this.persistArtifacts) {
+      this.lastEpochValue = epoch;
+      setReplacementEpoch(this.key, epoch);
+      return;
+    }
     // Probe DISK, not just the memo: a sibling's reconciliation can delete
     // this artifact, and an absent witness always satisfies webpack's check.
     const onDisk = this.diskEpochValue();
@@ -2515,7 +2741,7 @@ export class ExtractionSession {
   /** Delete legacy flat artifacts and prune sibling session directories past
    *  the retention window — never this session's own dir. */
   private runSessionStartHygiene(): void {
-    if (this.sessionStartHygieneDone) return;
+    if (this.sessionStartHygieneDone || !this.persistArtifacts) return;
     this.sessionStartHygieneDone = true;
     const animusDir = join(this.rootDir!, ANIMUS_ARTIFACT_DIR);
     // A flat set whose commit record VERIFIES is the CLI's published output,
@@ -2570,12 +2796,14 @@ export class ExtractionSession {
   /** Write one artifact write-then-rename, so a cross-process reader never
    *  sees a torn file; the tmp name carries the pid to keep writers apart. */
   private writeSessionArtifact(name: string, content: string): void {
-    const dir = this.sessionDir;
-    // Unconditional: mkdirSync(recursive) is a no-op when the dir exists.
-    mkdirSync(dir, { recursive: true });
-    const tmpPath = join(dir, `.${name}.${process.pid}.tmp`);
-    writeFileSync(tmpPath, content);
-    renameSync(tmpPath, join(dir, name));
+    if (this.persistArtifacts) {
+      const dir = this.sessionDir;
+      // Unconditional: mkdirSync(recursive) is a no-op when the dir exists.
+      mkdirSync(dir, { recursive: true });
+      const tmpPath = join(dir, `.${name}.${process.pid}.tmp`);
+      writeFileSync(tmpPath, content);
+      renameSync(tmpPath, join(dir, name));
+    }
     this.onArtifactWrite?.(name, content);
   }
 
@@ -2593,6 +2821,21 @@ export class ExtractionSession {
     this.assetDependencyKeys.clear();
 
     const urlBySpecifier = new Map<string, string>();
+    // In memory, until a host supplies an asset URL strategy, each asset is
+    // named by its live source path: no copy is made, written or pruned.
+    if (!this.persistArtifacts) {
+      for (const specifier of specifiers) {
+        const resolvedPath = this.resolveAssetSpecifier(specifier);
+        if (resolvedPath) {
+          this.trackAssetDependency(resolvedPath);
+          urlBySpecifier.set(specifier, resolvedPath);
+        } else {
+          this.reportUnresolvableAsset(specifier);
+          urlBySpecifier.set(specifier, specifier);
+        }
+      }
+      return substituteSheetAssets(sheets, urlBySpecifier);
+    }
     for (const specifier of specifiers) {
       // The memo saves resolution and the copy, never the hash: bytes can
       // change with mtime and size unchanged (SE-5). A missing copy
@@ -2612,12 +2855,7 @@ export class ExtractionSession {
       }
       const resolvedPath = this.resolveAssetSpecifier(specifier);
       if (!resolvedPath) {
-        const message = `unresolvable asset() specifier: ${specifier}`;
-        if (this.options.strict) {
-          this.strictFailure(`[${this.driverLabel}] ${message}`);
-        } else {
-          this.warn(message);
-        }
+        this.reportUnresolvableAsset(specifier);
         urlBySpecifier.set(specifier, specifier);
         continue;
       }
@@ -2639,6 +2877,15 @@ export class ExtractionSession {
     if (pruneSuperseded) pruneStaleAssets(assetsDir, expected);
 
     return substituteSheetAssets(sheets, urlBySpecifier);
+  }
+
+  private reportUnresolvableAsset(specifier: string): void {
+    const message = `unresolvable asset() specifier: ${specifier}`;
+    if (this.options.strict) {
+      this.strictFailure(`[${this.driverLabel}] ${message}`);
+    } else {
+      this.warn(message);
+    }
   }
 
   private trackAssetDependency(path: string): void {

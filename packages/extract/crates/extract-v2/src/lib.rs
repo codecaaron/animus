@@ -108,13 +108,20 @@ pub struct NapiSystemConfig {
     /// of each `package.json` that selected one, sorted; the entry is
     /// included, runtime stubs are not.
     pub dependencies: Vec<String>,
+    /// Paths the resolution looked for and found absent, ahead of the file it
+    /// chose, sorted: creating one changes what the system loads.
+    pub missing: Option<Vec<String>>,
     /// Per-module built-theme token manifests, shaped
     /// `{ modulePath: { exportName: [token paths] } }`. Absent when none exist.
     pub source_theme_manifests: Option<String>,
 }
 
+/// A failed load throws an `Error` carrying `dependencies` (the files it
+/// read or attempted) and `missing` (the paths it looked for and found
+/// absent), so the host watches them for the retry.
 #[napi]
 pub fn load_system_module(
+    env: napi::Env,
     system_path: String,
     root_dir: String,
     export_name: Option<String>,
@@ -124,13 +131,17 @@ pub fn load_system_module(
 ) -> napi::Result<NapiSystemConfig> {
     let context = resolution_context(conditions, workspaces, extension_policy_json)
         .map_err(napi::Error::from_reason)?;
-    let config = animus_system_loader::load_system_module(
+    let mut reads = animus_system_loader::LoadReads::default();
+    let config = match animus_system_loader::load_system_module_reading(
         &system_path,
         &root_dir,
         export_name.as_deref(),
         &context,
-    )
-    .map_err(napi::Error::from_reason)?;
+        &mut reads,
+    ) {
+        Ok(config) => config,
+        Err(message) => return Err(load_failure(&env, message, reads)),
+    };
 
     Ok(NapiSystemConfig {
         prop_config: config.prop_config,
@@ -150,8 +161,22 @@ pub fn load_system_module(
         keyframes_blocks: config.keyframes_blocks,
         vocabulary_witnesses: config.vocabulary_witnesses,
         dependencies: config.dependencies,
+        missing: Some(config.missing),
         source_theme_manifests: config.source_theme_manifests,
     })
+}
+
+/// The `Error` a failed load throws, with what it read and looked for.
+fn load_failure(env: &napi::Env, message: String, reads: animus_system_loader::LoadReads) -> napi::Error {
+    use napi::bindgen_prelude::JsObjectValue;
+    use napi::JsValue;
+    let build = || -> napi::Result<napi::Error> {
+        let mut error = env.create_error(napi::Error::from_reason(message.clone()))?;
+        error.set_named_property("dependencies", reads.read.iter().cloned().collect::<Vec<_>>())?;
+        error.set_named_property("missing", reads.missing.iter().cloned().collect::<Vec<_>>())?;
+        Ok(napi::Error::from(error.to_unknown()))
+    };
+    build().unwrap_or_else(|_| napi::Error::from_reason(message))
 }
 
 /// The host's export conditions, in its order, the session root's declared

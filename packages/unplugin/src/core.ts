@@ -1,5 +1,4 @@
 import {
-  buildPathAliasesJson,
   BUILT_IN_EXTENSION_POLICY,
   builtInAssetClassification,
   DiagnosticFailure,
@@ -9,7 +8,6 @@ import {
   isEngineTransformExtension,
   isPathWithinRoot,
   keepsKitSourceEffects,
-  readTsconfigAliasPairs,
   rollupExtensionPolicy,
   viteAssetClassification,
   viteExtensionPolicy,
@@ -445,13 +443,22 @@ export const unpluginFactory: UnpluginFactory<
       session.extensionPolicy = hostExtensions;
       session.assetClassification = hostAssets;
       session.systemPropsModuleId = TURBOPACK_SYSTEM_PROPS_ID;
-      const aliasPairs = readTsconfigAliasPairs(root);
-      const builtAliases = buildPathAliasesJson(aliasPairs, root);
-      if (builtAliases) {
-        session.pathAliasesJson = builtAliases.json;
-      }
+      // Each full pass re-reads the tsconfig aliases.
+      session.aliasesFromTsconfig = true;
       state.key = session.key;
-      await session.runFullPipeline();
+      try {
+        await session.runFullPipeline();
+      } catch (error) {
+        // A failed load still names what to watch for the retry: the files
+        // it read and the paths it found absent.
+        state.watchPaths = [
+          resolve(root, options.system),
+          ...session.systemDependencyPaths,
+          ...session.systemMissingPaths,
+          join(root, 'tsconfig.json'),
+        ];
+        throw error;
+      }
       state.sessionDir = getSessionArtifactDir(session.key);
       const analyzed = getAnalyzedHashes(session.key);
       if (!analyzed || analyzed.size === 0) {
@@ -472,6 +479,8 @@ export const unpluginFactory: UnpluginFactory<
         watchPaths.add(resolve(root, key));
       }
       for (const dep of session.systemDependencyPaths) watchPaths.add(dep);
+      // Absent now; creating one rebuilds against a system that loads it.
+      for (const path of session.systemMissingPaths) watchPaths.add(path);
       for (const dep of session.assetDependencyPaths) watchPaths.add(dep);
       watchPaths.add(join(root, 'tsconfig.json'));
       state.watchPaths = [...watchPaths];
@@ -551,8 +560,11 @@ export const unpluginFactory: UnpluginFactory<
     enforce: 'pre',
 
     async buildStart() {
-      await startPipeline();
-      registerWatchTargets(this);
+      try {
+        await startPipeline();
+      } finally {
+        registerWatchTargets(this);
+      }
     },
 
     async resolveId(id, importer) {
@@ -721,8 +733,11 @@ export const unpluginFactory: UnpluginFactory<
           'rollup'
         );
         modeOracle = this.meta?.watchMode ? 'development' : 'production';
-        await startPipeline();
-        registerWatchTargets(this);
+        try {
+          await startPipeline();
+        } finally {
+          registerWatchTargets(this);
+        }
       },
     },
 
