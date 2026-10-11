@@ -225,3 +225,12 @@ export declare function resolveKitSourceRoot(specifier: string, fromDir: string,
  * `conditions`, `import` and `default`), then `module`, then `main`.
  */
 export declare function resolveSpecifier(specifier: string, fromDir: string, conditions?: Array<string> | undefined | null, workspaces?: Record<string, string> | undefined | null, extensionPolicyJson?: string | undefined | null): NapiResolvedSpecifier
+
+/**
+ * Which kits a system file's roots extend or include, from the engine's
+ * own parse (`system_membership`). `inputs_json` is `{ system, files:
+ * { path: source }, resolved: { "importer\0specifier": { file?, why?,
+ * caseMismatch? } } }`; the result lists `needs` until every module its
+ * identities follow is supplied.
+ */
+export declare function systemMembership(inputsJson: string): string

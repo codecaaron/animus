@@ -6,8 +6,9 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
-import { basename, dirname, join, relative, resolve } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
 import { describe, expect, test } from 'vitest';
 
 import {
@@ -22,12 +23,17 @@ import {
 import { webpackExtensionPolicy } from '../pipeline/host-extensions';
 import { KIT_SYSTEM_NOT_INCLUDED } from '../pipeline/manifest-diagnostics';
 
-import type {
-  CollectedExternalPackages,
-  ModuleRecord,
-} from '../pipeline/discover-packages';
+import type { CollectedExternalPackages } from '../pipeline/discover-packages';
 import type { ManifestDiagnostic } from '../pipeline/manifest-diagnostics';
 import type { JsonValue } from '../pipeline/tsconfig-paths';
+
+/** The native engine, whose own parse reads a system file's membership. */
+const ENGINE = {
+  systemMembership: (inputsJson: string): string =>
+    createRequire(import.meta.url)('../index-v2.js').systemMembership(
+      inputsJson
+    ),
+};
 
 const writeFixture = (contents: string): string => {
   const dir = mkdtempSync(join(tmpdir(), 'discover-packages-'));
@@ -50,7 +56,7 @@ describe('extractSystemFilePackages', () => {
     `);
 
     try {
-      const pkgs = await extractSystemFilePackages(path);
+      const pkgs = await extractSystemFilePackages(path, ENGINE);
       expect(pkgs).toContain('@animus-ui/test-ds');
       expect(pkgs).not.toContain('@animus-ui/system');
     } finally {
@@ -73,7 +79,7 @@ describe('extractSystemFilePackages', () => {
     `);
 
     try {
-      const pkgs = await extractSystemFilePackages(path);
+      const pkgs = await extractSystemFilePackages(path, ENGINE);
       expect(pkgs).toContain('@ds-a/core');
       expect(pkgs).toContain('@ds-b/core');
     } finally {
@@ -94,7 +100,7 @@ describe('extractSystemFilePackages', () => {
     `);
 
     try {
-      const pkgs = await extractSystemFilePackages(path);
+      const pkgs = await extractSystemFilePackages(path, ENGINE);
       expect(pkgs).toContain('@animus-ui/test-ds');
     } finally {
       rmSync(path, { force: true });
@@ -122,9 +128,11 @@ describe('extractSystemFilePackages', () => {
 
     try {
       const fromConstructor = (
-        await extractSystemFilePackages(constructorForm)
+        await extractSystemFilePackages(constructorForm, ENGINE)
       ).sort();
-      const fromChain = (await extractSystemFilePackages(chainForm)).sort();
+      const fromChain = (
+        await extractSystemFilePackages(chainForm, ENGINE)
+      ).sort();
       expect(fromConstructor).toEqual(fromChain);
       expect(fromConstructor).toContain('@animus-ui/test-ds');
     } finally {
@@ -144,7 +152,7 @@ describe('extractSystemFilePackages', () => {
     `);
 
     try {
-      const pkgs = await extractSystemFilePackages(path);
+      const pkgs = await extractSystemFilePackages(path, ENGINE);
       expect(pkgs).toEqual([]);
     } finally {
       rmSync(path, { force: true });
@@ -163,7 +171,7 @@ describe('extractSystemFilePackages', () => {
     `);
 
     try {
-      const pkgs = await extractSystemFilePackages(path);
+      const pkgs = await extractSystemFilePackages(path, ENGINE);
       expect(pkgs).toEqual([resolve(join(path, '..'), '../sibling/src/index')]);
       expect(pkgs[0].startsWith('.')).toBe(false);
     } finally {
@@ -184,7 +192,7 @@ describe('extractSystemFilePackages', () => {
     `);
 
     try {
-      const pkgs = await extractSystemFilePackages(path);
+      const pkgs = await extractSystemFilePackages(path, ENGINE);
       expect(pkgs).toContain('@animus-ui/test-ds');
       expect(pkgs).toContain(join(path, '..', 'local-system'));
       expect(pkgs).toHaveLength(2);
@@ -205,7 +213,7 @@ describe('extractSystemFilePackages', () => {
     `);
 
     try {
-      const pkgs = await extractSystemFilePackages(path);
+      const pkgs = await extractSystemFilePackages(path, ENGINE);
       expect(pkgs).toContain('@scope/my-ds');
     } finally {
       rmSync(path, { force: true });
@@ -225,7 +233,7 @@ describe('extractSystemFilePackages', () => {
     `);
 
     try {
-      const pkgs = await extractSystemFilePackages(path);
+      const pkgs = await extractSystemFilePackages(path, ENGINE);
       expect(pkgs).toContain('@acme/ui-kit');
       expect(pkgs).not.toContain('@animus-ui/system');
     } finally {
@@ -248,7 +256,7 @@ describe('extractSystemFilePackages', () => {
     `);
 
     try {
-      const pkgs = await extractSystemFilePackages(path);
+      const pkgs = await extractSystemFilePackages(path, ENGINE);
       expect(pkgs).toContain('@ds-a/core');
       expect(pkgs).toContain('@ds-b/core');
     } finally {
@@ -271,7 +279,7 @@ describe('extractSystemFilePackages', () => {
     `);
 
     try {
-      const pkgs = await extractSystemFilePackages(path);
+      const pkgs = await extractSystemFilePackages(path, ENGINE);
       expect(pkgs).toContain('@acme/ui-kit');
       expect(pkgs).toContain('@acme/other-kit');
     } finally {
@@ -298,7 +306,7 @@ describe('extractSystemFilePackages', () => {
     `);
 
     try {
-      const pkgs = await extractSystemFilePackages(path);
+      const pkgs = await extractSystemFilePackages(path, ENGINE);
       expect(pkgs).toContain('@acme/ui-kit');
       expect(pkgs).not.toContain('@acme/tokens-only');
     } finally {
@@ -319,7 +327,7 @@ describe('extractSystemFilePackages', () => {
     `);
 
     try {
-      const pkgs = await extractSystemFilePackages(path);
+      const pkgs = await extractSystemFilePackages(path, ENGINE);
       expect(pkgs).toContain('@acme/kit');
       expect(pkgs).not.toContain('@animus-ui/system');
     } finally {
@@ -344,7 +352,7 @@ describe('extractSystemFilePackages', () => {
     `);
 
     try {
-      const pkgs = await extractSystemFilePackages(path);
+      const pkgs = await extractSystemFilePackages(path, ENGINE);
       expect(pkgs).toContain('@ds-a/core');
       expect(pkgs).toContain('@ds-b/core');
       expect(pkgs).toContain('@ds-c/core');
@@ -372,7 +380,7 @@ describe('extractSystemFilePackages', () => {
     `);
 
     try {
-      const pkgs = await extractSystemFilePackages(path);
+      const pkgs = await extractSystemFilePackages(path, ENGINE);
       expect(pkgs).toContain('@acme/ui-kit');
       expect(pkgs).not.toContain('@acme/tokens-only');
     } finally {
@@ -396,7 +404,7 @@ describe('extractSystemFilePackages', () => {
     `);
 
     try {
-      const pkgs = (await extractSystemFilePackages(path)).sort();
+      const pkgs = (await extractSystemFilePackages(path, ENGINE)).sort();
       expect(pkgs).toEqual([
         '@acme/base',
         '@acme/ui-kit',
@@ -422,7 +430,7 @@ describe('extractSystemFilePackages', () => {
     `);
 
     try {
-      const pkgs = await extractSystemFilePackages(path);
+      const pkgs = await extractSystemFilePackages(path, ENGINE);
       expect(pkgs).toContain('@acme/ui-kit');
     } finally {
       rmSync(path, { force: true });
@@ -444,7 +452,7 @@ describe('extractSystemFilePackages', () => {
     `);
 
     try {
-      const pkgs = await extractSystemFilePackages(path);
+      const pkgs = await extractSystemFilePackages(path, ENGINE);
       expect(pkgs).toContain('@acme/ui-kit');
       expect(pkgs).toContain('@acme/other-kit');
     } finally {
@@ -462,7 +470,7 @@ describe('extractSystemFilePackages', () => {
     `);
 
     try {
-      expect(await extractSystemFilePackages(path)).toEqual([
+      expect(await extractSystemFilePackages(path, ENGINE)).toEqual([
         '@acme/ui-kit/definition',
       ]);
     } finally {
@@ -481,7 +489,7 @@ describe('extractSystemFilePackages chain-scan tolerance', () => {
   ): Promise<void> => {
     const path = writeFixture(contents);
     try {
-      const pkgs = await extractSystemFilePackages(path);
+      const pkgs = await extractSystemFilePackages(path, ENGINE);
       for (const specifier of expected) {
         expect(pkgs).toContain(specifier);
       }
@@ -606,7 +614,7 @@ describe('extractSystemFilePackages chain-scan tolerance', () => {
       export const { system: ds } = base.extend(kit).build();
     `);
     try {
-      expect(await extractSystemFilePackages(path)).not.toContain(
+      expect(await extractSystemFilePackages(path, ENGINE)).not.toContain(
         '@acme/tokens-only'
       );
     } finally {
@@ -639,45 +647,6 @@ describe('extractSystemFilePackages root bindings', () => {
         `export const d = createSystem().extend(kitD).build();`,
       ].join('\n'),
     };
-    const animus: ModuleRecord = {
-      imports: [],
-      exports: [
-        {
-          exported: 'makeSystem',
-          local: null,
-          source: '@animus-ui/system',
-          original: 'createSystem',
-        },
-      ],
-    };
-    const system: ModuleRecord = {
-      imports: [
-        { local: 'makeSystem', imported: 'makeSystem', source: './animus' },
-        {
-          local: 'createSystem',
-          imported: 'createSystem',
-          source: './factory',
-        },
-        { local: 'cs', imported: 'createSystem', source: '@acme/unresolved' },
-        { local: 'kitA', imported: 'ds', source: '@acme/a' },
-        { local: 'kitB', imported: 'ds', source: '@acme/b' },
-        { local: 'kitC', imported: 'ds', source: '@acme/c' },
-      ],
-      exports: [],
-    };
-    const records = new Map([
-      ['animus.ts', animus],
-      ['factory.ts', { imports: [], exports: [] }],
-      ['ds.ts', system],
-      [
-        'bare.ts',
-        {
-          imports: [{ local: 'kitD', imported: 'ds', source: '@acme/d' }],
-          exports: [],
-          unboundCreateSystemCalls: [[2, 18]],
-        },
-      ],
-    ]);
     for (const [name, contents] of Object.entries(files)) {
       writeFileSync(join(dir, name), contents, 'utf-8');
     }
@@ -686,7 +655,7 @@ describe('extractSystemFilePackages root bindings', () => {
     const discover = (file: string) =>
       extractSystemFilePackages(
         join(dir, file),
-        (_source, path) => records.get(basename(path)) ?? null,
+        ENGINE,
         (diagnostic) => diagnostics.push(diagnostic),
         () => null
       );

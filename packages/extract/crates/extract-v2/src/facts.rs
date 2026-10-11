@@ -609,7 +609,7 @@ pub struct UnwalkedChainSite {
 }
 
 /// 1-based line and column of a byte offset.
-fn line_column(source: &str, offset: u32) -> (usize, usize) {
+pub(crate) fn line_column(source: &str, offset: u32) -> (usize, usize) {
     let before = &source[..(offset as usize).min(source.len())];
     let line = before.matches('\n').count() + 1;
     let column = before.rsplit('\n').next().map_or(0, |l| l.chars().count()) + 1;

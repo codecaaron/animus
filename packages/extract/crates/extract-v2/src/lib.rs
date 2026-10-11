@@ -49,6 +49,7 @@ pub(crate) mod keyframe_aliases;
 pub mod link;
 pub mod loads;
 pub mod module_specifiers;
+pub mod system_membership;
 pub mod usage_facts;
 pub mod chain_walk;
 pub mod css;
@@ -418,6 +419,19 @@ pub fn module_specifiers(file_entries_json: String, path_aliases_json: Option<St
         })
         .collect();
     serde_json::to_string(&serde_json::json!({ "files": files, "bases": bases }))
+        .map_err(|e| napi::Error::from_reason(format!("serialize failed: {e}")))
+}
+
+/// Which kits a system file's roots extend or include, from the engine's
+/// own parse (`system_membership`). `inputs_json` is `{ system, files:
+/// { path: source }, resolved: { "importer\0specifier": { file?, why?,
+/// caseMismatch? } } }`; the result lists `needs` until every module its
+/// identities follow is supplied.
+#[napi]
+pub fn system_membership(inputs_json: String) -> napi::Result<String> {
+    let inputs: system_membership::MembershipInputs = serde_json::from_str(&inputs_json)
+        .map_err(|e| napi::Error::from_reason(format!("invalid membership inputs JSON: {e}")))?;
+    serde_json::to_string(&system_membership::system_membership(&inputs))
         .map_err(|e| napi::Error::from_reason(format!("serialize failed: {e}")))
 }
 
