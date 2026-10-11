@@ -3,13 +3,17 @@
  * plugin or bundler — every such dependency arrives injected.
  */
 
+import { parseInternalWire } from './internal-wire';
 import { parseFilesJson } from './source-ingestion';
 
 import type { WorkspacePackages } from './workspace-packages';
 
 /** The stateful engine handle produced by `new native.ExtractEngine(...)`. */
 export interface V2ExtractEngine {
-  analyze(filesJson: string): string;
+  /** Parses the files for the next `analyze` of them, and names each base
+   *  their specifiers probe. */
+  prepare(filesJson: string): string;
+  analyze(filesJson: string, probeEvidenceJson?: string): string;
   transformFile(path: string): string;
   clearCache(): void;
 }
@@ -84,7 +88,11 @@ export interface EngineApi {
     declarationScalesJson?: string,
     analysisContextJson?: string,
     generatedNamesJson?: string,
-    propertyRecordsJson?: string
+    propertyRecordsJson?: string,
+    /** Given, the session's host-candidate evidence for the bases the
+     *  engine's `prepare` names, carrying its input identity (spec §2.2
+     *  A2, A8), as JSON. */
+    probeEvidence?: (bases: readonly string[], identity: string) => string
   ) => string;
   transformFile: (
     source: string,
@@ -237,7 +245,8 @@ export function createV2EngineApi(deps: V2EngineAdapterDeps): () => EngineApi {
         declarationScalesJson,
         analysisContextJson,
         generatedNamesJson,
-        propertyRecordsJson
+        propertyRecordsJson,
+        probeEvidence
       ) => {
         const filesJson = deps.rehydrateFilesJson
           ? deps.rehydrateFilesJson(filesJsonRaw)
@@ -293,7 +302,17 @@ export function createV2EngineApi(deps: V2EngineAdapterDeps): () => EngineApi {
         // `index.d.ts` declares `ExtractEngine` with exactly these methods.
         const engine = new native.ExtractEngine(config) as V2ExtractEngine;
         store.setEngine(engine);
-        return engine.analyze(filesJson);
+        // The session answers the probes the parse names, and analysis
+        // reads that parse.
+        let evidence: string | undefined;
+        if (probeEvidence !== undefined) {
+          const prepared = parseInternalWire<{
+            identity: string;
+            bases: string[];
+          }>(engine.prepare(filesJson), 'ExtractEngine.prepare');
+          evidence = probeEvidence(prepared.bases, prepared.identity);
+        }
+        return engine.analyze(filesJson, evidence);
       },
       transformFile: (source, path, _manifest) => {
         const engine = store.getEngine();

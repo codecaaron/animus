@@ -112,6 +112,9 @@ type Compiler = {
     thisCompilation: {
       tap: (name: string, fn: (compilation: OwnCompilation) => void) => void;
     };
+    /** `compiler.close()` (webpack 5), and the end of a watch. */
+    shutdown?: { tap: (name: string, fn: () => void) => void };
+    watchClose?: { tap: (name: string, fn: () => void) => void };
   };
   context: string;
   /** Present on watchRun compilers after the first compilation (webpack 5). */
@@ -166,6 +169,9 @@ export class AnimusWebpackPlugin {
   private options: AnimusNextOptions;
   private session: ExtractionSession;
   private initialized = false;
+  /** Left its build: the next turn joins again and catches up, retried
+   *  until it succeeds, never reusing the startup it already consumed. */
+  private rejoining = false;
   private aliasesExtracted = false;
   private readonly animusLoaderPaths: Set<string>;
   private lastBuiltEpoch: string | null = null;
@@ -285,6 +291,17 @@ export class AnimusWebpackPlugin {
 
     this.appendEpochWatchIgnore(compiler);
 
+    // The compiler's end leaves the build, which retires with its last
+    // compiler. A watch started again analyzes in full: its build may have
+    // retired meanwhile.
+    const leave = () => {
+      this.session.close();
+      this.initialized = false;
+      this.rejoining = true;
+    };
+    compiler.hooks.shutdown?.tap(PLUGIN_NAME, leave);
+    compiler.hooks.watchClose?.tap(PLUGIN_NAME, leave);
+
     compiler.hooks.thisCompilation.tap(PLUGIN_NAME, (compilation) => {
       const epochMoved = this.epochMovedForNextCompilation;
       this.epochMovedForNextCompilation = false;
@@ -350,6 +367,10 @@ export class AnimusWebpackPlugin {
       this.extractAliases(_compiler);
       this.extractConditions(_compiler);
 
+      if (await this.rejoin()) {
+        this.session.agreeWithSystemAuthority();
+        return;
+      }
       const existing = getAnalysisStartedPromise(this.session.key);
       if (existing) {
         await existing;
@@ -382,7 +403,25 @@ export class AnimusWebpackPlugin {
 
   /** Rejects with the analysis error; the published generation stays the
    *  last successful one. */
+  /** Joins the build this compiler left and catches up with it: true when
+   *  the build was live, false when it starts as at first. */
+  private async rejoin(): Promise<boolean> {
+    if (!this.rejoining) return false;
+    this.session.reattach();
+    const live = await this.session.catchUp();
+    this.rejoining = false;
+    return live;
+  }
+
   private async analyzeWatchTurn(compiler: Compiler): Promise<void> {
+    if (!this.initialized && (await this.rejoin())) {
+      this.session.agreeWithSystemAuthority();
+      this.initialized = true;
+      this.lastBuiltEpoch = getReplacementEpoch(this.session.key);
+      // The build moved on while this compiler was away: rebuild them all.
+      this.epochMovedForNextCompilation = true;
+      return;
+    }
     if (!this.initialized) {
       let startup = getAnalysisStartedPromise(this.session.key);
       if (!startup) {

@@ -3,7 +3,19 @@
 
 export declare class ExtractEngine {
   constructor(options?: EngineOptions | undefined | null)
-  analyze(fileEntriesJson: string): string
+  /**
+   * Parses `file_entries_json` for the next `analyze` of the same files,
+   * and returns their input identity and the path each of their
+   * specifiers probes (`probe_base`), sorted: the bases a session gathers
+   * host-candidate evidence for, which carries that identity.
+   */
+  prepare(fileEntriesJson: string): string
+  /**
+   * Analyzes `file_entries_json`, reading `probe_evidence_json`, the
+   * session's host-candidate evidence for this ingest generation, where
+   * given. A `prepare` of the same files lends its parse.
+   */
+  analyze(fileEntriesJson: string, probeEvidenceJson?: string | undefined | null): string
   clearCache(): void
   get parseCount(): number
   transformFile(path: string): string

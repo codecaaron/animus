@@ -212,6 +212,9 @@ export function getWatchTransaction(key: SessionKey): Promise<void> | null {
 export interface ObservationQueue {
   /** The latest revision handed to a recording caller. */
   revision: number;
+  /** A full rescan is requested: the attempt that takes it reads every
+   *  file, so deletions nobody reported reconcile too. */
+  rescan: boolean;
   /** Each path no attempt has taken yet, with its latest state. */
   readonly untaken: Map<string, string>;
   /** Each waiting caller's revision, and the attempt that took it once one
@@ -461,6 +464,8 @@ export interface SessionState {
   watchTransaction: Promise<void> | null;
   observations: ObservationQueue;
   systemAuthority: SystemAuthority | null;
+  /** Releases the build's on-disk claim record; null until one is held. */
+  claimRecord: (() => void) | null;
   manifestJson: string | null;
   sharedCss: string;
   sharedSystemProps: string;
@@ -527,11 +532,13 @@ export function joinSession(
       watchTransaction: null,
       observations: {
         revision: 0,
+        rescan: false,
         untaken: new Map(),
         revisions: new Map(),
         active: null,
       },
       systemAuthority: null,
+      claimRecord: null,
       manifestJson: null,
       sharedCss: '',
       sharedSystemProps: '',
@@ -568,6 +575,42 @@ export function joinSession(
 /** The session of `key`, if a participant has joined it. */
 export function findSession(key: SessionKey): SessionState | undefined {
   return sessionRegistry().sessions.get(sessionKeyId(key));
+}
+
+/** The build's on-disk claim record, which stops another process pruning
+ *  its tree: held once by the build, whichever participant publishes, and
+ *  released only when the build retires. */
+export function holdBuildClaimRecord(
+  key: SessionKey,
+  hold: () => () => void
+): void {
+  const state = joined(key);
+  state.claimRecord ??= hold();
+}
+
+/** `participant` leaves the build of `key`. The build retires with its
+ *  last participant, once no attempt is in flight: it leaves the registry
+ *  and releases its claim record, so its tree is pruned once stale. */
+export function leaveSession(key: SessionKey, participant: string): void {
+  const state = findSession(key);
+  if (state === undefined) return;
+  state.participants.delete(participant);
+  retireIfUnused(sessionKeyId(key), state);
+}
+
+function retireIfUnused(id: string, state: SessionState): void {
+  if (state.participants.size > 0) return;
+  const inflight = state.watchTransaction;
+  if (inflight !== null) {
+    const retry = () => retireIfUnused(id, state);
+    inflight.then(retry, retry);
+    return;
+  }
+  const sessions = sessionRegistry().sessions;
+  if (sessions.get(id) !== state) return;
+  sessions.delete(id);
+  state.claimRecord?.();
+  state.claimRecord = null;
 }
 
 /** The registry's global slot, which test harnesses clear. */
