@@ -13,13 +13,21 @@ export interface ResolvedFile {
   unresolved?: string | null;
 }
 
-/** A specifier resolved as the system loader resolves it (the native
- *  module's `resolveSpecifier`), under the host's export conditions. */
-export type ResolveSpecifier = (
-  specifier: string,
-  fromDir: string,
-  conditions: readonly string[]
-) => ResolvedFile;
+/** Package resolution as the system loader resolves (the native module),
+ *  under the host's export conditions. */
+export interface PackageResolution {
+  /** A specifier, resolved from a directory. */
+  resolveSpecifier(
+    specifier: string,
+    fromDir: string,
+    conditions: readonly string[]
+  ): ResolvedFile;
+  /** The root entry of the package in a directory, located some other way. */
+  resolvePackageEntry(
+    packageDir: string,
+    conditions: readonly string[]
+  ): ResolvedFile;
+}
 
 /** The packages a session includes: each entry, and for each package that
  *  names no file, why. */
@@ -28,10 +36,37 @@ export interface ResolvedPackages {
   unresolved: { [specifier: string]: string };
 }
 
+/** The session root's declared workspace directories; none when its
+ *  manifest is absent or declares none. */
+function workspaceDirs(rootDir: string): string[] {
+  try {
+    const rootPkg = JSON.parse(
+      readFileSync(join(rootDir, 'package.json'), 'utf-8')
+    );
+    const workspaces: string[] = Array.isArray(rootPkg.workspaces)
+      ? rootPkg.workspaces
+      : (rootPkg.workspaces?.packages ?? []);
+    return workspaces.map((ws) => resolve(rootDir, ws));
+  } catch {
+    return [];
+  }
+}
+
+/** A workspace directory's package name; null for a directory that holds
+ *  no readable manifest, which is no package. */
+function workspaceName(wsDir: string): string | null {
+  try {
+    const pkg = JSON.parse(readFileSync(join(wsDir, 'package.json'), 'utf-8'));
+    return pkg.name || null;
+  } catch {
+    return null;
+  }
+}
+
 export function resolvePackagesByName(
   rootDir: string,
   names: string[],
-  resolveSpecifier: ResolveSpecifier,
+  resolution: PackageResolution,
   conditions: readonly string[]
 ): ResolvedPackages {
   const packageMap: ResolvedPackageMap = {};
@@ -40,45 +75,39 @@ export function resolvePackagesByName(
 
   const nameSet = new Set(names);
   const resolved = new Set<string>();
+  // Why a located workspace package named no entry: its own evidence wins
+  // over the installed lookup's when neither finds a file.
+  const workspaceFailures = new Map<string, string>();
 
-  try {
-    const rootPkg = JSON.parse(
-      readFileSync(join(rootDir, 'package.json'), 'utf-8')
-    );
-    const workspaces: string[] = Array.isArray(rootPkg.workspaces)
-      ? rootPkg.workspaces
-      : (rootPkg.workspaces?.packages ?? []);
-
-    for (const ws of workspaces) {
-      const wsDir = resolve(rootDir, ws);
-      if (!existsSync(wsDir)) continue;
-
-      try {
-        const pkg = JSON.parse(
-          readFileSync(join(wsDir, 'package.json'), 'utf-8')
-        );
-        const name: string = pkg.name || '';
-
-        if (nameSet.has(name)) {
-          const main = pkg.main || pkg.module || 'index.ts';
-          const entryPath = resolve(wsDir, main);
-          if (existsSync(entryPath)) {
-            packageMap[name] = relative(rootDir, entryPath);
-            resolved.add(name);
-          }
-        }
-      } catch {}
+  // The walk locates a workspace package; the loader selects its entry.
+  for (const wsDir of workspaceDirs(rootDir)) {
+    if (!existsSync(wsDir)) continue;
+    const name = workspaceName(wsDir);
+    if (name === null || !nameSet.has(name)) continue;
+    const entry = resolution.resolvePackageEntry(wsDir, conditions);
+    if (entry.path) {
+      packageMap[name] = relative(rootDir, entry.path);
+      resolved.add(name);
+    } else {
+      workspaceFailures.set(
+        name,
+        entry.unresolved ??
+          `${join(wsDir, 'package.json')} selects no entry file`
+      );
     }
-  } catch {}
+  }
 
   // Every other package resolves as the system loader resolves it: its
   // `animus` source condition first, then the host's conditions, `import`
   // and `default`, then `module` before `main`.
   for (const name of nameSet) {
     if (resolved.has(name)) continue;
-    const entry = resolveSpecifier(name, rootDir, conditions);
+    const entry = resolution.resolveSpecifier(name, rootDir, conditions);
     if (entry.path) packageMap[name] = relative(rootDir, entry.path);
-    else unresolved[name] = entry.unresolved ?? 'it names no file';
+    else {
+      unresolved[name] =
+        workspaceFailures.get(name) ?? entry.unresolved ?? 'it names no file';
+    }
   }
 
   return { entries: packageMap, unresolved };

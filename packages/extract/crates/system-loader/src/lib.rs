@@ -104,8 +104,43 @@ pub fn resolve_bare_specifier(
     conditions: &[String],
 ) -> Result<(String, PathBuf), String> {
     let (pkg_name, subpath) = split_specifier(specifier);
-
     let pkg_json_path = find_package_json(pkg_name, from_dir)?;
+    select_package_entry(pkg_json_path, subpath, conditions, specifier)
+}
+
+/// The entry `subpath` (`""` or `"."` for the root, else `./x` or `/x`) of
+/// the package in `package_dir`, selected as `resolve_bare_specifier`
+/// selects it once it has found the package: for a package located some
+/// other way, such as a workspace.
+pub fn resolve_package_entry(
+    package_dir: &Path,
+    subpath: &str,
+    conditions: &[String],
+) -> Result<(PathBuf, PathBuf), String> {
+    let label = format!("{}{}", package_dir.display(), subpath.trim_start_matches('.'));
+    select_package_entry(package_dir.join("package.json"), subpath, conditions, &label)
+        .map(|(path, manifest)| (real_path(PathBuf::from(path)), real_path(manifest)))
+}
+
+/// `path` with its links and `.` segments resolved, as `require.resolve`
+/// and Vite return it; as given when it cannot be.
+fn real_path(path: PathBuf) -> PathBuf {
+    fs::canonicalize(&path).unwrap_or(path)
+}
+
+/// The file the package whose manifest is `pkg_json_path` names for
+/// `subpath`, as Node's ESM resolver selects it, a kit's source first:
+/// `exports` alone where it exists (its valid `animus` target, else the
+/// first of `conditions`, `import` and `default` in the object's order);
+/// otherwise `module`, `main` and a root `index`, or the subpath, as files or
+/// directories through the extension policy. Every path that resolves a
+/// package's entry goes through it.
+fn select_package_entry(
+    pkg_json_path: PathBuf,
+    subpath: &str,
+    conditions: &[String],
+    specifier: &str,
+) -> Result<(String, PathBuf), String> {
     let pkg_dir = pkg_json_path
         .parent()
         .ok_or_else(|| format!("invalid package.json path: {:?}", pkg_json_path))?;
@@ -354,12 +389,11 @@ pub fn resolve_specifier(
     from_dir: &str,
     conditions: &[String],
 ) -> Result<(PathBuf, Option<PathBuf>), String> {
-    let real = |path: PathBuf| fs::canonicalize(&path).unwrap_or(path);
     if specifier.starts_with('.') || specifier.starts_with('/') {
-        resolve_relative(Path::new(from_dir), specifier).map(|path| (real(PathBuf::from(path)), None))
+        resolve_relative(Path::new(from_dir), specifier).map(|path| (real_path(PathBuf::from(path)), None))
     } else {
         resolve_bare_specifier(specifier, from_dir, conditions)
-            .map(|(path, manifest)| (real(PathBuf::from(path)), Some(real(manifest))))
+            .map(|(path, manifest)| (real_path(PathBuf::from(path)), Some(real_path(manifest))))
     }
 }
 

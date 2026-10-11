@@ -27,6 +27,7 @@ import { ExtractionSession } from '../../session/extraction-session';
 import { engineApi, setEngineApiOverride } from '../../session/singleton';
 import {
   makeManifest,
+  manifestPackageEntry,
   requireResolveSpecifier,
   resetAnimusGlobals,
   SYSTEM_CONFIG,
@@ -41,6 +42,7 @@ setEngineApiOverride(() => {
     transformFile: mocks.transformFile,
     clearAnalysisCache: mocks.clearAnalysisCache,
     resolveSpecifier: requireResolveSpecifier,
+    resolvePackageEntry: manifestPackageEntry,
   };
   return mocks.extractFactsEnabled
     ? { ...api, extractFacts: mocks.extractFacts }
