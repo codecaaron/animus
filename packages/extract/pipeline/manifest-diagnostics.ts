@@ -66,23 +66,6 @@ export function warnLine(diagnostic: ManifestDiagnostic): string {
 export const SELECTOR_UNSUPPORTED_SUBJECT =
   'animus.selector.unsupported-subject';
 
-/** The one matcher for the engine's unresolved-parent chain-drop message;
- *  consumers match through the exported helpers, never their own copy. */
-const UNRESOLVED_PARENT_RE =
-  /chain dropped: could not resolve parent component '([^']+)'/;
-
-type DiagnosticMessage = Pick<ManifestDiagnostic, 'message'>;
-
-export function isUnresolvedParentDrop(diagnostic: DiagnosticMessage): boolean {
-  return UNRESOLVED_PARENT_RE.test(diagnostic.message);
-}
-
-export function unresolvedParentName(
-  diagnostic: DiagnosticMessage
-): string | null {
-  return UNRESOLVED_PARENT_RE.exec(diagnostic.message)?.[1] ?? null;
-}
-
 export interface DiagnosticPolicy {
   /** When true, error-severity diagnostics throw instead of warning. */
   strict?: boolean;

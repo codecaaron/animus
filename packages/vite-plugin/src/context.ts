@@ -184,24 +184,11 @@ export class PluginContext {
    *  diverge. */
   systemPropsModule = EMPTY_SYSTEM_PROPS_MODULE;
 
-  rawExtensionFallbacks = new Set<string>();
-
   /** Original path → hash of bytes whose parse aborted in a rejected attempt;
    *  non-empty while that rejection holds publication. Those bytes are served
    *  raw so the host reports its own syntax error instead of receiving the
    *  previous module from the retained engine. */
   readonly abortedParseHashes = new Map<string, string>();
-
-  /** The one mutator of a file's fallback state — every raw-serve exit of the
-   *  transform hook reports here, except aborted bytes, which never execute.
-   *  Production keeps the set empty. The
-   *  barrier's one-shot withhold release must not route through here: it
-   *  retires other files' records, no claim about their current serve. */
-  recordFallbackState(relativePath: string, isFallback: boolean): void {
-    if (this.isProd) return;
-    if (isFallback) this.rawExtensionFallbacks.add(relativePath);
-    else this.rawExtensionFallbacks.delete(relativePath);
-  }
 
   readonly hotUpdateEvents = new HotUpdateEvents();
 

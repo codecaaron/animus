@@ -159,7 +159,6 @@ export function makeContextProbe<Overrides extends ContextProbeOverrides>(
       outputExclude: null,
       assetCopyDir: null,
       session,
-      rawExtensionFallbacks: new Set<string>(),
       abortedParseHashes: new Map<string, string>(),
       reverseProvenance,
       storedManifest: makeManifest(),
@@ -168,7 +167,6 @@ export function makeContextProbe<Overrides extends ContextProbeOverrides>(
       recordTransformOutput(relativePath: string, code: string) {
         this.transformOutputHashes.set(relativePath, `probe:${code.length}`);
       },
-      recordFallbackState: PluginContext.prototype.recordFallbackState,
       async submitChanges(changes: WatchChanges) {
         probe.submissions.push(changes);
         return responder(changes);
