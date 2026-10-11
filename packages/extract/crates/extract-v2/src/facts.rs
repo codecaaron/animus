@@ -507,7 +507,7 @@ pub struct FileFacts {
     /// Modules this file loads at runtime (`import()`, `require()`, a
     /// context or a glob): their exports render where usage cannot follow.
     #[serde(skip)]
-    pub(crate) module_loads: Vec<crate::usage_facts::ModuleLoad>,
+    pub(crate) module_loads: Vec<crate::loads::ModuleLoad>,
     /// Top-level functions and classes, and `const` bindings of a function or
     /// class expression, that nothing in the file writes: a tag that names
     /// one renders an ordinary component, not an Animus one.
@@ -1214,7 +1214,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
     let program = ast.program();
     // The engine lowers every file before static enrichment; any other
     // caller lowers this one here.
-    let crate::link::Lowered { scoping, bindings, record: module_record } =
+    let crate::link::Lowered { scoping, bindings, record: module_record, loads } =
         lowered.unwrap_or_else(|| crate::link::Lowered::of(ast));
     let source = ast.source();
     let directive_prologue = program.directives.last().map(|last| {
@@ -1501,7 +1501,6 @@ pub(crate) fn extract_file_facts_from_static_maps(
         confined: confined_components,
         escapes: value_escapes,
         spread_wrappers,
-        module_loads,
         unsafe_object_uses,
         ordinary_components,
         context_consts,
@@ -1584,7 +1583,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
         confined_components,
         value_escapes,
         spread_wrappers,
-        module_loads,
+        module_loads: loads.iter().filter_map(|load| load.module_load(source)).collect(),
         ordinary_components,
         context_consts,
         prop_tags,
