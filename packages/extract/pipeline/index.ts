@@ -254,8 +254,12 @@ export {
 } from './host-assets';
 export type { HostAssetClassification } from './host-assets';
 export { viteHostExpander, viteLoadExpander } from './vite-expansions';
-export { webpackLoadExpander } from './webpack-expansions';
-export type { WebpackResolveReading } from './webpack-expansions';
+export { webpackHostExpander, webpackLoadExpander } from './webpack-expansions';
+export type {
+  WebpackResolveReading,
+  WebpackRuleEntry,
+  WebpackRuleReading,
+} from './webpack-expansions';
 export type {
   ExpandedPath,
   HostLoadExpander,

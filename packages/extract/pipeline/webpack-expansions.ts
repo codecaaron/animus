@@ -1,5 +1,5 @@
 import { readdirSync, realpathSync, statSync } from 'node:fs';
-import { dirname, posix, relative, resolve, sep } from 'node:path';
+import { dirname, isAbsolute, posix, relative, resolve, sep } from 'node:path';
 
 import type {
   ExpandedPath,
@@ -17,6 +17,10 @@ export interface WebpackResolveReading {
   modules: ReadonlyArray<string | readonly string[]>;
   fullySpecified: boolean;
   enforceExtension: boolean;
+  /** The names of the resolver's `alias` and `fallback` entries, for the
+   *  normal and the context resolver: one could redirect a context or one
+   *  of its requests. */
+  aliasNames: readonly string[];
 }
 
 /** One context webpack builds for a load (`ContextModuleFactory`). */
@@ -208,27 +212,18 @@ function contextFiles(
   reading: WebpackResolveReading
 ): string[] {
   const files: string[] = [];
+  // A read the walk cannot finish throws: the expansion would not be every
+  // file.
   const visit = (dir: string, visited: ReadonlySet<string>) => {
-    let real: string;
-    let names: string[];
-    try {
-      real = realpathSync(dir);
-      names = readdirSync(dir).map((name) => name.normalize('NFC'));
-    } catch {
-      return;
-    }
+    const real = realpathSync(dir);
+    const names = readdirSync(dir).map((name) => name.normalize('NFC'));
     if (visited.has(real)) return;
     const inside = new Set(visited).add(real);
     for (const name of names) {
       if (name.startsWith('.')) continue;
       const path = `${dir}${sep}${name}`;
       if (context.exclude?.test(path)) continue;
-      let stat;
-      try {
-        stat = statSync(path);
-      } catch {
-        continue;
-      }
+      const stat = statSync(path);
       if (stat.isDirectory()) {
         if (context.recursive) visit(path, inside);
       } else if (
@@ -237,8 +232,9 @@ function contextFiles(
       ) {
         const request = `.${path.slice(context.dir.length).replace(/\\/g, '/')}`;
         const requests = alternatives(context.dir, request, reading);
+        // The resolver follows the link: the module is the real file.
         if (requests.some((alternative) => context.regExp.test(alternative))) {
-          files.push(path);
+          files.push(realpathSync(path));
         }
       }
     }
@@ -275,11 +271,88 @@ export function webpackLoadExpander(
       }
       if (context === undefined) return undefined;
       const reading = resolveReading(context.category);
-      if (reading === undefined) return undefined;
-      return contextFiles(context, reading).map((file) => ({
-        path: relative(rootDir, file).split(sep).join(posix.sep),
+      if (reading === undefined || reading.aliasNames.some(redirectsRelative)) {
+        return undefined;
+      }
+      let files: string[];
+      let realRoot: string;
+      try {
+        files = contextFiles(context, reading);
+        realRoot = realpathSync(rootDir);
+      } catch {
+        // An unreadable directory, or a link that cannot be followed.
+        return undefined;
+      }
+      return files.map((file) => ({
+        path: relative(realRoot, file).split(sep).join(posix.sep),
         query: context.query,
       }));
     },
   };
+}
+
+/** Whether a resolver alias or fallback named `name` could redirect a
+ *  relative or absolute request, which the expander reads without the
+ *  resolver. */
+function redirectsRelative(name: string): boolean {
+  return name.startsWith('.') || isAbsolute(name);
+}
+
+/** A `module.rules` entry, or a placeholder webpack skips (`'...'`, a
+ *  falsy value). */
+export type WebpackRuleEntry =
+  | WebpackRuleReading
+  | string
+  | false
+  | 0
+  | null
+  | undefined;
+
+/** A webpack `module.rules` entry, as far as the expander reads it. */
+export interface WebpackRuleReading {
+  resolve?: object;
+  parser?: object;
+  rules?: ReadonlyArray<WebpackRuleEntry>;
+  oneOf?: ReadonlyArray<WebpackRuleEntry>;
+}
+
+/** A rule entry, rather than `'...'` or a falsy placeholder. */
+function isRule(rule: WebpackRuleEntry): rule is WebpackRuleReading {
+  return rule instanceof Object;
+}
+
+/** Every rule, nested `rules` and `oneOf` included. */
+function everyRule(
+  rules: ReadonlyArray<WebpackRuleEntry>
+): WebpackRuleReading[] {
+  return rules
+    .filter(isRule)
+    .flatMap((rule) => [
+      rule,
+      ...everyRule(rule.rules ?? []),
+      ...everyRule(rule.oneOf ?? []),
+    ]);
+}
+
+/**
+ * The expander for a webpack 5 compiler: none where a rule carries its own
+ * resolve options or context parser options, which the expander does not
+ * read. `wrappedDefaults` is false where a parser changes the wrapped
+ * context.
+ */
+export function webpackHostExpander(reading: {
+  resolveReading: (
+    category: 'esm' | 'commonjs'
+  ) => WebpackResolveReading | undefined;
+  wrappedDefaults: boolean;
+  rules: ReadonlyArray<WebpackRuleEntry>;
+}): HostLoadExpander | undefined {
+  const rules = everyRule(reading.rules);
+  const unread = rules.some(
+    (rule) =>
+      rule.resolve !== undefined ||
+      Object.keys(rule.parser ?? {}).some((key) => key.includes('Context'))
+  );
+  if (unread) return undefined;
+  return webpackLoadExpander(reading.resolveReading, reading.wrappedDefaults);
 }

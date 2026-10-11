@@ -13,7 +13,7 @@ import {
   viteExtensionPolicy,
   viteHostExpander,
   webpackExtensionPolicy,
-  webpackLoadExpander,
+  webpackHostExpander,
 } from '@animus-ui/extract/pipeline';
 import {
   ANIMUS_CSS_MODULE_ID,
@@ -40,6 +40,7 @@ import type {
   HostAssetClassification,
   HostExtensionPolicy,
   HostLoadExpander,
+  WebpackRuleEntry,
 } from '@animus-ui/extract/pipeline';
 import type { SessionKey } from '@animus-ui/extract/session';
 import type {
@@ -296,7 +297,10 @@ interface WrappedContextOptions {
 interface WebpackLikeCompiler {
   options: {
     mode?: string;
-    module?: { parser?: Record<string, WrappedContextOptions | undefined> };
+    module?: {
+      parser?: Record<string, WrappedContextOptions | undefined>;
+      rules?: ReadonlyArray<WebpackRuleEntry>;
+    };
     resolve?: {
       conditionNames?: string[];
       extensions?: string[];
@@ -317,7 +321,7 @@ interface WebpackLikeCompiler {
    *  requests. */
   resolverFactory?: {
     get(
-      type: 'normal',
+      type: 'normal' | 'context',
       options: { dependencyType: string }
     ): {
       options: {
@@ -326,6 +330,8 @@ interface WebpackLikeCompiler {
         modules: ReadonlyArray<string | readonly string[]>;
         fullySpecified?: boolean;
         enforceExtension?: boolean;
+        alias?: ReadonlyArray<{ name: string }>;
+        fallback?: ReadonlyArray<{ name: string }>;
       };
     };
   };
@@ -969,18 +975,32 @@ export const unpluginFactory: UnpluginFactory<
     const resolverFactory = compiler.resolverFactory;
     hostLoadExpander =
       meta.framework === 'webpack' && resolverFactory !== undefined
-        ? webpackLoadExpander((category) => {
-            const read = resolverFactory.get('normal', {
-              dependencyType: category,
-            }).options;
-            return {
-              extensions: [...read.extensions],
-              mainFiles: [...read.mainFiles],
-              modules: read.modules,
-              fullySpecified: read.fullySpecified === true,
-              enforceExtension: read.enforceExtension === true,
-            };
-          }, wrappedContextDefaults(compiler.options.module?.parser))
+        ? webpackHostExpander({
+            resolveReading: (category) => {
+              const read = resolverFactory.get('normal', {
+                dependencyType: category,
+              }).options;
+              const context = resolverFactory.get('context', {
+                dependencyType: category,
+              }).options;
+              return {
+                extensions: [...read.extensions],
+                mainFiles: [...read.mainFiles],
+                modules: read.modules,
+                fullySpecified: read.fullySpecified === true,
+                enforceExtension: read.enforceExtension === true,
+                aliasNames: [read, context].flatMap((resolver) =>
+                  [...(resolver.alias ?? []), ...(resolver.fallback ?? [])].map(
+                    (entry) => entry.name
+                  )
+                ),
+              };
+            },
+            wrappedDefaults: wrappedContextDefaults(
+              compiler.options.module?.parser
+            ),
+            rules: compiler.options.module?.rules ?? [],
+          })
         : undefined;
     const DefinePlugin =
       compiler.webpack?.DefinePlugin ?? compiler.rspack?.DefinePlugin;

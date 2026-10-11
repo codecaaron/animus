@@ -16,9 +16,13 @@ import {
   viteHostExpander,
   viteLoadExpander,
 } from '../pipeline/vite-expansions';
-import { webpackLoadExpander } from '../pipeline/webpack-expansions';
+import {
+  webpackHostExpander,
+  webpackLoadExpander,
+} from '../pipeline/webpack-expansions';
 
 import type { ListedArgs, ListedLoad } from '../pipeline/host-expansions';
+import type { WebpackRuleReading } from '../pipeline/webpack-expansions';
 
 describe('hostExpansions', () => {
   // Contract: a query selects how the host loads a file, which can be other
@@ -215,24 +219,32 @@ describe('webpackLoadExpander', () => {
       'src/pages/data.json',
       'src/pages/x.test.js',
       'src/pages/entry.js',
+      'src/locked/l.js',
     ]) {
       mkdirSync(dirname(join(root, file)), { recursive: true });
       writeFileSync(join(root, file), 'export default 1;\n');
     }
-    const expander = webpackLoadExpander(
-      () => ({
-        extensions: ['.js', '.json', '.wasm'],
-        mainFiles: ['index'],
-        modules: [['node_modules']],
-        fullySpecified: false,
-        enforceExtension: false,
-      }),
-      true
-    );
-    const expand = (kind: ListedLoad['kind'], args: ListedArgs) =>
+    // A directory the walk cannot read.
+    chmodSync(join(root, 'src/locked'), 0o000);
+    const reading = (aliasNames: string[] = []) => ({
+      extensions: ['.js', '.json', '.wasm'],
+      mainFiles: ['index'],
+      modules: [['node_modules']],
+      fullySpecified: false,
+      enforceExtension: false,
+      aliasNames,
+    });
+    const expandWith = (
+      expander: ReturnType<typeof webpackLoadExpander> | undefined,
+      kind: ListedLoad['kind'],
+      args: ListedArgs
+    ) =>
       expander
-        .expand({ importer: 'src/entry.js', start: 0, kind, args }, root)
+        ?.expand({ importer: 'src/entry.js', start: 0, kind, args }, root)
         ?.map(({ path, query }) => `${path}${query}`);
+    const expander = webpackLoadExpander(() => reading(), true);
+    const expand = (kind: ListedLoad['kind'], args: ListedArgs) =>
+      expandWith(expander, kind, args);
     const context = (
       dir: string,
       read: {
@@ -306,7 +318,59 @@ describe('webpackLoadExpander', () => {
         twoHoles: undefined,
         sticky: undefined,
       });
+      // What the expander does not read gives no record: a resolver alias
+      // that could redirect a relative or absolute request, a rule with its
+      // own resolve or context parser options, an unreadable directory.
+      const pages = {
+        dir: './pages',
+        recursive: null,
+        regExp: null,
+        include: null,
+        exclude: null,
+        mode: null,
+      };
+      const ruled = (rule: WebpackRuleReading) =>
+        webpackHostExpander({
+          resolveReading: () => reading(),
+          wrappedDefaults: true,
+          rules: [rule],
+        });
+      expect({
+        relativeAlias: expandWith(
+          webpackLoadExpander(() => reading(['./pages']), true),
+          'context',
+          pages
+        ),
+        absoluteAlias: expandWith(
+          webpackLoadExpander(
+            () => reading([join(root, 'src/pages/a.js')]),
+            true
+          ),
+          'context',
+          pages
+        ),
+        packageAlias: expandWith(
+          webpackLoadExpander(() => reading(['lodash']), true),
+          'context',
+          pages
+        )?.length,
+        ruleResolve: ruled({ resolve: { extensions: ['.special'] } }),
+        ruleParser: ruled({
+          parser: { wrappedContextRegExp: /[\s\S]*/ },
+        }),
+        ruleOther: ruled({ parser: { javascript: {} } }) === undefined,
+        unreadable: context('./locked'),
+      }).toEqual({
+        relativeAlias: undefined,
+        absoluteAlias: undefined,
+        packageAlias: 5,
+        ruleResolve: undefined,
+        ruleParser: undefined,
+        ruleOther: false,
+        unreadable: undefined,
+      });
     } finally {
+      chmodSync(join(root, 'src/locked'), 0o755);
       rmSync(root, { recursive: true, force: true });
     }
   });
