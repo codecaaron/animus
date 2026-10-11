@@ -73,14 +73,14 @@ pub fn eval_object_expr(
 
 pub fn eval_object_expr_with_statics(
     obj: &ObjectExpression<'_>,
-    static_values: Option<&FxHashMap<String, Value>>,
+    static_values: Option<Statics<'_>>,
 ) -> Result<(Value, Vec<SkippedProperty>, Vec<CapturedTransform>), BailError> {
     eval_object_expr_scoped(obj, static_values, false)
 }
 
 fn eval_object_expr_scoped(
     obj: &ObjectExpression<'_>,
-    static_values: Option<&FxHashMap<String, Value>>,
+    static_values: Option<Statics<'_>>,
     keyframes_eligible: bool,
 ) -> Result<(Value, Vec<SkippedProperty>, Vec<CapturedTransform>), BailError> {
     let mut map = Map::new();
@@ -222,7 +222,7 @@ fn eval_object_expr_scoped(
 /// holds a string. A key read from a lost value bails with its reason.
 fn computed_key(
     key: &PropertyKey<'_>,
-    static_values: Option<&FxHashMap<String, Value>>,
+    static_values: Option<Statics<'_>>,
 ) -> Result<String, BailError> {
     let unsupported = || BailError::new("computed property key in style object");
     let expr = key.as_expression().ok_or_else(unsupported)?;
@@ -249,15 +249,17 @@ fn computed_key(
 
 /// The static value an identifier, or a member path from one, names:
 /// `preset`, `presets.pixel`, `presets['pixel']`. `None` for anything else,
-/// and for a member a lost-value marker stands in for.
+/// for an unsettled binding, and for a member a lost-value marker stands in
+/// for.
 pub(crate) fn static_path_value<'v>(
     expr: &Expression<'_>,
-    static_values: &'v FxHashMap<String, Value>,
+    static_values: Statics<'v>,
 ) -> Option<&'v Value> {
     match crate::chain_walk::unwrap_type_assertions(expr) {
-        Expression::Identifier(ident) => static_values
-            .get(ident.name.as_str())
-            .filter(|value| asset_function(value).is_none()),
+        Expression::Identifier(ident) => match static_values.read(ident.name.as_str())? {
+            StaticRead::Exact(value) => Some(value).filter(|value| asset_function(value).is_none()),
+            StaticRead::Unsettled(_) => None,
+        },
         Expression::StaticMemberExpression(member) => {
             let parent = static_path_value(&member.object, static_values)?;
             lost_value_reason(parent).is_none().then_some(())?;
@@ -279,10 +281,14 @@ pub(crate) fn static_path_value<'v>(
     }
 }
 
-/// The reason of the lost-value marker an identifier or member path meets.
-fn lost_path_reason<'v>(expr: &Expression<'_>, static_values: &'v FxHashMap<String, Value>) -> Option<&'v str> {
+/// Why an identifier or member path names no static value: its binding is
+/// unsettled, or it meets a lost-value marker.
+fn lost_path_reason<'v>(expr: &Expression<'_>, static_values: Statics<'v>) -> Option<&'v str> {
     match crate::chain_walk::unwrap_type_assertions(expr) {
-        Expression::Identifier(ident) => lost_value_reason(static_values.get(ident.name.as_str())?),
+        Expression::Identifier(ident) => match static_values.read(ident.name.as_str())? {
+            StaticRead::Exact(value) => lost_value_reason(value),
+            StaticRead::Unsettled(reason) => Some(reason),
+        },
         Expression::StaticMemberExpression(member) => lost_path_reason(&member.object, static_values).or_else(|| {
             let parent = static_path_value(&member.object, static_values)?;
             lost_value_reason(parent.get(member.property.name.as_str())?)
@@ -294,11 +300,10 @@ fn lost_path_reason<'v>(expr: &Expression<'_>, static_values: &'v FxHashMap<Stri
 }
 
 /// The static object a spread argument names, or why it names none. An
-/// object whose stability the analysis could not prove is a marker naming
-/// the use that makes it unstable.
+/// unsettled object names the use that may change it.
 fn static_object_at(
     expr: &Expression<'_>,
-    static_values: Option<&FxHashMap<String, Value>>,
+    static_values: Option<Statics<'_>>,
 ) -> Result<Value, BailError> {
     if let Some(reason) = static_values.and_then(|sv| lost_path_reason(expr, sv)) {
         return Err(BailError::new(format!("spread of {reason}")));
@@ -329,7 +334,7 @@ fn eval_expression(
 pub(crate) fn eval_expression_with_statics(
     expr: &Expression<'_>,
     skips: &mut Vec<SkippedProperty>,
-    static_values: Option<&FxHashMap<String, Value>>,
+    static_values: Option<Statics<'_>>,
 ) -> Result<Value, BailError> {
     eval_expression_scoped(expr, skips, static_values, false)
 }
@@ -337,7 +342,7 @@ pub(crate) fn eval_expression_with_statics(
 fn eval_expression_scoped(
     expr: &Expression<'_>,
     skips: &mut Vec<SkippedProperty>,
-    static_values: Option<&FxHashMap<String, Value>>,
+    static_values: Option<Statics<'_>>,
     keyframes_eligible: bool,
 ) -> Result<Value, BailError> {
     let expr = crate::chain_walk::unwrap_type_assertions(expr);
@@ -409,13 +414,19 @@ fn eval_expression_scoped(
 
         Expression::Identifier(ident) => {
             if let Some(sv) = static_values {
-                if let Some(val) = sv.get(ident.name.as_str()).filter(|val| asset_function(val).is_none()) {
+                match sv.read(ident.name.as_str()) {
                     // A static something may change before the read is no
                     // value: the runtime reads whatever it holds then.
-                    if let Some(reason) = lost_value_reason(val) {
+                    Some(StaticRead::Unsettled(reason)) => {
                         return Err(BailError::new(format!("variable reference (non-static) — {reason}")));
                     }
-                    return Ok(val.clone());
+                    Some(StaticRead::Exact(val)) if asset_function(val).is_none() => {
+                        if let Some(reason) = lost_value_reason(val) {
+                            return Err(BailError::new(format!("variable reference (non-static) — {reason}")));
+                        }
+                        return Ok(val.clone());
+                    }
+                    _ => {}
                 }
             }
             Err(BailError::new("variable reference (non-static)"))
@@ -458,7 +469,7 @@ fn eval_expression_scoped(
 fn member_expression_skip_reason(
     object: &Expression<'_>,
     property: &str,
-    static_values: Option<&FxHashMap<String, Value>>,
+    static_values: Option<Statics<'_>>,
     keyframes_eligible: bool,
 ) -> String {
     let Expression::Identifier(ident) = object else {
@@ -471,7 +482,12 @@ fn member_expression_skip_reason(
     let Some(sv) = static_values else {
         return format!("{named} — evaluated without extraction-time statics");
     };
-    match sv.get(base) {
+    let value = match sv.read(base) {
+        Some(StaticRead::Unsettled(reason)) => return format!("{named} — {reason}"),
+        Some(StaticRead::Exact(value)) => Some(value),
+        None => None,
+    };
+    match value {
         Some(value) if lost_value_reason(value).is_some() => {
             format!("{named} — {}", lost_value_reason(value).unwrap_or_default())
         }
@@ -539,7 +555,7 @@ pub struct VariantStageConfig {
 
 pub fn parse_variant_arg(
     obj: &ObjectExpression<'_>,
-    static_values: Option<&FxHashMap<String, Value>>,
+    static_values: Option<Statics<'_>>,
 ) -> Result<(VariantStageConfig, Vec<SkippedProperty>), BailError> {
     let mut prop = "variant".to_string();
     let mut default_variant = None;
@@ -751,7 +767,7 @@ fn const_value(
 ) -> Option<Value> {
     match crate::chain_walk::unwrap_type_assertions(init) {
         Expression::ObjectExpression(obj) => {
-            let (mut val, skips, captures) = eval_object_expr_scoped(obj, Some(scope), false).ok()?;
+            let (mut val, skips, captures) = eval_object_expr_scoped(obj, Some(Statics::from(scope)), false).ok()?;
             if !require_complete {
                 mark_lost_values(&mut val, &LostValueSource { obj, name, undefined_bound }, &skips, &captures);
                 Some(val)
@@ -761,7 +777,7 @@ fn const_value(
         }
         init => {
             let mut skips = Vec::new();
-            let val = eval_expression_with_statics(init, &mut skips, Some(scope)).ok()?;
+            let val = eval_expression_with_statics(init, &mut skips, Some(Statics::from(scope))).ok()?;
             (!require_complete || skips.is_empty()).then_some(val)
         }
     }
@@ -863,35 +879,49 @@ fn mark_lost_value(
     }
 }
 
-/// A marker that stands in for a static value no reader may use, saying why.
-pub(crate) fn lost_marker(reason: String) -> Value {
-    let mut marker = Map::new();
-    marker.insert(LOST_VALUE.to_string(), Value::String(reason));
-    Value::Object(marker)
+/// A static binding some use may change before a style reads it: every
+/// read refuses with `reason`. `held` is the binding's `pre_read_static`
+/// value, which serialized facts carry.
+#[derive(Debug, Clone)]
+pub(crate) struct Unsettled {
+    pub(crate) reason: String,
+    pub(crate) held: Option<Value>,
 }
 
-/// Set on a marker for a const object whose stability the analysis could
-/// not prove, holding its value.
-const HELD_VALUE: &str = "$animus.held";
+/// What a read of a binding's static value yields: the value, or why no
+/// reader may use it.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum StaticRead<'s> {
+    Exact(&'s Value),
+    Unsettled(&'s str),
+}
 
-/// A lost marker that still holds `value`, the binding's `pre_read_static`
-/// value: a spread, a computed key or a member path below the first member
-/// refuses with `reason`, while the reads extraction made before the
-/// stability analysis (the binding by name, or one member of it as a value)
-/// take `value` through `held_value`.
-pub(crate) fn held_marker(reason: String, value: Value) -> Value {
-    let mut marker = lost_marker(reason);
-    if let Some(entries) = marker.as_object_mut() {
-        entries.insert(HELD_VALUE.to_string(), value);
+/// The static values a reader sees, with the bindings that are unsettled.
+/// Every read of a binding goes through `read`.
+#[derive(Clone, Copy)]
+pub struct Statics<'s> {
+    values: &'s FxHashMap<String, Value>,
+    unsettled: Option<&'s FxHashMap<String, Unsettled>>,
+}
+
+impl<'s> Statics<'s> {
+    pub(crate) fn new(values: &'s FxHashMap<String, Value>, unsettled: &'s FxHashMap<String, Unsettled>) -> Self {
+        Self { values, unsettled: Some(unsettled) }
     }
-    marker
+
+    /// What `name`'s static value reads as, or `None` for a binding with no
+    /// static value.
+    pub(crate) fn read(self, name: &str) -> Option<StaticRead<'s>> {
+        match self.unsettled.and_then(|unsettled| unsettled.get(name)) {
+            Some(unsettled) => Some(StaticRead::Unsettled(&unsettled.reason)),
+            None => self.values.get(name).map(StaticRead::Exact),
+        }
+    }
 }
 
-/// The value a held marker holds, or `value` itself.
-pub(crate) fn held_value(value: &Value) -> &Value {
-    match value.as_object() {
-        Some(entries) if entries.contains_key(LOST_VALUE) => entries.get(HELD_VALUE).unwrap_or(value),
-        _ => value,
+impl<'s> From<&'s FxHashMap<String, Value>> for Statics<'s> {
+    fn from(values: &'s FxHashMap<String, Value>) -> Self {
+        Self { values, unsettled: None }
     }
 }
 
@@ -902,17 +932,20 @@ pub(crate) fn lost_value_reason(value: &Value) -> Option<&str> {
 
 /// The static value a dotted path from a binding names, through members
 /// no marker stands in for; the last step may be a marker, so a reader can
-/// report it.
-pub(crate) fn static_path<'v>(statics: &'v FxHashMap<String, Value>, path: &str) -> Option<&'v Value> {
+/// report it. An unsettled binding is unsettled at any path below it.
+pub(crate) fn static_path<'v>(statics: Statics<'v>, path: &str) -> Option<StaticRead<'v>> {
     let mut segments = path.split('.');
-    let mut current = statics.get(segments.next()?)?;
+    let mut current = match statics.read(segments.next()?)? {
+        StaticRead::Exact(value) => value,
+        unsettled @ StaticRead::Unsettled(_) => return Some(unsettled),
+    };
     for segment in segments {
         if lost_value_reason(current).is_some() {
-            return Some(current);
+            return Some(StaticRead::Exact(current));
         }
         current = current.as_object()?.get(segment)?;
     }
-    Some(current)
+    Some(StaticRead::Exact(current))
 }
 
 /// Among a file's static values, a local bound to `@animus-ui/system`'s
@@ -945,12 +978,13 @@ fn is_relative_specifier(specifier: &str) -> bool {
 /// placeholder it returns; `None` for any other call.
 fn eval_asset_call(
     call: &oxc::ast::ast::CallExpression<'_>,
-    static_values: Option<&FxHashMap<String, Value>>,
+    static_values: Option<Statics<'_>>,
 ) -> Option<Result<Value, BailError>> {
     let Expression::Identifier(callee) = &call.callee else {
         return None;
     };
-    let relative_allowed = asset_function(static_values?.get(callee.name.as_str())?)?;
+    let StaticRead::Exact(callee) = static_values?.read(callee.name.as_str())? else { return None };
+    let relative_allowed = asset_function(callee)?;
     let [Argument::StringLiteral(specifier)] = call.arguments.as_slice() else {
         return Some(Err(BailError::new("asset() of a non-literal specifier (non-static)")));
     };
@@ -967,7 +1001,7 @@ fn eval_asset_call(
 /// expressions stay non-static.
 fn eval_asset_template(
     tpl: &oxc::ast::ast::TemplateLiteral<'_>,
-    static_values: Option<&FxHashMap<String, Value>>,
+    static_values: Option<Statics<'_>>,
     keyframes_eligible: bool,
 ) -> Option<Value> {
     let mut parts = Vec::with_capacity(tpl.expressions.len());
@@ -1275,7 +1309,7 @@ mod tests {
         if let Some(oxc::ast::ast::Statement::VariableDeclaration(decl)) = program.body.first() {
             if let Some(declarator) = decl.declarations.first() {
                 if let Some(Expression::ObjectExpression(obj)) = &declarator.init {
-                    return parse_variant_arg(obj, sv).unwrap();
+                    return parse_variant_arg(obj, sv.map(Statics::from)).unwrap();
                 }
             }
         }
@@ -1883,7 +1917,7 @@ const Component = { gap: GAP };"#;
         if let Some(Statement::VariableDeclaration(decl)) = program.body.first() {
             if let Some(declarator) = decl.declarations.first() {
                 if let Some(Expression::ObjectExpression(obj)) = &declarator.init {
-                    return eval_object_expr_with_statics(obj, sv).unwrap();
+                    return eval_object_expr_with_statics(obj, sv.map(Statics::from)).unwrap();
                 }
             }
         }
