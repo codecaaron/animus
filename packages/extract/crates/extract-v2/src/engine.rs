@@ -567,6 +567,38 @@ fn unstable_style_statics(
         Some(crate::static_value::StaticValue::Object(entries)) => entries.iter().any(|(_, value)| object_like(value)),
         _ => false,
     };
+    // The paths of the members of a declaration's object at `at` that pass
+    // `keep`; the object itself when it has none or is not an object.
+    let members_at = |(file, local): &(String, String), at: &[String], keep: &dyn Fn(&crate::static_value::StaticValue) -> bool| {
+        let mut value = files.get(file).and_then(|statics| statics.get(local));
+        for segment in at {
+            value = value.and_then(|value| value.get(segment));
+        }
+        let members: Vec<Vec<String>> = match value {
+            Some(crate::static_value::StaticValue::Object(entries)) => entries
+                .iter()
+                .filter(|(_, value)| keep(value))
+                .map(|(key, _)| at.iter().cloned().chain(std::iter::once(key.clone())).collect())
+                .collect(),
+            _ => Vec::new(),
+        };
+        if members.is_empty() { vec![at.to_vec()] } else { members }
+    };
+    // Where a use changes a declaration's object: a member's value handed on
+    // escapes below the member's slot, and an escape of a nested object's
+    // members leaves the object's own slots as they were.
+    let changes_of = |target: &(String, String), at: &crate::usage_facts::UseAt| -> Vec<(Vec<String>, ChangeKind)> {
+        use crate::usage_facts::UseAt;
+        match at {
+            UseAt::Member(path) => vec![(path.clone(), ChangeKind::Escape)],
+            UseAt::AnyMember(path) => {
+                members_at(target, path, &|_| true).into_iter().map(|path| (path, ChangeKind::Escape)).collect()
+            }
+            UseAt::Written(path) => vec![(path.clone(), ChangeKind::Write)],
+            UseAt::UnknownKeyWritten(path) => vec![(path.clone(), ChangeKind::UnknownKeyWrite)],
+        }
+    };
+    let nested_members = |target: &(String, String)| members_at(target, &[], &object_like);
     let said = |file: &str, name: &str, used: &crate::usage_facts::ObjectUse| {
         let line = used.line.map_or(String::new(), |line| format!(" on line {line}"));
         format!("{name} {} in {file}{line}", used.what)
@@ -642,16 +674,23 @@ fn unstable_style_statics(
         // members to, so only an object of primitives passes as a read.
         for handoff in &module.facts.handoffs {
             for target in possible(file, &handoff.binding).into_iter().filter(|target| mutable(target)) {
-                let read = !nested(&target)
-                    && declared(file, &handoff.callee).is_some_and(|(callee_file, callee_name)| {
-                        reads_only(&callee_file, &callee_name, handoff.index, 0, &declared, readings_of)
-                    });
-                if !read {
-                    flow.change(object(target), Vec::new(), ChangeKind::Escape, said(file, &handoff.binding, &handoff.used));
+                let reads = declared(file, &handoff.callee).is_some_and(|(callee_file, callee_name)| {
+                    reads_only(&callee_file, &callee_name, handoff.index, 0, &declared, readings_of)
+                });
+                // A callee that only reads the object may still hand its
+                // nested objects on.
+                let escaped = match (reads, nested(&target)) {
+                    (true, false) => continue,
+                    (true, true) => nested_members(&target),
+                    (false, _) => vec![Vec::new()],
+                };
+                for path in escaped {
+                    let cause = said(file, &handoff.binding, &handoff.used);
+                    flow.change(object(target.clone()), path, ChangeKind::Escape, cause);
                 }
             }
         }
-        for (name, used) in &module.facts.uses {
+        for (name, used, at) in &module.facts.uses {
             // A namespace used whole may change anything its module exports,
             // as the member tables read it.
             if let Some(Request::Module(target)) = namespace_of(file, name).filter(|_| !name.contains('.')) {
@@ -659,13 +698,17 @@ fn unstable_style_statics(
                 continue;
             }
             for target in targets_of(name) {
-                flow.change(object(target), Vec::new(), ChangeKind::Escape, said(file, name, used));
+                for (path, kind) in changes_of(&target, at) {
+                    flow.change(object(target.clone()), path, kind, said(file, name, used));
+                }
             }
         }
         for (name, used) in &module.facts.flat_reads {
             for target in targets_of(name).into_iter().filter(|target| nested(target)) {
-                let reason = format!("{}, and it holds a nested object", said(file, name, used));
-                flow.change(object(target), Vec::new(), ChangeKind::Escape, reason);
+                for path in nested_members(&target) {
+                    let reason = format!("{}, and it holds a nested object", said(file, name, used));
+                    flow.change(object(target.clone()), path, ChangeKind::Escape, reason);
+                }
             }
         }
         let reexports = module
@@ -689,14 +732,23 @@ fn unstable_style_statics(
     // A static stored in an object, or read from a binding, may change with
     // it.
     for (file, module) in style {
+        // A container's change hands out the object stored in it whole, or
+        // the members a spread copied in; a `const` that reads a binding
+        // holds what it read in its members.
         let edges = module
             .facts
             .stored
             .iter()
-            .map(|(stored, container)| (stored, container, "is stored in"))
-            .chain(module.facts.derives.iter().map(|(derived, read)| (derived, read, "reads")));
-        for (dependent, on, how) in edges {
-            let to = possible(file, dependent).into_iter().map(object).collect();
+            .map(|(stored, container, copied)| (stored, container, "is stored in", *copied))
+            .chain(module.facts.derives.iter().map(|(derived, read)| (derived, read, "reads", true)));
+        for (dependent, on, how, below) in edges {
+            let to = possible(file, dependent)
+                .into_iter()
+                .flat_map(|target| {
+                    let paths = if below { members_at(&target, &[], &|_| true) } else { vec![Vec::new()] };
+                    paths.into_iter().map(move |path| (object(target.clone()), path))
+                })
+                .collect();
             let from = possible(file, on).into_iter().map(object).collect();
             flow.flow(to, from, format!("{dependent} {how} {on}, and "));
         }
