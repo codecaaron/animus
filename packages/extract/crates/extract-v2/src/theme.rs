@@ -1864,29 +1864,159 @@ pub fn unresolved_alias_spans(value: &str) -> Vec<String> {
     spans
 }
 
+/// The token path a brace alias's content names: `colors.primary/40`
+/// names `colors.primary`.
+fn alias_token_path(content: &str) -> String {
+    dot_path_to_flat_key(content.split_once('/').map_or(content, |(path, _)| path))
+}
+
+/// The theme tokens a literal's aliases expand through: those no variable
+/// stands for whose own literal holds aliases.
+fn expanded_tokens(literal: &str, theme: &FlatTheme, variable_map: &VariableMap) -> Vec<String> {
+    unresolved_alias_spans(literal)
+        .iter()
+        .map(|span| alias_token_path(&span[1..span.len() - 1]))
+        .filter(|key| !variable_map.contains_key(key) && theme.get(key).is_some_and(|literal| literal.contains('{')))
+        .collect()
+}
+
+/// The most bytes resolution expands one theme literal's aliases to. A
+/// chain of any length resolves, but a literal that repeats an alias can
+/// double at every link; past this bound the alias stays unresolved.
+const ALIAS_EXPANSION_LIMIT: usize = 1 << 20;
+
+/// Why a brace alias stayed unresolved.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UnresolvedAlias {
+    /// It names no token.
+    Missing,
+    /// Its expansion reaches an alias cycle: the token paths from its own
+    /// to the first one met twice (`a → b → c → b`).
+    Cycle(Vec<String>),
+    /// Its expansion grows past `ALIAS_EXPANSION_LIMIT` bytes.
+    TooLarge,
+}
+
+/// Why `span`, a brace alias resolution left in a value, stayed unresolved.
+/// Resolution leaves an alias of a theme token whose literal holds aliases
+/// unresolved only when its expansion reaches a cycle or the size bound.
+pub fn unresolved_alias(span: &str, theme: &FlatTheme, variable_map: &VariableMap) -> UnresolvedAlias {
+    let content = span.strip_prefix('{').and_then(|rest| rest.strip_suffix('}')).unwrap_or(span);
+    let start = alias_token_path(content);
+    if variable_map.contains_key(&start) || !theme.get(&start).is_some_and(|literal| literal.contains('{')) {
+        return UnresolvedAlias::Missing;
+    }
+    // Depth first without recursion, so a chain of any length is walked:
+    // each token on the path, with the tokens its literal expands through
+    // still to visit.
+    let next_of = |token: &str| {
+        let mut next = expanded_tokens(&theme[token], theme, variable_map);
+        next.reverse();
+        next
+    };
+    let mut path = vec![(start.clone(), next_of(&start))];
+    let mut on_path: FxHashSet<String> = FxHashSet::from_iter([start]);
+    let mut done: FxHashSet<String> = FxHashSet::default();
+    while let Some((_, pending)) = path.last_mut() {
+        match pending.pop() {
+            Some(next) if on_path.contains(&next) => {
+                let mut cycle: Vec<String> = path.into_iter().map(|(token, _)| token).collect();
+                cycle.push(next);
+                return UnresolvedAlias::Cycle(cycle);
+            }
+            Some(next) if done.contains(&next) => {}
+            Some(next) => {
+                on_path.insert(next.clone());
+                let pending = next_of(&next);
+                path.push((next, pending));
+            }
+            None => {
+                if let Some((token, _)) = path.pop() {
+                    on_path.remove(&token);
+                    done.insert(token);
+                }
+            }
+        }
+    }
+    UnresolvedAlias::TooLarge
+}
+
 fn resolve_token_aliases(
     value: &str,
     theme: &FlatTheme,
     variable_map: &VariableMap,
     contextual_vars: &ContextualVarsMap,
 ) -> String {
-    resolve_aliases_within(value, theme, variable_map, contextual_vars, 0)
+    let mut literals = ResolvedLiterals::default();
+    substitute_aliases(value, usize::MAX, &mut |content| {
+        resolve_single_alias(content, theme, variable_map, contextual_vars, &mut literals)
+    })
+    .expect("a substitution without a size bound completes")
 }
 
-/// How deep a theme literal's own aliases expand. The theme build already
-/// rejects a reference cycle; past this depth an alias stays unresolved and
-/// is reported as one.
-const ALIAS_DEPTH_LIMIT: usize = 16;
+/// Theme literals that hold aliases, each resolved once per resolution:
+/// `None` for one whose expansion reaches an alias cycle or grows past
+/// `ALIAS_EXPANSION_LIMIT`, which stays unresolved.
+#[derive(Default)]
+struct ResolvedLiterals(FxHashMap<String, Option<String>>);
 
-fn resolve_aliases_within(
-    value: &str,
-    theme: &FlatTheme,
-    variable_map: &VariableMap,
-    contextual_vars: &ContextualVarsMap,
-    depth: usize,
-) -> String {
+impl ResolvedLiterals {
+    /// `key`'s literal, which holds aliases, with them resolved. A chain of
+    /// any length resolves without recursion: a literal resolves once every
+    /// literal it expands through has.
+    fn resolve(
+        &mut self,
+        key: &str,
+        theme: &FlatTheme,
+        variable_map: &VariableMap,
+        contextual_vars: &ContextualVarsMap,
+    ) -> Option<String> {
+        if let Some(resolved) = self.0.get(key) {
+            return resolved.clone();
+        }
+        let mut chain = vec![key.to_string()];
+        let mut on_chain: FxHashSet<String> = FxHashSet::from_iter([key.to_string()]);
+        while let Some(token) = chain.last().cloned() {
+            let literal = &theme[&token];
+            let pending = expanded_tokens(literal, theme, variable_map)
+                .into_iter()
+                .find(|next| !self.0.contains_key(next));
+            match pending {
+                Some(next) if !on_chain.contains(&next) => {
+                    on_chain.insert(next.clone());
+                    chain.push(next);
+                    continue;
+                }
+                Some(_) => {
+                    self.0.insert(token.clone(), None);
+                }
+                None => {
+                    // One unresolved literal it expands through leaves it unresolved too.
+                    let blocked =
+                        expanded_tokens(literal, theme, variable_map).iter().any(|next| self.0[next].is_none());
+                    let resolved = (!blocked)
+                        .then(|| {
+                            substitute_aliases(literal, ALIAS_EXPANSION_LIMIT, &mut |content| {
+                                resolve_single_alias(content, theme, variable_map, contextual_vars, self)
+                            })
+                        })
+                        .flatten();
+                    self.0.insert(token.clone(), resolved);
+                }
+            }
+            chain.pop();
+            on_chain.remove(&token);
+        }
+        self.0.get(key).cloned().flatten()
+    }
+}
+
+/// `value` with each `{…}` alias replaced by what `alias` makes of its
+/// content; an unclosed `{` keeps the rest of the value as written. `None`
+/// once the result grows past `limit` bytes.
+fn substitute_aliases(value: &str, limit: usize, alias: &mut dyn FnMut(&str) -> String) -> Option<String> {
     if !value.contains('{') {
-        return value.to_string();
+        return (value.len() <= limit).then(|| value.to_string());
     }
 
     let mut result = String::with_capacity(value.len());
@@ -1894,7 +2024,6 @@ fn resolve_aliases_within(
 
     while let Some((i, ch)) = chars.next() {
         if ch == '{' {
-            let _start = i;
             let mut end = None;
             let content_start = i + 1;
             while let Some(&(j, c)) = chars.peek() {
@@ -1906,9 +2035,10 @@ fn resolve_aliases_within(
             }
 
             if let Some(end_idx) = end {
-                let alias_content = &value[content_start..end_idx];
-                let resolved = resolve_single_alias(alias_content, theme, variable_map, contextual_vars, depth);
-                result.push_str(&resolved);
+                result.push_str(&alias(&value[content_start..end_idx]));
+                if result.len() > limit {
+                    return None;
+                }
             } else {
                 result.push('{');
                 result.push_str(&value[content_start..]);
@@ -1919,7 +2049,8 @@ fn resolve_aliases_within(
         }
     }
 
-    result
+    // Text after the last alias counts toward the bound too.
+    (result.len() <= limit).then_some(result)
 }
 
 /// A colour token's opacity modifier: a percentage from 0 to 100, decimals
@@ -1939,7 +2070,7 @@ fn resolve_single_alias(
     theme: &FlatTheme,
     variable_map: &VariableMap,
     contextual_vars: &ContextualVarsMap,
-    depth: usize,
+    literals: &mut ResolvedLiterals,
 ) -> String {
     // A malformed modifier keeps its old reading: an integer, or none.
     let (token_path, alpha) = match content.split_once('/') {
@@ -1956,11 +2087,15 @@ fn resolve_single_alias(
         format!("var({})", var_name)
     } else if let Some(literal) = theme.get(&flat_key) {
         // A literal can itself hold aliases, a contextual variable among
-        // them, when the theme was built before they resolved there.
-        if literal.contains('{') && depth < ALIAS_DEPTH_LIMIT {
-            resolve_aliases_within(literal, theme, variable_map, contextual_vars, depth + 1)
-        } else {
+        // them, when the theme was built before they resolved there. One
+        // whose expansion reaches an alias cycle or the size bound stays
+        // unresolved (`unresolved_alias`).
+        if !literal.contains('{') {
             literal.clone()
+        } else if let Some(resolved) = literals.resolve(&flat_key, theme, variable_map, contextual_vars) {
+            resolved
+        } else {
+            return format!("{{{}}}", content);
         }
     } else if let Some(dot_idx) = token_path.find('.') {
         let scale_name = &token_path[..dot_idx];

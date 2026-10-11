@@ -34,7 +34,7 @@ use crate::theme::{
     ConditionAliasesMap, ContextualVarsMap, CssDeclaration, FlatTheme, PropConfig, PropConfigMap,
     ResolveContext, ResolvedStyles, SelectorAliasesMap, StrictTokenMiss, StrictTokenMissSink,
     TransformFailure, TransformFailureSink, VariableMap, extracts_callback_value, extracts_configured_value, resolve_styles, skips_transforms, strict_token_miss_of,
-    unresolved_alias_spans, writes_token_reference,
+    unresolved_alias, unresolved_alias_spans, writes_token_reference, UnresolvedAlias,
 };
 use crate::transforms::CallbackDefinition;
 use crate::usage_facts::{is_animus_system_specifier, TagFact, TagOrigin, UsageFact, UsageResidueRecord};
@@ -530,6 +530,13 @@ const SKIPPED_VALUE: &str = "animus.chain.skipped-value";
 const UNRESOLVED_PARENT: &str = "animus.extension.unresolved-parent";
 const UNBOUND_TRANSFORM_NAME: &str = "animus.props.unbound-transform-name";
 const UNRESOLVED_TOKEN_ALIAS: &str = "animus.style.unresolved-token-alias";
+/// A token alias whose expansion reaches a cycle of theme aliases: its
+/// declaration is dropped, and the finding names the cycle, so it is never
+/// read as a missing token.
+const TOKEN_ALIAS_CYCLE: &str = "animus.style.token-alias-cycle";
+/// A token alias whose expansion grows past the size bound, as theme
+/// literals that repeat an alias do: its declaration is dropped.
+const TOKEN_ALIAS_TOO_LARGE: &str = "animus.style.token-alias-too-large";
 const TOKEN_SHAPED_VALUE: &str = "animus.style.unresolved-token-value";
 const EXTERNAL_TOKEN_CANDIDATE: &str = "animus.theme.external-token-candidate";
 const TRANSFORM_THREW: &str = "animus.transform.threw";
@@ -580,6 +587,8 @@ pub(crate) const DIAGNOSTIC_CODES: &[(&str, &str)] = &[
     (UNRESOLVED_PARENT, "warn"),
     (UNBOUND_TRANSFORM_NAME, "warn"),
     (UNRESOLVED_TOKEN_ALIAS, "warn"),
+    (TOKEN_ALIAS_CYCLE, "warn"),
+    (TOKEN_ALIAS_TOO_LARGE, "warn"),
     (TOKEN_SHAPED_VALUE, "warn"),
     (EXTERNAL_TOKEN_CANDIDATE, "warn"),
     (TRANSFORM_THREW, "warn"),
@@ -1539,22 +1548,78 @@ fn shed_unresolved_alias_decls(
             warn_token_shaped_value(d, scale_check, file, component, diagnostics);
             return true;
         }
-        diagnostics.push(unresolved_token_alias(file, component, d, &spans));
+        diagnostics.extend(unresolved_alias_findings(file, component, d, spans, scale_check.theme, scale_check.variable_map));
         false
     });
 }
 
-/// A declaration dropped for the token aliases in it that name no token.
-fn unresolved_token_alias(file: &str, component: &str, declaration: &CssDeclaration, spans: &[String]) -> CssDiagnostic {
-    let aliases = spans.join(", ");
-    diagnostic(
-        file,
-        component,
-        "warn",
-        format!("unresolvable token alias {aliases} in '{}' — declaration dropped", declaration.property),
-        Some(UNRESOLVED_TOKEN_ALIAS),
-    )
-    .dropping(&aliases)
+/// The findings for a declaration dropped for the token aliases left in it:
+/// one for the aliases that name no token, and one for each alias whose
+/// expansion reaches a cycle, naming it, or grows past the size bound.
+fn unresolved_alias_findings(
+    file: &str,
+    component: &str,
+    declaration: &CssDeclaration,
+    spans: Vec<String>,
+    theme: &FlatTheme,
+    variable_map: &VariableMap,
+) -> Vec<CssDiagnostic> {
+    let mut missing = Vec::new();
+    let mut findings = Vec::new();
+    for span in spans {
+        match unresolved_alias(&span, theme, variable_map) {
+            UnresolvedAlias::Cycle(cycle) => findings.push(
+                diagnostic(
+                    file,
+                    component,
+                    "warn",
+                    format!(
+                        "token alias {span} in '{}' reaches an alias cycle ({}) — declaration \
+                         dropped; end the chain at a value",
+                        declaration.property,
+                        // A long path into the cycle keeps its ends: where
+                        // it starts, and the token it meets twice.
+                        match cycle.len() {
+                            0..=8 => cycle.join(" → "),
+                            n => format!("{} → … → {}", cycle[..4].join(" → "), cycle[n - 2..].join(" → ")),
+                        }
+                    ),
+                    Some(TOKEN_ALIAS_CYCLE),
+                )
+                .dropping(&span),
+            ),
+            UnresolvedAlias::TooLarge => findings.push(
+                diagnostic(
+                    file,
+                    component,
+                    "warn",
+                    format!(
+                        "token alias {span} in '{}' expands past 1 MiB, as theme values that repeat an \
+                         alias can — declaration dropped",
+                        declaration.property
+                    ),
+                    Some(TOKEN_ALIAS_TOO_LARGE),
+                )
+                .dropping(&span),
+            ),
+            UnresolvedAlias::Missing => missing.push(span),
+        }
+    }
+    if !missing.is_empty() {
+        let aliases = missing.join(", ");
+        findings.insert(
+            0,
+            diagnostic(
+                file,
+                component,
+                "warn",
+                format!("unresolvable token alias {aliases} in '{}' — declaration dropped", declaration.property),
+                Some(UNRESOLVED_TOKEN_ALIAS),
+            )
+            .dropping(&aliases),
+        );
+    }
+    findings
 }
 
 /// Properties whose values legitimately carry dotted bare identifiers, so a
@@ -1588,6 +1653,7 @@ struct ScaleCheck<'a> {
     family: &'a ScaleFamily,
     tokens: &'a FxHashMap<String, Vec<String>>,
     theme: &'a crate::theme::FlatTheme,
+    variable_map: &'a VariableMap,
     external: bool,
 }
 
@@ -1988,6 +2054,10 @@ fn record_external_candidates_in_decls(
                     // the alpha suffix.
                     content.split('/').next().unwrap_or(content).to_string()
                 })
+                // A consumer token left unresolved reached an alias cycle or
+                // the size bound, which the shed reports; it is no external
+                // token.
+                .filter(|token| !theme.contains_key(token))
                 .collect()
         };
         for token in tokens {
@@ -5873,6 +5943,7 @@ fn run_with_system_floor(
                         family: &scale_family_props,
                         tokens: &theme_tokens,
                         theme: &inputs.theme,
+                        variable_map: &inputs.variable_map,
                         external: is_external_file(file_path, &inputs.external_dirs),
                     },
                     file_path,
@@ -6312,9 +6383,14 @@ fn run_with_system_floor(
             let resolved = resolve_styles(&serde_json::json!({ prop_name: value }), &quiet, true);
             for declaration in resolved.all_declarations() {
                 let spans = unresolved_alias_spans(&declaration.value);
-                if !spans.is_empty() {
-                    diagnostics.push(unresolved_token_alias(file, component, declaration, &spans));
-                }
+                diagnostics.extend(unresolved_alias_findings(
+                    file,
+                    component,
+                    declaration,
+                    spans,
+                    resolve_ctx.theme,
+                    resolve_ctx.variable_map,
+                ));
             }
         }
         Some(UtilityInput {
@@ -8125,6 +8201,43 @@ mod tests {
         inputs.theme.insert("space.8".into(), "0.5rem".into());
         inputs.theme.insert("breakpoints.sm".into(), "480".into());
         inputs
+    }
+
+    /// Contract: a finite token alias chain of any length resolves, and a
+    /// cycle is reported with its own code and drops only its declaration,
+    /// never shed as though the token were missing.
+    #[test]
+    fn token_alias_chains_resolve_at_any_length_and_cycles_are_reported() {
+        let run = |links: &[(String, String)]| {
+            let mut inputs = test_inputs();
+            for (key, value) in links {
+                inputs.theme.insert(key.clone(), value.clone());
+            }
+            let source = "export const C = ds.styles({ color: '{colors.t0}', display: 'flex' }).asElement('div');\n\
+                          export const App = () => <C />;\n";
+            analyze(&[("app.tsx", source)], &inputs)
+        };
+        let codes = |out: &CssOutput| out.diagnostics.iter().filter_map(|d| d.code.clone()).collect::<Vec<_>>();
+        let link = |from: usize, to: &str| (format!("colors.t{from}"), to.to_string());
+        for length in [17, 40] {
+            let mut links: Vec<_> = (0..length).map(|i| link(i, &format!("{{colors.t{}}}", i + 1))).collect();
+            links.push(link(length, "red"));
+            let out = run(&links);
+            assert!(out.css.contains("color: red"), "{length} links: {}", out.css);
+            assert!(codes(&out).is_empty(), "{length} links: {:?}", out.diagnostics);
+        }
+        let out = run(&[link(0, "{colors.t1}"), link(1, "{colors.t0}")]);
+        assert!(!out.css.contains("color:") && out.css.contains("display: flex"), "{}", out.css);
+        assert_eq!(codes(&out), [TOKEN_ALIAS_CYCLE], "{:?}", out.diagnostics);
+        assert!(out.diagnostics[0].message.contains("colors.t0 → colors.t1 → colors.t0"), "{}", out.diagnostics[0].message);
+        let out = run(&[link(0, "{colors.missing}")]);
+        assert!(!out.css.contains("color:"), "{}", out.css);
+        assert_eq!(codes(&out), [UNRESOLVED_TOKEN_ALIAS], "{:?}", out.diagnostics);
+        // Text after the last alias counts toward the size bound.
+        let past_bound = format!("\"{{colors.leaf}}{}\"", "x".repeat(1 << 20));
+        let out = run(&[link(0, &past_bound), ("colors.leaf".to_string(), "a".to_string())]);
+        assert!(!out.css.contains("color:"), "the declaration is dropped");
+        assert_eq!(codes(&out), [TOKEN_ALIAS_TOO_LARGE], "{:?}", out.diagnostics);
     }
 
     fn assert_uncertain_identity_widens_and_retains(out: &CssOutput) {
