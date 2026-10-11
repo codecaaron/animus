@@ -183,6 +183,42 @@ pub struct AnalysisContext {
     /// analysis never reads, spec §2.2 A8): each is an opening of this
     /// analysis, as one of its own probes is.
     pub openings: Vec<IngestionOpening>,
+    /// What the host's bundler expands each computed load to (spec §6.3),
+    /// by importer and the load's byte offset.
+    pub expansions: Vec<HostExpansion>,
+}
+
+/// One computed load's expansion under the host's own semantics: every
+/// file it may load, with how the analysis reads each, and whether the
+/// host could list them all.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HostExpansion {
+    /// The importing module, as the analysis keys it.
+    pub importer: String,
+    /// The load's byte offset in the importer.
+    pub start: u32,
+    /// Whether `files` is every file the load may load.
+    pub closed: bool,
+    pub files: Vec<ExpandedFile>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct ExpandedFile {
+    pub path: String,
+    pub status: ExpandedStatus,
+}
+
+/// How the analysis reads a file an expansion may load.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ExpandedStatus {
+    /// A module the analysis holds.
+    Analysed,
+    /// A file the host loads as an opaque value (spec §2.2 A8).
+    Opaque,
+    /// A file the analysis does not read.
+    Unanalysed,
 }
 
 /// Why ingestion ended a probe Incomplete.
@@ -3070,6 +3106,50 @@ fn member_path_ids(
 /// How many modules one load may reach before it counts as reaching any
 /// (spec §6.3, the load-set bound).
 pub(crate) const LOAD_SET_LIMIT: usize = 64;
+
+/// What one runtime load may load, as Flow reads it.
+pub(crate) enum LoadReach<'f> {
+    /// These analysed modules, and nothing else.
+    Modules(Vec<&'f String>),
+    /// Any module, said as a clause.
+    Any(String),
+}
+
+/// What `load`, in `file`, may load. A literal names its module. A
+/// computed load (a template with substitutions, a context, a glob, any
+/// other expression) reaches its host expansion where the host listed it
+/// closed with every file analysed or opaque, up to the bound; otherwise
+/// it may load any module.
+pub(crate) fn load_reach<'f, T>(
+    file: &str,
+    load: &crate::loads::ModuleLoad,
+    files: &'f BTreeMap<String, T>,
+    inputs: &CssInputs,
+) -> LoadReach<'f> {
+    if let crate::loads::LoadTarget::Specifier(_) = load.target {
+        return LoadReach::Modules(loaded_modules(file, load, files, inputs));
+    }
+    let expansion = inputs
+        .analysis_context
+        .expansions
+        .iter()
+        .find(|expansion| expansion.importer == file && expansion.start == load.start);
+    let Some(expansion) = expansion.filter(|expansion| expansion.closed) else {
+        return LoadReach::Any("which may load any module, and the host lists no closed expansion of it".to_string());
+    };
+    let mut modules = Vec::new();
+    for expanded in &expansion.files {
+        match (expanded.status, files.get_key_value(&expanded.path)) {
+            (ExpandedStatus::Opaque, _) => {}
+            (ExpandedStatus::Analysed, Some((key, _))) => modules.push(key),
+            _ => return LoadReach::Any(format!("which may load {}, a module the analysis does not read", expanded.path)),
+        }
+    }
+    if modules.len() > LOAD_SET_LIMIT {
+        return LoadReach::Any(format!("which may load any of {} modules", modules.len()));
+    }
+    LoadReach::Modules(modules)
+}
 
 pub(crate) fn loaded_modules<'f, T>(
     file: &str,
@@ -13577,26 +13657,60 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         }
     }
 
-    /// A computed load reaches each module its expansion may load, up to the
-    /// bound (spec §6.3, 64 modules); past it, it may load any module, so
-    /// every member table is unproven.
+    /// A computed load (a template with substitutions, a computed
+    /// `require`, a context, a glob) reaches only what the host's bundler
+    /// expands it to, and only where the host lists that expansion closed
+    /// with every file analysed or opaque, up to the bound (spec §6.3, 64
+    /// modules). Otherwise it may load any module, an excluded one
+    /// included, so every member table is unproven. A glob of several
+    /// patterns is one call.
     #[test]
-    fn a_load_past_the_bound_reaches_any_exported_object() {
+    fn a_computed_load_reaches_only_a_closed_host_expansion() {
         let recipe = "export const Box = ds.styles({}).system({ space: true }).asElement('div');\n";
         let fam = "import { Box } from './recipe';\nexport const Fam = { Box };\n";
         let app = "import { Fam } from './fam';\nexport const App = () => <Fam.Box marginInlineStart={8} />;\n";
-        let loader = "export const open = (name) => import(`./pages/${name}.js`);\n";
-        for (pages, warns) in [(LOAD_SET_LIMIT, false), (LOAD_SET_LIMIT + 1, true)] {
+        let warned = |loader: &str, pages: usize, expansion: Option<HostExpansion>| -> Vec<String> {
+            let mut inputs = logical_space_inputs();
+            inputs.analysis_context.expansions.extend(expansion);
             let paths: Vec<String> = (0..pages).map(|page| format!("pages/p{page}.js")).collect();
             let mut files = vec![("recipe.tsx", recipe), ("fam.tsx", fam), ("app.tsx", app), ("loader.ts", loader)];
             files.extend(paths.iter().map(|path| (path.as_str(), "export const page = 1;\n")));
-            let out = analyze_with_logical_space(&files);
-            let warned = unattributed(&out);
-            assert_eq!(warned.len(), usize::from(warns), "{pages} pages: {:?}", out.diagnostics);
-            if warns {
-                assert!(warned[0].message.contains(&format!("which may load any of {pages} modules")), "{:?}", warned[0].message);
-            }
+            unattributed(&analyze(&files, &inputs)).iter().map(|d| d.message.clone()).collect()
+        };
+        // Without the host's expansion, any computed load may load any module.
+        for loader in [
+            "export const open = (name) => import(`./excluded/${name}.js`);\n",
+            "export const open = (name) => require('./excluded/' + name);\n",
+            "export const pages = require.context('./excluded', true, /\\.js$/);\n",
+            "export const pages = import.meta.glob(['./excluded/*.js', './other/*.js']);\n",
+        ] {
+            let warned = warned(loader, 0, None);
+            assert!(
+                warned.len() == 1 && warned[0].contains("the host lists no closed expansion"),
+                "{loader}: {warned:?}"
+            );
         }
+        // With it, the load reaches what the host lists.
+        let loader = "export const open = (name) => import(`./pages/${name}.js`);\n";
+        let start = loader.find("import(").unwrap() as u32;
+        let listed = |closed: bool, analysed: usize, more: &[(&str, ExpandedStatus)]| HostExpansion {
+            importer: "loader.ts".to_string(),
+            start,
+            closed,
+            files: (0..analysed)
+                .map(|page| ExpandedFile { path: format!("pages/p{page}.js"), status: ExpandedStatus::Analysed })
+                .chain(more.iter().map(|(path, status)| ExpandedFile { path: path.to_string(), status: *status }))
+                .collect(),
+        };
+        let any = |clause: &str, rows: Vec<String>| rows.len() == 1 && rows[0].contains(clause);
+        let not_closed = warned(loader, 3, Some(listed(false, 3, &[])));
+        assert!(any("the host lists no closed expansion", not_closed.clone()), "{not_closed:?}");
+        assert_eq!(warned(loader, LOAD_SET_LIMIT, Some(listed(true, LOAD_SET_LIMIT, &[]))), Vec::<String>::new());
+        let past = warned(loader, LOAD_SET_LIMIT + 1, Some(listed(true, LOAD_SET_LIMIT + 1, &[])));
+        assert!(any("which may load any of 65 modules", past.clone()), "{past:?}");
+        let excluded = warned(loader, 3, Some(listed(true, 3, &[("pages/p3.test.js", ExpandedStatus::Unanalysed)])));
+        assert!(any("which may load pages/p3.test.js, a module the analysis does not read", excluded.clone()), "{excluded:?}");
+        assert_eq!(warned(loader, 3, Some(listed(true, 3, &[("pages/data.json", ExpandedStatus::Opaque)]))), Vec::<String>::new());
     }
 
     /// Code a module runs from a string can `import()` any module and

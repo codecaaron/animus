@@ -10,7 +10,7 @@ use std::rc::Rc;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::analyze_css::{
-    declared_export, loaded_modules, namespace_path_module, resolve_declaration, resolve_import_source, CssInputs,
+    declared_export, namespace_path_module, resolve_declaration, resolve_import_source, CssInputs,
 };
 use crate::facts::{FacadeEntry, FileFacts};
 use crate::loads::LoadTarget;
@@ -789,7 +789,12 @@ impl<'f> ObjectMembers<'f> {
                     flow.open(unread.reason(), Region::of(RegionAtom::AllExports), reason);
                 }
             }
+            // A glob of several patterns is one call: judged once.
+            let mut calls = std::collections::BTreeSet::new();
             for load in &ff.module_loads {
+                if !calls.insert(load.start) && !matches!(load.target, LoadTarget::Specifier(_)) {
+                    continue;
+                }
                 if let LoadTarget::Specifier(spec) = &load.target {
                     if let Some(unread) = crate::link::unread_source(module, spec, files, inputs) {
                         let reason =
@@ -797,19 +802,14 @@ impl<'f> ObjectMembers<'f> {
                         flow.open(unread.reason(), Region::of(RegionAtom::AllExports), reason);
                     }
                 }
-                let targets = loaded_modules(module, load, files, inputs);
-                // A load that may reach more modules than the bound may
-                // reach any.
-                if targets.len() > crate::analyze_css::LOAD_SET_LIMIT {
-                    let reason = format!(
-                        "{module} loads {} at runtime on line {}, which may load any of {} modules",
-                        load.call,
-                        load.line,
-                        targets.len()
-                    );
-                    flow.open(ReasonId::UnexpandedHostLoad, Region::of(RegionAtom::AllExports), reason);
-                    continue;
-                }
+                let targets = match crate::analyze_css::load_reach(module, load, files, inputs) {
+                    crate::analyze_css::LoadReach::Modules(targets) => targets,
+                    crate::analyze_css::LoadReach::Any(why) => {
+                        let reason = format!("{module} loads {} at runtime on line {}, {why}", load.call, load.line);
+                        flow.open(ReasonId::UnexpandedHostLoad, Region::of(RegionAtom::AllExports), reason);
+                        continue;
+                    }
+                };
                 for target in targets {
                     let reason = format!("{module} loads {target} at runtime on line {}", load.line);
                     self.namespace_reach(target).record(&mut flow, Vec::new(), &reason);

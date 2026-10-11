@@ -71,6 +71,7 @@ impl Load {
             dynamic_import,
             line: source[..start].matches('\n').count() + 1,
             call: source[start..end].split_whitespace().collect::<Vec<_>>().join(" "),
+            start: self.span.start,
         }
     }
 
@@ -201,6 +202,9 @@ pub struct ModuleLoad {
     /// components.
     pub line: usize,
     pub call: String,
+    /// The call's byte offset in its file, which a host expansion record
+    /// names it by.
+    pub start: u32,
 }
 
 /// What a module load names.

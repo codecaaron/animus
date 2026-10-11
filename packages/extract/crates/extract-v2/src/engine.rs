@@ -673,7 +673,12 @@ fn unstable_style_statics(
         // A runtime load hands on every module it may load: the one a
         // literal names, or each one a template, a context or a glob may
         // reach, up to the bound.
+        // A glob of several patterns is one call: judged once.
+        let mut calls = std::collections::BTreeSet::new();
         for load in &module.loads {
+            if !calls.insert(load.start) && !matches!(load.target, crate::loads::LoadTarget::Specifier(_)) {
+                continue;
+            }
             if let crate::loads::LoadTarget::Specifier(spec) = &load.target {
                 if let Some(unread) = crate::link::unread_source(file, spec, files, inputs) {
                     let reason = format!("{file} hands on {spec} at runtime, and {}", unread.clause());
@@ -681,17 +686,14 @@ fn unstable_style_statics(
                     continue;
                 }
             }
-            let targets = analyze_css::loaded_modules(file, load, files, inputs);
-            if targets.len() > analyze_css::LOAD_SET_LIMIT {
-                let reason = format!(
-                    "{file} loads {} at runtime on line {}, which may load any of {} modules",
-                    load.call,
-                    load.line,
-                    targets.len()
-                );
-                flow.open(ReasonId::UnexpandedHostLoad, Region::of(RegionAtom::AllExports), reason);
-                continue;
-            }
+            let targets = match analyze_css::load_reach(file, load, files, inputs) {
+                analyze_css::LoadReach::Modules(targets) => targets,
+                analyze_css::LoadReach::Any(why) => {
+                    let reason = format!("{file} loads {} at runtime on line {}, {why}", load.call, load.line);
+                    flow.open(ReasonId::UnexpandedHostLoad, Region::of(RegionAtom::AllExports), reason);
+                    continue;
+                }
+            };
             for target in targets {
                 hand_on(&mut flow, target, &format!("{file} hands on {target} at runtime"));
             }
