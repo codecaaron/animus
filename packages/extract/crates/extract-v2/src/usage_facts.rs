@@ -2953,6 +2953,10 @@ pub struct SpreadWrapper {
     pub forwarding: Vec<Forwarding>,
     /// Attributes of those elements that pass a named prop on.
     pub passed: Vec<PassThrough>,
+    /// Forwarding elements whose spread may carry nothing (`const rest =
+    /// visible ? props : {}`): each also renders its target with only its
+    /// own attributes.
+    pub may_omit: Vec<(u32, u32)>,
     /// How many `.asComponent(W)` calls hand it to a component, which then
     /// renders it with the props its own renders forward.
     pub targeted: usize,
@@ -3165,6 +3169,9 @@ fn spread_wrappers(
         targeted: FxHashMap::default(),
         held: FxHashMap::default(),
         handed_on: FxHashMap::default(),
+        aliases: FxHashMap::default(),
+        may_omit: FxHashMap::default(),
+        referenced: FxHashSet::default(),
         ancestors: Vec::new(),
     };
     for (index, candidate) in candidates.iter().enumerate() {
@@ -3213,6 +3220,7 @@ fn spread_wrappers(
                     targeted: scan.targeted.get(&index).copied().unwrap_or_default(),
                     held: scan.held.get(&index).copied().unwrap_or_default(),
                     handed_on: scan.handed_on.remove(&index).unwrap_or_default(),
+                    may_omit: scan.may_omit.remove(&index).unwrap_or_default(),
                 },
             ))
         })
@@ -3253,7 +3261,89 @@ struct WrapperScan<'a, 's> {
     /// Candidate index → keys of its props read where the value can be
     /// handed on or changed.
     handed_on: FxHashMap<usize, BTreeSet<String>>,
+    /// A `const` the body initializes with the spread parameter or nothing,
+    /// alternative by alternative → candidate index, and whether it may
+    /// hold nothing.
+    aliases: FxHashMap<SymbolId, (usize, bool)>,
+    /// Candidate index → forwarding elements whose spread may carry nothing.
+    may_omit: FxHashMap<usize, Vec<(u32, u32)>>,
+    /// Every symbol a reference read so far reached, so an alias read before
+    /// its declaration is known.
+    referenced: FxHashSet<SymbolId>,
     ancestors: Vec<AstKind<'a>>,
+}
+
+impl WrapperScan<'_, '_> {
+    /// Whether a reference at `span` is spread whole into an element, and
+    /// that element when it is one of candidate `index`'s forwarding
+    /// elements, which is recorded. An element with a second spread, or an
+    /// unnamed tag, forwards to nothing usage tracking follows.
+    fn spread_into(&mut self, span: oxc::span::Span, index: usize) -> Option<Option<(u32, u32)>> {
+        let mut ancestors = self.ancestors.iter().rev();
+        let Some(AstKind::JSXSpreadAttribute(spread)) = ancestors.next() else { return None };
+        if spread.argument.span() != span {
+            return None;
+        }
+        let Some(AstKind::JSXOpeningElement(element)) = ancestors.next() else { return None };
+        let at = (element.span.start, element.span.end);
+        let spreads = element
+            .attributes
+            .iter()
+            .filter(|attr| matches!(attr, JSXAttributeItem::SpreadAttribute(_)))
+            .count();
+        let tag = match &element.name {
+            JSXElementName::IdentifierReference(id) => Some(id.name.to_string()),
+            JSXElementName::MemberExpression(member) => jsx_member_path(member),
+            _ => None,
+        };
+        let (1, Some(tag)) = (spreads, tag) else { return Some(None) };
+        self.forwarding.entry(index).or_default().push((at, tag));
+        Some(Some(at))
+    }
+
+    /// The `const` the spread parameter `props`, read at `span`, initializes
+    /// as one alternative of its value (`const rest = visible ? props :
+    /// {}`), when every alternative is the props or a value that spreads
+    /// nothing, and whether one spreads nothing.
+    fn alias_initialized_by(&self, span: oxc::span::Span, props: SymbolId) -> Option<(SymbolId, bool)> {
+        use oxc::ast::ast::LogicalOperator;
+        let mut current = span;
+        let mut ancestors = self.ancestors.iter().rev();
+        let declarator = loop {
+            match ancestors.next()? {
+                AstKind::ParenthesizedExpression(expr) => current = expr.span,
+                AstKind::TSAsExpression(expr) => current = expr.span,
+                AstKind::TSSatisfiesExpression(expr) => current = expr.span,
+                AstKind::TSNonNullExpression(expr) => current = expr.span,
+                AstKind::TSTypeAssertion(expr) => current = expr.span,
+                AstKind::ConditionalExpression(conditional) if conditional.test.span() != current => {
+                    current = conditional.span;
+                }
+                AstKind::LogicalExpression(logical)
+                    if logical.operator != LogicalOperator::And || logical.left.span() != current =>
+                {
+                    current = logical.span;
+                }
+                AstKind::VariableDeclarator(declarator)
+                    if declarator.init.as_ref().is_some_and(|init| init.span() == current) =>
+                {
+                    break declarator;
+                }
+                _ => return None,
+            }
+        };
+        if current == span {
+            return None;
+        }
+        let Some(AstKind::VariableDeclaration(declaration)) = ancestors.next() else { return None };
+        if declaration.kind != oxc::ast::ast::VariableDeclarationKind::Const {
+            return None;
+        }
+        let oxc::ast::ast::BindingPattern::BindingIdentifier(alias) = &declarator.id else { return None };
+        let mut kinds = Alternatives::default();
+        Props { scoping: self.scoping, symbol: props }.alternatives(declarator.init.as_ref()?, &mut kinds);
+        (kinds.props && !kinds.derived && !kinds.other).then_some((alias.symbol_id.get()?, kinds.omits))
+    }
 }
 
 impl<'a> Visit<'a> for WrapperScan<'a, '_> {
@@ -3353,31 +3443,38 @@ impl<'a> Visit<'a> for WrapperScan<'a, '_> {
             }
             return;
         }
-        let Some(&index) = self.spreads.get(&symbol) else { return };
+        // A type query (`typeof rest`) reads no value at run time.
         if !reference.is_value() {
+            return;
+        }
+        // An alias of the props is only ever spread whole into an element.
+        if let Some(&(index, omits)) = self.aliases.get(&symbol) {
+            match self.spread_into(ident.span, index) {
+                Some(Some(element)) if omits => self.may_omit.entry(index).or_default().push(element),
+                Some(_) => {}
+                None => {
+                    self.invalid.insert(index);
+                }
+            }
+            return;
+        }
+        let Some(&index) = self.spreads.get(&symbol) else {
+            self.referenced.insert(symbol);
+            return;
+        };
+        if let Some((alias, omits)) = self.alias_initialized_by(ident.span, symbol) {
+            // Read or written before here, the alias is not what the spread
+            // carries.
+            if self.referenced.contains(&alias) || self.scoping.symbol_is_mutated(alias) {
+                self.invalid.insert(index);
+            }
+            self.aliases.insert(alias, (index, omits));
             return;
         }
         match ancestors.next() {
             Some(AstKind::JSXSpreadAttribute(spread)) if spread.argument.span() == ident.span => {
-                let Some(AstKind::JSXOpeningElement(element)) = ancestors.next() else {
+                if self.spread_into(ident.span, index).is_none() {
                     self.invalid.insert(index);
-                    return;
-                };
-                let spreads = element
-                    .attributes
-                    .iter()
-                    .filter(|attr| matches!(attr, JSXAttributeItem::SpreadAttribute(_)))
-                    .count();
-                let tag = match &element.name {
-                    JSXElementName::IdentifierReference(id) => Some(id.name.to_string()),
-                    JSXElementName::MemberExpression(member) => jsx_member_path(member),
-                    _ => None,
-                };
-                if let (1, Some(tag)) = (spreads, tag) {
-                    self.forwarding
-                        .entry(index)
-                        .or_default()
-                        .push(((element.span.start, element.span.end), tag));
                 }
             }
             // A read of one member (`props.title`), never written, and never
@@ -5466,6 +5563,9 @@ pub struct WrapperProxies {
     /// Opening-element spans of forwarding elements: their spread carries
     /// exactly the wrapper's renders, so it opens nothing itself.
     pub forwarding: FxHashSet<(u32, u32)>,
+    /// Forwarding elements whose spread may carry nothing: each also renders
+    /// its target with only its own attributes.
+    pub may_omit: FxHashSet<(u32, u32)>,
     /// Opening-element spans of the forwarding elements of a wrapper that
     /// `.asComponent()` takes: their spread carries what the component's
     /// renders forward, which the project proof derives (`Forward`), so it
@@ -5859,10 +5959,13 @@ pub fn filter_usage_scan(
                     }
 
                     // A forwarding element's spread carries exactly the wrapper's
-                    // renders, which are recorded at the render.
+                    // renders, which are recorded at the render; one whose
+                    // spread may carry nothing also renders with only its own
+                    // attributes.
+                    let omitted = proxies.may_omit.contains(span);
                     if let Some(config) = component_configs
                         .get(tag_name)
-                        .filter(|_| !proxies.forwarding.contains(span))
+                        .filter(|_| omitted || !proxies.forwarding.contains(span))
                     {
                         record_unwritten_options(
                             &mut result,
@@ -5870,7 +5973,7 @@ pub fn filter_usage_scan(
                             &binding,
                             config,
                             &written,
-                            spread.is_some(),
+                            spread.is_some() && !omitted,
                         );
                     }
                 }

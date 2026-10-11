@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use crate::identity::LocalId;
 use crate::link::ProjectLinks;
 use crate::{analyze_css, assemble, ast_store, cross_file, emit, facts};
-use animus_system_loader::module_table::{ExportLookup, ModuleIndex, Terminal};
+use animus_system_loader::module_table::{ExportLookup, ImportName, ModuleIndex, Request, Terminal};
 
 const SYSTEM_PROPS_MODULE_ID: &str = "virtual:animus/system-props";
 
@@ -330,6 +330,55 @@ fn import_binding<T>(
     links.declared(&target, imported)
 }
 
+/// The local bindings among a module table answer's terminals.
+fn local_bindings(terminals: Vec<Terminal<LocalId>>) -> impl Iterator<Item = (ModuleIndex, LocalId)> {
+    terminals.into_iter().filter_map(|terminal| match terminal {
+        Terminal::Local { module, binding } => Some((module, binding)),
+        _ => None,
+    })
+}
+
+/// Every analysed binding a route the analysis cannot open may reach: each
+/// one some module's export of the name it was asked for reaches, or, asked
+/// for any name, each one any export reaches.
+fn exposed_bindings(links: &ProjectLinks, name: Option<&str>) -> Vec<(ModuleIndex, LocalId)> {
+    let reached = |module: ModuleIndex, name: &str| {
+        let terminals = match links.table.resolve_export(module, name) {
+            ExportLookup::Resolved(terminal) => vec![terminal],
+            ExportLookup::Incomplete { known, .. } => known,
+            ExportLookup::Absent | ExportLookup::Ambiguous(_) => Vec::new(),
+        };
+        local_bindings(terminals).collect::<Vec<_>>()
+    };
+    (0..links.paths.len())
+        .flat_map(|module| match name {
+            Some(name) => reached(module, name),
+            None => {
+                let names = links.table.exported_names(module).names;
+                names.iter().flat_map(|name| reached(module, name)).collect()
+            }
+        })
+        .collect()
+}
+
+/// Every binding a module table answer may name: the one it resolves to
+/// or, when an open route leaves it incomplete, each binding it already
+/// knows and every binding the open route may reach.
+fn possible_bindings(links: &ProjectLinks, lookup: ExportLookup<LocalId>) -> Vec<(ModuleIndex, LocalId)> {
+    let (terminals, openings) = match lookup {
+        ExportLookup::Resolved(terminal) => (vec![terminal], Vec::new()),
+        ExportLookup::Incomplete { known, openings } => (known, openings),
+        ExportLookup::Absent | ExportLookup::Ambiguous(_) => return Vec::new(),
+    };
+    let mut found: Vec<(ModuleIndex, LocalId)> = local_bindings(terminals).collect();
+    for opening in openings {
+        found.extend(exposed_bindings(links, opening.name.as_deref()));
+    }
+    found.sort();
+    found.dedup();
+    found
+}
+
 /// The modules a file loads at runtime by a literal specifier:
 /// `import('./x')` and `require('./x')`.
 fn literal_module_loads(program: &oxc::ast::ast::Program<'_>) -> Vec<String> {
@@ -367,7 +416,6 @@ type Declared<'d> = dyn Fn(&str, &str) -> Option<(String, String)> + 'd;
 /// One module's inputs to `unstable_style_statics`.
 struct StyleModule {
     facts: crate::usage_facts::StyleObjectFacts,
-    namespace_imports: BTreeMap<String, String>,
     namespace_exports: BTreeMap<String, String>,
     loads: Vec<String>,
 }
@@ -391,6 +439,31 @@ fn unstable_style_statics(
         let path = &links.paths[module];
         (path.clone(), lowered[path].bindings.binding(binding).name.clone())
     };
+    // The declarations a module's binding may name: itself, or each binding
+    // what it imports may be.
+    let possible = |file: &str, name: &str| -> Vec<(String, String)> {
+        let imported = links.module(file).and_then(|module| {
+            let local = lowered[file].bindings.module_binding(name)?;
+            let import = links.table.record(module).imports.iter().find(|import| import.local == local)?;
+            Some(links.table.resolve_request(module, import.request, &import.name))
+        });
+        match imported {
+            Some(lookup) => possible_bindings(links, lookup).into_iter().map(declaration).collect(),
+            None => vec![(file.to_string(), name.to_string())],
+        }
+    };
+    // What a module's namespace import names, by the record's request.
+    let namespace_of = |file: &str, name: &str| -> Option<&Request> {
+        let module = links.module(file)?;
+        let local = lowered[file].bindings.module_binding(name)?;
+        let record = links.table.record(module);
+        let import =
+            record.imports.iter().find(|import| import.local == local && import.name == ImportName::Namespace)?;
+        Some(&record.requests[import.request])
+    };
+    let exported = |target: &str, name: &str| -> Vec<(ModuleIndex, LocalId)> {
+        links.module(target).map(|module| possible_bindings(links, links.table.resolve_export(module, name))).unwrap_or_default()
+    };
     // The declaration a module's binding names: itself, or what it imports.
     let declared = |file: &str, name: &str| -> Option<(String, String)> {
         let (imports, _) = modules.get(file)?;
@@ -401,15 +474,19 @@ fn unstable_style_statics(
             None => Some((file.to_string(), name.to_string())),
         }
     };
+    // Every binding a module's namespace may hold: each export's, and, past
+    // a star the analysis cannot open, every binding it may reach.
     let every_export = |target: &str| -> Vec<(String, String)> {
         let Some(module) = links.module(target) else { return Vec::new() };
-        links
-            .table
-            .exported_names(module)
-            .names
-            .iter()
-            .filter_map(|name| links.declared(target, name).map(declaration))
-            .collect()
+        let names = links.table.exported_names(module);
+        let mut found: Vec<(ModuleIndex, LocalId)> =
+            names.names.iter().flat_map(|name| exported(target, name)).collect();
+        if !names.complete() {
+            found.extend(exposed_bindings(links, None));
+        }
+        found.sort();
+        found.dedup();
+        found.into_iter().map(declaration).collect()
     };
     // Whether the function `function` of `file` only reads the object passed
     // as its parameter `index`, through the read-only callees it passes the
@@ -461,19 +538,20 @@ fn unstable_style_statics(
         // namespace's member, every export of a namespace used whole, or
         // the binding's own.
         let targets_of = |name: &str| -> Vec<(String, String)> {
+            let exposed = |name: Option<&str>| exposed_bindings(links, name).into_iter().map(declaration).collect();
             let targets: Vec<(String, String)> = match name.split_once('.') {
-                Some((namespace, member)) => module
-                    .namespace_imports
-                    .get(namespace)
-                    .and_then(|spec| analyze_css::resolve_import_source(file, spec, files, inputs))
-                    .and_then(|target| links.declared(&target, member).map(declaration))
-                    .into_iter()
-                    .collect(),
-                None => match module.namespace_imports.get(name) {
-                    Some(spec) => analyze_css::resolve_import_source(file, spec, files, inputs)
-                        .map(|target| every_export(&target))
-                        .unwrap_or_default(),
-                    None => declared(file, name).into_iter().collect(),
+                Some((namespace, member)) => match namespace_of(file, namespace) {
+                    Some(Request::Module(target)) => {
+                        exported(&links.paths[*target], member).into_iter().map(declaration).collect()
+                    }
+                    Some(Request::Unresolved(_)) => exposed(Some(member)),
+                    Some(Request::Outside(_)) | None => Vec::new(),
+                },
+                None => match namespace_of(file, name) {
+                    Some(Request::Module(target)) => every_export(&links.paths[*target]),
+                    Some(Request::Unresolved(_)) => exposed(None),
+                    Some(Request::Outside(_)) => Vec::new(),
+                    None => possible(file, name),
                 },
             };
             targets.into_iter().filter(|target| mutable(target)).collect()
@@ -481,13 +559,14 @@ fn unstable_style_statics(
         // A function hands a nested object on to whatever it hands
         // members to, so only an object of primitives passes as a read.
         for handoff in &module.facts.handoffs {
-            let Some(target) = declared(file, &handoff.binding).filter(|target| mutable(target)) else { continue };
-            let read = !nested(&target)
-                && declared(file, &handoff.callee).is_some_and(|(callee_file, callee_name)| {
-                    reads_only(&callee_file, &callee_name, handoff.index, 0, &declared, readings_of)
-                });
-            if !read {
-                unstable.entry(target).or_insert_with(|| said(file, &handoff.binding, &handoff.used));
+            for target in possible(file, &handoff.binding).into_iter().filter(|target| mutable(target)) {
+                let read = !nested(&target)
+                    && declared(file, &handoff.callee).is_some_and(|(callee_file, callee_name)| {
+                        reads_only(&callee_file, &callee_name, handoff.index, 0, &declared, readings_of)
+                    });
+                if !read {
+                    unstable.entry(target).or_insert_with(|| said(file, &handoff.binding, &handoff.used));
+                }
             }
         }
         for (name, used) in &module.facts.uses {
@@ -526,15 +605,14 @@ fn unstable_style_statics(
                 .map(|(stored, container)| (stored, container, "is stored in"))
                 .chain(module.facts.derives.iter().map(|(derived, read)| (derived, read, "reads")));
             for (dependent, on, how) in edges {
-                let (Some(dependent_at), Some(on_at)) = (declared(file, dependent), declared(file, on)) else {
+                let Some(reason) = possible(file, on).iter().find_map(|on_at| unstable.get(on_at)).cloned() else {
                     continue;
                 };
-                if unstable.contains_key(&dependent_at) {
-                    continue;
-                }
-                if let Some(reason) = unstable.get(&on_at).cloned() {
-                    unstable.insert(dependent_at, format!("{dependent} {how} {on}, and {reason}"));
-                    changed = true;
+                for dependent_at in possible(file, dependent) {
+                    if let std::collections::btree_map::Entry::Vacant(entry) = unstable.entry(dependent_at) {
+                        entry.insert(format!("{dependent} {how} {on}, and {reason}"));
+                        changed = true;
+                    }
                 }
             }
         }
@@ -682,15 +760,17 @@ impl ExtractEngine {
         // Each file's Lower output, before anything reads across files.
         let mut lowered_by_file: BTreeMap<String, crate::link::Lowered> =
             store.iter().map(|ast| (ast.path.clone(), crate::link::Lowered::of(ast))).collect();
-        // Static enrichment and mutation targets read explicit exports only,
-        // never through `export *`.
+        let links = ProjectLinks::of_records(&lowered_by_file, |lowered| &lowered.record, &self.opts.css_inputs);
+        // Static reads follow explicit exports only, never `export *`, until
+        // mutation tracking can bound every source a star exposes a binding
+        // to; mutation tracking follows stars.
         let explicit: BTreeMap<String, crate::link::OwnedModuleRecord> = lowered_by_file
             .iter()
             .map(|(path, lowered)| {
                 (path.clone(), crate::link::OwnedModuleRecord { star_exports: Vec::new(), ..lowered.record.clone() })
             })
             .collect();
-        let links = ProjectLinks::of_records(&explicit, |record| record, &self.opts.css_inputs);
+        let read_links = ProjectLinks::of_records(&explicit, |record| record, &self.opts.css_inputs);
         for ast in store.iter() {
             let program = ast.program();
             let statics = if crate::analyze_css::is_external_file(&ast.path, &self.opts.css_inputs.external_dirs) {
@@ -740,7 +820,6 @@ impl ExtractEngine {
                 ast.path.clone(),
                 StyleModule {
                     facts,
-                    namespace_imports,
                     namespace_exports: crate::usage_facts::collect_namespace_exports(module),
                     loads: literal_module_loads(program),
                 },
@@ -833,11 +912,11 @@ impl ExtractEngine {
                 else {
                     continue;
                 };
-                let Some(module) = links.module(&target) else { continue };
-                let (lookup, spelled) = links.table.resolve_export_spelled(module, &imp.imported);
+                let Some(module) = read_links.module(&target) else { continue };
+                let (lookup, spelled) = read_links.table.resolve_export_spelled(module, &imp.imported);
                 match lookup {
                     ExportLookup::Resolved(Terminal::Local { module, binding }) => {
-                        let declaring = &links.paths[module];
+                        let declaring = &read_links.paths[module];
                         let local = &lowered_by_file[declaring].bindings.binding(binding).name;
                         // A relative `asset()` specifier means its own file's
                         // directory, which an importer cannot carry.
@@ -863,7 +942,7 @@ impl ExtractEngine {
                     extra.insert(imp.local.clone(), kf.clone());
                     usage_extra.insert(imp.local.clone(), kf.clone());
                 } else if let Some((at, _)) = spelled.first() {
-                    let declared_in = &links.paths[*at];
+                    let declared_in = &read_links.paths[*at];
                     if crate::analyze_css::is_external_file(declared_in, output_dirs) {
                         compiled_declarations.insert((path.clone(), imp.local.clone()), declared_in.clone());
                     }
@@ -2076,6 +2155,158 @@ export const App = () => <Box tone="red" />;
         assert!(manifest["system_prop_map"]["p"]["24"].is_string());
         assert!(manifest["system_prop_map"]["p"]["32"].is_string());
         assert_eq!(manifest["usageResidue"], serde_json::json!([]));
+    }
+
+    /// A static is never read through `export *`: a read through a star
+    /// stays dynamic. A namespace re-export of a module that stars it in
+    /// still unsettles it for a direct reader.
+    #[test]
+    fn a_star_carries_no_static_read_but_still_unsettles_what_it_brings_in() {
+        let mut engine = ExtractEngine::new(Some(EngineOptions {
+            config_json: Some(r#"{"p":{"property":"padding"}}"#.to_string()),
+            group_registry_json: Some(r#"{"space":["p"]}"#.to_string()),
+            ..Default::default()
+        }))
+        .unwrap();
+        let manifest: serde_json::Value = serde_json::from_str(
+            &engine
+                .analyze(
+                    serde_json::json!([
+                        { "path": "tokens.ts", "source": "export const GAP = 24;\nexport const pad = { margin: 4 };\n" },
+                        { "path": "barrel.ts", "source": "export * from './tokens';\n" },
+                        { "path": "all.ts", "source": "export * as all from './barrel';\n" },
+                        { "path": "a.tsx", "source": "import { GAP } from './barrel';\nimport { pad } from './tokens';\nexport const Box = ds.system({ space: true }).asElement('div');\nexport const Card = ds.styles({ ...pad }).asElement('div');\nexport const App = () => <><Box p={GAP} /><Card /></>;\n" }
+                    ])
+                    .to_string(),
+                )
+                .unwrap(),
+        )
+        .unwrap();
+
+        assert!(manifest["system_prop_map"]["p"]["24"].is_null(), "{manifest}");
+        assert_eq!(manifest["usageResidue"][0]["prop"], "p", "{manifest}");
+        let dropped: Vec<&str> = manifest["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|d| d["component"] == "Card")
+            .filter_map(|d| d["message"].as_str())
+            .collect();
+        assert_eq!(
+            dropped,
+            ["chain dropped: stage 'styles' evaluation failed — styles eval failed: spread of all.ts hands on barrel.ts as the namespace all"],
+            "{manifest}"
+        );
+    }
+
+    /// A mutated object read through a spread is refused, never shipped
+    /// with its declared value, whatever route its mutator imports it by:
+    /// directly, through 31 or 32 re-export hops, through a star cycle, or
+    /// through a star the analysis cannot open (a missing module or a
+    /// package) or from a missing module itself, or as a member of a missing
+    /// module's namespace. A reader through a star is refused whatever the
+    /// mutator does: a load of a module with an open star, a computed
+    /// `import()` or `require()`, a default alias, or a rename behind an
+    /// open star.
+    #[test]
+    fn an_export_target_the_analysis_cannot_close_never_yields_stale_static_css() {
+        let file = |path: &str, source: &str| (path.to_string(), source.to_string());
+        let mutate = |from: &str| file("mutate.ts", &format!("import {{ pad }} from '{from}';\npad.padding = 9;\n"));
+        let hops = |n: usize| -> Vec<(String, String)> {
+            let mut files: Vec<(String, String)> = (0..n)
+                .map(|i| {
+                    let next = if i == n - 1 { "tokens".to_string() } else { format!("b{}", i + 1) };
+                    file(&format!("b{i}.ts"), &format!("export {{ pad }} from './{next}';\n"))
+                })
+                .collect();
+            files.push(mutate("./b0"));
+            files
+        };
+        let open = || file("open.ts", "export * from './tokens';\nexport * from 'some-package';\n");
+        let closed = || file("closed.ts", "export * from './tokens';\n");
+        // Each row: its name, the module the reader imports `pad` from, and
+        // the route's modules.
+        type Row<'r> = (&'r str, &'r str, Vec<(String, String)>);
+        let rows: Vec<Row<'_>> = vec![
+            ("direct", "./tokens", vec![mutate("./tokens")]),
+            ("31 hops", "./tokens", hops(31)),
+            ("32 hops", "./tokens", hops(32)),
+            (
+                "star cycle",
+                "./tokens",
+                vec![
+                    file("a.ts", "export * from './b';\nexport * from './tokens';\n"),
+                    file("b.ts", "export * from './a';\n"),
+                    mutate("./a"),
+                ],
+            ),
+            ("missing module star", "./tokens", vec![file("a.ts", "export * from './external';\n"), mutate("./a")]),
+            ("package star", "./tokens", vec![file("a.ts", "export * from 'some-package';\n"), mutate("./a")]),
+            ("missing module import", "./tokens", vec![mutate("./missing")]),
+            ("read through a closed star", "./closed", vec![closed(), open(), mutate("./open")]),
+            ("import() of an open star", "./closed", vec![closed(), open(), file("mutate.ts", "import('./open');\n")]),
+            ("require() of an open star", "./closed", vec![closed(), open(), file("mutate.ts", "require('./open');\n")]),
+            (
+                "computed import()",
+                "./closed",
+                vec![
+                    closed(),
+                    file("mutate.ts", "const source = './tokens';\nimport(source).then((tokens) => { tokens.pad.padding = 9; });\n"),
+                ],
+            ),
+            (
+                "computed require()",
+                "./closed",
+                vec![closed(), file("mutate.ts", "const source = './tokens';\nrequire(source).pad.padding = 9;\n")],
+            ),
+            (
+                "default alias through a star",
+                "./closed",
+                vec![
+                    closed(),
+                    file("defaults.ts", "import { pad } from './tokens';\nexport default pad;\n"),
+                    file("alias.ts", "export { default as pad } from './defaults';\n"),
+                    file("star.ts", "export * from './alias';\n"),
+                    mutate("./star"),
+                ],
+            ),
+            (
+                "renamed behind an open star",
+                "./closed",
+                vec![closed(), open(), file("mutate.ts", "import { different } from './open';\ndifferent.padding = 9;\n")],
+            ),
+            (
+                "namespace of a missing module",
+                "./tokens",
+                vec![file("mutate.ts", "import * as ns from './missing';\nns.pad.padding = 9;\n")],
+            ),
+        ];
+        let mut stale = Vec::new();
+        for (row, read_from, route) in rows {
+            let mut files = vec![
+                file("tokens.ts", "export const pad = { padding: 4 };\n"),
+                file(
+                    "reader.tsx",
+                    &format!("import './mutate';\nimport {{ pad }} from '{read_from}';\nexport const C = ds.styles({{ ...pad }}).asElement('div');\nexport const App = () => <C />;\n"),
+                ),
+            ];
+            files.extend(route);
+            let entries: Vec<serde_json::Value> =
+                files.iter().map(|(path, source)| serde_json::json!({ "path": path, "source": source })).collect();
+            let mut engine = ExtractEngine::new(None).unwrap();
+            let manifest: serde_json::Value =
+                serde_json::from_str(&engine.analyze(serde_json::Value::Array(entries).to_string()).unwrap()).unwrap();
+            let refused = manifest["diagnostics"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|d| d["component"] == "C" && d["code"] == "animus.chain.unextractable");
+            let code = engine.transform_file("reader.tsx".to_string()).unwrap();
+            if manifest["css"].as_str().unwrap().contains("padding: 4") || !refused || code.contains("createComponent") {
+                stale.push(row);
+            }
+        }
+        assert_eq!(stale, Vec::<&str>::new());
     }
 
     #[test]
