@@ -424,6 +424,10 @@ pub struct ResolveContext<'a> {
     pub dropped_keys: Option<&'a DroppedStyleKeySink>,
     /// The custom properties the theme registers with a numeric syntax.
     pub numeric_properties: Option<&'a FxHashSet<String>>,
+    /// A non-zero authored number takes `px` here: set for global blocks and
+    /// keyframes, whose CSS the pipeline's unit fallback never reads. Unlike
+    /// that fallback, zero and authored strings stay as written.
+    pub numbers_take_px: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -788,17 +792,7 @@ pub fn resolve_styles(
         record_unitless_number(key, value, ctx);
 
         if is_responsive_value(value, ctx.breakpoint_keys) {
-            resolve_responsive_prop(
-                key,
-                value,
-                ctx.config,
-                ctx.theme,
-                ctx.variable_map,
-                ctx.contextual_vars,
-                ctx.transform_evaluator,
-                ctx.transform_failures,
-                &mut result,
-            );
+            resolve_responsive_prop(key, value, ctx, &mut result);
             continue;
         }
 
@@ -899,9 +893,7 @@ fn resolve_block_entries(
         if is_responsive_value(value, ctx.breakpoint_keys) {
             if let Some(vobj) = value.as_object() {
                 for (bp_key, bp_value) in vobj {
-                    let declarations = resolve_single_prop(
-                        key, bp_value, ctx.config, ctx.theme, ctx.variable_map, ctx.contextual_vars, ctx.transform_evaluator, ctx.transform_failures,
-                    );
+                    let declarations = resolve_prop(key, bp_value, ctx);
                     if bp_key == "_" {
                         plain_decls.extend(declarations);
                     } else if !declarations.is_empty() {
@@ -1019,9 +1011,7 @@ fn record_non_block(ctx: &ResolveContext, path: &[String], key: &str, value: &Va
 fn resolve_entry(key: &str, value: &Value, ctx: &ResolveContext) -> Vec<CssDeclaration> {
     let failures = || ctx.transform_failures.map_or(0, |sink| sink.borrow().len());
     let failures_before = failures();
-    let declarations = resolve_single_prop(
-        key, value, ctx.config, ctx.theme, ctx.variable_map, ctx.contextual_vars, ctx.transform_evaluator, ctx.transform_failures,
-    );
+    let declarations = resolve_prop(key, value, ctx);
     if declarations.is_empty() && value.is_object() && failures() == failures_before {
         let key = key.to_string();
         record_dropped_key(
@@ -1131,26 +1121,14 @@ pub(crate) fn is_responsive_value(value: &Value, breakpoint_keys: &FxHashSet<Str
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn resolve_responsive_prop(
-    prop_name: &str,
-    value: &Value,
-    config: &PropConfigMap,
-    theme: &FlatTheme,
-    variable_map: &VariableMap,
-    contextual_vars: &ContextualVarsMap,
-    evaluator: Option<&TransformEvaluator>,
-    failures: Option<&TransformFailureSink>,
-    result: &mut ResolvedStyles,
-) {
+fn resolve_responsive_prop(prop_name: &str, value: &Value, ctx: &ResolveContext, result: &mut ResolvedStyles) {
     let obj = match value.as_object() {
         Some(o) => o,
         None => return,
     };
 
     for (bp_key, bp_value) in obj {
-        let declarations =
-            resolve_single_prop(prop_name, bp_value, config, theme, variable_map, contextual_vars, evaluator, failures);
+        let declarations = resolve_prop(prop_name, bp_value, ctx);
         if bp_key == "_" {
             result.declarations.extend(declarations);
         } else {
@@ -1173,16 +1151,7 @@ fn resolve_flat_styles(obj: &Map<String, Value>, ctx: &ResolveContext, nesting_u
         }
         let failures = || ctx.transform_failures.map_or(0, |sink| sink.borrow().len());
         let failures_before = failures();
-        let resolved = resolve_single_prop(
-            key,
-            value,
-            ctx.config,
-            ctx.theme,
-            ctx.variable_map,
-            ctx.contextual_vars,
-            ctx.transform_evaluator,
-            ctx.transform_failures,
-        );
+        let resolved = resolve_prop(key, value, ctx);
         if let Some(path) = nesting_under {
             record_nesting(ctx, path, key, value, resolved.is_empty() && failures() == failures_before);
         }
@@ -1296,6 +1265,39 @@ fn without_priority(value: &Value, custom_only: bool) -> Cow<'_, Value> {
     let value = with_priority(value, custom_only);
     let bare = split_priority(&value).map(|(bare, _)| bare);
     bare.map_or(value, Cow::Owned)
+}
+
+/// A prop's declarations under `ctx`.
+fn resolve_prop(key: &str, value: &Value, ctx: &ResolveContext) -> Vec<CssDeclaration> {
+    let mut declarations = resolve_single_prop(
+        key,
+        value,
+        ctx.config,
+        ctx.theme,
+        ctx.variable_map,
+        ctx.contextual_vars,
+        ctx.transform_evaluator,
+        ctx.transform_failures,
+    );
+    take_px(value, &mut declarations, ctx);
+    declarations
+}
+
+/// A bare number `authored` resolved to unchanged takes `px` where `ctx`
+/// asks for it, unless its property is unitless or custom; zero stays bare.
+fn take_px(authored: &Value, declarations: &mut [CssDeclaration], ctx: &ResolveContext) {
+    if !ctx.numbers_take_px || !authored.as_f64().is_some_and(|number| number != 0.0 && number.is_finite()) {
+        return;
+    }
+    let Some(bare) = value_to_css_string(authored) else { return };
+    for declaration in declarations {
+        if declaration.value == bare
+            && !declaration.property.starts_with("--")
+            && !crate::css::is_unitless_css_property(&declaration.property)
+        {
+            declaration.value.push_str("px");
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2086,6 +2088,7 @@ pub fn resolve_global_block(
     block: &Value,
     ctx: &ResolveContext,
 ) -> String {
+    let ctx = &ResolveContext { numbers_take_px: true, ..*ctx };
     let selectors = match block.as_object() {
         Some(o) => o,
         None => return String::new(),
@@ -2412,6 +2415,7 @@ fn render_font_faces(faces: &Value, ctx: &ResolveContext) -> String {
 /// so a frame given no block, and a block nested in a frame, are reported
 /// under the block's `@keyframes` selector.
 pub fn resolve_keyframes_block(block: &Value, ctx: &ResolveContext) -> String {
+    let ctx = &ResolveContext { numbers_take_px: true, ..*ctx };
     let obj = match block.as_object() {
         Some(o) => o,
         None => return String::new(),
@@ -2754,6 +2758,7 @@ mod tests {
                 token_misses: None,
                 dropped_keys: None,
                 numeric_properties: None,
+                numbers_take_px: false,
             }
         }
     }
@@ -3435,6 +3440,34 @@ mod tests {
             css.contains("font-family: Inter, sans-serif;"),
             "family token unresolved:\n{css}"
         );
+    }
+
+    #[test]
+    fn bare_numbers_take_px_except_on_unitless_properties_and_font_face_descriptors() {
+        let owner = TestCtxOwner::new();
+        let global = json!({
+            "body": { "padding": 8, "lineHeight": 1.5, "zIndex": 2, "opacity": 0.5, "margin": 0 },
+            "@keyframes grow": { "to": { "top": 10 } },
+            "@font-face": { "fontFamily": "Mona", "src": "local(Arial)", "sizeAdjust": 104 }
+        });
+        let keyframes = json!({ "name": "rise", "frames": { "to": { "height": 4 } } });
+        let css = format!(
+            "{}\n{}",
+            resolve_global_block(&global, &owner.ctx()),
+            resolve_keyframes_block(&keyframes, &owner.ctx())
+        );
+        for declaration in [
+            "padding: 8px;",
+            "line-height: 1.5;",
+            "z-index: 2;",
+            "opacity: 0.5;",
+            "margin: 0;",
+            "top: 10px;",
+            "size-adjust: 104;",
+            "height: 4px;",
+        ] {
+            assert!(css.contains(declaration), "{declaration} missing:\n{css}");
+        }
     }
 
     #[test]
