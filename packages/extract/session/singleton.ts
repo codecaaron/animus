@@ -4,8 +4,12 @@ import { randomUUID } from 'crypto';
  * globalThis-backed so the ESM plugin copy and the CJS webpack-loader copy
  * share one store; module scope alone gives each copy its own instance.
  */
+import { realpathSync } from 'fs';
+import { resolve } from 'path';
+
 import { createV2EngineApi } from '../pipeline/index';
 
+import type { AnimusCoreOptions } from '../pipeline/core-options';
 import type { V2ExtractEngine } from '../pipeline/index';
 
 const MANIFEST_KEY = '__animus_manifest_json__';
@@ -356,3 +360,175 @@ export const SINGLETON_GLOBAL_KEYS = [
   V2_SENT_SOURCES_KEY,
   V2_DRIFT_WARNED_KEY,
 ] as const;
+
+/** The participant protocol a `SessionKey` was made under; a participant
+ *  from a copy speaking another version never joins its session. */
+export const SESSION_PROTOCOL = 1;
+
+/**
+ * One host build of one root. The owning host wrapper creates the build id
+ * and passes the key to every participant and worker, so two concurrent
+ * builds of one root stay distinct.
+ */
+export interface SessionKey {
+  readonly build: string;
+  readonly root: string;
+  readonly protocol: number;
+}
+
+/** A fresh build id, created once by the owning host wrapper. */
+export function createBuildId(): string {
+  return randomUUID();
+}
+
+/** The key of build `build` of `root`, by the root's canonical path. */
+export function sessionKey(build: string, root: string): SessionKey {
+  const absolute = resolve(root);
+  let canonical = absolute;
+  try {
+    canonical = realpathSync(absolute);
+  } catch {
+    // A root that does not exist yet keeps its absolute spelling.
+  }
+  return { build, root: canonical, protocol: SESSION_PROTOCOL };
+}
+
+function sessionKeyId(key: SessionKey): string {
+  return JSON.stringify([key.protocol, key.build, key.root]);
+}
+
+/** A participant joined a session with semantic options that differ from
+ *  those the session was created with. */
+export class SessionConfigurationConflict extends Error {
+  readonly code = 'SessionConfigurationConflict';
+
+  constructor(
+    readonly key: SessionKey,
+    readonly established: string,
+    readonly joining: string,
+    readonly differing: readonly string[]
+  ) {
+    super(
+      `[animus] SessionConfigurationConflict: "${joining}" joined build ` +
+        `${key.build} of ${key.root} with ${differing.join(', ')} differing ` +
+        `from "${established}". Every participant of one build must use the ` +
+        `same Animus options.`
+    );
+    this.name = 'SessionConfigurationConflict';
+  }
+}
+
+/** Options that change no output: a participant may differ in them. */
+const OPERATIONAL_OPTIONS: ReadonlySet<string> = new Set(['verbose', 'root']);
+
+function semanticOptions(options: AnimusCoreOptions): Map<string, string> {
+  const entries = Object.entries(options)
+    .filter(([name, value]) => !OPERATIONAL_OPTIONS.has(name) && value !== undefined)
+    .map(([name, value]): [string, string] => [name, stableJson(value)]);
+  return new Map(entries.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
+}
+
+/** Each function or symbol an option holds, by reference: JSON would drop
+ *  it, so two options differing only in one would compare equal. */
+const functionReferences = new WeakMap<object, number>();
+const symbolReferences = new Map<symbol, number>();
+let nextOptionReference = 0;
+
+function referenceId(value: object | symbol): number {
+  const known = typeof value === 'symbol' ? symbolReferences.get(value) : functionReferences.get(value);
+  if (known !== undefined) return known;
+  const id = nextOptionReference++;
+  if (typeof value === 'symbol') symbolReferences.set(value, id);
+  else functionReferences.set(value, id);
+  return id;
+}
+
+/** An option value as text that is equal exactly when the values are: plain
+ *  data by content with keys sorted, a function by reference (the same
+ *  function object, never equal text), a symbol by its description and
+ *  reference. */
+function stableJson(value: unknown): string {
+  return JSON.stringify(value, (_key, inner: unknown) => {
+    if (typeof inner === 'function') return { function: referenceId(inner) };
+    if (typeof inner === 'symbol') return { symbol: String(inner.description), at: referenceId(inner) };
+    if (typeof inner === 'bigint') return { bigint: inner.toString() };
+    if (inner !== null && typeof inner === 'object' && !Array.isArray(inner)) {
+      return Object.fromEntries(
+        Object.entries(inner).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+      );
+    }
+    return inner;
+  });
+}
+
+/** The mutable state of one session, which every participant shares. */
+export interface SessionState {
+  readonly key: SessionKey;
+  /** The first participant, whose options the session was created with. */
+  readonly established: string;
+  readonly options: ReadonlyMap<string, string>;
+  readonly participants: Set<string>;
+}
+
+const SESSION_REGISTRY = Symbol.for('animus.session-registry.v1');
+
+interface SessionRegistry {
+  readonly sessions: Map<string, SessionState>;
+}
+
+// SAFETY: the symbol is this module's own, and every copy of this module,
+// ESM or CJS, writes it only through this function.
+const registryGlobal = globalThis as typeof globalThis & {
+  [SESSION_REGISTRY]?: SessionRegistry;
+};
+
+function sessionRegistry(): SessionRegistry {
+  return (registryGlobal[SESSION_REGISTRY] ??= { sessions: new Map() });
+}
+
+/**
+ * Joins `participant` to the session of `key`, creating it with `options` on
+ * the first join. A later participant must bring the same semantic options.
+ */
+export function joinSession(
+  key: SessionKey,
+  participant: string,
+  options: AnimusCoreOptions
+): SessionState {
+  const sessions = sessionRegistry().sessions;
+  const id = sessionKeyId(key);
+  const joining = semanticOptions(options);
+  const existing = sessions.get(id);
+  if (existing === undefined) {
+    const state: SessionState = {
+      key,
+      established: participant,
+      options: joining,
+      participants: new Set([participant]),
+    };
+    sessions.set(id, state);
+    return state;
+  }
+  const names = new Set([...existing.options.keys(), ...joining.keys()]);
+  const differing = [...names].filter(
+    (name) => existing.options.get(name) !== joining.get(name)
+  );
+  if (differing.length > 0) {
+    throw new SessionConfigurationConflict(
+      key,
+      existing.established,
+      participant,
+      differing.sort()
+    );
+  }
+  existing.participants.add(participant);
+  return existing;
+}
+
+/** Ends the session of `key`; a later join starts a new one. */
+export function closeSession(key: SessionKey): void {
+  sessionRegistry().sessions.delete(sessionKeyId(key));
+}
+
+/** The registry's global slot, which test harnesses clear. */
+export const SESSION_REGISTRY_KEY = SESSION_REGISTRY;
