@@ -6,22 +6,24 @@ import { ResetCoalescer } from '../src/reset-coalescer';
 
 import type { ErrorPayload } from 'vite';
 
-function harness(run: () => void | Promise<void>, quietMs = 60) {
+function harness(run: () => void | Promise<void>, windowMs = 75) {
   const pending: Array<{ id: number; fn: () => void | Promise<void> }> = [];
   const errors: unknown[] = [];
   let nextId = 1;
   const coalescer = new ResetCoalescer(
     run,
     (err) => errors.push(err),
-    quietMs,
-    (fn) => {
-      const id = nextId++;
-      pending.push({ id, fn });
-      return id;
-    },
-    (id) => {
-      const at = pending.findIndex((t) => t.id === id);
-      if (at !== -1) pending.splice(at, 1);
+    windowMs,
+    {
+      schedule: (fn) => {
+        const id = nextId++;
+        pending.push({ id, fn });
+        return id;
+      },
+      cancel: (id) => {
+        const at = pending.findIndex((t) => t.id === id);
+        if (at !== -1) pending.splice(at, 1);
+      },
     }
   );
   const fire = () => {
@@ -153,7 +155,7 @@ describe('ResetCoalescer', () => {
     expect(runs).toBe(2);
   });
 
-  it('schedules again after a completed quiet cycle', () => {
+  it('schedules again after a completed window', () => {
     let runs = 0;
     const { coalescer, fire } = harness(() => {
       runs++;
