@@ -410,6 +410,10 @@ export class ExtractionSession {
   /** Whether the analysis-inputs hydration corpus is written to disk. Only
    *  isolated loader workers replay it; an in-process loader reads memory. */
   persistAnalysisInputs = false;
+  /** The host substitutes asset() URLs itself (Vite: dev copies, build
+   *  emitFile markers): the published sheets keep their placeholders, and
+   *  the session makes no copy and tracks no asset file. */
+  hostSubstitutesAssets = false;
   /** Whether the session keeps its artifacts on disk: status, commit,
    *  manifest, styles, the epoch witness, asset copies and its directory
    *  claim, with the sibling reconciliation they need. A host that serves
@@ -2847,6 +2851,7 @@ export class ExtractionSession {
     this.assetDependencyPaths.clear();
     this.assetDependencyKeys.clear();
 
+    if (this.hostSubstitutesAssets) return sheets;
     const urlBySpecifier = new Map<string, string>();
     // In memory, until a host supplies an asset URL strategy, each asset is
     // named by its live source path: no copy is made, written or pruned.
