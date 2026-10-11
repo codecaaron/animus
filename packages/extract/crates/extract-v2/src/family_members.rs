@@ -156,6 +156,18 @@ impl FamilyIndex {
     }
 }
 
+/// A namespace import of a module the analysis does not read.
+enum UnreadNamespace {
+    Missing,
+    Package,
+}
+
+/// Whether a use, as the scan says it, writes or deletes a member below the
+/// binding (`has its member Box assigned`).
+fn writes_member(what: &str) -> bool {
+    what.starts_with("has ") && (what.ends_with(" assigned") || what.ends_with(" deleted"))
+}
+
 /// An object whose members a member tag reads.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum Object {
@@ -658,8 +670,14 @@ impl<'f> ObjectMembers<'f> {
                 let reason = format!("{name} {} in {module}{line}", used.what);
                 let held: Vec<Object> = match name.split_once('.') {
                     // A member of a namespace import.
-                    Some((namespace, member)) => {
-                        match ff
+                    // A module the analysis cannot find, or a package, may
+                    // re-export any object under any name: a write through a
+                    // member of its namespace may reach any of them.
+                    Some((namespace, member)) => match self.unread_namespace(module, ff, namespace) {
+                        Some(UnreadNamespace::Missing) => self.every_exported_object(),
+                        Some(UnreadNamespace::Package) if writes_member(&used.what) => self.every_exported_object(),
+                        Some(UnreadNamespace::Package) => Vec::new(),
+                        None => match ff
                             .namespace_imports
                             .get(namespace)
                             .and_then(|spec| resolve_import_source(module, spec, files, inputs))
@@ -668,17 +686,18 @@ impl<'f> ObjectMembers<'f> {
                                 Some(object) => vec![object],
                                 None => self.opened_export(&target, member),
                             },
-                            // A module the analysis cannot find may re-export
-                            // any object under any name.
-                            None if self.missing_namespace(module, ff, namespace) => self.every_exported_object(),
                             None => Vec::new(),
-                        }
-                    }
+                        },
+                    },
                     None => match ff.namespace_imports.get(name) {
-                        Some(spec) => match resolve_import_source(module, spec, files, inputs) {
-                            Some(target) => self.namespace_objects(&target),
-                            None if self.missing_namespace(module, ff, name) => self.every_exported_object(),
-                            None => Vec::new(),
+                        Some(spec) => match self.unread_namespace(module, ff, name) {
+                            // Reading a member a key names reaches none of a
+                            // package's objects.
+                            Some(UnreadNamespace::Package) if ff.namespace_member_reads.contains(name) => Vec::new(),
+                            Some(_) => self.every_exported_object(),
+                            None => resolve_import_source(module, spec, files, inputs)
+                                .map(|target| self.namespace_objects(&target))
+                                .unwrap_or_default(),
                         },
                         None => match self.unresolved_import(module, ff, name) {
                             // An import the analysis cannot follow may be any
@@ -771,17 +790,19 @@ impl<'f> ObjectMembers<'f> {
     }
 
     /// Whether `module` imports `local` as the namespace of a module the
-    /// analysis cannot find (a package is not one).
-    fn missing_namespace(&self, module: &str, ff: &FileFacts, local: &str) -> bool {
-        let (Some(index), Some(binding)) = (self.links.module(module), ff.bindings.module_binding(local)) else {
-            return false;
-        };
+    /// analysis does not read: one it cannot find, or a package.
+    fn unread_namespace(&self, module: &str, ff: &FileFacts, local: &str) -> Option<UnreadNamespace> {
+        let (index, binding) = (self.links.module(module)?, ff.bindings.module_binding(local)?);
         let record = self.links.table.record(index);
-        record.imports.iter().any(|import| {
-            import.local == binding
-                && import.name == ImportName::Namespace
-                && matches!(record.requests[import.request], Request::Unresolved(_))
-        })
+        let import = record
+            .imports
+            .iter()
+            .find(|import| import.local == binding && import.name == ImportName::Namespace)?;
+        match record.requests[import.request] {
+            Request::Unresolved(_) => Some(UnreadNamespace::Missing),
+            Request::Outside(_) => Some(UnreadNamespace::Package),
+            Request::Module(_) => None,
+        }
     }
 
     /// Every object any module exports.

@@ -472,6 +472,11 @@ pub struct FileFacts {
     /// more than read joins `unsafe_object_uses`.
     #[serde(skip)]
     pub(crate) object_handoffs: Vec<crate::usage_facts::Handoff>,
+    /// Namespace imports whose every whole use is a computed member read
+    /// (`icons[name]`) whose value no use writes through, hands on or
+    /// exports: such a read only reads a member.
+    #[serde(skip)]
+    pub(crate) namespace_member_reads: BTreeSet<String>,
     /// How each of the module's functions treats an object passed to it.
     #[serde(skip)]
     pub(crate) param_readings: crate::usage_facts::ParamReadings,
@@ -1512,6 +1517,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
         spread_wrappers,
         unsafe_object_uses,
         object_handoffs,
+        namespace_member_reads,
         ordinary_components,
         context_consts,
         prop_tags,
@@ -1571,6 +1577,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
         facades: const_initializers.facades,
         unsafe_object_uses,
         object_handoffs,
+        namespace_member_reads,
         param_readings,
         member_parent_extensions,
         member_rooted_chains: walked.member_rooted,

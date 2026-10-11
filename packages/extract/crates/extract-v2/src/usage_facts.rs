@@ -823,6 +823,8 @@ pub(crate) struct EnrichedUsage {
     pub unsafe_object_uses: BTreeMap<String, ObjectUse>,
     /// See `FileFacts::object_handoffs`.
     pub object_handoffs: Vec<Handoff>,
+    /// See `FileFacts::namespace_member_reads`.
+    pub namespace_member_reads: BTreeSet<String>,
     /// See `FileFacts::ordinary_components`.
     pub ordinary_components: BTreeSet<String>,
     /// See `FileFacts::context_consts`.
@@ -1036,9 +1038,9 @@ pub(crate) fn collect_enriched_usage(
     }
     // Read through the scopes every module builds, so a module with no
     // import or chain still records what may change its objects.
-    let (unsafe_object_uses, object_handoffs) = match origins {
+    let (unsafe_object_uses, object_handoffs, namespace_member_reads) = match origins {
         Some(scoping) => unsafe_object_uses(program, scoping, &watched, assigned_targets),
-        None => (BTreeMap::new(), Vec::new()),
+        None => (BTreeMap::new(), Vec::new(), BTreeSet::new()),
     };
     let (opaque_calls, opaque_tags, element_consts) =
         origins.map(|scoping| opaque_calls(program, scoping)).unwrap_or_default();
@@ -1053,6 +1055,7 @@ pub(crate) fn collect_enriched_usage(
         spread_wrappers,
         unsafe_object_uses,
         object_handoffs,
+        namespace_member_reads,
         ordinary_components,
         context_consts,
         prop_tags,
@@ -1707,15 +1710,32 @@ fn unsafe_object_uses(
     scoping: &Scoping,
     object_consts: &BTreeMap<&str, bool>,
     assigned_targets: &BTreeSet<&str>,
-) -> (BTreeMap<String, ObjectUse>, Vec<Handoff>) {
+) -> (BTreeMap<String, ObjectUse>, Vec<Handoff>, BTreeSet<String>) {
     let candidates = object_bindings(program, scoping, object_consts, assigned_targets);
     if candidates.is_empty() {
-        return (BTreeMap::new(), Vec::new());
+        return (BTreeMap::new(), Vec::new(), BTreeSet::new());
     }
     if scoping.root_unresolved_references().contains_key("eval") {
         // Direct eval can reach any binding by name.
         let what = ObjectUse { line: None, what: "can be changed by a direct eval".to_string() };
-        return (candidates.into_values().map(|binding| (binding.name, what.clone())).collect(), Vec::new());
+        return (
+            candidates.into_values().map(|binding| (binding.name, what.clone())).collect(),
+            Vec::new(),
+            BTreeSet::new(),
+        );
+    }
+    let mut member_consts = MemberConsts {
+        scoping,
+        namespaces: candidates
+            .iter()
+            .filter(|(_, binding)| binding.namespace)
+            .map(|(symbol, binding)| (*symbol, binding.name.clone()))
+            .collect(),
+        exported: FxHashSet::default(),
+        consts: FxHashMap::default(),
+    };
+    if !member_consts.namespaces.is_empty() {
+        member_consts.visit_program(program);
     }
     let mut scan = ObjectUseScan {
         scoping,
@@ -1732,9 +1752,59 @@ fn unsafe_object_uses(
         derives: Vec::new(),
         handoffs: Vec::new(),
         flat_reads: Vec::new(),
+        member_consts: member_consts.consts,
+        member_reads: BTreeSet::new(),
+        whole_uses: BTreeSet::new(),
     };
     scan.visit_program(program);
-    (scan.uses, scan.handoffs)
+    let member_reads = scan.member_reads.difference(&scan.whole_uses).cloned().collect();
+    (scan.uses, scan.handoffs, member_reads)
+}
+
+/// Each `const` a computed member of a namespace import initializes
+/// (`const Icon = icons[name]`), with the namespace, unless the module
+/// exports it.
+struct MemberConsts<'s> {
+    scoping: &'s Scoping,
+    namespaces: FxHashMap<SymbolId, String>,
+    exported: FxHashSet<SymbolId>,
+    consts: FxHashMap<SymbolId, String>,
+}
+
+impl<'a> Visit<'a> for MemberConsts<'_> {
+    fn visit_export_named_declaration(&mut self, export: &oxc::ast::ast::ExportNamedDeclaration<'a>) {
+        if let Some(oxc::ast::ast::Declaration::VariableDeclaration(declaration)) = &export.declaration {
+            for declarator in &declaration.declarations {
+                if let oxc::ast::ast::BindingPattern::BindingIdentifier(id) = &declarator.id {
+                    self.exported.extend(id.symbol_id.get());
+                }
+            }
+        }
+        oxc::ast_visit::walk::walk_export_named_declaration(self, export);
+    }
+
+    fn visit_variable_declarator(&mut self, declarator: &oxc::ast::ast::VariableDeclarator<'a>) {
+        use oxc::ast::ast::{BindingPattern, VariableDeclarationKind};
+        if let (VariableDeclarationKind::Const, BindingPattern::BindingIdentifier(id), Some(init)) =
+            (declarator.kind, &declarator.id, &declarator.init)
+        {
+            if let Expression::ComputedMemberExpression(member) = crate::chain_walk::unwrap_type_assertions(init) {
+                if let Expression::Identifier(object) = crate::chain_walk::unwrap_type_assertions(&member.object) {
+                    let namespace = object
+                        .reference_id
+                        .get()
+                        .and_then(|reference| self.scoping.get_reference(reference).symbol_id())
+                        .and_then(|symbol| self.namespaces.get(&symbol));
+                    if let (Some(namespace), Some(symbol)) = (namespace, id.symbol_id.get()) {
+                        if !self.exported.contains(&symbol) {
+                            self.consts.insert(symbol, namespace.clone());
+                        }
+                    }
+                }
+            }
+        }
+        oxc::ast_visit::walk::walk_variable_declarator(self, declarator);
+    }
 }
 
 /// For static style values: each module-scope `const` object in
@@ -1777,6 +1847,9 @@ pub(crate) fn style_object_uses(
         derives: Vec::new(),
         handoffs: Vec::new(),
         flat_reads: Vec::new(),
+        member_consts: FxHashMap::default(),
+        member_reads: BTreeSet::new(),
+        whole_uses: BTreeSet::new(),
     };
     scan.visit_program(program);
     StyleObjectFacts {
@@ -2372,13 +2445,46 @@ struct ObjectUseScan<'a, 's> {
     handoffs: Vec<Handoff>,
     /// See `StyleObjectFacts::flat_reads`.
     flat_reads: Vec<(String, ObjectUse)>,
+    /// See `MemberConsts`; empty in style mode.
+    member_consts: FxHashMap<SymbolId, String>,
+    /// Namespaces with a computed member read whose value no use may write.
+    member_reads: BTreeSet<String>,
+    /// Namespaces with any other whole use.
+    whole_uses: BTreeSet<String>,
 }
 
-impl ObjectUseScan<'_, '_> {
+impl<'a> ObjectUseScan<'a, '_> {
     /// The 1-based line `span` starts on.
     fn line(&self, span: Span) -> usize {
         let start = (span.start as usize).min(self.source.len());
         self.source[..start].matches('\n').count() + 1
+    }
+
+    /// Whether a use may write the member value at `span`, read through a
+    /// computed member of a namespace import or a `const` it initializes:
+    /// writing through it, handing it on or exporting it. Initializing a
+    /// `const` in `member_consts` leaves the answer to that `const`'s uses;
+    /// storing it, passing it as a prop and calling it only read it.
+    fn writes_member_value<'b>(&self, span: Span, ancestors: impl Iterator<Item = &'b AstKind<'a>> + Clone) -> bool
+    where
+        'a: 'b,
+    {
+        let (current, parent) = peel_wrappers(span, &mut ancestors.clone());
+        match parent {
+            Some(AstKind::ExportSpecifier(_) | AstKind::ExportDefaultDeclaration(_)) => return true,
+            Some(AstKind::VariableDeclarator(declarator))
+                if declarator.init.as_ref().map(GetSpan::span) == Some(current)
+                    && matches!(&declarator.id, oxc::ast::ast::BindingPattern::BindingIdentifier(id)
+                        if id.symbol_id.get().is_some_and(|symbol| self.member_consts.contains_key(&symbol))) =>
+            {
+                return false;
+            }
+            _ => {}
+        }
+        object_use(span, ancestors, false, self.global_object, false).is_some_and(|what| {
+            !matches!(what.as_str(), "is called" | "is stored in an object" | "is stored in an array" | "is passed as a prop")
+                && !what.ends_with(" called as a method")
+        })
     }
 }
 
@@ -2396,6 +2502,11 @@ impl<'a> Visit<'a> for ObjectUseScan<'a, '_> {
             return;
         };
         let Some(symbol) = reference.symbol_id() else { return };
+        if let Some(namespace) = self.member_consts.get(&symbol) {
+            if reference.is_value() && self.writes_member_value(ident.span, self.ancestors.iter().rev()) {
+                self.whole_uses.insert(namespace.clone());
+            }
+        }
         let Some(binding) = self.candidates.get(&symbol) else { return };
         if !reference.is_value() {
             return;
@@ -2527,7 +2638,19 @@ impl<'a> Visit<'a> for ObjectUseScan<'a, '_> {
                     let what = object_use(member.span, ancestors, false, self.global_object, false);
                     (key, what)
                 }
-                _ => (binding.name.clone(), Some("is used as a whole namespace".to_string())),
+                // Some member a key names at runtime, which a use may write.
+                Some(AstKind::ComputedMemberExpression(member)) if member.object.span() == span => {
+                    if self.writes_member_value(member.span, ancestors) {
+                        self.whole_uses.insert(binding.name.clone());
+                    } else {
+                        self.member_reads.insert(binding.name.clone());
+                    }
+                    (binding.name.clone(), Some("is used as a whole namespace".to_string()))
+                }
+                _ => {
+                    self.whole_uses.insert(binding.name.clone());
+                    (binding.name.clone(), Some("is used as a whole namespace".to_string()))
+                }
             }
         } else {
             if self.uses.contains_key(&binding.name)
