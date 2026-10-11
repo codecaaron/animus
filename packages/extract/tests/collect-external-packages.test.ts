@@ -831,6 +831,28 @@ describe('collectExternalPackageSources under exact case', () => {
     }
   });
 
+  test("an absolute include's `..` past a link is taken back lexically, as Node reads it", async () => {
+    const root = makeRoot();
+    const pkg = makePackage(join(root, 'packages', 'kit'), {
+      'token.ts': 'export const t = 1;',
+      'other/Token.ts': 'export const t = 2;',
+      'other/sub/x.ts': 'export const x = 1;',
+    });
+    symlinkSync(join(pkg, 'other', 'sub'), join(pkg, 'link'));
+    // Spelled raw: `join` would take the `..` back itself.
+    const specifier = `${pkg}/link/../token.ts`;
+
+    const result = await collect(root, { [specifier]: null });
+
+    // The entry read is the package's own `token.ts`, not the file the link's
+    // parent holds.
+    expect(result.packageMap[specifier]).toBe('packages/kit/token.ts');
+    expect(
+      result.entries.find((entry) => entry.path === 'packages/kit/token.ts')
+        ?.source
+    ).toBe('export const t = 1;');
+  });
+
   test('an entry whose source target is misspelled is analysed from its runtime target', async () => {
     const root = makeRoot();
     const pkg = join(root, 'node_modules', 'kit');

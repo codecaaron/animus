@@ -4,6 +4,7 @@ import {
   extname,
   isAbsolute,
   join,
+  normalize,
   relative,
   resolve,
   sep,
@@ -99,8 +100,13 @@ export function probeAbsolutePathSpecifier(
   extensionsSet?: ReadonlySet<string>,
   within?: string
 ): ProbedFile {
+  // `..` is taken back lexically first, as Node resolves a specifier, so
+  // the path a probe returns is the path it checked.
   return probeOnDisk(
-    policyCandidates(absSpecifier, { sources: extensionsSet, index: join }),
+    policyCandidates(normalize(absSpecifier), {
+      sources: extensionsSet,
+      index: join,
+    }),
     within
   );
 }
@@ -648,16 +654,20 @@ export async function collectExternalPackageSources(opts: {
     // case-insensitive filesystem opens a file that differs only in case.
     // Node's resolver refuses extensionless TS paths, so one it declines is
     // found here too.
+    // The path used is the path checked: a host's answer with `..` taken
+    // back lexically, as Node reads it, or the probe's own.
     let caseMismatch: string | undefined;
     if (isAbsolute(specifier)) {
-      const probed = probeAbsolutePathSpecifier(
-        specifier,
-        extensionsSet,
-        rootDir
-      );
-      if (probed.kind === 'found') absEntry ??= probed.path;
+      const hosted = absEntry === null ? null : normalize(absEntry);
+      const seen = hosted === null ? null : seeOnDisk(hosted, rootDir);
+      const probed: ProbedFile =
+        hosted === null || seen === null
+          ? probeAbsolutePathSpecifier(specifier, extensionsSet, rootDir)
+          : seen.kind === 'case-only'
+            ? { kind: 'case-mismatch', candidate: hosted, actual: seen.actual }
+            : { kind: 'found', path: hosted };
+      absEntry = probed.kind === 'found' ? probed.path : null;
       if (probed.kind === 'case-mismatch') {
-        absEntry = null;
         caseMismatch = caseMismatchReason(
           `'${specifier}'`,
           probed,
