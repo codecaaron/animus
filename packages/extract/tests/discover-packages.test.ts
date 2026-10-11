@@ -935,21 +935,9 @@ test('an imported kit the system does not include is an error', () => {
   pkg('@acme/stray', source);
   const imports = ['@acme/included', '@acme/legacy', '@acme/stray', 'react'];
   const engine = {
-    // The stand-in table: a kit's manifest declares `animus`.
-    resolveKitSourceRoot: (
-      _specifier: string,
-      _fromDir: string,
-      _conditions?: readonly string[],
-      _workspaces?: Record<string, string>,
-      _policyJson?: string,
-      _hostEntry?: string,
-      packageDir?: string
-    ) =>
-      readFileSync(join(packageDir ?? '', 'package.json'), 'utf-8').includes(
-        '"animus"'
-      )
-        ? JSON.stringify({ rule: 'animus', entries: [], invalid: [] })
-        : JSON.stringify({ unresolved: 'no kit' }),
+    // The stand-in table: a kit declares `animus` in its `exports`.
+    declaresKitSource: (dir: string) =>
+      readFileSync(join(dir, 'package.json'), 'utf-8').includes('"animus"'),
     extractFacts: () =>
       JSON.stringify({
         parseCount: 1,

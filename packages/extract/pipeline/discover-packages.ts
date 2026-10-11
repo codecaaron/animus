@@ -18,10 +18,6 @@ import {
   probeOnDisk,
   seeOnDisk,
 } from './extension-policy';
-import {
-  BUILT_IN_EXTENSION_POLICY,
-  extensionPolicyJson,
-} from './host-extensions';
 import { parseInternalWire } from './internal-wire';
 import { readKitDescriptor } from './kit-descriptor';
 import {
@@ -968,25 +964,18 @@ function dependencyNames(
 }
 
 /** Whether the package at `pkgRoot` declares the kit source condition, as
- *  the system loader's table reads it: an `animus` condition on any entry,
- *  whether or not its target is valid. */
+ *  the system loader's table reads its manifest: an `animus` key anywhere in
+ *  its `exports`, on any entry, subpath or pattern, valid or not. */
 function declaresKitSource(
-  engine: Pick<EngineApi, 'resolveKitSourceRoot'>,
-  rootDir: string,
-  name: string,
+  engine: Pick<EngineApi, 'declaresKitSource'>,
   pkgRoot: string
 ): boolean {
-  const selection = nativeKitSourceRoot(
-    engine,
-    rootDir,
-    [],
-    {},
-    extensionPolicyJson(BUILT_IN_EXTENSION_POLICY)
-  )(name, pkgRoot, null);
-  return (
-    selection !== null &&
-    (selection.rule === 'animus' || selection.invalid.length > 0)
-  );
+  if (engine.declaresKitSource === undefined) {
+    throw new Error(
+      'the native engine does not expose declaresKitSource, which kit discovery needs — rebuild @animus-ui/extract'
+    );
+  }
+  return engine.declaresKitSource(pkgRoot);
 }
 
 /** The source kits the application at `rootDir` declares as dependencies.
@@ -995,7 +984,7 @@ function declaresKitSource(
  *  `transpilePackages`, and Vite's optimizer prebundles it. */
 export function sourceKitDependencies(
   rootDir: string,
-  engine: Pick<EngineApi, 'resolveKitSourceRoot'>
+  engine: Pick<EngineApi, 'declaresKitSource'>
 ): SourceKitDependency[] {
   const declared = dependencyNames(readPackageManifest(rootDir), [
     'dependencies',
@@ -1003,8 +992,7 @@ export function sourceKitDependencies(
   ]);
   return declared.flatMap((name) => {
     const pkgRoot = locatePackageRoot(name, rootDir);
-    if (pkgRoot === null || !declaresKitSource(engine, rootDir, name, pkgRoot))
-      return [];
+    if (pkgRoot === null || !declaresKitSource(engine, pkgRoot)) return [];
     return [
       {
         name,
@@ -1035,7 +1023,7 @@ function isPackageSpecifier(specifier: string): boolean {
  */
 export function importedKitDiagnostics(
   files: ReadonlyArray<{ path: string; source: string }>,
-  engine: Pick<EngineApi, 'extractFacts' | 'resolveKitSourceRoot'>,
+  engine: Pick<EngineApi, 'extractFacts' | 'declaresKitSource'>,
   rootDir: string,
   systemKits: readonly string[]
 ): ManifestDiagnostic[] {
@@ -1073,7 +1061,7 @@ export function importedKitDiagnostics(
       if (seen.has(name)) continue;
       seen.add(name);
       const pkgRoot = locatePackageRoot(name, dirname(resolve(rootDir, path)));
-      if (pkgRoot && declaresKitSource(engine, rootDir, name, pkgRoot)) {
+      if (pkgRoot && declaresKitSource(engine, pkgRoot)) {
         diagnostics.push({
           file: path,
           component: name,

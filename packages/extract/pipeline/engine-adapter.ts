@@ -49,6 +49,9 @@ export interface EngineApi {
    *  `animus` targets; or `{ "unresolved": why }` where no host imports the
    *  specifier. `hostEntry` is the file the host resolves; `packageDir` the
    *  package discovery located. */
+  /** Whether the package at `packageDir` declares the kit source condition:
+   *  an `animus` key anywhere in its `exports`, read from the manifest. */
+  declaresKitSource?: (packageDir: string) => boolean;
   resolveKitSourceRoot?: (
     specifier: string,
     fromDir: string,
@@ -186,6 +189,10 @@ export function createV2EngineApi(deps: V2EngineAdapterDeps): () => EngineApi {
                 workspaces,
                 extensionPolicyJson
               ),
+      declaresKitSource:
+        native.declaresKitSource === undefined
+          ? undefined
+          : (packageDir) => native.declaresKitSource(packageDir),
       resolveKitSourceRoot:
         native.resolveKitSourceRoot === undefined
           ? undefined

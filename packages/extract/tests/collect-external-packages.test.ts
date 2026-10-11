@@ -1238,38 +1238,49 @@ test('a wildcard entry is read through its animus target', async () => {
   }).toEqual({ discovery: 'src/entries/foo.ts', loader: 'src/entries/foo.ts' });
 });
 
-// Contract: a package is a kit when the loader's table reads an `animus`
-// condition on any of its entries, an array-valued one included. The app's
-// declared source kits and the imported-kit check both read it so.
-test('a kit with an array-valued animus condition is a kit to both checks', () => {
+// Contract: a package is a kit when its manifest declares an `animus`
+// condition anywhere in its `exports` (any entry, subpath or pattern, under
+// any condition, valid or not), as the loader's table reads it. The app's
+// declared source kits and the imported-kit check both read it so, whether
+// or not the package's root entry resolves.
+test.each([
+  ['array', { '.': { animus: ['./src/index.ts'], import: './dist/index.js' } }],
+  [
+    'subpath-only',
+    { './button': { animus: './src/index.ts', import: './dist/index.js' } },
+  ],
+  ['invalid-without-runtime', { '.': { animus: '../outside.ts' } }],
+  [
+    'nested-under-browser',
+    {
+      '.': {
+        browser: { animus: './src/index.ts', default: './dist/index.js' },
+      },
+    },
+  ],
+  ['pattern-only', { './*': { animus: './src/*.ts', import: './dist/*.js' } }],
+])('a %s kit is a kit to both checks', (declaration, exports) => {
+  const name = `${declaration}-kit`;
   const root = realpathSync(makeRoot());
   writeFileSync(
     join(root, 'package.json'),
-    JSON.stringify({ name: 'app', dependencies: { 'array-kit': '1.0.0' } })
+    JSON.stringify({ name: 'app', dependencies: { [name]: '1.0.0' } })
   );
-  const pkg = join(root, 'node_modules', 'array-kit');
+  const pkg = join(root, 'node_modules', name);
   for (const file of ['src/index.ts', 'dist/index.js']) {
     mkdirSync(join(pkg, file, '..'), { recursive: true });
     writeFileSync(join(pkg, file), 'export const t = 1;\n');
   }
-  writeFileSync(
-    join(pkg, 'package.json'),
-    JSON.stringify({
-      name: 'array-kit',
-      exports: {
-        '.': { animus: ['./src/index.ts'], import: './dist/index.js' },
-      },
-    })
-  );
+  writeFileSync(join(pkg, 'package.json'), JSON.stringify({ name, exports }));
   const engine = {
-    resolveKitSourceRoot: native.resolveKitSourceRoot,
+    declaresKitSource: native.declaresKitSource,
     extractFacts: () =>
       JSON.stringify({
         parseCount: 1,
         files: {
           'src/App.tsx': {
             parsePanicked: false,
-            imports: [{ local: 'x', imported: 'x', source: 'array-kit' }],
+            imports: [{ local: 'x', imported: 'x', source: name }],
             exports: [],
           },
         },
@@ -1285,7 +1296,7 @@ test('a kit with an array-valued animus condition is a kit to both checks', () =
       []
     ).map((d) => [d.component, d.code]),
   }).toEqual({
-    declared: ['array-kit'],
-    imported: [['array-kit', KIT_SYSTEM_NOT_INCLUDED]],
+    declared: [name],
+    imported: [[name, KIT_SYSTEM_NOT_INCLUDED]],
   });
 });

@@ -19,7 +19,7 @@ mod linked;
 pub mod module_table;
 pub mod resolution;
 
-pub use kit_source::{resolve_kit_source_root, KitSourceRoot, KitSourceRule};
+pub use kit_source::{declares_kit_source, resolve_kit_source_root, KitSourceRoot, KitSourceRule};
 use serde::{Deserialize, Serialize};
 
 /// Serialized system configuration returned by `load_system_module()`.
