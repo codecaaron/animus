@@ -10917,6 +10917,17 @@ export const App = ({ n }) => <Box bgImage={n} texture={n} />;
                 [("kit.tsx", kit), ("contexts.tsx", contexts), ("barrel.ts", barrel), ("other.ts", other), ("app.tsx", app)];
             assert_eq!(analyze(&files, &test_inputs()).dynamic_props.keys().collect::<Vec<_>>(), ["p"], "{barrel}{other}");
         }
+        // A context's members are not known, so a facade that spreads one
+        // may hold any member: `<Parts.Root>` stays uncertain.
+        let parts = "import { createContext } from 'react';\nexport const Shared = createContext(null);\n\
+                     export const Root = ds.styles({ padding: 4 })\n\
+                       .variant({ prop: 'size', defaultVariant: 'sm', variants: { sm: { margin: 1 }, lg: { margin: 9 } } })\n\
+                       .asElement('div');\n\
+                     export const Parts = { Root, ...Shared };\n";
+        let app = "import { Box } from './kit';\nimport { Parts, Shared } from './parts';\n\
+                   export const App = () => <Shared.Provider value={1}><Parts.Root size='sm' /><Box p={8} /></Shared.Provider>;\n";
+        let files = [("kit.tsx", kit), ("contexts.tsx", contexts), ("parts.tsx", parts), ("app.tsx", app)];
+        assert_eq!(analyze(&files, &test_inputs()).dynamic_props.keys().collect::<Vec<_>>(), ["p"]);
     }
 
     /// A tag whose type a function's own prop chooses (`createElement(as ??

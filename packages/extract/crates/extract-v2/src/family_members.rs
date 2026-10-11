@@ -214,7 +214,7 @@ enum Object {
     /// A facade: (module, binding) of its declaration.
     Facade(String, String),
     /// A context React's `createContext` builds, whose `Provider` a tag
-    /// reads: (module, binding) of its declaration. It has no member table.
+    /// reads: (module, binding) of its declaration. Its member table is open.
     Context(String, String),
 }
 
@@ -567,7 +567,8 @@ impl<'f> ObjectMembers<'f> {
                 self.building.remove(object);
                 table
             }
-            Object::Context(..) => MemberTable::default(),
+            // Nothing proves which members a context holds.
+            Object::Context(..) => MemberTable { open: true, ..MemberTable::default() },
         };
         // What changed the object may also have added members.
         if let Some(reason) = self.instability(object) {
