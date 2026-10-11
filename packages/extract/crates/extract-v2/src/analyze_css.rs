@@ -13748,12 +13748,12 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         assert_eq!(
             listed,
             serde_json::json!([
-                { "start": start("import(/*"), "kind": "import", "args": { "quasis": ["./pages/", ".js"], "comments": ["/* webpackInclude: /\\.js$/ */"] } },
-                { "start": start("(require)"), "kind": "require", "args": { "quasis": ["./data/", ".json"], "comments": [] } },
+                { "start": start("import(/*"), "kind": "import", "args": { "quasis": ["./pages/", ".js"], "template": true, "comments": ["/* webpackInclude: /\\.js$/ */"] } },
+                { "start": start("(require)"), "kind": "require", "args": { "quasis": ["./data/", ".json"], "template": false, "comments": [] } },
                 { "start": start("require['"), "kind": "context", "args": { "dir": "./ctx", "recursive": false, "regExp": { "source": "\\.js$", "flags": "i" }, "include": null, "exclude": null, "mode": null } },
                 { "start": start("import.meta.webpackContext"), "kind": "webpackContext", "args": { "dir": "./wc", "recursive": null, "regExp": { "source": "x", "flags": "" }, "include": null, "exclude": null, "mode": "lazy" } },
                 { "start": start("import.meta.glob(["), "kind": "glob", "args": { "patterns": ["./g/*.js", "!./g/skip.js"], "options": { "query": "?raw", "import": "default" } } },
-                { "start": start("import(s)"), "kind": "import", "args": { "quasis": ["", ""], "comments": [] } },
+                { "start": start("import(s)"), "kind": "import", "args": { "quasis": ["", ""], "template": false, "comments": [] } },
                 // An argument that is not written statically lists no arguments.
                 { "start": start("import.meta.glob('./h"), "kind": "glob", "args": null },
             ])

@@ -194,7 +194,11 @@ impl<'a> Visit<'a> for Calls<'_, 'a> {
             span: import.span,
         });
         self.list(import.span, HostLoadKind::Import, |calls| {
-            Some(HostArgs::Specifier { quasis: quasis_of(&import.source)?, comments: calls.comments_in(import.span) })
+            Some(HostArgs::Specifier {
+                quasis: quasis_of(&import.source)?,
+                template: is_template(&import.source),
+                comments: calls.comments_in(import.span),
+            })
         });
         oxc::ast_visit::walk::walk_import_expression(self, import);
     }
@@ -454,8 +458,9 @@ pub enum HostLoadKind {
 pub enum HostArgs {
     /// `import(…)` or `require(…)`: the specifier's static text between
     /// its substitutions (a template's quasis, or a concatenation's strings;
-    /// one more than the substitutions), and the comments inside the call.
-    Specifier { quasis: Vec<String>, comments: Vec<String> },
+    /// one more than the substitutions), whether it is a template literal
+    /// (some hosts expand only those), and the comments inside the call.
+    Specifier { quasis: Vec<String>, template: bool, comments: Vec<String> },
     /// `require.context(dir, recursive, regExp, mode)`, or
     /// `import.meta.webpackContext(dir, { recursive, regExp, include,
     /// exclude, mode })`; an argument left out is `None`, for the host's
@@ -499,7 +504,8 @@ fn host_args(kind: HostLoadKind, call: &CallExpression<'_>, comments: Vec<String
     let argument = |index: usize| call.arguments.get(index).map(Argument::as_expression);
     match kind {
         HostLoadKind::Import | HostLoadKind::Require => {
-            Some(HostArgs::Specifier { quasis: quasis_of(argument(0)??)?, comments })
+            let specifier = argument(0)??;
+            Some(HostArgs::Specifier { quasis: quasis_of(specifier)?, template: is_template(specifier), comments })
         }
         HostLoadKind::Context => Some(HostArgs::Context {
             dir: literal_text(argument(0)??)?,
@@ -616,6 +622,10 @@ fn quasis_of(expression: &Expression<'_>) -> Option<Vec<String>> {
         }
         _ => Some(vec![String::new(), String::new()]),
     }
+}
+
+fn is_template(expression: &Expression<'_>) -> bool {
+    matches!(expression.get_inner_expression(), Expression::TemplateLiteral(_))
 }
 
 fn is_text(expression: &Expression<'_>) -> bool {
