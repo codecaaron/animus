@@ -5,10 +5,19 @@
 use std::cmp::Ordering;
 
 /// A number as the source wrote it: `1` and `1.0` stay apart, as the CSS
-/// they print does. Ordered by value, then by spelling, so the order agrees
-/// with equality.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// they print does. Ordered by value (`f64::total_cmp`, so `-0.0` sorts
+/// before `0.0`), then by spelling; two numbers are equal only where that
+/// order says so.
+#[derive(Debug, Clone)]
 pub struct StaticNumber(pub serde_json::Number);
+
+impl PartialEq for StaticNumber {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other) == Ordering::Equal
+    }
+}
+
+impl Eq for StaticNumber {}
 
 impl Ord for StaticNumber {
     fn cmp(&self, other: &Self) -> Ordering {
@@ -29,6 +38,9 @@ impl PartialOrd for StaticNumber {
 pub struct Unevaluated {
     pub kind: UnevaluatedKind,
     pub clause: String,
+    /// The object as written, where an authored object spells the marker
+    /// that stands for this node with more than the marker holds.
+    pub written: Option<Vec<(String, StaticValue)>>,
 }
 
 /// Why a node is unevaluated.
@@ -55,8 +67,9 @@ pub enum StaticValue {
     /// A local bound to `@animus-ui/system`'s `asset`: evaluation calls it,
     /// and no read takes it as a value. `in_project` says whether a relative
     /// specifier may evaluate: in a package file it would resolve from the
-    /// wrong origin.
-    AssetFunction { in_project: bool },
+    /// wrong origin. `written` is the object as written, where an authored
+    /// object spells the asset marker with more than the marker holds.
+    AssetFunction { in_project: bool, written: Option<Vec<(String, StaticValue)>> },
     Unevaluated(Unevaluated),
 }
 
@@ -94,6 +107,48 @@ impl StaticValue {
         match self {
             StaticValue::String(text) => Some(text),
             _ => None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Contract: `StaticValue`'s equality agrees with its order, numbers
+    /// included, so a `Known` set of values never holds two that are equal
+    /// or loses one that is not.
+    #[test]
+    fn equality_agrees_with_order() {
+        let numbers: Vec<serde_json::Number> = [
+            serde_json::json!(0),
+            serde_json::json!(-0.0),
+            serde_json::json!(0.0),
+            serde_json::json!(1),
+            serde_json::json!(1.0),
+            serde_json::json!(-1),
+            serde_json::json!(0.1),
+            serde_json::json!(2.5),
+            serde_json::json!(1e300),
+            serde_json::json!(u64::MAX),
+            serde_json::json!(u64::MAX - 1),
+            serde_json::json!(i64::MIN),
+        ]
+        .into_iter()
+        .filter_map(|value| value.as_number().cloned())
+        .collect();
+        let values: Vec<StaticValue> = numbers
+            .iter()
+            .map(|number| StaticValue::Number(StaticNumber(number.clone())))
+            .chain(numbers.iter().map(|number| {
+                StaticValue::Array(vec![StaticValue::Number(StaticNumber(number.clone()))])
+            }))
+            .collect();
+        for a in &values {
+            for b in &values {
+                assert_eq!(a == b, a.cmp(b) == Ordering::Equal, "{a:?} against {b:?}");
+                assert_eq!(a.cmp(b), b.cmp(a).reverse(), "{a:?} against {b:?}");
+            }
         }
     }
 }

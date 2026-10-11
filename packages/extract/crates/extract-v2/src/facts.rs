@@ -1762,6 +1762,50 @@ mod tests {
         assert_eq!(serialized["statics"], serde_json::json!({ "GAP": 16 }));
     }
 
+    /// Contract (until serialized statics read typed values): an authored
+    /// object whose key spells a marker reads as that marker, as main's JSON
+    /// readers took it. A `$animus.lost` key refuses the object through a
+    /// stage, a spread and a member read; an unknown `$animus.asset` scope
+    /// is kept as written.
+    #[test]
+    fn an_authored_marker_key_reads_as_the_marker() {
+        let consts = "const preset = { '$animus.lost': 'authored', padding: 4 };\n\
+            const odd = { '$animus.asset': 'other' };\n\
+            const box = { f: { '$animus.asset': 'other', x: 1 } };\n";
+        let rows: [(&str, &str); 6] = [
+            (
+                "export const A = ds.styles(preset).asElement('div');",
+                r#"{"value": null, "skipped": [], "eval_error": "styles eval failed: authored"}"#,
+            ),
+            (
+                "export const A = ds.styles({ ...preset, color: 'red' }).asElement('div');",
+                r#"{"value": null, "skipped": [], "eval_error": "styles eval failed: spread of authored"}"#,
+            ),
+            (
+                "export const A = ds.styles({ p: preset.padding }).asElement('div');",
+                r#"{"value": {}, "skipped": [["p", "member expression (non-static) — authored"]], "eval_error": null}"#,
+            ),
+            (
+                "export const A = ds.styles({ p: preset['padding'] }).asElement('div');",
+                r#"{"value": {}, "skipped": [["p", "member expression (non-static) — authored"]], "eval_error": null}"#,
+            ),
+            (
+                "export const A = ds.styles({ ...odd, color: 'red' }).asElement('div');",
+                r#"{"value": null, "skipped": [], "eval_error": "styles eval failed: spread element in style object"}"#,
+            ),
+            (
+                "export const A = ds.styles({ ...box }).asElement('div');",
+                r#"{"value": {"f": {"$animus.asset": "other", "x": 1}}, "skipped": [], "eval_error": null}"#,
+            ),
+        ];
+        for (chain, expected) in rows {
+            let facts = facts_for(&format!("{consts}{chain}"));
+            let stage = &facts.chains[0].stages[0];
+            let seen = serde_json::json!({ "value": stage.value, "skipped": stage.skipped, "eval_error": stage.eval_error });
+            assert_eq!(seen, serde_json::from_str::<Value>(expected).unwrap(), "{chain}");
+        }
+    }
+
     #[test]
     fn local_const_ident_aliases_are_captured() {
         let facts = facts_for(
