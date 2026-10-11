@@ -1806,6 +1806,43 @@ mod tests {
         }
     }
 
+    /// Contract: a stage takes an authored marker key that a spread copies
+    /// in, nested, as main did: a `$animus.lost` key is a skip, one with a
+    /// `$animus.capture` key is taken without one. A `.props()` config's
+    /// lost `transform` is removed as JSON's map removed it, the last entry
+    /// taking its place, which the config's class reads.
+    #[test]
+    fn a_stage_takes_copied_marker_keys_as_main_did() {
+        let rows: [(&str, &str); 3] = [
+            (
+                "const nested = { ':hover': { '$animus.lost': 'authored', padding: 4 }, color: 'red' };\n\
+                 export const A = ds.styles({ ...nested }).asElement('div');",
+                r#"{"value": {"color": "red"}, "skipped": [[":hover", "authored"]], "dropped_transforms": []}"#,
+            ),
+            (
+                "const nested = { ':hover': { '$animus.lost': 'authored', '$animus.capture': false, padding: 4 }, color: 'red' };\n\
+                 export const A = ds.styles({ ...nested }).asElement('div');",
+                r#"{"value": {"color": "red"}, "skipped": [], "dropped_transforms": []}"#,
+            ),
+            (
+                "const cfg = { tone: { transform: { '$animus.lost': 'authored' }, property: 'color', scale: 'colors' }, gap: { property: 'gap' } };\n\
+                 export const A = ds.props(cfg).asElement('div');",
+                r#"{"value": {"tone": {"scale": "colors", "property": "color"}, "gap": {"property": "gap"}}, "skipped": [], "dropped_transforms": [["tone", "authored"]]}"#,
+            ),
+        ];
+        for (source, expected) in rows {
+            let facts = facts_for(source);
+            let stage = &facts.chains[0].stages[0];
+            let seen = serde_json::json!({
+                "value": stage.value,
+                "skipped": stage.skipped,
+                "dropped_transforms": stage.dropped_transforms,
+            });
+            // Compared as text, so the order of a config's keys counts.
+            assert_eq!(seen.to_string(), serde_json::from_str::<Value>(expected).unwrap().to_string(), "{source}");
+        }
+    }
+
     #[test]
     fn local_const_ident_aliases_are_captured() {
         let facts = facts_for(

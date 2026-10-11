@@ -1154,7 +1154,9 @@ pub(crate) fn take_unevaluated_custom_props(value: &mut StaticValue) -> LostCust
                 .iter()
                 .position(|(key, value)| key == "transform" && matches!(value, StaticValue::Unevaluated(_)));
             if let Some(at) = transform {
-                if let (_, StaticValue::Unevaluated(unevaluated)) = entries.remove(at) {
+                // Removed as JSON's map removed it, the last entry taking its
+                // place, since the order decides the config's class.
+                if let (_, StaticValue::Unevaluated(unevaluated)) = entries.swap_remove(at) {
                     lost.transforms.push((prop.clone(), unevaluated.clause));
                 }
             }
