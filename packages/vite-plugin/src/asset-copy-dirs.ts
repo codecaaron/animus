@@ -21,8 +21,10 @@ export function processCopyDir(): string {
   return `${process.pid}-${processStartMs}`;
 }
 
-/** When `pid` started, as `ps` reports it; null where it cannot say. */
-function startTimeOf(pid: number): number | null {
+/** When `pid` started, as `ps` reports it: null where `ps` ran and could
+ *  not say, `'unavailable'` where there is no `ps` (Windows). */
+function startTimeOf(pid: number): number | null | 'unavailable' {
+  if (process.platform === 'win32') return 'unavailable';
   try {
     const started = Date.parse(
       execFileSync('ps', ['-o', 'lstart=', '-p', String(pid)], {
@@ -31,7 +33,12 @@ function startTimeOf(pid: number): number | null {
       }).trim()
     );
     return Number.isNaN(started) ? null : started;
-  } catch {
+  } catch (error) {
+    // SAFETY: `error` is execFileSync's throw; only a missing executable's
+    // `ENOENT` code is acted on.
+    if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') {
+      return 'unavailable';
+    }
     return null;
   }
 }
@@ -53,6 +60,9 @@ function ownerLive(copyRoot: string, entry: string): boolean {
   }
   if (ageMs < ABANDONED_AFTER_MS) return true;
   const started = startTimeOf(pid);
+  // Without `ps`, a live pid keeps its directory: a reused pid may then keep
+  // an abandoned one, which beats sweeping a live server's served copies.
+  if (started === 'unavailable') return true;
   return (
     started !== null && Math.abs(started - startMs) <= START_TIME_TOLERANCE_MS
   );
