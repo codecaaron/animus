@@ -913,11 +913,13 @@ pub(crate) fn collect_enriched_usage(
     program: &Program<'_>,
     module: &ModuleRecord<'_>,
     static_values: &FxHashMap<String, StaticValue>,
+    module_path: &str,
     chains: &[&ChainDescriptor],
     exports: &[ExportFact],
     object_consts: &BTreeMap<&str, bool>,
     assigned_targets: &BTreeSet<&str>,
 ) -> EnrichedUsage {
+    let static_values = crate::eval::Statics::of(static_values, module_path);
     let exported: FxHashSet<&str> = exports.iter().filter_map(|e| e.local.as_deref()).collect();
     let candidates: Vec<&str> = chains
         .iter()
@@ -3901,7 +3903,7 @@ fn rendered_in_place<'b, 'a: 'b>(
 
 struct FactCollector<'a, 's> {
     facts: Vec<UsageFact>,
-    static_values: &'s FxHashMap<String, StaticValue>,
+    static_values: crate::eval::Statics<'s>,
     scoping: Option<&'s Scoping>,
     enrich: bool,
     /// What calls React's `createElement` and `cloneElement`.
@@ -4063,7 +4065,7 @@ impl<'a> FactCollector<'a, '_> {
                             if let Some(value) =
                                 without_absent_entries(object, self.static_values, self.scoping, self.origins)
                             {
-                                literal = without_absent_entries(object, &FxHashMap::default(), None, self.origins)
+                                literal = without_absent_entries(object, crate::eval::Statics::empty(), None, self.origins)
                                     .is_some();
                                 static_value = Some(value);
                                 dynamic = false;
@@ -5362,10 +5364,10 @@ impl ReactNames {
 
 /// Collect every candidate tag and createElement call, component-agnostic.
 pub fn collect_usage_facts(program: &Program<'_>) -> Vec<UsageFact> {
-    let static_values: FxHashMap<String, StaticValue> = FxHashMap::default();
+    let static_values = crate::eval::Statics::empty();
     let mut collector = FactCollector {
         facts: Vec::new(),
-        static_values: &static_values,
+        static_values,
         scoping: None,
         enrich: false,
         react: ReactNames::by_name(),
@@ -5383,9 +5385,11 @@ pub fn collect_usage_facts_with_statics(
     program: &Program<'_>,
     module: &ModuleRecord<'_>,
     static_values: &FxHashMap<String, StaticValue>,
+    module_path: &str,
 ) -> Vec<UsageFact> {
     let built = SemanticBuilder::new().build(program).semantic.into_scoping();
-    collect_enriched_usage(built, program, module, static_values, &[], &[], &BTreeMap::new(), &BTreeSet::new()).usage
+    collect_enriched_usage(built, program, module, static_values, module_path, &[], &[], &BTreeMap::new(), &BTreeSet::new())
+        .usage
 }
 
 fn attribute_expression<'a, 'b>(
@@ -5400,7 +5404,7 @@ fn attribute_expression<'a, 'b>(
 
 fn evaluate_with_statics(
     expression: &Expression<'_>,
-    static_values: &FxHashMap<String, StaticValue>,
+    static_values: crate::eval::Statics<'_>,
     scoping: Option<&Scoping>,
 ) -> Option<Value> {
     if let Some(scoping) = scoping {
@@ -5416,12 +5420,12 @@ fn evaluate_with_statics(
     }
     if let Expression::ObjectExpression(object) = expression {
         let (value, skipped, captured) =
-            crate::eval::eval_object_expr_with_statics(object, Some(static_values.into())).ok()?;
+            crate::eval::eval_object_expr_with_statics(object, Some(static_values)).ok()?;
         return (skipped.is_empty() && captured.is_empty()).then(|| crate::eval::plain(&value));
     }
     let mut skipped = Vec::new();
     let value =
-        crate::eval::eval_expression_with_statics(expression, &mut skipped, Some(static_values.into()))
+        crate::eval::eval_expression_with_statics(expression, &mut skipped, Some(static_values))
             .ok()?;
     skipped.is_empty().then(|| crate::eval::plain(&value))
 }
@@ -5501,7 +5505,7 @@ fn write_conditions(expression: &Expression<'_>, origins: Option<&Scoping>) -> O
 /// `origins` tells the global `undefined` from a shadowing binding.
 fn without_absent_entries(
     object: &oxc::ast::ast::ObjectExpression<'_>,
-    static_values: &FxHashMap<String, StaticValue>,
+    static_values: crate::eval::Statics<'_>,
     scoping: Option<&Scoping>,
     origins: Option<&Scoping>,
 ) -> Option<Value> {
@@ -5529,14 +5533,14 @@ fn without_absent_entries(
 /// Static values are keyed by top-level names, so a reference may use one
 /// only when it resolves to that root binding, never to a shadowing local.
 struct StaticReferenceGuard<'s> {
-    static_values: &'s FxHashMap<String, StaticValue>,
+    static_values: crate::eval::Statics<'s>,
     scoping: &'s Scoping,
     resolves_to_root_bindings: bool,
 }
 
 impl<'a> Visit<'a> for StaticReferenceGuard<'_> {
     fn visit_identifier_reference(&mut self, ident: &IdentifierReference<'a>) {
-        if !self.static_values.contains_key(ident.name.as_str()) {
+        if !self.static_values.contains(ident.name.as_str()) {
             return;
         }
         let root_symbol = self.scoping.get_root_binding(ident.name);
@@ -5556,7 +5560,7 @@ impl<'a> Visit<'a> for StaticReferenceGuard<'_> {
 /// keeps its breakpoint, as a runtime entry's lookup spells it.
 fn important_literals(
     expression: &Expression<'_>,
-    static_values: &FxHashMap<String, StaticValue>,
+    static_values: crate::eval::Statics<'_>,
     scoping: Option<&Scoping>,
     literals: &mut Vec<Value>,
 ) {
@@ -6412,8 +6416,8 @@ mod tests {
     fn enriched_result(source: &str) -> UsageScanResult {
         let ast = parse(source);
         let program = ast.program();
-        let statics = crate::eval::collect_complete_static_values(program);
-        let facts = collect_usage_facts_with_statics(program, ast.module_record(), &statics);
+        let statics = crate::eval::collect_complete_static_values(program, "test.tsx");
+        let facts = collect_usage_facts_with_statics(program, ast.module_record(), &statics, "test.tsx");
         filter_usage_scan(
             &facts,
             &props(&[("Box", &["p", "display", "mt"])]),
@@ -6690,9 +6694,9 @@ mod tests {
     fn create_element_lowercase_identifier_is_uncertain_in_raw_and_enriched_facts() {
         let source = "const App = () => createElement(component, null);";
         let ast = parse(source);
-        let statics = crate::eval::collect_complete_static_values(ast.program());
+        let statics = crate::eval::collect_complete_static_values(ast.program(), "test.tsx");
         let raw = collect_usage_facts(ast.program());
-        let enriched = collect_usage_facts_with_statics(ast.program(), ast.module_record(), &statics);
+        let enriched = collect_usage_facts_with_statics(ast.program(), ast.module_record(), &statics, "test.tsx");
 
         for (label, facts) in [("raw", raw), ("enriched", enriched)] {
             let filtered = filter_usage_scan(

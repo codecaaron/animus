@@ -59,6 +59,9 @@ pub enum ReasonId {
     /// What Lower's evaluation could not settle in a static value: a
     /// computed key, a call or spread in a const, a captured `transform`.
     Unevaluated(crate::static_value::UnevaluatedKind),
+    /// A change Flow saw: a write, a write under an unknown key, an escape
+    /// or a rebind of the object at a path.
+    Changed(ChangeKind),
 }
 
 /// One part of what an opening may reach.
@@ -172,7 +175,7 @@ pub enum Known<T: Ord> {
 }
 
 /// How a change touches an object at its path.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum ChangeKind {
     /// A write, delete or `defineProperty` of the member at the path.
     Write,
@@ -238,6 +241,18 @@ pub enum Exposure<'e> {
 }
 
 impl Exposure<'_> {
+    /// What the exposure makes uncertain (spec §6.2 F1a): an opening's
+    /// reason and region, or a seen change at its object's path.
+    pub fn uncertainty(&self) -> Uncertainty {
+        match self {
+            Exposure::Opened(opening) => Uncertainty::new(opening.reason, opening.exposure.clone()),
+            Exposure::Changed(change) => Uncertainty::new(
+                ReasonId::Changed(change.kind),
+                Region::of(RegionAtom::Path(change.object.clone(), change.path.clone())),
+            ),
+        }
+    }
+
     /// The clause that says what may reach the subject.
     pub fn cause(&self) -> &str {
         match self {
@@ -499,6 +514,34 @@ mod tests {
             inputs.push(Uncertainty::new(reason, Region::top()));
         }
         inputs
+    }
+
+    /// Contract (spec §6.2 F1a): what an exposure makes uncertain. A seen
+    /// change is `Changed(kind)` at its object's path; an opening keeps its
+    /// own reason and region.
+    #[test]
+    fn an_exposure_is_uncertain_as_its_change_or_opening() {
+        let o = ObjectId::new("m.ts", "preset");
+        let mut flow = FlowBuilder::new();
+        flow.export(o.clone(), "m.ts", "preset");
+        flow.change(o.clone(), vec!["a".to_string()], ChangeKind::Write, "preset.a is written".to_string());
+        flow.open(ReasonId::DynamicCode, Region::of(RegionAtom::AllExports), "m.ts runs code".to_string());
+        let effects = flow.close();
+        let Coverage::Exposed(exposures) = effects.covers(&AbsenceQuery::Stable(o.clone(), Vec::new())) else {
+            panic!("a written object is exposed");
+        };
+        let uncertainties: Vec<Uncertainty> = exposures.iter().map(Exposure::uncertainty).collect();
+
+        assert_eq!(
+            uncertainties,
+            [
+                Uncertainty::new(
+                    ReasonId::Changed(ChangeKind::Write),
+                    Region::of(RegionAtom::Path(o, vec!["a".to_string()])),
+                ),
+                Uncertainty::new(ReasonId::DynamicCode, Region::of(RegionAtom::AllExports)),
+            ]
+        );
     }
 
     /// A slot is exposed only by what can rebind it: a write of it or of a

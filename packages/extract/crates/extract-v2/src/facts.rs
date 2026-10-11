@@ -11,6 +11,7 @@ use serde_json::Value;
 
 use crate::chain_walk::{self, ChainDescriptor};
 use crate::eval;
+use crate::flow::Known;
 use crate::static_value::StaticValue;
 use crate::jsx_scan::{scan_compose_calls, ComposeFamilyInfo};
 use crate::owned_ast::OwnedAst;
@@ -1222,8 +1223,8 @@ pub fn extract_file_facts_enriched_with_usage_statics(
     extra_usage_statics: &rustc_hash::FxHashMap<String, StaticValue>,
 ) -> FileFacts {
     let program = ast.program();
-    let local_statics = eval::collect_static_values(program);
-    let local_usage_statics = eval::collect_complete_static_values(program);
+    let local_statics = eval::collect_static_values(program, &ast.path);
+    let local_usage_statics = eval::collect_complete_static_values(program, &ast.path);
     let imports = collect_import_facts(ast.module_record());
     let exports = crate::usage_facts::collect_export_facts(program);
     let inputs = crate::analyze_css::CssInputs::default();
@@ -1286,7 +1287,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
         unsettled_fx.insert(k.clone(), unsettled.clone());
         statics_fx.remove(k);
     }
-    let statics = eval::Statics::new(&statics_fx, &unsettled_fx);
+    let statics = eval::Statics::new(&statics_fx, &unsettled_fx, &ast.path);
     let mut usage_statics_fx = local_usage_statics.clone();
     for (k, v) in extra_usage_statics {
         usage_statics_fx.insert(k.clone(), v.clone());
@@ -1388,13 +1389,12 @@ pub(crate) fn extract_file_facts_from_static_maps(
                                 let binding = segments.next().unwrap_or_default();
                                 let path: Vec<&str> = segments.collect();
                                 match eval::static_value(statics, binding, &path) {
-                                    Some(eval::StaticAnswer::Unsettled(unsettled)) => Err(unsettled.reason.clone()),
-                                    Some(eval::StaticAnswer::Unevaluated(unevaluated)) => {
-                                        Err(unevaluated.clause.clone())
-                                    }
-                                    Some(eval::StaticAnswer::Exact(value)) => {
-                                        Ok((Some(value.clone()), Vec::new(), Vec::new()))
-                                    }
+                                    Some(Known::Finite(_) | Known::Uncertain(_)) => Err(eval::uncertain_clause(
+                                        statics, binding, &path,
+                                    )
+                                    .unwrap_or_default()
+                                    .to_string()),
+                                    Some(Known::Exact(value)) => Ok((Some(value.clone()), Vec::new(), Vec::new())),
                                     None => Err(format!(
                                         "identifier '{}' not resolvable to static object",
                                         name
@@ -1585,6 +1585,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
         program,
         ast.module_record(),
         &usage_statics_fx,
+        &ast.path,
         &descriptors,
         &exports,
         &object_consts,
