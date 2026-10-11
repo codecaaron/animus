@@ -406,41 +406,67 @@ fn literal_module_loads(program: &oxc::ast::ast::Program<'_>) -> Vec<String> {
     loads.0
 }
 
-/// How a module runs code from a string, which can load any module: an
-/// unbound `eval`, direct or not, or a call of the unbound `Function`.
+/// How a module runs code from a string, which can load any module: it
+/// reads the unbound `eval` or `Function` as a value, or a member of that
+/// name of any object (`globalThis.eval`, an alias of the global object's
+/// `window.Function`), so any call, alias or `Reflect.construct` of it
+/// counts. A type query, a `typeof` operand and the right side of
+/// `instanceof` run nothing. A computed member (`globalThis['ev' + 'al']`)
+/// is not followed.
 fn dynamic_code(program: &oxc::ast::ast::Program<'_>, scoping: &oxc::semantic::Scoping) -> Option<&'static str> {
-    use oxc::ast::ast::{CallExpression, Expression, NewExpression};
+    use oxc::ast::ast::{BinaryExpression, Expression, IdentifierReference, StaticMemberExpression, UnaryExpression};
     use oxc::ast_visit::Visit;
-    if scoping.root_unresolved_references().contains_key("eval") {
-        return Some("calls eval");
-    }
-    if !scoping.root_unresolved_references().contains_key("Function") {
-        return None;
-    }
-    struct Constructs<'s> {
+    use oxc::syntax::operator::{BinaryOperator, UnaryOperator};
+    const RUNNERS: [&str; 2] = ["eval", "Function"];
+    struct Reads<'s> {
         scoping: &'s oxc::semantic::Scoping,
-        found: bool,
+        found: Option<&'static str>,
     }
-    impl Constructs<'_> {
-        fn global_function(&self, callee: &Expression<'_>) -> bool {
-            matches!(callee.get_inner_expression(), Expression::Identifier(id)
-                if id.name == "Function"
-                    && id.reference_id.get().is_some_and(|id| self.scoping.get_reference(id).symbol_id().is_none()))
+    impl Reads<'_> {
+        fn unbound(&self, id: &IdentifierReference<'_>) -> bool {
+            id.reference_id.get().is_some_and(|id| self.scoping.get_reference(id).symbol_id().is_none())
+        }
+        fn runner(&self, expr: &Expression<'_>) -> bool {
+            match expr.get_inner_expression() {
+                Expression::Identifier(id) => RUNNERS.contains(&id.name.as_str()) && self.unbound(id),
+                Expression::StaticMemberExpression(member) => RUNNERS.contains(&member.property.name.as_str()),
+                _ => false,
+            }
+        }
+        fn record(&mut self, name: &str) {
+            self.found.get_or_insert(if name == "eval" { "reads eval" } else { "reads Function" });
         }
     }
-    impl<'a> Visit<'a> for Constructs<'_> {
-        fn visit_call_expression(&mut self, call: &CallExpression<'a>) {
-            self.found |= self.global_function(&call.callee);
-            oxc::ast_visit::walk::walk_call_expression(self, call);
+    impl<'a> Visit<'a> for Reads<'_> {
+        fn visit_identifier_reference(&mut self, id: &IdentifierReference<'a>) {
+            let value = id.reference_id.get().is_some_and(|id| self.scoping.get_reference(id).is_value());
+            if value && RUNNERS.contains(&id.name.as_str()) && self.unbound(id) {
+                self.record(&id.name);
+            }
         }
-        fn visit_new_expression(&mut self, new: &NewExpression<'a>) {
-            self.found |= self.global_function(&new.callee);
-            oxc::ast_visit::walk::walk_new_expression(self, new);
+        fn visit_static_member_expression(&mut self, member: &StaticMemberExpression<'a>) {
+            if RUNNERS.contains(&member.property.name.as_str()) {
+                self.record(&member.property.name);
+            }
+            oxc::ast_visit::walk::walk_static_member_expression(self, member);
+        }
+        fn visit_unary_expression(&mut self, unary: &UnaryExpression<'a>) {
+            if unary.operator == UnaryOperator::Typeof && self.runner(&unary.argument) {
+                return;
+            }
+            oxc::ast_visit::walk::walk_unary_expression(self, unary);
+        }
+        fn visit_binary_expression(&mut self, binary: &BinaryExpression<'a>) {
+            if binary.operator == BinaryOperator::Instanceof && self.runner(&binary.right) {
+                self.visit_expression(&binary.left);
+                return;
+            }
+            oxc::ast_visit::walk::walk_binary_expression(self, binary);
         }
     }
-    let mut constructs = Constructs { scoping, found: false };
-    constructs.visit_program(program);
-    constructs.found.then_some("builds a function from a string")
+    let mut reads = Reads { scoping, found: None };
+    reads.visit_program(program);
+    reads.found
 }
 
 /// One module's functions, each with how its parameters treat an object.
@@ -636,7 +662,7 @@ fn unstable_style_statics(
         // Code from a string can `import()` any module and change what it
         // exports.
         if let Some(how) = module.dynamic_code {
-            let reason = format!("{file} {how}, whose code can load and change any module");
+            let reason = format!("{file} {how}, so code from a string can load and change any module");
             for target in style.keys() {
                 for export in every_export(target) {
                     unstable.entry(export).or_insert_with(|| reason.clone());
@@ -2068,6 +2094,21 @@ export const App = () => <Box tone="red" />;
                 "await new Function(\"return import('./tokens.js')\")().then((m) => { m.pad.padding = 9; });",
                 "{ ...pad }",
             ),
+            (
+                "the global object's eval loads the module",
+                "await globalThis.eval(\"import('./tokens.js')\").then((m) => { m.pad.padding = 9; });",
+                "{ ...pad }",
+            ),
+            (
+                "Reflect constructs a function that loads the module",
+                "await Reflect.construct(Function, [\"return import('./tokens.js')\"])().then((m) => { m.pad.padding = 9; });",
+                "{ ...pad }",
+            ),
+            (
+                "an alias of Function loads the module",
+                "const Make = Function;\nawait Make(\"return import('./tokens.js')\")().then((m) => { m.pad.padding = 9; });",
+                "{ ...pad }",
+            ),
         ];
         for (row, mutation, read) in rows {
             let mut engine = ExtractEngine::new(None).unwrap();
@@ -2085,6 +2126,19 @@ export const App = () => <Box tone="red" />;
             let out: serde_json::Value = serde_json::from_str(&engine.analyze(files.to_string()).unwrap()).unwrap();
             assert!(!out["css"].as_str().unwrap_or_default().contains("padding"), "{row}: {}", out["css"]);
         }
+        // A type query of eval runs nothing: the static still extracts.
+        let mut engine = ExtractEngine::new(None).unwrap();
+        let files = serde_json::json!([
+            { "path": "tokens.ts", "source": "export const pad = { padding: 4 };\n" },
+            { "path": "types.ts", "source": "export type Evaluate = typeof eval;\n" },
+            {
+                "path": "reader.tsx",
+                "source": "import './types';\nimport { pad } from './tokens';\n\
+                           export const C = ds.styles({ ...pad }).asElement('div');\nexport const App = () => <C />;\n",
+            },
+        ]);
+        let out: serde_json::Value = serde_json::from_str(&engine.analyze(files.to_string()).unwrap()).unwrap();
+        assert!(out["css"].as_str().unwrap_or_default().contains("padding"), "type query: {}", out["css"]);
     }
 
     #[test]
