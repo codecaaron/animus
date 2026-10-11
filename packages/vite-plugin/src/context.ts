@@ -126,6 +126,13 @@ export interface BuildingEnvironment {
   readonly name: string;
 }
 
+/** An environment's open build, and the promise its end settles. */
+interface OpenBuild {
+  environment: BuildingEnvironment;
+  ended: Promise<void>;
+  end(): void;
+}
+
 export class PluginContext {
   readonly options: AnimusExtractOptions;
   readonly verbose: boolean;
@@ -498,41 +505,37 @@ export class PluginContext {
   /** The environment a host without environments builds as. */
   readonly singleEnvironment: BuildingEnvironment = { name: 'build' };
 
-  /** Each environment whose build started and has not closed, by name. A
+  /** Each environment build that started and has not ended, by name. A
    *  custom `buildApp` builds a shared plugin's environments in parallel, so
    *  the context's build retires with the last of them, not the first. */
-  private readonly openBuilds = new Map<string, BuildingEnvironment>();
+  private readonly openBuilds = new Map<string, OpenBuild>();
 
-  /** Opens `environment`'s build. Builds are tracked by environment, not by
-   *  generation, so a second build of an active environment, or a second
-   *  environment under an active name, is refused. */
-  openBuild(environment: BuildingEnvironment): void {
-    const { name } = environment;
-    const open = this.openBuilds.get(name);
-    if (open === environment) {
-      throw new Error(
-        `[animus-extract] a previous build of environment ${name} is still ` +
-          `running on this plugin instance; wait for it to finish before ` +
-          `building it again`
-      );
+  /** Opens `environment`'s build, after any open build under its name has
+   *  ended: a builder reused while an earlier build still runs, or a second
+   *  environment under one name, builds after it rather than beside it.
+   *  Each build then ends its own generation once, in `buildEnd`. */
+  async openBuild(environment: BuildingEnvironment): Promise<void> {
+    for (;;) {
+      const open = this.openBuilds.get(environment.name);
+      if (open === undefined) break;
+      await open.ended;
     }
-    if (open !== undefined) {
-      throw new Error(
-        `[animus-extract] two environments named ${name} build on this ` +
-          `plugin instance at once; give each environment its own name`
-      );
-    }
-    this.openBuilds.set(name, environment);
+    let end = () => {};
+    const ended = new Promise<void>((settle) => {
+      end = settle;
+    });
+    this.openBuilds.set(environment.name, { environment, ended, end });
   }
 
-  /** Whether no build is open once `environment`'s closes. Vite can close
-   *  one environment twice (a failed build), close one that never started
-   *  (dev), or close a build this context refused, so only the environment
-   *  that opened an entry removes it. */
-  closeBuild(environment: BuildingEnvironment): boolean {
-    if (this.openBuilds.get(environment.name) === environment) {
-      this.openBuilds.delete(environment.name);
-    }
+  /** Ends `environment`'s open build; whether that left none open. Vite
+   *  ends each build once, in `buildEnd`, and a dev server ends only the
+   *  environments that started, so only the build that opened an entry
+   *  ends it. */
+  endBuild(environment: BuildingEnvironment): boolean {
+    const open = this.openBuilds.get(environment.name);
+    if (open === undefined || open.environment !== environment) return false;
+    this.openBuilds.delete(environment.name);
+    open.end();
     return this.openBuilds.size === 0;
   }
 
