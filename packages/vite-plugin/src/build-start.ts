@@ -15,6 +15,8 @@ import {
   firstOwners,
   isDeletedSource,
   nativeKitSourceRoot,
+  outputSourceGuard,
+  outputSourceMessage,
   surfaceManifestDiagnostics,
   unmatchedExcludeLines,
   unreadableSourceDiagnostic,
@@ -343,8 +345,21 @@ async function discoverSources(
     `Discovered ${rawEntries.length} files (${packageFileCount} from packages) (${Math.round(performance.now() - t0)}ms)`
   );
 
+  // A file whose real path lies in the output directory is output, under
+  // whatever spelling discovery reached it.
+  const inOutput = outputSourceGuard(
+    ctx.rootDir,
+    ctx.outputExclude === null ? [] : [ctx.outputExclude]
+  );
+  const analysisInputs = rawEntries.filter((entry) => {
+    const outputDir = inOutput(resolve(ctx.rootDir, entry.path));
+    if (outputDir === null) return true;
+    ctx.warn(outputSourceMessage(entry.path, outputDir));
+    return false;
+  });
+
   return {
-    rawEntries,
+    rawEntries: analysisInputs,
     // Seed before the parse and analysis gates: a failed non-strict
     // buildStart must leave HMR the full corpus, not one assembled from the
     // first edit.

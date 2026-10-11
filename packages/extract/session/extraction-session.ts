@@ -39,6 +39,8 @@ import {
   declaredWorkspacePackages,
   extensionPolicyJson,
   loadSystemConfig,
+  outputSourceGuard,
+  outputSourceMessage,
   postProcessCss,
   projectExternalFileOwners,
   resolveAssetFile,
@@ -900,9 +902,15 @@ export class ExtractionSession {
     }
 
     const changedPaths: string[] = [];
+    const inOutput = outputSourceGuard(rootDir, this.structuralExclude);
 
     for (const target of targets) {
       const relPath = target.key;
+      const outputDir = inOutput(target.abs);
+      if (outputDir !== null) {
+        this.warn(outputSourceMessage(relPath, outputDir));
+        continue;
+      }
       let source: string;
       try {
         source = readFileSync(target.abs, 'utf-8');
@@ -1419,7 +1427,9 @@ export class ExtractionSession {
       this.beginStatusAttempt();
       let accepted: SourceIngestionResult;
       try {
-        accepted = await this.corpus.prepare(rawEntries);
+        accepted = await this.corpus.prepare(
+          this.withoutOutputSources(rawEntries)
+        );
         this.throwOnAbortedParse(accepted);
         this.skippedSources = accepted.skippedOriginals ?? [];
         this.ingestionOpenings = accepted.openings ?? [];
@@ -1465,6 +1475,18 @@ export class ExtractionSession {
 
   /** Per-generation source state captured as ONE object so the restore
    *  cannot omit a member; deep-copied fields are mutated in place. */
+  /** The full pass's analysis inputs, less any file whose real path lies in
+   *  an output directory, each reported. */
+  private withoutOutputSources(entries: FileEntry[]): FileEntry[] {
+    const inOutput = outputSourceGuard(this.rootDir!, this.structuralExclude);
+    return entries.filter((entry) => {
+      const outputDir = inOutput(resolve(this.rootDir!, entry.path));
+      if (outputDir === null) return true;
+      this.warn(outputSourceMessage(entry.path, outputDir));
+      return false;
+    });
+  }
+
   private snapshotSourceState() {
     return {
       sourceIdentity: this.sourceIdentity,

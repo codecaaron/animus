@@ -3,7 +3,8 @@
  * default exclusions, and mode authority cannot drift per driver.
  */
 
-import { relative, sep } from 'path';
+import { realpathSync } from 'fs';
+import { relative, resolve, sep } from 'path';
 
 import { DIAGNOSTIC_LEVELS } from './manifest-diagnostics';
 import { isPathWithinRoot } from './source-identity';
@@ -450,6 +451,42 @@ export function outputExclusion(root: string, outDir: string): string | null {
   if (!isPathWithinRoot(root, outDir)) return null;
   const rel = relative(root, outDir);
   return rel === '' ? null : rel.split(sep).join('/');
+}
+
+/**
+ * The output directory a source file's real path lies in, or null. Applied
+ * where a host assembles its analysis inputs: a file reached under another
+ * spelling, through a source-tree link or a package's entry, is output too.
+ */
+export function outputSourceGuard(
+  root: string,
+  outputDirs: readonly string[]
+): (absPath: string) => string | null {
+  if (outputDirs.length === 0) return () => null;
+  const realDirs = outputDirs.map((dir) => ({
+    dir,
+    real: realPathOf(resolve(root, dir)),
+  }));
+  return (absPath) => {
+    const real = realPathOf(absPath);
+    return realDirs.find((o) => isPathWithinRoot(o.real, real))?.dir ?? null;
+  };
+}
+
+/** The warning for a source a host refused as output. */
+export function outputSourceMessage(
+  relPath: string,
+  outputDir: string
+): string {
+  return `${relPath} resolves into the output directory '${outputDir}', which is never source; it is not analysed`;
+}
+
+function realPathOf(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    return path;
+  }
 }
 
 /** How a resolved value was decided; surfaced by `--print-config`. */

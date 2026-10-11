@@ -43,6 +43,8 @@ export {
   DEFAULT_EXCLUDE,
   DRIVER_NAMESPACES,
   outputExclusion,
+  outputSourceGuard,
+  outputSourceMessage,
   REPLACEABLE_DEFAULT_EXCLUDE,
   STRUCTURAL_EXCLUDE,
   resolveMode,
