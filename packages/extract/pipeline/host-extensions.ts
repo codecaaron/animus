@@ -66,11 +66,25 @@ function label(
 }
 
 /** Vite's `resolve.extensions`, which `configResolved` holds with its
- *  defaults applied. A TypeScript importer's `./x.js` names `x.ts` too. */
+ *  defaults applied. A TypeScript importer's `./x.js` names `x.ts` too.
+ *  Only the default order is captured, as a real build resolves it. A
+ *  configured list does not describe Vite's effective resolution: Vite 8's
+ *  resolver falls back past it (`['.js']` still loads `./only` as
+ *  `only.tsx`), so it is unreadable. */
 export function viteExtensionPolicy(
   extensions: readonly string[],
   version?: string
 ): HostExtensionPolicy {
+  const configured =
+    extensions.length !== HOST_DEFAULT_EXTENSIONS.vite.length ||
+    extensions.some((ext, i) => ext !== HOST_DEFAULT_EXTENSIONS.vite[i]);
+  if (configured) {
+    return {
+      ...BUILT_IN_EXTENSION_POLICY,
+      resolverVersion:
+        'built-in (hostOptionUnreadable: vite configured extensions)',
+    };
+  }
   return {
     appended: [...extensions],
     nodeNext: TYPESCRIPT_OUTPUTS,
