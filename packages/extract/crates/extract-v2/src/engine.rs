@@ -2085,10 +2085,15 @@ export const App = () => <Box tone="red" />;
             assert!(!out["css"].as_str().unwrap_or_default().contains("padding"), "{row}: {}", out["css"]);
         }
         // A type query of eval, or a schema builder's own `Function` member
-        // (TypeBox's `Type.Function`), runs nothing: the static still
+        // (TypeBox's `Type.Function`), runs nothing, and a type query of a
+        // function's `arguments` reads none of them: the static still
         // extracts.
         for (row, module) in [
             ("type query", "export type Evaluate = typeof eval;\n"),
+            (
+                "a type query of arguments in a read-only callee",
+                "import { pad } from './tokens';\nfunction read(o) { type Args = typeof arguments; return o.padding; }\nread(pad);\n",
+            ),
             (
                 "a namespace's Function member",
                 "import * as Type from './typebox';\nexport const schema = Type.Function([], Type.String());\n",

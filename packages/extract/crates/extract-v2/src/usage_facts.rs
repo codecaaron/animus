@@ -2177,7 +2177,7 @@ pub(crate) fn function_param_readings(
                 if let ExportDefaultDeclarationKind::FunctionDeclaration(func) = &export.declaration {
                     if let Some(id) = &func.id {
                         functions.push((id.name.to_string(), &func.params, func.body.is_some()));
-                        if func.body.as_ref().is_some_and(|body| reads_own_arguments(body)) {
+                        if func.body.as_ref().is_some_and(|body| reads_own_arguments(body, scoping)) {
                             by_arguments.insert(id.name.to_string());
                         }
                     }
@@ -2190,7 +2190,7 @@ pub(crate) fn function_param_readings(
             Some(Declaration::FunctionDeclaration(func)) => {
                 if let Some(id) = &func.id {
                     functions.push((id.name.to_string(), &func.params, func.body.is_some()));
-                    if func.body.as_ref().is_some_and(|body| reads_own_arguments(body)) {
+                    if func.body.as_ref().is_some_and(|body| reads_own_arguments(body, scoping)) {
                         by_arguments.insert(id.name.to_string());
                     }
                 }
@@ -2204,7 +2204,7 @@ pub(crate) fn function_param_readings(
                         }
                         Some(Expression::FunctionExpression(func)) => {
                             functions.push((id.name.to_string(), &func.params, func.body.is_some()));
-                            if func.body.as_ref().is_some_and(|body| reads_own_arguments(body)) {
+                            if func.body.as_ref().is_some_and(|body| reads_own_arguments(body, scoping)) {
                                 by_arguments.insert(id.name.to_string());
                             }
                         }
@@ -2268,15 +2268,17 @@ pub(crate) fn function_param_readings(
     scan.readings
 }
 
-/// Whether a function body reads its own `arguments` object, also from an
-/// arrow inside it. A nested function has its own; a module is strict, so
-/// nothing else is named `arguments`.
-fn reads_own_arguments(body: &oxc::ast::ast::FunctionBody<'_>) -> bool {
-    struct Scan {
+/// Whether a function body reads its own `arguments` object as a value,
+/// also from an arrow inside it; a type query of it reads nothing. A nested
+/// function has its own; a module is strict, so nothing else is named
+/// `arguments`.
+fn reads_own_arguments(body: &oxc::ast::ast::FunctionBody<'_>, scoping: &Scoping) -> bool {
+    struct Scan<'s> {
+        scoping: &'s Scoping,
         found: bool,
         nested: usize,
     }
-    impl<'a> Visit<'a> for Scan {
+    impl<'a> Visit<'a> for Scan<'_> {
         fn visit_function(&mut self, func: &oxc::ast::ast::Function<'a>, flags: oxc::semantic::ScopeFlags) {
             self.nested += 1;
             oxc::ast_visit::walk::walk_function(self, func, flags);
@@ -2284,12 +2286,13 @@ fn reads_own_arguments(body: &oxc::ast::ast::FunctionBody<'_>) -> bool {
         }
 
         fn visit_identifier_reference(&mut self, ident: &IdentifierReference<'a>) {
-            if self.nested == 0 && ident.name == "arguments" {
+            let value = ident.reference_id.get().is_some_and(|id| self.scoping.get_reference(id).is_value());
+            if self.nested == 0 && value && ident.name == "arguments" {
                 self.found = true;
             }
         }
     }
-    let mut scan = Scan { found: false, nested: 0 };
+    let mut scan = Scan { scoping, found: false, nested: 0 };
     scan.visit_function_body(body);
     scan.found
 }
