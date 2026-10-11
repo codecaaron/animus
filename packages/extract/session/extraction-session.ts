@@ -28,6 +28,7 @@ import {
   enforceExternalTokenContracts,
   excludeCollectedPackages,
   extractSystemFilePackages,
+  nativeKitSourceRoot,
   importedKitDiagnostics,
   findPackageRoot,
   findSheetAssetSpecifiers,
@@ -1093,6 +1094,13 @@ export class ExtractionSession {
 
     const collected = await collectExternalPackageSources({
       extensions: context.extensions,
+      kitSourceRoot: nativeKitSourceRoot(
+        engineApi(this.key),
+        rootDir,
+        context.conditions,
+        context.workspaces,
+        extensionPolicyJson(context.extensions)
+      ),
       specifiers: packageNames,
       resolveSpecifier: (name) =>
         preResolved.entries[name]

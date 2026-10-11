@@ -14,9 +14,12 @@ use oxc::span::SourceType;
 use oxc::transformer::{TransformOptions, Transformer};
 use rquickjs::{Context, Function, Object, Runtime};
 
+mod kit_source;
 mod linked;
 pub mod module_table;
 pub mod resolution;
+
+pub use kit_source::{resolve_kit_source_root, KitSourceRoot, KitSourceRule};
 use serde::{Deserialize, Serialize};
 
 /// Serialized system configuration returned by `load_system_module()`.
@@ -133,7 +136,7 @@ pub fn resolve_bare_specifier(
         // for a workspace package nothing links there.
         Err(missing) => context.workspaces.get(pkg_name).map(|dir| dir.join("package.json")).ok_or(missing)?,
     };
-    select_package_entry(pkg_json_path, subpath, context, specifier)
+    select_package_entry(pkg_json_path, subpath, context, specifier, true)
 }
 
 /// `path` with its links and `.` segments resolved, as `require.resolve`
@@ -154,6 +157,7 @@ fn select_package_entry(
     subpath: &str,
     context: &ResolutionContext,
     specifier: &str,
+    source_first: bool,
 ) -> Result<(String, PathBuf), String> {
     let conditions = &context.conditions;
     let pkg_dir = pkg_json_path
@@ -175,7 +179,8 @@ fn select_package_entry(
         // A source target that is missing or differs from its file only in
         // case, which discovery reports, falls back to the runtime entry; a
         // runtime target differing only in case names no file.
-        for source in [true, false] {
+        let facets: &[bool] = if source_first { &[true, false] } else { &[false] };
+        for &source in facets {
             if let Some(resolved) = resolve_exports_entry(exports, export_key, source, conditions) {
                 // Node reads a target as a URL and decodes its escapes; each
                 // decoding rule is another way to name a file Node refuses,

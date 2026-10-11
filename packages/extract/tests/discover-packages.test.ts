@@ -6,6 +6,8 @@ import { describe, expect, test } from 'vitest';
 import {
   extractSystemFilePackages,
   probeAbsolutePathSpecifier,
+  staleDistIncludesMessage,
+  unresolvableIncludesMessage,
 } from '../pipeline/discover-packages';
 import { webpackExtensionPolicy } from '../pipeline/host-extensions';
 
@@ -756,4 +758,57 @@ test.each([
   expect(probed.kind === 'found' ? relative(root, probed.path) : null).toBe(
     named
   );
+});
+
+describe('external-package outcome messages', () => {
+  test('unresolvableIncludesMessage names every unresolvable specifier, null when all resolve', () => {
+    expect(
+      unresolvableIncludesMessage([
+        { specifier: '@x/missing', outcome: 'unresolvable', fileCount: 0 },
+        { specifier: '@x/ds', outcome: 'resolved', fileCount: 2 },
+        { specifier: '@x/typo', outcome: 'unresolvable', fileCount: 0 },
+      ])
+    ).toBe(
+      '[animus-extract] unresolvable include specifier(s): @x/missing, @x/typo'
+    );
+    expect(
+      unresolvableIncludesMessage([
+        { specifier: '@x/ds', outcome: 'resolved', fileCount: 2 },
+        { specifier: '@x/empty', outcome: 'empty', fileCount: 0 },
+      ])
+    ).toBeNull();
+    // The resolver's reason, and the system file that includes the package.
+    expect(
+      unresolvableIncludesMessage(
+        [
+          {
+            specifier: '@x/blocked',
+            outcome: 'unresolvable',
+            fileCount: 0,
+            reason: "exports no file for '.'",
+          },
+        ],
+        'src/ds.ts'
+      )
+    ).toBe(
+      "[animus-extract] unresolvable include specifier(s) in src/ds.ts: @x/blocked (exports no file for '.')"
+    );
+  });
+  test('staleDistIncludesMessage names every stale package, null when none are stale', () => {
+    expect(
+      staleDistIncludesMessage([
+        { specifier: '@x/kit', outcome: 'stale-dist', fileCount: 3 },
+        { specifier: '@x/ds', outcome: 'resolved', fileCount: 2 },
+        { specifier: '@x/base', outcome: 'stale-dist', fileCount: 1 },
+      ])
+    ).toBe(
+      '[animus-extract] stale dist for include specifier(s): @x/kit, @x/base — dist entry is older than the newest src/ file; rebuild the package(s) before extracting'
+    );
+    expect(
+      staleDistIncludesMessage([
+        { specifier: '@x/ds', outcome: 'resolved', fileCount: 2 },
+        { specifier: '@x/empty', outcome: 'empty', fileCount: 0 },
+      ])
+    ).toBeNull();
+  });
 });

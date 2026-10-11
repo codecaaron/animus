@@ -206,6 +206,38 @@ pub fn resolve_specifier(
     )
 }
 
+/// A kit's source root (spec §2.2 A5), as JSON: the package located from
+/// `from_dir` as the system loader locates it, the rule that chose the root
+/// (`animus`, `source-exports`, `src` or `compiled`), its entries, its
+/// invalid `animus` targets, and the runtime entry (`host_entry`, the file
+/// the host resolves, where given); or `{ "unresolved": why }` where no host
+/// imports the specifier. `package_dir` is the package discovery located,
+/// where it located one.
+#[napi]
+pub fn resolve_kit_source_root(
+    specifier: String,
+    from_dir: String,
+    conditions: Option<Vec<String>>,
+    workspaces: Option<std::collections::HashMap<String, String>>,
+    extension_policy_json: Option<String>,
+    host_entry: Option<String>,
+    package_dir: Option<String>,
+) -> String {
+    let found = resolution_context(conditions, workspaces, extension_policy_json).and_then(|context| {
+        animus_system_loader::resolve_kit_source_root(
+            &specifier,
+            &from_dir,
+            &context,
+            host_entry.as_deref(),
+            package_dir.as_deref(),
+        )
+    });
+    match found {
+        Ok(root) => serde_json::to_string(&root).unwrap_or_else(|e| serde_json::json!({ "unresolved": e.to_string() }).to_string()),
+        Err(reason) => serde_json::json!({ "unresolved": reason }).to_string(),
+    }
+}
+
 impl From<Result<(std::path::PathBuf, Option<std::path::PathBuf>), String>> for NapiResolvedSpecifier {
     fn from(result: Result<(std::path::PathBuf, Option<std::path::PathBuf>), String>) -> Self {
         match result {
