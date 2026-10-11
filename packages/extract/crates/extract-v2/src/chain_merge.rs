@@ -204,8 +204,9 @@ pub struct ProvenanceNode {
 pub enum TopoResult {
     /// Valid ordering: parents appear before their children.
     Sorted(Vec<String>),
-    /// A cycle was detected; the involved component IDs are listed.
-    Cycle(Vec<String>),
+    /// A cycle was detected: the component IDs it reaches, then every other
+    /// ID in parents-first order.
+    Cycle(Vec<String>, Vec<String>),
 }
 
 /// Topologically sort components by extension provenance (Kahn's algorithm);
@@ -272,7 +273,7 @@ pub fn topological_sort(nodes: &[ProvenanceNode]) -> TopoResult {
             .filter(|n| !sorted_set.contains(n.component_id.as_str()))
             .map(|n| n.component_id.clone())
             .collect();
-        return TopoResult::Cycle(cycle_nodes);
+        return TopoResult::Cycle(cycle_nodes, sorted);
     }
 
     TopoResult::Sorted(sorted)
@@ -400,7 +401,7 @@ mod tests {
                 assert!(a < b, "A must come before B");
                 assert!(b < c, "B must come before C");
             }
-            TopoResult::Cycle(_) => panic!("expected sorted result"),
+            TopoResult::Cycle(..) => panic!("expected sorted result"),
         }
     }
 
@@ -422,7 +423,7 @@ mod tests {
                 assert!(a < b, "A must come before B");
                 assert!(c < d, "C must come before D");
             }
-            TopoResult::Cycle(_) => panic!("expected sorted result"),
+            TopoResult::Cycle(..) => panic!("expected sorted result"),
         }
     }
 
@@ -430,7 +431,7 @@ mod tests {
     fn detects_cycle() {
         let nodes = vec![node("A", Some("B")), node("B", Some("A"))];
         match topological_sort(&nodes) {
-            TopoResult::Cycle(cycle) => {
+            TopoResult::Cycle(cycle, _) => {
                 assert!(cycle.contains(&"A".to_string()) || cycle.contains(&"B".to_string()));
             }
             TopoResult::Sorted(_) => panic!("expected cycle detection"),
@@ -446,7 +447,7 @@ mod tests {
                 let b = order.iter().position(|x| x == "B").unwrap();
                 assert!(a < b, "A (root) must come before B (child)");
             }
-            TopoResult::Cycle(_) => panic!("expected sorted result"),
+            TopoResult::Cycle(..) => panic!("expected sorted result"),
         }
     }
 
@@ -457,7 +458,7 @@ mod tests {
             TopoResult::Sorted(order) => {
                 assert_eq!(order, vec!["A".to_string()]);
             }
-            TopoResult::Cycle(_) => panic!("expected sorted result"),
+            TopoResult::Cycle(..) => panic!("expected sorted result"),
         }
     }
 

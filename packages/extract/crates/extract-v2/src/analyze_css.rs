@@ -5677,18 +5677,12 @@ fn sorted_resolvable_component_ids(
 
     match topological_sort(&nodes) {
         TopoResult::Sorted(order) => order,
-        TopoResult::Cycle(cycle_ids) => {
+        TopoResult::Cycle(cycle_ids, rest) => {
             // A binding declared by more than one chain is one id, listed once.
             let unique: BTreeSet<&String> = cycle_ids.iter().collect();
             diagnostics.extend(unique.into_iter().map(|id| extension_cycle_bail(id, files, parent_map)));
             // The rest keep the order parents first, which no cycle breaks.
-            let cycle_set: FxHashSet<&String> = cycle_ids.iter().collect();
-            let rest: Vec<ProvenanceNode> =
-                nodes.into_iter().filter(|node| !cycle_set.contains(&node.component_id)).collect();
-            match topological_sort(&rest) {
-                TopoResult::Sorted(order) => order,
-                TopoResult::Cycle(_) => unreachable!("every node a cycle reaches is set aside"),
-            }
+            rest
         }
     }
 }
