@@ -823,6 +823,8 @@ pub(crate) struct EnrichedUsage {
     pub module_loads: Vec<ModuleLoad>,
     /// See `FileFacts::unsafe_object_uses`.
     pub unsafe_object_uses: BTreeMap<String, ObjectUse>,
+    /// See `FileFacts::object_handoffs`.
+    pub object_handoffs: Vec<Handoff>,
     /// See `FileFacts::ordinary_components`.
     pub ordinary_components: BTreeSet<String>,
     /// See `FileFacts::context_consts`.
@@ -1209,9 +1211,9 @@ pub(crate) fn collect_enriched_usage(
     }
     // Read through the scopes every module builds, so a module with no
     // import or chain still records what may change its objects.
-    let unsafe_object_uses = match origins {
+    let (unsafe_object_uses, object_handoffs) = match origins {
         Some(scoping) => unsafe_object_uses(program, scoping, &watched, assigned_targets),
-        None => BTreeMap::new(),
+        None => (BTreeMap::new(), Vec::new()),
     };
     let (opaque_calls, opaque_tags, element_consts) =
         origins.map(|scoping| opaque_calls(program, scoping)).unwrap_or_default();
@@ -1226,6 +1228,7 @@ pub(crate) fn collect_enriched_usage(
         spread_wrappers,
         module_loads,
         unsafe_object_uses,
+        object_handoffs,
         ordinary_components,
         context_consts,
         prop_tags,
@@ -1880,15 +1883,15 @@ fn unsafe_object_uses(
     scoping: &Scoping,
     object_consts: &BTreeMap<&str, bool>,
     assigned_targets: &BTreeSet<&str>,
-) -> BTreeMap<String, ObjectUse> {
+) -> (BTreeMap<String, ObjectUse>, Vec<Handoff>) {
     let candidates = object_bindings(program, scoping, object_consts, assigned_targets);
     if candidates.is_empty() {
-        return BTreeMap::new();
+        return (BTreeMap::new(), Vec::new());
     }
     if scoping.root_unresolved_references().contains_key("eval") {
         // Direct eval can reach any binding by name.
         let what = ObjectUse { line: None, what: "can be changed by a direct eval".to_string() };
-        return candidates.into_values().map(|binding| (binding.name, what.clone())).collect();
+        return (candidates.into_values().map(|binding| (binding.name, what.clone())).collect(), Vec::new());
     }
     let mut scan = ObjectUseScan {
         scoping,
@@ -1907,7 +1910,7 @@ fn unsafe_object_uses(
         flat_reads: Vec::new(),
     };
     scan.visit_program(program);
-    scan.uses
+    (scan.uses, scan.handoffs)
 }
 
 /// For static style values: each module-scope `const` object in
@@ -2286,6 +2289,38 @@ fn style_object_use(
     }
 }
 
+/// One module's functions, each with how its parameters treat an object.
+pub(crate) type ParamReadings = std::sync::Arc<BTreeMap<String, Vec<ParamReading>>>;
+/// A module's function readings.
+pub(crate) type ReadingsOf<'r> = dyn FnMut(&str) -> ParamReadings + 'r;
+/// The declaring module and local name a module's binding names.
+pub(crate) type Declared<'d> = dyn Fn(&str, &str) -> Option<(String, String)> + 'd;
+
+/// Whether the function `function` of `file` only reads the object passed
+/// as its parameter `index`. A reading is conditional on the callees it
+/// passes the object to: each must itself only read it, at most four calls
+/// deep, past which nothing is proven.
+pub(crate) fn reads_only(
+    file: &str,
+    function: &str,
+    index: usize,
+    depth: usize,
+    declared: &Declared<'_>,
+    readings_of: &mut ReadingsOf<'_>,
+) -> bool {
+    if depth > 4 {
+        return false;
+    }
+    let readings = readings_of(file);
+    let Some(ParamReading::ReadOnly(passes)) = readings.get(function).and_then(|params| params.get(index)) else {
+        return false;
+    };
+    passes.iter().all(|(callee, at)| match declared(file, callee) {
+        Some((callee_file, callee_name)) => reads_only(&callee_file, &callee_name, *at, depth + 1, declared, readings_of),
+        None => false,
+    })
+}
+
 /// How a function treats the object passed as one of its parameters.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ParamReading {
@@ -2636,12 +2671,37 @@ impl<'a> Visit<'a> for ObjectUseScan<'a, '_> {
             {
                 return;
             }
+            // Passed to a module-scope function nothing writes: the engine
+            // judges whether that parameter only reads it.
+            if let Some((callee, index)) = fixed_call_argument(ident.span, &self.ancestors, self.scoping) {
+                self.handoffs.push(Handoff {
+                    binding: binding.name.clone(),
+                    used: ObjectUse { line: Some(self.line(ident.span)), what: format!("is passed to {callee}()") },
+                    callee,
+                    index,
+                });
+                return;
+            }
             (binding.name.clone(), object_use(ident.span, ancestors, true, self.global_object, assigned_target))
         };
         let Some(what) = what else { return };
         let start = (ident.span.start as usize).min(self.source.len());
         let line = self.source[..start].matches('\n').count() + 1;
         self.uses.entry(key).or_insert(ObjectUse { line: Some(line), what });
+    }
+}
+
+/// The function and argument position a reference at `span` is passed to,
+/// when the callee is a module-scope binding nothing writes.
+fn fixed_call_argument(span: Span, ancestors: &[AstKind<'_>], scoping: &Scoping) -> Option<(String, usize)> {
+    let (current, parent) = peel_wrappers(span, &mut ancestors.iter().rev());
+    let Some(AstKind::CallExpression(call)) = parent else { return None };
+    let index = call.arguments.iter().position(|argument| argument.span() == current)?;
+    match crate::chain_walk::unwrap_type_assertions(&call.callee) {
+        Expression::Identifier(callee) if fixed_callee(scoping, callee.reference_id.get()) => {
+            Some((callee.name.to_string(), index))
+        }
+        _ => None,
     }
 }
 

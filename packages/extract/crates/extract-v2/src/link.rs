@@ -28,6 +28,8 @@ pub(crate) struct Lowered {
     pub(crate) scoping: Scoping,
     pub(crate) bindings: BindingTable,
     pub(crate) record: OwnedModuleRecord,
+    /// How each of the module's functions treats an object passed to it.
+    pub(crate) readings: crate::usage_facts::ParamReadings,
 }
 
 impl Lowered {
@@ -41,7 +43,8 @@ impl Lowered {
         let scoping = SemanticBuilder::new().build(program).semantic.into_scoping();
         let bindings = BindingTable::prepare(IdentityInput { module, program, module_record, scoping: &scoping });
         let record = copy_module_record(module_record, &bindings, program.source_text, program);
-        Self { scoping, bindings, record }
+        let readings = std::sync::Arc::new(crate::usage_facts::function_param_readings(program, &scoping));
+        Self { scoping, bindings, record, readings }
     }
 }
 
