@@ -217,7 +217,16 @@ impl<B: Clone + Eq + Ord> ModuleTable<B> {
 
     /// ResolveExport for export `name` of `module`.
     pub fn resolve_export(&self, module: ModuleIndex, name: &str) -> ExportLookup<B> {
-        self.resolve(module, name, &mut HashSet::new())
+        self.resolve(module, name, &mut HashSet::new(), &mut Vec::new())
+    }
+
+    /// ResolveExport for export `name` of `module`, with the name each route
+    /// reaches its terminal by: the export name asked of the module that
+    /// declares the binding or exports the namespace.
+    pub fn resolve_export_spelled(&self, module: ModuleIndex, name: &str) -> (ExportLookup<B>, Vec<(ModuleIndex, String)>) {
+        let mut spelled = Vec::new();
+        let lookup = self.resolve(module, name, &mut HashSet::new(), &mut spelled);
+        (lookup, spelled)
     }
 
     /// ResolveExport through `module`'s request `request`, as an import or
@@ -239,18 +248,25 @@ impl<B: Clone + Eq + Ord> ModuleTable<B> {
     /// One `set` of (module, name) pairs serves the whole query, forwarded
     /// through every branch: a pair met again resolves to null there, and
     /// null is `Absent`.
-    fn resolve(&self, module: ModuleIndex, name: &str, set: &mut HashSet<(ModuleIndex, String)>) -> ExportLookup<B> {
+    fn resolve(
+        &self,
+        module: ModuleIndex,
+        name: &str,
+        set: &mut HashSet<(ModuleIndex, String)>,
+        spelled: &mut Vec<(ModuleIndex, String)>,
+    ) -> ExportLookup<B> {
         if !set.insert((module, name.to_string())) {
             return ExportLookup::Absent;
         }
         let record = &self.modules[module];
         let through = |request: RequestId| &record.requests[request];
         if let Some((_, binding)) = record.local_exports.iter().find(|(exported, _)| exported == name) {
+            spelled.push((module, name.to_string()));
             return ExportLookup::Resolved(Terminal::Local { module, binding: binding.clone() });
         }
         if let Some((_, request, imported)) = record.indirect_exports.iter().find(|(exported, ..)| exported == name) {
             return match through(*request) {
-                Request::Module(target) => self.resolve(*target, imported, set),
+                Request::Module(target) => self.resolve(*target, imported, set, spelled),
                 Request::Outside(identity) => {
                     ExportLookup::Resolved(Terminal::External { module: identity.clone(), export: Some(imported.clone()) })
                 }
@@ -259,7 +275,10 @@ impl<B: Clone + Eq + Ord> ModuleTable<B> {
         }
         if let Some((_, request)) = record.namespace_exports.iter().find(|(exported, _)| exported == name) {
             return match through(*request) {
-                Request::Module(target) => ExportLookup::Resolved(Terminal::Namespace(*target)),
+                Request::Module(target) => {
+                    spelled.push((module, name.to_string()));
+                    ExportLookup::Resolved(Terminal::Namespace(*target))
+                }
                 Request::Outside(identity) => {
                     ExportLookup::Resolved(Terminal::External { module: identity.clone(), export: None })
                 }
@@ -279,7 +298,7 @@ impl<B: Clone + Eq + Ord> ModuleTable<B> {
                 Request::Unresolved(specifier) => {
                     openings.push(Opening { module, reason: OpeningReason::UnresolvedRequest(specifier.clone()) });
                 }
-                Request::Module(target) => match self.resolve(*target, name, set) {
+                Request::Module(target) => match self.resolve(*target, name, set, spelled) {
                     ExportLookup::Absent => {}
                     ExportLookup::Ambiguous(terminals) => return ExportLookup::Ambiguous(terminals),
                     ExportLookup::Resolved(terminal) => add_terminal(&mut known, terminal),
