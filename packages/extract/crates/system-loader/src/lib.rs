@@ -1,6 +1,6 @@
 //! Engine-neutral TypeScript system-module loader.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -95,6 +95,15 @@ pub fn strip_typescript_module(source: &str, file_path: &str) -> Result<String, 
     Ok(codegen.build(&program).code)
 }
 
+/// What a resolution resolves under (pipeline spec §2.2): the host's export
+/// conditions, in its order, and the session root's declared workspace
+/// packages, by name, at their canonical directories.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ResolutionContext {
+    pub conditions: Vec<String>,
+    pub workspaces: BTreeMap<String, PathBuf>,
+}
+
 /// Resolve a bare specifier to an absolute file path and the `package.json`
 /// that selected it. Resolution chain: `exports` (a kit's `animus` source
 /// condition, else the host's `conditions`, `import` and `default`) →
@@ -102,25 +111,16 @@ pub fn strip_typescript_module(source: &str, file_path: &str) -> Result<String, 
 pub fn resolve_bare_specifier(
     specifier: &str,
     from_dir: &str,
-    conditions: &[String],
+    context: &ResolutionContext,
 ) -> Result<(String, PathBuf), String> {
     let (pkg_name, subpath) = split_specifier(specifier);
-    let pkg_json_path = find_package_json(pkg_name, from_dir)?;
-    select_package_entry(pkg_json_path, subpath, conditions, specifier)
-}
-
-/// The entry `subpath` (`""` or `"."` for the root, else `./x` or `/x`) of
-/// the package in `package_dir`, selected as `resolve_bare_specifier`
-/// selects it once it has found the package: for a package located some
-/// other way, such as a workspace.
-pub fn resolve_package_entry(
-    package_dir: &Path,
-    subpath: &str,
-    conditions: &[String],
-) -> Result<(PathBuf, PathBuf), String> {
-    let label = format!("{}{}", package_dir.display(), subpath.trim_start_matches('.'));
-    select_package_entry(package_dir.join("package.json"), subpath, conditions, &label)
-        .map(|(path, manifest)| (real_path(PathBuf::from(path)), real_path(manifest)))
+    let pkg_json_path = match find_package_json(pkg_name, from_dir) {
+        Ok(path) => path,
+        // A declared workspace answers where no `node_modules` copy does, as
+        // for a workspace package nothing links there.
+        Err(missing) => context.workspaces.get(pkg_name).map(|dir| dir.join("package.json")).ok_or(missing)?,
+    };
+    select_package_entry(pkg_json_path, subpath, &context.conditions, specifier)
 }
 
 /// `path` with its links and `.` segments resolved, as `require.resolve`
@@ -388,12 +388,12 @@ fn valid_package_target(target: &str) -> bool {
 pub fn resolve_specifier(
     specifier: &str,
     from_dir: &str,
-    conditions: &[String],
+    context: &ResolutionContext,
 ) -> Result<(PathBuf, Option<PathBuf>), String> {
     if specifier.starts_with('.') || specifier.starts_with('/') {
         resolve_relative(Path::new(from_dir), specifier).map(|path| (real_path(PathBuf::from(path)), None))
     } else {
-        resolve_bare_specifier(specifier, from_dir, conditions)
+        resolve_bare_specifier(specifier, from_dir, context)
             .map(|(path, manifest)| (real_path(PathBuf::from(path)), Some(real_path(manifest))))
     }
 }
@@ -591,7 +591,7 @@ type DependencyResolution = (
 pub fn resolve_all_deps(
     system_path: &str,
     _root_dir: &str,
-    conditions: &[String],
+    context: &ResolutionContext,
 ) -> Result<DependencyResolution, String> {
     let mut specifier_map: HashMap<(String, String), String> = HashMap::new();
     let mut source_map: HashMap<String, String> = HashMap::new();
@@ -709,7 +709,7 @@ pub fn resolve_all_deps(
             } else {
                 // No generic stub fallback: a silent stub turns a missing
                 // package into "X is not a function" in an unrelated module.
-                match resolve_bare_specifier(spec, &current_dir.to_string_lossy(), conditions) {
+                match resolve_bare_specifier(spec, &current_dir.to_string_lossy(), context) {
                     Ok((resolved, manifest)) => {
                         let canonical = fs::canonicalize(&resolved)
                             .unwrap_or_else(|_| PathBuf::from(&resolved))
@@ -1690,16 +1690,16 @@ fn list_export_keys(namespace: &Object<'_>) -> Vec<String> {
     keys
 }
 
-/// Load a system module and return its serialized configuration.
-/// `conditions` are the host's export conditions, in its order.
+/// Load a system module and return its serialized configuration, resolving
+/// its imports under `context`.
 pub fn load_system_module(
     system_path: &str,
     root_dir: &str,
     export_name: Option<&str>,
-    conditions: &[String],
+    context: &ResolutionContext,
 ) -> Result<SystemConfig, String> {
     let (specifier_map, source_map, stub_exports, manifests, type_exports) =
-        resolve_all_deps(system_path, root_dir, conditions)?;
+        resolve_all_deps(system_path, root_dir, context)?;
 
     let entry_path = fs::canonicalize(system_path)
         .map_err(|e| format!("failed to canonicalize '{}': {}", system_path, e))?
@@ -2106,7 +2106,8 @@ export const ds = tokens;
         let from = dir.to_string_lossy().to_string();
         let resolved = |specifier: &str, conditions: &[&str]| {
             let conditions: Vec<String> = conditions.iter().map(|condition| condition.to_string()).collect();
-            resolve_bare_specifier(specifier, &from, &conditions)
+            let context = ResolutionContext { conditions, ..ResolutionContext::default() };
+            resolve_bare_specifier(specifier, &from, &context)
                 .map(|(path, _)| path.rsplit("node_modules/").next().unwrap_or_default().replace("/./", "/"))
         };
         assert_eq!(resolved("legacy-main", &[]).as_deref(), Ok("legacy-main/index.js"));
@@ -2175,7 +2176,7 @@ export const ds = tokens;
         write_fixture(&dir.join("erased.ts"), "import { Shape } from './types';\ntype T = Shape;\nexport default {};\n");
         write_fixture(&dir.join("types.ts"), "import './missing';\nexport interface Shape {}\n");
         write_fixture(&dir.join("value.ts"), "import { size } from './tokens';\nexport const s = size;\n");
-        let crawl = |entry: &str| resolve_all_deps(&dir.join(entry).to_string_lossy(), &dir.to_string_lossy(), &[]);
+        let crawl = |entry: &str| resolve_all_deps(&dir.join(entry).to_string_lossy(), &dir.to_string_lossy(), &ResolutionContext::default());
         assert!(crawl("erased.ts").is_ok(), "{:?}", crawl("erased.ts").err());
         let error = crawl("value.ts").err().unwrap_or_default();
         assert!(error.contains("'./tokens'") && error.contains("value.ts"), "{error}");
@@ -2242,7 +2243,7 @@ export const ds = tokens;
                  {FIXTURE_THEME}"
             ),
         );
-        let config = load_system_module(&dir.join("ds.js").to_string_lossy(), &dir.to_string_lossy(), None, &[])
+        let config = load_system_module(&dir.join("ds.js").to_string_lossy(), &dir.to_string_lossy(), None, &ResolutionContext::default())
             .expect("fixture system loads");
         let provenance: serde_json::Value =
             serde_json::from_str(config.transform_provenance.as_deref().expect("provenance")).unwrap();
@@ -2310,7 +2311,7 @@ export const ds = tokens;
         let entry = dir.join("entry.ts");
         write_fixture(&entry, &sealed_system_fixture(TWO_COLLECTION_RECORD));
 
-        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &[]);
+        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &ResolutionContext::default());
         let _ = fs::remove_dir_all(&dir);
 
         let config = result.expect("sealed system must load");
@@ -2340,7 +2341,7 @@ export const ds = tokens;
         );
         write_fixture(&entry, &source);
 
-        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &[]);
+        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &ResolutionContext::default());
         let _ = fs::remove_dir_all(&dir);
 
         let config = result.expect("sealed system must load");
@@ -2408,7 +2409,7 @@ export const ds = tokens;
                 write_fixture(&dir.join(file), &source);
             }
             let entry = files.iter().find(|(file, _)| file.starts_with("entry.")).map(|(file, _)| dir.join(file)).unwrap();
-            let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &[]);
+            let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &ResolutionContext::default());
             let _ = fs::remove_dir_all(&dir);
             assert_eq!(result.map(|loaded| loaded.prop_config).as_deref(), Ok(expected), "{name}");
         }
@@ -2432,7 +2433,7 @@ export const ds = tokens;
         );
         write_fixture(&dir.join("c.js"), "export const y = 3;\n");
         write_fixture(&dir.join("d.js"), "export const B = 4;\n");
-        let result = load_system_module(&dir.join("entry.js").to_string_lossy(), &dir.to_string_lossy(), None, &[]);
+        let result = load_system_module(&dir.join("entry.js").to_string_lossy(), &dir.to_string_lossy(), None, &ResolutionContext::default());
         let _ = fs::remove_dir_all(&dir);
         let order = r#"["B","a","default","w","y","z"]"#;
         assert_eq!(
@@ -2629,7 +2630,7 @@ export const ds = tokens;
                 write_fixture(&dir.join(format!("{file}.js")), &source);
             }
             let entry = dir.join("entry.js");
-            let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &[]);
+            let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &ResolutionContext::default());
             let _ = fs::remove_dir_all(&dir);
             match expected {
                 Ok(config) => assert_eq!(result.map(|loaded| loaded.prop_config).as_deref(), Ok(config), "{name}"),
@@ -2652,7 +2653,7 @@ export const ds = tokens;
             ),
         );
 
-        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &[]);
+        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &ResolutionContext::default());
         let _ = fs::remove_dir_all(&dir);
 
         let error = result.expect_err("incompatible record version must fail loud");
@@ -2675,7 +2676,7 @@ export const ds = tokens;
             ),
         );
 
-        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &[]);
+        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &ResolutionContext::default());
         let _ = fs::remove_dir_all(&dir);
 
         let error = result.expect_err("two distinct system-like exports must fail loud");
@@ -2698,7 +2699,7 @@ export const ds = tokens;
             ),
         );
 
-        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &[]);
+        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &ResolutionContext::default());
         let _ = fs::remove_dir_all(&dir);
 
         result.expect("aliases of ONE instance stay unambiguous");
@@ -2710,9 +2711,9 @@ export const ds = tokens;
         let entry = dir.join("entry.ts");
         write_fixture(&entry, &sealed_system_fixture(TWO_COLLECTION_RECORD));
 
-        let first = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &[])
+        let first = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &ResolutionContext::default())
             .expect("first load");
-        let second = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &[])
+        let second = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &ResolutionContext::default())
             .expect("second load");
         let _ = fs::remove_dir_all(&dir);
 
@@ -2740,7 +2741,7 @@ export const ds = tokens;
             ),
         );
 
-        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &[]);
+        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &ResolutionContext::default());
         let _ = fs::remove_dir_all(&dir);
 
         let config = result.expect("sealed system must load");
@@ -2786,7 +2787,7 @@ export const ds = tokens;
             ),
         );
 
-        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &[]);
+        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &ResolutionContext::default());
         let _ = fs::remove_dir_all(&dir);
 
         result.expect("the load must succeed without touching the root barrel");
@@ -2807,9 +2808,9 @@ export const ds = tokens;
         );
         write_fixture(&entry, &source);
 
-        let first = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &[])
+        let first = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &ResolutionContext::default())
             .expect("sealed system must load");
-        let second = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &[])
+        let second = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &ResolutionContext::default())
             .expect("second load");
         let _ = fs::remove_dir_all(&dir);
 
@@ -2845,7 +2846,7 @@ export const ds = tokens;
             ),
         );
 
-        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &[]);
+        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &ResolutionContext::default());
         let _ = fs::remove_dir_all(&dir);
 
         let error = result.expect_err("a recordless system must fail the load");
@@ -2865,7 +2866,7 @@ export const ds = tokens;
              export const value = thing;\n",
         );
 
-        let result = resolve_all_deps(&entry.to_string_lossy(), &dir.to_string_lossy(), &[]);
+        let result = resolve_all_deps(&entry.to_string_lossy(), &dir.to_string_lossy(), &ResolutionContext::default());
         let _ = fs::remove_dir_all(&dir);
 
         let error = result.expect_err("an unresolvable bare specifier must fail the load");
@@ -2913,7 +2914,12 @@ export const ds = tokens;
         write_fixture(&dir.join("blocked.ts"), "export * from '@probe/kit/blocked';\n");
         let load = |entry: &str, conditions: &[&str]| {
             let conditions: Vec<String> = conditions.iter().map(|c| c.to_string()).collect();
-            load_system_module(&dir.join(entry).to_string_lossy(), &dir.to_string_lossy(), None, &conditions)
+            load_system_module(
+                &dir.join(entry).to_string_lossy(),
+                &dir.to_string_lossy(),
+                None,
+                &ResolutionContext { conditions, ..ResolutionContext::default() },
+            )
         };
 
         let source = load("system.ts", &["source", "development"]);
@@ -2966,7 +2972,7 @@ export const ds = tokens;
             "export const base = { color: 'red' };\n",
         );
 
-        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &[]);
+        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &ResolutionContext::default());
 
         let canonical_dir = fs::canonicalize(&dir).expect("canonicalize scratch dir");
         let _ = fs::remove_dir_all(&dir);
@@ -2983,6 +2989,45 @@ export const ds = tokens;
             config.dependencies, expected,
             "dependencies must be the sorted canonical transitive module set"
         );
+    }
+
+    /// Contract: a workspace package resolves the same for system evaluation
+    /// and analysis. A declared workspace that nothing links into
+    /// `node_modules` answers once the `node_modules` lookup misses: the
+    /// system that imports it loads it, and `resolve_specifier`, which the
+    /// session's package map reads, names the same file.
+    #[test]
+    fn unlinked_workspace_resolves_alike_for_evaluation_and_analysis() {
+        let dir = scratch_dir("unlinked-workspace");
+        let app = dir.join("app");
+        let entry = app.join("entry.ts");
+        write_fixture(
+            &entry,
+            "import { base } from '@probe/tokens';\n\
+             export const theme = { serialize: () => ({ scalesJson: JSON.stringify(base), variableMapJson: '{}', variableCss: '', contextualVarsJson: '{}' }) };\n\
+             export const system = { toConfig: () => ({ propConfig: '{}', groupRegistry: '{}' }), getVocabularyRecord: () => ({ version: 1, keyframes: [], globalStyles: [], collisions: [], legacyVerbs: [] }) };\n",
+        );
+        let workspace = dir.join("packages/tokens");
+        write_fixture(&workspace.join("package.json"), r#"{ "name": "@probe/tokens", "main": "./index.ts" }"#);
+        write_fixture(&workspace.join("index.ts"), "export const base = { color: 'red' };\n");
+        let canonical = fs::canonicalize(&workspace).expect("canonicalize workspace");
+        let context = ResolutionContext {
+            workspaces: BTreeMap::from([("@probe/tokens".to_string(), canonical.clone())]),
+            ..ResolutionContext::default()
+        };
+        let load = |context: &ResolutionContext| {
+            load_system_module(&entry.to_string_lossy(), &app.to_string_lossy(), None, context)
+        };
+        let undeclared = load(&ResolutionContext::default());
+        let evaluated = load(&context);
+        let analyzed = resolve_specifier("@probe/tokens", &app.to_string_lossy(), &context);
+        let _ = fs::remove_dir_all(&dir);
+
+        assert!(undeclared.is_err(), "an undeclared, unlinked workspace names no package");
+        let config = evaluated.expect("a declared workspace loads");
+        let file = canonical.join("index.ts");
+        assert!(config.dependencies.contains(&file.to_string_lossy().to_string()), "{:?}", config.dependencies);
+        assert_eq!(analyzed.map(|(path, _)| path), Ok(file));
     }
 
     #[test]
@@ -3014,7 +3059,7 @@ export const ds = tokens;
              };\n",
         );
 
-        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &[]);
+        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &ResolutionContext::default());
 
         let canonical_dir = fs::canonicalize(&dir).expect("canonicalize scratch dir");
         let _ = fs::remove_dir_all(&dir);
@@ -3065,7 +3110,7 @@ export const ds = tokens;
              };\n",
         );
 
-        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &[]);
+        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &ResolutionContext::default());
 
         let canonical_dir = fs::canonicalize(&dir).expect("canonicalize scratch dir");
         let _ = fs::remove_dir_all(&dir);
@@ -3116,7 +3161,7 @@ export const ds = tokens;
              };\n",
         );
 
-        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &[]);
+        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &ResolutionContext::default());
 
         let canonical_dir = fs::canonicalize(&dir).expect("canonicalize scratch dir");
         let _ = fs::remove_dir_all(&dir);
@@ -3166,7 +3211,7 @@ export const ds = tokens;
              export const system = { toConfig: () => ({ propConfig: '{}', groupRegistry: '{}' }), getVocabularyRecord: () => ({ version: 1, keyframes: [], globalStyles: [{ name: 'globals', styles: globals.styles, fontFaces: globals.fontFaces }], collisions: [], legacyVerbs: [] }) };\n",
         );
 
-        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &[]);
+        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &ResolutionContext::default());
         let _ = fs::remove_dir_all(&dir);
 
         let config = result.expect("system with an asset placeholder must load");
@@ -3262,7 +3307,7 @@ export const ds = tokens;
              export const system = { toConfig: () => ({ propConfig: '{}', groupRegistry: '{}' }), getVocabularyRecord: () => ({ version: 1, keyframes: [], globalStyles: [{ name: 'docsResources', styles: copied(docsResources) }, { name: 'inline', styles: copied(inline) }], collisions: [], legacyVerbs: [] }) };\n",
         );
 
-        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &[]);
+        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &ResolutionContext::default());
         let _ = fs::remove_dir_all(&dir);
 
         let config = result.expect("system with registered globals must load");
@@ -3292,7 +3337,7 @@ export const ds = tokens;
              export const system = { toConfig: () => ({ propConfig: '{}', groupRegistry: '{}' }), getVocabularyRecord: () => ({ version: 1, keyframes: [], globalStyles: [], collisions: [], legacyVerbs: [] }) };\n",
         );
 
-        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &[]);
+        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &ResolutionContext::default());
         let _ = fs::remove_dir_all(&dir);
 
         let config = result.expect("plain system must load");
@@ -3320,7 +3365,7 @@ export const ds = tokens;
              export const system = { toConfig: () => ({ propConfig: '{}', groupRegistry: '{}' }), getVocabularyRecord: () => ({ version: 1, keyframes: [], globalStyles: [], collisions: [], legacyVerbs: [] }) };\n",
         );
 
-        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &[]);
+        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &ResolutionContext::default());
         let _ = fs::remove_dir_all(&dir);
 
         let config = result.expect("'theme' beside a non-theme 'tokens' must load");
@@ -3348,7 +3393,7 @@ export const ds = tokens;
              export const system = { toConfig: () => ({ propConfig: '{}', groupRegistry: '{}' }), getVocabularyRecord: () => ({ version: 1, keyframes: [], globalStyles: [], collisions: [], legacyVerbs: [] }) };\n",
         );
 
-        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &[]);
+        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &ResolutionContext::default());
         let _ = fs::remove_dir_all(&dir);
 
         let config = result.expect("a tokens-only system must load");
@@ -3377,7 +3422,7 @@ export const ds = tokens;
              export const system = { toConfig: () => ({ propConfig: '{}', groupRegistry: '{}' }), getVocabularyRecord: () => ({ version: 1, keyframes: [], globalStyles: [], collisions: [], legacyVerbs: [] }) };\n",
         );
 
-        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &[]);
+        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &ResolutionContext::default());
         let _ = fs::remove_dir_all(&dir);
 
         let config = result.expect("built tokens beside unrelated theme must load");
@@ -3402,7 +3447,7 @@ export const ds = tokens;
              export const system = { toConfig: () => ({ propConfig: '{}', groupRegistry: '{}' }), getVocabularyRecord: () => ({ version: 1, keyframes: [], globalStyles: [], collisions: [], legacyVerbs: [] }) };\n",
         );
 
-        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &[]);
+        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &ResolutionContext::default());
         let _ = fs::remove_dir_all(&dir);
 
         let err = result.expect_err("an un-built 'theme' export must fail the load");
@@ -3434,7 +3479,7 @@ export const ds = tokens;
              export const system = { toConfig: () => ({ propConfig: '{}', groupRegistry: '{}' }), getVocabularyRecord: () => ({ version: 1, keyframes: [], globalStyles: [], collisions: [], legacyVerbs: [] }) };\n",
         );
 
-        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &[]);
+        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &ResolutionContext::default());
         let _ = fs::remove_dir_all(&dir);
 
         let err =
@@ -3459,7 +3504,7 @@ export const ds = tokens;
              export const system = { toConfig: () => ({ propConfig: '{}', groupRegistry: '{}' }), getVocabularyRecord: () => ({ version: 1, keyframes: [], globalStyles: [], collisions: [], legacyVerbs: [] }) };\n",
         );
 
-        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &[]);
+        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &ResolutionContext::default());
         let _ = fs::remove_dir_all(&dir);
 
         let err = result.expect_err("an un-built 'tokens' export must fail the load");
@@ -3480,7 +3525,7 @@ export const ds = tokens;
              export const system = { toConfig: () => ({ propConfig: '{}', groupRegistry: '{}' }), getVocabularyRecord: () => ({ version: 1, keyframes: [], globalStyles: [], collisions: [], legacyVerbs: [] }) };\n",
         );
 
-        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &[]);
+        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &ResolutionContext::default());
         let _ = fs::remove_dir_all(&dir);
 
         let err = result.expect_err("an unrelated 'theme' with no fallback must fail the load");
@@ -3509,7 +3554,7 @@ export const ds = tokens;
              export const system = { toConfig: () => ({ propConfig: '{}', groupRegistry: '{}' }), getVocabularyRecord: () => ({ version: 1, keyframes: [], globalStyles: [], collisions: [], legacyVerbs: [] }) };\n",
         );
 
-        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &[]);
+        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &ResolutionContext::default());
         let _ = fs::remove_dir_all(&dir);
 
         result.expect("aliasing 'tokens' to 'theme' must stay a valid load");
@@ -3541,7 +3586,7 @@ export const ds = tokens;
              export const system = { toConfig: () => ({ propConfig: '{}', groupRegistry: '{}' }), getVocabularyRecord: () => ({ version: 1, keyframes: [], globalStyles: [], collisions: [], legacyVerbs: [] }) };\n",
         );
 
-        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &[]);
+        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &ResolutionContext::default());
         let _ = fs::remove_dir_all(&dir);
 
         let error = result.expect_err("two distinct built themes must fail the load");
@@ -3566,7 +3611,7 @@ export const ds = tokens;
              export const value = fontUrl;\n",
         );
 
-        let result = resolve_all_deps(&entry.to_string_lossy(), &dir.to_string_lossy(), &[]);
+        let result = resolve_all_deps(&entry.to_string_lossy(), &dir.to_string_lossy(), &ResolutionContext::default());
         let _ = fs::remove_dir_all(&dir);
 
         let error = result.expect_err("a bundler asset-query import must fail the load");
@@ -3595,7 +3640,7 @@ export const ds = tokens;
              export const value = fontUrl;\n",
         );
 
-        let result = resolve_all_deps(&entry.to_string_lossy(), &dir.to_string_lossy(), &[]);
+        let result = resolve_all_deps(&entry.to_string_lossy(), &dir.to_string_lossy(), &ResolutionContext::default());
         let _ = fs::remove_dir_all(&dir);
 
         let error = result.expect_err("a binary asset import must fail the load");
@@ -3615,7 +3660,7 @@ export const ds = tokens;
              export const value = createHash;\n",
         );
 
-        let result = resolve_all_deps(&entry.to_string_lossy(), &dir.to_string_lossy(), &[]);
+        let result = resolve_all_deps(&entry.to_string_lossy(), &dir.to_string_lossy(), &ResolutionContext::default());
         let _ = fs::remove_dir_all(&dir);
 
         let error = result.expect_err("a Node builtin import must fail the load");
@@ -3644,7 +3689,7 @@ export const ds = tokens;
             "import { thing } from 'fake-esm-pkg';\nexport const value = thing;\n",
         );
 
-        let result = resolve_all_deps(&entry.to_string_lossy(), &dir.to_string_lossy(), &[]);
+        let result = resolve_all_deps(&entry.to_string_lossy(), &dir.to_string_lossy(), &ResolutionContext::default());
         let _ = fs::remove_dir_all(&dir);
 
         let (specifier_map, source_map, stub_exports, _, _) =
@@ -3690,7 +3735,7 @@ export const ds = tokens;
              export const value: Thing = 1;\n",
         );
 
-        let result = resolve_all_deps(&entry.to_string_lossy(), &dir.to_string_lossy(), &[]);
+        let result = resolve_all_deps(&entry.to_string_lossy(), &dir.to_string_lossy(), &ResolutionContext::default());
         let _ = fs::remove_dir_all(&dir);
 
         let (specifier_map, _, stub_exports, _, _) =
@@ -3717,7 +3762,7 @@ export const ds = tokens;
             "import { thing } from 'fake-cjs-pkg';\nexport const value = thing;\n",
         );
 
-        let result = resolve_all_deps(&entry.to_string_lossy(), &dir.to_string_lossy(), &[]);
+        let result = resolve_all_deps(&entry.to_string_lossy(), &dir.to_string_lossy(), &ResolutionContext::default());
         let _ = fs::remove_dir_all(&dir);
 
         let error = result.expect_err("a CommonJS dependency must fail the load");
@@ -3906,10 +3951,10 @@ export const ds = tokens;
         fs::create_dir_all(&from_dir).expect("create importing dir");
 
         let resolved =
-            resolve_bare_specifier("@fixture/wildcard-kit/field", &from_dir.to_string_lossy(), &[]);
-        let root = resolve_bare_specifier("@fixture/wildcard-kit", &from_dir.to_string_lossy(), &[]);
+            resolve_bare_specifier("@fixture/wildcard-kit/field", &from_dir.to_string_lossy(), &ResolutionContext::default());
+        let root = resolve_bare_specifier("@fixture/wildcard-kit", &from_dir.to_string_lossy(), &ResolutionContext::default());
         let missing =
-            resolve_bare_specifier("@fixture/wildcard-kit/absent", &from_dir.to_string_lossy(), &[]);
+            resolve_bare_specifier("@fixture/wildcard-kit/absent", &from_dir.to_string_lossy(), &ResolutionContext::default());
         let _ = fs::remove_dir_all(&dir);
 
         let (resolved, _) = resolved.expect("a `./*` exports pattern must resolve its subpath");
@@ -3940,7 +3985,7 @@ export const ds = tokens;
         }
 
         // @animus-ui/system has exports field
-        let (path, _) = resolve_bare_specifier("@animus-ui/system", &dir_str, &[])
+        let (path, _) = resolve_bare_specifier("@animus-ui/system", &dir_str, &ResolutionContext::default())
             .expect("built @animus-ui/system package must resolve");
         assert!(path.contains("dist/index.js") || path.contains("dist/index.mjs"));
     }
@@ -3957,7 +4002,7 @@ export const ds = tokens;
             return;
         }
 
-        let (path, _) = resolve_bare_specifier("@animus-ui/system/groups", &dir_str, &[])
+        let (path, _) = resolve_bare_specifier("@animus-ui/system/groups", &dir_str, &ResolutionContext::default())
             .expect("built @animus-ui/system/groups subpath must resolve");
         assert!(path.contains("groups"));
     }
@@ -3982,9 +4027,9 @@ export const ds = tokens;
         package("main-only", r#"{"main": "dist/index.js"}"#, &["dist/index.js"]);
         let from = dir.to_string_lossy();
 
-        let (module, _) = resolve_bare_specifier("with-module", &from, &[]).expect("module resolves");
+        let (module, _) = resolve_bare_specifier("with-module", &from, &ResolutionContext::default()).expect("module resolves");
         assert!(module.ends_with("with-module/dist/index.mjs"), "{module}");
-        let (main, _) = resolve_bare_specifier("main-only", &from, &[]).expect("main resolves");
+        let (main, _) = resolve_bare_specifier("main-only", &from, &ResolutionContext::default()).expect("main resolves");
         assert!(main.ends_with("main-only/dist/index.js"), "{main}");
     }
 
@@ -4005,7 +4050,7 @@ export const ds = tokens;
             return;
         }
 
-        let config = load_system_module(&ds_path.to_string_lossy(), &root_str, None, &[])
+        let config = load_system_module(&ds_path.to_string_lossy(), &root_str, None, &ResolutionContext::default())
             .expect("load_system_module should succeed");
 
         assert!(
