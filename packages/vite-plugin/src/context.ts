@@ -3,7 +3,6 @@ import {
   contentHash,
   createExcludeMatcher,
   DiagnosticFailure,
-  createV2EngineApi,
   DEFAULT_EXTENSIONS,
   clearEngineCache,
   diffFilePlans,
@@ -29,6 +28,11 @@ import {
   unresolvableIncludesMessage,
   runStructuralSelfCheck,
 } from '@animus-ui/extract/pipeline';
+import {
+  createBuildId,
+  engineHandle,
+  sessionKey,
+} from '@animus-ui/extract/session';
 import { statSync } from 'fs';
 import { isAbsolute, relative, resolve } from 'path';
 
@@ -58,7 +62,6 @@ import type {
   SourceCorpus,
   SourceIngestionResult,
   SystemConfig,
-  V2ExtractEngine,
 } from '@animus-ui/extract/pipeline';
 import type { Logger } from 'vite';
 
@@ -332,9 +335,6 @@ export class PluginContext {
 
   // Per-plugin-instance engine state: two differently-configured plugins in
   // one process must not share an engine.
-  private v2Engine: V2ExtractEngine | null = null;
-  private v2SentSources: Map<string, string> | null = null;
-  private v2DriftWarned = false;
 
   /** Every native extraction call goes through this one accessor. */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -362,39 +362,25 @@ export class PluginContext {
       this.engineApi = engineApiOverride;
       return;
     }
-    // The module id goes through a variable so bundlers leave the require
-    // dynamic instead of resolving the native engine at build time.
-    const engineModuleId = '@animus-ui/extract';
-    this.engineApi = createV2EngineApi({
-      label: 'animus-extract',
-      isV2: () => true,
-      loadNativeEngine: () => require(engineModuleId),
-      rehydrateFilesJson: (filesJsonRaw) => {
-        if (!filesJsonRaw.includes('"source":""')) return filesJsonRaw;
-        const entries = parseFilesJson(filesJsonRaw, 'animus-extract');
-        const analysisEntries = this.corpus.published.analysisEntries;
-        for (const entry of entries) {
-          if (entry.source === '') {
-            entry.source = analysisEntries.get(entry.path)?.source ?? '';
-          }
+    // This context is one build: its engine state is its own in the one
+    // engine-handle store, keyed once the root is known.
+    const build = createBuildId();
+    const rehydrateFilesJson = (filesJsonRaw: string): string => {
+      if (!filesJsonRaw.includes('"source":""')) return filesJsonRaw;
+      const entries = parseFilesJson(filesJsonRaw, 'animus-extract');
+      const analysisEntries = this.corpus.published.analysisEntries;
+      for (const entry of entries) {
+        if (entry.source === '') {
+          entry.source = analysisEntries.get(entry.path)?.source ?? '';
         }
-        return JSON.stringify(entries);
-      },
-      store: {
-        getEngine: () => this.v2Engine,
-        setEngine: (engine) => {
-          this.v2Engine = engine;
-        },
-        getSentSources: () => this.v2SentSources,
-        setSentSources: (sources) => {
-          this.v2SentSources = sources;
-        },
-        getDriftWarned: () => this.v2DriftWarned,
-        setDriftWarned: (value) => {
-          this.v2DriftWarned = value;
-        },
-      },
-    });
+      }
+      return JSON.stringify(entries);
+    };
+    this.engineApi = () =>
+      engineHandle(sessionKey(build, this.rootDir || process.cwd()), {
+        label: 'animus-extract',
+        rehydrateFilesJson,
+      })();
   }
 
   log(msg: string): void {

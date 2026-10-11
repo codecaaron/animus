@@ -70,10 +70,16 @@ export {
   resetAnalysisStartedPromise,
   setAnalysisStartedPromise,
   createBuildId,
+  engineHandle,
+  EnvironmentFailure,
   findSession,
   joinSession,
   requireEngine,
   SessionConfigurationConflict,
   sessionKey,
 } from './singleton';
-export type { SessionKey, SessionState } from './singleton';
+export type {
+  EngineHandleOptions,
+  SessionKey,
+  SessionState,
+} from './singleton';
