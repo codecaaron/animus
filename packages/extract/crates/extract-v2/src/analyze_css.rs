@@ -6200,6 +6200,21 @@ fn run_with_system_floor(
             );
             continue;
         }
+        // A parent the analysis refused after the walk (an unsettled static,
+        // a stage that failed) leaves what the extension inherits unknown,
+        // so the extension is refused with it rather than shipped without
+        // it. A parent outside the analysis leaves it standalone.
+        let refused_parent = parent_map
+            .get(component_id)
+            .is_some_and(|parent_id| chain_lookup.contains_key(parent_id.as_str()) && !evaluated.contains_key(parent_id));
+        if refused_parent {
+            let parent = chain.descriptor.extends_from.clone().unwrap_or_default();
+            let reason = parent_failed_reason(&parent);
+            diagnostics.push(
+                diagnostic(file_path, &chain.descriptor.binding, "bail", reason, Some(UNRESOLVED_PARENT)).dropping(&parent),
+            );
+            continue;
+        }
         let parent_variant_configs = parent_map
             .get(component_id)
             .and_then(|parent_id| inherited_variant_configs.get(parent_id))

@@ -2443,6 +2443,37 @@ export const App = () => <Box tone="red" />;
                 serde_json::from_str(&engine.analyze(serde_json::Value::Array(files).to_string(), None).unwrap()).unwrap();
             assert_eq!(out["css"].as_str().unwrap_or_default().contains("padding"), extracts, "{row}: {}", out["css"]);
         }
+        // An extension of a parent refused for a possibly-mutated static is
+        // refused with it, named, never shipped without what it inherits;
+        // with nothing mutated, it inherits the parent's styles.
+        let kit = "import { pad } from './tokens';\n\
+                   export const Parent = ds.styles({ ...pad, display: 'flex', cursor: 'pointer' }).asElement('button');\n\
+                   export const Child = Parent.extend().styles({ color: 'red' }).asElement('button');\n";
+        for mutated in [true, false] {
+            let mut engine = ExtractEngine::new(None).unwrap();
+            let mut files = vec![
+                serde_json::json!({ "path": "tokens.ts", "source": "export const pad = { padding: 4 };\n" }),
+                serde_json::json!({ "path": "kit.tsx", "source": kit }),
+                serde_json::json!({
+                    "path": "app.tsx",
+                    "source": "import { Parent, Child } from './kit';\nexport const App = () => <><Parent /><Child /></>;\n",
+                }),
+            ];
+            if mutated {
+                files.push(serde_json::json!({ "path": "mutate.ts", "source": "import { pad } from './tokens';\npad.padding = 9;\n" }));
+            }
+            let files = serde_json::Value::Array(files);
+            let out: serde_json::Value = serde_json::from_str(&engine.analyze(files.to_string(), None).unwrap()).unwrap();
+            let child = out["component_fragments"]["kit.tsx::Child"]["base"].as_str().unwrap_or_default();
+            let named = out["diagnostics"].as_array().unwrap().iter().any(|d| {
+                d["component"] == "Child" && d["code"] == "animus.extension.unresolved-parent"
+            });
+            if mutated {
+                assert!(child.is_empty() && named, "{child}: {}", out["diagnostics"]);
+            } else {
+                assert!(["padding", "display: flex", "cursor: pointer", "color: red"].iter().all(|d| child.contains(d)), "{child}");
+            }
+        }
         // A type query of eval, or a schema builder's own `Function` member
         // (TypeBox's `Type.Function`), runs nothing, and a type query of a
         // function's `arguments` reads none of them: the static still
