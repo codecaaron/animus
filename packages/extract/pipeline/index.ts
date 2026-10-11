@@ -254,6 +254,8 @@ export {
 } from './host-assets';
 export type { HostAssetClassification } from './host-assets';
 export { viteLoadExpander } from './vite-expansions';
+export { webpackLoadExpander } from './webpack-expansions';
+export type { WebpackResolveReading } from './webpack-expansions';
 export type {
   ExpandedPath,
   HostLoadExpander,

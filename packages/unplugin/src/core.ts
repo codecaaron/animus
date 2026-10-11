@@ -13,6 +13,7 @@ import {
   viteExtensionPolicy,
   viteLoadExpander,
   webpackExtensionPolicy,
+  webpackLoadExpander,
 } from '@animus-ui/extract/pipeline';
 import {
   ANIMUS_CSS_MODULE_ID,
@@ -285,9 +286,17 @@ interface RspackLikeCompiler extends WebpackLikeCompiler {
   };
 }
 
+/** A webpack parser's wrapped-context options, which build a template or
+ *  concatenated request's context. */
+interface WrappedContextOptions {
+  wrappedContextRegExp?: RegExp;
+  wrappedContextRecursive?: boolean;
+}
+
 interface WebpackLikeCompiler {
   options: {
     mode?: string;
+    module?: { parser?: Record<string, WrappedContextOptions | undefined> };
     resolve?: {
       conditionNames?: string[];
       extensions?: string[];
@@ -304,6 +313,22 @@ interface WebpackLikeCompiler {
   };
   /** Set once `watch()` starts, before the first compilation. */
   watchMode?: boolean;
+  /** webpack's resolvers, whose options decide a context's alternative
+   *  requests. */
+  resolverFactory?: {
+    get(
+      type: 'normal',
+      options: { dependencyType: string }
+    ): {
+      options: {
+        extensions: Iterable<string>;
+        mainFiles: Iterable<string>;
+        modules: ReadonlyArray<string | readonly string[]>;
+        fullySpecified?: boolean;
+        enforceExtension?: boolean;
+      };
+    };
+  };
   webpack?: {
     version?: string;
     DefinePlugin?: new (defs: Record<string, string>) => WebpackLikeApplied;
@@ -343,6 +368,22 @@ interface KitResolveData {
 }
 interface WebpackLikeApplied {
   apply: (compiler: WebpackLikeCompiler) => void;
+}
+
+/** Whether every webpack JavaScript parser keeps the default wrapped
+ *  context, `/.*\/` and recursive. */
+function wrappedContextDefaults(
+  parser: Record<string, WrappedContextOptions | undefined> | undefined
+): boolean {
+  return Object.entries(parser ?? {})
+    .filter(([type]) => type === 'javascript' || type.startsWith('javascript/'))
+    .every(
+      ([, options]) =>
+        (options?.wrappedContextRegExp === undefined ||
+          (options.wrappedContextRegExp.source === '.*' &&
+            options.wrappedContextRegExp.flags === '')) &&
+        options?.wrappedContextRecursive !== false
+    );
 }
 
 /** Whether Vite's `build.dynamicImportVarsOptions` are its default, which
@@ -952,6 +993,23 @@ export const unpluginFactory: UnpluginFactory<
       `${meta.framework === 'rspack' ? 'rspack' : 'webpack'} rules not modelled`
     );
     watching = () => compiler.watchMode === true;
+    // Rspack builds contexts in its own implementation, not reproduced.
+    const resolverFactory = compiler.resolverFactory;
+    hostLoadExpander =
+      meta.framework === 'webpack' && resolverFactory !== undefined
+        ? webpackLoadExpander((category) => {
+            const read = resolverFactory.get('normal', {
+              dependencyType: category,
+            }).options;
+            return {
+              extensions: [...read.extensions],
+              mainFiles: [...read.mainFiles],
+              modules: read.modules,
+              fullySpecified: read.fullySpecified === true,
+              enforceExtension: read.enforceExtension === true,
+            };
+          }, wrappedContextDefaults(compiler.options.module?.parser))
+        : undefined;
     const DefinePlugin =
       compiler.webpack?.DefinePlugin ?? compiler.rspack?.DefinePlugin;
     if (!DefinePlugin) {
