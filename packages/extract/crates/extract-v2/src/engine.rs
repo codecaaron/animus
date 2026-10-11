@@ -1196,17 +1196,24 @@ impl ExtractEngine {
             consumed.push("@animus-ui/system/compose-with-context");
             consumed.push("@animus-ui/system");
         }
+        // A builder import the strip would remove stays while any reference
+        // to it lies outside every replaced span, such as a chain left
+        // untransformed beside one that was replaced.
+        let still_referenced = |callee: &str| {
+            file_facts.builder_import_references.iter().any(|import| {
+                import.imported == callee
+                    && consumed.contains(&import.source.as_str())
+                    && import.spans.iter().any(|&(start, end)| {
+                        !replacements
+                            .iter()
+                            .any(|&(from, to, _)| from <= start && end <= to)
+                    })
+            })
+        };
         let mut extracted: Vec<&str> = Vec::new();
-        if has_primary_extracted {
+        if has_primary_extracted && !still_referenced("animus") {
             extracted.push("animus");
         }
-        // Only a remaining use of an import the strip would remove keeps it.
-        let still_referenced = |callee: &str| {
-            file_facts
-                .compose_callees_in_use
-                .iter()
-                .any(|(name, source)| name == callee && consumed.contains(&source.as_str()))
-        };
         if has_compose_replacements && !still_referenced("compose") {
             extracted.push("compose");
         }
@@ -2301,6 +2308,32 @@ export const App = () => <Box tone="red" />;
         engine.clear_cache();
         assert!(engine.facts.is_empty());
         assert_eq!(engine.parse_count, 0);
+    }
+
+    #[test]
+    fn an_import_a_retained_builder_references_is_never_removed() {
+        let import = "import { animus } from '@animus-ui/system';";
+        // (case, a chain that bails beside the replaced one, import kept)
+        let cases = [
+            ("a bailed chain beside a replaced one", "export const B = animus.styles(dyn()).asElement('span');\n", true),
+            ("every chain replaced", "", false),
+        ];
+        for (case, bailed, kept) in cases {
+            let source = format!(
+                "{import}\nconst dyn = () => ({{ color: 'red' }});\n\
+                 export const A = animus.styles({{ display: 'flex' }}).asElement('div');\n\
+                 {bailed}export const App = () => <A />;\n"
+            );
+            let mut engine = ExtractEngine::new(None).unwrap();
+            engine
+                .analyze(serde_json::json!([{ "path": "a.tsx", "source": source }]).to_string())
+                .unwrap();
+            let out: serde_json::Value =
+                serde_json::from_str(&engine.transform_file("a.tsx".to_string()).unwrap()).unwrap();
+            let code = out["code"].as_str().unwrap();
+            assert!(code.contains("createComponent('div'"), "{case}: {code}");
+            assert_eq!(code.contains(import), kept, "{case}: {code}");
+        }
     }
 
     #[test]
