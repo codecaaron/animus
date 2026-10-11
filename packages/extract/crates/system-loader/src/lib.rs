@@ -841,30 +841,13 @@ fn rewrite_module_for_bundle(
             }
 
             Statement::ExportNamedDeclaration(decl) => {
-                if let Some(source_lit) = &decl.source {
-                    let spec = source_lit.value.to_string();
-                    let require_literal = js_quoted(
-                        &specifier_map
-                            .get(&(canonical_path.to_string(), spec.clone()))
-                            .cloned()
-                            .unwrap_or_else(|| stub_key(&spec)),
-                    );
-
-                    let mut assignments = Vec::new();
-                    for es in &decl.specifiers {
-                        // Arbitrary module namespace names are legal ES2022,
-                        // so export names take the same escape.
-                        let local_str = js_quoted(&module_export_name(&es.local));
-                        let exported_str = js_quoted(&module_export_name(&es.exported));
-                        assignments.push(format!(
-                            "__exports['{}'] = __require('{}')['{}']",
-                            exported_str, require_literal, local_str
-                        ));
-                    }
+                if decl.source.is_some() {
+                    // The module table resolves a re-export; its value is
+                    // assigned after the module runs.
                     ops.push(RewriteOp {
                         start: decl.span.start as usize,
                         end: decl.span.end as usize,
-                        replacement: format!("{};", assignments.join(";\n")),
+                        replacement: String::new(),
                     });
                 } else if !decl.specifiers.is_empty() {
                     for es in &decl.specifiers {
@@ -913,31 +896,13 @@ fn rewrite_module_for_bundle(
                 }
             }
 
+            // The module table resolves what `export *` and `export * as`
+            // bring in; their values are assigned after the module runs.
             Statement::ExportAllDeclaration(decl) => {
-                let spec = decl.source.value.to_string();
-                let require_literal = js_quoted(
-                    &specifier_map
-                        .get(&(canonical_path.to_string(), spec.clone()))
-                        .cloned()
-                        .unwrap_or_else(|| stub_key(&spec)),
-                );
-                // `|| {}` guards a registry miss: assigning `undefined` would
-                // leave surrounding code reading exports that never appear.
-                let replacement = match &decl.exported {
-                    Some(exported) => format!(
-                        "__exports['{}'] = __require('{}') || {{}};",
-                        js_quoted(&module_export_name(exported)),
-                        require_literal
-                    ),
-                    None => format!(
-                        "Object.assign(__exports, __require('{}') || {{}});",
-                        require_literal
-                    ),
-                };
                 ops.push(RewriteOp {
                     start: decl.span.start as usize,
                     end: decl.span.end as usize,
-                    replacement,
+                    replacement: String::new(),
                 });
             }
 
@@ -1199,6 +1164,20 @@ fn build_bundle(
             )
         }
     };
+    // Every module's names come from the shared module table, as a cyclic
+    // graph's do: an import or re-export that links to nothing fails here,
+    // before any module runs.
+    let mut modules: HashMap<String, linked::LinkedModule> = HashMap::with_capacity(order.len());
+    for path in &order {
+        let module = linked::rewrite_module_for_linking(&source_map[path], path, specifier_map)?;
+        modules.insert(path.clone(), module);
+    }
+    let linker = linked::Linker::new(&modules, stub_exports);
+    let mut paths: Vec<&String> = order.iter().collect();
+    paths.sort();
+    for path in paths {
+        linker.check_links(path)?;
+    }
     let mut module_spans = Vec::with_capacity(order.len());
 
     for module_path in &order {
@@ -1209,6 +1188,7 @@ fn build_bundle(
             module_path,
             source_map,
             specifier_map,
+            &linker.forwarded(module_path),
         )?;
     }
 
@@ -1232,12 +1212,21 @@ fn push_module_iife(
     module_path: &String,
     source_map: &HashMap<String, String>,
     specifier_map: &HashMap<(String, String), String>,
+    forwarded: &[(String, String)],
 ) -> Result<(), String> {
     let source = source_map
         .get(module_path)
         .ok_or_else(|| format!("module '{}' not found in source_map", module_path))?;
 
-    let rewritten = rewrite_module_for_bundle(source, module_path, specifier_map)?;
+    let mut rewritten = rewrite_module_for_bundle(source, module_path, specifier_map)?;
+    // What the module re-exports, or `export *` brings in, reads the binding
+    // it resolves to, once the modules it imports have run.
+    if !forwarded.is_empty() {
+        rewritten.push('\n');
+        for (name, read) in forwarded {
+            let _ = writeln!(rewritten, "__exports['{}'] = {};", js_quoted(name), read);
+        }
+    }
 
     marker_offsets.push((bundle.len(), module_path.clone()));
     let _ = writeln!(bundle, "{}{}", MODULE_MARKER_PREFIX, module_path);
@@ -2292,10 +2281,7 @@ export const ds = tokens;
         let (bundle, _) =
             build_bundle(&HashMap::new(), &source_map, &stub_exports, "/entry.js").unwrap();
 
-        assert!(
-            bundle.contains("__exports['dsSpace'] = __require('__stub__/react')['space']"),
-            "{bundle}"
-        );
+        assert!(bundle.contains("__exports['dsSpace'] = __modules['__stub__/react']['space'];"), "{bundle}");
         eval_bundle(&bundle).expect("re-export from a stub must not read a property of undefined");
     }
 
@@ -2305,10 +2291,8 @@ export const ds = tokens;
         let (bundle, _) =
             build_bundle(&HashMap::new(), &source_map, &HashMap::new(), "/entry.js").unwrap();
 
-        assert!(
-            bundle.contains("Object.assign(__exports, __require('__stub__/react') || {})"),
-            "{bundle}"
-        );
+        // An unregistered module brings in no name, so nothing is assigned.
+        assert!(!bundle.contains("__exports['"), "{bundle}");
         eval_bundle(&bundle).expect("`export *` from an unregistered module must not throw");
     }
 
@@ -2318,10 +2302,10 @@ export const ds = tokens;
             ("/entry.ts".to_string(), "pkg".to_string()),
             "/canonical/pkg.ts".to_string(),
         )]);
+        // The module table binds the name; the rewrite only drops the syntax.
         assert_eq!(
-            rewrite_module_for_bundle("export * as ns from 'pkg';", "/entry.ts", &resolved_map)
-                .unwrap(),
-            "__exports['ns'] = __require('/canonical/pkg.ts') || {};"
+            rewrite_module_for_bundle("export * as ns from 'pkg';", "/entry.ts", &resolved_map).unwrap(),
+            ""
         );
 
         let stub_exports =
@@ -2329,10 +2313,7 @@ export const ds = tokens;
         let source_map = single_module("/entry.js", "export * as R from 'react';\n");
         let (bundle, _) =
             build_bundle(&HashMap::new(), &source_map, &stub_exports, "/entry.js").unwrap();
-        assert!(
-            bundle.contains("__exports['R'] = __require('__stub__/react') || {}"),
-            "{bundle}"
-        );
+        assert!(bundle.contains("__exports['R'] = __modules['__stub__/react'];"), "{bundle}");
         assert!(
             !bundle.contains("Object.assign(__exports, __require('__stub__/react')"),
             "namespace form must not spread into __exports: {bundle}"
@@ -2685,6 +2666,27 @@ export const ds = tokens;
             !blocks.contains("motion") && !blocks.contains("animus-kf-ccc"),
             "unregistered export must not carry: {blocks}"
         );
+    }
+
+    #[test]
+    fn a_systems_explicit_reexport_is_never_overridden_by_a_star() {
+        // Contract: an explicit export wins over a name `export *` brings in,
+        // whatever their order, as Node links them, on the acyclic path as
+        // on the cyclic one.
+        let dir = scratch_dir("explicit-beats-star");
+        write_fixture(
+            &dir.join("entry.js"),
+            "import { y } from './a.js';\nconst data = { y };\n\
+             export const ds = { toConfig: () => ({ propConfig: JSON.stringify(data), groupRegistry: '{}' }), \
+             getVocabularyRecord: () => ({ version: 1, keyframes: [], globalStyles: [], collisions: [] }) };\n\
+             export const theme = { serialize: () => ({ scalesJson: '{}', variableMapJson: '{}', variableCss: '', contextualVarsJson: '{}' }) };\n",
+        );
+        write_fixture(&dir.join("a.js"), "export { y } from './c.js';\nexport * from './d.js';\n");
+        write_fixture(&dir.join("c.js"), "export const y = 'explicit';\n");
+        write_fixture(&dir.join("d.js"), "export const y = 'star';\n");
+        let result = load_system_module(&dir.join("entry.js").to_string_lossy(), &dir.to_string_lossy(), None, &[]);
+        let _ = fs::remove_dir_all(&dir);
+        assert_eq!(result.map(|loaded| loaded.prop_config).as_deref(), Ok(r#"{"y":"explicit"}"#));
     }
 
     #[test]

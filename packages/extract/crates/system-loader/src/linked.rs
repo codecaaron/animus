@@ -104,7 +104,8 @@ pub(crate) enum ExportTarget {
     Namespace { from: String },
 }
 
-/// A module of a cyclic graph, rewritten for linking.
+/// A module rewritten for linking: its exports, stars and imports link every
+/// graph; its link code and body make a cyclic graph's bundle.
 pub(crate) struct LinkedModule {
     /// Its own export names, in source order.
     pub exports: Vec<(String, ExportTarget)>,
@@ -298,7 +299,7 @@ pub(crate) fn rewrite_module_for_linking(
     Ok(module)
 }
 
-/// The export relation of a cyclic graph's modules, answered by the shared
+/// The export relation of a system's modules, cyclic or not, answered by the shared
 /// module table. A stub is a module outside the graph: an import of it names
 /// its export without proving it, and `export *` of it is open. The loader
 /// builds each stub's object, so it closes that opening itself: a star of a
@@ -455,11 +456,21 @@ impl<'a> Linker<'a> {
         getters
     }
 
+    /// The getters of `module`'s names that do not read one of its own
+    /// bindings: what it re-exports, and what `export *` brings in.
+    pub fn forwarded(&self, module: &str) -> Vec<(String, String)> {
+        let record = self.table.record(self.index[module]);
+        self.getters(module)
+            .into_iter()
+            .filter(|(name, _)| !record.local_exports.iter().any(|(exported, _)| exported == name))
+            .collect()
+    }
+
     /// Fails as Node fails to link: an import of a name its module does not
     /// export, or exports ambiguously through `export *`, a re-export that
     /// does not resolve, and either through a module the graph does not hold.
     pub fn check_links(&self, module: &str) -> Result<(), String> {
-        use crate::module_table::{ExportLookup, ImportName, Request};
+        use crate::module_table::{ExportLookup, ImportName, Request, LINK_ABSENT_IMPORT, LINK_AMBIGUOUS_IMPORT};
         let at = self.index[module];
         let record = self.table.record(at);
         // A re-export is named by the name it exports, as Node names it.
@@ -476,15 +487,15 @@ impl<'a> Linker<'a> {
                 Request::Outside(_) => continue,
                 Request::Unresolved(key) => (key.clone(), ExportLookup::Absent),
             };
-            let problem = match lookup {
+            let (code, problem) = match lookup {
                 ExportLookup::Resolved(_) => continue,
-                ExportLookup::Ambiguous(_) => "which resolves it ambiguously through `export *`",
-                _ if verb == "re-exports" => "which resolves to no binding",
-                _ => "which does not export it",
+                ExportLookup::Ambiguous(_) => (LINK_AMBIGUOUS_IMPORT, "which resolves it ambiguously through `export *`"),
+                _ if verb == "re-exports" => (LINK_ABSENT_IMPORT, "which resolves to no binding"),
+                _ => (LINK_ABSENT_IMPORT, "which does not export it"),
             };
             let target = if verb == "re-exports" { String::new() } else { format!(" from '{from}'") };
             return Err(format!(
-                "module '{module}' {verb} '{shown}'{target}, {problem}; the system loader links this cyclic \
+                "module '{module}' {verb} '{shown}'{target}, {problem} ({code}); the system loader links this \
                  module graph as Node does, and Node rejects this too"
             ));
         }
