@@ -1520,7 +1520,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
         &assigned_targets,
     );
 
-    let module_record = crate::link::copy_module_record(ast.module_record(), &bindings);
+    let module_record = crate::link::copy_module_record(ast.module_record(), &bindings, ast.source());
 
     FileFacts {
         path: ast.path.clone(),

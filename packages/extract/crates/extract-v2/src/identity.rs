@@ -108,6 +108,9 @@ pub struct Binding {
     /// `None` for the module scope.
     pub scope: Option<ScopeId>,
     pub kind: BindingKind,
+    /// Whether it holds a value at runtime: false for a type, an interface
+    /// and a namespace with no runtime member.
+    pub value: bool,
 }
 
 /// What the module exports as `default`.
@@ -210,7 +213,8 @@ impl BindingTable {
             let import = scope.is_none().then(|| imports.get(name)).flatten();
             let kind = import.map_or(BindingKind::Declared, |import| BindingKind::Import(import.clone()));
             let span = scoping.symbol_span(symbol);
-            bindings.push(Binding { name: name.to_string(), span: (span.start, span.end), scope, kind });
+            let value = scoping.symbol_flags(symbol).is_value();
+            bindings.push(Binding { name: name.to_string(), span: (span.start, span.end), scope, kind, value });
         }
         let module_names: FxHashMap<String, LocalId> = scope_names
             .into_iter()
@@ -322,6 +326,7 @@ fn default_export(
             span: (span.start, span.end),
             scope: None,
             kind: BindingKind::DefaultCell,
+            value: true,
         });
         local
     };
