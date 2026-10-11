@@ -6,22 +6,24 @@ import { ResetCoalescer } from '../src/reset-coalescer';
 
 import type { ErrorPayload } from 'vite';
 
-function harness(run: () => void | Promise<void>, quietMs = 60) {
+function harness(run: () => void | Promise<void>, windowMs = 75) {
   const pending: Array<{ id: number; fn: () => void | Promise<void> }> = [];
   const errors: unknown[] = [];
   let nextId = 1;
   const coalescer = new ResetCoalescer(
     run,
     (err) => errors.push(err),
-    quietMs,
-    (fn) => {
-      const id = nextId++;
-      pending.push({ id, fn });
-      return id;
-    },
-    (id) => {
-      const at = pending.findIndex((t) => t.id === id);
-      if (at !== -1) pending.splice(at, 1);
+    windowMs,
+    {
+      schedule: (fn) => {
+        const id = nextId++;
+        pending.push({ id, fn });
+        return id;
+      },
+      cancel: (id) => {
+        const at = pending.findIndex((t) => t.id === id);
+        if (at !== -1) pending.splice(at, 1);
+      },
     }
   );
   const fire = () => {
@@ -90,7 +92,7 @@ describe('ResetCoalescer', () => {
     expect(errors).toEqual([boom]);
   });
 
-  it('waits for an async reset to settle before scheduling one follow-up', async () => {
+  it('runs one follow-up only after an async reset settles', async () => {
     let runs = 0;
     let releaseFirst!: () => void;
     const h = harness(() => {
@@ -106,16 +108,17 @@ describe('ResetCoalescer', () => {
     const firstRun = h.fire();
     expect(runs).toBe(1);
 
+    // Requests during the run open one window; it comes due mid-run and
+    // never overlaps the running reset.
     h.coalescer.request();
     h.coalescer.request();
     h.coalescer.request();
-    expect(h.pending).toHaveLength(0);
+    expect(h.pending).toHaveLength(1);
+    h.fire();
+    expect(runs).toBe(1);
 
     releaseFirst();
     await firstRun;
-    expect(h.pending).toHaveLength(1);
-
-    await h.fire();
     expect(runs).toBe(2);
     expect(h.pending).toHaveLength(0);
   });
@@ -153,7 +156,7 @@ describe('ResetCoalescer', () => {
     expect(runs).toBe(2);
   });
 
-  it('schedules again after a completed quiet cycle', () => {
+  it('schedules again after a completed window', () => {
     let runs = 0;
     const { coalescer, fire } = harness(() => {
       runs++;
@@ -164,6 +167,92 @@ describe('ResetCoalescer', () => {
     coalescer.request();
     fire();
     expect(runs).toBe(2);
+  });
+});
+
+/** A manual clock with time: timers fire in due order as it advances. */
+function timedClock() {
+  let now = 0;
+  let nextId = 1;
+  const timers: Array<{
+    id: number;
+    due: number;
+    fn: () => void | Promise<void>;
+  }> = [];
+  return {
+    clock: {
+      schedule: (fn: () => void | Promise<void>, ms: number) => {
+        const id = nextId++;
+        timers.push({ id, due: now + ms, fn });
+        return id;
+      },
+      cancel: (id: number | ReturnType<typeof setTimeout>) => {
+        const at = timers.findIndex((t) => t.id === id);
+        if (at !== -1) timers.splice(at, 1);
+      },
+    },
+    now: () => now,
+    /** Advances to `to`, firing each timer due by then at its due time. */
+    async advance(to: number) {
+      for (;;) {
+        timers.sort((a, b) => a.due - b.due);
+        const next = timers[0];
+        if (next === undefined || next.due > to) break;
+        timers.shift();
+        now = next.due;
+        // A held reset never settles here: fire it and let it start.
+        void next.fn();
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+      now = to;
+    },
+  };
+}
+
+describe('ResetCoalescer window', () => {
+  /** Contract: the window never moves back (SA19). It fires a fixed
+   *  interval after its first event, and a follow-up requested during a
+   *  running reset is due a fixed interval after its own first request. */
+  it('the window never moves back', async () => {
+    const time = timedClock();
+    const starts: number[] = [];
+    let finish!: () => void;
+    const coalescer = new ResetCoalescer(
+      () => {
+        starts.push(time.now());
+        if (starts.length > 1) return;
+        return new Promise<void>((resolve) => {
+          finish = resolve;
+        });
+      },
+      () => {},
+      75,
+      time.clock
+    );
+
+    // Requests at 0, 50 and 70: the first reset starts at 75 regardless.
+    coalescer.request();
+    await time.advance(50);
+    coalescer.request();
+    await time.advance(70);
+    coalescer.request();
+    await time.advance(75);
+    expect(starts).toEqual([75]);
+
+    // Requests at 80, 200 and 290 during the running reset: the first is
+    // due at 155, so the follow-up starts at settlement, 300, and covers
+    // the later two; no second follow-up runs at 365.
+    await time.advance(80);
+    coalescer.request();
+    await time.advance(200);
+    coalescer.request();
+    await time.advance(290);
+    coalescer.request();
+    await time.advance(300);
+    finish();
+    await new Promise((resolve) => setImmediate(resolve));
+    await time.advance(400);
+    expect(starts).toEqual([75, 300]);
   });
 });
 
