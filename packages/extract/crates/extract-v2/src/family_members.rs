@@ -275,7 +275,7 @@ impl<'f> ObjectMembers<'f> {
         let (root, rest) = name.split_once('.').map_or((name, None), |(root, rest)| (root, Some(rest)));
         let declared = match ff.imports.iter().find(|import| import.local == root) {
             Some(import) => resolve_import_source(module, &import.source, self.files, self.inputs)
-                .and_then(|source| declared_export(&source, import.imported.clone(), self.files, self.inputs, self.links))
+                .and_then(|source| declared_export(&source, import.imported.clone(), self.files, self.links))
                 .map(|(declaring, _, binding)| (declaring, binding)),
             None => Some((module.to_string(), root.to_string())),
         };
@@ -485,7 +485,7 @@ impl<'f> ObjectMembers<'f> {
     /// and barrels.
     fn exported_object(&mut self, module: &str, name: &str) -> Option<Object> {
         let (declaring, exported, declared) =
-            declared_export(module, name.to_string(), self.files, self.inputs, self.links)?;
+            declared_export(module, name.to_string(), self.files, self.links)?;
         if let Some(&id) = self.families.exports.get(&(declaring.clone(), exported)) {
             return Some(Object::Family(id));
         }
@@ -803,19 +803,14 @@ fn resolve_export(
 /// (`import * as name from '…'; export { name }`), followed through
 /// re-exports and barrels. `None` when `name` is no namespace there.
 ///
-/// A module namespace the module table resolves the export to is that
-/// module; any other answer keeps the namespace re-export walk.
-pub(crate) fn namespace_export(
-    module: String,
-    name: String,
-    files: &BTreeMap<String, FileFacts>,
-    inputs: &CssInputs,
-    links: &crate::link::ProjectLinks,
-) -> Option<String> {
-    if let Some(ExportLookup::Resolved(Terminal::Namespace(target))) = links.resolve_export(&module, &name) {
-        return Some(links.paths[target].clone());
+/// Only a module namespace the module table resolves the export to is a
+/// namespace: an absent, ambiguous or open answer, a binding and an
+/// export of a module outside the analysis are none.
+pub(crate) fn namespace_export(module: String, name: String, links: &crate::link::ProjectLinks) -> Option<String> {
+    match links.resolve_export(&module, &name)? {
+        ExportLookup::Resolved(Terminal::Namespace(target)) => Some(links.paths[target].clone()),
+        _ => None,
     }
-    resolve_namespace(module, name, files, inputs, &mut FxHashSet::default())
 }
 
 fn resolve_namespace(

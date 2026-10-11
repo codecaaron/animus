@@ -882,51 +882,50 @@ fn resolve_export_traced(
     links: &crate::link::ProjectLinks,
 ) -> Option<(String, String, bool, Option<String>)> {
     let module = resolve_import_source(file_path, specifier, files, inputs)?;
-    Some(module_declaration(module, imported, files, inputs, links))
+    module_declaration(module, imported, files, inputs, links)
 }
 
-/// Where `module`'s export `imported` is declared: the landing file, the
-/// declarator binding there, whether that file declares it locally, and the
-/// first barrel left through a local export of an import. A binding the
-/// module table resolves the export to lands there, `export *` routes
-/// included; any other answer keeps the analyzed re-export walk.
+/// Where `module`'s export `imported` is declared, as the module table
+/// resolves it: the declaring file, the declarator binding there, whether
+/// that file declares it itself, and the first barrel left through a local
+/// export of an import (for diagnostics only).
+/// - A binding the table resolves the export to is the answer. For
+///   `export default X`, that is X, as the facts name it.
+/// - A namespace, or an export of a module outside the analysis, is
+///   declared nowhere here: the answer stays at `module`, not declared
+///   locally.
+/// - An absent, ambiguous or open answer is `None`: the export names
+///   nothing the analysis can prove.
 fn module_declaration(
     module: String,
     imported: &str,
     files: &BTreeMap<String, FileFacts>,
     inputs: &CssInputs,
     links: &crate::link::ProjectLinks,
-) -> (String, String, bool, Option<String>) {
-    let resolved = links.resolve_export(&module, imported);
-    let (pf, pn, barrel) = follow_reexports_traced(module, imported.to_string(), files, inputs);
-    if let Some(ExportLookup::Resolved(Terminal::Local { module: declaring, binding })) = resolved {
-        let path = &links.paths[declaring];
-        let declared = files[path].bindings.binding(binding);
-        if declared.kind != BindingKind::DefaultCell {
-            let locally_defined = declares_locally(&files[path], &declared.name);
-            return (path.clone(), declared.name.clone(), locally_defined, barrel);
+) -> Option<(String, String, bool, Option<String>)> {
+    let (_, _, barrel) = follow_reexports_traced(module.clone(), imported.to_string(), files, inputs);
+    // A module outside the analysis declares nothing here.
+    let Some(lookup) = links.resolve_export(&module, imported) else {
+        return Some((module, imported.to_string(), false, barrel));
+    };
+    match lookup {
+        ExportLookup::Resolved(Terminal::Local { module: declaring, binding }) => {
+            let path = &links.paths[declaring];
+            let declared = files[path].bindings.binding(binding);
+            let name = match declared.kind {
+                BindingKind::DefaultCell => {
+                    files[path].default_export_binding.clone().unwrap_or_else(|| declared.name.clone())
+                }
+                _ => declared.name.clone(),
+            };
+            let locally_defined = declares_locally(&files[path], &name);
+            Some((path.clone(), name, locally_defined, barrel))
         }
+        ExportLookup::Resolved(Terminal::Namespace(_) | Terminal::External { .. }) => {
+            Some((module, imported.to_string(), false, barrel))
+        }
+        ExportLookup::Absent | ExportLookup::Ambiguous(_) | ExportLookup::Incomplete { .. } => None,
     }
-    let landing = files.get(&pf);
-
-    // Component ids key on the DECLARATOR, not the exported name, so an
-    // aliased export resolves through the export fact's `local`.
-    let local_export = landing.and_then(|pff| {
-        pff.exports
-            .iter()
-            .find(|e| e.exported == pn && e.source.is_none())
-    });
-    let binding = local_export.and_then(|e| e.local.clone()).unwrap_or(pn);
-
-    // A barrel records `local: Some(X)`, `source: None` for a name it merely
-    // imported, so `local` is a declarator only when the file declares it.
-    let locally_defined = landing.is_some_and(|pff| {
-        let imported_here = pff.imports.iter().any(|i| i.local == binding);
-        !imported_here
-            && (local_export.is_some()
-                || pff.chains.iter().any(|c| c.descriptor.binding == binding))
-    });
-    (pf, binding, locally_defined, barrel)
 }
 
 /// Whether `ff` declares `binding` itself, as a local export of it or a
@@ -2765,7 +2764,7 @@ fn member_path_ids(
         let (namespace, family) = namespace.rsplit_once('.')?;
         let module = namespace_path_module(file, ff, namespace, files, inputs, links)?;
         let (declaring, exported, declared) =
-            declared_export(&module, family.to_string(), files, inputs, links)?;
+            declared_export(&module, family.to_string(), files, links)?;
         Some(
             exported_family_slots(&declaring, &exported, &declared, files)
                 .into_iter()
@@ -3039,7 +3038,7 @@ fn exported_component_ids(
         }
         for name in crate::family_members::module_export_names(&module, files, inputs, links) {
             let namespace =
-                crate::family_members::namespace_export(module.clone(), name.clone(), files, inputs, links);
+                crate::family_members::namespace_export(module.clone(), name.clone(), links);
             match namespace {
                 Some(namespace) => modules.push(namespace),
                 None => ids.extend(export_ids(&module, name, true, files, inputs, links, evaluated_ids)),
@@ -3060,7 +3059,7 @@ fn export_ids(
     links: &crate::link::ProjectLinks,
     evaluated_ids: &FxHashSet<String>,
 ) -> Vec<String> {
-    let Some((declaring, exported, declared)) = declared_export(module, name, files, inputs, links) else {
+    let Some((declaring, exported, declared)) = declared_export(module, name, files, links) else {
         return Vec::new();
     };
     let mut ids = resolve_identity(&declaring, &declared, files, inputs, evaluated_ids, None);
@@ -3072,49 +3071,42 @@ fn export_ids(
     ids
 }
 
-/// Where `module`'s export `name` is declared: the declaring file, the
-/// name it exports there, and the local binding it declares. A binding the
-/// module table resolves the export to is declared there, under the name
-/// asked for when the declaring module exports it so, else its first export
-/// name; any other answer keeps the family re-export walk.
+/// Where `module`'s export `name` is declared, as the module table resolves
+/// it: the declaring file, the name it exports there, and the local binding
+/// it declares. Only a binding the table resolves the export to is
+/// declared: the export name is the one asked for when the declaring
+/// module exports the binding so, else its first; for `export default X`
+/// the binding is X, as the facts name it. A namespace, an export of a
+/// module outside the analysis, and an absent, ambiguous or open answer
+/// declare nothing.
 pub(crate) fn declared_export(
     module: &str,
     name: String,
     files: &BTreeMap<String, FileFacts>,
-    inputs: &CssInputs,
     links: &crate::link::ProjectLinks,
 ) -> Option<(String, String, String)> {
-    if let Some(ExportLookup::Resolved(Terminal::Local { module: declaring, binding })) =
-        links.resolve_export(module, &name)
-    {
-        let path = &links.paths[declaring];
-        let declared = files[path].bindings.binding(binding);
-        if declared.kind != BindingKind::DefaultCell {
-            let exports: Vec<&String> = links
-                .table
-                .record(declaring)
-                .local_exports
-                .iter()
-                .filter(|(_, exported)| *exported == binding)
-                .map(|(exported_as, _)| exported_as)
-                .collect();
-            let exported = exports.iter().find(|exported_as| **exported_as == &name).or(exports.first());
-            if let Some(exported) = exported {
-                return Some((path.clone(), exported.to_string(), declared.name.clone()));
-            }
-        }
-    }
-    let (declaring, exported) =
-        crate::family_members::follow_exports(module.to_string(), name, files, inputs)?;
-    let ff = files.get(&declaring)?;
-    let declared = ff
-        .exports
+    let ExportLookup::Resolved(Terminal::Local { module: declaring, binding }) = links.resolve_export(module, &name)?
+    else {
+        return None;
+    };
+    let path = &links.paths[declaring];
+    let declared = files[path].bindings.binding(binding);
+    let exports: Vec<&String> = links
+        .table
+        .record(declaring)
+        .local_exports
         .iter()
-        .find(|e| e.exported == exported && e.source.is_none())
-        .and_then(|e| e.local.clone())
-        .or_else(|| ff.default_export_binding.clone().filter(|_| exported == "default"))
-        .unwrap_or_else(|| exported.clone());
-    Some((declaring, exported, declared))
+        .filter(|(_, exported)| *exported == binding)
+        .map(|(exported_as, _)| exported_as)
+        .collect();
+    let exported = exports.iter().find(|exported_as| **exported_as == &name).or(exports.first())?;
+    let declared_name = match declared.kind {
+        BindingKind::DefaultCell => {
+            files[path].default_export_binding.clone().unwrap_or_else(|| declared.name.clone())
+        }
+        _ => declared.name.clone(),
+    };
+    Some((path.clone(), exported.to_string(), declared_name))
 }
 
 /// The (slot, binding) pairs of the compose family `declaring` declares as
@@ -3160,7 +3152,7 @@ pub(crate) fn namespace_path_module(
     )?;
     for segment in segments {
         let segment = segment.to_string();
-        module = crate::family_members::namespace_export(module, segment, files, inputs, links)?;
+        module = crate::family_members::namespace_export(module, segment, links)?;
     }
     Some(module)
 }
@@ -4056,7 +4048,7 @@ fn bounded_prop_tags(
     let namespace_declared = |file: &str, ff: &FileFacts, path: &str| {
         let (namespace, member) = path.rsplit_once('.')?;
         let module = namespace_path_module(file, ff, namespace, files, inputs, links)?;
-        let (declaring, binding, _, _) = module_declaration(module, member, files, inputs, links);
+        let (declaring, binding, _, _) = module_declaration(module, member, files, inputs, links)?;
         Some((declaring, binding))
     };
     // Whether the component `outer` builds forwards the prop only as written
@@ -11284,6 +11276,79 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             "{}",
             out.sheets.base
         );
+    }
+
+    #[test]
+    fn an_exported_namespace_is_one_only_where_the_module_table_resolves_it() {
+        // Two stars bringing in different namespaces, or one beside an
+        // unresolved path, name no namespace.
+        let counter = crate::owned_ast::ParseCounter::new(0);
+        let files: BTreeMap<String, FileFacts> = [
+            ("x.ts", "export const X = 1;"),
+            ("y.ts", "export const Y = 1;"),
+            ("a.ts", "export * as ns from './x';"),
+            ("b.ts", "export * as ns from './y';"),
+            ("both.ts", "export * from './a';\nexport * from './b';"),
+            ("open.ts", "export * from './a';\nexport * from './missing';"),
+            ("one.ts", "export * from './a';"),
+        ]
+        .into_iter()
+        .map(|(path, source)| {
+            let ast = crate::owned_ast::OwnedAst::parse(path.to_string(), source.to_string(), &counter);
+            (path.to_string(), crate::facts::extract_file_facts(&ast))
+        })
+        .collect();
+        let links = crate::link::ProjectLinks::link(&files, &test_inputs());
+        let namespace = |module: &str| crate::family_members::namespace_export(module.to_string(), "ns".to_string(), &links);
+        assert_eq!(namespace("both.ts"), None);
+        assert_eq!(namespace("open.ts"), None);
+        assert_eq!(namespace("one.ts"), Some("x.ts".to_string()));
+    }
+
+    #[test]
+    fn a_family_export_is_declared_only_where_the_module_table_resolves_it() {
+        // An ambiguous or open export declares nothing; only a resolved
+        // binding is declared, and never the first star's candidate.
+        let counter = crate::owned_ast::ParseCounter::new(0);
+        let files: BTreeMap<String, FileFacts> = [
+            ("a.ts", "export const X = 1;"),
+            ("b.ts", "export const X = 2;"),
+            ("both.ts", "export * from './a';\nexport * from './b';"),
+            ("open.ts", "export * from './a';\nexport * from './missing';"),
+            ("one.ts", "export * from './a';"),
+        ]
+        .into_iter()
+        .map(|(path, source)| {
+            let ast = crate::owned_ast::OwnedAst::parse(path.to_string(), source.to_string(), &counter);
+            (path.to_string(), crate::facts::extract_file_facts(&ast))
+        })
+        .collect();
+        let links = crate::link::ProjectLinks::link(&files, &test_inputs());
+        let declared = |module: &str| declared_export(module, "X".to_string(), &files, &links);
+        assert_eq!(declared("both.ts"), None);
+        assert_eq!(declared("open.ts"), None);
+        assert_eq!(declared("one.ts"), Some(("a.ts".to_string(), "X".to_string(), "X".to_string())));
+    }
+
+    #[test]
+    fn an_extension_parent_its_module_does_not_export_is_not_inherited() {
+        // The module table resolves no export `Parent`: the import names
+        // nothing, so the extension is refused rather than inheriting.
+        let out = analyze(
+            &[
+                (
+                    "private.tsx",
+                    "export const Other = 1;\nconst Parent = ds.styles({ color: 'red' }).asElement('div');\nexport const A = () => <Parent />;\n",
+                ),
+                (
+                    "app.tsx",
+                    "import { Parent } from './private';\nexport const Child = Parent.extend().styles({ display: 'grid' }).asElement('div');\nexport const B = () => <Child />;\n",
+                ),
+            ],
+            &test_inputs(),
+        );
+        assert_eq!(unresolvable_parent_bails(&out, "Parent").len(), 1, "{:?}", out.diagnostics);
+        assert!(!out.sheets.base.contains("animus-Child-"), "{}", out.sheets.base);
     }
 
     #[test]
