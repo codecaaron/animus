@@ -4547,4 +4547,62 @@ export const ds = tokens;
             kit_reads.missing
         );
     }
+
+    /// A failed package resolution keeps what it read and looked for: the
+    /// manifest (even one that does not parse), an exports target or legacy
+    /// entry it found absent, and each nearer `node_modules/<pkg>` it
+    /// checked, never the package directory it took.
+    #[test]
+    fn a_failed_package_resolution_keeps_its_manifest_and_absent_entry() {
+        let dir = scratch_dir("failed-package-reads");
+        let from = dir.join("src");
+        fs::create_dir_all(&from).unwrap();
+        let modules = dir.join("node_modules");
+        write_fixture(&modules.join("bad/package.json"), "{ broken");
+        write_fixture(&modules.join("gone-export/package.json"), r#"{"exports": {".": "./dist/index.js"}}"#);
+        write_fixture(&modules.join("gone-main/package.json"), r#"{"main": "lib/main.js"}"#);
+        let observe = |specifier: &str| {
+            let mut reads = LoadReads::default();
+            let result = resolve_bare_specifier_observed(
+                specifier,
+                &from.to_string_lossy(),
+                &ResolutionContext::default(),
+                &mut reads,
+            );
+            assert!(result.is_err(), "{specifier} resolves to nothing");
+            reads
+        };
+        let path = |rel: &str| dir.join(rel).to_string_lossy().to_string();
+
+        let bad = observe("bad");
+        assert!(bad.read.contains(&path("node_modules/bad/package.json")), "{:?}", bad.read);
+        assert!(bad.missing.contains(&path("src/node_modules/bad")), "{:?}", bad.missing);
+        assert!(!bad.missing.contains(&path("node_modules/bad")), "the package taken: {:?}", bad.missing);
+
+        let export = observe("gone-export");
+        assert!(export.missing.contains(&path("node_modules/gone-export/dist/index.js")), "{:?}", export.missing);
+
+        let main = observe("gone-main");
+        assert!(main.missing.contains(&path("node_modules/gone-main/lib/main.js")), "{:?}", main.missing);
+    }
+
+    /// A package entry records the candidates its probe found absent ahead
+    /// of the one it took, an extension alias's included.
+    #[test]
+    fn a_package_entry_records_the_candidates_ahead_of_the_one_taken() {
+        let dir = scratch_dir("package-entry-candidates");
+        let modules = dir.join("node_modules");
+        write_fixture(&modules.join("aliased/package.json"), r#"{"main": "entry.js"}"#);
+        write_fixture(&modules.join("aliased/entry.js"), "export {};\n");
+        let mut context = ResolutionContext::default();
+        context.extensions.alias = vec![(".js".to_string(), vec![".ts".to_string(), ".js".to_string()])];
+        let mut reads = LoadReads::default();
+
+        let (resolved, _) =
+            resolve_bare_specifier_observed("aliased", &dir.to_string_lossy(), &context, &mut reads).unwrap();
+
+        assert!(resolved.ends_with("aliased/entry.js"), "{resolved}");
+        let entry_ts = modules.join("aliased/entry.ts").to_string_lossy().to_string();
+        assert!(reads.missing.contains(&entry_ts), "{:?}", reads.missing);
+    }
 }
