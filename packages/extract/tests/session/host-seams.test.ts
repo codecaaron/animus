@@ -2,7 +2,7 @@
  * The seams a host adapter sets on the Session (spec §12.2, Vite onto
  * Session): each changes what the Session does only where the host sets it.
  */
-import { existsSync } from 'fs';
+import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
@@ -12,6 +12,10 @@ const mocks = vi.hoisted(() => ({
   clearAnalysisCache: vi.fn(),
 }));
 
+import {
+  REPLACEMENT_EPOCH_ARTIFACT,
+  sessionsRootDir,
+} from '../../session/session-paths';
 import {
   getManifestJson,
   getSharedCss,
@@ -27,6 +31,7 @@ import {
   createKitWorkspace,
   createProject,
   makeComponent,
+  makeManifest,
   disposeTempRoots,
   lastAnalyzedPaths,
   makeSession,
@@ -145,6 +150,45 @@ describe('a session that keeps its artifacts in memory', () => {
     expect(getManifestJson(session.key)).not.toBeNull();
     expect(getSharedCss(session.key)).toContain('@layer');
     expect(existsSync(session.sessionDir)).toBe(false);
+    session.close();
+  });
+});
+
+describe('a session that keeps its artifacts in memory', () => {
+  test('writes no asset copy and leaves a sibling epoch alone', async () => {
+    setEngineApiOverride(() => ({
+      extractFacts: () => '{"files":{},"parseCount":0}',
+      loadSystemModule: mocks.loadSystemModule,
+      analyzeProject: mocks.analyzeProject,
+      clearAnalysisCache: mocks.clearAnalysisCache,
+    }));
+    const root = createProject('animus-in-memory-assets-');
+    const logo = join(root, 'logo.svg');
+    writeFileSync(logo, '<svg/>');
+    mocks.analyzeProject.mockImplementation(() => {
+      const manifest = makeManifest();
+      manifest.sheets.global = `@layer anm-global{body{background:url('animus-asset:${logo}')}}`;
+      return JSON.stringify(manifest);
+    });
+    const sibling = join(sessionsRootDir(root), 'a-stale-sibling');
+    mkdirSync(sibling, { recursive: true });
+    const siblingEpoch = join(sibling, REPLACEMENT_EPOCH_ARTIFACT);
+    writeFileSync(
+      siblingEpoch,
+      JSON.stringify({
+        schema: 1,
+        sessionId: 'a-stale-sibling',
+        epoch: 'other',
+      })
+    );
+    const session = makeSession(root);
+    session.persistArtifacts = false;
+
+    await session.runFullPipeline();
+
+    expect(readdirSync(sessionsRootDir(root))).toEqual(['a-stale-sibling']);
+    expect(existsSync(siblingEpoch)).toBe(true);
+    expect(getSharedCss(session.key)).toContain(logo);
     session.close();
   });
 });
