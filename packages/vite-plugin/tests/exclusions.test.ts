@@ -1,6 +1,6 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { resolveConfig } from 'vite';
+import { createLogger, resolveConfig } from 'vite';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 
 import {
@@ -49,9 +49,11 @@ async function buildWithUserExcludes(excludeOrLayout: string[] | BuildLayout) {
   const systemSource = layout.systemSource ?? KIT_SYSTEM_SOURCE;
   const analyzed: string[] = [];
   const reported: string[] = [];
-  vi.spyOn(console, 'error').mockImplementation((...parts: unknown[]) => {
-    reported.push(parts.map(String).join(' '));
-  });
+  // Vite's logger carries the report; its level stays the app's.
+  const customLogger = createLogger('silent');
+  customLogger.error = (line) => {
+    reported.push(line);
+  };
   const ctx = new PluginContext({ system: './src/system.ts', exclude }, () => ({
     loadSystemModule: () => ({
       propConfig: '{}',
@@ -81,6 +83,7 @@ async function buildWithUserExcludes(excludeOrLayout: string[] | BuildLayout) {
         configFile: false,
         root: app,
         logLevel: 'silent',
+        customLogger,
         build: { outDir: layout.outDir ?? 'dist' },
       },
       'build'
