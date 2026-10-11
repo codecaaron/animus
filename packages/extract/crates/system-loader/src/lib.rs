@@ -177,7 +177,11 @@ fn select_package_entry(
     // file or directory in the package.
     let probe = |entry: &str| {
         resolution::extension_policy()
-            .probe(&pkg_dir.join(entry).to_string_lossy(), |candidate| Path::new(candidate).is_file())
+            .probe(&pkg_dir.join(entry).to_string_lossy(), |candidate| match Path::new(candidate).is_file() {
+                true => resolution::Seen::File,
+                false => resolution::Seen::Missing,
+            })
+            .found()
     };
     let legacy = match subpath.trim_start_matches('.').trim_start_matches('/') {
         "" => ["module", "main"]
@@ -391,19 +395,37 @@ pub fn resolve_specifier(
     conditions: &[String],
 ) -> Result<(PathBuf, Option<PathBuf>), String> {
     if specifier.starts_with('.') || specifier.starts_with('/') {
-        resolve_relative(Path::new(from_dir), specifier).map(|path| (real_path(PathBuf::from(path)), None))
+        resolve_relative(Path::new(from_dir), specifier)
+            .map(|path| (real_path(PathBuf::from(path)), None))
+            .map_err(|miss| match miss {
+                RelativeMiss::Absent => format!("could not resolve '{specifier}' from {from_dir:?}"),
+                RelativeMiss::CaseMismatch(reason) => reason,
+            })
     } else {
         resolve_bare_specifier(specifier, from_dir, conditions)
             .map(|(path, manifest)| (real_path(PathBuf::from(path)), Some(real_path(manifest))))
     }
 }
 
-fn resolve_relative(base_dir: &Path, specifier: &str) -> Result<String, String> {
+/// Why a relative specifier resolved to no file.
+enum RelativeMiss {
+    Absent,
+    /// A file differs from it only in case: never resolved, never absent.
+    CaseMismatch(String),
+}
+
+fn resolve_relative(base_dir: &Path, specifier: &str) -> Result<String, RelativeMiss> {
     // Appended, not replaced: `./tokens.theme` names `tokens.theme.ts`.
     let target = base_dir.join(specifier).to_string_lossy().to_string();
-    resolution::extension_policy()
-        .probe(&target, |candidate| Path::new(candidate).is_file())
-        .ok_or_else(|| format!("could not resolve '{}' from {:?}", specifier, base_dir))
+    match resolution::extension_policy().probe(&target, |candidate| resolution::see_within(base_dir, candidate)) {
+        resolution::Probe::Found(path) => Ok(path),
+        resolution::Probe::CaseMismatch { candidate, actual } => Err(RelativeMiss::CaseMismatch(format!(
+            "relative import '{specifier}' from {base_dir:?} names {candidate:?}, but the file on disk is \
+             {actual:?}, which differs only in case: a case-insensitive filesystem loads it and a \
+             case-sensitive one does not — spell the import as the file is spelled"
+        ))),
+        resolution::Probe::Absent => Err(RelativeMiss::Absent),
+    }
 }
 
 /// `names` are the names as the *imported* module defines them — what a stub
@@ -682,7 +704,8 @@ pub fn resolve_all_deps(
                     }
                     // The evaluated module makes this import, so it would
                     // read as undefined.
-                    Err(_) => {
+                    Err(RelativeMiss::CaseMismatch(reason)) => return Err(reason),
+                    Err(RelativeMiss::Absent) => {
                         return Err(format!(
                             "relative import '{}' in '{}' names no file, and the module \
                              evaluates it (it is not a type-only import), so the system cannot \
@@ -2572,22 +2595,23 @@ export const ds = tokens;
         // competing rows pin the order: appended extensions, index files and
         // NodeNext sources each in policy order, an appended file before an
         // index, and the literal spelling before any source it stands for.
-        let witnesses: [(&[&str], &str, &str); 15] = [
-            (&["x.ts"], "./x.js", "x.ts"),
-            (&["x.js", "x.ts"], "./x.js", "x.js"),
-            (&["x.tsx"], "./x.jsx", "x.tsx"),
-            (&["x.mts"], "./x.mjs", "x.mts"),
-            (&["x.cts"], "./x.cjs", "x.cts"),
-            (&["x.ts"], "./x.JS", "x.ts"),
-            (&["x.jsx"], "./x", "x.jsx"),
-            (&["x.mjs"], "./x", "x.mjs"),
-            (&["x.ts", "x.tsx", "x.js", "x.jsx", "x.mjs"], "./x", "x.ts"),
-            (&["x.tsx", "x.js"], "./x", "x.tsx"),
-            (&["x.jsx", "x.mjs"], "./x", "x.jsx"),
-            (&["x/index.ts", "x/index.tsx", "x/index.js"], "./x", "x/index.ts"),
-            (&["x.ts", "x/index.ts"], "./x", "x.ts"),
-            (&["x.ts", "x.tsx", "x.jsx"], "./x.js", "x.ts"),
-            (&["x.tsx", "x.jsx"], "./x.js", "x.tsx"),
+        let witnesses: [(&[&str], &str, Option<&str>); 15] = [
+            (&["x.ts"], "./x.js", Some("x.ts")),
+            (&["x.js", "x.ts"], "./x.js", Some("x.js")),
+            (&["x.tsx"], "./x.jsx", Some("x.tsx")),
+            (&["x.mts"], "./x.mjs", Some("x.mts")),
+            (&["x.cts"], "./x.cjs", Some("x.cts")),
+            // Exact case: `.JS` is no emitted `.js`, so nothing stands for it.
+            (&["x.ts"], "./x.JS", None),
+            (&["x.jsx"], "./x", Some("x.jsx")),
+            (&["x.mjs"], "./x", Some("x.mjs")),
+            (&["x.ts", "x.tsx", "x.js", "x.jsx", "x.mjs"], "./x", Some("x.ts")),
+            (&["x.tsx", "x.js"], "./x", Some("x.tsx")),
+            (&["x.jsx", "x.mjs"], "./x", Some("x.jsx")),
+            (&["x/index.ts", "x/index.tsx", "x/index.js"], "./x", Some("x/index.ts")),
+            (&["x.ts", "x/index.ts"], "./x", Some("x.ts")),
+            (&["x.ts", "x.tsx", "x.jsx"], "./x.js", Some("x.ts")),
+            (&["x.tsx", "x.jsx"], "./x.js", Some("x.tsx")),
         ];
         for (index, (present, specifier, expected)) in witnesses.into_iter().enumerate() {
             let dir = scratch_dir(&format!("extension-policy-{index}"));
@@ -2597,13 +2621,56 @@ export const ds = tokens;
                 fs::write(path, "export {};\n").expect("write witness");
             }
             let prefix = format!("{}/", dir.to_string_lossy());
-            let system = resolve_relative(&dir, specifier).map(|path| path.trim_start_matches(&prefix).trim_start_matches("./").to_string());
+            let system = resolve_relative(&dir, specifier)
+                .map(|path| path.trim_start_matches(&prefix).trim_start_matches("./").to_string())
+                .ok();
             let base = specifier.trim_start_matches("./");
-            let analysis = resolution::extension_policy().probe(base, |candidate| present.contains(&candidate));
-            assert_eq!(system.as_deref(), Ok(expected), "system: {present:?} {specifier}");
-            assert_eq!(analysis.as_deref(), Some(expected), "analysis: {present:?} {specifier}");
+            let analysis = resolution::extension_policy()
+                .probe(base, |candidate| match present.contains(&candidate) {
+                    true => resolution::Seen::File,
+                    false => resolution::Seen::Missing,
+                })
+                .found();
+            assert_eq!(system.as_deref(), expected, "system: {present:?} {specifier}");
+            assert_eq!(analysis.as_deref(), expected, "analysis: {present:?} {specifier}");
             let _ = fs::remove_dir_all(&dir);
         }
+        // A file that differs from the specifier only in case: the system
+        // side fails loudly naming both spellings, whatever the filesystem's
+        // case rule, and analysis finds no file.
+        let dir = scratch_dir("extension-policy-case");
+        fs::write(dir.join("x.ts"), "export {};\n").expect("write witness");
+        match resolve_relative(&dir, "./X") {
+            Err(RelativeMiss::CaseMismatch(reason)) => {
+                assert!(reason.contains("X.ts") && reason.contains("x.ts"), "{reason}")
+            }
+            Ok(path) => panic!("a case-only match resolved to {path}"),
+            Err(RelativeMiss::Absent) => panic!("a case-only match read as absent"),
+        }
+        let analysis = resolution::extension_policy()
+            .probe("X", |candidate| match candidate == "x.ts" {
+                true => resolution::Seen::File,
+                false => resolution::Seen::Missing,
+            })
+            .found();
+        assert_eq!(analysis, None);
+        let _ = fs::remove_dir_all(&dir);
+        // The host's root spelled in another case: only the names a
+        // specifier spells are checked, so its imports still resolve where
+        // the filesystem opens that root, and are absent where it does not.
+        let dir = scratch_dir("extension-policy-host-case");
+        fs::create_dir_all(dir.join("sub")).expect("create directory");
+        fs::write(dir.join("sub/x.ts"), "export {};\n").expect("write witness");
+        let name = dir.file_name().expect("a scratch dir has a name").to_string_lossy().to_ascii_uppercase();
+        let host_root = dir.with_file_name(name);
+        match (host_root.exists(), resolve_relative(&host_root, "./sub/x")) {
+            (true, Ok(path)) => assert!(path.ends_with("sub/x.ts"), "{path}"),
+            (false, Err(RelativeMiss::Absent)) => {}
+            (opens, Ok(path)) => panic!("opens root {opens}: resolved to {path}"),
+            (opens, Err(RelativeMiss::Absent)) => panic!("opens root {opens}: read as absent"),
+            (opens, Err(RelativeMiss::CaseMismatch(reason))) => panic!("opens root {opens}: {reason}"),
+        }
+        let _ = fs::remove_dir_all(&dir);
     }
 
     /// A relative import the evaluated module makes and that names no file
