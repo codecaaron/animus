@@ -741,6 +741,9 @@ pub struct CssOutput {
     /// Consuming file → member tag as written there (`Panel.Body`,
     /// `ui.Card.Body`) → the component its slot renders.
     pub member_bindings: BTreeMap<String, BTreeMap<String, String>>,
+    /// Each extension dropped over a parent that is no analysed chain, with
+    /// why (spec §12.2 row 11).
+    pub missing_inputs: Vec<MissingInput>,
 }
 
 pub fn extract_breakpoints(theme: &FlatTheme) -> BreakpointMap {
@@ -870,9 +873,13 @@ pub fn probe_base(from_file: &str, spec: &str, inputs: &CssInputs) -> Option<Str
     for seg in spec.split('/') {
         match seg {
             "." | "" => {}
-            ".." => {
-                parts.pop();
-            }
+            // Above the root the step stays: the base is outside the root.
+            ".." => match parts.last() {
+                Some(&last) if last != ".." => {
+                    parts.pop();
+                }
+                _ => parts.push(".."),
+            },
             s => parts.push(s),
         }
     }
@@ -1063,6 +1070,98 @@ fn parent_failed_reason(named: &str) -> String {
         "chain dropped: parent chain '{}' failed evaluation before extension",
         named
     )
+}
+
+/// Why an extension's parent is no analysed chain: the typed evidence a
+/// host's fold reads (spec §12.2 row 11), in place of the drop's message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum MissingParent {
+    /// The parent's import names a path no analysed module answers.
+    Absent,
+    /// The host opens a file the analysis does not read (spec §2.2 A8).
+    Incomplete,
+    /// The host opens an opaque file there.
+    Opaque,
+    /// The host opens an adapted original there (`.mdx`, `.svelte`) whose
+    /// analysis holds no module the probe names.
+    Adapted,
+    /// A package the package map does not answer.
+    Package,
+    /// The import resolves, but the parent is not reached past it.
+    Unreached,
+    /// The parent is declared in an analysed module, but not as a chain.
+    NotAChain,
+    /// The parent chain failed its own evaluation.
+    FailedParent,
+}
+
+/// One extension dropped over its parent: the file and component, the
+/// parent as written, the specifier it is imported by and the path that
+/// probes, where known.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MissingInput {
+    pub file: String,
+    pub component: String,
+    pub parent: String,
+    pub specifier: Option<String>,
+    pub base: Option<String>,
+    pub outcome: MissingParent,
+}
+
+/// Why `component`'s parent `extends_binding` is no analysed chain.
+fn missing_parent_input(
+    file_path: &str,
+    ff: &FileFacts,
+    component: &str,
+    extends_binding: &str,
+    files: &BTreeMap<String, FileFacts>,
+    inputs: &CssInputs,
+    links: &crate::link::ProjectLinks,
+) -> MissingInput {
+    let record = |specifier: Option<&str>, base: Option<String>, outcome| MissingInput {
+        file: file_path.to_string(),
+        component: component.to_string(),
+        parent: extends_binding.to_string(),
+        specifier: specifier.map(str::to_string),
+        base,
+        outcome,
+    };
+    let specifier = match ff.bindings.module_import(extends_binding) {
+        Some(ImportBinding::Named { specifier, .. } | ImportBinding::Default { specifier }) => Some(specifier.as_str()),
+        _ => None,
+    };
+    if let Some((file, binding, true)) = resolve_declaration(file_path, ff, extends_binding, files, inputs, links) {
+        let outcome = match chain_extractable(files, &file, &binding) {
+            Some(false) => MissingParent::FailedParent,
+            _ => MissingParent::NotAChain,
+        };
+        return record(specifier, None, outcome);
+    }
+    let Some(specifier) = specifier else {
+        return record(None, None, MissingParent::NotAChain);
+    };
+    let Some(base) = probe_base(file_path, specifier, inputs) else {
+        return record(Some(specifier), None, MissingParent::Package);
+    };
+    let outcome = match probe_files(&base, files, inputs) {
+        // The probe names no module, but the host opens a file there.
+        ProbeOutcome::Absent => match inputs
+            .probe_evidence
+            .as_ref()
+            .and_then(|evidence| evidence.bases.get(&base))
+            .and_then(|host| host.reading)
+        {
+            Some(HostReading::Asset) => MissingParent::Opaque,
+            Some(HostReading::Adapted) => MissingParent::Adapted,
+            _ => MissingParent::Absent,
+        },
+        ProbeOutcome::Incomplete { .. } => MissingParent::Incomplete,
+        ProbeOutcome::Shadowing { .. } => MissingParent::Opaque,
+        ProbeOutcome::Found(_) => MissingParent::Unreached,
+    };
+    record(Some(specifier), Some(base), outcome)
 }
 
 fn classify_parent(
@@ -5578,15 +5677,12 @@ fn sorted_resolvable_component_ids(
 
     match topological_sort(&nodes) {
         TopoResult::Sorted(order) => order,
-        TopoResult::Cycle(cycle_ids) => {
+        TopoResult::Cycle(cycle_ids, rest) => {
             // A binding declared by more than one chain is one id, listed once.
             let unique: BTreeSet<&String> = cycle_ids.iter().collect();
             diagnostics.extend(unique.into_iter().map(|id| extension_cycle_bail(id, files, parent_map)));
-            let cycle_set: FxHashSet<&String> = cycle_ids.iter().collect();
-            all_component_ids
-                .into_iter()
-                .filter(|id| !cycle_set.contains(id))
-                .collect()
+            // The rest keep the order parents first, which no cycle breaks.
+            rest
         }
     }
 }
@@ -6032,6 +6128,7 @@ fn run_with_system_floor(
 
     let mut parent_map: FxHashMap<String, String> = FxHashMap::default();
     let mut unresolvable_extensions: FxHashSet<String> = FxHashSet::default();
+    let mut missing_inputs: Vec<MissingInput> = Vec::new();
     for (file_path, ff) in files {
         for chain in &ff.chains {
             let d = &chain.descriptor;
@@ -6064,6 +6161,15 @@ fn run_with_system_floor(
                             diagnostic(file_path, &d.binding, "bail", reason, Some(UNRESOLVED_PARENT))
                                 .dropping(&parent),
                         );
+                        missing_inputs.push(missing_parent_input(
+                            file_path,
+                            ff,
+                            &d.binding,
+                            extends_binding,
+                            files,
+                            inputs,
+                            links,
+                        ));
                         unresolvable_extensions.insert(component_id);
                     }
                 }
@@ -6111,6 +6217,9 @@ fn run_with_system_floor(
         Vec<(BTreeMap<String, Value>, String)>, // POST-MERGE compound configs
     );
     let mut evaluated: FxHashMap<String, EvalEntry> = FxHashMap::default();
+    // Each component's skipped (stage, key) pairs, its own and those it
+    // inherits without setting itself.
+    let mut skipped_keys: FxHashMap<String, Vec<(String, String)>> = FxHashMap::default();
     let scale_family_props = scale_family_css_properties(&inputs.config, &inputs.theme);
     let theme_tokens = tokens_by_name(&inputs.theme, &inputs.contextual_vars);
     let scale_names = if inputs.external_dirs.is_empty() {
@@ -6200,6 +6309,47 @@ fn run_with_system_floor(
             );
             continue;
         }
+        // A parent the analysis refused after the walk (an unsettled static,
+        // a stage that failed) leaves what the extension inherits unknown,
+        // so the extension is refused with it rather than shipped without
+        // it. A parent outside the analysis leaves it standalone.
+        let refused_parent = parent_map
+            .get(component_id)
+            .is_some_and(|parent_id| chain_lookup.contains_key(parent_id.as_str()) && !evaluated.contains_key(parent_id));
+        if refused_parent {
+            let parent = chain.descriptor.extends_from.clone().unwrap_or_default();
+            let reason = parent_failed_reason(&parent);
+            diagnostics.push(
+                diagnostic(file_path, &chain.descriptor.binding, "bail", reason, Some(UNRESOLVED_PARENT)).dropping(&parent),
+            );
+            continue;
+        }
+        // What the parent skipped, the extension inherits skipped, unless it
+        // sets that key in the same stage itself.
+        let sets = |method: &str, key: &str| {
+            chain.stages.iter().any(|stage| {
+                stage.method == method && stage.value.as_ref().and_then(Value::as_object).is_some_and(|value| value.contains_key(key))
+            })
+        };
+        let inherited: Vec<(String, String)> = parent_map
+            .get(component_id)
+            .and_then(|parent_id| skipped_keys.get(parent_id))
+            .into_iter()
+            .flatten()
+            .filter(|(method, key)| !sets(method, key))
+            .cloned()
+            .collect();
+        if let Some(parent) = &chain.descriptor.extends_from {
+            for (_, key) in &inherited {
+                let message =
+                    format!("[skip] {}: property '{key}' — inherited from {parent}, which could not evaluate it", chain.descriptor.binding);
+                diagnostics.push(
+                    diagnostic(file_path, &chain.descriptor.binding, "skip", message, Some(SKIPPED_VALUE)).dropping(key),
+                );
+            }
+        }
+        let own = chain.stages.iter().flat_map(|stage| stage.skipped.iter().map(|(key, _)| (stage.method.clone(), key.clone())));
+        skipped_keys.insert(component_id.clone(), own.chain(inherited).collect());
         let parent_variant_configs = parent_map
             .get(component_id)
             .and_then(|parent_id| inherited_variant_configs.get(parent_id))
@@ -8730,6 +8880,7 @@ fn run_with_system_floor(
             .into_iter()
             .map(|(path, members)| (path, members.into_iter().collect()))
             .collect(),
+        missing_inputs,
     }
 }
 
@@ -8859,6 +9010,76 @@ mod tests {
              {render}\n"
         );
         analyze(&[("a.tsx", source.as_str())], &test_inputs())
+    }
+
+    /// Contract: an extension dropped over its parent carries typed
+    /// evidence of why (spec §12.2 row 11), which a host's rediscovery
+    /// reads in place of the drop's message.
+    #[test]
+    fn a_dropped_extension_names_its_missing_input() {
+        let child = |name: &str, import: &str| {
+            format!("import {{ {name} }} from '{import}';\nexport const Child{name} = {name}.extend().styles({{ m: 1 }}).asElement('div');\n")
+        };
+        let files = [
+            ("absent.tsx", child("Gone", "./gone")),
+            ("package.tsx", child("Kit", "some-kit")),
+            ("plain.tsx", child("Plain", "./plain")),
+            ("plain.ts", "export const Plain = 1;\n".to_string()),
+            ("local.tsx", "const Local = makeIt();\nexport const ChildLocal = Local.extend().styles({ m: 1 }).asElement('div');\n".to_string()),
+            ("src/asset.tsx", child("Data", "./parent.json")),
+            ("src/adapted.tsx", child("Doc", "./doc.mdx")),
+            ("src/above.tsx", child("Gen", "../../generated")),
+        ];
+        // The host opens a file at these bases that no analysed module is.
+        let mut inputs = test_inputs();
+        let opens = |candidate: &str, reading| HostCandidate {
+            candidate: candidate.into(),
+            actual: None,
+            analysed_as: None,
+            reading: Some(reading),
+        };
+        inputs.probe_evidence = Some(ProbeEvidence {
+            generation: 1,
+            identity: String::new(),
+            bases: [
+                ("src/parent.json".to_string(), opens("src/parent.json", HostReading::Asset)),
+                ("src/doc.mdx".to_string(), opens("src/doc.mdx", HostReading::Adapted)),
+            ]
+            .into_iter()
+            .collect(),
+        });
+        let entries: Vec<(&str, &str)> = files.iter().map(|(path, source)| (*path, source.as_str())).collect();
+        let out = analyze(&entries, &inputs);
+        let records: Vec<(String, Option<String>, Option<String>, MissingParent)> = out
+            .missing_inputs
+            .iter()
+            .map(|r| (r.component.clone(), r.specifier.clone(), r.base.clone(), r.outcome))
+            .collect();
+        assert_eq!(
+            records,
+            [
+                ("ChildGone".to_string(), Some("./gone".to_string()), Some("gone".to_string()), MissingParent::Absent),
+                ("ChildLocal".to_string(), None, None, MissingParent::NotAChain),
+                ("ChildKit".to_string(), Some("some-kit".to_string()), None, MissingParent::Package),
+                ("ChildPlain".to_string(), Some("./plain".to_string()), None, MissingParent::NotAChain),
+                // A base above the root keeps its step out of the root.
+                (
+                    "ChildGen".to_string(),
+                    Some("../../generated".to_string()),
+                    Some("../generated".to_string()),
+                    MissingParent::Absent
+                ),
+                ("ChildDoc".to_string(), Some("./doc.mdx".to_string()), Some("src/doc.mdx".to_string()), MissingParent::Adapted),
+                ("ChildData".to_string(), Some("./parent.json".to_string()), Some("src/parent.json".to_string()), MissingParent::Opaque),
+            ],
+            "{:?}",
+            out.diagnostics
+        );
+        // The file above the root answers that base: nothing is dropped.
+        let generated = "export const Gen = ds.styles({ m: 2 }).asElement('div');\n";
+        let above = child("Gen", "../../generated");
+        let out = analyze(&[("src/above.tsx", above.as_str()), ("../generated.tsx", generated)], &test_inputs());
+        assert_eq!(out.missing_inputs, [], "{:?}", out.diagnostics);
     }
 
     #[test]

@@ -9,7 +9,7 @@ import { makeContextProbe, published } from './context-probe';
 import { makeComponent, makeManifest } from './manifest-fixture';
 
 import type { ContextProbe } from './context-probe';
-import type { ManifestDiagnostic } from '@animus-ui/extract/pipeline';
+import type { ManifestMissingInput } from '@animus-ui/extract/pipeline';
 
 function makeProbe(rootDir: string): ContextProbe {
   return makeContextProbe(rootDir, {
@@ -24,16 +24,20 @@ function submittedPaths(probe: ContextProbe): string[][] {
   );
 }
 
-function dropDiagnostic(
-  file: string,
-  component: string,
-  parent: string
-): ManifestDiagnostic {
+/** An extension in `Consumer.tsx` dropped because analysis found no module
+ *  at `base`. */
+function absentParent(
+  parent: string,
+  base: string,
+  outcome: ManifestMissingInput['outcome'] = 'absent'
+): ManifestMissingInput {
   return {
-    file,
-    component,
-    kind: 'bail',
-    message: `chain dropped: could not resolve parent component '${parent}'`,
+    file: 'Consumer.tsx',
+    component: 'Fancy',
+    parent,
+    specifier: `./${base}`,
+    base,
+    outcome,
   };
 }
 
@@ -48,39 +52,43 @@ describe('reconcileSourceCorpus', () => {
     rmSync(root, { recursive: true, force: true });
   });
 
-  it('folds an on-disk parent and re-analyzes before publishing', async () => {
-    writeFileSync(
-      join(root, 'Parent.tsx'),
-      "export const Parent = ds.styles({}).asElement('div');\n"
-    );
-    const probe = makeProbe(root);
-    probe.session.heldSources.set('Consumer.tsx', {
-      hash: 'h',
-      source: 'src',
-    });
-    probe.ctx.storedManifest = makeManifest({
-      diagnostics: [dropDiagnostic('Consumer.tsx', 'Fancy', 'Parent')],
-    });
-    probe.respond(() => [
-      published(probe, {
-        manifest: makeManifest({
-          components: {
-            'Consumer.tsx::Fancy': makeComponent('Consumer.tsx', 'r'),
-          },
-          files: { 'Consumer.tsx': ['Consumer.tsx::Fancy'] },
+  // `incomplete`: the host opens the file, which the Session does not hold
+  // yet (a creation the watcher has not reported).
+  for (const outcome of ['absent', 'incomplete'] as const) {
+    it(`folds an on-disk ${outcome} parent and re-analyzes before publishing`, async () => {
+      writeFileSync(
+        join(root, 'Parent.tsx'),
+        "export const Parent = ds.styles({}).asElement('div');\n"
+      );
+      const probe = makeProbe(root);
+      probe.session.heldSources.set('Consumer.tsx', {
+        hash: 'h',
+        source: 'src',
+      });
+      probe.ctx.storedManifest = makeManifest({
+        missing_inputs: [absentParent('Parent', 'Parent', outcome)],
+      });
+      probe.respond(() => [
+        published(probe, {
+          manifest: makeManifest({
+            components: {
+              'Consumer.tsx::Fancy': makeComponent('Consumer.tsx', 'r'),
+            },
+            files: { 'Consumer.tsx': ['Consumer.tsx::Fancy'] },
+          }),
+          planChanged: ['Consumer.tsx'],
         }),
-        planChanged: ['Consumer.tsx'],
-      }),
-    ]);
+      ]);
 
-    const outcomes = await reconcileSourceCorpus(probe.ctx);
+      const outcomes = await reconcileSourceCorpus(probe.ctx);
 
-    expect(submittedPaths(probe)).toEqual([[join(root, 'Parent.tsx')]]);
-    expect(outcomes).toHaveLength(1);
-    expect(probe.warnings).toEqual([]);
-  });
+      expect(submittedPaths(probe)).toEqual([[join(root, 'Parent.tsx')]]);
+      expect(outcomes).toHaveLength(1);
+      expect(probe.warnings).toEqual([]);
+    });
+  }
 
-  it('does nothing when no unresolved-parent drops are present', async () => {
+  it('does nothing when no extension was dropped', async () => {
     writeFileSync(join(root, 'New.tsx'), 'export const x = 1;\n');
     const probe = makeProbe(root);
     probe.ctx.storedManifest = makeManifest();
@@ -89,10 +97,10 @@ describe('reconcileSourceCorpus', () => {
     expect(probe.submissions).toEqual([]);
   });
 
-  it('returns without re-analyzing when the walk finds nothing new', async () => {
+  it('returns without re-analyzing when no file answers the parent', async () => {
     const probe = makeProbe(root);
     probe.ctx.storedManifest = makeManifest({
-      diagnostics: [dropDiagnostic('Consumer.tsx', 'Fancy', 'Ghost')],
+      missing_inputs: [absentParent('Ghost', 'Ghost')],
     });
 
     expect(await reconcileSourceCorpus(probe.ctx)).toEqual([]);
@@ -122,7 +130,7 @@ describe('reconcileSourceCorpus', () => {
         source: 'src',
       });
       probe.ctx.storedManifest = makeManifest({
-        diagnostics: [dropDiagnostic('Consumer.tsx', 'Fancy', 'Parent')],
+        missing_inputs: [absentParent('Parent', 'Parent')],
       });
       probe.respond(fail);
 
@@ -139,19 +147,13 @@ describe('reconcileSourceCorpus', () => {
     });
   }
 
-  /** A barren walk is remembered for the manifest it saw, never for the
-   *  file set: a later publication walks again and folds the parent. */
-  it('walks again once another generation publishes', async () => {
+  /** Each pass probes afresh: a parent written after a barren pass folds
+   *  on the next one. */
+  it('folds a parent that appears after a barren pass', async () => {
     const probe = makeProbe(root);
-    const consumerSource =
-      "export const Fancy = Parent.extend().styles({}).asElement('div');\n";
-    writeFileSync(join(root, 'Consumer.tsx'), consumerSource);
-    probe.session.heldSources.set('Consumer.tsx', {
-      hash: 'h',
-      source: consumerSource,
+    probe.ctx.storedManifest = makeManifest({
+      missing_inputs: [absentParent('Parent', 'Parent')],
     });
-    const drops = [dropDiagnostic('Consumer.tsx', 'Fancy', 'Parent')];
-    probe.ctx.storedManifest = makeManifest({ diagnostics: drops });
 
     await reconcileSourceCorpus(probe.ctx);
     expect(probe.submissions).toEqual([]);
@@ -160,11 +162,6 @@ describe('reconcileSourceCorpus', () => {
       join(root, 'Parent.tsx'),
       "export const Parent = ds.styles({}).asElement('div');\n"
     );
-    // The barren generation is still served: its walk is not repeated.
-    await reconcileSourceCorpus(probe.ctx);
-    expect(probe.submissions).toEqual([]);
-
-    probe.ctx.storedManifest = makeManifest({ diagnostics: drops });
     probe.respond(() => [published(probe, { manifest: makeManifest() })]);
     await reconcileSourceCorpus(probe.ctx);
 
@@ -191,7 +188,7 @@ describe('reconcileSourceCorpus', () => {
         "export const Fancy = Parent.extend().styles({}).asElement('div');\n",
     });
     ctx.storedManifest = makeManifest({
-      diagnostics: [dropDiagnostic('Consumer.tsx', 'Fancy', 'Parent')],
+      missing_inputs: [absentParent('Parent', 'generated/Parent')],
     });
 
     await reconcileSourceCorpus(probe.ctx);
