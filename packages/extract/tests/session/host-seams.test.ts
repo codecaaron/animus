@@ -232,3 +232,49 @@ describe("a host's engine and logger", () => {
     session.close();
   });
 });
+
+describe('a host that substitutes asset URLs itself', () => {
+  async function publishWithAsset(hostSubstitutesAssets: boolean) {
+    setEngineApiOverride(() => ({
+      extractFacts: () => '{"files":{},"parseCount":0}',
+      loadSystemModule: mocks.loadSystemModule,
+      analyzeProject: mocks.analyzeProject,
+      clearAnalysisCache: mocks.clearAnalysisCache,
+    }));
+    const root = createProject('animus-host-assets-');
+    const logo = join(root, 'logo.svg');
+    writeFileSync(logo, '<svg/>');
+    const placeholder = `url('animus-asset:${logo}')`;
+    mocks.loadSystemModule.mockReturnValue({
+      ...SYSTEM_CONFIG,
+      variableCss: `:root{--anm-logo:${placeholder}}`,
+    });
+    mocks.analyzeProject.mockImplementation(() => {
+      const manifest = makeManifest();
+      manifest.sheets.global = `@layer anm-global{body{background:${placeholder}}}`;
+      return JSON.stringify(manifest);
+    });
+    const session = makeSession(root);
+    session.hostSubstitutesAssets = hostSubstitutesAssets;
+    await session.runFullPipeline();
+    return { session, placeholder };
+  }
+
+  test('keeps the placeholders in the analysis sheets and the variable CSS', async () => {
+    const { session, placeholder } = await publishWithAsset(true);
+
+    expect(session.publication?.analysisGlobalCss).toContain(placeholder);
+    expect(session.publication?.system.variableCss).toContain(placeholder);
+    expect(existsSync(join(session.sessionDir, 'assets'))).toBe(false);
+    session.close();
+  });
+
+  test('a persisting host without it still serves its copies', async () => {
+    const { session, placeholder } = await publishWithAsset(false);
+
+    expect(session.publication?.styles).toContain('./assets/logo.');
+    expect(session.publication?.styles).not.toContain(placeholder);
+    expect(readdirSync(join(session.sessionDir, 'assets'))).toHaveLength(1);
+    session.close();
+  });
+});
