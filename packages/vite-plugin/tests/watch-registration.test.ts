@@ -35,16 +35,26 @@ describe('registerSystemWatchPaths', () => {
     expect(add.mock.calls).toEqual([[['/ws/tokens/src/theme.ts']]]);
   });
 
-  it('registers absent system paths and external package directories alongside system paths', () => {
+  it('registers external package directories, and the absent system paths no watched directory covers, alongside system paths', () => {
+    // A watch on an absent file inside a watched directory stops that
+    // directory's events under inotify; the directory's own watch already
+    // reports the creation.
     const { ctx, add } = contextWithWatcher({
       systemDependencyPaths: ['/ws/tokens/src/theme.ts'],
-      systemMissingPaths: ['/ws/tokens/src/extra.ts'],
+      systemMissingPaths: [
+        '/ws/app/src/theme.js',
+        '/ws/tokens/src/extra.ts',
+        '/ws/ui-kit/src/Missing.ts',
+      ],
       externalPackageDirs: ['/ws/ui-kit/src'],
     });
+    ctx.rootDir = '/ws/app';
     ctx.registerSystemWatchPaths();
-    expect(add).toHaveBeenCalledWith(['/ws/tokens/src/theme.ts']);
-    expect(add).toHaveBeenCalledWith(['/ws/tokens/src/extra.ts']);
-    expect(add).toHaveBeenCalledWith(['/ws/ui-kit/src']);
+    expect(add.mock.calls).toEqual([
+      [['/ws/tokens/src/theme.ts']],
+      [['/ws/tokens/src/extra.ts']],
+      [['/ws/ui-kit/src']],
+    ]);
   });
 
   it('registers external package directories even with no system paths', () => {
