@@ -176,6 +176,8 @@ pub struct Change {
     pub object: ObjectId,
     pub path: Vec<String>,
     pub cause: String,
+    /// When it was recorded, among changes and openings alike.
+    order: usize,
 }
 
 /// Something the analysis cannot close, with what it may reach.
@@ -185,6 +187,7 @@ pub struct Opening {
     pub exposure: Region,
     /// The clause that says where: `a.tsx loads './missing' at runtime`.
     pub site: String,
+    order: usize,
 }
 
 /// Every opening of one analysis, in the order they were recorded.
@@ -207,13 +210,40 @@ pub enum Exposure<'e> {
     Opened(&'e Opening),
 }
 
+impl Exposure<'_> {
+    /// The clause that says what may reach the subject.
+    pub fn cause(&self) -> &str {
+        match self {
+            Exposure::Changed(change) => &change.cause,
+            Exposure::Opened(opening) => &opening.site,
+        }
+    }
+
+    fn order(&self) -> usize {
+        match self {
+            Exposure::Changed(change) => change.order,
+            Exposure::Opened(opening) => opening.order,
+        }
+    }
+}
+
 /// The answer to an absence query.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Coverage<'e> {
     /// The subject lies outside every change and every opening.
     Disjoint,
-    /// What may reach it, changes first, each in the order recorded.
+    /// What may reach it, in the order recorded.
     Exposed(Vec<Exposure<'e>>),
+}
+
+/// Objects that hold what other objects hold, or read from them: a change
+/// that may reach any of `from` may reach each of `to`, said as `prefix`
+/// followed by the first such change's clause.
+#[derive(Debug, Clone)]
+struct Flow {
+    to: Vec<ObjectId>,
+    from: Vec<ObjectId>,
+    prefix: String,
 }
 
 /// The facts of one analysis as they are found. It only grows; it answers
@@ -222,7 +252,9 @@ pub enum Coverage<'e> {
 pub struct FlowBuilder {
     changes: Vec<Change>,
     openings: Vec<Opening>,
+    flows: Vec<Flow>,
     exports: BTreeMap<ObjectId, BTreeSet<(String, String)>>,
+    recorded: usize,
 }
 
 impl FlowBuilder {
@@ -236,23 +268,53 @@ impl FlowBuilder {
     }
 
     pub fn change(&mut self, object: ObjectId, path: Vec<String>, cause: String) {
-        self.changes.push(Change { object, path, cause });
+        self.changes.push(Change { object, path, cause, order: self.recorded });
+        self.recorded += 1;
     }
 
     pub fn open(&mut self, reason: ReasonId, exposure: Region, site: String) {
-        self.openings.push(Opening { reason, exposure, site });
+        self.openings.push(Opening { reason, exposure, site, order: self.recorded });
+        self.recorded += 1;
     }
 
+    /// Whatever may change any of `from` may change each of `to`: `to`
+    /// holds or reads what `from` holds. Its change is said as `prefix`
+    /// followed by the clause of the first change that reaches `from`.
+    pub fn flow(&mut self, to: Vec<ObjectId>, from: Vec<ObjectId>, prefix: String) {
+        self.flows.push(Flow { to, from, prefix });
+    }
+
+    /// The closed facts, with changes carried along every flow until none
+    /// adds one: each pass takes the flows in the order recorded, and an
+    /// object one flow changes is changed for the flows after it.
     pub fn close(self) -> ValueEffects {
-        let mut changed: BTreeMap<ObjectId, Vec<usize>> = BTreeMap::new();
-        for (index, change) in self.changes.iter().enumerate() {
-            changed.entry(change.object.clone()).or_default().push(index);
-        }
-        ValueEffects {
-            changes: self.changes,
-            changed,
+        let mut effects = ValueEffects {
+            changes: Vec::new(),
+            changed: BTreeMap::new(),
             exports: self.exports,
             closure: SemanticClosure { openings: self.openings },
+            recorded: self.recorded,
+        };
+        for change in self.changes {
+            effects.add(change);
+        }
+        loop {
+            let mut grew = false;
+            for flow in &self.flows {
+                let Some(cause) = flow.from.iter().find_map(|object| effects.first_cause(object)) else { continue };
+                for object in &flow.to {
+                    if effects.first_cause(object).is_none() {
+                        let order = effects.recorded;
+                        effects.recorded += 1;
+                        let cause = format!("{}{cause}", flow.prefix);
+                        effects.add(Change { object: object.clone(), path: Vec::new(), cause, order });
+                        grew = true;
+                    }
+                }
+            }
+            if !grew {
+                return effects;
+            }
         }
     }
 }
@@ -264,11 +326,24 @@ pub struct ValueEffects {
     changed: BTreeMap<ObjectId, Vec<usize>>,
     exports: BTreeMap<ObjectId, BTreeSet<(String, String)>>,
     closure: SemanticClosure,
+    recorded: usize,
 }
 
 impl ValueEffects {
     pub fn closure(&self) -> &SemanticClosure {
         &self.closure
+    }
+
+    fn add(&mut self, change: Change) {
+        self.changed.entry(change.object.clone()).or_default().push(self.changes.len());
+        self.changes.push(change);
+    }
+
+    fn first_cause(&self, object: &ObjectId) -> Option<String> {
+        match self.covers(&AbsenceQuery::Stable(object.clone(), Vec::new())) {
+            Coverage::Disjoint => None,
+            Coverage::Exposed(exposures) => Some(exposures[0].cause().to_string()),
+        }
     }
 
     /// Whether a subject is provably untouched, or what may reach it.
@@ -291,7 +366,8 @@ impl ValueEffects {
             .iter()
             .filter(|opening| self.reaches(&opening.exposure, object, path))
             .map(Exposure::Opened);
-        let exposed: Vec<Exposure<'_>> = changed.chain(opened).collect();
+        let mut exposed: Vec<Exposure<'_>> = changed.chain(opened).collect();
+        exposed.sort_by_key(Exposure::order);
         if exposed.is_empty() { Coverage::Disjoint } else { Coverage::Exposed(exposed) }
     }
 
