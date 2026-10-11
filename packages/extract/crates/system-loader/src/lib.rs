@@ -643,21 +643,11 @@ pub fn resolve_all_deps(
             raw_source.clone()
         };
 
-        let stripped_imports = is_ts.then(|| extract_import_specifiers(&processed, &current_path));
-        let mut import_infos = extract_import_specifiers(&raw_source, &current_path);
-        // What the evaluated module still imports: one the strip erased,
-        // used only as a type, may name no file.
-        let evaluated_specifiers: HashSet<String> = stripped_imports
-            .as_ref()
-            .unwrap_or(&import_infos)
-            .iter()
-            .map(|info| info.specifier.clone())
-            .collect();
-        if let Some(stripped_imports) = stripped_imports {
-            // The strip's JSX transform adds an automatic-runtime import the
-            // authored source lacks; the evaluated module needs its stub.
-            import_infos.extend(stripped_imports);
-        }
+        // The imports the evaluated module makes: for TypeScript, those that
+        // survive the strip, which erases an import only a type uses and adds
+        // the JSX transform's automatic-runtime import. A module that only an
+        // erased import names is never crawled.
+        let import_infos = extract_import_specifiers(&processed, &current_path);
 
         let current_dir = Path::new(&current_path)
             .parent()
@@ -690,9 +680,9 @@ pub fn resolve_all_deps(
                             queue.push_back(canonical);
                         }
                     }
-                    // An import only a type uses is erased with it; one the
-                    // evaluated module still makes would read as undefined.
-                    Err(_) if evaluated_specifiers.contains(spec) => {
+                    // The evaluated module makes this import, so it would
+                    // read as undefined.
+                    Err(_) => {
                         return Err(format!(
                             "relative import '{}' in '{}' names no file, and the module \
                              evaluates it (it is not a type-only import), so the system cannot \
@@ -700,7 +690,6 @@ pub fn resolve_all_deps(
                             spec, current_path
                         ));
                     }
-                    Err(_) => {}
                 }
             } else if spec.starts_with("node:") {
                 return Err(format!(
@@ -2615,6 +2604,23 @@ export const ds = tokens;
             assert_eq!(analysis.as_deref(), Some(expected), "analysis: {present:?} {specifier}");
             let _ = fs::remove_dir_all(&dir);
         }
+    }
+
+    /// A relative import the evaluated module makes and that names no file
+    /// fails the crawl, naming it; an import only a type uses is erased with
+    /// it, so the module it names, and that module's own imports, are never
+    /// crawled.
+    #[test]
+    fn only_evaluated_imports_are_crawled_and_must_resolve() {
+        let dir = scratch_dir("evaluated-imports");
+        write_fixture(&dir.join("erased.ts"), "import { Shape } from './types';\ntype T = Shape;\nexport default {};\n");
+        write_fixture(&dir.join("types.ts"), "import './missing';\nexport interface Shape {}\n");
+        write_fixture(&dir.join("value.ts"), "import { size } from './tokens';\nexport const s = size;\n");
+        let crawl = |entry: &str| resolve_all_deps(&dir.join(entry).to_string_lossy(), &dir.to_string_lossy(), &[]);
+        assert!(crawl("erased.ts").is_ok(), "{:?}", crawl("erased.ts").err());
+        let error = crawl("value.ts").err().unwrap_or_default();
+        assert!(error.contains("'./tokens'") && error.contains("value.ts"), "{error}");
+        let _ = fs::remove_dir_all(&dir);
     }
 
     /// Host-binding evidence follows each definition's own authored callable,
