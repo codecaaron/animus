@@ -1,0 +1,150 @@
+/**
+ * The seams a host adapter sets on the Session (spec §12.2, Vite onto
+ * Session): each changes what the Session does only where the host sets it.
+ */
+import { existsSync } from 'fs';
+import { join } from 'path';
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
+
+const mocks = vi.hoisted(() => ({
+  loadSystemModule: vi.fn(),
+  analyzeProject: vi.fn<(...args: AnalyzeProjectArgs) => string>(),
+  clearAnalysisCache: vi.fn(),
+}));
+
+import {
+  getManifestJson,
+  getSharedCss,
+  setEngineApiOverride,
+} from '../../session/singleton';
+import {
+  emptyFacts,
+  factsExtractor,
+  systemImportFacts,
+} from '../source-ingestion-fixtures';
+import {
+  buildManifest,
+  createKitWorkspace,
+  createProject,
+  makeComponent,
+  disposeTempRoots,
+  lastAnalyzedPaths,
+  makeSession,
+  requireResolveSpecifier,
+  resetAnimusGlobals,
+  SYSTEM_CONFIG,
+} from './session-fixtures';
+
+import type { AnalyzeProjectArgs } from '../../pipeline';
+
+let restoreGlobals: () => void;
+
+beforeEach(() => {
+  restoreGlobals = resetAnimusGlobals();
+  mocks.loadSystemModule.mockReset().mockReturnValue({ ...SYSTEM_CONFIG });
+  mocks.analyzeProject.mockReset().mockImplementation(() => buildManifest({}));
+  mocks.clearAnalysisCache.mockReset();
+});
+
+afterEach(() => {
+  restoreGlobals();
+  setEngineApiOverride(null);
+  vi.restoreAllMocks();
+  disposeTempRoots();
+});
+
+/** A workspace whose system extends `@kits/ui` by its package name, which
+ *  nothing installs: only a host that resolves it finds it. */
+function bareKitWorkspace() {
+  const systemSource = `import { createSystem } from '@animus-ui/system';
+import kit from '@kits/ui';
+export const system = createSystem({}).extend(kit);
+`;
+  const { app, kit } = createKitWorkspace(systemSource);
+  const systemPath = join(app, 'src', 'system.ts');
+  setEngineApiOverride(() => ({
+    extractFacts: factsExtractor({
+      [systemPath]: {
+        ...emptyFacts(systemPath),
+        imports: systemImportFacts(systemSource),
+      },
+    }),
+    resolveSpecifier: requireResolveSpecifier,
+    locatePackage: (name: string) => (name === '@kits/ui' ? kit : null),
+    resolveKitSourceRoot: () => '{}',
+    loadSystemModule: mocks.loadSystemModule,
+    analyzeProject: mocks.analyzeProject,
+    clearAnalysisCache: mocks.clearAnalysisCache,
+  }));
+  return { app, kit };
+}
+
+describe('a host resolver answers package discovery', () => {
+  test("the host's answer admits a package the loader cannot find", async () => {
+    const { app, kit } = bareKitWorkspace();
+    const session = makeSession(app);
+    const asked: string[] = [];
+    session.hostResolve = async (specifier) => {
+      asked.push(specifier);
+      return specifier === '@kits/ui' ? join(kit, 'src', 'index.ts') : null;
+    };
+
+    await session.runFullPipeline();
+
+    expect(asked).toContain('@kits/ui');
+    expect(lastAnalyzedPaths(mocks.analyzeProject)).toContain(
+      '../kits/ui/src/Button.tsx'
+    );
+    session.close();
+  });
+});
+
+describe('a host runtime import', () => {
+  test('reaches the emitter, and an override that cannot supply a terminal fails', async () => {
+    setEngineApiOverride(() => ({
+      extractFacts: () => '{"files":{},"parseCount":0}',
+      loadSystemModule: mocks.loadSystemModule,
+      analyzeProject: mocks.analyzeProject,
+      clearAnalysisCache: mocks.clearAnalysisCache,
+    }));
+    mocks.analyzeProject.mockImplementation(() =>
+      buildManifest({
+        'src/Button.tsx::Button': makeComponent(
+          'src/Button.tsx',
+          "createComponent('button', 'a')"
+        ),
+      })
+    );
+    const session = makeSession(createProject('animus-runtime-import-'));
+    session.runtimeImport = '@acme/runtime';
+
+    await expect(session.runFullPipeline()).rejects.toThrow(
+      /runtimeImport '@acme\/runtime' is valid only when every extracted terminal is \.asClass\(\)/
+    );
+    const emitterJson = mocks.analyzeProject.mock.calls[0][8];
+    expect(JSON.parse(emitterJson ?? '{}').runtime_import).toBe(
+      '@acme/runtime'
+    );
+    session.close();
+  });
+});
+
+describe('a session that keeps its artifacts in memory', () => {
+  test('publishes every result and writes no session directory', async () => {
+    setEngineApiOverride(() => ({
+      extractFacts: () => '{"files":{},"parseCount":0}',
+      loadSystemModule: mocks.loadSystemModule,
+      analyzeProject: mocks.analyzeProject,
+      clearAnalysisCache: mocks.clearAnalysisCache,
+    }));
+    const session = makeSession(createProject('animus-in-memory-'));
+    session.persistArtifacts = false;
+
+    await session.runFullPipeline();
+
+    expect(getManifestJson(session.key)).not.toBeNull();
+    expect(getSharedCss(session.key)).toContain('@layer');
+    expect(existsSync(session.sessionDir)).toBe(false);
+    session.close();
+  });
+});
