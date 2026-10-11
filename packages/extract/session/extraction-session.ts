@@ -26,12 +26,8 @@ import {
   AliasAgreementCache,
   compareAliases,
   packageInstanceFinding,
-  physical,
+  packageReadRecord,
 } from '../pipeline/alias-agreement';
-import {
-  bareSpecifierPackageName,
-  isPackageSpecifier,
-} from '../pipeline/discover-packages';
 import {
   adaptedOriginals,
   assembleStylesheet,
@@ -60,6 +56,7 @@ import {
   DEFAULT_RUNTIME_IMPORT,
   hostFirstPackageResolver,
   hashReplacementPlans,
+  isEngineTransformExtension,
   isExcludedPackageRelativePath,
   isPathWithinRoot,
   declaredWorkspacePackages,
@@ -96,6 +93,7 @@ import {
   surfaceManifestDiagnostics,
   systemLoadReads,
 } from '../pipeline/index';
+import { parseInternalWire } from '../pipeline/internal-wire';
 import { COALESCING_WINDOW_MS } from './coalescing-window';
 import {
   checkLockLiveness,
@@ -147,6 +145,8 @@ import {
   setOwningWatchSession,
   setAnalysisStartedPromise,
   setAnalyzedHashes,
+  getSharedPackageReadRecord,
+  setSharedPackageReadRecord,
   setManifestJson,
   setReplacementEpoch,
   setSessionArtifactDir,
@@ -159,6 +159,7 @@ import {
 } from './singleton';
 import { logBuildTimings } from './timing';
 
+import type { PackageReadRecord } from '../pipeline/alias-agreement';
 import type {
   AnimusCoreOptions,
   ExternalPackageOutcome,
@@ -166,6 +167,7 @@ import type {
   HostExtensionPolicy,
   KitDescriptorRecord,
 } from '../pipeline/index';
+import type { ExtractFactsResult } from '../pipeline/source-ingestion';
 import type {
   PackageResolution,
   SessionResolutionContext,
@@ -806,10 +808,9 @@ export class ExtractionSession {
   kitDescriptors: KitDescriptorRecord[] = [];
   /** Package name → the real root of the instance discovery read. */
   private packageInstances: Record<string, string> = {};
-  /** The last comparison's analysed files, at real paths, and the
-   *  package-instance findings already reported against them. */
-  private analysedRealPaths: () => ReadonlySet<string> = () => new Set();
-  private reportedInstances = new Set<string>();
+  /** What this attempt's analysis read of the discovered packages; the
+   *  build's shared record once the analysis publishes. */
+  private packageReadRecord: PackageReadRecord | null = null;
 
   /** Component count of the last published analysis, null before the first —
    *  read by drivers instead of re-parsing the manifest JSON every cycle. */
@@ -2635,6 +2636,9 @@ export class ExtractionSession {
       this.key,
       new Map(fileEntries.map((entry) => [entry.path, entry.hash]))
     );
+    if (this.packageReadRecord !== null) {
+      setSharedPackageReadRecord(this.key, this.packageReadRecord);
+    }
 
     // Payloads first, then the commit, then the epoch LAST and only when its
     // value moved — an epoch-woken reader never sees an uncommitted write.
@@ -2720,6 +2724,14 @@ export class ExtractionSession {
   private async compareAliasesWithHost(
     fileEntries: FileEntry[]
   ): Promise<ManifestDiagnostic[]> {
+    const record = packageReadRecord({
+      rootDir: this.rootDir!,
+      roots: this.packageInstances,
+      redirected: new Set(this.externalSourceEntries.keys()),
+      analysed: fileEntries.map((entry) => entry.path),
+      rendersBuilder: (file) => this.rendersBuilder(file),
+    });
+    this.packageReadRecord = record;
     const { moduleSpecifiers } = this.engine();
     // No finding is agreement only where a comparison ran (spec §2.2 A7);
     // its state belongs to the acquisition certificate, so until that
@@ -2729,12 +2741,6 @@ export class ExtractionSession {
       this.log('path aliases: no host resolver, comparison unavailable');
       return [];
     }
-    let analysedReal: Set<string> | null = null;
-    this.analysedRealPaths = () =>
-      (analysedReal ??= new Set(
-        fileEntries.map((entry) => physical(join(this.rootDir!, entry.path)))
-      ));
-    this.reportedInstances = new Set();
     // A report: whatever goes wrong while comparing never blocks the
     // analysis or its publication.
     try {
@@ -2750,13 +2756,10 @@ export class ExtractionSession {
         moduleSpecifiers,
         resolve: this.hostResolve,
         cache: this.aliasCache,
-        packages: {
-          roots: this.packageInstances,
-          redirected: new Set(this.externalSourceEntries.keys()),
-        },
+        packages: record,
       });
       for (const finding of findings) {
-        this.reportedInstances.add(`${finding.file}\0${finding.component}`);
+        record.reported.add(`${finding.file}\0${finding.component}`);
       }
       if (unavailable > 0) {
         this.log(
@@ -2767,6 +2770,29 @@ export class ExtractionSession {
     } catch (error) {
       this.log(`path aliases: comparison unavailable (${String(error)})`);
       return [];
+    }
+  }
+
+  /** Whether the file at a real path declares builder chains, by the
+   *  engine's own parse: a module that does, served unread, renders with
+   *  empty classes. One the engine cannot read counts as one that does. */
+  private rendersBuilder(file: string): boolean {
+    if (!isEngineTransformExtension(file)) return false;
+    const { extractFacts } = this.engine();
+    if (extractFacts === undefined) return true;
+    const path = relative(this.rootDir!, file);
+    try {
+      const facts = parseInternalWire<ExtractFactsResult>(
+        extractFacts(
+          JSON.stringify([{ path, source: readFileSync(file, 'utf-8') }])
+        ),
+        'extractFacts'
+      ).files[path];
+      return (
+        facts === undefined || facts.parsePanicked || facts.chains.length > 0
+      );
+    } catch {
+      return true;
     }
   }
 
@@ -2783,22 +2809,20 @@ export class ExtractionSession {
     request: string,
     resolved: string
   ): void {
-    if (this.rootDir === null || !isPackageSpecifier(request)) return;
-    const readRoot = this.packageInstances[bareSpecifierPackageName(request)];
-    if (readRoot === undefined) return;
-    const finding = packageInstanceFinding({
-      rootDir: this.rootDir,
-      importer: relative(this.rootDir, importer).split(sep).join(posix.sep),
-      specifier: request,
-      resolved,
-      readRoot,
-      redirected: this.externalSourceEntries.has(request),
-      holds: (file) => this.analysedRealPaths().has(file),
-    });
+    // The build's published record, whichever participant collected it: a
+    // compiler that joined another's analysis holds no evidence of its own.
+    const record = getSharedPackageReadRecord(this.key);
+    if (record === null) return;
+    const finding = packageInstanceFinding(
+      record,
+      relative(record.rootDir, importer).split(sep).join(posix.sep),
+      request,
+      resolved
+    );
     if (finding === null) return;
     const key = `${finding.file}\0${finding.component}`;
-    if (this.reportedInstances.has(key)) return;
-    this.reportedInstances.add(key);
+    if (record.reported.has(key)) return;
+    record.reported.add(key);
     surfaceManifestDiagnostics(
       { diagnostics: [finding] },
       (message) => this.warn(message),
