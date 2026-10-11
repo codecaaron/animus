@@ -1,4 +1,11 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'fs';
+import {
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { describe, expect, test } from 'vitest';
@@ -8,6 +15,7 @@ import {
   extensionPolicyJson,
   viteExtensionPolicy,
 } from '../pipeline/host-extensions';
+import { gatherProbeEvidence } from '../pipeline/probe-evidence';
 
 const v2 = require('../index-v2.js');
 
@@ -242,3 +250,66 @@ test("a configured Vite extension list is unreadable, and './only' still finds o
     native: expect.stringMatching(/only\.tsx$/),
   });
 });
+
+// Contract: analysis never opens a different file than a case-insensitive
+// host would (spec §2.2 A2, A8). `./x` beside `X.ts` (red) and `x.tsx`
+// (blue): where the filesystem opens `x.ts` as `X.ts`, the probe is
+// Incomplete, the finding names both spellings, and the child is never
+// linked to `x.tsx`; where it does not, the exact `x.tsx` is read, as the
+// host reads it. The same for an APFS-only pair, `ς` beside `Σ.ts` and an
+// exact `ς.tsx`.
+test.each([
+  ['x', 'X.ts', 'x.tsx'],
+  ['ς', 'Σ.ts', 'ς.tsx'],
+])(
+  "analysis reads './%s' beside %s and %s as the host does",
+  (name, variant, exact) => {
+    const root = realpathSync(
+      mkdtempSync(join(tmpdir(), 'animus-case-probe-'))
+    );
+    const sources = {
+      [variant]:
+        "export const Parent = ds.styles({ color: 'red' }).asElement('div');\n",
+      [exact]:
+        "export const Parent = ds.styles({ color: 'blue' }).asElement('div');\n",
+      'app.tsx': `import { Parent } from './${name}';\nexport const Child = Parent.extend().styles({ margin: '1px' }).asElement('div');\nexport const App = () => <Child />;\n`,
+    } satisfies Record<string, string>;
+    for (const [path, source] of Object.entries(sources)) {
+      writeFileSync(join(root, path), source);
+    }
+    const candidate = `${name}.ts`;
+    const opensVariant =
+      existsSync(join(root, candidate)) &&
+      !readdirSync(root).includes(candidate);
+    const files = Object.entries(sources).map(([path, source]) => ({
+      path,
+      source,
+    }));
+    const filesJson = JSON.stringify(files);
+    const engine = new v2.ExtractEngine({});
+    const prepared = JSON.parse(engine.prepare(filesJson));
+    const evidence = gatherProbeEvidence(
+      root,
+      new Set(Object.keys(sources)),
+      undefined
+    )(prepared.bases, prepared.identity);
+    const manifest = JSON.parse(engine.analyze(filesJson, evidence));
+    rmSync(root, { recursive: true, force: true });
+
+    expect({
+      parent: manifest.components['app.tsx::Child']?.extends_from ?? null,
+      mismatch: manifest.diagnostics
+        .filter(
+          (d: { code?: string }) => d.code === 'animus.resolve.case-mismatch'
+        )
+        .map(
+          (d: { message: string }) =>
+            d.message.includes(candidate) && d.message.includes(variant)
+        ),
+    }).toEqual(
+      opensVariant
+        ? { parent: null, mismatch: [true] }
+        : { parent: `${exact}::Parent`, mismatch: [] }
+    );
+  }
+);

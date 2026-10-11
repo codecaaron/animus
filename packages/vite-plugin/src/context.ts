@@ -255,6 +255,7 @@ export class PluginContext {
     warn: (message: string) => this.warn(message),
     reportErrors: () => this.reportErrors(),
     extensions: () => this.extensionPolicy,
+    rootDir: () => this.rootDir,
   });
 
   rawExtensionFallbacks = new Set<string>();

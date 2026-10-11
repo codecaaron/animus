@@ -332,6 +332,7 @@ export class ExtractionSession {
     warn: (message: string) => this.warn(message),
     reportErrors: () => this.reportErrors(),
     extensions: () => this.extensionPolicy,
+    rootDir: () => this.rootDir!,
   });
 
   // Membership keys (lexical + canonical) for the system's evaluated module

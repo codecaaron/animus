@@ -1,3 +1,14 @@
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
 
 import { contentHash } from '../pipeline/content-hash';
@@ -190,6 +201,53 @@ const attrs = badge.attrs({ tone: 'quiet' });
       ).toContain("<badge tone={'quiet'} />");
     }
   );
+
+  // Contract: a Svelte resolver call is attributed to the module its host's
+  // filesystem opens first (spec §2.2 A8). Where the filesystem opens
+  // `definition.ts` as `Definition.ts`, the call is attributed to no module,
+  // never to the exact `definition.tsx`; where it does not, it is.
+  test('attributes a resolver call to the file its host opens', async () => {
+    const root = realpathSync(
+      mkdtempSync(join(tmpdir(), 'animus-svelte-case-'))
+    );
+    const variantPath = 'src/Definition.ts';
+    const exactPath = 'src/definition.tsx';
+    const sveltePath = 'src/Usage.svelte';
+    const svelteSource = `<script>
+import { badge } from './definition';
+const attrs = badge.attrs({ tone: 'quiet' });
+</script>`;
+    const sources = {
+      [variantPath]: `export const badge = ds.styles({}).asClass();`,
+      [exactPath]: `export const badge = ds.styles({}).asClass();`,
+      [sveltePath]: svelteSource,
+    } satisfies Record<string, string>;
+    mkdirSync(join(root, 'src'));
+    for (const [path, source] of Object.entries(sources)) {
+      writeFileSync(join(root, path), source);
+    }
+    const opensVariant =
+      existsSync(join(root, 'src', 'definition.ts')) &&
+      !readdirSync(join(root, 'src')).includes('definition.ts');
+
+    const result = await ingestSourceEntries(
+      Object.entries(sources).map(([path, source]) => ({ path, source })),
+      {
+        extractFacts: factsExtractor({
+          [variantPath]: resolverFacts(variantPath),
+          [exactPath]: resolverFacts(exactPath),
+        }),
+        rootDir: root,
+      }
+    );
+    rmSync(root, { recursive: true, force: true });
+
+    expect(
+      result.analysisEntries
+        .find((entry) => entry.path === `${sveltePath}.instance.tsx`)
+        ?.source.includes("<badge tone={'quiet'} />") ?? false
+    ).toBe(!opensVariant);
+  });
 
   test('attributes Windows-style source keys without rewriting public identities', async () => {
     const definitionPath = 'src\\definition.ts';
