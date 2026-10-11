@@ -2570,7 +2570,7 @@ export const ds = tokens;
         /// A case's name, its modules, and the loaded propConfig or a part
         /// of the load's error.
         type Case<'a> = (&'a str, &'a [(&'a str, &'a str)], Result<&'a str, &'a str>);
-        let cases: [Case; 11] = [
+        let cases: [Case; 12] = [
             (
                 "hoisted-live",
                 &[
@@ -2641,6 +2641,16 @@ export const ds = tokens;
                     ("c", "import './entry.js';\nexport const y = 3;\n"),
                 ],
                 Ok(r#"{"keys":["a","w","y","z"]}"#),
+            ),
+            (
+                // React's real exports hold no `x`, so Node takes b's.
+                "stub-star-yields-to-module",
+                &[
+                    ("entry", "import { x } from './a.js';\nimport * as ns from './a.js';\nconst data = { x, keys: Object.keys(ns) };\n"),
+                    ("a", "import './entry.js';\nexport * from 'react';\nexport * from './b.js';\n"),
+                    ("b", "export const x = 'b';\n"),
+                ],
+                Ok(r#"{"x":"b","keys":["x"]}"#),
             ),
             (
                 "missing-import",

@@ -301,9 +301,9 @@ pub(crate) fn rewrite_module_for_linking(
 /// The export relation of a cyclic graph's modules, answered by the shared
 /// module table. A stub is a module outside the graph: an import of it names
 /// its export without proving it, and `export *` of it is open. The loader
-/// builds each stub's object, so it closes that opening itself: the names a
-/// star of a stub brings in are the stub's own, each reading the stub's
-/// property, as a module exporting them would.
+/// builds each stub's object, so it closes that opening itself: a star of a
+/// stub brings in the stub's own names, each reading the stub's property, and
+/// supplies any other name only when no analysed branch does.
 pub(crate) struct Linker<'a> {
     table: crate::module_table::ModuleTable<String>,
     keys: Vec<String>,
@@ -362,14 +362,17 @@ impl<'a> Linker<'a> {
         Self { table: ModuleTable::new(records), keys, index, stubs }
     }
 
-    /// Export `name` of `module`, with each open star of a stub closed by
-    /// the stub's own names: one terminal resolves, two are ambiguous.
+    /// Export `name` of `module`, with each open star of a stub closed: the
+    /// stub supplies `name` when it has that name, or when no analysed branch
+    /// gives one. One terminal resolves, two are ambiguous.
     fn resolve(&self, module: usize, name: &str) -> crate::module_table::ExportLookup<String> {
         use crate::module_table::{ExportLookup, OpeningReason, Terminal};
         match self.table.resolve_export(module, name) {
             ExportLookup::Incomplete { mut known, openings } => {
+                let analysed = !known.is_empty();
                 for opening in openings {
                     match opening.reason {
+                        OpeningReason::OutsideStar(stub) if analysed && !self.stubs[&stub].contains(name) => {}
                         OpeningReason::OutsideStar(stub) => {
                             let terminal = Terminal::External { module: stub, export: Some(name.to_string()) };
                             if !known.contains(&terminal) {
