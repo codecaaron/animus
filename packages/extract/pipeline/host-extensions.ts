@@ -117,14 +117,15 @@ export function webpackExtensionPolicy(
 }
 
 /** Turbopack's `turbopack.resolveExtensions`, or its documented default
- *  when the Next config sets none. */
+ *  when the Next config sets none. It substitutes no source: under Next
+ *  16.3, `./x.js` beside only `x.ts` names no module. */
 export function turbopackExtensionPolicy(
   resolveExtensions: readonly string[] | undefined,
   nextVersion?: string
 ): HostExtensionPolicy {
   return {
     appended: [...(resolveExtensions ?? HOST_DEFAULT_EXTENSIONS.turbopack)],
-    nodeNext: TYPESCRIPT_OUTPUTS,
+    nodeNext: [],
     resolverVersion: label(
       'turbopack',
       nextVersion,
