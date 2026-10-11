@@ -484,11 +484,12 @@ describe('catch-up decision table (design D3 — verbatim)', () => {
     expect(dependencies).not.toContain(analysisStatusPath(sessionDir));
   });
 
-  test('missing artifacts passthrough: no commit AND no status → source unchanged', async () => {
+  test('missing artifacts: no commit and no status fails, never serves the source', async () => {
     const root = makeTempRoot('animus-turbo-protocol-');
     mkdirSync(sessionArtifactDir(root, SESSION_ID), { recursive: true });
-    const { code } = await runLoader({ root, source: OLD_SOURCE });
-    expect(code).toBe(OLD_SOURCE);
+    await expect(runLoader({ root, source: OLD_SOURCE })).rejects.toThrow(
+      /ANIMUS_ANALYSIS_MISSING/
+    );
   });
 
   test('an analyzed file is never passed through raw: every failure path serves a diagnostic, not the source', async () => {
