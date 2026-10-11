@@ -4547,6 +4547,7 @@ fn bounded_prop_tags(
 /// component, a relative or aliased import extraction cannot read (an
 /// excluded file may render our components) or any other declaration may
 /// be one of our components, so it blocks every component.
+#[allow(clippy::too_many_arguments)]
 fn uncertainty_leaves_usage_proven(
     sites: &[(&String, UncertainIdentity)],
     files: &BTreeMap<String, FileFacts>,
@@ -4554,8 +4555,8 @@ fn uncertainty_leaves_usage_proven(
     links: &crate::link::ProjectLinks,
     ordinary_members: &FxHashMap<(String, String), (String, String)>,
     package_members: &FxHashSet<(String, String)>,
-    bounded_tags: &FxHashSet<(String, u32)>) -> bool {
-    let contexts = &context_changes(files, inputs, links);
+    bounded_tags: &FxHashSet<(String, u32)>,
+    contexts: &crate::flow::ValueEffects) -> bool {
     // Each element of an ordinary component is a site; classify each tag once.
     let mut classified: FxHashSet<(&str, &str, Option<TagOrigin>)> = FxHashSet::default();
     sites.iter().all(|(file, site)| {
@@ -4663,27 +4664,6 @@ pub(crate) fn judge_object_handoffs(
             }
         }
     }
-}
-
-/// What a use in any analysed module may change of the contexts React's
-/// `createContext` builds: a member write or delete, a hand-off to code
-/// other than React's context readers. A changed context's `Provider` is
-/// not proven to be React's.
-fn context_changes(files: &BTreeMap<String, FileFacts>, inputs: &CssInputs, links: &crate::link::ProjectLinks) -> crate::flow::ValueEffects {
-    let mut flow = crate::flow::FlowBuilder::new();
-    for (path, ff) in files {
-        for (name, used) in &ff.unsafe_object_uses {
-            let root = name.split('.').next().unwrap_or(name);
-            let Some((declaring, binding, _)) = resolve_declaration(path, ff, root, files, inputs, links) else { continue };
-            if files.get(&declaring).is_some_and(|declared| declared.context_consts.contains(&binding)) {
-                let line = used.line.map_or(String::new(), |line| format!(" on line {line}"));
-                let cause = format!("{name} {} in {path}{line}", used.what);
-                let context = crate::flow::ObjectId::new(&declaring, &binding);
-                flow.change(context, Vec::new(), crate::flow::ChangeKind::Escape, cause);
-            }
-        }
-    }
-    flow.close()
 }
 
 /// Whether `tag`, or the binding it is a member of, is imported from a
@@ -5054,8 +5034,8 @@ fn opaque_delivery(
     ordinary_members: &FxHashMap<(String, String), (String, String)>,
     receiver_ids: impl Fn(&str, &FileFacts, &str) -> Vec<String>,
     renders_in_place: impl Fn(&str) -> bool,
+    contexts: &crate::flow::ValueEffects,
 ) -> (std::collections::BTreeSet<String>, Vec<(String, String)>) {
-    let contexts = context_changes(files, inputs, links);
     // The declaration `name` (`lib.enhance` for a namespace import's
     // member) names from `file`, or `None` outside the analysis.
     let declaration = |file: &str, ff: &FileFacts, name: &str| {
@@ -5082,7 +5062,7 @@ fn opaque_delivery(
         if matches!(tag.origin, TagOrigin::Nested | TagOrigin::Provided | TagOrigin::Undeclared) {
             return true;
         }
-        if names_context_provider(file, ff, &tag.tag, Some(tag.origin), files, inputs, links, &contexts) {
+        if names_context_provider(file, ff, &tag.tag, Some(tag.origin), files, inputs, links, contexts) {
             return false;
         }
         let ids = receiver_ids(file, ff, &tag.tag);
@@ -7407,7 +7387,8 @@ fn run_with_system_floor(
         |id| {
             !changed_ids.contains(id)
                 && evaluated.get(id).is_some_and(|(_, _, terminal, ..)| *terminal == TerminalKind::AsElement)
-        },);
+        },
+        object_members.changes(),);
     escaped_ids.extend(delivered_ids);
     // A held wrapper some render of which no member tag shows renders with
     // props no analysed use shows.
@@ -7609,7 +7590,16 @@ fn run_with_system_floor(
     let usage_complete = !analysis_incomplete(files, inputs)
         && !files.values().any(|ff| ff.direct_eval)
         && (!identity_policy.uncertain
-            || uncertainty_leaves_usage_proven(&uncertain_identities, files, inputs, links, &ordinary_members, &package_members, &bounded_tags));
+            || uncertainty_leaves_usage_proven(
+                &uncertain_identities,
+                files,
+                inputs,
+                links,
+                &ordinary_members,
+                &package_members,
+                &bounded_tags,
+                object_members.changes(),
+            ));
     let project_uses = usage_complete
         .then(|| {
             let unproven: std::collections::BTreeSet<String> =
@@ -10888,6 +10878,24 @@ export const App = ({ n }) => <Box bgImage={n} texture={n} />;
                        export const App = () => <Shared.Provider value={1}><Box p={8} /></Shared.Provider>;\n";
             let files = [("kit.tsx", kit), ("contexts.tsx", contexts.as_str()), ("read.tsx", read), ("app.tsx", app)];
             assert_eq!(analyze(&files, &test_inputs()).dynamic_props.keys().collect::<Vec<_>>(), want, "{more}");
+        }
+        // Nor is one an opening may reach: code run from a string, a hand-on
+        // of its module's namespace, a runtime load of it, or a write through
+        // the namespace of a module the analysis cannot find or does not read,
+        // which may re-export it.
+        let app = "import { Box } from './kit';\nimport { Shared } from './contexts';\n\
+                   export const App = () => <Shared.Provider value={1}><Box p={8} /></Shared.Provider>;\n";
+        for (other, want) in [
+            ("export const make = (source) => new Function(source);\n", &["p"][..]),
+            ("import * as contexts from './contexts';\nconsume(contexts);\n", &["p"][..]),
+            ("export * as contexts from './contexts';\n", &["p"][..]),
+            ("import('./contexts').then(consume);\n", &["p"][..]),
+            ("import * as lib from './missing';\nlib.Shared.Provider = pick();\n", &["p"][..]),
+            ("import * as ui from '@local/proxy';\nui.Shared.Provider = pick();\n", &["p"][..]),
+            ("export const other = 1;\n", &[][..]),
+        ] {
+            let files = [("kit.tsx", kit), ("contexts.tsx", contexts), ("other.ts", other), ("app.tsx", app)];
+            assert_eq!(analyze(&files, &test_inputs()).dynamic_props.keys().collect::<Vec<_>>(), want, "{other}");
         }
     }
 

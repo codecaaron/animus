@@ -534,6 +534,21 @@ impl<'f> ObjectMembers<'f> {
 
     /// The object `module` exports as `name`, followed through re-exports
     /// and barrels.
+    /// The context React's `createContext` builds that `module` exports
+    /// under `name`, if it exports one.
+    fn exported_context(&self, module: &str, name: &str) -> Option<ObjectId> {
+        let (declaring, _, declared) = declared_export(module, name.to_string(), self.files, self.links)?;
+        self.files[&declaring].context_consts.contains(&declared).then(|| ObjectId::new(&declaring, &declared))
+    }
+
+    /// The context React's `createContext` builds that the binding a use in
+    /// `module` names (`Ctx`, or `Ctx.Provider`) declares, if any.
+    fn context_of(&self, module: &str, ff: &FileFacts, name: &str) -> Option<ObjectId> {
+        let root = name.split('.').next().unwrap_or(name);
+        let (declaring, binding, _) = resolve_declaration(module, ff, root, self.files, self.inputs, self.links)?;
+        self.files.get(&declaring)?.context_consts.contains(&binding).then(|| ObjectId::new(&declaring, &binding))
+    }
+
     fn exported_object(&mut self, module: &str, name: &str) -> Option<Object> {
         let (declaring, exported, declared) =
             declared_export(module, name.to_string(), self.files, self.links)?;
@@ -648,15 +663,21 @@ impl<'f> ObjectMembers<'f> {
         table
     }
 
-    /// The first use in the analysed modules that may change `object`, said
-    /// as a clause, or `None` when there is none.
-    fn instability(&mut self, object: &Object) -> Option<String> {
+    /// What the uses in the analysed modules may change, closed once, on
+    /// the first question.
+    pub(crate) fn changes(&mut self) -> &ValueEffects {
         if self.changed.is_none() {
             let changed = self.changed();
             self.changed = Some(changed);
         }
+        self.changed.as_ref().expect("closed above")
+    }
+
+    /// The first use in the analysed modules that may change `object`, said
+    /// as a clause, or `None` when there is none.
+    fn instability(&mut self, object: &Object) -> Option<String> {
         let query = AbsenceQuery::SlotsNotWritten(object_id(object));
-        if let Some(Coverage::Exposed(exposures)) = self.changed.as_ref().map(|changed| changed.covers(&query)) {
+        if let Coverage::Exposed(exposures) = self.changes().covers(&query) {
             return Some(exposures[0].cause().to_string());
         }
         let Object::Facade(module, binding) = object else { return None };
@@ -684,7 +705,9 @@ impl<'f> ObjectMembers<'f> {
     /// module and source order: a use of a binding that holds it, a use that
     /// may write through a package's namespace, a namespace re-export of a
     /// module exporting it, a runtime load of one, or code run from a
-    /// string. Every such use may rebind any member.
+    /// string. Every such use may rebind any member. The objects are facades,
+    /// families and the contexts React's `createContext` builds, whose
+    /// `Provider` a tag reads.
     fn changed(&mut self) -> ValueEffects {
         let files = self.files;
         let inputs = self.inputs;
@@ -698,6 +721,9 @@ impl<'f> ObjectMembers<'f> {
             for name in &names {
                 if let Some(object) = self.exported_object(module, name) {
                     flow.export(object_id(&object), module, name);
+                }
+                if let Some(context) = self.exported_context(module, name) {
+                    flow.export(context, module, name);
                 }
             }
         }
@@ -755,6 +781,11 @@ impl<'f> ObjectMembers<'f> {
                 // A write to an assigned facade's target changes the facade.
                 let facades = self.facades_on(module, ff, name);
                 reach.record(&mut flow, facades, &reason);
+                // A use of a context other than React's context readers may
+                // change its `Provider`.
+                if let Some(context) = self.context_of(module, ff, name) {
+                    flow.change(context, Vec::new(), ChangeKind::Escape, reason);
+                }
             }
             // A package may re-export our objects (a linked workspace
             // package) under any name: a use that may write through its
