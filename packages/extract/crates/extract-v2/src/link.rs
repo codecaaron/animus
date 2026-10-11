@@ -235,15 +235,33 @@ fn node_builtins() -> &'static FxHashSet<String> {
     })
 }
 
-/// Whether `identity`, a package `Named` names, is a module built into
-/// Node.
-pub(crate) fn is_node_builtin(identity: &str) -> bool {
-    identity.starts_with("node:") || node_builtins().contains(identity)
+/// Whether the package `identity`, as `Named` names it, imports no module
+/// the analysis holds: a module built into Node, or a package the host
+/// found disjoint.
+pub(crate) fn imports_nothing_analysed(identity: &str, inputs: &CssInputs) -> bool {
+    identity.starts_with("node:")
+        || node_builtins().contains(identity)
+        || package_name(identity).is_some_and(|name| inputs.analysis_context.disjoint_packages.contains(name))
+}
+
+/// The package a bare specifier names (`@scope/name`, `name`); `None` for a
+/// path.
+fn package_name(specifier: &str) -> Option<&str> {
+    if specifier.starts_with('.') || specifier.starts_with('/') {
+        return None;
+    }
+    let mut segments = specifier.splitn(3, '/');
+    let first = segments.next()?;
+    if !first.starts_with('@') {
+        return Some(first);
+    }
+    let second = segments.next()?;
+    Some(&specifier[..first.len() + 1 + second.len()])
 }
 
 /// The package `specifier`, written in `path`, names when the analysis
 /// does not read it and it may import modules the analysis holds, and so
-/// re-export any of their objects: any package but one built into Node.
+/// re-export any of their objects.
 pub(crate) fn unread_package<T>(
     path: &str,
     specifier: &str,
@@ -251,7 +269,7 @@ pub(crate) fn unread_package<T>(
     inputs: &CssInputs,
 ) -> Option<String> {
     match named(path, specifier, files, inputs) {
-        Named::Package(identity) if !is_node_builtin(&identity) => Some(identity),
+        Named::Package(identity) if !imports_nothing_analysed(&identity, inputs) => Some(identity),
         _ => None,
     }
 }

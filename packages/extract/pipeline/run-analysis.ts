@@ -92,6 +92,9 @@ export interface AnalysisContext {
   /** Resolver calls ingestion ended under another spelling (spec §2.2
    *  A8): openings analysis reports and never prunes past. */
   openings?: IngestionOpening[];
+  /** Packages, by name, that import no module the analysis holds (see
+   *  `disjointPackages`): a load of one re-exports no analysed object. */
+  disjointPackages?: readonly string[];
 }
 
 /**
@@ -160,7 +163,8 @@ export function buildAnalysisInputs(
     context?.skippedSources?.length ||
     context?.unbundledComputedImports ||
     context?.packageDirs?.length ||
-    context?.extensions
+    context?.extensions ||
+    context?.disjointPackages?.length
   ) {
     inputs.analysisContextJson = JSON.stringify({
       skippedSources: context.skippedSources ?? [],
@@ -168,6 +172,7 @@ export function buildAnalysisInputs(
       packageDirs: context.packageDirs ?? [],
       linkedDirs: context.linkedDirs ?? [],
       outputDirs: context.outputDirs ?? [],
+      disjointPackages: context.disjointPackages ?? [],
       ...(context.extensions && {
         extensions: {
           appended: context.extensions.appended,

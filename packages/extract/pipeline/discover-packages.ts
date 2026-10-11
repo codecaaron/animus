@@ -154,7 +154,7 @@ function sourceEntryForSpecifier(
 }
 
 /** The package's parsed `package.json`, or null when it cannot be read. */
-function readPackageManifest(pkgRoot: string): JsonValue | null {
+export function readPackageManifest(pkgRoot: string): JsonValue | null {
   try {
     return JSON.parse(readFileSync(join(pkgRoot, 'package.json'), 'utf-8'));
   } catch {
@@ -275,7 +275,10 @@ function realPath(path: string): string {
 /** The root of the installed package `name` as Node finds it from `fromDir`,
  *  the first `node_modules/<name>` up the directory tree, at its real path,
  *  as host resolvers report a linked package. */
-function locatePackageRoot(name: string, fromDir: string): string | null {
+export function locatePackageRoot(
+  name: string,
+  fromDir: string
+): string | null {
   for (let dir = fromDir; ; dir = dirname(dir)) {
     const candidate = join(dir, 'node_modules', name);
     if (existsSync(join(candidate, 'package.json'))) return realPath(candidate);

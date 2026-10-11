@@ -641,7 +641,7 @@ fn unstable_style_statics(
         // under any name: a use that may write through its namespace may
         // reach any of them.
         for (namespace, (subject, used)) in &module.written_namespaces {
-            if matches!(namespace_of(file, namespace), Some(Request::Outside(identity)) if !crate::link::is_node_builtin(identity)) {
+            if matches!(namespace_of(file, namespace), Some(Request::Outside(identity)) if !crate::link::imports_nothing_analysed(identity, inputs)) {
                 flow.open(ReasonId::SkippedSource, Region::of(RegionAtom::AllExports), said(file, subject, used));
             }
         }

@@ -179,6 +179,11 @@ pub struct AnalysisContext {
     /// call whose import the host opens as another file, spec §2.2 A8):
     /// each is an opening of this analysis, as one of its own probes is.
     pub openings: Vec<CaseOpening>,
+    /// Packages that import no module the analysis holds, by name: every
+    /// package their installed dependency closure reaches is installed,
+    /// readable and none of the analysed ones. A load of one re-exports no
+    /// analysed object.
+    pub disjoint_packages: BTreeSet<String>,
 }
 
 /// A probe ingestion ended because the host opens its candidate under
@@ -13192,6 +13197,10 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
     }
 
     fn analyze_with_logical_space(entries: &[(&str, &str)]) -> CssOutput {
+        analyze(entries, &logical_space_inputs())
+    }
+
+    fn logical_space_inputs() -> CssInputs {
         let mut inputs = CssInputs::from_json(
             None,
             None,
@@ -13213,7 +13222,7 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         )
         .unwrap();
         inputs.theme.insert("space.8".into(), "0.5rem".into());
-        analyze(entries, &inputs)
+        inputs
     }
 
     /// An object handed to a module-scope function nothing writes stays
@@ -13349,6 +13358,33 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             files.extend_from_slice(more);
             let out = analyze_with_logical_space(&files);
             assert_eq!(unattributed(&out).len(), usize::from(warns), "{more:?}: {:?}", out.diagnostics);
+        }
+    }
+
+    /// A package whose installed dependencies reach no analysed module, as
+    /// the host lists it, re-exports no analysed object: loading it, a
+    /// subpath of it or its namespace leaves the member tables. A package
+    /// the host does not list still reaches every exported object.
+    #[test]
+    fn a_package_the_host_finds_disjoint_changes_no_member_table() {
+        let recipe = "export const Box = ds.styles({}).system({ space: true }).asElement('div');\n";
+        let fam = "import { Box } from './recipe';\nexport const Fam = { Box };\n";
+        let app = "import { Fam } from './fam';\nexport const App = () => <Fam.Box marginInlineStart={8} />;\n";
+        let mut inputs = logical_space_inputs();
+        inputs.analysis_context.disjoint_packages = ["@local/lib".to_string(), "lib".to_string()].into();
+        for (mutate, warns) in [
+            ("import('@local/lib').then((ui) => { ui.Fam.Box = () => null; });\n", false),
+            ("require('@local/lib/sub').Fam.Box = () => null;\n", false),
+            ("import * as ui from 'lib';\nui.Fam.Box = () => null;\n", false),
+            ("export * as ns from '@local/lib';\n", false),
+            ("import('@local/proxy').then((ui) => { ui.Fam.Box = () => null; });\n", true),
+            ("import * as ui from 'lib-other';\nui.Fam.Box = () => null;\n", true),
+        ] {
+            let out = analyze(
+                &[("recipe.tsx", recipe), ("fam.tsx", fam), ("app.tsx", app), ("mutate.ts", mutate)],
+                &inputs,
+            );
+            assert_eq!(unattributed(&out).len(), usize::from(warns), "{mutate}: {:?}", out.diagnostics);
         }
     }
 

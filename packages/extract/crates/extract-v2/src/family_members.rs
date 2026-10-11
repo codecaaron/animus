@@ -872,7 +872,7 @@ impl<'f> ObjectMembers<'f> {
             .find(|import| import.local == binding && import.name == ImportName::Namespace)?;
         match &record.requests[import.request] {
             Request::Unresolved(_) => Some(UnreadNamespace::Missing),
-            Request::Outside(identity) if crate::link::is_node_builtin(identity) => None,
+            Request::Outside(identity) if crate::link::imports_nothing_analysed(identity, self.inputs) => None,
             Request::Outside(_) => Some(UnreadNamespace::Package),
             Request::Module(_) => None,
         }

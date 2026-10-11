@@ -19,6 +19,7 @@ const typescriptTestTargets = [
   'packages/extract/tests/css-keywords.test.ts',
   'packages/extract/tests/correlate-external-tokens.test.ts',
   'packages/extract/tests/discover-packages.test.ts',
+  'packages/extract/tests/disjoint-packages.test.ts',
   'packages/extract/tests/dynamic-prop-config.test.ts',
   'packages/extract/tests/error-diagnostics.test.ts',
   'packages/extract/tests/files-json-decode.test.ts',
