@@ -344,8 +344,9 @@ export class ExtractionSession {
    *  isolated loader workers replay it; an in-process loader reads memory. */
   persistAnalysisInputs = false;
   /** Whether the session keeps its artifacts on disk: status, commit,
-   *  manifest, styles and its directory claim. A host that serves every
-   *  result from memory (Vite) turns it off; the shared state still
+   *  manifest, styles, the epoch witness, asset copies and its directory
+   *  claim, with the sibling reconciliation they need. A host that serves
+   *  every result from memory (Vite) turns it off; the shared state still
    *  publishes. */
   persistArtifacts = true;
   /** Whether this session serves development (a watch), where an error-level
@@ -2471,6 +2472,12 @@ export class ExtractionSession {
   /** Maintain the session's epoch witness, rewritten ONLY when the value
    *  changes, then expose it through the singleton. */
   private publishReplacementEpoch(epoch: string): void {
+    // In memory, no artifact names the epoch and no sibling is reconciled.
+    if (!this.persistArtifacts) {
+      this.lastEpochValue = epoch;
+      setReplacementEpoch(this.key, epoch);
+      return;
+    }
     // Probe DISK, not just the memo: a sibling's reconciliation can delete
     // this artifact, and an absent witness always satisfies webpack's check.
     const onDisk = this.diskEpochValue();
@@ -2687,6 +2694,21 @@ export class ExtractionSession {
     this.assetDependencyKeys.clear();
 
     const urlBySpecifier = new Map<string, string>();
+    // In memory, until a host supplies an asset URL strategy, each asset is
+    // named by its live source path: no copy is made, written or pruned.
+    if (!this.persistArtifacts) {
+      for (const specifier of specifiers) {
+        const resolvedPath = this.resolveAssetSpecifier(specifier);
+        if (resolvedPath) {
+          this.trackAssetDependency(resolvedPath);
+          urlBySpecifier.set(specifier, resolvedPath);
+        } else {
+          this.reportUnresolvableAsset(specifier);
+          urlBySpecifier.set(specifier, specifier);
+        }
+      }
+      return substituteSheetAssets(sheets, urlBySpecifier);
+    }
     for (const specifier of specifiers) {
       // The memo saves resolution and the copy, never the hash: bytes can
       // change with mtime and size unchanged (SE-5). A missing copy
@@ -2706,12 +2728,7 @@ export class ExtractionSession {
       }
       const resolvedPath = this.resolveAssetSpecifier(specifier);
       if (!resolvedPath) {
-        const message = `unresolvable asset() specifier: ${specifier}`;
-        if (this.options.strict) {
-          this.strictFailure(`[${this.driverLabel}] ${message}`);
-        } else {
-          this.warn(message);
-        }
+        this.reportUnresolvableAsset(specifier);
         urlBySpecifier.set(specifier, specifier);
         continue;
       }
@@ -2744,6 +2761,15 @@ export class ExtractionSession {
     if (pruneSuperseded) pruneStaleAssets(assetsDir, expected);
 
     return substituteSheetAssets(sheets, urlBySpecifier);
+  }
+
+  private reportUnresolvableAsset(specifier: string): void {
+    const message = `unresolvable asset() specifier: ${specifier}`;
+    if (this.options.strict) {
+      this.strictFailure(`[${this.driverLabel}] ${message}`);
+    } else {
+      this.warn(message);
+    }
   }
 
   private trackAssetDependency(path: string): void {
