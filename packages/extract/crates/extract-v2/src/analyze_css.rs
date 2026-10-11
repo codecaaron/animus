@@ -9064,20 +9064,20 @@ mod tests {
         // outermost start's `&` is the component, and a start without `&` is
         // relative to it, as nested CSS reads it (CSS Cascade 6 §3.5).
         for wrapped in [
-            format!("@scope (.{} .zz-prose) to ([data-prose-ignore]) {{\n    :scope li {{\n      cursor: pointer;", class("Prose")),
+            format!("@scope (.{} .zz-prose) to ([data-prose-ignore]) {{\n    :where(:scope) li {{\n      cursor: pointer;", class("Prose")),
             format!("@starting-style {{\n    .{} {{\n      opacity: 0;", class("Toast")),
             format!("@starting-style {{\n    .{}:hover {{\n      opacity: 0.5;", class("Toast")),
             format!("@starting-style {{\n    .{} {{\n      color: red;", class("Toast")),
-            format!("@scope (.{}) to (.not-card) {{\n    :scope p {{\n      margin: 0;", class("Card")),
-            format!("@scope (.{}) {{\n    :scope {{\n      color: red;", class("Bare")),
-            format!("@scope (.{}) {{\n    :scope em {{\n      color: green;", class("Bare")),
-            format!("@scope (.{} [data-label=\"R&D\"]) {{\n    :scope {{\n      color: blue;", class("Bare")),
-            format!("@scope (.{}) to (:scope > .stop) {{\n    :scope p {{\n      color: red;", class("Donut")),
-            format!("@scope (.{}:hover) {{\n    @scope (:scope > .inner) {{\n      :scope p {{\n        color: red;", class("Nest")),
+            format!("@scope (.{}) to (.not-card) {{\n    :where(:scope) p {{\n      margin: 0;", class("Card")),
+            format!("@scope (.{}) {{\n    :where(:scope) {{\n      color: red;", class("Bare")),
+            format!("@scope (.{}) {{\n    :where(:scope) em {{\n      color: green;", class("Bare")),
+            format!("@scope (.{} [data-label=\"R&D\"]) {{\n    :where(:scope) {{\n      color: blue;", class("Bare")),
+            format!("@scope (.{}) to (:scope > .stop) {{\n    :where(:scope) p {{\n      color: red;", class("Donut")),
+            format!("@scope (.{}:hover) {{\n    @scope (:scope > .inner) {{\n      :where(:scope) p {{\n        color: red;", class("Nest")),
         ] {
             assert!(base.contains(&wrapped), "{wrapped}\nmissing from anm-base:\n{}", out.css);
         }
-        assert!(out.sheets.global.contains("@scope (:is(.a, .b) > p) {\n  :scope em {"), "{}", out.sheets.global);
+        assert!(out.sheets.global.contains("@scope (:is(.a, .b) > p) {\n  :where(:scope) em {"), "{}", out.sheets.global);
         let codes: Vec<_> = out.diagnostics.iter().filter_map(|d| Some((d.code.as_deref()?, d.component.as_str()))).collect();
         assert_eq!(
             codes,

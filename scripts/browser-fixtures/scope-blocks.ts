@@ -3,9 +3,10 @@
  * extraction engine, finalized as hosts finalize it, and matched by the
  * browser. Each expectation is what the same block nested in the component's
  * rule matches natively (CSS Cascade 6 §3.5): the rule is the scope root, a
- * limit's `&` is that root, and a start without `&` is relative to the
- * component. A lowering that styled the component as a descendant of its own
- * scope, or bound `&` to the component everywhere, changes a colour here.
+ * limit's `&` is that root, a scoped `&` adds no specificity, and a start
+ * without `&` is relative to the component. A lowering that styled the
+ * component as a descendant of its own scope, bound `&` to the component
+ * everywhere, or gave the scope root a specificity, changes a colour here.
  */
 import {
   postProcessCss,
@@ -18,13 +19,15 @@ import type { FixtureCase, Probe } from './cases';
 
 const RED = 'rgb(255, 0, 0)';
 const NONE = 'rgba(0, 0, 0, 0)';
+const BLUE = 'rgb(0, 0, 255)';
 
 const SOURCE = `import { ds } from './setup';
 export const Lone = ds.styles({ '@scope': { backgroundColor: 'red' } }).asElement('div');
 export const Donut = ds.styles({ '@scope (&) to (& > .stop)': { '& p': { backgroundColor: 'red' } } }).asElement('div');
 export const Nest = ds.styles({ '@scope (&)': { '@scope (& > .inner)': { '& p': { backgroundColor: 'red' } } } }).asElement('div');
 export const Prose = ds.styles({ '@scope (.zz-prose) to ([data-prose-ignore])': { '& li': { backgroundColor: 'red' } } }).asElement('div');
-export const App = () => <><Lone /><Donut /><Nest /><Prose /></>;`;
+export const Ranked = ds.styles({ '@scope (&)': { '& p': { backgroundColor: 'red' } } }).asElement('div');
+export const App = () => <><Lone /><Donut /><Nest /><Prose /><Ranked /></>;`;
 
 export function scopeBlockCases(root: string): FixtureCase[] {
   const manifest = analyzeFixture({
@@ -74,6 +77,16 @@ export function scopeBlockCases(root: string): FixtureCase[] {
           'prose-outside',
           NONE
         ),
+      ],
+    },
+    {
+      name: 'a scoped `&` adds no specificity, so a later equal rule still wins',
+      // Native `& p` in the scope is `:where(:scope) p`, as specific as the
+      // later `p`; a lowering to `:scope p` would outrank it.
+      css: `${css}@layer anm-base{@scope(.${className('Ranked')}){p{background-color:blue}}}`,
+      body: `<div class="${className('Ranked')}"><p id="ranked"></p></div>`,
+      probes: [
+        probe('the later rule of equal specificity wins', 'ranked', BLUE),
       ],
     },
   ];

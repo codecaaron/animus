@@ -705,7 +705,7 @@ fn write_condition_block(
         }
         let decl_indent = 2 * (preludes.len() + 1);
         let inners: Vec<String> = match subject {
-            Some(_) => vec![":scope".to_string()],
+            Some(_) => vec![crate::theme::SCOPE_ROOT.to_string()],
             None => inner_selectors.to_vec(),
         };
         for inner in &inners {

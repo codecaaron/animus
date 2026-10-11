@@ -494,6 +494,10 @@ impl Condition {
     }
 }
 
+/// A scoped rule's own element, the scope root, as nested CSS reads `&`
+/// inside `@scope` (CSS Cascade 6 §3.5.3): with no specificity of its own.
+pub(crate) const SCOPE_ROOT: &str = ":where(:scope)";
+
 /// The preludes wrapping a rule whose own selector is `subject`, outermost
 /// first; `None` when one cannot be written. Within a scope (CSS Cascade 6
 /// §3.5), only the outermost scope's start says `&` for `subject`: a limit,
@@ -2435,7 +2439,7 @@ fn push_global_rules(
         };
         // Within a scope the rule is the scope root.
         let rule = if group.conditions.iter().any(Condition::is_scope) {
-            group.selector.as_deref().map_or_else(|| ":scope".to_string(), |nested| compose_selectors(":scope", nested))
+            group.selector.as_deref().map_or_else(|| SCOPE_ROOT.to_string(), |nested| compose_selectors(SCOPE_ROOT, nested))
         } else {
             subject(&group.selector)
         };
