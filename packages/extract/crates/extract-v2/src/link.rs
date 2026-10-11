@@ -21,13 +21,15 @@ use rustc_hash::FxHashSet;
 /// A module's record with its requests as written.
 pub type OwnedModuleRecord = ModuleRecord<LocalId, String>;
 
-/// One file's Lower output: its identity table and owned module record,
-/// and the semantic build both were read from, which fact extraction
-/// reuses rather than building again.
+/// One file's Lower output: its identity table, owned module record,
+/// module loads and parameter readings, and the semantic build the table,
+/// record and readings were read from, which fact extraction reuses rather
+/// than building again.
 pub(crate) struct Lowered {
     pub(crate) scoping: Scoping,
     pub(crate) bindings: BindingTable,
     pub(crate) record: OwnedModuleRecord,
+    pub(crate) loads: Vec<crate::loads::Load>,
     /// How each of the module's functions treats an object passed to it.
     pub(crate) readings: crate::usage_facts::ParamReadings,
 }
@@ -44,7 +46,7 @@ impl Lowered {
         let bindings = BindingTable::prepare(IdentityInput { module, program, module_record, scoping: &scoping });
         let record = copy_module_record(module_record, &bindings, program.source_text, program);
         let readings = std::sync::Arc::new(crate::usage_facts::function_param_readings(program, &scoping));
-        Self { scoping, bindings, record, readings }
+        Self { scoping, bindings, record, loads: crate::loads::collect(program), readings }
     }
 }
 
