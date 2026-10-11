@@ -432,9 +432,9 @@ export class ExtractionSession {
   /** Those read from their package's compiled output. */
   externalOutputDirs: string[] = [];
   /** Absolute package dir → owning specifier (cross-source correlation). */
-  private externalDirOwners: Record<string, string> = {};
+  externalDirOwners: Record<string, string> = {};
   /** rootDir-relative external file → owning specifier (correlation join). */
-  private externalFileOwners: Record<string, string> = {};
+  externalFileOwners: Record<string, string> = {};
   /** External package specifier → absolute source entry path. */
   externalSourceEntries = new Map<string, string>();
   /** Specifier → its source entry's side effects, from the owning package's
@@ -476,6 +476,16 @@ export class ExtractionSession {
   onOutcome: ((outcome: SessionOutcome) => void) | null = null;
   /** The last published generation; null before the first. */
   publication: SessionPublication | null = null;
+
+  /** The original sources (raw, before adaptation) the session holds, by
+   *  root-relative path: the published generation's, plus any that an
+   *  attempt in flight or held by an aborted parse has read. */
+  get publishedSources(): ReadonlyMap<
+    string,
+    { hash: string; source: string }
+  > {
+    return this.fileCache;
+  }
   /** The generation an emit produced, current once its ingestion
    *  publishes. */
   private stagedPublication: Omit<SessionPublication, 'ownership'> | null =

@@ -73,7 +73,7 @@ import type {
   SourceIngestionResult,
   SystemConfig,
 } from '@animus-ui/extract/pipeline';
-import type { SessionKey } from '@animus-ui/extract/session';
+import type { SessionKey, SessionOutcome } from '@animus-ui/extract/session';
 import type { Logger } from 'vite';
 
 function emptySystemConfig(): SystemConfig {
@@ -418,6 +418,9 @@ export class PluginContext {
   readonly build = createBuildId();
   /** The build's Session, created once the Vite root resolves. */
   session: ExtractionSession | null = null;
+  /** The Session's last outcome: a publication, or a hold on an aborted
+   *  parse. */
+  sessionOutcome: SessionOutcome | null = null;
 
   constructor(
     options: AnimusExtractOptions,
@@ -503,6 +506,11 @@ export class PluginContext {
       }
     );
     session.persistArtifacts = false;
+    session.driverLabel = 'animus-extract';
+    this.sessionOutcome = null;
+    session.onOutcome = (outcome) => {
+      this.sessionOutcome = outcome;
+    };
     session.development = this.development;
     session.rootDir = this.rootDir;
     session.conditions = this.resolveConditions;
@@ -514,6 +522,55 @@ export class PluginContext {
       this.outputExclude === null ? [] : [this.outputExclude];
     this.session = session;
     return session;
+  }
+
+  /** Serves the Session's last publication: the manifest, the analysis
+   *  sheets (asset placeholders kept; Vite substitutes them), the system,
+   *  the package map and the external-package state. */
+  adoptPublication(session: ExtractionSession): void {
+    const publication = session.publication;
+    if (publication === null) return;
+    const manifest = publication.manifest;
+    this.system = publication.system;
+    this.systemLoaded = true;
+    this.resolvedSystemPath = resolve(this.rootDir, this.options.system);
+    const keys = new Set<string>();
+    for (const path of [
+      this.resolvedSystemPath,
+      ...session.systemDependencyPaths,
+    ]) {
+      for (const key of toWatchKeys(path)) keys.add(key);
+    }
+    this.systemDependencyKeys = keys;
+    this.systemDependencyPaths = session.systemDependencyPaths;
+    this.storedManifest = manifest;
+    this.storedManifestJson = publication.manifestJson;
+    this.storedSheets = manifest.sheets;
+    this.globalCss = publication.analysisGlobalCss;
+    this.resolvedComponentCss = publication.analysisComponentCss;
+    this.packageMap = publication.packageMap;
+    this.reverseProvenance = manifest.reverse_provenance;
+    this.storedSystemPropMapJson = JSON.stringify(manifest.system_prop_map);
+    this.storedDynamicPropsJson = JSON.stringify(manifest.dynamic_props);
+    this.storedAdmittedTransformsJson = JSON.stringify(
+      manifest.admitted_transforms
+    );
+    this.storedTypedSystemPropsJson = JSON.stringify(
+      manifest.typed_system_props
+    );
+    this.externalPackageDirs = session.externalPackageDirs;
+    this.externalLinkedDirs = session.externalLinkedDirs;
+    this.externalOutputDirs = session.externalOutputDirs;
+    this.externalDirOwners = session.externalDirOwners;
+    this.externalFileOwners = session.externalFileOwners;
+    this.externalSourceEntries.clear();
+    for (const [specifier, entry] of session.externalSourceEntries) {
+      this.externalSourceEntries.set(specifier, entry);
+    }
+    this.externalSourceSideEffects = session.externalSourceSideEffects;
+    this.kitDescriptors = session.kitDescriptors;
+    this.externalPackageOutcomes = session.lastExternalOutcomes;
+    this.registerSystemWatchPaths();
   }
 
   /** Releases this context's engine handle: a standalone one, which no
