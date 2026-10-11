@@ -564,6 +564,9 @@ const RESOLVE_CASE_MISMATCH: &str = "animus.resolve.case-mismatch";
 /// would otherwise have read a later candidate (spec §2.2 A8,
 /// Incomplete(SkippedSource)).
 const RESOLVE_SKIPPED_SOURCE: &str = "animus.resolve.skipped-source";
+/// Any other probe the host ends at a file analysis never reads (spec §2.2
+/// A8): no opening stops pruning silently.
+const RESOLVE_UNANALYSED_IMPORT: &str = "animus.resolve.unanalysed-import";
 const WIDE_MODULE_LOAD_LIMIT: usize = 20;
 /// A warning, once per production analysis: tags usage cannot match to an
 /// Animus component stop whole-component removal, so every extracted
@@ -639,6 +642,7 @@ pub(crate) const DIAGNOSTIC_CODES: &[(&str, &str)] = &[
     (WIDE_MODULE_LOAD, "warn"),
     (RESOLVE_CASE_MISMATCH, "warn"),
     (RESOLVE_SKIPPED_SOURCE, "warn"),
+    (RESOLVE_UNANALYSED_IMPORT, "warn"),
     (IDENTITY_UNCERTAIN, "warn"),
     (IDENTITY_UNCERTAIN_TAG, "info"),
     (UNEXTRACTABLE_CHAIN, "warn"),
@@ -8410,11 +8414,18 @@ fn run_with_system_floor(
     crate::reconcile::pool_shared_usage(&mut usage_ledger, copies.into_values(), &parent_ids);
 
     // A probe whose host opens a file analysis never reads (spec §2.2 A8)
-    // is reported once per importer and specifier: a case variant always, a
-    // skipped source only where analysis would otherwise have read a later
-    // candidate; any other opening is recorded silently.
+    // is reported once per importer and specifier: a case variant, a skipped
+    // source where analysis would otherwise have read a later candidate, and
+    // any other opening, as each stops pruning.
     let incomplete: Vec<IncompleteProbe> =
         inputs.incomplete_probes.lock().map(|probes| probes.iter().cloned().collect()).unwrap_or_default();
+    // Each import is reported once; one a skipped-source finding names
+    // already says pruning stops.
+    let mut unanalysed_reported: FxHashSet<(&str, &str)> = incomplete
+        .iter()
+        .filter(|probe| matches!(probe.why, Opening::Skipped { later: Some(_) }))
+        .map(|probe| (probe.importer.as_str(), probe.specifier.as_str()))
+        .collect();
     for probe in &incomplete {
         let IncompleteProbe { importer, specifier, candidate, opened, why } = probe;
         match why {
@@ -8441,7 +8452,18 @@ fn run_with_system_floor(
                 ),
                 Some(RESOLVE_SKIPPED_SOURCE),
             )),
-            Opening::Skipped { later: None } => {}
+            Opening::Skipped { later: None } if !unanalysed_reported.insert((importer, specifier)) => {}
+            Opening::Skipped { later: None } => diagnostics.push(diagnostic(
+                importer,
+                specifier,
+                "warn",
+                format!(
+                    "'{specifier}' opens {opened}, which analysis does not read, so nothing is pruned: \
+                     every variant and state option in the app ships — analyse {opened}, or serve it \
+                     as an asset"
+                ),
+                Some(RESOLVE_UNANALYSED_IMPORT),
+            )),
         }
     }
     let shadowing: Vec<ShadowingProbe> =
