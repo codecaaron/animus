@@ -331,8 +331,9 @@ export class ExtractionSession {
   private readonly options: SessionOptions;
   private readonly staticCssJson: string | null;
   private system: SystemConfig | null = null;
-  /** Configured external files that could not be read. Incremental passes
-   *  re-collect nothing, so they replay these instead of passing strict. */
+  /** Configured files that could not be read. Incremental passes replay
+   *  these instead of passing strict, and add a watched change they cannot
+   *  read. */
   private ingestionFailureDiagnostics: ManifestDiagnostic[] = [];
   /** Whether the corpus being analyzed left a file out, whose renders the
    *  analysis cannot see. */
@@ -903,15 +904,27 @@ export class ExtractionSession {
     }
 
     const changedPaths: string[] = [];
+    let unreadableAny = false;
 
     for (const target of targets) {
       const relPath = target.key;
       let source: string;
       try {
         source = readFileSync(target.abs, 'utf-8');
-      } catch {
+      } catch (err) {
         // Benign race: the file vanished between the watch event and this
         // read — it will surface in removedFiles on the next watch cycle.
+        if (isDeletedSource(err)) continue;
+        // Lost input, as a full pass treats it: reported with its cause, and
+        // its last source stops riding along.
+        this.clearIngestionFailure(relPath);
+        this.ingestionFailureDiagnostics = [
+          ...this.ingestionFailureDiagnostics,
+          unreadableSourceDiagnostic(relPath, err),
+        ];
+        recordPrior(relPath);
+        this.fileCache.delete(relPath);
+        unreadableAny = true;
         continue;
       }
       // A file read now no longer costs the analysis its renders.
@@ -946,7 +959,12 @@ export class ExtractionSession {
       }
     }
 
-    if (changedPaths.length > 0 || removedAny || assetChanged) {
+    if (
+      changedPaths.length > 0 ||
+      removedAny ||
+      unreadableAny ||
+      assetChanged
+    ) {
       const pending: Array<[string, string]> = changedPaths.map((rel) => [
         rel,
         this.fileCache.get(rel)!.hash,
