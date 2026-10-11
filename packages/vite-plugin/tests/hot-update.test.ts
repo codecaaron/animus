@@ -464,13 +464,14 @@ describe('hotUpdate recovers a new imported parent found on disk', () => {
         ? [
             published(probe, {
               manifest: makeManifest({
-                diagnostics: [
+                missing_inputs: [
                   {
                     file: 'Consumer.tsx',
                     component: 'Fancy',
-                    kind: 'bail',
-                    message:
-                      "chain dropped: could not resolve parent component 'Parent'",
+                    parent: 'Parent',
+                    specifier: './Parent',
+                    base: 'Parent',
+                    outcome: 'absent',
                   },
                 ],
               }),
