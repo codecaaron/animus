@@ -623,7 +623,20 @@ export async function collectExternalPackageSources(opts: {
   };
 
   const diagnostics: ManifestDiagnostic[] = [];
-  const reportedPackages = new Set<string>();
+  // Each finding once, by its package, code and message (which names the
+  // entry and target), whichever specifier of the package reaches it.
+  const reported = new Set<string>();
+  const report = (
+    packageName: string,
+    condition: KitSourceCondition | null
+  ): void => {
+    for (const finding of sourceConditionDiagnostics(packageName, condition)) {
+      const key = `${finding.file}\0${finding.code}\0${finding.message}`;
+      if (reported.has(key)) continue;
+      reported.add(key);
+      diagnostics.push(finding);
+    }
+  };
 
   const kitDescriptors: KitDescriptorRecord[] = [];
   const describedRoots = new Set<string>();
@@ -728,14 +741,8 @@ export async function collectExternalPackageSources(opts: {
         : null;
     // A refused selection fails the load, so its finding is reported with
     // the unresolvable outcome.
-    if (
-      selection?.unresolved &&
-      condition &&
-      packageName &&
-      !reportedPackages.has(packageName)
-    ) {
-      reportedPackages.add(packageName);
-      diagnostics.push(...sourceConditionDiagnostics(packageName, condition));
+    if (selection?.unresolved && condition && packageName) {
+      report(packageName, condition);
     }
     const entryKey = packageName && `.${specifier.slice(packageName.length)}`;
     absEntry ??=
@@ -787,10 +794,7 @@ export async function collectExternalPackageSources(opts: {
     let fileCount = 0;
     let staleDist = false;
 
-    if (packageName && !reportedPackages.has(packageName)) {
-      reportedPackages.add(packageName);
-      diagnostics.push(...sourceConditionDiagnostics(packageName, condition));
-    }
+    if (packageName) report(packageName, condition);
 
     // The compiled output a runtime entry lives in: its directory, with the
     // entry's own extension, less the paths no package ships as source.

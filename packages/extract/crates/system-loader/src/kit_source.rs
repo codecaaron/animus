@@ -186,10 +186,11 @@ pub fn resolve_kit_source_root(
         return Ok(found);
     }
 
-    // Source-targeting exports: every exact entry's runtime target, as the
-    // loader selects it, is TypeScript source in the package.
+    // Source-targeting exports: every exact entry's runtime target, and the
+    // specifier's own pattern entry's, as the loader selects it, is
+    // TypeScript source in the package.
     let mut sources = Vec::new();
-    for (entry, _) in &exact {
+    for (entry, _, _) in &walked {
         let target = resolve_exports_entry(exports.as_ref().unwrap_or(&serde_json::Value::Null), entry, false, &context.conditions);
         let Some(target) = target.filter(|target| is_typescript_source(target) && !target.contains('%')) else {
             sources.clear();

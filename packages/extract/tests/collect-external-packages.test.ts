@@ -1300,3 +1300,87 @@ test.each([
     imported: [[name, KIT_SYSTEM_NOT_INCLUDED]],
   });
 });
+
+// Contract: a pattern entry whose runtime target is already source is that
+// source, as the loader evaluates it: `kit/foo` through `./*` reads
+// `src/entries/foo.ts`, never a `src/` guess, and a source-targeting export
+// loses no source fidelity, so it reports no kit-without-source-condition.
+test('a source-targeting wildcard entry is read as its source, with no finding', async () => {
+  const root = realpathSync(makeRoot());
+  const pkg = join(root, 'node_modules', 'source-wild');
+  for (const file of ['src/entries/foo.ts', 'src/foo.ts']) {
+    mkdirSync(join(pkg, file, '..'), { recursive: true });
+    writeFileSync(join(pkg, file), 'export const t = 1;\n');
+  }
+  writeFileSync(
+    join(pkg, 'package.json'),
+    JSON.stringify({
+      name: 'source-wild',
+      exports: { './*': './src/entries/*.ts' },
+    })
+  );
+
+  const result = await collect(root, {
+    'source-wild/foo': join(pkg, 'src', 'entries', 'foo.ts'),
+  });
+  const loaded = native.resolveSpecifier('source-wild/foo', root, []);
+
+  expect({
+    discovery: relative(
+      pkg,
+      result.sourceEntries.get('source-wild/foo') ??
+        join(root, result.packageMap['source-wild/foo'] ?? '')
+    ),
+    loader: relative(pkg, loaded.path ?? ''),
+    findings: result.diagnostics.map((d) => d.code),
+  }).toEqual({
+    discovery: 'src/entries/foo.ts',
+    loader: 'src/entries/foo.ts',
+    findings: [],
+  });
+});
+
+// Contract: a refused percent entry is reported whichever of its package's
+// specifiers the system includes first.
+test.each([[['pct', 'pct/a%20b']], [['pct/a%20b', 'pct']]])(
+  'a refused percent entry is reported for includes %j',
+  async (order) => {
+    const root = realpathSync(makeRoot());
+    const pkg = join(root, 'node_modules', 'pct');
+    for (const file of [
+      'src/index.ts',
+      'src/a%20b.ts',
+      'dist/index.js',
+      'dist/a%20b.js',
+    ]) {
+      mkdirSync(join(pkg, file, '..'), { recursive: true });
+      writeFileSync(join(pkg, file), 'export const t = 1;\n');
+    }
+    writeFileSync(
+      join(pkg, 'package.json'),
+      JSON.stringify({
+        name: 'pct',
+        exports: {
+          '.': { animus: './src/index.ts', import: './dist/index.js' },
+          './*': { animus: './src/*.ts', import: './dist/*.js' },
+        },
+      })
+    );
+
+    const result = await collect(
+      root,
+      Object.fromEntries(
+        order.map((specifier) => [
+          specifier,
+          join(pkg, 'dist', `${specifier === 'pct' ? 'index' : 'a%20b'}.js`),
+        ])
+      )
+    );
+
+    expect(
+      result.diagnostics
+        .filter((d) => d.code === INVALID_KIT_SOURCE_CONDITION)
+        .map((d) => d.message)
+    ).toEqual([expect.stringContaining('percent-escape unsupported')]);
+  }
+);
