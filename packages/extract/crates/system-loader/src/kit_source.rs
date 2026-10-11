@@ -8,7 +8,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::{
-    best_exports_pattern, condition_target, find_package_json, resolution, resolve_exports_entry,
+    best_exports_pattern, condition_target, locate_package, resolution, resolve_exports_entry,
     select_package_entry, split_specifier, target_path, valid_package_target, ResolutionContext, Target,
 };
 
@@ -73,10 +73,7 @@ pub fn resolve_kit_source_root(
     let (name, subpath) = split_specifier(specifier);
     let manifest = match package_dir {
         Some(dir) => Path::new(dir).join("package.json"),
-        None => match find_package_json(name, from_dir) {
-            Ok(path) => path,
-            Err(missing) => context.workspaces.get(name).map(|dir| dir.join("package.json")).ok_or(missing)?,
-        },
+        None => locate_package(name, from_dir, context)?.join("package.json"),
     };
     let package_dir = manifest.parent().map(Path::to_path_buf).unwrap_or_default();
     let exports = fs::read_to_string(&manifest)

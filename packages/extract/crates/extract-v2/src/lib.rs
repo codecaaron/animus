@@ -206,6 +206,21 @@ pub fn resolve_specifier(
     )
 }
 
+/// The directory of the package `name` as the system loader locates it from
+/// `from_dir` (the first `node_modules/<name>` up the tree, then the declared
+/// `workspaces`), at its real path, as host resolvers report a linked
+/// package; null where it locates none.
+#[napi]
+pub fn locate_package(
+    name: String,
+    from_dir: String,
+    workspaces: Option<std::collections::HashMap<String, String>>,
+) -> Option<String> {
+    let context = resolution_context(None, workspaces, None).ok()?;
+    let dir = animus_system_loader::locate_package(&name, &from_dir, &context).ok()?;
+    Some(std::fs::canonicalize(&dir).unwrap_or(dir).to_string_lossy().to_string())
+}
+
 /// Whether the package at `package_dir` declares the kit source condition:
 /// an `animus` key anywhere in its `exports`, valid or not, read from the
 /// manifest alone.

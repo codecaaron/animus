@@ -145,6 +145,8 @@ function makeEngineProbe(): EngineProbe {
       return { code: '', hasComponents: false };
     },
     clearAnalysisCache: () => {},
+    // The fixtures install no package.
+    locatePackage: () => null,
   } satisfies EngineApi;
   return {
     engine,
@@ -185,6 +187,8 @@ function makeStatefulResetProbe() {
       clears += 1;
       active = false;
     },
+    // The fixtures install no package.
+    locatePackage: () => null,
   } satisfies EngineApi;
 
   return {
@@ -304,6 +308,8 @@ describe('opted-in Svelte source ownership in the Vite lifecycle', () => {
       analyzeProject: () => '{}',
       transformFile: () => ({ code: '', hasComponents: false }),
       clearAnalysisCache: () => {},
+      // The fixtures install no package.
+      locatePackage: () => null,
     } satisfies EngineApi;
     const ctx = new PluginContext({ system: 'src/ds.ts' }, () => legacyEngine);
 
@@ -583,6 +589,8 @@ describe('opted-in Svelte source ownership in the Vite lifecycle', () => {
       },
       transformFile: () => ({ code: '', hasComponents: false }),
       clearAnalysisCache: () => {},
+      // The fixtures install no package.
+      locatePackage: () => null,
     };
     const ctx = makeContext(appRoot, engine, ['.ts', '.svelte']);
 
