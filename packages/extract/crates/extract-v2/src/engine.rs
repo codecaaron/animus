@@ -682,15 +682,7 @@ impl ExtractEngine {
         // Each file's Lower output, before anything reads across files.
         let mut lowered_by_file: BTreeMap<String, crate::link::Lowered> =
             store.iter().map(|ast| (ast.path.clone(), crate::link::Lowered::of(ast))).collect();
-        // Static enrichment and mutation targets read explicit exports only,
-        // never through `export *`.
-        let explicit: BTreeMap<String, crate::link::OwnedModuleRecord> = lowered_by_file
-            .iter()
-            .map(|(path, lowered)| {
-                (path.clone(), crate::link::OwnedModuleRecord { star_exports: Vec::new(), ..lowered.record.clone() })
-            })
-            .collect();
-        let links = ProjectLinks::of_records(&explicit, |record| record, &self.opts.css_inputs);
+        let links = ProjectLinks::of_records(&lowered_by_file, |lowered| &lowered.record, &self.opts.css_inputs);
         for ast in store.iter() {
             let program = ast.program();
             let statics = if crate::analyze_css::is_external_file(&ast.path, &self.opts.css_inputs.external_dirs) {
@@ -1995,6 +1987,46 @@ export const App = () => <Box tone="red" />;
         assert!(manifest["system_prop_map"]["p"]["24"].is_string());
         assert!(manifest["system_prop_map"]["p"]["32"].is_string());
         assert_eq!(manifest["usageResidue"], serde_json::json!([]));
+    }
+
+    /// A static an import reaches through `export *` enriches its reader,
+    /// and a namespace re-export of a module that stars it in unsettles it.
+    #[test]
+    fn statics_follow_export_star_into_enrichment_and_mutation_targets() {
+        let mut engine = ExtractEngine::new(Some(EngineOptions {
+            config_json: Some(r#"{"p":{"property":"padding"}}"#.to_string()),
+            group_registry_json: Some(r#"{"space":["p"]}"#.to_string()),
+            ..Default::default()
+        }))
+        .unwrap();
+        let manifest: serde_json::Value = serde_json::from_str(
+            &engine
+                .analyze(
+                    serde_json::json!([
+                        { "path": "tokens.ts", "source": "export const GAP = 24;\nexport const pad = { margin: 4 };\n" },
+                        { "path": "barrel.ts", "source": "export * from './tokens';\n" },
+                        { "path": "all.ts", "source": "export * as all from './barrel';\n" },
+                        { "path": "a.tsx", "source": "import { GAP } from './barrel';\nimport { pad } from './tokens';\nexport const Box = ds.system({ space: true }).asElement('div');\nexport const Card = ds.styles({ ...pad }).asElement('div');\nexport const App = () => <><Box p={GAP} /><Card /></>;\n" }
+                    ])
+                    .to_string(),
+                )
+                .unwrap(),
+        )
+        .unwrap();
+
+        assert!(manifest["system_prop_map"]["p"]["24"].is_string(), "{manifest}");
+        let dropped: Vec<&str> = manifest["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|d| d["component"] == "Card")
+            .filter_map(|d| d["message"].as_str())
+            .collect();
+        assert_eq!(
+            dropped,
+            ["chain dropped: stage 'styles' evaluation failed — styles eval failed: spread of all.ts hands on barrel.ts as the namespace all"],
+            "{manifest}"
+        );
     }
 
     #[test]
