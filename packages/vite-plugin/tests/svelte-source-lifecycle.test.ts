@@ -253,7 +253,7 @@ function makeContext(
 
 /** The sources the context's Session holds, by root-relative path. */
 function heldSources(ctx: PluginContext) {
-  return ctx.session!.publishedSources;
+  return ctx.session!.heldSources;
 }
 
 /** The Session's published source ownership. */

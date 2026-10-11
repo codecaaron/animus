@@ -344,7 +344,7 @@ describe('transform: new-file invalidation is unconditional', () => {
         join(ROOT, 'src/New.tsx')
       )
     ).rejects.toThrow(/analysis of the new file src\/New\.tsx failed/);
-    expect(probe.session.publishedSources.has('src/New.tsx')).toBe(false);
+    expect(probe.session.heldSources.has('src/New.tsx')).toBe(false);
     expect(probe.extractedInvalidations).toBe(0);
 
     await expect(

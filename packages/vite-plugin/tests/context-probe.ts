@@ -15,7 +15,7 @@ import type { DevEnvironment } from 'vite';
 /** What the probe's Session holds: its sources by root-relative path, and
  *  the published corpus's analysis entries and ownership. */
 export interface ProbeSession {
-  publishedSources: Map<string, { hash: string; source: string }>;
+  heldSources: Map<string, { hash: string; source: string }>;
   corpus: {
     published: {
       analysisEntries: Map<string, { path: string; source: string }>;
@@ -138,7 +138,7 @@ export function makeContextProbe<Overrides extends ContextProbeOverrides>(
   let probe: ContextProbe;
   let responder: ProbeResponder = () => [published(probe)];
   const session: ProbeSession = {
-    publishedSources: new Map(),
+    heldSources: new Map(),
     corpus: { published: { analysisEntries: new Map(), ownership: {} } },
   };
   const externalPackageDirs: string[] = [];

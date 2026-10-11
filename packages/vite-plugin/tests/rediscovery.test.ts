@@ -54,7 +54,7 @@ describe('reconcileSourceCorpus', () => {
       "export const Parent = ds.styles({}).asElement('div');\n"
     );
     const probe = makeProbe(root);
-    probe.session.publishedSources.set('Consumer.tsx', {
+    probe.session.heldSources.set('Consumer.tsx', {
       hash: 'h',
       source: 'src',
     });
@@ -117,7 +117,7 @@ describe('reconcileSourceCorpus', () => {
         "export const Parent = ds.styles({}).asElement('div');\n"
       );
       const probe = makeProbe(root);
-      probe.session.publishedSources.set('Consumer.tsx', {
+      probe.session.heldSources.set('Consumer.tsx', {
         hash: 'h',
         source: 'src',
       });
@@ -146,7 +146,7 @@ describe('reconcileSourceCorpus', () => {
     const consumerSource =
       "export const Fancy = Parent.extend().styles({}).asElement('div');\n";
     writeFileSync(join(root, 'Consumer.tsx'), consumerSource);
-    probe.session.publishedSources.set('Consumer.tsx', {
+    probe.session.heldSources.set('Consumer.tsx', {
       hash: 'h',
       source: consumerSource,
     });
@@ -184,7 +184,7 @@ describe('reconcileSourceCorpus', () => {
     // The matcher is memoized, so mutating `options.exclude` after
     // construction only takes effect once it is rebuilt.
     ctx.excludeMatcher = createExcludeMatcher(ctx.options.exclude);
-    probe.session.publishedSources.set('Consumer.tsx', {
+    probe.session.heldSources.set('Consumer.tsx', {
       hash: 'h',
       source:
         "import { Parent } from './generated/Parent';\n" +

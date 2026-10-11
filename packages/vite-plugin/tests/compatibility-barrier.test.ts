@@ -59,11 +59,11 @@ function makeProbe(
 }
 
 async function serveConsumerRaw(probe: BarrierProbe): Promise<void> {
-  probe.session.publishedSources.set('src/Consumer.tsx', {
+  probe.session.heldSources.set('src/Consumer.tsx', {
     hash: 'h',
     source: 's',
   });
-  probe.session.publishedSources.set('src/Parent.tsx', {
+  probe.session.heldSources.set('src/Parent.tsx', {
     hash: 'h2',
     source: 's2',
   });
@@ -181,11 +181,11 @@ describe('compatibility publication barrier', () => {
 
   it('ignores raw serves that carry no unresolved-extension drop', async () => {
     const probe = makeProbe();
-    probe.session.publishedSources.set('src/util.ts', {
+    probe.session.heldSources.set('src/util.ts', {
       hash: 'h',
       source: 's',
     });
-    probe.session.publishedSources.set('src/Parent.tsx', {
+    probe.session.heldSources.set('src/Parent.tsx', {
       hash: 'h2',
       source: 's2',
     });

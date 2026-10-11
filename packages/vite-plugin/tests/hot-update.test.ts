@@ -405,7 +405,7 @@ describe('hotUpdate recovers a new imported parent found on disk', () => {
   it('folds the parent during the consumer edit and re-analyzes once', async () => {
     const probe = makeContext(root);
     // The Session holds the consumer, not the parent its watcher never saw.
-    probe.session.publishedSources.set('Consumer.tsx', {
+    probe.session.heldSources.set('Consumer.tsx', {
       hash: 'h',
       source: readFileSync(consumer, 'utf-8'),
     });
