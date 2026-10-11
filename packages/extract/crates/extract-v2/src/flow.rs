@@ -222,6 +222,9 @@ pub enum AbsenceQuery {
     /// escape of a container on the way, and no reassignment of the
     /// binding. A change strictly below the member leaves it.
     SlotNotWritten(ObjectId, Vec<String>),
+    /// No member slot of the object is rebound: what would rebind some
+    /// slot `SlotNotWritten` asks of, whichever member it is.
+    SlotsNotWritten(ObjectId),
 }
 
 /// Why a subject is exposed: a change the analysis sees, or an opening.
@@ -396,9 +399,20 @@ impl ValueEffects {
 
     /// Whether a subject is provably untouched, or what may reach it.
     pub fn covers(&self, query: &AbsenceQuery) -> Coverage<'_> {
-        let (object, path, slot) = match query {
-            AbsenceQuery::Stable(object, path) => (object, path, false),
-            AbsenceQuery::SlotNotWritten(object, path) => (object, path, true),
+        // Every slot is a one-member path; asking of all of them asks of the
+        // member each change or opening names, or of any member when it
+        // names none.
+        let (object, path, slot, any_member) = match query {
+            AbsenceQuery::Stable(object, path) => (object, path.as_slice(), false, false),
+            AbsenceQuery::SlotNotWritten(object, path) => (object, path.as_slice(), true, false),
+            AbsenceQuery::SlotsNotWritten(object) => (object, &[][..], true, true),
+        };
+        let slot_of = |at: &[String]| -> Vec<String> {
+            match (any_member, at.first()) {
+                (true, Some(member)) => vec![member.clone()],
+                (true, None) => vec![String::new()],
+                (false, _) => path.to_vec(),
+            }
         };
         let counts = |change: &Change| {
             if !slot {
@@ -406,11 +420,12 @@ impl ValueEffects {
                 // and the paths that are prefixes of it.
                 return change.path.iter().zip(path).all(|(a, b)| a == b);
             }
+            let path = slot_of(&change.path);
             match change.kind {
                 ChangeKind::Rebind => true,
-                ChangeKind::Write => prefix_of(&change.path, path),
+                ChangeKind::Write => prefix_of(&change.path, &path),
                 ChangeKind::UnknownKeyWrite | ChangeKind::Escape => {
-                    change.path.len() < path.len() && prefix_of(&change.path, path)
+                    change.path.len() < path.len() && prefix_of(&change.path, &path)
                 }
             }
         };
@@ -426,7 +441,18 @@ impl ValueEffects {
             .closure
             .openings
             .iter()
-            .filter(|opening| self.reaches(&opening.exposure, object, path, slot))
+            .filter(|opening| match any_member {
+                // A region of part of the object reaches a slot when it is
+                // the whole object or one member.
+                true => match opening.exposure.as_atoms() {
+                    None => true,
+                    Some(atoms) => atoms.iter().any(|atom| match atom {
+                        RegionAtom::Path(target, at) => target == object && at.len() <= 1,
+                        atom => self.reaches(&Region::of(atom.clone()), object, &[], false),
+                    }),
+                },
+                false => self.reaches(&opening.exposure, object, path, slot),
+            })
             .map(Exposure::Opened);
         let mut exposed: Vec<Exposure<'_>> = changed.chain(opened).collect();
         exposed.sort_by_key(Exposure::order);
@@ -476,46 +502,57 @@ mod tests {
     /// container above it, a write under an unknown key or an escape of a
     /// container above it, a reassignment of the binding, or an opening
     /// that reaches the object at or above it. Anything strictly below the
-    /// slot leaves it, while `Stable` counts that too.
+    /// slot leaves it, while `Stable` counts that too. Every slot of the
+    /// object together (`SlotsNotWritten`) is exposed by what exposes any
+    /// one-member slot, a member the table does not list included.
     #[test]
     fn a_slot_counts_only_what_can_rebind_it() {
         let o = ObjectId::new("m.ts", "o");
         let path = |members: &[&str]| members.iter().map(|member| member.to_string()).collect::<Vec<_>>();
         let slot = AbsenceQuery::SlotNotWritten(o.clone(), path(&["Root"]));
+        let slots = AbsenceQuery::SlotsNotWritten(o.clone());
         let stable = AbsenceQuery::Stable(o.clone(), path(&["Root"]));
-        let changes: [(ChangeKind, &[&str], bool, bool); 10] = [
-            // (kind, at, slot exposed, stable exposed)
-            (ChangeKind::Write, &["Root"], true, true),
-            (ChangeKind::Write, &[], true, true),
-            (ChangeKind::Write, &["Root", "x"], false, true),
-            (ChangeKind::Write, &["Other"], false, false),
-            (ChangeKind::UnknownKeyWrite, &[], true, true),
-            (ChangeKind::UnknownKeyWrite, &["Root"], false, true),
-            (ChangeKind::Escape, &[], true, true),
-            (ChangeKind::Escape, &["Root"], false, true),
-            (ChangeKind::Escape, &["Other"], false, false),
-            (ChangeKind::Rebind, &[], true, true),
+        let changes: [(ChangeKind, &[&str], bool, bool, bool); 12] = [
+            // (kind, at, slot exposed, every slot exposed, stable exposed)
+            (ChangeKind::Write, &["Root"], true, true, true),
+            (ChangeKind::Write, &[], true, true, true),
+            (ChangeKind::Write, &["Root", "x"], false, false, true),
+            (ChangeKind::Write, &["Other"], false, true, false),
+            (ChangeKind::UnknownKeyWrite, &[], true, true, true),
+            (ChangeKind::UnknownKeyWrite, &["Root"], false, false, true),
+            (ChangeKind::Escape, &[], true, true, true),
+            (ChangeKind::Escape, &["Root"], false, false, true),
+            (ChangeKind::Escape, &["Other"], false, false, false),
+            (ChangeKind::Escape, &["Root", "x"], false, false, true),
+            (ChangeKind::Rebind, &[], true, true, true),
+            (ChangeKind::Rebind, &["Root"], true, true, true),
         ];
         let exposed = |effects: &ValueEffects, query: &AbsenceQuery| matches!(effects.covers(query), Coverage::Exposed(_));
-        for (kind, at, slot_exposed, stable_exposed) in changes {
+        for (kind, at, slot_exposed, slots_exposed, stable_exposed) in changes {
             let mut builder = FlowBuilder::new();
             builder.change(o.clone(), path(at), kind, "changed".to_string());
             let effects = builder.close();
             assert_eq!(exposed(&effects, &slot), slot_exposed, "{kind:?} at {at:?}");
+            assert_eq!(exposed(&effects, &slots), slots_exposed, "{kind:?} at {at:?}, every slot");
             assert_eq!(exposed(&effects, &stable), stable_exposed, "{kind:?} at {at:?}");
         }
-        let openings: [(RegionAtom, bool); 5] = [
-            (RegionAtom::Object(o.clone()), true),
-            (RegionAtom::Path(o.clone(), path(&["Root"])), true),
-            (RegionAtom::Path(o.clone(), path(&["Root", "x"])), false),
-            (RegionAtom::ExportsOf("m.ts".to_string()), true),
-            (RegionAtom::ExportedAs("elsewhere".to_string()), false),
+        let openings: [(RegionAtom, bool, bool); 7] = [
+            // (region, slot exposed, every slot exposed)
+            (RegionAtom::Object(o.clone()), true, true),
+            (RegionAtom::Path(o.clone(), path(&[])), true, true),
+            (RegionAtom::Path(o.clone(), path(&["Root"])), true, true),
+            (RegionAtom::Path(o.clone(), path(&["Other"])), false, true),
+            (RegionAtom::Path(o.clone(), path(&["Root", "x"])), false, false),
+            (RegionAtom::ExportsOf("m.ts".to_string()), true, true),
+            (RegionAtom::ExportedAs("elsewhere".to_string()), false, false),
         ];
-        for (atom, slot_exposed) in openings {
+        for (atom, slot_exposed, slots_exposed) in openings {
             let mut builder = FlowBuilder::new();
             builder.export(o.clone(), "m.ts", "o");
             builder.open(ReasonId::OpaqueEffect, Region::of(atom.clone()), "opened".to_string());
-            assert_eq!(exposed(&builder.close(), &slot), slot_exposed, "{atom:?}");
+            let effects = builder.close();
+            assert_eq!(exposed(&effects, &slot), slot_exposed, "{atom:?}");
+            assert_eq!(exposed(&effects, &slots), slots_exposed, "{atom:?}, every slot");
         }
     }
 
