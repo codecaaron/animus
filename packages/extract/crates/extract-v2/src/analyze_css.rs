@@ -2564,10 +2564,11 @@ fn resolve_usage_identity(
     local: &str,
     files: &BTreeMap<String, FileFacts>,
     inputs: &CssInputs,
+    links: &crate::link::ProjectLinks,
     evaluated_ids: &FxHashSet<String>,
     ids_by_binding: &IdsByBinding,
 ) -> Vec<String> {
-    resolve_identity(file, local, files, inputs, evaluated_ids, Some(ids_by_binding))
+    resolve_identity(file, local, files, inputs, links, evaluated_ids, Some(ids_by_binding))
 }
 
 /// The components `local` names in `file` through that file's own
@@ -2579,9 +2580,10 @@ fn resolve_declared_identity(
     local: &str,
     files: &BTreeMap<String, FileFacts>,
     inputs: &CssInputs,
+    links: &crate::link::ProjectLinks,
     evaluated_ids: &FxHashSet<String>,
 ) -> Vec<String> {
-    let ids = resolve_identity(file, local, files, inputs, evaluated_ids, None);
+    let ids = resolve_identity(file, local, files, inputs, links, evaluated_ids, None);
     if !ids.is_empty() {
         return ids;
     }
@@ -2612,7 +2614,7 @@ fn resolve_declared_identity(
         .and_then(|ff| ff.exports.iter().find(|e| e.exported == exported && e.source.is_none()))
         .and_then(|e| e.local.clone())
         .unwrap_or(exported);
-    resolve_identity(&declaring_file, &declared, files, inputs, evaluated_ids, None)
+    resolve_identity(&declaring_file, &declared, files, inputs, links, evaluated_ids, None)
 }
 
 /// With `ids_by_binding`, a name the file's declarations and imports do not
@@ -2622,6 +2624,7 @@ fn resolve_identity(
     local: &str,
     files: &BTreeMap<String, FileFacts>,
     inputs: &CssInputs,
+    links: &crate::link::ProjectLinks,
     evaluated_ids: &FxHashSet<String>,
     ids_by_binding: Option<&IdsByBinding>,
 ) -> Vec<String> {
@@ -2656,48 +2659,24 @@ fn resolve_identity(
         .and_then(|ff| ff.imports.iter().find(|i| i.local == local))
     {
         if let Some(source_file) = resolve_import_source(file, &imp.source, files, inputs) {
-            let imported_id = format!("{}::{}", source_file, imp.imported);
-            if evaluated_ids.contains(&imported_id) {
-                return vec![imported_id];
-            }
-            // Without this walk a renamed consumer's usage never reaches the
-            // chain, and another consumer prunes the variant it renders.
-            let (mut terminal_file, mut terminal_name) =
-                follow_reexports(source_file, imp.imported.clone(), files, inputs);
-            let mut hop_guard: FxHashSet<(String, String)> = FxHashSet::default();
-            loop {
-                let terminal_id = format!("{}::{}", terminal_file, terminal_name);
+            // The module table's answer is final: the component the binding
+            // it resolves the import to builds, `export *` routes included;
+            // otherwise every component bound to the imported name.
+            if let Some(ExportLookup::Resolved(Terminal::Local { module, binding })) =
+                links.resolve_export(&source_file, &imp.imported)
+            {
+                let path = &links.paths[module];
+                let declared = files[path].bindings.binding(binding);
+                let name = match declared.kind {
+                    BindingKind::DefaultCell => {
+                        files[path].default_export_binding.clone().unwrap_or_else(|| declared.name.clone())
+                    }
+                    _ => declared.name.clone(),
+                };
+                let terminal_id = format!("{path}::{name}");
                 if evaluated_ids.contains(&terminal_id) {
                     return vec![terminal_id];
                 }
-                if !hop_guard.insert((terminal_file.clone(), terminal_name.clone())) {
-                    break;
-                }
-                let Some(ff) = files.get(&terminal_file) else {
-                    break;
-                };
-                if let Some(local) = ff
-                    .exports
-                    .iter()
-                    .find(|e| e.exported == terminal_name && e.source.is_none())
-                    .and_then(|e| e.local.clone())
-                {
-                    if local != terminal_name {
-                        terminal_name = local;
-                        continue;
-                    }
-                }
-                let Some(hop) = ff.imports.iter().find(|i| i.local == terminal_name) else {
-                    break;
-                };
-                let Some(next) = resolve_import_source(&terminal_file, &hop.source, files, inputs)
-                else {
-                    break;
-                };
-                let (next_file, next_name) =
-                    follow_reexports(next, hop.imported.clone(), files, inputs);
-                terminal_file = next_file;
-                terminal_name = next_name;
             }
         }
         return by_bare_name(&imp.imported);
@@ -2770,7 +2749,7 @@ fn member_path_ids(
                 .into_iter()
                 .filter(|(slot, _)| slot == name)
                 .flat_map(|(_, binding)| {
-                    resolve_identity(&declaring, binding, files, inputs, evaluated_ids, None)
+                    resolve_identity(&declaring, binding, files, inputs, links, evaluated_ids, None)
                 })
                 .collect(),
         )
@@ -3062,10 +3041,10 @@ fn export_ids(
     let Some((declaring, exported, declared)) = declared_export(module, name, files, links) else {
         return Vec::new();
     };
-    let mut ids = resolve_identity(&declaring, &declared, files, inputs, evaluated_ids, None);
+    let mut ids = resolve_identity(&declaring, &declared, files, inputs, links, evaluated_ids, None);
     if slots {
         for (_, slot) in exported_family_slots(&declaring, &exported, &declared, files) {
-            ids.extend(resolve_identity(&declaring, slot, files, inputs, evaluated_ids, None));
+            ids.extend(resolve_identity(&declaring, slot, files, inputs, links, evaluated_ids, None));
         }
     }
     ids
@@ -3177,6 +3156,7 @@ fn spread_wrapper_targets(
     file: &str,
     ff: &FileFacts,
     (files, inputs): (&BTreeMap<String, FileFacts>, &CssInputs),
+    links: &crate::link::ProjectLinks,
     evaluated_ids: &FxHashSet<String>,
     styles_from: &dyn Fn(&str, &str) -> bool,
 ) -> WrapperTargets {
@@ -3194,6 +3174,7 @@ fn spread_wrapper_targets(
         ff: &'s FileFacts,
         files: &'s BTreeMap<String, FileFacts>,
         inputs: &'s CssInputs,
+        links: &'s crate::link::ProjectLinks,
         evaluated_ids: &'s FxHashSet<String>,
         styles_from: &'s dyn Fn(&str, &str) -> bool,
         /// Each element by its opening-element span.
@@ -3232,6 +3213,7 @@ fn spread_wrapper_targets(
                         tag,
                         self.files,
                         self.inputs,
+                        self.links,
                         self.evaluated_ids,
                     );
                     // A member tag, or a component-like name, that resolves to
@@ -3286,6 +3268,7 @@ fn spread_wrapper_targets(
         ff,
         files,
         inputs,
+        links,
         evaluated_ids,
         styles_from,
         elements: usage
@@ -3307,7 +3290,7 @@ fn spread_wrapper_targets(
             .chains
             .iter()
             .filter(|chain| chain.descriptor.terminal == TerminalKind::AsComponent && chain.descriptor.tag == *name)
-            .map(|chain| resolve_declared_identity(file, &chain.descriptor.binding, files, inputs, evaluated_ids))
+            .map(|chain| resolve_declared_identity(file, &chain.descriptor.binding, files, inputs, links, evaluated_ids))
             .collect();
         // Each object member that holds it is one of this module's facades.
         let holders = ff
@@ -4129,7 +4112,7 @@ fn bounded_prop_tags(
                     .chains
                     .iter()
                     .filter(|chain| chain.descriptor.terminal == TerminalKind::AsComponent && chain.descriptor.tag == *name)
-                    .map(|chain| resolve_declared_identity(path, &chain.descriptor.binding, files, inputs, evaluated_ids))
+                    .map(|chain| resolve_declared_identity(path, &chain.descriptor.binding, files, inputs, links, evaluated_ids))
                     .collect();
                 if outers.len() != uses.as_component || outers.iter().any(Vec::is_empty) {
                     return false;
@@ -4826,7 +4809,7 @@ fn opaque_delivery(
     let delivered = tags
         .iter()
         .flat_map(|(file, tag)| {
-            resolve_usage_identity(file, tag, files, inputs, evaluated_ids, ids_by_binding).into_iter().chain(
+            resolve_usage_identity(file, tag, files, inputs, links, evaluated_ids, ids_by_binding).into_iter().chain(
                 wrapper_targets.get(file).and_then(|wrappers| wrappers.get(tag)).into_iter().flatten().cloned(),
             )
         })
@@ -6409,9 +6392,9 @@ fn run_with_system_floor(
             binding_name,
             files,
             inputs,
+            links,
             &evaluated_ids,
-            &ids_by_binding,
-        )
+            &ids_by_binding,)
     };
     let family_index = crate::family_members::FamilyIndex::build(files, |family_file, binding| {
         match resolve_slot_ids(family_file, binding).as_slice() {
@@ -6420,7 +6403,7 @@ fn run_with_system_floor(
         }
     });
     let declared_component = |file: &str, binding: &str| {
-        match resolve_declared_identity(file, binding, files, inputs, &evaluated_ids).as_slice() {
+        match resolve_declared_identity(file, binding, files, inputs, links, &evaluated_ids).as_slice() {
             [only] => Some(only.clone()),
             _ => None,
         }
@@ -6551,7 +6534,7 @@ fn run_with_system_floor(
     };
     let all_wrappers: FxHashMap<&String, WrapperTargets> = files
         .iter()
-        .map(|(path, ff)| (path, spread_wrapper_targets(path, ff, (files, inputs), &evaluated_ids, &styles_from)))
+        .map(|(path, ff)| (path, spread_wrapper_targets(path, ff, (files, inputs), links, &evaluated_ids, &styles_from)))
         .collect();
     let held_ids = |module: &String, wrapper: &str| {
         all_wrappers
@@ -6586,7 +6569,7 @@ fn run_with_system_floor(
         let mut unattributed_imports: Vec<&str> = Vec::new();
         for (name, from_import) in bound_names {
             let mut ids =
-                resolve_usage_identity(path, name, files, inputs, &evaluated_ids, &ids_by_binding);
+                resolve_usage_identity(path, name, files, inputs, links, &evaluated_ids, &ids_by_binding);
             // An imported facade built with `Object.assign(T, …)` is `T`.
             if ids.is_empty() && from_import {
                 if let Some(crate::family_members::Member::Stable(component)) = object_members.root(path, name) {
@@ -6618,7 +6601,7 @@ fn run_with_system_floor(
         // `<B>` renders as `R` when this file's own declarations and imports
         // settle it.
         for alias in ff.aliases.keys().chain(ff.assigned_aliases.keys()) {
-            let ids = resolve_declared_identity(path, alias, files, inputs, &evaluated_ids);
+            let ids = resolve_declared_identity(path, alias, files, inputs, links, &evaluated_ids);
             if ids.is_empty() || global_lookup.attribution.get(alias.as_str()) == Some(&ids) {
                 continue;
             }
@@ -6701,7 +6684,7 @@ fn run_with_system_floor(
             system_props_by_id.get(id).is_some_and(|props| props.contains(prop))
         };
         let takes_system_prop = |file: &str, name: &str, prop: &str| {
-            resolve_declared_identity(file, name, files, inputs, &evaluated_ids)
+            resolve_declared_identity(file, name, files, inputs, links, &evaluated_ids)
                 .iter()
                 .any(|id| component_takes(id, prop))
         };
@@ -6885,7 +6868,7 @@ fn run_with_system_floor(
             for (dot, _) in name.match_indices('.') {
                 let prefix = &name[..dot];
                 escaped_ids.extend(
-                    resolve_declared_identity(path, prefix, files, inputs, &evaluated_ids)
+                    resolve_declared_identity(path, prefix, files, inputs, links, &evaluated_ids)
                         .into_iter()
                         .chain(member_path_ids(path, ff, prefix, false, files, inputs, links, &evaluated_ids))
                         .filter(|id| {
@@ -6944,7 +6927,7 @@ fn run_with_system_floor(
                 continue;
             }
             if let Some((declaring, binding, _)) = resolve_export(path, source, original, files, inputs, links) {
-                escaped_ids.extend(resolve_declared_identity(&declaring, &binding, files, inputs, &evaluated_ids));
+                escaped_ids.extend(resolve_declared_identity(&declaring, &binding, files, inputs, links, &evaluated_ids));
             }
         }
         // Through the file's own declarations and imports only: an outside
@@ -6955,8 +6938,8 @@ fn run_with_system_floor(
                 name,
                 files,
                 inputs,
-                &evaluated_ids,
-            ));
+                links,
+                &evaluated_ids,));
         }
     }
     // An element handed to code outside the analysis renders with options
@@ -6991,7 +6974,7 @@ fn run_with_system_floor(
     let receiver_ids = |path: &str, ff: &FileFacts, tag: &str| {
         let mut ids = match tag.contains('.') {
             true => Vec::new(),
-            false => resolve_declared_identity(path, tag, files, inputs, &evaluated_ids),
+            false => resolve_declared_identity(path, tag, files, inputs, links, &evaluated_ids),
         };
         ids.extend(member_bindings.get(path).and_then(|members| members.get(tag)).cloned());
         ids.extend(member_path_ids(path, ff, tag, false, files, inputs, links, &evaluated_ids));
@@ -7005,7 +6988,7 @@ fn run_with_system_floor(
         for used in ff.value_escapes.iter().chain(ff.unsafe_object_uses.keys()) {
             let prefixes = used.match_indices('.').map(|(dot, _)| &used[..dot]).chain(std::iter::once(used.as_str()));
             for prefix in prefixes {
-                changed_ids.extend(resolve_declared_identity(path, prefix, files, inputs, &evaluated_ids));
+                changed_ids.extend(resolve_declared_identity(path, prefix, files, inputs, links, &evaluated_ids));
                 changed_ids.extend(member_path_ids(path, ff, prefix, false, files, inputs, links, &evaluated_ids));
             }
         }
@@ -7837,7 +7820,7 @@ fn run_with_system_floor(
             continue;
         }
         let target_ids =
-            resolve_usage_identity(file_path, tag, files, inputs, &evaluated_ids, &ids_by_binding);
+            resolve_usage_identity(file_path, tag, files, inputs, links, &evaluated_ids, &ids_by_binding);
         for id in target_ids {
             if let Some(variant_config) = variant_configs_for_ledger.get(&id) {
                 let used = usage_ledger.variant_usage.entry(id.clone()).or_default();
