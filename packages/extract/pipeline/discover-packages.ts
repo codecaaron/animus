@@ -11,6 +11,7 @@ import {
 
 import { globToRegExp } from './core-options';
 import { discoverFiles } from './discover-files';
+import { policyCandidates } from './extension-policy';
 import { parseInternalWire } from './internal-wire';
 import { readKitDescriptor } from './kit-descriptor';
 import {
@@ -94,14 +95,14 @@ const isFile = (path: string): boolean => {
 
 export function resolveAbsolutePathSpecifier(
   absSpecifier: string,
-  extensionsSet: ReadonlySet<string>
+  extensionsSet?: ReadonlySet<string>
 ): string | null {
-  const candidates = [
-    absSpecifier,
-    ...Array.from(extensionsSet, (ext) => absSpecifier + ext),
-    ...Array.from(extensionsSet, (ext) => join(absSpecifier, `index${ext}`)),
-  ];
-  return candidates.find(isFile) ?? null;
+  return (
+    policyCandidates(absSpecifier, {
+      sources: extensionsSet,
+      index: join,
+    }).find(isFile) ?? null
+  );
 }
 
 /** The package a bare specifier names: `@scope/name` or `name`. */
