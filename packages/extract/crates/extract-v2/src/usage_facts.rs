@@ -1714,7 +1714,24 @@ fn unsafe_object_uses(
     object_consts: &BTreeMap<&str, bool>,
     assigned_targets: &BTreeSet<&str>,
 ) -> (BTreeMap<String, ObjectUse>, Vec<Handoff>, WrittenNamespaces) {
-    let candidates = object_bindings(program, scoping, object_consts, assigned_targets);
+    scan_object_uses(program, scoping, object_bindings(program, scoping, object_consts, assigned_targets))
+}
+
+/// See `FileFacts::written_namespaces`: the module's namespace imports
+/// alone, for static style values.
+pub(crate) fn written_namespaces(program: &Program<'_>, scoping: &Scoping) -> WrittenNamespaces {
+    let namespaces = object_bindings(program, scoping, &BTreeMap::new(), &BTreeSet::new())
+        .into_iter()
+        .filter(|(_, binding)| binding.namespace)
+        .collect();
+    scan_object_uses(program, scoping, namespaces).2
+}
+
+fn scan_object_uses(
+    program: &Program<'_>,
+    scoping: &Scoping,
+    candidates: FxHashMap<SymbolId, ObjectBinding>,
+) -> (BTreeMap<String, ObjectUse>, Vec<Handoff>, WrittenNamespaces) {
     if candidates.is_empty() {
         return (BTreeMap::new(), Vec::new(), BTreeMap::new());
     }

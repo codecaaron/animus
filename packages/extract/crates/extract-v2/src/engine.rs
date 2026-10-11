@@ -452,6 +452,8 @@ fn possible_bindings(links: &ProjectLinks, lookup: ExportLookup<LocalId>) -> Vec
 /// One module's inputs to `unstable_style_statics`.
 struct StyleModule {
     facts: crate::usage_facts::StyleObjectFacts,
+    /// See `FileFacts::written_namespaces`.
+    written_namespaces: crate::usage_facts::WrittenNamespaces,
     namespace_exports: BTreeMap<String, String>,
     loads: Vec<String>,
     /// How it runs code from a string, which can load any module.
@@ -633,6 +635,14 @@ fn unstable_style_statics(
             for target in targets_of(name).into_iter().filter(|target| nested(target)) {
                 let reason = format!("{}, and it holds a nested object", said(file, name, used));
                 flow.change(object(target), Vec::new(), ChangeKind::Escape, reason);
+            }
+        }
+        // A package may re-export our objects (a linked workspace package)
+        // under any name: a use that may write through its namespace may
+        // reach any of them.
+        for (namespace, (subject, used)) in &module.written_namespaces {
+            if matches!(namespace_of(file, namespace), Some(Request::Outside(identity)) if !crate::link::is_node_builtin(identity)) {
+                flow.open(ReasonId::SkippedSource, Region::of(RegionAtom::AllExports), said(file, subject, used));
             }
         }
         let reexports = module
@@ -904,6 +914,11 @@ impl ExtractEngine {
                 ast.path.clone(),
                 StyleModule {
                     facts,
+                    written_namespaces: if namespace_imports.is_empty() {
+                        BTreeMap::new()
+                    } else {
+                        crate::usage_facts::written_namespaces(program, &lowered_by_file[&ast.path].scoping)
+                    },
                     namespace_exports: crate::usage_facts::collect_namespace_exports(module),
                     loads: lowered_by_file[&ast.path]
                         .loads
@@ -2221,6 +2236,11 @@ export const App = () => <Box tone="red" />;
             ("held by name", concat!(import_pad!(), "pad.padding = 9;"), "pad"),
             ("held one member", concat!(import_pad!(), "pad.padding = 9;"), "{ padding: pad.padding }"),
             ("direct eval, by name", concat!(import_pad!(), "eval('pad.padding = 9');"), "pad"),
+            // A package outside the analysis may re-export `pad` (a linked
+            // workspace package): a write or hand-off through its namespace
+            // may change it.
+            ("package namespace, member written", "import * as ui from '@local/proxy';\nui.pad.padding = 9;", "{ ...pad }"),
+            ("package namespace, handed on", "import * as ui from '@local/proxy';\nregister(ui);", "{ ...pad }"),
             // Code from a string can load and change any module (PF3).
             (
                 "eval loads the module",
