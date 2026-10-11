@@ -14,6 +14,10 @@ import {
 import { basename, extname, isAbsolute, join, relative, resolve } from 'path';
 
 import {
+  AliasAgreementCache,
+  compareAliases,
+} from '../pipeline/alias-agreement';
+import {
   adaptedOriginals,
   assembleStylesheet,
   buildPathAliasesJson,
@@ -140,6 +144,7 @@ import {
 } from './singleton';
 import { logBuildTimings } from './timing';
 
+import type { AliasComparison } from '../pipeline/alias-agreement';
 import type {
   AnimusCoreOptions,
   ExternalPackageOutcome,
@@ -196,6 +201,9 @@ export interface SessionHost {
   /** Where the session's lines go; omitted, the console. Each line already
    *  carries its `[animus]` mark. */
   logger?: SessionLogger;
+  /** The session's output feeds no bundler (the CLI), so its path aliases
+   *  have no host answer to agree with (spec §2.2 A7). */
+  noBundler?: boolean;
 }
 
 /** A host's sink for the session's human-facing lines. */
@@ -289,10 +297,48 @@ function isDiskString<Value>(value: Value): value is Value & string {
 /** Rejection of an attempt whose corpus holds an aborted parse. */
 class AbortedParseRejection extends Error {}
 
-/** A system reload a parse hold deferred, refused because its full read
- *  would replace host-supplied bytes the Session holds with the disk's.
- *  Like a hold, it keeps the prior publication and the observed sources. */
+/** A reload refused because its full read would replace host-supplied
+ *  bytes with the disk's: a system reload a parse hold deferred, or a full
+ *  read that reaches a host-supplied file only under another spelling (a
+ *  case-insensitive volume). Like a hold, it keeps the prior publication
+ *  and the observed sources. */
 class DeferredReloadRefusal extends Error {}
+
+/** The file's canonical path, or null when it cannot be resolved. */
+function canonicalPath(path: string): string | null {
+  try {
+    return realpathSync.native(path);
+  } catch {
+    return null;
+  }
+}
+
+/** The host sources a full read reaches only under another spelling: a key
+ *  the read did not reach exactly, whose file is one the read reached by
+ *  another path (a case-insensitive volume, a symlinked alias). A key with
+ *  no such file is not read either way, and is left alone. */
+function misspelledHostSources(
+  hostSources: ReadonlyMap<string, string>,
+  readPaths: ReadonlySet<string>
+): Array<{ path: string; read: string[] }> {
+  const misses = [...hostSources.keys()].filter((path) => !readPaths.has(path));
+  if (misses.length === 0) return [];
+  const readByCanonical = new Map<string, string[]>();
+  for (const readPath of readPaths) {
+    const canonical = canonicalPath(readPath);
+    if (canonical === null) continue;
+    readByCanonical.set(canonical, [
+      ...(readByCanonical.get(canonical) ?? []),
+      readPath,
+    ]);
+  }
+  return misses.flatMap((path) => {
+    const canonical = canonicalPath(path);
+    const read =
+      canonical === null ? undefined : readByCanonical.get(canonical);
+    return read === undefined ? [] : [{ path, read }];
+  });
+}
 
 function isDiskNumber<Value>(value: Value): value is Value & number {
   return (
@@ -386,6 +432,11 @@ export class ExtractionSession {
    *  discovery asks it first, the loader only for a declared workspace it
    *  cannot resolve. Null resolves through the loader alone. */
   hostResolve: HostResolve | null = null;
+  /** How the last analysis compared the path aliases it reads with the
+   *  host's resolver (spec §2.2 A7); `unavailable` is never agreement. */
+  aliasComparison: AliasComparison = 'unavailable';
+  /** Each file's alias comparison, kept by content hash across analyses. */
+  private readonly aliasCache = new AliasAgreementCache();
   /** Serialized path aliases, harvested by the adapter from bundler config. */
   pathAliasesJson: string | null = null;
   /** The host's aliases are the project's tsconfig `paths`: each full pass
@@ -1669,8 +1720,12 @@ export class ExtractionSession {
     // be read is lost input, not degradation: error severity fails a strict
     // build.
     const ingestionFailures: ManifestDiagnostic[] = [];
+    // Every path the read reaches, to check that it reaches each host
+    // source under its own spelling.
+    const readPaths = new Set<string>();
     for (const filePath of files) {
       const relPath = relative(rootDir, filePath);
+      readPaths.add(filePath);
       let source: string;
       try {
         const supplied = hostSources.get(filePath);
@@ -1908,8 +1963,9 @@ export class ExtractionSession {
       this.externalSourceEntries = admitted.sourceEntries;
       this.externalSourceSideEffects = admitted.sourceEntrySideEffects;
       for (const entry of admitted.entries) {
-        const source =
-          hostSources.get(resolve(rootDir, entry.path)) ?? entry.source;
+        const entryPath = resolve(rootDir, entry.path);
+        readPaths.add(entryPath);
+        const source = hostSources.get(entryPath) ?? entry.source;
         rawEntries.push({
           path: entry.path,
           source,
@@ -1922,6 +1978,20 @@ export class ExtractionSession {
       this.externalOutputDirs = admitted.outputDirs;
 
       bt.packageResolve = this.elapsed(t);
+
+      // A host source the read reaches only under another spelling would be
+      // published from the disk instead: refuse loudly.
+      const misspelled = misspelledHostSources(hostSources, readPaths).map(
+        ({ path, read }) =>
+          `${relative(rootDir, path)} (read as ${read.map((readPath) => relative(rootDir, readPath)).join(', ')})`
+      );
+      if (misspelled.length > 0) {
+        throw new DeferredReloadRefusal(
+          `[${this.driverLabel}] reload not published: the host supplied ` +
+            `bytes for ${misspelled.join(', ')}, which the full read reaches ` +
+            `only under another spelling; the last generation stays served`
+        );
+      }
 
       this.beginStatusAttempt();
       let accepted: SourceIngestionResult;
@@ -2426,7 +2496,10 @@ export class ExtractionSession {
       strict: this.options.strict,
       diagnostics: this.options.diagnostics,
       reportErrors: this.reportErrors(),
-      extraDiagnostics: this.ingestionFailureDiagnostics,
+      extraDiagnostics: [
+        ...this.ingestionFailureDiagnostics,
+        ...(await this.compareAliasesWithHost(fileEntries)),
+      ],
       kitDescriptors: this.kitDescriptors,
     });
     if (result.manifest) {
@@ -2624,6 +2697,50 @@ export class ExtractionSession {
 
   /** Write the session's analysis-status artifact. Terminal states
    *  (idle/failed) close the attempt. */
+  /** Where the host resolves a path alias the analysis reads to another
+   *  file (spec §2.2 A7, report only), and how the two were compared. */
+  private async compareAliasesWithHost(
+    fileEntries: FileEntry[]
+  ): Promise<ManifestDiagnostic[]> {
+    const { moduleSpecifiers } = this.engine();
+    if (this.host.noBundler) {
+      this.aliasComparison = 'not-applicable';
+      return [];
+    }
+    if (this.hostResolve === null || moduleSpecifiers === undefined) {
+      this.aliasComparison = 'unavailable';
+      return [];
+    }
+    // A report: whatever goes wrong while comparing never blocks the
+    // analysis or its publication.
+    try {
+      const { findings, unavailable } = await compareAliases({
+        rootDir: this.rootDir!,
+        fileEntries,
+        pathAliasesJson: this.pathAliasesJson,
+        order: this.extensionPolicy,
+        readings: {
+          isAsset: this.assetClassification.isAsset,
+          adapted: this.ingestionAdapted,
+        },
+        moduleSpecifiers,
+        resolve: this.hostResolve,
+        cache: this.aliasCache,
+      });
+      this.aliasComparison = 'compared';
+      if (unavailable > 0) {
+        this.log(
+          `path aliases: ${unavailable} aliased import(s) the host's resolver failed on are unavailable, not agreeing`
+        );
+      }
+      return findings;
+    } catch (error) {
+      this.aliasComparison = 'unavailable';
+      this.log(`path aliases: comparison unavailable (${String(error)})`);
+      return [];
+    }
+  }
+
   private writeAnalysisStatus(
     state: AnalysisStatus['state'],
     pending: Array<[string, string]>,
