@@ -1994,7 +1994,7 @@ export const App = () => <Box tone="red" />;
             // A concise arrow returns what it evaluates (PF2).
             ("sync return", "const get = () => pad; get().padding = 9;", "{ ...pad }"),
             ("async return", "const get = async () => pad; (await get()).padding = 9;", "{ ...pad }"),
-            ("then callback return", "Promise.resolve(0).then(() => pad).then((p) => { p.padding = 9; });", "{ ...pad }"),
+            ("then callback return", "await Promise.resolve(0).then(() => pad).then((p) => { p.padding = 9; });", "{ ...pad }"),
             // A read by name or by one member takes no held value (PF1).
             ("held by name", "pad.padding = 9;", "pad"),
             ("held one member", "pad.padding = 9;", "{ padding: pad.padding }"),
