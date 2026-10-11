@@ -138,7 +138,7 @@ impl FamilyIndex {
     /// The family `module` exports as `name`, following re-exports and
     /// barrels.
     /// The family `module`'s export `name` declares, as the module table
-    /// resolves it.
+    /// resolves it: an ambiguous or open export declares none.
     fn exported(
         &self,
         module: &str,
