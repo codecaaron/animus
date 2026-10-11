@@ -725,17 +725,26 @@ fn expression_root(expr: &Expression<'_>) -> Option<String> {
     }
 }
 
-/// Statics as JSON, without a binding whose whole value is unevaluated.
+/// Statics as JSON, data only: no binding, member or item is the `asset`
+/// function or a node evaluation could not settle.
 fn serialize_statics<S: serde::Serializer>(
     statics: &BTreeMap<String, StaticValue>,
     serializer: S,
 ) -> Result<S::Ok, S::Error> {
-    serializer.collect_map(
-        statics
-            .iter()
-            .filter(|(_, value)| !matches!(value, StaticValue::Unevaluated(_)))
-            .map(|(name, value)| (name, eval::plain(value))),
-    )
+    serializer.collect_map(statics.iter().filter_map(|(name, value)| Some((name, serialized(value)?))))
+}
+
+/// A static value as serialized facts carry it; `None` for the `asset`
+/// function or an unevaluated node, which no JSON value stands for.
+fn serialized(value: &StaticValue) -> Option<Value> {
+    Some(match value {
+        StaticValue::AssetFunction { .. } | StaticValue::Unevaluated(_) => return None,
+        StaticValue::Array(items) => Value::Array(items.iter().filter_map(serialized).collect()),
+        StaticValue::Object(entries) => Value::Object(
+            entries.iter().filter_map(|(key, value)| Some((key.clone(), serialized(value)?))).collect(),
+        ),
+        scalar => eval::plain(scalar),
+    })
 }
 
 #[derive(Default)]
@@ -1798,6 +1807,21 @@ mod tests {
             // Compared as text, so key order counts.
             assert_eq!(seen.to_string(), serde_json::from_str::<Value>(expected).unwrap().to_string(), "{source}");
         }
+    }
+
+    /// Contract: serialized statics carry data only, so the `asset` function
+    /// a module imports is no serialized static.
+    #[test]
+    fn serialized_statics_carry_no_asset_function() {
+        let facts = facts_for(
+            r#"
+            import { asset } from '@animus-ui/system';
+            const GAP = 16;
+            export const Box = ds.styles({ gap: GAP }).asElement('div');
+            "#,
+        );
+        let serialized = serde_json::to_value(&facts).unwrap();
+        assert_eq!(serialized["statics"], serde_json::json!({ "GAP": 16 }));
     }
 
     #[test]
