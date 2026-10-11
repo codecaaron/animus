@@ -787,6 +787,9 @@ impl ExtractEngine {
             String,
             rustc_hash::FxHashMap<String, serde_json::Value>,
         > = std::collections::BTreeMap::new();
+        // Each file's Lower output, before anything reads across files.
+        let mut lowered_by_file: BTreeMap<String, crate::link::Lowered> =
+            store.iter().map(|ast| (ast.path.clone(), crate::link::Lowered::of(ast))).collect();
         for ast in store.iter() {
             let program = ast.program();
             let statics = if crate::analyze_css::is_external_file(&ast.path, &self.opts.css_inputs.external_dirs) {
@@ -1035,6 +1038,7 @@ impl ExtractEngine {
                 extra,
                 usage_extra,
                 &references,
+                lowered_by_file.remove(&ast.path),
             );
             if let Some(names) = global_declarations.get(ast.path.as_str()) {
                 file_facts.global_keys = facts::declaration_keys(ast.program(), ast.source(), names);
