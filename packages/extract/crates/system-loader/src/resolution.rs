@@ -1,13 +1,13 @@
 //! The order in which a relative or aliased specifier's candidate files are
-//! tried: one probe that both the system loader and the extractor resolve
-//! through. Each still passes the list it has always used; the two lists
-//! differ (see `SYSTEM_EVALUATION` and `ANALYSIS_SOURCE`), and are to become
-//! one policy.
+//! tried: one policy, through which both the system loader and the
+//! extractor resolve, so a specifier names the same file for a system's
+//! evaluation and for an analysis. `relativeSourceCandidates` in
+//! `packages/extract/pipeline/source-ingestion.ts` mirrors it.
 
 /// The candidate files a specifier's base path names, in the order they are
 /// tried: the base itself, the base with each appended extension, its
 /// `index` with each, then the NodeNext sources an emitted extension stands
-/// for.
+/// for, whatever the emitted extension's case.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ExtensionPolicy {
     /// Appended to the base, then to `{base}/index`.
@@ -15,29 +15,17 @@ pub struct ExtensionPolicy {
     /// An emitted extension (`./x.js`), and the source extensions it names
     /// (`x.ts`), tried in order.
     pub node_next: &'static [(&'static str, &'static [&'static str])],
-    /// Whether an emitted extension matches whatever its case.
-    pub node_next_ignores_case: bool,
 }
 
-/// The system loader's list, for the modules a system's evaluation reads.
-pub const SYSTEM_EVALUATION: ExtensionPolicy = ExtensionPolicy {
-    appended: &[".ts", ".tsx", ".js", ".mjs"],
-    node_next: &[(".js", &[".ts", ".tsx"])],
-    node_next_ignores_case: false,
-};
-
-/// The extractor's list, for the sources an analysis reads. It mirrors
-/// `resolveRelativeSource` and `NODE_NEXT_EXTENSION_MAP` in
-/// `packages/extract/pipeline/source-ingestion.ts`.
-pub const ANALYSIS_SOURCE: ExtensionPolicy = ExtensionPolicy {
-    appended: &[".ts", ".tsx", ".js", ".jsx"],
+/// The one extension policy.
+pub const EXTENSION_POLICY: ExtensionPolicy = ExtensionPolicy {
+    appended: &[".ts", ".tsx", ".js", ".jsx", ".mjs"],
     node_next: &[
         (".js", &[".ts", ".tsx", ".jsx"]),
         (".jsx", &[".tsx"]),
         (".mjs", &[".mts"]),
         (".cjs", &[".cts"]),
     ],
-    node_next_ignores_case: true,
 };
 
 impl ExtensionPolicy {
@@ -52,12 +40,7 @@ impl ExtensionPolicy {
             .or_else(|| {
                 self.node_next.iter().find_map(|(emitted, sources)| {
                     let split = base.len().checked_sub(emitted.len())?;
-                    let suffix = base.get(split..)?;
-                    let matches = match self.node_next_ignores_case {
-                        true => suffix.eq_ignore_ascii_case(emitted),
-                        false => suffix == *emitted,
-                    };
-                    if !matches {
+                    if !base.get(split..)?.eq_ignore_ascii_case(emitted) {
                         return None;
                     }
                     let stem = &base[..split];
