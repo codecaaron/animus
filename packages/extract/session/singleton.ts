@@ -468,6 +468,36 @@ export interface SessionState {
   readonly established: string;
   readonly options: ReadonlyMap<string, string>;
   readonly participants: Set<string>;
+  /** The participant whose analysis attempt is active: one per session. */
+  activeAttempt: string | null;
+  /** The session that runs this build's analysis; others join its results
+   *  and forward their watch batches to it. */
+  authority: WatchBatchTarget | null;
+  /** A latch over the most recently started analysis, never cleared on
+   *  settle: non-null means one was scheduled. */
+  analysisStarted: Promise<void> | null;
+  /** The one in-flight watch-analysis transaction. */
+  watchTransaction: Promise<void> | null;
+  manifestJson: string | null;
+  sharedCss: string;
+  sharedSystemProps: string;
+  externalDirs: string[];
+  externalEntries: Map<string, string>;
+  /** Specifier → its source entry's side effects; absent leaves the
+   *  bundler's own classification. */
+  externalSideEffects: Map<string, boolean>;
+  /** Root-relative path → hash of the bytes the last published analysis
+   *  read, including files that produced no entries. */
+  analyzedHashes: Map<string, string> | null;
+  /** Written after the manifest, so a reader of the epoch sees at least
+   *  that generation's manifest. */
+  replacementEpoch: string | null;
+  /** The artifact directory of the session's last publication. */
+  artifactDir: string | null;
+  /** The session's own engine, its analyze-time sources and drift flag. */
+  engine: V2ExtractEngine | null;
+  sentSources: Map<string, string> | null;
+  driftWarned: boolean;
 }
 
 const SESSION_REGISTRY = Symbol.for('animus.session-registry.v1');
@@ -505,6 +535,22 @@ export function joinSession(
       established: participant,
       options: joining,
       participants: new Set([participant]),
+      activeAttempt: null,
+      authority: null,
+      analysisStarted: null,
+      watchTransaction: null,
+      manifestJson: null,
+      sharedCss: '',
+      sharedSystemProps: '',
+      externalDirs: [],
+      externalEntries: new Map(),
+      externalSideEffects: new Map(),
+      analyzedHashes: null,
+      replacementEpoch: null,
+      artifactDir: null,
+      engine: null,
+      sentSources: null,
+      driftWarned: false,
     };
     sessions.set(id, state);
     return state;
@@ -523,6 +569,11 @@ export function joinSession(
   }
   existing.participants.add(participant);
   return existing;
+}
+
+/** The session of `key`, if a participant has joined it. */
+export function findSession(key: SessionKey): SessionState | undefined {
+  return sessionRegistry().sessions.get(sessionKeyId(key));
 }
 
 /** Ends the session of `key`; a later join starts a new one. */
