@@ -3,7 +3,11 @@
  * default exclusions, and mode authority cannot drift per driver.
  */
 
+import { realpathSync } from 'fs';
+import { relative, resolve, sep } from 'path';
+
 import { DIAGNOSTIC_LEVELS } from './manifest-diagnostics';
+import { isPathWithinRoot } from './source-identity';
 
 import type { DiagnosticLevels } from './manifest-diagnostics';
 import type { StaticCssConfig } from './static-css';
@@ -296,11 +300,16 @@ function editDistance(a: string, b: string): number {
 }
 
 export interface ExcludeMatcher {
-  /** Effective list: structural ∪ (user ?? replaceable defaults). */
+  /** Effective list: structural ∪ output dirs ∪ (user ?? replaceable
+   *  defaults). */
   readonly patterns: readonly string[];
   /** Per-pattern hit counts over this matcher's lifetime; zero hits after
-   *  discovery means the pattern matched nothing. */
+   *  discovery means the pattern matched nothing. A user pattern counts
+   *  every path it matches, whichever pattern excludes the path. */
   stats(): ReadonlyMap<string, number>;
+  /** The user's patterns that have matched nothing yet; none without a
+   *  user list. */
+  unmatched(): string[];
   /** True when the path is excluded; both path forms are tested. */
   matches(fullPath: string, relativePath: string): boolean;
   explain(fullPath: string, relativePath: string): string | null;
@@ -365,40 +374,119 @@ export function globToRegExp(glob: string): RegExp {
   return new RegExp(`^${out}$`);
 }
 
+/** Whether a root-relative path is `dir` or lies under it, a literal path
+ *  prefix: an output name is never a pattern. */
+function compileOutputDir(dir: string): (full: string, rel: string) => boolean {
+  return (_full, rel) => {
+    const normalized = rel.split('\\').join('/');
+    return normalized === dir || normalized.startsWith(`${dir}/`);
+  };
+}
+
 /**
- * A user list replaces only the replaceable defaults. Driver-owned
- * invariants belong in `extraStructural`; a user list would replace those.
+ * A user list replaces only the replaceable defaults. A host's output
+ * directories (`outputExclusion`) always apply, whatever the user's list.
  */
 export function createExcludeMatcher(
   userPatterns?: readonly string[],
-  extraStructural: readonly string[] = []
+  outputDirs: readonly string[] = []
 ): ExcludeMatcher {
-  const merged = [...STRUCTURAL_EXCLUDE];
-  for (const pattern of extraStructural) {
-    if (!merged.includes(pattern)) merged.push(pattern);
+  const userList = userPatterns ?? REPLACEABLE_DEFAULT_EXCLUDE;
+  const compiled: Array<{
+    pattern: string;
+    test: (full: string, rel: string) => boolean;
+    isUser: boolean;
+  }> = [];
+  for (const pattern of STRUCTURAL_EXCLUDE) {
+    compiled.push({
+      pattern,
+      test: compilePattern(pattern),
+      isUser: userList.includes(pattern),
+    });
   }
-  for (const pattern of userPatterns ?? REPLACEABLE_DEFAULT_EXCLUDE) {
-    if (!merged.includes(pattern)) merged.push(pattern);
+  for (const dir of outputDirs) {
+    compiled.push({ pattern: dir, test: compileOutputDir(dir), isUser: false });
   }
-  const compiled = merged.map(
-    (pattern) => [pattern, compilePattern(pattern)] as const
-  );
-  const hits = new Map<string, number>(merged.map((p) => [p, 0]));
+  for (const pattern of userList) {
+    if (STRUCTURAL_EXCLUDE.includes(pattern)) continue;
+    compiled.push({ pattern, test: compilePattern(pattern), isUser: true });
+  }
+  const hits = new Map<string, number>(compiled.map((c) => [c.pattern, 0]));
   const explain = (full: string, rel: string): string | null => {
-    for (const [pattern, test] of compiled) {
-      if (test(full, rel)) {
-        hits.set(pattern, (hits.get(pattern) ?? 0) + 1);
-        return pattern;
-      }
+    let excludedBy: string | null = null;
+    for (const { pattern, test, isUser } of compiled) {
+      // Past the first match, only the user's patterns are still counted.
+      if (excludedBy !== null && !isUser) continue;
+      if (!test(full, rel)) continue;
+      hits.set(pattern, (hits.get(pattern) ?? 0) + 1);
+      excludedBy ??= pattern;
     }
-    return null;
+    return excludedBy;
   };
   return {
-    patterns: merged,
+    patterns: compiled.map((c) => c.pattern),
     matches: (full, rel) => explain(full, rel) !== null,
     explain,
     stats: () => hits,
+    unmatched: () =>
+      (userPatterns ?? []).filter((pattern) => hits.get(pattern) === 0),
   };
+}
+
+/** One line per user pattern that matched nothing, which every host
+ *  prints to stderr after its first discovery, as the CLI always has. */
+export function unmatchedExcludeLines(matcher: ExcludeMatcher): string[] {
+  return matcher
+    .unmatched()
+    .map((pattern) => `[animus] exclude pattern '${pattern}' matched nothing`);
+}
+
+/**
+ * A host's output directory as an exclusion: root-relative with `/`
+ * separators, matched as a literal path prefix, so a user list, which
+ * replaces the defaults, never re-admits output. Null when the directory is
+ * outside the root or is the root itself.
+ */
+export function outputExclusion(root: string, outDir: string): string | null {
+  if (!isPathWithinRoot(root, outDir)) return null;
+  const rel = relative(root, outDir);
+  return rel === '' ? null : rel.split(sep).join('/');
+}
+
+/**
+ * The output directory a source file's real path lies in, or null. Applied
+ * where a host assembles its analysis inputs: a file reached under another
+ * spelling, through a source-tree link or a package's entry, is output too.
+ */
+export function outputSourceGuard(
+  root: string,
+  outputDirs: readonly string[]
+): (absPath: string) => string | null {
+  if (outputDirs.length === 0) return () => null;
+  const realDirs = outputDirs.map((dir) => ({
+    dir,
+    real: realPathOf(resolve(root, dir)),
+  }));
+  return (absPath) => {
+    const real = realPathOf(absPath);
+    return realDirs.find((o) => isPathWithinRoot(o.real, real))?.dir ?? null;
+  };
+}
+
+/** The warning for a source a host refused as output. */
+export function outputSourceMessage(
+  relPath: string,
+  outputDir: string
+): string {
+  return `${relPath} resolves into the output directory '${outputDir}', which is never source; it is not analysed`;
+}
+
+function realPathOf(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    return path;
+  }
 }
 
 /** How a resolved value was decided; surfaced by `--print-config`. */

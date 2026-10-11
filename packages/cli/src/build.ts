@@ -1,9 +1,8 @@
 import {
   buildKitDescriptor,
-  buildPathAliasesJson,
   KIT_DESCRIPTOR_FILE,
   kitPublicationFailures,
-  readTsconfigAliasPairs,
+  outputExclusion,
   runStructuralSelfCheck,
 } from '@animus-ui/extract/pipeline';
 import {
@@ -85,16 +84,13 @@ export function createCliSession(config: ResolvedCliConfig): ExtractionSession {
         `--root at the source tree.`
     );
   }
-  if (
-    !relOut.startsWith('..') &&
-    !config.excludePatterns.some((p) => relOut.includes(p) || p === relOut)
-  ) {
-    // Anchored glob, never a substring: 'out' would drop every path
-    // containing it. Structural, not the user list, which replaces defaults.
-    const anchored = `${relOut.split('\\').join('/')}/**`;
-    session.structuralExclude = [anchored];
+  // Installed whatever the user's list says: no user pattern stands in for
+  // the output boundary.
+  const outputDir = outputExclusion(root, outDir);
+  if (outputDir !== null) {
+    session.structuralExclude = [outputDir];
     err(
-      `outDir ${relOut} is inside the root — auto-excluded from discovery (pattern '${anchored}')`
+      `outDir ${relOut} is inside the root — auto-excluded from discovery (directory '${outputDir}')`
     );
   }
 
@@ -103,11 +99,8 @@ export function createCliSession(config: ResolvedCliConfig): ExtractionSession {
   // Every cycle republishes the whole assets set, so a superseded copy
   // would ship in a tree a fresh build of the same source never produces.
   session.staleAssetPruning = 'every-cycle';
-  const aliasPairs = readTsconfigAliasPairs(root);
-  const builtAliases = buildPathAliasesJson(aliasPairs, root);
-  if (builtAliases) {
-    session.pathAliasesJson = builtAliases.json;
-  }
+  // Each full pass re-reads the tsconfig aliases.
+  session.aliasesFromTsconfig = true;
   return session;
 }
 
@@ -227,12 +220,6 @@ export function reportDiscoveryOutcomes(
     err(
       `include '${specifier}': ${outcome}${outcome === 'resolved' ? ` (${files} files)` : ''}`
     );
-  }
-  const stats = session.getExcludeStats();
-  for (const pattern of config.options.exclude ?? []) {
-    if ((stats.get(pattern) ?? 0) === 0) {
-      err(`exclude pattern '${pattern}' matched nothing`);
-    }
   }
 }
 

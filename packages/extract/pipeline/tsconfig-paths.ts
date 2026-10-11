@@ -160,20 +160,34 @@ function readConfig(path: string): TsconfigNode | null {
   };
 }
 
+/** Where an `extends` specifier can name a config: a relative one as
+ *  written, with `.json`, or as a directory's tsconfig; a package's under
+ *  each ancestor's `node_modules`. Resolution takes the first that exists. */
+function extendsCandidates(specifier: string, fromDir: string): string[] {
+  if (specifier.startsWith('.') || isAbsolute(specifier)) {
+    const base = resolve(fromDir, specifier);
+    return [base, `${base}.json`, join(base, 'tsconfig.json')];
+  }
+  const target = specifier.endsWith('.json')
+    ? specifier
+    : `${specifier}/tsconfig.json`;
+  const candidates: string[] = [];
+  for (let dir = resolve(fromDir); ; dir = dirname(dir)) {
+    candidates.push(join(dir, 'node_modules', target));
+    if (dirname(dir) === dir) return candidates;
+  }
+}
+
 function resolveExtendsTarget(
   specifier: string,
   fromDir: string
 ): string | null {
   if (specifier.startsWith('.') || isAbsolute(specifier)) {
-    const base = resolve(fromDir, specifier);
-    for (const candidate of [
-      base,
-      `${base}.json`,
-      join(base, 'tsconfig.json'),
-    ]) {
-      if (existsSync(candidate)) return candidate;
-    }
-    return null;
+    return (
+      extendsCandidates(specifier, fromDir).find((candidate) =>
+        existsSync(candidate)
+      ) ?? null
+    );
   }
   try {
     return require.resolve(
@@ -190,9 +204,12 @@ function resolveExtendsTarget(
 }
 
 /** Child-first flattened extends chain starting at `entryPath`. */
-function loadChain(entryPath: string): TsconfigNode[] {
+function loadChain(
+  entryPath: string,
+  visited = new Set<string>(),
+  absent = new Set<string>()
+): TsconfigNode[] {
   const chain: TsconfigNode[] = [];
-  const visited = new Set<string>();
   const queue: string[] = [entryPath];
 
   while (queue.length > 0) {
@@ -208,9 +225,24 @@ function loadChain(entryPath: string): TsconfigNode[] {
     for (const parent of node.extends) {
       const resolved = resolveExtendsTarget(parent, node.dir);
       if (resolved) queue.push(resolved);
+      else {
+        for (const candidate of extendsCandidates(parent, node.dir)) {
+          absent.add(candidate);
+        }
+      }
     }
   }
   return chain;
+}
+
+/** Every tsconfig file the project's alias chain reads or looks for, absent
+ *  ones included, an unresolved `extends` target's candidates among them:
+ *  an edit, creation or deletion of any changes the aliases. */
+export function tsconfigChainPaths(rootDir: string): string[] {
+  const visited = new Set<string>();
+  const absent = new Set<string>();
+  loadChain(join(rootDir, 'tsconfig.json'), visited, absent);
+  return [...visited, ...absent];
 }
 
 /**
