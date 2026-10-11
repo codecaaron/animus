@@ -37,6 +37,7 @@ import type {
   AnimusMode,
   HostAssetClassification,
   HostExtensionPolicy,
+  HostResolve,
 } from '@animus-ui/extract/pipeline';
 import type { SessionKey } from '@animus-ui/extract/session';
 import type {
@@ -343,6 +344,33 @@ interface WebpackLikeApplied {
   apply: (compiler: WebpackLikeCompiler) => void;
 }
 
+/** A Rollup-family plugin context, which resolves through the bundler's
+ *  own plugin pipeline. */
+interface ResolvingContext {
+  resolve(
+    source: string,
+    importer?: string,
+    options?: { skipSelf?: boolean }
+  ): Promise<{ id: string } | null>;
+}
+
+function hasPluginResolve(
+  context: UnpluginBuildContext | ResolvingContext
+): context is ResolvingContext {
+  return 'resolve' in context;
+}
+
+/** The bundler's resolution through a Rollup-family plugin context (Rollup,
+ *  Rolldown, Vite); none where the context cannot resolve. */
+function pluginResolver(
+  context: UnpluginBuildContext | ResolvingContext
+): HostResolve | null {
+  if (!hasPluginResolve(context)) return null;
+  return async (specifier, importer) =>
+    (await context.resolve(specifier, importer, { skipSelf: true }))?.id ??
+    null;
+}
+
 const PLUGIN_NAME = 'animus-host';
 
 const ESBUILD_WATCH_HINT =
@@ -372,6 +400,9 @@ export const unpluginFactory: UnpluginFactory<
   let hostExtensions: HostExtensionPolicy = BUILT_IN_EXTENSION_POLICY;
   let hostAssets: HostAssetClassification =
     builtInAssetClassification('noHost');
+  /** The bundler's own resolution, which package discovery asks first
+   *  (spec §2.2 A4); none where the host exposes no resolver. */
+  let hostResolver: HostResolve | null = null;
   /** Hooks can fire before buildStart (webpack's make taps run
    *  concurrently), so joiners await this before awaiting the pipeline. */
   let signalPipelineStarted!: () => void;
@@ -442,6 +473,7 @@ export const unpluginFactory: UnpluginFactory<
       session.conditions = hostConditions;
       session.extensionPolicy = hostExtensions;
       session.assetClassification = hostAssets;
+      session.hostResolve = hostResolver;
       session.systemPropsModuleId = TURBOPACK_SYSTEM_PROPS_ID;
       // Each full pass re-reads the tsconfig aliases.
       session.aliasesFromTsconfig = true;
@@ -560,6 +592,7 @@ export const unpluginFactory: UnpluginFactory<
     enforce: 'pre',
 
     async buildStart() {
+      if (rollupLike) hostResolver = pluginResolver(this);
       try {
         await startPipeline();
       } finally {
@@ -733,6 +766,7 @@ export const unpluginFactory: UnpluginFactory<
           'rollup'
         );
         modeOracle = this.meta?.watchMode ? 'development' : 'production';
+        hostResolver = pluginResolver(this);
         try {
           await startPipeline();
         } finally {
