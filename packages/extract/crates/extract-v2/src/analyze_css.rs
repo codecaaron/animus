@@ -11667,6 +11667,36 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
     }
 
     #[test]
+    fn a_family_star_exported_twice_or_openly_names_no_member() {
+        // `ui.Card` is ambiguous through two stars, or open beside an
+        // unresolved one: `ui.Card.Root` names no component, so the recipe
+        // `Card.Root` builds keeps every option.
+        let family = |recipe: &str| {
+            format!("import {{ R }} from './{recipe}';\nexport const Card = compose({{ Root: R }}, {{ name: 'Card' }});\n")
+        };
+        let app = "import * as ui from './barrel';\nexport const App = () => <ui.Card.Root size=\"sm\" active />;\n";
+        let other = "export const R = ds.styles({ display: 'grid' }).asElement('div');\n";
+        let a = family("r");
+        let b = family("other");
+        let every = (vec!["sm", "md", "lg"], vec!["active", "busy"]);
+        for (barrel, expected) in [
+            ("export * from './a';\nexport * from './b';\n", every.clone()),
+            ("export * from './a';\nexport * from './missing';\n", every),
+            ("export * from './a';\n", (vec!["sm"], vec!["active"])),
+        ] {
+            let kept = kept_options(&[
+                ("r.tsx", RECIPE),
+                ("other.tsx", other),
+                ("a.tsx", a.as_str()),
+                ("b.tsx", b.as_str()),
+                ("barrel.tsx", barrel),
+                ("app.tsx", app),
+            ]);
+            assert_eq!(kept, expected, "{barrel}");
+        }
+    }
+
+    #[test]
     fn direct_renders_still_prune_unused_options() {
         let app = "import { R } from './r';\nexport const App = () => <R size=\"sm\" active />;\n";
         assert_eq!(kept_options(&[("r.tsx", RECIPE), ("app.tsx", app)]), (vec!["sm"], vec!["active"]));
