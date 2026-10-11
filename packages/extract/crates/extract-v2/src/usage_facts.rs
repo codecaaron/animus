@@ -1919,6 +1919,7 @@ fn unsafe_object_uses(
 /// that object.
 pub(crate) fn style_object_uses(
     program: &Program<'_>,
+    scoping: &Scoping,
     statics: &FxHashMap<String, Value>,
 ) -> StyleObjectFacts {
     let consts: BTreeMap<&str, bool> = statics
@@ -1926,8 +1927,7 @@ pub(crate) fn style_object_uses(
         .filter(|(_, value)| value.is_object())
         .map(|(name, _)| (name.as_str(), false))
         .collect();
-    let scoping = SemanticBuilder::new().build(program).semantic.into_scoping();
-    let candidates = object_bindings(program, &scoping, &consts, &BTreeSet::new());
+    let candidates = object_bindings(program, scoping, &consts, &BTreeSet::new());
     if candidates.is_empty() {
         return StyleObjectFacts::default();
     }
@@ -1937,11 +1937,11 @@ pub(crate) fn style_object_uses(
         return StyleObjectFacts { uses, ..StyleObjectFacts::default() };
     }
     let mut scan = ObjectUseScan {
-        scoping: &scoping,
+        scoping,
         source: program.source_text,
         candidates,
-        global_object: !binds_anywhere(&scoping, "Object"),
-        react: ReactImports::of(program, &scoping),
+        global_object: !binds_anywhere(scoping, "Object"),
+        react: ReactImports::of(program, scoping),
         uses: BTreeMap::new(),
         ancestors: Vec::new(),
         style: true,
@@ -2301,9 +2301,11 @@ pub(crate) enum ParamReading {
 /// `ParamReading`. A destructuring, rest, default or other pattern counts
 /// as unsafe, and so does every parameter of a function something
 /// reassigns.
-pub(crate) fn function_param_readings(program: &Program<'_>) -> BTreeMap<String, Vec<ParamReading>> {
+pub(crate) fn function_param_readings(
+    program: &Program<'_>,
+    scoping: &Scoping,
+) -> BTreeMap<String, Vec<ParamReading>> {
     use oxc::ast::ast::{BindingPattern, Declaration, ExportDefaultDeclarationKind, FormalParameters};
-    let scoping = SemanticBuilder::new().build(program).semantic.into_scoping();
     // A function with no body (an ambient `declare function` or an overload
     // signature) may do anything with its arguments.
     let mut functions: Vec<(String, &FormalParameters<'_>, bool)> = Vec::new();
@@ -2386,11 +2388,11 @@ pub(crate) fn function_param_readings(program: &Program<'_>) -> BTreeMap<String,
         return readings;
     }
     let mut scan = ParamScan {
-        scoping: &scoping,
+        scoping,
         params,
         readings,
         ancestors: Vec::new(),
-        global_object: !binds_anywhere(&scoping, "Object"),
+        global_object: !binds_anywhere(scoping, "Object"),
     };
     scan.visit_program(program);
     scan.readings
@@ -2853,7 +2855,15 @@ fn object_use<'b, 'a: 'b>(
                 _ => unfollowed("is assigned to a variable"),
             }
         }
-        AstKind::ExpressionStatement(_) => None,
+        // A concise arrow body is the arrow's return value, which the call
+        // hands on (`() => pad`, `.then(() => pad)`); any other statement
+        // discards it.
+        AstKind::ExpressionStatement(_) => match (ancestors.next(), ancestors.next()) {
+            (Some(AstKind::FunctionBody(_)), Some(AstKind::ArrowFunctionExpression(arrow))) if arrow.expression => {
+                unfollowed("is returned from a function")
+            }
+            _ => None,
+        },
         AstKind::ForInStatement(statement) if statement.right.span() == current => None,
         // An assigned facade's own sources may name it.
         AstKind::ObjectProperty(_) if assigned_target && in_own_assign_source(&mut ancestors, global_object) => None,

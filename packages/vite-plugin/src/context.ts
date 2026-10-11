@@ -12,6 +12,7 @@ import {
   findSheetAssetSpecifiers,
   generatedModuleCode,
   isDeletedSource,
+  declaredWorkspacePackages,
   loadSystemConfig,
   parseFilesJson,
   projectExternalFileOwners,
@@ -456,6 +457,7 @@ export class PluginContext {
         prefix: this.options.prefix,
         prefixContextualVars: this.options.prefixContextualVars,
         conditions: this.resolveConditions,
+        workspaces: declaredWorkspacePackages(this.rootDir),
       });
       // Includes each manifest whose `exports` selected a module, so an edit
       // to one reloads the system too.

@@ -812,7 +812,7 @@ impl ExtractEngine {
                 || !namespace_imports.is_empty()
                 || imports.iter().any(|import| object_exports.contains(import.imported.as_str()))
             {
-                crate::usage_facts::style_object_uses(program, statics)
+                crate::usage_facts::style_object_uses(program, &lowered_by_file[&ast.path].scoping, statics)
             } else {
                 crate::usage_facts::StyleObjectFacts::default()
             };
@@ -838,7 +838,9 @@ impl ExtractEngine {
                 std::rc::Rc::new(
                     programs
                         .get(file)
-                        .map(|program| crate::usage_facts::function_param_readings(program))
+                        .map(|program| {
+                            crate::usage_facts::function_param_readings(program, &lowered_by_file[file].scoping)
+                        })
                         .unwrap_or_default(),
                 )
             }))
@@ -1980,6 +1982,34 @@ export const App = () => <Box tone="red" />;
             out.contains(r#""p":4"#) || out.contains(r#""p":4"#),
             "{out}"
         );
+    }
+
+    /// Contract: a possibly-mutated static never yields its pre-mutation
+    /// value as static CSS. Each row writes `pad.padding = 9` before the
+    /// reader runs, as Node runs the modules; the reader's style is refused
+    /// rather than emitting `padding: 4`.
+    #[test]
+    fn a_possibly_mutated_static_never_yields_its_pre_mutation_value_as_static_css() {
+        let rows = [
+            // A concise arrow returns what it evaluates (PF2).
+            ("sync return", "const get = () => pad; get().padding = 9;"),
+            ("async return", "const get = async () => pad; (await get()).padding = 9;"),
+            ("then callback return", "await Promise.resolve(0).then(() => pad).then((p) => { p.padding = 9; });"),
+        ];
+        for (row, mutation) in rows {
+            let mut engine = ExtractEngine::new(None).unwrap();
+            let files = serde_json::json!([
+                { "path": "tokens.js", "source": "export const pad = { padding: 4 };\n" },
+                { "path": "mutate.js", "source": format!("import {{ pad }} from './tokens.js';\n{mutation}\n") },
+                {
+                    "path": "reader.tsx",
+                    "source": "import './mutate.js';\nimport { pad } from './tokens.js';\n\
+                               export const C = ds.styles({ ...pad }).asElement('div');\nexport const App = () => <C />;\n",
+                },
+            ]);
+            let out: serde_json::Value = serde_json::from_str(&engine.analyze(files.to_string()).unwrap()).unwrap();
+            assert!(!out["css"].as_str().unwrap_or_default().contains("padding"), "{row}: {}", out["css"]);
+        }
     }
 
     #[test]

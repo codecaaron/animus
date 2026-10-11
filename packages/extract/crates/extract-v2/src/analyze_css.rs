@@ -744,7 +744,15 @@ pub fn resolve_import_source<T>(
 
 /// The analyzed file `base` names, through the one extension policy.
 fn probe_files<T>(base: &str, files: &BTreeMap<String, T>) -> Option<String> {
-    animus_system_loader::resolution::extension_policy().probe(base, |candidate| files.contains_key(candidate))
+    use animus_system_loader::resolution::{extension_policy, Seen};
+    // The analyzed set is keyed by each file's own spelling, so a lookup is
+    // exact: a specifier that differs only in case names no analyzed file.
+    extension_policy()
+        .probe(base, |candidate| match files.contains_key(candidate) {
+            true => Seen::File,
+            false => Seen::Missing,
+        })
+        .found()
 }
 
 /// Follow `export { X as Y } from '...'` hops, and local exports of an
@@ -8629,7 +8637,9 @@ mod tests {
         assert_eq!(resolve("./icon.js").as_deref(), Some("src/icon.tsx"));
         assert_eq!(resolve("./real.js").as_deref(), Some("src/real.js"));
         assert_eq!(resolve("./m.mjs").as_deref(), Some("src/m.mts"));
-        assert_eq!(resolve("./signals.JS").as_deref(), Some("src/signals.ts"));
+        // Exact case, as Node, TypeScript and the hosts read it: `.JS` is no
+        // emitted `.js`.
+        assert_eq!(resolve("./signals.JS"), None);
         assert_eq!(resolve("./icon.jsx").as_deref(), Some("src/icon.tsx"));
         assert_eq!(resolve("./missing.js"), None);
     }

@@ -359,7 +359,8 @@ describe('production run (full pipeline)', () => {
       join(root, 'src', 'system.ts'),
       root,
       undefined,
-      ['source']
+      ['source'],
+      {}
     );
     expect(mocks.analyzeProject).toHaveBeenCalledTimes(1);
 
