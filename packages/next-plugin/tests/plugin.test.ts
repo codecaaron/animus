@@ -1,6 +1,13 @@
 import { isJsonObject, parseJsonObject } from '@animus-ui/assertions';
 import { RETIRED_ENGINE_MESSAGE } from '@animus-ui/extract/pipeline';
-import { readFileSync, rmSync, statSync, writeFileSync } from 'fs';
+import {
+  existsSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  utimesSync,
+  writeFileSync,
+} from 'fs';
 import { join } from 'path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
@@ -153,8 +160,14 @@ function createCompiler(
   const watchRunHandlers: AsyncHandler[] = [];
   const compilationHandlers: CompilationHandler[] = [];
   const thisCompilationHandlers: ThisCompilationHandler[] = [];
+  const shutdownHandlers: Array<() => void> = [];
   const compiler: PluginCompiler = {
     hooks: {
+      shutdown: {
+        tap: (_name: string, fn: () => void) => {
+          shutdownHandlers.push(fn);
+        },
+      },
       run: {
         tapPromise: (_name: string, fn: AsyncHandler) => {
           runHandlers.push(fn);
@@ -197,6 +210,7 @@ function createCompiler(
     watchRunHandlers,
     compilationHandlers,
     thisCompilationHandlers,
+    shutdownHandlers,
   };
 }
 
@@ -672,6 +686,33 @@ describe('production run (full pipeline)', () => {
       String(call[0]).includes('not surfaced')
     );
     expect(surfaced).toHaveLength(0);
+  });
+});
+
+describe('teardown', () => {
+  /** Contract: a completed build is pruned once stale. A build whose
+   *  compilers have shut down holds no claim, so a later build of the root
+   *  removes its tree once it passes the retention window. */
+  test('a completed build is pruned once stale', async () => {
+    const root = createProject();
+    const first = createCompiler(root);
+    const completed = new AnimusWebpackPlugin(OPTIONS, { build: 'completed' });
+    applyPlugin(completed, first.compiler);
+    await first.runHandlers[0](first.compiler);
+    for (const shutdown of first.shutdownHandlers) shutdown();
+
+    const dir = sessionArtifactDir(root, completed.sessionId);
+    const stale = new Date(Date.now() - 25 * 60 * 60 * 1000);
+    utimesSync(dir, stale, stale);
+
+    const second = createCompiler(root);
+    applyPlugin(
+      new AnimusWebpackPlugin(OPTIONS, { build: 'successor' }),
+      second.compiler
+    );
+    await second.runHandlers[0](second.compiler);
+
+    expect(existsSync(dir)).toBe(false);
   });
 });
 
