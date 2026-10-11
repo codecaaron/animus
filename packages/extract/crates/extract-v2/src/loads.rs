@@ -22,6 +22,11 @@ pub enum LoadKind {
     DynamicImport,
     /// A load call; `require` for `require(…)` itself.
     Call { require: bool },
+    /// `require` reached through parentheses or a type assertion
+    /// (`(require)('./x')`, `require!('./x')`) with a string-literal
+    /// specifier. Only the style statics' view reads it; the load calls
+    /// match the bare name.
+    WrappedRequire,
 }
 
 /// How a load's specifier is written.
@@ -58,7 +63,7 @@ impl Load {
         let dynamic_import = match self.kind {
             LoadKind::DynamicImport => true,
             LoadKind::Call { .. } => false,
-            LoadKind::Import { .. } | LoadKind::Reexport { .. } => return None,
+            LoadKind::Import { .. } | LoadKind::Reexport { .. } | LoadKind::WrappedRequire => return None,
         };
         let (start, end) = (self.span.start as usize, self.span.end as usize);
         Some(ModuleLoad {
@@ -144,10 +149,24 @@ impl<'a> Visit<'a> for Calls {
 
     fn visit_call_expression(&mut self, call: &CallExpression<'a>) {
         let require = call.callee.is_specific_id("require");
-        let literal = matches!(call.arguments.first(), Some(Argument::StringLiteral(_)));
-        for target in call_loads(call) {
-            let spelling = if require && literal { Spelling::String } else { Spelling::Other };
-            self.0.push(Load { kind: LoadKind::Call { require }, target, spelling, span: call.span });
+        let literal = match call.arguments.first() {
+            Some(Argument::StringLiteral(literal)) => Some(literal.value.to_string()),
+            _ => None,
+        };
+        let targets = call_loads(call);
+        match (targets.is_empty(), require, literal) {
+            (true, true, Some(specifier)) => self.0.push(Load {
+                kind: LoadKind::WrappedRequire,
+                target: LoadTarget::Specifier(specifier),
+                spelling: Spelling::String,
+                span: call.span,
+            }),
+            (_, _, literal) => {
+                for target in targets {
+                    let spelling = if require && literal.is_some() { Spelling::String } else { Spelling::Other };
+                    self.0.push(Load { kind: LoadKind::Call { require }, target, spelling, span: call.span });
+                }
+            }
         }
         oxc::ast_visit::walk::walk_call_expression(self, call);
     }

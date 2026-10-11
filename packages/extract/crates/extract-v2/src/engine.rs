@@ -876,8 +876,10 @@ impl ExtractEngine {
                         .loads
                         .iter()
                         .filter(|load| {
-                            matches!(load.kind, LoadKind::DynamicImport | LoadKind::Call { require: true })
-                                && load.spelling == Spelling::String
+                            matches!(
+                                load.kind,
+                                LoadKind::DynamicImport | LoadKind::Call { require: true } | LoadKind::WrappedRequire
+                            ) && load.spelling == Spelling::String
                         })
                         .filter_map(|load| load.specifier().map(str::to_string))
                         .collect(),
@@ -2349,7 +2351,8 @@ export const App = () => <Box tone="red" />;
     /// directly, through 31 or 32 re-export hops, through a star cycle, or
     /// through a star the analysis cannot open (a missing module or a
     /// package) or from a missing module itself, or as a member of a missing
-    /// module's namespace. A reader through a star is refused whatever the
+    /// module's namespace, or loads its module through a parenthesized
+    /// `require`. A reader through a star is refused whatever the
     /// mutator does: a load of a module with an open star, a computed
     /// `import()` or `require()`, a default alias, or a rename behind an
     /// open star.
@@ -2387,6 +2390,11 @@ export const App = () => <Box tone="red" />;
             ),
             ("missing module star", "./tokens", vec![file("a.ts", "export * from './external';\n"), mutate("./a")]),
             ("package star", "./tokens", vec![file("a.ts", "export * from 'some-package';\n"), mutate("./a")]),
+            (
+                "parenthesized require",
+                "./tokens",
+                vec![file("mutate.ts", "(require)('./tokens').pad.padding = 9;\n")],
+            ),
             ("missing module import", "./tokens", vec![mutate("./missing")]),
             ("read through a closed star", "./closed", vec![closed(), open(), mutate("./open")]),
             ("import() of an open star", "./closed", vec![closed(), open(), file("mutate.ts", "import('./open');\n")]),
