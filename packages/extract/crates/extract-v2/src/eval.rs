@@ -192,7 +192,7 @@ fn eval_object_expr_scoped(
                 // key overrides an earlier one and keeps its first position.
                 // A lost key overrides too, so no earlier value stands for it.
                 let mut spread_value = static_object_at(&spread.argument, static_values)?;
-                for (mut path, reason) in take_lost_segments(&mut spread_value) {
+                for (mut path, reason) in take_unevaluated_segments(&mut spread_value) {
                     let key = path.pop().unwrap_or_default();
                     if path.is_empty() {
                         map.insert(key.clone(), Value::Null);
@@ -205,7 +205,7 @@ fn eval_object_expr_scoped(
                         span: span_of(spread.span),
                     });
                 }
-                if let Value::Object(entries) = spread_value {
+                if let Value::Object(entries) = marked(&spread_value) {
                     for (key, value) in entries {
                         tombstones.remove(&key);
                         map.insert(key, value);
@@ -305,13 +305,13 @@ fn uncertain_clause<'v>(expr: &Expression<'_>, static_values: Statics<'v>) -> Op
 fn static_object_at(
     expr: &Expression<'_>,
     static_values: Option<Statics<'_>>,
-) -> Result<Value, BailError> {
+) -> Result<StaticValue, BailError> {
     if let Some(reason) = static_values.and_then(|sv| uncertain_clause(expr, sv)) {
         return Err(BailError::new(format!("spread of {reason}")));
     }
     match static_values.and_then(|sv| static_path_value(expr, sv)) {
         // The `asset` function spreads as the object its marker is.
-        Some(value @ (StaticValue::Object(_) | StaticValue::AssetFunction { .. })) => Ok(marked(value)),
+        Some(value @ (StaticValue::Object(_) | StaticValue::AssetFunction { .. })) => Ok(value.clone()),
         Some(_) => Err(BailError::new("spread of a static value that is no object")),
         None => Err(BailError::new("spread element in style object")),
     }
@@ -1116,52 +1116,76 @@ pub(crate) struct LostCustomProps {
     pub skipped: Vec<(String, String)>,
 }
 
-/// Takes the markers on top-level custom prop configs and their `transform`
-/// from a `.props()` value, then takes every other marker as a skip.
-pub(crate) fn take_lost_custom_props(value: &mut Value) -> LostCustomProps {
+/// Takes the unevaluated top-level custom prop configs and their
+/// `transform` from a `.props()` value, then takes every other unevaluated
+/// node as a skip.
+pub(crate) fn take_unevaluated_custom_props(value: &mut StaticValue) -> LostCustomProps {
     let mut lost = LostCustomProps::default();
-    if let Some(configs) = value.as_object_mut() {
-        configs.retain(|prop, config| match lost_value_reason(config) {
-            Some(reason) => {
-                lost.configs.push((prop.clone(), reason.to_string()));
+    if let StaticValue::Object(configs) = value {
+        configs.retain(|(prop, config)| match config {
+            StaticValue::Unevaluated(unevaluated) => {
+                lost.configs.push((prop.clone(), unevaluated.clause.clone()));
                 false
             }
-            None => true,
+            _ => true,
         });
         for (prop, config) in configs.iter_mut() {
-            let Some(config) = config.as_object_mut() else {
+            let StaticValue::Object(entries) = config else {
                 continue;
             };
-            let reason = config
-                .get("transform")
-                .and_then(lost_value_reason)
-                .map(str::to_string);
-            if let Some(reason) = reason {
-                config.remove("transform");
-                lost.transforms.push((prop.clone(), reason));
+            let transform = entries
+                .iter()
+                .position(|(key, value)| key == "transform" && matches!(value, StaticValue::Unevaluated(_)));
+            if let Some(at) = transform {
+                if let (_, StaticValue::Unevaluated(unevaluated)) = entries.remove(at) {
+                    lost.transforms.push((prop.clone(), unevaluated.clause));
+                }
             }
         }
     }
-    lost.skipped = take_lost_values(value);
+    lost.skipped = take_unevaluated(value);
     lost
 }
 
-/// Removes the lost-value markers from a stage value reached through a const,
-/// returning each lost property, as a dotted path, with its reason. A
-/// captured inline `transform` is removed without a skip.
-pub(crate) fn take_lost_values(value: &mut Value) -> Vec<(String, String)> {
-    take_lost_segments(value)
-        .into_iter()
-        .map(|(path, reason)| (path.join("."), reason))
-        .collect()
+/// Removes the unevaluated nodes from a stage value reached through a const,
+/// returning each, as a dotted path, with its clause. A captured inline
+/// `transform` is removed without a skip.
+pub(crate) fn take_unevaluated(value: &mut StaticValue) -> Vec<(String, String)> {
+    take_unevaluated_segments(value).into_iter().map(|(path, clause)| (path.join("."), clause)).collect()
 }
 
-/// `take_lost_values` with each path as its key segments, since a selector
+/// `take_unevaluated` with each path as its key segments, since a selector
 /// key can itself contain a dot.
-fn take_lost_segments(value: &mut Value) -> Vec<(Vec<String>, String)> {
+fn take_unevaluated_segments(value: &mut StaticValue) -> Vec<(Vec<String>, String)> {
     let mut lost = Vec::new();
-    collect_lost_values(value, &[], &mut lost);
+    collect_unevaluated(value, &[], &mut lost);
     lost
+}
+
+/// Each unevaluated node an object entry holds, with its key segments; an
+/// array's items are read at the array's own path.
+fn collect_unevaluated(value: &mut StaticValue, path: &[String], lost: &mut Vec<(Vec<String>, String)>) {
+    match value {
+        StaticValue::Object(entries) => {
+            entries.retain_mut(|(key, child)| {
+                let at = [path, std::slice::from_ref(key)].concat();
+                match child {
+                    StaticValue::Unevaluated(unevaluated) => {
+                        if unevaluated.kind != UnevaluatedKind::CapturedTransform {
+                            lost.push((at, unevaluated.clause.clone()));
+                        }
+                        false
+                    }
+                    child => {
+                        collect_unevaluated(child, &at, lost);
+                        true
+                    }
+                }
+            });
+        }
+        StaticValue::Array(items) => items.iter_mut().for_each(|item| collect_unevaluated(item, path, lost)),
+        _ => {}
+    }
 }
 
 fn collect_lost_values(value: &mut Value, path: &[String], lost: &mut Vec<(Vec<String>, String)>) {
@@ -1194,7 +1218,7 @@ fn collect_lost_values(value: &mut Value, path: &[String], lost: &mut Vec<(Vec<S
 /// Removes every marker without reporting: serialized statics are not a
 /// stage reader, so the stage that later reads one reports its losses.
 pub(crate) fn strip_lost_values(value: &mut Value) {
-    take_lost_values(value);
+    collect_lost_values(value, &[], &mut Vec::new());
 }
 
 /// Whether a module-scope declaration or import binds `name`; chain and
