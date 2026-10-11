@@ -271,7 +271,7 @@ fn report_invalid_references(
     valid
 }
 
-fn external_symbol_diagnostic(transform_name: &str, symbol: &str) -> String {
+pub(super) fn external_symbol_diagnostic(transform_name: &str, symbol: &str) -> String {
     format!(
         "[bail] Transform '{}': callback references external symbol '{}'. \
          Transform callbacks must be self-contained (no imports or external references). \

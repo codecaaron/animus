@@ -10,7 +10,7 @@ use oxc::ast::ast::Statement;
 use oxc::codegen::Codegen;
 use oxc::parser::{Parser, ParserReturn};
 use oxc::semantic::SemanticBuilder;
-use oxc::span::{GetSpan, SourceType};
+use oxc::span::SourceType;
 use oxc::transformer::{TransformOptions, Transformer};
 use rquickjs::{Context, Function, Object, Runtime};
 
@@ -407,7 +407,7 @@ fn resolve_relative(base_dir: &Path, specifier: &str) -> Result<String, String> 
 }
 
 /// `names` are the names as the *imported* module defines them — what a stub
-/// must define, since the bundle rewrite destructures `{ imported: local }`.
+/// must define, since the bundle reads `__modules['__stub__/x']['name']`.
 struct ImportInfo {
     specifier: String,
     names: Vec<String>,
@@ -482,7 +482,7 @@ fn has_esm_syntax(source: &str, file_path: &str) -> bool {
     })
 }
 
-/// The bundle rewrites ESM into IIFEs, so a CJS body would evaluate against
+/// The bundle rewrites ESM into functions, so a CJS body would evaluate against
 /// an undefined `module`/`require` and fail far from its cause.
 fn looks_like_commonjs(source: &str, file_path: &str) -> bool {
     if has_esm_syntax(source, file_path) {
@@ -770,323 +770,7 @@ fn type_only_export_names(source: &str, file_path: &str) -> HashSet<String> {
         .collect()
 }
 
-struct RewriteOp {
-    start: usize,
-    end: usize,
-    replacement: String,
-}
-
-/// `require_literal` is the registry key ALREADY escaped by `js_quoted` — it is
-/// spliced straight into `__require('…')` and must never be used as a map key.
-fn rewrite_import_specifiers(
-    specifiers: &[oxc::ast::ast::ImportDeclarationSpecifier<'_>],
-    require_literal: &str,
-) -> String {
-    let mut destructure_parts = Vec::new();
-    let mut default_name: Option<String> = None;
-    let mut namespace_name: Option<String> = None;
-
-    for specifier in specifiers {
-        match specifier {
-            oxc::ast::ast::ImportDeclarationSpecifier::ImportSpecifier(import) => {
-                let imported = module_export_name(&import.imported);
-                let local = import.local.name.to_string();
-                if imported == local {
-                    destructure_parts.push(imported);
-                } else {
-                    destructure_parts.push(format!("{}: {}", imported, local));
-                }
-            }
-            oxc::ast::ast::ImportDeclarationSpecifier::ImportDefaultSpecifier(default) => {
-                default_name = Some(default.local.name.to_string());
-            }
-            oxc::ast::ast::ImportDeclarationSpecifier::ImportNamespaceSpecifier(namespace) => {
-                namespace_name = Some(namespace.local.name.to_string());
-            }
-        }
-    }
-
-    let mut parts = Vec::new();
-    if let Some(namespace_name) = namespace_name {
-        parts.push(format!(
-            "const {} = __require('{}')",
-            namespace_name, require_literal
-        ));
-    } else {
-        if let Some(default_name) = default_name {
-            parts.push(format!(
-                "const {} = __require('{}').default",
-                default_name, require_literal
-            ));
-        }
-        if !destructure_parts.is_empty() {
-            parts.push(format!(
-                "const {{ {} }} = __require('{}')",
-                destructure_parts.join(", "),
-                require_literal
-            ));
-        }
-    }
-    parts.join(";\n")
-}
-
-/// Replace import/export statements with `__require()`/`__exports`
-/// assignments. The IIFE wrapper is the caller's.
-fn rewrite_module_for_bundle(
-    source: &str,
-    canonical_path: &str,
-    specifier_map: &HashMap<(String, String), String>,
-) -> Result<String, String> {
-    let allocator = Allocator::default();
-    let source_type = SourceType::from_path(Path::new(canonical_path))
-        .unwrap_or_else(|_| SourceType::mjs())
-        .with_module(true);
-
-    let ParserReturn { program, .. } = Parser::new(&allocator, source, source_type).parse();
-
-    let mut ops: Vec<RewriteOp> = Vec::new();
-    let mut trailing_exports: Vec<(String, String)> = Vec::new();
-
-    for stmt in &program.body {
-        match stmt {
-            Statement::ImportDeclaration(decl) => {
-                let spec = decl.source.value.to_string();
-                let require_literal = js_quoted(
-                    &specifier_map
-                        .get(&(canonical_path.to_string(), spec.clone()))
-                        .cloned()
-                        .unwrap_or_else(|| stub_key(&spec)),
-                );
-
-                // The span takes the statement's own `;`, and compacted output
-                // starts the next statement on the same line, so the
-                // replacement ends itself.
-                let replacement = match &decl.specifiers {
-                    Some(specifiers) if !specifiers.is_empty() => format!(
-                        "{};",
-                        rewrite_import_specifiers(specifiers, &require_literal)
-                    ),
-                    _ => format!("__require('{}');", require_literal),
-                };
-
-                ops.push(RewriteOp {
-                    start: decl.span.start as usize,
-                    end: decl.span.end as usize,
-                    replacement,
-                });
-            }
-
-            Statement::ExportNamedDeclaration(decl) => {
-                if decl.source.is_some() {
-                    // The module table resolves a re-export; its value is
-                    // assigned after the module runs.
-                    ops.push(RewriteOp {
-                        start: decl.span.start as usize,
-                        end: decl.span.end as usize,
-                        replacement: String::new(),
-                    });
-                } else if !decl.specifiers.is_empty() {
-                    for es in &decl.specifiers {
-                        trailing_exports.push((
-                            module_export_name(&es.exported),
-                            module_export_name(&es.local),
-                        ));
-                    }
-                    ops.push(RewriteOp {
-                        start: decl.span.start as usize,
-                        end: decl.span.end as usize,
-                        replacement: String::new(),
-                    });
-                } else if decl.declaration.is_none() {
-                    // `export {}`, which the strip leaves in a module that
-                    // exports only types, exports nothing.
-                    ops.push(RewriteOp {
-                        start: decl.span.start as usize,
-                        end: decl.span.end as usize,
-                        replacement: String::new(),
-                    });
-                } else if let Some(declaration) = &decl.declaration {
-                    let decl_start = declaration.span().start as usize;
-                    let export_keyword_end = decl_start;
-                    ops.push(RewriteOp {
-                        start: decl.span.start as usize,
-                        end: export_keyword_end,
-                        replacement: String::new(),
-                    });
-                    collect_declaration_export_names(declaration, &mut trailing_exports);
-                }
-            }
-
-            Statement::ExportDefaultDeclaration(decl) => {
-                let decl_start = decl.declaration.span().start as usize;
-                ops.push(RewriteOp {
-                    start: decl.span.start as usize,
-                    end: decl_start,
-                    replacement: "__exports.default = ".to_string(),
-                });
-                // A function or class declaration becomes an expression here,
-                // which compacted output must not run into the next statement.
-                if matches!(
-                    decl.declaration,
-                    oxc::ast::ast::ExportDefaultDeclarationKind::FunctionDeclaration(_)
-                        | oxc::ast::ast::ExportDefaultDeclarationKind::ClassDeclaration(_)
-                ) {
-                    let decl_end = decl.span.end as usize;
-                    ops.push(RewriteOp {
-                        start: decl_end,
-                        end: decl_end,
-                        replacement: ";".to_string(),
-                    });
-                }
-            }
-
-            // The module table resolves what `export *` and `export * as`
-            // bring in; their values are assigned after the module runs.
-            Statement::ExportAllDeclaration(decl) => {
-                ops.push(RewriteOp {
-                    start: decl.span.start as usize,
-                    end: decl.span.end as usize,
-                    replacement: String::new(),
-                });
-            }
-
-            _ => {}
-        }
-    }
-
-    // Reverse order keeps the not-yet-applied offsets valid. At one offset,
-    // the op replacing text runs before an insertion there, so the insertion
-    // lands ahead of that replacement and shifts no pending range.
-    ops.sort_by_key(|op| std::cmp::Reverse((op.start, op.end)));
-    let mut result = source.to_string();
-    for op in &ops {
-        result.replace_range(op.start..op.end, &op.replacement);
-    }
-
-    if !trailing_exports.is_empty() {
-        result.push('\n');
-        for (exported, local) in &trailing_exports {
-            // `local` is a bare JS binding identifier; `exported` is a module
-            // namespace name, which may be an arbitrary string literal.
-            let _ = writeln!(result, "__exports['{}'] = {};", js_quoted(exported), local);
-        }
-    }
-
-    Ok(result)
-}
-
-fn collect_declaration_export_names(
-    declaration: &oxc::ast::ast::Declaration<'_>,
-    exports: &mut Vec<(String, String)>,
-) {
-    match declaration {
-        oxc::ast::ast::Declaration::VariableDeclaration(var_decl) => {
-            for declarator in &var_decl.declarations {
-                collect_binding_names(&declarator.id, exports);
-            }
-        }
-        oxc::ast::ast::Declaration::FunctionDeclaration(fn_decl) => {
-            if let Some(id) = &fn_decl.id {
-                let name = id.name.to_string();
-                exports.push((name.clone(), name));
-            }
-        }
-        oxc::ast::ast::Declaration::ClassDeclaration(class_decl) => {
-            if let Some(id) = &class_decl.id {
-                let name = id.name.to_string();
-                exports.push((name.clone(), name));
-            }
-        }
-        _ => {}
-    }
-}
-
-fn collect_binding_names(
-    pattern: &oxc::ast::ast::BindingPattern<'_>,
-    exports: &mut Vec<(String, String)>,
-) {
-    match pattern {
-        oxc::ast::ast::BindingPattern::BindingIdentifier(id) => {
-            let name = id.name.to_string();
-            exports.push((name.clone(), name));
-        }
-        oxc::ast::ast::BindingPattern::ObjectPattern(obj) => {
-            for prop in &obj.properties {
-                collect_binding_names(&prop.value, exports);
-            }
-        }
-        oxc::ast::ast::BindingPattern::ArrayPattern(arr) => {
-            for elem in arr.elements.iter().flatten() {
-                collect_binding_names(elem, exports);
-            }
-        }
-        oxc::ast::ast::BindingPattern::AssignmentPattern(assign) => {
-            collect_binding_names(&assign.left, exports);
-        }
-    }
-}
-
-/// Returns modules in execution order: dependencies before dependents.
-fn topological_sort(
-    specifier_map: &HashMap<(String, String), String>,
-    source_map: &HashMap<String, String>,
-    _entry_path: &str,
-) -> Result<Vec<String>, String> {
-    let mut dependents: HashMap<&str, Vec<&str>> = HashMap::new();
-    let mut in_degree: HashMap<&str, usize> = HashMap::new();
-
-    for key in source_map.keys() {
-        dependents.entry(key.as_str()).or_default();
-        in_degree.entry(key.as_str()).or_insert(0);
-    }
-
-    for ((from, _), to) in specifier_map {
-        if source_map.contains_key(to.as_str()) && source_map.contains_key(from.as_str()) {
-            dependents
-                .entry(to.as_str())
-                .or_default()
-                .push(from.as_str());
-            *in_degree.entry(from.as_str()).or_insert(0) += 1;
-        }
-    }
-
-    // HashMap iteration order is unspecified: sorting every adjacency list
-    // and the root queue is what keeps the emitted bundle byte-stable.
-    for node_dependents in dependents.values_mut() {
-        node_dependents.sort_unstable();
-    }
-
-    let mut roots: Vec<&str> = in_degree
-        .iter()
-        .filter(|(_, &degree)| degree == 0)
-        .map(|(node, _)| *node)
-        .collect();
-    roots.sort_unstable();
-    let mut queue: VecDeque<&str> = roots.into_iter().collect();
-
-    let mut sorted: Vec<String> = Vec::new();
-    while let Some(node) = queue.pop_front() {
-        sorted.push(node.to_string());
-        if let Some(node_dependents) = dependents.get(node) {
-            for dep in node_dependents {
-                if let Some(d) = in_degree.get_mut(dep) {
-                    *d -= 1;
-                    if *d == 0 {
-                        queue.push_back(dep);
-                    }
-                }
-            }
-        }
-    }
-
-    if sorted.len() != in_degree.len() {
-        return Err("circular dependency detected in module graph".to_string());
-    }
-
-    Ok(sorted)
-}
-
-/// Marker emitted before each module's IIFE; bundle-line-to-module
+/// Marker emitted before each module; bundle-line-to-module
 /// attribution keys off it.
 const MODULE_MARKER_PREFIX: &str = "// __module__: ";
 
@@ -1107,6 +791,9 @@ struct BundleLayout {
     stub_specifiers: Vec<String>,
     /// Byte range of each real module's rewritten text in the bundle.
     module_spans: Vec<(usize, usize, String)>,
+    /// The bundle range of each reference to an imported binding, and the
+    /// local name the module refers to it by.
+    import_refs: Vec<(usize, usize, String)>,
 }
 
 impl BundleLayout {
@@ -1141,17 +828,27 @@ fn offsets_to_line_numbers(bundle: &str, offsets: Vec<(usize, String)>) -> Vec<(
         .collect()
 }
 
-/// Generated structure:
+/// Generated structure (see `linked`):
 /// ```js
 /// globalThis.console = globalThis.console || ...;  // host shim
 /// const __modules = {};
-/// const __require = (n) => __modules[n];
 /// // __module__: __stub__/react
 /// (function(){ const __exports = {}; ... __modules['__stub__/react'] = __exports; })();
+/// __modules['/path/to/dep.js'] = {};  // every module, in evaluation order
+/// __modules['/path/to/mod.js'] = {};
 /// // __module__: /path/to/mod.js
-/// (function(){ const __exports = {}; ... __modules['/path/to/mod.js'] = __exports; })();
+/// const __linked0 = (function*(){ const __exports = __modules['/path/to/mod.js'];
+/// Object.defineProperty(__exports, 'name', { enumerable: true, get: () => name });
+/// yield;
+/// ... })();
+/// __linked0.next();
+/// __linked1.next();  // each module's body, in evaluation order
 /// ```
-/// The returned [`BundleLayout`] attributes an eval failure to its module.
+/// Every module's export object exists first, so the content scans that walk
+/// `__modules` meet modules in the order they ran. Each module then runs to
+/// its `yield` to link, defining its export getters; then each finishes in
+/// evaluation order. The returned [`BundleLayout`] attributes an eval failure
+/// to its module.
 fn build_bundle(
     specifier_map: &HashMap<(String, String), String>,
     source_map: &HashMap<String, String>,
@@ -1165,12 +862,9 @@ fn build_bundle(
     let mut marker_offsets: Vec<(usize, String)> = Vec::new();
 
     bundle.push_str(CONSOLE_SHIM);
-    bundle.push_str("const __modules = {};\nconst __require = (n) => __modules[n];\n");
-    // A module namespace lists its names in code-unit order, as Node lists
-    // them; plain assignment leaves them in the order the module ran.
-    bundle.push_str(
-        "const __namespace = (e) => { const ns = {}; for (const k of Object.keys(e).sort()) ns[k] = e[k]; return ns; };\n\n",
-    );
+    bundle.push_str("const __modules = {};\n");
+    bundle.push_str(linked::PRELUDE);
+    bundle.push('\n');
 
     // Stub modules first, emitted in sorted key order (and with sorted export
     // names) so the same inputs always produce the same bytes.
@@ -1195,115 +889,6 @@ fn build_bundle(
         bundle.push_str("})();\n\n");
     }
 
-    let order = match topological_sort(specifier_map, source_map, entry_path) {
-        Ok(order) => order,
-        Err(_) => {
-            let prelude = Prelude { bundle, marker_offsets, stub_specifiers };
-            return build_linked_bundle(specifier_map, source_map, stub_exports, type_exports, entry_path, prelude);
-        }
-    };
-    // Every module's names come from the shared module table, as a cyclic
-    // graph's do: an import or re-export that links to nothing fails here,
-    // before any module runs.
-    let mut modules: HashMap<String, linked::LinkedModule> = HashMap::with_capacity(order.len());
-    for path in &order {
-        let module = linked::rewrite_module_for_linking(&source_map[path], path, specifier_map)?;
-        modules.insert(path.clone(), module);
-    }
-    let linker = linked::Linker::new(&modules, stub_exports, type_exports);
-    let mut paths: Vec<&String> = order.iter().collect();
-    paths.sort();
-    for path in paths {
-        linker.check_links(path)?;
-    }
-    let mut module_spans = Vec::with_capacity(order.len());
-
-    for module_path in &order {
-        push_module_iife(
-            &mut bundle,
-            &mut marker_offsets,
-            &mut module_spans,
-            module_path,
-            source_map,
-            specifier_map,
-            &linker.forwarded(module_path),
-        )?;
-    }
-
-    let module_starts = offsets_to_line_numbers(&bundle, marker_offsets);
-    Ok((
-        bundle,
-        BundleLayout {
-            module_starts,
-            stub_specifiers,
-            module_spans,
-        },
-    ))
-}
-
-/// Appends `module_path` as an IIFE that evaluates it at once and registers
-/// its exports.
-fn push_module_iife(
-    bundle: &mut String,
-    marker_offsets: &mut Vec<(usize, String)>,
-    module_spans: &mut Vec<(usize, usize, String)>,
-    module_path: &String,
-    source_map: &HashMap<String, String>,
-    specifier_map: &HashMap<(String, String), String>,
-    forwarded: &[(String, String)],
-) -> Result<(), String> {
-    let source = source_map
-        .get(module_path)
-        .ok_or_else(|| format!("module '{}' not found in source_map", module_path))?;
-
-    let mut rewritten = rewrite_module_for_bundle(source, module_path, specifier_map)?;
-    // What the module re-exports, or `export *` brings in, reads the binding
-    // it resolves to, once the modules it imports have run.
-    if !forwarded.is_empty() {
-        rewritten.push('\n');
-        for (name, read) in forwarded {
-            let _ = writeln!(rewritten, "__exports['{}'] = {};", js_quoted(name), read);
-        }
-    }
-
-    marker_offsets.push((bundle.len(), module_path.clone()));
-    let _ = writeln!(bundle, "{}{}", MODULE_MARKER_PREFIX, module_path);
-    bundle.push_str("(function(){ const __exports = {};\n");
-    let start = bundle.len();
-    bundle.push_str(&rewritten);
-    module_spans.push((start, bundle.len(), module_path.clone()));
-    bundle.push('\n');
-    let _ = writeln!(
-        bundle,
-        "__modules['{}'] = __namespace(__exports);",
-        js_quoted(module_path)
-    );
-    bundle.push_str("})();\n\n");
-    Ok(())
-}
-
-/// What a bundle holds before its modules: the shims and stub modules, where
-/// each stub starts, and the stubs' specifiers.
-struct Prelude {
-    bundle: String,
-    marker_offsets: Vec<(usize, String)>,
-    stub_specifiers: Vec<String>,
-}
-
-/// The bundle of a graph with an import cycle (see `linked`), after the
-/// stub modules `bundle` already holds. Every module's export object exists
-/// first; each module is then a generator that runs to its `yield` to link,
-/// defining its namespace imports and its export getters; then each finishes
-/// in evaluation order.
-fn build_linked_bundle(
-    specifier_map: &HashMap<(String, String), String>,
-    source_map: &HashMap<String, String>,
-    stub_exports: &HashMap<String, HashSet<String>>,
-    type_exports: &HashMap<String, HashSet<String>>,
-    entry_path: &str,
-    prelude: Prelude,
-) -> Result<(String, BundleLayout), String> {
-    let Prelude { mut bundle, mut marker_offsets, stub_specifiers } = prelude;
     let order = linked::evaluation_order(specifier_map, source_map, entry_path);
     let mut paths: Vec<&String> = source_map.keys().collect();
     paths.sort();
@@ -1312,6 +897,8 @@ fn build_linked_bundle(
         let module = linked::rewrite_module_for_linking(&source_map[*path], path, specifier_map)?;
         modules.insert((*path).clone(), module);
     }
+    // An import or re-export that links to nothing fails here, before any
+    // module runs.
     let linker = linked::Linker::new(&modules, stub_exports, type_exports);
     for path in &paths {
         linker.check_links(path)?;
@@ -1320,11 +907,13 @@ fn build_linked_bundle(
         paths.iter().enumerate().map(|(index, path)| (path.as_str(), format!("__linked{index}"))).collect();
     let generator = |module: &str| &generators[module];
 
-    for path in &paths {
+    // The global-style and theme scans walk `__modules` in this order.
+    for path in &order {
         let _ = writeln!(bundle, "__modules['{}'] = {{}};", js_quoted(path));
     }
     bundle.push('\n');
     let mut module_spans = Vec::with_capacity(paths.len());
+    let mut import_refs = Vec::new();
     for path in &paths {
         let module = &modules[*path];
         marker_offsets.push((bundle.len(), (*path).clone()));
@@ -1348,6 +937,7 @@ fn build_linked_bundle(
         let start = bundle.len();
         bundle.push_str(&module.body);
         module_spans.push((start, bundle.len(), (*path).clone()));
+        import_refs.extend(module.import_refs.iter().map(|(from, to, local)| (start + from, start + to, local.clone())));
         bundle.push_str("\n})();\n");
         let _ = writeln!(bundle, "{}.next();\n", generator(path));
     }
@@ -1362,6 +952,7 @@ fn build_linked_bundle(
             module_starts,
             stub_specifiers,
             module_spans,
+            import_refs,
         },
     ))
 }
@@ -1760,8 +1351,10 @@ struct AuthoredPosition {
 
 /// Why an authored callable's bindings cannot be admitted.
 enum BindingFailure {
-    /// A reference inside the callable resolves to a binding outside it.
-    Captured(String),
+    /// A reference inside the callable resolves to a binding outside it: the
+    /// first, and each read of an import through the bundle's module cell
+    /// when every read of the cell is one.
+    Captured { reason: String, import_reads: Vec<String> },
     /// The callable's function or a host read could not be established.
     Inconclusive(String),
 }
@@ -1800,7 +1393,12 @@ fn transform_provenance<'js>(
             id.clone(),
             match evidence {
                 Ok(globals) => serde_json::json!({ "hostGlobals": globals }),
-                Err(BindingFailure::Captured(reason)) => serde_json::json!({ "rejection": reason }),
+                Err(BindingFailure::Captured { reason, import_reads }) if import_reads.is_empty() => {
+                    serde_json::json!({ "rejection": reason })
+                }
+                Err(BindingFailure::Captured { reason, import_reads }) => {
+                    serde_json::json!({ "rejection": reason, "importReads": import_reads })
+                }
                 Err(BindingFailure::Inconclusive(reason)) if reads_shared_host_name(source) => {
                     serde_json::json!({ "rejection": reason })
                 }
@@ -1843,7 +1441,9 @@ fn authored_positions<'js>(
 /// The shared host names the authored function reads as the host's, or why
 /// its bindings cannot be admitted: the position must start exactly that
 /// function of a bundled module and its text must be the configured source;
-/// a reference resolving to a binding outside the function is captured; and
+/// a reference resolving to a binding outside the function, or reading an
+/// imported binding, is captured, and each import read is named when the
+/// module cell is read for nothing else; and
 /// every `btoa` or `atob` it reads must be unbound in a module without
 /// direct eval.
 fn host_binding_evidence(
@@ -1891,6 +1491,11 @@ fn host_binding_evidence(
     let direct_eval = scoping.root_unresolved_references().contains_key("eval");
     let mut globals = Vec::new();
     let mut unproven = None;
+    let mut captured: Option<String> = None;
+    let mut import_reads: Vec<String> = Vec::new();
+    // Whether the callable reads the bundle's module cell other than to read
+    // an import: then the cell's reads are not all imports.
+    let mut cell_read_otherwise = false;
     // Nodes come in source order, so the first captured name is reported.
     for node in semantic.nodes().iter() {
         let AstKind::IdentifierReference(reference) = node.kind() else { continue };
@@ -1902,9 +1507,22 @@ fn host_binding_evidence(
         match symbol {
             Some(symbol) if span.contains_inclusive(scoping.symbol_span(symbol)) => {}
             Some(_) => {
-                return Err(BindingFailure::Captured(format!(
-                    "reads '{name}' declared in {module} outside the callback"
-                )));
+                cell_read_otherwise |= name == "__modules";
+                captured.get_or_insert_with(|| format!("reads '{name}' declared in {module} outside the callback"));
+            }
+            // The bundle refers to an imported binding through its module's
+            // cell, within the range the rewrite recorded for that read.
+            None if name == "__modules" => {
+                let at = start + reference.span.start as usize;
+                let imported = layout.import_refs.iter().find(|(from, to, _)| (*from..*to).contains(&at));
+                let reason =
+                    format!("reads '{}' declared in {module} outside the callback", imported.map_or(name, |(_, _, local)| local.as_str()));
+                match imported {
+                    Some(_) if !import_reads.contains(&reason) => import_reads.push(reason.clone()),
+                    Some(_) => {}
+                    None => cell_read_otherwise = true,
+                }
+                captured.get_or_insert(reason);
             }
             None => {
                 let Some(host) = SHARED_HOST_NAMES.iter().find(|host| name == **host) else { continue };
@@ -1915,6 +1533,12 @@ fn host_binding_evidence(
                 }
             }
         }
+    }
+    if let Some(reason) = captured {
+        if cell_read_otherwise {
+            import_reads.clear();
+        }
+        return Err(BindingFailure::Captured { reason, import_reads });
     }
     if let Some(reason) = unproven {
         return Err(inconclusive(reason));
@@ -1963,8 +1587,9 @@ fn extract_vocabulary_record<'js>(
   // Registration copies a block's styles, so its declaring module is found by
   // content: the module exporting a block with the same styles, the export
   // named like the registration breaking a tie between distinct blocks. A
-  // module registers after the modules it imports, so the first exporter of
-  // a block declares it.
+  // module registers after the modules it imports, and `__modules` holds
+  // modules in evaluation order (build_bundle registers them so), so the
+  // first exporter of a block declares it.
   const exported = [];
   for (const path in __modules) {
     const ns = __modules[path];
@@ -2180,66 +1805,6 @@ export const ds = tokens;
     }
 
     #[test]
-    fn import_rewrite_preserves_existing_output_matrix() {
-        let stub_map = HashMap::new();
-
-        assert_eq!(
-            rewrite_module_for_bundle("import 'react';", "/entry.ts", &stub_map).unwrap(),
-            "__require('__stub__/react');"
-        );
-        assert_eq!(
-            rewrite_module_for_bundle("import {} from 'react';", "/entry.ts", &stub_map,).unwrap(),
-            "__require('__stub__/react');"
-        );
-        assert_eq!(
-            rewrite_module_for_bundle(
-                "import { same, source as local } from 'react-dom';",
-                "/entry.ts",
-                &stub_map,
-            )
-            .unwrap(),
-            "const { same, source: local } = __require('__stub__/react-dom');"
-        );
-        assert_eq!(
-            rewrite_module_for_bundle(
-                "import Default, { same, source as local } from 'react';",
-                "/entry.ts",
-                &stub_map,
-            )
-            .unwrap(),
-            "const Default = __require('__stub__/react').default;\nconst { same, source: local } = __require('__stub__/react');"
-        );
-        assert_eq!(
-            rewrite_module_for_bundle(
-                "import * as namespace from 'react/jsx-runtime';",
-                "/entry.ts",
-                &stub_map,
-            )
-            .unwrap(),
-            "const namespace = __require('__stub__/react/jsx-runtime');"
-        );
-        assert_eq!(
-            rewrite_module_for_bundle(
-                "import Default, * as namespace from 'react';",
-                "/entry.ts",
-                &stub_map,
-            )
-            .unwrap(),
-            "const namespace = __require('__stub__/react');"
-        );
-
-        let resolved_map = HashMap::from([(
-            ("/entry.ts".to_string(), "pkg".to_string()),
-            "/canonical/pkg.ts".to_string(),
-        )]);
-        assert_eq!(
-            rewrite_module_for_bundle("import { same } from 'pkg';", "/entry.ts", &resolved_map,)
-                .unwrap(),
-            "const { same } = __require('/canonical/pkg.ts');"
-        );
-    }
-
-    #[test]
     fn runtime_stub_list_matches_exactly_not_by_prefix() {
         for specifier in [
             "react",
@@ -2291,17 +1856,15 @@ export const ds = tokens;
             HashMap::from([(stub_key("react"), HashSet::from(["space".to_string()]))]);
         let source_map = single_module(
             "/entry.js",
-            "import { space as dsSpace } from 'react';\nconst applied = dsSpace();\n",
+            "import { space as dsSpace } from 'react';\nexport const applied = dsSpace();\n",
         );
         let (bundle, _) =
             build_bundle(&HashMap::new(), &source_map, &stub_exports, &HashMap::new(), "/entry.js").unwrap();
 
-        assert!(bundle.contains("__exports['space'] = noop;"), "{bundle}");
-        assert!(
-            bundle.contains("const { space: dsSpace } = __require('__stub__/react')"),
-            "{bundle}"
+        let checked = format!(
+            "{bundle}\nif (typeof __modules['/entry.js'].applied !== 'object') throw new Error('dsSpace is not the noop');\n"
         );
-        eval_bundle(&bundle).expect("aliased stub import must bind a callable noop");
+        eval_bundle(&checked).expect("aliased stub import must bind a callable noop");
     }
 
     #[test]
@@ -2327,8 +1890,10 @@ export const ds = tokens;
         let (bundle, _) =
             build_bundle(&HashMap::new(), &source_map, &stub_exports, &HashMap::new(), "/entry.js").unwrap();
 
-        assert!(bundle.contains("__exports['dsSpace'] = __modules['__stub__/react']['space'];"), "{bundle}");
-        eval_bundle(&bundle).expect("re-export from a stub must not read a property of undefined");
+        let checked = format!(
+            "{bundle}\nif (__modules['/entry.js'].dsSpace !== __modules['__stub__/react'].space) throw new Error('dsSpace is not the stub\\'s space');\n"
+        );
+        eval_bundle(&checked).expect("re-export from a stub must not read a property of undefined");
     }
 
     #[test]
@@ -2337,9 +1902,11 @@ export const ds = tokens;
         let (bundle, _) =
             build_bundle(&HashMap::new(), &source_map, &HashMap::new(), &HashMap::new(), "/entry.js").unwrap();
 
-        // An unregistered module brings in no name, so nothing is assigned.
-        assert!(!bundle.contains("__exports['"), "{bundle}");
-        eval_bundle(&bundle).expect("`export *` from an unregistered module must not throw");
+        // An unregistered module brings in no name.
+        let checked = format!(
+            "{bundle}\nif (Object.keys(__modules['/entry.js']).length !== 0) throw new Error('a name was brought in');\n"
+        );
+        eval_bundle(&checked).expect("`export *` from an unregistered module must not throw");
     }
 
     #[test]
@@ -2348,17 +1915,11 @@ export const ds = tokens;
             ("/entry.ts".to_string(), "pkg".to_string()),
             "/canonical/pkg.ts".to_string(),
         )]);
-        // The module table binds the name; the rewrite only drops the syntax.
-        assert_eq!(
-            rewrite_module_for_bundle("export * as ns from 'pkg';", "/entry.ts", &resolved_map).unwrap(),
-            ""
-        );
         let source_map = HashMap::from([
             ("/entry.ts".to_string(), "export * as ns from 'pkg';\n".to_string()),
             ("/canonical/pkg.ts".to_string(), "export const v = 7;\n".to_string()),
         ]);
         let (bundle, _) = build_bundle(&resolved_map, &source_map, &HashMap::new(), &HashMap::new(), "/entry.ts").unwrap();
-        assert!(bundle.contains("__exports['ns'] = __modules['/canonical/pkg.ts'];"), "{bundle}");
         let checked = format!("{bundle}\nif (__modules['/entry.ts'].ns.v !== 7) throw new Error('ns is not pkg');\n");
         eval_bundle(&checked).expect("`export * as ns` binds pkg's namespace");
 
@@ -2367,12 +1928,10 @@ export const ds = tokens;
         let source_map = single_module("/entry.js", "export * as R from 'react';\n");
         let (bundle, _) =
             build_bundle(&HashMap::new(), &source_map, &stub_exports, &HashMap::new(), "/entry.js").unwrap();
-        assert!(bundle.contains("__exports['R'] = __modules['__stub__/react'];"), "{bundle}");
-        assert!(
-            !bundle.contains("Object.assign(__exports, __require('__stub__/react')"),
-            "namespace form must not spread into __exports: {bundle}"
+        let checked = format!(
+            "{bundle}\nif (__modules['/entry.js'].R !== __modules['__stub__/react']) throw new Error('R is not the stub');\n"
         );
-        eval_bundle(&bundle).expect("`export * as ns` from a stub must bind an object");
+        eval_bundle(&checked).expect("`export * as ns` from a stub must bind an object");
     }
 
     #[test]
@@ -2651,16 +2210,21 @@ export const ds = tokens;
         write_fixture(&dir.join("factory.js"), "export const made = ((btoa) => (v) => btoa(String(v)))((s) => s);\n");
         write_fixture(&dir.join("direct.js"), "eval('');\nexport const viaEval = (v) => btoa(String(v));\n");
         write_fixture(
+            &dir.join("authored.js"),
+            "export const authored = (() => { const bias = (v) => v; const __modules = (v) => v; return (v) => bias(v) + __modules(v); })();\n",
+        );
+        write_fixture(
             &dir.join("ds.js"),
             &format!(
                 "import {{ local, mathLocal, setImported }} from './local.js';\n\
                  import {{ global, decl, own, mathOwn, mathGlobal }} from './global.js';\n\
                  import {{ made }} from './factory.js';\n\
                  import {{ viaEval }} from './direct.js';\n\
+                 import {{ authored }} from './authored.js';\n\
                  const link = Symbol.for('animus.transform.authored');\n\
                  const forward = (fn) => {{ const w = (v) => fn(v); Object.defineProperty(w, link, {{ value: fn }}); return w; }};\n\
                  const built = new Function('v', 'return btoa(String(v))');\n\
-                 const linked = {{ local, global, decl, own, made, viaEval, built, mathLocal, setImported, mathOwn, mathGlobal }};\n\
+                 const linked = {{ local, global, decl, own, made, viaEval, built, mathLocal, setImported, mathOwn, mathGlobal, authored }};\n\
                  const transforms = Object.fromEntries(Object.entries(linked).map(([id, fn]) => [id, forward(fn)]));\n\
                  transforms.unlinked = (v) => btoa(String(v));\n\
                  transforms.renamed = forward(global);\n\
@@ -2696,6 +2260,11 @@ export const ds = tokens;
         // source reading neither host name keeps its text admission.
         assert!(reason("mathLocal").contains("reads 'Math' declared in"), "{}", reason("mathLocal"));
         assert!(reason("setImported").contains("reads 'Set' declared in"), "{}", reason("setImported"));
+        // An import read through the bundle's module cell is named as one; a
+        // `__modules` the module declares itself is no import.
+        assert_eq!(provenance["setImported"]["importReads"], serde_json::json!([reason("setImported")]));
+        assert!(reason("authored").contains("reads 'bias' declared in"), "{}", reason("authored"));
+        assert!(provenance["authored"].get("importReads").is_none(), "{}", provenance["authored"]);
         assert_eq!(provenance["mathOwn"], serde_json::json!({ "hostGlobals": [] }));
         assert_eq!(provenance["mathGlobal"], serde_json::json!({ "hostGlobals": [] }));
         assert_eq!(provenance["mathUnlinked"], serde_json::json!({ "hostGlobals": [] }));
@@ -2785,10 +2354,10 @@ export const ds = tokens;
     #[test]
     fn a_systems_explicit_reexport_is_never_overridden_by_a_star() {
         // Contract: an explicit export wins over a name `export *` brings in,
-        // whatever their order, as Node links them, on the acyclic path as on
-        // the cyclic one. A TypeScript type re-exported or imported without
-        // `type` links to nothing and fails nothing, as a bundler without
-        // isolated modules accepts it, and a module exporting only types loads.
+        // whatever their order, as Node links them. A TypeScript type
+        // re-exported or imported without `type` links to nothing and fails
+        // nothing, as a bundler without isolated modules accepts it, and a
+        // module exporting only types loads.
         const PROTOCOL: &str = "export const ds = { toConfig: () => ({ propConfig: JSON.stringify(data), groupRegistry: '{}' }), \
              getVocabularyRecord: () => ({ version: 1, keyframes: [], globalStyles: [], collisions: [] }) };\n\
              export const theme = { serialize: () => ({ scalesJson: '{}', variableMapJson: '{}', variableCss: '', contextualVarsJson: '{}' }) };\n";
@@ -2872,24 +2441,26 @@ export const ds = tokens;
         );
     }
 
-    /// Contract: a system whose module graph has an import cycle loads as
-    /// Node loads it. Each module evaluates once, after the modules it imports
-    /// outside its cycle. A hoisted function, an anonymous default function,
+    /// Contract: a system's module graph, with or without an import cycle,
+    /// loads as Node loads it. Each module evaluates once, after the modules
+    /// it imports outside its cycle. A hoisted function, an anonymous default function,
     /// a namespace import and a name `export *` brings in are all readable
     /// before their module evaluates, and every import, including one from
     /// outside the cycle, reads the exporting binding live, `export *`
     /// included when star exports form a cycle. An import of a name the
     /// module does not export, or a re-export that resolves to no binding or
-    /// ambiguously, fails the load, naming the module.
+    /// ambiguously, fails the load, naming the module. A write to an import
+    /// throws at the write, and the loader's default binding takes no name
+    /// the module uses.
     #[test]
-    fn cyclic_module_graph_evaluates_with_node_semantics() {
+    fn module_graphs_evaluate_with_node_semantics() {
         const PROTOCOL: &str = "export const ds = { toConfig: () => ({ propConfig: JSON.stringify(data), groupRegistry: '{}' }), \
              getVocabularyRecord: () => ({ version: 1, keyframes: [], globalStyles: [], collisions: [] }) };\n\
              export const theme = { serialize: () => ({ scalesJson: '{}', variableMapJson: '{}', variableCss: '', contextualVarsJson: '{}' }) };\n";
         /// A case's name, its modules, and the loaded propConfig or a part
         /// of the load's error.
         type Case<'a> = (&'a str, &'a [(&'a str, &'a str)], Result<&'a str, &'a str>);
-        let cases: [Case; 13] = [
+        let cases: [Case; 16] = [
             (
                 "hoisted-live",
                 &[
@@ -2982,6 +2553,47 @@ export const ds = tokens;
                 Ok(r#"{"same":true}"#),
             ),
             (
+                // A write to an import reads and evaluates what it would
+                // write, then throws at the write.
+                "import-writes-throw-at-the-write",
+                &[
+                    ("m", "export const log = [];\nexport let v = 0;\nexport let n = { valueOf() { log.push('valueOf'); return 1; } };\n"),
+                    ("entry", "import { v, n, log } from './m.js';\n\
+                        const attempt = (write) => { try { write(); } catch (e) { log.push(e.constructor.name); } };\n\
+                        attempt(() => { v = (log.push('rhs'), 2); });\n\
+                        attempt(() => { v += (log.push('compound'), 2); });\n\
+                        attempt(() => { n++; });\n\
+                        attempt(() => { ({ v } = { get v() { log.push('get'); return 3; } }); });\n\
+                        attempt(() => { [v] = [(log.push('element'), 4)]; });\n\
+                        const data = { log, v };\n"),
+                ],
+                Ok(r#"{"log":["rhs","TypeError","compound","TypeError","valueOf","TypeError","get","TypeError","element","TypeError"],"v":0}"#),
+            ),
+            (
+                "import-logical-assignment-short-circuits",
+                &[
+                    ("m", "export let one = 1;\nexport let zero = 0;\n"),
+                    ("entry", "import { one, zero } from './m.js';\n\
+                        const seen = [];\n\
+                        const rhs = (x) => { seen.push(x); return x; };\n\
+                        one ||= rhs('or');\none ??= rhs('nullish');\nzero &&= rhs('and');\n\
+                        let thrown = null;\n\
+                        try { zero ||= rhs('written'); } catch (e) { thrown = e.constructor.name; }\n\
+                        const data = { seen, thrown, one, zero };\n"),
+                ],
+                Ok(r#"{"seen":["written"],"thrown":"TypeError","one":1,"zero":0}"#),
+            ),
+            (
+                // The loader names a default export's binding itself, never
+                // taking a name the module declares.
+                "authored-default-name",
+                &[
+                    ("b", "const __default = 4;\nexport default function () { return __default; }\n"),
+                    ("entry", "import f from './b.js';\nconst __default = 7;\nexport default 3;\nconst data = { ok: __default, f: f(), name: f.name };\n"),
+                ],
+                Ok(r#"{"ok":7,"f":4,"name":"default"}"#),
+            ),
+            (
                 "missing-import",
                 &[
                     ("entry", "import { nope } from './b.js';\nconst data = { nope };\n"),
@@ -3011,7 +2623,7 @@ export const ds = tokens;
             ),
         ];
         for (name, files, expected) in cases {
-            let dir = scratch_dir(&format!("cyclic-{name}"));
+            let dir = scratch_dir(&format!("node-{name}"));
             for (file, source) in files {
                 let source = if *file == "entry" { format!("{source}{PROTOCOL}") } else { source.to_string() };
                 write_fixture(&dir.join(format!("{file}.js")), &source);
@@ -3565,6 +3177,59 @@ export const ds = tokens;
             blocks.contains("animus-asset:@acme/tokens/fonts/inter.woff2"),
             "placeholder must survive serialization verbatim: {blocks}"
         );
+    }
+
+    #[test]
+    fn a_systems_modules_evaluate_in_esm_order_and_global_styles_register_in_that_order() {
+        // Each module registers a global style as it runs. The record's order
+        // is ECMA's evaluation order, as Node and Bun run it: `c` (through
+        // `a`'s star), `a`, then `b`'s requests `d` and `x`, `b`, the entry.
+        // So the last registration for a selector wins as it would in Node.
+        // A block that `c` exports and `a` re-exports through its star is
+        // declared by `c`, the first module in that order to export it; path
+        // order would name `a.ts`.
+        let dir = scratch_dir("esm-order");
+        let register = |name: &str| {
+            format!("import {{ register }} from './registry';\nregister('{name}', {{ body: {{ color: '{name}' }} }});\n")
+        };
+        write_fixture(
+            &dir.join("registry.ts"),
+            "export const registered = [];\n\
+             export const register = (name, styles) => { registered.push({ name, styles }); };\n",
+        );
+        write_fixture(
+            &dir.join("c.ts"),
+            &format!(
+                "{}export const declared = {{ __brand: 'GlobalStyleBlock', styles: {{ main: {{ margin: 0 }} }} }};\n\
+                 register('declared', declared.styles);\n",
+                register("c")
+            ),
+        );
+        write_fixture(&dir.join("a.ts"), &format!("{}export * from './c';\n", register("a")));
+        write_fixture(&dir.join("d.ts"), &format!("{}export const y = 1;\n", register("d")));
+        write_fixture(&dir.join("x.ts"), &register("x"));
+        write_fixture(&dir.join("b.ts"), &format!("export {{ y }} from './d';\nimport './x';\n{}", register("b")));
+        let entry = dir.join("entry.ts");
+        write_fixture(
+            &entry,
+            &format!(
+                "import './a';\nimport './b';\nimport {{ registered }} from './registry';\n{}{}",
+                register("entry"),
+                sealed_system_fixture(
+                    "{ version: 1, keyframes: [], globalStyles: registered, collisions: [], legacyVerbs: [] }"
+                )
+            ),
+        );
+
+        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &[]);
+        let _ = fs::remove_dir_all(&dir);
+
+        let config = result.expect("ordered system loads");
+        let blocks: serde_json::Value =
+            serde_json::from_str(&config.global_style_blocks.expect("registered globals")).unwrap();
+        let order: Vec<&str> = blocks.as_object().unwrap().keys().map(String::as_str).collect();
+        assert_eq!(order, ["c", "declared", "a", "d", "x", "b", "entry"]);
+        assert_eq!(blocks["declared"]["source"], "c.ts", "{blocks}");
     }
 
     #[test]

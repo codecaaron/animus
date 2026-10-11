@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use crate::identity::LocalId;
 use crate::link::ProjectLinks;
 use crate::{analyze_css, assemble, ast_store, cross_file, emit, facts};
-use animus_system_loader::module_table::ModuleIndex;
+use animus_system_loader::module_table::{ExportLookup, ModuleIndex, Terminal};
 
 const SYSTEM_PROPS_MODULE_ID: &str = "virtual:animus/system-props";
 
@@ -330,6 +330,55 @@ fn import_binding<T>(
     links.declared(&target, imported)
 }
 
+/// The local bindings among a module table answer's terminals.
+fn local_bindings(terminals: Vec<Terminal<LocalId>>) -> impl Iterator<Item = (ModuleIndex, LocalId)> {
+    terminals.into_iter().filter_map(|terminal| match terminal {
+        Terminal::Local { module, binding } => Some((module, binding)),
+        _ => None,
+    })
+}
+
+/// Every analysed binding a route the analysis cannot open may reach: each
+/// one some module's export of the name it was asked for reaches, or, asked
+/// for any name, each one any export reaches.
+fn exposed_bindings(links: &ProjectLinks, name: Option<&str>) -> Vec<(ModuleIndex, LocalId)> {
+    let reached = |module: ModuleIndex, name: &str| {
+        let terminals = match links.table.resolve_export(module, name) {
+            ExportLookup::Resolved(terminal) => vec![terminal],
+            ExportLookup::Incomplete { known, .. } => known,
+            ExportLookup::Absent | ExportLookup::Ambiguous(_) => Vec::new(),
+        };
+        local_bindings(terminals).collect::<Vec<_>>()
+    };
+    (0..links.paths.len())
+        .flat_map(|module| match name {
+            Some(name) => reached(module, name),
+            None => {
+                let names = links.table.exported_names(module).names;
+                names.iter().flat_map(|name| reached(module, name)).collect()
+            }
+        })
+        .collect()
+}
+
+/// Every binding a module table answer may name: the one it resolves to
+/// or, when an open route leaves it incomplete, each binding it already
+/// knows and every binding the open route may reach.
+fn possible_bindings(links: &ProjectLinks, lookup: ExportLookup<LocalId>) -> Vec<(ModuleIndex, LocalId)> {
+    let (terminals, openings) = match lookup {
+        ExportLookup::Resolved(terminal) => (vec![terminal], Vec::new()),
+        ExportLookup::Incomplete { known, openings } => (known, openings),
+        ExportLookup::Absent | ExportLookup::Ambiguous(_) => return Vec::new(),
+    };
+    let mut found: Vec<(ModuleIndex, LocalId)> = local_bindings(terminals).collect();
+    for opening in openings {
+        found.extend(exposed_bindings(links, opening.name.as_deref()));
+    }
+    found.sort();
+    found.dedup();
+    found
+}
+
 /// The modules a file loads at runtime by a literal specifier:
 /// `import('./x')` and `require('./x')`.
 fn literal_module_loads(program: &oxc::ast::ast::Program<'_>) -> Vec<String> {
@@ -391,6 +440,22 @@ fn unstable_style_statics(
         let path = &links.paths[module];
         (path.clone(), lowered[path].bindings.binding(binding).name.clone())
     };
+    // The declarations a module's binding may name: itself, or each binding
+    // what it imports may be.
+    let possible = |file: &str, name: &str| -> Vec<(String, String)> {
+        let imported = links.module(file).and_then(|module| {
+            let local = lowered[file].bindings.module_binding(name)?;
+            let import = links.table.record(module).imports.iter().find(|import| import.local == local)?;
+            Some(links.table.resolve_request(module, import.request, &import.name))
+        });
+        match imported {
+            Some(lookup) => possible_bindings(links, lookup).into_iter().map(declaration).collect(),
+            None => vec![(file.to_string(), name.to_string())],
+        }
+    };
+    let exported = |target: &str, name: &str| -> Vec<(ModuleIndex, LocalId)> {
+        links.module(target).map(|module| possible_bindings(links, links.table.resolve_export(module, name))).unwrap_or_default()
+    };
     // The declaration a module's binding names: itself, or what it imports.
     let declared = |file: &str, name: &str| -> Option<(String, String)> {
         let (imports, _) = modules.get(file)?;
@@ -401,15 +466,19 @@ fn unstable_style_statics(
             None => Some((file.to_string(), name.to_string())),
         }
     };
+    // Every binding a module's namespace may hold: each export's, and, past
+    // a star the analysis cannot open, every binding it may reach.
     let every_export = |target: &str| -> Vec<(String, String)> {
         let Some(module) = links.module(target) else { return Vec::new() };
-        links
-            .table
-            .exported_names(module)
-            .names
-            .iter()
-            .filter_map(|name| links.declared(target, name).map(declaration))
-            .collect()
+        let names = links.table.exported_names(module);
+        let mut found: Vec<(ModuleIndex, LocalId)> =
+            names.names.iter().flat_map(|name| exported(target, name)).collect();
+        if !names.complete() {
+            found.extend(exposed_bindings(links, None));
+        }
+        found.sort();
+        found.dedup();
+        found.into_iter().map(declaration).collect()
     };
     // Whether the function `function` of `file` only reads the object passed
     // as its parameter `index`, through the read-only callees it passes the
@@ -466,14 +535,13 @@ fn unstable_style_statics(
                     .namespace_imports
                     .get(namespace)
                     .and_then(|spec| analyze_css::resolve_import_source(file, spec, files, inputs))
-                    .and_then(|target| links.declared(&target, member).map(declaration))
-                    .into_iter()
-                    .collect(),
+                    .map(|target| exported(&target, member).into_iter().map(declaration).collect())
+                    .unwrap_or_default(),
                 None => match module.namespace_imports.get(name) {
                     Some(spec) => analyze_css::resolve_import_source(file, spec, files, inputs)
                         .map(|target| every_export(&target))
                         .unwrap_or_default(),
-                    None => declared(file, name).into_iter().collect(),
+                    None => possible(file, name),
                 },
             };
             targets.into_iter().filter(|target| mutable(target)).collect()
@@ -481,13 +549,14 @@ fn unstable_style_statics(
         // A function hands a nested object on to whatever it hands
         // members to, so only an object of primitives passes as a read.
         for handoff in &module.facts.handoffs {
-            let Some(target) = declared(file, &handoff.binding).filter(|target| mutable(target)) else { continue };
-            let read = !nested(&target)
-                && declared(file, &handoff.callee).is_some_and(|(callee_file, callee_name)| {
-                    reads_only(&callee_file, &callee_name, handoff.index, 0, &declared, readings_of)
-                });
-            if !read {
-                unstable.entry(target).or_insert_with(|| said(file, &handoff.binding, &handoff.used));
+            for target in possible(file, &handoff.binding).into_iter().filter(|target| mutable(target)) {
+                let read = !nested(&target)
+                    && declared(file, &handoff.callee).is_some_and(|(callee_file, callee_name)| {
+                        reads_only(&callee_file, &callee_name, handoff.index, 0, &declared, readings_of)
+                    });
+                if !read {
+                    unstable.entry(target).or_insert_with(|| said(file, &handoff.binding, &handoff.used));
+                }
             }
         }
         for (name, used) in &module.facts.uses {
@@ -526,15 +595,14 @@ fn unstable_style_statics(
                 .map(|(stored, container)| (stored, container, "is stored in"))
                 .chain(module.facts.derives.iter().map(|(derived, read)| (derived, read, "reads")));
             for (dependent, on, how) in edges {
-                let (Some(dependent_at), Some(on_at)) = (declared(file, dependent), declared(file, on)) else {
+                let Some(reason) = possible(file, on).iter().find_map(|on_at| unstable.get(on_at)).cloned() else {
                     continue;
                 };
-                if unstable.contains_key(&dependent_at) {
-                    continue;
-                }
-                if let Some(reason) = unstable.get(&on_at).cloned() {
-                    unstable.insert(dependent_at, format!("{dependent} {how} {on}, and {reason}"));
-                    changed = true;
+                for dependent_at in possible(file, dependent) {
+                    if let std::collections::btree_map::Entry::Vacant(entry) = unstable.entry(dependent_at) {
+                        entry.insert(format!("{dependent} {how} {on}, and {reason}"));
+                        changed = true;
+                    }
                 }
             }
         }
@@ -822,36 +890,45 @@ impl ExtractEngine {
             let mut extra = rustc_hash::FxHashMap::default();
             let mut usage_extra = rustc_hash::FxHashMap::default();
             for imp in imports {
-                let Some((module, binding)) = import_binding(
-                    path,
-                    &imp.source,
-                    &imp.imported,
-                    &links,
-                    &statics_by_file,
-                    &self.opts.css_inputs,
-                ) else {
+                let Some(target) =
+                    analyze_css::resolve_import_source(path, &imp.source, &statics_by_file, &self.opts.css_inputs)
+                else {
                     continue;
                 };
-                let resolved_file = links.paths[module].clone();
-                let local = &lowered_by_file[&resolved_file].bindings.binding(binding).name;
-                // A relative `asset()` specifier means its own file's
-                // directory, which an importer cannot carry.
-                if let Some(val) = statics_by_file[&resolved_file]
-                    .get(local)
-                    .filter(|value| !crate::eval::carries_relative_asset(value))
-                {
-                    extra.insert(imp.local.clone(), val.clone());
+                let Some(module) = links.module(&target) else { continue };
+                let (lookup, spelled) = links.table.resolve_export_spelled(module, &imp.imported);
+                match lookup {
+                    ExportLookup::Resolved(Terminal::Local { module, binding }) => {
+                        let declaring = &links.paths[module];
+                        let local = &lowered_by_file[declaring].bindings.binding(binding).name;
+                        // A relative `asset()` specifier means its own file's
+                        // directory, which an importer cannot carry.
+                        if let Some(val) = statics_by_file[declaring]
+                            .get(local)
+                            .filter(|value| !crate::eval::carries_relative_asset(value))
+                        {
+                            extra.insert(imp.local.clone(), val.clone());
+                        }
+                        if let Some(val) = complete_statics_by_file[declaring].get(local) {
+                            usage_extra.insert(imp.local.clone(), val.clone());
+                        }
+                    }
+                    ExportLookup::Resolved(Terminal::Namespace(_)) => {}
+                    _ => continue,
                 }
-                if let Some(val) = complete_statics_by_file[&resolved_file].get(local) {
-                    usage_extra.insert(imp.local.clone(), val.clone());
-                }
-                // A registered collection, by a name its module exports it as.
-                let registered = links.exported_as(module, binding).find_map(|name| keyframes_registry.get(name));
-                if let Some(kf) = registered {
+                // A registered collection, by the name the import's route
+                // reaches it by; routes naming different registrations name
+                // none.
+                let mut registered = spelled.iter().filter_map(|(_, name)| keyframes_registry.get(name));
+                let first = registered.next();
+                if let Some(kf) = first.filter(|kf| registered.all(|other| other == *kf)) {
                     extra.insert(imp.local.clone(), kf.clone());
                     usage_extra.insert(imp.local.clone(), kf.clone());
-                } else if crate::analyze_css::is_external_file(&resolved_file, output_dirs) {
-                    compiled_declarations.insert((path.clone(), imp.local.clone()), resolved_file);
+                } else if let Some((at, _)) = spelled.first() {
+                    let declared_in = &links.paths[*at];
+                    if crate::analyze_css::is_external_file(declared_in, output_dirs) {
+                        compiled_declarations.insert((path.clone(), imp.local.clone()), declared_in.clone());
+                    }
                 }
             }
             for exp in exports {
@@ -1932,6 +2009,50 @@ export const App = () => <Box tone="red" />;
         assert!(skips.is_empty(), "{skips:?}");
     }
 
+    /// An import of a registered keyframes collection takes the registration
+    /// of the name its route reaches the collection by: never another alias
+    /// of the same binding registered as a different collection, and a
+    /// namespace exported as the collection too.
+    #[test]
+    fn an_imported_collection_takes_the_registration_its_route_names() {
+        let frames = r#"{"from":{"opacity":0},"to":{"opacity":1}}"#;
+        let registry = format!(
+            r#"{{"motion":{{"pulse":{{"name":"animus-kf-motion","frames":{frames}}}}},"alternate":{{"pulse":{{"name":"animus-kf-alternate","frames":{frames}}}}}}}"#
+        );
+        let consumer = "import { motion } from './motion';\nexport const C = ds.styles({ animationName: motion.pulse }).asElement('span');\nexport const App = () => <C />;\n";
+        let rows = [
+            (
+                "aliased binding",
+                serde_json::json!([
+                    { "path": "motion.ts", "source": "const original = createKeyframes({ pulse: { from: { opacity: 0 }, to: { opacity: 1 } } });\nexport { original as alternate, original as motion };\n" },
+                    { "path": "other.ts", "source": "export const alternate = createKeyframes({ pulse: { from: { opacity: 1 }, to: { opacity: 0 } } });\n" },
+                    { "path": "app.tsx", "source": consumer }
+                ]),
+            ),
+            (
+                "exported namespace",
+                serde_json::json!([
+                    { "path": "frames.ts", "source": "export const __brand = 'Keyframes';\nexport const __frames = { pulse: { from: { opacity: 0 }, to: { opacity: 1 } } };\nexport const pulse = 'pulse';\n" },
+                    { "path": "motion.ts", "source": "import * as ns from './frames';\nexport { ns as motion };\n" },
+                    { "path": "app.tsx", "source": consumer }
+                ]),
+            ),
+        ];
+        let mut wrong = Vec::new();
+        for (row, files) in rows {
+            let mut engine =
+                ExtractEngine::new(Some(EngineOptions { keyframes_json: Some(registry.clone()), ..Default::default() }))
+                    .unwrap();
+            let manifest: serde_json::Value =
+                serde_json::from_str(&engine.analyze(files.to_string()).unwrap()).unwrap();
+            let css = manifest["css"].as_str().unwrap();
+            if !css.contains("animation-name: animus-kf-motion") || !manifest["diagnostics"].as_array().unwrap().is_empty() {
+                wrong.push((row, css.to_string(), manifest["diagnostics"].to_string()));
+            }
+        }
+        assert!(wrong.is_empty(), "{wrong:#?}");
+    }
+
     #[test]
     fn imported_as_const_variant_map_matches_inline_manifest() {
         let source_binding = serde_json::json!([
@@ -2029,6 +2150,80 @@ export const App = () => <Box tone="red" />;
             ["chain dropped: stage 'styles' evaluation failed — styles eval failed: spread of all.ts hands on barrel.ts as the namespace all"],
             "{manifest}"
         );
+    }
+
+    /// A mutated object read through a spread is refused, never shipped
+    /// with its declared value, whatever route its mutator imports it by:
+    /// directly, through 31 or 32 re-export hops, through a star cycle, or
+    /// through a star the analysis cannot open (a missing module or a
+    /// package) or from a missing module itself, also when the reader takes
+    /// it through a closed star; and a
+    /// runtime load of a module with an open star unsettles it too.
+    #[test]
+    fn an_export_target_the_analysis_cannot_close_never_yields_stale_static_css() {
+        let file = |path: &str, source: &str| (path.to_string(), source.to_string());
+        let mutate = |from: &str| file("mutate.ts", &format!("import {{ pad }} from '{from}';\npad.padding = 9;\n"));
+        let hops = |n: usize| -> Vec<(String, String)> {
+            let mut files: Vec<(String, String)> = (0..n)
+                .map(|i| {
+                    let next = if i == n - 1 { "tokens".to_string() } else { format!("b{}", i + 1) };
+                    file(&format!("b{i}.ts"), &format!("export {{ pad }} from './{next}';\n"))
+                })
+                .collect();
+            files.push(mutate("./b0"));
+            files
+        };
+        let open = || file("open.ts", "export * from './tokens';\nexport * from 'some-package';\n");
+        let closed = || file("closed.ts", "export * from './tokens';\n");
+        // Each row: its name, the module the reader imports `pad` from, and
+        // the route's modules.
+        type Row<'r> = (&'r str, &'r str, Vec<(String, String)>);
+        let rows: Vec<Row<'_>> = vec![
+            ("direct", "./tokens", vec![mutate("./tokens")]),
+            ("31 hops", "./tokens", hops(31)),
+            ("32 hops", "./tokens", hops(32)),
+            (
+                "star cycle",
+                "./tokens",
+                vec![
+                    file("a.ts", "export * from './b';\nexport * from './tokens';\n"),
+                    file("b.ts", "export * from './a';\n"),
+                    mutate("./a"),
+                ],
+            ),
+            ("missing module star", "./tokens", vec![file("a.ts", "export * from './external';\n"), mutate("./a")]),
+            ("package star", "./tokens", vec![file("a.ts", "export * from 'some-package';\n"), mutate("./a")]),
+            ("missing module import", "./tokens", vec![mutate("./missing")]),
+            ("read through a closed star", "./closed", vec![closed(), open(), mutate("./open")]),
+            ("import() of an open star", "./closed", vec![closed(), open(), file("mutate.ts", "import('./open');\n")]),
+            ("require() of an open star", "./closed", vec![closed(), open(), file("mutate.ts", "require('./open');\n")]),
+        ];
+        let mut stale = Vec::new();
+        for (row, read_from, route) in rows {
+            let mut files = vec![
+                file("tokens.ts", "export const pad = { padding: 4 };\n"),
+                file(
+                    "reader.tsx",
+                    &format!("import './mutate';\nimport {{ pad }} from '{read_from}';\nexport const C = ds.styles({{ ...pad }}).asElement('div');\nexport const App = () => <C />;\n"),
+                ),
+            ];
+            files.extend(route);
+            let entries: Vec<serde_json::Value> =
+                files.iter().map(|(path, source)| serde_json::json!({ "path": path, "source": source })).collect();
+            let mut engine = ExtractEngine::new(None).unwrap();
+            let manifest: serde_json::Value =
+                serde_json::from_str(&engine.analyze(serde_json::Value::Array(entries).to_string()).unwrap()).unwrap();
+            let refused = manifest["diagnostics"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|d| d["component"] == "C" && d["code"] == "animus.chain.unextractable");
+            let code = engine.transform_file("reader.tsx".to_string()).unwrap();
+            if manifest["css"].as_str().unwrap().contains("padding: 4") || !refused || code.contains("createComponent") {
+                stale.push(row);
+            }
+        }
+        assert_eq!(stale, Vec::<&str>::new());
     }
 
     #[test]
