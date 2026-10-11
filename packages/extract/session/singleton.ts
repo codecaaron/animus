@@ -212,6 +212,9 @@ export function getWatchTransaction(key: SessionKey): Promise<void> | null {
 export interface ObservationQueue {
   /** The latest revision handed to a recording caller. */
   revision: number;
+  /** A full rescan is requested: the attempt that takes it reads every
+   *  file, so deletions nobody reported reconcile too. */
+  rescan: boolean;
   /** Each path no attempt has taken yet, with its latest state. */
   readonly untaken: Map<string, string>;
   /** Each waiting caller's revision, and the attempt that took it once one
@@ -227,6 +230,36 @@ export interface ObservationQueue {
 
 export function observationQueue(key: SessionKey): ObservationQueue {
   return joined(key).observations;
+}
+
+/** A system as one resolution context loaded it: the evaluated modules and
+ *  a fingerprint of everything the load produced. */
+export interface SystemLoad {
+  readonly identity: string;
+  readonly dependencies: readonly string[];
+}
+
+/**
+ * The build's one agreed system (SA5): the load its analysis runs on, the
+ * resolution context that made it, and each other participant context's
+ * load of the same system, made once.
+ */
+export interface SystemAuthority extends SystemLoad {
+  /** The context as stable text, and as a conflict names it. */
+  readonly context: string;
+  readonly label: string;
+  readonly others: Map<string, SystemLoad>;
+}
+
+export function getSystemAuthority(key: SessionKey): SystemAuthority | null {
+  return findSession(key)?.systemAuthority ?? null;
+}
+
+export function setSystemAuthority(
+  key: SessionKey,
+  authority: SystemAuthority
+): void {
+  joined(key).systemAuthority = authority;
 }
 
 export function setWatchTransaction(
@@ -342,13 +375,13 @@ export class SessionConfigurationConflict extends Error {
     readonly key: SessionKey,
     readonly established: string,
     readonly joining: string,
-    readonly differing: readonly string[]
+    readonly differing: readonly string[],
+    requirement = 'Every participant of one build must use the same Animus options.'
   ) {
     super(
       `[animus] SessionConfigurationConflict: "${joining}" joined build ` +
         `${key.build} of ${key.root} with ${differing.join(', ')} differing ` +
-        `from "${established}". Every participant of one build must use the ` +
-        `same Animus options.`
+        `from "${established}". ${requirement}`
     );
     this.name = 'SessionConfigurationConflict';
   }
@@ -430,6 +463,9 @@ export interface SessionState {
   /** The one in-flight watch-analysis transaction. */
   watchTransaction: Promise<void> | null;
   observations: ObservationQueue;
+  systemAuthority: SystemAuthority | null;
+  /** Releases the build's on-disk claim record; null until one is held. */
+  claimRecord: (() => void) | null;
   manifestJson: string | null;
   sharedCss: string;
   sharedSystemProps: string;
@@ -496,10 +532,13 @@ export function joinSession(
       watchTransaction: null,
       observations: {
         revision: 0,
+        rescan: false,
         untaken: new Map(),
         revisions: new Map(),
         active: null,
       },
+      systemAuthority: null,
+      claimRecord: null,
       manifestJson: null,
       sharedCss: '',
       sharedSystemProps: '',
@@ -536,6 +575,42 @@ export function joinSession(
 /** The session of `key`, if a participant has joined it. */
 export function findSession(key: SessionKey): SessionState | undefined {
   return sessionRegistry().sessions.get(sessionKeyId(key));
+}
+
+/** The build's on-disk claim record, which stops another process pruning
+ *  its tree: held once by the build, whichever participant publishes, and
+ *  released only when the build retires. */
+export function holdBuildClaimRecord(
+  key: SessionKey,
+  hold: () => () => void
+): void {
+  const state = joined(key);
+  state.claimRecord ??= hold();
+}
+
+/** `participant` leaves the build of `key`. The build retires with its
+ *  last participant, once no attempt is in flight: it leaves the registry
+ *  and releases its claim record, so its tree is pruned once stale. */
+export function leaveSession(key: SessionKey, participant: string): void {
+  const state = findSession(key);
+  if (state === undefined) return;
+  state.participants.delete(participant);
+  retireIfUnused(sessionKeyId(key), state);
+}
+
+function retireIfUnused(id: string, state: SessionState): void {
+  if (state.participants.size > 0) return;
+  const inflight = state.watchTransaction;
+  if (inflight !== null) {
+    const retry = () => retireIfUnused(id, state);
+    inflight.then(retry, retry);
+    return;
+  }
+  const sessions = sessionRegistry().sessions;
+  if (sessions.get(id) !== state) return;
+  sessions.delete(id);
+  state.claimRecord?.();
+  state.claimRecord = null;
 }
 
 /** The registry's global slot, which test harnesses clear. */

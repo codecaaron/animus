@@ -449,71 +449,6 @@ fn possible_bindings(links: &ProjectLinks, lookup: ExportLookup<LocalId>) -> Vec
     found
 }
 
-/// How a module runs code from a string, which can load any module: it
-/// reads the unbound `eval` or `Function` as a value, so any call, alias or
-/// `Reflect.construct` of it counts, or reads either as a member of the
-/// unbound global object (`globalThis.eval`, `window.Function`). A type
-/// query, and the bare name as a `typeof` operand or the right side of
-/// `instanceof`, run nothing. Not followed: a computed member
-/// (`globalThis['ev' + 'al']`) and an alias of the global object.
-fn dynamic_code(program: &oxc::ast::ast::Program<'_>, scoping: &oxc::semantic::Scoping) -> Option<&'static str> {
-    use oxc::ast::ast::{BinaryExpression, Expression, IdentifierReference, StaticMemberExpression, UnaryExpression};
-    use oxc::ast_visit::Visit;
-    use oxc::syntax::operator::{BinaryOperator, UnaryOperator};
-    const RUNNERS: [&str; 2] = ["eval", "Function"];
-    const GLOBAL_OBJECTS: [&str; 4] = ["globalThis", "window", "self", "global"];
-    struct Reads<'s> {
-        scoping: &'s oxc::semantic::Scoping,
-        found: Option<&'static str>,
-    }
-    impl Reads<'_> {
-        fn unbound(&self, id: &IdentifierReference<'_>) -> bool {
-            id.reference_id.get().is_some_and(|id| self.scoping.get_reference(id).symbol_id().is_none())
-        }
-        /// The bare unbound `eval` or `Function`, which `typeof` and
-        /// `instanceof` only inspect.
-        fn bare_runner(&self, expr: &Expression<'_>) -> bool {
-            matches!(expr.get_inner_expression(), Expression::Identifier(id)
-                if RUNNERS.contains(&id.name.as_str()) && self.unbound(id))
-        }
-        fn record(&mut self, name: &str) {
-            self.found.get_or_insert(if name == "eval" { "reads eval" } else { "reads Function" });
-        }
-    }
-    impl<'a> Visit<'a> for Reads<'_> {
-        fn visit_identifier_reference(&mut self, id: &IdentifierReference<'a>) {
-            let value = id.reference_id.get().is_some_and(|id| self.scoping.get_reference(id).is_value());
-            if value && RUNNERS.contains(&id.name.as_str()) && self.unbound(id) {
-                self.record(&id.name);
-            }
-        }
-        fn visit_static_member_expression(&mut self, member: &StaticMemberExpression<'a>) {
-            let global = matches!(member.object.get_inner_expression(), Expression::Identifier(object)
-                if GLOBAL_OBJECTS.contains(&object.name.as_str()) && self.unbound(object));
-            if global && RUNNERS.contains(&member.property.name.as_str()) {
-                self.record(&member.property.name);
-            }
-            oxc::ast_visit::walk::walk_static_member_expression(self, member);
-        }
-        fn visit_unary_expression(&mut self, unary: &UnaryExpression<'a>) {
-            if unary.operator == UnaryOperator::Typeof && self.bare_runner(&unary.argument) {
-                return;
-            }
-            oxc::ast_visit::walk::walk_unary_expression(self, unary);
-        }
-        fn visit_binary_expression(&mut self, binary: &BinaryExpression<'a>) {
-            if binary.operator == BinaryOperator::Instanceof && self.bare_runner(&binary.right) {
-                self.visit_expression(&binary.left);
-                return;
-            }
-            oxc::ast_visit::walk::walk_binary_expression(self, binary);
-        }
-    }
-    let mut reads = Reads { scoping, found: None };
-    reads.visit_program(program);
-    reads.found
-}
-
 /// One module's inputs to `unstable_style_statics`.
 struct StyleModule {
     facts: crate::usage_facts::StyleObjectFacts,
@@ -609,7 +544,7 @@ fn unstable_style_statics(
         let line = used.line.map_or(String::new(), |line| format!(" on line {line}"));
         format!("{name} {} in {file}{line}", used.what)
     };
-    use crate::flow::{AbsenceQuery, Coverage, FlowBuilder, ObjectId, ReasonId, Region, RegionAtom};
+    use crate::flow::{AbsenceQuery, ChangeKind, Coverage, FlowBuilder, ObjectId, ReasonId, Region, RegionAtom};
     let object = |(file, local): (String, String)| ObjectId { module: file, binding: local };
     let mut flow = FlowBuilder::new();
     // Each object a module exports, under each name it exports it as.
@@ -685,19 +620,19 @@ fn unstable_style_statics(
                         reads_only(&callee_file, &callee_name, handoff.index, 0, &declared, readings_of)
                     });
                 if !read {
-                    flow.change(object(target), Vec::new(), said(file, &handoff.binding, &handoff.used));
+                    flow.change(object(target), Vec::new(), ChangeKind::Escape, said(file, &handoff.binding, &handoff.used));
                 }
             }
         }
         for (name, used) in &module.facts.uses {
             for target in targets_of(name) {
-                flow.change(object(target), Vec::new(), said(file, name, used));
+                flow.change(object(target), Vec::new(), ChangeKind::Escape, said(file, name, used));
             }
         }
         for (name, used) in &module.facts.flat_reads {
             for target in targets_of(name).into_iter().filter(|target| nested(target)) {
                 let reason = format!("{}, and it holds a nested object", said(file, name, used));
-                flow.change(object(target), Vec::new(), reason);
+                flow.change(object(target), Vec::new(), ChangeKind::Escape, reason);
             }
         }
         let reexports = module
@@ -967,7 +902,7 @@ impl ExtractEngine {
                         })
                         .filter_map(|load| load.specifier().map(str::to_string))
                         .collect(),
-                    dynamic_code: dynamic_code(program, &lowered_by_file[&ast.path].scoping),
+                    dynamic_code: lowered_by_file[&ast.path].dynamic_code,
                 },
             );
         }

@@ -20,7 +20,11 @@ setEngineApiOverride(() => ({
 }));
 
 import { ExtractionSession } from '../../session/extraction-session';
-import { getManifestJson, getWatchTransaction } from '../../session/singleton';
+import {
+  findSession,
+  getManifestJson,
+  getWatchTransaction,
+} from '../../session/singleton';
 import {
   buildManifest as buildFixtureManifest,
   BUTTON_STYLE_EDIT as BUTTON_SOURCE_CHANGED,
@@ -263,6 +267,40 @@ describe('single-flight watch transaction', () => {
 
     const analyzed = lastAnalyzedFiles(mocks.analyzeProject);
     expect(analyzed.map((entry) => entry.path)).toContain('src/Button.tsx');
+  });
+
+  /** Contract: a closed participant never joins again by itself. An
+   *  attempt in flight at close finishes under the key it began with. */
+  test('a close during an attempt registers no participant after it', async () => {
+    const root = createProject();
+    const owner = await startOwner(root);
+    const follower = new ExtractionSession(
+      { system: './src/system.ts' },
+      { build: owner.sessionId }
+    );
+    follower.rootDir = root;
+    const key = owner.key;
+    expect(follower.key).toEqual(key);
+    mocks.analyzeProject.mockImplementation(() =>
+      buildManifest('.btn{margin:16px;}')
+    );
+
+    // The attempt suspends at its async preprocessing; another edit queues.
+    const held = owner.handleWatchUpdate({
+      modifiedFiles: makeSuspendingBatch(root),
+      removedFiles: new Set(),
+    });
+    const notePath = join(root, 'src', 'Note.tsx');
+    writeFileSync(notePath, 'export const note = 1;\n');
+    const queued = follower.handleWatchUpdate({
+      modifiedFiles: new Set([notePath]),
+      removedFiles: new Set(),
+    });
+    owner.close();
+    follower.close();
+    await Promise.allSettled([held, queued]);
+
+    expect(findSession(key)).toBeUndefined();
   });
 
   test('a failed transaction rejects every joiner and clears the gate', async () => {
