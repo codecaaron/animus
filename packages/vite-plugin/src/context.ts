@@ -549,7 +549,8 @@ export class PluginContext {
   runAnalysis(
     fileEntries: Array<{ path: string; source: string; hash?: string }>,
     skippedOriginals: readonly string[] = [],
-    openings: readonly IngestionOpening[] = []
+    openings: readonly IngestionOpening[] = [],
+    adapted: ReadonlyMap<string, readonly string[]> = new Map()
   ): boolean {
     const ingestionFailures = this.unsettledIngestionFailures();
     let result: ProjectAnalysisResult;
@@ -569,7 +570,7 @@ export class PluginContext {
         ),
         rootDir: this.rootDir,
         assets: this.assetClassification,
-        adapted: adaptedOriginals(this.corpus.published.ownership),
+        adapted,
         devMode: !this.emissionProd,
         // Rollup leaves an `import(expr)` it cannot read unbundled.
         analysisContext: {
@@ -751,7 +752,9 @@ export class PluginContext {
         this.runAnalysis(
           accepted.analysisEntries,
           accepted.skippedOriginals,
-          accepted.openings
+          accepted.openings,
+          // The ingestion being analysed publishes only after its analysis.
+          adaptedOriginals(accepted.ownership)
         ) !== false;
       if (!ok) return { ok, accepted, endedHold: false, redeliver: [] };
       this.publishSourceIngestion(accepted);

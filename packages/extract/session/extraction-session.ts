@@ -347,6 +347,9 @@ export class ExtractionSession {
   private skippedSources: readonly string[] = [];
   /** Resolver calls ingestion ended under another spelling. */
   private ingestionOpenings: readonly IngestionOpening[] = [];
+  /** The adapted originals of the ingestion being analysed: it publishes
+   *  only after its analysis does. */
+  private ingestionAdapted: ReadonlyMap<string, readonly string[]> = new Map();
   /** Full package-resolution map from the last full pipeline — replayed by
    *  incremental passes (sourceEntries alone omits dist-resolved packages). */
   private lastPackageMap: Record<string, string> = {};
@@ -1008,6 +1011,7 @@ export class ExtractionSession {
         this.throwOnAbortedParse(ingested);
         this.skippedSources = ingested.skippedOriginals ?? [];
         this.ingestionOpenings = ingested.openings ?? [];
+        this.ingestionAdapted = adaptedOriginals(ingested.ownership);
         if (this.systemReloadOwed) {
           this.log(
             'system reload: publishing the reload a parse hold deferred'
@@ -1446,6 +1450,7 @@ export class ExtractionSession {
         this.throwOnAbortedParse(accepted);
         this.skippedSources = accepted.skippedOriginals ?? [];
         this.ingestionOpenings = accepted.openings ?? [];
+        this.ingestionAdapted = adaptedOriginals(accepted.ownership);
       } catch (err) {
         this.debouncePending.clear();
         this.writeAnalysisStatus('failed', pending, String(err));
@@ -1883,7 +1888,7 @@ export class ExtractionSession {
       ),
       rootDir: this.rootDir!,
       assets: this.assetClassification,
-      adapted: adaptedOriginals(this.corpus.published.ownership),
+      adapted: this.ingestionAdapted,
       devMode: this.engineDevMode(devMode),
       // A skipped or unreadable file may render any option, so nothing is
       // pruned while one is.
