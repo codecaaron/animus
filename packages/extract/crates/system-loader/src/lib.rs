@@ -176,6 +176,16 @@ fn select_package_entry(
         // runtime target differing only in case names no file.
         for source in [true, false] {
             if let Some(resolved) = resolve_exports_entry(exports, export_key, source, conditions) {
+                // Node reads a target as a URL and decodes its escapes; each
+                // decoding rule is another way to name a file Node refuses,
+                // so an escape is refused, loudly, where Node may load it.
+                if resolved.contains('%') {
+                    return Err(format!(
+                        "could not resolve '{specifier}': {pkg_json_path:?} exports {resolved:?} for \
+                         '{export_key}' — percent-escape unsupported: spell the target and the \
+                         specifier without '%'"
+                    ));
+                }
                 // `..` taken back lexically, as Node resolves a target: the
                 // path checked is the path opened.
                 let abs_path = resolution::lexical(&pkg_dir.join(&resolved)).to_string_lossy().to_string();
@@ -301,13 +311,13 @@ fn resolve_exports_entry(
         return (lookup_key == ".")
             .then(|| resolve_condition_value(exports, source, conditions))
             .flatten()
-            .and_then(|target| target_path(&target));
+            .map(|target| target_path(&target));
     }
 
     // An exact key answers alone: a declared key whose target resolves to
     // nothing is a blocked subpath, not an invitation to try the patterns.
     if let Some(entry) = exports.get(&lookup_key) {
-        return resolve_condition_value(entry, source, conditions).and_then(|target| target_path(&target));
+        return resolve_condition_value(entry, source, conditions).map(|target| target_path(&target));
     }
 
     resolve_exports_pattern(exports.as_object()?, &lookup_key, source, conditions)
@@ -353,49 +363,24 @@ fn resolve_exports_pattern(
     if refused_pattern_match(matched) {
         return None;
     }
-    target_path(&resolve_condition_value(value, source, conditions)?.replace('*', matched))
+    Some(target_path(&resolve_condition_value(value, source, conditions)?.replace('*', matched)))
 }
 
-/// The path an `exports` target names, read as Node reads it: a URL, so a
-/// raw backslash is a `/`, and one holding an encoded separator (`%2F`,
-/// `%5C`) is refused (`ERR_INVALID_MODULE_SPECIFIER`). The rest is decoded
-/// as `fileURLToPath` decodes it: `a%20b` names `a b`, and a malformed
-/// escape or one that is not UTF-8 names nothing (`URIError`).
-fn target_path(target: &str) -> Option<String> {
-    let lowered = target.to_ascii_lowercase();
-    if lowered.contains("%2f") || lowered.contains("%5c") {
-        return None;
-    }
-    percent_decoded(&target.replace('\\', "/"))
-}
-
-/// `text` with each `%XX` escape decoded, as `decodeURIComponent` decodes
-/// it: `None` for an escape without two hex digits, or bytes that are not
-/// UTF-8.
-fn percent_decoded(text: &str) -> Option<String> {
-    let mut bytes = Vec::with_capacity(text.len());
-    let mut rest = text.as_bytes();
-    while let Some((&byte, tail)) = rest.split_first() {
-        if byte == b'%' {
-            let hex = std::str::from_utf8(tail.get(..2)?).ok()?;
-            bytes.push(u8::from_str_radix(hex, 16).ok()?);
-            rest = &tail[2..];
-        } else {
-            bytes.push(byte);
-            rest = tail;
-        }
-    }
-    String::from_utf8(bytes).ok()
+/// The path an `exports` target names, read as Node reads a URL: a raw
+/// backslash is a `/`. A target holding a percent-escape is refused where
+/// the entry is selected (`select_package_entry`).
+fn target_path(target: &str) -> String {
+    target.replace('\\', "/")
 }
 
 /// Whether Node refuses a pattern's match (`ERR_INVALID_MODULE_SPECIFIER`):
-/// a segment that is `.`, `..` or `node_modules`, in any case and
-/// percent-encoded. An empty segment loads (only deprecated, DEP0166).
+/// a segment that is `.`, `..` or `node_modules`, in any case. A
+/// percent-encoded one is refused with every escape. An empty segment
+/// loads (only deprecated, DEP0166).
 fn refused_pattern_match(matched: &str) -> bool {
-    matched.split(['/', '\\']).any(|segment| {
-        percent_decoded(segment)
-            .is_some_and(|decoded| matches!(decoded.to_ascii_lowercase().as_str(), "." | ".." | "node_modules"))
-    })
+    matched
+        .split(['/', '\\'])
+        .any(|segment| matches!(segment.to_ascii_lowercase().as_str(), "." | ".." | "node_modules"))
 }
 
 /// With `source`, a kit's `animus` condition, its original source, which
@@ -2238,11 +2223,12 @@ export const ds = tokens;
         package(
             "wild",
             serde_json::json!({ "exports": { "./*": "./src/*.ts" } }),
-            &["src/token.ts", "src/a/b.ts", "src/a%2fb.ts", "src/a b.ts", "src/a%20b.ts"],
+            &["src/token.ts", "src/a/b.ts", "src/a%2fb.ts", "src/a b.ts", "src/a%20b.ts", "src/a\u{f}b.ts"],
         );
-        // An exact target is read as a URL too; `main` stays literal, as
-        // Node reads it.
+        // An exact target holding an escape, beside the file each reading
+        // names.
         package("exact-escape", serde_json::json!({ "exports": { ".": "./src/a%20b.ts" } }), &["src/a b.ts", "src/a%20b.ts"]);
+        package("exact-dots", serde_json::json!({ "exports": { ".": "./src/%2e%2e/token.ts" } }), &["token.ts", "src/token.ts"]);
         #[cfg(unix)]
         fs::write(dir.join("node_modules/wild/src/a\\b.ts"), "export {};\n").expect("write backslash name");
         #[cfg(unix)]
@@ -2280,14 +2266,12 @@ export const ds = tokens;
         // backslash is a `/`, though a file holds one in its name.
         assert!(resolved("wild/a%2fb", &[]).is_err(), "an encoded `/` is refused");
         assert!(resolved("wild/a%5Cb", &[]).is_err(), "an encoded `\\` is refused");
-        // The rest is decoded, as Node's `fileURLToPath` decodes it: `a%20b`
-        // names `a b.ts` beside a literal `a%20b.ts`, which `a%2520b` names.
-        assert_eq!(resolved("wild/a%20b", &[]).as_deref(), Ok("wild/src/a b.ts"));
-        assert_eq!(resolved("wild/a%2520b", &[]).as_deref(), Ok("wild/src/a%20b.ts"));
-        assert_eq!(resolved("wild/%74oken", &[]).as_deref(), Ok("wild/src/token.ts"));
-        assert!(resolved("wild/a%zzb", &[]).is_err(), "a malformed escape is refused");
-        assert!(resolved("wild/%ff", &[]).is_err(), "an escape that is not UTF-8 is refused");
-        assert_eq!(resolved("exact-escape", &[]).as_deref(), Ok("exact-escape/src/a b.ts"));
+        // Any other escape is refused loudly, in a target or a match: Node
+        // decodes it, and each decoding rule names a file another way.
+        for specifier in ["wild/a%20b", "wild/a%+fb", "exact-escape", "exact-dots"] {
+            let error = resolved(specifier, &[]).expect_err("a percent-escape names no file");
+            assert!(error.contains("percent-escape unsupported"), "{specifier}: {error}");
+        }
         #[cfg(unix)]
         assert_eq!(resolved("wild/a\\b", &[]).as_deref(), Ok("wild/src/a/b.ts"));
         // Where the filesystem opens the misspelled entry, the selection
