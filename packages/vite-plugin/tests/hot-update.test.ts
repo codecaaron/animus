@@ -519,7 +519,7 @@ describe('hotUpdate reads through the retry-guarded read helper', () => {
     const { app } = createKitWorkspace();
     const file = join(app, 'src', 'Button.tsx');
     writeFileSync(file, 'export const Button = 1;\n');
-    const state = { systemLoadFails: false };
+    const state = { systemLoadFails: false, systemLoads: 0 };
     const systemFacts = factsExtractor({
       [join(app, 'src', 'system.ts')]: {
         ...emptyFacts(join(app, 'src', 'system.ts')),
@@ -528,6 +528,7 @@ describe('hotUpdate reads through the retry-guarded read helper', () => {
     });
     const ctx = new PluginContext({ system: './src/system.ts' }, () => ({
       loadSystemModule: () => {
+        state.systemLoads++;
         if (state.systemLoadFails) throw new Error('planned system failure');
         return {
           propConfig: '{}',
@@ -598,10 +599,10 @@ describe('hotUpdate reads through the retry-guarded read helper', () => {
     ctx.close();
   });
 
-  it('refuses a reload a parse hold deferred rather than publish the disk over held bytes', async () => {
-    // The deferred reload's full read does not carry the bytes an earlier
-    // held observation supplied (ticket 12 follow-up): with the disk still
-    // behind them, it refuses loudly and keeps the prior publication.
+  it('a reload a parse hold deferred publishes the bytes the host supplied', async () => {
+    // Every full read carries the held host bytes, and a held full read
+    // keeps what it observed: the repair publishes Card's settled bytes
+    // while the disk is still empty.
     const { app, file, ctx, state, update } = await startedContext();
     const card12 = 'export const Button = 12;\n';
     writeFileSync(file, '');
@@ -615,34 +616,54 @@ describe('hotUpdate reads through the retry-guarded read helper', () => {
     await flushSystemReload(ctx);
     state.systemLoadFails = false;
 
-    // The owed reload enters a parse hold. The Card edit that follows is
-    // kept; its deferred reload would read the held Broken from disk, so
-    // it refuses too.
+    // The owed reload enters a parse hold, and the Card edit is held with it.
     writeFileSync(broken, 'export const broken = ;\n');
     await update(broken, async () => 'export const broken = ;\n');
     const card20 = 'export const Button = 20;\n';
-    await expect(update(file, async () => card20)).rejects.toThrow(
-      /system reload not published: .*src\/Broken\.ts/
-    );
-    expect(ctx.session?.heldSources.get('src/Button.tsx')?.source).toBe(card20);
-
-    // The repair would run the deferred reload over the empty Card on disk.
-    const repaired = 'export const broken = 2;\n';
-    writeFileSync(broken, repaired);
-    await expect(update(broken, async () => repaired)).rejects.toThrow(
-      /system reload not published: .*src\/Button\.tsx/
-    );
+    // The hold kept Broken's broken bytes, so the edit stays held without
+    // another full read.
+    const loadsBefore = state.systemLoads;
+    await update(file, async () => card20);
+    expect(state.systemLoads).toBe(loadsBefore);
     const publishedCard = () =>
       ctx.session?.corpus.published.analysisEntries.get('src/Button.tsx')
         ?.source;
     expect(publishedCard()).toBe(card12);
+    expect(ctx.session?.heldSources.get('src/Button.tsx')?.source).toBe(card20);
 
-    // Once the disk holds the bytes, the next change publishes the reload.
-    writeFileSync(file, card20);
-    const repairedAgain = 'export const broken = 3;\n';
-    writeFileSync(broken, repairedAgain);
-    await update(broken, async () => repairedAgain);
+    // The repair runs the deferred reload, Card still empty on disk.
+    const repaired = 'export const broken = 2;\n';
+    writeFileSync(broken, repaired);
+    await update(broken, async () => repaired);
     expect(publishedCard()).toBe(card20);
+    expect(
+      ctx.session?.corpus.published.analysisEntries.get('src/Broken.ts')?.source
+    ).toBe(repaired);
+    ctx.close();
+  });
+
+  it('an equal-content re-save publishes an owed reload once the bytes are consistent', async () => {
+    // Nothing in the re-save differs from what the Session holds; the owed
+    // reload still runs on it rather than wait for some other change.
+    const { app, file, ctx, state, update } = await startedContext();
+    const card = 'export const Button = 2;\n';
+    writeFileSync(file, '');
+    await update(file, async () => card);
+
+    state.systemLoadFails = true;
+    await update(join(app, 'src', 'system.ts'));
+    await flushSystemReload(ctx);
+    // Repaired without an event the watcher delivers.
+    state.systemLoadFails = false;
+
+    writeFileSync(file, card);
+    const loadsBefore = state.systemLoads;
+    await update(file, async () => card);
+    expect(state.systemLoads).toBe(loadsBefore + 1);
+    expect(
+      ctx.session?.corpus.published.analysisEntries.get('src/Button.tsx')
+        ?.source
+    ).toBe(card);
     ctx.close();
   });
 
