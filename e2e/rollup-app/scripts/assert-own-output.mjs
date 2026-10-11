@@ -3,8 +3,9 @@
 // entry name puts the bundle in the discovered extensions. Rollup names its
 // output directory only after analysis: a watch's later builds exclude it,
 // and a new process that read it fails under `strict`, naming the files.
+// An output file written beside sources names only itself.
 import { spawn, spawnSync } from 'node:child_process';
-import { readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
 
 import { check, failures, lane, mutateUntil, until } from './watch-harness.mjs';
@@ -27,11 +28,26 @@ const editedSource = readFileSync(editedPath, 'utf-8');
 const build = () =>
   spawnSync(rollup, outputArgs, { cwd: lane, encoding: 'utf-8' });
 
+// One output file inside `src/`, through a config that names it.
+const srcFile = join(lane, 'src', `own-bundle-${process.pid}.js`);
+const srcFileRel = relative(lane, srcFile);
+const fileConfig = join(lane, `.own-file-${process.pid}.config.mjs`);
+// What the file build writes beside the bundle, removed only if new.
+const besideSrcFile = [
+  join(lane, 'src', 'animus.css'),
+  join(lane, 'src', 'assets'),
+].filter((path) => !existsSync(path));
+const buildFile = () =>
+  spawnSync(rollup, ['-c', fileConfig], { cwd: lane, encoding: 'utf-8' });
+
 let watchRun = null;
 const cleanup = () => {
   watchRun?.kill('SIGKILL');
   writeFileSync(editedPath, editedSource);
   rmSync(outDir, { recursive: true, force: true });
+  for (const path of [srcFile, fileConfig, ...besideSrcFile]) {
+    rmSync(path, { recursive: true, force: true });
+  }
 };
 
 try {
@@ -50,6 +66,28 @@ try {
     second.stderr.includes(`${outRel}/bundle.js`) &&
       second.stderr.includes(`'${outRel}'`),
     second.stderr.slice(-600)
+  );
+
+  // An output file beside sources: the first build reads only sources, and
+  // a new build that read the earlier bundle names that file alone.
+  writeFileSync(
+    fileConfig,
+    `import config from './rollup.config.mjs';\n` +
+      `export default { ...config, output: { file: ${JSON.stringify(srcFile)}, format: 'esm' } };\n`
+  );
+  const firstFile = buildFile();
+  check(
+    'a first build beside sources succeeds',
+    firstFile.status === 0,
+    firstFile.stderr.slice(-600)
+  );
+  const secondFile = buildFile();
+  check(
+    'a new build that read its output file fails naming that file alone',
+    secondFile.status !== 0 &&
+      secondFile.stderr.includes(srcFileRel) &&
+      !secondFile.stderr.includes('src/Box.tsx'),
+    secondFile.stderr.slice(-600)
   );
 
   // One watch process: its later builds exclude the output it wrote.
