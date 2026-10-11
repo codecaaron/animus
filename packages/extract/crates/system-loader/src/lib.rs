@@ -15,6 +15,7 @@ use oxc::transformer::{TransformOptions, Transformer};
 use rquickjs::{Context, Function, Object, Runtime};
 
 mod linked;
+pub mod resolution;
 use serde::{Deserialize, Serialize};
 
 /// Serialized system configuration returned by `load_system_module()`.
@@ -308,45 +309,11 @@ fn condition_target(value: &serde_json::Value, source: bool, conditions: &[Strin
 }
 
 fn resolve_relative(base_dir: &Path, specifier: &str) -> Result<String, String> {
-    let target = base_dir.join(specifier);
-
-    if target.is_file() {
-        return Ok(target.to_string_lossy().to_string());
-    }
-
     // Appended, not replaced: `./tokens.theme` names `tokens.theme.ts`.
-    // Extractor twin: `probe_files` in crates/extract-v2/src/analyze_css.rs.
-    let target_str = target.to_string_lossy().to_string();
-    let extensions = [".ts", ".tsx", ".js", ".mjs"];
-    for ext in &extensions {
-        let with_ext = PathBuf::from(format!("{}{}", target_str, ext));
-        if with_ext.is_file() {
-            return Ok(with_ext.to_string_lossy().to_string());
-        }
-    }
-
-    let index_files = ["index.ts", "index.tsx", "index.js", "index.mjs"];
-    for idx in &index_files {
-        let with_index = target.join(idx);
-        if with_index.is_file() {
-            return Ok(with_index.to_string_lossy().to_string());
-        }
-    }
-
-    // NodeNext specifiers name the emitted file: `./x.js` for `x.ts`.
-    if let Some(stem) = target_str.strip_suffix(".js") {
-        for ext in [".ts", ".tsx"] {
-            let source = PathBuf::from(format!("{}{}", stem, ext));
-            if source.is_file() {
-                return Ok(source.to_string_lossy().to_string());
-            }
-        }
-    }
-
-    Err(format!(
-        "could not resolve '{}' from {:?}",
-        specifier, base_dir
-    ))
+    let target = base_dir.join(specifier).to_string_lossy().to_string();
+    resolution::SYSTEM_EVALUATION
+        .probe(&target, |candidate| Path::new(candidate).is_file())
+        .ok_or_else(|| format!("could not resolve '{}' from {:?}", specifier, base_dir))
 }
 
 /// `names` are the names as the *imported* module defines them — what a stub

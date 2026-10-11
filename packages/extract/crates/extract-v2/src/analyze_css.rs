@@ -727,48 +727,9 @@ pub fn resolve_import_source<T>(
     probe_files(&base, files)
 }
 
-/// NodeNext specifiers name the emitted file (`./x.js` for `x.ts`). Mirrors
-/// `NODE_NEXT_EXTENSION_MAP` in `packages/extract/pipeline/source-ingestion.ts`.
-const NODE_NEXT_SOURCES: [(&str, &[&str]); 4] = [
-    (".js", &[".ts", ".tsx", ".jsx"]),
-    (".jsx", &[".tsx"]),
-    (".mjs", &[".mts"]),
-    (".cjs", &[".cts"]),
-];
-
-/// Candidate order decides which file wins when several extensions exist; the
-/// literal spelling is probed before a NodeNext source, so a real `.js`
-/// neighbor still wins. Mirrors `resolveRelativeSource` in
-/// `packages/extract/pipeline/source-ingestion.ts`.
+/// The analyzed file `base` names, through the extractor's extension policy.
 fn probe_files<T>(base: &str, files: &BTreeMap<String, T>) -> Option<String> {
-    let candidates = [
-        base.to_string(),
-        format!("{base}.ts"),
-        format!("{base}.tsx"),
-        format!("{base}.js"),
-        format!("{base}.jsx"),
-        format!("{base}/index.ts"),
-        format!("{base}/index.tsx"),
-        format!("{base}/index.js"),
-        format!("{base}/index.jsx"),
-    ];
-    candidates
-        .into_iter()
-        .find(|c| files.contains_key(c))
-        .or_else(|| {
-            NODE_NEXT_SOURCES.iter().find_map(|(emitted, sources)| {
-                let split = base.len().checked_sub(emitted.len())?;
-                let suffix = base.get(split..)?;
-                if !suffix.eq_ignore_ascii_case(emitted) {
-                    return None;
-                }
-                let stem = &base[..split];
-                sources
-                    .iter()
-                    .map(|source| format!("{stem}{source}"))
-                    .find(|c| files.contains_key(c))
-            })
-        })
+    animus_system_loader::resolution::ANALYSIS_SOURCE.probe(base, |candidate| files.contains_key(candidate))
 }
 
 /// Follow `export { X as Y } from '...'` hops, and local exports of an
