@@ -44,6 +44,20 @@ export interface EngineApi {
     workspaces?: WorkspacePackages,
     extensionPolicyJson?: string
   ) => { path?: string | null; unresolved?: string | null };
+  /** A kit's source root as the system loader's table selects it (spec
+   *  §2.2 A5), as JSON: the rule that chose it, its entries and invalid
+   *  `animus` targets; or `{ "unresolved": why }` where no host imports the
+   *  specifier. `hostEntry` is the file the host resolves; `packageDir` the
+   *  package discovery located. */
+  resolveKitSourceRoot?: (
+    specifier: string,
+    fromDir: string,
+    conditions?: readonly string[],
+    workspaces?: WorkspacePackages,
+    extensionPolicyJson?: string,
+    hostEntry?: string,
+    packageDir?: string
+  ) => string;
   analyzeProject: (
     filesJson: string,
     scalesJson: string,
@@ -171,6 +185,27 @@ export function createV2EngineApi(deps: V2EngineAdapterDeps): () => EngineApi {
                 conditions,
                 workspaces,
                 extensionPolicyJson
+              ),
+      resolveKitSourceRoot:
+        native.resolveKitSourceRoot === undefined
+          ? undefined
+          : (
+              specifier,
+              fromDir,
+              conditions,
+              workspaces,
+              extensionPolicyJson,
+              hostEntry,
+              packageDir
+            ) =>
+              native.resolveKitSourceRoot(
+                specifier,
+                fromDir,
+                conditions,
+                workspaces,
+                extensionPolicyJson,
+                hostEntry,
+                packageDir
               ),
       analyzeProject: (
         filesJsonRaw,
