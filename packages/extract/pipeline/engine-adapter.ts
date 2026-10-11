@@ -90,8 +90,9 @@ export interface EngineApi {
     generatedNamesJson?: string,
     propertyRecordsJson?: string,
     /** Given, the session's host-candidate evidence for the bases the
-     *  engine's `prepare` names (spec §2.2 A2, A8), as JSON. */
-    probeEvidence?: (bases: readonly string[]) => string
+     *  engine's `prepare` names, carrying its input identity (spec §2.2
+     *  A2, A8), as JSON. */
+    probeEvidence?: (bases: readonly string[], identity: string) => string
   ) => string;
   transformFile: (
     source: string,
@@ -303,15 +304,14 @@ export function createV2EngineApi(deps: V2EngineAdapterDeps): () => EngineApi {
         store.setEngine(engine);
         // The session answers the probes the parse names, and analysis
         // reads that parse.
-        const evidence =
-          probeEvidence === undefined
-            ? undefined
-            : probeEvidence(
-                parseInternalWire<string[]>(
-                  engine.prepare(filesJson),
-                  'ExtractEngine.prepare'
-                )
-              );
+        let evidence: string | undefined;
+        if (probeEvidence !== undefined) {
+          const prepared = parseInternalWire<{
+            identity: string;
+            bases: string[];
+          }>(engine.prepare(filesJson), 'ExtractEngine.prepare');
+          evidence = probeEvidence(prepared.bases, prepared.identity);
+        }
         return engine.analyze(filesJson, evidence);
       },
       transformFile: (source, path, _manifest) => {

@@ -1,7 +1,7 @@
-import { readdirSync, realpathSync, statSync } from 'node:fs';
-import { basename, dirname, join } from 'node:path';
+import { realpathSync } from 'node:fs';
+import { join, relative } from 'node:path';
 
-import { policyCandidates } from './extension-policy';
+import { policyCandidates, seeOnDisk } from './extension-policy';
 
 import type { ExtensionOrder } from './extension-policy';
 
@@ -24,9 +24,10 @@ let generations = 0;
  * The session's host-candidate evidence for one analysis (spec §2.3): for
  * each probe base the engine's `prepare` names, the first of its candidates,
  * in the host's order, that the host opens. The filesystem decides what
- * opens and how it is spelled, each candidate checked against its own
- * directory's listing; nothing is folded. Each call is a new ingest
- * generation, so no evidence outlives the files it was gathered from.
+ * opens, and each name below the session root is checked against its own
+ * directory's listing (`seeOnDisk`); nothing is folded. The evidence
+ * carries the input identity `prepare` reported, and each call is a new
+ * ingest generation, so no evidence is read for other files.
  *
  * A candidate the analysis holds answers before the filesystem is asked: an
  * adapted original's analysis child need not exist on disk. An original the
@@ -36,28 +37,15 @@ export function gatherProbeEvidence(
   rootDir: string,
   analysed: ReadonlySet<string>,
   order: ExtensionOrder | undefined
-): (bases: readonly string[]) => string {
-  return (bases) => {
-    const listings = new Map<string, ReadonlySet<string>>();
-    const listing = (dir: string): ReadonlySet<string> => {
-      let names = listings.get(dir);
-      if (names === undefined) {
-        try {
-          names = new Set(readdirSync(dir));
-        } catch {
-          names = new Set();
-        }
-        listings.set(dir, names);
-      }
-      return names;
-    };
-    const opens = (path: string): boolean => {
-      try {
-        return statSync(path).isFile();
-      } catch {
-        return false;
-      }
-    };
+): (bases: readonly string[], identity: string) => string {
+  // The filesystem reports a spelling at its real path.
+  let realRoot = rootDir;
+  try {
+    realRoot = realpathSync.native(rootDir);
+  } catch {
+    // An unreadable root opens nothing below it.
+  }
+  return (bases, identity) => {
     const byBase: Record<string, HostCandidate> = {};
     for (const base of bases) {
       const candidates = policyCandidates(base, { policy: order });
@@ -66,22 +54,23 @@ export function gatherProbeEvidence(
           byBase[base] = { candidate, actual: null, analysedAs: candidate };
           break;
         }
-        const file = join(rootDir, candidate);
-        if (!opens(file)) continue;
-        const exact = listing(dirname(file)).has(basename(file));
+        const seen = seeOnDisk(join(rootDir, candidate), rootDir);
+        if (seen.kind === 'missing') continue;
         byBase[base] = {
           candidate,
-          actual: exact ? null : basename(realpathSync.native(file)),
-          analysedAs: exact
-            ? (candidates
-                .slice(index + 1)
-                .find((later) => analysed.has(later)) ?? null)
-            : null,
+          actual:
+            seen.kind === 'case-only' ? relative(realRoot, seen.actual) : null,
+          analysedAs:
+            seen.kind === 'file'
+              ? (candidates
+                  .slice(index + 1)
+                  .find((later) => analysed.has(later)) ?? null)
+              : null,
         };
         break;
       }
     }
     generations += 1;
-    return JSON.stringify({ generation: generations, bases: byBase });
+    return JSON.stringify({ generation: generations, identity, bases: byBase });
   };
 }

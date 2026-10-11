@@ -1,7 +1,4 @@
-import {
-  buildAnalyzeProjectArgs,
-  withProbeEvidence,
-} from './analyze-project-args';
+import { buildAnalyzeProjectArgs } from './analyze-project-args';
 import { kitDescriptorDiagnostics } from './kit-descriptor';
 import {
   collectSelectorAliasDiagnostics,
@@ -236,18 +233,17 @@ export function runProjectAnalysis(
   const serializeMs = Math.round(performance.now() - t);
 
   t = performance.now();
-  const args = buildAnalyzeProjectArgs(inputs);
   const manifestJson: string = analyzeProject(
-    ...(opts.rootDir === undefined
-      ? args
-      : withProbeEvidence(
-          args,
-          gatherProbeEvidence(
+    ...buildAnalyzeProjectArgs(
+      inputs,
+      opts.rootDir === undefined
+        ? undefined
+        : gatherProbeEvidence(
             opts.rootDir,
             new Set(opts.fileEntries.map((entry) => entry.path)),
             opts.analysisContext?.extensions
           )
-        ))
+    )
   );
   const extractMs = Math.round(performance.now() - t);
 

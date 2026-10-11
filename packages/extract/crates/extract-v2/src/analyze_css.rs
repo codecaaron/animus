@@ -735,10 +735,13 @@ pub struct HostCandidate {
 }
 
 /// The host-candidate evidence for one analysis, by probe base, from one
-/// ingest generation.
+/// ingest generation, gathered for the files whose `input_identity` it
+/// carries: evidence for other files is never read.
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Deserialize)]
 pub struct ProbeEvidence {
     pub generation: u64,
+    #[serde(default)]
+    pub identity: String,
     pub bases: FxHashMap<String, HostCandidate>,
 }
 

@@ -23,7 +23,7 @@ export type AnalyzeProjectArgs = [
   analysisContextJson?: string,
   generatedNamesJson?: string,
   propertyRecordsJson?: string,
-  probeEvidence?: (bases: readonly string[]) => string,
+  probeEvidence?: (bases: readonly string[], identity: string) => string,
 ];
 
 /** @internal */
@@ -63,7 +63,10 @@ export interface AnalyzeProjectInputs {
 
 /** @internal */
 export function buildAnalyzeProjectArgs(
-  inputs: AnalyzeProjectInputs
+  inputs: AnalyzeProjectInputs,
+  /** The session's host-candidate evidence gatherer, which no persisted
+   *  input carries. */
+  probeEvidence?: (bases: readonly string[], identity: string) => string
 ): AnalyzeProjectArgs {
   const args: AnalyzeProjectArgs = [
     inputs.filesJson,
@@ -94,68 +97,13 @@ export function buildAnalyzeProjectArgs(
     inputs.generatedNamesJson,
     inputs.propertyRecordsJson,
   ];
-  const last = tail.findLastIndex((slot) => slot !== undefined && slot !== '');
+  const last =
+    probeEvidence === undefined
+      ? tail.findLastIndex((slot) => slot !== undefined && slot !== '')
+      : tail.length - 1;
   for (const slot of tail.slice(0, last + 1)) {
     args.push(slot || undefined);
   }
+  if (probeEvidence !== undefined) args.push(probeEvidence);
   return args;
-}
-
-/** `args` with the session's host-candidate evidence gatherer in its own
- *  slot, after every optional one. */
-export function withProbeEvidence(
-  args: AnalyzeProjectArgs,
-  probeEvidence: (bases: readonly string[]) => string
-): AnalyzeProjectArgs {
-  const [
-    filesJson,
-    scalesJson,
-    variableMapJson,
-    contextualVarsJson,
-    propConfigJson,
-    groupRegistryJson,
-    packageResolutionJson,
-    devMode,
-    emitterConfigJson,
-    selectorAliasesJson,
-    selectorOrderJson,
-    globalStyleBlocksJson,
-    pathAliasesJson,
-    keyframesJson,
-    staticCssJson,
-    conditionAliasesJson,
-    externalDirsJson,
-    transformSourcesJson,
-    transformProvenanceJson,
-    declarationScalesJson,
-    analysisContextJson,
-    generatedNamesJson,
-    propertyRecordsJson,
-  ] = args;
-  return [
-    filesJson,
-    scalesJson,
-    variableMapJson,
-    contextualVarsJson,
-    propConfigJson,
-    groupRegistryJson,
-    packageResolutionJson,
-    devMode,
-    emitterConfigJson,
-    selectorAliasesJson,
-    selectorOrderJson,
-    globalStyleBlocksJson,
-    pathAliasesJson,
-    keyframesJson,
-    staticCssJson,
-    conditionAliasesJson,
-    externalDirsJson,
-    transformSourcesJson,
-    transformProvenanceJson,
-    declarationScalesJson,
-    analysisContextJson,
-    generatedNamesJson,
-    propertyRecordsJson,
-    probeEvidence,
-  ];
 }

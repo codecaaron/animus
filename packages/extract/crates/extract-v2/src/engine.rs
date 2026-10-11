@@ -360,6 +360,19 @@ fn canonical_entries(file_entries_json: &str) -> napi::Result<Vec<InputEntry>> {
     Ok(entries)
 }
 
+/// The identity of an analysis input: its files, by path and source, in
+/// canonical order. Evidence gathered for one input is never read for
+/// another, even one with as many files.
+fn input_identity(entries: &[InputEntry]) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for entry in entries {
+        entry.path.hash(&mut hasher);
+        entry.source.hash(&mut hasher);
+    }
+    format!("{:016x}", hasher.finish())
+}
+
 type ModuleFacts = BTreeMap<
     String,
     (Vec<crate::usage_facts::ImportFact>, Vec<crate::usage_facts::ExportFact>),
@@ -793,11 +806,13 @@ impl ExtractEngine {
     }
 
     /// Parses `file_entries_json` for the next `analyze` of the same files,
-    /// and returns the path each of their specifiers probes (`probe_base`),
-    /// sorted: the bases a session gathers host-candidate evidence for.
+    /// and returns their input identity and the path each of their
+    /// specifiers probes (`probe_base`), sorted: the bases a session gathers
+    /// host-candidate evidence for, which carries that identity.
     #[napi]
     pub fn prepare(&mut self, file_entries_json: String) -> napi::Result<String> {
         let entries = canonical_entries(&file_entries_json)?;
+        let identity = input_identity(&entries);
         let kept: Vec<(String, String)> = entries.iter().map(|e| (e.path.clone(), e.source.clone())).collect();
         let store = ast_store::AstStore::build(
             entries.into_iter().map(|e| ast_store::FileEntry { path: e.path, source: e.source }).collect(),
@@ -813,7 +828,8 @@ impl ExtractEngine {
             }
         }
         self.prepared = Some((kept, store));
-        serde_json::to_string(&bases).map_err(|e| napi::Error::from_reason(format!("probe bases: {e}")))
+        serde_json::to_string(&serde_json::json!({ "identity": identity, "bases": bases }))
+            .map_err(|e| napi::Error::from_reason(format!("probe bases: {e}")))
     }
 
     /// Analyzes `file_entries_json`, reading `probe_evidence_json`, the
@@ -822,11 +838,15 @@ impl ExtractEngine {
     #[napi]
     pub fn analyze(&mut self, file_entries_json: String, probe_evidence_json: Option<String>) -> napi::Result<String> {
         let entries = canonical_entries(&file_entries_json)?;
+        // Evidence gathered for other files (a same-count edit since the
+        // `prepare`) is not this input's, so the probes ask the file set.
+        let identity = input_identity(&entries);
         self.opts.css_inputs.probe_evidence = match probe_evidence_json {
             Some(json) => Some(
-                serde_json::from_str(&json)
+                serde_json::from_str::<analyze_css::ProbeEvidence>(&json)
                     .map_err(|e| napi::Error::from_reason(format!("invalid probe evidence JSON: {e}")))?,
-            ),
+            )
+            .filter(|evidence| evidence.identity == identity),
             None => None,
         };
         self.facts.clear();
@@ -1503,6 +1523,40 @@ mod tests {
             .to_string()
     }
 
+    /// Contract: evidence is read only for the files it was gathered for. A
+    /// same-count edit since the `prepare` (an unrelated file replaced by
+    /// `x.ts`) leaves the old evidence for `./x` (`x.tsx`) unread, so the
+    /// probe finds `x.ts`, as a plain analysis does.
+    #[test]
+    fn evidence_for_other_files_is_never_read() {
+        let entries = |second: (&str, &str)| {
+            serde_json::json!([
+                { "path": "app.tsx", "source": "import { Parent } from './x';\nexport const Child = Parent.extend().styles({ m: 1 }).asElement('div');\nexport const App = () => <Child />;" },
+                { "path": "x.tsx", "source": "export const Parent = ds.styles({ p: 2 }).asElement('div');" },
+                { "path": second.0, "source": second.1 },
+            ])
+            .to_string()
+        };
+        let before = entries(("unrelated.ts", "export const u = 1;"));
+        let after = entries(("x.ts", "export const Parent = ds.styles({ p: 1 }).asElement('div');"));
+        let mut engine = ExtractEngine::new(None).unwrap();
+        let prepared: serde_json::Value = serde_json::from_str(&engine.prepare(before).unwrap()).unwrap();
+        let evidence = serde_json::json!({
+            "generation": 1,
+            "identity": prepared["identity"],
+            "bases": { "x": { "candidate": "x.tsx", "actual": null, "analysedAs": "x.tsx" } },
+        })
+        .to_string();
+        let parent_of = |manifest: String| {
+            let manifest: serde_json::Value = serde_json::from_str(&manifest).unwrap();
+            manifest["components"]["app.tsx::Child"]["extends_from"].clone()
+        };
+        let stale = parent_of(engine.analyze(after.clone(), Some(evidence)).unwrap());
+        let plain = parent_of(ExtractEngine::new(None).unwrap().analyze(after, None).unwrap());
+        assert_eq!(plain, serde_json::json!("x.ts::Parent"));
+        assert_eq!(stale, plain);
+    }
+
     /// Contract: `prepare` names every base analysis probes, so a session
     /// that gathers evidence for its bases leaves no probe unanswered:
     /// imports, re-exports, `import()` and an alias's expansion alike.
@@ -1521,8 +1575,8 @@ mod tests {
             { "path": "src/lazy.tsx", "source": "export default 1;" },
         ])
         .to_string();
-        let bases: std::collections::BTreeSet<String> =
-            serde_json::from_str(&engine.prepare(files.clone()).unwrap()).unwrap();
+        let prepared: serde_json::Value = serde_json::from_str(&engine.prepare(files.clone()).unwrap()).unwrap();
+        let bases: std::collections::BTreeSet<String> = serde_json::from_value(prepared["bases"].clone()).unwrap();
         crate::analyze_css::PROBED.with(|probed| probed.borrow_mut().clear());
         engine.analyze(files, None).unwrap();
         let probed = crate::analyze_css::PROBED.with(|probed| probed.borrow().clone());

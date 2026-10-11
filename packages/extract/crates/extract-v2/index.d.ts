@@ -5,8 +5,9 @@ export declare class ExtractEngine {
   constructor(options?: EngineOptions | undefined | null)
   /**
    * Parses `file_entries_json` for the next `analyze` of the same files,
-   * and returns the path each of their specifiers probes (`probe_base`),
-   * sorted: the bases a session gathers host-candidate evidence for.
+   * and returns their input identity and the path each of their
+   * specifiers probes (`probe_base`), sorted: the bases a session gathers
+   * host-candidate evidence for, which carries that identity.
    */
   prepare(fileEntriesJson: string): string
   /**
