@@ -98,6 +98,14 @@ export declare function extractFacts(fileEntriesJson: string): string
 export declare function loadSystemModule(systemPath: string, rootDir: string, exportName?: string | undefined | null, conditions?: Array<string> | undefined | null, workspaces?: Record<string, string> | undefined | null, extensionPolicyJson?: string | undefined | null): NapiSystemConfig
 
 /**
+ * The directory of the package `name` as the system loader locates it from
+ * `from_dir` (the first `node_modules/<name>` up the tree, then the declared
+ * `workspaces`), at its real path, as host resolvers report a linked
+ * package; null where it locates none.
+ */
+export declare function locatePackage(name: string, fromDir: string, workspaces?: Record<string, string> | undefined | null): string | null
+
+/**
  * Each file's run-time module specifiers, for the kit publication check:
  * imports, re-exports and literal `import()` calls that survive type
  * stripping. `{ "files": { path: [specifier, …] } }`.

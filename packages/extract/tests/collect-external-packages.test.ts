@@ -17,6 +17,7 @@ import {
   firstOwners,
   importedKitDiagnostics,
   nativeKitSourceRoot,
+  nativePackageLocator,
   sourceKitDependencies,
   staleDistIncludesMessage,
 } from '../pipeline/discover-packages';
@@ -81,6 +82,7 @@ function collect(
     specifiers: Object.keys(specifierEntries),
     resolveSpecifier: (spec) => specifierEntries[spec],
     kitSourceRoot: kitSourceRoot(rootDir),
+    locatePackage: nativePackageLocator(native, {}),
     rootDir,
     extensionsSet: EXTENSIONS,
     hasEntry: () => false,
@@ -275,6 +277,7 @@ describe('collectExternalPackageSources', () => {
         return null;
       },
       kitSourceRoot: kitSourceRoot(root),
+      locatePackage: nativePackageLocator(native, {}),
       rootDir: root,
       extensionsSet: EXTENSIONS,
       hasEntry: () => false,
@@ -1274,6 +1277,7 @@ test.each([
   writeFileSync(join(pkg, 'package.json'), JSON.stringify({ name, exports }));
   const engine = {
     declaresKitSource: native.declaresKitSource,
+    locatePackage: native.locatePackage,
     extractFacts: () =>
       JSON.stringify({
         parseCount: 1,
@@ -1466,3 +1470,88 @@ test('two copies of a kit report their own percent findings', async () => {
       .sort()
   ).toEqual(['a%20b', 'c%20d']);
 });
+
+// Contract: discovery locates a package as the system loader does: the first
+// `node_modules/<name>` up the tree, before a declared workspace of that
+// name, at its real path; null where neither holds it.
+test('locatePackage reads node_modules before the workspaces, at the real path', () => {
+  const root = realpathSync(makeRoot());
+  const linked = makePackage(join(root, 'packages', 'linked'), {});
+  const unlinked = makePackage(join(root, 'packages', 'unlinked'), {});
+  const shadowed = makePackage(join(root, 'packages', 'shadowed'), {});
+  const installed = makePackage(
+    join(root, 'node_modules', '@x', 'shadowed'),
+    {}
+  );
+  symlinkSync(linked, join(root, 'node_modules', '@x', 'linked'));
+  const locate = nativePackageLocator(native, {
+    '@x/unlinked': unlinked,
+    '@x/shadowed': shadowed,
+  });
+
+  expect(
+    ['@x/linked', '@x/unlinked', '@x/shadowed', '@x/absent'].map((name) =>
+      locate(name, join(root, 'app'))
+    )
+  ).toEqual([linked, unlinked, installed, null]);
+});
+
+// Contract: locating an unlinked workspace package admits nothing the host
+// cannot load (spec §2.2 A2). Where only the system loader resolves it, a kit
+// is admitted only where a source entry redirects the import: with only
+// compiled output it is located but unresolvable; with an `animus` source
+// condition it is admitted.
+test.each([
+  [undefined, false],
+  [{ '.': { animus: './src/index.ts', default: './dist/index.js' } }, true],
+])(
+  'an unlinked workspace kit with exports %j is admitted: %s',
+  async (exports, admitted) => {
+    const root = realpathSync(makeRoot());
+    const kit = join(root, 'packages', 'kit');
+    makePackage(kit, { 'dist/index.js': 'export const t = 1;\n' });
+    if (exports) {
+      mkdirSync(join(kit, 'src'));
+      writeFileSync(join(kit, 'src', 'index.ts'), 'export const t = 1;\n');
+    }
+    writeFileSync(
+      join(kit, 'package.json'),
+      JSON.stringify({
+        name: '@x/kit',
+        exports: exports ?? { '.': './dist/index.js' },
+      })
+    );
+    const workspaces = { '@x/kit': kit };
+    const result = await collect(
+      root,
+      {},
+      {
+        specifiers: ['@x/kit'],
+        // The host resolves nothing; the system loader's answer is all.
+        resolveSpecifier: (spec) =>
+          native.resolveSpecifier(spec, root, [], workspaces).path ?? null,
+        requireSourceEntry: () => true,
+        kitSourceRoot: nativeKitSourceRoot(
+          native,
+          root,
+          [],
+          workspaces,
+          extensionPolicyJson(BUILT_IN_EXTENSION_POLICY)
+        ),
+        locatePackage: nativePackageLocator(native, workspaces),
+      }
+    );
+
+    expect({
+      located: nativePackageLocator(native, workspaces)('@x/kit', root),
+      admitted: Object.hasOwn(result.packageMap, '@x/kit'),
+      outcome: result.outcomes[0]?.outcome,
+    }).toEqual({
+      located: kit,
+      admitted,
+      outcome: admitted
+        ? expect.not.stringMatching(/^unresolvable$/)
+        : 'unresolvable',
+    });
+  }
+);

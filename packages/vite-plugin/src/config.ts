@@ -1,8 +1,11 @@
 import {
   buildPathAliasesJson,
+  outputExclusion,
   resolveMode,
+  viteAssetClassification,
   viteExtensionPolicy,
 } from '@animus-ui/extract/pipeline';
+import { resolve } from 'path';
 
 import { resolveLightningTargets } from './css';
 
@@ -26,6 +29,10 @@ export function applyResolvedConfig(
       config.command === 'build' ? 'production' : 'development'
     ).mode === 'production';
   ctx.rootDir = config.root;
+  ctx.outputExclude = outputExclusion(
+    config.root,
+    resolve(config.root, config.build.outDir)
+  );
   // Vite substitutes the mode for its `development|production` condition.
   ctx.resolveConditions = config.resolve.conditions.map((condition) =>
     condition === 'development|production'
@@ -36,6 +43,7 @@ export function applyResolvedConfig(
   );
   // Vite's extension order, with its defaults applied.
   ctx.extensionPolicy = viteExtensionPolicy(config.resolve.extensions);
+  ctx.assetClassification = viteAssetClassification(config.assetsInclude);
   ctx.log(`extension order: ${ctx.extensionPolicy.resolverVersion}`);
   ctx.logger = config.logger;
   // Public base for dev /@fs asset URLs (build URLs are resolved by Vite's

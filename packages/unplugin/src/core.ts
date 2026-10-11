@@ -1,12 +1,15 @@
 import {
   BUILT_IN_EXTENSION_POLICY,
+  builtInAssetClassification,
   DiagnosticFailure,
   ENGINE_TRANSFORM_EXTENSIONS,
+  esbuildAssetClassification,
   esbuildExtensionPolicy,
   isEngineTransformExtension,
   isPathWithinRoot,
   keepsKitSourceEffects,
   rollupExtensionPolicy,
+  viteAssetClassification,
   viteExtensionPolicy,
   webpackExtensionPolicy,
 } from '@animus-ui/extract/pipeline';
@@ -32,6 +35,7 @@ import { resolveHostMode, resolveHostOptions } from './options';
 import type { AnimusUnpluginOptions } from './options';
 import type {
   AnimusMode,
+  HostAssetClassification,
   HostExtensionPolicy,
 } from '@animus-ui/extract/pipeline';
 import type { SessionKey } from '@animus-ui/extract/session';
@@ -366,6 +370,8 @@ export const unpluginFactory: UnpluginFactory<
   /** The bundler's extension order, as its resolved configuration holds
    *  it; the built-in policy for a host none is read from (Rolldown). */
   let hostExtensions: HostExtensionPolicy = BUILT_IN_EXTENSION_POLICY;
+  let hostAssets: HostAssetClassification =
+    builtInAssetClassification('noHost');
   /** Hooks can fire before buildStart (webpack's make taps run
    *  concurrently), so joiners await this before awaiting the pipeline. */
   let signalPipelineStarted!: () => void;
@@ -435,6 +441,7 @@ export const unpluginFactory: UnpluginFactory<
       session.rootDir = root;
       session.conditions = hostConditions;
       session.extensionPolicy = hostExtensions;
+      session.assetClassification = hostAssets;
       session.systemPropsModuleId = TURBOPACK_SYSTEM_PROPS_ID;
       // Each full pass re-reads the tsconfig aliases.
       session.aliasesFromTsconfig = true;
@@ -686,8 +693,10 @@ export const unpluginFactory: UnpluginFactory<
         command: string;
         build: { watch?: unknown };
         resolve: { extensions: string[] };
+        assetsInclude: (file: string) => boolean;
       }) {
         hostExtensions = viteExtensionPolicy(config.resolve.extensions);
+        hostAssets = viteAssetClassification(config.assetsInclude);
         const serving =
           config.command === 'serve' || Boolean(config.build.watch);
         watching = () => serving;
@@ -701,6 +710,10 @@ export const unpluginFactory: UnpluginFactory<
           (inputOptions?.plugins ?? []).some(
             (plugin) => plugin?.name === 'node-resolve'
           )
+        );
+        hostAssets = builtInAssetClassification(
+          'hostOptionUnreadable',
+          'rollup'
         );
         modeOracle = this.meta?.watchMode ? 'development' : 'production';
         await startPipeline();
@@ -784,6 +797,7 @@ export const unpluginFactory: UnpluginFactory<
         esbuildOptions = buildOptions;
         hostConditions = buildOptions.conditions ?? [];
         hostExtensions = esbuildExtensionPolicy(buildOptions.resolveExtensions);
+        hostAssets = esbuildAssetClassification(buildOptions.loader);
         watching = () => watch;
         buildOptions.define = {
           ...buildOptions.define,
@@ -870,6 +884,12 @@ export const unpluginFactory: UnpluginFactory<
       meta.framework,
       compiler.options.resolve ?? {},
       compiler.webpack?.version ?? compiler.rspack?.rspackVersion
+    );
+    // webpack's rules are not modelled: a conditional rule may never apply,
+    // so the built-in list answers (spec §2.2 A8).
+    hostAssets = builtInAssetClassification(
+      'hostOptionUnreadable',
+      `${meta.framework === 'rspack' ? 'rspack' : 'webpack'} rules not modelled`
     );
     watching = () => compiler.watchMode === true;
     const DefinePlugin =

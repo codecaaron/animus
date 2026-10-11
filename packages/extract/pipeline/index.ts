@@ -42,10 +42,14 @@ export {
   createExcludeMatcher,
   DEFAULT_EXCLUDE,
   DRIVER_NAMESPACES,
+  outputExclusion,
+  outputSourceGuard,
+  outputSourceMessage,
   REPLACEABLE_DEFAULT_EXCLUDE,
   STRUCTURAL_EXCLUDE,
   resolveMode,
   resolveVerbosity,
+  unmatchedExcludeLines,
 } from './core-options';
 export { compareDiscoveryOrder, discoverFiles } from './discover-files';
 export type {
@@ -64,6 +68,7 @@ export {
   fileSideEffects,
   findPackageRoot,
   nativeKitSourceRoot,
+  nativePackageLocator,
   keepsKitSourceEffects,
   kitSourceModuleSideEffects,
   firstOwners,
@@ -233,3 +238,11 @@ export { applyUnitFallback } from './unit-fallback';
 export { camelToKebab, stableStringify } from './utils';
 export { toWatchKeys } from './watch-keys';
 export type { IngestionOpening } from './source-ingestion';
+export {
+  builtInAssetClassification,
+  esbuildAssetClassification,
+  nextImageAssetClassification,
+  viteAssetClassification,
+} from './host-assets';
+export type { HostAssetClassification } from './host-assets';
+export { adaptedOriginals } from './probe-evidence';

@@ -2,6 +2,8 @@ import {
   AnimusConfigError,
   assertSupportedEngine,
   buildPathAliasesJson,
+  builtInAssetClassification,
+  outputExclusion,
   webpackExtensionPolicy,
 } from '@animus-ui/extract/pipeline';
 import {
@@ -250,6 +252,12 @@ export class AnimusWebpackPlugin {
     const resolve = compiler.options?.resolve;
     const names = resolve?.conditionNames ?? [];
     this.session.conditions = names.filter((name) => name !== '...');
+    // webpack's rules are not modelled: a conditional rule may never apply,
+    // so the built-in list answers (spec §2.2 A8).
+    this.session.assetClassification = builtInAssetClassification(
+      'hostOptionUnreadable',
+      'next-webpack rules not modelled'
+    );
     this.session.extensionPolicy = webpackExtensionPolicy(
       'next-webpack',
       resolve ?? {},
@@ -477,6 +485,13 @@ export class AnimusWebpackPlugin {
 
   setRootDir(rootDir: string): void {
     this.session.rootDir = rootDir;
+  }
+
+  /** Keeps Next's output directory out of discovery, whatever the user's
+   *  exclude list says. Call after `setRootDir`. */
+  excludeOutputDir(outDir: string): void {
+    const pattern = outputExclusion(this.session.rootDir!, outDir);
+    if (pattern !== null) this.session.structuralExclude = [pattern];
   }
 
   /** Adopts `compiler.context` only when no config-time root exists: every

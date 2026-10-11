@@ -5,7 +5,7 @@ import { policyCandidates } from './extension-policy';
 import { parseInternalWire } from './internal-wire';
 import { SKIPPED_SOURCE_COST } from './manifest-diagnostics';
 import { preprocessMdx, type PreprocessMdxResult } from './mdx-preprocessor';
-import { hostCandidate } from './probe-evidence';
+import { adaptedOriginals, hostCandidate } from './probe-evidence';
 import {
   adaptSvelteSource,
   type AdaptSvelteSourceResult,
@@ -200,13 +200,16 @@ export interface SourceIngestionResult {
   openings?: IngestionOpening[];
 }
 
-/** A probe ingestion ended because the host opens its candidate under
- *  another spelling. */
+/** A probe ingestion ended Incomplete (spec §2.2 A8): the host opens its
+ *  candidate under another spelling, or opens a file analysis never reads
+ *  (`later` the analysed candidate a fall-through would have read). */
 export interface IngestionOpening {
   importer: string;
   specifier: string;
   candidate: string;
   opened: string;
+  why: 'case-mismatch' | 'skipped';
+  later?: string;
 }
 
 export interface AbortedParse {
@@ -274,9 +277,11 @@ function resolveRelativeSource(
   specifier: string,
   files: ReadonlyMap<string, string>,
   analysed: ReadonlySet<string>,
-  opened: (candidate: string, actual: string) => void,
+  opened: (opening: Omit<IngestionOpening, 'importer' | 'specifier'>) => void,
   policy: ExtensionOrder | undefined,
-  host: { rootDir: string } | undefined
+  host:
+    | { rootDir: string; adapted: ReadonlyMap<string, readonly string[]> }
+    | undefined
 ): string | null {
   if (host !== undefined && specifier.startsWith('.')) {
     const first = hostCandidate(
@@ -288,16 +293,44 @@ function resolveRelativeSource(
         )
       ),
       analysed,
-      policy
+      policy,
+      { adapted: host.adapted }
     );
-    // The host opens another spelling: no module, and an opening the
-    // analysis reports and never prunes past.
-    if (first?.actual) {
-      opened(first.candidate, first.actual);
-      return null;
+    // The call stops at the host's first candidate (spec §2.2 A8): an
+    // analysed module, an adapted original's child, or no module. Where the
+    // host opens another spelling, or a file analysis never reads, the call
+    // is an opening the analysis reports and never prunes past.
+    if (first !== null) {
+      if (first.actual) {
+        opened({
+          candidate: first.candidate,
+          opened: first.actual,
+          why: 'case-mismatch',
+        });
+        return null;
+      }
+      if (first.reading === 'unanalysed') {
+        const candidates = relativeSourceCandidates(
+          importerPath,
+          specifier,
+          policy
+        );
+        const later = candidates
+          .slice(candidates.indexOf(first.candidate) + 1)
+          .find((candidate) => files.has(candidate));
+        const opening: Omit<IngestionOpening, 'importer' | 'specifier'> = {
+          candidate: first.candidate,
+          opened: first.candidate,
+          why: 'skipped',
+        };
+        if (later !== undefined) opening.later = later;
+        opened(opening);
+        return null;
+      }
+      return first.analysedAs === null
+        ? null
+        : (files.get(first.analysedAs) ?? null);
     }
-    const named = first?.analysedAs && files.get(first.analysedAs);
-    if (named) return named;
   }
   for (const candidate of relativeSourceCandidates(
     importerPath,
@@ -318,7 +351,7 @@ class ResolverExportIndex {
 
   private readonly files: ReadonlyMap<string, string>;
   private readonly analysed: ReadonlySet<string>;
-  /** Each resolver call the host opens under another spelling, once. */
+  /** Each resolver call that ended Incomplete, once. */
   readonly openings = new Map<string, IngestionOpening>();
   private readonly resolverBindings = new Map<string, ReadonlySet<string>>();
   /** Both memos live for one ingest only — the index is rebuilt per call,
@@ -333,7 +366,9 @@ class ResolverExportIndex {
     private readonly facts: ExtractFactsResult,
     analysisPaths: readonly string[],
     private readonly extensions: ExtensionOrder | undefined,
-    private readonly host: { rootDir: string } | undefined
+    private readonly host:
+      | { rootDir: string; adapted: ReadonlyMap<string, readonly string[]> }
+      | undefined
   ) {
     const pathsByCanonical = new Map<string, string[]>();
     for (const path of analysisPaths) {
@@ -424,12 +459,11 @@ class ResolverExportIndex {
         specifier,
         this.files,
         this.analysed,
-        (candidate, opened) =>
+        (opening) =>
           this.openings.set(key, {
             importer: importerPath,
             specifier,
-            candidate,
-            opened,
+            ...opening,
           }),
         this.extensions,
         this.host
@@ -606,7 +640,9 @@ export async function ingestSourceEntries(
     facts,
     analysisEntries.map((entry) => entry.path),
     options.extensions,
-    options.rootDir === undefined ? undefined : { rootDir: options.rootDir }
+    options.rootDir === undefined
+      ? undefined
+      : { rootDir: options.rootDir, adapted: adaptedOriginals(ownership) }
   );
   for (const { canonicalPath, paths } of resolvers.collisions) {
     for (let index = 0; index < paths.length; index += 1) {

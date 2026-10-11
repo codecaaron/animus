@@ -1,18 +1,19 @@
 import {
+  adaptedOriginals,
   buildSystemPropsModule,
-  contentHash,
-  createExcludeMatcher,
-  DiagnosticFailure,
-  DEFAULT_EXTENSIONS,
+  BUILT_IN_EXTENSION_POLICY,
+  builtInAssetClassification,
   clearEngineCache,
+  contentHash,
+  createSourceCorpus,
+  declaredWorkspacePackages,
+  DEFAULT_EXTENSIONS,
+  DiagnosticFailure,
   diffFilePlans,
   enforceExternalTokenContracts,
-  createSourceCorpus,
   findSheetAssetSpecifiers,
   generatedModuleCode,
   isDeletedSource,
-  BUILT_IN_EXTENSION_POLICY,
-  declaredWorkspacePackages,
   loadSystemConfig,
   parseFilesJson,
   projectExternalFileOwners,
@@ -20,13 +21,13 @@ import {
   resolveAssetFile,
   resolveVerbosity,
   runProjectAnalysis,
+  runStructuralSelfCheck,
   serializeStaticCss,
   snapshotFilePlans,
   staleDistIncludesMessage,
   substituteSheetAssets,
   toWatchKeys,
   unresolvableIncludesMessage,
-  runStructuralSelfCheck,
 } from '@animus-ui/extract/pipeline';
 import {
   CoalescingWindow,
@@ -55,6 +56,7 @@ import type {
   AssetSheets,
   ExcludeMatcher,
   ExternalPackageOutcome,
+  HostAssetClassification,
   HostExtensionPolicy,
   KitDescriptorRecord,
   ManifestDiagnostic,
@@ -209,13 +211,22 @@ export class PluginContext {
   /** Vite's resolved extension order; the built-in policy until
    *  `configResolved`. */
   extensionPolicy: HostExtensionPolicy = BUILT_IN_EXTENSION_POLICY;
+  /** Vite's asset classification, captured at `configResolved`. */
+  assetClassification: HostAssetClassification =
+    builtInAssetClassification('noHost');
 
   /** Development's repeat of buildStart's discovery, with its resolver. */
   rediscoverSources: (() => Promise<DiscoveredSources>) | null = null;
 
   extensionsSet: ReadonlySet<string>;
 
-  excludeMatcher: ExcludeMatcher;
+  /** Built once per buildStart, before any discovery, from the user's
+   *  exclude list and the output directory. */
+  excludeMatcher!: ExcludeMatcher;
+
+  /** Vite's output directory as a structural exclusion; null outside the
+   *  root. Set in `configResolved`. */
+  outputExclude: string | null = null;
 
   // `null` means no analysis has published yet; a failed analysis leaves the
   // previous manifest current instead of clearing it.
@@ -380,7 +391,6 @@ export class PluginContext {
     this.verbose = verbosity !== 'quiet';
     this.tracing = verbosity === 'trace';
     this.extensionsSet = new Set(options.extensions ?? DEFAULT_EXTENSIONS);
-    this.excludeMatcher = createExcludeMatcher(options.exclude);
 
     if (engineApiOverride) {
       this.engineApi = engineApiOverride;
@@ -543,7 +553,8 @@ export class PluginContext {
   runAnalysis(
     fileEntries: Array<{ path: string; source: string; hash?: string }>,
     skippedOriginals: readonly string[] = [],
-    openings: readonly IngestionOpening[] = []
+    openings: readonly IngestionOpening[] = [],
+    adapted: ReadonlyMap<string, readonly string[]> = new Map()
   ): boolean {
     const ingestionFailures = this.unsettledIngestionFailures();
     let result: ProjectAnalysisResult;
@@ -562,6 +573,8 @@ export class PluginContext {
           relative(this.rootDir, dir)
         ),
         rootDir: this.rootDir,
+        assets: this.assetClassification,
+        adapted,
         devMode: !this.emissionProd,
         // Rollup leaves an `import(expr)` it cannot read unbundled.
         analysisContext: {
@@ -743,7 +756,9 @@ export class PluginContext {
         this.runAnalysis(
           accepted.analysisEntries,
           accepted.skippedOriginals,
-          accepted.openings
+          accepted.openings,
+          // The ingestion being analysed publishes only after its analysis.
+          adaptedOriginals(accepted.ownership)
         ) !== false;
       if (!ok) return { ok, accepted, endedHold: false, redeliver: [] };
       this.publishSourceIngestion(accepted);

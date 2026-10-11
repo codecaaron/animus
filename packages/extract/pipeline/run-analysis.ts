@@ -13,6 +13,7 @@ import { applyUnitFallback } from './unit-fallback';
 
 import type { AnalyzeProjectInputs } from './analyze-project-args';
 import type { ExtensionOrder } from './extension-policy';
+import type { HostAssetClassification } from './host-assets';
 import type { KitDescriptorRecord } from './kit-descriptor';
 import type {
   DiagnosticLevels,
@@ -60,6 +61,12 @@ export interface AnalysisOptions {
    *  host-candidate evidence for each probe is gathered from its filesystem
    *  (spec §2.2 A2, A8); without it, analysis probes its file set alone. */
   rootDir?: string;
+  /** The host's asset classification (spec §2.2 A8): an asset a probe's
+   *  host opens is an opaque value, not a source analysis skipped. */
+  assets?: HostAssetClassification;
+  /** Each adapted original (`.mdx`, `.svelte`) and its analysis children,
+   *  through which a probe the host opens one at reads it. */
+  adapted?: ReadonlyMap<string, readonly string[]>;
   /** Diagnostics gathered outside analysis, surfaced through the same
    *  policy point as the manifest's own. */
   extraDiagnostics?: import('./manifest-diagnostics').ManifestDiagnostic[];
@@ -245,7 +252,8 @@ export function runProjectAnalysis(
         : gatherProbeEvidence(
             opts.rootDir,
             new Set(opts.fileEntries.map((entry) => entry.path)),
-            opts.analysisContext?.extensions
+            opts.analysisContext?.extensions,
+            { isAsset: opts.assets?.isAsset, adapted: opts.adapted }
           )
     )
   );
