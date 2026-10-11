@@ -241,6 +241,14 @@ function isDiskNumber<Value>(value: Value): value is Value & number {
   );
 }
 
+/** The files a system load read: its watch keys, paths and content
+ *  hashes. */
+interface SystemDependencies {
+  keys: Set<string>;
+  paths: string[];
+  hashes: Map<string, string>;
+}
+
 /** Bundler-agnostic extraction pipeline: system load, source ingestion,
  *  analysis, emission, and watch-cycle diffing. Carries no bundler types. */
 export class ExtractionSession {
@@ -408,11 +416,22 @@ export class ExtractionSession {
    *  the cache keeps every observed source so the repair publishes them in
    *  one generation; a successful publication clears it. */
   private heldRejection: string | null = null;
-  /** Reload debt: a development system reload that failed, owed until one
-   *  succeeds. While it stands, every batch retries the full reload and
+  /** Reload debt: a full pass that failed with a committed system to
+   *  hold, in development or under an aborted parse, owed until one
+   *  succeeds. runFullPipeline alone sets and clears it. While it stands, every batch retries the full reload and
    *  nothing publishes against the stale system. Under an aborted parse's
    *  hold, the first batch that passes the parse check pays it instead. */
   private systemReloadOwed = false;
+  /** The system dependencies the last committed full pass recorded: a
+   *  failed reload watches these and its own, never an earlier failure's. */
+  private lastGoodSystemDependencies: SystemDependencies = {
+    keys: new Set(),
+    paths: [],
+    hashes: new Map(),
+  };
+  /** Whether the current full pass's system load recorded its
+   *  dependencies. */
+  private attemptRecordedSystemDependencies = false;
   /** Monotonic readiness witness: flips true on the first complete
    *  publication and never regresses; every later status write carries it. */
   private firstEmissionComplete = false;
@@ -796,9 +815,7 @@ export class ExtractionSession {
         const promise = this.runFullPipeline(this.pendingFromBatch(changes));
         setAnalysisStartedPromise(this.key, promise);
         await promise;
-        this.systemReloadOwed = false;
       } catch (err) {
-        this.systemReloadOwed = true;
         // A failed reset re-run is a failed cycle, not a fallback: swallowing
         // it would republish against the stale system. The status write is not
         // redundant: the system load throws before the analyze-and-emit status
@@ -1011,7 +1028,6 @@ export class ExtractionSession {
           );
           this.resetForHmr();
           await this.runFullPipeline(pending);
-          this.systemReloadOwed = false;
           return;
         }
         this.externalFileOwners = projectExternalFileOwners(
@@ -1102,6 +1118,7 @@ export class ExtractionSession {
     // restore it — otherwise this session answers as owner with empty caches.
     const priorSystem = this.system;
     const priorRegistration = this.snapshotWatchRegistration();
+    this.attemptRecordedSystemDependencies = false;
 
     const nested = getWatchTransaction(this.key) !== null;
     // A top-level full read covers every observation queued before it, so
@@ -1118,20 +1135,33 @@ export class ExtractionSession {
       // The authority stays the committed system's, with its proofs.
       this.system = priorSystem;
       this.restoreWatchRegistration(priorRegistration);
+      // A live development reload owes itself until one succeeds, and an
+      // aborted parse's hold owes it in every mode; a failed startup has no
+      // last-good generation to hold.
+      if (
+        priorSystem !== null &&
+        (this.development || error instanceof AbortedParseRejection)
+      ) {
+        this.systemReloadOwed = true;
+      }
       throw error;
     } finally {
       if (!nested) setWatchTransaction(this.key, null);
     }
+    this.systemReloadOwed = false;
+    this.lastGoodSystemDependencies = {
+      keys: this.systemDependencyKeys,
+      paths: this.systemDependencyPaths,
+      hashes: this.systemDependencyHashes,
+    };
     this.commitSystemAuthority();
   }
 
-  /** What hosts watch, and what the last-good generation reported about its
-   *  kits and packages, which a failed full pass must leave in place. */
+  /** What hosts watch for assets, and what the last-good generation
+   *  reported about its kits and packages, which a failed full pass must
+   *  leave in place. */
   private snapshotWatchRegistration() {
     return {
-      systemDependencyKeys: this.systemDependencyKeys,
-      systemDependencyPaths: this.systemDependencyPaths,
-      systemDependencyHashes: this.systemDependencyHashes,
       assetDependencyPaths: new Set(this.assetDependencyPaths),
       assetDependencyKeys: new Set(this.assetDependencyKeys),
       kitDescriptors: this.kitDescriptors,
@@ -1139,28 +1169,31 @@ export class ExtractionSession {
     };
   }
 
-  /** Restores the last-good registration. The failed attempt's system
-   *  dependencies, when its load got that far, stay watched beside it: a fix
-   *  to any of them must reach the owed reload. */
+  /** Restores the last-good registration. The system dependencies are the
+   *  last committed pass's and, when its load got that far, this failed
+   *  attempt's (spec §2.3): a fix to any of them must reach the owed reload,
+   *  and an earlier failure's are replaced, never accumulated. */
   private restoreWatchRegistration(
     prior: ReturnType<ExtractionSession['snapshotWatchRegistration']>
   ): void {
-    const attempted = {
-      keys: this.systemDependencyKeys,
-      paths: this.systemDependencyPaths,
-      hashes: this.systemDependencyHashes,
-    };
     Object.assign(this, prior);
+    const lastGood = this.lastGoodSystemDependencies;
+    if (!this.attemptRecordedSystemDependencies) {
+      this.systemDependencyKeys = lastGood.keys;
+      this.systemDependencyPaths = lastGood.paths;
+      this.systemDependencyHashes = lastGood.hashes;
+      return;
+    }
     this.systemDependencyKeys = new Set([
-      ...prior.systemDependencyKeys,
-      ...attempted.keys,
+      ...lastGood.keys,
+      ...this.systemDependencyKeys,
     ]);
     this.systemDependencyPaths = [
-      ...new Set([...prior.systemDependencyPaths, ...attempted.paths]),
+      ...new Set([...lastGood.paths, ...this.systemDependencyPaths]),
     ];
     this.systemDependencyHashes = new Map([
-      ...attempted.hashes,
-      ...prior.systemDependencyHashes,
+      ...this.systemDependencyHashes,
+      ...lastGood.hashes,
     ]);
   }
 
@@ -1228,6 +1261,7 @@ export class ExtractionSession {
         }
       }
       this.systemDependencyHashes = hashes;
+      this.attemptRecordedSystemDependencies = true;
     }
     bt.systemLoad = this.elapsed(t);
 
