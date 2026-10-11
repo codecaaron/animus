@@ -463,7 +463,35 @@ fn eval_expression_scoped(
                 None => BailError::new(UnevaluatedKind::Reference, "member expression (non-static)"),
             }),
 
-        _ => Err(BailError::new(UnevaluatedKind::Unsupported, "unsupported expression type")),
+        _ => Err(BailError::new(expression_kind(expr), "unsupported expression type")),
+    }
+}
+
+/// What kind of expression evaluation could not settle, by its form;
+/// `Unsupported` only where no specific kind applies.
+fn expression_kind(expr: &Expression<'_>) -> UnevaluatedKind {
+    match crate::chain_walk::unwrap_type_assertions(expr) {
+        Expression::BinaryExpression(_)
+        | Expression::LogicalExpression(_)
+        | Expression::ConditionalExpression(_)
+        | Expression::UnaryExpression(_)
+        | Expression::UpdateExpression(_)
+        | Expression::AssignmentExpression(_)
+        | Expression::SequenceExpression(_)
+        | Expression::AwaitExpression(_) => UnevaluatedKind::Operator,
+        Expression::CallExpression(_) | Expression::NewExpression(_) | Expression::ChainExpression(_) => {
+            UnevaluatedKind::Call
+        }
+        Expression::ArrowFunctionExpression(_) | Expression::FunctionExpression(_) | Expression::ClassExpression(_) => {
+            UnevaluatedKind::Function
+        }
+        Expression::TemplateLiteral(_) | Expression::TaggedTemplateExpression(_) => UnevaluatedKind::Template,
+        Expression::Identifier(_)
+        | Expression::StaticMemberExpression(_)
+        | Expression::ComputedMemberExpression(_)
+        | Expression::PrivateFieldExpression(_)
+        | Expression::ThisExpression(_) => UnevaluatedKind::Reference,
+        _ => UnevaluatedKind::Unsupported,
     }
 }
 
@@ -531,7 +559,10 @@ fn eval_array_element(elem: &ArrayExpressionElement<'_>) -> Result<StaticValue, 
         }
         ArrayExpressionElement::SpreadElement(_) => Err(BailError::new(UnevaluatedKind::Spread, "spread in array")),
         ArrayExpressionElement::Elision(_) => Ok(StaticValue::Null),
-        _ => Err(BailError::new(UnevaluatedKind::Unsupported, "unsupported array element")),
+        other => Err(BailError::new(
+            other.as_expression().map_or(UnevaluatedKind::Unsupported, expression_kind),
+            "unsupported array element",
+        )),
     }
 }
 
@@ -553,9 +584,9 @@ pub fn parse_variant_arg(
     let mut base = None;
     let mut variants = StaticValue::Object(Vec::new());
     let mut all_skips = Vec::new();
-    let skip = |key: &str, reason: &str, span: Span| SkippedProperty {
+    let skip = |key: &str, kind: UnevaluatedKind, reason: &str, span: Span| SkippedProperty {
         key: key.to_string(),
-        kind: UnevaluatedKind::Unsupported,
+        kind,
         reason: reason.to_string(),
         parent: None,
         span: span_of(span),
@@ -569,7 +600,7 @@ pub fn parse_variant_arg(
                     if let Expression::StringLiteral(lit) = &p.value {
                         prop = lit.value.to_string();
                     } else {
-                        all_skips.push(skip("prop", "variant prop name (non-static)", p.value.span()));
+                        all_skips.push(skip("prop", expression_kind(&p.value), "variant prop name (non-static)", p.value.span()));
                     }
                 }
                 "defaultVariant" => {
@@ -578,6 +609,7 @@ pub fn parse_variant_arg(
                     } else {
                         all_skips.push(skip(
                             "defaultVariant",
+                            expression_kind(&p.value),
                             "default variant name (non-static)",
                             p.value.span(),
                         ));
@@ -589,14 +621,16 @@ pub fn parse_variant_arg(
                             eval_object_expr_with_statics(obj, static_values)?;
                         all_skips.extend(skips);
                         base = Some(val);
-                    } else if let Ok(object @ StaticValue::Object(_)) = eval_expression_with_statics(
-                        &p.value,
-                        &mut Vec::new(),
-                        static_values,
-                    ) {
-                        base = Some(object);
                     } else {
-                        all_skips.push(skip("base", "variant base styles (non-static)", p.value.span()));
+                        // A value that evaluates is no object; one that does
+                        // not keeps the kind evaluation gave it.
+                        match eval_expression_with_statics(&p.value, &mut Vec::new(), static_values) {
+                            Ok(object @ StaticValue::Object(_)) => base = Some(object),
+                            evaluated => {
+                                let kind = evaluated.err().map_or(UnevaluatedKind::Unsupported, |bail| bail.kind);
+                                all_skips.push(skip("base", kind, "variant base styles (non-static)", p.value.span()));
+                            }
+                        }
                     }
                 }
                 "variants" => {
@@ -617,22 +651,25 @@ pub fn parse_variant_arg(
                                 ObjectPropertyKind::SpreadProperty(spread) => {
                                     all_skips.push(skip(
                                         "variants",
+                                        UnevaluatedKind::Spread,
                                         "variant map spread (non-static)",
                                         spread.span,
                                     ));
                                 }
                             }
                         }
-                    } else if let Ok(StaticValue::Object(entries)) = eval_expression_with_statics(
-                        &p.value,
-                        &mut Vec::new(),
-                        static_values,
-                    ) {
-                        for (vkey, vstyles) in entries {
-                            variants.insert(&vkey, vstyles);
-                        }
                     } else {
-                        all_skips.push(skip("variants", "variant map (non-static)", p.value.span()));
+                        match eval_expression_with_statics(&p.value, &mut Vec::new(), static_values) {
+                            Ok(StaticValue::Object(entries)) => {
+                                for (vkey, vstyles) in entries {
+                                    variants.insert(&vkey, vstyles);
+                                }
+                            }
+                            evaluated => {
+                                let kind = evaluated.err().map_or(UnevaluatedKind::Unsupported, |bail| bail.kind);
+                                all_skips.push(skip("variants", kind, "variant map (non-static)", p.value.span()));
+                            }
+                        }
                     }
                 }
                 _ => {}
@@ -640,6 +677,7 @@ pub fn parse_variant_arg(
         } else {
             all_skips.push(skip(
                 "variant config",
+                UnevaluatedKind::Spread,
                 "variant config spread (non-static)",
                 prop_kind.span(),
             ));
@@ -1328,6 +1366,28 @@ mod tests {
             }
         }
         panic!("failed to parse variant config object");
+    }
+
+    /// Contract: a skip carries the kind of what evaluation could not
+    /// settle, from its own site (spec §6.2, `Unevaluated(kind)`).
+    #[test]
+    fn a_skip_carries_the_kind_of_what_evaluation_could_not_settle() {
+        let object_kind = |source: &str| {
+            let (_, skips, _) = parse_obj_all(source);
+            skips.iter().map(|skip| skip.kind).collect::<Vec<_>>()
+        };
+        let variant_kind = |source: &str| {
+            let (_, skips) = parse_variant(source);
+            skips.iter().map(|skip| skip.kind).collect::<Vec<_>>()
+        };
+        assert_eq!(object_kind("{ a: unknown + 1 }"), [UnevaluatedKind::Operator]);
+        assert_eq!(object_kind("{ a: [() => 1] }"), [UnevaluatedKind::Function]);
+        assert_eq!(object_kind("{ a: [`x${unknown}`] }"), [UnevaluatedKind::Template]);
+        assert_eq!(object_kind("{ a: [!unknown] }"), [UnevaluatedKind::Operator]);
+        assert_eq!(object_kind("{ a: [unknown.x] }"), [UnevaluatedKind::Reference]);
+        assert_eq!(variant_kind("{ prop: 'size', variants: { sm: {}, ...rest } }"), [UnevaluatedKind::Spread]);
+        assert_eq!(variant_kind("{ prop: 'size', variants: selectSizes }"), [UnevaluatedKind::Reference]);
+        assert_eq!(variant_kind("{ prop: name, variants: {} }"), [UnevaluatedKind::Reference]);
     }
 
     #[test]
