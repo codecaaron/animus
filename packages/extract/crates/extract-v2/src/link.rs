@@ -220,9 +220,18 @@ pub(crate) fn named<T>(path: &str, specifier: &str, files: &BTreeMap<String, T>,
     match resolve_import_source(path, specifier, files, inputs) {
         Some(target) if files.contains_key(&target) => Named::Module(target),
         Some(target) => Named::Package(target),
-        None if specifier.starts_with('.') || expand_alias(specifier, &inputs.path_aliases).is_some() => Named::Nothing,
+        None if names_a_path(specifier) || expand_alias(specifier, &inputs.path_aliases).is_some() => Named::Nothing,
         None => Named::Package(specifier.to_string()),
     }
+}
+
+/// Whether `specifier` names a file by its path rather than a package: a
+/// relative or absolute POSIX path, a Windows drive or UNC path, or a
+/// `file:` URL.
+fn names_a_path(specifier: &str) -> bool {
+    let bytes = specifier.as_bytes();
+    let drive = bytes.len() >= 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && matches!(bytes[2], b'/' | b'\\');
+    specifier.starts_with('.') || specifier.starts_with('/') || specifier.starts_with('\\') || specifier.starts_with("file:") || drive
 }
 
 /// The specifiers that name a module built into Node 24, from

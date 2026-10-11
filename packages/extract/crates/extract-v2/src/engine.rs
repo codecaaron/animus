@@ -2272,6 +2272,7 @@ export const App = () => <Box tone="red" />;
             // A path the analysis cannot find may be a module at run time.
             ("missing module import()", "await import('./generated.js').then((m) => { m.pad.padding = 9; });", "{ ...pad }"),
             ("missing module side-effect import", "import './generated.js';", "{ ...pad }"),
+            ("missing module imported by absolute path", "import '/workspace/generated.js';", "{ ...pad }"),
             // Code from a string can load and change any module (PF3).
             (
                 "eval loads the module",
