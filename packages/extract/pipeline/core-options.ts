@@ -94,8 +94,9 @@ export interface AnimusCoreOptions {
    * over environment signals; never process lifecycle (watchers, HMR).
    */
   mode?: AnimusMode;
-  /** Root every relative input resolves against. Plugin drivers derive their
-   *  root from the host bundler and reject this key. */
+  /** Root every relative input resolves against. Vite and unplugin derive
+   *  their root from the host bundler and reject this key; Next takes it as
+   *  the app's root, since Next passes no dir to a config module. */
   root?: string;
 }
 
@@ -232,6 +233,7 @@ const CORE_VALUE_GATES: ReadonlyArray<{
     ok: isString,
     expected: 'a string path',
   },
+  { key: 'root', ok: isString, expected: 'a string path' },
   {
     key: 'exclude',
     ok: isStringArray,
