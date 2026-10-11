@@ -569,6 +569,16 @@ export class AnimusWebpackPlugin {
       : getSharedExternalDirs(this.session.key);
   }
 
+  /** An import webpack resolved while bundling, with the resolve options of
+   *  the rules its importer matches (spec §2.2 A4). */
+  reportHostResolution(
+    importer: string,
+    request: string,
+    resolved: string
+  ): void {
+    this.session.reportHostResolution(importer, request, resolved);
+  }
+
   getExternalSourceEntries(): Map<string, string> {
     return this.session.externalSourceEntries.size > 0
       ? this.session.externalSourceEntries

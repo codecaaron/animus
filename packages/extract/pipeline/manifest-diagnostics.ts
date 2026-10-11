@@ -307,6 +307,19 @@ export const UNIMPORTED_CREATE_SYSTEM =
  *  analysis does (spec §2.2 A7): report only. */
 export const ALIAS_MISMATCH = 'animus.discovery.alias-mismatch';
 
+/** An import the host resolves, from its importer, into another instance
+ *  of a discovered package whose file is not analysed and that no source
+ *  redirect covers: the importer would render unextracted builder code
+ *  (spec §2.2 A4, SA1). */
+export const UNREAD_PACKAGE_INSTANCE =
+  'animus.discovery.unread-package-instance';
+
+/** An import the host resolves, from its importer, into another instance
+ *  of a discovered package, which a request-keyed source redirect replaces
+ *  with the instance discovery read (spec §2.2 A4). */
+export const REPLACED_PACKAGE_INSTANCE =
+  'animus.discovery.replaced-package-instance';
+
 /** What a skipped source file costs: the analysis never sees what it
  *  renders. */
 export const SKIPPED_SOURCE_COST =
@@ -435,6 +448,8 @@ const DIAGNOSTIC_SEVERITY: ReadonlyMap<string, DiagnosticSeverity> = new Map([
   [UNPROVEN_ROOT_BINDING, 'warn'],
   [UNIMPORTED_CREATE_SYSTEM, 'warn'],
   [ALIAS_MISMATCH, 'warn'],
+  [UNREAD_PACKAGE_INSTANCE, 'error'],
+  [REPLACED_PACKAGE_INSTANCE, 'warn'],
   [VOCABULARY_COLLISION, 'warn'],
   [VOCABULARY_LEGACY_VERB, 'warn'],
   [INVALID_PROPERTY_REGISTRATION, 'error'],

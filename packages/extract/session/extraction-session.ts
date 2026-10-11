@@ -11,12 +11,27 @@ import {
   unlinkSync,
   writeFileSync,
 } from 'fs';
-import { basename, extname, isAbsolute, join, relative, resolve } from 'path';
+import {
+  basename,
+  extname,
+  isAbsolute,
+  join,
+  posix,
+  relative,
+  resolve,
+  sep,
+} from 'path';
 
 import {
   AliasAgreementCache,
   compareAliases,
+  packageInstanceFinding,
+  physical,
 } from '../pipeline/alias-agreement';
+import {
+  bareSpecifierPackageName,
+  isPackageSpecifier,
+} from '../pipeline/discover-packages';
 import {
   adaptedOriginals,
   assembleStylesheet,
@@ -793,6 +808,12 @@ export class ExtractionSession {
   lastExternalOutcomes: ExternalPackageOutcome[] = [];
   /** The analysed kits' descriptors, from the last discovery. */
   kitDescriptors: KitDescriptorRecord[] = [];
+  /** Package name → the real root of the instance discovery read. */
+  private packageInstances: Record<string, string> = {};
+  /** The last comparison's analysed files, at real paths, and the
+   *  package-instance findings already reported against them. */
+  private analysedRealPaths: () => ReadonlySet<string> = () => new Set();
+  private reportedInstances = new Set<string>();
 
   /** Component count of the last published analysis, null before the first —
    *  read by drivers instead of re-parsing the manifest JSON every cycle. */
@@ -1927,6 +1948,7 @@ export class ExtractionSession {
       rootDir
     );
     this.kitDescriptors = admitted.kitDescriptors;
+    this.packageInstances = admitted.packageInstances;
 
     try {
       const identity = createSourceIdentity(rootDir);
@@ -2711,6 +2733,12 @@ export class ExtractionSession {
       this.aliasComparison = 'unavailable';
       return [];
     }
+    let analysedReal: Set<string> | null = null;
+    this.analysedRealPaths = () =>
+      (analysedReal ??= new Set(
+        fileEntries.map((entry) => physical(join(this.rootDir!, entry.path)))
+      ));
+    this.reportedInstances = new Set();
     // A report: whatever goes wrong while comparing never blocks the
     // analysis or its publication.
     try {
@@ -2726,8 +2754,15 @@ export class ExtractionSession {
         moduleSpecifiers,
         resolve: this.hostResolve,
         cache: this.aliasCache,
+        packages: {
+          roots: this.packageInstances,
+          redirected: new Set(this.externalSourceEntries.keys()),
+        },
       });
       this.aliasComparison = 'compared';
+      for (const finding of findings) {
+        this.reportedInstances.add(`${finding.file}\0${finding.component}`);
+      }
       if (unavailable > 0) {
         this.log(
           `path aliases: ${unavailable} aliased import(s) the host's resolver failed on are unavailable, not agreeing`
@@ -2739,6 +2774,46 @@ export class ExtractionSession {
       this.log(`path aliases: comparison unavailable (${String(error)})`);
       return [];
     }
+  }
+
+  /**
+   * An import the host resolved while bundling (spec §2.2 A4), reported as
+   * the comparison reports it: webpack resolves each module's requests with
+   * the resolve options of the rules that module matches, which its
+   * resolver, asked outside a compilation, does not apply. `importer` and
+   * `resolved` are absolute. A finding the comparison already reported is
+   * not repeated; an error-level one throws in a build.
+   */
+  reportHostResolution(
+    importer: string,
+    request: string,
+    resolved: string
+  ): void {
+    if (this.rootDir === null || !isPackageSpecifier(request)) return;
+    const readRoot = this.packageInstances[bareSpecifierPackageName(request)];
+    if (readRoot === undefined) return;
+    const finding = packageInstanceFinding({
+      rootDir: this.rootDir,
+      importer: relative(this.rootDir, importer).split(sep).join(posix.sep),
+      specifier: request,
+      resolved,
+      readRoot,
+      redirected: this.externalSourceEntries.has(request),
+      holds: (file) => this.analysedRealPaths().has(file),
+    });
+    if (finding === null) return;
+    const key = `${finding.file}\0${finding.component}`;
+    if (this.reportedInstances.has(key)) return;
+    this.reportedInstances.add(key);
+    surfaceManifestDiagnostics(
+      { diagnostics: [finding] },
+      (message) => this.warn(message),
+      {
+        levels: this.options.diagnostics,
+        strict: this.options.strict,
+        reportErrors: this.reportErrors(),
+      }
+    );
   }
 
   private writeAnalysisStatus(
