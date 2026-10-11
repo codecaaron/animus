@@ -524,15 +524,11 @@ pub struct FileFacts {
     /// components they spread their props into.
     #[serde(skip)]
     pub(crate) spread_wrappers: BTreeMap<String, crate::usage_facts::SpreadWrapper>,
-    /// Modules this file loads at runtime (`import()`, `require()`, a
-    /// context or a glob): their exports render where usage cannot follow.
+    /// Modules this file loads at runtime (`import()`, `require()`, wrapped
+    /// or not, a context or a glob): their exports render where usage cannot
+    /// follow.
     #[serde(skip)]
     pub(crate) module_loads: Vec<crate::loads::ModuleLoad>,
-    /// Modules this file loads through a wrapped `require`
-    /// (`(require)('./x')`), which the member tables read beside
-    /// `module_loads`.
-    #[serde(skip)]
-    pub(crate) wrapped_requires: Vec<crate::loads::ModuleLoad>,
     /// Top-level functions and classes, and `const` bindings of a function or
     /// class expression, that nothing in the file writes: a tag that names
     /// one renders an ordinary component, not an Animus one.
@@ -1628,7 +1624,6 @@ pub(crate) fn extract_file_facts_from_static_maps(
         value_escapes,
         spread_wrappers,
         module_loads: loads.iter().filter_map(|load| load.module_load(source)).collect(),
-        wrapped_requires: loads.iter().filter_map(|load| load.wrapped_require(source)).collect(),
         dynamic_code,
         ordinary_components,
         context_consts,

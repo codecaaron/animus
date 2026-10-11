@@ -12326,9 +12326,9 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         }
     }
 
-    /// A module loaded at runtime (`import()`, `require()`, a context or a
-    /// glob) renders its exports where usage cannot follow, so each
-    /// component it can load keeps every option.
+    /// A module loaded at runtime (`import()`, `require()`, wrapped or not,
+    /// a context or a glob) renders its exports where usage cannot follow,
+    /// so each component it can load keeps every option.
     #[test]
     fn components_a_module_load_can_reach_keep_every_option() {
         let kept = |setup: &str| {
@@ -12352,6 +12352,7 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             "export const load = (name) => import(`./${name}`);",
             "export const load = (name) => import('./' + name);",
             "const ui = require('./r');\nexport const Big = () => <ui.R size=\"lg\" />;",
+            "export const render = (c, props) => [c, props];\nrender((require)('./r').R, { size: 'lg' });",
             "const context = require.context('./', false, /r\\.tsx$/);",
             "const context = import.meta.webpackContext('./');",
             "const modules = import.meta.glob('./*.tsx', { eager: true });",
@@ -12368,7 +12369,13 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         ] {
             assert_eq!(kept(setup), (vec!["sm"], vec!["active"]), "{setup}");
         }
-        // A loaded compose family hands over its slots.
+        // A component only a wrapped require reaches is rendered all the same.
+        let only_loaded = kept_options(&[
+            ("r.tsx", RECIPE),
+            ("entry.ts", "export const render = (c, props) => [c, props];\nrender((require)('./r').R, { size: 'lg' });\n"),
+        ]);
+        assert_eq!(only_loaded, (vec!["sm", "md", "lg"], vec!["active", "busy"]));
+                // A loaded compose family hands over its slots.
         let family = format!(
             "{}export const Fam = compose({{ Root: R }}, {{ name: 'Fam' }});\n",
             RECIPE.replacen("export const R", "const R", 1)

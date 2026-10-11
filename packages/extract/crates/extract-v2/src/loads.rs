@@ -23,9 +23,8 @@ pub enum LoadKind {
     /// A load call; `require` for `require(…)` itself.
     Call { require: bool },
     /// `require` reached through parentheses or a type assertion
-    /// (`(require)('./x')`, `require!('./x')`) with a literal specifier.
-    /// The style statics and the member tables read it; the load calls
-    /// match the bare name.
+    /// (`(require)('./x')`, `require!('./x')`) with a literal specifier;
+    /// the load calls match the bare name.
     WrappedRequire,
 }
 
@@ -62,25 +61,16 @@ impl Load {
     pub fn module_load(&self, source: &str) -> Option<ModuleLoad> {
         let dynamic_import = match self.kind {
             LoadKind::DynamicImport => true,
-            LoadKind::Call { .. } => false,
-            LoadKind::Import { .. } | LoadKind::Reexport { .. } | LoadKind::WrappedRequire => return None,
+            LoadKind::Call { .. } | LoadKind::WrappedRequire => false,
+            LoadKind::Import { .. } | LoadKind::Reexport { .. } => return None,
         };
-        Some(self.recorded(source, dynamic_import))
-    }
-
-    /// A wrapped `require` as `FileFacts::wrapped_requires` records it.
-    pub fn wrapped_require(&self, source: &str) -> Option<ModuleLoad> {
-        (self.kind == LoadKind::WrappedRequire).then(|| self.recorded(source, false))
-    }
-
-    fn recorded(&self, source: &str, dynamic_import: bool) -> ModuleLoad {
         let (start, end) = (self.span.start as usize, self.span.end as usize);
-        ModuleLoad {
+        Some(ModuleLoad {
             target: self.target.clone(),
             dynamic_import,
             line: source[..start].matches('\n').count() + 1,
             call: source[start..end].split_whitespace().collect::<Vec<_>>().join(" "),
-        }
+        })
     }
 }
 
