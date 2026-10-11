@@ -44,6 +44,7 @@ pub(crate) mod family_members;
 pub mod identity;
 pub mod ids;
 pub mod jsx_scan;
+pub(crate) mod keyframe_aliases;
 pub mod link;
 pub mod module_specifiers;
 pub mod usage_facts;
@@ -145,6 +146,33 @@ pub fn load_system_module(
         dependencies: config.dependencies,
         source_theme_manifests: config.source_theme_manifests,
     })
+}
+
+/// A specifier as the system loader resolves it: the real path of the file
+/// it names, with that of the `package.json` that selected it for a
+/// package, or why it names none.
+#[napi(object)]
+pub struct NapiResolvedSpecifier {
+    pub path: Option<String>,
+    pub manifest: Option<String>,
+    pub unresolved: Option<String>,
+}
+
+/// Resolves `specifier` from `from_dir` as the system loader resolves its
+/// imports, so a host lane can resolve a file or package the way a system's
+/// evaluation does: a relative or absolute path through the extension
+/// policy; a package through `exports` (its `animus` source condition, then
+/// `conditions`, `import` and `default`), then `module`, then `main`.
+#[napi]
+pub fn resolve_specifier(specifier: String, from_dir: String, conditions: Option<Vec<String>>) -> NapiResolvedSpecifier {
+    match animus_system_loader::resolve_specifier(&specifier, &from_dir, conditions.as_deref().unwrap_or_default()) {
+        Ok((path, manifest)) => NapiResolvedSpecifier {
+            path: Some(path.to_string_lossy().to_string()),
+            manifest: manifest.map(|manifest| manifest.to_string_lossy().to_string()),
+            unresolved: None,
+        },
+        Err(reason) => NapiResolvedSpecifier { path: None, manifest: None, unresolved: Some(reason) },
+    }
 }
 
 #[derive(Deserialize)]

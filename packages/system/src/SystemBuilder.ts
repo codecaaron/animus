@@ -65,19 +65,34 @@ interface SerializedValuePropEntry {
 
 export type GlobalStyleMap = Record<string, Record<string, any>>;
 
-export interface FontFaceSrc {
+/** A font the browser loads: rendered as `url('…') format('…') tech(…)`. */
+export interface FontFaceUrlSrc {
   /**
-   * A literal string is emitted byte-exact; an `AssetRef` emits its
-   * placeholder string, which the host plugin substitutes after extraction.
+   * A literal string is emitted as written, escaped inside its quotes; an
+   * `AssetRef` emits its placeholder string, which the host plugin
+   * substitutes after extraction.
    */
   url: string | AssetRef;
   /** Format hint (`woff2`, `woff`, …), rendered as `format('…')`. */
   format?: string;
+  /** Technology hint (`variations`, `color-COLRv1`, …), rendered as `tech(…)`. */
+  tech?: string;
+  local?: never;
 }
+
+/** A font installed on the device, by its full name: rendered as `local(…)`. */
+export interface FontFaceLocalSrc {
+  local: string;
+  url?: never;
+  format?: never;
+  tech?: never;
+}
+
+export type FontFaceSrc = FontFaceUrlSrc | FontFaceLocalSrc;
 
 /**
  * `family` may use a font-scale token reference (`{fonts.body}`); the other
- * descriptors take CSS literals only.
+ * descriptors take CSS literals only, written as strings.
  */
 export interface FontFace {
   family: string;
@@ -87,6 +102,12 @@ export interface FontFace {
   display?: string;
   unicodeRange?: string;
   stretch?: string;
+  sizeAdjust?: string;
+  ascentOverride?: string;
+  descentOverride?: string;
+  lineGapOverride?: string;
+  fontFeatureSettings?: string;
+  fontVariationSettings?: string;
 }
 
 export interface GlobalStyleBlock {
