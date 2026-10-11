@@ -1324,11 +1324,9 @@ pub(crate) fn extract_file_facts_from_static_maps(
                             }
                         }
                         None => match identifier_index.get(key) {
-                            // A stage argument by name reads its held value; a
-                            // member path does not.
-                            Some(name) => match eval::static_path(&statics_fx, name)
-                                .map(|v| if name.contains('.') { v } else { eval::held_value(v) })
-                            {
+                            // A stage argument something may change before the
+                            // read refuses, by name or by member path.
+                            Some(name) => match eval::static_path(&statics_fx, name) {
                                 Some(v) => match eval::lost_value_reason(v) {
                                     Some(reason) => Err(reason.to_string()),
                                     None => Ok((Some(v.clone()), Vec::new(), Vec::new())),
