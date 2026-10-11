@@ -187,7 +187,29 @@ export interface SessionHost {
    *  Omitted, it reaches the importer's directory, as a webpack context
    *  does. */
   unbundledComputedImports?: boolean;
+  /** The engine this session's build uses; omitted, the build's handle in
+   *  the shared engine store. A host with its own engine (a test, or a
+   *  host that owns the handle) supplies it. */
+  engine?: () => EngineApi;
+  /** Where the session's lines go; omitted, the console. Each line already
+   *  carries its `[animus]` mark. */
+  logger?: SessionLogger;
 }
+
+/** A host's sink for the session's human-facing lines. */
+export interface SessionLogger {
+  info(line: string): void;
+  warn(line: string): void;
+  error(line: string): void;
+}
+
+const CONSOLE_LOGGER: SessionLogger = {
+  // Human-facing session lines go to stderr — stdout belongs to the
+  // drivers' machine surfaces.
+  info: (line) => console.error(line),
+  warn: (line) => console.warn(line),
+  error: (line) => console.error(line),
+};
 
 import type {
   AnimusMode,
@@ -197,6 +219,7 @@ import type {
 } from '../pipeline/index';
 import type {
   AssetSheets,
+  EngineApi,
   IngestionOpening,
   LightningTargets,
   ManifestDiagnostic,
@@ -478,7 +501,7 @@ export class ExtractionSession {
   private fileCache = new Map<string, { hash: string; source: string }>();
 
   readonly corpus: SourceCorpus = createSourceCorpus({
-    engineApi: () => engineApi(this.key),
+    engineApi: () => this.engine(),
     prefix: '[animus-next]',
     strict: () => !!this.options.strict,
     warn: (message: string) => this.warn(message),
@@ -621,20 +644,27 @@ export class ExtractionSession {
     return this.verbosity !== 'quiet';
   }
 
+  /** The engine of this session's build. */
+  private engine(): EngineApi {
+    return this.host.engine?.() ?? engineApi(this.key);
+  }
+
+  private get logger(): SessionLogger {
+    return this.host.logger ?? CONSOLE_LOGGER;
+  }
+
   private log(msg: string): void {
-    if (this.verbose) {
-      // Human-facing session lines go to stderr — stdout belongs to the
-      // drivers' machine surfaces.
-      console.error(`[animus] ${msg}`);
-    }
+    if (this.verbose) this.logger.info(`[animus] ${msg}`);
   }
 
   private warn(msg: string): void {
-    console.warn(`[animus] ${msg}`);
+    this.logger.warn(`[animus] ${msg}`);
   }
 
   private reportErrors(): ((message: string) => void) | undefined {
-    return this.development ? (message) => console.error(message) : undefined;
+    return this.development
+      ? (message) => this.logger.error(message)
+      : undefined;
   }
 
   /** A build-strictness check that failed: a build throws `message`, and
@@ -1485,7 +1515,7 @@ export class ExtractionSession {
     // Once per build: its first full discovery, whether or not it publishes.
     if (claimUnmatchedExcludeReport(this.key)) {
       for (const line of unmatchedExcludeLines(excludeMatcher)) {
-        console.error(line);
+        this.logger.error(line);
       }
     }
 
@@ -1526,7 +1556,7 @@ export class ExtractionSession {
         fromDir,
         { conditions, workspaces, extensions }
       ) => {
-        const native = engineApi(this.key).resolveSpecifier;
+        const native = this.engine().resolveSpecifier;
         if (native === undefined) {
           throw new Error(
             'the native engine does not expose resolveSpecifier, which package resolution needs — rebuild @animus-ui/extract'
@@ -1544,7 +1574,7 @@ export class ExtractionSession {
     const hostFirst =
       this.hostResolve === null
         ? null
-        : hostFirstPackageResolver(this.hostResolve, engineApi(this.key), {
+        : hostFirstPackageResolver(this.hostResolve, this.engine(), {
             rootDir,
             conditions: context.conditions,
             workspaces: context.workspaces,
@@ -1553,7 +1583,7 @@ export class ExtractionSession {
     const discoveryDiagnostics: ManifestDiagnostic[] = [];
     const packageNames = await extractSystemFilePackages(
       resolvedSystemPath,
-      engineModuleParser(engineApi(this.key)),
+      engineModuleParser(this.engine()),
       (diagnostic) => discoveryDiagnostics.push(diagnostic),
       hostFirst?.resolveSpecifier ??
         ((name) => {
@@ -1570,7 +1600,7 @@ export class ExtractionSession {
     discoveryDiagnostics.push(
       ...importedKitDiagnostics(
         rawEntries,
-        engineApi(this.key),
+        this.engine(),
         rootDir,
         packageNames
       )
@@ -1592,16 +1622,13 @@ export class ExtractionSession {
     const collected = await collectExternalPackageSources({
       extensions: context.extensions,
       kitSourceRoot: nativeKitSourceRoot(
-        engineApi(this.key),
+        this.engine(),
         rootDir,
         context.conditions,
         context.workspaces,
         extensionPolicyJson(context.extensions)
       ),
-      locatePackage: nativePackageLocator(
-        engineApi(this.key),
-        context.workspaces
-      ),
+      locatePackage: nativePackageLocator(this.engine(), context.workspaces),
       specifiers: packageNames,
       resolveSpecifier:
         hostFirst?.resolveSpecifier ??
@@ -1771,7 +1798,7 @@ export class ExtractionSession {
       bt.fileCount = accepted.analysisEntries.length;
       // Clear the native cache only after adaptation produced a corpus: a
       // failed reload must leave the last-good transform engine usable.
-      clearEngineCache(() => engineApi(this.key));
+      clearEngineCache(() => this.engine());
       await this.analyzeAndEmit(
         accepted.analysisEntries,
         packageMap,
@@ -1849,7 +1876,7 @@ export class ExtractionSession {
   /** The system under `context`: the one load path for the build's
    *  authority and for a participant checking its own context. */
   private loadSystemUnder(context: SessionResolutionContext): SystemConfig {
-    return loadSystemConfig(() => engineApi(this.key), {
+    return loadSystemConfig(() => this.engine(), {
       systemPath: resolve(this.rootDir!, this.options.system),
       rootDir: this.rootDir!,
       prefix: this.options.prefix,
@@ -2237,7 +2264,7 @@ export class ExtractionSession {
     this.writeAnalysisStatus('analyzing', pending);
     // An error-level diagnostic, a hard error included, throws here in a
     // build, before any stylesheet is assembled: no partial generation.
-    const result = runProjectAnalysis(() => engineApi(this.key), {
+    const result = runProjectAnalysis(() => this.engine(), {
       ...analysisOptions,
       warn: (message) => this.warn(message),
       info: (message) => this.log(message),

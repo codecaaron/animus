@@ -86,4 +86,5 @@ export function applyResolvedConfig(
     ctx.pathAliasesJson = built.json;
     ctx.log(`Path aliases forwarded: ${built.count} entries`);
   }
+  ctx.createSession();
 }

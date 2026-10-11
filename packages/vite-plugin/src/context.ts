@@ -37,6 +37,7 @@ import {
   createBuildId,
   engineFactory,
   engineHandle,
+  ExtractionSession,
   releaseEngineHandle,
   sessionKey,
 } from '@animus-ui/extract/session';
@@ -413,6 +414,10 @@ export class PluginContext {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   readonly kitEngine: () => any = engineFactory;
   private engineKey: SessionKey | null = null;
+  /** This context's build: one Vite config instance, one build. */
+  readonly build = createBuildId();
+  /** The build's Session, created once the Vite root resolves. */
+  session: ExtractionSession | null = null;
 
   constructor(
     options: AnimusExtractOptions,
@@ -439,7 +444,7 @@ export class PluginContext {
     // This context is one build: its engine state is its own in the one
     // engine-handle store, keyed once the root is resolved and released
     // when the context closes.
-    const build = createBuildId();
+    const build = this.build;
     const rehydrateFilesJson = (filesJsonRaw: string): string => {
       if (!filesJsonRaw.includes('"source":""')) return filesJsonRaw;
       const entries = parseFilesJson(filesJsonRaw, 'animus-extract');
@@ -463,6 +468,52 @@ export class PluginContext {
         rehydrateFilesJson,
       })();
     };
+  }
+
+  /** Creates the build's Session from the resolved config: Vite's engine,
+   *  logger and core options, kept in memory. */
+  createSession(): ExtractionSession {
+    const options = this.options;
+    const session = new ExtractionSession(
+      {
+        system: options.system,
+        exclude: options.exclude,
+        extensions: options.extensions,
+        strict: options.strict,
+        diagnostics: options.diagnostics,
+        verbose: options.verbose,
+        prefix: options.prefix,
+        prefixContextualVars: options.prefixContextualVars,
+        targets: options.targets,
+        minify: options.minify,
+        staticCss: options.staticCss,
+        layers: options.layers,
+        engine: options.engine,
+        mode: this.emissionProd ? 'production' : 'development',
+      },
+      {
+        build: this.build,
+        unbundledComputedImports: true,
+        engine: () => this.engineApi(),
+        logger: {
+          info: (line) => (this.logger ?? console).info(line),
+          warn: (line) => (this.logger ?? console).warn(line),
+          error: (line) => (this.logger ?? console).error(line),
+        },
+      }
+    );
+    session.persistArtifacts = false;
+    session.development = this.development;
+    session.rootDir = this.rootDir;
+    session.conditions = this.resolveConditions;
+    session.extensionPolicy = this.extensionPolicy;
+    session.assetClassification = this.assetClassification;
+    session.pathAliasesJson = this.pathAliasesJson;
+    session.runtimeImport = options.runtimeImport ?? DEFAULT_RUNTIME_IMPORT;
+    session.structuralExclude =
+      this.outputExclude === null ? [] : [this.outputExclude];
+    this.session = session;
+    return session;
   }
 
   /** Releases this context's engine handle: a standalone one, which no
