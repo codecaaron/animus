@@ -2,7 +2,7 @@
  * The Session's publication record and its per-attempt outcome: what a host
  * serving from memory reads, and what it redelivers.
  */
-import { writeFileSync } from 'fs';
+import { readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
@@ -90,7 +90,7 @@ describe('a publication reports itself', () => {
       ['incremental', ['src/Button.tsx']],
     ]);
     expect(session.publication?.manifest.components).toEqual(PLAN_B);
-    expect(session.publication?.componentCss).toContain('.btn');
+    expect(session.publication?.analysisComponentCss).toContain('.btn');
     session.close();
   });
 });
@@ -110,6 +110,25 @@ describe('a held attempt reports itself', () => {
     expect(
       repaired.kind === 'published' && [repaired.endedHold, repaired.redeliver]
     ).toEqual([true, ['src/Button.tsx']]);
+    session.close();
+  });
+});
+
+describe('a publication carries the final stylesheet', () => {
+  test('byte for byte the body a persisting host writes, minified', async () => {
+    mocks.analyzeProject.mockImplementation(() => buildManifest(PLAN_A));
+    const session = makeSession(createProject('animus-publication-styles-'), {
+      minify: true,
+    });
+
+    await session.runFullPipeline();
+
+    const disk = readFileSync(join(session.sessionDir, 'styles.css'), 'utf-8');
+    const body = disk.slice(0, disk.lastIndexOf('\n/* __animusSession '));
+    expect(session.publication?.styles).toBe(body);
+    expect(session.publication?.styles).not.toBe(
+      session.publication?.analysisComponentCss
+    );
     session.close();
   });
 });
