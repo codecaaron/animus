@@ -70,6 +70,16 @@ import type {
 import type { SessionKey } from '@animus-ui/extract/session';
 import type { Logger } from 'vite';
 
+/** The runtime every adapter emits by default (spine row 1). */
+const DEFAULT_RUNTIME_IMPORT = '@animus-ui/system/runtime';
+
+/** The entries that supply every terminal: an override naming another must
+ *  extract only `.asClass()` terminals. */
+const FULL_RUNTIME_IMPORTS: ReadonlySet<string> = new Set([
+  DEFAULT_RUNTIME_IMPORT,
+  '@animus-ui/system',
+]);
+
 function emptySystemConfig(): SystemConfig {
   return {
     propConfigJson: '{}',
@@ -542,7 +552,7 @@ export class PluginContext {
         packageMap: this.packageMap,
         system: this.system,
         emitter: {
-          runtimeImport: this.options.runtimeImport ?? '@animus-ui/system',
+          runtimeImport: this.options.runtimeImport ?? DEFAULT_RUNTIME_IMPORT,
           cssModuleId: VIRTUAL_CSS_ID,
         },
         pathAliasesJson: this.pathAliasesJson,
@@ -642,7 +652,7 @@ export class PluginContext {
     manifest: ProjectManifest
   ): void {
     const override = this.options.runtimeImport;
-    if (!override || override === '@animus-ui/system') return;
+    if (!override || FULL_RUNTIME_IMPORTS.has(override)) return;
     const offenders: string[] = [];
     for (const [id, descriptor] of Object.entries(manifest.components)) {
       if (
@@ -659,7 +669,7 @@ export class PluginContext {
       `[animus-extract] runtimeImport '${override}' is valid only when ` +
         `every extracted terminal is .asClass(), but ${offenders.length} ` +
         `component(s) need createComponent/createComposedFamily from the ` +
-        `default '@animus-ui/system' runtime: ${shown}` +
+        `default '${DEFAULT_RUNTIME_IMPORT}' runtime: ${shown}` +
         (offenders.length > 5 ? ', …' : '') +
         `. Remove the override or convert these terminals to .asClass().`
     );
