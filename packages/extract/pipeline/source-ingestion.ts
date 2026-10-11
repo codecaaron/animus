@@ -223,10 +223,12 @@ const RELATIVE_PROBE_SUFFIXES = [
   '.tsx',
   '.js',
   '.jsx',
+  '.mjs',
   '/index.ts',
   '/index.tsx',
   '/index.js',
   '/index.jsx',
+  '/index.mjs',
 ] as const;
 
 function extension(path: string): string {
@@ -241,7 +243,7 @@ function canonicalResolverPath(path: string): string {
 
 /** NodeNext relative specifiers carry the EMITTED extension (`./x.js` for
  *  `x.ts`); the literal spelling is probed first, so a `.js` neighbor wins.
- *  The extractor's twin is `ANALYSIS_SOURCE` in `crates/system-loader/src/resolution.rs`. */
+ *  Mirrors `EXTENSION_POLICY` in `crates/system-loader/src/resolution.rs`. */
 interface NodeNextExtensionMap {
   readonly [emitted: string]: readonly string[] | undefined;
 }

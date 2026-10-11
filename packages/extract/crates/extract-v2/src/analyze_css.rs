@@ -741,9 +741,9 @@ pub fn resolve_import_source<T>(
     probe_files(&base, files)
 }
 
-/// The analyzed file `base` names, through the extractor's extension policy.
+/// The analyzed file `base` names, through the one extension policy.
 fn probe_files<T>(base: &str, files: &BTreeMap<String, T>) -> Option<String> {
-    animus_system_loader::resolution::ANALYSIS_SOURCE.probe(base, |candidate| files.contains_key(candidate))
+    animus_system_loader::resolution::EXTENSION_POLICY.probe(base, |candidate| files.contains_key(candidate))
 }
 
 /// Follow `export { X as Y } from '...'` hops, and local exports of an

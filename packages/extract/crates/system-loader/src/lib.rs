@@ -176,7 +176,7 @@ fn select_package_entry(
     // its root, as Node's legacy resolution reads them; a subpath names a
     // file or directory in the package.
     let probe = |entry: &str| {
-        resolution::SYSTEM_EVALUATION
+        resolution::EXTENSION_POLICY
             .probe(&pkg_dir.join(entry).to_string_lossy(), |candidate| Path::new(candidate).is_file())
     };
     let legacy = match subpath.trim_start_matches('.').trim_start_matches('/') {
@@ -401,7 +401,7 @@ pub fn resolve_specifier(
 fn resolve_relative(base_dir: &Path, specifier: &str) -> Result<String, String> {
     // Appended, not replaced: `./tokens.theme` names `tokens.theme.ts`.
     let target = base_dir.join(specifier).to_string_lossy().to_string();
-    resolution::SYSTEM_EVALUATION
+    resolution::EXTENSION_POLICY
         .probe(&target, |candidate| Path::new(candidate).is_file())
         .ok_or_else(|| format!("could not resolve '{}' from {:?}", specifier, base_dir))
 }
@@ -2526,6 +2526,35 @@ export const ds = tokens;
         assert_eq!(resolved("import-first", &["browser"]).as_deref(), Ok("import-first/import.js"));
         assert_eq!(resolved("escaping-source", &[]).as_deref(), Ok("escaping-source/runtime.js"));
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Contract: one extension policy answers system and analysis resolution
+    /// alike. Each witness resolves to the same file for a system's
+    /// evaluation, on disk, and for an analysis, in its file set.
+    #[test]
+    fn one_extension_policy_answers_system_and_analysis_alike() {
+        let witnesses: [(&[&str], &str, &str); 8] = [
+            (&["x.ts"], "./x.js", "x.ts"),
+            (&["x.js", "x.ts"], "./x.js", "x.js"),
+            (&["x.tsx"], "./x.jsx", "x.tsx"),
+            (&["x.mts"], "./x.mjs", "x.mts"),
+            (&["x.cts"], "./x.cjs", "x.cts"),
+            (&["x.ts"], "./x.JS", "x.ts"),
+            (&["x.jsx"], "./x", "x.jsx"),
+            (&["x.mjs"], "./x", "x.mjs"),
+        ];
+        for (index, (present, specifier, expected)) in witnesses.into_iter().enumerate() {
+            let dir = scratch_dir(&format!("extension-policy-{index}"));
+            for file in present {
+                fs::write(dir.join(file), "export {};\n").expect("write witness");
+            }
+            let system = resolve_relative(&dir, specifier).map(|path| path.rsplit('/').next().unwrap_or_default().to_string());
+            let base = specifier.trim_start_matches("./");
+            let analysis = resolution::EXTENSION_POLICY.probe(base, |candidate| present.contains(&candidate));
+            assert_eq!(system.as_deref(), Ok(expected), "system: {present:?} {specifier}");
+            assert_eq!(analysis.as_deref(), Some(expected), "analysis: {present:?} {specifier}");
+            let _ = fs::remove_dir_all(&dir);
+        }
     }
 
     /// Host-binding evidence follows each definition's own authored callable,
