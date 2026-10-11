@@ -93,6 +93,7 @@ impl FamilyIndex {
         ff: &FileFacts,
         files: &BTreeMap<String, FileFacts>,
         inputs: &CssInputs,
+        links: &crate::link::ProjectLinks,
     ) -> FxHashMap<String, String> {
         let mut members = FxHashMap::default();
         let mut add = |prefix: &str, id: usize| {
@@ -107,7 +108,7 @@ impl FamilyIndex {
         }
         for import in &ff.imports {
             let id = match resolve_import_source(file, &import.source, files, inputs) {
-                Some(module) => self.exported(module, import.imported.clone(), files, inputs),
+                Some(module) => self.exported(&module, import.imported.clone(), files, links),
                 // A default import is named by its local binding.
                 None if import.imported == "default" => self.only(&import.local),
                 None => self.only(&import.imported),
@@ -125,8 +126,8 @@ impl FamilyIndex {
                 }
                 continue;
             };
-            for name in module_export_names(&module, files, inputs) {
-                if let Some(id) = self.exported(module.clone(), name.clone(), files, inputs) {
+            for name in module_export_names(&module, files, inputs, links) {
+                if let Some(id) = self.exported(&module, name.clone(), files, links) {
                     add(&format!("{namespace}.{name}"), id);
                 }
             }
@@ -136,15 +137,17 @@ impl FamilyIndex {
 
     /// The family `module` exports as `name`, following re-exports and
     /// barrels.
+    /// The family `module`'s export `name` declares, as the module table
+    /// resolves it: an ambiguous or open export declares none.
     fn exported(
         &self,
-        module: String,
+        module: &str,
         name: String,
         files: &BTreeMap<String, FileFacts>,
-        inputs: &CssInputs,
+        links: &crate::link::ProjectLinks,
     ) -> Option<usize> {
-        let key = follow_exports(module, name, files, inputs)?;
-        self.exports.get(&key).copied()
+        let (declaring, exported, declared) = declared_export(module, name, files, links)?;
+        self.exports.get(&(declaring.clone(), exported)).or_else(|| self.locals.get(&(declaring, declared))).copied()
     }
 
     /// The only family bound to `binding` anywhere in the analysis.
@@ -497,7 +500,7 @@ impl<'f> ObjectMembers<'f> {
             return Rc::clone(objects);
         }
         let files = self.files;
-        let mut names = module_export_names(module, files, self.inputs);
+        let mut names = module_export_names(module, files, self.inputs, self.links);
         // `export default compose(…)` binds no name to list.
         names.insert("default".to_string());
         let objects: Rc<[Object]> = names.iter().filter_map(|name| self.exported_object(module, name)).collect();
@@ -870,7 +873,12 @@ pub(crate) fn module_export_names(
     module: &str,
     files: &BTreeMap<String, FileFacts>,
     inputs: &CssInputs,
+    links: &crate::link::ProjectLinks,
 ) -> BTreeSet<String> {
+    // An analysed module's exported names are the module table's.
+    if let Some(index) = links.module(module) {
+        return links.table.exported_names(index).names.into_iter().collect();
+    }
     let mut names = BTreeSet::new();
     let mut seen: FxHashSet<String> = FxHashSet::default();
     let mut stack = vec![(module.to_string(), true)];
