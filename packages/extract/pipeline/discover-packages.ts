@@ -730,6 +730,17 @@ export async function collectExternalPackageSources(opts: {
             root: selection.rule === 'compiled' ? null : selection.root,
           }
         : null;
+    // A refused selection fails the load, so its finding is reported with
+    // the unresolvable outcome.
+    if (
+      selection?.unresolved &&
+      condition &&
+      packageName &&
+      !reportedPackages.has(packageName)
+    ) {
+      reportedPackages.add(packageName);
+      diagnostics.push(...sourceConditionDiagnostics(packageName, condition));
+    }
     const entryKey = packageName && `.${specifier.slice(packageName.length)}`;
     absEntry ??=
       condition?.entries.find(([entry]) => entry === entryKey)?.[1] ?? null;

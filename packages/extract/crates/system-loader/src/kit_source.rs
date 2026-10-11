@@ -8,8 +8,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::{
-    condition_target, find_package_json, resolution, resolve_exports_entry, select_package_entry, split_specifier,
-    target_path, ResolutionContext, Target,
+    best_exports_pattern, condition_target, find_package_json, resolution, resolve_exports_entry,
+    select_package_entry, split_specifier, target_path, valid_package_target, ResolutionContext, Target,
 };
 
 /// The export condition a kit gives each public entry's original source.
@@ -108,34 +108,36 @@ pub fn resolve_kit_source_root(
         |found: &KitSourceRoot| found.runtime_entry.is_none() && !found.entries.iter().any(|(entry, _)| *entry == entry_key);
     let why_not_importable = || loader_runtime.as_ref().err().cloned().unwrap_or_default();
 
-    // `animus`: each exact entry's source target, as the loader selects it.
+    // `animus`: each exact entry's source target, as the loader selects it,
+    // and the specifier's own entry through a pattern where no exact key
+    // names it.
+    let mut walked: Vec<(String, serde_json::Value, Option<String>)> =
+        exact.iter().map(|(entry, value)| (entry.clone(), value.clone(), None)).collect();
+    if !exact.iter().any(|(entry, _)| *entry == entry_key) {
+        if let Some((value, matched)) =
+            exports.as_ref().and_then(serde_json::Value::as_object).and_then(|map| best_exports_pattern(map, &entry_key))
+        {
+            walked.push((entry_key.clone(), value.clone(), Some(matched.to_string())));
+        }
+    }
     let mut declared = false;
-    for (entry, value) in &exact {
-        let Some(selected) = source_condition(value, &context.conditions) else {
-            continue;
+    for (entry, value, matched) in &walked {
+        let mut refused = None;
+        let target = match source_walk(value, &context.conditions, &mut refused) {
+            (Target::Found(target), true) => {
+                target_path(&matched.as_deref().map_or(target.clone(), |matched| target.replace('*', matched)))
+            }
+            _ => {
+                // The loader stops elsewhere: at a runtime target, or at none.
+                // An `animus` key it passed that names no target is reported.
+                if let Some((animus, why)) = refused {
+                    declared = true;
+                    found.invalid.push((entry.clone(), animus_text(&animus), why));
+                }
+                continue;
+            }
         };
         declared = true;
-        let target = match selected {
-            Target::Found(target) => target_path(&target),
-            Target::Unmatched => {
-                found.invalid.push((
-                    entry.clone(),
-                    animus_text(value),
-                    format!("matches none of the conditions {:?}", context.conditions),
-                ));
-                continue;
-            }
-            Target::Blocked => {
-                found.invalid.push((
-                    entry.clone(),
-                    animus_text(value),
-                    "is no package target Node accepts (one starts with './' and has no '.', '..' or \
-                     'node_modules' segment)"
-                        .to_string(),
-                ));
-                continue;
-            }
-        };
         if target.contains('%') {
             // The loader refuses it loudly and tries nothing else.
             let reason = format!(
@@ -237,38 +239,67 @@ pub fn resolve_kit_source_root(
     Ok(found)
 }
 
-/// The `animus` target an entry's conditions select, as the loader's
-/// source facet reads them: the first `animus` key met in condition order,
-/// its array taking the first valid target. `None` where no `animus` key is
-/// met.
-fn source_condition(value: &serde_json::Value, conditions: &[String]) -> Option<Target> {
+/// The loader's source-facet walk over an entry's conditions, as
+/// `condition_target` takes it: the target it stops at, and whether that
+/// target came through an `animus` key. The first matching array element or
+/// condition key ends the walk, as it ends the loader's. `refused` takes the
+/// first `animus` key the walk passed that names no target, with why.
+fn source_walk(
+    value: &serde_json::Value,
+    conditions: &[String],
+    refused: &mut Option<(serde_json::Value, String)>,
+) -> (Target, bool) {
     match value {
-        serde_json::Value::Array(values) => values.iter().find_map(|value| source_condition(value, conditions)),
-        serde_json::Value::Object(obj) => obj
-            .get(KIT_SOURCE_CONDITION)
-            .map(|animus| condition_target(animus, true, conditions))
-            .or_else(|| {
-                obj.iter()
-                    .filter(|(key, _)| {
-                        matches!(key.as_str(), "import" | "default") || conditions.iter().any(|condition| condition == *key)
-                    })
-                    .find_map(|(_, value)| source_condition(value, conditions))
-            }),
-        _ => None,
+        serde_json::Value::String(target) if valid_package_target(target) => (Target::Found(target.clone()), false),
+        serde_json::Value::String(_) | serde_json::Value::Null => (Target::Blocked, false),
+        serde_json::Value::Array(values) => {
+            let mut blocked = false;
+            for value in values {
+                match source_walk(value, conditions, refused) {
+                    (Target::Found(target), via_animus) => return (Target::Found(target), via_animus),
+                    (Target::Blocked, _) => blocked = true,
+                    (Target::Unmatched, _) => {}
+                }
+            }
+            (if blocked { Target::Blocked } else { Target::Unmatched }, false)
+        }
+        serde_json::Value::Object(obj) => {
+            if let Some(animus) = obj.get(KIT_SOURCE_CONDITION) {
+                match condition_target(animus, true, conditions) {
+                    Target::Found(target) => return (Target::Found(target), true),
+                    Target::Unmatched => {
+                        refused.get_or_insert((animus.clone(), format!("matches none of the conditions {conditions:?}")));
+                    }
+                    Target::Blocked => {
+                        refused.get_or_insert((
+                            animus.clone(),
+                            "is no package target Node accepts (one starts with './' and has no '.', '..' or \
+                             'node_modules' segment)"
+                                .to_string(),
+                        ));
+                    }
+                }
+            }
+            for (key, value) in obj {
+                if !(matches!(key.as_str(), "import" | "default") || conditions.iter().any(|condition| condition == key)) {
+                    continue;
+                }
+                match source_walk(value, conditions, refused) {
+                    (Target::Unmatched, _) => {}
+                    stop => return stop,
+                }
+            }
+            (Target::Unmatched, false)
+        }
+        _ => (Target::Unmatched, false),
     }
 }
 
-/// An entry's `animus` value as written, for a report.
-fn animus_text(value: &serde_json::Value) -> String {
-    let animus = match value {
-        serde_json::Value::Object(obj) => obj.get(KIT_SOURCE_CONDITION),
-        serde_json::Value::Array(values) => values.iter().find_map(|value| value.get(KIT_SOURCE_CONDITION)),
-        _ => None,
-    };
+/// An `animus` value as written, for a report.
+fn animus_text(animus: &serde_json::Value) -> String {
     match animus {
-        Some(serde_json::Value::String(target)) => target.clone(),
-        Some(other) => other.to_string(),
-        None => String::new(),
+        serde_json::Value::String(target) => target.clone(),
+        other => other.to_string(),
     }
 }
 
