@@ -3,7 +3,10 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describe, expect, test } from 'vitest';
 
-import { compareAliases } from '../pipeline/alias-agreement';
+import {
+  aliasesAgreeByConstruction,
+  compareAliases,
+} from '../pipeline/alias-agreement';
 import { buildPathAliasesJson } from '../pipeline/path-aliases';
 
 describe('compareAliases', () => {
@@ -55,5 +58,33 @@ describe('compareAliases', () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe('aliasesAgreeByConstruction', () => {
+  // Contract: a host that reads tsconfig paths itself (Turbopack) agrees by
+  // construction only when it reads the session's tsconfig and no alias of
+  // its own overlaps a pattern the session reads (spec §2.2 A7).
+  test('agrees only on the same tsconfig with no overlapping alias', () => {
+    const agrees = (hostTsconfigPath: string | undefined, keys: string[]) =>
+      aliasesAgreeByConstruction({
+        rootDir: '/app',
+        hostTsconfigPath,
+        hostAliasKeys: keys,
+        sessionPatterns: ['@', '~lib/x.ts'],
+      });
+    expect({
+      defaults: agrees(undefined, []),
+      sameFile: agrees('./tsconfig.json', ['lodash']),
+      otherFile: agrees('tsconfig.app.json', []),
+      overlapping: agrees(undefined, ['@/components/*']),
+      exactOverlap: agrees(undefined, ['~lib/x.ts']),
+    }).toEqual({
+      defaults: true,
+      sameFile: true,
+      otherFile: false,
+      overlapping: false,
+      exactOverlap: false,
+    });
   });
 });

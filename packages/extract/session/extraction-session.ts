@@ -201,6 +201,9 @@ export interface SessionHost {
   /** The session's output feeds no bundler (the CLI), so its path aliases
    *  have no host answer to agree with (spec §2.2 A7). */
   noBundler?: boolean;
+  /** The host reads the session's tsconfig paths itself, with no alias of
+   *  its own over them (Turbopack): they agree by construction (A7). */
+  aliasesByConstruction?: boolean;
 }
 
 /** A host's sink for the session's human-facing lines. */
@@ -2643,6 +2646,10 @@ export class ExtractionSession {
     const { moduleSpecifiers } = this.engine();
     if (this.host.noBundler) {
       this.aliasComparison = 'not-applicable';
+      return [];
+    }
+    if (this.host.aliasesByConstruction) {
+      this.aliasComparison = 'by-construction';
       return [];
     }
     if (this.hostResolve === null || moduleSpecifiers === undefined) {

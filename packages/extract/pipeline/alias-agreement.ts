@@ -1,4 +1,4 @@
-import { isAbsolute, posix, relative, sep } from 'node:path';
+import { isAbsolute, posix, relative, resolve, sep } from 'node:path';
 
 import { ALIAS_MISMATCH, severityFor } from './manifest-diagnostics';
 import { hostCandidate } from './probe-evidence';
@@ -8,11 +8,49 @@ import type { HostResolve } from './host-package-resolver';
 import type { ManifestDiagnostic } from './manifest-diagnostics';
 import type { HostReadings } from './probe-evidence';
 
-/** How a session compared its tsconfig aliases with the host (spec §2.2
- *  A7): `compared` against the host's resolver; `unavailable` where the
- *  host's resolver cannot be reached, which is never agreement;
- *  `not-applicable` where no bundler resolves the output (the CLI). */
-export type AliasComparison = 'compared' | 'unavailable' | 'not-applicable';
+/** How a session compared the path aliases analysis reads with the host
+ *  (spec §2.2 A7): `compared` against the host's resolver;
+ *  `by-construction` where the host reads the same tsconfig file the
+ *  session read, with nothing overriding it (Turbopack); `unavailable`
+ *  where neither holds, which is never agreement; `not-applicable` where no
+ *  bundler resolves the output (the CLI). */
+export type AliasComparison =
+  | 'compared'
+  | 'by-construction'
+  | 'unavailable'
+  | 'not-applicable';
+
+/** A pattern or alias key without its trailing wildcard. */
+function aliasStem(key: string): string {
+  return key.replace(/\/?\*$/, '');
+}
+
+/**
+ * Whether a host that reads tsconfig paths itself (Turbopack) agrees with
+ * the session by construction: it reads the session's tsconfig file (Next's
+ * `typescript.tsconfigPath`, by default `tsconfig.json`), and no alias of
+ * its own (`resolveAlias`) overlaps a pattern the session reads, which
+ * would leave which one applies to the host.
+ */
+export function aliasesAgreeByConstruction(input: {
+  rootDir: string;
+  hostTsconfigPath: string | undefined;
+  hostAliasKeys: readonly string[];
+  sessionPatterns: readonly string[];
+}): boolean {
+  const sessionTsconfig = resolve(input.rootDir, 'tsconfig.json');
+  const hostTsconfig = resolve(
+    input.rootDir,
+    input.hostTsconfigPath ?? 'tsconfig.json'
+  );
+  if (hostTsconfig !== sessionTsconfig) return false;
+  return !input.hostAliasKeys.some((key) =>
+    input.sessionPatterns.some((pattern) => {
+      const [own, read] = [aliasStem(key), aliasStem(pattern)];
+      return own.startsWith(read) || read.startsWith(own);
+    })
+  );
+}
 
 interface AliasEntry {
   pattern: string;

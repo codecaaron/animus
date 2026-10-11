@@ -1,4 +1,5 @@
 import {
+  aliasesAgreeByConstruction,
   AnimusConfigError,
   assembleStylesheet,
   assertSupportedEngine,
@@ -8,6 +9,7 @@ import {
   keepsKitSourceEffects,
   nextImageAssetClassification,
   outputExclusion,
+  readTsconfigAliasPairs,
   resolveMode,
   sourceKitDependencies,
   turbopackExtensionPolicy,
@@ -499,7 +501,14 @@ function turbopackConfig<Config extends NextOwnedConfig>(
       outputExclude,
       nextConfig.images?.disableStaticImages === true,
       build,
-      appRoot
+      appRoot,
+      {
+        tsconfigPath: nextConfig.typescript?.tsconfigPath,
+        aliasKeys: Object.keys({
+          ...nextConfig.experimental?.turbo?.resolveAlias,
+          ...nextConfig.turbopack?.resolveAlias,
+        }),
+      }
     ).then((fragment) => mergeTurbopackFragment(nextConfig, fragment));
   function then<Resolved = TurbopackNextConfigObject<Config>, Rejected = never>(
     onResolved?:
@@ -549,6 +558,14 @@ function turbopackOwner(build: string): TurbopackOwner {
   return owner;
 }
 
+/** What decides whether Turbopack's aliases agree with the session's
+ *  (spec §2.2 A7): the tsconfig Next reads, and the consumer's own
+ *  `resolveAlias` keys. */
+interface TurbopackAliasReading {
+  tsconfigPath: string | undefined;
+  aliasKeys: string[];
+}
+
 function loadTurbopackFragment(
   options: AnimusNextOptions,
   phase: string,
@@ -556,7 +573,8 @@ function loadTurbopackFragment(
   outputExclude: string | null,
   disableStaticImages: boolean,
   build: string,
-  rootDir: string
+  rootDir: string,
+  aliases: TurbopackAliasReading
 ): Promise<TurbopackConfigFragment> {
   // The extension order is part of the analysis a load shares.
   const key = JSON.stringify([
@@ -564,6 +582,7 @@ function loadTurbopackFragment(
     rootDir,
     resolveExtensions ?? null,
     disableStaticImages,
+    aliases,
   ]);
   const owner = turbopackOwner(build);
   if (owner.load?.key === key) return owner.load.fragment;
@@ -574,7 +593,8 @@ function loadTurbopackFragment(
     resolveExtensions,
     outputExclude,
     disableStaticImages,
-    build
+    build,
+    aliases
   );
   const load = { key, fragment };
   owner.load = load;
@@ -591,7 +611,8 @@ async function analyzeForTurbopack(
   resolveExtensions: readonly string[] | undefined,
   outputExclude: string | null,
   disableStaticImages: boolean,
-  build: string
+  build: string,
+  aliases: TurbopackAliasReading
 ): Promise<TurbopackConfigFragment> {
   const development = phase === PHASE_DEVELOPMENT_SERVER;
   const { mode } = resolveMode(options.mode, () =>
@@ -602,7 +623,20 @@ async function analyzeForTurbopack(
   // with its own mode, so it is a build of its own.
   const session = new ExtractionSession(
     { ...options, mode },
-    { unbundledComputedImports: true, build: `${build}-${phase}` }
+    {
+      unbundledComputedImports: true,
+      build: `${build}-${phase}`,
+      // Turbopack reads tsconfig paths itself: the same ones, unless Next
+      // reads another tsconfig or an alias of its own overlaps them.
+      aliasesByConstruction: aliasesAgreeByConstruction({
+        rootDir,
+        hostTsconfigPath: aliases.tsconfigPath,
+        hostAliasKeys: aliases.aliasKeys,
+        sessionPatterns: readTsconfigAliasPairs(rootDir).map(
+          ({ pattern }) => pattern
+        ),
+      }),
+    }
   );
   // A replaced session's watcher would keep the root claimed for it.
   const owner = turbopackOwner(build);
