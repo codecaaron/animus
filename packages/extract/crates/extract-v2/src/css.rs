@@ -678,33 +678,43 @@ fn write_condition_block(
     if declarations.is_empty() {
         return;
     }
-    let mut preludes: Vec<String> = Vec::with_capacity(group.conditions.len());
-    for condition in &group.conditions {
-        let prelude = match condition {
-            crate::theme::Condition::Breakpoint(bp) => breakpoints.media_query(bp),
-            other => other.prelude().map(str::to_string),
-        };
-        match prelude {
-            Some(prelude) => preludes.push(prelude),
-            None => return,
+    // A scope naming `&` scopes to each rule's own outer selector, so each
+    // inner selector takes a wrapper of its own.
+    let subjects: Vec<Option<&String>> = if group.conditions.iter().any(crate::theme::Condition::names_subject) {
+        inner_selectors.iter().map(Some).collect()
+    } else {
+        vec![None]
+    };
+    for subject in subjects {
+        let mut preludes: Vec<String> = Vec::with_capacity(group.conditions.len());
+        for condition in &group.conditions {
+            let prelude = match condition {
+                crate::theme::Condition::Breakpoint(bp) => breakpoints.media_query(bp),
+                other => subject.map_or_else(|| other.prelude().map(str::to_string), |subject| other.prelude_for(subject)),
+            };
+            match prelude {
+                Some(prelude) => preludes.push(prelude),
+                None => return,
+            }
         }
-    }
-    if preludes.is_empty() {
-        return;
-    }
-    for (depth, prelude) in preludes.iter().enumerate() {
-        writeln!(output, "{}{} {{", "  ".repeat(depth + 1), prelude).unwrap();
-    }
-    let decl_indent = 2 * (preludes.len() + 1);
-    for inner in inner_selectors {
-        let sel = match &group.selector {
-            Some(s) => format_composed_pseudo(inner, s),
-            None => inner.clone(),
-        };
-        write_declarations_indented(output, &sel, declarations, decl_indent);
-    }
-    for depth in (0..preludes.len()).rev() {
-        writeln!(output, "{}}}", "  ".repeat(depth + 1)).unwrap();
+        if preludes.is_empty() {
+            return;
+        }
+        for (depth, prelude) in preludes.iter().enumerate() {
+            writeln!(output, "{}{} {{", "  ".repeat(depth + 1), prelude).unwrap();
+        }
+        let decl_indent = 2 * (preludes.len() + 1);
+        let inners = subject.map_or(inner_selectors, std::slice::from_ref);
+        for inner in inners {
+            let sel = match &group.selector {
+                Some(s) => format_composed_pseudo(inner, s),
+                None => inner.clone(),
+            };
+            write_declarations_indented(output, &sel, declarations, decl_indent);
+        }
+        for depth in (0..preludes.len()).rev() {
+            writeln!(output, "{}}}", "  ".repeat(depth + 1)).unwrap();
+        }
     }
 }
 

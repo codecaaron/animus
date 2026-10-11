@@ -592,6 +592,7 @@ pub(crate) const DIAGNOSTIC_CODES: &[(&str, &str)] = &[
     (crate::theme::UNITLESS_CUSTOM_PROPERTY, "warn"),
     (crate::theme::NON_BLOCK_VALUE, "error"),
     (crate::theme::AT_RULE_SELECTOR_NESTING, "error"),
+    (crate::theme::AT_RULE_PLACEMENT, "error"),
     (CLASS_NAME_WHITESPACE, "warn"),
     (INVALID_OPACITY_MODIFIER, "warn"),
     (UNSUPPORTED_OBJECT_MEMBER, "warn"),
@@ -1257,6 +1258,7 @@ fn drain_dropped_style_keys(
         // known, else as JSON.
         let held = match &dropped.dropped {
             DroppedStyleKey::UnsupportedAtRule { block: held, .. }
+            | DroppedStyleKey::AtRulePlacement { block: held, .. }
             | DroppedStyleKey::NonBlockValue { value: held, .. }
             | DroppedStyleKey::AtRuleSelectorNesting { block: held, .. } => held,
             _ => {
@@ -1323,10 +1325,17 @@ fn dropped_style_key(
         DroppedStyleKey::UnsupportedAtRule { key, .. } => {
             let message = format!(
                 "style key '{key}' is an at-rule extraction does not support, {not_emitted} — \
-                 extraction supports @media, @container and @supports; fix the at-rule's name, or \
-                 write the block in a stylesheet of its own"
+                 extraction supports @media, @container, @supports, @scope and @starting-style; fix the \
+                 at-rule's name, or write the block in a stylesheet of its own"
             );
             return diagnostic(file, component, "warn", message, Some(crate::theme::UNSUPPORTED_AT_RULE));
+        }
+        DroppedStyleKey::AtRulePlacement { key, within, lost, .. } => {
+            let message = format!(
+                "'{key}' wraps a rule, and {within} holds none, so {lost} is not emitted — write '{key}' \
+                 as a key of a style block, beside the declarations it applies to"
+            );
+            return diagnostic(file, component, "warn", message, Some(crate::theme::AT_RULE_PLACEMENT));
         }
         DroppedStyleKey::NonBlockValue { key, value } => {
             let message = format!(
@@ -9023,6 +9032,55 @@ mod tests {
             out.sheets.system.contains("animus-u-"),
             "{}",
             out.sheets.system
+        );
+    }
+
+    #[test]
+    fn scope_and_starting_style_blocks_wrap_their_rules_and_report_where_none_can_be_wrapped() {
+        let mut inputs = test_inputs();
+        inputs.condition_aliases.insert(
+            "_starting".into(),
+            crate::theme::ConditionAliasEntry { value: "@starting-style".into(), order: 500, kind: "starting-style".into() },
+        );
+        inputs.keyframes_blocks = Some(serde_json::json!({
+            "motion": { "rise": { "name": "animus-kf-rise", "frames": { "to": { "opacity": 1, "@starting-style": { "opacity": 0 } } } } }
+        }));
+        inputs.global_style_blocks = Some(serde_json::json!({
+            "lists": { ".a, .b": { "@scope (& > p)": { "& em": { "color": "red" } } }, "@starting-style": { "opacity": 0 } }
+        }));
+        let source = "export const Prose = ds.styles({ display: 'block', '@scope (.zz-prose) to ([data-prose-ignore])': { '& li': { cursor: 'pointer' } } }).asElement('div');\n\
+                      export const Toast = ds.styles({ opacity: 1, '@starting-style': { opacity: 0 }, '&:hover': { '@starting-style': { opacity: 0.5 } }, _starting: { color: 'red' } }).asElement('div');\n\
+                      export const Card = ds.styles({ '@scope (&) to (.not-card)': { '& p': { margin: 0 } } }).asElement('div');\n\
+                      export const Bad = ds.styles({ opacity: { _: 1, '@starting-style': 0 } }).asElement('div');\n\
+                      export const Alias = ds.styles({ opacity: { _: 1, _starting: 0 } }).asElement('div');\n\
+                      export const Bare = ds.styles({ '@scope': { '& em': { color: 'red' } }, '@scope ([data-label=\"R&D\"])': { color: 'blue' } }).asElement('div');\n\
+                      export const App = () => <><Prose /><Toast /><Card /><Bad /><Alias /><Bare /></>;\n";
+        let out = analyze(&[("a.tsx", source)], &inputs);
+        let class = |binding: &str| out.replacement_configs[&format!("a.tsx::{binding}")].class_name.clone().unwrap_or_default();
+        let base = out.css.split("@layer anm-base {").nth(1).and_then(|rest| rest.split("\n}\n").next()).unwrap_or_default();
+        for wrapped in [
+            format!("@scope (.zz-prose) to ([data-prose-ignore]) {{\n    .{} li {{\n      cursor: pointer;", class("Prose")),
+            format!("@starting-style {{\n    .{} {{\n      opacity: 0;", class("Toast")),
+            format!("@starting-style {{\n    .{}:hover {{\n      opacity: 0.5;", class("Toast")),
+            format!("@starting-style {{\n    .{} {{\n      color: red;", class("Toast")),
+            format!("@scope (.{0}) to (.not-card) {{\n    .{0} p {{\n      margin: 0;", class("Card")),
+            format!("@scope (.{0}) {{\n    .{0} em {{\n      color: red;", class("Bare")),
+            format!("@scope ([data-label=\"R&D\"]) {{\n    .{} {{\n      color: blue;", class("Bare")),
+        ] {
+            assert!(base.contains(&wrapped), "{wrapped}\nmissing from anm-base:\n{}", out.css);
+        }
+        assert!(out.sheets.global.contains("@scope (:is(.a, .b) > p) {"), "{}", out.sheets.global);
+        let codes: Vec<_> = out.diagnostics.iter().filter_map(|d| Some((d.code.as_deref()?, d.component.as_str()))).collect();
+        assert_eq!(
+            codes,
+            [
+                ("animus.style.at-rule-placement", "Alias"),
+                ("animus.style.at-rule-placement", "Bad"),
+                ("animus.style.at-rule-placement", "global 'lists'"),
+                ("animus.style.at-rule-placement", "keyframes 'animus-kf-rise'"),
+            ],
+            "{:#?}",
+            out.diagnostics
         );
     }
 

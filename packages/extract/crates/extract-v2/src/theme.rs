@@ -265,6 +265,8 @@ impl ConditionAliasEntry {
         match self.kind.as_str() {
             "container" => Condition::Container(self.value.clone()),
             "supports" => Condition::Supports(self.value.clone()),
+            // Read as the raw key reads it, so a bare `@scope` scopes to `&`.
+            "scope" | "starting-style" => condition_from_raw_key(&self.value).unwrap_or_else(|| Condition::Media(self.value.clone())),
             _ => Condition::Media(self.value.clone()),
         }
     }
@@ -288,9 +290,28 @@ pub fn condition_from_raw_key(key: &str) -> Option<Condition> {
         Some(Condition::Container(key.to_string()))
     } else if key.starts_with("@supports") {
         Some(Condition::Supports(key.to_string()))
+    } else if key == "@scope" || key.starts_with("@scope ") || key.starts_with("@scope(") {
+        // No scope root: nested CSS would scope to the parent rule's element,
+        // which is the rule's own subject here.
+        let tail = key["@scope".len()..].trim_start();
+        if tail.is_empty() || tail.starts_with("to") {
+            Some(Condition::Scope(format!("@scope (&) {tail}").trim_end().to_string()))
+        } else {
+            Some(Condition::Scope(key.to_string()))
+        }
+    } else if key == "@starting-style" {
+        Some(Condition::StartingStyle(key.to_string()))
     } else {
         None
     }
+}
+
+/// Whether `key`, raw or an alias, is `@scope` or `@starting-style`: an
+/// at-rule whose block only wraps a style rule, so it has no place inside a
+/// keyframe frame or a prop's value.
+pub(crate) fn only_wraps_rules(key: &str, ctx: &ResolveContext) -> bool {
+    let condition = condition_from_raw_key(key).or_else(|| ctx.condition_aliases.get(key).map(ConditionAliasEntry::to_condition));
+    matches!(condition, Some(Condition::Scope(_) | Condition::StartingStyle(_)))
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -324,8 +345,8 @@ pub const UNRECOGNIZED_STYLE_KEY: &str = "animus.style.unrecognized-key";
 /// Two keys of one style block that set one CSS property at one condition.
 pub const KEYS_SHARE_PROPERTY: &str = "animus.style.keys-share-property";
 
-/// A style-object at-rule key other than `@media`, `@container` and
-/// `@supports`, whose block is not emitted.
+/// A style-object at-rule key other than `@media`, `@container`,
+/// `@supports`, `@scope` and `@starting-style`, whose block is not emitted.
 pub const UNSUPPORTED_AT_RULE: &str = "animus.style.unsupported-at-rule";
 /// A number on a prop that writes only custom properties and binds no
 /// transform: a custom property has no unit context, so it stays unitless.
@@ -339,6 +360,10 @@ pub const NON_BLOCK_VALUE: &str = "animus.style.non-block-value";
 /// holds declarations only.
 pub const AT_RULE_SELECTOR_NESTING: &str = "animus.style.at-rule-selector-nesting";
 
+/// `@scope` or `@starting-style` where no rule can be wrapped: inside a
+/// keyframe frame, or among a prop's values.
+pub const AT_RULE_PLACEMENT: &str = "animus.style.at-rule-placement";
+
 /// A style-object key given an object that resolves to nothing.
 #[derive(Debug, Clone, PartialEq)]
 pub enum DroppedStyleKey {
@@ -348,9 +373,12 @@ pub enum DroppedStyleKey {
     NonResponsiveObject(String),
     /// Any other key, such as an HTML element name written without `&`.
     UnrecognizedKey(String),
-    /// An at-rule other than `@media`, `@container` and `@supports`, with
-    /// the block it holds.
+    /// An at-rule extraction does not support, with the block it holds.
     UnsupportedAtRule { key: String, block: Value },
+    /// `@scope` or `@starting-style` placed where no rule can be wrapped
+    /// (`within`: a keyframe frame, or a prop's value), with its block and
+    /// what is not emitted for it (`lost`).
+    AtRulePlacement { key: String, within: String, lost: String, block: Value },
     /// A prop that writes only the custom `properties` was given the number
     /// `value`, which no unit or transform establishes: it is written
     /// unitless.
@@ -389,6 +417,7 @@ impl DroppedStyleKey {
             | Self::NonResponsiveObject(key)
             | Self::UnrecognizedKey(key)
             | Self::UnsupportedAtRule { key, .. }
+            | Self::AtRulePlacement { key, .. }
             | Self::UnitlessCustomProperty { prop: key, .. }
             | Self::NonBlockValue { key, .. }
             | Self::AtRuleSelectorNesting { key, .. } => key,
@@ -442,13 +471,36 @@ pub enum Condition {
     Media(String),
     Container(String),
     Supports(String),
+    /// `@scope (<start>) [to (<end>)]`; an `&` in the prelude stands for the
+    /// rule's own subject, which emission substitutes.
+    Scope(String),
+    StartingStyle(String),
 }
 
 impl Condition {
     pub fn prelude(&self) -> Option<&str> {
         match self {
             Condition::Breakpoint(_) => None,
-            Condition::Media(q) | Condition::Container(q) | Condition::Supports(q) => Some(q),
+            Condition::Media(q)
+            | Condition::Container(q)
+            | Condition::Supports(q)
+            | Condition::Scope(q)
+            | Condition::StartingStyle(q) => Some(q),
+        }
+    }
+
+    /// Whether the prelude names the wrapped rule's subject, as `@scope (&)`
+    /// does; only a scope's prelude does.
+    pub fn names_subject(&self) -> bool {
+        matches!(self, Condition::Scope(q) if crate::selector_subject::has_subject(q))
+    }
+
+    /// The prelude with each unquoted `&` of a scope standing for `subject`,
+    /// the selector the wrapped rule's own nesting starts from.
+    pub fn prelude_for(&self, subject: &str) -> Option<String> {
+        match self {
+            Condition::Scope(q) => Some(crate::selector_subject::substitute_subjects(q, subject)),
+            other => other.prelude().map(str::to_string),
         }
     }
 }
@@ -1013,6 +1065,12 @@ fn resolve_entry(key: &str, value: &Value, ctx: &ResolveContext) -> Vec<CssDecla
     let failures_before = failures();
     let declarations = resolve_prop(key, value, ctx);
     if declarations.is_empty() && value.is_object() && failures() == failures_before {
+        if let Some((at_rule, block)) = value.as_object().into_iter().flatten().find(|(entry, _)| only_wraps_rules(entry, ctx)) {
+            let within = format!("the value of '{key}'");
+            let lost = format!("'{key}'");
+            record_dropped_key(ctx, DroppedStyleKey::AtRulePlacement { key: at_rule.clone(), within, lost, block: block.clone() });
+            return declarations;
+        }
         let key = key.to_string();
         record_dropped_key(
             ctx,
@@ -1164,6 +1222,16 @@ fn resolve_flat_styles(obj: &Map<String, Value>, ctx: &ResolveContext, nesting_u
 /// `path`, that emitted nothing, and failed no transform (which reports
 /// itself).
 fn record_nesting(ctx: &ResolveContext, path: &[String], key: &str, value: &Value, emitted_nothing: bool) {
+    if emitted_nothing && value.is_object() && only_wraps_rules(key, ctx) {
+        if let [selector, frame] = path {
+            if selector.starts_with("@keyframes") {
+                let within = format!("the keyframe frame '{frame}' of '{selector}'");
+                let lost = "its block".to_string();
+                record_dropped_key_at(ctx, path, DroppedStyleKey::AtRulePlacement { key: key.to_string(), within, lost, block: value.clone() });
+                return;
+            }
+        }
+    }
     if emitted_nothing && value.is_object() {
         let selector = path.first().cloned().unwrap_or_default();
         record_dropped_key_at(
@@ -2133,6 +2201,17 @@ pub fn resolve_global_block(
         // only, as before; a block nested under one is reported.
         if selector.starts_with('@') {
             let path = std::slice::from_ref(selector);
+            // Declarations straight under `@starting-style` style nothing.
+            if matches!(condition_from_raw_key(selector), Some(Condition::StartingStyle(_))) {
+                let dropped = DroppedStyleKey::AtRulePlacement {
+                    key: selector.clone(),
+                    within: "a global block's top level".to_string(),
+                    lost: "its block".to_string(),
+                    block: style_obj.clone(),
+                };
+                record_dropped_key_at(ctx, &[], dropped);
+                continue;
+            }
             let decls = if selector.starts_with("@font-face") {
                 resolve_descriptors(style_map, ctx, path)
             } else {
@@ -2249,13 +2328,16 @@ fn push_global_rules(
             }
         }
     }
+    // A scope prelude's `&` is the global's selector, a list kept whole.
+    let scope_subject =
+        if split_top_level_commas(selector).len() > 1 { format!(":is({branches})") } else { branches.clone() };
     for group in resolved.conditioned_emission_order() {
         let preludes: Option<Vec<String>> = group
             .conditions
             .iter()
             .map(|condition| match condition {
                 Condition::Breakpoint(bp) => breakpoints.media_query(bp),
-                other => other.prelude().map(str::to_string),
+                other => other.prelude_for(&scope_subject),
             })
             .collect();
         let Some(preludes) = preludes.filter(|p| !p.is_empty()) else {
