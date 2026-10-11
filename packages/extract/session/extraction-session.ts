@@ -484,10 +484,7 @@ export class ExtractionSession {
   /** The original sources (raw, before adaptation) the session holds, by
    *  root-relative path: the published generation's, plus any that an
    *  attempt in flight or held by an aborted parse has read. */
-  get publishedSources(): ReadonlyMap<
-    string,
-    { hash: string; source: string }
-  > {
+  get heldSources(): ReadonlyMap<string, { hash: string; source: string }> {
     return this.fileCache;
   }
   /** The generation an emit produced, current once its ingestion
@@ -540,6 +537,12 @@ export class ExtractionSession {
   // Membership keys (lexical + canonical) for the system's evaluated module
   // files. A failed reload keeps the last set — the stale config still serves.
   private systemDependencyKeys: Set<string> = new Set();
+
+  /** Whether `path` is the system module, one of its dependencies, or a
+   *  path its load found absent: a change to it reloads the system. */
+  isSystemDependency(path: string): boolean {
+    return toWatchKeys(path).some((key) => this.systemDependencyKeys.has(key));
+  }
 
   /** Loader-reported dependency paths for bundler watch registration. */
   systemDependencyPaths: string[] = [];
@@ -965,9 +968,7 @@ export class ExtractionSession {
           configHit = firstChangedFile(this.configInputHashes);
         }
       } else {
-        systemHit = changed.find((path) =>
-          toWatchKeys(path).some((key) => this.systemDependencyKeys.has(key))
-        );
+        systemHit = changed.find((path) => this.isSystemDependency(path));
       }
     } catch (err) {
       // Detection-only failure: degrade to the ordinary incremental diff.
@@ -1252,7 +1253,9 @@ export class ExtractionSession {
         }
         throw err;
       }
-      this.publishSourceIngestion(ingested, 'incremental', this.fileCache);
+      this.publishSourceIngestion(ingested, 'incremental', (path) =>
+        this.fileCache.get(path)
+      );
       commitObservedBatch();
     } else if (this.statusAttemptOpen) {
       // A debounced burst produced nothing analyzable — close the attempt so
@@ -1282,7 +1285,7 @@ export class ExtractionSession {
   private publishSourceIngestion(
     result: SourceIngestionResult,
     pass: 'full' | 'incremental',
-    raw: ReadonlyMap<string, { hash?: string; source: string }>
+    raw: (path: string) => { hash?: string; source: string } | undefined
   ): void {
     const endedHold = this.heldRejection !== null;
     const previousOwnership = this.corpus.published.ownership;
@@ -1294,7 +1297,7 @@ export class ExtractionSession {
       ])
     );
     for (const path of result.skippedOriginals ?? []) {
-      const entry = raw.get(path);
+      const entry = raw(path);
       if (entry) {
         held.set(path, {
           hash: entry.hash ?? contentHash(entry.source),
@@ -1856,10 +1859,8 @@ export class ExtractionSession {
         pipelineStart,
         pending
       );
-      this.publishSourceIngestion(
-        accepted,
-        'full',
-        new Map(rawEntries.map((entry) => [entry.path, entry]))
+      this.publishSourceIngestion(accepted, 'full', (path) =>
+        rawEntries.find((entry) => entry.path === path)
       );
 
       // External package state publishes in the same successful generation
