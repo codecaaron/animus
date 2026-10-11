@@ -17,6 +17,7 @@ use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::chain_walk::{ChainDescriptor, TerminalKind};
+use crate::static_value::StaticValue;
 use crate::jsx_scan::{
     classify_jsx_attribute_as_variant_value, create_element_literals, create_element_props, eval_jsx_attribute_value, eval_property_key,
     eval_static_expression, make_json_number,
@@ -911,7 +912,7 @@ pub(crate) fn collect_enriched_usage(
     built: Scoping,
     program: &Program<'_>,
     module: &ModuleRecord<'_>,
-    static_values: &FxHashMap<String, Value>,
+    static_values: &FxHashMap<String, StaticValue>,
     chains: &[&ChainDescriptor],
     exports: &[ExportFact],
     object_consts: &BTreeMap<&str, bool>,
@@ -1830,9 +1831,13 @@ pub(crate) fn style_object_uses(
     scoping: &Scoping,
     statics: &FxHashMap<String, Value>,
 ) -> StyleObjectFacts {
+    let statics = &crate::eval::typed_statics(statics);
     let consts: BTreeMap<&str, bool> = statics
         .iter()
-        .filter(|(_, value)| value.is_object())
+        // An object's marker counts, as its JSON object did.
+        .filter(|(_, value)| {
+            matches!(value, StaticValue::Object(_) | StaticValue::AssetFunction { .. } | StaticValue::Unevaluated(_))
+        })
         .map(|(name, _)| (name.as_str(), false))
         .collect();
     let candidates = object_bindings(program, scoping, &consts, &BTreeSet::new());
@@ -2513,7 +2518,7 @@ struct ObjectUseScan<'a, 's> {
     containers: Vec<(String, String)>,
     /// The module's static values, which say whether a member handed on is
     /// an object; `None` outside style mode.
-    statics: Option<&'s FxHashMap<String, Value>>,
+    statics: Option<&'s FxHashMap<String, StaticValue>>,
     /// See `StyleObjectFacts::derives`.
     derives: Vec<(String, String)>,
     /// See `StyleObjectFacts::handoffs`.
@@ -2663,7 +2668,13 @@ impl<'a> Visit<'a> for ObjectUseScan<'a, '_> {
                             for segment in &path {
                                 value = value.get(segment)?;
                             }
-                            Some(!value.is_object() && !value.is_array())
+                            Some(matches!(
+                                value,
+                                StaticValue::Null
+                                    | StaticValue::Bool(_)
+                                    | StaticValue::Number(_)
+                                    | StaticValue::String(_)
+                            ))
                         });
                         if primitive == Some(true) {
                             return;
@@ -3894,7 +3905,7 @@ fn rendered_in_place<'b, 'a: 'b>(
 
 struct FactCollector<'a, 's> {
     facts: Vec<UsageFact>,
-    static_values: &'s FxHashMap<String, Value>,
+    static_values: &'s FxHashMap<String, StaticValue>,
     scoping: Option<&'s Scoping>,
     enrich: bool,
     /// What calls React's `createElement` and `cloneElement`.
@@ -5355,7 +5366,7 @@ impl ReactNames {
 
 /// Collect every candidate tag and createElement call, component-agnostic.
 pub fn collect_usage_facts(program: &Program<'_>) -> Vec<UsageFact> {
-    let static_values = FxHashMap::default();
+    let static_values: FxHashMap<String, StaticValue> = FxHashMap::default();
     let mut collector = FactCollector {
         facts: Vec::new(),
         static_values: &static_values,
@@ -5378,7 +5389,8 @@ pub fn collect_usage_facts_with_statics(
     static_values: &FxHashMap<String, Value>,
 ) -> Vec<UsageFact> {
     let built = SemanticBuilder::new().build(program).semantic.into_scoping();
-    collect_enriched_usage(built, program, module, static_values, &[], &[], &BTreeMap::new(), &BTreeSet::new()).usage
+    let typed = crate::eval::typed_statics(static_values);
+    collect_enriched_usage(built, program, module, &typed, &[], &[], &BTreeMap::new(), &BTreeSet::new()).usage
 }
 
 fn attribute_expression<'a, 'b>(
@@ -5393,7 +5405,7 @@ fn attribute_expression<'a, 'b>(
 
 fn evaluate_with_statics(
     expression: &Expression<'_>,
-    static_values: &FxHashMap<String, Value>,
+    static_values: &FxHashMap<String, StaticValue>,
     scoping: Option<&Scoping>,
 ) -> Option<Value> {
     if let Some(scoping) = scoping {
@@ -5407,15 +5419,14 @@ fn evaluate_with_statics(
             return None;
         }
     }
-    let typed = crate::eval::typed_statics(static_values);
     if let Expression::ObjectExpression(object) = expression {
         let (value, skipped, captured) =
-            crate::eval::eval_object_expr_with_statics(object, Some((&typed).into())).ok()?;
+            crate::eval::eval_object_expr_with_statics(object, Some(static_values.into())).ok()?;
         return (skipped.is_empty() && captured.is_empty()).then_some(value);
     }
     let mut skipped = Vec::new();
     let value =
-        crate::eval::eval_expression_with_statics(expression, &mut skipped, Some((&typed).into()))
+        crate::eval::eval_expression_with_statics(expression, &mut skipped, Some(static_values.into()))
             .ok()?;
     skipped.is_empty().then_some(value)
 }
@@ -5495,7 +5506,7 @@ fn write_conditions(expression: &Expression<'_>, origins: Option<&Scoping>) -> O
 /// `origins` tells the global `undefined` from a shadowing binding.
 fn without_absent_entries(
     object: &oxc::ast::ast::ObjectExpression<'_>,
-    static_values: &FxHashMap<String, Value>,
+    static_values: &FxHashMap<String, StaticValue>,
     scoping: Option<&Scoping>,
     origins: Option<&Scoping>,
 ) -> Option<Value> {
@@ -5523,7 +5534,7 @@ fn without_absent_entries(
 /// Static values are keyed by top-level names, so a reference may use one
 /// only when it resolves to that root binding, never to a shadowing local.
 struct StaticReferenceGuard<'s> {
-    static_values: &'s FxHashMap<String, Value>,
+    static_values: &'s FxHashMap<String, StaticValue>,
     scoping: &'s Scoping,
     resolves_to_root_bindings: bool,
 }
@@ -5550,7 +5561,7 @@ impl<'a> Visit<'a> for StaticReferenceGuard<'_> {
 /// keeps its breakpoint, as a runtime entry's lookup spells it.
 fn important_literals(
     expression: &Expression<'_>,
-    static_values: &FxHashMap<String, Value>,
+    static_values: &FxHashMap<String, StaticValue>,
     scoping: Option<&Scoping>,
     literals: &mut Vec<Value>,
 ) {
@@ -6286,6 +6297,23 @@ mod tests {
     fn parse(source: &str) -> OwnedAst {
         let counter = ParseCounter::new(0);
         OwnedAst::parse("test.tsx".into(), source.to_string(), &counter)
+    }
+
+    /// Contract (until serialized statics read typed values): a member
+    /// handed on is read through an object that spells a marker with more
+    /// fields, as main read its JSON, so a primitive one leaves the object
+    /// stable.
+    #[test]
+    fn a_member_handed_on_reads_a_marker_objects_fields() {
+        let ast = parse(
+            "const cfg = { inner: { '$animus.lost': 'authored', value: 1 }, padding: 4 };\n\
+             unknown(cfg.inner.value);\n",
+        );
+        let program = ast.program();
+        let scoping = SemanticBuilder::new().build(program).semantic.into_scoping();
+        let statics = crate::eval::collect_static_values(program);
+        let facts = style_object_uses(program, &scoping, &statics);
+        assert!(!facts.uses.contains_key("cfg"), "{:?}", facts.uses);
     }
 
     fn props(entries: &[(&str, &[&str])]) -> FxHashMap<String, FxHashSet<String>> {
