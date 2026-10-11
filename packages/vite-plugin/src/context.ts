@@ -431,7 +431,7 @@ export class PluginContext {
   submitChanges(changes: WatchChanges): Promise<ObservedOutcome[]> {
     return this.runAttempt((session) =>
       session.publication === null
-        ? session.runFullPipeline()
+        ? session.runFullPipeline([], changes.sources)
         : session.handleWatchUpdate(changes)
     );
   }
