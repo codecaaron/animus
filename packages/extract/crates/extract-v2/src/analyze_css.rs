@@ -4036,8 +4036,9 @@ fn bounded_prop_tags(
         };
         Some((declaring, binding))
     };
-    // Whether `module` is `declaring`, or re-exports from it at any depth:
-    // `export … from`, or an import it exports again (`export { F }`).
+    // Whether `module` is `declaring`, or re-exports from it at any depth,
+    // as the module table links them: by name, as a namespace, through
+    // `export *`, or as `export default` of an imported binding.
     let reexports_from = |module: &String, declaring: &String| {
         let mut seen: FxHashSet<String> = FxHashSet::default();
         let mut pending = vec![module.clone()];
@@ -4048,19 +4049,17 @@ fn bounded_prop_tags(
             if !seen.insert(next.clone()) {
                 continue;
             }
-            let Some(ff) = files.get(&next) else { continue };
-            let exported_imports = ff.imports.iter().filter(|import| {
-                ff.default_export_binding.as_ref() == Some(&import.local)
-                    || ff.exports.iter().any(|export| export.source.is_none() && export.local.as_ref() == Some(&import.local))
+            let Some(index) = links.module(&next) else { continue };
+            pending.extend(links.table.reexported_modules(index).map(|target| links.paths[target].clone()));
+            // `export default X` of an imported X, named or a namespace.
+            let default_import = files.get(&next).and_then(|ff| {
+                let local = ff.default_export_binding.as_ref()?;
+                let named = ff.imports.iter().find(|import| &import.local == local).map(|import| &import.source);
+                named.or_else(|| ff.namespace_imports.get(local))
             });
-            let sources = ff
-                .exports
-                .iter()
-                .filter_map(|export| export.source.as_ref())
-                .chain(&ff.star_exports)
-                .chain(ff.namespace_exports.values())
-                .chain(exported_imports.map(|import| &import.source));
-            pending.extend(sources.filter_map(|source| resolve_import_source(&next, source, files, inputs)));
+            if let Some(source) = default_import {
+                pending.extend(resolve_import_source(&next, source, files, inputs));
+            }
         }
         false
     };

@@ -199,6 +199,22 @@ impl<B: Clone + Eq + Ord> ModuleTable<B> {
         &self.dependents[module]
     }
 
+    /// The analysed modules `module` re-exports from: by name, as a
+    /// namespace, or through `export *`.
+    pub fn reexported_modules(&self, module: ModuleIndex) -> impl Iterator<Item = ModuleIndex> + '_ {
+        let record = &self.modules[module];
+        record
+            .indirect_exports
+            .iter()
+            .map(|(_, request, _)| *request)
+            .chain(record.namespace_exports.iter().map(|(_, request)| *request))
+            .chain(record.star_exports.iter().copied())
+            .filter_map(|request| match &record.requests[request] {
+                Request::Module(target) => Some(*target),
+                Request::Outside(_) | Request::Unresolved(_) => None,
+            })
+    }
+
     /// ResolveExport for export `name` of `module`.
     pub fn resolve_export(&self, module: ModuleIndex, name: &str) -> ExportLookup<B> {
         self.resolve(module, name, &mut HashSet::new())
