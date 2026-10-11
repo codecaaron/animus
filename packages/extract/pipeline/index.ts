@@ -25,6 +25,8 @@ export {
   assertSupportedEngine,
   RETIRED_ENGINE_MESSAGE,
 } from './engine-retirement';
+export type { AssetCopy } from './asset-copies';
+export { pruneStaleAssets, writeAssetCopy } from './asset-copies';
 export { contentHash } from './content-hash';
 export type {
   AnimusCoreOptions,

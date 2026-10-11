@@ -1,5 +1,6 @@
 import {
   buildPathAliasesJson,
+  isPathWithinRoot,
   outputExclusion,
   resolveMode,
   viteAssetClassification,
@@ -29,6 +30,20 @@ export function applyResolvedConfig(
       config.command === 'build' ? 'production' : 'development'
     ).mode === 'production';
   ctx.rootDir = config.root;
+  // Dev asset() URLs name immutable copies where the dev server serves
+  // them; a cacheDir outside `server.fs.allow` would 403 under strict mode.
+  if (!ctx.isProd) {
+    const copyDir = resolve(config.cacheDir, 'animus-assets');
+    const served =
+      !config.server.fs.strict ||
+      config.server.fs.allow.some((dir) => isPathWithinRoot(dir, copyDir));
+    ctx.assetCopyDir = served ? copyDir : null;
+    if (!served) {
+      ctx.warn(
+        `[animus-extract] asset() copies need ${copyDir} in server.fs.allow; serving the live files instead, so an edited asset keeps its URL`
+      );
+    }
+  }
   ctx.outputExclude = outputExclusion(
     config.root,
     resolve(config.root, config.build.outDir)

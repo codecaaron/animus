@@ -18,6 +18,7 @@ import {
   nativePackageLocator,
   outputSourceGuard,
   outputSourceMessage,
+  pruneStaleAssets,
   surfaceManifestDiagnostics,
   unmatchedExcludeLines,
   unreadableSourceDiagnostic,
@@ -99,6 +100,8 @@ export async function runBuildStart(
   // Vite's CSS pipeline resolves `__VITE_ASSET__` markers to hashed names
   // before the stylesheet is hashed, so the CSS hash reflects the final URL.
   const assetSpecifiers = ctx.sheetAssetSpecifiers();
+  ctx.currentAssetCopies.clear();
+  ctx.assetSourceBySpecifier.clear();
   for (const specifier of assetSpecifiers) {
     const resolvedPath = await resolveSpecifier(specifier);
     if (!resolvedPath) {
@@ -126,10 +129,24 @@ export async function runBuildStart(
         );
       }
     } else {
-      ctx.assetUrlBySpecifier.set(specifier, ctx.devFsUrl(resolvedPath));
+      try {
+        ctx.assetUrlBySpecifier.set(
+          specifier,
+          ctx.devAssetUrl(specifier, resolvedPath)
+        );
+      } catch (err) {
+        ctx.assetFallback(
+          specifier,
+          `[animus-extract] failed to copy asset() specifier ${specifier}: ${String(err)}`,
+          err
+        );
+      }
     }
   }
-  ctx.substituteSheets();
+  // Once per dev server: superseded copies from earlier servers go.
+  if (ctx.assetCopyDir !== null) {
+    pruneStaleAssets(ctx.assetCopyDir, ctx.currentAssetCopies);
+  }
   // From here on, runAnalysis owns late-appearing specifiers (dev resets).
   ctx.assetPassComplete = true;
 

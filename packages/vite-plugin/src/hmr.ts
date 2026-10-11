@@ -63,6 +63,11 @@ async function handleHotUpdateExclusive(
     return [];
   }
 
+  if (ctx.assetCopyDir !== null && ctx.isAssetSource(absFile)) {
+    if (ownsEvent && type !== 'delete') ctx.refreshAssetCopies(absFile);
+    return [];
+  }
+
   if (type === 'delete') {
     if (ownsEvent) await pruneDeletedFile(ctx, absFile);
     return;

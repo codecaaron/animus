@@ -64,6 +64,8 @@ import {
   unmatchedExcludeLines,
   unresolvableIncludesMessage,
   walkPackageSources,
+  writeAssetCopy,
+  pruneStaleAssets,
   engineModuleParser,
   surfaceManifestDiagnostics,
 } from '../pipeline/index';
@@ -2619,20 +2621,9 @@ export class ExtractionSession {
         urlBySpecifier.set(specifier, specifier);
         continue;
       }
-      const bytes = readFileSync(resolvedPath);
-      const digest = contentHash(bytes);
+      const { fileName, digest } = writeAssetCopy(resolvedPath, assetsDir);
       this.trackAssetDependency(resolvedPath);
-      const ext = extname(resolvedPath);
-      const stem = basename(resolvedPath, ext);
-      const fileName = `${stem}.${digest.slice(0, 8)}${ext}`;
       expected.add(fileName);
-      if (!existsSync(assetsDir)) {
-        mkdirSync(assetsDir, { recursive: true });
-      }
-      const assetPath = join(assetsDir, fileName);
-      if (!existsSync(assetPath)) {
-        writeFileSync(assetPath, bytes);
-      }
       const url = `./${SESSION_ASSETS_DIR}/${fileName}`;
       urlBySpecifier.set(specifier, url);
       this.assetCopyCache.set(specifier, {
@@ -2682,28 +2673,5 @@ export class ExtractionSession {
       if (existsSync(candidate)) return candidate;
     }
     return null;
-  }
-}
-
-/** Sync `assets/` to the current build's file set; per-entry failures are
- *  tolerated — a concurrent session may have removed the same file. */
-export function pruneStaleAssets(
-  assetsDir: string,
-  expected: ReadonlySet<string>
-): void {
-  if (!existsSync(assetsDir)) return;
-  let entries: string[];
-  try {
-    entries = readdirSync(assetsDir);
-  } catch {
-    return;
-  }
-  for (const entry of entries) {
-    if (expected.has(entry)) continue;
-    try {
-      unlinkSync(join(assetsDir, entry));
-    } catch {
-      // Concurrent session removal, or an unexpected subdirectory — leave it.
-    }
   }
 }
