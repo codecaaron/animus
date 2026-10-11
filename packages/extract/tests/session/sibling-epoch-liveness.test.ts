@@ -38,6 +38,7 @@ import {
   createProject as createFixtureProject,
   disposeTempRoots,
   lockRecord,
+  makeSession,
   PLAN_A,
   resetAnimusGlobals,
   startSession,
@@ -166,6 +167,26 @@ describe('sibling epoch reconciliation', () => {
     expect(existsSync(live)).toBe(true);
     expect(existsSync(abandoned)).toBe(false);
     session.close();
+  });
+
+  /** Contract: a registered build's tree is never pruned. A publisher's
+   *  close() releases the claim, but a compiler of the build still serves
+   *  from the tree, so the registry, not the claim, decides. */
+  test('a registered build keeps its tree after its publisher closes', async () => {
+    const root = createFixtureProject('animus-sibling-registered-');
+    const publisher = await startSession(root, {}, { build: 'serving' });
+    const sibling = makeSession(root, {}, { build: 'serving' });
+    expect(sibling.key.build).toBe('serving');
+    publisher.close();
+    const tree = publisher.sessionDir;
+    // Past the 24h sibling-directory retention window.
+    const stale = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
+    utimesSync(tree, stale, stale);
+
+    const later = await startSession(root, {}, { build: 'later' });
+
+    expect(existsSync(tree)).toBe(true);
+    later.close();
   });
 
   test('a sibling claiming this process is pruned (one publisher per process)', async () => {
