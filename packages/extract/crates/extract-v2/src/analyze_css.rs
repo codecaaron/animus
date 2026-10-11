@@ -5651,17 +5651,17 @@ fn run_with_system_floor(
             Ok(hosts) => hosts,
             Err(rejections) => {
                 // A callable reading an import is captured from the loader's
-                // bundle, where the import reads the loader's module cell;
-                // the loader's evidence names the import instead. Every
+                // bundle, where the import reads the loader's module cell.
+                // Where the loader shows every read of the cell is an
+                // import's, each import replaces the cell's reason. Every
                 // other reason stands.
                 let cell = crate::transforms::module_cell_rejection(name);
-                let captured = inputs.transform_provenance.captured_rejection(key, name);
+                let imports = inputs.transform_provenance.import_rejections(key, name);
                 for reason in rejections {
-                    match &captured {
-                        Some(captured) if reason == cell => {
-                            diagnostics.push(rejected_with(captured.clone(), CAPTURED_ADVICE))
-                        }
-                        _ => diagnostics.push(rejected(reason)),
+                    if reason == cell && !imports.is_empty() {
+                        diagnostics.extend(imports.iter().map(|import| rejected_with(import.clone(), CAPTURED_ADVICE)));
+                    } else {
+                        diagnostics.push(rejected(reason));
                     }
                 }
                 continue;
@@ -14286,28 +14286,38 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         assert!(out.diagnostics.iter().any(|d| d.code.as_deref() == Some(CONFIGURED_TRANSFORM_REJECTED)
             && d.message.contains("'plain'") && d.message.contains("its callable reads 'String' declared in /m.ts outside the callback")));
         // A callable reading an import is captured from the loader's bundle,
-        // where the import reads the loader's module cell. Its rejection
-        // names the import, not the cell, and keeps every other reason.
-        let captured = "reads 'btoa' declared in /m.ts outside the callback";
+        // where the import reads the loader's module cell. Where the loader
+        // shows each read of the cell is an import's, the rejection names the
+        // imports, not the cell, and keeps every other reason. Without that
+        // evidence, a `__modules` the source declares outside the callback
+        // keeps its own reason, whatever else the loader captured first.
+        let import = "reads 'btoa' declared in /m.ts outside the callback";
+        let imports = format!(r#"{{"enc@a": {{"rejection": "{import}", "importReads": ["{import}"]}}}}"#);
+        let authored = r#"{"enc@a": {"rejection": "reads 'bias' declared in /m.ts outside the callback"}}"#.to_string();
         let cell = "(0, __modules['/enc.ts']['btoa'])(String(v))";
-        for (source, kept) in [
-            (format!("(v) => {cell}"), None),
-            (format!("(v) => this.bias + {cell}"), Some("reads 'this' of the callback")),
-            (format!("(v) => unknown(v) + {cell}"), Some("external symbol 'unknown'")),
+        for (source, provenance, expected, absent) in [
+            (format!("(v) => {cell}"), &imports, vec![import], vec!["__modules"]),
+            (format!("(v) => this.bias + {cell}"), &imports, vec![import, "reads 'this' of the callback"], vec!["__modules"]),
+            (format!("(v) => unknown(v) + {cell}"), &imports, vec![import, "external symbol 'unknown'"], vec!["__modules"]),
+            (
+                "(v) => bias(v) + __modules(v)".to_string(),
+                &authored,
+                vec!["external symbol '__modules'", "external symbol 'bias'"],
+                vec!["its callable reads"],
+            ),
         ] {
             let config = r#"{"a": {"property": "width", "transform": "enc", "transformId": "enc@a"}}"#;
             let sources = serde_json::json!({ "enc@a": source }).to_string();
             let mut inputs = configured_inputs(config, r#"["a"]"#, Some(&sources), false);
-            inputs.transform_provenance = crate::transforms::TransformProvenance::from_json(Some(&format!(
-                r#"{{"enc@a": {{"rejection": "{captured}"}}}}"#
-            )));
+            inputs.transform_provenance = crate::transforms::TransformProvenance::from_json(Some(provenance));
             let out = analyze(&[("use.tsx", "export const Box = ds.styles({ a: 'x' }).asElement('div');\nexport const App = () => <Box />;\n")], &inputs);
             let rejected: Vec<&String> = out.diagnostics.iter()
                 .filter(|d| d.code.as_deref() == Some(CONFIGURED_TRANSFORM_REJECTED)).map(|d| &d.message).collect();
-            assert!(rejected.iter().any(|m| m.contains(captured)), "{source}: {rejected:#?}");
-            assert!(rejected.iter().all(|m| !m.contains("__modules")), "{source}: {rejected:#?}");
-            if let Some(kept) = kept {
-                assert!(rejected.iter().any(|m| m.contains(kept)), "{source}: {rejected:#?}");
+            for reason in expected {
+                assert!(rejected.iter().any(|m| m.contains(reason)), "{source}: {reason}: {rejected:#?}");
+            }
+            for reason in absent {
+                assert!(rejected.iter().all(|m| !m.contains(reason)), "{source}: {reason}: {rejected:#?}");
             }
         }
     }

@@ -302,6 +302,10 @@ pub struct ProvenanceEntry {
     #[serde(default)]
     host_globals: Vec<String>,
     rejection: Option<String>,
+    /// Why, for each import its callable reads through the loader's module
+    /// cell, when the cell is read for nothing else.
+    #[serde(default)]
+    import_reads: Vec<String>,
 }
 
 impl TransformProvenance {
@@ -320,6 +324,15 @@ impl TransformProvenance {
         let Self::Supplied(entries) = self else { return None };
         let rejection = entries.get(key)?.rejection.as_deref()?;
         Some(format!("[bail] Transform '{name}': its callable {rejection}"))
+    }
+
+    /// Why definition `key` reads each import its callable reads through the
+    /// loader's module cell, which its configured source shows only as the
+    /// cell; empty when the loader showed the cell read for anything else.
+    pub(crate) fn import_rejections(&self, key: &str, name: &str) -> Vec<String> {
+        let Self::Supplied(entries) = self else { return Vec::new() };
+        let Some(entry) = entries.get(key) else { return Vec::new() };
+        entry.import_reads.iter().map(|reason| format!("[bail] Transform '{name}': its callable {reason}")).collect()
     }
 
     /// Why definition `key`, whose admitted configured source reads the
