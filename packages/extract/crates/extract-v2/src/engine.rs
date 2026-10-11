@@ -717,11 +717,41 @@ impl ExtractEngine {
             path: String,
             source: String,
         }
-        let mut entries: Vec<InputEntry> = serde_json::from_str(&file_entries_json)
+        let entries: Vec<InputEntry> = serde_json::from_str(&file_entries_json)
             .map_err(|e| napi::Error::from_reason(format!("invalid file entries JSON: {e}")))?;
         // Analysis sees the files in canonical order, so its output does not
         // depend on the order a host lists them in, or on how it spells a path.
-        entries.sort_by_cached_key(|entry| (canonical_analysis_id(&entry.path), entry.path.clone()));
+        let mut keyed: Vec<(String, InputEntry)> =
+            entries.into_iter().map(|entry| (canonical_analysis_id(&entry.path), entry)).collect();
+        keyed.sort_by(|(a, x), (b, y)| a.cmp(b).then_with(|| x.path.cmp(&y.path)));
+        // A path listed twice with the same source is one file. Listed twice
+        // with different sources, or spelled two ways (`a.tsx`, `./a.tsx`),
+        // it names no single input, so the analysis fails rather than pick
+        // one: lookups keep the spelling the host passed.
+        let mut entries: Vec<InputEntry> = Vec::with_capacity(keyed.len());
+        let mut kept_id: Option<String> = None;
+        for (id, entry) in keyed {
+            match entries.last() {
+                Some(kept) if kept_id.as_ref() == Some(&id) => {
+                    if kept.path != entry.path {
+                        return Err(napi::Error::from_reason(format!(
+                            "file entries list one file as '{}' and as '{}'; pass each file once, under one path",
+                            kept.path, entry.path
+                        )));
+                    }
+                    if kept.source != entry.source {
+                        return Err(napi::Error::from_reason(format!(
+                            "file entries list '{}' twice with different sources; pass each file once",
+                            entry.path
+                        )));
+                    }
+                }
+                _ => {
+                    kept_id = Some(id);
+                    entries.push(entry);
+                }
+            }
+        }
 
         self.facts.clear();
         self.sources.clear();
@@ -2505,6 +2535,31 @@ export const App = () => <Box tone="red" />;
         ] {
             assert_eq!(canonical_analysis_id(path), id, "{path}");
         }
+    }
+
+    /// A path listed twice with the same source is analysed once; listed
+    /// twice with different sources, or as two spellings of one file, it
+    /// fails the analysis. A query names another input.
+    #[test]
+    fn a_file_listed_twice_is_one_input_or_a_failure() {
+        let analyze = |entries: &[(&str, &str)]| {
+            let mut engine = ExtractEngine::new(None).unwrap();
+            let entries: Vec<_> =
+                entries.iter().map(|(path, source)| serde_json::json!({ "path": path, "source": source })).collect();
+            engine.analyze(serde_json::Value::from(entries).to_string()).map(|_| engine.parse_count).map_err(|e| e.reason)
+        };
+        let (one, two) = ("export const x = 1;", "export const x = 2;");
+        assert_eq!(analyze(&[("a.tsx", one), ("a.tsx", one)]), Ok(1));
+        let failure = analyze(&[("a.tsx", one), ("a.tsx", two)]).unwrap_err();
+        assert!(failure.contains("'a.tsx' twice with different sources"), "{failure}");
+        for (first, second) in [("a.tsx", "./a.tsx"), ("a.tsx", "dir/../a.tsx"), ("a/b.tsx", "a\\b.tsx")] {
+            for source in [one, two] {
+                let failure = analyze(&[(first, one), (second, source)]).unwrap_err();
+                assert!(failure.contains("list one file as"), "{first} {second}: {failure}");
+                assert!(failure.contains(first) && failure.contains(second), "{first} {second}: {failure}");
+            }
+        }
+        assert_eq!(analyze(&[("a.tsx", one), ("a.tsx?raw", two)]), Ok(2));
     }
 
     /// Contract: analysis output is independent of the order the caller
