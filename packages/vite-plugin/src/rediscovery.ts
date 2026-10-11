@@ -1,18 +1,14 @@
 import {
   caseMismatchReason,
-  contentHash,
   discoverFiles,
   isPathWithinRoot,
-  isDeletedSource,
   isUnresolvedParentDrop,
   probeAbsolutePathSpecifier,
-  unreadableSourceDiagnostic,
   unresolvedParentName,
 } from '@animus-ui/extract/pipeline';
-import { readFileSync } from 'fs';
 import { dirname, extname, relative, resolve } from 'path';
 
-import type { PluginContext } from './context';
+import type { ObservedOutcome, PluginContext } from './context';
 import type { ProjectManifest } from '@animus-ui/extract/pipeline';
 
 interface UnresolvedParentDrop {
@@ -60,82 +56,47 @@ export function unresolvedDropFiles(ctx: PluginContext): ReadonlySet<string> {
 }
 
 /**
- * Folds undiscovered on-disk files when the manifest reports an unresolved
- * parent, then re-analyzes; the iteration cap is containment, not semantics.
+ * Folds undiscovered on-disk files into the Session when the manifest
+ * reports an unresolved parent, and returns the outcomes of the attempts
+ * that analyzed them; the iteration cap is containment, not semantics.
  */
 export async function reconcileSourceCorpus(
   ctx: PluginContext
-): Promise<boolean> {
-  if (ctx.isProd) return false;
+): Promise<ObservedOutcome[]> {
+  const outcomes: ObservedOutcome[] = [];
+  if (ctx.isProd || ctx.session === null) return outcomes;
 
-  let reanalyzed = false;
   for (let iteration = 0; iteration < 3; iteration++) {
     if (unresolvedDropFiles(ctx).size === 0) {
       // Drops resolved — future occurrences of the same conditions warn anew.
       warnedVerdicts.get(ctx)?.clear();
-      return reanalyzed;
+      return outcomes;
     }
-    const drops = unresolvedParentDrops(ctx);
+    // A walk over the generation a barren walk saw cannot fold anything new.
+    const manifest = ctx.storedManifest;
+    if (manifest !== null && barrenWalks.has(manifest)) return outcomes;
 
-    // A walk over an unchanged drop set with no cache movement cannot fold
-    // anything new. Movement is the mutation generation, never the size.
-    const dropKey = drops
-      .map((d) => `${d.file}\0${d.component}\0${d.parent}`)
-      .sort()
-      .join('\n');
-    const memo = barrenWalkMemos.get(ctx);
-    if (
-      memo &&
-      memo.dropKey === dropKey &&
-      memo.cacheGeneration === ctx.fileCacheGeneration
-    ) {
-      return reanalyzed;
-    }
-
-    const recordedFailures = ctx.ingestionFailureDiagnostics.length;
-    const folded = foldUndiscoveredFiles(ctx);
-    // A newly unreadable file is lost input the next analysis must report,
-    // under the strict policy, even when nothing else folded.
-    const newlyUnreadable =
-      ctx.ingestionFailureDiagnostics.length > recordedFailures;
-    if (folded.length === 0 && !newlyUnreadable) {
+    const folded = undiscoveredFiles(ctx);
+    if (folded.length === 0) {
       // The walk is complete and the parents are still unresolvable; teach
       // the reason where resolution succeeds on disk.
-      barrenWalkMemos.set(ctx, {
-        dropKey,
-        cacheGeneration: ctx.fileCacheGeneration,
-      });
-      warnInadmissibleParents(ctx, drops);
-      return reanalyzed;
+      if (manifest !== null) barrenWalks.add(manifest);
+      warnInadmissibleParents(ctx, unresolvedParentDrops(ctx));
+      return outcomes;
     }
-    barrenWalkMemos.delete(ctx);
 
-    if (folded.length > 0) {
-      ctx.log(
-        `rediscovery: folded ${folded.length} on-disk file(s) after unresolved-parent drop`
-      );
-    }
-    reanalyzed = true;
-    // Roll the fold back unless the analysis published: kept entries make the
-    // next walk barren, memoize that, and short-circuit every later call. An
-    // aborted-parse rejection holds the fold for the repair to publish.
-    let published = false;
-    let held = false;
-    try {
-      const analysis = await ctx.analyzeIngested();
-      published = analysis.ok;
-      held = analysis.abortedOriginals !== undefined;
-    } finally {
-      if (!published && !held) {
-        ctx.mutateFileCache((cache) => {
-          for (const key of folded) cache.delete(key);
-        });
-      }
-    }
-    if (!published) {
-      // Previous manifest is still current; the cache is back to its
-      // pre-fold state, so the next event genuinely retries.
-      return reanalyzed;
+    ctx.log(
+      `rediscovery: folded ${folded.length} on-disk file(s) after unresolved-parent drop`
+    );
+    // The Session reads them: a file it cannot read is lost input it reports,
+    // and an attempt that fails keeps none of them for the next walk.
+    const submitted = await ctx.submitChanges({
+      modifiedFiles: new Set(folded),
+    });
+    outcomes.push(...submitted);
+    // Nothing published: the previous manifest is still current.
+    if (!submitted.some(({ outcome }) => outcome.kind === 'published')) {
+      return outcomes;
     }
   }
 
@@ -144,63 +105,28 @@ export async function reconcileSourceCorpus(
       'source-corpus rediscovery did not stabilize after bounded retries'
     );
   }
-  return reanalyzed;
+  return outcomes;
 }
 
-/** Returns the cache keys this fold added: a failed analysis must restore
- *  the cache, or the content-hash gate suppresses the retry forever. A file
- *  it cannot read joins the context's ingestion failures instead. */
-function foldUndiscoveredFiles(ctx: PluginContext): string[] {
-  const excludeMatcher = ctx.excludeMatcher;
-  const filePaths = discoverFiles(
+/** The on-disk sources the Session does not hold, as absolute paths. */
+function undiscoveredFiles(ctx: PluginContext): string[] {
+  const held = ctx.session!.publishedSources;
+  return discoverFiles(
     ctx.rootDir,
     ctx.rootDir,
-    excludeMatcher,
+    ctx.excludeMatcher,
     ctx.extensionsSet
+  ).filter(
+    (filePath) =>
+      // `.mdx` ingests on its first watcher edit instead: without the
+      // optional MDX peer a folded `.mdx` is re-quarantined on every pass.
+      extname(filePath) !== '.mdx' && !held.has(relative(ctx.rootDir, filePath))
   );
-  const folded: string[] = [];
-  const pending: Array<[string, { hash: string; source: string }]> = [];
-  for (const filePath of filePaths) {
-    // `.mdx` ingests on its first watcher edit instead: without the optional
-    // MDX peer a folded `.mdx` is re-quarantined on every pass.
-    if (extname(filePath) === '.mdx') continue;
-    const relPath = relative(ctx.rootDir, filePath);
-    if (ctx.fileCache.has(relPath)) continue;
-    let source: string;
-    try {
-      source = readFileSync(filePath, 'utf-8');
-    } catch (err) {
-      // A late file that vanished is a deletion; one that cannot be read is
-      // lost input, held like a buildStart failure until it is read or gone.
-      if (
-        !isDeletedSource(err) &&
-        !ctx.ingestionFailureDiagnostics.some((d) => d.file === relPath)
-      ) {
-        ctx.ingestionFailureDiagnostics.push(
-          unreadableSourceDiagnostic(relPath, err)
-        );
-      }
-      continue;
-    }
-    pending.push([relPath, { hash: contentHash(source), source }]);
-    folded.push(relPath);
-  }
-  // One mutation for the whole walk: the fold either happens or it does not,
-  // and the memo above reads a single generation either way.
-  if (pending.length > 0) {
-    ctx.mutateFileCache((cache) => {
-      for (const [relPath, entry] of pending) cache.set(relPath, entry);
-    });
-  }
-  return folded;
 }
 
-/** Per context: the drop tuple-set and the cache mutation generation at the
- *  last walk that folded nothing. */
-const barrenWalkMemos = new WeakMap<
-  object,
-  { dropKey: string; cacheGeneration: number }
->();
+/** The manifests whose walk folded nothing: their drops stay unresolvable
+ *  until another publication. */
+const barrenWalks = new WeakSet<ProjectManifest>();
 
 /** Per-context (file, parent, condition) verdicts already warned — each
  *  condition warns once; cleared when the drops disappear. */
@@ -227,7 +153,7 @@ function warnInadmissibleParents(
   }
 
   for (const drop of drops) {
-    const consumer = ctx.fileCache.get(drop.file);
+    const consumer = ctx.session?.publishedSources.get(drop.file);
     if (!consumer) continue;
     const specifier = importSpecifierFor(consumer.source, drop.parent);
     if (!specifier || !specifier.startsWith('.')) continue;

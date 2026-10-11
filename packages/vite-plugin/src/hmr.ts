@@ -228,11 +228,13 @@ async function analyzeChangedFile(
       ? { kind: 'ignored' }
       : { kind: 'unchanged' };
   }
-  const merged = mergePublished(outcomes);
-  applyPublished(ctx, merged);
   // Reconcile on-disk sources before acting on the result: a parent whose
   // create event was lost folds in here, so the consumer re-serves extracted.
-  await reconcileSourceCorpus(ctx);
+  const merged = mergePublished([
+    ...outcomes,
+    ...(await reconcileSourceCorpus(ctx)),
+  ]);
+  applyPublished(ctx, merged);
 
   // Ending a hold re-delivers the edited module too: the client may hold a
   // failed request for it, or none after a reload during the failure.
