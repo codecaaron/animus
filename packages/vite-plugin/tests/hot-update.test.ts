@@ -1,4 +1,4 @@
-import { createExcludeMatcher } from '@animus-ui/extract/pipeline';
+import { contentHash, createExcludeMatcher } from '@animus-ui/extract/pipeline';
 import {
   mkdirSync,
   mkdtempSync,
@@ -8,8 +8,22 @@ import {
 } from 'fs';
 import { tmpdir } from 'os';
 import { join, resolve } from 'path';
+import { resolveConfig } from 'vite';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import {
+  createKitWorkspace,
+  disposeTempRoots,
+  KIT_SYSTEM_SOURCE,
+  resetAnimusGlobals,
+} from '../../extract/tests/session/session-fixtures';
+import {
+  emptyFacts,
+  factsExtractor,
+  systemImportFacts,
+} from '../../extract/tests/source-ingestion-fixtures';
+import { runBuildStart } from '../src/build-start';
+import { applyResolvedConfig } from '../src/config';
 import {
   RESOLVED_COMPONENTS_ID,
   RESOLVED_SYSTEM_PROPS_ID,
@@ -97,6 +111,15 @@ function makeEnvironment(name: string, moduleIds: string[]) {
 
 const VIRTUAL_IDS = [RESOLVED_COMPONENTS_ID, RESOLVED_SYSTEM_PROPS_ID];
 
+/** The change set for an edit whose settled bytes Vite's `read()` handed
+ *  over: the file as it now reads on disk. */
+function settledEdit(path: string) {
+  return {
+    modifiedFiles: new Set([path]),
+    sources: new Map([[path, readFileSync(path, 'utf-8')]]),
+  };
+}
+
 describe('hotUpdate across environment dispatches', () => {
   let root: string;
   let file: string;
@@ -131,7 +154,7 @@ describe('hotUpdate across environment dispatches', () => {
       read: readFile,
     });
 
-    expect(probe.submissions).toEqual([{ modifiedFiles: new Set([file]) }]);
+    expect(probe.submissions).toEqual([settledEdit(file)]);
     expect(client.invalidated).toEqual(VIRTUAL_IDS);
     expect(ssr.invalidated).toEqual(VIRTUAL_IDS);
     expect(clientModules?.map((m) => m.id)).toEqual(VIRTUAL_IDS);
@@ -248,7 +271,7 @@ describe('hotUpdate across environment dispatches', () => {
       read: readFile,
     });
 
-    expect(probe.submissions).toEqual([{ modifiedFiles: new Set([file]) }]);
+    expect(probe.submissions).toEqual([settledEdit(file)]);
     expect(client.invalidated).toEqual(VIRTUAL_IDS);
     expect(ssr.invalidated).toEqual(VIRTUAL_IDS);
     expect(clientModules?.map((m) => m.id)).toEqual(VIRTUAL_IDS);
@@ -275,7 +298,7 @@ describe('hotUpdate across environment dispatches', () => {
       read: async () => readFileSync(kitFile, 'utf-8'),
     });
 
-    expect(probe.submissions).toEqual([{ modifiedFiles: new Set([kitFile]) }]);
+    expect(probe.submissions).toEqual([settledEdit(kitFile)]);
   });
 
   it('coalesces a create the Session already holds without overriding the module list', async () => {
@@ -452,7 +475,7 @@ describe('hotUpdate recovers a new imported parent found on disk', () => {
     });
 
     expect(probe.submissions).toEqual([
-      { modifiedFiles: new Set([consumer]) },
+      settledEdit(consumer),
       { modifiedFiles: new Set([join(root, 'Parent.tsx')]) },
     ]);
     expect(returned?.map((m) => m.id)).toContain(RESOLVED_COMPONENTS_ID);
@@ -460,47 +483,71 @@ describe('hotUpdate recovers a new imported parent found on disk', () => {
 });
 
 /**
- * An atomic save leaves the path momentarily empty, so the hook waits on
- * Vite's retrying `read()` helper before the Session reads the file.
+ * An atomic save leaves the path momentarily empty: Vite's `read()` helper
+ * retries until the save lands and returns the settled bytes, which the
+ * analysis must hold even while the disk still reads empty.
  */
 describe('hotUpdate reads through the retry-guarded read helper', () => {
-  let root: string;
-  let file: string;
+  let restoreGlobals: () => void;
 
   beforeEach(() => {
-    root = mkdtempSync(join(tmpdir(), 'animus-hot-update-read-'));
-    file = join(root, 'Button.tsx');
+    restoreGlobals = resetAnimusGlobals();
   });
 
   afterEach(() => {
-    rmSync(root, { recursive: true, force: true });
+    restoreGlobals();
+    disposeTempRoots();
   });
 
-  it('submits only after the retried read has settled', async () => {
+  it('caches the retried content, not the empty file on disk', async () => {
+    const { app } = createKitWorkspace();
+    const file = join(app, 'src', 'Button.tsx');
+    writeFileSync(file, 'export const Button = 1;\n');
+    const ctx = new PluginContext({ system: './src/system.ts' }, () => ({
+      loadSystemModule: () => ({
+        propConfig: '{}',
+        groupRegistry: '{}',
+        scalesJson: '{}',
+        variableMapJson: '{}',
+        variableCss: '',
+        dependencies: [],
+      }),
+      extractFacts: factsExtractor({
+        [join(app, 'src', 'system.ts')]: {
+          ...emptyFacts(join(app, 'src', 'system.ts')),
+          imports: systemImportFacts(KIT_SYSTEM_SOURCE),
+        },
+      }),
+      analyzeProject: () => JSON.stringify(makeManifest()),
+    }));
+    applyResolvedConfig(
+      ctx,
+      await resolveConfig(
+        { configFile: false, root: app, logLevel: 'silent' },
+        'serve'
+      )
+    );
+    await runBuildStart(ctx, async (specifier) =>
+      resolve(app, 'src', specifier)
+    );
+
     const settled = 'export const Button = 2;\n';
     // The atomic-save window: the path exists and is empty right now.
     writeFileSync(file, '');
-    const probe = makeContext(root);
-    const seenBySession: string[] = [];
-    probe.respond(() => {
-      seenBySession.push(readFileSync(file, 'utf-8'));
-      return [published(probe)];
-    });
     const client = makeEnvironment('client', VIRTUAL_IDS);
-
-    await runHotUpdate(probe.ctx, client.environment, {
+    await runHotUpdate(ctx, client.environment, {
       type: 'update',
       file,
       timestamp: 60,
       modules: [],
-      // Vite's helper retries until the save lands.
-      read: async () => {
-        writeFileSync(file, settled);
-        return settled;
-      },
+      read: async () => settled,
     });
 
-    expect(seenBySession).toEqual([settled]);
+    expect(ctx.session?.heldSources.get('src/Button.tsx')).toEqual({
+      hash: contentHash(settled),
+      source: settled,
+    });
+    ctx.close();
   });
 });
 
