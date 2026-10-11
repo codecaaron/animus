@@ -143,5 +143,29 @@ export interface ProjectManifest {
   components: Record<string, ManifestComponentDescriptor>;
   /** file path → component ids declared in it. */
   files: Record<string, string[]>;
+  /** Each extension dropped over a parent that is no analysed chain, with
+   *  why (spec §12.2 row 11); absent where none was. */
+  missing_inputs?: ManifestMissingInput[];
   timing: ManifestTiming;
+}
+
+/** An extension dropped over its parent: the typed evidence a host's
+ *  rediscovery reads in place of the drop's message. */
+export interface ManifestMissingInput {
+  file: string;
+  component: string;
+  /** The parent as written in the extending file. */
+  parent: string;
+  /** The specifier the parent is imported by, where it is imported. */
+  specifier: string | null;
+  /** The rootDir-relative path the specifier probes, where it is a path. */
+  base: string | null;
+  outcome:
+    | 'absent'
+    | 'incomplete'
+    | 'opaque'
+    | 'package'
+    | 'unreached'
+    | 'not-a-chain'
+    | 'failed-parent';
 }

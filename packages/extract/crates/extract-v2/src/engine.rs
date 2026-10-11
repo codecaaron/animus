@@ -46,6 +46,9 @@ struct AnalyzeResult<'a> {
     reverse_provenance: &'a std::collections::BTreeMap<String, Vec<String>>,
     components: &'a std::collections::BTreeMap<String, analyze_css::ComponentDescriptor>,
     files: &'a std::collections::BTreeMap<String, Vec<String>>,
+    /// Present only where an extension was dropped over its parent.
+    #[serde(skip_serializing_if = "<[_]>::is_empty")]
+    missing_inputs: &'a [analyze_css::MissingInput],
     timing: serde_json::Value,
 }
 
@@ -1201,6 +1204,7 @@ impl ExtractEngine {
             reverse_provenance: &css.reverse_provenance,
             components: &css.components,
             files: &css.files_map,
+            missing_inputs: &css.missing_inputs,
             timing: serde_json::json!({ "parseCount": self.parse_count }),
         });
         self.cross = Some(cross);
