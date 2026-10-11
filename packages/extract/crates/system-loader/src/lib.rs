@@ -354,13 +354,34 @@ fn resolve_exports_pattern(
     }
     // As Node reads the substituted target: a URL, so a raw backslash is a
     // `/`, and one holding an encoded separator (`%2F`, `%5C`) is refused
-    // (`ERR_INVALID_MODULE_SPECIFIER`).
+    // (`ERR_INVALID_MODULE_SPECIFIER`). The rest is decoded as
+    // `fileURLToPath` decodes it: `a%20b` names `a b`, and a malformed escape
+    // or one that is not UTF-8 names nothing (`URIError`).
     let target = resolve_condition_value(value, source, conditions)?.replace('*', matched);
     let lowered = target.to_ascii_lowercase();
     if lowered.contains("%2f") || lowered.contains("%5c") {
         return None;
     }
-    Some(target.replace('\\', "/"))
+    percent_decoded(&target.replace('\\', "/"))
+}
+
+/// `text` with each `%XX` escape decoded, as `decodeURIComponent` decodes
+/// it: `None` for an escape without two hex digits, or bytes that are not
+/// UTF-8.
+fn percent_decoded(text: &str) -> Option<String> {
+    let mut bytes = Vec::with_capacity(text.len());
+    let mut rest = text.as_bytes();
+    while let Some((&byte, tail)) = rest.split_first() {
+        if byte == b'%' {
+            let hex = std::str::from_utf8(tail.get(..2)?).ok()?;
+            bytes.push(u8::from_str_radix(hex, 16).ok()?);
+            rest = &tail[2..];
+        } else {
+            bytes.push(byte);
+            rest = tail;
+        }
+    }
+    String::from_utf8(bytes).ok()
 }
 
 /// Whether Node refuses a pattern's match (`ERR_INVALID_MODULE_SPECIFIER`):
@@ -368,23 +389,8 @@ fn resolve_exports_pattern(
 /// percent-encoded. An empty segment loads (only deprecated, DEP0166).
 fn refused_pattern_match(matched: &str) -> bool {
     matched.split(['/', '\\']).any(|segment| {
-        let bytes = segment.as_bytes();
-        let mut decoded = String::new();
-        let mut index = 0;
-        while index < bytes.len() {
-            let hex = segment.get(index + 1..index + 3).and_then(|hex| u8::from_str_radix(hex, 16).ok());
-            match (bytes[index], hex) {
-                (b'%', Some(byte)) => {
-                    decoded.push(char::from(byte));
-                    index += 3;
-                }
-                (byte, _) => {
-                    decoded.push(char::from(byte));
-                    index += 1;
-                }
-            }
-        }
-        matches!(decoded.to_ascii_lowercase().as_str(), "." | ".." | "node_modules")
+        percent_decoded(segment)
+            .is_some_and(|decoded| matches!(decoded.to_ascii_lowercase().as_str(), "." | ".." | "node_modules"))
     })
 }
 
@@ -2225,7 +2231,11 @@ export const ds = tokens;
         // link's parent holds.
         package("linked-main", serde_json::json!({ "main": "./link/../token.ts" }), &["token.ts", "other/Token.ts", "other/sub/x.ts"]);
         // A pattern's match may not hold `..`, as Node refuses it.
-        package("wild", serde_json::json!({ "exports": { "./*": "./src/*.ts" } }), &["src/token.ts", "src/a/b.ts", "src/a%2fb.ts"]);
+        package(
+            "wild",
+            serde_json::json!({ "exports": { "./*": "./src/*.ts" } }),
+            &["src/token.ts", "src/a/b.ts", "src/a%2fb.ts", "src/a b.ts", "src/a%20b.ts"],
+        );
         #[cfg(unix)]
         fs::write(dir.join("node_modules/wild/src/a\\b.ts"), "export {};\n").expect("write backslash name");
         #[cfg(unix)]
@@ -2263,6 +2273,13 @@ export const ds = tokens;
         // backslash is a `/`, though a file holds one in its name.
         assert!(resolved("wild/a%2fb", &[]).is_err(), "an encoded `/` is refused");
         assert!(resolved("wild/a%5Cb", &[]).is_err(), "an encoded `\\` is refused");
+        // The rest is decoded, as Node's `fileURLToPath` decodes it: `a%20b`
+        // names `a b.ts` beside a literal `a%20b.ts`, which `a%2520b` names.
+        assert_eq!(resolved("wild/a%20b", &[]).as_deref(), Ok("wild/src/a b.ts"));
+        assert_eq!(resolved("wild/a%2520b", &[]).as_deref(), Ok("wild/src/a%20b.ts"));
+        assert_eq!(resolved("wild/%74oken", &[]).as_deref(), Ok("wild/src/token.ts"));
+        assert!(resolved("wild/a%zzb", &[]).is_err(), "a malformed escape is refused");
+        assert!(resolved("wild/%ff", &[]).is_err(), "an escape that is not UTF-8 is refused");
         #[cfg(unix)]
         assert_eq!(resolved("wild/a\\b", &[]).as_deref(), Ok("wild/src/a/b.ts"));
         // Where the filesystem opens the misspelled entry, the selection
