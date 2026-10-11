@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto';
 import {
   existsSync,
   mkdirSync,
@@ -90,8 +91,11 @@ import {
 } from './session-paths';
 import {
   claimExclusiveSessionOwner,
-  claimProcessSessionId,
+  createBuildId,
   engineApi,
+  findSession,
+  joinSession,
+  sessionKey,
   getOwningWatchSession,
   getWatchTransaction,
   resetAnalysisStartedPromise,
@@ -120,11 +124,16 @@ import type {
   PackageResolution,
   SessionResolutionContext,
 } from './resolve-packages';
+import type { SessionKey } from './singleton';
 
 export type SessionOptions = AnimusCoreOptions;
 
 /** What the hosting bundler does, which the user does not configure. */
 export interface SessionHost {
+  /** The build this session takes part in, created once by the owning host
+   *  wrapper and passed to every participant and worker. Omitted, the
+   *  session is a build of its own. */
+  build?: string;
   /** The bundler leaves an `import(expr)` it cannot read unbundled
    *  (Rollup, Vite, Turbopack), so the load reaches no analysed module.
    *  Omitted, it reaches the importer's directory, as a webpack context
@@ -310,7 +319,7 @@ export class ExtractionSession {
   private fileCache = new Map<string, { hash: string; source: string }>();
 
   readonly corpus: SourceCorpus = createSourceCorpus({
-    engineApi: () => engineApi(),
+    engineApi: () => engineApi(this.key),
     prefix: '[animus-next]',
     strict: () => !!this.options.strict,
     warn: (message: string) => this.warn(message),
@@ -340,9 +349,11 @@ export class ExtractionSession {
   /** Release handle for the in-process owner slot AND the directory's
    *  on-disk owner record, taken and released as one; null when unheld. */
   private releasePublicationClaim: (() => void) | null = null;
-  /** Session identity, claimed once per PROCESS and adopted by every later
-   *  session instance so all compilers share one artifact tree. */
-  readonly sessionId: string = claimProcessSessionId();
+  /** The build this session takes part in: every participant of one build
+   *  shares its artifact tree and state; another build of the root never
+   *  does. */
+  readonly sessionId: string;
+  private joinedKey: SessionKey | null = null;
   /** Epoch of the last published analysis; null seeds from disk so a
    *  same-session restart with unchanged plans rewrites no bytes. */
   private lastEpochValue: string | null = null;
@@ -376,6 +387,7 @@ export class ExtractionSession {
     private readonly host: SessionHost = {}
   ) {
     this.options = options;
+    this.sessionId = host.build ?? createBuildId();
     // Serialized once (stable key order) so the analysis-inputs hash is
     // insensitive to option-object identity.
     this.staticCssJson = serializeStaticCss(options.staticCss);
@@ -391,6 +403,19 @@ export class ExtractionSession {
 
   get sessionDir(): string {
     return sessionArtifactDir(this.rootDir!, this.sessionId);
+  }
+
+  /** This session's build of its root, joined on first use: a participant
+   *  whose options differ from the build's fails with
+   *  `SessionConfigurationConflict`. */
+  get key(): SessionKey {
+    if (this.joinedKey === null) {
+      const key = sessionKey(this.sessionId, this.rootDir!);
+      // Unique across module copies (ESM and CJS), which share the registry.
+      joinSession(key, `${this.driverLabel}#${randomUUID()}`, this.options);
+      this.joinedKey = key;
+    }
+    return this.joinedKey;
   }
 
   get verbose(): boolean {
@@ -508,7 +533,7 @@ export class ExtractionSession {
     const hasBatch =
       (changes.modifiedFiles?.size ?? 0) > 0 ||
       (changes.removedFiles?.size ?? 0) > 0;
-    const inflight = getWatchTransaction();
+    const inflight = getWatchTransaction(this.key);
     if (inflight) {
       await inflight;
       if (!hasBatch) return;
@@ -519,7 +544,7 @@ export class ExtractionSession {
     // check AFTER the join above: an initial full pipeline registers its
     // owner on publication. An empty or absent follower batch stays a no-op.
     if (!this.system) {
-      const owner = getOwningWatchSession();
+      const owner = getOwningWatchSession(this.key);
       if (owner && owner !== this && hasBatch) {
         await owner.ingestForwardedBatch(changes);
       }
@@ -534,7 +559,7 @@ export class ExtractionSession {
   async ingestForwardedBatch(changes: WatchChanges): Promise<void> {
     if (!this.system) return;
     for (;;) {
-      const inflight = getWatchTransaction();
+      const inflight = getWatchTransaction(this.key);
       if (!inflight) break;
       await inflight;
     }
@@ -543,11 +568,11 @@ export class ExtractionSession {
     const transaction = Promise.resolve().then(() =>
       this.processWatchUpdate(changes)
     );
-    setWatchTransaction(transaction);
+    setWatchTransaction(this.key, transaction);
     try {
       await transaction;
     } finally {
-      setWatchTransaction(null);
+      setWatchTransaction(this.key, null);
     }
   }
 
@@ -604,7 +629,7 @@ export class ExtractionSession {
       this.resetForHmr();
       try {
         const promise = this.runFullPipeline(this.pendingFromBatch(changes));
-        setAnalysisStartedPromise(promise);
+        setAnalysisStartedPromise(this.key, promise);
         await promise;
         this.systemReloadOwed = false;
       } catch (err) {
@@ -810,12 +835,12 @@ export class ExtractionSession {
           this.externalFileOwners
         );
 
-        resetAnalysisStartedPromise();
+        resetAnalysisStartedPromise(this.key);
         const promise = this.runIncrementalPipeline(
           ingested.analysisEntries,
           pending
         );
-        setAnalysisStartedPromise(promise);
+        setAnalysisStartedPromise(this.key, promise);
         await promise;
       } catch (err) {
         if (err instanceof AbortedParseRejection) {
@@ -877,12 +902,15 @@ export class ExtractionSession {
     // write guards hold by construction. Re-entrant for this instance.
     if (this.releasePublicationClaim === null) {
       const releaseOwner = claimExclusiveSessionOwner(
+        this.key,
         `${this.driverLabel}:${this.sessionDir}`
       );
       // The on-disk record is what stops a sibling from pruning this tree.
       // Only the in-process winner writes it, and both release together.
       mkdirSync(this.sessionDir, { recursive: true });
-      const releaseClaimRecord = holdDirectoryClaim(this.sessionDir);
+      const releaseClaimRecord = holdDirectoryClaim(this.sessionDir, {
+        build: this.sessionId,
+      });
       this.releasePublicationClaim = () => {
         releaseOwner();
         releaseClaimRecord();
@@ -893,16 +921,16 @@ export class ExtractionSession {
     // restore it — otherwise this session answers as owner with empty caches.
     const priorSystem = this.system;
 
-    const nested = getWatchTransaction() !== null;
+    const nested = getWatchTransaction(this.key) !== null;
     const transaction = this.runPipelineTransaction(pending);
-    if (!nested) setWatchTransaction(transaction);
+    if (!nested) setWatchTransaction(this.key, transaction);
     try {
       await transaction;
     } catch (error) {
       this.system = priorSystem;
       throw error;
     } finally {
-      if (!nested) setWatchTransaction(null);
+      if (!nested) setWatchTransaction(this.key, null);
     }
   }
 
@@ -915,7 +943,7 @@ export class ExtractionSession {
     // Hygiene first, then publish this session's artifact dir for the
     // in-process loader before any analysis can complete.
     this.runSessionStartHygiene();
-    setSessionArtifactDir(this.sessionDir);
+    setSessionArtifactDir(this.key, this.sessionDir);
 
     const rootDir = this.rootDir!;
     const priorSourceState = this.snapshotSourceState();
@@ -931,7 +959,7 @@ export class ExtractionSession {
     };
     this.log(`extension order: ${context.extensions.resolverVersion}`);
     let t = this.now();
-    this.system = loadSystemConfig(engineApi, {
+    this.system = loadSystemConfig(() => engineApi(this.key), {
       systemPath: resolvedSystemPath,
       rootDir,
       prefix: this.options.prefix,
@@ -1013,7 +1041,7 @@ export class ExtractionSession {
         fromDir,
         { conditions, workspaces, extensions }
       ) => {
-        const native = engineApi().resolveSpecifier;
+        const native = engineApi(this.key).resolveSpecifier;
         if (native === undefined) {
           throw new Error(
             'the native engine does not expose resolveSpecifier, which package resolution needs — rebuild @animus-ui/extract'
@@ -1031,7 +1059,7 @@ export class ExtractionSession {
     const discoveryDiagnostics: ManifestDiagnostic[] = [];
     const packageNames = await extractSystemFilePackages(
       resolvedSystemPath,
-      engineModuleParser(engineApi()),
+      engineModuleParser(engineApi(this.key)),
       (diagnostic) => discoveryDiagnostics.push(diagnostic),
       (name) => {
         const entry = resolvePackagesByName(
@@ -1045,7 +1073,12 @@ export class ExtractionSession {
       context.extensions
     );
     discoveryDiagnostics.push(
-      ...importedKitDiagnostics(rawEntries, engineApi(), rootDir, packageNames)
+      ...importedKitDiagnostics(
+        rawEntries,
+        engineApi(this.key),
+        rootDir,
+        packageNames
+      )
     );
     const preResolved = resolvePackagesByName(
       rootDir,
@@ -1219,7 +1252,7 @@ export class ExtractionSession {
       bt.fileCount = accepted.analysisEntries.length;
       // Clear the native cache only after adaptation produced a corpus: a
       // failed reload must leave the last-good transform engine usable.
-      clearEngineCache(engineApi);
+      clearEngineCache(() => engineApi(this.key));
       await this.analyzeAndEmit(
         accepted.analysisEntries,
         packageMap,
@@ -1232,15 +1265,15 @@ export class ExtractionSession {
 
       // External package state publishes in the same successful generation
       // as the source projection.
-      setSharedExternalDirs(admitted.packageDirs);
-      setSharedExternalEntries(admitted.sourceEntries);
-      setSharedExternalSideEffects(admitted.sourceEntrySideEffects);
+      setSharedExternalDirs(this.key, admitted.packageDirs);
+      setSharedExternalEntries(this.key, admitted.sourceEntries);
+      setSharedExternalSideEffects(this.key, admitted.sourceEntrySideEffects);
 
       this.onExternalRootsCommitted?.(this.externalWatchRoots);
 
       // Registered only on SUCCESS: a failed pipeline leaves no owner that
       // would accept batches it cannot analyze.
-      setOwningWatchSession(this);
+      setOwningWatchSession(this.key, this);
     } catch (err) {
       this.restoreSourceState(priorSourceState);
       throw err;
@@ -1292,7 +1325,7 @@ export class ExtractionSession {
   /** Reset analysis state for a system reload: write guards go back to null
    *  and reseed from the disk envelopes on the next publication. */
   resetForHmr(): void {
-    resetAnalysisStartedPromise();
+    resetAnalysisStartedPromise(this.key);
     this.artifactRecords = { manifest: null, inputs: null, styles: null };
     this.lastSystemPropsHash = null;
   }
@@ -1552,7 +1585,7 @@ export class ExtractionSession {
     this.writeAnalysisStatus('analyzing', pending);
     // An error-level diagnostic, a hard error included, throws here in a
     // build, before any stylesheet is assembled: no partial generation.
-    const result = runProjectAnalysis(engineApi, {
+    const result = runProjectAnalysis(() => engineApi(this.key), {
       ...analysisOptions,
       warn: (message) => this.warn(message),
       info: (message) => this.log(message),
@@ -1643,7 +1676,7 @@ export class ExtractionSession {
       surface: 'generated runtime modules',
     });
 
-    setSharedCss(fullCss);
+    setSharedCss(this.key, fullCss);
 
     const systemPropsContent = buildSystemPropsModule({
       systemPropMapJson: JSON.stringify(manifest?.system_prop_map ?? {}),
@@ -1653,13 +1686,14 @@ export class ExtractionSession {
       typedSystemProps: manifest?.typed_system_props ?? [],
     });
 
-    setSharedSystemProps(systemPropsContent);
+    setSharedSystemProps(this.key, systemPropsContent);
 
-    setManifestJson(result.manifestJson);
+    setManifestJson(this.key, result.manifestJson);
 
     // The analyzed-hash map publishes with the manifest — one generation,
     // one publication; it is the loader's stale-input witness.
     setAnalyzedHashes(
+      this.key,
       new Map(fileEntries.map((entry) => [entry.path, entry.hash]))
     );
 
@@ -1919,7 +1953,7 @@ export class ExtractionSession {
       this.lastEpochValue = epoch;
       this.reconcileSiblingEpochs(epoch);
     }
-    setReplacementEpoch(epoch);
+    setReplacementEpoch(this.key, epoch);
   }
 
   /** sessions-root listing memo, keyed by the root dir's mtime — a new or
@@ -1984,10 +2018,18 @@ export class ExtractionSession {
   }
 
   /** The pid of `siblingDir`'s live owner, or null when nothing proves one.
-   *  Our own pid is never one — publication is process-exclusive. A missing,
-   *  undecodable or unreadable claim all mean no owner: the opposite default
-   *  from the CLI lock check on purpose, so do not unify the two. */
+   *  A tree whose build is registered in this process is ours and live,
+   *  claim or no claim: a publisher's close() releases the claim while the
+   *  build's other participants still serve from it. Otherwise a missing,
+   *  undecodable or unreadable claim, or one naming our own pid, means no
+   *  owner: the opposite default from the CLI lock check on purpose, so do
+   *  not unify the two. */
   private liveSiblingOwnerPid(siblingDir: string): number | null {
+    // A session directory is named by its build.
+    const build = basename(siblingDir);
+    if (findSession(sessionKey(build, this.rootDir!)) !== undefined) {
+      return process.pid;
+    }
     let claim: ReturnType<typeof readCliLockRecord>;
     try {
       claim = readCliLockRecord(siblingDir);
@@ -1996,6 +2038,7 @@ export class ExtractionSession {
       return null;
     }
     if (claim.kind !== 'held') return null;
+    // Our own pid on an unregistered build is a tree this process left.
     if (claim.record.pid === process.pid) return null;
     return checkLockLiveness(claim.record).live ? claim.record.pid : null;
   }

@@ -190,11 +190,29 @@ export interface KitSourceCondition {
    *  absolute source file. */
   entries: Array<[subpath: string, target: string]>;
   /** Entries whose target is missing, differs from its file only in case,
-   *  or is outside the package, and which of those. */
+   *  or is no package target Node accepts, and which of those. */
   invalid: Array<[subpath: string, target: string, why: string]>;
   /** The deepest directory holding every source entry: what discovery walks.
    *  Null when no entry is valid. */
   root: string | null;
+}
+
+/** A package target Node accepts, as the system loader reads it
+ *  (`valid_package_target`): relative to the package root (`./`), with no
+ *  `.`, `..` or `node_modules` segment after it. An empty segment loads. */
+function isPackageTarget(target: string): boolean {
+  return (
+    target.startsWith('./') &&
+    !target
+      .split(/[/\\]/)
+      .slice(1)
+      .some(
+        (segment) =>
+          segment === '.' ||
+          segment === '..' ||
+          segment.toLowerCase() === 'node_modules'
+      )
+  );
 }
 
 /** The package's kit source condition, or null when no exact `exports`
@@ -213,10 +231,13 @@ export function readKitSourceCondition(
     if (subpath.includes('*') || !isJsonBlock(value)) continue;
     const target = value[KIT_SOURCE_CONDITION];
     if (!isJsonString(target)) continue;
-    const file = resolve(pkgRoot, target);
-    const seen = isPathWithinRoot(pkgRoot, file)
-      ? seeOnDisk(file, pkgRoot)
-      : null;
+    // Read as the system loader reads a target: a raw backslash is a `/`,
+    // and a percent-escape is refused. A target it refuses is no source: it
+    // evaluates the runtime entry, so analysis reads that entry too.
+    const file = resolve(pkgRoot, target.replaceAll('\\', '/'));
+    const escaped = target.includes('%');
+    const seen =
+      isPackageTarget(target) && !escaped ? seeOnDisk(file, pkgRoot) : null;
     if (seen?.kind === 'file') {
       condition.entries.push([subpath, file]);
     } else {
@@ -225,7 +246,11 @@ export function readKitSourceCondition(
         target,
         seen?.kind === 'case-only'
           ? `is spelled otherwise on disk (${seen.actual}), which a case- or normalization-sensitive filesystem does not load`
-          : 'is missing or outside the package',
+          : escaped
+            ? "holds a percent-escape, which the system loader refuses (percent-escape unsupported) — spell the target without '%'"
+            : seen === null
+              ? "is no package target Node accepts (one starts with './' and has no '.', '..' or 'node_modules' segment)"
+              : 'is missing',
       ]);
     }
   }
@@ -708,8 +733,28 @@ export async function collectExternalPackageSources(opts: {
     // from where the nearest manifest can be the application's own. Then,
     // and for a source-only kit with no runtime entry to resolve, the package
     // is found as Node finds it, and its condition names the entry.
-    const resolvedRoot = absEntry ? findPackageRoot(absEntry) : null;
+    // A manifest nested below the package Node locates (a published
+    // `dist/lib/package.json` carrying the package's name) is part of the
+    // package, not its root: the root is the located directory, spelled as
+    // the host spells the entry. Only where the entry's own real path lies
+    // inside it: an entry linked out of the package is not its file.
+    let resolvedRoot = absEntry ? findPackageRoot(absEntry) : null;
     const locatedRoot = packageName && locatePackageRoot(packageName, rootDir);
+    if (
+      resolvedRoot &&
+      locatedRoot &&
+      absEntry &&
+      realPath(resolvedRoot) !== locatedRoot &&
+      isPathWithinRoot(locatedRoot, realPath(absEntry))
+    ) {
+      while (
+        realPath(resolvedRoot) !== locatedRoot &&
+        resolvedRoot !== dirname(resolvedRoot)
+      ) {
+        resolvedRoot = dirname(resolvedRoot);
+      }
+      if (realPath(resolvedRoot) !== locatedRoot) resolvedRoot = locatedRoot;
+    }
     const pkgRoot =
       resolvedRoot &&
       (!locatedRoot ||
@@ -1049,7 +1094,7 @@ export function importedKitDiagnostics(
 }
 
 /** A kit without the source condition, warned once, or each condition entry
- *  whose target is missing or outside the package. */
+ *  whose target is missing or no package target Node accepts. */
 function sourceConditionDiagnostics(
   packageName: string,
   condition: KitSourceCondition | null

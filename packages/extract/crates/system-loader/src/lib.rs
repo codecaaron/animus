@@ -450,13 +450,15 @@ fn condition_target(value: &serde_json::Value, source: bool, conditions: &[Strin
 }
 
 /// A package target Node accepts: relative to the package root (`./`), with
-/// no `..` or `node_modules` segment taking it out of the package.
+/// no `.`, `..` or `node_modules` segment after it
+/// (`ERR_INVALID_PACKAGE_TARGET`). An empty segment loads. Discovery reads
+/// a kit's source targets by the same rule (`isPackageTarget`).
 fn valid_package_target(target: &str) -> bool {
     target.starts_with("./")
         && !target
             .split(['/', '\\'])
             .skip(1)
-            .any(|segment| segment == ".." || segment.eq_ignore_ascii_case("node_modules"))
+            .any(|segment| segment == "." || segment == ".." || segment.eq_ignore_ascii_case("node_modules"))
 }
 
 /// `specifier` resolved from `from_dir` as the system loader resolves its

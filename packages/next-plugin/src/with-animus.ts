@@ -11,6 +11,7 @@ import {
   turbopackExtensionPolicy,
 } from '@animus-ui/extract/pipeline';
 import {
+  createBuildId,
   ExtractionSession,
   runSessionPipeline,
   startTurbopackWatcher,
@@ -188,12 +189,17 @@ export function withAnimus(
     );
   }
 
+  // One build per config load: every compiler, the loaders and the
+  // Turbopack workers take part in it, and another `next` process of the
+  // same root is another build.
+  const build = createBuildId();
+
   return <Config extends NextOwnedConfig>(
     authoredConfig: NextConfigInput<Config>
   ): WebpackNextConfig<Config> | TurbopackNextConfig<Config> => {
     const nextConfig = withSourceKits(authoredConfig, process.cwd());
     if (resolveTurbopackMode(options)) {
-      return turbopackConfig(nextConfig, options);
+      return turbopackConfig(nextConfig, options, build);
     }
 
     const existingWebpack = nextConfig.webpack;
@@ -214,7 +220,7 @@ export function withAnimus(
         );
         const plugin = new AnimusWebpackPlugin(
           { ...options, mode },
-          { development: context.dev === true }
+          { development: context.dev === true, build }
         );
         plugin.setRootDir(rootDir);
         const sessionDir = plugin.sessionDir;
@@ -380,6 +386,8 @@ export function withAnimus(
                 strict: options.strict,
                 development: context.dev === true,
                 cssImportTarget: options.cssImportTarget,
+                build,
+                root: rootDir,
               },
             },
           ],
@@ -430,7 +438,8 @@ function withSourceKits<Config extends NextOwnedConfig>(
 
 function turbopackConfig<Config extends NextOwnedConfig>(
   nextConfig: NextConfigInput<Config>,
-  options: AnimusNextOptions
+  options: AnimusNextOptions,
+  build: string
 ): TurbopackNextConfig<Config> {
   // Turbopack's extension order as Next merges it: `turbopack`, else the
   // legacy `experimental.turbo`; its documented default without either.
@@ -438,8 +447,8 @@ function turbopackConfig<Config extends NextOwnedConfig>(
     nextConfig.turbopack?.resolveExtensions ??
     nextConfig.experimental?.turbo?.resolveExtensions;
   const load = (phase: string): Promise<TurbopackNextConfigObject<Config>> =>
-    loadTurbopackFragment(options, phase, resolveExtensions).then((fragment) =>
-      mergeTurbopackFragment(nextConfig, fragment)
+    loadTurbopackFragment(options, phase, resolveExtensions, build).then(
+      (fragment) => mergeTurbopackFragment(nextConfig, fragment)
     );
   function then<Resolved = TurbopackNextConfigObject<Config>, Rejected = never>(
     onResolved?:
@@ -465,21 +474,35 @@ function turbopackConfig<Config extends NextOwnedConfig>(
   return config;
 }
 
-let liveTurbopackSession: ExtractionSession | null = null;
-let liveTurbopackWatcher: TurbopackWatcherHandle | null = null;
-/** The load the live session came from. Next loads the config again after
- *  Ready (validateTurboNextConfig), and a user config may await this one
- *  besides: the same phase and root share one analysis and keep the watcher.
- *  A rejected load is dropped, so a repaired source loads again. */
-let liveTurbopackLoad: {
-  key: string;
-  fragment: Promise<TurbopackConfigFragment>;
-} | null = null;
+/** One config wrapper's live Turbopack session, its watcher, and the load
+ *  it came from. Next loads the config again after Ready
+ *  (validateTurboNextConfig), and a user config may await this one besides:
+ *  the same phase and root share one analysis and keep the watcher. A
+ *  rejected load is dropped, so a repaired source loads again. */
+interface TurbopackOwner {
+  session: ExtractionSession | null;
+  watcher: TurbopackWatcherHandle | null;
+  load: { key: string; fragment: Promise<TurbopackConfigFragment> } | null;
+}
+
+/** Each wrapper's owner, by the build it created: another wrapper of the
+ *  same root is another build and never shares or closes this one's. */
+const turbopackOwners = new Map<string, TurbopackOwner>();
+
+function turbopackOwner(build: string): TurbopackOwner {
+  let owner = turbopackOwners.get(build);
+  if (owner === undefined) {
+    owner = { session: null, watcher: null, load: null };
+    turbopackOwners.set(build, owner);
+  }
+  return owner;
+}
 
 function loadTurbopackFragment(
   options: AnimusNextOptions,
   phase: string,
-  resolveExtensions: readonly string[] | undefined
+  resolveExtensions: readonly string[] | undefined,
+  build: string
 ): Promise<TurbopackConfigFragment> {
   // `next dev <subdir>` under Turbopack is a known gap: no dir reaches a
   // config module, so cwd is the only root signal. Next 16's `turbopack.root`
@@ -488,17 +511,19 @@ function loadTurbopackFragment(
   const rootDir = process.cwd();
   // The extension order is part of the analysis a load shares.
   const key = JSON.stringify([phase, rootDir, resolveExtensions ?? null]);
-  if (liveTurbopackLoad?.key === key) return liveTurbopackLoad.fragment;
+  const owner = turbopackOwner(build);
+  if (owner.load?.key === key) return owner.load.fragment;
   const fragment = analyzeForTurbopack(
     options,
     phase,
     rootDir,
-    resolveExtensions
+    resolveExtensions,
+    build
   );
   const load = { key, fragment };
-  liveTurbopackLoad = load;
+  owner.load = load;
   fragment.catch(() => {
-    if (liveTurbopackLoad === load) liveTurbopackLoad = null;
+    if (owner.load === load) owner.load = null;
   });
   return fragment;
 }
@@ -507,22 +532,26 @@ async function analyzeForTurbopack(
   options: AnimusNextOptions,
   phase: string,
   rootDir: string,
-  resolveExtensions: readonly string[] | undefined
+  resolveExtensions: readonly string[] | undefined,
+  build: string
 ): Promise<TurbopackConfigFragment> {
   const development = phase === PHASE_DEVELOPMENT_SERVER;
   const { mode } = resolveMode(options.mode, () =>
     development ? 'development' : 'production'
   );
   // Turbopack leaves an `import(expr)` it cannot read unbundled.
+  // Each phase Next loads the config in is a host operation of its own,
+  // with its own mode, so it is a build of its own.
   const session = new ExtractionSession(
     { ...options, mode },
-    { unbundledComputedImports: true }
+    { unbundledComputedImports: true, build: `${build}-${phase}` }
   );
   // A replaced session's watcher would keep the root claimed for it.
-  liveTurbopackSession?.close();
-  liveTurbopackWatcher?.close();
-  liveTurbopackWatcher = null;
-  liveTurbopackSession = session;
+  const owner = turbopackOwner(build);
+  owner.session?.close();
+  owner.watcher?.close();
+  owner.watcher = null;
+  owner.session = session;
   // The dev server's phase, not the emission mode: an error-level
   // diagnostic reports there and the session keeps publishing.
   session.development = development;
@@ -536,10 +565,10 @@ async function analyzeForTurbopack(
   await runSessionPipeline(session);
 
   // A load that started while this one analyzed has replaced its session.
-  if (development && liveTurbopackSession === session) {
+  if (development && owner.session === session) {
     const outcome = startTurbopackWatcher(session, rootDir);
     bindTurbopackWatchDeathReport(outcome, rootDir);
-    if (outcome.kind === 'started') liveTurbopackWatcher = outcome.handle;
+    if (outcome.kind === 'started') owner.watcher = outcome.handle;
   }
 
   for (const line of turbopackSideEffectsLimits(
