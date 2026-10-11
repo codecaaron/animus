@@ -244,8 +244,10 @@ pub struct ExtractEngine {
     /// Computed once per analyze(); recomputing per transform is O(files²).
     cross: Option<cross_file::CrossFileFacts>,
     sources: BTreeMap<String, String>,
-    /// Caller order of the last analyze(): registration collisions and
-    /// utility-class first-wins dedup are order-sensitive.
+    /// The files of the last analyze(), by path: the canonical order every
+    /// order-sensitive choice reads (registration collisions, first-wins
+    /// utility dedup, composed-family rules, report examples), never the
+    /// caller's.
     order: Vec<String>,
     css: Option<analyze_css::CssOutput>,
     parse_count: usize,
@@ -661,8 +663,11 @@ impl ExtractEngine {
             path: String,
             source: String,
         }
-        let entries: Vec<InputEntry> = serde_json::from_str(&file_entries_json)
+        let mut entries: Vec<InputEntry> = serde_json::from_str(&file_entries_json)
             .map_err(|e| napi::Error::from_reason(format!("invalid file entries JSON: {e}")))?;
+        // Analysis sees the files in canonical order, so its output does not
+        // depend on the order a host lists them in.
+        entries.sort_by(|a, b| a.path.cmp(&b.path));
 
         self.facts.clear();
         self.sources.clear();
@@ -2379,5 +2384,48 @@ export const App = () => <Box tone="red" />;
         assert!(!code.contains(".extend("), "{code}");
         assert!(code.contains("const kept = ds.styles"), "{code}");
         assert!(code.contains("export const shared = ds.styles"), "{code}");
+    }
+
+    /// Contract: analysis output is independent of the order the caller
+    /// lists files in. Composed-family rules and the whole-component
+    /// removal report's examples both once followed it.
+    #[test]
+    fn analysis_output_is_independent_of_caller_file_order() {
+        let family = |name: &str, display: &str| {
+            format!(
+                "import {{ compose }} from '@animus-ui/system/compose';\nimport {{ ds }} from './ds';\n\
+                 export const Root = ds.styles({{ display: '{display}' }})\
+                 .variant({{ prop: 'density', variants: {{ compact: {{ gap: 4 }}, loose: {{ gap: 12 }} }} }}).asElement('div');\n\
+                 export const Header = ds.styles({{}})\
+                 .variant({{ prop: 'density', variants: {{ compact: {{ margin: 2 }}, loose: {{ margin: 8 }} }} }}).asElement('header');\n\
+                 export const {name} = compose({{ Root, Header }}, {{ name: '{name}', shared: {{ density: true }} }});\n"
+            )
+        };
+        let files = [
+            ("ds.ts", "import { createSystem } from '@animus-ui/system';\nexport const ds = createSystem().build();\n".to_string()),
+            ("one.tsx", family("FamOne", "flex")),
+            ("two.tsx", family("FamTwo", "grid")),
+            (
+                "app.tsx",
+                "import { FamOne } from './one';\nimport { FamTwo } from './two';\nimport { Outside } from 'elsewhere';\n\
+                 export const App = () => <><FamOne.Root density=\"compact\"><FamOne.Header /></FamOne.Root>\
+                 <FamTwo.Root density=\"loose\"><FamTwo.Header /></FamTwo.Root><Outside /></>;\n"
+                    .to_string(),
+            ),
+            ("page.tsx", "import { Widget } from 'unknown-lib';\nexport const Page = () => <Widget />;\n".to_string()),
+        ];
+        let run = |order: [usize; 5]| {
+            let mut engine = ExtractEngine::new(None).unwrap();
+            let entries: Vec<_> =
+                order.iter().map(|&i| serde_json::json!({ "path": files[i].0, "source": files[i].1 })).collect();
+            let analysis = engine.analyze(serde_json::Value::from(entries).to_string()).unwrap();
+            let transforms: Vec<String> =
+                files.iter().map(|(path, _)| engine.transform_file(path.to_string()).unwrap()).collect();
+            (analysis, transforms)
+        };
+        let given = run([0, 1, 2, 3, 4]);
+        for order in [[4, 3, 2, 1, 0], [2, 4, 0, 3, 1]] {
+            assert_eq!(run(order), given, "files in the order {order:?}");
+        }
     }
 }
