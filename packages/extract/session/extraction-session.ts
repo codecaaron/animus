@@ -260,8 +260,8 @@ export class ExtractionSession {
     string,
     {
       sourcePath: string;
-      mtimeMs: number;
-      size: number;
+      /** The content hash the copy was made from. */
+      digest: string;
       fileName: string;
       url: string;
     }
@@ -2437,16 +2437,13 @@ export class ExtractionSession {
 
     const urlBySpecifier = new Map<string, string>();
     for (const specifier of specifiers) {
-      // The memo reduces a steady-state pass to one existsSync; a missing
-      // copy (concurrent prune) falls through and self-heals.
+      // The memo saves resolution and the copy, never the hash: bytes can
+      // change with mtime and size unchanged (SE-5). A missing copy
+      // (concurrent prune) falls through and self-heals.
       const cached = this.assetCopyCache.get(specifier);
       if (cached && existsSync(join(assetsDir, cached.fileName))) {
         try {
-          const current = statSync(cached.sourcePath);
-          if (
-            current.mtimeMs === cached.mtimeMs &&
-            current.size === cached.size
-          ) {
+          if (contentHash(readFileSync(cached.sourcePath)) === cached.digest) {
             this.trackAssetDependency(cached.sourcePath);
             expected.add(cached.fileName);
             urlBySpecifier.set(specifier, cached.url);
@@ -2468,11 +2465,11 @@ export class ExtractionSession {
         continue;
       }
       const bytes = readFileSync(resolvedPath);
-      const sourceStat = statSync(resolvedPath);
+      const digest = contentHash(bytes);
       this.trackAssetDependency(resolvedPath);
       const ext = extname(resolvedPath);
       const stem = basename(resolvedPath, ext);
-      const fileName = `${stem}.${contentHash(bytes).slice(0, 8)}${ext}`;
+      const fileName = `${stem}.${digest.slice(0, 8)}${ext}`;
       expected.add(fileName);
       if (!existsSync(assetsDir)) {
         mkdirSync(assetsDir, { recursive: true });
@@ -2485,8 +2482,7 @@ export class ExtractionSession {
       urlBySpecifier.set(specifier, url);
       this.assetCopyCache.set(specifier, {
         sourcePath: resolvedPath,
-        mtimeMs: sourceStat.mtimeMs,
-        size: sourceStat.size,
+        digest,
         fileName,
         url,
       });

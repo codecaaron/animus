@@ -7,6 +7,8 @@ import {
   readdirSync,
   realpathSync,
   rmSync,
+  statSync,
+  utimesSync,
   writeFileSync,
 } from 'fs';
 import { join, relative } from 'path';
@@ -18,7 +20,7 @@ const mocks = vi.hoisted(() => ({
   clearAnalysisCache: vi.fn(),
 }));
 
-import { setEngineApiOverride } from '../../session/singleton';
+import { getSharedCss, setEngineApiOverride } from '../../session/singleton';
 
 // Injection through the singleton's globalThis seam reaches every copy of
 // the module (source or dist); a module mock does not.
@@ -137,6 +139,36 @@ describe('handleWatchUpdate asset+component batches', () => {
       (entry) => entry.path === relative(root, buttonPath)
     );
     expect(ghost).toBeUndefined();
+  });
+
+  /** Contract: asset bytes are identified by hash, never by modification
+   *  time and size (SE-5). Bytes that change with both unchanged, and no
+   *  event for the asset, still publish a new copy on the next cycle. */
+  test('changed asset bytes with the same mtime and size are detected by hash', async () => {
+    const { root, assetPath } = createProject();
+    // A whole-second mtime, which a restore reproduces exactly.
+    const stamp = 1_700_000_000;
+    utimesSync(assetPath, stamp, stamp);
+    const session = await startSession(root, assetPath);
+    const before = getSharedCss(session.key);
+
+    writeFileSync(assetPath, '<svg x=1/>'.slice(0, '<svg/>'.length));
+    utimesSync(assetPath, stamp, stamp);
+    expect(statSync(assetPath).mtimeMs).toBe(stamp * 1000);
+    expect(statSync(assetPath).size).toBe('<svg/>'.length);
+    // A cycle the asset itself reported nothing to.
+    writeFileSync(join(root, 'src', 'Button.tsx'), BUTTON_SOURCE_CHANGED);
+    await session.handleWatchUpdate({
+      modifiedFiles: new Set([join(root, 'src', 'Button.tsx')]),
+      removedFiles: new Set(),
+    });
+
+    const after = getSharedCss(session.key);
+    const copy = (css: string) =>
+      /assets\/logo\.([0-9a-f]{8})\.svg/.exec(css)?.[1];
+    expect(copy(before)).toBeDefined();
+    expect(copy(after)).toBeDefined();
+    expect(copy(after)).not.toBe(copy(before));
   });
 
   test('an asset-only batch still re-analyzes (asset substitution refresh)', async () => {

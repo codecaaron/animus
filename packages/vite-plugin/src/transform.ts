@@ -61,8 +61,6 @@ export async function transformSource(
   code: string,
   id: string
 ): Promise<{ code: string; map: null } | null> {
-  if (!ctx.storedManifest) return null;
-
   // Virtual module ids pass the `.js` extension gate, so without this guard
   // each reaches new-file detection as a cache entry no event can remove.
   if (id.startsWith('\0') || id.startsWith(VIRTUAL_PREFIX)) return null;
@@ -91,6 +89,17 @@ export async function transformSource(
   if (abortedHash !== undefined && abortedHash === contentHash(code)) {
     return null;
   }
+
+  // A candidate with no analysis behind it is a failure, never a raw
+  // serve (SA1): the analysis failed, and serving it would ship builder code.
+  if (!ctx.storedManifest) {
+    throw new Error(
+      `[animus-extract] no analysis is available to transform ` +
+        `${relativePath}: the project analysis failed; see the error above.`
+    );
+  }
+
+  let detectionFailed = false;
 
   if (!ctx.storedManifest.files[relativePath]?.length) {
     // Exclusive: Vite transforms concurrently, and two interleaved
@@ -126,6 +135,7 @@ export async function transformSource(
           // publish and re-deliver.
           if (!analysisOk && !held) {
             ctx.mutateFileCache((cache) => cache.delete(relativePath));
+            detectionFailed = true;
           }
         }
 
@@ -155,7 +165,17 @@ export async function transformSource(
         }
       });
     }
+    // A new file whose analysis failed is never served raw (SA1).
+    if (detectionFailed) {
+      throw new Error(
+        `[animus-extract] the analysis of the new file ${relativePath} ` +
+          `failed; see the error above.`
+      );
+    }
     if (!ctx.storedManifest.files[relativePath]?.length) {
+      // SA1's one remaining exception, which row 11 retires: a file dropped
+      // because its extension parent did not resolve serves raw as the
+      // runtime fallback the barrier below guards.
       // Recording a raw serve caused by an unresolved extension parent
       // makes the barrier below withhold that parent's extracted serve.
       ctx.recordFallbackState(
@@ -168,8 +188,9 @@ export async function transformSource(
 
   // Never serve an extracted extension ancestor while a descendant serves
   // the raw fallback: the child `.extend()`s it and hits the runtime guard.
-  // Keep this block OUTSIDE the try below — the non-strict catch would swallow
-  // the withhold — and invalidate the conflicted descendants before throwing.
+  // Keep this block OUTSIDE the try below, which wraps engine errors, so
+  // the withhold throws as itself; invalidate the conflicted descendants
+  // before throwing.
   if (!ctx.isProd && ctx.rawExtensionFallbacks.size > 0) {
     const conflicted = rawFallbackDescendants(ctx, relativePath);
     if (conflicted.length > 0) {
@@ -192,10 +213,12 @@ export async function transformSource(
     const result = transformFile(code, relativePath, ctx.storedManifestJson);
 
     if (!result.hasComponents) {
-      // The manifest lists components and the engine found none: the raw
-      // serve is the same fatal pair the barrier above exists to catch.
-      ctx.recordFallbackState(relativePath, true);
-      return null;
+      // The manifest lists components and the engine found none: serving
+      // the raw source would ship builder code (SA1).
+      throw new Error(
+        `the analysis extracted components from ${relativePath}, but its ` +
+          `transform found none`
+      );
     }
 
     if (ctx.tracing) {
@@ -216,14 +239,9 @@ export async function transformSource(
 
     return { code: outputCode, map: null };
   } catch (e) {
-    if (ctx.options.strict) {
-      ctx.strictFailure(`[animus-extract] Failed to transform ${id}: ${e}`, e);
-    } else {
-      console.warn(`[animus-extract] Failed to transform ${id}:`, e);
-    }
-    // Non-strict serves the raw source, which for an extracted file is the
-    // fallback the barrier catches — recorded before returning.
-    ctx.recordFallbackState(relativePath, true);
-    return null;
+    // In every mode the failure is Vite's error, never a raw serve (SA1).
+    throw new Error(`[animus-extract] Failed to transform ${id}: ${e}`, {
+      cause: e,
+    });
   }
 }
