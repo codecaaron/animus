@@ -18,6 +18,7 @@ import {
   resetAnimusGlobals,
 } from '../../extract/tests/session/session-fixtures';
 import {
+  abortedFacts,
   emptyFacts,
   factsExtractor,
   systemImportFacts,
@@ -34,6 +35,7 @@ import { HotUpdateEvents } from '../src/hot-update-events';
 import { makeContextProbe, makeEnvGraph, published } from './context-probe';
 import { makeComponent, makeManifest } from './manifest-fixture';
 
+import type { FactFile } from '../../extract/tests/source-ingestion-fixtures';
 import type { ContextProbe } from './context-probe';
 import type {
   ProjectManifest,
@@ -506,6 +508,12 @@ describe('hotUpdate reads through the retry-guarded read helper', () => {
     const file = join(app, 'src', 'Button.tsx');
     writeFileSync(file, 'export const Button = 1;\n');
     const state = { systemLoadFails: false };
+    const systemFacts = factsExtractor({
+      [join(app, 'src', 'system.ts')]: {
+        ...emptyFacts(join(app, 'src', 'system.ts')),
+        imports: systemImportFacts(KIT_SYSTEM_SOURCE),
+      },
+    });
     const ctx = new PluginContext({ system: './src/system.ts' }, () => ({
       loadSystemModule: () => {
         if (state.systemLoadFails) throw new Error('planned system failure');
@@ -518,12 +526,22 @@ describe('hotUpdate reads through the retry-guarded read helper', () => {
           dependencies: [],
         };
       },
-      extractFacts: factsExtractor({
-        [join(app, 'src', 'system.ts')]: {
-          ...emptyFacts(join(app, 'src', 'system.ts')),
-          imports: systemImportFacts(KIT_SYSTEM_SOURCE),
-        },
-      }),
+      extractFacts: (filesJson: string) => {
+        // SAFETY: the Session's own JSON.stringify of its file entries.
+        const entries = JSON.parse(filesJson) as Array<{
+          path: string;
+          source: string;
+        }>;
+        // SAFETY: the facts double above serializes this shape.
+        const facts = JSON.parse(systemFacts(filesJson)) as {
+          files: Record<string, FactFile>;
+        };
+        // The parser stops before the end of a source holding `= ;`.
+        for (const { path, source } of entries) {
+          if (source.includes('= ;')) facts.files[path] = abortedFacts(path);
+        }
+        return JSON.stringify(facts);
+      },
       analyzeProject: () => JSON.stringify(makeManifest()),
     }));
     applyResolvedConfig(
@@ -538,9 +556,13 @@ describe('hotUpdate reads through the retry-guarded read helper', () => {
     );
     const client = makeEnvironment('client', VIRTUAL_IDS);
     let timestamp = 60;
-    const update = (path: string, read?: () => Promise<string>) =>
+    const update = (
+      path: string,
+      read?: () => Promise<string>,
+      type: HotUpdateOptions['type'] = 'update'
+    ) =>
       runHotUpdate(ctx, client.environment, {
-        type: 'update',
+        type,
         file: path,
         timestamp: timestamp++,
         modules: [],
@@ -561,6 +583,53 @@ describe('hotUpdate reads through the retry-guarded read helper', () => {
       hash: contentHash(settled),
       source: settled,
     });
+    ctx.close();
+  });
+
+  it('refuses a reload a parse hold deferred rather than publish the disk over held bytes', async () => {
+    // The deferred reload's full read does not carry the bytes an earlier
+    // held observation supplied (ticket 12 follow-up): with the disk still
+    // behind them, it refuses loudly and keeps the prior publication.
+    const { app, file, ctx, state, update } = await startedContext();
+    const card12 = 'export const Button = 12;\n';
+    writeFileSync(file, '');
+    await update(file, async () => card12);
+    const broken = join(app, 'src', 'Broken.ts');
+    writeFileSync(broken, 'export const broken = 1;\n');
+    await update(broken, async () => 'export const broken = 1;\n', 'create');
+
+    state.systemLoadFails = true;
+    await update(join(app, 'src', 'system.ts'));
+    state.systemLoadFails = false;
+
+    // The owed reload enters a parse hold. The Card edit that follows is
+    // kept; its deferred reload would read the held Broken from disk, so
+    // it refuses too.
+    writeFileSync(broken, 'export const broken = ;\n');
+    await update(broken, async () => 'export const broken = ;\n');
+    const card20 = 'export const Button = 20;\n';
+    await expect(update(file, async () => card20)).rejects.toThrow(
+      /system reload not published: .*src\/Broken\.ts/
+    );
+    expect(ctx.session?.heldSources.get('src/Button.tsx')?.source).toBe(card20);
+
+    // The repair would run the deferred reload over the empty Card on disk.
+    const repaired = 'export const broken = 2;\n';
+    writeFileSync(broken, repaired);
+    await expect(update(broken, async () => repaired)).rejects.toThrow(
+      /system reload not published: .*src\/Button\.tsx/
+    );
+    const publishedCard = () =>
+      ctx.session?.corpus.published.analysisEntries.get('src/Button.tsx')
+        ?.source;
+    expect(publishedCard()).toBe(card12);
+
+    // Once the disk holds the bytes, the next change publishes the reload.
+    writeFileSync(file, card20);
+    const repairedAgain = 'export const broken = 3;\n';
+    writeFileSync(broken, repairedAgain);
+    await update(broken, async () => repairedAgain);
+    expect(publishedCard()).toBe(card20);
     ctx.close();
   });
 
