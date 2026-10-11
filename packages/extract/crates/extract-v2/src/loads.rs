@@ -23,8 +23,8 @@ pub enum LoadKind {
     /// A load call; `require` for `require(…)` itself.
     Call { require: bool },
     /// `require` reached through parentheses or a type assertion
-    /// (`(require)('./x')`, `require!('./x')`) with a string-literal
-    /// specifier. Only the style statics' view reads it; the load calls
+    /// (`(require)('./x')`, `require!('./x')`) with a literal specifier.
+    /// The style statics and the member tables read it; the load calls
     /// match the bare name.
     WrappedRequire,
 }
@@ -65,13 +65,22 @@ impl Load {
             LoadKind::Call { .. } => false,
             LoadKind::Import { .. } | LoadKind::Reexport { .. } | LoadKind::WrappedRequire => return None,
         };
+        Some(self.recorded(source, dynamic_import))
+    }
+
+    /// A wrapped `require` as `FileFacts::wrapped_requires` records it.
+    pub fn wrapped_require(&self, source: &str) -> Option<ModuleLoad> {
+        (self.kind == LoadKind::WrappedRequire).then(|| self.recorded(source, false))
+    }
+
+    fn recorded(&self, source: &str, dynamic_import: bool) -> ModuleLoad {
         let (start, end) = (self.span.start as usize, self.span.end as usize);
-        Some(ModuleLoad {
+        ModuleLoad {
             target: self.target.clone(),
             dynamic_import,
             line: source[..start].matches('\n').count() + 1,
             call: source[start..end].split_whitespace().collect::<Vec<_>>().join(" "),
-        })
+        }
     }
 }
 
@@ -149,8 +158,12 @@ impl<'a> Visit<'a> for Calls {
 
     fn visit_call_expression(&mut self, call: &CallExpression<'a>) {
         let require = call.callee.is_specific_id("require");
-        let literal = match call.arguments.first() {
-            Some(Argument::StringLiteral(literal)) => Some(literal.value.to_string()),
+        // The specifier as written: a string, or a template with no
+        // substitution.
+        let first = call.arguments.first().and_then(Argument::as_expression);
+        let written = spelling(first);
+        let literal = match (written, first.map(load_of)) {
+            (Spelling::String | Spelling::Template, Some(LoadTarget::Specifier(specifier))) => Some(specifier),
             _ => None,
         };
         let targets = call_loads(call);
@@ -158,12 +171,12 @@ impl<'a> Visit<'a> for Calls {
             (true, true, Some(specifier)) => self.0.push(Load {
                 kind: LoadKind::WrappedRequire,
                 target: LoadTarget::Specifier(specifier),
-                spelling: Spelling::String,
+                spelling: written,
                 span: call.span,
             }),
             (_, _, literal) => {
                 for target in targets {
-                    let spelling = if require && literal.is_some() { Spelling::String } else { Spelling::Other };
+                    let spelling = if require && literal.is_some() { written } else { Spelling::Other };
                     self.0.push(Load { kind: LoadKind::Call { require }, target, spelling, span: call.span });
                 }
             }

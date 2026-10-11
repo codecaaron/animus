@@ -927,7 +927,7 @@ impl ExtractEngine {
                             matches!(
                                 load.kind,
                                 LoadKind::DynamicImport | LoadKind::Call { require: true } | LoadKind::WrappedRequire
-                            ) && load.spelling == Spelling::String
+                            ) && matches!(load.spelling, Spelling::String | Spelling::Template)
                         })
                         .filter_map(|load| load.specifier().map(str::to_string))
                         .collect(),
@@ -2241,6 +2241,9 @@ export const App = () => <Box tone="red" />;
             // may change it.
             ("package namespace, member written", "import * as ui from '@local/proxy';\nui.pad.padding = 9;", "{ ...pad }"),
             ("package namespace, handed on", "import * as ui from '@local/proxy';\nregister(ui);", "{ ...pad }"),
+            // A template literal with no substitution is a literal specifier.
+            ("package import(), template literal", "await import(`@local/proxy`).then((m) => { m.pad.padding = 9; });", "{ ...pad }"),
+            ("package require(), template literal", "require(`@local/proxy`).pad.padding = 9;", "{ ...pad }"),
             // Code from a string can load and change any module (PF3).
             (
                 "eval loads the module",

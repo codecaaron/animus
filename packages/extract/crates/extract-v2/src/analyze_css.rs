@@ -13308,8 +13308,9 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
 
     /// A package the analysis does not read may re-export any analysed
     /// object (a linked workspace package), so a write through its
-    /// namespace re-exported, loaded with `import()` or with `require()`
-    /// leaves every member table unproven, through a further star too. A
+    /// namespace re-exported, loaded with `import()` or with `require()`,
+    /// wrapped or not, leaves every member table unproven, through a further
+    /// star too. A
     /// module built into Node imports nothing analysed, and a load of an
     /// analysed module reaches only what it exports.
     #[test]
@@ -13318,7 +13319,7 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         let fam = "import { Box } from './recipe';\nexport const Fam = { Box };\n";
         let app = "import { Fam } from './fam';\nexport const App = () => <Fam.Box marginInlineStart={8} />;\n";
         let proxied = "export * as ns from '@local/proxy';\n";
-        let rows: [(&[(&str, &str)], bool); 7] = [
+        let rows: [(&[(&str, &str)], bool); 9] = [
             (&[("proxied.ts", proxied), ("mutate.ts", "import { ns } from './proxied';\nns.Fam.Box = () => null;\n")], true),
             (
                 &[
@@ -13330,8 +13331,10 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             ),
             (&[("mutate.ts", "import('@local/proxy').then((ui) => { ui.Fam.Box = () => null; });\n")], true),
             (&[("mutate.ts", "require('@local/proxy').Fam.Box = () => null;\n")], true),
+            (&[("mutate.ts", "(require)('@local/proxy').Fam.Box = () => null;\n")], true),
             (&[("mutate.ts", "import('node:path').then((path) => { path.Fam = null; });\n")], false),
             (&[("mutate.ts", "require('fs').Fam = null;\n")], false),
+            (&[("mutate.ts", "require('_http_agent').Fam = null;\n")], false),
             (&[("mutate.ts", "import('./recipe').then((recipe) => { recipe.Box.x = 1; });\n")], false),
         ];
         for (more, warns) in rows {

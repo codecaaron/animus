@@ -782,7 +782,7 @@ impl<'f> ObjectMembers<'f> {
                 let reason = format!("{module} re-exports {target} as the namespace {name}");
                 self.namespace_reach(&target).record(&mut flow, Vec::new(), &reason);
             }
-            for load in &ff.module_loads {
+            for load in ff.module_loads.iter().chain(&ff.wrapped_requires) {
                 if let LoadTarget::Specifier(spec) = &load.target {
                     if crate::link::unread_package(module, spec, files, inputs).is_some() {
                         let reason = format!(

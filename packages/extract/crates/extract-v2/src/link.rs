@@ -225,22 +225,20 @@ pub(crate) fn named<T>(path: &str, specifier: &str, files: &BTreeMap<String, T>,
     }
 }
 
-/// The modules built into Node 24 that a bare specifier names; `node:`
-/// names one too. None imports a module the analysis holds.
-const NODE_BUILTINS: [&str; 54] = [
-    "assert", "assert/strict", "async_hooks", "buffer", "child_process", "cluster", "console", "constants",
-    "crypto", "dgram", "diagnostics_channel", "dns", "dns/promises", "domain", "events", "fs", "fs/promises",
-    "http", "http2", "https", "inspector", "inspector/promises", "module", "net", "os", "path", "path/posix",
-    "path/win32", "perf_hooks", "process", "punycode", "querystring", "readline", "readline/promises", "repl",
-    "stream", "stream/consumers", "stream/promises", "stream/web", "string_decoder", "sys", "timers",
-    "timers/promises", "tls", "trace_events", "tty", "url", "util", "util/types", "v8", "vm", "wasi",
-    "worker_threads", "zlib",
-];
+/// The specifiers that name a module built into Node 24, from
+/// `module.builtinModules` (`scripts/node-builtins.ts` writes the list); any
+/// `node:` specifier names one too. None imports a module the analysis holds.
+fn node_builtins() -> &'static FxHashSet<String> {
+    static BUILTINS: std::sync::OnceLock<FxHashSet<String>> = std::sync::OnceLock::new();
+    BUILTINS.get_or_init(|| {
+        serde_json::from_str(include_str!("node_builtins.json")).expect("node_builtins.json is generated valid JSON")
+    })
+}
 
 /// Whether `identity`, a package `Named` names, is a module built into
 /// Node.
 pub(crate) fn is_node_builtin(identity: &str) -> bool {
-    identity.starts_with("node:") || NODE_BUILTINS.contains(&identity)
+    identity.starts_with("node:") || node_builtins().contains(identity)
 }
 
 /// The package `specifier`, written in `path`, names when the analysis
