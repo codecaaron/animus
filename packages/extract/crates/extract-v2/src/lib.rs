@@ -118,12 +118,15 @@ pub fn load_system_module(
     export_name: Option<String>,
     conditions: Option<Vec<String>>,
     workspaces: Option<std::collections::HashMap<String, String>>,
+    extension_policy_json: Option<String>,
 ) -> napi::Result<NapiSystemConfig> {
+    let context = resolution_context(conditions, workspaces, extension_policy_json)
+        .map_err(napi::Error::from_reason)?;
     let config = animus_system_loader::load_system_module(
         &system_path,
         &root_dir,
         export_name.as_deref(),
-        &resolution_context(conditions, workspaces),
+        &context,
     )
     .map_err(napi::Error::from_reason)?;
 
@@ -149,21 +152,27 @@ pub fn load_system_module(
     })
 }
 
-/// The host's export conditions, in its order, and the session root's
-/// declared workspace packages (name → canonical directory), which a package
-/// lookup consults after `node_modules`.
+/// The host's export conditions, in its order, the session root's declared
+/// workspace packages (name → canonical directory), which a package lookup
+/// consults after `node_modules`, and the host's extension order as JSON
+/// (`{ appended, nodeNext }`), the built-in policy when absent.
 fn resolution_context(
     conditions: Option<Vec<String>>,
     workspaces: Option<std::collections::HashMap<String, String>>,
-) -> animus_system_loader::ResolutionContext {
-    animus_system_loader::ResolutionContext {
+    extension_policy_json: Option<String>,
+) -> Result<animus_system_loader::ResolutionContext, String> {
+    Ok(animus_system_loader::ResolutionContext {
         conditions: conditions.unwrap_or_default(),
         workspaces: workspaces
             .unwrap_or_default()
             .into_iter()
             .map(|(name, dir)| (name, std::path::PathBuf::from(dir)))
             .collect(),
-    }
+        extensions: match extension_policy_json {
+            Some(json) => serde_json::from_str(&json).map_err(|error| format!("invalid extension policy: {error}"))?,
+            None => animus_system_loader::resolution::extension_policy().clone(),
+        },
+    })
 }
 
 /// A specifier as the system loader resolves it: the real path of the file
@@ -187,12 +196,12 @@ pub fn resolve_specifier(
     from_dir: String,
     conditions: Option<Vec<String>>,
     workspaces: Option<std::collections::HashMap<String, String>>,
+    extension_policy_json: Option<String>,
 ) -> NapiResolvedSpecifier {
-    NapiResolvedSpecifier::from(animus_system_loader::resolve_specifier(
-        &specifier,
-        &from_dir,
-        &resolution_context(conditions, workspaces),
-    ))
+    NapiResolvedSpecifier::from(
+        resolution_context(conditions, workspaces, extension_policy_json)
+            .and_then(|context| animus_system_loader::resolve_specifier(&specifier, &from_dir, &context)),
+    )
 }
 
 impl From<Result<(std::path::PathBuf, Option<std::path::PathBuf>), String>> for NapiResolvedSpecifier {

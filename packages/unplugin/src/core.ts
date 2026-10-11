@@ -1,11 +1,16 @@
 import {
   buildPathAliasesJson,
+  BUILT_IN_EXTENSION_POLICY,
   DiagnosticFailure,
   ENGINE_TRANSFORM_EXTENSIONS,
+  esbuildExtensionPolicy,
   isEngineTransformExtension,
   isPathWithinRoot,
   keepsKitSourceEffects,
   readTsconfigAliasPairs,
+  rollupExtensionPolicy,
+  viteExtensionPolicy,
+  webpackExtensionPolicy,
 } from '@animus-ui/extract/pipeline';
 import {
   ANIMUS_CSS_MODULE_ID,
@@ -26,7 +31,10 @@ import { dirname, join, relative, resolve } from 'node:path';
 import { resolveHostMode, resolveHostOptions } from './options';
 
 import type { AnimusUnpluginOptions } from './options';
-import type { AnimusMode } from '@animus-ui/extract/pipeline';
+import type {
+  AnimusMode,
+  HostExtensionPolicy,
+} from '@animus-ui/extract/pipeline';
 import type {
   ExternalIdResult,
   UnpluginBuildContext,
@@ -223,6 +231,7 @@ interface EsbuildOptionsLike {
   write?: boolean;
   define?: Record<string, string>;
   conditions?: string[];
+  resolveExtensions?: string[];
 }
 
 interface RspackLikeCompiler extends WebpackLikeCompiler {
@@ -238,7 +247,14 @@ interface RspackLikeCompiler extends WebpackLikeCompiler {
 }
 
 interface WebpackLikeCompiler {
-  options: { mode?: string; resolve?: { conditionNames?: string[] } };
+  options: {
+    mode?: string;
+    resolve?: {
+      conditionNames?: string[];
+      extensions?: string[];
+      extensionAlias?: Record<string, string | string[]>;
+    };
+  };
   /** Set once `watch()` starts, before the first compilation. */
   watchMode?: boolean;
   webpack?: {
@@ -302,6 +318,9 @@ export const unpluginFactory: UnpluginFactory<
   /** The bundler's export conditions, in its order, for the system loader;
    *  Rollup exposes none. */
   let hostConditions: readonly string[] = [];
+  /** The bundler's extension order, as its resolved configuration holds
+   *  it; the built-in policy for a host none is read from (Rolldown). */
+  let hostExtensions: HostExtensionPolicy = BUILT_IN_EXTENSION_POLICY;
   /** Hooks can fire before buildStart (webpack's make taps run
    *  concurrently), so joiners await this before awaiting the pipeline. */
   let signalPipelineStarted!: () => void;
@@ -370,6 +389,7 @@ export const unpluginFactory: UnpluginFactory<
       session.driverLabel = 'animus-unplugin';
       session.rootDir = root;
       session.conditions = hostConditions;
+      session.extensionPolicy = hostExtensions;
       session.systemPropsModuleId = TURBOPACK_SYSTEM_PROPS_ID;
       const aliasPairs = readTsconfigAliasPairs(root);
       const builtAliases = buildPathAliasesJson(aliasPairs, root);
@@ -613,7 +633,12 @@ export const unpluginFactory: UnpluginFactory<
     vite: {
       // Vite runs the normalized buildStart, so its own signals decide:
       // serving or `build.watch` runs another turn.
-      configResolved(config: { command: string; build: { watch?: unknown } }) {
+      configResolved(config: {
+        command: string;
+        build: { watch?: unknown };
+        resolve: { extensions: string[] };
+      }) {
+        hostExtensions = viteExtensionPolicy(config.resolve.extensions);
         const serving =
           config.command === 'serve' || Boolean(config.build.watch);
         watching = () => serving;
@@ -622,7 +647,13 @@ export const unpluginFactory: UnpluginFactory<
 
     rollup: {
       // unplugin runs this instead of the normalized buildStart.
-      async buildStart() {
+      async buildStart(inputOptions: { plugins?: Array<{ name?: string }> }) {
+        hostExtensions = rollupExtensionPolicy(
+          (inputOptions?.plugins ?? []).some(
+            (plugin) => plugin?.name === 'node-resolve'
+          ),
+          this.meta?.rollupVersion
+        );
         modeOracle = this.meta?.watchMode ? 'development' : 'production';
         await startPipeline();
         registerWatchTargets(this);
@@ -704,6 +735,7 @@ export const unpluginFactory: UnpluginFactory<
       config(buildOptions) {
         esbuildOptions = buildOptions;
         hostConditions = buildOptions.conditions ?? [];
+        hostExtensions = esbuildExtensionPolicy(buildOptions.resolveExtensions);
         watching = () => watch;
         buildOptions.define = {
           ...buildOptions.define,
@@ -786,6 +818,10 @@ export const unpluginFactory: UnpluginFactory<
     hostConditions = (compiler.options.resolve?.conditionNames ?? []).filter(
       (name) => name !== '...'
     );
+    hostExtensions = webpackExtensionPolicy(meta.framework, {
+      extensions: compiler.options.resolve?.extensions,
+      extensionAlias: compiler.options.resolve?.extensionAlias,
+    });
     watching = () => compiler.watchMode === true;
     const DefinePlugin =
       compiler.webpack?.DefinePlugin ?? compiler.rspack?.DefinePlugin;

@@ -1,6 +1,7 @@
 import {
   assertNoRetiredEngineSelection,
   buildPathAliasesJson,
+  webpackExtensionPolicy,
 } from '@animus-ui/extract/pipeline';
 import {
   ANIMUS_CSS_MODULE_ID,
@@ -122,12 +123,15 @@ type Compiler = {
     resolve?: {
       alias?: WebpackAliasMap;
       conditionNames?: string[];
+      extensions?: string[];
+      extensionAlias?: Record<string, string | string[]>;
     };
     watchOptions?: {
       ignored?: WatchIgnored;
     };
   };
   webpack?: {
+    version?: string;
     Compilation: {
       PROCESS_ASSETS_STAGE_ADDITIONAL: number;
     };
@@ -221,10 +225,20 @@ export class AnimusWebpackPlugin {
   }
 
   /** Webpack's export conditions select the system's kit files as they
-   *  select the bundle's; `...`, webpack's own defaults, names none. */
+   *  select the bundle's; `...`, webpack's own defaults, names none. Its
+   *  extension order and aliases are captured alongside. */
   private extractConditions(compiler: Compiler): void {
-    const names = compiler.options?.resolve?.conditionNames ?? [];
+    const resolve = compiler.options?.resolve;
+    const names = resolve?.conditionNames ?? [];
     this.session.conditions = names.filter((name) => name !== '...');
+    this.session.extensionPolicy = webpackExtensionPolicy(
+      'next-webpack',
+      {
+        extensions: resolve?.extensions,
+        extensionAlias: resolve?.extensionAlias,
+      },
+      compiler.webpack?.version
+    );
   }
 
   private extractAliases(compiler: Compiler): void {

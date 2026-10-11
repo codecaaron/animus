@@ -8,6 +8,7 @@ import {
   readTsconfigAliasPairs,
   resolveMode,
   sourceKitDependencies,
+  turbopackExtensionPolicy,
 } from '@animus-ui/extract/pipeline';
 import {
   ExtractionSession,
@@ -428,8 +429,10 @@ function turbopackConfig<Config extends NextOwnedConfig>(
   nextConfig: NextConfigInput<Config>,
   options: AnimusNextOptions
 ): TurbopackNextConfig<Config> {
+  // Turbopack's extension order, or its documented default.
+  const resolveExtensions = nextConfig.turbopack?.resolveExtensions;
   const load = (phase: string): Promise<TurbopackNextConfigObject<Config>> =>
-    loadTurbopackFragment(options, phase).then((fragment) =>
+    loadTurbopackFragment(options, phase, resolveExtensions).then((fragment) =>
       mergeTurbopackFragment(nextConfig, fragment)
     );
   function then<Resolved = TurbopackNextConfigObject<Config>, Rejected = never>(
@@ -469,7 +472,8 @@ let liveTurbopackLoad: {
 
 function loadTurbopackFragment(
   options: AnimusNextOptions,
-  phase: string
+  phase: string,
+  resolveExtensions: readonly string[] | undefined
 ): Promise<TurbopackConfigFragment> {
   // `next dev <subdir>` under Turbopack is a known gap: no dir reaches a
   // config module, so cwd is the only root signal. Next 16's `turbopack.root`
@@ -478,7 +482,12 @@ function loadTurbopackFragment(
   const rootDir = process.cwd();
   const key = JSON.stringify([phase, rootDir]);
   if (liveTurbopackLoad?.key === key) return liveTurbopackLoad.fragment;
-  const fragment = analyzeForTurbopack(options, phase, rootDir);
+  const fragment = analyzeForTurbopack(
+    options,
+    phase,
+    rootDir,
+    resolveExtensions
+  );
   const load = { key, fragment };
   liveTurbopackLoad = load;
   fragment.catch(() => {
@@ -490,7 +499,8 @@ function loadTurbopackFragment(
 async function analyzeForTurbopack(
   options: AnimusNextOptions,
   phase: string,
-  rootDir: string
+  rootDir: string,
+  resolveExtensions: readonly string[] | undefined
 ): Promise<TurbopackConfigFragment> {
   const development = phase === PHASE_DEVELOPMENT_SERVER;
   const { mode } = resolveMode(options.mode, () =>
@@ -510,6 +520,7 @@ async function analyzeForTurbopack(
   // diagnostic reports there and the session keeps publishing.
   session.development = development;
   session.rootDir = rootDir;
+  session.extensionPolicy = turbopackExtensionPolicy(resolveExtensions);
   const aliasPairs = readTsconfigAliasPairs(rootDir);
   const builtAliases = buildPathAliasesJson(aliasPairs, rootDir);
   if (builtAliases) {

@@ -1,4 +1,8 @@
-import { buildPathAliasesJson, resolveMode } from '@animus-ui/extract/pipeline';
+import {
+  buildPathAliasesJson,
+  resolveMode,
+  viteExtensionPolicy,
+} from '@animus-ui/extract/pipeline';
 
 import { resolveLightningTargets } from './css';
 
@@ -30,6 +34,9 @@ export function applyResolvedConfig(
         : 'development'
       : condition
   );
+  // Vite's extension order, with its defaults applied.
+  ctx.extensionPolicy = viteExtensionPolicy(config.resolve.extensions);
+  ctx.log(`extension order: ${ctx.extensionPolicy.resolverVersion}`);
   ctx.logger = config.logger;
   // Public base for dev /@fs asset URLs (build URLs are resolved by Vite's
   // own asset pipeline, which applies base itself).
