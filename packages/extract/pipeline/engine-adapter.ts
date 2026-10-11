@@ -48,14 +48,14 @@ export interface EngineApi {
     workspaces?: WorkspacePackages,
     extensionPolicyJson?: string
   ) => { path?: string | null; unresolved?: string | null };
+  /** Whether the package at `packageDir` declares the kit source condition:
+   *  an `animus` key anywhere in its `exports`, read from the manifest. */
+  declaresKitSource?: (packageDir: string) => boolean;
   /** A kit's source root as the system loader's table selects it (spec
    *  §2.2 A5), as JSON: the rule that chose it, its entries and invalid
    *  `animus` targets; or `{ "unresolved": why }` where no host imports the
    *  specifier. `hostEntry` is the file the host resolves; `packageDir` the
    *  package discovery located. */
-  /** Whether the package at `packageDir` declares the kit source condition:
-   *  an `animus` key anywhere in its `exports`, read from the manifest. */
-  declaresKitSource?: (packageDir: string) => boolean;
   resolveKitSourceRoot?: (
     specifier: string,
     fromDir: string,

@@ -1,52 +1,62 @@
-/**
- * Timer functions are injected seams: `vi.mock` on node builtins silently
- * no-ops under vite-plus-test, so tests drive a manual scheduler.
- */
-type ResetTimerHandle = ReturnType<typeof setTimeout> | number;
+import {
+  COALESCING_WINDOW_MS,
+  CoalescingWindow,
+} from '@animus-ui/extract/session';
+
+import type { WindowClock } from '@animus-ui/extract/session';
 
 type ResetErrorHandler = <Thrown>(error: Thrown) => void;
 
+/** Single-flight system resets on the session's one coalescing window: a
+ *  request during a running reset schedules exactly one follow-up, due a
+ *  fixed interval after its own first request. */
 export class ResetCoalescer {
-  private timer: ResetTimerHandle | null = null;
   private running = false;
-  private dirty = false;
+  /** The window came due while a reset ran: the follow-up runs as that
+   *  reset settles. */
+  private due = false;
+  private readonly window: CoalescingWindow;
 
   constructor(
     private readonly run: () => void | Promise<void>,
     // Required: a throw escaping the timer callback is an unhandled
     // exception that kills the dev server, so every caller decides its fate.
     private readonly onError: ResetErrorHandler,
-    private readonly quietMs = 60,
-    private readonly schedule: (
-      fn: () => void,
-      ms: number
-    ) => ResetTimerHandle = (fn, ms) => setTimeout(fn, ms),
-    private readonly cancel: (timer: ResetTimerHandle) => void = (timer) =>
-      clearTimeout(timer)
-  ) {}
+    windowMs = COALESCING_WINDOW_MS,
+    clock?: WindowClock
+  ) {
+    this.window = new CoalescingWindow(
+      () => {
+        if (!this.running) return this.runReset();
+        this.due = true;
+      },
+      windowMs,
+      clock
+    );
+  }
 
-  /** Ask for a reset; bursts within the quiescence window collapse. */
+  /** Ask for a reset; requests within the open window collapse. A request
+   *  during a running reset opens the follow-up's window now, so its
+   *  deadline counts from that request, not from the settlement. */
   request(): void {
-    if (this.running) {
-      this.dirty = true;
-      return;
-    }
-    if (this.timer !== null) this.cancel(this.timer);
-    this.timer = this.schedule(async () => {
-      this.timer = null;
-      this.running = true;
-      try {
-        const result = this.run();
-        if (result instanceof Promise) await result;
-      } catch (err) {
-        this.onError(err);
-      } finally {
-        this.running = false;
-        if (this.dirty) {
-          this.dirty = false;
-          this.request();
-        }
+    this.window.note();
+  }
+
+  private async runReset(): Promise<void> {
+    this.running = true;
+    try {
+      const result = this.run();
+      if (result instanceof Promise) await result;
+    } catch (err) {
+      this.onError(err);
+    } finally {
+      this.running = false;
+      if (this.due) {
+        this.due = false;
+        // The follow-up covers every request so far: flushing starts it and
+        // closes a newer window, which would otherwise run it again.
+        void this.window.flush();
       }
-    }, this.quietMs);
+    }
   }
 }

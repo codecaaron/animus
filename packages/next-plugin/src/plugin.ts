@@ -353,6 +353,8 @@ export class AnimusWebpackPlugin {
       const existing = getAnalysisStartedPromise(this.session.key);
       if (existing) {
         await existing;
+        // Another compiler's conditions loaded the build's system.
+        this.session.agreeWithSystemAuthority();
         return;
       }
 
@@ -397,6 +399,8 @@ export class AnimusWebpackPlugin {
         }
         throw err;
       }
+      // Another compiler's conditions may have loaded the build's system.
+      this.session.agreeWithSystemAuthority();
       this.initialized = true;
       this.lastBuiltEpoch = getReplacementEpoch(this.session.key);
       // A failed startup's compilation passed every module through
@@ -409,6 +413,8 @@ export class AnimusWebpackPlugin {
       modifiedFiles: compiler.modifiedFiles,
       removedFiles: compiler.removedFiles,
     });
+    // A system reload under another compiler's conditions is checked again.
+    this.session.agreeWithSystemAuthority();
 
     const epoch = getReplacementEpoch(this.session.key);
     this.epochMovedForNextCompilation =

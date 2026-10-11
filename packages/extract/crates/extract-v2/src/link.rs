@@ -22,9 +22,9 @@ use rustc_hash::FxHashSet;
 pub type OwnedModuleRecord = ModuleRecord<LocalId, String>;
 
 /// One file's Lower output: its identity table, owned module record,
-/// module loads and parameter readings, and the semantic build the table,
-/// record and readings were read from, which fact extraction reuses rather
-/// than building again.
+/// module loads, parameter readings and how it runs code from a string, and
+/// the semantic build all but the loads were read from, which fact
+/// extraction reuses rather than building again.
 pub(crate) struct Lowered {
     pub(crate) scoping: Scoping,
     pub(crate) bindings: BindingTable,
@@ -32,6 +32,8 @@ pub(crate) struct Lowered {
     pub(crate) loads: Vec<crate::loads::Load>,
     /// How each of the module's functions treats an object passed to it.
     pub(crate) readings: crate::usage_facts::ParamReadings,
+    /// How the module runs code from a string, if it does.
+    pub(crate) dynamic_code: Option<&'static str>,
 }
 
 impl Lowered {
@@ -46,7 +48,8 @@ impl Lowered {
         let bindings = BindingTable::prepare(IdentityInput { module, program, module_record, scoping: &scoping });
         let record = copy_module_record(module_record, &bindings, program.source_text, program);
         let readings = std::sync::Arc::new(crate::usage_facts::function_param_readings(program, &scoping));
-        Self { scoping, bindings, record, loads: crate::loads::collect(program), readings }
+        let dynamic_code = crate::usage_facts::dynamic_code(program, &scoping);
+        Self { scoping, bindings, record, loads: crate::loads::collect(program), readings, dynamic_code }
     }
 }
 
